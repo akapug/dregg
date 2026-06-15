@@ -8,14 +8,15 @@
 The kernel is a Lean 4 program with machine-checked soundness, and it is the
 *exact* function the running node executes — every state transition ("turn") is
 gated by an unforgeable capability, leaves a verifiable receipt, and carries a
-STARK proof that a light client can check without re-running history. Authority
-is *held*, never *owed*; the walls hold by proof, not by trust.
+STARK proof a light client can check without re-running history. Authority is
+*held*, never *owed*; the walls hold by proof, not by trust.
 
 On top of the kernel, **deos** is the agentic desktop userlayer — the same proofs
 made visual and interactive: a window *is* a capability, an interaction *is* a
-verified turn, and a screenshot can re-expand into a live, per-viewer, attenuated
-view of the shared witness-graph. (Naming: **robigalia** the project · **dregg**
-the kernel · **deos** the desktop.)
+verified turn, a quote *is* the source's committed value (Xanadu, shipped), and a
+screenshot can re-expand into a live, per-viewer, attenuated view of the shared
+witness-graph. (Naming: **robigalia** the project · **dregg** the kernel · **deos**
+the desktop. *deos runs on dregg runs in robigalia.*)
 
 > ### The question underneath
 >
@@ -79,11 +80,14 @@ The whole kernel is one sentence:
 
 Given algebra, that sentence is:
 
-- **Four substances.** Everything a cell holds is one of four kinds: **value**
-  (linear balances — an asset *is* its issuer cell), **state** (a heap of
-  programmable slots), **authority** (a capability tree), and **evidence**
-  (shielded/sealed values). A fifth and sixth axis — *birth* and *retirement* —
-  bracket a cell's lifecycle.
+- **Four substances.** Everything a cell holds is one of four kinds, each with
+  its own discipline: **value** (linear balances — an asset *is* its issuer
+  cell, which carries −supply, so every asset's sum is identically zero),
+  **state** (a heap of programmable slots), **authority** (a capability tree
+  that grows only by authorized, receipt-disclosed production from held
+  connectivity and narrows freely), and **evidence** (monotone nullifier /
+  commitment / epoch ledgers). *Birth* and *retirement* bracket a cell's
+  lifecycle.
 
 - **Eight verbs.** The kernel is `create · write · move · grant · revoke ·
   shield/unshield · lifecycle · exercise` — eight directed operations over the
@@ -91,7 +95,9 @@ Given algebra, that sentence is:
   verb is irreplaceable) and **completeness** (they cover every effect) theorems.
   The catalog is generated directly from
   [`VerbRegistry.lean`](metatheory/Dregg2/Substrate/VerbRegistry.lean); nothing
-  in it is hand-asserted.
+  in it is hand-asserted. Everything else — queues, inboxes, escrows, auctions,
+  namespaces, bridges, councils — is a *cell-program pattern* over these verbs,
+  not a kernel primitive.
 
 - **Turns as forests.** A turn is an atomic, capability-gated transition across
   one or more cells — a *forest* of effects with delegation edges. Authorization
@@ -103,7 +109,12 @@ Given algebra, that sentence is:
   third-party discharge conditions, rate bounds, scope restrictions — composed
   as a macaroon-style chain. Holding a capability means being able to exhibit
   the witness that discharges its caveats; the kernel checks the witness, it
-  does not take your word.
+  does not take your word. All four guard polarities — caveat (imposed on
+  delegated power), program (maintained on self), precondition (required of a
+  turn), and intent demand (wanted of the world) — are one `Pred` algebra.
+
+The substrate's full design — the four substances, the eight verbs, the
+unifications — is [docs/DREGG3.md](docs/DREGG3.md).
 
 ## The organs
 
@@ -149,17 +160,23 @@ story you can drive end-to-end. See [docs/ORGANS.md](docs/ORGANS.md).
 - **Circuits are emitted from Lean.** Constraint systems are generated from
   proved Lean modules as byte-pinned descriptor artifacts (a SHA-256
   fingerprinted registry, drift-rejected in CI). The Rust prover *interprets*
-  them; Rust authors no constraints. STARK proofs (Plonky3, BabyBear,
-  Poseidon2, FRI — post-quantum assumptions only) attest turns *additively* —
-  verifying a turn never requires re-executing history — and recursive
-  aggregation folds a whole history into one root a light client checks.
+  them; Rust authors no constraints. The live proof path is a single rotated
+  multi-table circuit (IR-v2, R=24): a heterogeneous turn is split into maximal
+  homogeneous cohort-runs and proven as a chain of rotated legs
+  ([docs/PATH-PRESERVE.md](docs/PATH-PRESERVE.md)). STARK proofs (Plonky3,
+  BabyBear, Poseidon2, FRI — post-quantum assumptions only) attest turns
+  *additively* — verifying a turn never requires re-executing history — and
+  recursive aggregation folds a whole history into one root a light client
+  checks.
 
 - **An honest assurance case.** [docs/ASSURANCE.md](docs/ASSURANCE.md) and
   [`AssuranceCase.lean`](metatheory/Dregg2/AssuranceCase.lean) state the
   guarantees as Lean theorems pinned to exactly `{propext, Classical.choice,
   Quot.sound}` — no `sorry`, no extra axioms — each with non-vacuity witnesses
   (the property provably *can* fail, and is proven not to), and each named seam
-  between the theorems and the deployed node stated at file:line.
+  between the theorems and the deployed node stated at file:line. The composed
+  apex `deployed_system_secure` conjoins all five guarantees over one committed
+  running-entry forest.
 
 ## Assurance — the five guarantees
 
@@ -167,16 +184,19 @@ The case to a light client is five guarantees plus the running entry:
 
 - **A — Authority.** Every state change is justified by an unforgeable,
   non-amplified, fresh token chain. Production (mint) is gated on holding the
-  issuer's capability; a grant conferring authority the holder lacks is rejected.
+  issuer's capability; a grant conferring authority the holder lacks is rejected
+  (the gate discriminates — it is not `:= True`).
 - **B — Conservation.** Per asset, the resource sum is *identically zero* on
-  every reachable state. Mint, burn, and fees are ordinary moves against
-  negative-capable wells; no verb can move any asset's sum.
+  every reachable state. Under `AssetId := CellId` every asset is its issuer
+  cell; mint, burn, and fees are ordinary moves against negative-capable wells,
+  and no verb can move any asset's sum.
 - **C — Integrity.** A receipt binds the *whole* post-state. The circuit and the
   executor provably produce the same receipt; a commitment that drops a field is
   provably not a faithful bridge.
 - **D — Freshness.** No replay, no double-spend: a committed spend's nullifier
-  was fresh (an in-circuit sorted-tree non-membership opening), and revocation
-  takes effect at finality.
+  was fresh (an in-circuit sorted-tree non-membership opening), revocation takes
+  effect at finality, and a stored capability cannot outlive its grantor's
+  revocation (the retrieval-epoch rule).
 - **E — Unfoolability.** A light client checking only the aggregate root learns
   A–D for the *entire* history, re-witnessing nothing; a tampered or reordered
   aggregate cannot bind.
@@ -189,17 +209,99 @@ BLAKE3 CR, Ed25519 EUF-CMA, HMAC unforgeability, AEAD, FRI/STARK soundness, BLS
 quorum certs, and post-GST synchrony. Higher assumptions reduce onto this floor;
 nothing else is load-bearing.
 
-**Open, named — why this is not security-critical-ready.** The proof system is
-mid-cutover to a single rotated multi-table circuit (−65.6% proof size, verify
-3.4× faster); every finalized turn is proven *today* — a chained-cohort prover
-keeps even heterogeneous turns covered — and the legacy hand-AIR path is being
-deleted to reach a single verification key. Cell programs today speak a small
-slot-level grammar; the expressiveness uplift that makes real apps *natural*
-(richer fields, cross-cell reads, growable collections) is in progress
-([docs/REFINEMENT-DESIGN.md](docs/REFINEMENT-DESIGN.md)).
-No independent audit has happened. The seams are enumerated in §3 of
-[docs/ASSURANCE.md](docs/ASSURANCE.md). **Do not use for anything
-security-critical.**
+**Open, named — why this is not security-critical-ready.** The honest seams are
+enumerated in §3 of [docs/ASSURANCE.md](docs/ASSURANCE.md). The crypto floor
+above is *assumed*, not discharged — the named primitives enter as hypotheses.
+The deployed-binary bridge is the largest open distance from l4v-grade: the
+Lean→C/`.a` link correspondence and the wire-codec translation validation
+(`dregg-lean-ffi/src/marshal.rs`) are stated as obligations, not yet proven.
+On the shared devnet the per-turn STARK currently stays `proof_pending` (the
+witness lands immediately; the async prove pool isn't attaching proofs), and
+the deployed devnet binary runs solo (single-node ordering). No independent
+audit has happened. **Do not use for anything security-critical.**
+
+## deos — the agentic desktop
+
+deos is the userlayer where a *window is a capability* and an interaction is a
+*verified turn*. It adds **zero new trust**: every visual and interactive
+primitive reduces to a kernel theorem. See [docs/deos/DEOS.md](docs/deos/DEOS.md).
+
+- **htmx on crack.** A cell declares **affordances** — named, typed, cap-gated
+  verified-turn templates. The "button" is a cap-gated effect, the "fragment" is
+  the attested post-state surface, and *who may press it* is decided by held
+  capabilities, not a session cookie. The render/fire gate is the genuine
+  `is_attenuation` (`required ⊆ held`, the proven lattice), so progressive
+  enhancement becomes progressive *attenuation*: an agent sees exactly the
+  affordances its caps authorize. A `GatedAffordance` further pairs the cap-gate
+  with a live cell-program state-gate — a button lights iff caps *and* state both
+  pass, and goes dark the instant the cell changes
+  ([`Deos/GatedAffordance.lean`](metatheory/Dregg2/Deos/GatedAffordance.lean)).
+
+- **Transclusion = Xanadu, shipped.** A transcluded quote *is* a first-class
+  provenanced citation of a source cell's committed field value — the value
+  Nelson wanted, made literal and unbreakable. It is the verified cross-cell
+  observation: the quote carries its provenance, cannot be forged or silently
+  edited, and is per-viewer. Each of the four Xanadu properties is an existing
+  kernel theorem restated for the docuverse, no new mathematics
+  ([`Deos/Transclusion.lean`](metatheory/Dregg2/Deos/Transclusion.lean)).
+
+- **The powerbox (CapDesk).** Granting authority is *designate-then-attenuate*:
+  you point at a resource and hand over a strictly weaker capability than you
+  hold, never ambient authority ([`starbridge-v2/src/powerbox.rs`](starbridge-v2/src/powerbox.rs)).
+
+- **The web-of-cells.** Cells address each other by `dregg://` reference; a peer
+  reaches a surface by a verified attested read, not by trusting a server. Live
+  DOM and JS bundles publish *as* web-of-cells cells.
+
+- **Rehydratable frustum-snapshots — the dregg-only novelty.** A deos
+  "screenshot" embeds a sturdyref behind a membrane, so *opening the image*
+  re-attaches a live, **per-viewer, attenuated, liveness-typed** surface,
+  confined by construction. The liveness-type is a *proven* confinement readout:
+  `ReplayedDeterministic` is exactly the fragment whose every interaction went
+  through the membrane ([`Deos/Rehydration.lean`](metatheory/Dregg2/Deos/Rehydration.lean)).
+  The membrane composes `is_attenuation` across reshare hops, so a forwarded
+  view can never amplify.
+
+The forcing-function exemplar is a **multiplayer fog-of-war game where the
+security property *is* the game mechanic**: what a player can see is exactly
+what its caps authorize it to rehydrate, fail-closed, with a real proof
+obligation (you provably cannot even *prove* the enemy's vision). It runs a full
+agent-vs-agent match through the cap gate, with a membrane-negotiation spectator
+surface. See [docs/deos/DEOS-APPS.md](docs/deos/DEOS-APPS.md).
+
+## The durable verified workflow — what a deos app *is*
+
+A deos app is a **cap-mandated, verified, durable workflow**: a multi-step
+process that runs to completion exactly once even across crashes (durable, à la
+DBOS), where each step is admitted only by a capability its actor holds
+(attenuable, à la ocap), each step's effect is a verified turn the substrate
+re-validates before it can become state (unforgeable + conserving, à la dregg),
+and each step is surfaced as a fireable affordance (interactive, à la the web).
+It is four surfaces of the one kernel, proven to be the same object. See
+[docs/deos/DURABLE-WORKFLOW.md](docs/deos/DURABLE-WORKFLOW.md).
+
+- **A step is a verified turn** — capability-gated, protocol-ordered, attested;
+  no unauthorized or out-of-order step can ever commit
+  ([`Protocol/Workflow.lean`](metatheory/Dregg2/Protocol/Workflow.lean)).
+- **A step *is* an affordance fire** — the deos surface renders the choreography,
+  it does not fork it: the cap-gate is the authorization, the state-gate is the
+  phase precondition ([`Deos/WorkflowBridge.lean`](metatheory/Dregg2/Deos/WorkflowBridge.lean)).
+- **One attenuable mandate** delegates the whole workflow, bounds every step,
+  and keeps it legal forever under any adversarial schedule
+  ([`Apps/CompartmentWorkflowMandate.lean`](metatheory/Dregg2/Apps/CompartmentWorkflowMandate.lean)).
+- **Durable execution over verified turns** — [pg-dregg](docs/PG-DREGG.md) is
+  "DBOS, but every step is a verified turn": reads are free SQL over the
+  materialized mirror, writes go through the `AUTHZ → CHAIN → APPLY` spine, and
+  crash-recovery re-validates every persisted turn on the way up
+  ([`pg-dregg/src/workflow.rs`](pg-dregg/src/workflow.rs)).
+- **Composition is right-skewed, and refinement is decidable.** Flows compose by
+  choice `⊔`, sequence `⋆`, and meet `⊓`; the algebra is a right-skewed Kleene
+  algebra with distributive meets (RSKA_d⊓), because the reactive rung reads both
+  old and new state ([`Deos/FlowAlgebra.lean`](metatheory/Dregg2/Deos/FlowAlgebra.lean)).
+  That makes *"does flow/policy A refine B"* a **decidable** question:
+  `decideRefines : Flow → Flow → Bool` is sound and complete, with a `Decidable`
+  instance ([`Deos/FlowRefine.lean`](metatheory/Dregg2/Deos/FlowRefine.lean)) —
+  the foundation for ARGUS's "does this protocol evolution refine the spec?" bar.
 
 ## The surfaces
 
@@ -212,26 +314,22 @@ the same verified kernel.
   an inescapable authorization step: `.turn().sign().submit()`.
 - **The MCP server** ([`node/src/mcp.rs`](node/src/mcp.rs)). AI-agent access,
   cap-gated: every tool a sub-agent calls carries a biscuit-style capability the
-  node admits or refuses.
+  node admits or refuses, routed through the Lean producer gate.
 - **The Discord bot** ([`discord-bot/`](discord-bot/)). A first-class devnet
   citizen — councils, real signed turns, cipherclerk macaroons — not a
   read-only mirror.
 - **The Studio / Playground** (the [site](site/)). Stage, run, and prove turns
   in the browser against a live wasm executor.
 - **[pg-dregg](docs/PG-DREGG.md)** ([`pg-dregg/`](pg-dregg/)). dregg capabilities
-  as a PostgreSQL Row-Level-Security layer: a policy reads
-  `dregg_cap_admits(token, 'read', id, …)` instead of hand-rolled SQL, and the
-  decision is the *same one the kernel makes*, from the same token.
+  as a PostgreSQL Row-Level-Security + durable-workflow layer: a policy reads
+  `dregg_admits('read', id)` instead of hand-rolled SQL — the decision is the
+  *same one the kernel makes*, from the session's presented token — and reads
+  are free SQL while writes are verified turns.
 - **deos — the agentic desktop** ([`starbridge-v2/`](starbridge-v2/) ·
-  [docs/deos/DEOS.md](docs/deos/DEOS.md)). The userlayer where a *window is a
-  capability* (`Target::Surface(cell)`) and an interaction is a verified turn —
-  htmx-on-crack: a cell declares cap-gated affordances, and pressing one is a
-  turn the witness-graph records. Its one genuine novelty is the **rehydratable
-  frustum-snapshot** — a screenshot that embeds a sturdyref-behind-a-membrane, so
-  *opening the image* re-expands a live, per-viewer, attenuated, liveness-typed
-  view, confined by construction (the fog-of-war non-interference and rehydration
-  theorems are machine-checked in [`metatheory/Dregg2/Deos/`](metatheory/Dregg2/Deos/)).
-  **starbridge-v2** is the native cockpit that *embeds the real verified executor*.
+  [docs/deos/DEOS.md](docs/deos/DEOS.md)). The native cockpit that *embeds the
+  real verified executor*: affordance surfaces, the `dregg://` web-of-cells
+  browser tab, the interactive powerbox, transclusion, and rehydratable
+  frustum-snapshots.
 - **DreggDL** ([`dregg-deploy/`](dregg-deploy/)). Declarative deployment specs;
   an over-grant in a spec is caught as in-forest capability amplification before
   anything deploys.
@@ -240,14 +338,17 @@ the same verified kernel.
   *firmament* is a seL4-hosted ground that holds deterministic apps inside one
   capability fabric (seL4 caps isolate protection domains; dregg caps mediate
   the cells inside them) — an seL4 capability and a dregg capability are the
-  *same* abstraction at two points on a distance parameter. **Today:** the
-  Robigalia v0 demo boots Rust userspace protection domains, a real on-device
-  STARK verifier PD, **and the executor PD itself** — the Lean kernel
-  `execFullForestG` runs inside a real seL4 protection domain — on the seL4
-  microkernel under QEMU (aarch64, riscv64 booting too). The Lean-runtime port
-  long called the *one true blocker* is closed: the runtime embeds single-threaded,
-  no allocator override, IO-free. **Remaining:** productionization — the crypto
-  floor supplied from the verifier-STARK PD, and the decomposed five-PD assembly.
+  *same* abstraction at two points on a distance parameter, and at `n = 1`
+  (one machine) the distributed bounds collapse to strong local properties.
+  **Today:** the Robigalia v0 demo boots Rust userspace protection domains, a
+  real on-device STARK verifier PD, **and the executor PD itself** — the Lean
+  kernel `execFullForestG` runs inside a real seL4 protection domain — on the
+  seL4 microkernel under QEMU (aarch64; riscv64 booting too). The Lean-runtime
+  embedding long called the *one true blocker* is closed: the runtime embeds
+  single-threaded, with no allocator override, IO-free
+  ([docs/EMBEDDABLE-LEAN-RUNTIME.md](docs/EMBEDDABLE-LEAN-RUNTIME.md)).
+  **Remaining (named):** productionization — the crypto floor supplied from the
+  verifier-STARK PD, and the decomposed multi-PD assembly.
 
 ## Run it yourself
 
@@ -269,12 +370,14 @@ build notes.
 
 | Where | What |
 |-------|------|
-| [`metatheory/`](metatheory/) | **The system itself**, in Lean 4 (library `Dregg2`): the eight-verb kernel, the gated executor, the circuit IR + descriptor emission, the assurance case. l4v-shaped: abstract spec → executable design → refinement proofs. |
+| [`metatheory/`](metatheory/) | **The system itself**, in Lean 4 (library `Dregg2`): the eight-verb kernel, the gated executor, the circuit IR + descriptor emission, the assurance case, and the deos modeling (`Dregg2/Deos/`). l4v-shaped: abstract spec → executable design → refinement proofs. |
 | [`dregg-lean-ffi/`](dregg-lean-ffi/) | The link: compiles the Lean executor into `libdregg_lean.a` and exports the entry the node calls. |
 | [`node/`](node/) | The daemon: HTTP/MCP API, gossip + blocklace sync, block production driven by the Lean producer. |
 | [`circuit/`](circuit/) | The STARK stack: the Lean-descriptor interpreter (the prover), Plonky3, recursive aggregation, the light-client verifier. |
 | [`cell/`](cell/), [`turn/`](turn/), [`wire/`](wire/) | Cell state, turn types, and the wire codec — the Rust data plane the executor's decisions flow through. |
 | [`blocklace/`](blocklace/), [`federation/`](federation/), [`captp/`](captp/) | The DAG (signed, equivocation-detecting, BFT-final), committee machinery, and capability transport between nodes. |
+| [`pg-dregg/`](pg-dregg/) | dregg capabilities + durable verified workflows as a PostgreSQL extension (RLS policies + the verified-write spine). |
+| [`starbridge-v2/`](starbridge-v2/), [`starbridge-web-surface/`](starbridge-web-surface/) | deos: the native cockpit (embeds the real executor) and the web-surface / affordance / rehydration stack. |
 | [`sdk/`](sdk/), [`sdk-ts/`](sdk-ts/), [`sdk-py/`](sdk-py/), [`cli/`](cli/), [`site/`](site/) | Building against dregg: the three SDKs, the `dregg` CLI, and the web Studio/Playground/Explorer. |
 | [`starbridge-apps/`](starbridge-apps/), [`docs/`](docs/) | Applications built on the substrate, and the design documents. |
 
