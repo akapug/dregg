@@ -460,6 +460,11 @@ pub use membership_verifier::{
     registry_with_real_verifiers_full, single_member_authorized_root,
     single_member_membership_proof,
 };
+#[cfg(feature = "threshold-sig")]
+pub use membership_verifier::{
+    StaticThresholdSigPolicy, ThresholdSigCommittee, ThresholdSigPolicyAuthority,
+    ThresholdSigVerifier, register_threshold_sig_verifier, threshold_sig_proof_bytes,
+};
 
 /// The turn executor: applies turns to a ledger atomically.
 mod effect_vm_bridge;

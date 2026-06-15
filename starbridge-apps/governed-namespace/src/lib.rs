@@ -1283,18 +1283,22 @@ pub fn register_nameservice_route_action(
 //      SUBMISSION path — the half the floor's `evaluate_with_meta`-only tests never
 //      exercised through a real signed turn (see `tests/deos_seam.rs`).
 //
-// **THE `commit_table_update` SEAM, named honestly.** `commit_table_update` rides
+// **THE `commit_table_update` THRESHOLD-SIG FIRE.** `commit_table_update` rides
 // `Authorization::Custom` + a `WitnessedPredicate { Custom { vk_hash: GOVERNANCE_VK } }`
-// (the constitutional threshold-sig). The `EmbeddedExecutor` wires
-// `WitnessedPredicateRegistry::default_builtins()`, whose witnessed verifiers are the
-// FAIL-CLOSED `NotYetWiredVerifier` — so a turn riding that predicate CANNOT have a
-// happy-path green fire through the embedded executor today. We therefore expose
-// `commit_table_update` as a CAP-AUTHORIZATION-ONLY affordance carrying the existing
-// [`build_commit_table_update_action`] effects as its surface representative, and the
-// deos seam does NOT assert a green commit fire. The cap gate (root clears it) is the
-// real, tested tooth; the full executor acceptance is gated on the
-// `WitnessedPredicateRegistry`-into-executor lane (the same dependency the crate docs
-// name). This is option (b): expose it, name the seam, do not fake it.
+// (the constitutional threshold-sig). The verifier for that kind is
+// [`dregg_turn::executor::ThresholdSigVerifier`] — a real BLS12-381 + KZG
+// weighted-threshold-signature check (`hints::verify_aggregate`: the constant-size
+// aggregate QC's SNARK proof + final BLS pairing), the same primitive
+// `dregg-federation`'s `FederationCommittee` / `ThresholdQC` wrap. A host installs it
+// with [`dregg_turn::executor::register_threshold_sig_verifier`] under `GOVERNANCE_VK`,
+// backed by a `StaticThresholdSigPolicy` mapping the predicate `commitment` (the
+// `governance_committee_root`) to the committee's `hints::Verifier` + the k-of-n floor.
+// With that registry installed (`EmbeddedExecutor::set_witnessed_registry`), the commit
+// fire COMMITS through the full executor under a valid k-of-n aggregate over the
+// canonical custom signing message, and is REFUSED under an under-threshold / forged /
+// wrong-committee signature — both polarities are proven end-to-end in
+// `tests/commit_threshold_sig.rs`. The threshold floor is pinned from the host policy,
+// not the QC, so an aggregator-chosen low threshold cannot downgrade the gate.
 
 /// The governance rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles
 /// the floor crate's cap-graph + `SenderAuthorized(committee_root)` enforces:

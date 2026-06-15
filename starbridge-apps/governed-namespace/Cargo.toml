@@ -48,6 +48,14 @@ serde_json = { workspace = true }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
+# The `commit_table_update` `GOVERNANCE_VK` enforced-fire test builds a real
+# k-of-n BLS threshold-signing committee and produces aggregate QCs. We reuse
+# `dregg-federation`'s `FederationCommittee` wrapper (it sets up the `hints`
+# universe, signs shares, aggregates, and exposes the `hints::Verifier` the
+# `ThresholdSigVerifier` policy needs) and `dregg-hints` for the raw QC bytes.
+# This is dev-only — the app crate itself stays free of the federation edge.
+dregg-federation = { path = "../../federation" }
+hints = { path = "../../hints", package = "dregg-hints" }
 
 [lints]
 workspace = true
