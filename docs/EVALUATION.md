@@ -153,7 +153,11 @@ No build, no account, no one in the loop — just `curl`:
    the JSON tells you it's healthy, solo-federation, with a verified Lean state
    producer and per-turn proving on.
 
-2. **Faucet yourself a cell.** Any fresh 32-byte hex id is a valid recipient:
+2. **Watch a verified turn — faucet a cell.** A cell id is a commitment to a
+   public key (`id == derive_raw(pubkey, token)`), so a bare random id is an
+   **unspendable** address: the faucet credits it (a real verified turn) but no
+   one holds its key to sign a spend. To fund a cell you OWN, pass a `public_key`
+   you hold (what `dregg demo` does). This bare-address form just shows the turn:
 
    ```sh
    CELL=$(python3 -c "import secrets;print(secrets.token_hex(32))")
