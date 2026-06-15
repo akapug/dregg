@@ -11,6 +11,94 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## DREGG-LEAN-FFI ARCHIVE IS A SHARED MUTABLE FILE — concurrent-feature-set build race (named 2026-06-15)
+
+`dregg-lean-ffi/build.rs:966` writes the GIT-TRACKED `dregg-lean-ffi/libdregg_lean.a` (the canonical
+185 MB Lean-closure archive) from EVERY cargo target's build-script: it splices the Dregg2 closure in,
+then `gc_unreachable_members` PRUNES to the set reachable from THIS build's `dregg_*` exports. The object
+CACHE is per-`OUT_DIR` (safe), but the ARCHIVE is ONE shared path. Two lanes with different feature sets
+building concurrently RACE: a default-feature lane splices the full closure (~3041 reachable members),
+a `--no-default-features` lane (e.g. `starbridge-v2 --features embedded-executor`) prunes it to a smaller
+set (~150 MB), and a torn read mid-rewrite leaves the archive missing initializers
+(`Undefined symbols: _initialize_Dregg2_Metatheory_EpistemicDial` / `…CreateCellFromFactory`). OBSERVED
+LIVE during the Theme-2 lane: my `cargo test -p dregg-lean-ffi` link FAILED while a starbridge lane was
+re-seeding the archive; my next run (after it settled) was green. So it's a transient swarm-safety bug,
+not a code bug — but it makes `cargo test` of any archive-linking crate FLAKY under the swarm. FIX shape
+(pick one): (a) make the archive per-`OUT_DIR` (copy the seeded base into `OUT_DIR`, splice+link THERE,
+never touch the git path during a build) — cleanest, fully swarm-safe; (b) an flock around the
+splice+GC+link critical section keyed on the archive path; (c) skip `gc_unreachable_members` when
+`CARGO_FEATURE_*` indicates a reduced feature set (avoids the shrink-then-rebloat thrash). Until fixed:
+build archive-linking crate tests SERIALLY, or in a pbuild lane dir. (My memory's "copy a shared file at
+HEAD into your pbuild lane dir if a foreign in-flight edit breaks the crate" is the manual workaround.)
+
+## ⚑⚑ PRIME-ORDER-SCHNORR-CURVE (named 2026-06-15 — MAKE-PRIVACY-REAL lane, the DEEP one; TWO bugs, both with a fix in hand)
+
+**Two stacked breaks on the in-circuit Schnorr (confidential-VALUE) path — NOT core auth (Ed25519, real).**
+Both are loudly `// SECURITY:`-marked in-file; a rigorous PARI/GP curve search + an against-the-code
+probe nailed both AND the fix.
+
+**BUG 1 (FOUNDATIONAL — `circuit/src/babybear8.rs`): BabyBear^8 is NOT a field.** The tower reuses
+non-residue `W=11` for BOTH layers (`x^4−11` and `y^2−11`). But `x^2` already squares to 11, so
+`y^2−11=(y−x^2)(y+x^2)` factors → the quotient is a product ring `F_{p^4}×F_{p^4}` with zero divisors,
+not `F_{p^8}`. PROVEN against the real code (temp probe, since removed): `A=y−x^2` is nonzero,
+`A·(y+x^2)=0`, `A.inverse()=None` (norm `11−11=0`). This voids the "size p^8 ⇒ ~124-bit DL" premise at
+the foundation. FIX: the top-layer non-residue must be a genuine `F_{p^4}` element (NO base scalar works
+— every `c∈F_p*` is a square in `F_{p^4}`); use `V=x`, giving the clean field `F_p[z]/(z^8−11)` with
+`z=y`, `x=z^2` (minimal, keeps the "−11" flavor; basis maps `x^i=z^{2i}, y=z`).
+
+**BUG 2 (`circuit/src/schnorr_curve.rs`): composite 31-bit generator order.** `GENERATOR=(1,2)` lives in
+the base-field embedding `F_p⊂F_{p^8}`, order `2013191319=3·331·2027383` (~2^31, composite) →
+Pollard-rho/Pohlig–Hellman recover sk in seconds. STRUCTURAL obstruction found: ANY curve defined over
+the BASE field has `#E(F_{p^8})` divisible by `#E(F_p)·#E(F_{p^2})·#E(F_{p^4})` (nested point groups),
+so it is never near-prime — the largest prime factor is bounded by the primitive part `≈p^4≈2^124`,
+giving at best ~62-bit security. (Confirmed: all 6 j=0 sextic twists are catastrophically smooth, top
+factors 83/81/59-bit; best base-field a≠0 gives a 124-bit-prime × 124-bit-cofactor split = 62-bit.)
+**The curve MUST be defined directly over F_{p^8}, not descend to a subfield.**
+
+**THE FIX IS IN HAND (a real prime-order curve over the corrected field):** SEA over F_{p^8} is ~5 s/curve
+in PARI/GP. Over `F_p[z]/(z^8−11)`, **`y^2 = x^3 + (z+2)·x + (z^3+8)` has PRIME order**
+`N = 269903886087112502248563194479599378757044855200285447932848137338699712099` (248-bit, **cofactor
+h=1**, exactly 124-bit Pollard-rho security). In the code's basis: `z+2 → 2·[1] + 1·[y]`;
+`z^3+8 → 8·[1] + 1·[x·y]` (since `z^3=z^2·z=x·y`). **Closure steps:** (1) fix `babybear8.rs` to
+`z^8−11` (re-derive `mul`/`inverse`/`square`, or keep the tower with a correct top non-residue);
+(2) set `CURVE_A=z+2`, `CURVE_B=z^3+8` (a≠0 now — `double()` already carries the `+a` term, good);
+(3) `GENERATOR` = random point × cofactor (h=1 ⇒ any non-identity point generates); `ORDER=N`;
+(4) rewrite `scalar_*_mod` to full 248-bit bigint mod `N` (today single-limb u32). The AIR
+(`schnorr_air.rs`, now a real `s·G+e·pk==R` check) + `schnorr_sig.rs` are curve-agnostic — only the
+constants + bigint scalar arithmetic change. NOT reachable in this lane (a ~248-bit field/curve rebuild
++ new scalar bigint is its own work); the groundwork (bug proofs, the obstruction theorem, the exact
+prime-order params) is DONE here.
+
+## ⚑ SEMIHOST EXECUTOR-PD LANDED (2026-06-14 — the cockpit on the sel4 PD world)
+
+**The executor-PD's `turn_in → step → commit_out` cap partition RUNS on the semihost, and a cockpit
+turn flows through it.** `sel4/dregg-firmament/src/executor_pd.rs` adds `ExecutorPd<R: TurnRunner>` —
+the firmament HEART (FIRMAMENT.md §2 L3) as the Endpoint SERVER over the `EmulatedKernel`: an app-PD
+stages a postcard `Turn` into `turn_in`, `pp_call`s the executor (the `ingress→executor` edge the real
+`executor-stub` PD awaits on ch 1), the executor reads `turn_in`, runs the bytes through `R`, writes the
+`TurnReceipt`/reason into `commit_out`, and replies. It rides the EXISTING kernel IPC (Endpoint
+recv/reply + regions, the SAME the compositor-PD uses); NO executor logic of its own. starbridge-v2
+`world.rs` plugs in the FULL real `World` as the runner (`WorldRunner` → `SemihostCockpit::
+commit_turn_via_semihost`): a cockpit turn stages → signals → runs the IDENTICAL `World::commit_turn`
+path behind the Endpoint → reads the receipt back out of `commit_out`. PROVEN: commits, rejects an
+overspend fail-closed, and is **byte-for-byte equal to the direct path** (same `receipt_hash`, same
+`state_root`). This is the §3 KEYSTONE payoff ("the verified executor-PD hosts on the semihost NOW")
+turned runnable. Tests: firmament `tests/executor_pd_boot.rs` (cross-PD Endpoint) + `executor_pd.rs`
+inline units + starbridge-v2 `world.rs` (the 3 semihost tests). Doc: `docs/SEMIHOST-COCKPIT.md`.
+
+### residue named by this landing (closure lanes):
+- **the gpui frontend still calls `World::commit_turn` DIRECTLY, not through `SemihostCockpit`** — the
+  semihost path is wired + proven equivalent, but the cockpit's panels (`cockpit.rs`, the many commit
+  sites) have not been CUT OVER to route through `commit_turn_via_semihost`. Closure = swap the commit
+  call across the panels (mechanical; the byte-for-byte equivalence test is the safety net), then run the
+  frontend as an app-PD client of the executor-PD + compositor-PD over the kernel Endpoints (the cross-PD
+  `serve_turn`/`serve_present` path, not the inline drive). → starbridge-v2, the frontend cutover. NOT
+  blocking (the backend runs the PD world today; this routes the UI through it). `docs/SEMIHOST-COCKPIT.md §6`.
+- **the wgpu software-render path → compositor-PD framebuffer is DESIGNED, not built** — an app-PD
+  rendering its surface with a software wgpu adapter (lavapipe) and `present()`ing the pixels to the
+  compositor-PD's framebuffer region (the in-sel4 render). The authority gate (T1/T2/T3) runs; the pixel
+  pipeline is the named graphics frontier (F1/F2/F3, R3 Stage C). → the graphics lane. `docs/SEMIHOST-COCKPIT.md §4`.
+
 ## ⚑⚑⚑ C7 GREP-ZERO LANDED (2026-06-14 — the v1 deletion drive, READ FIRST)
 
 **THE FLIP IS DONE — v1 effect-VM proof reaches GREP-ZERO under `recursion`.** With PATH-PRESERVE
@@ -130,7 +218,7 @@ named): pg-dregg does not link `dregg-turn`, so the in-backend producer SYNTHESI
 decoding the submitter's postcard `SignedTurn` — lifting the full `SignedTurn→WForest` decode in-backend (the node-side
 `dregg-turn` `lean_apply` marshaller, #171) is the one piece between this and "an arbitrary submitted turn executes
 in-backend". seL4 executor-PD = WEEKS of productionization. verifier-PD is Lean-free-linkable (`no-lean-link`).
-- **DEOS SPINE on seL4 — the persist-PD IS the `dregg.turns` commit log of the seL4 deos foundation (R2 rung, host-test GREEN).** `docs/PG-DREGG-ON-SEL4-DEOS-SPINE.md` + `sel4/persist-hosttest/` (NEW): the persist-PD's durable verified commit log + Tier-C chain gate, `no_std`+`alloc`, REUSING `pg-dregg/src/mirror.rs:477` `verify_chain_step` / `ChainRefusal` / `persist/src/commit_log.rs` `CommitRecord` VERBATIM (not reinvented). `cargo run`+7 `#[test]`s green: executor→persist→read spine + all 4 anti-substitution teeth + durable resume. The WRITER organ (executor PD) BOOTS; this is the STORE organ, host-witnessed. Distinct from `docs/PG-DREGG-ON-SEL4.md` (the literal-Postgres VMM-guest ladder) — the two are the SQL face vs the native PD-pair spine, cross-linked. RESIDUAL (the named wall + levers, all the macOS user-mode-qemu-aarch64 checkpoint, NOT the semantics): (R3) the redb-over-block-cap backend under the persist PD (`docs/SEL4-EMBEDDING.md` §3 — swap the host `BTreeMap` for redb over the sole block cap; gate logic is done); (§3.3) the executor→persist `CommitRecord` serialization + `commit_out` shared-region framing (today the seat reads a sentinel byte) + the persist-PD ELF link carrying `commit_store.rs` (the crypto-floor on-device checkpoint shape); (§3.3) the ingress/submit-queue enqueue over `turn_in` (the seL4-native outbox, executor is the gate, = `node/src/submit_queue_drainer.rs` shape). → `sel4/persist-hosttest/` + `sel4/dregg-pd/persist-stub/`, downstream of the executor PD boot (R0) which is DONE.
+- **DEOS SPINE on seL4 — the persist-PD IS the `dregg.turns` commit log of the seL4 deos foundation; now REAL redb durability + the app-hosting economy (R2+R3+R8, host-GREEN).** `docs/PG-DREGG-ON-SEL4-DEOS-SPINE.md` + `sel4/persist-hosttest/`: the persist-PD's durable verified commit log + Tier-C chain gate. **Three organs, one gate, 21 tests green** (`cargo test --release`): (1) `commit_store.rs` — the chain-gate discipline `no_std`+`alloc`, REUSING `pg-dregg/src/mirror.rs:477` `verify_chain_step`/`ChainRefusal` + `persist/src/commit_log.rs` `CommitRecord` VERBATIM (rides INSIDE the persist PD via `#[path]`); (2) **`redb_store.rs` (NEW) — the REAL durable store**: the SAME gate + record committed into real `redb` ACID tables over a block-device `StorageBackend` (`len`/`read`/`set_len`/`sync_data`/`write` = exactly a block cap). Durability is REAL — `commits_survive_drop_and_reopen_over_the_same_bytes` (drop the store, reopen over the file bytes, head/cursor/log/indices recover, chain self-checks). 8 `#[test]`s. (3) **`hosting.rs` (NEW) — the app-hosting economy**: pay coin to be hosted = a conserving `Transfer` (app→host) committed through the durable spine; a lapsed fee EVICTS (a verified durable turn dropping the hosting), fail-closed; Σ value invariant. 6 `#[test]`s + `Dregg2/Apps/HostingLease.lean` (the lease = a TIME(period)+BUDGET(balance) caveat over the durable slot; 5 teeth + #guard, `#assert_all_clean`). Witness binaries `host_persist_spine` + `host_durable_hosting` green. Distinct from `docs/PG-DREGG-ON-SEL4.md` (the literal-Postgres VMM-guest ladder) — SQL face vs the native PD-pair spine. RESIDUAL (the named wall + levers, all the macOS user-mode-qemu-aarch64 checkpoint, NOT the semantics): (R3, REFINED) the **`BlockCapBackend`** — ONE `redb::StorageBackend` impl whose 5 ops go through the seL4 block cap (the durable redb store above it is host-green + unchanged; this is now a bounded device-driver trait impl, not "the backend"); (§3.3) the executor→persist `CommitRecord` serialization + `commit_out` shared-region framing (today the seat reads a sentinel byte) + the persist-PD ELF link carrying `commit_store.rs` (the crypto-floor on-device checkpoint shape); (§3.3) the ingress/submit-queue enqueue over `turn_in` (= `node/src/submit_queue_drainer.rs` shape). → `sel4/persist-hosttest/` + `sel4/dregg-pd/persist-stub/`, downstream of the executor PD boot (R0) DONE.
 
 **STARFORGE:** dregg's agent joined the pen-pal agent-town — PR #12 `claude-of-dregg` (clone `~/clome/starforge-commons`),
 first letter to sibling `claude-of-tulip`. dregg is REAL + in contact with other people now.
