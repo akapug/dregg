@@ -49,6 +49,10 @@ pub enum CommandId {
     GoOrgans,
     /// Navigate to the PROOFS tab (proof-attach + STARK verification status).
     GoProofs,
+    /// Navigate to the POWERBOX tab (CapDesk — the trusted designation flow: an app
+    /// requests a cap it lacks; the user designates from what they hold; the powerbox
+    /// mints a fresh attenuated cap via a real grant turn).
+    GoPowerbox,
 
     // --- the A1 IDE DEVELOPER surfaces (editor buffer + terminal) ---
     /// Type a line into the editor buffer (free, in-memory — the doc goes dirty).
@@ -154,7 +158,7 @@ impl CommandId {
             }
             GoHome | GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
             | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm | GoGraph | GoOrgans
-            | GoProofs => Category::Navigate,
+            | GoProofs | GoPowerbox => Category::Navigate,
             BufferType | BufferCommit | BufferReadOnlyWrite | TerminalRunInMandate
             | TerminalRunOutOfMandate
             | SwarmCoordinatorEmitA | SwarmWorkerADrain | SwarmCoordinatorTransferAndWake
@@ -199,6 +203,7 @@ impl CommandId {
             GoGraph => "Go to Graph (ocap delegation · multi-hop layout)",
             GoOrgans => "Go to Organs (live trustline · flash-well cell-state)",
             GoProofs => "Go to Proofs (attach + STARK verification status)",
+            GoPowerbox => "Go to Powerbox (CapDesk — designate a held cap into an app, attenuated)",
             SwarmCoordinatorEmitA => {
                 "Swarm: coordinator emits task/go → worker-a (notify edge, async)"
             }
@@ -270,6 +275,7 @@ impl CommandId {
             GoGraph => "graph ocap delegation capability edge multi-hop reach blast-radius layout depth",
             GoOrgans => "organ trustline flashwell flash-well credit line channel mailbox court live cell-state",
             GoProofs => "proof stark verify attach tier verification signed by-construction light-client",
+            GoPowerbox => "powerbox capdesk designate grant capability attenuate mint file dialog ocap pick picker confined app no-ambient-authority",
             SwarmCoordinatorEmitA => {
                 "emit event notify wake inbox async turn receipt seam swarm coordinator worker"
             }
@@ -391,7 +397,7 @@ pub fn all_commands() -> Vec<Command> {
         // navigation
         GoHome,
         GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
-        GoAgent, GoBuffer, GoTerminal, GoSwarm, GoGraph, GoOrgans, GoProofs,
+        GoAgent, GoBuffer, GoTerminal, GoSwarm, GoGraph, GoOrgans, GoProofs, GoPowerbox,
         // replay
         ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
         ReplayForkHere, ReplayClearFork,

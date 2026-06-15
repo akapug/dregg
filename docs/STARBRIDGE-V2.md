@@ -157,6 +157,16 @@ starbridge_v2 (lib, feature embedded-executor)
 │               FRUSTUM-SNAPSHOT (`AffordanceSnapshot` + `rehydrate_for`): a tiny
 │               snapshot (cell + names, not data) that re-expands PER-VIEWER through
 │               the same attenuation gate — the deos rehydration thesis. gpui-free.
+├── powerbox   — the interactive POWERBOX (CapDesk): the trusted designation flow. A
+│               confined app-cell REQUESTS a cap it lacks (`CapabilityRequest`, no
+│               ambient authority); `Powerbox::present` filters a picker to what the
+│               cockpit principal ACTUALLY HOLDS (the principal's live c-list —
+│               `mint_needs_held_factory` made visible); the user designates a target +
+│               rights; `Powerbox::grant` runs the real `is_attenuation` (non-amp,
+│               `gen_conferral_is_attenuation`) then MINTS a fresh attenuated
+│               `CapabilityRef` into the app's c-list via a REAL `Effect::GrantCapability`
+│               through `World::commit_turn` — the app gets EXACTLY the designated,
+│               attenuated cap, the executor is the no-amplification backstop. gpui-free.
 ├── model      — the node's wire types (`/status`, `/api/cells`, `/api/events/stream`
 │               receipt events, the `/turn/submit` request). Pure serde; single-sourced
 │               in the library so the live-node panel + the thin client share one mirror.
@@ -175,8 +185,8 @@ starbridge-v2 (bin)
 ├── cockpit    — the gpui cockpit (feature gpui-ui): the comprehensive panels
 │               (cell world · inspector · blocklace · composer · objects ·
 │               dynamics) plus the workspace tabs (SHELL · agent · swarm · GRAPH ·
-│               ORGANS · PROOFS · WEB-OF-CELLS · buffer · terminal · composer ·
-│               objects · debugger · replay · cipherclerk · editor), rendering
+│               ORGANS · PROOFS · WEB-OF-CELLS · POWERBOX · buffer · terminal ·
+│               composer · objects · debugger · replay · cipherclerk · editor), rendering
 │               `World` directly. The SHELL tab renders the cap-first compositor
 │               scene (surfaces over real cells); the OBJECTS tab projects proofs /
 │               nullifiers / cell lifecycle through `reflect`; the GRAPH tab draws
@@ -353,6 +363,72 @@ in-circuit cross-cell observation via the protocol's `ObservedFieldEquals`
 predicate (which lives below the web-surface crate's public API in
 `dregg_cell::predicate`).
 
+## The powerbox — CapDesk, the trusted designation flow (the ocap grant ceremony)
+
+An object-capability system has **no ambient authority**: a confined app-cell holds
+exactly the capabilities in its c-list and *cannot name a peer or resource it was
+never granted*. So how does a user hand a freshly-launched app the authority to touch
+one specific file / peer / cell — without that app getting the power to enumerate or
+reach anything else? The **powerbox** (CapDesk — the "open-file dialog *as the grant
+ceremony*"), the POWERBOX tab (`src/powerbox.rs` + the cockpit's `powerbox_panel`):
+
+1. the app **requests** a capability it lacks (it holds no power to obtain it — it can
+   only *ask*; it does not even get to see whether the user holds the target);
+2. the **trusted UI** — the cockpit, the system's own principal, **not** the app —
+   presents a **picker of the things the USER actually holds** (filtered from the
+   principal's live c-list: a target the user cannot reach simply *is not in the
+   picker*);
+3. the user **designates** one target + the rights to confer;
+4. the powerbox **mints a fresh, attenuated capability into the app's c-list via a
+   real grant turn** (`Powerbox::grant` → a genuine `Effect::GrantCapability` through
+   `World::commit_turn`), handing back **exactly** that one designated, attenuated cap.
+
+The app never sees the namespace; it gets precisely what the user pointed at, narrowed.
+The flow reinvents none of the machinery — it is the user-facing surface over facts the
+metatheory already **proves**:
+
+- **The trusted UI holds no ambient authority of its own** — it grants ONLY from the
+  cockpit principal's own held caps (exactly the `starbridge_web_surface::delegate`
+  thesis: "the delegate callback is the powerbox; holds no ambient authority").
+- **You cannot grant what you do not hold** — the proven `mint_needs_held_factory`
+  (`Dregg2/Spec/Authority.lean`: "minting needs a held factory cap; the powerbox is
+  not ambient"). The picker IS that fact made visible, and the real executor is the
+  backstop: a grant from a principal that holds nothing is **rejected by the
+  executor** (the same gate `world::over_grant_is_rejected` exercises), never by the
+  UI.
+- **The grant is strictly attenuating** — the conferred rights are `≤` the held rights
+  (the proven `gen_conferral_is_attenuation`). `Powerbox::grant` runs the genuine
+  `dregg_cell::is_attenuation` (`granted ⊆ held`) *before* it builds a turn, so a
+  request to confer MORE than the user holds is denied in-band (the anti-ghost tooth),
+  and the executor's no-amplification rule is the second gate.
+
+`src/powerbox.rs` is the panel's pure, gpui-free **flow MODEL** (like `web_cells.rs` /
+`landing.rs`): the cockpit renders exactly its rows (`Powerbox::all_text`), so the
+`cargo test` proves the flow without a GPU — the picker shows only held targets; an
+empty-c-list principal presents an empty powerbox; designating a held target mints a
+real attenuated cap (a real receipt); the app cannot obtain a target the user does not
+hold (denied, no turn); the powerbox refuses to amplify past the held ceiling; and the
+executor is the backstop even if a UI bug let a designation through.
+
+### Semi-reinteractive transclusion — powerbox × transclusion
+
+The web-of-cells **transclusion** (above) is **read-only**: the verified cross-cell
+finalized READ is *free* (a quote is a read, never a key — `TranscludedField::project_for`
+hands a viewer at most their own held authority, the membrane non-amp). **Semi-
+reinteractive transclusion** (`SemiReinteractiveTransclusion` in `src/web_cells.rs`)
+lifts exactly one rung higher, and ONLY through the powerbox: if the user designates
+it, the quote carries an **attenuated affordance capability** — the host document can
+*fire one of the source's affordances* (attenuated to what the user conferred), not
+merely read it. The read stays the free verified observation; the *interact* is a
+powerbox-mediated attenuated grant (`upgrade_transclusion_via_powerbox` → a real
+`Powerbox::grant` minting a cap reaching the source into the host's c-list). So a plain
+transclusion fires nothing; a powerbox-upgraded one fires **exactly** the granted
+(attenuated) affordance and no more — a wider affordance than was conferred is refused
+in-band by the same real `is_attenuation` the affordance surface gates on. Proven
+gpui-free: a plain transclusion is read-only; an upgraded one fires the granted
+affordance through the embedded executor (a verified turn) and refuses the wider one;
+and the powerbox refuses to upgrade a quote the user lacks source authority over.
+
 ## The landing — the warm front door (the boot view)
 
 The first thing the master interface shows is not a sparse window-manager scene:
@@ -449,6 +525,8 @@ over EVERY dregg datum and EVERY action. The coverage is an honest burn-down:
 | compositor layout (float · tile · stack) | **live** | `shell::Layout`, SHELL tab "cycle layout" |
 | the organ operations (open/draw/repay; create/join/remove; send/drain; evidence) | designed-pending | trustline/flash-well live *state* reflected (ORGANS panel); the operating verbs ride the SDK's `AgentRuntime` (trustline/flashwell in embed-core); channel/mailbox/court need `captp` (remote path) |
 | fire a cell affordance (htmx-on-crack, the deos interaction) | **live** (runs the real executor) | `affordance::AffordanceSurface::fire` → `AffordanceIntent::fire_through_world` → `World::commit_turn`; the SEAM is CLOSED (the receipt is the executor's own) |
+| powerbox designation (the trusted grant ceremony — mint an attenuated cap into an app) | **live** (runs the real executor) | `powerbox::Powerbox::present` (picker = the user's held caps) → `Powerbox::grant` (real `is_attenuation` non-amp, then `Effect::GrantCapability` through `World::commit_turn`); the executor is the `mint_needs_held_factory` backstop, POWERBOX tab |
+| semi-reinteractive transclusion (powerbox-upgraded quote: fire the granted affordance, attenuated) | **live** (runs the real executor) | `web_cells::WebCellsBrowser::upgrade_transclusion_via_powerbox` (a real `Powerbox::grant`) → `fire_transcluded_affordance` (the granted affordance through the executor; a wider one refused in-band) |
 | connect to a live node + stream its receipts | **live** (headless heart; gpui strip wired) | `client::LiveNode::sync` (snapshot reflections) + `connect_stream` (SSE `/api/events/stream` → `live_node::SseParser` → `ReceiptFeed`, `cx.notify()` per receipt); `--node <url>` |
 
 > **Lifecycle finding — seal/destroy are recorded, the *verbs* enforce
