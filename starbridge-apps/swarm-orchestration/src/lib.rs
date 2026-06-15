@@ -68,10 +68,11 @@
 #![forbid(unsafe_code)]
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode, CellProgram,
-    ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, field_from_u64,
-    hex_encode_32, symbol,
+    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CapabilityRef, CellAffordance,
+    CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect,
+    EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireError, FireExecuteError,
+    GatedAffordance, InspectorDescriptor, StarbridgeAppContext, StateConstraint, TurnReceipt,
+    canonical_program_vk, field_from_u64, hex_encode_32, symbol,
 };
 
 pub use dregg_app_framework::field_from_bytes;
@@ -386,6 +387,440 @@ pub fn build_drain_action(
 }
 
 // =============================================================================
+// The deos-native surface — the dispatch BOARD as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #3): swarm-orchestration's deos
+// re-expression was the second deos-native test, but lived in `tests/reexpress_deos_app.rs`
+// on the scaffold `emit`/`edit` placeholders (the "honest seam" it admitted). This
+// PROMOTES `board_app` into `src/`: the same operations are ONE [`DeosApp`]
+// ([`board_app`] below); the framework wires the rest — per-viewer projection, web-of-cells
+// publish (the BOARD cell IS a `dregg://` sturdyref), per-viewer rehydration, the generated
+// `<dregg-affordance-surface>` component, and the manifest — none of which the old bones
+// had. `register(ctx)` now mounts it (see [`register_deos`]).
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror supply-chain-provenance). The two
+// state-mutating operations (`dispatch`, `open_board`) are [`GatedAffordance`]s carrying a
+// live-state PRECONDITION; the FULL swarm program ([`coordinator_program`] =
+// [`swarm_constraints`]) is INSTALLED on the seeded board cell ([`seed_board`]) and
+// RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_dispatch`] / [`fire_open_board`] then submit the FULL multi-effect
+//      dispatch/open turn ([`dispatch_effects`] / [`open_board_effects`]), and the executor
+//      RE-ENFORCES the full swarm program — so the atomic budget `AffineLe(spent_a + spent_b
+//      <= budget)` (an over-budget runaway), the `StrictMonotonic(epoch)` (a replayed
+//      dispatch), the `Monotonic(SPENT_*)` (a meter rollback), and the `WriteOnce(budget)`
+//      (a quiet mandate widening) are all REAL executor refusals in the SUBMISSION path —
+//      the half the floor's `program.evaluate`-only tests never exercised through a real
+//      signed turn (see `tests/deos_seam.rs`).
+//
+// `grant_worker` carries the REAL [`Effect::GrantCapability`] (the `derive_no_amplify`
+// worker delegation: an ATTENUATED slice to the worker cell) as a cap-only affordance.
+
+/// The swarm rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles the floor
+/// crate's cap-graph enforces (a worker holds only its attenuated slice):
+///
+///   - an OBSERVER (an operator auditing a swarm she did not write — the narration-vs-truth
+///     reader) holds [`AuthRequired::Signature`] — the narrow tier: it can `view_board`
+///     (read lead / budget / meters / epoch) and nothing else;
+///   - a WORKER (a dispatched agent cell) holds [`AuthRequired::Either`] — it can
+///     `ack_dispatch` (the async drain, in its OWN receipted turn) AND view;
+///   - the LEAD / OPERATOR holds [`AuthRequired::None`]/root — it can `open_board` (pin the
+///     lead + mandate), `dispatch` (advance a worker meter + wake the worker), and
+///     `grant_worker` (hand a worker an attenuated slice) on top of everything a worker can do.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the observer ⊂ worker ⊂ lead ladder.
+pub const OBSERVER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The worker rights tier (sig-or-proof — ack + view). See [`OBSERVER_RIGHTS`].
+pub const WORKER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The lead/operator rights tier (root — open, dispatch, grant, +all). See [`OBSERVER_RIGHTS`].
+pub const LEAD_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The permissions a worker's attenuated capability carries (a `SelfCell` slice the lead
+/// hands forward NARROWED, never widened — the Lean `derive_no_amplify`). Matches the
+/// factory's `allowed_cap_templates` ceiling.
+pub const WORKER_CAP_PERMISSIONS: AuthRequired = AuthRequired::Signature;
+
+/// The `dispatch` **live-state precondition** — the board must be OPEN (`EPOCH >= 1`, the
+/// lead + budget are pinned). A real [`CellProgram`] read against the cell's current state,
+/// so a dispatch button is DARK before the board opens and LIT after (the htmx tooth). This
+/// gates "may `dispatch` fire now"; the dispatch INVARIANTS (the `AffineLe` budget gate +
+/// `StrictMonotonic(epoch)` etc.) are the installed [`coordinator_program`] the executor
+/// re-enforces on the produced transition.
+pub fn opened_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: EPOCH_SLOT,
+        value: field_from_u64(1),
+    }])
+}
+
+/// The `open_board` **live-state precondition** — the board must NOT yet be open
+/// (`EPOCH == 0`). So the `open_board` button is LIT only on a fresh board and goes DARK the
+/// instant it opens (the htmx tooth). The executor's installed `StrictMonotonic(EPOCH)` +
+/// `WriteOnce(BUDGET)` are the second guards (a re-open is a real refusal).
+pub fn preopen_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldEquals {
+        index: EPOCH_SLOT,
+        value: field_from_u64(0),
+    }])
+}
+
+/// **`grant_worker` effect** — the lead's real cap handoff: an [`Effect::GrantCapability`]
+/// of an ATTENUATED slice of the board's authority to the worker cell, at the SAME
+/// (`Signature`) permissions — narrowed, never widened (the Lean `derive_no_amplify`). This
+/// is the deos affordance's effect-template for `grant_worker`, NOT a scaffold stand-in.
+pub fn grant_worker_effect(board: CellId, worker_cell: CellId) -> Effect {
+    Effect::GrantCapability {
+        from: board,
+        to: worker_cell,
+        cap: CapabilityRef {
+            target: board,
+            slot: SPENT_A_SLOT as u32,
+            permissions: WORKER_CAP_PERMISSIONS,
+            breadstuff: None,
+            expires_at: None,
+            allowed_effects: None,
+            stored_epoch: None,
+        },
+    }
+}
+
+/// **The swarm dispatch BOARD as a composed [`DeosApp`]** — the whole interaction surface,
+/// on the deos bones. The board cell is the agent's OWN cell (`cipherclerk.cell_id()`) so
+/// fires execute against the seeded embedded ledger.
+///
+/// Five operations on the BOARD cell, on the observer ⊂ worker ⊂ lead rights ladder:
+///
+///   - `view_board` — a cap-only affordance (an OBSERVER audits): `Signature`, an `EmitEvent`;
+///   - `ack_dispatch` — a cap-only affordance (a WORKER drains a wake in its own turn):
+///     `Either`, an `EmitEvent` (the async drain ack);
+///   - `dispatch` — a [`GatedAffordance`] (the LEAD advances a worker meter): `None`/root, a
+///     live-state PRECONDITION (the board is open); the real fire ([`fire_dispatch`]) submits
+///     the FULL dispatch (meter + epoch + async wake), re-enforced by the executor's installed
+///     swarm program (the `AffineLe` budget gate + `StrictMonotonic` epoch + `Monotonic` meters
+///     BITE on the produced transition);
+///   - `open_board` — a [`GatedAffordance`] (the LEAD pins lead + mandate): `None`/root, a
+///     live-state PRECONDITION (the board is NOT yet open); the real fire ([`fire_open_board`])
+///     submits the FULL open, re-enforced by the executor (`WriteOnce(BUDGET)` + `StrictMonotonic`);
+///   - `grant_worker` — a cap-only affordance carrying the REAL [`Effect::GrantCapability`]
+///     (the `derive_no_amplify` attenuated worker delegation): `None`/root.
+///
+/// The board cell is published into the web-of-cells at the observer tier (a federated peer
+/// reacquires the dispatch board across the membrane) and is discoverable under
+/// `orchestration` / `swarm`.
+///
+/// Seed the cell's program + opened state with [`seed_board`] (or fire `open_board`) so the
+/// gated fires have a live state and the executor re-enforces the swarm policy.
+pub fn board_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let board = cipherclerk.cell_id();
+
+    // `dispatch` — the LEAD advances worker-A's spend meter (the `AffineLe`-summed `SPENT_A`
+    // slot). The GatedAffordance carries the DECISIVE effect (the meter write) as its surface
+    // representative AND a live-state PRECONDITION ([`opened_precondition`]: the board is open)
+    // — so the button is dark before the board opens and lit after, and the cap∧state gate
+    // decides its verdict in-band. The actual fire ([`fire_dispatch`]) submits the FULL
+    // dispatch ([`dispatch_effects`]: meter + epoch + async wake), which the executor
+    // re-enforces the FULL swarm program on — so the `AffineLe` budget gate BITES: an
+    // over-budget dispatch is REFUSED.
+    let dispatch = GatedAffordance::new(
+        CellAffordance::new(
+            "dispatch",
+            LEAD_RIGHTS,
+            Effect::SetField {
+                cell: board,
+                index: SPENT_A_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        opened_precondition(),
+    );
+    // `open_board` — the LEAD pins the lead + mandate. The decisive effect advances `EPOCH`
+    // 0 -> 1 (the lead/budget/meters are the full `open_board_effects` turn); gated on the
+    // PRE-OPEN precondition ([`preopen_precondition`]: the board is not yet open, `EPOCH == 0`).
+    // The executor re-enforces the installed program (so `StrictMonotonic(EPOCH)` +
+    // `WriteOnce(BUDGET)` bite — a re-open is refused).
+    let open = GatedAffordance::new(
+        CellAffordance::new(
+            "open_board",
+            LEAD_RIGHTS,
+            Effect::SetField {
+                cell: board,
+                index: EPOCH_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        preopen_precondition(),
+    );
+    // `grant_worker` — the lead hands a worker an attenuated slice. A real
+    // `Effect::GrantCapability`, cap-only (the cap-graph half — no state mutation).
+    let grant = CellAffordance::new(
+        "grant_worker",
+        LEAD_RIGHTS,
+        grant_worker_effect(board, CellId::from_bytes([0x9a; 32])),
+    );
+    // `ack_dispatch` — a worker drains a wake in its own receipted turn. Cap-only.
+    let ack = CellAffordance::new(
+        "ack_dispatch",
+        WORKER_RIGHTS,
+        Effect::EmitEvent {
+            cell: board,
+            event: Event::new(symbol("dispatch-acked"), vec![]),
+        },
+    );
+    // `view_board` — an observer audits. Cap-only.
+    let view = CellAffordance::new(
+        "view_board",
+        OBSERVER_RIGHTS,
+        Effect::EmitEvent {
+            cell: board,
+            event: Event::new(symbol("board-read"), vec![]),
+        },
+    );
+
+    DeosApp::builder("swarm-orchestration", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["orchestration".into(), "swarm".into()])
+        .cell(
+            DeosCell::new(board, "board")
+                .affordance(view)
+                .affordance(ack)
+                .gated(dispatch)
+                .gated(open)
+                .affordance(grant)
+                .publish(OBSERVER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the BOARD cell** so the gated fires have live state + the caveats bite: install
+/// the full swarm [`coordinator_program`] on the seeded board cell (so the executor
+/// re-enforces it on every touching turn), then open the genesis state (pin `LEAD` +
+/// `BUDGET`, the two meters at 0, advance `EPOCH` to 1) directly into the embedded ledger.
+///
+/// After seeding, the board is open at epoch 1 with the given `budget` mandate — a real
+/// `(old, new)` baseline against which `dispatch` advances a meter. Returns the seeded budget.
+pub fn seed_board(executor: &EmbeddedExecutor, lead: &str, budget: u64) -> u64 {
+    let board = executor.cell_id();
+    executor.install_program(board, coordinator_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(cell) = ledger.get_mut(&board) {
+            cell.state.set_field(LEAD_SLOT as usize, identity_field(lead));
+            cell.state.set_field(BUDGET_SLOT as usize, field_from_u64(budget));
+            cell.state.set_field(SPENT_A_SLOT as usize, field_from_u64(0));
+            cell.state.set_field(SPENT_B_SLOT as usize, field_from_u64(0));
+            cell.state.set_field(EPOCH_SLOT as usize, field_from_u64(1));
+        }
+    });
+    budget
+}
+
+/// **`open_board` effects** — the multi-effect open body: pin `LEAD` + `BUDGET`
+/// (`WriteOnce`: bound once from zero, frozen), the two worker meters born at 0, advance
+/// `EPOCH` 0 -> 1 (so `StrictMonotonic(EPOCH)` holds on the very first touch), and emit
+/// `swarm-board-opened`. This is the ONE coherent transition the full swarm program admits.
+/// The deos `open_board` gated affordance is the cap∧state PRECONDITION face; THIS is the
+/// turn [`fire_open_board`] submits. (Identical shape to [`build_open_board_action`]'s body.)
+pub fn open_board_effects(board: CellId, lead: &str, budget: u64) -> Vec<Effect> {
+    vec![
+        Effect::SetField {
+            cell: board,
+            index: LEAD_SLOT as usize,
+            value: identity_field(lead),
+        },
+        Effect::SetField {
+            cell: board,
+            index: BUDGET_SLOT as usize,
+            value: field_from_u64(budget),
+        },
+        Effect::SetField {
+            cell: board,
+            index: SPENT_A_SLOT as usize,
+            value: field_from_u64(0),
+        },
+        Effect::SetField {
+            cell: board,
+            index: SPENT_B_SLOT as usize,
+            value: field_from_u64(0),
+        },
+        Effect::SetField {
+            cell: board,
+            index: EPOCH_SLOT as usize,
+            value: field_from_u64(1),
+        },
+        Effect::EmitEvent {
+            cell: board,
+            event: Event::new(
+                symbol("swarm-board-opened"),
+                vec![identity_field(lead), field_from_u64(budget)],
+            ),
+        },
+    ]
+}
+
+/// **`dispatch` effects** — the multi-effect dispatch body: advance `worker`'s cumulative
+/// spend meter to `new_spent` (`Monotonic`; summed by the `AffineLe` budget gate), strictly
+/// advance `EPOCH` (no-replay), and (the async notify edge) EMIT a wake targeting the
+/// `worker_cell` carrying the sub-task `topic`. This is the ONE coherent transition the full
+/// swarm program admits — every clause holds together: `AffineLe(spent_a + spent_b <=
+/// budget)`, `StrictMonotonic(EPOCH)`, `Monotonic(SPENT_*)`. The deos `dispatch` gated
+/// affordance is the cap∧state PRECONDITION face; THIS is the turn [`fire_dispatch`] submits.
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_effects(
+    board: CellId,
+    worker: Worker,
+    worker_cell: CellId,
+    new_spent: u64,
+    new_epoch: u64,
+    cost: u64,
+    topic: &str,
+) -> Vec<Effect> {
+    vec![
+        Effect::SetField {
+            cell: board,
+            index: worker.spend_slot() as usize,
+            value: field_from_u64(new_spent),
+        },
+        Effect::SetField {
+            cell: board,
+            index: EPOCH_SLOT as usize,
+            value: field_from_u64(new_epoch),
+        },
+        Effect::EmitEvent {
+            cell: worker_cell,
+            event: Event::new(
+                symbol(&format!("dispatch/{}", topic)),
+                vec![field_from_u64(cost), field_from_u64(new_epoch)],
+            ),
+        },
+    ]
+}
+
+/// **Fire `open_board`** — the deos cap∧state PRECONDITION gate (cap ⊇ root AND the board is
+/// NOT yet open), then the FULL multi-effect open turn ([`open_board_effects`]). Like
+/// [`fire_dispatch`], the gated affordance decides the button in-band and the executor's
+/// program re-enforcement (`StrictMonotonic(EPOCH)` 0 -> 1 + `WriteOnce(BUDGET)`) is the
+/// verified second gate. Install the program first (the executor re-enforces it); do NOT seed
+/// the genesis state (open is what binds it).
+pub fn fire_open_board(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    lead: &str,
+    budget: u64,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let board = cell.cell();
+    if !cell
+        .gated_fireable_names(held, executor)
+        .iter()
+        .any(|n| n == "open_board")
+    {
+        let ga = cell.gated_surface().get("open_board").expect("open_board is gated");
+        let state = executor.cell_state(board).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: "open_board".into(),
+                reason: "cell has no live state (fail-closed)".into(),
+            })
+        })?;
+        return Err(FireExecuteError::Gate(
+            ga.fire(board, held, &state, &state).unwrap_err(),
+        ));
+    }
+    let action = cipherclerk.make_action(board, "open_board", open_board_effects(board, lead, budget));
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// **Fire `dispatch`** — the deos cap∧state PRECONDITION gate (anti-ghost, in-band), then
+/// the FULL multi-effect dispatch turn the executor re-enforces the swarm program on. The
+/// two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇ root AND the
+/// board is open) WITHOUT touching the executor; on both passing, the complete dispatch turn
+/// ([`dispatch_effects`]: meter + epoch + async wake) is submitted, and the executor's
+/// re-enforcement of [`coordinator_program`] is the SECOND, verified gate (the `AffineLe`
+/// budget gate + `StrictMonotonic(epoch)` + `Monotonic(meters)` all bite on the produced
+/// transition). Anti-ghost both ways: a precondition miss never submits; a budget breach (or
+/// replay, or rollback) is a real executor refusal.
+///
+/// The dispatch cursor is read from the board's live state (current `EPOCH` ⇒ the next epoch,
+/// the worker's current meter ⇒ the new meter), so the caller threads only the `cost`, the
+/// target `worker` + `worker_cell`, and the sub-task `topic`. Use [`seed_board`] first.
+#[allow(clippy::too_many_arguments)]
+pub fn fire_dispatch(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    worker: Worker,
+    worker_cell: CellId,
+    cost: u64,
+    topic: &str,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let board = cell.cell();
+    // Tooth 1+2: the deos cap∧state PRECONDITION gate, in-band, nothing submitted on a miss.
+    if !cell
+        .gated_fireable_names(held, executor)
+        .iter()
+        .any(|n| n == "dispatch")
+    {
+        let ga = cell
+            .gated_surface()
+            .get("dispatch")
+            .expect("dispatch is a gated affordance");
+        let state = executor.cell_state(board).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: "dispatch".into(),
+                reason: "cell has no live state (fail-closed)".into(),
+            })
+        })?;
+        return Err(FireExecuteError::Gate(
+            ga.fire(board, held, &state, &state).unwrap_err(),
+        ));
+    }
+    // The dispatch cursor, read from live state.
+    let state = executor.cell_state(board).expect("checked above");
+    let epoch = field_to_u64(&state.fields[EPOCH_SLOT as usize]);
+    let prev_spent = field_to_u64(&state.fields[worker.spend_slot() as usize]);
+    let new_spent = prev_spent.saturating_add(cost);
+    // Submit the FULL multi-effect dispatch turn — the executor re-enforces the program (the
+    // `AffineLe` budget gate sums the new meter against the OTHER meter + the budget).
+    let effects = dispatch_effects(board, worker, worker_cell, new_spent, epoch + 1, cost, topic);
+    let action = cipherclerk.make_action(board, "dispatch", effects);
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// [`field_from_u64`] for the epoch/meter counters the board stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Mount the deos-native surface** ([`board_app`]) on a shared context: build the composed
+/// [`DeosApp`] from the context's cipherclerk + executor, seed the board cell's program +
+/// opened state (so the gated fires bite), and fold the app into the context's affordance
+/// registry ([`DeosApp::register`]). Returns the live [`DeosApp`] (so a host can also
+/// [`DeosApp::mount`] its axum router / [`DeosApp::publish_all`] into the web-of-cells). This
+/// is the PROMOTION the census Tier-1 #3 asks for: the deos surface now ships from `src/`,
+/// not from a side-proof in `tests/`.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = board_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the board cell so the gated `dispatch` / `open_board` fires have a live
+    // `(old, new)` and the full swarm program (installed here) is re-enforced by the executor
+    // on every touching turn.
+    seed_board(ctx.executor(), "lead", 1000);
+    app.register(ctx);
+    app
+}
+
+// =============================================================================
 // StarbridgeAppContext mount.
 // =============================================================================
 
@@ -425,6 +860,14 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
             "methods": ["open_board", "dispatch", "drain_dispatch"],
         }),
     });
+
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context — the
+    // census Tier-1 #3 promotion: the deos surface now ships from `src/`, not from a
+    // side-proof in `tests/`. The factory + inspector are where SOUNDNESS lives (an
+    // over-budget / replayed dispatch is a real executor refusal on the born cell); the
+    // deos surface is the composition skin (per-viewer projection, the cap∧state gated
+    // fires, the `dregg://` publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
 
     factory_vk
 }

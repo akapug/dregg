@@ -41,25 +41,44 @@
     "builders.subscription"
   ],
   "slot_layout": {
-    "SEQ_HEAD_SLOT": 2,
-    "SEQ_TAIL_SLOT": 3,
-    "CAPACITY_SLOT": 4,
-    "PUBLISHERS_ROOT_SLOT": 5,
-    "CONSUMERS_ROOT_SLOT": 6,
-    "MESSAGE_ROOT_SLOT": 7,
-    "LATEST_PAYLOAD_SLOT": 8,
-    "OWNER_PK_HASH_SLOT": 9
+    "SEQ_HEAD_SLOT": 0,
+    "SEQ_TAIL_SLOT": 1,
+    "CAPACITY_SLOT": 2,
+    "PUBLISHERS_ROOT_SLOT": 3,
+    "CONSUMERS_ROOT_SLOT": 4,
+    "OWNER_PK_HASH_SLOT": 5,
+    "MESSAGE_ROOT_SLOT": 6,
+    "LATEST_PAYLOAD_SLOT": 7
   },
   "state_constraints": [
-    "Immutable(CAPACITY_SLOT)",
-    "Immutable(OWNER_PK_HASH_SLOT)",
+    "WriteOnce(CAPACITY_SLOT)",
+    "WriteOnce(OWNER_PK_HASH_SLOT)",
     "FieldLteField(SEQ_TAIL_SLOT, SEQ_HEAD_SLOT)",
+    "Monotonic(SEQ_HEAD_SLOT)",
+    "Monotonic(SEQ_TAIL_SLOT)",
     "MethodIs(publish) => MonotonicSequence(SEQ_HEAD_SLOT)",
     "MethodIs(consume) => MonotonicSequence(SEQ_TAIL_SLOT)"
   ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "subscription_deos_app(cipherclerk, executor)",
+    "cell": "feed",
+    "discoverable": ["pubsub", "feed"],
+    "publish": "Signature (the feed cell is a dregg:// sturdyref a peer on another federation reacquires)",
+    "affordances": {
+      "view_feed": "cap-only, Signature (a CONSUMER reads the head-of-queue)",
+      "grant_publisher": "cap-only, None/root (the OWNER admits a publisher)",
+      "grant_consumer": "cap-only, None/root (the OWNER admits a consumer)",
+      "publish": "GATED (cap∧state), Either — configured precondition (CAPACITY>=1); the fire submits the FULL delivery (head + message_root + latest_payload), the executor re-enforcing Monotonic(SEQ_HEAD)",
+      "consume": "GATED (cap∧state), Signature — pending precondition (tail<head); the fire submits the FULL draw, the executor re-enforcing FieldLteField(tail<=head)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded feed cell carrying the queue invariants (WriteOnce capacity/owner + Monotonic head/tail + FieldLteField(tail<=head)), so a STALE delivery (head not advancing) and an OVER-DRAW (tail past head) BITE in the deos fire path (tests/deos_seam.rs)"
+  },
   "manifest_health": {
     "status": "ready",
     "embedded": true,
+    "deos_native_src": true,
     "source_of_truth": "starbridge-apps/subscription/src/lib.rs"
   }
 }

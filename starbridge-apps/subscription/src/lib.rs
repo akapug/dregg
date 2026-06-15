@@ -153,12 +153,15 @@
 //! state. See the README for the dependency note.
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellId, CellMode,
-    CellProgram, ChildVkStrategy, ConstantsModule, Effect, Event, FactoryDescriptor, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard,
-    canonical_program_vk, hex_encode_32, symbol,
+    Action, AppCipherclerk, AuthRequired, AuthorizedSet, CapTarget, CapTemplate, CellAffordance,
+    CellId, CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect,
+    EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireError, FireExecuteError,
+    GatedAffordance, InspectorDescriptor, StarbridgeAppContext, StateConstraint, TransitionCase,
+    TransitionGuard, TurnReceipt, canonical_program_vk, field_from_u64, hex_encode_32, symbol,
 };
 use dregg_cell::program::SimpleStateConstraint;
+
+pub use dregg_app_framework::field_from_bytes;
 
 // =============================================================================
 // Slot layout
@@ -855,6 +858,429 @@ pub fn build_bounty_state_publish_action(
 }
 
 // =============================================================================
+// The deos-native surface — the FEED as a composed `DeosApp`.
+// =============================================================================
+//
+// `docs/deos/APPS-DEOS-INTEGRATION-CENSUS.md` (Tier-1 #2): subscription's deos
+// re-expression was the MOST complete of the leading cohort, but MISLOCATED — it
+// lived in `app-framework/tests/reexpress_subscription.rs` (the framework tree). This
+// PROMOTES it into the crate: the four pub/sub operations are ONE [`DeosApp`]
+// ([`subscription_deos_app`] below); the framework wires the rest — per-viewer
+// projection, web-of-cells publish (the FEED cell IS a `dregg://` sturdyref),
+// per-viewer rehydration, the generated `<dregg-affordance-surface>` component, and
+// the manifest — none of which the old bones had. `register(ctx)` now mounts it (see
+// [`register_deos`]).
+//
+// **The seam is closed** — a TWO-TEMPO fire (mirror supply-chain-provenance). The two
+// state-advancing operations (`publish`, `consume`) are [`GatedAffordance`]s carrying a
+// live-state PRECONDITION; the FULL queue invariants (the descriptor's
+// `state_constraints`: `Monotonic` head/tail, `WriteOnce` capacity/owner,
+// `FieldLteField(tail <= head)`) are INSTALLED on the seeded feed cell ([`seed_feed`])
+// and RE-ENFORCED by the executor on every touching turn:
+//
+//   1. the deos PRECONDITION gate (the cap-gate `is_attenuation` AND the live-state
+//      precondition `CellProgram::evaluate`) decides the button's verdict IN-BAND —
+//      nothing submitted on a miss (anti-ghost; the htmx reactivity rides this);
+//   2. [`fire_publish`] / [`fire_consume`] then submit the FULL multi-effect
+//      publish/consume turn ([`publish_effects`] / [`consume_effects`]), and the
+//      executor RE-ENFORCES the installed invariants — so a REWOUND delivery cursor (a
+//      `publish` whose head is rolled back to forge re-delivery room, `Monotonic(SEQ_HEAD)`)
+//      and an OVER-DELIVER (a `consume` whose tail passes the head, `FieldLteField(tail <=
+//      head)`) are REAL executor refusals in the SUBMISSION path — the half the floor's
+//      `evaluate_with_meta`-only tests never exercised through a real signed turn (see
+//      `tests/deos_seam.rs`). (The flat invariants carry `Monotonic` (`>=`), so a no-advance
+//      head stays put; the per-op `MonotonicSequence(+1)` exact-advance lives in the full
+//      [`subscription_program`] `Cases`, bound by the child program VK.)
+//
+// Recurring delivery as gated affordances: each `publish` is a billing/delivery event
+// that advances the producer cursor (`Monotonic(SEQ_HEAD)`, never rewound); each `consume`
+// draws delivered items forward under `tail <= head` — a consumer can never over-draw the
+// feed (the executor refuses).
+
+/// The pub/sub rights tiers, ON THE REAL ATTENUATION LATTICE — these ARE the roles the
+/// floor crate's cap-graph enforces:
+///
+///   - a CONSUMER holds [`AuthRequired::Signature`] — the narrow reader tier: it can
+///     `consume` (draw a delivered item forward) and `view_feed`, nothing else;
+///   - a PUBLISHER holds [`AuthRequired::Either`] — it can `publish` (a recurring
+///     delivery) AND consume AND view;
+///   - the OWNER holds [`AuthRequired::None`]/root — it can `grant_publisher` /
+///     `grant_consumer` (admit members) on top of everything a publisher can do.
+///
+/// So `Signature ⊂ Either ⊂ None` IS the consumer ⊂ publisher ⊂ owner ladder.
+pub const CONSUMER_RIGHTS: AuthRequired = AuthRequired::Signature;
+/// The publisher rights tier (sig-or-proof — publish + consume + view). See [`CONSUMER_RIGHTS`].
+pub const PUBLISHER_RIGHTS: AuthRequired = AuthRequired::Either;
+/// The owner rights tier (root — grant publishers/consumers + all). See [`CONSUMER_RIGHTS`].
+pub const OWNER_RIGHTS: AuthRequired = AuthRequired::None;
+
+/// The **life-of-cell queue invariants** the executor re-enforces on every touching
+/// turn — exactly the descriptor's `state_constraints` (`WriteOnce` capacity/owner,
+/// `FieldLteField(tail <= head)`, `Monotonic` head/tail). This is the FLAT predicate a
+/// factory-born feed cell carries FOR LIFE (the same one `tests/factory_birth.rs`
+/// proves bites on the executor); the full operation-scoped [`subscription_program`]
+/// `Cases` shape is bound by the child program VK. Installed by [`seed_feed`] so the
+/// gated fires re-enforce it.
+pub fn feed_invariants_program() -> CellProgram {
+    CellProgram::Predicate(subscription_factory_descriptor().state_constraints)
+}
+
+/// The `publish` **live-state precondition** — the feed must be CONFIGURED (capacity
+/// bound, `CAPACITY >= 1`). A real [`CellProgram`] read against the cell's current
+/// state, so a publish button is DARK on an unconfigured feed and LIT once configured
+/// (the htmx tooth). This gates "may `publish` fire now"; the delivery INVARIANT
+/// (`Monotonic(SEQ_HEAD)`, head strictly advances) is the installed
+/// [`feed_invariants_program`] the executor re-enforces on the produced transition.
+pub fn configured_precondition() -> CellProgram {
+    CellProgram::Predicate(vec![StateConstraint::FieldGte {
+        index: CAPACITY_SLOT,
+        value: field_from_u64(1),
+    }])
+}
+
+/// The `consume` **live-state precondition** — the feed must have an UNDRAINED item
+/// (`SEQ_HEAD > SEQ_TAIL`, i.e. `tail < head`). So the `consume` button is DARK on a
+/// drained feed (tail caught up to head) and LIT when a delivery is pending (the htmx
+/// tooth). The executor's installed `FieldLteField(tail <= head)` is the second guard
+/// (an over-draw past the head is a real refusal).
+pub fn pending_precondition() -> CellProgram {
+    // `tail < head` ≡ `tail <= head - 1` ≡ `FieldLteOther { tail, head, delta: -1 }`.
+    CellProgram::Predicate(vec![StateConstraint::FieldLteOther {
+        index: SEQ_TAIL_SLOT,
+        other: SEQ_HEAD_SLOT,
+        delta: -1,
+    }])
+}
+
+/// **The subscription FEED as a composed [`DeosApp`]** — the whole interaction surface,
+/// on the deos bones. The feed cell is the agent's OWN cell (`cipherclerk.cell_id()`)
+/// so fires execute against the seeded embedded ledger.
+///
+/// Four operations on the FEED cell, on the consumer ⊂ publisher ⊂ owner rights ladder:
+///
+///   - `view_feed` — a cap-only affordance (a CONSUMER reads the head-of-queue):
+///     `Signature`, an `EmitEvent`;
+///   - `consume` — a [`GatedAffordance`] (a CONSUMER draws an item forward):
+///     `Signature`, a live-state PRECONDITION (a delivery is pending); the real fire
+///     ([`fire_consume`]) submits the FULL consume turn, re-enforced by the executor's
+///     installed invariants (`MonotonicSequence(SEQ_TAIL)` under `tail <= head`);
+///   - `publish` — a [`GatedAffordance`] (a PUBLISHER delivers): `Either`, a live-state
+///     PRECONDITION (the feed is configured); the real fire ([`fire_publish`]) submits
+///     the FULL publish turn, re-enforced by the executor (`Monotonic(SEQ_HEAD)`);
+///   - `grant_publisher` / `grant_consumer` — cap-only affordances carrying the real
+///     root-advancing `Effect::SetField` (the owner admits a member): `None`/root.
+///
+/// The feed cell is published into the web-of-cells at the consumer tier (a peer on
+/// another federation reacquires the feed across the membrane) and is discoverable under
+/// `pubsub` / `feed`.
+///
+/// Seed the cell's program + configured state with [`seed_feed`] so the gated fires have
+/// a live state and the executor re-enforces the invariants.
+pub fn subscription_deos_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> DeosApp {
+    let feed = cipherclerk.cell_id();
+
+    // `publish` — a PUBLISHER delivers (recurring). The GatedAffordance carries the
+    // DECISIVE effect (the producer-cursor advance) as its surface representative AND a
+    // live-state PRECONDITION ([`configured_precondition`]: the feed is configured) — so
+    // the button is dark before configure and lit after, and the cap∧state gate decides
+    // its verdict in-band. The actual fire ([`fire_publish`]) submits the FULL publish
+    // turn ([`publish_effects`]: head + message_root + latest_payload + event), which the
+    // executor re-enforces the installed invariants on — so `Monotonic(SEQ_HEAD)` BITES:
+    // a non-advancing (stale) delivery is REFUSED.
+    let publish = GatedAffordance::new(
+        CellAffordance::new(
+            "publish",
+            PUBLISHER_RIGHTS,
+            Effect::SetField {
+                cell: feed,
+                index: SEQ_HEAD_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        configured_precondition(),
+    );
+    // `consume` — a CONSUMER draws a delivered item forward. The decisive effect advances
+    // the consumer cursor; gated on the PENDING precondition ([`pending_precondition`]:
+    // `tail < head`, an item is undrained). The executor re-enforces the installed
+    // invariants (so `FieldLteField(tail <= head)` bites — an over-draw past the head is
+    // refused).
+    let consume = GatedAffordance::new(
+        CellAffordance::new(
+            "consume",
+            CONSUMER_RIGHTS,
+            Effect::SetField {
+                cell: feed,
+                index: SEQ_TAIL_SLOT as usize,
+                value: field_from_u64(1),
+            },
+        ),
+        pending_precondition(),
+    );
+    // `grant_publisher` / `grant_consumer` — the owner admits a member. A real
+    // root-advancing `Effect::SetField`, cap-only (the membership half — no cursor move).
+    let grant_publisher = CellAffordance::new(
+        "grant_publisher",
+        OWNER_RIGHTS,
+        Effect::SetField {
+            cell: feed,
+            index: PUBLISHERS_ROOT_SLOT as usize,
+            value: field_from_u64(1),
+        },
+    );
+    let grant_consumer = CellAffordance::new(
+        "grant_consumer",
+        OWNER_RIGHTS,
+        Effect::SetField {
+            cell: feed,
+            index: CONSUMERS_ROOT_SLOT as usize,
+            value: field_from_u64(1),
+        },
+    );
+    // `view_feed` — a consumer reads the head-of-queue. Cap-only.
+    let view = CellAffordance::new(
+        "view_feed",
+        CONSUMER_RIGHTS,
+        Effect::EmitEvent {
+            cell: feed,
+            event: Event::new(symbol("feed-read"), vec![]),
+        },
+    );
+
+    DeosApp::builder("subscription", cipherclerk.clone(), executor.clone())
+        .discoverable(vec!["pubsub".into(), "feed".into()])
+        .cell(
+            DeosCell::new(feed, "feed")
+                .affordance(view)
+                .gated(publish)
+                .gated(consume)
+                .affordance(grant_publisher)
+                .affordance(grant_consumer)
+                .publish(CONSUMER_RIGHTS),
+        )
+        .build()
+}
+
+/// **Seed the FEED cell** so the gated fires have live state + the invariants bite:
+/// install the queue invariants ([`feed_invariants_program`]) on the seeded feed cell
+/// (so the executor re-enforces them on every touching turn), then configure the genesis
+/// state directly into the embedded ledger — bind `CAPACITY` and `OWNER_PK_HASH`
+/// (`WriteOnce`, frozen after) and seed one pending delivery (`SEQ_HEAD = 1`,
+/// `SEQ_TAIL = 0`) so a real `(old, new)` baseline exists against which `publish`
+/// advances the head and `consume` draws the tail.
+///
+/// After seeding, the feed is configured with one undrained item — a real baseline.
+/// Returns the seeded `SEQ_HEAD` value.
+pub fn seed_feed(executor: &EmbeddedExecutor, capacity: u64, owner: &str) -> u64 {
+    let feed = executor.cell_id();
+    executor.install_program(feed, feed_invariants_program());
+    executor.with_ledger_mut(|ledger| {
+        if let Some(cell) = ledger.get_mut(&feed) {
+            cell.state.set_field(CAPACITY_SLOT as usize, field_from_u64(capacity));
+            cell.state
+                .set_field(OWNER_PK_HASH_SLOT as usize, field_from_bytes(owner.as_bytes()));
+            // one pending delivery: head at 1, tail at 0 (tail < head).
+            cell.state.set_field(SEQ_HEAD_SLOT as usize, field_from_u64(1));
+            cell.state.set_field(SEQ_TAIL_SLOT as usize, field_from_u64(0));
+        }
+    });
+    1
+}
+
+/// **`publish` effects** — the multi-effect delivery body: advance the producer cursor
+/// `SEQ_HEAD` to `new_head` (`Monotonic` — strictly forward), fold the new message into
+/// `MESSAGE_ROOT`, write `LATEST_PAYLOAD`, and emit `subscription-published`. This is the
+/// ONE coherent transition the installed invariants admit (head advances, tail/capacity/
+/// owner unchanged, `tail <= head` preserved). The deos `publish` gated affordance is the
+/// cap∧state PRECONDITION face; THIS is the turn [`fire_publish`] submits.
+pub fn publish_effects(
+    feed: CellId,
+    new_head: u64,
+    new_message_root: FieldElement,
+    payload_hash: FieldElement,
+) -> Vec<Effect> {
+    vec![
+        Effect::SetField {
+            cell: feed,
+            index: SEQ_HEAD_SLOT as usize,
+            value: field_from_u64(new_head),
+        },
+        Effect::SetField {
+            cell: feed,
+            index: MESSAGE_ROOT_SLOT as usize,
+            value: new_message_root,
+        },
+        Effect::SetField {
+            cell: feed,
+            index: LATEST_PAYLOAD_SLOT as usize,
+            value: payload_hash,
+        },
+        Effect::EmitEvent {
+            cell: feed,
+            event: Event::new(
+                symbol("subscription-published"),
+                vec![field_from_u64(new_head), new_message_root, payload_hash],
+            ),
+        },
+    ]
+}
+
+/// **`consume` effects** — the multi-effect draw body: advance the consumer cursor
+/// `SEQ_TAIL` to `new_tail` and emit `subscription-consumed`. The installed
+/// `FieldLteField(tail <= head)` re-enforces that the draw never passes the head (no
+/// over-deliver). THIS is the turn [`fire_consume`] submits.
+pub fn consume_effects(feed: CellId, new_tail: u64, consumed_payload: FieldElement) -> Vec<Effect> {
+    vec![
+        Effect::SetField {
+            cell: feed,
+            index: SEQ_TAIL_SLOT as usize,
+            value: field_from_u64(new_tail),
+        },
+        Effect::EmitEvent {
+            cell: feed,
+            event: Event::new(
+                symbol("subscription-consumed"),
+                vec![field_from_u64(new_tail), consumed_payload],
+            ),
+        },
+    ]
+}
+
+/// **Fire `publish`** — the deos cap∧state PRECONDITION gate (anti-ghost, in-band), then
+/// the FULL multi-effect delivery turn the executor re-enforces the queue invariants on.
+/// The two-tempo bridge: the gated affordance decides the button's verdict (cap ⊇ Either
+/// AND the feed is configured) WITHOUT touching the executor; on both passing, the
+/// complete cursor-advancing turn ([`publish_effects`]) is submitted, and the executor's
+/// re-enforcement of [`feed_invariants_program`] is the SECOND, verified gate
+/// (`Monotonic(SEQ_HEAD)` bites — a REWOUND delivery cursor is REFUSED). Anti-ghost both
+/// ways: a precondition miss never submits; an invariant violation is a real executor refusal.
+///
+/// The cursor is read from the cell's live state (current `SEQ_HEAD` ⇒ the next head),
+/// so the caller threads nothing. Use [`seed_feed`] first.
+pub fn fire_publish(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let feed = cell.cell();
+    // Tooth 1+2: the deos cap∧state PRECONDITION gate, in-band, nothing submitted on a miss.
+    if !cell
+        .gated_fireable_names(held, executor)
+        .iter()
+        .any(|n| n == "publish")
+    {
+        let ga = cell
+            .gated_surface()
+            .get("publish")
+            .expect("publish is a gated affordance");
+        let state = executor.cell_state(feed).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: "publish".into(),
+                reason: "cell has no live state (fail-closed)".into(),
+            })
+        })?;
+        return Err(FireExecuteError::Gate(
+            ga.fire(feed, held, &state, &state).unwrap_err(),
+        ));
+    }
+    // The cursor, read from live state: the next head strictly advances the current one.
+    let state = executor.cell_state(feed).expect("checked above");
+    let head = field_to_u64(&state.fields[SEQ_HEAD_SLOT as usize]);
+    let new_head = head + 1;
+    // The delivered message folds the new head into the prior root (a real commitment move).
+    let prev_root = state.fields[MESSAGE_ROOT_SLOT as usize];
+    let payload = field_from_bytes(&new_head.to_be_bytes());
+    let new_root = fold_message_root(&prev_root, new_head, &payload);
+    // Submit the FULL multi-effect delivery turn — the executor re-enforces the invariants.
+    let action = cipherclerk.make_action(feed, "publish", publish_effects(feed, new_head, new_root, payload));
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// **Fire `consume`** — the deos cap∧state PRECONDITION gate (cap ⊇ Signature AND a
+/// delivery is pending, `tail < head`), then the FULL consume turn ([`consume_effects`]).
+/// Like [`fire_publish`], the gated affordance decides the button in-band and the
+/// executor's re-enforcement (`FieldLteField(tail <= head)`, the draw never passes the
+/// head) is the verified second gate. Use [`seed_feed`] first.
+pub fn fire_consume(
+    app: &DeosApp,
+    held: &AuthRequired,
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+) -> Result<TurnReceipt, FireExecuteError> {
+    let cell = &app.cells()[0];
+    let feed = cell.cell();
+    if !cell
+        .gated_fireable_names(held, executor)
+        .iter()
+        .any(|n| n == "consume")
+    {
+        let ga = cell
+            .gated_surface()
+            .get("consume")
+            .expect("consume is a gated affordance");
+        let state = executor.cell_state(feed).ok_or_else(|| {
+            FireExecuteError::Gate(FireError::StateConditionUnmet {
+                affordance: "consume".into(),
+                reason: "cell has no live state (fail-closed)".into(),
+            })
+        })?;
+        return Err(FireExecuteError::Gate(
+            ga.fire(feed, held, &state, &state).unwrap_err(),
+        ));
+    }
+    let state = executor.cell_state(feed).expect("checked above");
+    let tail = field_to_u64(&state.fields[SEQ_TAIL_SLOT as usize]);
+    let new_tail = tail + 1;
+    let consumed = state.fields[LATEST_PAYLOAD_SLOT as usize];
+    let action = cipherclerk.make_action(feed, "consume", consume_effects(feed, new_tail, consumed));
+    executor
+        .submit_action(cipherclerk, action)
+        .map_err(FireExecuteError::Executor)
+}
+
+/// Fold a delivered `(seq, payload)` into the running `MESSAGE_ROOT` commitment —
+/// `blake3(prev ‖ seq ‖ payload)`. Deterministic and collision-resistant; the
+/// production face of the queue's per-message commitment (a different payload at the
+/// same seq produces a different root, so the consumer's membership check detects it).
+pub fn fold_message_root(prev: &FieldElement, seq: u64, payload: &FieldElement) -> FieldElement {
+    let mut h = blake3::Hasher::new();
+    h.update(b"dregg-subscription-msg\x01");
+    h.update(prev);
+    h.update(&seq.to_be_bytes());
+    h.update(payload);
+    *h.finalize().as_bytes()
+}
+
+/// Read a `u64` from the last 8 big-endian bytes of a field element (the inverse of
+/// `field_from_u64` for the head/tail cursors the feed stores).
+fn field_to_u64(f: &FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&f[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// **Mount the deos-native surface** ([`subscription_deos_app`]) on a shared context:
+/// build the composed [`DeosApp`] from the context's cipherclerk + executor, seed the
+/// feed cell's program + configured state (so the gated fires bite), and fold the app
+/// into the context's affordance registry ([`DeosApp::register`]). Returns the live
+/// [`DeosApp`] (so a host can also [`DeosApp::mount`] its axum router /
+/// [`DeosApp::publish_all`] into the web-of-cells). This is the PROMOTION the census
+/// Tier-1 #2 asks for: the deos surface now ships from `src/`, not from a side-proof in
+/// `app-framework/tests/`.
+pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
+    let app = subscription_deos_app(ctx.cipherclerk(), ctx.executor());
+    // Seed the feed cell so the gated `publish` / `consume` fires have a live `(old, new)`
+    // and the queue invariants (installed here) are re-enforced by the executor on every
+    // touching turn.
+    seed_feed(ctx.executor(), 16, "owner");
+    app.register(ctx);
+    app
+}
+
+// =============================================================================
 // StarbridgeAppContext mount
 // =============================================================================
 
@@ -926,6 +1352,14 @@ pub fn register(ctx: &StarbridgeAppContext) -> [u8; 32] {
             "factory_vk_hex": hex_encode_32(&SUBSCRIPTION_FACTORY_VK),
         })
     });
+
+    // Mount the deos-native composition surface (the `DeosApp`) on the SAME context —
+    // the census Tier-1 #2 promotion: the deos surface now ships from `src/`, not from a
+    // side-proof in `app-framework/tests/`. The factory + inspectors are where SOUNDNESS
+    // lives (a stale delivery / over-draw is a real executor refusal on the born cell);
+    // the deos surface is the composition skin (per-viewer projection, the cap∧state
+    // gated fires, the `dregg://` publish, the rehydratable snapshot, the manifest).
+    register_deos(ctx);
 
     factory_vk
 }
