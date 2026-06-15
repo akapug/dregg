@@ -111,3 +111,18 @@ leptos = { version = "0.8", features = ["ssr"] }
 
 [dev-dependencies]
 # (tests live inline in src/lib.rs)
+
+# The council-vote SSR demo (the original `cargo run` — per-viewer rehydration + the
+# real-executor fire). Kept as the default-named binary.
+[[bin]]
+name = "deos-leptos"
+path = "src/main.rs"
+
+# The LIVE reactive transclusion demo — the "live quote". `cargo run --bin
+# transclusion_demo` founds a constitution, renders the council's live quote of its
+# `threshold`, then AMENDS the source and re-renders, printing the quote tracking the
+# source reactively (V → V', the provenance height advancing) — the runnable demo of
+# the proven `Dregg2.Deos.Transclusion` primitive.
+[[bin]]
+name = "transclusion_demo"
+path = "src/bin/transclusion_demo.rs"
