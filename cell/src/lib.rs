@@ -42,6 +42,8 @@ pub mod migration;
 pub mod note;
 #[cfg(feature = "crypto")]
 pub mod note_bridge;
+#[cfg(feature = "crypto")]
+pub mod note_encryption;
 pub mod nullifier_set;
 #[cfg(feature = "crypto")]
 pub mod oblivious_transfer;
@@ -120,6 +122,8 @@ pub use lifecycle::{
     ArchivalAttestation, CellLifecycle, DeathCertificate, DeathReason, LifecycleTransitionError,
 };
 pub use note::{Note, NoteBatcher, NoteCommitment, NoteError, Nullifier, PositionedNote};
+#[cfg(feature = "crypto")]
+pub use note_encryption::{NoteDecryptError, NotePlaintext, decrypt_note, encrypt_note_to};
 #[cfg(feature = "crypto")]
 pub use note_bridge::{
     BridgeDestination, BridgeError, BridgeReceipt, BridgeState, BridgedNullifierSet, PendingBridge,
