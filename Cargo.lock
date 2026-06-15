@@ -2180,6 +2180,7 @@ dependencies = [
  "dregg-app-framework",
  "dregg-captp",
  "dregg-cell",
+ "dregg-circuit",
  "dregg-dfa",
  "dregg-sdk",
  "dregg-storage",
@@ -2197,6 +2198,7 @@ dependencies = [
  "starbridge-governed-namespace",
  "starbridge-identity",
  "starbridge-nameservice",
+ "starbridge-web-surface",
  "tokio",
  "tower-http 0.5.2",
  "tracing",
@@ -4792,6 +4794,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -4818,6 +4821,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit-prover"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
 dependencies = [
  "hashbrown 0.16.1",
  "p3-air",
@@ -5093,6 +5097,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1-circuit-air"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -5142,6 +5147,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2-circuit-air"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -5165,6 +5171,7 @@ dependencies = [
 [[package]]
 name = "p3-recursion"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -7206,12 +7213,15 @@ dependencies = [
 name = "starbridge-subscription"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -7260,6 +7270,15 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "starbridge-tussle"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-intent",
 ]
 
 [[package]]
