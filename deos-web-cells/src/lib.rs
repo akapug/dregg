@@ -66,6 +66,7 @@
 
 pub mod bundle;
 pub mod cascade;
+pub mod document;
 pub mod rehydrate;
 
 // ── The crate's surface: the bundle data model + publish/fetch, the DOM
@@ -78,6 +79,9 @@ pub use bundle::{
     fetch_bundle, publish_bundle, BundleAsset, BundleError, BundleKind, BundleManifest, WebBundle,
 };
 pub use cascade::{transclude_bundle_fragment, BundleFragmentQuote, CascadeError};
+pub use document::{
+    DocumentError, DreggverseDocument, RenderedDocument, RenderedSpan, Span, SpanRange,
+};
 pub use rehydrate::{
     rehydrate_bundle, BundleBoundary, DomSnapshot, RehydratedBundle, SnapshotError,
 };
