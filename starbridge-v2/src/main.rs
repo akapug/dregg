@@ -42,6 +42,28 @@ use starbridge_v2::{demo, reflect, world};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().any(|a| a == "--headless");
+
+    // `--render-cockpit <out>`: the HEADLESS COCKPIT BAKE (the seL4 deos-image
+    // weld). Drive the REAL `cockpit::Cockpit` element tree through a headless
+    // gpui `App`/`Window` (no GPU, no display) and render the resolved gpui
+    // `Scene` offscreen via the wgpu lavapipe path to an 800x600 RGBA8 frame —
+    // the byte image the deos-image PD bakes in and blits onto its ramfb
+    // framebuffer. See `render_cockpit_headless`. Builds only under the
+    // `headless-render` feature (which pulls gpui's `test-support` headless
+    // window + capture API). Mutually independent of the windowed `run_window`.
+    #[cfg(feature = "headless-render")]
+    {
+        if let Some(out) = render_cockpit_arg(&args) {
+            match render_cockpit_headless(&out) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-cockpit FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--node <url>`: ALSO connect the master interface to a LIVE remote dregg
     // node (its receipt nervous system + cell reflections), alongside the embedded
     // image. The embedded world is the headline; this is the additional remote
@@ -331,6 +353,151 @@ fn run_window(
         })
         .detach();
     });
+}
+
+/// Parse the `--render-cockpit <out>` (or `--render-cockpit=<out>`) argument —
+/// the output base path for the headless cockpit bake. Returns `None` when
+/// absent. `<out>` names the file stem; `<out>.rgba` (the raw 800x600 RGBA8 the
+/// seL4 PD bakes) and `<out>.png` (a visual check) are written.
+#[cfg(feature = "headless-render")]
+fn render_cockpit_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-cockpit" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-cockpit=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// THE HEADLESS COCKPIT BAKE — render the REAL `cockpit::Cockpit` element tree
+/// to an 800x600 RGBA8 frame with no GPU and no window, for the seL4 deos-image
+/// PD to blit onto its ramfb framebuffer.
+///
+/// This is the closure of the desktop keystone's last swap: the deos-image PD
+/// used to bake a *hand-built* cockpit-shaped `gpui::Scene`; this bakes the
+/// LIVE element tree. The mechanism is gpui's own headless capture path
+/// (`HeadlessAppContext` over `TestPlatform`), wired on Linux to the offscreen
+/// wgpu renderer (`gpui_platform::current_headless_renderer` →
+/// `gpui_wgpu::WgpuHeadlessRenderer`, the patched `render_scene_to_image` on
+/// lavapipe / software Vulkan):
+///
+///  1. A `CosmicTextSystem` (real glyph shaping) is the platform text system;
+///     the cockpit asks for the "Menlo" family, which falls back to the vendored
+///     Lilex (`assets/fonts`). Glyphs rasterize into the headless renderer's own
+///     sprite atlas, the same atlas the capture later samples.
+///  2. A headless `App` + `Window` is opened at exactly 800x600 with the REAL
+///     [`cockpit::Cockpit`] (over the fully-seeded [`world::demo_world`] image —
+///     all five verified executor turns already run) as its root view. Opening
+///     the window draws it once; a `refresh()` + `run_until_parked()` drives it
+///     to a fully-laid-out frame.
+///  3. `Window::render_to_image` (`capture_screenshot`) resolves that frame's
+///     `gpui::Scene` and renders it offscreen to RGBA — the bytes written here.
+///
+/// The geometry MUST equal the framebuffer's (`sel4/.../fb.rs` = 800x600) so the
+/// PD's blit is a straight RGBA→XRGB8888 copy.
+#[cfg(feature = "headless-render")]
+fn render_cockpit_headless(out: &str) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    // The seL4 deos-image framebuffer geometry (sel4/dregg-pd/deos-image/src/fb.rs).
+    const W: f32 = 800.0;
+    const H: f32 = 600.0;
+
+    // Vendored OFL fonts (the cockpit uses "Menlo"; unknown families fall back
+    // to the system_font_fallback — here Lilex — inside CosmicTextSystem).
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // 1. Real text shaping with no system fonts (deterministic), Lilex fallback.
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+
+    // 2. Headless app over TestPlatform + the Linux offscreen wgpu renderer.
+    //    `current_headless_renderer` returns the `WgpuHeadlessRenderer` (lavapipe
+    //    when `ZED_OFFSCREEN_PREFER_CPU=1`); its sprite atlas backs the window.
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+
+    // 3. The fully-seeded demo image — the same `World` the windowed cockpit runs,
+    //    with every verified executor turn already committed (eager seeding).
+    let (world, anchors) = world::demo_world();
+    let shared = Rc::new(RefCell::new(world));
+
+    // 4. Open an 800x600 headless window whose ROOT IS the real Cockpit. No node,
+    //    no pending seed (the image is already fully seeded above).
+    let window = cx.open_window(size(px(W), px(H)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None)
+        });
+        view.update(cx, |c, cx| c.focus_on_open(window, cx));
+        view
+    })?;
+
+    // 5. Drive to a fully-rendered frame, then capture the resolved gpui Scene
+    //    to RGBA (the canonical visual-capture sequence).
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+
+    // gpui's headless `TestWindow` reports a FIXED 2.0 scale factor (HiDPI), so
+    // an 800x600 LOGICAL window resolves to a 1600x1200 DEVICE-pixel render — the
+    // full cockpit layout (the 800-logical-wide three-column shape) at 2x. We
+    // downscale that to the framebuffer's exact 800x600 with a high-quality
+    // Lanczos3 filter, so the seL4 PD's blit stays a straight copy AND the live
+    // layout (not a cramped 400-logical one) is what reaches glass.
+    let (cw, ch) = (captured.width(), captured.height());
+    let img = if cw == W as u32 && ch == H as u32 {
+        captured
+    } else {
+        image::imageops::resize(
+            &captured,
+            W as u32,
+            H as u32,
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
+
+    let (ww, hh) = (img.width(), img.height());
+    anyhow::ensure!(
+        ww == W as u32 && hh == H as u32,
+        "headless cockpit resolved to {ww}x{hh} (captured {cw}x{ch}), expected {}x{}",
+        W as u32,
+        H as u32
+    );
+    let rgba = img.into_raw();
+    anyhow::ensure!(
+        rgba.len() == (ww * hh * 4) as usize,
+        "RGBA buffer is {} bytes, expected {}",
+        rgba.len(),
+        ww * hh * 4
+    );
+
+    // (a) the raw RGBA the seL4 deos-image PD bakes in (`cockpit_frame.rgba`).
+    std::fs::write(format!("{out}.rgba"), &rgba)?;
+    // (b) a PNG for a visual check.
+    image::RgbaImage::from_raw(ww, hh, rgba)
+        .ok_or_else(|| anyhow::anyhow!("failed to rebuild RgbaImage for PNG"))?
+        .save(format!("{out}.png"))?;
+
+    println!(
+        "OK headless cockpit render -> {out}.rgba + {out}.png \
+         (captured {cw}x{ch} @2x -> {ww}x{hh}); LIVE cockpit::Cockpit element tree, \
+         gpui Scene via lavapipe offscreen."
+    );
+    Ok(())
 }
 
 /// The thin-client report (sel4-thin / remote-node path).

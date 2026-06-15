@@ -1,17 +1,25 @@
-//! THE STARBRIDGE-V2 COCKPIT MODE — a REAL gpui-rendered cockpit frame, blitted
-//! onto the seL4 framebuffer.
+//! THE STARBRIDGE-V2 COCKPIT MODE — the REAL, LIVE starbridge-v2 cockpit,
+//! rendered headless and blitted onto the seL4 framebuffer.
 //!
-//! `cockpit_frame.rgba` is an 800x600 RGBA8 image rendered by the ACTUAL gpui
-//! renderer (`gpui_wgpu::WgpuRenderer::render_scene_to_image`, the patched
-//! offscreen path — docs/desktop-os-research/GPUI-OFFSCREEN-FORK.md) running on
-//! software Vulkan (lavapipe/llvmpipe — NO GPU, NO window) on persvati. The
-//! Scene is the starbridge-v2 cockpit shape: the title bar, the three master
-//! columns (WORLD / SHELL / REFLECT — the cockpit's reflective axes), each
-//! with an accent header and the four-substance surface tiles (VALUE / STATE /
-//! AUTHORITY / EVIDENCE), and a status bar — laid out with crisp anti-aliased
-//! glyphs by gpui's CosmicText system and rasterized through gpui's sprite
-//! atlas. The exact same renderer leaf the real Cockpit element tree resolves
-//! to (`gpui -> gpui_platform -> gpui_linux -> gpui_wgpu`).
+//! `cockpit_frame.rgba` is an 800x600 RGBA8 image of the **live
+//! `starbridge_v2::cockpit::Cockpit` element tree** over the fully-seeded demo
+//! image (`world::demo_world` — every verified executor turn run): the CELL
+//! WORLD rail with the real sovereign cells (ids, balances, cap counts, the
+//! issuer well at −supply), the INSPECTOR reflecting the image (cells / height /
+//! receipts / state_root / "executor embedded verified (TurnExecutor)"), the
+//! BLOCKLACE provenance (the real receipt chain), and the HOME/SHELL/AGENT
+//! workspace — all the actual cockpit, not a facsimile.
+//!
+//! It is produced by `starbridge-v2 --render-cockpit` (src/main.rs,
+//! `render_cockpit_headless`): a headless gpui `App`/`Window`
+//! (`gpui::HeadlessAppContext` over `TestPlatform`) drives the real `Cockpit`,
+//! and its resolved gpui `Scene` is rendered offscreen by the ACTUAL gpui wgpu
+//! renderer (`gpui_wgpu::WgpuHeadlessRenderer` / `render_scene_to_image`, the
+//! offscreen patch — docs/desktop-os-research/GPUI-OFFSCREEN-FORK.md) on software
+//! Vulkan (lavapipe/llvmpipe — NO GPU, NO window) on persvati. gpui reports a 2x
+//! scale, so the 800x600-logical cockpit renders at 1600x1200 device px and is
+//! Lanczos-downscaled to the framebuffer's 800x600. Same renderer leaf the
+//! windowed cockpit uses (`gpui -> gpui_platform -> gpui_linux -> gpui_wgpu`).
 //!
 //! It is baked in EXACTLY as `image_data.rs` bakes real cells: a `#![no_std]`
 //! PD cannot link wgpu/lavapipe, so the heavy render happens at build time on
@@ -20,14 +28,10 @@
 //! mapped framebuffer the QEMU ramfb engine scans out.
 //!
 //! Regenerate (the bytes, from persvati where lavapipe lives):
-//!   ssh persvati 'cd ~/cockpit-render && cargo run --release'   # -> cockpit-800x600.rgba
-//!   scp persvati:~/cockpit-render/cockpit-800x600.rgba \
-//!       sel4/dregg-pd/deos-image/src/cockpit_frame.rgba
-//!
-//! The frontier beyond this hand-built-Scene bring-up: drive the REAL `Cockpit`
-//! element tree through a headless gpui `App`/`Window` (its `shell::Scene` is a
-//! window-manager model that resolves to a gpui `Scene` only inside a live
-//! Window) so the blitted frame is the live cockpit, not a faithful still.
+//!   ssh persvati '... cd starbridge-v2 && \
+//!     ZED_OFFSCREEN_PREFER_CPU=1 VK_ICD_FILENAMES=…/lvp_icd.json \
+//!     cargo run --release --features headless-render -- --render-cockpit OUT'
+//!   scp persvati:OUT.rgba sel4/dregg-pd/deos-image/src/cockpit_frame.rgba
 
 use crate::fb::{Canvas, HEIGHT, WIDTH};
 

@@ -160,10 +160,43 @@ gpui-ui = ["dep:gpui", "dep:gpui_platform", "gpui_platform/runtime_shaders", "gp
 # same HTTP+SSE wire contract (`live-node`) the embedded build's remote panel uses.
 sel4-thin = ["live-node"]
 
+# THE HEADLESS COCKPIT BAKE (`--render-cockpit <out>`, `src/main.rs`) — render
+# the REAL `cockpit::Cockpit` element tree to an 800x600 RGBA8 frame with NO GPU
+# and NO window, the byte image the seL4 deos-image PD blits onto its ramfb
+# (sel4/dregg-pd/deos-image/src/cockpit_frame.rgba). Pulls the full native-full
+# build (embedded executor + gpui) PLUS gpui's headless capture path: gpui +
+# gpui_platform `test-support` light up `HeadlessAppContext` + the offscreen
+# wgpu renderer (`WgpuHeadlessRenderer`) + `Window::render_to_image`; gpui_wgpu
+# gives the `CosmicTextSystem` text system; `image` re-encodes the PNG check.
+# Run where software Vulkan (lavapipe) exists, e.g. persvati:
+#   ZED_OFFSCREEN_PREFER_CPU=1 VK_ICD_FILENAMES=…/lvp_icd.json \
+#     cargo run --release --features headless-render -- --render-cockpit OUT
+headless-render = [
+    "native-full",
+    "gpui/test-support",
+    "gpui_platform/test-support",
+    "dep:gpui_wgpu",
+    "gpui_wgpu/test-support",
+    "dep:image",
+]
+
 [dependencies]
 # --- gpui (gated on `gpui-ui`) ----------------------------------------------
-gpui = { git = "https://github.com/zed-industries/zed", rev = "fca2ccd403e8d13c8f4b968cda2f2c322f420f5a", optional = true }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "fca2ccd403e8d13c8f4b968cda2f2c322f420f5a", optional = true }
+# DREGG-OWNED FORK: `emberian/zed@dregg-offscreen` is `zed-industries/zed`'s
+# `fca2ccd` (the previously-pinned rev — gpui/gpui_platform are byte-identical to
+# `fca2ccd` there; the one commit between them touches only editor/agent_ui) PLUS
+# the offscreen/headless wgpu renderer the `headless-render` bake needs (the
+# `gpui_wgpu` surfaceless `render_scene_to_image` + `WgpuHeadlessRenderer:
+# PlatformHeadlessRenderer`, wired into `current_headless_renderer` on Linux).
+# Patch source of record: docs/desktop-os-research/patches/gpui-offscreen.patch
+# (+ this session's headless wiring). The windowed `run_window` path is unchanged.
+gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+# The wgpu renderer leaf, pulled DIRECTLY only for the headless bake (the
+# `CosmicTextSystem` platform text system + the offscreen renderer). Gated on
+# `headless-render`; absent from the windowed build. Same fork rev as gpui above
+# so cargo resolves ONE gpui instance across the graph.
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
 
 # --- LINUX display backend for gpui ------------------------------------------
 # The x11/wayland windowing backends gpui needs on Linux are enabled via the
@@ -256,3 +289,8 @@ anyhow = "1"
 # Used by the embedded `World` for the image-commitment root + cell snapshots.
 blake3 = "1"
 postcard = { version = "1", features = ["use-std"] }
+
+# The headless cockpit bake re-encodes the captured RGBA to a PNG visual check
+# (the raw `.rgba` the seL4 PD bakes is written directly). Gated on
+# `headless-render`. 0.25 matches gpui_wgpu's `image` (one resolved version).
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }

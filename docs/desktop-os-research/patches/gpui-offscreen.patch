@@ -1,5 +1,110 @@
+diff --git a/crates/gpui_linux/Cargo.toml b/crates/gpui_linux/Cargo.toml
+index 0e9de0ebc0..b3b0dbaea8 100644
+--- a/crates/gpui_linux/Cargo.toml
++++ b/crates/gpui_linux/Cargo.toml
+@@ -13,7 +13,7 @@ path = "src/gpui_linux.rs"
+ 
+ [features]
+ default = ["wayland", "x11"]
+-test-support = ["gpui/test-support"]
++test-support = ["gpui/test-support", "gpui_wgpu?/test-support"]
+ wayland = [
+     "bitflags",
+     "gpui_wgpu",
+diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
+index 62d972dc4e..0fb55756de 100644
+--- a/crates/gpui_linux/src/gpui_linux.rs
++++ b/crates/gpui_linux/src/gpui_linux.rs
+@@ -2,3 +2,19 @@
+ mod linux;
+ 
+ pub use linux::current_platform;
++
++/// Returns a headless wgpu renderer for offscreen capture on Linux (no window /
++/// no GPU; honours `ZED_OFFSCREEN_PREFER_CPU=1` for lavapipe), if the wgpu
++/// backend is compiled in. This is the Linux counterpart of macOS's
++/// `MetalHeadlessRenderer`; `gpui_platform::current_headless_renderer` routes
++/// here. The capture chooses its size per render.
++#[cfg(all(any(test, feature = "test-support"), any(feature = "wayland", feature = "x11")))]
++pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRenderer>> {
++    match gpui_wgpu::WgpuHeadlessRenderer::new() {
++        Ok(r) => Some(Box::new(r)),
++        Err(e) => {
++            log::error!("failed to create headless wgpu renderer: {e:#}");
++            None
++        }
++    }
++}
+diff --git a/crates/gpui_platform/Cargo.toml b/crates/gpui_platform/Cargo.toml
+index 22d44a96b2..87c71d07b2 100644
+--- a/crates/gpui_platform/Cargo.toml
++++ b/crates/gpui_platform/Cargo.toml
+@@ -14,7 +14,7 @@ path = "src/gpui_platform.rs"
+ [features]
+ default = []
+ font-kit = ["gpui_macos/font-kit"]
+-test-support = ["gpui/test-support", "gpui_macos/test-support"]
++test-support = ["gpui/test-support", "gpui_macos/test-support", "gpui_linux/test-support", "gpui_linux/x11"]
+ screen-capture = ["gpui/screen-capture", "gpui_macos/screen-capture", "gpui_windows/screen-capture", "gpui_linux/screen-capture"]
+ runtime_shaders = ["gpui_macos/runtime_shaders"]
+ wayland = ["gpui_linux/wayland"]
+diff --git a/crates/gpui_platform/src/gpui_platform.rs b/crates/gpui_platform/src/gpui_platform.rs
+index 1d2fea90b4..c312370bd3 100644
+--- a/crates/gpui_platform/src/gpui_platform.rs
++++ b/crates/gpui_platform/src/gpui_platform.rs
+@@ -69,7 +69,14 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
+         ))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++    {
++        // Software/offscreen wgpu (lavapipe via ZED_OFFSCREEN_PREFER_CPU=1) —
++        // the Linux counterpart of the Metal headless renderer above.
++        gpui_linux::current_headless_renderer()
++    }
++
++    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+     {
+         None
+     }
+diff --git a/crates/gpui_wgpu/Cargo.toml b/crates/gpui_wgpu/Cargo.toml
+index 61a5746df3..aa48423d2d 100644
+--- a/crates/gpui_wgpu/Cargo.toml
++++ b/crates/gpui_wgpu/Cargo.toml
+@@ -14,6 +14,11 @@ path = "src/gpui_wgpu.rs"
+ [features]
+ default = []
+ font-kit = ["dep:font-kit"]
++# Enables the headless offscreen renderer (WgpuHeadlessRenderer) + its gpui
++# PlatformHeadlessRenderer impl, used to capture a real element tree with no
++# window/GPU (lavapipe). Pulls gpui/test-support, which carries the headless
++# Window + capture API (Window::render_to_image).
++test-support = ["gpui/test-support", "dep:image"]
+ 
+ [dependencies]
+ gpui.workspace = true
+@@ -32,6 +37,8 @@ swash = "0.2.6"
+ unicode-segmentation.workspace = true
+ gpui_util.workspace = true
+ wgpu.workspace = true
++# The headless capture path returns image::RgbaImage (only under test-support).
++image = { workspace = true, optional = true }
+ 
+ # Optional: only needed on platforms with multiple font sources (e.g. Linux)
+ # WARNING: If you change this, you must also publish a new version of zed-font-kit to crates.io
+diff --git a/crates/gpui_wgpu/src/gpui_wgpu.rs b/crates/gpui_wgpu/src/gpui_wgpu.rs
+index 452c3c03f5..89a10ce4cb 100644
+--- a/crates/gpui_wgpu/src/gpui_wgpu.rs
++++ b/crates/gpui_wgpu/src/gpui_wgpu.rs
+@@ -8,3 +8,5 @@ pub use wgpu;
+ pub use wgpu_atlas::*;
+ pub use wgpu_context::*;
+ pub use wgpu_renderer::{GpuContext, WgpuRenderer, WgpuSurfaceConfig};
++#[cfg(any(test, feature = "test-support"))]
++pub use wgpu_renderer::WgpuHeadlessRenderer;
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 9dd5599..bd3fd6d 100644
+index 9dd5599393..bd3fd6dd36 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
 @@ -191,6 +191,179 @@ impl WgpuContext {
@@ -183,7 +288,7 @@ index 9dd5599..bd3fd6d 100644
          let caps = surface.get_capabilities(&self.adapter);
          if caps.formats.is_empty() {
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 08f30dc..0533248 100644
+index 08f30dc009..23a3d4a47b 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -108,7 +108,10 @@ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
@@ -570,7 +675,7 @@ index 08f30dc..0533248 100644
                      return true;
                  }
                  self.grow_instance_buffer();
-@@ -1330,11 +1582,177 @@ impl WgpuRenderer {
+@@ -1330,11 +1582,234 @@ impl WgpuRenderer {
              self.resources()
                  .queue
                  .submit(std::iter::once(encoder.finish()));
@@ -746,10 +851,67 @@ index 08f30dc..0533248 100644
 +        Ok((rgba, width, height))
 +    }
 +
++    /// Render `scene` into an owned offscreen texture **without** reading the
++    /// pixels back. This is the headless analogue of presenting a frame: it does
++    /// the same CPU-side scene encoding + GPU submission as the windowed `draw`
++    /// path, but allocates an owned render target instead of a swapchain frame
++    /// and never copies the result back. It is the wgpu counterpart of
++    /// `MetalRenderer::render_scene`, and exists so a `PlatformHeadlessRenderer`
++    /// can satisfy the present-without-capture contract `TestWindow::draw` uses.
++    #[cfg(not(target_family = "wasm"))]
++    pub fn render_scene(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
++        let width = size.width.0;
++        let height = size.height.0;
++        if width <= 0 || height <= 0 {
++            anyhow::bail!("Invalid size for render_scene: {:?}", size);
++        }
++        let width = width as u32;
++        let height = height as u32;
++        if width > self.max_texture_size || height > self.max_texture_size {
++            anyhow::bail!(
++                "render_scene size ({width}, {height}) exceeds max texture dimension {}",
++                self.max_texture_size
++            );
++        }
++
++        self.surface_config.width = width;
++        self.surface_config.height = height;
++        self.resources_mut().invalidate_intermediate_textures();
++
++        self.atlas.before_frame();
++        self.ensure_intermediate_textures();
++
++        let format = self.surface_config.format;
++        let target_texture =
++            self.resources()
++                .device
++                .create_texture(&wgpu::TextureDescriptor {
++                    label: Some("headless_render_target"),
++                    size: wgpu::Extent3d {
++                        width,
++                        height,
++                        depth_or_array_layers: 1,
++                    },
++                    mip_level_count: 1,
++                    sample_count: 1,
++                    dimension: wgpu::TextureDimension::D2,
++                    format,
++                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
++                    view_formats: &[],
++                });
++        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
++
++        if !self.draw_scene_to_view(scene, &target_view, width, height) {
++            anyhow::bail!("failed to encode scene for headless render");
++        }
++        target_texture.destroy();
++        Ok(())
++    }
++
      fn draw_quads(
          &self,
          quads: &[Quad],
-@@ -1741,7 +2159,7 @@ impl WgpuRenderer {
+@@ -1741,7 +2216,7 @@ impl WgpuRenderer {
                  .as_mut()
                  .expect("GPU resources not available");
              surface.configure(&res.device, &self.surface_config);
@@ -758,3 +920,68 @@ index 08f30dc..0533248 100644
  
              // Invalidate intermediate textures — they'll be recreated lazily.
              res.invalidate_intermediate_textures();
+@@ -1907,3 +2382,64 @@ impl RenderingParameters {
+         }
+     }
+ }
++
++/// A headless wgpu renderer that produces real rendered output with no window
++/// and no presented surface, suitable for offscreen capture (e.g. on lavapipe /
++/// software Vulkan inside a VM). It is the wgpu counterpart of
++/// `gpui_macos::metal_renderer::MetalHeadlessRenderer`: it wraps a surfaceless
++/// [`WgpuRenderer`] (built via [`WgpuRenderer::new_offscreen`]) and implements
++/// [`gpui::PlatformHeadlessRenderer`], so gpui's `TestPlatform` / headless
++/// `Window` can draw a real element tree and capture it via
++/// `Window::render_to_image`.
++///
++/// The renderer's sprite atlas is the one the headless `TestWindow` paints
++/// glyphs into during layout/paint, so the glyph tiles referenced by the
++/// captured [`Scene`] resolve against the very atlas this renderer samples on
++/// readback — the same coupling the Metal headless path relies on.
++#[cfg(any(test, feature = "test-support"))]
++pub struct WgpuHeadlessRenderer {
++    renderer: WgpuRenderer,
++}
++
++#[cfg(any(test, feature = "test-support"))]
++impl WgpuHeadlessRenderer {
++    /// Build a headless renderer over an offscreen [`WgpuContext`]. Honours
++    /// `ZED_OFFSCREEN_PREFER_CPU=1` (via `WgpuContext::new_offscreen`) so a
++    /// software rasterizer such as lavapipe is selected on a GPU-less host.
++    /// The capture re-sizes its render target to the requested size each call,
++    /// so this needs no fixed size up front.
++    pub fn new() -> anyhow::Result<Self> {
++        let instance = WgpuContext::offscreen_instance();
++        let context = WgpuContext::new_offscreen(instance)?;
++        // Initial target size; render_scene/render_scene_to_image re-size the
++        // target to the requested capture size each call (the window device size).
++        let config = WgpuSurfaceConfig {
++            size: gpui::size(DevicePixels(1), DevicePixels(1)),
++            transparent: false,
++            preferred_present_mode: None,
++        };
++        let renderer = WgpuRenderer::new_offscreen(&context, config)?;
++        Ok(Self { renderer })
++    }
++}
++
++#[cfg(any(test, feature = "test-support"))]
++impl gpui::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
++    fn render_scene_to_image(
++        &mut self,
++        scene: &Scene,
++        size: Size<DevicePixels>,
++    ) -> anyhow::Result<image::RgbaImage> {
++        let (rgba, width, height) = self.renderer.render_scene_to_image(scene, size)?;
++        image::RgbaImage::from_raw(width, height, rgba)
++            .ok_or_else(|| anyhow::anyhow!("render_scene_to_image produced a mis-sized RGBA buffer"))
++    }
++
++    fn render_scene(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
++        self.renderer.render_scene(scene, size)
++    }
++
++    fn sprite_atlas(&self) -> Arc<dyn gpui::PlatformAtlas> {
++        self.renderer.sprite_atlas().clone()
++    }
++}
