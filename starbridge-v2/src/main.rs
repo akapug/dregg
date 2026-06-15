@@ -199,6 +199,27 @@ fn run_window(
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    // STARTUP PROOF (the no-blank-screen receipt): build the HOME landing
+    // portal's text model from the live world and report how many real lines of
+    // text the boot view will render. Because the HOME tab renders exactly this
+    // model, a non-zero count here is a non-blank rendered tree — the thing to
+    // confirm if the window ever looks empty. (Printed before the run loop so it
+    // shows even though `application().run` never returns.)
+    {
+        let portal = starbridge_v2::landing::LandingPortal::build(&world);
+        println!("== Starbridge v2 · opening the window — boot view: HOME landing portal ==");
+        println!(
+            "HOME portal: {} lines of real text render (headline + {} cards + invitation)",
+            portal.line_count(),
+            portal.sections.len()
+        );
+        println!("  headline: {}", portal.headline);
+        println!(
+            "  (if the window looks blank, the text above is what should be on screen — \
+             a render/display issue, not an empty UI)"
+        );
+    }
+
     let shared = Rc::new(RefCell::new(world));
 
     application().run(move |cx: &mut App| {

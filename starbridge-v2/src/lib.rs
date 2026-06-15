@@ -72,6 +72,8 @@ pub mod edit;
 #[cfg(feature = "embedded-executor")]
 pub mod graph;
 #[cfg(feature = "embedded-executor")]
+pub mod landing;
+#[cfg(feature = "embedded-executor")]
 pub mod narration;
 #[cfg(feature = "embedded-executor")]
 pub mod organs;
@@ -122,6 +124,8 @@ pub use coordination::{MandateArrow, NotifyArrow, SwarmGraph, SwarmNode};
 pub use demo::{render_headless_report, DemoError, DemoFrame, HeadlineDemo};
 #[cfg(feature = "embedded-executor")]
 pub use graph::{GraphEdge, GraphLayer, GraphNode, OcapGraph};
+#[cfg(feature = "embedded-executor")]
+pub use landing::{LandingPortal, PortalLine, PortalSection, Tone};
 #[cfg(feature = "embedded-executor")]
 pub use narration::{
     ClaimPosture, ClaimedAction, Correlation, Divergence, NarrationPanel, NarrationRow,

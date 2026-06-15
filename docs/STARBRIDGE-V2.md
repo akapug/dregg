@@ -285,9 +285,33 @@ placement; move/resize honored), **tile** (a near-square grid of the work area),
 and **stack** (a centered cascade) — all painted in z-order, cycled with one
 toolbar button or the ⌘K palette.
 
-The SHELL is the cockpit's **default tab**: the master interface boots into a
-live compositor with the console plus the three anchor cells (treasury · user ·
-service) already open as cap-confined surfaces over the real world.
+The SHELL boots ready (the console plus the three anchor cells — treasury ·
+user · service — already open as cap-confined surfaces over the real world) and
+is one click away. The cockpit's **boot view** is the HOME landing portal below.
+
+## The landing — the warm front door (the boot view)
+
+The first thing the master interface shows is not a sparse window-manager scene:
+it is the **HOME landing portal** (`src/landing.rs` + the cockpit's HOME tab) — a
+warm, text-rich greeting that names the running system *reflectively*. The feel
+is deliberate: loading AOL as a seven-year-old, except this is the Good
+Cyberpunk Timeline — a Smalltalk-tier system that is reflectively present to
+itself.
+
+The portal is a pure, gpui-free **text model** ([`landing::LandingPortal`])
+projected from the LIVE `World` and rendered by the HOME tab as native gpui text:
+a big greeting, then titled cards that say where you are, the image *right now*
+(its real cell/receipt/value/commitment numbers), the verified heart (named:
+`dregg_turn::executor::TurnExecutor`), the receipt nervous system, the organs
+(surveyed through [`organs::OrganSurvey`] — live trustlines/flash-wells plus the
+catalogued remote-path channel/mailbox/court), and how to begin (⌘K · click a
+cell). Because the *content* is built gpui-free, it is `cargo test`-able: tests
+assert the portal speaks real, non-empty text about the real image, names the
+real executor, reports the live cell count, and *changes after a real turn* — so
+"the landing renders abundant real text" is proven without a GPU. On boot the
+binary also prints a one-line receipt (`HOME portal: N lines of real text
+render …`) so a blank-looking window is immediately diagnosable as a
+render/display issue, never an empty UI.
 
 ## The window (the Metal path)
 
@@ -484,7 +508,7 @@ console is a protected trusted root), the trusted-path identity chrome is
 shell-drawn from the live ledger (anti-spoof — a dangling surface reads
 `missing`, a sealed cell's badge follows the executor), and the compositor
 renders the surfaces over the real world in float / tile / stack. The SHELL tab
-is the cockpit's default view.
+boots ready and is one click from the HOME landing portal (the boot view).
 
 The remaining **designed-pending** rows (organ node-services behind `captp`, the
 multi-hop delegation graph view, intents/obligations panels, the live federation
