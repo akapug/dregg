@@ -25,10 +25,15 @@ curl -s https://devnet.dregg.fg-goose.online/status
  "full_turn_proving":true,"producer_covered_effects":19}
 ```
 
-Faucet yourself a cell — any fresh 32-byte id works as a recipient
-(`python3 -c "import secrets;print(secrets.token_hex(32))"` makes one):
+Faucet a cell. NOTE: a cell id is a commitment to a public key
+(`id == derive_raw(pubkey, token)`), so a bare *random* id is **unspendable** —
+the faucet credits it (a real verified turn you can watch land), but no one holds
+its key to sign a spend. To fund a cell you OWN, pass a `public_key` you hold —
+which is exactly what `dregg demo` (below) does: it generates your keypair,
+derives your agent cell, and funds that.
 
 ```sh
+# watch a verified turn land at a throwaway (unspendable) address:
 curl -s -X POST https://devnet.dregg.fg-goose.online/api/faucet \
   -H 'content-type: application/json' \
   -d '{"recipient":"28c2cba0ccfd29e8c2cb2773f398dfb652a94fa49dbcb143643cd4df847a076f","amount":1000}'
