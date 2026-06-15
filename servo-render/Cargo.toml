@@ -79,6 +79,19 @@ dregg-firmament = { path = "../sel4/dregg-firmament" }
 # crates use.
 blake3 = "1"
 
+# The REAL cap-gate (the OTHER half of Stage A): `starbridge-web-surface` ships the
+# `WebSurfaceDelegate`/`CapGatedDelegate` (libservo's `WebViewDelegate`, shaped
+# one-to-one) and the `SurfaceCapability` (a genuine firmament `Capability{ target:
+# Surface(cell), rights }` + web caveats). `src/cap_gated_pipeline.rs` wires THAT
+# delegate's mediated fetch/navigation in FRONT of this crate's SWGL render →
+# compositor-`present()` path, so a frame only reaches the glass through a held cap.
+# It path-depends on the SAME `../sel4/dregg-firmament` this crate does, so `CellId`
+# / `Capability` / `AuthRequired` UNIFY across the two crates — the wiring is the
+# genuine cap model, never a parallel re-mock. (`docs/desktop-os-research/SERVO-ON-SEL4.md`
+# Stage-A steps 4+5 are joined here: the cap gate gates the render that reaches the
+# compositor.)
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+
 # ── the libservo (real WebView) path — opt-in, pulls the mozjs elephant ──────────
 # The real libservo: `WebView` + `WebViewBuilder` + the `RenderingContext` trait
 # (re-exported from `paint_api`). Published to crates.io as `servo 0.1.0-rc2`

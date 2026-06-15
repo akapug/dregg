@@ -41,6 +41,11 @@
 //!   shim + the load-bearing "SWGL produces real RGBA8" test.
 //! - [`compositor_seam`] — [`present_frame`](compositor_seam::present_frame): the
 //!   render→hash→present→gate→blit step against the GENUINE compositor-PD.
+//! - [`cap_gated_pipeline`] — [`fetch_render_present`](cap_gated_pipeline::fetch_render_present):
+//!   the cap gate (the REAL `starbridge_web_surface::CapGatedDelegate`) IN FRONT of
+//!   the SWGL render → compositor present, so a frame reaches the glass only through
+//!   a held [`SurfaceCapability`](starbridge_web_surface::SurfaceCapability). Joins
+//!   Stage-A steps 4 (the cap gate) and 5 (the render→glass).
 //! - [`webview`] (feature `libservo`) — the real-`RenderingContext`-trait adapter
 //!   over SWGL that a real `WebView` paints into.
 
@@ -48,6 +53,11 @@ pub mod swgl_context;
 
 #[cfg(feature = "swgl-standalone")]
 pub mod compositor_seam;
+
+/// The cap-gated render pipeline — Stage A's two halves (the `starbridge-web-surface`
+/// cap gate + this crate's SWGL render → compositor present), joined.
+#[cfg(feature = "swgl-standalone")]
+pub mod cap_gated_pipeline;
 
 #[cfg(feature = "libservo")]
 pub mod webview;
@@ -59,3 +69,6 @@ pub use swgl_context::{
 
 #[cfg(feature = "swgl-standalone")]
 pub use compositor_seam::{present_frame, FramePresentation};
+
+#[cfg(feature = "swgl-standalone")]
+pub use cap_gated_pipeline::{fetch_render_present, PipelineOutcome};
