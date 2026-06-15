@@ -738,6 +738,22 @@ fn tree_is_marshallable(tree: &CallTree, id_map: &HashMap<CellId, u64>, any: &mu
         }
         *any = true;
     }
+    // A child edge is marshallable only when `tree_to_wforest` can faithfully (and SOUNDLY)
+    // reconstruct it — the two MUST agree (eligibility ⟺ marshallable). A cross-cell, non-bearer
+    // child has no verdict-equivalent cap-install image on this wire (the executor's delegate-chain
+    // authority differs from `recKDelegateAtten`), so the turn is ineligible for the shadow rather
+    // than marshalled as committable (which could admit what the executor denies — the unsound veto
+    // direction). Same-cell and bearer children ARE marshallable (direct null-cap subtrees).
+    for child in &tree.children {
+        let cross_cell = child.action.target != tree.action.target;
+        let is_bearer = matches!(
+            &child.action.authorization,
+            crate::action::Authorization::Bearer(_)
+        );
+        if cross_cell && !is_bearer {
+            return false;
+        }
+    }
     tree.children
         .iter()
         .all(|c| tree_is_marshallable(c, id_map, any))
@@ -1454,7 +1470,7 @@ fn turn_to_wire_turn(
     pre: &ShadowPreLedger,
     block_height: u64,
 ) -> Result<dregg_lean_ffi::marshal::WireTurn, String> {
-    use dregg_lean_ffi::marshal::{Cap, WChild, WForest, WireTurn};
+    use dregg_lean_ffi::marshal::{Cap, WChild, WireTurn};
 
     let agent = *pre
         .id_map
@@ -1471,31 +1487,35 @@ fn turn_to_wire_turn(
         .map(digest_of)
         .unwrap_or_default();
 
-    // The WHOLE forest, pre-order, as (wire action, originating credential) pairs.
-    let mapped = flatten_forest_actions_full(turn, pre)
-        .ok_or_else(|| "shadow: forest not fully marshallable".to_string())?;
-
-    let mut iter = mapped.into_iter();
-    let head = iter
+    // Build the WHOLE call-FOREST recursively, preserving the tree's delegation EDGES (no longer
+    // flattened to a linear null-cap chain). A single fresh-id counter is threaded across the entire
+    // pre-order walk so every created cell/queue gets a distinct never-snapshotted wire Nat.
+    //
+    // dregg1's `Turn` carries a `CallForest` (a LIST of root `CallTree`s). The Lean `WForest` is a
+    // SINGLE rooted node, so a multi-root forest is marshalled as: the FIRST root is the wire root,
+    // and each SUBSEQUENT root becomes a `null`-cap sibling child of it (run sequentially against the
+    // evolving state under its OWN authority — faithful to the executor's pre-order forest walk, where
+    // each root acts on its own target cell with no inter-root cap handoff). Within each root, the
+    // REAL `CallTree` child edges are reconstructed (`tree_to_wforest`), so the parent→child cap
+    // handoff the verified gate enforces is no longer lost.
+    let mut fresh_seq: u64 = 0;
+    let mut roots = turn.call_forest.roots.iter();
+    let first = roots
         .next()
-        .ok_or_else(|| "shadow: empty mapped forest".to_string())?;
-
-    // The tail actions become `null`-cap delegation children of the root, run SEQUENTIALLY
-    // by the Lean executor against the evolving state (no cap handoff). Each child still
-    // carries its own credential and is gated per-node by `execFullA`.
-    let children: Vec<WChild> = iter
-        .map(|m| WChild {
+        .ok_or_else(|| "shadow: empty call forest".to_string())?;
+    let mut root = tree_to_wforest(first, pre, &mut fresh_seq, &turn.agent)
+        .ok_or_else(|| "shadow: forest not fully marshallable".to_string())?;
+    // Subsequent forest roots: null-cap sibling subtrees of the wire root (sequential, own authority).
+    for sibling in roots {
+        let sib = tree_to_wforest(sibling, pre, &mut fresh_seq, &turn.agent)
+            .ok_or_else(|| "shadow: forest not fully marshallable".to_string())?;
+        root.children.push(WChild {
             holder: agent,
             keep: vec![],
             parent_cap: Cap::Null,
-            sub: WForest {
-                auth: m.wire_auth,
-                caveats: vec![],
-                action: m.action,
-                children: vec![],
-            },
-        })
-        .collect();
+            sub: sib,
+        });
+    }
 
     Ok(WireTurn {
         agent,
@@ -1504,60 +1524,149 @@ fn turn_to_wire_turn(
         valid_until,
         block_height,
         prev_hash,
-        root: WForest {
-            auth: head.wire_auth,
-            caveats: vec![],
-            action: head.action,
-            children,
-        },
+        root,
     })
 }
 
-/// A fully-resolved wire action with its credential (FFI build only).
+/// Recursively marshal ONE Rust `CallTree` node (its action + its REAL child edges) into a Lean
+/// `WForest`, PRESERVING the delegation TREE structure rather than flattening the whole forest to a
+/// linear null-cap chain. This is the §WG2 dual on the producer side: the kernel's
+/// `execFullChildrenG` walks the same nested edges the executor's `execute_tree` does.
+///
+/// ## The action → node mapping
+///
+/// A dregg1 `Action` carries a LIST of effects; the Lean `FullActionA` is ONE per-asset action per
+/// node. So an N-effect action becomes N wire nodes: the FIRST effect is THIS node's `action`; each
+/// REMAINING effect is a `null`-cap child (intra-action sequencing — same target cell, own authority,
+/// no cap handoff — faithful to the executor running the effects in order against the evolving state).
+/// Every effect-node carries the SAME credential (`auth_to_wire`) AND the same transported caveats
+/// (`action_caveats`, the `min_balance` lift) — the action's WHO + discharge legs gate each of them.
+///
+/// ## The child edges → subtree mapping (the WELD)
+///
+/// Each Rust `CallTree` child becomes a `WChild { holder, keep, parentCap, sub }`. The faithful and
+/// SOUND mapping mirrors the executor's `DelegationMode` walk (`execute_tree.rs:1058-1134`) while
+/// respecting the shadow's veto direction (the Lean verdict may only TIGHTEN — it must never admit a
+/// turn the executor refuses):
+///   * **same-cell child** (`child.target == this.target`): `parentCap = null` ⇒ the subtree runs
+///     DIRECTLY under its own credential (no cap install). Faithful to EVERY `DelegationMode` for a
+///     same-cell child — the executor confers nothing; the child acts on the parent's own cell. THIS
+///     is the structural win: a multi-level same-cell delegation tree now crosses as a tree (the
+///     gate fires per node, all-or-nothing) instead of a flattened sequential chain.
+///   * **bearer-authorized child**: `parentCap = null` ⇒ the subtree runs directly; the bearer WHO
+///     leg (its own carried delegation proof, now full-sig faithful) gates it, not a c-list install.
+///   * **cross-cell, non-bearer child**: the executor's cross-cell authority model (the
+///     `SnapshotRefresh` delegate-chain-walk + frozen snapshot, or the `None`/`ParentsOwn`/`Inherit`
+///     fail-closed) does NOT have a verdict-equivalent `recKDelegateAtten` image on this wire (the
+///     delegator-holds-cap gate is a DIFFERENT authority predicate than the delegate-pointer
+///     chain-walk). Marshalling it as a committable edge could admit what the executor denies (the
+///     unsound veto direction), so the turn is INELIGIBLE for the shadow (returns `None`). True
+///     cross-cell delegation FIDELITY is the cap-reshape lane's (`#103`); this weld closes the
+///     STRUCTURAL flattening without overclaiming the cross-cell authority match.
 #[cfg(not(feature = "no-lean-link"))]
-struct FullMapped {
-    action: WireAction,
-    wire_auth: dregg_lean_ffi::marshal::WireAuth,
-}
-
-/// Flatten the forest into wire actions paired with their originating credential. Each
-/// Rust action's auth decorates every effect-node it produced.
-#[cfg(not(feature = "no-lean-link"))]
-fn flatten_forest_actions_full(turn: &Turn, pre: &ShadowPreLedger) -> Option<Vec<FullMapped>> {
-    let mut out = Vec::new();
-    // A single fresh-id counter threaded across the WHOLE pre-order walk, so each created
-    // cell/queue gets a distinct never-snapshotted wire Nat (no cross-effect id collision).
-    let mut fresh_seq: u64 = 0;
-    for root in &turn.call_forest.roots {
-        flatten_tree_full(root, pre, &mut out, &mut fresh_seq, &turn.agent)?;
-    }
-    if out.is_empty() {
-        return None;
-    }
-    Some(out)
-}
-
-#[cfg(not(feature = "no-lean-link"))]
-fn flatten_tree_full(
+fn tree_to_wforest(
     tree: &CallTree,
     pre: &ShadowPreLedger,
-    out: &mut Vec<FullMapped>,
     fresh_seq: &mut u64,
     agent: &CellId,
-) -> Option<()> {
+) -> Option<dregg_lean_ffi::marshal::WForest> {
+    use dregg_lean_ffi::marshal::{Cap, WChild, WForest};
+
     let actor = *pre.id_map.get(&tree.action.target)?;
     let wire_auth = auth_to_wire(&tree.action.authorization);
-    for eff in &tree.action.effects {
+    let caveats = action_caveats(&tree.action, actor);
+
+    // The action's effects → this node's action + intra-action `null`-cap sequencing children.
+    let mut eff_iter = tree.action.effects.iter();
+    let head_eff = eff_iter.next()?;
+    let head_action = effect_to_wire(actor, head_eff, pre, fresh_seq, agent)?;
+
+    let mut children: Vec<WChild> = Vec::new();
+    for eff in eff_iter {
         let action = effect_to_wire(actor, eff, pre, fresh_seq, agent)?;
-        out.push(FullMapped {
-            action,
-            wire_auth: wire_auth.clone(),
+        children.push(WChild {
+            holder: actor,
+            keep: vec![],
+            parent_cap: Cap::Null,
+            sub: WForest {
+                auth: wire_auth.clone(),
+                caveats: caveats.clone(),
+                action,
+                children: vec![],
+            },
         });
     }
+
+    // The REAL `CallTree` child edges → nested subtrees (the structural weld).
     for child in &tree.children {
-        flatten_tree_full(child, pre, out, fresh_seq, agent)?;
+        let same_cell = child.action.target == tree.action.target;
+        let is_bearer = matches!(&child.action.authorization, Authorization::Bearer(_));
+        if !same_cell && !is_bearer {
+            // Cross-cell non-bearer: no verdict-equivalent cap install on this wire (see doc). Skip
+            // the whole turn rather than risk the unsound veto direction.
+            return None;
+        }
+        let holder = *pre.id_map.get(&child.action.target)?;
+        let sub = tree_to_wforest(child, pre, fresh_seq, agent)?;
+        // Same-cell / bearer: the subtree runs directly under its own credential (no cap handoff).
+        children.push(WChild {
+            holder,
+            keep: vec![],
+            parent_cap: Cap::Null,
+            sub,
+        });
     }
-    Some(())
+
+    Some(WForest {
+        auth: wire_auth,
+        caveats,
+        action: head_action,
+        children,
+    })
+}
+
+// ===================================================================
+// CAVEATS — carry the action's within-cell preconditions so the verified
+// gate's `caveatsDischarged` leg ENFORCES them (no longer admit-by-construction).
+// ===================================================================
+
+/// Lift an `Action`'s within-cell preconditions into the wire caveats the gated executor's
+/// `caveatsDischarged` leg reads on the node's PRE-state.
+///
+/// The faithful source is `Action.preconditions.cell_state.min_balance` — the dregg1 executor
+/// enforces it as `target.balance ≥ min_balance` on the action's OWN target cell (strictly
+/// intra-cell, monotone, see `cell/src/preconditions.rs:386`). That is EXACTLY the verified
+/// `WCaveat { tier: monotone, cell, asset, min }` semantics: `bal cell asset ≥ min` on the node's
+/// pre-state (`FullForestAuth.GatedCaveat.holds`, `liftCaveatW`). The cell's primary `balance` is
+/// wire `bal cell 0` (asset 0 — see `ledger_to_wire_state`'s `bal.push((nat, 0, balance))`), so the
+/// caveat reads asset 0 on the actor cell. A turn whose target is UNDER `min_balance` therefore
+/// fails the verified caveat leg → whole-forest rollback → `ok:0`, matching apply.rs's
+/// `InsufficientBalance` rejection — the leg the wire previously dropped (`caveats: vec![]`).
+///
+/// Tier `monotone` (0) is correct: a `min_balance` floor is a drift-stable, within-cell read (a
+/// concurrent turn can only RAISE the balance toward the floor, never invalidate a satisfied one
+/// mid-turn within the single-machine atomic snapshot). Preconditions with no `min_balance` yield
+/// no caveat (the wire stays minimal; the action is then gated by the WHO/WHAT legs alone).
+#[cfg(not(feature = "no-lean-link"))]
+fn action_caveats(
+    action: &crate::action::Action,
+    actor: u64,
+) -> Vec<dregg_lean_ffi::marshal::WireCaveat> {
+    use dregg_lean_ffi::marshal::WireCaveat;
+    let mut out = Vec::new();
+    if let Some(cs) = &action.preconditions.cell_state {
+        if let Some(min_bal) = cs.min_balance {
+            out.push(WireCaveat {
+                // monotone (drift-stable, within-cell): the dregg1 `min_balance` floor.
+                tier: 0,
+                cell: actor,
+                // asset 0 = the cell's primary `balance` slot (ledger_to_wire_state).
+                asset: 0,
+                min: min_bal as i128,
+            });
+        }
+    }
+    out
 }
 
 // ===================================================================
@@ -1601,6 +1710,14 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
             bound_action: str_to_nat(bound_action),
             bound_resource: str_to_nat(bound_resource),
         },
+        // The bearer arm no longer collapses the delegation sig to a low-u64 (`sig64_to_nat` =
+        // the last 8 bytes — a forged sig that shares its tail would have passed). The WHO-leg's
+        // `deleg_sig` Nat is now the FULL signature/proof bytes hashed to a Digest (`bytes32_to_nat
+        // (blake3(full_sig))`), so it is sensitive to the ENTIRE 64-byte ed25519 sig / STARK proof
+        // blob: a single flipped sig byte changes the hash → the wire `deleg_sig` → the verified
+        // WHO leg (`portalVerify .bearer msg sig = verify msg sig`) can REPRODUCE the bearer-auth
+        // outcome rather than seeing a truncated stand-in. (`deleg_msg` stays the delegator/root
+        // commitment; `stark` keeps the SignedDelegation|StarkDelegation discriminant.)
         Authorization::Bearer(proof) => {
             let (deleg_msg, deleg_sig, stark) = match &proof.delegation_proof {
                 DelegationProofData::SignedDelegation {
@@ -1609,7 +1726,7 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
                     ..
                 } => (
                     Digest::from_bytes(*delegator_pk),
-                    sig64_to_nat(signature),
+                    bytes32_to_nat(&blake3_of(signature)),
                     false,
                 ),
                 DelegationProofData::StarkDelegation {
@@ -1617,7 +1734,7 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
                     root_issuer_commitment,
                 } => (
                     Digest::from_bytes(*root_issuer_commitment),
-                    bytes_to_nat(proof_bytes),
+                    bytes32_to_nat(&blake3_of(proof_bytes)),
                     true,
                 ),
             };
@@ -1661,17 +1778,33 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
             ephemeral_pk: Digest::from_bytes(*ephemeral_pubkey),
             sig: sig64_to_nat(signature),
         },
-        // The token's issuer key / cell-scoped anchor is the WHO-leg; carry it in full.
-        Authorization::Token { key_ref, .. } => match key_ref {
-            crate::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => WireAuth::Token {
-                issuer_key: Digest::from_bytes(*issuer_pubkey),
-                sig: 0,
-            },
-            crate::action::TokenKeyRef::CellScopedMacaroon { cell } => WireAuth::Custom {
-                kind_stmt: Digest::from_bytes(cell.0),
-                proof: 0,
-            },
-        },
+        // The token's issuer key / cell-scoped anchor is the WHO-leg; carry it in full AND fold the
+        // `encoded` credential + its `discharges` caveat-chain into the `sig`/`proof` Nat. Before,
+        // `sig:0`/`proof:0` DROPPED the caveat chain — the verified gate authenticated the issuer
+        // key but was BLIND to the discharges, so a turn carrying a BAD discharge (a forged /
+        // missing third-party discharge the Rust `from_encoded_with_discharges` rejects,
+        // `authorize.rs:1795`) passed the Lean WHO leg unchanged. Now the `sig`/`proof` Nat is
+        // `bytes32_to_nat(blake3(encoded ‖ discharges))`, so it is sensitive to the ENTIRE caveat
+        // chain: a tampered/absent discharge changes the hash → the wire Nat → the verified WHO leg
+        // (`portalVerify .token key sig = verify key sig` / `.custom stmt pf`), so the gate can
+        // REPRODUCE the discharge-chain outcome rather than ignoring it.
+        Authorization::Token {
+            key_ref,
+            encoded,
+            discharges,
+        } => {
+            let chain_nat = bytes32_to_nat(&token_chain_hash(encoded, discharges));
+            match key_ref {
+                crate::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => WireAuth::Token {
+                    issuer_key: Digest::from_bytes(*issuer_pubkey),
+                    sig: chain_nat,
+                },
+                crate::action::TokenKeyRef::CellScopedMacaroon { cell } => WireAuth::Custom {
+                    kind_stmt: Digest::from_bytes(cell.0),
+                    proof: chain_nat,
+                },
+            }
+        }
     }
 }
 
@@ -1707,6 +1840,25 @@ fn digest_from_halves(r: &[u8; 32], _s: &[u8; 32]) -> dregg_lean_ffi::marshal::D
 #[cfg(not(feature = "no-lean-link"))]
 fn blake3_of(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
+}
+
+/// Hash a Token credential's `encoded` blob TOGETHER WITH its `discharges` caveat-chain into a
+/// single 32-byte commitment (the WHO-leg's discharge-sensitive `sig`/`proof` Nat preimage). The
+/// length-prefixing makes the fold injective in the discharge SET (a different number of
+/// discharges, or a different discharge, yields a different commitment), so the verified gate's
+/// WHO leg is sensitive to the FULL caveat chain the Rust verifier checks — not just the issuer
+/// key. An EMPTY credential with no discharges hashes the empty preimage (a stable non-secret).
+#[cfg(not(feature = "no-lean-link"))]
+fn token_chain_hash(encoded: &[u8], discharges: &[Vec<u8>]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-lean-shadow-token-chain-v1");
+    hasher.update(&(encoded.len() as u64).to_le_bytes());
+    hasher.update(encoded);
+    hasher.update(&(discharges.len() as u64).to_le_bytes());
+    for d in discharges {
+        hasher.update(&(d.len() as u64).to_le_bytes());
+        hasher.update(d);
+    }
+    *hasher.finalize().as_bytes()
 }
 
 #[cfg(not(feature = "no-lean-link"))]
@@ -1831,6 +1983,163 @@ mod producer_coverage_tests {
         );
         for c in producer_covered_effects() {
             assert!(!uncovered.contains(c), "{c} is both covered and uncovered");
+        }
+    }
+}
+
+/// Theme-2 LEAN-SHADOW AUTH-SHAPES: the producer marshaller now carries the HARD auth shapes
+/// (caveats / bearer full-sig / token discharge-chain) the wire previously dropped, so the verified
+/// Lean kernel evaluates them rather than seeing a weaker turn. These tests pin the Rust HALF of
+/// each closure (the data crosses faithfully + is tamper-sensitive); the Lean HALF (the refusal
+/// teeth) is `FFI.lean`'s `caveat_teeth_same_wire` / `bearer_teeth_same_wire` /
+/// `discharge_teeth_same_wire`.
+#[cfg(all(test, not(feature = "no-lean-link")))]
+mod auth_shape_marshal_tests {
+    use super::*;
+    use crate::action::{Action, Authorization, DelegationProofData, TokenKeyRef};
+    use dregg_cell::preconditions::{CellStatePrecondition, Preconditions};
+
+    fn bare_action(target: CellId, auth: Authorization, pre: Preconditions) -> Action {
+        Action {
+            target,
+            method: Default::default(),
+            args: vec![],
+            authorization: auth,
+            preconditions: pre,
+            effects: vec![],
+            may_delegate: crate::action::DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        }
+    }
+
+    /// (1) CAVEATS: a `min_balance` precondition lifts to a monotone within-cell `WireCaveat`
+    /// (`bal actor 0 ≥ min`) — the SAME read the verified gate's `caveatsDischarged` leg runs and
+    /// the SAME read apply.rs enforces (`target.balance ≥ min_balance`). No precondition ⇒ no caveat.
+    #[test]
+    fn min_balance_precondition_lifts_to_monotone_caveat() {
+        let cell = CellId([7u8; 32]);
+        let actor: u64 = 42;
+        let pre = Preconditions {
+            cell_state: Some(CellStatePrecondition {
+                min_balance: Some(500),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cavs = action_caveats(&bare_action(cell, Authorization::Unchecked, pre), actor);
+        assert_eq!(cavs.len(), 1, "min_balance must produce exactly one caveat");
+        let c = &cavs[0];
+        assert_eq!(c.tier, 0, "min_balance is a monotone (drift-stable) within-cell read");
+        assert_eq!(c.cell, actor, "caveat reads the action's own target cell");
+        assert_eq!(c.asset, 0, "the cell's primary balance is wire asset 0");
+        assert_eq!(c.min, 500i128, "the threshold is the min_balance floor");
+    }
+
+    #[test]
+    fn no_precondition_yields_no_caveat() {
+        let cell = CellId([1u8; 32]);
+        let cavs = action_caveats(
+            &bare_action(cell, Authorization::Unchecked, Preconditions::default()),
+            9,
+        );
+        assert!(cavs.is_empty(), "an action with no min_balance carries no caveat (additive)");
+    }
+
+    /// (2) TOKEN DISCHARGE: `token_chain_hash` is sensitive to the FULL `encoded ‖ discharges`
+    /// chain — a tampered/added/removed discharge changes the commitment, so the verified WHO leg
+    /// can no longer be blind to the chain (the `sig:0` drop the ledger named).
+    #[test]
+    fn token_chain_hash_is_discharge_sensitive() {
+        let encoded = b"eb2_some_biscuit".to_vec();
+        let d1 = vec![b"discharge-a".to_vec()];
+        let d2 = vec![b"discharge-b".to_vec()]; // a DIFFERENT discharge
+        let d_extra = vec![b"discharge-a".to_vec(), b"discharge-b".to_vec()]; // an ADDED discharge
+        let h_none = token_chain_hash(&encoded, &[]);
+        let h1 = token_chain_hash(&encoded, &d1);
+        let h2 = token_chain_hash(&encoded, &d2);
+        let h_extra = token_chain_hash(&encoded, &d_extra);
+        assert_ne!(h1, h_none, "adding a discharge changes the commitment");
+        assert_ne!(h1, h2, "a different discharge changes the commitment");
+        assert_ne!(h1, h_extra, "the discharge SET cardinality is load-bearing");
+        // ...and the `encoded` blob is load-bearing too:
+        assert_ne!(
+            token_chain_hash(&encoded, &d1),
+            token_chain_hash(b"em2_other", &d1),
+            "the encoded credential is part of the commitment"
+        );
+    }
+
+    /// (2) TOKEN arm: the producer maps a biscuit Token to the wire `token` arm with a
+    /// discharge-folded `sig` (NOT `sig:0`), so a turn with a different discharge marshals to a
+    /// DIFFERENT wire credential (the verified WHO leg sees the change).
+    #[test]
+    fn biscuit_token_wire_is_discharge_sensitive() {
+        use dregg_lean_ffi::marshal::WireAuth;
+        let key = [3u8; 32];
+        let mk = |discharges: Vec<Vec<u8>>| {
+            auth_to_wire(&Authorization::Token {
+                encoded: b"eb2_cred".to_vec(),
+                key_ref: TokenKeyRef::BiscuitIssuer { issuer_pubkey: key },
+                discharges,
+            })
+        };
+        let a = mk(vec![b"good".to_vec()]);
+        let b = mk(vec![b"bad".to_vec()]);
+        match (&a, &b) {
+            (
+                WireAuth::Token { sig: sa, .. },
+                WireAuth::Token { sig: sb, .. },
+            ) => assert_ne!(sa, sb, "a different discharge ⇒ a different wire token sig"),
+            _ => panic!("biscuit Token must map to the wire token arm"),
+        }
+        // the issuer key still crosses in full (the WHO anchor is preserved):
+        if let WireAuth::Token { issuer_key, .. } = &a {
+            assert_eq!(issuer_key.0, key, "issuer pubkey crosses byte-exact");
+        }
+    }
+
+    /// (3) BEARER: the producer now hashes the FULL delegation sig into `deleg_sig` (not the
+    /// truncated last 8 bytes), so flipping ANY sig byte changes the wire credential — the verified
+    /// WHO leg can reproduce the bearer-auth outcome instead of seeing a truncation a forged sig
+    /// could share.
+    #[test]
+    fn bearer_wire_is_full_sig_sensitive() {
+        use dregg_lean_ffi::marshal::WireAuth;
+        use crate::action::BearerCapProof;
+        use dregg_cell::AuthRequired;
+        let mk = |sig: [u8; 64]| {
+            auth_to_wire(&Authorization::Bearer(BearerCapProof {
+                target: CellId([5u8; 32]),
+                permissions: AuthRequired::None,
+                delegation_proof: DelegationProofData::SignedDelegation {
+                    delegator_pk: [9u8; 32],
+                    signature: sig,
+                    bearer_pk: [8u8; 32],
+                },
+                expires_at: 100,
+                revocation_channel: None,
+                allowed_effects: None,
+            }))
+        };
+        let mut sig_a = [1u8; 64];
+        let mut sig_b = [1u8; 64];
+        // flip a byte in the HIGH half (the old `sig64_to_nat` only read the LOW 8 bytes [56..64],
+        // so this forge was previously INVISIBLE on the wire):
+        sig_a[0] = 0xAA;
+        sig_b[0] = 0xBB;
+        let a = mk(sig_a);
+        let b = mk(sig_b);
+        match (&a, &b) {
+            (
+                WireAuth::Bearer { deleg_sig: da, stark: false, .. },
+                WireAuth::Bearer { deleg_sig: db, stark: false, .. },
+            ) => assert_ne!(
+                da, db,
+                "a high-half sig byte flip must change deleg_sig (old truncation missed it)"
+            ),
+            _ => panic!("SignedDelegation must map to the wire bearer arm with stark=false"),
         }
     }
 }
