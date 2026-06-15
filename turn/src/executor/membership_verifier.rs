@@ -43,6 +43,9 @@ use dregg_circuit::membership_adjacency_air::{
     ADJ_PUBLIC_INPUT_COUNT, AdjStep, adj_pi, prove_adjacency, verify_adjacency,
 };
 use dregg_circuit::poseidon2;
+use dregg_circuit::predicate_air::{
+    PredicateProof, PredicateType, verify_in_range, verify_predicate,
+};
 use dregg_circuit::stark::{StarkProof, proof_from_bytes, proof_to_bytes};
 use dregg_circuit::temporal_predicate_dsl::{
     TemporalPredicateProof, TemporalPredicateRequirement, verify_temporal_predicate,
@@ -610,16 +613,17 @@ impl WitnessedPredicateVerifier for PedersenBulletproofVerifier {
 ///
 /// Kinds that need host-trusted context remain fail-closed here and are wired by
 /// [`registry_with_real_verifiers_full`]: `Dfa` (needs a [`ProgramRegistry`]),
-/// `Temporal` (needs a [`TemporalPolicyAuthority`]), and `BlindedSet`'s
-/// issuer-root binding (needs an [`IssuerRootAuthority`]).
+/// `Temporal` (needs a [`TemporalPolicyAuthority`]), `BlindedSet`'s issuer-root
+/// binding (needs an [`IssuerRootAuthority`]), and `BridgePredicate` (needs a
+/// [`BridgePredicatePolicyAuthority`]).
 ///
-/// `BridgePredicate` REMAINS fail-closed (`NotYetWiredVerifier`) in BOTH
-/// constructors: its real verifier is `dregg_bridge::present::verify_predicate_proof`,
-/// which lives in `dregg-bridge` — a crate `dregg-turn` does **not** depend on
-/// (turn → cell + circuit only). Wiring it from here would create a new
-/// dependency edge; a host that links `dregg-bridge` must register its
-/// BridgePredicate adapter via `register_builtin`. This is left fail-closed
-/// rather than faked.
+/// `BridgePredicate`'s real verifier is welded from the `dregg-circuit`
+/// predicate-AIR primitives (`verify_predicate` / `verify_in_range`) directly —
+/// the same gadgets `dregg_bridge::present::verify_predicate_proof` wraps — so it
+/// needs **no** `dregg-turn → dregg-bridge` edge. It stays fail-closed in *this*
+/// constructor only because it needs a host-trusted operator/threshold policy
+/// (else a prover could lower the threshold); [`registry_with_real_verifiers_full`]
+/// installs it given a [`BridgePredicatePolicyAuthority`].
 pub fn registry_with_real_verifiers() -> WitnessedPredicateRegistry {
     use dregg_cell::predicate::{
         CredentialSetMembershipVerifier, SortedNeighborNonMembershipVerifier,
@@ -653,13 +657,21 @@ pub fn registry_with_real_verifiers() -> WitnessedPredicateRegistry {
 /// - `BlindedSet` → `CredentialSetMembershipVerifier::production` with both the
 ///   adjacency STARK verifier AND `issuer_roots` (so the issuer-root binding can
 ///   ACCEPT honest members and reject self-fabricated accumulators).
+/// - `BridgePredicate` → [`BridgePredicateStarkVerifier`] over `bridge_policies`
+///   (the `dregg-circuit` predicate-AIR STARK; a commitment with no policy fails
+///   closed). This is welded from the circuit primitives directly — no
+///   `dregg-turn → dregg-bridge` dependency.
 ///
-/// `BridgePredicate` still fails closed (its verifier is in `dregg-bridge`; see
-/// [`registry_with_real_verifiers`]).
+/// With this constructor **every** built-in witnessed-predicate kind whose
+/// backend lives in `dregg-cell` / `dregg-circuit` is wired to its real
+/// cryptographic verifier; none of the five `default_builtins` fail-closed stubs
+/// (Dfa, Temporal, MerkleMembership, BridgePredicate, PedersenEquality — plus
+/// NonMembership / BlindedSet) remains.
 pub fn registry_with_real_verifiers_full(
     programs: Arc<ProgramRegistry>,
     temporal_policies: Arc<dyn TemporalPolicyAuthority>,
     issuer_roots: Arc<dyn IssuerRootAuthority>,
+    bridge_policies: Arc<dyn BridgePredicatePolicyAuthority>,
 ) -> WitnessedPredicateRegistry {
     use dregg_cell::predicate::CredentialSetMembershipVerifier;
 
@@ -674,6 +686,7 @@ pub fn registry_with_real_verifiers_full(
         adjacency,
         issuer_roots,
     )));
+    r.register_builtin(Arc::new(BridgePredicateStarkVerifier::new(bridge_policies)));
     r
 }
 
@@ -724,6 +737,323 @@ pub fn authorized_set_root_bytes(
     let mut out = [0u8; 32];
     out[..4].copy_from_slice(&root.0.to_le_bytes());
     out
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Single-member authorized set: the trivial-tree convenience pair.
+// ─────────────────────────────────────────────────────────────────────────
+//
+// The common honest-issuer case authorizes exactly ONE public key (the
+// issuer's own pk). For this the Merkle tree degenerates to a single leaf;
+// the membership STARK still needs depth ≥ 2 (`prove_membership_dsl`), so the
+// member sits at position 0 of a depth-2 tree padded with zero siblings. Both
+// the slot value and the proof are derived from the SAME `compress` /
+// `generate_merkle_poseidon2_trace` convention the [`MerkleMembershipStarkVerifier`]
+// reads, so they are mutually consistent by construction (the root the prover
+// commits to is exactly the root the verifier reconstructs from the slot).
+
+/// The canonical depth-2 single-member witness: position 0 at each level,
+/// zero siblings. `prove_membership_dsl` requires depth ≥ 2; this is the
+/// minimal honest path for a one-element authorized set.
+const SINGLE_MEMBER_SIBLINGS: [[BabyBear; 3]; 2] = [
+    [BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+    [BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+];
+const SINGLE_MEMBER_POSITIONS: [u8; 2] = [0, 0];
+
+/// The 32-byte authorized-set root slot value for a set whose ONLY member is
+/// `member` (a 32-byte sender public key).
+///
+/// Put the returned bytes in the cell's `fields[set_root_index]` (the
+/// `SenderAuthorized { PublicRoot { set_root_index } }` root slot). The matching
+/// proof is [`single_member_membership_proof`]; the two are derived from the
+/// same single-leaf tree so the proof verifies against this root.
+pub fn single_member_authorized_root(member: &[u8; 32]) -> [u8; 32] {
+    authorized_set_root_bytes(member, &SINGLE_MEMBER_SIBLINGS, &SINGLE_MEMBER_POSITIONS)
+}
+
+/// The membership-STARK proof bytes proving `member` is the (sole) leaf under
+/// the root [`single_member_authorized_root`] returns for the same `member`.
+///
+/// Wrap the returned bytes in `WitnessKind::MerklePath` (or `ProofBytes`) and
+/// attach them to the firing action's `witness_blobs`; the
+/// `SenderAuthorized { PublicRoot }` evaluator binds the unique such blob and
+/// feeds it to [`MerkleMembershipStarkVerifier`], which accepts iff the proof's
+/// committed leaf = `compress(member)` reaches the slot's root.
+pub fn single_member_membership_proof(member: &[u8; 32]) -> Vec<u8> {
+    prove_sender_membership(member, &SINGLE_MEMBER_SIBLINGS, &SINGLE_MEMBER_POSITIONS)
+        .expect("single-member depth-2 membership proof is always provable")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// BridgePredicate — real predicate-AIR STARK verifier
+// (dregg_circuit::predicate_air::verify_predicate / verify_in_range).
+// ─────────────────────────────────────────────────────────────────────────
+//
+// `WitnessedPredicateKind::BridgePredicate` declares a Gte/Lte/Gt/Lt/Neq/InRange
+// predicate over a hidden value committed inside a `fact_commitment`. The real
+// verifier (`dregg_bridge::present::verify_predicate_proof`) is a thin wrapper
+// around `dregg_circuit::verify_predicate` / `verify_in_range`; the proving-
+// system gadgets live in `dregg-circuit`, which `dregg-turn` ALREADY links.
+// So the verifier is welded HERE from the circuit primitives directly — no
+// `dregg-turn → dregg-bridge` edge is created (turn → cell + circuit only).
+//
+// # Why a host policy (the threshold-lowering forge)
+//
+// `verify_predicate(proof, threshold, fact_commitment)` takes the threshold and
+// the operator (via the proof's `op` tag) as the public statement it binds. A
+// prover who controls those could "prove `value >= 0`" and present it as
+// "`value >= 1_000`". So — exactly as `Temporal` consults a
+// [`TemporalPolicyAuthority`] — `BridgePredicate` consults a host-trusted
+// [`BridgePredicatePolicyAuthority`] that maps the predicate `commitment` to the
+// authoritative operator + threshold(s). The verifier reconstructs the STARK
+// statement from the POLICY's values (not the proof's self-claimed ones) and
+// additionally pins the proof's `op` to the policy operator, so a forger can
+// neither lower the threshold nor swap the comparison. A commitment with no
+// registered policy fails closed.
+
+/// The authoritative predicate a [`WitnessedPredicateKind::BridgePredicate`]
+/// proof must satisfy, keyed by the predicate `commitment` (the `fact_commitment`
+/// felt). The host supplies this so the threshold/operator cannot be chosen by
+/// the prover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BridgePredicateRequirement {
+    /// A single-bound comparison: the hidden value relates to `threshold` under
+    /// `op` (`Gte`/`Lte`/`Gt`/`Lt`/`Neq`). `InRangeLow`/`InRangeHigh` are not
+    /// valid single requirements — use [`Self::InRange`].
+    Threshold { op: PredicateType, threshold: u32 },
+    /// A two-bound range: `low <= value <= high`. Verified as a pair of
+    /// predicate proofs (`InRangeLow` against `low`, `InRangeHigh` against
+    /// `high`).
+    InRange { low: u32, high: u32 },
+}
+
+/// Host-installed authority mapping a [`WitnessedPredicateKind::BridgePredicate`]
+/// predicate `commitment` (the `fact_commitment` felt) to the authoritative
+/// [`BridgePredicateRequirement`] the proof must satisfy.
+pub trait BridgePredicatePolicyAuthority: Send + Sync {
+    /// Return the authoritative requirement for `commitment`, or `None` if no
+    /// policy is registered (the verifier then fails closed).
+    fn requirement(&self, commitment: &[u8; 32]) -> Option<BridgePredicateRequirement>;
+}
+
+/// A static [`BridgePredicatePolicyAuthority`] backed by an in-memory table of
+/// `commitment -> BridgePredicateRequirement`. A commitment absent from the
+/// table is rejected (fail-closed by construction).
+#[derive(Clone, Debug, Default)]
+pub struct StaticBridgePredicatePolicy {
+    bindings: std::collections::BTreeMap<[u8; 32], BridgePredicateRequirement>,
+}
+
+impl StaticBridgePredicatePolicy {
+    /// Construct an empty authority (rejects everything until requirements added).
+    pub fn new() -> Self {
+        Self {
+            bindings: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Authorize `requirement` for `commitment`.
+    pub fn authorize(
+        mut self,
+        commitment: [u8; 32],
+        requirement: BridgePredicateRequirement,
+    ) -> Self {
+        self.bindings.insert(commitment, requirement);
+        self
+    }
+}
+
+impl BridgePredicatePolicyAuthority for StaticBridgePredicatePolicy {
+    fn requirement(&self, commitment: &[u8; 32]) -> Option<BridgePredicateRequirement> {
+        self.bindings.get(commitment).copied()
+    }
+}
+
+/// Wire encoding for a [`WitnessedPredicateKind::BridgePredicate`] proof.
+///
+/// Carries the circuit-level `PredicateProof`(s) only — the operator and
+/// threshold are NOT trusted from the wire; they are reconstructed from the host
+/// [`BridgePredicateRequirement`]. `Single` is a one-bound comparison;
+/// `Range` is the `(low_bound, high_bound)` proof pair for an `InRange`
+/// requirement.
+#[derive(serde::Serialize, serde::Deserialize)]
+enum BridgePredicateWire {
+    Single(PredicateProof),
+    Range(PredicateProof, PredicateProof),
+}
+
+/// Real predicate-AIR-STARK-backed verifier for
+/// [`WitnessedPredicateKind::BridgePredicate`].
+///
+/// Decodes a [`BridgePredicateWire`], looks up the authoritative
+/// [`BridgePredicateRequirement`] for the `commitment`, and verifies the
+/// circuit predicate STARK (`dregg_circuit::verify_predicate` / `verify_in_range`)
+/// against the POLICY's operator + threshold(s) and the `commitment`-derived
+/// `fact_commitment` felt — NOT the proof's self-claimed values. A commitment
+/// with no registered policy, or a proof whose operator disagrees with the
+/// policy, or a proof bound to a different fact_commitment / threshold, fails
+/// closed.
+#[derive(Clone)]
+pub struct BridgePredicateStarkVerifier {
+    policies: Arc<dyn BridgePredicatePolicyAuthority>,
+}
+
+impl BridgePredicateStarkVerifier {
+    /// Construct from a host-trusted policy authority.
+    pub fn new(policies: Arc<dyn BridgePredicatePolicyAuthority>) -> Self {
+        Self { policies }
+    }
+}
+
+impl WitnessedPredicateVerifier for BridgePredicateStarkVerifier {
+    fn name(&self) -> &'static str {
+        "bridge-predicate-stark"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::BridgePredicate
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let wire: BridgePredicateWire =
+            postcard::from_bytes(proof_bytes).map_err(|e| WitnessedPredicateError::Rejected {
+                kind_name: "BridgePredicate",
+                reason: format!(
+                    "BridgePredicate proof wire did not decode (expected BridgePredicateWire): {e}"
+                ),
+            })?;
+        let requirement = self
+            .policies
+            .requirement(commitment)
+            .ok_or_else(|| WitnessedPredicateError::Rejected {
+                kind_name: "BridgePredicate",
+                reason:
+                    "no bridge-predicate policy registered for this commitment (fact_commitment); \
+                     the operator/threshold is not host-trusted, so the proof fails closed"
+                        .into(),
+            })?;
+
+        // The committed fact is a BabyBear felt published in the 32-byte
+        // commitment as its canonical 4-byte LE form (the `root_felt_from_slot`
+        // convention shared with MerkleMembership). Reconstruct it; the circuit
+        // verifier binds it as a public input.
+        let fact_commitment = root_felt_from_slot(commitment);
+
+        match (requirement, wire) {
+            (
+                BridgePredicateRequirement::Threshold { op, threshold },
+                BridgePredicateWire::Single(proof),
+            ) => {
+                // Pin the operator: verify_predicate binds the proof's OWN `op`
+                // tag into the PI, so a Gte proof presented under an Lte policy
+                // would slip past a threshold-only check. Reject the mismatch.
+                if proof.op != op {
+                    return Err(WitnessedPredicateError::Rejected {
+                        kind_name: "BridgePredicate",
+                        reason: format!(
+                            "proof operator {:?} does not match the host policy operator {op:?}",
+                            proof.op
+                        ),
+                    });
+                }
+                // Authoritative STARK gate: threshold + fact_commitment come from
+                // the host policy, not the proof. A proof whose embedded values
+                // disagree yields a PI that mismatches the STARK boundary and is
+                // rejected by verify_predicate.
+                verify_predicate(&proof, BabyBear::new(threshold), fact_commitment).map_err(|e| {
+                    WitnessedPredicateError::Rejected {
+                        kind_name: "BridgePredicate",
+                        reason: format!("predicate STARK rejected: {e}"),
+                    }
+                })
+            }
+            (
+                BridgePredicateRequirement::InRange { low, high },
+                BridgePredicateWire::Range(low_proof, high_proof),
+            ) => {
+                if low_proof.op != PredicateType::InRangeLow
+                    || high_proof.op != PredicateType::InRangeHigh
+                {
+                    return Err(WitnessedPredicateError::Rejected {
+                        kind_name: "BridgePredicate",
+                        reason: format!(
+                            "range proof operators must be (InRangeLow, InRangeHigh); got ({:?}, {:?})",
+                            low_proof.op, high_proof.op
+                        ),
+                    });
+                }
+                if verify_in_range(
+                    &low_proof,
+                    &high_proof,
+                    BabyBear::new(low),
+                    BabyBear::new(high),
+                    fact_commitment,
+                ) {
+                    Ok(())
+                } else {
+                    Err(WitnessedPredicateError::Rejected {
+                        kind_name: "BridgePredicate",
+                        reason: "in-range predicate STARK rejected (value not in [low, high] \
+                                 against the policy bounds and committed fact)"
+                            .into(),
+                    })
+                }
+            }
+            // Wire shape disagrees with the policy shape (single-vs-range).
+            (BridgePredicateRequirement::Threshold { .. }, BridgePredicateWire::Range(..)) => {
+                Err(WitnessedPredicateError::Rejected {
+                    kind_name: "BridgePredicate",
+                    reason: "host policy is a single-bound threshold but the proof is a range pair"
+                        .into(),
+                })
+            }
+            (BridgePredicateRequirement::InRange { .. }, BridgePredicateWire::Single(..)) => {
+                Err(WitnessedPredicateError::Rejected {
+                    kind_name: "BridgePredicate",
+                    reason: "host policy is an InRange but the proof is a single-bound predicate"
+                        .into(),
+                })
+            }
+        }
+    }
+}
+
+/// The 32-byte BridgePredicate `commitment` form for a `fact_commitment` felt:
+/// its canonical 4-byte LE encoding (matching [`root_felt_from_slot`], the
+/// convention the verifier reads). Hosts that hold a `fact_commitment` BabyBear
+/// publish `bridge_predicate_commitment_bytes(fact_commitment)` as the predicate
+/// commitment.
+pub fn bridge_predicate_commitment_bytes(fact_commitment: BabyBear) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[..4].copy_from_slice(&fact_commitment.as_u32().to_le_bytes());
+    out
+}
+
+/// Produce a serialized [`WitnessedPredicateKind::BridgePredicate`] single-bound
+/// proof. `proof` is a circuit `PredicateProof` (e.g. from
+/// `dregg_circuit::prove_predicate`); the returned bytes verify under
+/// [`BridgePredicateStarkVerifier`] when the host policy's operator + threshold
+/// match the proof's bound statement.
+pub fn bridge_predicate_proof_bytes(proof: &PredicateProof) -> Vec<u8> {
+    postcard::to_allocvec(&BridgePredicateWire::Single(proof.clone()))
+        .expect("BridgePredicateWire serialization is infallible")
+}
+
+/// Produce a serialized [`WitnessedPredicateKind::BridgePredicate`] range proof
+/// from the `(low_bound, high_bound)` pair (e.g. from
+/// `dregg_circuit::prove_in_range`).
+pub fn bridge_predicate_range_proof_bytes(
+    low_proof: &PredicateProof,
+    high_proof: &PredicateProof,
+) -> Vec<u8> {
+    postcard::to_allocvec(&BridgePredicateWire::Range(low_proof.clone(), high_proof.clone()))
+        .expect("BridgePredicateWire serialization is infallible")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1075,6 +1405,7 @@ mod tests {
             programs,
             Arc::new(EmptyTemporalPolicy),
             Arc::new(StaticIssuerRootAuthority::new()),
+            Arc::new(StaticBridgePredicatePolicy::new()),
         );
         let wp = WitnessedPredicate::dfa(vk_hash, PredicateInputRefSender(), 0);
         let dummy = [0u8; 32];
@@ -1249,6 +1580,7 @@ mod tests {
             Arc::new(ProgramRegistry::new()),
             Arc::new(EmptyTemporalPolicy),
             Arc::new(StaticIssuerRootAuthority::new()),
+            Arc::new(StaticBridgePredicatePolicy::new()),
         );
         assert_eq!(
             reg.get(WitnessedPredicateKind::Dfa).unwrap().name(),
@@ -1261,6 +1593,237 @@ mod tests {
         assert_eq!(
             reg.get(WitnessedPredicateKind::BlindedSet).unwrap().name(),
             "credential-set-membership"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // BridgePredicate real-verifier teeth (welded from dregg-circuit's
+    // predicate-AIR STARK; no dregg-bridge dependency).
+    // ─────────────────────────────────────────────────────────────────────
+
+    use dregg_circuit::compute_fact_commitment;
+    use dregg_circuit::predicate_air::{PredicateWitness, prove_in_range, prove_predicate};
+
+    /// A bridge policy authority that authorizes ONE requirement for ONE commitment.
+    struct OneBridgePolicy {
+        commitment: [u8; 32],
+        requirement: BridgePredicateRequirement,
+    }
+    impl BridgePredicatePolicyAuthority for OneBridgePolicy {
+        fn requirement(&self, commitment: &[u8; 32]) -> Option<BridgePredicateRequirement> {
+            (commitment == &self.commitment).then_some(self.requirement)
+        }
+    }
+
+    /// Build an honest single-bound predicate proof for `value op threshold` over
+    /// a committed fact, returning `(commitment_bytes, fact_commitment_felt, proof)`.
+    fn honest_bridge_single(
+        value: u32,
+        op: PredicateType,
+        threshold: u32,
+    ) -> ([u8; 32], BabyBear, PredicateProof) {
+        let fact_hash = BabyBear::new(0xFACE);
+        let state_root = BabyBear::new(0xB00C);
+        let fact_commitment = compute_fact_commitment(fact_hash, state_root);
+        let witness = PredicateWitness {
+            private_value: BabyBear::new(value),
+            threshold: BabyBear::new(threshold),
+            predicate_type: op,
+            fact_commitment,
+            blinding: None,
+            fact_hash: Some(fact_hash),
+            state_root: Some(state_root),
+        };
+        let proof = prove_predicate(witness).expect("honest predicate must be provable");
+        (
+            bridge_predicate_commitment_bytes(fact_commitment),
+            fact_commitment,
+            proof,
+        )
+    }
+
+    /// TOOTH (admit): a genuine `value >= threshold` proof verifies through the
+    /// real BridgePredicate verifier when the host policy matches.
+    #[test]
+    fn bridge_predicate_real_verifier_accepts_valid() {
+        let (commitment, _fc, proof) = honest_bridge_single(500, PredicateType::Gte, 100);
+        let policy = Arc::new(OneBridgePolicy {
+            commitment,
+            requirement: BridgePredicateRequirement::Threshold {
+                op: PredicateType::Gte,
+                threshold: 100,
+            },
+        });
+        let v = BridgePredicateStarkVerifier::new(policy);
+        let bytes = bridge_predicate_proof_bytes(&proof);
+        let dummy = [0u8; 32];
+        v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+            .expect("genuine Gte predicate must verify through the real BridgePredicate verifier");
+    }
+
+    /// TOOTH (reject): the threshold-lowering forge. A proof for `value >= 100`
+    /// is presented under a host policy demanding `value >= 1_000`. The verifier
+    /// reconstructs the STARK PI from the POLICY threshold, so the proof's
+    /// boundary commitment mismatches and it is rejected — the prover cannot
+    /// pass a higher bar with a lower-bar proof.
+    #[test]
+    fn bridge_predicate_real_verifier_rejects_threshold_lowering_forge() {
+        let (commitment, _fc, proof) = honest_bridge_single(500, PredicateType::Gte, 100);
+        let policy = Arc::new(OneBridgePolicy {
+            commitment,
+            requirement: BridgePredicateRequirement::Threshold {
+                op: PredicateType::Gte,
+                threshold: 1_000, // host demands a HIGHER bar than the proof carries
+            },
+        });
+        let v = BridgePredicateStarkVerifier::new(policy);
+        let bytes = bridge_predicate_proof_bytes(&proof);
+        let dummy = [0u8; 32];
+        assert!(
+            v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+                .is_err(),
+            "a 'value >= 100' proof must NOT satisfy a 'value >= 1000' policy"
+        );
+    }
+
+    /// TOOTH (reject): operator-swap forge. A `Gte` proof is presented under an
+    /// `Lte` policy at the same threshold; the operator pin rejects it.
+    #[test]
+    fn bridge_predicate_real_verifier_rejects_operator_swap() {
+        let (commitment, _fc, proof) = honest_bridge_single(500, PredicateType::Gte, 100);
+        let policy = Arc::new(OneBridgePolicy {
+            commitment,
+            requirement: BridgePredicateRequirement::Threshold {
+                op: PredicateType::Lte, // policy wants <=, proof proves >=
+                threshold: 100,
+            },
+        });
+        let v = BridgePredicateStarkVerifier::new(policy);
+        let bytes = bridge_predicate_proof_bytes(&proof);
+        let dummy = [0u8; 32];
+        assert!(
+            v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+                .is_err(),
+            "a Gte proof must not satisfy an Lte policy"
+        );
+    }
+
+    /// TOOTH (reject): wrong-fact-commitment forge. A genuine proof presented
+    /// against a DIFFERENT commitment than the one it was bound to is rejected
+    /// (the fact_commitment is a bound public input).
+    #[test]
+    fn bridge_predicate_real_verifier_rejects_wrong_commitment() {
+        let (commitment, _fc, proof) = honest_bridge_single(500, PredicateType::Gte, 100);
+        // A policy under a *different* commitment than the proof's fact.
+        let wrong_commitment = bridge_predicate_commitment_bytes(BabyBear::new(0xDEAD));
+        let policy = Arc::new(OneBridgePolicy {
+            commitment: wrong_commitment,
+            requirement: BridgePredicateRequirement::Threshold {
+                op: PredicateType::Gte,
+                threshold: 100,
+            },
+        });
+        let v = BridgePredicateStarkVerifier::new(policy);
+        let bytes = bridge_predicate_proof_bytes(&proof);
+        let dummy = [0u8; 32];
+        // Verify against the wrong commitment (the one the policy is keyed on).
+        assert!(
+            v.verify(&wrong_commitment, &PredicateInput::Slot(&dummy), &bytes)
+                .is_err(),
+            "a proof bound to fact A must not verify against fact B"
+        );
+        // Sanity: it would have an effect only because the genuine commitment differs.
+        assert_ne!(commitment, wrong_commitment);
+    }
+
+    /// TOOTH (reject): no registered policy → fail closed.
+    #[test]
+    fn bridge_predicate_real_verifier_fails_closed_without_policy() {
+        let (commitment, _fc, proof) = honest_bridge_single(500, PredicateType::Gte, 100);
+        let v = BridgePredicateStarkVerifier::new(Arc::new(StaticBridgePredicatePolicy::new()));
+        let bytes = bridge_predicate_proof_bytes(&proof);
+        let dummy = [0u8; 32];
+        assert!(
+            v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+                .is_err(),
+            "a commitment with no host policy must fail closed"
+        );
+        // Garbage wire → reject too.
+        assert!(
+            v.verify(&commitment, &PredicateInput::Slot(&dummy), b"junk")
+                .is_err()
+        );
+    }
+
+    /// TOOTH (admit + reject): InRange. A `low <= value <= high` proof verifies;
+    /// the same proof against a narrower policy band that excludes the value is
+    /// rejected.
+    #[test]
+    fn bridge_predicate_real_verifier_in_range_accept_and_reject() {
+        let fact_hash = BabyBear::new(0x1234);
+        let state_root = BabyBear::new(0x5678);
+        let fact_commitment = compute_fact_commitment(fact_hash, state_root);
+        let commitment = bridge_predicate_commitment_bytes(fact_commitment);
+        let dummy = [0u8; 32];
+
+        // Honest: value=50 in [10, 100].
+        let (low_p, high_p) =
+            prove_in_range(BabyBear::new(50), BabyBear::new(10), BabyBear::new(100), fact_commitment)
+                .expect("honest in-range must be provable");
+        let bytes = bridge_predicate_range_proof_bytes(&low_p, &high_p);
+
+        let ok_policy = Arc::new(OneBridgePolicy {
+            commitment,
+            requirement: BridgePredicateRequirement::InRange { low: 10, high: 100 },
+        });
+        BridgePredicateStarkVerifier::new(ok_policy)
+            .verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+            .expect("value 50 in [10,100] must verify");
+
+        // FORGE: the SAME proof pair presented under a policy band [60, 100] that
+        // excludes 50. The low-bound proof proves value >= 10, not value >= 60,
+        // so reconstructing the PI from the policy's low=60 mismatches and rejects.
+        let narrow_policy = Arc::new(OneBridgePolicy {
+            commitment,
+            requirement: BridgePredicateRequirement::InRange { low: 60, high: 100 },
+        });
+        assert!(
+            BridgePredicateStarkVerifier::new(narrow_policy)
+                .verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+                .is_err(),
+            "a [10,100] proof must not satisfy a [60,100] policy band"
+        );
+
+        // FORGE 2: shape mismatch — a single-bound policy with the range proof.
+        let single_policy = Arc::new(OneBridgePolicy {
+            commitment,
+            requirement: BridgePredicateRequirement::Threshold {
+                op: PredicateType::Gte,
+                threshold: 10,
+            },
+        });
+        assert!(
+            BridgePredicateStarkVerifier::new(single_policy)
+                .verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
+                .is_err(),
+            "a range proof must not satisfy a single-bound threshold policy"
+        );
+    }
+
+    /// The full production registry installs the real BridgePredicate verifier.
+    #[test]
+    fn full_registry_installs_real_bridge_predicate() {
+        let reg = registry_with_real_verifiers_full(
+            Arc::new(ProgramRegistry::new()),
+            Arc::new(EmptyTemporalPolicy),
+            Arc::new(StaticIssuerRootAuthority::new()),
+            Arc::new(StaticBridgePredicatePolicy::new()),
+        );
+        assert_eq!(
+            reg.get(WitnessedPredicateKind::BridgePredicate)
+                .unwrap()
+                .name(),
+            "bridge-predicate-stark"
         );
     }
 }

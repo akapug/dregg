@@ -453,7 +453,12 @@ pub use migration::{CellMigrationManager, MigrationCancelReason, MigrationError,
 /// teeth). Lives here (not in `cell/`) because it depends on `dregg-circuit`.
 pub mod membership_verifier;
 pub use membership_verifier::{
-    MerkleMembershipStarkVerifier, registry_with_real_sender_membership,
+    BridgePredicatePolicyAuthority, BridgePredicateRequirement, BridgePredicateStarkVerifier,
+    MerkleMembershipStarkVerifier, StaticBridgePredicatePolicy, bridge_predicate_commitment_bytes,
+    bridge_predicate_proof_bytes, bridge_predicate_range_proof_bytes,
+    registry_with_real_sender_membership, registry_with_real_verifiers,
+    registry_with_real_verifiers_full, single_member_authorized_root,
+    single_member_membership_proof,
 };
 
 /// The turn executor: applies turns to a ledger atomically.
