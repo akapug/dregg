@@ -11,9 +11,17 @@
 //! them globally unique and federation-independent. This ensures double-spend
 //! protection works across federation boundaries without export ceremonies.
 //!
-//! All commitments use domain-separated BLAKE3 (placeholder for Poseidon2 over
-//! the STARK-native field). The API is designed so that swapping to algebraic
-//! Poseidon2 requires changing only the hash calls in this module.
+//! Note commitments and nullifiers are computed with **Poseidon2** over the
+//! STARK-native BabyBear field — the same audited `dregg_circuit::poseidon2`
+//! sponge the circuit verifies. The 32-byte `NoteCommitment` / `Nullifier` are
+//! the [`crate::felt_to_bytes32`] encoding of the Poseidon2 field-element
+//! digest, so the cell-side note identity matches the circuit's field-domain
+//! commitment (`Note::poseidon2_commitment` is the underlying felt).
+//!
+//! The separate BLAKE3 paths in this crate are confined to non-commitment
+//! key-derivation roles: `creation_nonce` domain separation here, and the
+//! Diffie–Hellman encryption KDF in `note_encryption` (which must keep its full
+//! 256-bit symmetric strength and is unrelated to the felt commitment).
 
 use serde::{Deserialize, Serialize};
 
@@ -108,7 +116,6 @@ impl std::error::Error for NoteError {}
 /// the per-limb mod-p wrap, which only aliases 4-byte chunks whose raw u32
 /// exceeds `p` — a measure-zero, deterministic, total mapping that is identical
 /// for any two callers).
-#[cfg(feature = "zkvm")]
 #[inline]
 fn bytes32_to_limbs(b: &[u8; 32]) -> [dregg_circuit::field::BabyBear; 8] {
     use dregg_circuit::field::{BABYBEAR_P, BabyBear};
@@ -124,7 +131,6 @@ fn bytes32_to_limbs(b: &[u8; 32]) -> [dregg_circuit::field::BabyBear; 8] {
 /// Decompose a u64 into 2 BabyBear limbs: `[low 32 bits, high 32 bits]`, each
 /// reduced mod `p`. Binds the FULL 64 bits of a u64 note field (value /
 /// asset_type), versus the legacy form that bound only the low 32 bits.
-#[cfg(feature = "zkvm")]
 #[inline]
 fn u64_to_limbs(v: u64) -> [dregg_circuit::field::BabyBear; 2] {
     use dregg_circuit::field::{BABYBEAR_P, BabyBear};
@@ -195,16 +201,16 @@ impl Note {
     }
 
     /// Compute the commitment for this note.
-    /// Uses domain-separated BLAKE3 over (owner || fields || randomness || creation_nonce).
+    ///
+    /// This is the **Poseidon2 commitment** over the STARK-native field: the
+    /// 32-byte value is the [`crate::felt_to_bytes32`] encoding of
+    /// [`Note::poseidon2_commitment`] (the audited `dregg_circuit::poseidon2`
+    /// hash of the 28-limb owner ‖ value ‖ asset_type ‖ creation_nonce ‖
+    /// randomness preimage). So `NoteCommitment(felt_to_bytes32(c)) == c`'s
+    /// circuit-side felt commitment — the cell identity and the circuit
+    /// commitment are the same function.
     pub fn commitment(&self) -> NoteCommitment {
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-note commitment v1");
-        hasher.update(&self.owner);
-        for f in &self.fields {
-            hasher.update(&f.to_le_bytes());
-        }
-        hasher.update(&self.randomness);
-        hasher.update(&self.creation_nonce);
-        NoteCommitment(*hasher.finalize().as_bytes())
+        NoteCommitment(crate::felt_to_bytes32(self.poseidon2_commitment()))
     }
 
     /// Compute the nullifier for this note given the owner's secret key.
@@ -215,19 +221,29 @@ impl Note {
     /// lives in. This makes double-spend detection global by construction.
     ///
     /// This is the **canonical in-protocol nullifier** consumed by the
-    /// note-spending STARK AIR (`circuit/src/note_spending_air.rs`) and the
-    /// production `NullifierSet` in the turn executor. The separate EVM
-    /// withdrawal path (`dregg_chain::withdraw::derive_nullifier`) uses a
-    /// different, domain-separated scheme (`dregg-withdrawal-nullifier-v1`)
-    /// because it commits to a different SP1 circuit; see that function's
-    /// doc-comment for why the schemes are intentionally distinct.
+    /// production `NullifierSet` in the turn executor. It is computed with
+    /// Poseidon2 over the STARK-native field, structurally mirroring the
+    /// note-spending AIR's `NoteSpendingWitness::nullifier`
+    /// (`circuit/src/note_spending_air.rs`):
+    ///   `hash_many(commitment_felt ‖ spending_key[8 limbs] ‖ creation_nonce[8 limbs])`,
+    /// then encoded to 32 bytes via [`crate::felt_to_bytes32`]. The spending key
+    /// is bound through all eight 4-byte limbs (~248-bit secret), so only the
+    /// owner can compute it.
+    ///
+    /// The separate EVM withdrawal path
+    /// (`dregg_chain::withdraw::derive_nullifier`) uses a different,
+    /// domain-separated scheme (`dregg-withdrawal-nullifier-v1`) because it
+    /// commits to a different SP1 circuit; see that function's doc-comment for
+    /// why the schemes are intentionally distinct.
     pub fn nullifier(&self, spending_key: &[u8; 32]) -> Nullifier {
-        let commitment = self.commitment();
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-note nullifier v1");
-        hasher.update(&commitment.0);
-        hasher.update(spending_key);
-        hasher.update(&self.creation_nonce);
-        Nullifier(*hasher.finalize().as_bytes())
+        use dregg_circuit::poseidon2::hash_many;
+        let commitment_felt = self.poseidon2_commitment();
+        // commitment(1) + spending_key(8 limbs) + creation_nonce(8 limbs) = 17.
+        let mut preimage = Vec::with_capacity(17);
+        preimage.push(commitment_felt);
+        preimage.extend_from_slice(&bytes32_to_limbs(spending_key)); // 8
+        preimage.extend_from_slice(&bytes32_to_limbs(&self.creation_nonce)); // 8
+        Nullifier(crate::felt_to_bytes32(hash_many(&preimage)))
     }
 
     /// Check if this note represents a fungible asset.
@@ -246,21 +262,20 @@ impl Note {
         self.fields[0]
     }
 
-    /// Compute the ZK-compatible Poseidon2 commitment for this note.
+    /// Compute the Poseidon2 commitment **field element** for this note.
     ///
     /// This is the commitment used in the NOTE TREE (Poseidon2 Merkle tree) and
-    /// verified inside the STARK circuit. It differs from `commitment()` which uses
-    /// BLAKE3 for non-ZK use cases (simple hash-based lookups, encryption key derivation).
+    /// verified inside the STARK circuit. It is also the felt that
+    /// [`Note::commitment`] encodes (via [`crate::felt_to_bytes32`]) into the
+    /// 32-byte `NoteCommitment` — so the cleartext note identity and the
+    /// in-circuit commitment are the SAME Poseidon2 function, just felt vs.
+    /// 32-byte-encoded.
     ///
     /// The Poseidon2 commitment is authoritative for:
     /// - Note tree membership proofs (ZK Merkle paths)
     /// - STARK spending proofs (the circuit recomputes this from witness columns)
-    /// - Nullifier derivation inside the circuit
-    ///
-    /// The BLAKE3 commitment (`commitment()`) is authoritative for:
-    /// - Cleartext note identity / deduplication
-    /// - Non-ZK lookups and indexing
-    /// - Encryption key derivation
+    /// - Nullifier derivation (cell-side and inside the circuit)
+    /// - Cleartext note identity / deduplication (via the 32-byte encoding)
     ///
     /// # Field mapping (full-width, 256-bit-binding)
     ///
@@ -298,7 +313,6 @@ impl Note {
     /// note-spending AIR to the 28-limb preimage is a separate, out-of-scope
     /// circuit change (the schema-based `effect_action_air` already carries
     /// 8 limbs per 32-byte field for action-binding). See residual notes.
-    #[cfg(feature = "zkvm")]
     pub fn poseidon2_commitment(&self) -> dregg_circuit::field::BabyBear {
         use dregg_circuit::poseidon2::hash_many;
 
@@ -339,6 +353,82 @@ mod tests {
         key[0] = seed;
         key[1] = 0xBB;
         key
+    }
+
+    /// The 32-byte `NoteCommitment` IS Poseidon2 (not BLAKE3): it equals the
+    /// `felt_to_bytes32` encoding of the note's `poseidon2_commitment` felt, and
+    /// is NOT the old BLAKE3 digest. This pins the cutover of the former BLAKE3
+    /// "placeholder for Poseidon2" stand-in.
+    #[test]
+    fn commitment_is_poseidon2_encoded_felt_not_blake3() {
+        let owner = test_owner(3);
+        let fields = [7u64, 250, 0, 0, 0, 0, 0, 0];
+        let note = Note::with_randomness(owner, fields, [42u8; 32]);
+
+        // The commitment equals the felt commitment encoded to 32 bytes.
+        let expected = crate::felt_to_bytes32(note.poseidon2_commitment());
+        assert_eq!(
+            note.commitment().0,
+            expected,
+            "NoteCommitment must be the felt_to_bytes32 of poseidon2_commitment"
+        );
+
+        // And it is NOT the legacy BLAKE3 commitment.
+        let mut legacy = blake3::Hasher::new_derive_key("dregg-note commitment v1");
+        legacy.update(&note.owner);
+        for f in &note.fields {
+            legacy.update(&f.to_le_bytes());
+        }
+        legacy.update(&note.randomness);
+        legacy.update(&note.creation_nonce);
+        assert_ne!(
+            note.commitment().0,
+            *legacy.finalize().as_bytes(),
+            "NoteCommitment must no longer be the BLAKE3 stand-in"
+        );
+    }
+
+    /// The nullifier is Poseidon2 over (commitment_felt ‖ key limbs ‖ nonce
+    /// limbs), encoded to 32 bytes — matching the note-spending AIR's structure.
+    /// It is deterministic, key-bound, and NOT the legacy BLAKE3 nullifier.
+    #[test]
+    fn nullifier_is_poseidon2_not_blake3() {
+        use dregg_circuit::poseidon2::hash_many;
+        let owner = test_owner(3);
+        let fields = [7u64, 250, 0, 0, 0, 0, 0, 0];
+        let note = Note::with_randomness(owner, fields, [42u8; 32]);
+        let key = test_spending_key(1);
+
+        // Independently reconstruct the Poseidon2 nullifier felt.
+        let mut preimage = Vec::with_capacity(17);
+        preimage.push(note.poseidon2_commitment());
+        preimage.extend_from_slice(&super::bytes32_to_limbs(&key));
+        preimage.extend_from_slice(&super::bytes32_to_limbs(&note.creation_nonce));
+        let expected = crate::felt_to_bytes32(hash_many(&preimage));
+        assert_eq!(
+            note.nullifier(&key).0,
+            expected,
+            "nullifier must be the encoded Poseidon2 of commitment ‖ key ‖ nonce"
+        );
+
+        // NOT the legacy BLAKE3 nullifier.
+        let mut legacy = blake3::Hasher::new_derive_key("dregg-note nullifier v1");
+        legacy.update(&note.commitment().0);
+        legacy.update(&key);
+        legacy.update(&note.creation_nonce);
+        assert_ne!(
+            note.nullifier(&key).0,
+            *legacy.finalize().as_bytes(),
+            "nullifier must no longer be the BLAKE3 stand-in"
+        );
+
+        // Deterministic and key-bound.
+        assert_eq!(note.nullifier(&key), note.nullifier(&key));
+        assert_ne!(
+            note.nullifier(&key),
+            note.nullifier(&test_spending_key(2)),
+            "distinct spending keys must give distinct nullifiers"
+        );
     }
 
     #[test]

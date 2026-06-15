@@ -4157,17 +4157,20 @@ fn evaluate_simple_constraint(
 /// digest function behind [`StateConstraint::PreimageGate`] and
 /// [`StateConstraint::KeyRotationGate`].
 ///
-/// `Poseidon2` uses BLAKE3 of a domain-tagged preimage as a stand-in until
-/// a Poseidon2-on-bytes helper is wired through here. Executor-side use
-/// only; AIR enforcement will use the actual Poseidon2 gadget.
+/// `Poseidon2` is the STARK-native hash: it runs the exact audited
+/// `dregg_circuit::poseidon2` sponge (`hash_bytes`, the same width-16 BabyBear
+/// permutation the whole circuit verifies, KAT-locked to Plonky3's
+/// `default_babybear_poseidon2_16`) over the preimage bytes, then encodes the
+/// resulting field element into the 32-byte slot word via
+/// [`crate::felt_to_bytes32`] — the SAME felt→bytes encoding the capability
+/// root uses. So a Poseidon2-gated slot commitment computed here equals the
+/// circuit's `hash_bytes(preimage)` digest bit-for-bit (see the cross-crate KAT
+/// `cell::tests::poseidon2_hash_matches_circuit`).
 fn hash_preimage32(hash_kind: &HashKind, preimage: &[u8; 32]) -> [u8; 32] {
     match hash_kind {
         HashKind::Blake3 => *blake3::hash(preimage).as_bytes(),
         HashKind::Poseidon2 => {
-            let mut tagged = Vec::with_capacity(47);
-            tagged.extend_from_slice(b"poseidon2-stub:");
-            tagged.extend_from_slice(preimage);
-            *blake3::hash(&tagged).as_bytes()
+            crate::felt_to_bytes32(dregg_circuit::poseidon2::hash_bytes(preimage))
         }
     }
 }
@@ -6286,6 +6289,97 @@ mod tests {
         );
         // No preimage in ctx → missing
         assert!(p.evaluate(&s, None, Some(&EvalContext::default())).is_err());
+    }
+
+    /// `PreimageGate` on a **Poseidon2**-tagged slot: the gate now computes the
+    /// real STARK-native digest. The committed slot word must be the
+    /// `felt_to_bytes32` encoding of `dregg_circuit::poseidon2::hash_bytes`, and
+    /// the gate accepts exactly the real preimage and rejects a wrong one. This
+    /// is the load-bearing closure of the former `poseidon2-stub:` BLAKE3
+    /// stand-in: the same digest the circuit verifies.
+    #[test]
+    fn preimage_gate_poseidon2_verifies_real_hash() {
+        let preimage = [7u8; 32];
+        // The canonical Poseidon2 commitment — IDENTICAL to the circuit's.
+        let commitment =
+            crate::felt_to_bytes32(dregg_circuit::poseidon2::hash_bytes(&preimage));
+        let p = CellProgram::Predicate(vec![StateConstraint::PreimageGate {
+            commitment_index: 0,
+            hash_kind: HashKind::Poseidon2,
+        }]);
+        let mut s = CellState::new(0);
+        s.fields[0] = commitment;
+
+        // Correct preimage → accepts.
+        assert!(
+            p.evaluate(&s, None, Some(&ctx_preimage(preimage))).is_ok(),
+            "Poseidon2 PreimageGate must accept the real preimage"
+        );
+        // Wrong preimage → rejects.
+        assert!(
+            p.evaluate(&s, None, Some(&ctx_preimage([8u8; 32]))).is_err(),
+            "Poseidon2 PreimageGate must reject a wrong preimage"
+        );
+        // A Poseidon2 slot must NOT be openable by the old BLAKE3 stand-in
+        // digest — proves the function genuinely changed (non-vacuous cutover).
+        let mut s_blake = CellState::new(0);
+        s_blake.fields[0] = *blake3::hash(&preimage).as_bytes();
+        assert!(
+            p.evaluate(&s_blake, None, Some(&ctx_preimage(preimage)))
+                .is_err(),
+            "a BLAKE3-digest slot must NOT satisfy a Poseidon2 gate"
+        );
+    }
+
+    /// `KeyRotationGate` on a **Poseidon2**-tagged digest register: the preimage
+    /// exhibit against the OLD digest uses the real Poseidon2 hash, so an honest
+    /// rotation that pre-committed `hash_bytes(next_keys)` exhibits and installs.
+    #[test]
+    fn key_rotation_gate_poseidon2_real_hash() {
+        let gate = StateConstraint::KeyRotationGate {
+            digest_slot: 1,
+            current_slot: 2,
+            last_rotated_slot: 3,
+            cooling_period: 50,
+            hash_kind: HashKind::Poseidon2,
+        };
+        let p = CellProgram::Predicate(vec![gate]);
+        let next: [u8; 32] = [0xAB; 32]; // the pre-committed next key-set.
+        // Pre-committed digest = the REAL Poseidon2 of `next`.
+        let digest = crate::felt_to_bytes32(dregg_circuit::poseidon2::hash_bytes(&next));
+
+        let ctx = |height: u64, preimage: Option<[u8; 32]>| EvalContext {
+            block_height: height,
+            revealed_preimage: preimage,
+            ..EvalContext::default()
+        };
+
+        let mut old = CellState::new(0);
+        old.nonce = 1;
+        old.fields[1] = digest;
+        old.fields[2] = [0x01; 32];
+        old.fields[3] = field_from_u64(100);
+
+        // Honest rotation at height 200: exhibit `next`, install, re-commit.
+        let mut rotated = old.clone();
+        rotated.fields[1] =
+            crate::felt_to_bytes32(dregg_circuit::poseidon2::hash_bytes(&[0xCD; 32]));
+        rotated.fields[2] = next;
+        rotated.fields[3] = field_from_u64(200);
+        assert!(
+            p.evaluate(&rotated, Some(&old), Some(&ctx(200, Some(next))))
+                .is_ok(),
+            "Poseidon2 rotation must accept the real preimage exhibit"
+        );
+
+        // A WRONG preimage (does not Poseidon2-hash to the committed digest) → reject.
+        let mut rotated_bad = rotated.clone();
+        rotated_bad.fields[2] = [0x99; 32];
+        assert!(
+            p.evaluate(&rotated_bad, Some(&old), Some(&ctx(200, Some([0x99; 32]))))
+                .is_err(),
+            "Poseidon2 rotation must reject a preimage that does not exhibit the digest"
+        );
     }
 
     /// `KeyRotationGate`: the rotate verb as a guarded write — preimage
