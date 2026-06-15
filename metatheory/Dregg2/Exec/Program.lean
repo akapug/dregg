@@ -234,6 +234,36 @@ inductive SimpleConstraint where
   | wakeOnResolve (stateField : FieldName) (resolvedValue : Int) (badge : Int)
   deriving Repr
 
+/-- **A bound branch of an `anyOfBound` disjunction** (`docs/CELL-PROGRAM-LANGUAGE.md` §11.3).
+The branch shape that lets a WITNESSED (proof-bearing) leaf sit beside a CHEAP (no-proof) leaf
+under `⊔` WITHOUT the proof-stripping unsoundness §4 warns of: each witnessed branch names its OWN
+proof carrier (here the `(sourceCell, sourceField)` it reads from `TurnCtx.observedFields` — the
+exact §11.2 portal carrier), so "this branch needs a proof" is STRUCTURAL, and a stripped/absent
+proof makes that branch FAIL rather than masquerade as a no-proof branch (`anyOfBound_stripped_proof_branch_fails`).
+
+  * `Simple c` — the cheap leg: an ordinary `SimpleConstraint` (timeout, state guard, sender
+    binding). No witness; evaluated by `evalSimpleCtx`. THIS is the "cheaper branch" §4 says a
+    submitter would try to slide down.
+  * `Witnessed localField sourceCell sourceField` — the proof-bearing leg: the cross-cell
+    verified-observation leaf (`observedFieldEquals`) naming the peer read it needs. It admits ONLY
+    when the §8 portal opened a genuinely-finalized `(sourceCell, sourceField)` value into the
+    carrier (the Merkle-open + host root-authenticity check already discharged) AND `new[localField]`
+    equals it — the SAME proven `observedFieldEquals` semantics, now as a disjunction branch.
+
+WHY this is the witnessed shape and not e.g. `preimageGate`: `observedFieldEquals` is the one
+witnessed leaf in this file whose carrier read is a `StateConstraint` (the §4 discipline keeps it
+out of the composable `SimpleConstraint` fragment), and whose anti-forge tooth
+(`evalConstraintCtx_observedFieldEquals_absent_proof_refuses`) is already proved — the anti-strip
+tooth REDUCES to it. Mirrors Rust `BoundBranch::{Simple, Witnessed { wp }}` (`cell/src/program.rs`),
+where a witnessed branch carries a `WitnessedPredicate` naming its own `proof_witness_index`. -/
+inductive BoundBranch where
+  /-- The cheap, no-proof leg (a plain simple constraint). -/
+  | simple    (c : SimpleConstraint)
+  /-- The proof-bearing leg: `observedFieldEquals localField sourceCell sourceField` — admits IFF
+  the portal opened a finalized peer value into `TurnCtx.observedFields` AND `new[localField]` = it. -/
+  | witnessed (localField : FieldName) (sourceCell : Int) (sourceField : FieldName)
+  deriving Repr
+
 /-- **The full state-constraint catalog** — simple constraints plus the cross-slot,
 conservation, state-machine, disjunction, and (declared-but-deferred) cross-cell variants. -/
 inductive StateConstraint where
@@ -349,6 +379,34 @@ inductive StateConstraint where
   `localField` ⇒ `false`; the ctx-LESS evaluator (no carrier in scope) ⇒ `false`. Admit-char:
   `evalConstraintCtx_observedFieldEquals_iff`. -/
   | observedFieldEquals (localField : FieldName) (sourceCell : Int) (sourceField : FieldName)
+  /-- **`anyOfBound branches`** (`docs/CELL-PROGRAM-LANGUAGE.md` §11.3 — witnessed branches under ⊔):
+  single-level disjunction over `BoundBranch`es — admits IFF SOME branch admits (`branches.any`).
+  The rung that lets a real escrow/governance ceremony express "release if EITHER the timeout passed
+  OR a credential/finalized-read proof verifies" — a WITNESSED branch beside a CHEAP branch — which
+  the plain `anyOf` (`SimpleConstraint`-only) cannot, because proof-bearing leaves do not survive a
+  naive lift (§4: an `anyOf` branch that fails to open a proof must be DISTINGUISHABLE from one that
+  needs none, or a submitter strips the proof and slides down the cheap branch).
+
+  THE SOUNDNESS CORE (`anyOfBound_stripped_proof_branch_fails`): a witnessed branch whose proof
+  carrier is ABSENT/invalid (the portal opened no triple for its `(sourceCell, sourceField)` — a
+  stripped or rejected proof) does NOT admit. It cannot masquerade as a no-proof branch: the
+  `BoundBranch.witnessed` shape STRUCTURALLY demands the opened triple, exactly as the Rust witnessed
+  branch's own `proof_witness_index` + the unique-blob scan bind its blob. So a proof-strip closes
+  the witnessed branch rather than opening a cheaper path; the only branches a stripped turn can take
+  are the genuinely cheap `simple` ones, which is the intended semantics.
+
+  Reads `TurnCtx` (the witnessed branches consult `observedFields`, the simple branches consult
+  `sender`/`balance`/…), so the cross-cell witnessed seam stays in `evalConstraintCtx`; the ctx-less
+  `evalConstraint` arm FAILS CLOSED (the witnessed-family ctx-less rejection — `evalConstraintCtx_empty`
+  proves the two agree). COST (§5/§8): the MAX of the branch costs — a disjunction is as coordinated
+  as its most-coordinated TAKEN branch (a cheap `simple` branch is free; a witnessed `observedFieldEquals`
+  branch is the FREE finalized-read class; an ordering-pole branch makes the whole gate ordering when
+  taken); disclosure is the union of what the taken branch reveals. Mirrors Rust
+  `StateConstraint::AnyOfBound { branches }` (`cell/src/program.rs`); the evaluator arm calls the
+  EXISTING `evaluate_simple_constraint` / witnessed-predicate verification (the gate CALLS the
+  evaluator the executor already owns — no new semantics). APPENDED (so existing serialized programs,
+  factory VKs, and content addresses stay byte-identical, §2). Admit-char: `evalConstraint_anyOfBound_iff`. -/
+  | anyOfBound (branches : List BoundBranch)
   deriving Repr
 
 /-! ## Evaluation — the executable admissibility check. -/
@@ -447,6 +505,17 @@ def evalSimple : SimpleConstraint → Value → Value → Bool
       | some v => !(v == rv)        -- resolving ⇒ reject (no wake witness ctx-less); not resolving ⇒ admit
       | none   => true             -- state field absent ⇒ not resolving ⇒ dormant ⇒ admit
 
+/-- **Evaluate a bound branch CTX-LESS** against `(old, new)` (`anyOfBound`, §11.3). A `simple`
+branch delegates to the ctx-less `evalSimple` (so a pure non-context simple branch behaves exactly
+as it does standalone); a `witnessed` branch FAILS CLOSED — there is no §8-portal carrier in scope
+ctx-less, so the cross-cell finalized read is not evaluable (the witnessed-family rejection). This is
+the per-branch twin of the `observedFieldEquals` ctx-less arm, and the reason
+`evalConstraintCtx_empty` holds on `anyOfBound`: under the empty context the ctx-aware branch
+evaluator reduces to THIS one branch-for-branch. -/
+def BoundBranch.eval : BoundBranch → Value → Value → Bool
+  | .simple c,         o, n => evalSimple c o n
+  | .witnessed _ _ _,  _, _ => false
+
 /-- **Evaluate a full state constraint** against `(old, new)`. -/
 def evalConstraint : StateConstraint → Value → Value → Bool
   | .simple c,              old, new => evalSimple c old new
@@ -501,6 +570,17 @@ def evalConstraint : StateConstraint → Value → Value → Bool
   -- surfaces `ObservedRootUnauthorized`/missing-proof). The ctx-aware semantics live in
   -- `evalConstraintCtx`; `evalConstraintCtx_empty` proves the two agree.
   | .observedFieldEquals _ _ _, _, _ => false
+  -- `anyOfBound` is the disjunction over `BoundBranch`es — `branches.any BoundBranch.eval`,
+  -- the per-branch ctx-LESS reduction. A `witnessed` branch is NOT evaluable ctx-less (it needs
+  -- the §8-portal carrier `observedFields`, absent here) so `BoundBranch.eval` fails it closed,
+  -- mirroring the witnessed-family `observedFieldEquals` rejection; a `simple` branch delegates to
+  -- the ctx-less `evalSimple` (a pure state-guard branch CAN pass ctx-less, exactly as it does
+  -- standalone). Defining the arm as the honest `branches.any` (not a blanket `false`) is what makes
+  -- `evalConstraintCtx_empty` a genuine branch-for-branch reduction (`BoundBranch.evalCtx_empty`):
+  -- the empty context recovers THIS arm exactly. A blanket `false` here would be UNSOUND in the
+  -- conservative-extension direction — it would reject a turn the ctx-aware evaluator on the empty
+  -- context ADMITS via a passing pure-simple branch.
+  | .anyOfBound branches, old, new => branches.any (fun b => b.eval old new)
 
 /-! ## RecordProgram + TransitionGuard dispatch + default-deny. -/
 
@@ -1081,8 +1161,24 @@ def evalSimpleCtx (ctx : TurnCtx) : SimpleConstraint → Value → Value → Boo
   | .not c,             old, new => !(evalSimpleCtx ctx c old new)
   | c,                  old, new => evalSimple c old new
 
-/-- **Ctx-aware constraint evaluation**: `simple`/`anyOf` thread the context; every other
-variant is context-free and delegates to `evalConstraint`. -/
+/-- **Evaluate a bound branch CTX-AWARE** against `(old, new)` (`anyOfBound`, §11.3). A `simple`
+branch threads the context through `evalSimpleCtx` (so a `senderIs`/`balance…` simple branch reads
+the sender/balance carriers, exactly as it does standalone). A `witnessed localField sourceCell
+sourceField` branch is the cross-cell verified-observation read: it admits IFF the §8 portal opened a
+finalized value `v` for `(sourceCell, sourceField)` into `ctx.observedFields` AND `new[localField] =
+v` — DEFINITIONALLY the `observedFieldEquals` arm of `evalConstraintCtx`, so the anti-strip tooth
+reduces to the already-proved `evalConstraintCtx_observedFieldEquals_absent_proof_refuses`. THE
+soundness point: the witnessed branch STRUCTURALLY demands the opened triple, so a stripped/rejected
+proof (no triple) makes this branch FAIL — it cannot masquerade as a no-proof `simple` branch. -/
+def BoundBranch.evalCtx (ctx : TurnCtx) : BoundBranch → Value → Value → Bool
+  | .simple c,                        o, n => evalSimpleCtx ctx c o n
+  | .witnessed localField sourceCell sourceField, _, n =>
+      match ctx.observedValue sourceCell sourceField, n.scalar localField with
+      | some v, some lv => lv == v
+      | _,      _       => false
+
+/-- **Ctx-aware constraint evaluation**: `simple`/`anyOf`/`anyOfBound` thread the context; every
+other variant is context-free and delegates to `evalConstraint`. -/
 def evalConstraintCtx (ctx : TurnCtx) : StateConstraint → Value → Value → Bool
   | .simple c,  old, new => evalSimpleCtx ctx c old new
   | .anyOf vs,  old, new => vs.any (fun c => evalSimpleCtx ctx c old new)
@@ -1095,6 +1191,13 @@ def evalConstraintCtx (ctx : TurnCtx) : StateConstraint → Value → Value → 
       match ctx.observedValue sourceCell sourceField, new.scalar localField with
       | some v, some lv => lv == v
       | _,      _       => false
+  -- The witnessed-branches disjunction (§11.3): admits IFF SOME branch admits (`branches.any`),
+  -- each branch consulting the carriers it needs (`witnessed` → `observedFields`; `simple` →
+  -- `sender`/`balance`/…). The cross-cell witnessed seam stays HERE (the ctx-less `evalConstraint`
+  -- arm is the per-branch ctx-less reduction; `evalConstraintCtx_empty` proves they agree). A
+  -- stripped proof closes the witnessed branch (`anyOfBound_stripped_proof_branch_fails`), never a
+  -- cheaper path.
+  | .anyOfBound branches, old, new => branches.any (fun b => b.evalCtx ctx old new)
   | c,          old, new => evalConstraint c old new
 
 /-- **Ctx-aware admissibility** — `RecordProgram.admits` with the turn context threaded
@@ -1134,6 +1237,23 @@ theorem evalSimpleCtx_empty (c : SimpleConstraint) (o n : Value) :
       simp only [hc, Bool.or_false]
   | _ => rfl
 
+/-- **`BoundBranch.evalCtx_empty`** — under the empty context, the ctx-aware branch evaluator IS
+the ctx-less one branch-for-branch. A `simple` branch delegates to `evalSimpleCtx_empty`; a
+`witnessed` branch's carrier (`observedFields`) is empty, so `observedValue _ _ = none` and the
+cross-cell match short-circuits to `false` on both sides. THIS is what makes `anyOfBound` a genuine
+conservative extension (rather than the blanket-`false` arm it had to be when the witnessed family
+could not be evaluated ctx-less). -/
+theorem BoundBranch.evalCtx_empty (b : BoundBranch) (o n : Value) :
+    b.evalCtx TurnCtx.empty o n = b.eval o n := by
+  cases b with
+  | simple c => simpa only [BoundBranch.evalCtx, BoundBranch.eval] using evalSimpleCtx_empty c o n
+  | witnessed localField sourceCell sourceField =>
+      -- empty carrier ⇒ `observedValue = none` ⇒ both sides `false` (the witnessed branch fails
+      -- closed without the §8-portal triple — the per-branch anti-strip behaviour).
+      show (match TurnCtx.empty.observedValue sourceCell sourceField, n.scalar localField with
+            | some v, some lv => lv == v | _, _ => false) = false
+      simp only [TurnCtx.observedValue, TurnCtx.empty, List.find?, Option.map_none]
+
 /-- `evalConstraintCtx` under the empty context is `evalConstraint`. -/
 theorem evalConstraintCtx_empty (c : StateConstraint) (o n : Value) :
     evalConstraintCtx TurnCtx.empty c o n = evalConstraint c o n := by
@@ -1148,6 +1268,11 @@ theorem evalConstraintCtx_empty (c : StateConstraint) (o n : Value) :
       -- match short-circuits to `false`, agreeing with the ctx-less `evalConstraint` arm.
       simp only [evalConstraintCtx, evalConstraint, TurnCtx.observedValue, TurnCtx.empty,
         List.find?, Option.map_none]
+  | anyOfBound branches =>
+      -- branch-for-branch: the empty-ctx branch evaluator reduces to the ctx-less one
+      -- (`BoundBranch.evalCtx_empty`), so the two `branches.any` agree.
+      simp only [evalConstraintCtx, evalConstraint]
+      exact congrArg branches.any (funext fun b => BoundBranch.evalCtx_empty b o n)
   | _ => rfl
 
 /-- `admitsCtx` under the empty context is `admits` — the guard-evaluation theorem family
@@ -1508,6 +1633,87 @@ theorem evalConstraint_observedFieldEquals_fails
     (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value) :
     evalConstraint (.observedFieldEquals localField sourceCell sourceField) o n = false := rfl
 
+/-! ### THE `anyOfBound` keystones (`docs/CELL-PROGRAM-LANGUAGE.md` §11.3 — witnessed branches under ⊔).
+
+`anyOfBound branches` is the disjunction that lets a WITNESSED (proof-bearing) leaf sit beside a
+CHEAP (no-proof) leaf under `⊔`. The admit-characterization is "admits IFF SOME branch admits"
+(`branches.any`); THE soundness core is `anyOfBound_stripped_proof_branch_fails` — a witnessed branch
+whose proof carrier is absent/invalid (the §8 portal opened no triple for its `(sourceCell,
+sourceField)`) does NOT admit, so a stripped proof closes the witnessed branch rather than opening a
+cheaper path. The anti-strip tooth REDUCES to the already-proved
+`evalConstraintCtx_observedFieldEquals_absent_proof_refuses`: the `witnessed` branch's evaluator IS
+the `observedFieldEquals` arm. -/
+
+/-- **`evalConstraint_anyOfBound_iff` (the admit-characterization).** The ctx-aware disjunction
+admits IFF SOME branch admits. The Heyting `⊔` over `BoundBranch`es — the §11.3 rung's defining law. -/
+theorem evalConstraint_anyOfBound_iff (ctx : TurnCtx) (branches : List BoundBranch) (o n : Value) :
+    evalConstraintCtx ctx (.anyOfBound branches) o n = true ↔
+      ∃ b ∈ branches, b.evalCtx ctx o n = true := by
+  simp only [evalConstraintCtx, List.any_eq_true]
+
+/-- **A witnessed branch with an ABSENT proof carrier fails closed (the per-branch anti-strip).** When
+the §8 portal opened no triple for `(sourceCell, sourceField)` — a stripped or host-rejected proof —
+the `witnessed` branch does NOT admit. It cannot masquerade as a no-proof branch: the
+`BoundBranch.witnessed` shape STRUCTURALLY demands the opened triple. Reduces, definitionally, to the
+`observedFieldEquals` anti-forge tooth (`evalConstraintCtx_observedFieldEquals_absent_proof_refuses`),
+because the witnessed branch's evaluator IS that arm. -/
+theorem BoundBranch.witnessed_absent_proof_refuses (ctx : TurnCtx)
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value)
+    (h : ctx.observedValue sourceCell sourceField = none) :
+    (BoundBranch.witnessed localField sourceCell sourceField).evalCtx ctx o n = false := by
+  show (match ctx.observedValue sourceCell sourceField, n.scalar localField with
+        | some v, some lv => lv == v | _, _ => false) = false
+  rw [h]
+
+/-- **THE anti-strip tooth (`anyOfBound_stripped_proof_branch_fails`) — the soundness core of §11.3.**
+An `anyOfBound` whose branches are ALL witnessed cross-cell reads, EVERY one of whose proofs is
+stripped/rejected (the portal opened no triple for any branch's `(sourceCell, sourceField)`), does
+NOT admit. The §4 unsoundness — a submitter strips a proof to slide down a *cheaper* branch — is
+closed: a stripped witnessed branch FAILS (it cannot masquerade as a no-proof `simple` branch),
+so the only branches a stripped turn can take are the genuinely-cheap `simple` ones (here there are
+none, so the whole gate refuses). This is the keystone the design hangs on: if it could not be
+proved, the witnessed-branch binding would be decorative. -/
+theorem anyOfBound_stripped_proof_branch_fails (ctx : TurnCtx) (o n : Value)
+    (branches : List BoundBranch)
+    -- every branch is a witnessed cross-cell read whose proof was STRIPPED (no opened triple):
+    (hstripped : ∀ b ∈ branches, ∃ lf sc sf,
+      b = BoundBranch.witnessed lf sc sf ∧ ctx.observedValue sc sf = none) :
+    evalConstraintCtx ctx (.anyOfBound branches) o n = false := by
+  -- no branch admits ⇒ `branches.any` is `false`.
+  rw [Bool.eq_false_iff, ne_eq, evalConstraint_anyOfBound_iff]
+  rintro ⟨b, hb, hadm⟩
+  obtain ⟨lf, sc, sf, rfl, hnone⟩ := hstripped b hb
+  rw [BoundBranch.witnessed_absent_proof_refuses ctx lf sc sf o n hnone] at hadm
+  exact Bool.noConfusion hadm
+
+/-- A witnessed branch ADMITS exactly when its `observedFieldEquals` semantics hold (the cheap-vs-
+witnessed distinction is real in BOTH directions): the portal opened a finalized `v` AND
+`new[localField] = v`. So a genuinely-opened cross-cell read DOES take the witnessed branch — the
+binding has teeth, not just an anti-strip refusal. -/
+theorem BoundBranch.witnessed_iff (ctx : TurnCtx)
+    (localField : FieldName) (sourceCell : Int) (sourceField : FieldName) (o n : Value) :
+    (BoundBranch.witnessed localField sourceCell sourceField).evalCtx ctx o n = true ↔
+      ∃ v, ctx.observedValue sourceCell sourceField = some v ∧ n.scalar localField = some v := by
+  show (match ctx.observedValue sourceCell sourceField, n.scalar localField with
+        | some v, some lv => lv == v | _, _ => false) = true ↔ _
+  cases hv : ctx.observedValue sourceCell sourceField with
+  | none   => simp
+  | some v =>
+    cases hl : n.scalar localField with
+    | none    => simp
+    | some lv =>
+      simp only [beq_iff_eq]
+      constructor
+      · rintro rfl; exact ⟨lv, rfl, rfl⟩
+      · rintro ⟨x, hx, hx'⟩; rw [Option.some.injEq] at hx hx'; rw [hx, hx']
+
+/-- The ctx-LESS evaluator on `anyOfBound` is the per-branch ctx-less disjunction (`branches.any
+BoundBranch.eval`) — definitional. (The honest reduction, not a blanket `false`: a pure `simple`
+state-guard branch passes ctx-less exactly as standalone; the conservative-extension keystone
+`evalConstraintCtx_empty` then makes the empty context recover it branch-for-branch.) -/
+theorem evalConstraint_anyOfBound (branches : List BoundBranch) (o n : Value) :
+    evalConstraint (.anyOfBound branches) o n = branches.any (fun b => b.eval o n) := rfl
+
 /-! ### THE actor-bound approval keystone (polis gap 5 → dissolved).
 
 `anyOf [immutable f, senderIs k]` is the per-slot actor binding the polis council installs per
@@ -1773,6 +1979,43 @@ def marketReadsOracle : StateConstraint := .observedFieldEquals "mark" 100 "pric
 -- evalConstraint (which is `false` on observedFieldEquals — definitional).
 #guard evalConstraintCtx TurnCtx.empty marketReadsOracle (.record []) (.record [("mark", .int 42)]) == evalConstraint marketReadsOracle (.record []) (.record [("mark", .int 42)])
 
+/-! ### anyOfBound (§11.3): witnessed branches under ⊔ — "release if timeout OR finalized-read proof".
+The escrow `escrowOr` releases when EITHER the cheap `simple` timeout branch (`state ≥ 2`) holds OR
+the witnessed cross-cell read (`new["mark"] = oracle 100's finalized "price"`) opens. The witnessed
+branch admits ONLY with the §8-portal triple; a stripped proof closes it (the anti-strip tooth) and
+the gate then depends solely on the cheap branch. -/
+def escrowOr : StateConstraint :=
+  .anyOfBound [.simple (.fieldGe "state" 2), .witnessed "mark" 100 "price"]
+
+-- ADMIT via the CHEAP branch (timeout passed: state = 2 ≥ 2) — no proof needed, no carrier.
+#guard evalConstraintCtx {} escrowOr (.record []) (.record [("state", .int 2), ("mark", .int 7)])
+-- ADMIT via the WITNESSED branch (portal opened oracle 100's finalized "price" = 7, and mark = 7),
+-- even though the cheap branch FAILS (state = 1 < 2).
+#guard evalConstraintCtx { observedFields := [(100, "price", 7)] } escrowOr
+  (.record []) (.record [("state", .int 1), ("mark", .int 7)])
+-- REFUSE-ALL: the cheap branch fails (state = 1 < 2) AND the witnessed proof is STRIPPED (no triple)
+-- — the anti-strip tooth: the witnessed branch cannot masquerade as a no-proof branch.
+#guard evalConstraintCtx {} escrowOr
+  (.record []) (.record [("state", .int 1), ("mark", .int 7)]) == false
+-- REFUSE: the witnessed branch's proof is present but MISMATCHES (mark = 9 ≠ finalized 7) and the
+-- cheap branch fails — the binding has teeth.
+#guard evalConstraintCtx { observedFields := [(100, "price", 7)] } escrowOr
+  (.record []) (.record [("state", .int 1), ("mark", .int 9)]) == false
+
+-- A PURELY-witnessed disjunction with the proof STRIPPED refuses entirely (no cheap fallback):
+def witnessedOnly : StateConstraint :=
+  .anyOfBound [.witnessed "mark" 100 "price", .witnessed "vol" 100 "volume"]
+#guard evalConstraintCtx {} witnessedOnly (.record []) (.record [("mark", .int 7), ("vol", .int 3)]) == false
+-- …but with EITHER finalized read opened it admits (the witnessed branch has real teeth).
+#guard evalConstraintCtx { observedFields := [(100, "volume", 3)] } witnessedOnly
+  (.record []) (.record [("mark", .int 7), ("vol", .int 3)])
+
+-- Conservative extension: ctx-less, `anyOfBound` is the per-branch ctx-less disjunction — the cheap
+-- simple branch passes ctx-less exactly as standalone, the witnessed branch fails closed.
+#guard evalConstraintCtx TurnCtx.empty escrowOr (.record []) (.record [("state", .int 2), ("mark", .int 7)]) == evalConstraint escrowOr (.record []) (.record [("state", .int 2), ("mark", .int 7)])
+#guard evalConstraint escrowOr (.record []) (.record [("state", .int 2)])  -- cheap branch passes ctx-less
+#guard evalConstraint witnessedOnly (.record []) (.record [("mark", .int 7)]) == false  -- witnessed fails closed ctx-less
+
 #assert_axioms evalSimpleCtx_delegationEpochEquals_iff
 #assert_axioms evalSimpleCtx_delegationEpochEquals_absent_epoch_refuses
 #assert_axioms evalSimpleCtx_delegationEpochEquals_absent_slot_refuses
@@ -1787,6 +2030,13 @@ def marketReadsOracle : StateConstraint := .observedFieldEquals "mark" 100 "pric
 #assert_axioms evalConstraintCtx_observedFieldEquals_absent_local_refuses
 #assert_axioms observedFieldEquals_mismatch_refuses
 #assert_axioms evalConstraint_observedFieldEquals_fails
+-- §11.3 anyOfBound keystones (witnessed branches under ⊔):
+#assert_axioms evalConstraint_anyOfBound_iff
+#assert_axioms BoundBranch.witnessed_absent_proof_refuses
+#assert_axioms anyOfBound_stripped_proof_branch_fails
+#assert_axioms BoundBranch.witnessed_iff
+#assert_axioms evalConstraint_anyOfBound
+#assert_axioms BoundBranch.evalCtx_empty
 #assert_axioms evalSimpleCtx_empty
 #assert_axioms evalConstraintCtx_empty
 #assert_axioms admitsCtx_empty

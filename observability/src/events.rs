@@ -816,6 +816,9 @@ fn constraint_dissect(
         // Collection aggregate: no primary slot (binds a heap collection_id,
         // not a u8 register); consumers read the predicate from the program view.
         SC::CollectionAggregate { .. } => ("collection_aggregate", None, vec![]),
+        // Witnessed disjunction (§11.3): a composite leaf with no primary slot —
+        // each branch names its own predicate; consumers read the program view.
+        SC::AnyOfBound { .. } => ("any_of_bound", None, vec![]),
     }
 }
 
