@@ -1,0 +1,90 @@
+LDR|INFO: Setting all interrupts to Group 1
+LDR|INFO: GICv2 ITLinesNumber: 0x00000008
+LDR|INFO|CPU0: CurrentEL=EL2
+LDR|INFO|CPU0: Resetting CNTVOFF
+LDR|INFO: disabling MMU (if it was enabled)
+LDR|INFO: PSCI version is 1.1
+LDR|INFO: loader for seL4 starting
+LDR|INFO: flags:
+             seL4 configured as hypervisor
+LDR|INFO: kernel:      entry:   0x0000008060000000
+LDR|INFO: root server: physmem: 0x0000000060246000 -- 0x0000000065d94000
+LDR|INFO:              virtmem: 0x0000000000200000 -- 0x0000000005d4e000
+LDR|INFO:              entry  : 0x0000000000221904
+LDR|INFO: region: 0x00000000   addr: 0x0000000060000000   size: 0x0000000000246000   offset: 0x0000000000000000   type: 0x0000000000000001
+LDR|INFO: region: 0x00000001   addr: 0x0000000060246000   size: 0x000000000000a304   offset: 0x0000000000246000   type: 0x0000000000000001
+LDR|INFO: region: 0x00000002   addr: 0x0000000060260308   size: 0x0000000000013a08   offset: 0x0000000000250304   type: 0x0000000000000001
+LDR|INFO: region: 0x00000003   addr: 0x0000000060283d10   size: 0x00000000000100b0   offset: 0x0000000000263d0c   type: 0x0000000000000001
+LDR|INFO: region: 0x00000004   addr: 0x0000000060294000   size: 0x000000000546b50c   offset: 0x0000000000273dbc   type: 0x0000000000000001
+LDR|INFO: region: 0x00000005   addr: 0x0000000065700000   size: 0x0000000000694000   offset: 0x00000000056df2c8   type: 0x0000000000000001
+LDR|INFO: copying region 0x00000000
+LDR|INFO: copying region 0x00000001
+LDR|INFO: copying region 0x00000002
+LDR|INFO: copying region 0x00000003
+LDR|INFO: copying region 0x00000004
+LDR|INFO: copying region 0x00000005
+LDR|INFO|CPU0: active CPUs to start: 0x00000001
+LDR|INFO|CPU0: enabling MMU
+LDR|INFO|CPU0: CurrentEL=EL2
+LDR|INFO|CPU0: Resetting CNTVOFF
+LDR|INFO|CPU0: enabling MMU
+LDR|INFO|CPU0: jumping to kernel
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+available phys memory regions: 1
+  [60000000..c0000000)
+reserved virt address space regions: 2
+  [8060000000..8060246000)
+  [8060246000..8065d94000)
+Booting all finished, dropped to user space
+INFO  [sel4_capdl_initializer::initialize] Starting CapDL initializer
+INFO  [sel4_capdl_initializer::initialize] Starting threads
+MON|INFO: Microkit Monitor started!
+
+[executor] dregg executor-PD — the firmament HEART, embedding the VERIFIED executor
+[executor]   cap partition: turn_in (R), commit_out (RW); NO device/NIC cap
+[executor]   (the .preinit_array hook installed the sel4-musl syscall handler
+[executor]    ahead of the Lean C++ ctors that global_init() already ran)
+[executor]   turn_in[0]=0x00 (region live)
+[executor]   initializing embedded Lean runtime …
+[executor]   lean_initialize_runtime_module()
+[executor]   initialize_Dregg2_Dregg2_Exec_FFI(builtin=1)
+[executor]   embedded Lean runtime initialized â executor ready
+[executor]   embedded Lean runtime UP — execFullForestG ready ( ◕‿◕ )
+[executor]   >>> running the verified DEMO turn (in-PD wire) through the PD
+[executor]   demo wire: 731 bytes (in-PD text, turn_in untouched)
+[executor]   >>> dregg_exec_full_forest_auth(turn_in, 731 bytes)
+[executor]   <<< receipt (313 bytes)
+[executor]   receipt written to commit_out (313 bytes):
+---RECEIPT-BEGIN---
+{"state":{"cells":[[0,{"rec":[["balance",{"int":90}],["nonce",{"int":8}]]}],[1,{"rec":[["balance",{"int":5}]]}]],"caps":[[9,[{"node":0}]]],"bal":[[0,0,70],[1,0,35]],"escrows":[],"nullifiers":[111],"commitments":[222],"queues":[],"swiss":[],"revoked":[],"lifecycle":[],"deathCert":[]},"loglen":1,"status":2,"ok":1}
+---RECEIPT-END---
+[executor]   ==> VERIFIED turn through the PD: status:2 ok:1
+[executor]   ==> bodyCommitted — the executor PD ran a REAL accepted turn ( ◕‿◕ )
+[executor]   signalling persist (ch 2) + verifier (ch 3)
+[executor]   awaiting ingress→executor signal (channel id 1) for live turns …
+[stark] dregg verifier-stark PD booted — REAL STARK (BabyBear+BLAKE3+FRI) on seL4
+[stark] proved 4-row AIR  -> proof 78135 bytes
+[stark] verify(good proof) -> ACCEPT  (STARK verified ✓)
+[stark] verify(roundtripped proof) -> ACCEPT  (wire form OK ✓)
+[stark] verify(tampered proof) -> REJECT  (anti-ghost ✓): Trace Merkle proof failed at index 8
+[stark] verify(good proof, wrong PI) -> REJECT  (boundary tooth ✓): Public inputs mismatch
+[stark] real STARK proof-checking is LIVE on the microkernel — the firmament has a verified heart organ
+[stark] executor→verifier signal (ch 1) — bundle staged / verdict-ready edge observed
+[persist] dregg persist-PD SEAT booted — the durable-store seat
+[persist]   cap partition: commit_out (R); the storage-device cap will land HERE (sole holder)
+[persist]   commit_out[0]=0x7b read OK (executor seat's sentinel)
+[persist]   redb-over-block-cap + snapshot⊕overlay root tooth is the §3 block-cap port;
+[persist]   no other PD can ever touch the disk — the partition makes durable state unforgeable.
+[persist]   awaiting executor→persist commit signal (channel id 1) …
+[persist]   notified on channel 1 (commit ready)
+[net] virtio-mmio probe: version=Modern device_type=Network vendor=0x554d4551
+[net] virtio-net device UP — MAC [52, 54, 00, 12, 34, 56] — the firmament reached the wire
+[m2] rbg DirectoryCell PD booted — the Robigalia heart
+[m2] register 'billing-service' -> entry version 1
+[m2] member alice resolves 'billing-service' (kind=service, v=1)
+[m2] non-member mallory REFUSED (scope bound enforced) ✓
+[m2] stale CAS (expected v0, live v1) REJECTED ✓
+[m2] factory slot-caveat: mints CNode (c-list) ONLY ✓
+[m2]   → maps to seL4_Untyped_Retype(untyped, CNode, ..)
+[m2] directory holds 1 entry(s); rbg heritage is alive on seL4

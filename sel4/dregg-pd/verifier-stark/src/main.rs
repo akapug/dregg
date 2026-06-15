@@ -33,7 +33,17 @@ use stark_core::stark::{
     prove, proof_from_bytes, proof_to_bytes, verify, BoundaryConstraint, StarkAir,
 };
 
-use sel4_microkit::{debug_println, protection_domain, Handler, Infallible};
+use sel4_microkit::{
+    debug_println, protection_domain, Channel, ChannelSet, Handler, Infallible,
+};
+
+// The executor→verifier edge (dregg.system: executor id 3 → verifier id 1). It is
+// ONE-WAY ("a bundle is staged / verdict ready"): the verifier NEVER calls out to
+// a prover — this edge IS the no-prover-callback property (FIRMAMENT §2). The
+// verifier acknowledges the signal; in this image its verification is the
+// self-contained on-boot STARK selftest above (no bundle is read from a region),
+// so the live edge is observed but needs no per-turn work.
+const EXECUTOR_TO_VERIFIER: Channel = Channel::new(1);
 
 /// A minimal but real AIR: a 2-column trace with the transition constraint
 /// `col0' = col0 + 1` and the algebraic boundary `col1 = col0^2`. Small enough
@@ -154,4 +164,21 @@ struct HandlerImpl;
 
 impl Handler for HandlerImpl {
     type Error = Infallible;
+
+    // The executor signals (one-way) that a turn committed and a bundle is staged.
+    // Acknowledge it; the default Handler::notified panics on any notification,
+    // which would fault this PD when the executor's verdict-ready edge fires.
+    fn notified(&mut self, channels: ChannelSet) -> Result<(), Self::Error> {
+        for channel in channels.iter() {
+            if channel == EXECUTOR_TO_VERIFIER {
+                debug_println!(
+                    "[stark] executor→verifier signal (ch {}) — bundle staged / verdict-ready edge observed",
+                    channel.index()
+                );
+            } else {
+                debug_println!("[stark] notified on channel {}", channel.index());
+            }
+        }
+        Ok(())
+    }
 }

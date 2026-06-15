@@ -1,0 +1,60 @@
+# executor-microkit-pd — THE firmament keystone (WALL step 4, assembled): the
+# `executor` SEAT in the 5-PD assembly (`sel4/dregg.system`) made REAL. This is a
+# Microkit protection domain that EMBEDS the VERIFIED dregg executor
+# (`dregg_exec_full_forest_auth` = `execFullForestG` + admission, proved in
+# `metatheory/`) and runs a real turn THROUGH the PD's channels:
+#
+#     net/ingress --(channel id 1)--> [executor PD] --(channel id 2)--> persist
+#                  turn staged in        decode→step→encode        receipt in
+#                  turn_in (R)           the VERIFIED turn          commit_out (RW)
+#
+# It folds the proven hosting from the sibling `executor-rootserver/` (the
+# musl + libuv-excised Lean-ELF runtime that BOOTS one verified turn under seL4)
+# into a Microkit *PD* seat — NOT a raw root task. The two differ only in the
+# entry shim: a Microkit PD gets its C++ static initializers (`.init_array`) run
+# by `sel4-runtime-common::global_init()` (the Microkit entry calls it via
+# `declare_rust_entrypoint! { global_init if true }`), exactly as the root task
+# does — so the `.preinit_array` syscall-handler install + the in-PD Linux-
+# syscall handler that services the Lean runtime's malloc/write/... work the same
+# way here. (docs/EMBEDDABLE-LEAN-RUNTIME.md §4, docs/SEL4-EMBEDDING.md §2,
+# docs/FIRMAMENT.md §6, ../executor-pd/WALL.md.)
+#
+# Standalone workspace (own target dir; swarm-safe; never edits the shared
+# dregg-pd `members` list — same rationale as ../executor-pd and
+# ../executor-rootserver). The heavy Lean closure link stays out of the other
+# PDs' build.
+[workspace]
+
+[package]
+name = "dregg-executor-microkit-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-executor-microkit-pd"
+path = "src/main.rs"
+
+[dependencies]
+# The seL4 Microkit Rust runtime, the SAME commit the other dregg PDs pin
+# (Microkit SDK 2.2.0). `alloc` for the Rust-side heap the Microkit runtime owns
+# (separate from the brk/mmap pools the Lean runtime's musl uses below).
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608", default-features = false, features = ["alloc"] }
+# raw seL4 for suspend_self on the libc exit_group path.
+sel4 = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608", default-features = false }
+
+# The in-PD Linux-syscall surface the embedded Lean runtime's musl libc routes
+# through `__sysinfo` (Brk/Mmap/Write/...). sel4-musl is RUNTIME-AGNOSTIC — its
+# only deps are sel4-immediate-sync-once-cell + sel4-linux-syscall-types — so it
+# works inside a Microkit PD just as in the root task. The dlmalloc/heap crates
+# back the brk + mmap pools.
+sel4-musl = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-linux-syscall-types = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-dlmalloc = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+one-shot-mutex = "0.2.1"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
