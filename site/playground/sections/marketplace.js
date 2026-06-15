@@ -84,6 +84,12 @@ export function initMarketplace(wasm) {
   let mktState = resetState();
   let animating = false;
 
+  // Under the EPOCH "fees-as-moves" model the signing escrow cell's balance
+  // must cover the turn FEE (computron budget + debited), so the escrow is
+  // funded with the job budget PLUS a fee reserve; the settle turn pays out the
+  // budget and the fee reserve covers the turn's gas.
+  const SETTLE_FEE = 4000; // comfortably covers the ~4-effect settle turn.
+
   function resetState() {
     return {
       phase: 'idle', // idle -> posted -> bids_submitted -> revealed -> executed | disputed
@@ -93,7 +99,47 @@ export function initMarketplace(wasm) {
       escrowBalance: 0,
       reputation: [0, 0, 0],
       receiptCount: 0,
+      // REAL runtime handles: the escrow is a real funded cell, settlement is a
+      // real multi-transfer turn through the wasm TurnExecutor.
+      rt: null,        // wasm runtime handle
+      cells: null,     // { clientIdx, clientCell, escrowIdx, escrowCell, providers: [{idx, cell}] }
+      lastTurnHash: null,
     };
+  }
+
+  // Read an escrow cell's REAL on-ledger balance from the runtime (not a JS
+  // variable). Returns a number, or null if unavailable.
+  function realEscrowBalance() {
+    if (!wasm || mktState.rt == null || !mktState.cells) return null;
+    try {
+      const st = wasm.get_cell_state(mktState.rt, mktState.cells.escrowCell);
+      // get_cell_state surfaces { balance, ... }; balances are signed i64.
+      const b = st && (st.balance ?? st.bal);
+      return b == null ? null : Number(b);
+    } catch { return null; }
+  }
+
+  function cellIdOf(r) {
+    if (!r || typeof r !== 'object') return '';
+    return r.cell_id || r.cellId || r.id || '';
+  }
+  function agentIdxOf(r) {
+    if (!r || typeof r !== 'object') return 0;
+    return r.agent_index ?? r.agentIndex ?? 0;
+  }
+  // 64-char hex field element for a u64 (big-endian in the low 8 bytes), the
+  // shape `set_field`'s value_hex expects.
+  function u64FieldHex(n) {
+    const hex = BigInt(n).toString(16).padStart(16, '0');
+    return '0'.repeat(48) + hex;
+  }
+  // BLAKE3 commitment of a string via the canonical wasm merkle root (used to
+  // bind the escrow to its job description).
+  function jobHash(str) {
+    try {
+      const r = wasm.compute_merkle_root(JSON.stringify([str]));
+      return r.root_hex;
+    } catch { return '00'.repeat(32); }
   }
 
   const postBtn = container.querySelector('#mkt-post-job');
@@ -130,10 +176,13 @@ export function initMarketplace(wasm) {
   function updateUI() {
     // Phase
     container.querySelector('#mkt-phase').textContent = mktState.phase;
-    container.querySelector('#mkt-escrow-bal').textContent = mktState.escrowBalance;
+    // Prefer the REAL on-ledger escrow balance when a runtime is live.
+    const realBal = realEscrowBalance();
+    const shownBal = realBal == null ? mktState.escrowBalance : realBal;
+    container.querySelector('#mkt-escrow-bal').textContent = shownBal;
     container.querySelector('#mkt-receipt-count').textContent = mktState.receiptCount;
     container.querySelector('#mkt-reputation').textContent = mktState.reputation.join(' / ');
-    container.querySelector('#mkt-escrow-status').textContent = `${mktState.escrowBalance} tokens`;
+    container.querySelector('#mkt-escrow-status').textContent = `${shownBal} tokens${realBal != null ? ' (on-ledger)' : ''}`;
 
     // Buttons
     postBtn.disabled = mktState.phase !== 'idle' || animating;
@@ -219,11 +268,50 @@ export function initMarketplace(wasm) {
     container.querySelector('#mkt-client-status').textContent = 'posting...';
     container.querySelector('#mkt-mkt-status').textContent = 'receiving...';
     addTimelineEntry(entries);
-    await delay(500);
+    await delay(400);
 
-    // Lock budget into escrow
+    // --- REAL escrow: stand up a runtime and fund a real escrow cell ---------
+    // The budget is locked by MINTING the escrow cell with `budget` tokens
+    // (a real transfer from genesis, the client's wallet) — not by setting a
+    // JS variable. The escrow's balance is now on-ledger.
+    let escrowReal = false;
+    try {
+      const rt = wasm.create_runtime();
+      // agent 0 = the client (genesis/funder), with headroom for fees + budget.
+      const client = wasm.create_agent(rt, 'client', 1_000_000n);
+      // The escrow cell is minted (by a real genesis transfer) holding the job
+      // budget PLUS a fee reserve so it can pay its own settlement turn's gas.
+      // The locked funds are thus a REAL on-ledger balance from the start.
+      const escrow = wasm.create_agent(rt, 'escrow', BigInt(mktState.job.budget + SETTLE_FEE));
+      const providers = [];
+      for (let i = 1; i <= 3; i++) {
+        const p = wasm.create_agent(rt, `provider-${i}`, 0n);
+        providers.push({ idx: agentIdxOf(p), cell: cellIdOf(p) });
+      }
+      mktState.rt = rt;
+      mktState.cells = {
+        clientIdx: agentIdxOf(client), clientCell: cellIdOf(client),
+        escrowIdx: agentIdxOf(escrow), escrowCell: cellIdOf(escrow),
+        providers,
+      };
+      // Install the escrow cell-program (settle/dispute one-shot drain, budget
+      // + job frozen). install_app_program PRESERVES the funded balance.
+      try {
+        wasm.install_app_program(rt, mktState.cells.escrowCell, 'escrow', JSON.stringify({
+          budget: mktState.job.budget,
+          job_hash_hex: jobHash(mktState.job.description),
+        }));
+      } catch (e) {
+        entries.push({ text: `[Escrow] program install note: ${e && e.message || e}`, type: 'warning' });
+      }
+      escrowReal = true;
+    } catch (e) {
+      entries.push({ text: `[Escrow] real runtime unavailable (${e && e.message || e}) — falling back to display-only counters`, type: 'warning' });
+    }
+
+    // Lock budget into escrow (display mirrors the on-ledger balance).
     mktState.escrowBalance = mktState.job.budget;
-    entries.push({ text: `[Client] Locked ${mktState.job.budget} tokens into escrow`, type: 'info' });
+    entries.push({ text: `[Client] Locked ${mktState.job.budget} tokens into escrow${escrowReal ? ` (real cell ${String(mktState.cells.escrowCell).slice(0, 12)}…, on-ledger ${realEscrowBalance()} = ${mktState.job.budget} job funds + ${SETTLE_FEE} gas reserve)` : ''}`, type: escrowReal ? 'success' : 'info' });
     entries.push({ text: `[Marketplace] Job ${jobId.slice(0, 8)}... posted. Accepting sealed bids.`, type: 'success' });
     container.querySelector('#mkt-client-status').textContent = 'job posted';
     container.querySelector('#mkt-mkt-status').textContent = 'accepting bids';
@@ -369,38 +457,79 @@ export function initMarketplace(wasm) {
     // Reveal result
     entries.push({ text: `[Provider ${winner.provider}] Result revealed and verified by client`, type: 'info' });
     addTimelineEntry(entries);
-    await delay(400);
+    await delay(300);
 
-    // Atomic settlement
-    entries.push({ text: `[Settlement] Atomic execution:`, type: 'info' });
-    entries.push({ text: `  - Escrow -> Provider ${winner.provider}: ${winner.amount} tokens`, type: 'success' });
-    entries.push({ text: `  - Escrow -> Client (refund): ${mktState.job.budget - winner.amount} tokens`, type: 'success' });
-    entries.push({ text: `  - Reputation[P${winner.provider}] += 1`, type: 'success' });
-    entries.push({ text: `  - Receipt logged (atomic, all-or-nothing)`, type: 'success' });
+    const refund = mktState.job.budget - winner.amount;
 
-    // Update state
-    mktState.escrowBalance = 0;
+    // --- REAL atomic settlement: ONE turn, TWO transfers out of the escrow ---
+    // escrow -> winning provider (winning amount) AND escrow -> client (refund),
+    // plus the escrow cell-program's phase→settled / paid:=amount state writes.
+    // The TurnExecutor commits all-or-nothing; conservation (Σδ=0) is a kernel
+    // theorem, so the escrow can neither over-pay nor be partially drained.
+    let settleReal = false, settleRes = null;
+    if (wasm && mktState.rt != null && mktState.cells) {
+      const c = mktState.cells;
+      const winnerCell = c.providers[winner.provider - 1].cell;
+      const actions = [
+        { type: 'transfer', to: winnerCell, amount: winner.amount },
+        { type: 'transfer', to: c.clientCell, amount: refund },
+        // escrow cell-program state machine: phase 0 -> 1 (settled), paid := amount.
+        { type: 'set_field', cell: c.escrowCell, index: 0, value_hex: u64FieldHex(1) },
+        { type: 'set_field', cell: c.escrowCell, index: 2, value_hex: u64FieldHex(winner.amount) },
+      ];
+      try {
+        // The escrow agent signs; the action targets the escrow app cell with
+        // method "settle". A real governed app turn through the canonical executor.
+        // Fee = the gas reserve the escrow was funded with; the payout is the
+        // budget, so the escrow drains to ~0.
+        settleRes = wasm.execute_app_turn(mktState.rt, c.escrowIdx, c.escrowCell, 'settle', JSON.stringify(actions), BigInt(SETTLE_FEE));
+      } catch (e) {
+        settleRes = { status: 'error', error: String(e && e.message || e) };
+      }
+      settleReal = settleRes && settleRes.status === 'committed';
+    }
+
+    if (settleReal) {
+      mktState.lastTurnHash = settleRes.turn_hash;
+      entries.push({ text: `[Settlement] REAL atomic turn committed · ${String(settleRes.turn_hash).slice(0, 14)}…`, type: 'success' });
+      entries.push({ text: `  - Escrow -> Provider ${winner.provider}: ${winner.amount} tokens (real transfer)`, type: 'success' });
+      entries.push({ text: `  - Escrow -> Client (refund): ${refund} tokens (real transfer)`, type: 'success' });
+      entries.push({ text: `  - Escrow on-ledger balance now: ${realEscrowBalance()} (was ${mktState.job.budget})`, type: 'success' });
+      entries.push({ text: `  - ${settleRes.computrons_used != null ? settleRes.computrons_used + ' computrons · ' : ''}post-state ${String(settleRes.post_state_hash || '').slice(0, 12)}…`, type: 'info' });
+    } else if (settleRes) {
+      // Real rejection — surfaced honestly, NOT faked as success.
+      entries.push({ text: `[Settlement] executor ${settleRes.status || 'rejected'}${settleRes.error ? ': ' + settleRes.error : ''} — escrow NOT drained (atomic: nothing moved)`, type: 'error' });
+      container.querySelector('#mkt-mkt-status').textContent = 'settle rejected';
+      addTimelineEntry(entries);
+      updateUI();
+      animating = false;
+      return;
+    } else {
+      // No runtime (wasm unavailable): display-only fallback, labeled.
+      entries.push({ text: `[Settlement] (display-only — no runtime) Escrow -> P${winner.provider}: ${winner.amount}, refund ${refund}`, type: 'warning' });
+      mktState.escrowBalance = 0;
+    }
+
     mktState.reputation[winner.provider - 1] += 1;
     mktState.receiptCount += 1;
     mktState.phase = 'executed';
 
     container.querySelector(`#mkt-p${winner.provider}-status`).textContent = `settled (+${winner.amount})`;
-    container.querySelector('#mkt-client-status').textContent = `refund: ${mktState.job.budget - winner.amount}`;
-    container.querySelector('#mkt-escrow-status').textContent = '0 tokens';
+    container.querySelector('#mkt-client-status').textContent = `refund: ${refund}`;
     container.querySelector('#mkt-mkt-status').textContent = 'settled';
 
-    // Update global state
-    state.receipts.push({ type: 'marketplace', job: mktState.job.id, winner: winner.provider, amount: winner.amount });
+    // Update global state with the REAL receipt hash when we have one.
+    state.receipts.push({ type: 'marketplace', job: mktState.job.id, winner: winner.provider, amount: winner.amount, turn_hash: mktState.lastTurnHash || null });
 
     addTimelineEntry(entries);
     showExplainer({
       leftLabel: 'Provider',
-      left: `Computed result\nCommit-reveal scheme ensures result is locked before payment\nReceived ${winner.amount} tokens from escrow`,
+      left: `Computed result\nCommit-reveal scheme locks the result before payment\nReceived ${winner.amount} tokens from the escrow cell (real transfer)`,
       centerLabel: 'Settlement',
-      center: `Single atomic turn:\n1. Verify result\n2. Transfer escrow -> provider\n3. Refund remainder -> client\n4. Update reputation\n5. Log receipt\n\nAll or nothing — partial settlement impossible`,
+      center: `Single REAL turn through the wasm TurnExecutor:\n1. Transfer escrow -> provider (${winner.amount})\n2. Refund remainder -> client (${refund})\n3. escrow phase 0->1 (settled, one-shot)\n4. escrow paid := ${winner.amount} (write-once)\n\n${settleReal ? `turn ${String(mktState.lastTurnHash).slice(0, 16)}…` : 'all-or-nothing'}`,
       rightLabel: 'Atomicity',
-      right: `This is a single dregg turn.\n\nIf ANY step fails, ALL steps revert.\n\nThe escrow cannot be drained without verified result.\nThe provider cannot be paid without delivering.\nThe receipt cannot exist without settlement.\n\nThis is the power of single-turn atomicity.`,
-      footer: `Settlement complete. Receipt #${mktState.receiptCount} logged.`,
+      right: `This is a single dregg turn.\n\nConservation (Σ per asset = 0) is a kernel theorem: the two\ntransfers MUST balance the escrow's ${mktState.job.budget} exactly, or the\nexecutor rejects the whole turn.\n\nThe escrow cell-program makes phase advance one-shot\n(StrictMonotonic) and the payout write-once — a second\nsettle (double-drain) is rejected.\n\nThe escrow balance you see is read from the real ledger.`,
+      footer: settleReal ? `Settlement committed. Real turn ${String(mktState.lastTurnHash).slice(0, 20)}…` : `Settlement recorded.`,
     });
 
     updateUI();
@@ -426,22 +555,55 @@ export function initMarketplace(wasm) {
 
     entries.push({ text: `[Marketplace] No valid result commitment found within deadline.`, type: 'warning' });
     addTimelineEntry(entries);
-    await delay(400);
+    await delay(300);
 
-    // Refund
+    // --- REAL dispute resolution: one turn refunds the FULL budget to client -
+    // escrow -> client (full budget), escrow cell-program phase 0 -> 2
+    // (disputed, one-shot); paid stays 0 (nothing went to a provider).
+    const budget = mktState.job.budget;
+    let disputeReal = false, dRes = null;
+    if (wasm && mktState.rt != null && mktState.cells) {
+      const c = mktState.cells;
+      // Refund the full job budget to the client; the gas reserve covers the
+      // turn fee. (We refund the budget, not the on-ledger total, because that
+      // total still includes the gas reserve the fee will consume.)
+      const actions = [
+        { type: 'transfer', to: c.clientCell, amount: budget },
+        { type: 'set_field', cell: c.escrowCell, index: 0, value_hex: u64FieldHex(2) },
+      ];
+      try {
+        dRes = wasm.execute_app_turn(mktState.rt, c.escrowIdx, c.escrowCell, 'dispute', JSON.stringify(actions), BigInt(SETTLE_FEE));
+      } catch (e) {
+        dRes = { status: 'error', error: String(e && e.message || e) };
+      }
+      disputeReal = dRes && dRes.status === 'committed';
+    }
+
     entries.push({ text: `[Settlement] Dispute resolution:`, type: 'info' });
-    entries.push({ text: `  - Escrow -> Client (full refund): ${mktState.escrowBalance} tokens`, type: 'success' });
+    if (disputeReal) {
+      mktState.lastTurnHash = dRes.turn_hash;
+      entries.push({ text: `  - Escrow -> Client (full refund): ${budget} tokens (real turn ${String(dRes.turn_hash).slice(0, 12)}…)`, type: 'success' });
+      entries.push({ text: `  - Escrow on-ledger balance now: ${realEscrowBalance()}`, type: 'success' });
+    } else if (dRes) {
+      entries.push({ text: `  - executor ${dRes.status || 'rejected'}${dRes.error ? ': ' + dRes.error : ''} — refund NOT applied`, type: 'error' });
+      container.querySelector('#mkt-mkt-status').textContent = 'dispute rejected';
+      addTimelineEntry(entries);
+      updateUI();
+      animating = false;
+      return;
+    } else {
+      entries.push({ text: `  - (display-only — no runtime) Escrow -> Client: ${budget}`, type: 'warning' });
+      mktState.escrowBalance = 0;
+    }
     entries.push({ text: `  - Reputation[P${winner.provider}] -= 1`, type: 'error' });
     entries.push({ text: `  - Dispute receipt logged`, type: 'success' });
 
     mktState.reputation[winner.provider - 1] -= 1;
-    mktState.escrowBalance = 0;
     mktState.receiptCount += 1;
     mktState.phase = 'disputed';
 
     container.querySelector(`#mkt-p${winner.provider}-status`).textContent = 'penalized';
-    container.querySelector('#mkt-client-status').textContent = `refunded: ${mktState.job.budget}`;
-    container.querySelector('#mkt-escrow-status').textContent = '0 tokens';
+    container.querySelector('#mkt-client-status').textContent = `refunded: ${budget}`;
     container.querySelector('#mkt-mkt-status').textContent = 'disputed';
 
     addTimelineEntry(entries);

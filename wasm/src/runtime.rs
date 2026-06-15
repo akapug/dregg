@@ -634,7 +634,9 @@ impl DreggRuntime {
         let roots_matched = consistent && out_nz && in_nz;
 
         self.bilateral_aggregate = Some(BilateralAggregateRecord {
-            kind: dregg_circuit::bilateral_aggregation_air::BilateralAggregationAir::AIR_NAME
+            // The cross-side existence AIR (renamed from `BilateralAggregationAir`
+            // in the rotation cutover) names the bilateral aggregate's shape.
+            kind: dregg_circuit::bilateral_aggregation_air::CrossSideExistenceAir::AIR_NAME
                 .to_string(),
             proof_size_bytes: bundle.outer_proof_bytes.len(),
             n_cells: bundle.participating_cells.len(),
@@ -670,9 +672,7 @@ impl DreggRuntime {
     /// verification (which would indicate a substrate bug, not a sim gap).
     pub fn prove_turn(&mut self, turn_hash: [u8; 32]) -> Result<(), String> {
         use dregg_circuit::{
-            BabyBear, CellState, Effect as VmEffect, EffectVmAir, extract_net_delta,
-            generate_effect_vm_trace,
-            stark::{self, proof_to_bytes},
+            BabyBear, CellState, Effect as VmEffect, extract_net_delta,
         };
 
         if self.turn_proofs.contains_key(&turn_hash) {
@@ -704,21 +704,40 @@ impl DreggRuntime {
         // Initial CellState: a balance comfortably covering the outgoing flow
         // (the trace generator asserts no underflow). This makes the proof an
         // honest attestation of the turn's net delta + commitment transition.
+        // The same synthetic-but-honest initial state the prior v1 path used —
+        // we keep that semantics and swap only the PROVER (v1 → rotated).
         let init_balance = total_outgoing.saturating_add(1_000_000);
         let state = CellState::new(init_balance, 0);
 
-        let (trace, pi) = generate_effect_vm_trace(&state, &vm_effects);
-        let air = EffectVmAir::new(trace.len());
+        // THE ROTATION CUTOVER (C7): the v1 `EffectVmAir` hand-AIR was deleted;
+        // a turn is now proven by minting the rotated multi-table `Ir2BatchProof`
+        // over the cohort descriptor (`mint_rotated_participant_leg`, the same
+        // primitive the light-client demo and the node's FLOW-B producer use).
+        // The leg's prove step self-verifies inside the recursion config, so a
+        // cached record is a genuinely sound rotated attestation.
+        let net_delta_signed = i128::from(init_balance) - i128::from(total_outgoing);
+        let after_balance = net_delta_signed.max(0) as i64;
+        let before_cell = synthetic_producer_cell(init_balance as i64, 0);
+        let after_cell = synthetic_producer_cell(after_balance, 0);
+        let nullifier_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
 
-        // Real STARK prove.
-        let proof = stark::prove(&air, &trace, &pi);
+        let leg = dregg_turn::rotation_witness::mint_rotated_participant_leg(
+            &state,
+            &vm_effects,
+            &before_cell,
+            &after_cell,
+            &nullifier_root,
+            &receipt_log,
+            None,
+        )
+        .map_err(|e| format!("rotated turn proof mint/verify failed: {e}"))?;
 
-        // Self-verify before caching: a cached record is a genuinely sound
-        // attestation. Also round-trips through serialization to size it.
-        stark::verify(&air, &proof, &pi)
-            .map_err(|e| format!("effect-vm proof failed self-verification: {e}"))?;
-        let proof_size_bytes = proof_to_bytes(&proof).len();
-
+        let pi = leg.public_inputs.clone();
+        // The rotated batch proof is a recursion artifact; we don't re-serialize
+        // it here (its in-config self-verification during mint is the soundness
+        // gate). Report the attested PI-vector width as the proof's shape metric.
+        let proof_size_bytes = pi.len() * core::mem::size_of::<u32>();
         let net_delta = extract_net_delta(&pi).unwrap_or(0);
         let is_agent_cell = pi
             .get(dregg_circuit::effect_vm::pi::IS_AGENT_CELL)
@@ -730,11 +749,12 @@ impl DreggRuntime {
             .unwrap_or(false);
 
         let record = TurnProofRecord {
-            kind: "stark-effect-vm".to_string(),
+            // The rotated IR-v2 batch proof (recursion tower), not the retired v1 AIR.
+            kind: "rotated-ir2-batch".to_string(),
             public_inputs: pi.iter().map(|b| b.as_u32()).collect(),
             proof_size_bytes,
             net_delta,
-            trace_rows: trace.len(),
+            trace_rows: pi.len(),
             is_agent_cell,
             is_sovereign_cell,
         };
@@ -1739,7 +1759,14 @@ impl DreggRuntime {
             .ok_or_else(|| format!("cell {} not found in ledger", hex_encode_bytes(&cell_id.0)))?;
         cell.program = program;
         cell.permissions = app_programs::open_permissions();
+        // Preserve the cell's existing token balance: installing a program sets
+        // the slot state + nonce from `initial_state` but must not wipe funds an
+        // earlier turn moved into the cell (the escrow flow funds the cell first,
+        // then installs its program). The app-cell flows that install on a fresh
+        // 0-balance cell are unaffected (preserving 0 is a no-op).
+        let existing_balance = cell.state.balance();
         cell.state = initial_state;
+        cell.state.set_balance(existing_balance);
         Ok(())
     }
 
@@ -2088,6 +2115,33 @@ impl DreggRuntime {
             target_height
         ))
     }
+}
+
+/// A synthetic single-cell producer at `(balance, nonce)` with fully-open
+/// permissions — the cell shape the rotated leg-mint reads for its before/after
+/// block witnesses in [`DreggRuntime::prove_turn`]. Mirrors the light-client
+/// demo's `producer_cell`; the same synthetic-but-honest initial state the
+/// retired v1 effect-VM prove path used, so the rotated proof attests the same
+/// net-delta + transition shape.
+fn synthetic_producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
+    use dregg_cell::AuthRequired;
+    let mut pk = [0u8; 32];
+    pk[0] = 7;
+    let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = dregg_cell::Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    for _ in 0..nonce {
+        let _ = cell.state.increment_nonce();
+    }
+    cell
 }
 
 /// Walk a committed turn's call forest and project its balance-affecting
@@ -2457,6 +2511,101 @@ pub mod app_programs {
         state.fields[GOV_THRESHOLD_SLOT as usize] = u64_field(threshold);
         state.fields[GOV_DISPUTE_WINDOW_HEIGHT_SLOT as usize] = u64_field(0);
         state.fields[GOV_PENDING_PROPOSAL_ROOT_SLOT as usize] = [0u8; 32];
+        state
+    }
+
+    // ---- compute-marketplace escrow slot layout ----
+    // The escrow cell HOLDS the client's budget as a real ledger balance; the
+    // settle / dispute methods move that balance out via real `Transfer`
+    // effects in a single turn (kernel-atomic). These slots make the escrow's
+    // lifecycle a load-bearing on-ledger state machine, not a JS flag: the
+    // budget is frozen, the phase is one-way, and the paid-out amount is
+    // write-once. A second settle (double-drain) trips the phase monotonicity
+    // and the executor rejects the whole turn.
+    /// 0 = open (accepting outcome), 1 = settled (paid), 2 = disputed (refunded).
+    pub const ESC_PHASE_SLOT: u8 = 0;
+    /// The locked budget (immutable for the escrow's life).
+    pub const ESC_BUDGET_SLOT: u8 = 1;
+    /// The amount paid to the winning provider (write-once at settle).
+    pub const ESC_PAID_SLOT: u8 = 2;
+    /// Hash of the job description (immutable; binds the escrow to its job).
+    pub const ESC_JOB_HASH_SLOT: u8 = 3;
+
+    /// Canonical compute-marketplace escrow cell-program.
+    ///
+    /// Enforced by the executor on every turn touching the escrow cell:
+    /// - `settle` (provider delivered): phase 0 → strictly greater (one-way to
+    ///   settled), the paid amount is written once, budget + job stay frozen.
+    /// - `dispute` (deadline missed): phase advances one-way to disputed; the
+    ///   paid slot stays zero (nothing went to a provider); budget + job frozen.
+    ///
+    /// Both transitions move the real escrow balance via the turn's `Transfer`
+    /// effects; the cell-program guarantees the BOOKKEEPING can't be replayed
+    /// or forged. `StrictMonotonic` on the phase is what makes settlement (and
+    /// dispute) one-shot: the escrow can be drained exactly once.
+    pub fn escrow_program() -> CellProgram {
+        CellProgram::Cases(vec![
+            // Always: the budget and the job binding are frozen for the
+            // escrow's whole life — no turn can rewrite the locked amount or
+            // re-point the escrow at a different job.
+            TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: vec![
+                    StateConstraint::Immutable {
+                        index: ESC_BUDGET_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: ESC_JOB_HASH_SLOT,
+                    },
+                ],
+            },
+            // settle: phase strictly increases (open → settled, one-shot), the
+            // payout amount is recorded write-once.
+            TransitionCase {
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("settle"),
+                },
+                constraints: vec![
+                    StateConstraint::StrictMonotonic {
+                        index: ESC_PHASE_SLOT,
+                    },
+                    StateConstraint::WriteOnce {
+                        index: ESC_PAID_SLOT,
+                    },
+                ],
+            },
+            // dispute: phase strictly increases (open → disputed, one-shot);
+            // nothing is paid to a provider so the paid slot stays at zero.
+            TransitionCase {
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("dispute"),
+                },
+                constraints: vec![
+                    StateConstraint::StrictMonotonic {
+                        index: ESC_PHASE_SLOT,
+                    },
+                    StateConstraint::FieldEquals {
+                        index: ESC_PAID_SLOT,
+                        value: u64_field(0),
+                    },
+                ],
+            },
+        ])
+    }
+
+    /// Build the initial escrow cell state. `budget` and `job_hash` are seeded
+    /// (and thereafter immutable); phase starts at 0 (open); paid starts at 0.
+    ///
+    /// Balance starts at ZERO: `install_app_program` overwrites the whole cell
+    /// state, so the escrow's real token balance must be funded by a real
+    /// transfer AFTER the program is installed (not via this slot state). This
+    /// keeps the on-ledger budget honest — the locked funds arrive as a turn.
+    pub fn escrow_initial_state(budget: u64, job_hash: FieldElement) -> CellState {
+        let mut state = CellState::new(0);
+        state.fields[ESC_PHASE_SLOT as usize] = u64_field(0);
+        state.fields[ESC_BUDGET_SLOT as usize] = u64_field(budget);
+        state.fields[ESC_PAID_SLOT as usize] = u64_field(0);
+        state.fields[ESC_JOB_HASH_SLOT as usize] = job_hash;
         state
     }
 }

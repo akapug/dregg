@@ -7092,6 +7092,7 @@ dependencies = [
 name = "starbridge-agent-provenance"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
@@ -7099,12 +7100,15 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-bounty-board"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
@@ -7112,24 +7116,30 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-compartment-workflow-mandate"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-escrow-market"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
@@ -7137,12 +7147,15 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-governed-namespace"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
@@ -7151,27 +7164,34 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-identity"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-circuit",
  "dregg-credentials",
  "dregg-token",
+ "dregg-turn",
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-nameservice"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
@@ -7179,21 +7199,31 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-polis"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
+ "dregg-app-framework",
  "dregg-cell",
+ "dregg-sdk",
+ "dregg-turn",
  "postcard",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-privacy-voting"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
@@ -7201,30 +7231,39 @@ dependencies = [
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-sealed-auction"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
+ "dregg-app-framework",
  "dregg-cell",
  "dregg-intent",
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-storage-gateway-mandate"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -7282,21 +7321,29 @@ dependencies = [
 name = "starbridge-tool-access-delegation"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-types",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
 name = "starbridge-tussle"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
+ "dregg-app-framework",
  "dregg-cell",
  "dregg-intent",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

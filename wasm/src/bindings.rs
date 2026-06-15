@@ -575,6 +575,9 @@ pub fn execute_turn_step_by_step(
 ///   - `"governed-namespace"` — installs `governance_program`.
 ///     `committee_root_hex` seeds slot 2; `threshold` seeds slot 3;
 ///     `initial_route_table_root_hex` seeds slot 0.
+///   - `"escrow"` — installs `escrow_program` (compute-marketplace shape).
+///     `budget` seeds slot 1 (frozen); `job_hash_hex` seeds slot 3 (frozen);
+///     phase slot 0 is one-way (settle/dispute drain the real balance once).
 ///
 /// Permissions are opened so multi-agent turns apply; the slot-caveat
 /// cell-program is the load-bearing enforcement (mirrors the apps' executor
@@ -597,6 +600,9 @@ pub fn install_app_program(
             committee_root_hex: Option<String>,
             threshold: Option<u64>,
             initial_route_table_root_hex: Option<String>,
+            // escrow
+            budget: Option<u64>,
+            job_hash_hex: Option<String>,
         }
         let cfg: Config = serde_json::from_str(config_json).map_err(|e| e.to_string())?;
 
@@ -625,6 +631,21 @@ pub fn install_app_program(
                 (
                     app_programs::governance_program(),
                     app_programs::governance_initial_state(committee, threshold, route_root),
+                )
+            }
+            "escrow" => {
+                // Compute-marketplace escrow: a real cell-program whose
+                // settle/dispute methods one-shot-drain the escrow's real
+                // balance (the actual tokens are funded into the escrow
+                // agent's cell separately). budget + job_hash are frozen.
+                let budget = cfg.budget.unwrap_or(0);
+                let job_hash = match cfg.job_hash_hex {
+                    Some(ref h) => hex_decode_32(h)?,
+                    None => *blake3::hash(b"escrow-job-v0").as_bytes(),
+                };
+                (
+                    app_programs::escrow_program(),
+                    app_programs::escrow_initial_state(budget, job_hash),
                 )
             }
             other => return Err(format!("unknown program_kind: {other}")),
