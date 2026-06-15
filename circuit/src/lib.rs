@@ -167,6 +167,13 @@ pub mod presentation;
 /// it, and the EffectVM circuit seeds its `cap_root` column from the same value
 /// (cap Phase A). Pure Poseidon2 (no plonky3): available in the `mock` build.
 pub mod cap_root;
+/// The OPENABLE `capability_root` descriptor loader (cap-reshape crown #103, the ARGUS linchpin):
+/// the Lean-verified `EffectVmDescriptor` that checks non-amplification (`granted ⊑ held` submask, per
+/// bit) + production-authority (the mint opens the issuer cap from the producer's held-set root)
+/// IN-CIRCUIT. Byte-pinned to `Dregg2.Circuit.Emit.EffectVmEmitCapReshape.capReshapeJson`; parsed by
+/// the running `parse_vm_descriptor` (the prover authors no constraint). Standalone (not in the locked
+/// `effect_vm_descriptors` registry).
+pub mod cap_reshape_descriptor;
 #[allow(deprecated)]
 pub mod committed_threshold;
 pub mod effect_vm;
