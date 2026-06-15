@@ -155,6 +155,8 @@ pub mod game;
 pub mod receipt_stream;
 pub mod rehydrate;
 pub mod transclusion;
+pub mod transclusion_chain;
+pub mod transclusion_version;
 pub mod vision_predicate;
 pub mod web_of_cells;
 pub mod world;
@@ -189,6 +191,21 @@ pub use affordance::{
 // "who transcludes me"). Mirrors `Dregg2.Deos.Transclusion`.
 pub use transclusion::{
     Backlinks, Observer, Provenance, TranscludedField, TransclusionAffordance, TransclusionError,
+};
+// Transclusion CHAINS — a quote of a quote of a quote, carrying the COMPOSED
+// provenance (the full citation trail, each hop's receipt). A chain `A→B→C` resolves
+// to the deepest source's committed value; a forged/absent link anywhere refuses (the
+// anti-forge tooth COMPOSES). Realizes the Lean `transclusion_provenance_faithful` +
+// `transclusion_forge_refused`, composed across hops.
+pub use transclusion_chain::{
+    ChainError, ChainProvenance, ResolvedChain, TransclusionChain,
+};
+// Versioned transclusion — the SNAPSHOT/LIVE dial. A snapshot pins a specific version
+// (I-confluent: stable as the source advances — the Lean
+// `transclusion_stable_under_source_advance`); a live quote re-resolves to the current
+// finalized value on each read. Both carry provenance; a forge is refused in either mode.
+pub use transclusion_version::{
+    Pinning, VersionedRead, VersionedTransclusion,
 };
 pub use game::{
     demo_skirmish, demo_world, game_cell, play_match, side_rights, AgentPlayer, AgentPolicy, Board,
