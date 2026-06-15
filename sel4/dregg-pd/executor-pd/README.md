@@ -14,18 +14,29 @@ source changes:
 
 ```
 $ ./scripts/cross-compile-closure.sh
-[xcompile] Dregg2 facets: OK=757  FAIL=0
+[xcompile] executor import-closure (rooted at Dregg2.Exec.FFI): 76 facets
+[xcompile]   (runtime-dead trim, elaborator-severing: Dregg2.Tactics — EXCLUDED)
+[xcompile] closure facets: OK=76  FAIL=0
+[xcompile] ✓ trim invariant: Dregg2_Tactics.o absent (elaborator init-chain severed)
 [xcompile] ✅ executor entry dregg_exec_full_forest_auth present in ELF closure (global text symbol)
 ```
 
 …and the deeper wall (step 2, the ELF Lean *runtime*) is now built, so the closure
 links and EXECUTES (see below).
 
-All 757 Dregg2 `:c` facets (the whole verified-executor closure) ELF-recompile
-for aarch64, and the production entry `dregg_exec_full_forest_auth` survives as a
-global text symbol in the resulting `out/libdregg_lean_elf.a` (757-member ELF
-archive). See `WALL.md` for the exact knobs (`-isystem .../include/clang`,
-`llvm-ar`).
+The closure is the **PRINCIPLED** one (the production form, `docs/EMBEDDABLE-LEAN-
+RUNTIME.md` §4 #2): the transitive IMPORT closure rooted at `Dregg2.Exec.FFI` —
+the module that `@[export]`s the executor entry — is 77 local modules, NOT the
+~820 facets `lake build` emits for the whole proof/circuit/distributed tree. This
+script compiles exactly those, MINUS the one runtime-dead leaf `Dregg2.Tactics`
+(pure metaprogramming: its facet `LEAN_EXPORT`s zero `l_*` runtime functions, only
+the module initializer that drags the Lean elaborator into the init-chain). So the
+elaborator is severed at the SHAPE of the archive — `Tactics.c`, the only facet in
+the closure that calls `initialize_Lean`, is simply absent — and the verified
+production entry `dregg_exec_full_forest_auth` survives as a global text symbol in
+the resulting 76-member `out/libdregg_lean_elf.a` (verified: 0 undefined `l_*`
+runtime symbols after the trim; the static ELF links with 0 undefined symbols).
+See `WALL.md` for the exact knobs (`-isystem .../include/clang`, `llvm-ar`).
 
 **The wall is PASSED — the verified executor runs.** `scripts/link-probe.sh`
 links the verified closure against a freshly-built **ELF Lean runtime** (leanrt +
@@ -57,8 +68,9 @@ set into a `sel4-root-task-with-std` PD, and boot under `qemu-system-aarch64`.
 
 ## Files
 
-- `scripts/cross-compile-closure.sh` — ELF-recompile the verified closure (incl.
-  the top-level `Metatheory/` facets, a closure-coverage fix found here).
+- `scripts/cross-compile-closure.sh` — ELF-recompile the verified closure: the
+  principled import closure rooted at `Dregg2.Exec.FFI` (77 modules), minus the
+  runtime-dead tactic leaf `Dregg2.Tactics` (the elaborator-severing trim).
 - `scripts/build-leanrt-elf.sh` — ELF leanrt (runtime + mimalloc/libuv stubs).
 - `scripts/build-leanlib-elf.sh <Init|Std|Lean>` — re-emit + ELF-compile a Lean
   library from `lean4@d024af099` sources.

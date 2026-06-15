@@ -96,11 +96,19 @@ the upstream `lean4@d024af099` sources for a **hosted aarch64-linux-musl** targe
      teeth run natively on the host, bitmask `0x7`; on-device RUN of the selftest
      ELF awaits a user-mode `qemu-aarch64`, absent on macOS — the link is the
      on-device checkpoint).
-   - `init-stubs.c` — no-op `initialize_Lean`/`initialize_aesop_Aesop`/
-     `initialize_Dregg2_Dregg2_Tactics`. These cut the **Lean elaborator** out of
-     the init-chain: the executor's compute path calls ZERO elaborator/kernel
-     primitives (verified) — they enter only because `Dregg2.Tactics` (a proof
-     module imported pervasively) drags the elaborator at init.
+   - `init-stubs.c` — the closure's import-boundary initializers. The **Lean
+     elaborator** is cut at the SHAPE of the closure: `cross-compile-closure.sh`
+     compiles exactly the import closure rooted at `Dregg2.Exec.FFI` (77 local
+     modules), and EXCLUDES the one runtime-dead leaf `Dregg2.Tactics` (pure
+     metaprogramming — its facet `LEAN_EXPORT`s zero `l_*` runtime functions, only
+     `initialize_Dregg2_Dregg2_Tactics`, which chains into `initialize_Lean` + the
+     mathlib Tactic inits). With `Tactics.c` absent from the archive, the only
+     facet that ever called `initialize_Lean` is gone, so the elaborator init-chain
+     is never pulled. `initialize_Dregg2_Dregg2_Tactics` (still called by the 22
+     importing facets' inits) is then a genuine boundary no-op here, not a
+     link-order shadow of a linked-but-dead member. `initialize_Lean` /
+     `initialize_aesop_Aesop` no-ops stay (aesop is still reached via
+     `Dregg2.Catalog`; the `Lean` no-op is defensive over the runtime archives).
    - `kernel-stub.c` (`kernel-stub-syms.txt`) — the libuv/dynlib/module-IO/
      elaborator-typechecker entries (`lean_uv_*`, `lean_kernel_check`, …) the dead
      tactic facets reference but the turn never reaches.

@@ -1,19 +1,32 @@
-/* init-stubs.c — break the metaprogramming init-chain for the embedded executor.
+/* init-stubs.c — the executor closure's import-boundary initializers.
  *
- * The verified executor closure imports `Dregg2.Tactics` (a proof/metaprogramming
- * module) from nearly every data module. At module-init time, the REAL
- * initialize_Dregg2_Dregg2_Tactics calls initialize_Lean + the mathlib Tactic
- * framework — which drags the entire Lean elaborator/kernel (lean_expr_*,
- * lean_kernel_*, lean_add_decl, ...) into the link. Those C++ kernel primitives
- * live in libleancpp/src/kernel (not the compiled .c facets) and are NEVER called
- * by `dregg_exec_full_forest_auth` (verified: the executor's reachable compute
- * objects reference ZERO elaborator/kernel symbols — they enter ONLY via this
- * init-chain).
+ * THE PRINCIPLED ELABORATOR TRIM (EMBEDDABLE-LEAN-RUNTIME.md §4 #2). The verified
+ * executor closure imports `Dregg2.Tactics` (a pure metaprogramming module —
+ * `#assert_axioms`/`#assert_clean` command elabs + the `dregg_auto`/`option_inj`/…
+ * proof-automation macros) from 22 of its 77 reachable modules. That facet
+ * (`Tactics.c`) `LEAN_EXPORT`s ZERO `l_Dregg2_*` runtime functions — only its
+ * module initializer `initialize_Dregg2_Dregg2_Tactics`, which the toolchain emits
+ * to chain into `initialize_Lean` + the mathlib `Tactic.Tauto`/`Ring` inits, which
+ * drag the ENTIRE Lean elaborator/kernel (lean_expr_*, lean_kernel_*,
+ * lean_add_decl, …) into the link. The executor's compute path calls ZERO of
+ * those (verified): they enter ONLY via this init-chain.
  *
- * So we provide NO-OP versions of the metaprogramming initializers. Linked before
- * the closure archive, the linker resolves these symbols here and never pulls the
- * real (elaborator-dragging) members. The executor's DATA modules keep their own
- * inits (which pull only the data mathlib already in libmathlib_elf.a).
+ * So `cross-compile-closure.sh` EXCLUDES `Tactics.c` from the closure archive
+ * (`RUNTIME_DEAD_TRIM`) — the elaborator is severed at the SHAPE of the closure,
+ * because `Tactics.c` is the only facet in the whole closure that calls
+ * `initialize_Lean`. With the facet absent, `initialize_Dregg2_Dregg2_Tactics`
+ * (still CALLED by the 22 importing facets' init-chains) is a genuine
+ * import-boundary symbol — resolved by the no-op HERE. This is now a true closure
+ * boundary, not a link-order shadow of a linked-but-dead member.
+ *
+ * `initialize_Lean` / `initialize_aesop_Aesop` no-ops stay (defensively):
+ *   - initialize_aesop_Aesop is genuinely still called from the closure
+ *     (`Dregg2.Catalog`'s init-chain); its no-op cuts the aesop metaprogramming
+ *     init the same way (Catalog uses aesop only at proof time).
+ *   - initialize_Lean is no longer referenced by any CLOSURE facet (Tactics.c was
+ *     its sole caller), but the linked Lean runtime archives (libLean_elf.a) define
+ *     and may chain it; the no-op keeps the elaborator-init severed there too.
+ * Linked before the archives, the linker resolves these here.
  *
  * Init ABI (v4.30.0): lean_object* initialize_X(uint8_t builtin); returns
  * lean_io_result_mk_ok(lean_box(0)). Idempotent via a local guard.
