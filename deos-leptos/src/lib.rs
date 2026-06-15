@@ -96,6 +96,13 @@ pub mod gate;
 /// to [`server::fire_affordance`]; the server runs the REAL gate + executor and
 /// returns the COMMITTED state.
 pub mod server;
+/// The LIVE reactive transclusion — Ted Nelson's "live quote", made runnable. A
+/// council surface transcludes a constitution cell's `threshold` through the REAL
+/// [`starbridge_web_surface::transclusion::TranscludedField`]; when the source is
+/// amended, the Leptos quote [`leptos::prelude::Memo`] re-resolves the verified read
+/// and the view shows the NEW committed value at the NEW provenance height (the live
+/// update). The runnable demo of the proven `Dregg2.Deos.Transclusion` primitive.
+pub mod transclusion_demo;
 
 use starbridge_web_surface::{
     AffordanceSurface, AuthRequired, CellAffordance, EvalContext, ReactiveAffordance,
