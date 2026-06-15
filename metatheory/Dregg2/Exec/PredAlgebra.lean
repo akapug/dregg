@@ -33,6 +33,90 @@ open Dregg2.Exec
 open Dregg2.Exec.EffectsState (fieldOf stateStep)
 open Dregg2.Authority.ClearanceGraph (ClearanceGraph Label)
 
+/-! ## Typed field readers for the NON-scalar leaves (`Value.sym` / `Value.dig`).
+
+The numeric atom catalog (`StateConstraint`) reads `Value.scalar` (the `.int` leaf) ONLY: every
+identity/enum/ownership policy went through a lossy `Int`-coercion ("read the owner digest's low
+word as a number"). These two readers close that gap — they read a field BY PROPER TYPE, the
+data-model twins of `Value.scalar` for the `Value.sym` (interned identity / enum case) and
+`Value.dig` (digest / cell-reference) leaves. Both FAIL CLOSED: an absent field, or a field present
+at the WRONG leaf (a `.dig` where a `.sym` is wanted, or an `.int`/`.record`), reads `none`, so a
+typed atom over a mistyped field REJECTS — never silently coerces. They generalize `Collections.elemSym`
+(which reads a `.sym` element field) to the top-level transition record. -/
+
+/-- **`Value.symField v f`** — read named field `f` of `v` as an interned identity (`Value.sym`, a
+`Nat`). `none` if absent or NOT a symbol (an `.int`/`.dig`/`.record` at `f` fails closed — a digest
+is NOT a symbol, so an ownership-by-symbol policy cannot be fooled by a coincident digest word). The
+typed twin of `Value.scalar` for the identity/enum leaf. -/
+def _root_.Dregg2.Exec.Value.symField (v : Value) (f : FieldName) : Option Nat :=
+  match v.field f with
+  | some (.sym s) => some s
+  | _             => none
+
+/-- **`Value.digField v f`** — read named field `f` of `v` as a digest / cell-reference
+(`Value.dig`, a `Nat`). `none` if absent or NOT a digest (an `.int`/`.sym`/`.record` fails closed —
+a symbol is NOT a digest). The typed twin of `Value.scalar` for the cell-reference leaf; the reader
+behind owner-match / no-self-transfer. -/
+def _root_.Dregg2.Exec.Value.digField (v : Value) (f : FieldName) : Option Nat :=
+  match v.field f with
+  | some (.dig d) => some d
+  | _             => none
+
+/-! ## Structural `Value` equality (the decidable leaf-equality behind `fieldEqField`).
+
+`Value` derives `Repr` only — no `DecidableEq`/`BEq` (it lives in `Exec/Value.lean`, untouched). The
+general cross-field-equality atom `fieldEqField` needs to decide `new[f] = new[g]` as VALUES, across
+ANY leaf. We provide a self-contained structural decision `Value.beq` (computable, `decide`-reducible,
+no global instance) and its soundness `Value.beq_iff` — the type-agnostic equality respects the
+STRUCTURE (`.sym 5 ≠ .dig 5`, never a coerced word). -/
+
+mutual
+/-- Structural Boolean equality on `Value` (computable; the `decEq` behind `fieldEqField`). -/
+def Value.beq : Value → Value → Bool
+  | .int a,    .int b    => a == b
+  | .dig a,    .dig b    => a == b
+  | .sym a,    .sym b    => a == b
+  | .record a, .record b => Value.beqFields a b
+  | _,         _         => false
+/-- Field-list structural equality (ordered key+value match). -/
+def Value.beqFields : List (FieldName × Value) → List (FieldName × Value) → Bool
+  | [],            []            => true
+  | (k, v) :: a,   (k', v') :: b => (k == k') && Value.beq v v' && Value.beqFields a b
+  | _,             _             => false
+end
+
+mutual
+/-- **`Value.beq_iff`** — the structural equality is sound and complete (`beq = true ↔ propositional
+equality`). So `fieldEqField` decides genuine `Value` equality. -/
+theorem Value.beq_iff : ∀ (a b : Value), Value.beq a b = true ↔ a = b
+  | .int a,    .int b    => by simp [Value.beq]
+  | .dig a,    .dig b    => by simp [Value.beq]
+  | .sym a,    .sym b    => by simp [Value.beq]
+  | .record a, .record b => by
+      simp only [Value.beq, Value.record.injEq]; exact Value.beqFields_iff a b
+  -- the cross-leaf cases: `beq = false`, and the values are unequal by constructor.
+  | .int _,    .dig _    => by simp [Value.beq]
+  | .int _,    .sym _    => by simp [Value.beq]
+  | .int _,    .record _ => by simp [Value.beq]
+  | .dig _,    .int _    => by simp [Value.beq]
+  | .dig _,    .sym _    => by simp [Value.beq]
+  | .dig _,    .record _ => by simp [Value.beq]
+  | .sym _,    .int _    => by simp [Value.beq]
+  | .sym _,    .dig _    => by simp [Value.beq]
+  | .sym _,    .record _ => by simp [Value.beq]
+  | .record _, .int _    => by simp [Value.beq]
+  | .record _, .dig _    => by simp [Value.beq]
+  | .record _, .sym _    => by simp [Value.beq]
+theorem Value.beqFields_iff : ∀ (a b : List (FieldName × Value)),
+    Value.beqFields a b = true ↔ a = b
+  | [],          []          => by simp [Value.beqFields]
+  | [],          _ :: _      => by simp [Value.beqFields]
+  | _ :: _,      []          => by simp [Value.beqFields]
+  | (k, v) :: a, (k', v') :: b => by
+      simp only [Value.beqFields, Bool.and_eq_true, List.cons.injEq, Prod.mk.injEq,
+        beq_iff_eq, Value.beq_iff v v', Value.beqFields_iff a b]
+end
+
 /-! ## The uniform Boolean predicate algebra. -/
 
 /-- **`Pred`** — a clean Boolean algebra over the `Exec` policy-combinator atoms (the
@@ -57,6 +141,45 @@ inductive Pred where
   | allOf (ps : List Pred)
   /-- n-ary disjunction (replaces the single-level `anyOf`). -/
   | anyOf (ps : List Pred)
+  -- ─── TYPED dig/sym FIELD ATOMS (the identity/ownership/enum gap the scalar-only catalog
+  --     could not express by PROPER TYPE — `StateConstraint` reads `Value.scalar` (`.int`) only,
+  --     so `owner = a digest` / `status ∈ {Draft,Active,Frozen}` went through lossy Int-coercion).
+  --     These read `Value.sym`/`Value.dig` by type via `Value.symField`/`Value.digField`; each
+  --     FAILS CLOSED on an absent or mistyped field (a digest is not a symbol, a symbol is not a
+  --     digest), so an identity policy cannot be fooled by a coincident scalar word. Leaf atoms
+  --     (no recursion), so they extend `Pred.eval` with plain match arms — NOT the mutual list arms. ───
+  /-- **`symEq f s`** — field `f`'s `Value.sym` identity equals `s`. The typed identity-equality the
+  numeric `fieldEquals` could only fake by reading a symbol's word as an `Int`. -/
+  | symEq (f : FieldName) (s : Nat)
+  /-- **`symMemberOf f set`** — field `f`'s `Value.sym` is one of `set`: enum membership BY PROPER
+  TYPE ("`status ∈ {Draft, Active, Frozen}`"). The typed twin of the scalar `memberOf`. -/
+  | symMemberOf (f : FieldName) (set : List Nat)
+  /-- **`digEq f d`** — field `f`'s `Value.dig` digest equals `d`. Pin a cell-reference / commitment
+  to a known digest by type (a coincident `.int`/`.sym` of the same word fails closed). -/
+  | digEq (f : FieldName) (d : Nat)
+  /-- **`digFieldEq f g`** — two DIGEST fields `f`, `g` are both present as `Value.dig` AND equal.
+  THE owner-match tooth (`digFieldEq sender owner`: only the owner may act); its NEGATION
+  (`not (digFieldEq from to)`) is the no-self-transfer "from ≠ to". Typed: a non-digest on either
+  side fails closed (you cannot owner-match a scalar against a digest). -/
+  | digFieldEq (f g : FieldName)
+  /-- **`fieldEqField f g`** — GENERAL cross-field equality on the full `Value` leaf (any of
+  `.int`/`.sym`/`.dig`/`.record`): `new[f] = new[g]` as values. The type-agnostic generalization of
+  `digFieldEq`; fail-closed if EITHER field is absent. -/
+  | fieldEqField (f g : FieldName)
+  /-- **`symUnchanged f`** — field `f`'s `Value.sym` identity is the SAME in old and new (the typed
+  reactive `immutable` for the identity leaf: "the controller symbol must NOT change"). First write
+  (absent old) is permitted, mirroring the numeric `immutable`. -/
+  | symUnchanged (f : FieldName)
+  /-- **`symChanged f`** — field `f`'s `Value.sym` identity DIFFERS between old and new (both present
+  as symbols). The reactive complement of `symUnchanged` — a status/role symbol that MUST flip. -/
+  | symChanged (f : FieldName)
+  /-- **`digUnchanged f`** — field `f`'s `Value.dig` digest is the SAME in old and new (the typed
+  reactive `immutable` for the cell-reference leaf: "the OWNER DIGEST must NOT change"). First write
+  (absent old) is permitted. THE keystone non-numeric reactive atom. -/
+  | digUnchanged (f : FieldName)
+  /-- **`digChanged f`** — field `f`'s `Value.dig` digest DIFFERS between old and new (both present
+  as digests). The reactive complement — an ownership-handoff slot that MUST move to a new digest. -/
+  | digChanged (f : FieldName)
   deriving Repr
 
 /-! **`Pred.eval`** — the structural fold to a `Bool` over `(old, new)`. Decidable, computable,
@@ -73,6 +196,25 @@ def Pred.eval : Pred → Value → Value → Bool
   | .not p,     o, n => !(p.eval o n)
   | .allOf ps,  o, n => Pred.evalAll ps o n
   | .anyOf ps,  o, n => Pred.evalAny ps o n
+  -- Typed dig/sym leaf atoms (fail-closed via the `Value.symField`/`Value.digField` readers):
+  | .symEq f s,        _, n => n.symField f == some s
+  | .symMemberOf f set, _, n => match n.symField f with
+                                | some x => set.contains x | none => false
+  | .digEq f d,        _, n => n.digField f == some d
+  | .digFieldEq f g,   _, n => match n.digField f, n.digField g with
+                               | some a, some b => a == b | _, _ => false
+  | .fieldEqField f g, _, n => match n.field f, n.field g with
+                               | some a, some b => Value.beq a b | _, _ => false
+  | .symUnchanged f,   o, n => match o.symField f with
+                               | none   => true                         -- first write allowed
+                               | some a => n.symField f == some a
+  | .symChanged f,     o, n => match o.symField f, n.symField f with
+                               | some a, some b => !(a == b) | _, _ => false
+  | .digUnchanged f,   o, n => match o.digField f with
+                               | none   => true                         -- first write allowed
+                               | some a => n.digField f == some a
+  | .digChanged f,     o, n => match o.digField f, n.digField f with
+                               | some a, some b => !(a == b) | _, _ => false
 def Pred.evalAll : List Pred → Value → Value → Bool
   | [],      _, _ => true
   | p :: ps, o, n => p.eval o n && Pred.evalAll ps o n
@@ -155,6 +297,251 @@ theorem Pred.anyOf_cons (p : Pred) (ps : List Pred) (o n : Value) :
 (vacuous conjunction admits); empty `anyOf` is `ff` (empty disjunction rejects, fail-closed). -/
 theorem Pred.allOf_nil_admits (o n : Value) : (Pred.allOf []).eval o n = true := rfl
 theorem Pred.anyOf_nil_rejects (o n : Value) : (Pred.anyOf []).eval o n = false := rfl
+
+/-! ## TYPED dig/sym atom admit-characterizations (each PROVED — the identity/ownership/enum teeth).
+
+Each typed atom is decidable and computable (`Pred.eval` is a `Bool`); these `iff`s pin its admit
+semantics over the typed `Value.symField`/`Value.digField` readers, mirroring the
+`evalConstraint_*_iff` family for the scalar atoms. Each is fail-closed: an absent or MISTYPED field
+makes the `Option` reader return `none` and the atom REJECT. -/
+
+/-- **`symEq` admit-char.** Admits IFF field `f` reads as a `Value.sym` whose identity is `s`. A
+non-symbol (a `.dig`/`.int`/`.record`) at `f`, or an absent field, fails closed. -/
+theorem Pred.symEq_iff (f : FieldName) (s : Nat) (o n : Value) :
+    (Pred.symEq f s).eval o n = true ↔ n.symField f = some s := by
+  simp only [Pred.eval, beq_iff_eq]
+
+/-- **`symMemberOf` admit-char (enum-by-type).** Admits IFF field `f` reads as a `Value.sym` whose
+identity is in `set`. The typed enum membership "`status ∈ {Draft, Active, Frozen}`". -/
+theorem Pred.symMemberOf_iff (f : FieldName) (set : List Nat) (o n : Value) :
+    (Pred.symMemberOf f set).eval o n = true ↔
+      ∃ x, n.symField f = some x ∧ set.contains x = true := by
+  simp only [Pred.eval]
+  cases h : n.symField f with
+  | none   => simp
+  | some x => simp
+
+/-- **`digEq` admit-char.** Admits IFF field `f` reads as a `Value.dig` whose digest is `d`. -/
+theorem Pred.digEq_iff (f : FieldName) (d : Nat) (o n : Value) :
+    (Pred.digEq f d).eval o n = true ↔ n.digField f = some d := by
+  simp only [Pred.eval, beq_iff_eq]
+
+/-- **`digFieldEq` admit-char (the owner-match keystone).** Admits IFF BOTH fields read as
+`Value.dig` digests AND they are equal. `digFieldEq sender owner` is "only the owner may act"; its
+negation is "from ≠ to". A non-digest on either side fails closed. -/
+theorem Pred.digFieldEq_iff (f g : FieldName) (o n : Value) :
+    (Pred.digFieldEq f g).eval o n = true ↔
+      ∃ a b, n.digField f = some a ∧ n.digField g = some b ∧ a = b := by
+  simp only [Pred.eval]
+  cases hf : n.digField f with
+  | none   => simp
+  | some a =>
+    cases hg : n.digField g with
+    | none   => simp
+    | some b =>
+      simp only [beq_iff_eq, Option.some.injEq]
+      exact ⟨fun h => ⟨a, b, rfl, rfl, h⟩, fun ⟨_, _, ha, hb, hab⟩ => ha ▸ hb ▸ hab⟩
+
+/-- **`fieldEqField` admit-char (general cross-field equality).** Admits IFF both fields are present
+(any leaf) AND equal as `Value`s. The type-agnostic generalization of `digFieldEq`. -/
+theorem Pred.fieldEqField_iff (f g : FieldName) (o n : Value) :
+    (Pred.fieldEqField f g).eval o n = true ↔
+      ∃ a b, n.field f = some a ∧ n.field g = some b ∧ a = b := by
+  simp only [Pred.eval]
+  cases hf : n.field f with
+  | none   => simp
+  | some a =>
+    cases hg : n.field g with
+    | none   => simp
+    | some b =>
+      simp only [Value.beq_iff, Option.some.injEq]
+      exact ⟨fun h => ⟨a, b, rfl, rfl, h⟩, fun ⟨_, _, ha, hb, hab⟩ => ha ▸ hb ▸ hab⟩
+
+/-- **`symUnchanged` admit-char (typed reactive `immutable`, the identity leaf).** With an old symbol
+present, admits IFF the new symbol equals it; an ABSENT old symbol admits (first write). "The
+controller symbol must not change." -/
+theorem Pred.symUnchanged_iff (f : FieldName) (o n : Value) :
+    (Pred.symUnchanged f).eval o n = true ↔
+      (∀ a, o.symField f = some a → n.symField f = some a) := by
+  simp only [Pred.eval]
+  cases ho : o.symField f with
+  | none   => simp
+  | some a => simp [beq_iff_eq]
+
+/-- **`symChanged` admit-char.** Admits IFF both old and new read as symbols AND they differ. -/
+theorem Pred.symChanged_iff (f : FieldName) (o n : Value) :
+    (Pred.symChanged f).eval o n = true ↔
+      ∃ a b, o.symField f = some a ∧ n.symField f = some b ∧ a ≠ b := by
+  simp only [Pred.eval]
+  cases ho : o.symField f with
+  | none   => simp
+  | some a =>
+    cases hn : n.symField f with
+    | none   => simp
+    | some b => simp
+
+/-- **`digUnchanged` admit-char (THE owner-digest reactive — typed `immutable` for the cell-reference
+leaf).** With an old digest present, admits IFF the new digest equals it; an ABSENT old digest admits
+(first write). "The owner digest must NOT change." -/
+theorem Pred.digUnchanged_iff (f : FieldName) (o n : Value) :
+    (Pred.digUnchanged f).eval o n = true ↔
+      (∀ a, o.digField f = some a → n.digField f = some a) := by
+  simp only [Pred.eval]
+  cases ho : o.digField f with
+  | none   => simp
+  | some a => simp [beq_iff_eq]
+
+/-- **`digChanged` admit-char.** Admits IFF both old and new read as digests AND they differ (an
+ownership-handoff slot that must move). -/
+theorem Pred.digChanged_iff (f : FieldName) (o n : Value) :
+    (Pred.digChanged f).eval o n = true ↔
+      ∃ a b, o.digField f = some a ∧ n.digField f = some b ∧ a ≠ b := by
+  simp only [Pred.eval]
+  cases ho : o.digField f with
+  | none   => simp
+  | some a =>
+    cases hn : n.digField f with
+    | none   => simp
+    | some b => simp
+
+/-! ### TYPED-ATOM NON-VACUITY (`#guard` + `by decide`) — each atom BOTH admits and rejects, and the
+THREE motivating teeth: "only owner may act" · "status ∈ enum" · "no self-transfer". No `:= true`. -/
+
+-- The cells: a transfer turn carries `sender`/`owner`/`from`/`to` DIGEST fields and a `status` SYMBOL.
+-- Symbol identities for an enum: Draft = 0, Active = 1, Frozen = 2. (Interned ids, by type.)
+def transferOwnerOk  : Value := .record [("sender", .dig 7), ("owner", .dig 7)]   -- sender = owner
+def transferOwnerBad : Value := .record [("sender", .dig 9), ("owner", .dig 7)]   -- sender ≠ owner
+def selfTransfer     : Value := .record [("from", .dig 7), ("to", .dig 7)]        -- from = to (forbidden)
+def realTransfer     : Value := .record [("from", .dig 7), ("to", .dig 9)]        -- from ≠ to (ok)
+
+/-- **OWNER-MATCH (`digFieldEq sender owner`) — "only the owner may act".** -/
+def ownerMayAct : Pred := .digFieldEq "sender" "owner"
+#guard (ownerMayAct.eval (.record []) transferOwnerOk)            -- true  (sender digest = owner digest)
+#guard (ownerMayAct.eval (.record []) transferOwnerBad) == false  -- false (a non-owner sender is REFUSED)
+example : ownerMayAct.eval (.record []) transferOwnerOk  = true  := by decide
+example : ownerMayAct.eval (.record []) transferOwnerBad = false := by decide
+-- TYPED: a scalar `sender` of the SAME word does NOT owner-match a digest owner (fail-closed by type).
+#guard (ownerMayAct.eval (.record []) (.record [("sender", .int 7), ("owner", .dig 7)])) == false
+
+/-- **NO-SELF-TRANSFER (`not (digFieldEq from to)`) — from ≠ to.** -/
+def noSelfTransfer : Pred := .not (.digFieldEq "from" "to")
+#guard (noSelfTransfer.eval (.record []) realTransfer)            -- true  (from ≠ to: permitted)
+#guard (noSelfTransfer.eval (.record []) selfTransfer) == false   -- false (from = to: REFUSED)
+example : noSelfTransfer.eval (.record []) realTransfer = true  := by decide
+example : noSelfTransfer.eval (.record []) selfTransfer = false := by decide
+
+/-- **ENUM-BY-TYPE (`symMemberOf status {Draft, Active, Frozen}`).** -/
+def statusInEnum : Pred := .symMemberOf "status" [0, 1, 2]   -- {Draft, Active, Frozen}
+#guard (statusInEnum.eval (.record []) (.record [("status", .sym 1)]))            -- true  (Active ∈ enum)
+#guard (statusInEnum.eval (.record []) (.record [("status", .sym 5)])) == false   -- false (5 ∉ enum)
+example : statusInEnum.eval (.record []) (.record [("status", .sym 2)]) = true  := by decide
+example : statusInEnum.eval (.record []) (.record [("status", .sym 5)]) = false := by decide
+-- TYPED: a SCALAR `status` of the same word is NOT a symbol-enum member (fail-closed by type — the
+-- whole point: an enum is over interned symbols, not coercible integers).
+#guard (statusInEnum.eval (.record []) (.record [("status", .int 1)])) == false
+
+-- symEq: pin an identity symbol.
+#guard ((Pred.symEq "role" 3).eval (.record []) (.record [("role", .sym 3)]))            -- true
+#guard ((Pred.symEq "role" 3).eval (.record []) (.record [("role", .sym 4)])) == false   -- false
+#guard ((Pred.symEq "role" 3).eval (.record []) (.record [("role", .dig 3)])) == false   -- false (a digest is not the symbol)
+example : (Pred.symEq "role" 3).eval (.record []) (.record [("role", .sym 3)]) = true  := by decide
+example : (Pred.symEq "role" 3).eval (.record []) (.record [("role", .int 3)]) = false := by decide
+
+-- digEq: pin a cell-reference digest.
+#guard ((Pred.digEq "ref" 42).eval (.record []) (.record [("ref", .dig 42)]))            -- true
+#guard ((Pred.digEq "ref" 42).eval (.record []) (.record [("ref", .dig 43)])) == false   -- false
+#guard ((Pred.digEq "ref" 42).eval (.record []) (.record [("ref", .sym 42)])) == false   -- false (a symbol is not the digest)
+example : (Pred.digEq "ref" 42).eval (.record []) (.record [("ref", .dig 42)]) = true  := by decide
+
+-- digUnchanged (THE owner-digest reactive): the owner digest must NOT change across the turn.
+def ownerPinned : Pred := .digUnchanged "owner"
+#guard (ownerPinned.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 7)]))            -- true  (unchanged)
+#guard (ownerPinned.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 8)])) == false   -- false (owner moved — REFUSED)
+#guard (ownerPinned.eval (.record []) (.record [("owner", .dig 8)]))                             -- true  (first write: absent old admits)
+example : ownerPinned.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 7)]) = true  := by decide
+example : ownerPinned.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 8)]) = false := by decide
+
+-- digChanged (the ownership-handoff dual): the owner digest MUST move.
+def ownerHandoff : Pred := .digChanged "owner"
+#guard (ownerHandoff.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 8)]))           -- true  (moved)
+#guard (ownerHandoff.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 7)])) == false  -- false (no move)
+example : ownerHandoff.eval (.record [("owner", .dig 7)]) (.record [("owner", .dig 8)]) = true  := by decide
+
+-- symUnchanged / symChanged (the identity-leaf reactive pair).
+#guard ((Pred.symUnchanged "ctl").eval (.record [("ctl", .sym 1)]) (.record [("ctl", .sym 1)]))            -- true
+#guard ((Pred.symUnchanged "ctl").eval (.record [("ctl", .sym 1)]) (.record [("ctl", .sym 2)])) == false   -- false (controller flipped)
+#guard ((Pred.symChanged "ctl").eval (.record [("ctl", .sym 1)]) (.record [("ctl", .sym 2)]))             -- true
+#guard ((Pred.symChanged "ctl").eval (.record [("ctl", .sym 1)]) (.record [("ctl", .sym 1)])) == false    -- false (no flip)
+example : (Pred.symUnchanged "ctl").eval (.record [("ctl", .sym 1)]) (.record [("ctl", .sym 2)]) = false := by decide
+example : (Pred.symChanged "ctl").eval (.record [("ctl", .sym 1)]) (.record [("ctl", .sym 2)]) = true   := by decide
+
+-- fieldEqField (general cross-field equality, type-agnostic): matches across ANY leaf, including syms.
+#guard ((Pred.fieldEqField "a" "b").eval (.record []) (.record [("a", .sym 5), ("b", .sym 5)]))            -- true
+#guard ((Pred.fieldEqField "a" "b").eval (.record []) (.record [("a", .sym 5), ("b", .sym 6)])) == false   -- false
+-- Type-agnostic: it matches when both leaves are the SAME leaf+value, and refuses across leaves
+-- (`.sym 5` ≠ `.dig 5` as `Value`s — the structural `Value` equality, not a coerced word).
+#guard ((Pred.fieldEqField "a" "b").eval (.record []) (.record [("a", .sym 5), ("b", .dig 5)])) == false
+example : (Pred.fieldEqField "a" "b").eval (.record []) (.record [("a", .sym 5), ("b", .sym 5)]) = true := by decide
+
+/-- **`typed_atoms_discriminate` (non-vacuity, theorem layer).** The three motivating teeth each
+ADMIT one transition and REFUSE another — genuine discriminators, both polarities, no laundered
+vacuity: owner-may-act, no-self-transfer, status∈enum. -/
+theorem typed_atoms_discriminate :
+    ownerMayAct.eval (.record []) transferOwnerOk = true ∧
+    ownerMayAct.eval (.record []) transferOwnerBad = false ∧
+    noSelfTransfer.eval (.record []) realTransfer = true ∧
+    noSelfTransfer.eval (.record []) selfTransfer = false ∧
+    statusInEnum.eval (.record []) (.record [("status", .sym 1)]) = true ∧
+    statusInEnum.eval (.record []) (.record [("status", .sym 5)]) = false :=
+  ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+
+/-- **`typed_atoms_fail_closed_on_type` (the typing is LOAD-BEARING).** Each typed atom REFUSES a
+field present at the WRONG leaf with the SAME numeric word — the precise statement that identity/
+ownership/enum policies are decided BY TYPE, not by a coercible scalar word (the toy-gap closure):
+a scalar sender does not owner-match a digest owner; a scalar status is not in a symbol enum; a
+digest is not the symbol; a symbol is not the digest. -/
+theorem typed_atoms_fail_closed_on_type :
+    ownerMayAct.eval (.record []) (.record [("sender", .int 7), ("owner", .dig 7)]) = false ∧
+    statusInEnum.eval (.record []) (.record [("status", .int 1)]) = false ∧
+    (Pred.symEq "role" 3).eval (.record []) (.record [("role", .dig 3)]) = false ∧
+    (Pred.digEq "ref" 42).eval (.record []) (.record [("ref", .sym 42)]) = false :=
+  ⟨by decide, by decide, by decide, by decide⟩
+
+/-! ### The typed atoms enforce on the LIVE leg too — a `PredCaveat` carrying a typed atom REJECTS a
+typed violation through `predCaveatsAdmit`, exactly like the scalar atoms (the executor teeth). Note
+the `PredCaveat` scalar-write adapter lifts `(old,new) : Int` to single-field `.int` records, so the
+record-shaped non-vacuity above is the natural home for the typed atoms; here we show a typed atom
+composed with the scalar adapter still DISCRIMINATES on a record transition via `Pred.eval` directly,
+which is precisely what `predStateStepGuarded` evaluates (it gates on `Pred.eval` over the records). -/
+
+-- A composite REAL policy: a transfer is admissible iff the SENDER owns the cell (typed owner-match)
+-- AND it is not a self-transfer (typed) AND the status is a live enum case — authored in the clean
+-- Boolean algebra over the TYPED atoms, the thing the scalar-only catalog could not say by type.
+def transferPolicy : Pred :=
+  .allOf [ .digFieldEq "sender" "owner"
+         , .not (.digFieldEq "from" "to")
+         , .symMemberOf "status" [0, 1] ]   -- status ∈ {Draft, Active} (not Frozen)
+
+def goodTransfer : Value :=
+  .record [("sender", .dig 7), ("owner", .dig 7), ("from", .dig 7), ("to", .dig 9), ("status", .sym 1)]
+def frozenTransfer : Value :=   -- owner matches, not self, but status = Frozen (2) ∉ {0,1}
+  .record [("sender", .dig 7), ("owner", .dig 7), ("from", .dig 7), ("to", .dig 9), ("status", .sym 2)]
+def nonOwnerTransfer : Value := -- status fine, not self, but sender ≠ owner
+  .record [("sender", .dig 9), ("owner", .dig 7), ("from", .dig 7), ("to", .dig 9), ("status", .sym 1)]
+
+#guard (transferPolicy.eval (.record []) goodTransfer)              -- true  (all three typed teeth pass)
+#guard (transferPolicy.eval (.record []) frozenTransfer) == false   -- false (Frozen status REFUSED)
+#guard (transferPolicy.eval (.record []) nonOwnerTransfer) == false -- false (non-owner sender REFUSED)
+example : transferPolicy.eval (.record []) goodTransfer = true := by decide
+
+/-- **`transferPolicy_discriminates` (the composite end-to-end, both polarities).** The clean Boolean
+algebra over the TYPED atoms admits the well-formed owner-driven transfer and refuses BOTH a frozen
+status and a non-owner sender — a genuine multi-tooth discriminator authored by proper type. -/
+theorem transferPolicy_discriminates :
+    transferPolicy.eval (.record []) goodTransfer = true ∧
+    transferPolicy.eval (.record []) frozenTransfer = false ∧
+    transferPolicy.eval (.record []) nonOwnerTransfer = false :=
+  ⟨by decide, by decide, by decide⟩
 
 /-! ## § Adapter — the LIVE-leg executor enforcement (mirrors `clearanceGe` / `stateStepGuarded`).
 
@@ -301,5 +688,21 @@ def kbare : RecordKernelState :=
 #assert_axioms predStateStepGuarded_eq
 #assert_axioms predStateStepGuarded_admits
 #assert_axioms predStateStepGuarded_violation_fails
+
+-- TYPED dig/sym atom keystones — every admit-char + the non-vacuity teeth, pinned kernel-clean.
+#assert_all_clean [
+  Pred.symEq_iff,
+  Pred.symMemberOf_iff,
+  Pred.digEq_iff,
+  Pred.digFieldEq_iff,
+  Pred.fieldEqField_iff,
+  Pred.symUnchanged_iff,
+  Pred.symChanged_iff,
+  Pred.digUnchanged_iff,
+  Pred.digChanged_iff,
+  typed_atoms_discriminate,
+  typed_atoms_fail_closed_on_type,
+  transferPolicy_discriminates
+]
 
 end Dregg2.Exec.PredAlgebra

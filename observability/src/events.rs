@@ -819,6 +819,18 @@ fn constraint_dissect(
         // Witnessed disjunction (§11.3): a composite leaf with no primary slot —
         // each branch names its own predicate; consumers read the program view.
         SC::AnyOfBound { .. } => ("any_of_bound", None, vec![]),
+        // Typed dig/sym field atoms (PredAlgebra typed leaves). Each binds the
+        // field slot it reads; `SymEq`/`SymMemberOf` read the u64 lane and
+        // `DigEq` the full field at `index`. `DigFieldEq` is a cross-slot
+        // owner-match — primary is the left slot, the right slot is extra
+        // (dissected exactly like `FieldLteField`).
+        SC::SymEq { index, .. } => ("sym_eq", Some(*index), vec![]),
+        SC::SymMemberOf { index, .. } => ("sym_member_of", Some(*index), vec![]),
+        SC::DigEq { index, .. } => ("dig_eq", Some(*index), vec![]),
+        SC::DigFieldEq {
+            left_index,
+            right_index,
+        } => ("dig_field_eq", Some(*left_index), vec![*right_index]),
     }
 }
 

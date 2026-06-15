@@ -389,7 +389,23 @@ pub fn project_slot_caveat_manifest(
             // wave — executor-enforced by the scalar evaluator (each branch
             // calls the evaluator the executor already owns), no SlotCaveat AIR
             // projection (deferred like `AnyOf` / `ObservedFieldEquals`).
-            | dregg_cell::StateConstraint::AnyOfBound { .. } => None,
+            | dregg_cell::StateConstraint::AnyOfBound { .. }
+            // Typed dig/sym field atoms (PredAlgebra typed leaves). In the
+            // untyped 8-slot substrate `SymEq`/`SymMemberOf` read the u64 lane
+            // (the `MemberOf` path) and `DigEq` is the full-field compare (the
+            // `FieldEquals` path) — but the lanes they coincide with (`MemberOf`,
+            // `FieldLteField`) are themselves NOT SlotCaveat-projected in this
+            // wave (they are `=> None` above, scalar-evaluator-enforced). So the
+            // typed atoms join them: no per-slot SlotCaveat AIR projection,
+            // executor-enforced by the scalar evaluator (cell/program.rs already
+            // owns their arms). `DigFieldEq` (cross-slot full-digest equality)
+            // is likewise scalar-enforced — its untyped sibling `FieldLteField`
+            // is `None` here, and a cross-slot tie binds two registers, not the
+            // single `slot_index` a SlotCaveatEntry carries.
+            | dregg_cell::StateConstraint::SymEq { .. }
+            | dregg_cell::StateConstraint::SymMemberOf { .. }
+            | dregg_cell::StateConstraint::DigEq { .. }
+            | dregg_cell::StateConstraint::DigFieldEq { .. } => None,
         };
         if let Some(e) = entry {
             entries[count] = e;
