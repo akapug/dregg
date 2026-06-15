@@ -45,6 +45,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
 import Dregg2.Circuit.Emit.EffectVmEmitSetVK
 import Dregg2.Circuit.Emit.EffectVmEmitSpawn
 import Dregg2.Circuit.Emit.EffectVmEmitRecordRoot
+import Dregg2.Circuit.Emit.EffectVmEmitCapReshape
 
 open Dregg2.Circuit.Emit.EffectVmEmit
 
@@ -100,7 +101,12 @@ def allEntries : List Entry :=
     -- spare 4th input now binds the user-field-map root cell into `state_commit`). Width-neutral
     -- (186): the carrier is the existing `state.FIELDS_ROOT` (= RESERVED, col 89) within the base
     -- layout, so the generic descriptor interpreter runs it with no width change.
-  , ⟨"recordVmDescriptor",              EffectVmEmitRecordRoot.recordVmDescriptor⟩ ]
+  , ⟨"recordVmDescriptor",              EffectVmEmitRecordRoot.recordVmDescriptor⟩
+    -- CAP-RESHAPE CROWN (#103): the OPENABLE capability_root descriptor — non-amp (per-bit submask
+    -- gates `granted ⊑ held`) + production-authority (the mint opens the issuer cap from the held-set
+    -- root). Not selector-bound (the sdk authority-binding routes to it by name); byte-pinned by
+    -- `circuit/src/cap_reshape_descriptor.rs` (a STANDALONE loader, not the locked selector registry).
+  , ⟨"capReshapeVmDescriptor",          EffectVmEmitCapReshape.capReshapeVmDescriptor⟩ ]
 
 def main : IO Unit := do
   for e in allEntries do
