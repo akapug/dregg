@@ -2234,11 +2234,11 @@ pub fn get_receipt_chain(handle: usize) -> Result<JsValue, JsError> {
                 let actions = collect_actions_from_forest(t);
                 // Refactor 7 + per-turn STARK: if the runtime has a real
                 // EffectVM STARK proof cached for this turn (generated lazily
-                // by `prove_turn` — the canonical `generate_effect_vm_trace` →
-                // `stark::prove` → `stark::verify` pipeline), surface it as a
-                // real ProofView. The bilateral γ.2 accumulator roots are
-                // executor-trusted at this stage (the trace generator leaves
-                // PI[OUTGOING_*_ROOT..] as zero sentinels), so `bilateral_pi`
+                // by `prove_turn` — the canonical ROTATED `Ir2BatchProof` leg
+                // minted + self-verified via `mint_rotated_participant_leg`),
+                // surface it as a real ProofView. The bilateral γ.2 accumulator
+                // roots are executor-trusted at this stage (the rotated leg
+                // leaves PI[OUTGOING_*_ROOT..] as zero sentinels), so `bilateral_pi`
                 // is None — honestly classifying this as Silver, not Golden,
                 // in `<dregg-proof>`. When no proof is cached yet the receipt
                 // is scope-0 (Placeholder until first inspector view triggers
@@ -2266,11 +2266,11 @@ pub fn get_receipt_chain(handle: usize) -> Result<JsValue, JsError> {
 /// Generate (and cache) a REAL EffectVM STARK proof for a committed turn,
 /// identified by its `turn_hash` (hex32).
 ///
-/// This drives the canonical Effect VM prove path
-/// (`generate_effect_vm_trace` → `stark::prove` → `stark::verify`), the same
-/// pipeline `circuit/tests/integration_effect_vm_prove_verify.rs` exercises.
-/// The proof is self-verified before being cached, so once this returns Ok the
-/// turn's `get_receipt_chain` entry carries a real `proof_view` (Silver tier).
+/// This drives the canonical ROTATED Effect VM prove path — the rotated
+/// multi-table `Ir2BatchProof` minted over the cohort descriptor
+/// (`mint_rotated_participant_leg`). The proof is self-verified before being
+/// cached, so once this returns Ok the turn's `get_receipt_chain` entry carries
+/// a real `proof_view` (Silver tier).
 ///
 /// PERFORMANCE: STARK proving is expensive in wasm, so this is NOT run on the
 /// commit path or at boot. The `<dregg-proof>` inspector calls it lazily on
@@ -2884,9 +2884,9 @@ pub struct BilateralPiView {
 ///
 /// The γ.2 bilateral accumulator roots (PI[OUTGOING_*_ROOT..],
 /// PI[INCOMING_*_ROOT..]) are surfaced as `bilateral_pi` ONLY when at least
-/// one of the six roots is non-zero. The current `generate_effect_vm_trace`
-/// path leaves these as zero sentinels (the bilateral accumulator is
-/// executor-trusted at this stage), so for sim-runtime proofs this is `None`
+/// one of the six roots is non-zero. The current rotated leg leaves these as
+/// zero sentinels (the bilateral accumulator is executor-trusted at this
+/// stage), so for sim-runtime proofs this is `None`
 /// — which `<dregg-proof>` honestly classifies as Silver (a real proof with
 /// executor-trusted cross-cell boundaries), never Golden.
 fn proof_view_from_record(record: Option<&crate::runtime::TurnProofRecord>) -> Option<ProofView> {

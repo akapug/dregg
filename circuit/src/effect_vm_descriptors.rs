@@ -793,10 +793,11 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 )];
 
 /// THE FULL-COHORT REGEN at the rotated R=24 block (`ROTATION-CUTOVER.md` §5 item 1):
-/// all 35 cohort descriptors re-emitted past their v1 layout with the rotated
+/// all 36 cohort descriptors re-emitted past their v1 layout with the rotated
 /// BEFORE/AFTER blocks + the widened-caveat region (Lean `rotateV3` /
-/// `EffectVmEmitRotationV3.lean`; `v3Registry` is the source) — the 27 v2-graduated members
-/// (incl. the cap-crown `revokeCapability`) PLUS the 8 LIVE-path effects the STEP 1 widening
+/// `EffectVmEmitRotationV3.lean`; `v3Registry` is the source) — the 28 v2-graduated members
+/// (the 17 graduated cohort + attenuate WITH its phase-B map-ops/submask lookup + revoke, plus
+/// the cap-crown `revokeCapability`) PLUS the 8 LIVE-path effects the STEP 1 widening
 /// added (grantCap · makeSovereign ·
 /// createCell · factory · spawn · receiptArchive · cellUnseal · emitEvent). The TSV is
 /// `key\tname\tjson` per line, sha-256 pinned by
