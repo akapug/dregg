@@ -4,6 +4,17 @@
   <img src="hero.png" alt="dregg — Dragon's Egg" width="720">
 </p>
 
+Dragon's Egg is my experiment in the metatheory of constructive knowledge, and a
+direct expression of my original impetus to build <https://rbg.systems>. Maybe
+Dragon's Egg will be a Robigalia userspace. In the meantime, here's what the LLMs
+have to say about it:
+
+(end-of-human-text)
+
+> *Machine reader? [`README-LLMs.md`](README-LLMs.md) is the dense, narration-free
+> technical reference written for you — every model tier, large and small. What
+> follows here is the human-facing tour.*
+
 **dregg is a formally verified, distributed object-capability operating system.**
 The kernel is a Lean 4 program with machine-checked soundness, and it is the
 *exact* function the running node executes — every state transition ("turn") is
