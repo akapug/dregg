@@ -33,8 +33,11 @@ block NATIVE grep-zero). STAYS (NOT grep targets): `EFFECT_VM_WIDTH`, `ACTIVE_BA
   (protocol-tests/dregg-dsl-tests/test-modules) — the "green the corpus" lane.
 - The **Collections Rust mirror** (`cell/src/program.rs` HeapAtom/HeapField — the layout-rotation gap
   7/11.1) — NOT done (delicate; the Lean rung landed + is umbrella-wired).
-- The **ObservedFieldEquals embedded-executor wiring**: thread a real `FinalizedRootAuthority` into the
-  executor so the §11.2 cross-cell atom can ACCEPT (it fails-closed today), → ratchet `teasting` 10→9.
+- ~~The **ObservedFieldEquals embedded-executor wiring**~~ — CLOSED 2026-06-14: `execute_tree.rs` now
+  builds a real `FinalizedRootAuthority` from its committed peer view (`build_finalized_root_authority`,
+  `finalized_roots: Some(...)`), so the §11.2 cross-cell atom ACCEPTS a genuine read + REJECTS the
+  mismatch/forge teeth. Accept/reject pair in `coverage_state_constraints.rs`; ratchet `teasting` 10→9.
+  Same gate also got `CollectionAggregate` (was missing from the classifier → RED) closed alongside.
 - sdk-ts/dist Docker rebuild (npm-in-Docker policy; Docker unreachable this session).
 
 ## ⚑ DEOS / LANGUAGE

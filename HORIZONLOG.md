@@ -122,12 +122,20 @@ surface/`, 20/0) · sdk pg-native (sdk-py 71/4-skip + sdk-ts 74/0). Open residua
   + `Netlayer::dial` (this crate models the local resolve+attest half); (d) the LIBSERVO SEAM at `delegate.rs`
   `MockSurface` (replace with the real `servo::WebViewDelegate` impl when libservo + Metal/wgpu link). Quorum-sig
   crypto on `AttestedRoot` is the `hints` layer (structural now; the receipt-stream Merkle binding IS real).
-- **ObservedFieldEquals embedded-executor wiring** (named 2026-06-14, the §11.2 cross-cell-read convergence):
-  the turn executor (`turn/src/executor/execute_tree.rs`) hands the `WitnessBundle` `finalized_roots: None`, so
-  the deos cross-cell observed-field atom fails CLOSED on the embedded path — `teasting`'s coverage gate counts
-  it not-yet-covered (ratchet bumped 9→10). CLOSURE: thread a real `FinalizedRootAuthority` (the finalized-state
-  oracle the cell-side evaluator already consumes) into the executor so ObservedFieldEquals can ACCEPT (not only
-  the fail-closed REJECT) + add the accept/reject pair to `coverage_state_constraints.rs` → ratchet back to 9.
+- **ObservedFieldEquals embedded-executor wiring — CLOSED 2026-06-14** (the §11.2 cross-cell-read convergence):
+  the turn executor now builds a real `FinalizedRootAuthority` (`execute_tree.rs::build_finalized_root_authority`)
+  from its committed view of each referenced peer cell's GENUINE finalized commitment + field value, handed to the
+  `WitnessBundle` as `finalized_roots: Some(&observed_authority)` — so the deos cross-cell observed-field atom now
+  ACCEPTS a genuine read (local field == peer's finalized value) and REJECTS the mismatch/forge teeth on the
+  embedded commit path (was fail-closed REJECT-only). Accept/reject pair: `coverage_state_constraints::
+  observed_field_equals_accept_and_reject` (a peer oracle cell inserted into the shared ledger; its real
+  `state_commitment()` is the program's `at_root`). Coverage gate: `ObservedFieldEquals => true`, removed from
+  `NOT_YET_COVERED_CONSTRAINTS`, ratchet `MAX_UNCOVERED_CONSTRAINTS` 10→9. Side-catch (same gate did not even
+  compile — `CollectionAggregate` was MISSING from the classifier match, RED at HEAD): added its honest executor
+  accept/reject pair `collection_aggregate_accept_and_reject` (a seeded `heap_map` collection meeting/failing a
+  CountSatGe statistic across a submitted SetField turn) + `CollectionAggregate => true` arm, so the gate is
+  exhaustive and the not-yet list is honest at 9. Green on persvati: `cargo check -p dregg-turn` clean;
+  `coverage_state_constraints` 25/25 + `protocol_coverage_gate` 3/3.
 - **`cargo check --workspace --tests` is broadly RED — pre-existing dregg3-reduction test-corpus rot** (named
   2026-06-14, surfaced by the ObservedFieldEquals convergence gauntlet once the WitnessBundle ripple closed):
   ~172 `cannot find` errors (E0425/E0422/E0433 — stale `use Effect/Turn/TurnExecutor/Action/CallForest/…`) in
