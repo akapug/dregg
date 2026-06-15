@@ -43,6 +43,11 @@ EnvironmentFile=/etc/dregg/node-%i.env
 # its blocks would never count toward the committee).
 ExecStartPre=/usr/bin/test -f /opt/dregg-data-%i/node.key
 ExecStartPre=/usr/bin/test -f /opt/dregg-data-%i/genesis.json
+# FINALITY-CRITICAL cadence at n=3 (see the matching note in
+# dregg-gateway-federation.conf and scripts/devnet-n3-ordering.sh): the default
+# idle-heartbeat (120000ms) starves wave closure so `latest_height` stays 0
+# forever even on a converged DAG. 1000/2000 paces rounds tightly enough for
+# `is_super_ratified` to assemble the all-three cohort → tau finalizes.
 ExecStart=/opt/dregg/target/release/dregg-node run \
     --data-dir /opt/dregg-data-%i \
     --port ${DREGG_PORT} \
@@ -54,7 +59,9 @@ ExecStart=/opt/dregg/target/release/dregg-node run \
     --enable-pruning \
     --enable-faucet \
     --federation-mode full \
-    --consensus blocklace
+    --consensus blocklace \
+    --block-cadence-ms 1000 \
+    --idle-heartbeat-ms 2000
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
