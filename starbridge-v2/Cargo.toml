@@ -152,6 +152,26 @@ sel4-thin = ["live-node"]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "fca2ccd403e8d13c8f4b968cda2f2c322f420f5a", optional = true }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "fca2ccd403e8d13c8f4b968cda2f2c322f420f5a", optional = true }
 
+# --- LINUX display backend for gpui (target-gated; NO-OP on macOS) -----------
+# On macOS gpui's window/render path is Metal, selected unconditionally inside
+# `gpui_macos`. On Linux/FreeBSD, `gpui_platform::application()` dispatches into
+# `gpui_linux::current_platform()`, which `match`es `guess_compositor()` over
+# "Wayland" / "X11" / "Headless" — but the "Wayland" and "X11" arms are
+# `#[cfg(feature = "…")]`-GATED on `gpui_linux`'s own `wayland` / `x11` features
+# (gpui_linux/src/linux.rs). `gpui_platform` re-exposes those as its OWN features
+# (`gpui_platform/{wayland,x11}` → `gpui_linux/{wayland,x11}`) but leaves them
+# OFF by default. With both off, only the "Headless" arm compiles and a real
+# DISPLAY/WAYLAND_DISPLAY session hits the `_ => unreachable!()` (linux.rs:55) —
+# the window panics with "entered unreachable code" the instant you try to open
+# it on a graphical Linux host. Enabling both here lights up the wgpu/Vulkan X11
+# AND Wayland windowing backends (the same wgpu Zed ships on Linux). This block
+# is `cfg(linux/freebsd)`-scoped, so the macOS build resolves IDENTICALLY to
+# before (the Mac never sees these features). Optional + `gpui-ui`-gated to match
+# the base `gpui_platform` line; cargo UNIONS the features of the two
+# specifications of the same git package.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "fca2ccd403e8d13c8f4b968cda2f2c322f420f5a", optional = true, features = ["x11", "wayland"] }
+
 # --- the embedded verified executor (gated on `embedded-executor`) ----------
 # These link libdregg_lean.a on native. `default-features = true` keeps the
 # Lean shadow/gate path compiled in (the verified producer).
