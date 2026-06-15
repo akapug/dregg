@@ -25,9 +25,18 @@ pub mod handoff_flow;
 mod config;
 mod credential_issue;
 mod db;
+// The deos surface inside Discord: a cell's cap-gated affordances projected
+// per-viewer as Discord buttons (the REAL `is_attenuation`), transclusion into
+// embeds (the REAL `TranscludedField` live quote), and `dregg://` what-links-here
+// (the REAL `Backlinks`/`Membrane`). Built on `starbridge-web-surface`.
+pub mod deos_surface;
 mod devnet;
 pub mod discord_caps;
 mod embeds;
+// Real selective-disclosure proofs: parses a predicate (`age>=18`), reads the
+// subject's attribute, and wires the SDK's `prove_predicate_unlinkable` so
+// `/credential verify` emits a GENUINE unlinkable STARK proof (not a null one).
+pub mod identity_proof;
 pub mod intent_flow;
 pub mod presence;
 
@@ -100,6 +109,8 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "dashboard",
     "cap-peer",
     "handoff-status",
+    // ─── deos surface inside Discord (cap-gated affordance buttons + transclusion) ─
+    "deos",
 ];
 
 #[cfg(test)]
@@ -204,6 +215,8 @@ impl EventHandler for Handler {
             commands::dashboard::register_dashboard(),
             commands::captp::register_peer(),
             commands::handoff::register_status(),
+            // ─── deos surface inside Discord ────────────────────────────────
+            commands::deos::register(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -313,12 +326,20 @@ impl EventHandler for Handler {
                 }
                 "intent" => commands::intent::handle(&ctx, &command, &self.state).await,
                 "bounty" => commands::bounty::handle(&ctx, &command, &self.state).await,
+                "deos" => commands::deos::handle(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
             }
         } else if let Interaction::Component(component) = interaction {
-            commands::dashboard::handle_component(&ctx, &component, &self.state).await;
+            // Route `deos:`-prefixed component presses (cap-gated affordance
+            // buttons) to the deos handler, which RE-RUNS the cap gate; everything
+            // else is the dashboard's.
+            if component.data.custom_id.starts_with("deos:") {
+                commands::deos::handle_component(&ctx, &component, &self.state).await;
+            } else {
+                commands::dashboard::handle_component(&ctx, &component, &self.state).await;
+            }
         } else if let Interaction::Modal(modal) = interaction {
             commands::dashboard::handle_modal(&ctx, &modal, &self.state).await;
         }

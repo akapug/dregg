@@ -22,6 +22,9 @@ pub mod transfer;
 pub mod bounty;
 pub mod captp;
 pub mod dashboard;
+// The deos surface inside Discord — cap-gated affordance buttons (progressive
+// attenuation), live transclusion into embeds, and dregg:// what-links-here.
+pub mod deos;
 pub mod federation;
 pub mod governance;
 pub mod handoff;

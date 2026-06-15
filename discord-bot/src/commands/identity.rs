@@ -291,23 +291,75 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
             return;
         }
     };
-    let status = if candidate.is_some() {
-        "credential_metadata_found"
-    } else {
-        "no_local_credential"
-    };
     let credential_id = candidate
         .as_ref()
-        .map(|credential| credential.credential_id.as_str());
-    let presentation_json = serde_json::json!({
-        "type": "presentation_placeholder",
-        "predicate": predicate,
-        "status": status,
-        "credential_id": credential_id,
-        "cryptographic_proof": null,
-        "note": "Selective disclosure proof generation is not implemented in the Discord bot."
-    })
-    .to_string();
+        .map(|credential| credential.credential_id.clone());
+
+    // ── REAL selective disclosure (the toy-finding fix) ────────────────────────
+    // If a credential matched, generate a GENUINE unlinkable predicate STARK proof
+    // on the subject's behalf (the bot is a custodial holder — it derives the
+    // subject's REAL cipherclerk from the same seed it uses everywhere). The
+    // produced presentation carries the proof's blinded fact commitment, NOT a
+    // `null` "cryptographic_proof". A FALSE predicate is unprovable (the sound
+    // circuit refuses) — surfaced honestly, never fabricated.
+    let proof_outcome = match candidate.as_ref() {
+        Some(credential) => {
+            let subject_seed = crate::cipherclerk::seed_for(&state.config.bot_secret, target_id);
+            Some(crate::identity_proof::generate_predicate_proof(
+                &subject_seed,
+                &predicate,
+                &credential.attributes_json,
+            ))
+        }
+        None => None,
+    };
+
+    // Determine the stored status + presentation JSON + the embed shape from the
+    // proof outcome. Each branch persists a structured (never-null) record.
+    let (status, presentation_json, embed_title, embed_body): (
+        &str,
+        String,
+        &str,
+        String,
+    ) = match &proof_outcome {
+        Some(Ok(generated)) => (
+            "unlinkable_predicate_proof",
+            generated.presentation_json(&subject_cell),
+            "Selective Disclosure Proof Generated",
+            format!(
+                "Generated a REAL unlinkable predicate proof for <@{target_id}> over cell `{}`.",
+                &subject_cell[..16.min(subject_cell.len())],
+            ),
+        ),
+        Some(Err(e)) => (
+            "proof_unavailable",
+            serde_json::json!({
+                "type": "predicate_proof_unavailable",
+                "predicate": predicate,
+                "reason": e.to_string(),
+                "cryptographic_proof": "none (predicate false or unparseable)",
+            })
+            .to_string(),
+            "Proof Not Generated",
+            format!("A real proof could not be generated: {e}"),
+        ),
+        None => (
+            "no_local_credential",
+            serde_json::json!({
+                "type": "no_local_credential",
+                "predicate": predicate,
+                "reason": "no held credential matched this predicate for the subject",
+                "cryptographic_proof": "none (no matching credential)",
+            })
+            .to_string(),
+            "No Matching Credential",
+            format!(
+                "<@{target_id}> has no held credential matching this predicate. \
+                 Issue one with `/credential issue` first."
+            ),
+        ),
+    };
+
     let presentation = match state
         .db
         .create_identity_presentation(
@@ -316,7 +368,7 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
             &subject_cell,
             &predicate,
             status,
-            credential_id,
+            credential_id.as_deref(),
             &presentation_json,
         )
         .await
@@ -331,16 +383,34 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
         }
     };
 
-    let mut embed = embeds::warning_embed(
-        "Proof Request Stored",
-        &format!(
-            "Stored request `{}` for <@{target_id}> cell `{}` with status `{}`. No selective disclosure proof was generated.",
-            presentation.request_id,
-            &subject_cell[..16.min(subject_cell.len())],
-            presentation.status
-        ),
-    )
-    .field("Predicate", format!("`{predicate}`"), false);
+    // The embed: success (green) when a real proof was generated; warning otherwise.
+    let mut embed = if matches!(proof_outcome, Some(Ok(_))) {
+        embeds::success_embed(embed_title).description(embed_body)
+    } else {
+        embeds::warning_embed(embed_title, &embed_body)
+    }
+    .field("Predicate", format!("`{predicate}`"), false)
+    .field("Request", format!("`{}`", presentation.request_id), true);
+
+    if let Some(Ok(generated)) = &proof_outcome {
+        embed = embed
+            .field(
+                "Proof",
+                format!(
+                    "Unlinkable predicate STARK proof. Blinded fact commitment: `{}`",
+                    generated.blinded_commitment_hex()
+                ),
+                false,
+            )
+            .field(
+                "Privacy",
+                "The verifier learns ONLY that the predicate holds. The attribute value, the \
+                 source credential, and any correlation with other proofs stay hidden \
+                 (fresh blinding per proof).",
+                false,
+            );
+    }
+
     if let Some(credential) = candidate {
         embed = embed.field(
             "Matched Local Credential",
@@ -350,12 +420,6 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
                 credential.schema,
                 credential.issued_at
             ),
-            false,
-        );
-    } else {
-        embed = embed.field(
-            "Matched Local Credential",
-            "None. The request was persisted as a placeholder only.",
             false,
         );
     }
