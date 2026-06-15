@@ -100,6 +100,18 @@ import Dregg2.Deos.ReplayMembrane
 -- gated-fire ∧ attest), phaseTransition_is_reactiveAffordance (a precond→postPhase IS the transition
 -- gate); the order/skip/cap teeth carry through. 10 keystones #assert_all_clean.
 import Dregg2.Deos.WorkflowBridge
+-- The FLOW-COMPOSITION ALGEBRA is RIGHT-SKEWED (2026-06-14, the "does choice distribute over
+-- composition?" question answered with a Lean proof): dregg's workflow/affordance-flow algebra satisfies
+-- only the HALF `(P⋆R)⊔(Q⋆R) ≤ (P⊔Q)⋆R` (flow_choice_halfdistrib) — the converse FAILS
+-- (flow_choice_right_skewed, the headline), so it is a right-skewed Kleene algebra with distributive
+-- meets (RSKA_d⊓, à la Pradic's Weihrauch lattice). The separation is NOT in the trace language (both
+-- sides denote the same set — flow_choice_languages_equal, the dregg Example 1.1); it lives in the
+-- ONLINE step-by-step simulation order (≤ᶠ), the algebraic shadow of the reactive rung: in (P⊔Q)⋆R the
+-- choice reads R's OUTPUT (the TransitionGate's old+new read), which the early-branch side cannot
+-- anticipate with no lookahead. The distributive meet is real (flow_meet_semilattice). PAYOFF (named,
+-- not built): right-skew ⟹ "does flow/caveat-policy A refine B" is DECIDABLE via Pradic's Büchi-game
+-- characterization — the ARGUS "refines" bar gets a decision procedure. 18 keystones #assert_all_clean.
+import Dregg2.Deos.FlowAlgebra
 
 namespace Dregg2.Deos
 
