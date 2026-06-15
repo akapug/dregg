@@ -149,6 +149,16 @@ import Dregg2.Deos.Transclusion
 -- both sources advancing; a forged middle (B claiming C's title was `99`) is refused. 12 keystones
 -- #assert_all_clean.
 import Dregg2.Deos.TransclusionChain
+-- SURFACE GATE ≡ EXECUTOR GATE (the "a darkened affordance can't be bypassed" guarantee): the deos surface
+-- state-gate `GatedAffordance.fireGated` and the EXECUTOR's installed-program gate `Argus.Policy.policyGuarded`
+-- — two gates over the SAME installed `RecordProgram`, each proven on its own side — provably DECIDE THE SAME
+-- TRANSITIONS (installedProgram_gate_eq_surface_stateGate, via executorGate_eq_all_eval / surfaceStateGate_eq_
+-- all_eval both collapsing to ∀-constraint-eval). So firing a turn straight at the executor cannot bypass a
+-- darkened button: bypass_refused_by_executor, surface_dark_iff_executor_refuses (both polarities), gated_
+-- surface_and_executor_both_dark, and the workflow lift workflow_out_of_phase_bypass_refused; agreement_
+-- nonvacuous + gates_agree_pointwise exhibit a concrete `memberOf "role"` program where surface-lights ⟺
+-- executor-admits and a wrong role darkens BOTH. 10 keystones #assert_all_clean.
+import Dregg2.Deos.FireProgramAgreement
 
 namespace Dregg2.Deos
 

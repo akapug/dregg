@@ -661,7 +661,7 @@ theorem execFullTurn_each_attests :
 Here we build the full-turn executor over THAT ledger — `balanceA`/`delegate`/`revoke`/`mintA`/`burnA`
 — and prove the all-or-nothing transaction moves `recTotalAsset b` by EXACTLY the net per-asset
 ledger delta, for EVERY asset `b` independently. This is the executable turn whose FFI export
-(`dregg_exec_full_turn`) conserves PER-ASSET (`DREGG2-GAP-MAP.md FILL 1`), not the scalar. The
+(`dregg_exec_full_turn`) conserves PER-ASSET (the CONSERVATION_VECTOR), not the scalar. The
 `delegate`/`revoke` kinds are REUSED verbatim (`recCDelegate`/`recCRevoke`); authority is
 asset-orthogonal (it edits `caps`, leaving `bal` fixed), so it contributes `0` to every asset. -/
 

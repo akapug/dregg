@@ -229,6 +229,227 @@ theorem bridge_keystone_concrete
     capAuthorityG (mkBridgeNode credOk 0 heldRW [keepR] chain) = true :=
   chainGateG_implies_capAuthorityG credOk 0 heldRW [keepR] chain h
 
+/-! ## §5 — THE DE-VACUIFIED BRIDGE: the macaroon caveat EMITS the `(granted, held)` the cap leg reads.
+
+The `§3` keystone (`chainGateG_implies_capAuthorityG`) hardwires the node's `granted :=
+caveatChainAuthority held keeps`, which `caveatChainAuthority_le_held` proves `≤ held` *by
+construction* — so its conclusion (`capAuthorityG = true`) holds REGARDLESS of `chainGateG` (the
+hypothesis is unused). That is the honest defense-in-depth fact, but it does not make the macaroon
+gate *load-bearing*: the cap leg would pass even with a forged chain.
+
+This section closes that gap, exactly as `docs/AUTHORIZATION-MODEL.md:53-61` asks: make the macaroon
+caveat that narrows a capability-bearing verb **emit the SAME `(granted, held)` pair the kernel cap
+leg already consumes**, and prove `chainGateG na = true → granted(na) ⊆ held(na)` on the delegation
+verb — **NON-VACUOUSLY**: the conclusion `granted ≤ held` is a FREE proposition over a free pair, and
+it provably FAILS exactly when the hypothesis fails (an amplifying delegation makes the chain caveat
+return `false`, so `chainGateG = false`).
+
+The mechanism: a single macaroon delegation caveat whose `check` reads the rights pair out of the
+chain context and returns `decide (granted ≤ held)`. The chain context `chainCtx := (granted, held)`
+IS that pair; the `.capTpDelivered` cert's `held`/`granted` ARE that SAME pair. So a verifying-and-
+admitting macaroon chain (the `chainGateG` hypothesis) forces the chain caveat to have fired, i.e.
+`granted ≤ held` — which is the very atom the kernel `capAuthorityG` gate consumes. The `&&` of the
+two `gateOK` legs is now a PROVEN IDENTITY *carried by one quantity*, not two narrowings that happen
+to agree, and not a conclusion true by construction. -/
+
+section DeVacuified
+
+open Dregg2.Authority.CaveatChain
+open Dregg2.Authority.CaveatChain (Chain Link seed honest_chain_verifies)
+open Dregg2.Exec (ExecAuth)
+open Dregg2.Exec.AuthModes (AuthMode AuthContext authModeAdmits captp_granted_le_held)
+
+/-- The bridge's chain/caveat context: the `(granted, held)` rights pair the delegation caveat reads.
+This is the ONE shared quantity — the macaroon caveat reads it, the kernel cert is built from it. -/
+abbrev RPair := ExecAuth × ExecAuth
+
+/-- The bridge carriers (a fresh instantiation of the `FullForestAuth` gate over a context that
+CARRIES the rights pair). Digest/Proof = the reference crypto kernel (so the WHO portal + `goodCred`
+resolve); Tag/Bytes/Key = `Nat` (so the proven `honestMacKernel` macaroon chain is reused verbatim);
+`Ctx := RPair`. -/
+abbrev BNodeAuth :=
+  NodeAuth Dg Pf Rq St Wt Label ExecAuth RPair Gw Bt Tg
+
+/-- **`delegCaveat` — the macaroon delegation caveat that EMITS `granted ⊆ held`.** A first-party
+(local) caveat whose check reads the `(granted, held)` pair out of the chain context and returns
+`decide (granted ≤ held)`. THIS is "the caveat that narrows a capability-bearing verb"; its decision
+is, verbatim, the kernel's `is_attenuation(held, granted)` atom. Appending it to a chain renders the
+delegation's non-amplification *on the wire*. -/
+def delegCaveat : Caveat RPair Gw :=
+  .local (fun p => decide (p.1 ≤ p.2))
+
+/-- **`delegChain granted held` — a verifying macaroon chain carrying exactly the delegation caveat.**
+`seed` then one honest `append` of the `delegCaveat` link (encoded bytes `0`, immaterial to the
+semantics). It `verify`s by `honest_chain_verifies`, and `admits (granted, held)` iff `granted ≤ held`
+— the chain's admit decision IS the delegation's non-amplification check. -/
+def delegChain (_granted _held : ExecAuth) : Chain RPair Gw (Key Tg) Bt Tg :=
+  (seed (Ctx := RPair) (Gateway := Gw) (0 : Nat) (0 : Nat)).append
+    { caveat := delegCaveat, encoded := (0 : Nat) }
+
+/-- **`delegChain_admits_iff` — the chain's admit decision IS `granted ≤ held`.** The single-link
+chain admits the pair `(granted, held)` exactly when `granted ≤ held`. (Reduces by `simp` over
+`Chain.admits`/`Chain.append`/`seed` + the `delegCaveat` check.) -/
+theorem delegChain_admits_iff (granted held : ExecAuth) (d : Discharges Gw) :
+    (delegChain granted held).admits (granted, held) d = decide (granted ≤ held) := by
+  simp [delegChain, delegCaveat, Chain.admits, Chain.append, seed, Caveat.ok]
+
+/-- **`delegChain_verify` — the honest delegation chain always `verify`s** (the HMAC tail binds the
+one appended caveat; `honest_chain_verifies`). So `Chain.verify` is never the leg that fails here —
+the admit leg (the `granted ≤ held` check) is what carries the content. -/
+theorem delegChain_verify (granted held : ExecAuth) :
+    (delegChain granted held).verify = true :=
+  honest_chain_verifies (Ctx := RPair) (Gateway := Gw) (0 : Nat) (0 : Nat)
+    { caveat := delegCaveat, encoded := (0 : Nat) }
+
+/-- The bridge's `.capTpDelivered` cap mode, built from the SAME `(granted, held)` pair the macaroon
+caveat reads. `authModeAdmits (.capTpDelivered ⟨_,_,⟨t,held⟩,⟨t,granted⟩⟩ _) c = decide (granted ≤
+held) && c.facetOk && c.freshOk`. NOTE: unlike `bridgeCapMode`, the `granted` is FREE — it is NOT
+`caveatChainAuthority held keeps`, so the cap leg does NOT pass by construction; it passes IFF the
+shared `granted ≤ held` holds. -/
+def delegCapMode (target : Label) (granted held : ExecAuth) :
+    AuthMode Rq St Wt Label ExecAuth RPair Gw :=
+  .capTpDelivered
+    { introducer := target, recipient := target
+    , held    := { target := target, rights := held }
+    , granted := { target := target, rights := granted } }
+    True
+
+/-- The bridge node: its `.capTpDelivered` WHAT leg reads the FREE pair `(granted, held)`, and it
+carries the macaroon `delegChain granted held` whose caveat reads the SAME pair out of `chainCtx :=
+(granted, held)`. The hypothesis-bearing object on which `chainGateG` and `capAuthorityG` read ONE
+shared quantity. -/
+def mkDelegNode (cred : Authorization Dg Pf) (target : Label) (granted held : ExecAuth) : BNodeAuth :=
+  { cred := cred, rev := Credential.noRevocations
+  , capMode := delegCapMode target granted held
+  , capCtx :=
+      { req := true, customStmt := 0, wit := fun _ => 0
+      , registry := fun _ => none, caveatCtx := (granted, held), discharges := fun _ => false
+      , graph := fun _ _ => False, consents := fun _ => True, facetOk := true, freshOk := true }
+  , caveats := [], chain := some (delegChain granted held)
+  , chainCtx := (granted, held), chainDis := fun _ => false }
+
+/-- **`chainGateG_emits_granted_le_held` — THE HEADLINE BRIDGE (non-vacuous).** On a delegation node
+whose macaroon chain caveat reads the shared `(granted, held)` pair, the macaroon caveat-chain gate
+passing FORCES the kernel non-amplification atom: `chainGateG na = true → granted ≤ held`. The proof
+CONSUMES the hypothesis (it reads the admit leg, which IS `decide (granted ≤ held)`), unlike `§3`.
+This is `docs/AUTHORIZATION-MODEL.md:58`'s `chainGateG na = true → granted(na) ⊆ held(na)`, on the
+overlap verb, with `granted`/`held` FREE. -/
+theorem chainGateG_emits_granted_le_held (cred : Authorization Dg Pf) (target : Label)
+    (granted held : ExecAuth)
+    (hchain : chainGateG (mkDelegNode cred target granted held) = true) :
+    granted ≤ held := by
+  -- `chainGateG` on a node with `chain := some (delegChain …)` is `verify && admits chainCtx chainDis`.
+  have hconj : ((delegChain granted held).verify
+              && (delegChain granted held).admits (granted, held) (fun _ => false)) = true := by
+    simpa [chainGateG, mkDelegNode] using hchain
+  rw [Bool.and_eq_true] at hconj
+  have hadm : (delegChain granted held).admits (granted, held) (fun _ => false) = true := hconj.2
+  -- the admit decision IS `decide (granted ≤ held)`, so it being `true` gives `granted ≤ held`.
+  rw [delegChain_admits_iff] at hadm
+  exact of_decide_eq_true hadm
+
+/-- **`chainGateG_implies_capAuthorityG_devac` — the SAME-PAIR identity, NON-VACUOUS.** The macaroon
+chain gate passing implies the kernel cap-authority gate passing, on a node whose `granted` is FREE
+(not `≤ held` by construction). The proof routes through `chainGateG_emits_granted_le_held` — the
+macaroon's `granted ≤ held` IS the atom the `.capTpDelivered` gate consumes. So the `gateOK` `&&` is
+a proven IDENTITY carried by one quantity: a verifying macaroon chain forces the cap gate, AND (the
+non-vacuity) an amplifying delegation breaks BOTH legs. -/
+theorem chainGateG_implies_capAuthorityG_devac (cred : Authorization Dg Pf) (target : Label)
+    (granted held : ExecAuth)
+    (hchain : chainGateG (mkDelegNode cred target granted held) = true) :
+    capAuthorityG (mkDelegNode cred target granted held) = true := by
+  have hle : granted ≤ held := chainGateG_emits_granted_le_held cred target granted held hchain
+  -- `capAuthorityG = authModeAdmits (.capTpDelivered …) = decide (granted ≤ held) && facetOk && freshOk`;
+  -- the node's `capCtx` pins `facetOk := freshOk := true`, so the gate reduces to `decide (granted ≤ held)`.
+  show authModeAdmits (delegCapMode target granted held) _ = true
+  unfold delegCapMode authModeAdmits mkDelegNode
+  simp only [Bool.and_true, decide_eq_true_eq]
+  exact hle
+
+/-- **`capAuthorityG_reads_same_atom` — the converse leg: the kernel gate's content IS `granted ≤
+held`.** `capAuthorityG (mkDelegNode …) = true → granted ≤ held`, via `captp_granted_le_held`. Paired
+with `chainGateG_emits_granted_le_held`, this certifies BOTH gate legs read the IDENTICAL atom on the
+shared pair — the `&&` is a conjunction of two readings of ONE relation, the design's "one proven
+identity on the overlap". -/
+theorem capAuthorityG_reads_same_atom (cred : Authorization Dg Pf) (target : Label)
+    (granted held : ExecAuth)
+    (hcap : capAuthorityG (mkDelegNode cred target granted held) = true) :
+    granted ≤ held := by
+  have h : authModeAdmits (delegCapMode target granted held)
+            (mkDelegNode cred target granted held).capCtx = true := hcap
+  exact captp_granted_le_held _ True _ h
+
+/-! ### §5.1 — Non-vacuity: the conclusion provably FAILS when the hypothesis fails (both polarities).
+
+The de-vacuification bar (`feedback-dont-launder-vacuity-as-honest`): the bridge's conclusion
+`granted ≤ held` is a REAL constraint, two-valued on the same gate. We exhibit a NON-AMPLIFYING pair
+(`{read} ⊆ {read, write}`) for which BOTH `chainGateG` and `capAuthorityG` PASS, and an AMPLIFYING
+pair (`{read, write, grant} ⊄ {read, write}`) for which BOTH FAIL — the macaroon chain caveat returns
+`false`, so `chainGateG = false`, so the bridge's hypothesis is unsatisfiable exactly where its
+conclusion is false. The arrow is NOT vacuous. -/
+
+/-- An amplifying granted set (`{read, write, grant} ⊄ {read, write}`) — names a right the parent
+never held. The delegation caveat REFUSES it. -/
+def grantedAmp : ExecAuth := {Auth.read, Auth.write, Auth.grant}
+
+-- The shared pair drives BOTH legs identically. NON-AMPLIFYING (`keepR ⊆ heldRW`) ⇒ both PASS:
+#guard ((delegChain keepR heldRW).verify)                                  -- honest chain verifies
+#guard ((delegChain keepR heldRW).admits (keepR, heldRW) (fun _ => false)) -- admit = (read ⊆ read,write)
+#guard (chainGateG (mkDelegNode credOk 0 keepR heldRW))                    -- chain gate PASSES
+#guard (capAuthorityG (mkDelegNode credOk 0 keepR heldRW))                 -- cap gate PASSES (same atom)
+-- AMPLIFYING (`grantedAmp ⊄ heldRW`) ⇒ the caveat returns false ⇒ BOTH legs FAIL:
+#guard ((delegChain grantedAmp heldRW).verify)                                     -- chain still verifies (HMAC ok)
+#guard ((delegChain grantedAmp heldRW).admits (grantedAmp, heldRW) (fun _ => false)) == false -- admit REFUSES
+#guard (chainGateG (mkDelegNode credOk 0 grantedAmp heldRW)) == false              -- chain gate FAILS
+#guard (capAuthorityG (mkDelegNode credOk 0 grantedAmp heldRW)) == false           -- cap gate FAILS
+
+/-- **NON-VACUITY (positive):** on a non-amplifying delegation the chain gate FIRES (hypothesis
+satisfiable) AND the bridge yields the kernel atom. So the arrow has real content. -/
+theorem deleg_nonAmp_chainGate : chainGateG (mkDelegNode credOk 0 keepR heldRW) = true := by
+  unfold chainGateG mkDelegNode
+  decide
+
+/-- **NON-VACUITY (the keystone fires concretely):** the headline bridge, applied to the firing
+hypothesis, yields `{read} ⊆ {read, write}`. -/
+theorem deleg_nonAmp_yields_le : (keepR : ExecAuth) ≤ heldRW :=
+  chainGateG_emits_granted_le_held credOk 0 keepR heldRW deleg_nonAmp_chainGate
+
+/-- **NON-VACUITY (negative tooth — the conclusion FAILS when the hypothesis fails).** On an
+AMPLIFYING delegation (`grantedAmp ⊄ heldRW`) the macaroon chain caveat returns `false`, so the
+bridge's hypothesis `chainGateG = true` is FALSE — exactly where its conclusion `granted ≤ held` is
+false. This is the load-bearing de-vacuification: the bridge is an arrow whose antecedent tracks its
+consequent, not a conclusion true by construction. -/
+theorem deleg_amp_chainGate_false : chainGateG (mkDelegNode credOk 0 grantedAmp heldRW) = false := by
+  unfold chainGateG mkDelegNode
+  decide
+
+/-- **NON-VACUITY (negative tooth, conclusion side):** the amplifying conclusion is genuinely FALSE
+(`{read, write, grant} ⊄ {read, write}`) — so the bridge could not be papered over by a vacuously-true
+consequent. -/
+theorem deleg_amp_not_le : ¬ (grantedAmp ≤ heldRW) := by decide
+
+/-- **NON-VACUITY (the cap gate FOLLOWS the macaroon gate, both ways).** The amplifying delegation is
+ALSO rejected by the kernel `capAuthorityG` leg — the two gates agree on the same pair, refuting the
+amplifying delegation TWICE (once per leg), never admitting it on either. -/
+theorem deleg_amp_capAuthority_false :
+    capAuthorityG (mkDelegNode credOk 0 grantedAmp heldRW) = false := by
+  show authModeAdmits (delegCapMode 0 grantedAmp heldRW) _ = false
+  unfold delegCapMode authModeAdmits
+  decide
+
+end DeVacuified
+
+#assert_axioms chainGateG_emits_granted_le_held
+#assert_axioms chainGateG_implies_capAuthorityG_devac
+#assert_axioms capAuthorityG_reads_same_atom
+#assert_axioms delegChain_admits_iff
+#assert_axioms delegChain_verify
+#assert_axioms deleg_nonAmp_chainGate
+#assert_axioms deleg_nonAmp_yields_le
+#assert_axioms deleg_amp_chainGate_false
+#assert_axioms deleg_amp_not_le
+#assert_axioms deleg_amp_capAuthority_false
+
 #assert_axioms caveatChainAuthority_le_held
 #assert_axioms caveatChainAuthority_append_le
 #assert_axioms delegationVerb_authority_eq
