@@ -85,10 +85,15 @@
 
 pub mod apply;
 pub mod lower;
+pub mod refine;
 pub mod schema;
 
 pub use apply::{plan_apply, plan_apply_toml, AppliedPlan, ApplyError, PlannedTurn};
 pub use lower::{Lowered, LowerError};
+pub use refine::{
+    decide_refines, flow_of_forest, flow_of_plan, refines_intent, refines_upgrade, FlowSpec,
+    IntentEffect, Proc, RefineFinding, RefineVerdict,
+};
 pub use schema::*;
 
 use dregg_userspace_verify::Assurance;
