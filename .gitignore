@@ -46,3 +46,9 @@ libdregg_lean.a*
 /site/pkg
 /sdk-ts/dist
 sel4/dregg-pd/executor-microkit-pd/microkit-patch/microkit-2.2.0-patched
+
+# build artifacts — never checkpoint compiled output into history
+*.wasm
+*.rlib
+*.rmeta
+*.dylib
