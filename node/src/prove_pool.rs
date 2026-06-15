@@ -16,20 +16,29 @@
 //! ## The fix (soundness-preserving)
 //!
 //! Proofs are *additive attestation*, not a per-step soundness gate. The commit
-//! path's job is to make sure the committed state is *correct*; it does that by
-//! DIRECTLY revalidating the witness (re-executing the verified executor and/or
-//! FRI-free constraint-checking the trace via
-//! `effect_vm_p3_full_air::bespoke_air_accepts` — sub-millisecond, see the
-//! bench), then committing and returning a fast `Tentative` / "proof pending"
-//! ack. The full STARK proof — the attestation layer light-clients and
+//! path's job is to make sure the committed state is *correct*; the authoritative
+//! executor (`execute_via_producer → Committed`) already validated the turn and
+//! committed the new state BEFORE this pool ever runs. The commit therefore needs
+//! no inline STARK proving or FRI-free re-check — the executor IS the soundness
+//! boundary. The full STARK proof — the attestation layer light-clients and
 //! cross-trust peers consume — is generated **asynchronously** by this pool,
 //! OFF the write lock, and attached to the receipt when it lands.
 //!
-//! Soundness is preserved because the witness is directly CHECKED at commit
-//! time (no trust): the trace satisfies the AIR constraints (or the verified
-//! executor re-derives the identical post-state) before the state mutation is
-//! kept. The async proof never gates the commit; it only enriches the receipt
-//! with the succinct attestation.
+//! ## The ROTATED leg (PATH-PRESERVE Phase 5b cutover)
+//!
+//! This pool no longer proves a bespoke v1 hand-AIR STARK over a trace re-derived
+//! from pre-state. It proves the SAME composed `FullTurnProof` the finalized
+//! commit path proves (`turn_proving::prove_and_verify_finalized_turn`): the
+//! effect-vm leg goes through the LEAN-emitted ROTATED descriptor (a multi-table
+//! `Ir2BatchProof`) when the caller threaded the per-turn rotation witness from
+//! the REAL before/after `dregg_cell::Cell`s, and self-verifies before it is
+//! attached. Under `not(recursion)` (or when the cell is not a rotatable cohort
+//! member) the byte-identical v1 leg runs INSIDE `prove_and_verify_finalized_turn`
+//! — this pool never touches the v1 effect-vm hand-AIR.
+//!
+//! Soundness is preserved because the executor already validated and committed
+//! the state; the async proof only enriches the receipt with the succinct,
+//! self-verified attestation.
 //!
 //! ## Pool shape
 //!
@@ -44,18 +53,34 @@
 
 use std::sync::Arc;
 
-use dregg_circuit::field::BabyBear;
+use dregg_types::CellId;
 use tokio::sync::mpsc;
 
 use crate::state::NodeState;
 
-/// A single async proving job: the FRI-free-revalidated witness + the receipt
-/// hash to attach the resulting `WitnessedReceipt` to once proving completes.
+/// A single async proving job: everything `prove_and_verify_finalized_turn` needs
+/// to (re-)build + self-verify the committed turn's composed `FullTurnProof` off
+/// the lock, plus the receipt hash to attach the resulting `WitnessedReceipt` to
+/// once proving completes. The executor already validated + committed this turn;
+/// the proof is additive attestation (see module docs).
 pub struct ProveJob {
-    /// Base Effect-VM trace (already FRI-free revalidated on the commit path).
-    pub trace: Vec<Vec<BabyBear>>,
-    /// Public inputs the prover binds (turn-hash / commitment PIs already set).
-    pub public_inputs: Vec<BabyBear>,
+    /// The actor cell whose whole-turn transition is proven.
+    pub agent: CellId,
+    /// The actor cell's balance captured BEFORE the executor mutated the ledger
+    /// (the pre-state the proof's `old_commit` binds to).
+    pub pre_balance: u64,
+    /// The actor cell's nonce captured before execution.
+    pub pre_nonce: u64,
+    /// The turn's effects (the same `turn.call_forest.total_effects()` the
+    /// executor ran), marshalled onto the actor inside the prover.
+    pub effects: Vec<dregg_turn::Effect>,
+    /// The turn hash the proof is bound to (replay binding).
+    pub turn_hash: [u8; 32],
+    /// The per-turn ROTATION producer witness built from the REAL before/after
+    /// actor cells. `Some` ⇒ the effect-vm leg proves through the rotated
+    /// descriptor; `None` ⇒ the byte-identical v1 leg runs inside the prover
+    /// (a non-cohort cell, or `not(recursion)`).
+    pub rotation: Option<dregg_sdk::RotationTurnWitness>,
     /// The committed receipt the proof attests (moved into the WitnessedReceipt).
     pub receipt: dregg_turn::TurnReceipt,
     /// Receipt hash key under which to store the proven WitnessedReceipt.
@@ -163,8 +188,12 @@ impl ProvePool {
 /// `WitnessedReceipt` back into state under a brief write-lock acquisition.
 async fn run_job(worker_id: usize, job: ProveJob, state: &NodeState) {
     let ProveJob {
-        trace,
-        public_inputs,
+        agent,
+        pre_balance,
+        pre_nonce,
+        effects,
+        turn_hash,
+        rotation,
         receipt,
         receipt_hash,
         turn_hash_hex,
@@ -174,18 +203,29 @@ async fn run_job(worker_id: usize, job: ProveJob, state: &NodeState) {
 
     // Proving is CPU-bound: run it on the blocking pool so it never stalls the
     // async runtime's I/O workers. CRUCIALLY, no state lock is held here.
+    //
+    // The composed `FullTurnProof` is generated + self-verified by the SAME
+    // helper the finalized commit path uses; its effect-vm leg proves through the
+    // LEAN-emitted ROTATED descriptor when a rotation witness was threaded (else
+    // the byte-identical v1 leg runs inside the helper). The resulting
+    // `WitnessedReceipt` is a scope-1 attestation (proof + composed PI): the
+    // executor already committed the state, and the inline-trace replay bundle is
+    // a v1-only Silver-Vision artifact the rotated leg does not carry.
     let prove_result = tokio::task::spawn_blocking(move || {
-        let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
-        let proof = dregg_circuit::stark::try_prove(&air, &trace, &public_inputs)
-            .map_err(|e| format!("async Effect VM proof generation failed: {e}"))?;
-        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
-        let public_inputs_u32: Vec<u32> = public_inputs.iter().map(|f| f.as_u32()).collect();
-        let witnessed = dregg_turn::WitnessedReceipt::from_components(
-            receipt,
-            proof_bytes,
-            public_inputs_u32,
-            Some(trace.as_slice()),
-        );
+        let proven = crate::turn_proving::prove_and_verify_finalized_turn(
+            &agent, pre_balance, pre_nonce, &effects, turn_hash, rotation,
+        )
+        .map_err(|e| format!("async full-turn proof generation failed: {e}"))?;
+        let proof_bytes = proven.proof_bytes().to_vec();
+        let public_inputs_u32: Vec<u32> = proven
+            .proof
+            .composed
+            .public_inputs
+            .iter()
+            .map(|f| f.as_u32())
+            .collect();
+        let witnessed =
+            dregg_turn::WitnessedReceipt::from_components(receipt, proof_bytes, public_inputs_u32, None);
         Ok::<_, String>(witnessed)
     })
     .await;
