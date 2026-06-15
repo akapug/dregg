@@ -37,6 +37,8 @@ pub enum CommandId {
     GoReplay,
     GoCipherclerk,
     GoEditor,
+    /// Navigate to the HOME landing portal (the warm front door of the live image).
+    GoHome,
     GoShell,
     GoAgent,
     GoBuffer,
@@ -150,7 +152,7 @@ impl CommandId {
             Transfer | ComposeMulti | Grant | CreateCell | Seal | Burn | OverGrant => {
                 Category::Verb
             }
-            GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
+            GoHome | GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
             | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm | GoGraph | GoOrgans
             | GoProofs => Category::Navigate,
             BufferType | BufferCommit | BufferReadOnlyWrite | TerminalRunInMandate
@@ -182,6 +184,7 @@ impl CommandId {
             Seal => "Seal a fresh cell (lifecycle)",
             Burn => "Burn 1,000 (supply reduced)",
             OverGrant => "Over-grant (watch the executor REJECT)",
+            GoHome => "Go to Home (the live verified image · the front door)",
             GoComposer => "Go to Composer",
             GoObjects => "Go to Objects (proofs · nullifiers · lifecycle)",
             GoDebugger => "Go to Debugger",
@@ -252,6 +255,7 @@ impl CommandId {
             Seal => "freeze lifecycle lock close",
             Burn => "destroy supply reduce remove value",
             OverGrant => "amplification reject denied no-amplify security guard",
+            GoHome => "home landing portal welcome front door image overview start begin",
             GoComposer => "verbs actions run",
             GoObjects => "proof stark nullifier lifecycle reflect",
             GoDebugger => "step trace explain refusal",
@@ -385,6 +389,7 @@ pub fn all_commands() -> Vec<Command> {
         // the four-surface KILLER DEMO (N5) — the pug-handoff artifact
         KillerDemoRunAll, KillerDemoAdvance, KillerDemoOverShare, KillerDemoReset,
         // navigation
+        GoHome,
         GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
         GoAgent, GoBuffer, GoTerminal, GoSwarm, GoGraph, GoOrgans, GoProofs,
         // replay

@@ -61,6 +61,12 @@ pub enum Selection {
 /// surfaces the composer alongside the four feature panels.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    /// The LANDING portal — the warm, alive front door of the live verified
+    /// image (the boot view). A text-rich greeting that names the running
+    /// system reflectively (the embedded executor · the live cells · the
+    /// receipt nervous system · the organs) and invites exploration. See
+    /// [`starbridge_v2::landing`].
+    Home,
     Shell,
     Agent,
     /// The IDE's EDITOR pane — a text buffer as a cap-confined Surface cell
@@ -95,7 +101,8 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 14] = [
+    const ALL: [Tab; 15] = [
+        Tab::Home,
         Tab::Shell,
         Tab::Agent,
         Tab::Swarm,
@@ -113,6 +120,7 @@ impl Tab {
     ];
     fn label(self) -> &'static str {
         match self {
+            Tab::Home => "HOME",
             Tab::Shell => "SHELL",
             Tab::Agent => "AGENT",
             Tab::Swarm => "SWARM",
@@ -388,7 +396,10 @@ impl Cockpit {
             selection: Selection::Image,
             last_outcome: None,
             anchors,
-            tab: Tab::Shell,
+            // BOOT into the warm landing PORTAL — the alive front door of the
+            // live verified image (text-rich, self-describing). SHELL and the
+            // other rooms are one click (or ⌘K) away.
+            tab: Tab::Home,
             debug_turn,
             breakpoints: vec![debug::Breakpoint::OnRefusal, debug::Breakpoint::OnConservationBreak],
             replay_cursor,
@@ -1278,6 +1289,7 @@ impl Cockpit {
             CommandId::GoReplay => self.set_tab(Tab::Replay, cx),
             CommandId::GoCipherclerk => self.set_tab(Tab::Cipherclerk, cx),
             CommandId::GoEditor => self.set_tab(Tab::Editor, cx),
+            CommandId::GoHome => self.set_tab(Tab::Home, cx),
             CommandId::GoShell => self.set_tab(Tab::Shell, cx),
             CommandId::GoAgent => self.set_tab(Tab::Agent, cx),
             CommandId::GoBuffer => self.set_tab(Tab::Buffer, cx),
@@ -1770,6 +1782,7 @@ impl Cockpit {
     /// The active right-pane workspace panel.
     fn workspace(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         match self.tab {
+            Tab::Home => self.home_panel().into_any_element(),
             Tab::Shell => self.shell_panel(cx).into_any_element(),
             Tab::Agent => self.agent_panel().into_any_element(),
             Tab::Swarm => self.swarm_panel(cx).into_any_element(),
@@ -1785,6 +1798,91 @@ impl Cockpit {
             Tab::Cipherclerk => self.cipherclerk_panel(cx).into_any_element(),
             Tab::Editor => self.editor_panel().into_any_element(),
         }
+    }
+
+    /// THE HOME panel — the warm LANDING portal (the boot view). Renders the
+    /// [`LandingPortal`](starbridge_v2::landing::LandingPortal) text model
+    /// (built fresh from the live [`World`], so its numbers are the running
+    /// image's actual numbers) as native gpui text: a big greeting, then a stack
+    /// of titled cards that name the running system reflectively — where you are,
+    /// the image right now, the verified heart, the receipt nervous system, the
+    /// organs, and how to begin. This is the alive front door: real, abundant
+    /// text inviting you in (the anti-blank surface).
+    fn home_panel(&self) -> impl IntoElement {
+        let portal = starbridge_v2::landing::LandingPortal::build(&self.world.borrow());
+
+        // The greeting masthead — the big "you have arrived" headline + subtitle,
+        // with a live liveness pill so the portal visibly breathes.
+        let w = self.world.borrow();
+        let masthead = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_4()
+            .rounded_md()
+            .border_1()
+            .border_color(theme::accent())
+            .bg(theme::panel())
+            .child(div().text_2xl().text_color(theme::text()).child(portal.headline.clone()))
+            .child(div().text_sm().text_color(theme::muted()).child(portal.subtitle.clone()))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .mt_1()
+                    .child(pill("● live", theme::good()))
+                    .child(pill("embedded verified executor", theme::good()))
+                    .child(pill(format!("h{}", w.height()), theme::accent()))
+                    .child(pill(format!("{} cells", w.cell_count()), theme::accent()))
+                    .child(pill(format!("{} receipts", w.receipts().len()), theme::accent())),
+            );
+        drop(w);
+
+        // Each portal section becomes a card; each line is real text, colored by
+        // its semantic tone.
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .size_full()
+            .overflow_hidden()
+            .child(masthead);
+
+        for section in &portal.sections {
+            let mut card = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(theme::border())
+                .bg(theme::panel())
+                .child(section_title(section.title.clone()).mb_1());
+            for line in &section.lines {
+                let color = portal_tone_color(line.tone);
+                let text_div = match line.tone {
+                    // Headings render a touch larger; everything else is xs body.
+                    starbridge_v2::landing::Tone::Heading => {
+                        div().text_sm().text_color(color).child(line.text.clone())
+                    }
+                    _ => div().text_xs().text_color(color).child(line.text.clone()),
+                };
+                card = card.child(text_div);
+            }
+            col = col.child(card);
+        }
+
+        // The closing call-to-action.
+        col = col.child(
+            div()
+                .text_sm()
+                .text_color(theme::accent())
+                .child(portal.invitation.clone()),
+        );
+        col
     }
 
     /// THE SHELL panel — the cap-first window manager / compositor. Composes the
@@ -3014,7 +3112,7 @@ impl Cockpit {
                     .flex()
                     .gap_2()
                     .child(div().text_xs().text_color(theme::muted()).w(px(28.)).child(format!("{:>3}", i + 1)))
-                    .child(div().text_xs().text_color(theme::text()).font_family("monospace").child(line.clone())),
+                    .child(div().text_xs().text_color(theme::text()).font_family("Menlo").child(line.clone())),
             );
         }
         col = col.child(body);
@@ -3105,7 +3203,7 @@ impl Cockpit {
                                 .gap_2()
                                 .items_center()
                                 .child(div().text_xs().text_color(mark_color).child(mark))
-                                .child(div().text_xs().text_color(theme::text()).font_family("monospace").child(l.command.clone()))
+                                .child(div().text_xs().text_color(theme::text()).font_family("Menlo").child(l.command.clone()))
                                 .when(l.committed, |d| {
                                     d.child(pill(format!("{} ⚙", l.computrons), theme::muted()))
                                 })
@@ -3117,7 +3215,7 @@ impl Cockpit {
                             div()
                                 .text_xs()
                                 .text_color(if l.committed { theme::muted() } else { theme::bad() })
-                                .font_family("monospace")
+                                .font_family("Menlo")
                                 .child(l.result.clone()),
                         ),
                 );
@@ -3134,7 +3232,7 @@ impl Cockpit {
         let mut col = div().flex().flex_col().p_3().size_full();
         col = col.child(section_title("LIVE EDITOR · author · validate · deploy").mb_1());
         for line in text.lines() {
-            col = col.child(div().text_xs().text_color(theme::text()).font_family("monospace").child(line.to_string()));
+            col = col.child(div().text_xs().text_color(theme::text()).font_family("Menlo").child(line.to_string()));
         }
         col
     }
@@ -3183,7 +3281,7 @@ impl Render for Cockpit {
             .size_full()
             .bg(theme::bg())
             .text_color(theme::text())
-            .font_family("monospace")
+            .font_family("Menlo")
             // Left rail: image header + cell world + dynamics feed.
             .child(
                 div()
@@ -3396,6 +3494,19 @@ fn clerk_button(
             }),
         )
         .child(label.to_string())
+}
+
+/// Map a landing-portal [`Tone`](starbridge_v2::landing::Tone) (a semantic role,
+/// kept gpui-free in the model) onto a theme color for the HOME render.
+fn portal_tone_color(tone: starbridge_v2::landing::Tone) -> Hsla {
+    use starbridge_v2::landing::Tone;
+    match tone {
+        Tone::Body => theme::text(),
+        Tone::Muted => theme::muted(),
+        Tone::Good => theme::good(),
+        Tone::Accent => theme::accent(),
+        Tone::Heading => theme::text(),
+    }
 }
 
 /// A short label + color for a palette command's category badge.
