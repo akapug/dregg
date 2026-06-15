@@ -353,17 +353,17 @@ pub struct DreggRuntime {
 
 /// A real EffectVM STARK proof attestation for one committed turn.
 ///
-/// Produced by [`DreggRuntime::prove_turn`] via the canonical
-/// `generate_effect_vm_trace` → `stark::prove` → `stark::verify` pipeline
-/// (the same path `circuit/tests/integration_effect_vm_prove_verify.rs`
-/// exercises). The proof is self-verified before the record is cached, so a
-/// cached record is a genuinely sound attestation — never a placeholder.
+/// Produced by [`DreggRuntime::prove_turn`] via the canonical ROTATED pipeline:
+/// the rotated multi-table `Ir2BatchProof` is minted over the cohort descriptor
+/// (`mint_rotated_participant_leg`) and self-verified inside the recursion config
+/// before the record is cached, so a cached record is a genuinely sound rotated
+/// attestation — never a placeholder.
 #[derive(Clone, Debug)]
 pub struct TurnProofRecord {
     /// Proof system identifier surfaced to the inspector (`"stark-effect-vm"`).
     pub kind: String,
-    /// Canonical EffectVM public inputs (raw u32 felts) as produced by
-    /// `generate_effect_vm_trace`. The inspector renders these directly.
+    /// Canonical EffectVM public inputs (raw u32 felts) carried by the rotated
+    /// leg's PI vector. The inspector renders these directly.
     pub public_inputs: Vec<u32>,
     /// Serialized proof size in bytes (post `proof_to_bytes`). Surfaced for
     /// the proof-size stat; the full bytes are not retained.
@@ -655,13 +655,13 @@ impl DreggRuntime {
     /// Generate (and cache) a real EffectVM STARK proof for the committed turn
     /// identified by `turn_hash`.
     ///
-    /// This is the canonical Effect VM prove path — the same
-    /// `generate_effect_vm_trace` → `stark::prove` → `stark::verify` pipeline
-    /// `circuit/tests/integration_effect_vm_prove_verify.rs` exercises. We
-    /// project the committed turn's balance-affecting effects into circuit
-    /// `Effect`s over a `CellState` whose initial balance covers the outgoing
-    /// flow, prove the transition, self-verify it, and cache a
-    /// [`TurnProofRecord`].
+    /// This is the canonical Effect VM prove path — the ROTATED multi-table
+    /// `Ir2BatchProof` minted over the cohort descriptor
+    /// (`mint_rotated_participant_leg`, the same primitive the light-client demo
+    /// and the node's FLOW-B producer use). We project the committed turn's
+    /// balance-affecting effects into circuit `Effect`s over a `CellState` whose
+    /// initial balance covers the outgoing flow, prove the rotated transition,
+    /// self-verify it, and cache a [`TurnProofRecord`].
     ///
     /// Deliberately NOT called from the commit path: STARK proving is
     /// expensive in wasm, so callers (the `<dregg-proof>` inspector) invoke

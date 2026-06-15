@@ -411,23 +411,24 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
     compose_aggregate(&circuit_refs)
 }
 
-/// Construct a CircuitDescriptor for the Effect VM AIR.
+/// Construct a CircuitDescriptor for the Effect VM transition.
 ///
-/// The Effect VM is a StarkAir (not a DslCircuit), so we create a thin
-/// descriptor wrapper for composition purposes. The VK hash is computed
-/// from the AIR's structural parameters.
+/// The live transition is proved through the ROTATED IR-v2 multi-table descriptor
+/// (`dregg_circuit::descriptor_ir2`; the rotated R=24 block over the shared
+/// `generate_rotated_effect_vm_trace`). This thin descriptor captures that rotated
+/// identity for the composed VK fingerprint — name `"dregg-effect-vm-rotated"`,
+/// the rotated trace width (`ROT_WIDTH = EFFECT_VM_WIDTH + APPENDIX = 311`), and the
+/// rotated PI surface (`ROT_PI_COUNT`). It is a structural fingerprint only (the
+/// `composed_vk_hash` is carried but re-derived per-sub-proof in `verify_full_turn`).
 fn effect_vm_circuit_descriptor() -> CircuitDescriptor {
-    // The Effect VM has 61 columns, degree 9, and ACTIVE_BASE_COUNT public inputs
-    // in the PI v3 layout.
-    // We create a minimal descriptor that captures its identity for VK hashing.
     CircuitDescriptor {
-        name: "dregg-effect-vm-v1".into(),
-        trace_width: effect_vm::EFFECT_VM_WIDTH,
+        name: "dregg-effect-vm-rotated".into(),
+        trace_width: effect_vm::ROT_WIDTH,
         max_degree: 9,
-        columns: vec![],     // Not needed for composition — VK hash suffices
-        constraints: vec![], // Constraints are in the StarkAir impl
-        boundaries: vec![],  // Boundaries are in the StarkAir impl
-        public_input_count: effect_vm::pi::ACTIVE_BASE_COUNT,
+        columns: vec![],     // Not needed for composition — VK fingerprint suffices
+        constraints: vec![], // Constraints live in the rotated IR-v2 batch AIRs
+        boundaries: vec![],  // Boundaries live in the rotated IR-v2 batch AIRs
+        public_input_count: effect_vm::ROT_PI_COUNT,
         lookup_tables: vec![],
     }
 }
