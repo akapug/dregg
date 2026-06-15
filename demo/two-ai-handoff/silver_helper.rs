@@ -628,6 +628,12 @@ fn cmd_verify_captp_delivered_tampered(state_dir: &PathBuf) -> bool {
 /// uses an all-zero turn_hash, matching the proof's PI[TURN_HASH_BASE..+4]).
 /// The authorization (CapTpDelivered) is in the Turn itself — the STARK proof
 /// covers the effect execution, and `verify-captp-delivered` covers the auth.
+// v1 FLOOR ONLY: mints a v1 hand-AIR (`EffectVmAir`) NoOp STARK proof for the
+// CapTpDelivered receipt-linkage chain. Under `recursion` the v1 hand-AIR is
+// retired (no single-proof analog — the rotated unit is an `"effect-vm-rotated"`
+// IR-v2 chain leg verified via `descriptor_ir2::verify_vm_descriptor2`), so this
+// is compiled out and the dispatch arm reports the retirement honestly.
+#[cfg(not(feature = "recursion"))]
 fn cmd_make_captp_delivered_chain(state_dir: &PathBuf) {
     use dregg_circuit::effect_vm::{
         self as evm, CellState as VmCellState, EffectVmAir, EffectVmContext,
@@ -1384,6 +1390,12 @@ fn cmd_make_introduce(
 /// — types, hashing, registry lookup — but until this command no
 /// substrate-honest artifact existed for the verifier's
 /// `scope-recursive` subcommand to consume.
+///
+/// v1 FLOOR ONLY: mints a v1 hand-AIR (`EffectVmAir`) NoOp STARK. Under
+/// `recursion` the v1 hand-AIR is retired; this compiles out and the dispatch
+/// arm reports the retirement honestly (the rotated leaf is minted via
+/// `dregg_turn::rotation_witness::mint_rotated_participant_leg`).
+#[cfg(not(feature = "recursion"))]
 fn cmd_make_recursive_witness(state_dir: &PathBuf, turn_nonce: u64) {
     use dregg_circuit::effect_vm::{
         self as evm, CellState as VmCellState, EffectVmAir, EffectVmContext,
@@ -1743,8 +1755,19 @@ fn run(cmd: &str, rest: &[String], state_dir: &PathBuf) -> Result<bool, String> 
             Ok(true)
         }
         "make-captp-delivered-chain" => {
-            cmd_make_captp_delivered_chain(state_dir);
-            Ok(true)
+            #[cfg(not(feature = "recursion"))]
+            {
+                cmd_make_captp_delivered_chain(state_dir);
+                Ok(true)
+            }
+            #[cfg(feature = "recursion")]
+            {
+                let _ = state_dir;
+                Err("make-captp-delivered-chain mints a v1 hand-AIR (EffectVmAir) NoOp STARK, \
+                     retired under the recursion build; rebuild with --no-default-features for the \
+                     v1 floor, or mint a rotated \"effect-vm-rotated\" IR-v2 leg instead"
+                    .to_string())
+            }
         }
         "verify-captp-delivered" => Ok(cmd_verify_captp_delivered(state_dir)),
         "verify-captp-delivered-tampered" => Ok(cmd_verify_captp_delivered_tampered(state_dir)),
@@ -1776,8 +1799,19 @@ fn run(cmd: &str, rest: &[String], state_dir: &PathBuf) -> Result<bool, String> 
         }
         "make-recursive-witness" => {
             let turn_nonce = need_u64("--turn-nonce", Some("1"))?;
-            cmd_make_recursive_witness(state_dir, turn_nonce);
-            Ok(true)
+            #[cfg(not(feature = "recursion"))]
+            {
+                cmd_make_recursive_witness(state_dir, turn_nonce);
+                Ok(true)
+            }
+            #[cfg(feature = "recursion")]
+            {
+                let _ = (state_dir, turn_nonce);
+                Err("make-recursive-witness mints a v1 hand-AIR (EffectVmAir) NoOp STARK, retired \
+                     under the recursion build; rebuild with --no-default-features for the v1 \
+                     floor, or mint a rotated leaf via mint_rotated_participant_leg instead"
+                    .to_string())
+            }
         }
         "make-bilateral-bundle" => {
             let a = need("--alice-cell")?;

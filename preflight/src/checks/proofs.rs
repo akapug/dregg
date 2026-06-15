@@ -226,28 +226,25 @@ fn check_derivation_proof() -> Result<(), String> {
 }
 
 fn check_effect_vm_proof() -> Result<(), String> {
-    // Prove a multi-effect turn via the effect VM STARK.
-    use dregg_circuit::effect_vm::{
-        CellState, Effect as VmEffect, compute_effects_hash, generate_effect_vm_trace, pi,
-    };
-    use dregg_circuit::effect_vm_p3_full_air::{prove_effect_vm_p3, verify_effect_vm_p3};
+    // Prove a single-Transfer turn through the LIVE verified-by-construction
+    // path: the Lean-emitted EffectVM DESCRIPTOR interpreted by
+    // `prove_vm_descriptor` / `verify_vm_descriptor` over the same
+    // `generate_effect_vm_trace` witness the executor produces. Under the
+    // `recursion` build (default) the v1 hand-AIR `prove_effect_vm_p3` is the
+    // wasm floor; the descriptor-interpreter is the path the rotated commit
+    // tower descends from, so this is the gate that exercises a real, currently
+    // live proof (constraint enforcement ≠ trace success).
+    use dregg_circuit::effect_vm::{CellState, Effect as VmEffect, compute_effects_hash, pi};
+    use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
+    use dregg_circuit::generate_effect_vm_trace;
+    use dregg_circuit::lean_descriptor_air::{parse_vm_descriptor, prove_vm_descriptor, verify_vm_descriptor};
 
     let initial_state = CellState::new(1000, 0);
-    let effects = vec![
-        VmEffect::Transfer {
-            amount: 100,
-            direction: 1,
-        }, // outgoing
-        VmEffect::Transfer {
-            amount: 50,
-            direction: 1,
-        }, // outgoing
-        VmEffect::SetField {
-            field_idx: 0,
-            value: BabyBear::new(42),
-        },
-        VmEffect::NoOp, // pad to 4 (power of 2)
-    ];
+    // selector 1 = TRANSFER — the validated descriptor; one Transfer effect.
+    let effects = vec![VmEffect::Transfer {
+        amount: 100,
+        direction: 1,
+    }];
 
     let (effects_hash_lo, effects_hash_hi) = compute_effects_hash(&effects);
 
@@ -259,19 +256,22 @@ fn check_effect_vm_proof() -> Result<(), String> {
         return Err("effects hash should not be zero for non-empty effects".into());
     }
 
-    // PROVE through the audited Plonky3 prover and VERIFY through the
-    // audited verifier — the preflight gate exercises the real proof path,
-    // not just witness generation (constraint enforcement ≠ trace success).
-    let proof = prove_effect_vm_p3(&trace, &public_inputs)
-        .map_err(|e| format!("effect VM p3 prove failed: {e}"))?;
-    verify_effect_vm_p3(&proof, &public_inputs)
-        .map_err(|e| format!("effect VM p3 verify rejected an honest proof: {e}"))?;
+    let json = descriptor_for_selector(1)
+        .ok_or_else(|| "no TRANSFER (selector 1) descriptor registered".to_string())?;
+    let desc = parse_vm_descriptor(json).map_err(|e| format!("parse transfer descriptor: {e}"))?;
+    let dpis = public_inputs[..desc.public_input_count].to_vec();
+
+    // PROVE + VERIFY through the descriptor interpreter — the real live proof.
+    let proof = prove_vm_descriptor(&desc, &trace, &dpis)
+        .map_err(|e| format!("effect VM descriptor prove failed: {e}"))?;
+    verify_vm_descriptor(&desc, &proof, &dpis)
+        .map_err(|e| format!("effect VM descriptor verify rejected an honest proof: {e}"))?;
 
     // ANTI-GHOST TOOTH: a forged post-state commitment MUST be rejected.
-    let mut forged = public_inputs.clone();
+    let mut forged = dpis.clone();
     forged[pi::NEW_COMMIT] = forged[pi::NEW_COMMIT] + BabyBear::new(1);
-    if verify_effect_vm_p3(&proof, &forged).is_ok() {
-        return Err("effect VM p3 verifier ACCEPTED a forged post-state commitment".into());
+    if verify_vm_descriptor(&desc, &proof, &forged).is_ok() {
+        return Err("effect VM descriptor verifier ACCEPTED a forged post-state commitment".into());
     }
 
     Ok(())

@@ -18,6 +18,16 @@ publish = false
 # generator the executor witness path uses. No estimates; we time the code that
 # actually runs.
 
+[features]
+# `recursion` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`, all of which
+# default to it) and forwards to `dregg-circuit/recursion`, so this crate's own
+# `#[cfg(feature = "recursion")]` gates ALIGN with the circuit's recursion state. Under `recursion`
+# (default) the live EffectVM commit path is the rotated IR-v2 tower, so the perf harnesses measure
+# `prove_turn_self_sovereign` (the real node turn) + the descriptor-interpreter (`prove_vm_descriptor`),
+# NOT the v1 hand-AIR `prove_effect_vm_p3` (which is the `not(recursion)` wasm floor, retired here).
+default = ["recursion"]
+recursion = ["dregg-circuit/recursion", "dregg-sdk/recursion", "dregg-turn/recursion"]
+
 [dependencies]
 dregg-circuit = { path = "../circuit" }
 dregg-sdk = { path = "../sdk" }
