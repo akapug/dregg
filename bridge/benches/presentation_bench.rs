@@ -56,7 +56,7 @@ fn make_builder_and_request() -> (BridgePresentationBuilder, AuthRequest) {
     let (fed_root_bb, fed_root_bytes) = compute_matching_federation_root(&key);
 
     let mut builder = BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-    let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
     builder.set_root_token(token);
 
     let att = Attenuation {
@@ -114,7 +114,7 @@ fn bench_prove_ivc(c: &mut Criterion) {
 
 fn bench_macaroon_to_factset_bench(c: &mut Criterion) {
     let key = test_key();
-    let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
 
     c.bench_function("bridge_macaroon_to_factset", |b| {
         b.iter(|| {
@@ -127,7 +127,7 @@ fn bench_authorize_with_trace_bench(c: &mut Criterion) {
     let key = test_key();
     let (fed_root_bb, fed_root_bytes) = compute_matching_federation_root(&key);
     let mut builder = BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-    let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
     builder.set_root_token(token);
 
     let att = Attenuation {
@@ -158,7 +158,7 @@ fn bench_end_to_end_cycle(c: &mut Criterion) {
     c.bench_function("bridge_end_to_end_mint_attenuate_prove_verify", |b| {
         b.iter(|| {
             // Mint
-            let token = MacaroonToken::mint(key, b"kid-1", "dregg.dev");
+            let token = MacaroonToken::mint(key, b"kid-1", "dregg.fg-goose.online");
 
             // Attenuate
             let att = Attenuation {

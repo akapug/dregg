@@ -48,7 +48,7 @@ fn generate_membership_proof(issuer_key: &[u8; 32]) -> (Vec<u8>, BabyBear) {
 fn test_mint_attenuate_prove_execute_verify() {
     // --- Phase 1: Token minting and attenuation ---
     let issuer_key = test_key("issuer");
-    let root_token = MacaroonToken::mint(issuer_key, b"test-kid", "test.dregg.dev");
+    let root_token = MacaroonToken::mint(issuer_key, b"test-kid", "test.dregg.fg-goose.online");
 
     let attenuation = Attenuation {
         services: vec![("compute".into(), "rw".into())],

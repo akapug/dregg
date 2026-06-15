@@ -86,7 +86,7 @@ fn diff_replay_tag_matches_real_tail() {
     let mut mac = Macaroon::new(
         &root_key,
         b"kid-replay".to_vec(),
-        "https://dregg.dev".into(),
+        "https://dregg.fg-goose.online".into(),
     );
 
     // After Macaroon::new, the tail is exactly seedTag(root, nonce) (empty fold).
@@ -118,7 +118,7 @@ fn diff_honest_chain_verifies() {
     let mut mac = Macaroon::new(
         &root_key,
         b"kid-honest".to_vec(),
-        "https://dregg.dev".into(),
+        "https://dregg.fg-goose.online".into(),
     );
     append_kv(&mut mac, "app", "demo");
     append_kv(&mut mac, "action", "read");
@@ -148,7 +148,7 @@ fn diff_honest_chain_verifies() {
 fn diff_removal_breaks_tail() {
     // Lean `removal_breaks_tail`: dropping the last caveat without re-signing fails verify.
     let root_key = crypto::random_key();
-    let mut mac = Macaroon::new(&root_key, b"kid-rm".to_vec(), "https://dregg.dev".into());
+    let mut mac = Macaroon::new(&root_key, b"kid-rm".to_vec(), "https://dregg.fg-goose.online".into());
     append_kv(&mut mac, "app", "demo");
     append_kv(&mut mac, "action", "read");
 
@@ -176,7 +176,7 @@ fn diff_tampered_caveat_rejected() {
     let mut mac = Macaroon::new(
         &root_key,
         b"kid-tamper".to_vec(),
-        "https://dregg.dev".into(),
+        "https://dregg.fg-goose.online".into(),
     );
     append_kv(&mut mac, "app", "demo");
 
@@ -205,7 +205,7 @@ fn diff_wrong_root_key_rejected() {
     // Lean `chain_unforgeable` premise: a verifier without the root key cannot accept the chain.
     let root_key = crypto::random_key();
     let wrong_key = crypto::random_key();
-    let mut mac = Macaroon::new(&root_key, b"kid-wrong".to_vec(), "https://dregg.dev".into());
+    let mut mac = Macaroon::new(&root_key, b"kid-wrong".to_vec(), "https://dregg.fg-goose.online".into());
     append_kv(&mut mac, "app", "demo");
 
     assert!(

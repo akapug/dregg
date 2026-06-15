@@ -87,7 +87,7 @@ fn bb_to_bytes(bb: BabyBear) -> [u8; 32] {
 fn test_full_private_authorization_pipeline() {
     // --- Step 1: Mint root token ---
     let issuer_key = test_key("issuer-pipeline");
-    let root_token = MacaroonToken::mint(issuer_key, b"pipeline-kid", "compute.dregg.dev");
+    let root_token = MacaroonToken::mint(issuer_key, b"pipeline-kid", "compute.dregg.fg-goose.online");
 
     // --- Step 2: Attenuate twice ---
     // First attenuation: restrict to service + add expiry
@@ -132,7 +132,7 @@ fn test_full_private_authorization_pipeline() {
     );
 
     // Set root token + add attenuations
-    let fresh_root = MacaroonToken::mint(issuer_key, b"pipeline-kid", "compute.dregg.dev");
+    let fresh_root = MacaroonToken::mint(issuer_key, b"pipeline-kid", "compute.dregg.fg-goose.online");
     builder.set_root_token(fresh_root);
     assert!(
         builder.add_attenuation(&att1),

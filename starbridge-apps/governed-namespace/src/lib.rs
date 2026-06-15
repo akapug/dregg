@@ -1268,6 +1268,255 @@ pub fn register_nameservice_route_action(
 }
 
 // =============================================================================
+// Distinct-committee quorum over the EXECUTOR-REACHABLE user-field MAP
+// =============================================================================
+
+/// **The distinct-committee commit gate — arbitrary-N member votes in the
+/// committed `fields_map`, with the threshold enforced as `MOfNDistinct`.**
+///
+/// ## The wall this lifts
+///
+/// The base [`commit_table_update`](build_commit_table_update_action) folds the
+/// committee's votes into ONE register slot, [`PENDING_PROPOSAL_ROOT_SLOT`], by
+/// rolling each vote through [`compose_vote_update`]. That hash chain is a
+/// *legible audit trail* — but it is NOT a distinctness-enforced count: the
+/// cell-program cannot read it back to assert "≥ k DISTINCT committee members
+/// voted approve", so "the threshold was actually met" is carried by the
+/// out-of-band threshold-sig verifier and an off-cell replay nullifier (lib
+/// docs: the `vote_on_proposal` count is enforced by `SenderAuthorized` + the
+/// auditor, not the program). A committee with more than three members also
+/// cannot keep one approval bit per member in the 16 fixed slots.
+///
+/// This module dissolves both: each committee member's vote is a RECORD in the
+/// cell's unbounded [`fields_map`](dregg_cell::state::CellState::fields_map)
+/// (keys `>= STATE_SLOTS`, committed by `fields_root`, written by the
+/// executor's `SetField { index >= STATE_SLOTS }` effect), and the commit gate
+/// is the dynamic-N [`StateConstraint::FieldsCollectionAggregate`] with
+/// [`CollPred::MOfNDistinct`] — the proven distinctness-enforced council
+/// keystone (`Dregg2.Exec.Collections.mOfNDistinct`), now READING the
+/// governance committee's map-borne votes. A committee of ANY size keeps one
+/// vote-record per member; arming the version bump DEMANDS ≥ `threshold`
+/// DISTINCT approving members in the same post-state.
+///
+/// THIS REUSES THE POLIS LARGE-COUNCIL PATH VERBATIM
+/// (`starbridge_polis::large_council`): same map layout (`{member_id, vote}`
+/// stride), same `MOfNDistinct { key_offset, approved: vote==1 }` gate, same
+/// `SlotChanged`-scoped second case. Only the host cell differs — a governance
+/// route-table board instead of a bare proposal cell — so the quorum fires on
+/// the route-table swap (the `version` bump) rather than a generic certify.
+pub mod committee_board {
+    use super::*;
+    use dregg_cell::program::{CollPred, ElemPredAtom};
+    use dregg_cell::state::STATE_SLOTS;
+
+    /// First user-map key the committee vote-board starts at — the map TAIL
+    /// (`>= STATE_SLOTS`), so the votes live wholly in the committed
+    /// `fields_map` the executor's `SetField` path writes. Chosen as the first
+    /// map key so the fixed register file (the route-table root, version,
+    /// committee root, threshold, dispute window, pending root) is untouched.
+    pub const VOTE_BASE: u64 = STATE_SLOTS as u64;
+    /// Per-element key stride: `{member_id, vote}` ⇒ 2 map keys per member.
+    pub const VOTE_STRIDE: u32 = 2;
+    /// Element-relative offset of the member-identity key (the DISTINCTNESS key
+    /// the quorum dedups over — a duplicate-padded forge collapses to ONE).
+    pub const MEMBER_OFF: u32 = 0;
+    /// Element-relative offset of the member's vote (`1` = approve the swap).
+    pub const VOTE_OFF: u32 = 1;
+
+    /// The fuel (upper element-count bound) the quorum gate reads to — an
+    /// explicit ceiling so the map read is bounded. Large enough for any
+    /// governance committee a single cell would hold.
+    pub const MAX_FUEL: u32 = 4096;
+
+    /// The map key holding committee member `index`'s identity element.
+    pub fn member_id_key(index: usize) -> u64 {
+        VOTE_BASE + (index as u64) * (VOTE_STRIDE as u64) + MEMBER_OFF as u64
+    }
+
+    /// The map key holding committee member `index`'s vote element.
+    pub fn member_vote_key(index: usize) -> u64 {
+        VOTE_BASE + (index as u64) * (VOTE_STRIDE as u64) + VOTE_OFF as u64
+    }
+
+    /// The distinct-committee quorum gate: `MOfNDistinct` over the map-borne
+    /// vote collection. Counts DISTINCT member identities that voted `1`; a
+    /// duplicate-padded forge (one member written `threshold`×) collapses to
+    /// ONE identity and REFUSES; an unbound forge (a padding element that does
+    /// not vote `1`) is filtered before the count. Both biting teeth ride the
+    /// proven `mOfNDistinct`. The proven council keystone, READING the
+    /// executor-reachable `fields_map`.
+    pub fn committee_quorum_gate(threshold: u64) -> StateConstraint {
+        StateConstraint::FieldsCollectionAggregate {
+            base: VOTE_BASE,
+            stride: VOTE_STRIDE,
+            fuel: MAX_FUEL,
+            pred: CollPred::MOfNDistinct {
+                m: threshold as u32,
+                key_offset: MEMBER_OFF,
+                approved: ElemPredAtom::FieldEquals {
+                    offset: VOTE_OFF,
+                    value: field_from_u64(1),
+                },
+            },
+        }
+    }
+
+    /// The structural invariants enforced on EVERY transition — the same
+    /// constitutional shape [`governance_program`] carries (committee root +
+    /// threshold `WriteOnce`, version + dispute window `Monotonic`, reserved
+    /// slots frozen). The quorum gate is NOT here — it is the swap-scoped second
+    /// case so a member merely casting a vote runs under the invariants alone.
+    pub fn invariants() -> Vec<StateConstraint> {
+        vec![
+            StateConstraint::WriteOnce {
+                index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
+            },
+            StateConstraint::WriteOnce {
+                index: THRESHOLD_SLOT,
+            },
+            StateConstraint::Monotonic {
+                index: VERSION_SLOT,
+            },
+            StateConstraint::Monotonic {
+                index: DISPUTE_WINDOW_HEIGHT_SLOT,
+            },
+            StateConstraint::Immutable {
+                index: RESERVED_SLOT_6,
+            },
+            StateConstraint::Immutable {
+                index: RESERVED_SLOT_7,
+            },
+        ]
+    }
+
+    /// **The distinct-committee governance `CellProgram`: a two-case program.**
+    ///
+    /// * Case `Always` — the structural [`invariants`] (the constitutional
+    ///   freeze + monotone version/window).
+    /// * Case `SlotChanged { VERSION_SLOT }` — the dynamic-N
+    ///   [`committee_quorum_gate`]. The route-table swap is exactly the turn that
+    ///   bumps `version`, so swapping the table DEMANDS ≥ `threshold` DISTINCT
+    ///   approving committee members in the map-borne vote-board, in the same
+    ///   post-state. A member casting a vote (writing their `{member_id, vote}`
+    ///   record) leaves `version` alone and runs under the invariants alone.
+    ///   (The exact-`+1` step shape is the base commit case's
+    ///   `MonotonicSequence(VERSION_SLOT)`; this gate is orthogonal — it pins
+    ///   WHO authorized the bump, not its arithmetic, so a deployment composes
+    ///   both: the quorum here + the exact-`+1` from the base case.)
+    ///
+    /// THE DESCRIPTOR/CELL-PROGRAM SPLIT (the established subscription /
+    /// large-council pattern): the descriptor's `state_constraints` is the FLAT
+    /// [`invariants`] — installed at factory birth, biting on every touching
+    /// turn — while the full two-case shape (the swap-scoped quorum gate) is
+    /// committed by `child_program_vk` and is the program a host installs on the
+    /// born cell. [`committee_board_program`] is that full program.
+    pub fn committee_board_program(threshold: u64) -> CellProgram {
+        CellProgram::Cases(vec![
+            TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: invariants(),
+            },
+            TransitionCase {
+                guard: TransitionGuard::SlotChanged {
+                    index: VERSION_SLOT,
+                },
+                constraints: vec![committee_quorum_gate(threshold)],
+            },
+        ])
+    }
+
+    /// **The distinct-committee governance factory (content-addressed over the
+    /// threshold).** Each governance board is one cell born from this factory;
+    /// the full two-case program is committed by `child_program_vk`, the flat
+    /// invariants ride in the descriptor and install on birth (mirrors
+    /// [`large_council_factory_descriptor`](starbridge_polis::large_council::large_council_factory_descriptor)).
+    pub fn committee_board_factory_descriptor(threshold: u64) -> FactoryDescriptor {
+        let program = committee_board_program(threshold);
+        // `child_vk` IS the canonical content-address of the FULL two-case
+        // program (postcard ‖ blake3-derive-key, `canonical_program_vk`). The
+        // factory vk is a domain-tagged digest of it, so two boards with
+        // distinct thresholds get distinct factories and the same board is
+        // re-derivable by any party — no separate postcard dep needed.
+        let child_vk = canonical_program_vk(&program);
+        let mut hasher = blake3::Hasher::new_derive_key(
+            "dregg-governed-namespace:committee-board-factory v1",
+        );
+        hasher.update(&child_vk);
+        let factory_vk = *hasher.finalize().as_bytes();
+        FactoryDescriptor {
+            factory_vk,
+            child_program_vk: Some(child_vk),
+            child_vk_strategy: Some(ChildVkStrategy::Fixed(Some(child_vk))),
+            allowed_cap_templates: vec![CapTemplate {
+                target: CapTarget::SelfCell,
+                max_permissions: AuthRequired::Signature,
+                attenuatable: true,
+            }],
+            field_constraints: vec![],
+            state_constraints: invariants(),
+            default_mode: CellMode::Sovereign,
+            creation_budget: Some(DEFAULT_CREATION_BUDGET),
+        }
+    }
+
+    /// Build the effects for committee member `index` casting an APPROVE vote on
+    /// the table swap: write their `{member_id, vote=1}` element into the MAP
+    /// (keys `>= STATE_SLOTS`). The `member_id` is the DISTINCTNESS key — a real
+    /// committee binds it to the member's pubkey-lane id; the in-test board uses
+    /// distinct nonzero field elements.
+    pub fn cast_committee_vote_effects(
+        namespace_cell: CellId,
+        index: usize,
+        member_id: FieldElement,
+    ) -> Vec<Effect> {
+        vec![
+            Effect::SetField {
+                cell: namespace_cell,
+                index: member_id_key(index) as usize,
+                value: member_id,
+            },
+            Effect::SetField {
+                cell: namespace_cell,
+                index: member_vote_key(index) as usize,
+                value: field_from_u64(1),
+            },
+        ]
+    }
+
+    /// Build the SIGNED action committing the atomic route-table swap under the
+    /// distinct-committee quorum. The effects bump `version` (which fires the
+    /// quorum gate over the map) and swap `route_table_root` — so the swap
+    /// commits ONLY when ≥ `threshold` DISTINCT committee members have voted
+    /// approve in the map. The method symbol is `commit_table_update` so the
+    /// `SlotChanged { VERSION_SLOT }` gate (and the structural invariants) bite.
+    pub fn build_committee_commit_action(
+        cipherclerk: &AppCipherclerk,
+        namespace_cell: CellId,
+        committed_route_table: &RouteTable,
+        new_version: u64,
+    ) -> Action {
+        let new_root = route_table_commitment(committed_route_table);
+        let effects = vec![
+            Effect::SetField {
+                cell: namespace_cell,
+                index: ROUTE_TABLE_ROOT_SLOT as usize,
+                value: new_root,
+            },
+            Effect::SetField {
+                cell: namespace_cell,
+                index: VERSION_SLOT as usize,
+                value: field_from_u64(new_version),
+            },
+            Effect::EmitEvent {
+                cell: namespace_cell,
+                event: Event::new(symbol("table-committed"), vec![new_root, field_from_u64(new_version)]),
+            },
+        ];
+        cipherclerk.make_action(namespace_cell, "commit_table_update", effects)
+    }
+}
+
+// =============================================================================
 // The deos-native surface — the governance BOARD as a composed `DeosApp`.
 // =============================================================================
 //

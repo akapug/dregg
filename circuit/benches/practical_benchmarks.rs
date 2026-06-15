@@ -70,7 +70,7 @@ fn make_builder(
     let (fed_root_bb, fed_root_bytes) = compute_federation_root(key);
     let mut builder =
         BridgePresentationBuilder::new_with_root_bb(*key, fed_root_bytes, fed_root_bb);
-    let token = MacaroonToken::mint(*key, b"bench-kid", "dregg.dev");
+    let token = MacaroonToken::mint(*key, b"bench-kid", "dregg.fg-goose.online");
     builder.set_root_token(token);
 
     for i in 0..num_attenuations {
@@ -102,12 +102,12 @@ fn bench_token_operations(c: &mut Criterion) {
     let key = test_key("mint");
     group.bench_function("mint_token", |b| {
         b.iter(|| {
-            black_box(MacaroonToken::mint(key, b"kid-bench", "dregg.dev"));
+            black_box(MacaroonToken::mint(key, b"kid-bench", "dregg.fg-goose.online"));
         });
     });
 
     // --- attenuate ---
-    let token = MacaroonToken::mint(key, b"kid-bench", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-bench", "dregg.fg-goose.online");
     let attenuation = Attenuation {
         apps: vec![("my-app".into(), "rw".into())],
         not_after: Some(2000000000),
@@ -134,7 +134,7 @@ fn bench_token_operations(c: &mut Criterion) {
 
     // Verify with deeper caveat chains
     for &depth in &[5, 10, 20] {
-        let root = MacaroonToken::mint(key, b"kid-chain", "dregg.dev");
+        let root = MacaroonToken::mint(key, b"kid-chain", "dregg.fg-goose.online");
         let mut tok: Box<dyn AuthToken> = Box::new(root);
         for i in 0..depth {
             let att = Attenuation {
@@ -517,7 +517,7 @@ fn bench_full_flow(c: &mut Criterion) {
     group.bench_function("mint_attenuate_prove_serialize_verify", |b| {
         b.iter(|| {
             // 1. Mint
-            let token = MacaroonToken::mint(key, b"e2e-kid", "dregg.dev");
+            let token = MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online");
 
             // 2. Attenuate
             let att = Attenuation {
@@ -530,7 +530,7 @@ fn bench_full_flow(c: &mut Criterion) {
             // 3. Build presentation and prove (real STARK)
             let mut builder =
                 BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-            builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.dev"));
+            builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
             builder.add_attenuation(&att);
 
             let request = AuthRequest {
@@ -559,12 +559,12 @@ fn bench_full_flow(c: &mut Criterion) {
     // Phase 1: Mint
     group.bench_function("phase1_mint", |b| {
         b.iter(|| {
-            black_box(MacaroonToken::mint(key, b"e2e-kid", "dregg.dev"));
+            black_box(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
         });
     });
 
     // Phase 2: Attenuate
-    let token = MacaroonToken::mint(key, b"e2e-kid", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online");
     let att = Attenuation {
         apps: vec![("my-app".into(), "rw".into())],
         not_after: Some(2000000000),
@@ -581,7 +581,7 @@ fn bench_full_flow(c: &mut Criterion) {
         b.iter(|| {
             let mut builder =
                 BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-            builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.dev"));
+            builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
             builder.add_attenuation(&att);
             let request = AuthRequest {
                 app_id: Some("my-app".into()),
@@ -594,7 +594,7 @@ fn bench_full_flow(c: &mut Criterion) {
 
     // Generate proof for serialize/verify phases
     let mut builder = BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-    builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.dev"));
+    builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
     builder.add_attenuation(&att);
     let request = AuthRequest {
         app_id: Some("my-app".into()),

@@ -467,10 +467,10 @@ pub use migration::{CellMigrationManager, MigrationCancelReason, MigrationError,
 pub mod membership_verifier;
 pub use membership_verifier::{
     BridgePredicatePolicyAuthority, BridgePredicateRequirement, BridgePredicateStarkVerifier,
-    MerkleMembershipStarkVerifier, StaticBridgePredicatePolicy, bridge_predicate_commitment_bytes,
-    bridge_predicate_proof_bytes, bridge_predicate_range_proof_bytes,
-    registry_with_real_sender_membership, registry_with_real_verifiers,
-    registry_with_real_verifiers_full, single_member_authorized_root,
+    DslCircuitDfaVerifier, MerkleMembershipStarkVerifier, StaticBridgePredicatePolicy,
+    bridge_predicate_commitment_bytes, bridge_predicate_proof_bytes,
+    bridge_predicate_range_proof_bytes, prove_dfa_transition, registry_with_real_sender_membership,
+    registry_with_real_verifiers, registry_with_real_verifiers_full, single_member_authorized_root,
     single_member_membership_proof,
 };
 #[cfg(feature = "threshold-sig")]

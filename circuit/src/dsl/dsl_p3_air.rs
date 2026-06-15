@@ -175,6 +175,27 @@ fn check_algebraic(c: &ConstraintExpr, index: usize) -> Result<(), DslP3Error> {
             index,
             form: "Lookup (route through the LogUp bus / lean_lookup_air)",
         }),
+        // Cross-row / PI-seeded running hashes absorb a Poseidon2 input drawn from
+        // the `next` window (chain) or a public input (seed). The single-permutation
+        // aux-block model here only handles hashes whose inputs are all in the `local`
+        // window, so these forms route through the native `crate::stark` prover (the
+        // path the live `DslCircuitDfaVerifier` uses) rather than the Plonky3 batch AIR.
+        ConstraintExpr::ChainedHash2to1 { .. } => Err(DslP3Error::NonAlgebraicConstraint {
+            index,
+            form: "ChainedHash2to1 (cross-row running hash; route through crate::stark)",
+        }),
+        ConstraintExpr::SeedHash2to1 { .. } => Err(DslP3Error::NonAlgebraicConstraint {
+            index,
+            form: "SeedHash2to1 (PI-seeded running hash; route through crate::stark)",
+        }),
+        // `TableFunction` is a genuine low-degree polynomial, but its symbolic
+        // expansion (bivariate Lagrange interpolation) is not yet emitted into the
+        // Plonky3 `AB::Expr` path; route it through the native `crate::stark` prover
+        // (the path the live `DslCircuitDfaVerifier` uses).
+        ConstraintExpr::TableFunction { .. } => Err(DslP3Error::NonAlgebraicConstraint {
+            index,
+            form: "TableFunction (bivariate-interpolation table; route through crate::stark)",
+        }),
     }
 }
 
@@ -427,7 +448,10 @@ fn eval_expr<AB: AirBuilder>(c: &ConstraintExpr, local: &[AB::Var], next: &[AB::
         | ConstraintExpr::Hash2to1 { .. }
         | ConstraintExpr::Hash4to1 { .. }
         | ConstraintExpr::MerkleHash { .. }
-        | ConstraintExpr::Lookup { .. } => AB::Expr::ZERO,
+        | ConstraintExpr::Lookup { .. }
+        | ConstraintExpr::ChainedHash2to1 { .. }
+        | ConstraintExpr::SeedHash2to1 { .. }
+        | ConstraintExpr::TableFunction { .. } => AB::Expr::ZERO,
     }
 }
 

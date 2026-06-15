@@ -12,7 +12,7 @@ use crate::error::SdkError;
 /// proof, then returns the discharge macaroon string (em2_ encoded).
 ///
 /// # Arguments
-/// - `gateway_url`: Base URL of the discharge gateway (e.g., "https://gateway.dregg.dev")
+/// - `gateway_url`: Base URL of the discharge gateway (e.g., "https://gateway.dregg.fg-goose.online")
 /// - `ticket`: The encrypted ticket bytes from the 3P caveat
 /// - `proof`: Optional proof bytes (ZK proof, signature, etc.)
 /// - `client_id`: Optional client identifier for rate limiting / allowlist

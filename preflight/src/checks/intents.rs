@@ -63,7 +63,7 @@ fn check_match_intent() -> Result<(), String> {
     let held = vec![HeldCapability {
         token_id: "test-token".to_string(),
         actions: vec!["read".into(), "write".into()],
-        resource: "compute.dregg.dev".into(),
+        resource: "compute.dregg.fg-goose.online".into(),
         app_id: None,
         service: Some("compute".into()),
         user_id: None,

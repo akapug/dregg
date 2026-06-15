@@ -627,11 +627,11 @@ fn main() {
 
         let d_mint = time_op_avg(
             || {
-                let _ = MacaroonToken::mint(key, b"kid", "dregg.dev");
+                let _ = MacaroonToken::mint(key, b"kid", "dregg.fg-goose.online");
             },
             10_000,
         );
-        let tok = MacaroonToken::mint(key, b"kid", "dregg.dev");
+        let tok = MacaroonToken::mint(key, b"kid", "dregg.fg-goose.online");
         let req = AuthRequest::default();
         let d_verify = time_op_avg(
             || {

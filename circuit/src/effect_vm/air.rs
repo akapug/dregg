@@ -4,6 +4,24 @@
 
 use super::{EFFECT_VM_WIDTH, NUM_EFFECTS, pi};
 
+// The v1 hand-AIR (`EffectVmAir` + its `StarkAir` impl) is retained only under
+// `#[cfg(not(feature = "recursion"))]` for the v1 floor; the recursion tower proves the
+// effect-VM transition through the rotated IR-v2 descriptor instead. These symbols are used
+// ONLY inside that gated `impl StarkAir` body, so the imports are gated to match — keeping
+// the ungated `AIR_DESCRIPTOR` (which needs only `EFFECT_VM_WIDTH`/`NUM_EFFECTS`/`pi`) clean
+// in the default (`recursion`) build.
+#[cfg(not(feature = "recursion"))]
+use super::{
+    AUX_BASE, BAL_LIMB_BITS, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, aux_off, param, sel,
+    state,
+};
+#[cfg(not(feature = "recursion"))]
+use crate::field::BabyBear;
+#[cfg(not(feature = "recursion"))]
+use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
+#[cfg(not(feature = "recursion"))]
+use crate::stark::{BoundaryConstraint, StarkAir};
+
 /// The Effect VM AIR's shape descriptor (VK v2; see
 /// `circuit::air_descriptor`). Captures the externally visible shape
 /// of [`EffectVmAir`] so callers can fingerprint it into VK v2's

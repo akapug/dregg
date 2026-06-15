@@ -20,6 +20,7 @@ pub mod cap_membership;
 pub mod circuit;
 pub mod committed_threshold;
 pub mod derivation;
+pub mod dfa_routing;
 // `dsl_p3_air` routes DSL circuits through the audited Plonky3 batch-STARK
 // prover; it requires `p3-air` / `p3-batch-stark` (the `recursion` feature) and
 // `crate::plonky3_prover` (gated on `plonky3`). Its only consumers
@@ -57,6 +58,12 @@ pub use garbled::{
 pub use temporal_absence::{
     DslTimelineEntry, TemporalAbsenceDslProof, TemporalAbsenceDslWitness,
     prove_temporal_absence_dsl, verify_temporal_absence_dsl,
+};
+
+// Re-export the production DFA message-routing (route-commitment-binding) API.
+pub use dfa_routing::{
+    build_routing_witness, compute_table_commitment, dfa_routing_circuit, dfa_routing_descriptor,
+    prove_dfa_routing, verify_dfa_routing,
 };
 
 // Re-export production non-revocation proving API.

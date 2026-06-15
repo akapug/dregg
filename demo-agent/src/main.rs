@@ -146,9 +146,9 @@ fn main() {
 
     section(2, total_steps, "Minting root macaroon token");
 
-    let root_token = MacaroonToken::mint(issuer_key, b"demo-kid-001", "dregg.dev");
+    let root_token = MacaroonToken::mint(issuer_key, b"demo-kid-001", "dregg.fg-goose.online");
     item("Root token minted (unrestricted, full access)");
-    item(&format!("  Location: dregg.dev"));
+    item(&format!("  Location: dregg.fg-goose.online"));
     item(&format!("  Key ID: demo-kid-001"));
 
     // ─── Step 3: Attenuate the token ────────────────────────────────────────

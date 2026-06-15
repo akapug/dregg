@@ -109,7 +109,7 @@ fn request_grid() -> Vec<AuthRequest> {
 ///   recorded on `ModelClearance::attenuate`); the REAL narrowing at this hand-off
 ///   is the validity window. Soundness (`child ⊆ parent`) holds regardless.
 fn build_chain() -> (MacaroonToken, Box<dyn AuthToken>, Box<dyn AuthToken>) {
-    let root = MacaroonToken::mint(root_key(), b"issuer-kid", "dregg.dev");
+    let root = MacaroonToken::mint(root_key(), b"issuer-kid", "dregg.fg-goose.online");
 
     let holder = root
         .attenuate(&Attenuation {

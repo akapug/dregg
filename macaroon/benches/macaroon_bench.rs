@@ -8,7 +8,7 @@ fn bench_create(c: &mut Criterion) {
             black_box(Macaroon::new(
                 &root_key,
                 b"kid-1".to_vec(),
-                "https://dregg.dev".into(),
+                "https://dregg.fg-goose.online".into(),
             ));
         });
     });
@@ -16,7 +16,7 @@ fn bench_create(c: &mut Criterion) {
 
 fn bench_verify_no_caveats(c: &mut Criterion) {
     let root_key = crypto::random_key();
-    let mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.dev".into());
+    let mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
     c.bench_function("macaroon_verify_0_caveats", |b| {
         b.iter(|| {
             black_box(mac.verify(&root_key, &[]).unwrap());
@@ -26,7 +26,7 @@ fn bench_verify_no_caveats(c: &mut Criterion) {
 
 fn bench_verify_with_caveats(c: &mut Criterion) {
     let root_key = crypto::random_key();
-    let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.dev".into());
+    let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
     for i in 0..5 {
         mac.add_first_party_wire(dregg_macaroon::WireCaveat {
             caveat_type: 1,
@@ -42,7 +42,7 @@ fn bench_verify_with_caveats(c: &mut Criterion) {
 
 fn bench_serialize_deserialize(c: &mut Criterion) {
     let root_key = crypto::random_key();
-    let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.dev".into());
+    let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
     mac.add_first_party_wire(dregg_macaroon::WireCaveat {
         caveat_type: 1,
         body: vec![0x42],
@@ -64,7 +64,7 @@ fn bench_serialize_deserialize(c: &mut Criterion) {
 
 fn bench_encode_decode(c: &mut Criterion) {
     let root_key = crypto::random_key();
-    let mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.dev".into());
+    let mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
     let encoded = mac.encode().unwrap();
 
     c.bench_function("macaroon_encode", |b| {
@@ -86,8 +86,8 @@ fn bench_third_party_flow(c: &mut Criterion) {
 
     c.bench_function("macaroon_3p_full_flow", |b| {
         b.iter(|| {
-            let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.dev".into());
-            mac.add_third_party("https://auth.dregg.dev", &shared_key, CaveatSet::new())
+            let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+            mac.add_third_party("https://auth.dregg.fg-goose.online", &shared_key, CaveatSet::new())
                 .unwrap();
 
             let tp_caveats = mac.caveats.third_party_caveats();
@@ -97,7 +97,7 @@ fn bench_third_party_flow(c: &mut Criterion) {
             dk.copy_from_slice(&wire_ticket.discharge_key);
 
             let mut discharge =
-                create_discharge(tp.ticket.clone(), &dk, "https://auth.dregg.dev".into(), &[]);
+                create_discharge(tp.ticket.clone(), &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
             mac.bind_discharge(&mut discharge);
             black_box(mac.verify(&root_key, &[discharge]).unwrap());
         });

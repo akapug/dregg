@@ -78,7 +78,7 @@ fn builder_for_key(key: [u8; 32]) -> BridgePresentationBuilder {
 #[test]
 fn valid_credential_accepted() {
     let key = issuer_key();
-    let token = MacaroonToken::mint(key, b"kid-valid", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-valid", "dregg.fg-goose.online");
 
     let mut builder = builder_for_key(key);
     builder.set_root_token(token);
@@ -159,7 +159,7 @@ fn wrong_issuer_key_rejected_by_membership_check() {
 #[test]
 fn expired_credential_denied() {
     let key = issuer_key();
-    let token = MacaroonToken::mint(key, b"kid-exp", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-exp", "dregg.fg-goose.online");
 
     let mut builder = builder_for_key(key);
     builder.set_root_token(token);
@@ -196,7 +196,7 @@ fn expired_credential_denied() {
 #[test]
 fn credential_wrong_app_denied() {
     let key = issuer_key();
-    let token = MacaroonToken::mint(key, b"kid-app", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-app", "dregg.fg-goose.online");
 
     let mut builder = builder_for_key(key);
     builder.set_root_token(token);
@@ -233,7 +233,7 @@ fn credential_wrong_app_denied() {
 #[test]
 fn wire_proof_strips_private_trace() {
     let key = issuer_key();
-    let token = MacaroonToken::mint(key, b"kid-wire", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-wire", "dregg.fg-goose.online");
 
     let mut builder = builder_for_key(key);
     builder.set_root_token(token);
@@ -284,7 +284,7 @@ fn wire_proof_strips_private_trace() {
 #[test]
 fn credential_wrong_user_denied() {
     let key = issuer_key();
-    let token = MacaroonToken::mint(key, b"kid-user", "dregg.dev");
+    let token = MacaroonToken::mint(key, b"kid-user", "dregg.fg-goose.online");
 
     let mut builder = builder_for_key(key);
     builder.set_root_token(token);

@@ -165,6 +165,79 @@ pub enum ConstraintExpr {
         /// Which trace columns form the query tuple (indices into the trace row).
         query_columns: Vec<usize>,
     },
+
+    /// **Cross-row running-hash accumulation.** Constrains
+    /// `next[output_next_col] == hash_2_to_1(local[seed_local_col], next[input_next_col])`.
+    ///
+    /// This is the transition form of [`Self::Hash2to1`]: it folds the *previous*
+    /// row's accumulator (`local[seed_local_col]`) with the *current* row's absorbed
+    /// value (`next[input_next_col]`) into the current row's accumulator
+    /// (`next[output_next_col]`). It is the only constraint form whose hash inputs
+    /// span both the `local` and `next` windows, which the running-hash route
+    /// commitment of `dregg-dfa-routing-v1` requires (the rolling commitment
+    /// `running_{i+1} = compress running_i entryHash_{i+1}`). The transition
+    /// vanishing polynomial excludes the last row, so this is enforced on rows
+    /// `0..n-2`, exactly as a chain step should be.
+    ///
+    /// Mirrors `Dregg2.Crypto.DfaAcceptanceAir.Accumulates`
+    /// (`b.running = compress a.running b.entryHash`).
+    ChainedHash2to1 {
+        /// `next`-row column receiving the accumulated hash.
+        output_next_col: usize,
+        /// `local`-row column holding the previous accumulator (the seed of this step).
+        seed_local_col: usize,
+        /// `next`-row column holding the value absorbed at this step.
+        input_next_col: usize,
+    },
+
+    /// **Public-input-seeded hash binding (per-row).** Constrains
+    /// `local[output_col] == hash_2_to_1(pi[seed_pi_index], local[input_col])`.
+    ///
+    /// The seed is a *public input* rather than a trace column — this binds the
+    /// first row's running hash to `compress tableCommitment entryHash₀`, where the
+    /// `tableCommitment` is disclosed as a public input. Gate it with a first-row
+    /// selector so it fires only on row 0 (the chain's seed), matching
+    /// `Dregg2.Crypto.DfaAcceptanceAir.Satisfies.seed`
+    /// (`r₀.running = compress tableCommitment r₀.entryHash`). Without this seed
+    /// binding the route commitment would not be tied to the *table* commitment, so
+    /// a router could present a chain over a different transition table.
+    SeedHash2to1 {
+        /// Column receiving the seeded hash.
+        output_col: usize,
+        /// Public-input index supplying the seed (the table commitment).
+        seed_pi_index: usize,
+        /// Column holding the value absorbed against the seed (the first entry hash).
+        input_col: usize,
+    },
+
+    /// **Deterministic 2-input function table, enforced algebraically.** Constrains
+    /// `local[out_col] == P(local[a_col], local[b_col])`, where `P` is the unique
+    /// bivariate Lagrange-interpolating polynomial that agrees with the function
+    /// table on the grid `a_values × b_values`. Unlike [`Self::Lookup`] (a
+    /// non-polynomial membership step that cannot be FRI-checked), this is a genuine
+    /// low-degree polynomial (degree `(|a_values|-1) + (|b_values|-1)`), so it is
+    /// sound through the real STARK quotient/FRI pipeline.
+    ///
+    /// Soundness is only meaningful when `(local[a_col], local[b_col])` is pinned to
+    /// the grid; pair this with range constraints (e.g. `∏ (col - v) == 0`) on the
+    /// input columns so off-grid rows cannot escape. Models the deterministic
+    /// transition TABLE of `Dregg2.Crypto.DfaAcceptanceAir`
+    /// (`r.next = d.step r.state r.sym`, GAP-A): `next == step(state, symbol)`.
+    TableFunction {
+        /// Column holding the first input (e.g. `current_state`).
+        a_col: usize,
+        /// Column holding the second input (e.g. `symbol`).
+        b_col: usize,
+        /// Column holding the function output (e.g. `next_state`).
+        out_col: usize,
+        /// Distinct first-input grid values (the `a` axis of the table).
+        a_values: Vec<u32>,
+        /// Distinct second-input grid values (the `b` axis of the table).
+        b_values: Vec<u32>,
+        /// Row-major outputs over `a_values × b_values`: `outputs[i*|b| + j]` is
+        /// `P(a_values[i], b_values[j])`.
+        outputs: Vec<u32>,
+    },
     // NOTE: SelectiveWrite was removed -- it used a non-algebraic Rust if/else branch
     // which is unsound in a STARK (constraints must be evaluatable as polynomials over
     // the entire domain). Users should instead use a Gated constraint with an explicit
@@ -370,8 +443,94 @@ impl ConstraintExpr {
                     BabyBear::ONE
                 }
             }
+            Self::ChainedHash2to1 {
+                output_next_col,
+                seed_local_col,
+                input_next_col,
+            } => {
+                // next[output] - hash_2_to_1(local[seed], next[input])
+                let expected =
+                    crate::poseidon2::hash_2_to_1(local[*seed_local_col], next[*input_next_col]);
+                next[*output_next_col] - expected
+            }
+            Self::SeedHash2to1 {
+                output_col,
+                seed_pi_index,
+                input_col,
+            } => {
+                // local[output] - hash_2_to_1(pi[seed], local[input])
+                let expected = crate::poseidon2::hash_2_to_1(pi[*seed_pi_index], local[*input_col]);
+                local[*output_col] - expected
+            }
+            Self::TableFunction {
+                a_col,
+                b_col,
+                out_col,
+                a_values,
+                b_values,
+                outputs,
+            } => {
+                let expected = eval_table_function(
+                    local[*a_col],
+                    local[*b_col],
+                    a_values,
+                    b_values,
+                    outputs,
+                );
+                local[*out_col] - expected
+            }
         }
     }
+}
+
+/// Evaluate the bivariate Lagrange interpolation of a function table at `(a, b)`.
+///
+/// `P(a, b) = Σ_i Σ_j outputs[i*|b|+j] · Lᵢ(a) · Lⱼ(b)`, where `Lᵢ(a) = ∏_{k≠i}
+/// (a - a_values[k]) / (a_values[i] - a_values[k])` is the Lagrange basis. This is
+/// a genuine low-degree polynomial in `(a, b)`, so it FRI-checks; at grid points it
+/// equals the tabulated output exactly. The grid values are distinct (a precondition
+/// the descriptor builder upholds), so the denominators are nonzero.
+fn eval_table_function(
+    a: BabyBear,
+    b: BabyBear,
+    a_values: &[u32],
+    b_values: &[u32],
+    outputs: &[u32],
+) -> BabyBear {
+    // Lagrange basis values L_i(a) and L_j(b).
+    let lagrange = |x: BabyBear, nodes: &[u32]| -> Vec<BabyBear> {
+        nodes
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| {
+                let xi_f = BabyBear::new(xi);
+                let mut num = BabyBear::ONE;
+                let mut den = BabyBear::ONE;
+                for (k, &xk) in nodes.iter().enumerate() {
+                    if k == i {
+                        continue;
+                    }
+                    let xk_f = BabyBear::new(xk);
+                    num = num * (x - xk_f);
+                    den = den * (xi_f - xk_f);
+                }
+                // Distinct nodes ⇒ den ≠ 0.
+                num * den.inverse().unwrap_or(BabyBear::ZERO)
+            })
+            .collect()
+    };
+
+    let la = lagrange(a, a_values);
+    let lb = lagrange(b, b_values);
+    let nb = b_values.len();
+    let mut acc = BabyBear::ZERO;
+    for (i, lai) in la.iter().enumerate() {
+        for (j, lbj) in lb.iter().enumerate() {
+            let out = outputs.get(i * nb + j).copied().unwrap_or(0);
+            acc = acc + (*lai) * (*lbj) * BabyBear::new(out);
+        }
+    }
+    acc
 }
 
 impl BoundaryDef {
@@ -666,6 +825,22 @@ impl ConstraintExpr {
                 // Lookup is non-algebraic (membership test). Degree is 1 per column reference.
                 query_columns.len().max(1)
             }
+            Self::ChainedHash2to1 { .. } => {
+                // next[out] - hash_2_to_1(local[seed], next[in]): opaque hash, degree 1.
+                1
+            }
+            Self::SeedHash2to1 { .. } => {
+                // local[out] - hash_2_to_1(pi[seed], local[in]): opaque hash, degree 1.
+                1
+            }
+            Self::TableFunction {
+                a_values,
+                b_values,
+                ..
+            } => {
+                // P(a,b) = Σ Lᵢ(a)Lⱼ(b) outputsᵢⱼ: degree (|a|-1) in a, (|b|-1) in b.
+                a_values.len().saturating_sub(1) + b_values.len().saturating_sub(1)
+            }
         }
     }
 
@@ -739,6 +914,22 @@ impl ConstraintExpr {
                 )
             }
             Self::Lookup { query_columns, .. } => query_columns.iter().copied().max(),
+            Self::ChainedHash2to1 {
+                output_next_col,
+                seed_local_col,
+                input_next_col,
+            } => Some((*output_next_col).max(*seed_local_col).max(*input_next_col)),
+            Self::SeedHash2to1 {
+                output_col,
+                input_col,
+                ..
+            } => Some((*output_col).max(*input_col)),
+            Self::TableFunction {
+                a_col,
+                b_col,
+                out_col,
+                ..
+            } => Some((*a_col).max(*b_col).max(*out_col)),
         }
     }
 }
@@ -751,6 +942,11 @@ fn check_pi_bounds_recursive(expr: &ConstraintExpr, pi_count: usize) -> Result<(
         ConstraintExpr::PiBinding { pi_index, .. } => {
             if *pi_index >= pi_count {
                 return Err(*pi_index);
+            }
+        }
+        ConstraintExpr::SeedHash2to1 { seed_pi_index, .. } => {
+            if *seed_pi_index >= pi_count {
+                return Err(*seed_pi_index);
             }
         }
         ConstraintExpr::Gated { inner, .. } => {

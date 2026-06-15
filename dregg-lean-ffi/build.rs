@@ -1016,15 +1016,27 @@ fn main() {
 
     // ── PLATFORM GATE (polarity inversion, docs/FEATURE-HYGIENE.md §Lean): the link is
     // UNCONDITIONAL on native; the ONE opt-out is the `no-lean-link` platform feature, set
-    // only by builds whose target cannot link libdregg_lean.a (wasm32, the SP1 zkvm guest).
-    // We also hard-skip on those targets regardless of the feature — a wasm32 build that
-    // forgot to wire `no-lean-link` should degrade to the marshal-only stubs, never attempt
-    // a native-archive link. No archive refresh, no shim, no link directives: the crate
-    // builds marshal-only and `lean_available()` is false.
+    // only by builds whose target cannot link libdregg_lean.a (wasm32, the SP1 zkvm guest,
+    // and Windows-MSVC). We also hard-skip on those targets regardless of the feature — a
+    // build that forgot to wire `no-lean-link` should degrade to the marshal-only stubs,
+    // never attempt a native-archive link. No archive refresh, no shim, no link directives:
+    // the crate builds marshal-only and `lean_available()` is false.
+    //
+    // WHY WINDOWS HARD-SKIPS: `libdregg_lean.a` is a HOST-NATIVE (Mach-O / ELF) archive of
+    // objects the Lean compiler emits, and this build.rs splices/links it with the unix
+    // binutils trio (`nm` / `ar` / `leanc` + `-fPIC` + a libc++/gmp/uv link). None of those
+    // apply to an MSVC (COFF / link.exe) target: the archive members are the wrong object
+    // format and the toolchain commands are absent. So a Windows build degrades to the
+    // marshal-only path (the same fallback wasm32 uses), and the honest `lean_available() ==
+    // false` flows to every consumer's `*_available()` guard (finality/strand/coord gates),
+    // which then take their un-gated Rust paths. A future native Windows Lean archive (built
+    // by `lake` on a Windows runner against an MSVC Lean toolchain) would lift this skip; it
+    // does not exist today, and emitting unix link directives here would only hard-fail the
+    // link. See docs/FEATURE-HYGIENE.md §Lean (defense-in-depth) + the PACKAGING report.
     let no_lean_link = std::env::var_os("CARGO_FEATURE_NO_LEAN_LINK").is_some();
     let gate_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let gate_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if no_lean_link || gate_arch == "wasm32" || gate_os == "zkvm" {
+    if no_lean_link || gate_arch == "wasm32" || gate_os == "zkvm" || gate_os == "windows" {
         return;
     }
 
