@@ -1,0 +1,43 @@
+# deos-tutorial — THE ONBOARDING. A real seL4 PD that boots a polished,
+# multi-screen, INTERACTIVE deos tutorial in a QEMU window: the newcomer presses
+# SPACE / ↑ / ↓ to navigate a six-screen arc that teaches deos from first
+# principles (a capability is constructive knowledge; your boundaries are
+# theorems), rendering REAL deos data shapes (a real cell's four substances, a
+# real affordance's cap∧state gate, a `dregg://` web-of-cells reference).
+#
+# It is the compositor-fb PD's bytes->glass mechanism (fw_cfg + ramfb scanout,
+# docs/desktop-os-research/GRAPHICAL-SEL4-BOOT.md) GROWN into a real UX:
+#   - the SAME fw_cfg/ramfb driver configures QEMU's ramfb display and scans out a
+#     framebuffer this PD solely holds,
+#   - PLUS a virtio-keyboard-device (virtio-mmio) the PD solely holds, driven with
+#     the SAME device-cap discipline the net-driver PD (sel4/dregg-pd/net) uses for
+#     virtio-net — the keypress IRQ schedules the PD's notified() handler, which
+#     advances the screen and repaints. Real input, not a slideshow.
+#   - a COMPLETE 8x8 bitmap font (font.rs): every printable ASCII glyph, real
+#     g/j/p/q/y descenders — replacing the compositor-fb splash's broken 5x7 font.
+#
+# Dependency discipline (the firmament's minimal graph): the font, the screens,
+# the RGBA renderer, and the fw_cfg/ramfb protocol are all hand-rolled in this
+# crate. The ONLY non-runtime deps are the virtio-mmio keyboard driver the net PD
+# already pulls (virtio-drivers + the rust-sel4 virtio HAL), pinned to the
+# workspace commit.
+
+[package]
+name = "dregg-deos-tutorial-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-deos-tutorial-pd"
+path = "src/main.rs"
+
+[dependencies]
+# `alloc` for the virtio driver's queues (the keyboard event ring); the screens
+# and framebuffer draw into a statically-mapped region — no alloc on the draw path.
+sel4-microkit = { workspace = true, features = ["alloc"] }
+
+# The virtio-mmio keyboard. Same crate + HAL the net-driver PD drives virtio-net
+# with (sel4/dregg-pd/net) — the device-cap discipline reused for human input.
+virtio-drivers = { version = "0.13.0", default-features = false, features = ["alloc"] }
+sel4-virtio-hal-impl = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }

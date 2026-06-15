@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  deos-tutorial.system : THE ONBOARDING. A real seL4 Microkit image whose single
+  protection domain (the deos-tutorial PD) boots a polished, multi-screen,
+  INTERACTIVE deos tutorial in a QEMU window. The newcomer presses SPACE / UP /
+  DOWN to walk a six-screen arc teaching deos from first principles, rendering
+  REAL deos data shapes (docs/desktop-os-research/GRAPHICAL-SEL4-BOOT.md).
+
+  It GROWS dregg-graphical.system (the compositor-fb splash) into a real UX. The
+  one PD holds, and holds NOTHING ELSE:
+    1. QEMU's fw_cfg engine MMIO cap (phys 0x9020000) : to configure ramfb;
+    2. a 4 MiB DMA framebuffer region (guest-physical base via region_paddr,
+       handed to ramfb; 800x600x4 = 1.83 MiB fits, last 4 KiB is fw_cfg scratch);
+    3. a virtio-keyboard-device's virtio-mmio region (slot 30, phys 0xa003000)
+       plus a 1 MiB DMA region (its event rings) plus its IRQ (78 = 48 + 30) :
+       the SAME device-cap discipline net-driver-only.system gives the virtio-net
+       slot, here for HUMAN input. A keypress raises IRQ 78, the PD's notified()
+       handler advances the screen and repaints the framebuffer, live.
+
+  The cap partition IS the trust boundary. seL4 faults any access this PD is not
+  the sole holder of.
+
+  Boot (sel4/Makefile):
+    make build-tutorial : cross-build the PD ELF and link this image.
+    make run-tutorial    : boot WITH a visible window and a real keyboard:
+        qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -m 2G
+          -device ramfb -display cocoa,show-cursor=on
+          -global virtio-mmio.force-legacy=false
+          -device virtio-keyboard-device,bus=virtio-mmio-bus.30
+          -device loader,file=build/deos-tutorial.img,addr=0x70000000,cpu-num=0
+          -serial mon:stdio
+    make run-tutorial-headless : same image, -display none, for screendump CI.
+
+  Board: qemu_virt_aarch64.
+-->
+<system>
+
+    <!-- The framebuffer DMA region: 4 MiB, huge-page-backed so region_paddr is
+         a single 4 MiB-aligned physically-contiguous run (a scanned-out
+         framebuffer must be contiguous in guest-physical space). The PD draws
+         into it (vaddr) and hands its PHYS base to ramfb. 800x600x4 = 1.83 MiB
+         fits; the last 4 KiB is the PD's fw_cfg DMA scratch. -->
+    <memory_region name="fb_dma" size="0x400_000" page_size="0x200_000" />
+
+    <!-- QEMU's fw_cfg engine MMIO window (qemu hw/arm/virt.c: 0x9020000). The PD
+         configures ramfb over this. Uncached: device memory. -->
+    <memory_region name="fwcfg_mmio" size="0x1000" phys_addr="0x9020000" />
+
+    <!-- The virtio-keyboard's virtio-mmio window: slot 30 of the qemu_virt_aarch64
+         mmio bus lives at phys 0xa003000..0xa004000 (base 0xa000000 + 30*0x200 =
+         0xa003c00 is inside this 4 KiB page; the driver adds OFFSET 0xc00).
+         Uncached: device memory. -->
+    <memory_region name="virtio_kbd_mmio" size="0x1000" phys_addr="0xa003000" />
+
+    <!-- The keyboard driver's DMA region (its virtio event/status rings). 1 MiB,
+         huge-page-backed so its region_paddr is contiguous and aligned. -->
+    <memory_region name="virtio_kbd_dma" size="0x200_000" page_size="0x200_000" />
+
+    <!-- ====================================================================
+         PD: deos-tutorial : the INTERACTIVE GRAPHICAL EDGE. Holds the fw_cfg
+         display cap, the framebuffer, and the keyboard's mmio/DMA/IRQ, and
+         nothing else. Draws the six screens; a keypress advances and repaints.
+         ==================================================================== -->
+    <protection_domain name="deos_tutorial" priority="100" stack_size="0x10000">
+        <program_image path="dregg-deos-tutorial-pd.elf" />
+
+        <!-- the framebuffer: RW (the PD draws), cached (lots of writes), with both
+             its vaddr and guest-phys addr exposed (the phys addr is scanned out). -->
+        <map mr="fb_dma" vaddr="0x2_000_000" perms="rw" cached="true" setvar_vaddr="fb_dma_vaddr" />
+        <setvar symbol="fb_dma_paddr" region_paddr="fb_dma" />
+
+        <!-- the fw_cfg MMIO window: RW, UNCACHED (device memory). -->
+        <map mr="fwcfg_mmio" vaddr="0x6_000_000_000" perms="rw" cached="false" setvar_vaddr="fwcfg_mmio_vaddr" />
+
+        <!-- the keyboard's virtio-mmio window: RW, UNCACHED (device memory). -->
+        <map mr="virtio_kbd_mmio" vaddr="0x6_000_001_000" perms="rw" cached="false" setvar_vaddr="virtio_kbd_mmio_vaddr" />
+
+        <!-- the keyboard's DMA region: RW, cached, vaddr plus guest-phys (the
+             device dereferences guest-physical for its rings). -->
+        <map mr="virtio_kbd_dma" vaddr="0x7_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_kbd_dma_vaddr" />
+        <setvar symbol="virtio_kbd_dma_paddr" region_paddr="virtio_kbd_dma" />
+
+        <!-- the keyboard IRQ: SPI 78 = 48 (SPI base) + 30 (mmio slot). id 0 maps
+             to Channel::new(0) in the PD (KBD). A keypress raises it. -->
+        <irq irq="78" id="0" />
+    </protection_domain>
+
+</system>
