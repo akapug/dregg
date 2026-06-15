@@ -54,7 +54,12 @@ pub struct CommittedNoteOutput {
     pub value: u64,
     /// Asset type identifier.
     pub asset_type: u64,
-    /// Recipient's public key (or stealth address).
+    /// Recipient's X25519 stealth *view* public key.
+    ///
+    /// The note opening `(value, asset_type, blinding)` is ECIES-encrypted to
+    /// this key (see [`dregg_cell::encrypt_note_to`]); only its holder can
+    /// recover the opening and spend the note. Obtain it from the recipient's
+    /// [`dregg_cell::StealthMetaAddress::view_pubkey`].
     pub recipient: [u8; 32],
 }
 
@@ -203,11 +208,18 @@ impl CommittedTurnBuilder {
                 // Generate range proof.
                 let range_proof = BulletproofRangeProof::prove_range(out.value, blinding);
 
-                // Build encrypted note (placeholder: just the recipient + nonce for now).
-                // In production this would be an ECIES-encrypted payload.
-                let mut encrypted_note = Vec::with_capacity(64);
-                encrypted_note.extend_from_slice(&out.recipient);
-                encrypted_note.extend_from_slice(&creation_nonce);
+                // Encrypt the note opening to the recipient with the real ECIES
+                // box (X25519 ephemeral DH → BLAKE3 KDF → ChaCha20-Poly1305, the
+                // same construction as `dregg_cell::seal`). The recipient's
+                // `recipient` field is their X25519 stealth *view* public key;
+                // only its holder can recover `(value, asset_type, blinding)` —
+                // exactly the opening they need to later spend the note.
+                let plaintext = dregg_cell::NotePlaintext {
+                    value: out.value,
+                    asset_type: out.asset_type,
+                    blinding: blinding.to_bytes(),
+                };
+                let encrypted_note = dregg_cell::encrypt_note_to(&out.recipient, &plaintext);
 
                 let effect = Effect::NoteCreate {
                     commitment: NoteCommitment(note_commitment),
@@ -575,6 +587,102 @@ mod tests {
         let builder = CommittedTurnBuilder::new();
         let result = builder.build(agent_cell, 0, 0);
         assert!(result.is_err());
+    }
+
+    /// TOOTH (closure 2): the recipient decrypts the NoteCreate `encrypted_note`
+    /// and recovers the real opening `(value, asset_type, blinding)`; a wrong
+    /// view key fails closed. This proves the encryption is real ECIES, not the
+    /// old `[recipient || nonce]` placeholder (which carried no ciphertext the
+    /// recipient could open).
+    #[test]
+    fn test_committed_note_encryption_recipient_decrypts() {
+        use x25519_dalek::{PublicKey as XPub, StaticSecret as XSecret};
+
+        // Recipient holds an X25519 view keypair; the sender addresses the
+        // output to the recipient's view *public* key.
+        let view_secret_bytes = [0x5Au8; 32];
+        let view_secret = XSecret::from(view_secret_bytes);
+        let view_pub = XPub::from(&view_secret);
+
+        let agent_cell = CellId([0xAA; 32]);
+        let input = CommittedNoteInput {
+            nullifier: Nullifier([0x11; 32]),
+            merkle_root: [0x22; 32],
+            value: 4242,
+            blinding: test_scalar(77),
+            asset_type: 9,
+            spending_proof: vec![0x01],
+        };
+        let output = CommittedNoteOutput {
+            value: 4242,
+            asset_type: 9,
+            recipient: *view_pub.as_bytes(),
+        };
+
+        let mut builder = CommittedTurnBuilder::new();
+        builder.add_input(input);
+        builder.add_output(output);
+        let turn = builder.build(agent_cell, 7, 0).unwrap();
+
+        // Pull the encrypted_note out of the NoteCreate effect.
+        let create = turn.call_forest.roots[0]
+            .action
+            .effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::NoteCreate {
+                    encrypted_note,
+                    value,
+                    asset_type,
+                    ..
+                } => Some((encrypted_note.clone(), *value, *asset_type)),
+                _ => None,
+            })
+            .expect("a NoteCreate effect");
+        let (encrypted_note, eff_value, eff_asset) = create;
+
+        // It must NOT be the old placeholder (recipient||nonce = 64 bytes of
+        // public data). The ECIES box is eph(32)+nonce(12)+ciphertext(>tag).
+        assert_ne!(encrypted_note.len(), 64, "must not be the placeholder shape");
+
+        // Recipient decrypts and recovers the true opening.
+        let opening = dregg_cell::decrypt_note(&view_secret_bytes, &encrypted_note)
+            .expect("recipient decrypts");
+        assert_eq!(opening.value, 4242);
+        assert_eq!(opening.asset_type, 9);
+        // The recovered opening matches the on-effect cleartext fields.
+        assert_eq!(opening.value, eff_value);
+        assert_eq!(opening.asset_type, eff_asset);
+
+        // The recovered blinding actually opens the on-effect value commitment:
+        // commit(value, blinding) must equal the effect's value_commitment.
+        let vc_bytes = turn.call_forest.roots[0]
+            .action
+            .effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::NoteCreate {
+                    value_commitment: Some(vc),
+                    ..
+                } => Some(*vc),
+                _ => None,
+            })
+            .expect("value commitment present");
+        let recovered_blinding = Scalar::from_canonical_bytes(opening.blinding)
+            .expect("blinding is a canonical scalar");
+        let recomputed = ValueCommitment::commit(opening.value, &recovered_blinding);
+        assert_eq!(
+            recomputed.to_bytes().0,
+            vc_bytes,
+            "recovered (value, blinding) must re-open the committed value"
+        );
+
+        // TOOTH: a wrong view key cannot decrypt.
+        let wrong_secret = [0x99u8; 32];
+        assert!(
+            dregg_cell::decrypt_note(&wrong_secret, &encrypted_note).is_err(),
+            "wrong key must fail to decrypt"
+        );
     }
 
     #[test]

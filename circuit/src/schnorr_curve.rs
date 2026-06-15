@@ -9,11 +9,27 @@
 //! addition formula (no `a` term in doubling). The parameter `b` is chosen
 //! so that the curve has a large prime-order subgroup.
 //!
-//! **IMPORTANT**: The curve parameters below are PLACEHOLDER values for
-//! prototyping. For production use, a proper curve search (Schoof/SEA algorithm
-//! or CM method) must be performed to find b such that #E(BabyBear^8) is prime
-//! or has a large prime factor. The current b is chosen to make arithmetic work
-//! correctly; the group order is not verified to be prime.
+//! # SECURITY: placeholder curve — composite order (NOT production-safe)
+//!
+//! The parameters below are PLACEHOLDER values. The generator `(1, 2)` lies in
+//! the BASE-field embedding `F_p ⊂ F_{p^8}`, and its order is the COMPOSITE
+//! 31-bit number `2013191319 = 3 · 331 · 2027383` (= `#E(F_p)`). This BREAKS the
+//! discrete-log security claim two ways:
+//!   1. The group is ~2^31, not ~2^248 — Pollard-rho is ~2^15.5, trivially broken.
+//!   2. Even at full size, a composite order lets an attacker solve DL in the
+//!      small prime subgroups (Pohlig–Hellman) and CRT them together.
+//!
+//! Production REQUIRES a curve whose `#E(F_{p^8})` is prime or has a large prime
+//! subgroup, with a generator of that subgroup. Because this curve is defined
+//! over the base field, `#E(F_{p^8})` is fixed by the base-field Frobenius trace
+//! `t` (`#E(F_p) = p + 1 − t`) via the recurrence
+//! `s_k = t·s_{k−1} − p·s_{k−2}`, `#E(F_{p^8}) = p^8 + 1 − s_8` — i.e. point
+//! counting reduces to choosing the right sextic twist `b` (6 traces for the
+//! j=0 family) plus, if none is good, an `a ≠ 0` search via PARI/GP `ellcard`.
+//! See the HORIZONLOG lane **PRIME-ORDER-SCHNORR-CURVE**.
+//!
+//! This curve is on the confidential-VALUE path (in-circuit Schnorr), NOT core
+//! turn auth (that is Ed25519). It is a real feature hole, loudly marked here.
 //!
 //! # Security Target
 //!
@@ -38,8 +54,10 @@ use crate::field::BabyBear;
 pub const CURVE_A: BabyBear8 = BabyBear8::ZERO;
 
 /// Curve parameter `b` (constant term in y^2 = x^3 + ax + b).
-/// PLACEHOLDER: b = 3 embedded in BabyBear^8.
-/// A production deployment must verify #E(F_{p^8}) with this b has prime order.
+///
+/// SECURITY: placeholder `b = 3` — composite group order (see module docs).
+/// A production deployment must pick `b` (or `(a, b)`) so `#E(F_{p^8})` has a
+/// large prime factor, then regenerate `GENERATOR` and `ORDER`.
 pub const CURVE_B: BabyBear8 = BabyBear8([
     BabyBear(3),
     BabyBear(0),
@@ -85,14 +103,16 @@ pub const GENERATOR: CurvePoint = CurvePoint {
 
 /// Group order of the generator point.
 ///
-/// For the prototype using base-field-embedded points (GENERATOR = (1, 2) on
-/// y^2 = x^3 + 3 over BabyBear), the point order is 2013191319 = 3 * 331 * 2027383.
-///
-/// This was computed by finding the smallest n > 0 such that n*G = infinity,
-/// using the Hasse bound to narrow the search range.
+/// SECURITY: placeholder — COMPOSITE 31-bit order. GENERATOR = (1, 2) on
+/// y^2 = x^3 + 3 lives in the base-field embedding, with order
+/// `2013191319 = 3 · 331 · 2027383` (= `#E(F_p)`). This is the discrete-log
+/// break: the group is ~2^31 and composite, so Pollard-rho / Pohlig–Hellman
+/// recover the secret key in seconds. See the module docs + the HORIZONLOG lane
+/// **PRIME-ORDER-SCHNORR-CURVE** for the (tractable) replacement procedure.
 ///
 /// In production over BabyBear^8 with a proper extension-field generator,
-/// the order would be ~2^248 and prime (found via Schoof/SEA point counting).
+/// the order would be ~2^248 with a large prime factor (found via the
+/// base-field-trace recurrence, not a full SEA over p^8).
 ///
 /// Stored as 8 little-endian u32 limbs.
 pub const ORDER: [u32; 8] = [

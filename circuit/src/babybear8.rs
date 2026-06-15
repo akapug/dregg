@@ -4,6 +4,26 @@
 //! where BabyBear^4 = BabyBear[x] / (x^4 - 11) and we use the same non-residue
 //! W = 11 for the quadratic extension on top.
 //!
+//! # SECURITY / SOUNDNESS BUG: this is NOT a field (zero divisors)
+//!
+//! Reusing `W = 11` for BOTH layers is mathematically wrong: in
+//! `F_p[x]/(x^4 - 11)`, the element `x^2` already satisfies `(x^2)^2 = x^4 = 11`,
+//! so `11` is a square there and `y^2 - 11 = (y - x^2)(y + x^2)` FACTORS. The
+//! quotient `F_{p^4}[y]/(y^2 - 11)` is therefore a product ring
+//! `≅ F_{p^4} × F_{p^4}` with zero divisors — NOT the field `F_{p^8}`. Witness:
+//! `A = y - x^2` is nonzero yet `A·(y + x^2) = y^2 - x^4 = 0`, and `A.inverse()`
+//! returns `None` (its norm `(-x^2)^2 - 11·1^2 = 11 - 11 = 0`). This voids the
+//! "field of size p^8 → ~124-bit DL security" premise at the foundation, on top
+//! of the separate composite-generator-order issue in `schnorr_curve`.
+//!
+//! FIX (HORIZONLOG **PRIME-ORDER-SCHNORR-CURVE**): use a genuine non-residue for
+//! the top layer — e.g. `V = x` (an `F_{p^4}` element, not a base scalar), giving
+//! the clean field `F_p[z]/(z^8 - 11)` with `z = y`, `x = z^2`. (No base-field
+//! constant works as the top non-residue: every `c ∈ F_p*` is a square in
+//! `F_{p^4}`.) Over the corrected field a fully prime-order curve EXISTS
+//! (`y^2 = x^3 + (z+2)x + (z^3+8)`, cofactor 1, 124-bit security). On the
+//! confidential-VALUE (in-circuit Schnorr) path only — NOT core auth (Ed25519).
+//!
 //! An element of BabyBear^8 is stored as [a0, a1, a2, a3, a4, a5, a6, a7] where
 //! the "low" half [a0..a3] forms the BabyBear^4 coefficient of 1, and the "high"
 //! half [a4..a7] forms the BabyBear^4 coefficient of y.
