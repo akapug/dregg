@@ -122,6 +122,13 @@ pub mod reflect;
 pub mod replay;
 #[cfg(feature = "embedded-executor")]
 pub mod scene;
+// WHAT-IF SIMULATION — compose any intent over any cell + an exhaustive effect
+// palette, predict its consequences in a FORKED throwaway world (the real
+// executor over a deep copy of the live ledger), then commit it for real. The
+// prediction is the live executor's verdict run one turn ahead; the live world is
+// never touched until commit. gpui-free, `cargo test`-able.
+#[cfg(feature = "embedded-executor")]
+pub mod simulate;
 #[cfg(feature = "embedded-executor")]
 pub mod shell;
 #[cfg(feature = "embedded-executor")]
@@ -188,6 +195,11 @@ pub use proofs::{AttachStatus, ProofBoard, ProofEntry, VerificationTier};
 pub use scene::{
     baked_admit_table, compositor_program, scene_admit, surface_factory, PresentVerdict,
     VerifiedScene, PRESENT_DIGEST_SLOT, SURFACE_FACTORY_VK,
+};
+#[cfg(feature = "embedded-executor")]
+pub use simulate::{
+    commit as simulate_commit, render_outcome, simulate, CellDelta, DraftAction, EffectKind,
+    IntentDraft, SimOutcome,
 };
 #[cfg(feature = "embedded-executor")]
 pub use organ_ops::{OrganDriver, OrganOp, OrganOpError, OrganOpOutcome};

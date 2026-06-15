@@ -76,6 +76,13 @@ pub enum Tab {
     /// cell (A1; the home of the ADOS tool-call seam).
     Terminal,
     Composer,
+    /// The SIMULATE tab — the WHAT-IF intent composer (studio-parity): compose
+    /// any intent over any cell(s) across a broad effect palette, PREDICT its
+    /// consequences in a forked throwaway world (the real executor over a deep
+    /// copy of the live ledger) — the predicted post-state + receipt or refusal —
+    /// then COMMIT the identical turn for real. The live world is untouched until
+    /// commit. See [`starbridge_v2::simulate`].
+    Simulate,
     Objects,
     Debugger,
     Replay,
@@ -124,7 +131,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 18] = [
+    const ALL: [Tab; 19] = [
         Tab::Home,
         Tab::Shell,
         Tab::Agent,
@@ -138,6 +145,7 @@ impl Tab {
         Tab::Buffer,
         Tab::Terminal,
         Tab::Composer,
+        Tab::Simulate,
         Tab::Objects,
         Tab::Debugger,
         Tab::Replay,
@@ -159,6 +167,7 @@ impl Tab {
             Tab::Buffer => "BUFFER",
             Tab::Terminal => "TERMINAL",
             Tab::Composer => "COMPOSER",
+            Tab::Simulate => "SIMULATE",
             Tab::Objects => "OBJECTS",
             Tab::Debugger => "DEBUGGER",
             Tab::Replay => "REPLAY",
@@ -381,6 +390,23 @@ pub struct Cockpit {
     /// currently mediating (`powerbox_app` points at it). Pressing "+ launch confined
     /// app" births a NEW one and routes its request through the existing powerbox.
     launched_apps: Vec<starbridge_v2::powerbox::LaunchedApp>,
+
+    // --- the WHAT-IF / SIMULATE intent composer (studio-parity) -------------
+    /// The intent under composition: the agent + a forest of actions/effects the
+    /// operator builds before simulating. Driven by the SIMULATE panel's pickers.
+    sim_draft: starbridge_v2::simulate::IntentDraft,
+    /// Index into [`sorted_cells`] for the TARGET the next added effect acts on
+    /// (the "target" picker cycles this). The agent picker cycles `sim_draft.agent`.
+    sim_target_idx: usize,
+    /// Which effect-kind template the next "+ add" will append (the effect picker
+    /// cycles this over the full palette — the studio-parity coverage).
+    sim_effect_idx: usize,
+    /// The last what-if outcome (the predicted post-state + receipt, or the
+    /// refusal), shown in the results area. `None` until the first SIMULATE.
+    sim_outcome: Option<starbridge_v2::simulate::SimOutcome>,
+    /// A short banner for the last commit-for-real (the REAL executor's verdict on
+    /// the committed intent), distinct from the prediction. `None` until committed.
+    sim_commit_banner: Option<String>,
 }
 
 impl Cockpit {
@@ -586,6 +612,24 @@ impl Cockpit {
             // The boot-seeded demo app (above) is the FIRST entry — the launcher
             // appends a fresh confined app per "+ launch" press.
             launched_apps: Vec::new(),
+            // The SIMULATE composer boots with the treasury as agent, the target
+            // picker on the first cell, the effect picker on the first palette
+            // entry, and a seeded example action (a small treasury→user transfer)
+            // so the panel opens on a runnable what-if rather than an empty forest.
+            sim_draft: {
+                let [treasury, _service, user] = anchors;
+                let mut d = starbridge_v2::simulate::IntentDraft::new(treasury);
+                let ai = d.add_action(treasury);
+                d.add_effect(
+                    ai,
+                    starbridge_v2::simulate::EffectKind::Transfer { to: user, amount: 250 },
+                );
+                d
+            },
+            sim_target_idx: 0,
+            sim_effect_idx: 0,
+            sim_outcome: None,
+            sim_commit_banner: None,
         }
     }
 
@@ -780,6 +824,168 @@ impl Cockpit {
             );
             w.commit_turn(turn)
         };
+        self.note_outcome(outcome);
+        self.refresh_cells();
+        cx.notify();
+    }
+
+    // --- the WHAT-IF / SIMULATE composer verbs ------------------------------
+    //
+    // These build an `IntentDraft` (compose any intent over any cell), run it
+    // through a FORKED throwaway world to PREDICT the outcome (the real executor,
+    // live world untouched), then — on commit — fire the SAME turn for real.
+
+    /// Cycle the SIMULATE composer's AGENT through the live cells (the cell that
+    /// authorizes + submits the composed turn). A fresh draft is started on the new
+    /// agent (the prior forest is cleared, since its actions referenced the old
+    /// agent's intent); the prediction is invalidated.
+    fn sim_cycle_agent(&mut self, cx: &mut Context<Self>) {
+        let cells = sorted_cells(&self.world.borrow());
+        if cells.is_empty() {
+            return;
+        }
+        let cur = cells.iter().position(|c| *c == self.sim_draft.agent).unwrap_or(0);
+        let next = cells[(cur + 1) % cells.len()];
+        self.sim_draft = starbridge_v2::simulate::IntentDraft::new(next);
+        self.sim_outcome = None;
+        self.sim_commit_banner = None;
+        cx.notify();
+    }
+
+    /// Cycle the TARGET cell the next added effect will act on (the action's
+    /// acting cell). Wraps over the live cells.
+    fn sim_cycle_target(&mut self, cx: &mut Context<Self>) {
+        let cells = sorted_cells(&self.world.borrow());
+        if cells.is_empty() {
+            return;
+        }
+        self.sim_target_idx = (self.sim_target_idx + 1) % cells.len();
+        cx.notify();
+    }
+
+    /// Cycle the EFFECT KIND the next "+ add" will append, over the full palette
+    /// (the studio-parity coverage — every single-custody-simulable effect).
+    fn sim_cycle_effect(&mut self, cx: &mut Context<Self>) {
+        self.sim_effect_idx = (self.sim_effect_idx + 1) % self.sim_effect_palette().len();
+        cx.notify();
+    }
+
+    /// The effect palette, with the CURRENT target/peer cells filled in (so the
+    /// templates reference real live cells). The "+ add" verb appends the entry at
+    /// `sim_effect_idx`. Order is the coverage display order.
+    fn sim_effect_palette(&self) -> Vec<starbridge_v2::simulate::EffectKind> {
+        use starbridge_v2::simulate::EffectKind as E;
+        let cells = sorted_cells(&self.world.borrow());
+        let target = cells.get(self.sim_target_idx).copied().unwrap_or(self.sim_draft.agent);
+        // A "peer" distinct from the target where possible (for transfer/grant dests).
+        let peer = cells
+            .iter()
+            .find(|c| **c != target)
+            .copied()
+            .unwrap_or(target);
+        vec![
+            E::Transfer { to: peer, amount: 250 },
+            E::GrantCapability { to: peer, target, slot: 0 },
+            E::RevokeCapability { slot: 0 },
+            E::EmitEvent { topic: "what-if".into() },
+            E::IncrementNonce,
+            E::CreateCell { seed: 0x9A },
+            E::SetField { index: 0, value: [7u8; 32] },
+            E::SetPermissionsOpen,
+            E::MakeSovereign,
+            E::Seal { reason: "what-if seal".into() },
+            E::Unseal,
+            E::Destroy,
+            E::Burn { amount: 1_000 },
+        ]
+    }
+
+    /// Append the currently-picked effect (on the currently-picked target) to the
+    /// draft as a new action root. Invalidates the prior prediction.
+    fn sim_add_effect(&mut self, cx: &mut Context<Self>) {
+        let cells = sorted_cells(&self.world.borrow());
+        let Some(target) = cells.get(self.sim_target_idx).copied() else {
+            return;
+        };
+        let palette = self.sim_effect_palette();
+        let Some(effect) = palette.get(self.sim_effect_idx).cloned() else {
+            return;
+        };
+        let ai = self.sim_draft.add_action(target);
+        self.sim_draft.add_effect(ai, effect);
+        self.sim_outcome = None;
+        self.sim_commit_banner = None;
+        cx.notify();
+    }
+
+    /// Drop the most-recently-added action from the draft (the panel's undo).
+    fn sim_pop_action(&mut self, cx: &mut Context<Self>) {
+        let n = self.sim_draft.actions.len();
+        if n > 0 {
+            self.sim_draft.remove_action(n - 1);
+        }
+        self.sim_outcome = None;
+        self.sim_commit_banner = None;
+        cx.notify();
+    }
+
+    /// Clear the draft to an empty forest on the same agent.
+    fn sim_clear(&mut self, cx: &mut Context<Self>) {
+        self.sim_draft = starbridge_v2::simulate::IntentDraft::new(self.sim_draft.agent);
+        self.sim_outcome = None;
+        self.sim_commit_banner = None;
+        cx.notify();
+    }
+
+    /// **SIMULATE the draft** — predict its consequences in a forked throwaway
+    /// world (the real executor, live world UNTOUCHED). Stores the [`SimOutcome`]
+    /// the panel renders (the predicted post-state + receipt, or the refusal).
+    fn sim_run(&mut self, cx: &mut Context<Self>) {
+        let outcome = {
+            let w = self.world.borrow();
+            starbridge_v2::simulate::simulate(&w, &self.sim_draft)
+        };
+        self.sim_outcome = Some(outcome);
+        self.sim_commit_banner = None;
+        cx.notify();
+    }
+
+    /// **COMMIT the draft for real** — run the IDENTICAL turn on the LIVE world.
+    /// Only meaningful after a SIMULATE that predicted a commit; the button is
+    /// disabled otherwise. Surfaces the real executor's verdict (which matches the
+    /// prediction) + refreshes the image.
+    fn sim_commit(&mut self, cx: &mut Context<Self>) {
+        // Only commit a draft the prediction said would commit (the panel disables
+        // the button otherwise; this guards the keyboard/palette path too).
+        let predicted_ok = matches!(
+            self.sim_outcome,
+            Some(starbridge_v2::simulate::SimOutcome::Predicted { .. })
+        );
+        if !predicted_ok {
+            self.sim_commit_banner =
+                Some("SIMULATE first — commit is enabled only after a predicted-commit".into());
+            cx.notify();
+            return;
+        }
+        let outcome = {
+            let mut w = self.world.borrow_mut();
+            starbridge_v2::simulate::commit(&mut w, &self.sim_draft)
+        };
+        self.sim_commit_banner = Some(match &outcome {
+            CommitOutcome::Committed { receipt, events } => format!(
+                "COMMITTED for real — {} action(s), {} computrons, {} dynamics event(s). \
+                 The prediction held.",
+                receipt.action_count,
+                receipt.computrons_used,
+                events.len()
+            ),
+            CommitOutcome::Rejected { reason, at_action } => {
+                format!("REJECTED by the live executor: {reason} @ {at_action:?}")
+            }
+        });
+        // The committed turn changed the image; also drop the stale prediction (the
+        // pre-state it predicted against is now spent).
+        self.sim_outcome = None;
         self.note_outcome(outcome);
         self.refresh_cells();
         cx.notify();
@@ -1540,7 +1746,23 @@ impl Cockpit {
             CommandId::Burn => self.run_burn(cx),
             CommandId::OverGrant => self.run_over_grant(cx),
 
+            // The WHAT-IF / SIMULATE composer (navigate to the tab on a verb so
+            // the prediction is in view).
+            CommandId::SimRun => {
+                self.set_tab(Tab::Simulate, cx);
+                self.sim_run(cx);
+            }
+            CommandId::SimCommit => {
+                self.set_tab(Tab::Simulate, cx);
+                self.sim_commit(cx);
+            }
+            CommandId::SimAddEffect => {
+                self.set_tab(Tab::Simulate, cx);
+                self.sim_add_effect(cx);
+            }
+
             CommandId::GoComposer => self.set_tab(Tab::Composer, cx),
+            CommandId::GoSimulate => self.set_tab(Tab::Simulate, cx),
             CommandId::GoObjects => self.set_tab(Tab::Objects, cx),
             CommandId::GoDebugger => self.set_tab(Tab::Debugger, cx),
             CommandId::GoReplay => self.set_tab(Tab::Replay, cx),
@@ -1977,6 +2199,282 @@ impl Cockpit {
             .child(self.outcome_banner())
     }
 
+    /// The WHAT-IF / SIMULATE panel: compose any intent over any cell across the
+    /// effect palette, PREDICT its consequences in a forked throwaway world (the
+    /// real executor, live world untouched), then COMMIT the identical turn.
+    fn simulate_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use starbridge_v2::simulate::SimOutcome;
+        let cells = sorted_cells(&self.world.borrow());
+        let target = cells.get(self.sim_target_idx).copied().unwrap_or(self.sim_draft.agent);
+        let palette = self.sim_effect_palette();
+        let effect = palette.get(self.sim_effect_idx).cloned();
+        let effect_label = effect.as_ref().map(|e| e.label()).unwrap_or_default();
+        let agent_short = reflect::short_hex(&self.sim_draft.agent.0);
+        let target_short = reflect::short_hex(&target.0);
+        let n_actions = self.sim_draft.actions.len();
+        let n_effects = self.sim_draft.effect_count();
+        let predicted_ok = matches!(self.sim_outcome, Some(SimOutcome::Predicted { .. }));
+
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title(
+            "SIMULATE · compose any intent · PREDICT before committing",
+        ));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "Build a turn over any cell(s) across the effect palette, run it through a \
+             FORKED throwaway world (the real executor over a deep copy of the live image) \
+             to see the predicted post-state + receipt or refusal — the LIVE world is \
+             untouched — then COMMIT the identical turn for real.",
+        ));
+
+        // --- the pickers (agent · target · effect) ---
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child("agent:"))
+                .child(cycle_chip(
+                    cx,
+                    "sim-agent",
+                    format!("{agent_short} (cycle)"),
+                    theme::accent(),
+                    Cockpit::sim_cycle_agent,
+                ))
+                .child(div().text_xs().text_color(theme::muted()).child("· target:"))
+                .child(cycle_chip(
+                    cx,
+                    "sim-target",
+                    format!("{target_short} (cycle)"),
+                    theme::good(),
+                    Cockpit::sim_cycle_target,
+                ))
+                .child(div().text_xs().text_color(theme::muted()).child("· effect:"))
+                .child(cycle_chip(
+                    cx,
+                    "sim-effect",
+                    format!("{effect_label} (cycle)"),
+                    theme::warn(),
+                    Cockpit::sim_cycle_effect,
+                )),
+        );
+        // --- the build verbs ---
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(small_button(cx, "sim-add", "+ add effect", theme::good(), Cockpit::sim_add_effect))
+                .child(small_button(cx, "sim-pop", "− last action", theme::muted(), Cockpit::sim_pop_action))
+                .child(small_button(cx, "sim-clear", "clear draft", theme::muted(), Cockpit::sim_clear)),
+        );
+
+        // --- the draft forest ---
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(pill(format!("{n_actions} action(s)"), theme::accent()))
+                .child(pill(format!("{n_effects} effect(s)"), theme::accent())),
+        );
+        let mut forest_box = div()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .p_2()
+            .rounded_md()
+            .bg(theme::panel())
+            .max_h(px(150.))
+            .overflow_hidden();
+        if self.sim_draft.actions.is_empty() {
+            forest_box = forest_box.child(
+                div().text_xs().text_color(theme::muted()).child(
+                    "(empty forest — pick a target + effect and press + add)",
+                ),
+            );
+        } else {
+            for (i, a) in self.sim_draft.actions.iter().enumerate() {
+                let tgt = reflect::short_hex(&a.target.0);
+                let effs = a
+                    .effects
+                    .iter()
+                    .map(|e| e.label())
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                forest_box = forest_box.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text())
+                        .child(format!("[{i}] on {tgt}: {effs}")),
+                );
+            }
+        }
+        col = col.child(forest_box);
+
+        // --- the SIMULATE + COMMIT verbs ---
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(small_button(cx, "sim-run", "▶ SIMULATE (predict)", theme::accent(), Cockpit::sim_run))
+                .child({
+                    // The commit button is enabled (and colored go) only after a
+                    // predicted-commit; otherwise it is dimmed + explains itself.
+                    let (label, color) = if predicted_ok {
+                        ("✓ COMMIT for real", theme::good())
+                    } else {
+                        ("✓ commit (simulate first)", theme::muted())
+                    };
+                    small_button(cx, "sim-commit", label, color, Cockpit::sim_commit)
+                }),
+        );
+
+        // --- the prediction results ---
+        col = col.child(self.simulate_results());
+
+        // --- the real-commit banner (distinct from the prediction) ---
+        if let Some(b) = &self.sim_commit_banner {
+            let color = if b.contains("REJECTED") || b.contains("simulate first") {
+                theme::warn()
+            } else {
+                theme::good()
+            };
+            col = col.child(
+                div().mt_1().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(color).child(b.clone()),
+            );
+        }
+        col
+    }
+
+    /// Render the last SIMULATE outcome — the predicted receipt + per-cell deltas +
+    /// dynamics, or the refusal (the executor's verdict run one turn ahead).
+    fn simulate_results(&self) -> gpui::AnyElement {
+        use starbridge_v2::simulate::SimOutcome;
+        let mut box_ = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mt_1()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::panel());
+        match &self.sim_outcome {
+            None => {
+                return box_
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child("(no prediction yet — press ▶ SIMULATE)"),
+                    )
+                    .into_any_element();
+            }
+            Some(SimOutcome::Predicted {
+                receipt,
+                deltas,
+                events,
+                cell_count_delta,
+                predicted_root,
+                ..
+            }) => {
+                box_ = box_.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .child(pill("PREDICTED: would COMMIT", theme::good()))
+                        .child(pill(format!("{} action(s)", receipt.action_count), theme::accent()))
+                        .child(pill(format!("{} computrons", receipt.computrons_used), theme::accent()))
+                        .child(pill(
+                            format!("receipt {}", reflect::short_hex(&receipt.receipt_hash())),
+                            theme::muted(),
+                        )),
+                );
+                box_ = box_.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .child(div().text_xs().text_color(theme::muted()).child("predicted image root:"))
+                        .child(pill(reflect::short_hex(predicted_root), theme::accent()))
+                        .when(*cell_count_delta != 0, |d| {
+                            d.child(pill(
+                                format!("cells {:+}", cell_count_delta),
+                                theme::good(),
+                            ))
+                        }),
+                );
+                box_ = box_.child(section_title("predicted cell deltas"));
+                if deltas.iter().all(|d| !d.balance_changed() && d.before.is_some()) {
+                    box_ = box_.child(
+                        div().text_xs().text_color(theme::muted()).child(
+                            "(no balance moved — a non-value effect; the receipt above still binds it)",
+                        ),
+                    );
+                }
+                for d in deltas {
+                    let cell = reflect::short_hex(&d.cell.0);
+                    let line = match (d.before, d.after) {
+                        (None, Some(a)) => format!("· {cell}  BORN → balance {a}"),
+                        (Some(_), None) => format!("· {cell}  RETIRED"),
+                        (Some(b), Some(a)) if b != a => format!("· {cell}  {b} → {a}"),
+                        (Some(b), Some(_)) => format!("· {cell}  unchanged ({b})"),
+                        (None, None) => format!("· {cell}  (absent)"),
+                    };
+                    let color = if d.balance_changed() { theme::text() } else { theme::muted() };
+                    box_ = box_.child(div().text_xs().text_color(color).child(line));
+                }
+                if !events.is_empty() {
+                    box_ = box_.child(section_title("predicted dynamics"));
+                    for ev in events.iter().take(8) {
+                        box_ = box_.child(
+                            div().text_xs().text_color(theme::muted()).child(format!("· {}", ev.label())),
+                        );
+                    }
+                }
+                box_.into_any_element()
+            }
+            Some(SimOutcome::Refused {
+                reason,
+                static_refusal,
+                at_action,
+                ..
+            }) => {
+                let badge = if *static_refusal {
+                    "PREDICTED: REFUSED (static rail — caught before submission)"
+                } else {
+                    "PREDICTED: REFUSED (the executor's guarantee would fire)"
+                };
+                box_ = box_.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .child(pill(badge, theme::bad()))
+                        .when(!at_action.is_empty(), |d| {
+                            d.child(pill(format!("@ action {at_action:?}"), theme::warn()))
+                        }),
+                );
+                box_ = box_.child(
+                    div().text_xs().text_color(theme::bad()).child(reason.clone()),
+                );
+                box_ = box_.child(div().text_xs().text_color(theme::muted()).child(
+                    "this is the live executor's verdict, run one turn ahead — no gas spent, \
+                     the live image untouched.",
+                ));
+                box_.into_any_element()
+            }
+        }
+    }
+
     fn outcome_banner(&self) -> impl IntoElement {
         let (txt, color) = match &self.last_outcome {
             // A rejected turn OR a refused shell op — the guarantee firing.
@@ -2061,6 +2559,7 @@ impl Cockpit {
             Tab::Buffer => self.buffer_panel(cx).into_any_element(),
             Tab::Terminal => self.terminal_panel(cx).into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
+            Tab::Simulate => self.simulate_panel(cx).into_any_element(),
             Tab::Objects => self.objects_panel().into_any_element(),
             Tab::Debugger => self.debugger_panel().into_any_element(),
             Tab::Replay => self.replay_panel().into_any_element(),
@@ -4532,6 +5031,34 @@ impl Cockpit {
             cx.notify();
         }
     }
+
+    /// Whether a LIVE NODE receipt stream is connected (so the post-paint pump in
+    /// `main::run_window` should keep turning). `false` for the pure embedded image
+    /// (no `--node`), which stops the pump immediately.
+    pub fn has_live_stream(&self) -> bool {
+        self.live_stream.is_some()
+    }
+
+    /// **The LIVE PUMP tick — drain the node's SSE stream off gpui's async
+    /// executor.**
+    ///
+    /// `drain_live_stream` runs at the top of `render`, but gpui only re-renders on
+    /// `cx.notify()` or input — so a receipt a remote node streams while the UI is
+    /// idle would sit unconsumed in the reader's channel until the next input. This
+    /// is the fix the recovered design calls for ("move the cockpit reads onto
+    /// gpui's async executor"): a foreground task in `run_window` calls this on a
+    /// short timer, so a connected node's receipts are drained — and the
+    /// ReceiptInspector / live organ panels advance LIVE — with no user input. Each
+    /// freshly-arrived receipt fires `cx.notify()` (inside `drain_live_stream`), so
+    /// the next paint reflects it. Returns whether the pump should keep running (a
+    /// stream is still connected). No-op (returns `false`) for the embedded-only image.
+    pub fn pump_live(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.live_stream.is_none() {
+            return false;
+        }
+        self.drain_live_stream(cx);
+        true
+    }
 }
 
 impl Render for Cockpit {
@@ -4766,6 +5293,66 @@ fn clerk_button(
             }),
         )
         .child(label.to_string())
+}
+
+/// A compact action button with an EXPLICIT element id (so two buttons that share
+/// a label don't collide) — the SIMULATE panel's build/run/commit verbs.
+fn small_button(
+    cx: &mut Context<Cockpit>,
+    id: &'static str,
+    label: &str,
+    color: Hsla,
+    handler: fn(&mut Cockpit, &mut Context<Cockpit>),
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(theme::panel_hi())
+        .border_1()
+        .border_color(theme::border())
+        .text_xs()
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::border()))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev, _window, cx| {
+                handler(this, cx);
+            }),
+        )
+        .child(label.to_string())
+}
+
+/// A clickable "cycle" chip — a small pill that runs `handler` on click (the
+/// SIMULATE panel's agent/target/effect pickers cycle their selection).
+fn cycle_chip(
+    cx: &mut Context<Cockpit>,
+    id: &'static str,
+    label: String,
+    color: Hsla,
+    handler: fn(&mut Cockpit, &mut Context<Cockpit>),
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_2()
+        .py_0p5()
+        .rounded_md()
+        .bg(theme::panel_hi())
+        .border_1()
+        .border_color(theme::border())
+        .text_xs()
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::border()))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev, _window, cx| {
+                handler(this, cx);
+            }),
+        )
+        .child(label)
 }
 
 /// Map a landing-portal [`Tone`](starbridge_v2::landing::Tone) (a semantic role,

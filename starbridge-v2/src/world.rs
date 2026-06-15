@@ -112,6 +112,14 @@ pub struct World {
     /// This is what lets the SWARM BUDGET METER (N1) observe non-zero metered spend
     /// on committed turns without every turn being rejected for under-fee.
     turn_fee: u64,
+    /// The factory descriptors deployed into this world's executor registry (via
+    /// [`World::deploy_factory`]). Retained here — the descriptor is `Clone` and
+    /// inspectable — so [`World::fork`] can replay them onto a throwaway world's
+    /// executor: a `CreateCellFromFactory` simulated in a fork validates against
+    /// the SAME registered factories the live world holds. (The engine's executor
+    /// owns the live registry but exposes no enumeration; this is the world's own
+    /// record of what it deployed, kept in lock-step with every `deploy_factory`.)
+    deployed_factories: Vec<dregg_cell::FactoryDescriptor>,
 }
 
 impl Default for World {
@@ -174,6 +182,7 @@ impl World {
             height: 0,
             timestamp,
             turn_fee: 0,
+            deployed_factories: Vec::new(),
         }
     }
 
@@ -295,6 +304,84 @@ impl World {
     /// callers (and the composer) can construct chained turns.
     pub fn chain_head(&self, agent: &CellId) -> Option<[u8; 32]> {
         self.engine.executor().get_last_receipt_hash(agent)
+    }
+
+    /// **Fork this world into a throwaway COPY for WHAT-IF SIMULATION.**
+    ///
+    /// Returns a fresh [`World`] whose engine carries a DEEP CLONE of this world's
+    /// ledger (`dregg_cell::Ledger` is `Clone`), the SAME [`EngineConfig`] (cost
+    /// model, federation id, block height, pinned timestamp), the SAME deployed
+    /// factory registry (replayed from [`Self::deployed_factories`]), and the SAME
+    /// per-agent receipt-chain heads (so a chained turn threads identically). The
+    /// fork's verified executor is the REAL one — running a turn through the fork's
+    /// [`World::commit_turn`] applies the IDENTICAL conservation / ocap / program
+    /// guarantees the live world would, and yields a byte-identical receipt for the
+    /// same turn (same timestamp + same pre-state ⟹ same `receipt_hash`).
+    ///
+    /// Because it is a SEPARATE `World`, committing on the fork mutates ONLY the
+    /// fork — the live world's ledger, provenance log, dynamics and history are
+    /// untouched. This is the substrate of the "simulate before committing" panel
+    /// ([`crate::simulate`]): build a turn, run it on a fork to see the predicted
+    /// post-state + receipt (or refusal), then — only if the operator chooses —
+    /// run the SAME turn on the live world to commit it for real.
+    ///
+    /// The fork does NOT carry over the live provenance log / dynamics / replay
+    /// tape (it starts empty there): a prediction is about the NEXT turn's effect,
+    /// not a re-derivation of past history. Its `turn_fee` matches this world's, so
+    /// turns built by the fork's [`World::turn`] meter the same way.
+    pub fn fork(&self) -> World {
+        let config = EngineConfig {
+            costs: self.engine.executor().costs.clone(),
+            federation_id: self.engine.executor().local_federation_id,
+            block_height: self.engine.executor().block_height,
+            timestamp: self.timestamp,
+            max_proof_age_secs: self.engine.max_proof_age_secs(),
+        };
+        // Deep-clone the live ledger into a fresh engine (the fork's substrate).
+        let mut engine = DreggEngine::with_ledger(config, self.engine.ledger().clone());
+        // Replay the deployed factories onto the fork's executor so a
+        // CreateCellFromFactory simulates against the SAME registered factories.
+        for descriptor in &self.deployed_factories {
+            let _ = engine.executor_mut().deploy_factory(descriptor.clone());
+        }
+        // The fork's replay-tape executor (kept in lock-step with the live one so
+        // `commit_turn`'s `record_commit` re-derives the SAME post-root as the
+        // authoritative engine — the fork stays internally consistent even though
+        // simulate never replays it).
+        let mut record_exec = TurnExecutor::new(self.engine.executor().costs.clone());
+        record_exec.set_timestamp(self.timestamp);
+        record_exec.set_block_height(self.engine.executor().block_height);
+        record_exec.set_local_federation_id(self.engine.executor().local_federation_id);
+        for descriptor in &self.deployed_factories {
+            let _ = record_exec.deploy_factory(descriptor.clone());
+        }
+        // Seed EVERY current cell's receipt-chain head onto BOTH the fork's
+        // authoritative executor AND its replay-tape executor, so a chained turn
+        // from any agent threads its `previous_receipt_hash` exactly as it would
+        // against the live world (otherwise the first forked turn from an agent
+        // with history rejects as ReceiptChainMismatch), and the two stay in
+        // lock-step.
+        for (id, _cell) in self.engine.ledger().iter() {
+            if let Some(head) = self.engine.executor().get_last_receipt_hash(id) {
+                engine.executor().set_last_receipt_hash(*id, head);
+                record_exec.set_last_receipt_hash(*id, head);
+            }
+        }
+        World {
+            engine,
+            // A fresh replay tape — the fork predicts the next turn, it does not
+            // re-derive past history (its own commit still records onto this tape,
+            // harmlessly, so the fork stays internally consistent).
+            history: History::with_costs(self.timestamp, self.engine.executor().costs.clone()),
+            record_ledger: self.engine.ledger().clone(),
+            record_exec,
+            receipts: Vec::new(),
+            dynamics: Dynamics::new(),
+            height: self.height,
+            timestamp: self.timestamp,
+            turn_fee: self.turn_fee,
+            deployed_factories: self.deployed_factories.clone(),
+        }
     }
 
     // --- genesis / cell creation (out-of-band, like a node's genesis block) -
@@ -466,7 +553,10 @@ impl World {
         let vk = self.engine.executor_mut().deploy_factory(descriptor.clone());
         // Keep the replay recorder's executor in lock-step so a factory-birth
         // committed below re-derives identically on replay.
-        let _ = self.record_exec.deploy_factory(descriptor);
+        let _ = self.record_exec.deploy_factory(descriptor.clone());
+        // Retain the descriptor so a fork can replay it onto its throwaway
+        // executor (the live registry isn't enumerable; this is our own record).
+        self.deployed_factories.push(descriptor);
         vk
     }
 
@@ -808,6 +898,11 @@ fn wrap_turn(agent: CellId, nonce: u64, forest: CallForest) -> Turn {
         cross_effect_dependencies: Vec::new(),
         effect_witness_index_map: Vec::new(),
     }
+}
+
+/// A short, human cell-id (the first bytes, hex) — for labels/banners.
+pub fn short(id: &CellId) -> String {
+    crate::reflect::short_hex(id.as_bytes())
 }
 
 /// Convenience: a transfer effect.
