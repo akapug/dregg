@@ -1,0 +1,52 @@
+diff --git a/tool/microkit/src/capdl/builder.rs b/tool/microkit/src/capdl/builder.rs
+index 44754e8..4f838a4 100644
+--- a/tool/microkit/src/capdl/builder.rs
++++ b/tool/microkit/src/capdl/builder.rs
+@@ -198,12 +198,33 @@ impl CapDLSpecContainer {
+             let seg_base_vaddr = segment.virt_addr;
+             let seg_mem_size: u64 = segment.mem_size();
+ 
+-            let page_size = PageSize::Small;
+-            let page_size_bytes = page_size as u64;
++            let small_bytes = PageSize::Small as u64;
++            let large_bytes = PageSize::Large as u64;
++            let seg_end_vaddr = seg_base_vaddr + seg_mem_size;
++
++            // Create and map all frames for this segment. We map with the LARGEST
++            // page (2 MiB Large) the alignment + remaining span permits, falling
++            // back to 4 KiB Small for any unaligned prefix/tail. A 2 MiB-aligned
++            // segment (the loader emits these when linked with `-z
++            // max-page-size=0x200000`) then maps with ~one 2 MiB frame per 2 MiB
++            // instead of 512 small frames — collapsing a ~300 MiB embedded image
++            // from ~80,000 frame caps (which exhausts ROOT_CNODE_SIZE_BITS) to a
++            // couple hundred. Small-page images are unchanged (no aligned 2 MiB run
++            // exists, so every step takes the Small branch).
++            let mut cur_vaddr = round_down(seg_base_vaddr, small_bytes);
++            while cur_vaddr < seg_end_vaddr {
++                // Choose this frame's page size: Large iff cur_vaddr is 2 MiB
++                // aligned AND a full 2 MiB still fits within the (page-rounded)
++                // segment span. Otherwise Small.
++                let page_size = if cur_vaddr % large_bytes == 0
++                    && cur_vaddr + large_bytes <= round_up(seg_end_vaddr, small_bytes)
++                {
++                    PageSize::Large
++                } else {
++                    PageSize::Small
++                };
++                let page_size_bytes = page_size as u64;
+ 
+-            // Create and map all frames for this segment.
+-            let mut cur_vaddr = round_down(seg_base_vaddr, page_size_bytes);
+-            while cur_vaddr < seg_base_vaddr + seg_mem_size {
+                 let mut frame_fill = Fill {
+                     entries: [].to_vec(),
+                 };
+@@ -245,7 +266,7 @@ impl CapDLSpecContainer {
+                     frame_fill,
+                     &format!("elf_{pd_name}_{frame_sequence:09}"),
+                     None,
+-                    PageSize::Small.fixed_size_bits(sel4_config) as u8,
++                    page_size.fixed_size_bits(sel4_config) as u8,
+                 );
+                 let frame_cap = capdl_util_make_frame_cap(
+                     frame_obj_id,

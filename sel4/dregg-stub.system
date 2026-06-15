@@ -115,15 +115,15 @@
          partition, enforced. A larger stack (the Lean runtime's C++ ctors + the
          turn's recursion) — the heaps are the PD's own static frames.
          ════════════════════════════════════════════════════════════════════ -->
-    <protection_domain name="executor" priority="120" stack_size="0x40000">
-        <program_image path="dregg-executor-microkit-pd.elf" />
+    <protection_domain name="executor" priority="120" stack_size="0x10000">
+        <program_image path="dregg-executor-stub-pd.elf" />
         <!-- The embedded verified Lean image is ~280 MiB of loaded ELF segments
              (ending near vaddr 0x1120_0000); the shared regions must map CLEAR of
              it, so they live high (the same high-vaddr style the net PD uses for
              its DMA regions). turn_in (R) the ingress edge fills; commit_out (RW)
              the receipt lands in (read by persist). -->
-        <map mr="turn_in"    vaddr="0x4_000_000_000" perms="r"  cached="true" setvar_vaddr="turn_in_vaddr" />
-        <map mr="commit_out" vaddr="0x4_000_400_000" perms="rw" cached="true" setvar_vaddr="commit_out_vaddr" />
+        <map mr="turn_in"    vaddr="0x3_000_000" perms="r"  cached="true" setvar_vaddr="turn_in_vaddr" />
+        <map mr="commit_out" vaddr="0x3_400_000" perms="rw" cached="true" setvar_vaddr="commit_out_vaddr" />
     </protection_domain>
 
 

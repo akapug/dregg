@@ -32,6 +32,11 @@ CARGO_FLAGS := --release -Z json-target-spec
 # vCPU must have EL2 — `virtualization=on`.
 QEMU_AARCH64 := qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 \
                 -m 2G -nographic
+# The 5-PD assembly's executor seat embeds the verified Lean image (~280 MiB of
+# ELF segments); the loader copies it into RAM, so the assembly needs more guest
+# memory than the single-PD demos. (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.)
+QEMU_AARCH64_ASSEMBLY := qemu-system-aarch64 -machine virt,virtualization=on \
+                -cpu cortex-a53 -m 4G -nographic
 QEMU_RISCV   := qemu-system-riscv64 -machine virt -m 2G -nographic
 
 # The GRAPHICAL boot reuses the same EL2 `virt` machine but DROPS -nographic and
@@ -46,6 +51,8 @@ QEMU_AARCH64_GRAPHICAL := qemu-system-aarch64 -machine virt,virtualization=on \
 QEMU_DISPLAY ?= cocoa,show-cursor=on
 
 .PHONY: all run run-m0 run-m1 run-m2 run-stark run-net run-assembly run-riscv \
+        build-executor-microkit verify-executor-microkit \
+        build-assembly-real run-assembly-real \
         build-aarch64 build-assembly build-riscv build-graphical run-graphical \
         run-graphical-headless build-tutorial run-tutorial run-tutorial-headless \
         build-image run-image run-image-headless \
@@ -137,10 +144,13 @@ run-net: build-aarch64
 #   verifier — dregg-verifier-stark-pd : a REAL BabyBear+BLAKE3+FRI STARK
 #              proved+verified on-device (the bankable verified-compute HEART
 #              ORGAN; anti-ghost teeth fire). Self-contains its proof — no Lean.
-#   executor — dregg-executor-stub-pd  : the HEART SEAT. Holds the executor's
-#              exact cap partition (turn_in R, commit_out RW; NO device/NIC cap)
-#              until the verified Lean execFullForestG cross-compiles (THE
-#              blocker, docs/SEL4-EMBEDDING.md §2). Writes the commit_out sentinel.
+#   executor — dregg-executor-microkit-pd : the HEART, REAL. EMBEDS the VERIFIED
+#              Lean executor (dregg_exec_full_forest_auth = execFullForestG +
+#              admission, proved in metatheory/). Reads turn_in (R) → runs the
+#              verified turn → writes the receipt to commit_out (RW) → signals
+#              persist+verifier. The §2 Lean-ELF blocker is CLEARED (musl +
+#              libuv-excised runtime folded from executor-rootserver). A real
+#              verified turn flows through this PD (status:2 ok:1).
 #   persist  — dregg-persist-stub-pd   : the durable-store seat. Maps commit_out
 #              (R) ONLY and reads the executor's sentinel back — the cross-PD
 #              channel proven live. The storage-device cap lands HERE (§3).
@@ -151,6 +161,86 @@ run-net: build-aarch64
 #              CAS + ACL + factory slot-caveat). Holds ONLY its own caps.
 # The cap partition IS the trust boundary ("capabilities all the way down").
 # QEMU carries the same -device virtio-net-device the net edge probes (slot 31).
+# The REAL executor PD lives in its OWN workspace (it links the heavy verified
+# Lean closure + the seL4-musl-rebuilt runtime; keeping it out of the dregg-pd
+# workspace keeps the other PDs' build light). It needs LIBCLANG_PATH (the sel4
+# crate's bindgen) + the same SEL4_INCLUDE_DIRS. The seL4-musl archive set it
+# links is provisioned by executor-rootserver/scripts/{provision-sel4,
+# relink-roottask}.sh (already run; see ../docs/EMBEDDABLE-LEAN-RUNTIME.md §4).
+EXEC_MK_DIR  := $(PD_DIR)/executor-microkit-pd
+EXEC_MK_ELF  := $(EXEC_MK_DIR)/target/aarch64-sel4-microkit/release/dregg-executor-microkit-pd.elf
+LIBCLANG_PATH ?= /opt/homebrew/opt/llvm/lib
+
+# Build the REAL executor PD: a Microkit PD that LINKS the verified Lean executor
+# (dregg_exec_full_forest_auth) + the ELF Lean runtime + the real crypto floor +
+# the seL4 musl into one ELF (0 undefined symbols). This is the firmament
+# keystone artifact (executor-microkit-pd/WALL.md). Run `make verify-executor-
+# microkit` to confirm the verified entry is embedded.
+build-executor-microkit:
+	cd $(EXEC_MK_DIR) && LIBCLANG_PATH=$(LIBCLANG_PATH) \
+		SEL4_INCLUDE_DIRS=$(SEL4_INCLUDE_DIRS) \
+		cargo build --release -Z json-target-spec
+
+# Prove the verified executor entry is embedded in the assembled PD ELF (T =
+# defined text), with zero undefined symbols.
+verify-executor-microkit: build-executor-microkit
+	@echo "== verified entry embedded in the assembled Microkit PD: =="
+	@nm $(EXEC_MK_ELF) | grep ' T dregg_exec_full_forest_auth' || \
+		(echo "MISSING verified entry!" && exit 1)
+	@echo "== undefined symbols in the static PD (must be 0): =="
+	@nm $(EXEC_MK_ELF) | grep -c ' U ' | xargs -I{} echo "   undefined: {}"
+
+# ── build-assembly-real: the REAL executor seat — BOOTS ─────────────────────
+# Builds the 5-PD image with the REAL executor PD (dregg-executor-microkit-pd,
+# embedding the VERIFIED executor) wired into dregg.system, and packages it into
+# ONE bootable Microkit image. The verified turn runs status:2 ok:1 INSIDE the
+# assembled PD (executor-microkit-pd/microkit-patch/assembly-boot-evidence.log).
+#
+# TWO things make the ~300-MiB-text executor PD fit a Microkit image:
+#   1. The PD ELF is linked with `-z max-page-size=0x200000` (its .cargo/config
+#      .toml) so its PT_LOAD segments are 2 MiB-aligned.
+#   2. A one-function microkit-tool patch maps PD image segments with 2 MiB Large
+#      pages where alignment permits (stock microkit hard-codes 4 KiB for every
+#      image frame). Without it the executor needs ~83,000 frame caps and the
+#      on-device CapDL initialiser exhausts ROOT_CNODE_SIZE_BITS (OutOfSlots);
+#      with it the image is ~170 Large frames + small tails (2,322 objects total).
+#      The patch + the prebuilt patched tool are in
+#      executor-microkit-pd/microkit-patch/ (0001-2mib-elf-image-pages.patch,
+#      built against the microkit 2.2.0 tag to match the SDK's initialiser.elf).
+#      Install it once:  cp executor-microkit-pd/microkit-patch/microkit-2.2.0-patched \
+#                           $(MICROKIT)
+# The SDK loader.elf is relinked to 0x90000000 (loader.elf.orig-0x70000000 is the
+# backup); QEMU loads the image blob at addr=0x90000000 to match.
+build-assembly-real: build-aarch64 build-executor-microkit
+	cd $(PD_DIR) && cargo build $(CARGO_FLAGS) \
+		-p dregg-verifier-stark-pd \
+		-p dregg-persist-stub-pd -p dregg-net-driver-pd -p dregg-rbg-dir
+	mkdir -p $(BUILD)
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-verifier-stark-pd.elf $(BUILD)/
+	cp $(EXEC_MK_ELF)                                                              $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-persist-stub-pd.elf   $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-net-driver-pd.elf     $(BUILD)/
+	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-rbg-dir.elf           $(BUILD)/
+	$(MICROKIT) dregg.system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/dregg-real.img -r $(BUILD)/dregg-real.report.txt
+
+# Boot the REAL 5-PD firmament: the VERIFIED Lean executor runs a turn (status:2
+# ok:1) through the assembled PD's channels (turn_in/commit_out), the verifier
+# -stark PD verifies a real STARK, persist reads the commit, net brings the NIC up.
+run-assembly-real: build-assembly-real
+	$(QEMU_AARCH64_ASSEMBLY) \
+		-global virtio-mmio.force-legacy=false \
+		-netdev user,id=net0 \
+		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.31 \
+		-device loader,file=$(BUILD)/dregg-real.img,addr=0x90000000,cpu-num=0 \
+		-serial mon:stdio
+
+# ── build-assembly / run-assembly: the BOOTABLE 5-PD firmament demo ──────────
+# The same 5-PD firmament, with the executor seat held by the small stub PD
+# (dregg-stub.system) so the WHOLE assembly BOOTS in QEMU today (the real
+# executor PD links the verified turn — see build-assembly-real + WALL.md — but
+# its 285-MiB-text image overflows the microkit tool's fixed loader). This keeps
+# the firmament boot demonstrable while the verified-executor seat is the linked
+# keystone artifact + the verified turn boots under seL4 via the rootserver.
 build-assembly: build-aarch64
 	cd $(PD_DIR) && cargo build $(CARGO_FLAGS) \
 		-p dregg-verifier-stark-pd -p dregg-executor-stub-pd \
@@ -161,7 +251,7 @@ build-assembly: build-aarch64
 	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-persist-stub-pd.elf   $(BUILD)/
 	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-net-driver-pd.elf     $(BUILD)/
 	cp $(PD_DIR)/target/aarch64-sel4-microkit/release/dregg-rbg-dir.elf           $(BUILD)/
-	$(MICROKIT) dregg.system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/dregg.img -r $(BUILD)/dregg.report.txt
+	$(MICROKIT) dregg-stub.system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/dregg.img -r $(BUILD)/dregg.report.txt
 
 run-assembly: build-assembly
 	$(QEMU_AARCH64) \
