@@ -102,16 +102,6 @@ pr-run-mode = "plan"
 ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
 ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
 
-# C3 native-batch leaf-wrap WIP: build the LOCAL plonky3-recursion fork checkout instead of
-# the pinned git rev, so the new `verify_p3_native_batch_proof_circuit` /
-# `RecursionInput::NativeBatchStark` entry compiles. Revert to the git rev (bump the rev in
-# [workspace.dependencies]) once the fork change is committed + pushed.
-[patch."https://github.com/emberian/plonky3-recursion"]
-p3-recursion = { path = "../plonky3-recursion/recursion" }
-p3-circuit = { path = "../plonky3-recursion/circuit" }
-p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
-
 [workspace.dependencies]
 ## Local
 dregg-macaroon = { path = "macaroon", default-features = false }
@@ -140,12 +130,13 @@ p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd73
 p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
 p3-util = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
 
-## Plonky3-recursion fork updated to match p3 rev 82cfad73.
-## Keep these as git dependencies so CI does not require a sibling checkout.
-p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "c14b5fc079af18d7f3ba3f3586f173bd166c7cd4" }
-p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "c14b5fc079af18d7f3ba3f3586f173bd166c7cd4" }
-p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "c14b5fc079af18d7f3ba3f3586f173bd166c7cd4" }
-p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "c14b5fc079af18d7f3ba3f3586f173bd166c7cd4" }
+## Plonky3-recursion fork — rev 72ffc56 (`update-plonky3-rev` tip: p3 82cfad73 + the C3
+## native-batch leaf-wrap carrying `RecursionInput::NativeBatchStark`). PURE git deps, no
+## `[patch]`, no sibling checkout — a fresh clone and CI resolve this identically.
+p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "72ffc5646e90af9324ab17248b4beed31c036db3" }
+p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "72ffc5646e90af9324ab17248b4beed31c036db3" }
+p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "72ffc5646e90af9324ab17248b4beed31c036db3" }
+p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "72ffc5646e90af9324ab17248b4beed31c036db3" }
 
 ## Crates.io
 ark-serialize = { version = "0.5", features = ["derive"] }
