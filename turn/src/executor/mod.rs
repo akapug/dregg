@@ -350,10 +350,13 @@ pub fn project_slot_caveat_manifest(
             | dregg_cell::StateConstraint::SenderInSlot { .. }
             | dregg_cell::StateConstraint::BalanceGte { .. }
             | dregg_cell::StateConstraint::BalanceLte { .. }
-            // Heap-keyed atoms bind a fields_map key, not a u8 register
-            // slot — executor-enforced by the scalar evaluator
-            // (`evaluate_heap_atom`); no SlotCaveat AIR projection.
+            // Heap-keyed / collection atoms bind heap keys or a collection
+            // run, not a u8 register slot — executor-enforced by the scalar
+            // evaluator; no SlotCaveat AIR projection.
             | dregg_cell::StateConstraint::HeapField { .. }
+            // CollectionAggregate opens an element run in the heap and
+            // evaluates a CollPred aggregate — no AIR slot projection.
+            | dregg_cell::StateConstraint::CollectionAggregate { .. }
             // The delegation_epoch tie reads the sealed per-cell counter
             // (`TransitionMeta::delegation_epoch`), not a state column in
             // the current AIR layout — executor-enforced like the other

@@ -1422,6 +1422,279 @@ pub enum StateConstraint {
         at_root: [u8; 32],
         proof_witness_index: usize,
     },
+
+    /// **Aggregate-over-a-collection gate** (`docs/CELL-PROGRAM-LANGUAGE.md`
+    /// gaps 7/11.1 — the heap/layout rung, the documented "lamesauce"
+    /// N≤3 fixed-slot cap *lifted*). Predicates over a NAMED COLLECTION
+    /// living in the cell's openable `(collection_id, key) → value` heap
+    /// ([`CellState::heap_map`], the sorted-Poseidon2 [`CellState::heap_root`]
+    /// — the same `cap_root` collection-commitment home as the channel
+    /// membership root). Where [`Self::CountGe`] re-exhibits an external
+    /// witnessed SET, this aggregates over the cell's OWN named collection
+    /// data, read by name end-to-end.
+    ///
+    /// A collection is a contiguous run of element records in `heap_map`
+    /// under `collection_id`: element `i` occupies the heap stride
+    /// `[i*stride .. i*stride + stride)`, and element `i`'s field at offset
+    /// `f` is `heap[(collection_id, i*stride + f)]` — the felt realization
+    /// of the Lean index-keyed sub-record (`Value.collectionField` reading
+    /// `"0"`,`"1"`,… element records, `elemScalar`/`elemSym` reading each
+    /// element's fields by name). The collection is the contiguous prefix
+    /// whose ANCHOR field (`pred`'s key offset, or offset 0) is present,
+    /// truncating at the first absent index (the `readIndexed` fail-closed
+    /// truncation: a collection has no phantom tail beyond a gap), bounded
+    /// by `fuel` (an upper element count — no element index exceeds it).
+    ///
+    /// **THE COUNCIL LIFT** rides [`CollPred::MOfNDistinct`]: arbitrary-N
+    /// M-of-N over the collection, distinctness-enforced. A naive
+    /// `CountSatGe` would be FOOLED by a duplicate-padded forge (the same
+    /// approver listed `m` times, raw count `m` from ONE real approval);
+    /// `MOfNDistinct` counts DISTINCT identity keys (`BTreeSet` dedup, the
+    /// `eraseDups` mirror), so a duplicate-padded forge collapses to ONE
+    /// key and REFUSES; an unbound forge (a padding element that does not
+    /// satisfy `approved`) is filtered before the count. Both biting teeth.
+    ///
+    /// Fail-closed: an absent collection (anchor of element 0 not present)
+    /// REJECTS (`collectionAggregate_absent_refuses` /
+    /// `collectionCouncil_absent_refuses`) — an aggregate over an absent
+    /// collection is unevaluable.
+    ///
+    /// Lean twin (LAW #1, the source of truth):
+    /// `Dregg2.Exec.Collections.collectionAggregate` /
+    /// `collectionCouncil` + `mOfNDistinct` (the council keystone), proved
+    /// `mOfNDistinct_iff` / `mOfNDistinct_le_countSat` (the duplicate-pad
+    /// tooth) / `collectionCouncil_iff`
+    /// (`metatheory/Dregg2/Exec/Collections.lean`). A `StateConstraint`
+    /// (it reads only post-state heap, but is proof/data-bearing over a
+    /// committed map — not a post-state-local scalar — so it does not lift
+    /// into the composable `SimpleStateConstraint` fragment, like
+    /// [`Self::CountGe`]). APPEND-ONLY (postcard variant indices preserved).
+    CollectionAggregate {
+        /// The `collection_id` lane in the cell's `(collection_id, key)`
+        /// heap under which the element run lives.
+        collection_id: u32,
+        /// The per-element heap-key stride (the element record's width —
+        /// how many heap keys one element occupies). Must be `>= 1`.
+        stride: u32,
+        /// An upper bound on the element count (the `readIndexed` fuel: no
+        /// element index is read beyond it). The collection is the
+        /// contiguous present prefix, at most `fuel` long.
+        fuel: u32,
+        /// The aggregate predicate over the read-out collection.
+        pred: CollPred,
+    },
+}
+
+/// A per-element decision predicate over the felt fields of one collection
+/// element (the Rust mirror of the Lean `ElemPred := Value → Bool`, built
+/// from `elemScalar`/`elemSym`). An element is its heap stride
+/// `&[Option<FieldElement>]` — `field[f]` is the value at element-relative
+/// offset `f` (absent ⇒ `None`). Each atom reads ONE element field by
+/// offset (the felt dual of reading a record field by name) and is
+/// fail-closed on an absent field.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ElemPredAtom {
+    /// `element[offset] == value` (full 32-byte; absent field ⇒ false).
+    FieldEquals { offset: u32, value: FieldElement },
+    /// `element[offset] >= value` (big-endian; absent ⇒ false).
+    FieldGte { offset: u32, value: FieldElement },
+    /// `element[offset] <= value` (big-endian; absent ⇒ false).
+    FieldLte { offset: u32, value: FieldElement },
+    /// `element[offset] ∈ set` (u64 lane; absent ⇒ false).
+    FieldInSet { offset: u32, set: Vec<u64> },
+}
+
+impl ElemPredAtom {
+    /// The element-relative offset this atom reads — its ANCHOR field. A
+    /// collection element is "present" iff its anchor (and, for the
+    /// council, its key) reads; this drives the `readIndexed` truncation.
+    fn anchor_offset(&self) -> u32 {
+        match self {
+            ElemPredAtom::FieldEquals { offset, .. }
+            | ElemPredAtom::FieldGte { offset, .. }
+            | ElemPredAtom::FieldLte { offset, .. }
+            | ElemPredAtom::FieldInSet { offset, .. } => *offset,
+        }
+    }
+
+    /// Decide this atom against one element's heap stride `elem` (indexed
+    /// by element-relative offset; `None` = absent field). Fail-closed:
+    /// an absent field is `false` (the `elemScalar`/`elemSym` fail-closed
+    /// read — `Value.scalar` over a missing field is `none`, so the
+    /// predicate built from it is `false`).
+    fn eval(&self, elem: &[Option<FieldElement>]) -> bool {
+        let read = |off: u32| -> Option<FieldElement> {
+            elem.get(off as usize).copied().flatten()
+        };
+        match self {
+            ElemPredAtom::FieldEquals { offset, value } => read(*offset) == Some(*value),
+            ElemPredAtom::FieldGte { offset, value } => {
+                read(*offset).is_some_and(|x| field_gte(&x, value))
+            }
+            ElemPredAtom::FieldLte { offset, value } => {
+                read(*offset).is_some_and(|x| field_lte(&x, value))
+            }
+            ElemPredAtom::FieldInSet { offset, set } => {
+                read(*offset).is_some_and(|x| set.contains(&field_to_u64(&x)))
+            }
+        }
+    }
+}
+
+/// The AGGREGATE predicate fragment over a named collection — the Rust
+/// mirror of the Lean `Dregg2.Exec.Collections.CollPred` PLUS the council
+/// lift `mOfNDistinct`. Each shape is a decidable function of the
+/// read-out collection, fail-closed.
+///
+/// Lean twin: `Dregg2.Exec.Collections.CollPred` (the first five) +
+/// `mOfNDistinct` (the council). Each evaluator arm implements the
+/// corresponding `eval_*_iff` / `mOfNDistinct_iff` admit-characterization
+/// (`metatheory/Dregg2/Exec/Collections.lean`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CollPred {
+    /// **≥ `m` elements satisfy `p`** — the in-data M-of-N count statistic
+    /// (NOT distinct — the distinct council gate is [`Self::MOfNDistinct`]).
+    /// Lean: `CollPred.countSatGe` / `eval_countSatGe_iff`.
+    CountSatGe { m: u32, p: ElemPredAtom },
+    /// **Σ of element field at `offset` ≤ `bound`** — a treasury/supply
+    /// ceiling (absent/ill-typed reads contribute 0 — total). Lean:
+    /// `CollPred.sumOfLe` / `eval_sumOfLe_iff`.
+    SumOfLe { offset: u32, bound: i64 },
+    /// **Σ of element field at `offset` ≥ `bound`** — a treasury/supply
+    /// floor. Lean: `CollPred.sumOfGe` / `eval_sumOfGe_iff`.
+    SumOfGe { offset: u32, bound: i64 },
+    /// **∀ element, `p`** — every entry obeys the invariant (bounded
+    /// universal). Lean: `CollPred.allMembers` / `eval_allMembers_iff`.
+    AllMembers { p: ElemPredAtom },
+    /// **∃ element, `p`** — some entry matches (bounded existential).
+    /// Lean: `CollPred.existsMember` / `eval_existsMember_iff`.
+    ExistsMember { p: ElemPredAtom },
+    /// **THE COUNCIL LIFT — arbitrary-N M-of-N, distinctness-enforced**:
+    /// ≥ `m` elements whose `key_offset` identities are DISTINCT satisfy
+    /// `approved`. The duplicate-padded forge collapses (one distinct
+    /// key); the unbound forge is filtered (fails `approved`). Lean:
+    /// `mOfNDistinct` / `mOfNDistinct_iff` / `mOfNDistinct_le_countSat`.
+    MOfNDistinct {
+        m: u32,
+        key_offset: u32,
+        approved: ElemPredAtom,
+    },
+}
+
+impl CollPred {
+    /// The element-relative offset whose presence ANCHORS the collection
+    /// read (drives the `readIndexed` truncation — the contiguous prefix
+    /// whose anchor is present). For the council it is the `key_offset`
+    /// (an element with no identity does not count); for the others it is
+    /// the predicate's read offset (or the summed field's). An element
+    /// missing its anchor truncates the collection there.
+    fn anchor_offset(&self) -> u32 {
+        match self {
+            CollPred::CountSatGe { p, .. }
+            | CollPred::AllMembers { p }
+            | CollPred::ExistsMember { p } => p.anchor_offset(),
+            CollPred::SumOfLe { offset, .. } | CollPred::SumOfGe { offset, .. } => *offset,
+            CollPred::MOfNDistinct { key_offset, .. } => *key_offset,
+        }
+    }
+
+    /// Evaluate this aggregate over the read-out collection `coll` (each
+    /// element a heap stride `Vec<Option<FieldElement>>`). Mirrors
+    /// `CollPred.eval` / `mOfNDistinct` exactly. Fail-closed by
+    /// construction (an absent element field is a `false`/`0` read).
+    fn eval(&self, coll: &[Vec<Option<FieldElement>>]) -> bool {
+        match self {
+            CollPred::CountSatGe { m, p } => {
+                let n = coll.iter().filter(|e| p.eval(e)).count();
+                (n as u64) >= (*m as u64)
+            }
+            CollPred::SumOfLe { offset, bound } => coll_sum(coll, *offset) <= (*bound as i128),
+            CollPred::SumOfGe { offset, bound } => coll_sum(coll, *offset) >= (*bound as i128),
+            CollPred::AllMembers { p } => coll.iter().all(|e| p.eval(e)),
+            CollPred::ExistsMember { p } => coll.iter().any(|e| p.eval(e)),
+            CollPred::MOfNDistinct {
+                m,
+                key_offset,
+                approved,
+            } => {
+                // distinctApproverKeys: filter to approving elements, read
+                // each one's key identity (drop keyless — fail-closed),
+                // then dedup. A `BTreeSet` IS the `eraseDups` distinctness
+                // (the duplicate-padded forge collapses to ONE key).
+                let distinct: std::collections::BTreeSet<u64> = coll
+                    .iter()
+                    .filter(|e| approved.eval(e))
+                    .filter_map(|e| e.get(*key_offset as usize).copied().flatten())
+                    .map(|k| field_to_u64(&k))
+                    .collect();
+                (distinct.len() as u64) >= (*m as u64)
+            }
+        }
+    }
+}
+
+/// Σ of the element field at `offset` over the collection — absent/missing
+/// reads contribute 0 (total, the Lean `sumOfField` `getD 0` discipline).
+/// Folded as `i128` (the u64-lane value lifted signed, like `affine_sum`).
+fn coll_sum(coll: &[Vec<Option<FieldElement>>], offset: u32) -> i128 {
+    coll.iter()
+        .map(|e| {
+            e.get(offset as usize)
+                .copied()
+                .flatten()
+                .map(|x| field_to_u64(&x) as i128)
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+/// Read the named collection out of a cell's heap as the contiguous run of
+/// element strides under `collection_id`. The Rust mirror of the Lean
+/// `Value.collectionField` (`readIndexed`): element `i` occupies heap keys
+/// `[i*stride .. i*stride + stride)` under `collection_id`; the collection
+/// is the prefix whose ANCHOR key (`anchor_off`) is present, truncating at
+/// the first absent index (fail-closed — no phantom tail beyond a gap),
+/// bounded by `fuel`. `None` if even element 0's anchor is absent (the
+/// `collectionField` "absent or not a record" `none`: no collection to
+/// aggregate ⇒ fail-closed reject upstream).
+fn read_collection(
+    new_state: &CellState,
+    collection_id: u32,
+    stride: u32,
+    fuel: u32,
+    anchor_off: u32,
+) -> Option<Vec<Vec<Option<FieldElement>>>> {
+    if stride == 0 {
+        // A zero-width element has no fields — an ill-formed collection
+        // shape; fail closed (the `collectionField` non-record `none`).
+        return None;
+    }
+    let mut coll: Vec<Vec<Option<FieldElement>>> = Vec::new();
+    for i in 0..fuel {
+        let base = (i as u64) * (stride as u64);
+        // The element's anchor key presence decides truncation (the
+        // `readIndexed` `match elems.field (toString i)` — stop at the
+        // first absent index).
+        let anchor_key = base + (anchor_off as u64);
+        // Heap keys are u32-lane; an out-of-range key cannot be present.
+        let anchor_present = u32::try_from(anchor_key)
+            .ok()
+            .and_then(|k| new_state.get_heap(collection_id, k))
+            .is_some();
+        if !anchor_present {
+            break;
+        }
+        let mut elem: Vec<Option<FieldElement>> = Vec::with_capacity(stride as usize);
+        for f in 0..stride {
+            let key = base + (f as u64);
+            let v = u32::try_from(key)
+                .ok()
+                .and_then(|k| new_state.get_heap(collection_id, k));
+            elem.push(v);
+        }
+        coll.push(elem);
+    }
+    if coll.is_empty() { None } else { Some(coll) }
 }
 
 /// Error from evaluating a cell program.
@@ -3255,6 +3528,47 @@ fn evaluate_constraint_full(
             }
             Ok(())
         }
+
+        // ─── Aggregate-over-a-collection gate (the heap/layout rung) ───
+        StateConstraint::CollectionAggregate {
+            collection_id,
+            stride,
+            fuel,
+            pred,
+        } => {
+            // Read the named collection out of the cell's `(collection_id,
+            // key)` heap (the `Value.collectionField` mirror). The anchor
+            // (the predicate's key/read offset) drives the `readIndexed`
+            // truncation. Fail-closed: an absent collection (element 0's
+            // anchor not present, or a zero stride) REJECTS — an aggregate
+            // over an absent collection is unevaluable
+            // (`collectionAggregate_absent_refuses`).
+            let anchor = pred.anchor_offset();
+            let Some(coll) =
+                read_collection(new_state, *collection_id, *stride, *fuel, anchor)
+            else {
+                return violated(
+                    constraint,
+                    format!(
+                        "collection {collection_id} is absent/empty (CollectionAggregate fails \
+                         closed: no collection to aggregate)"
+                    ),
+                );
+            };
+            // Evaluate the aggregate (`CollPred.eval` / `mOfNDistinct`).
+            if pred.eval(&coll) {
+                Ok(())
+            } else {
+                violated(
+                    constraint,
+                    format!(
+                        "aggregate over collection {collection_id} ({} element(s)) refuses \
+                         (CollectionAggregate)",
+                        coll.len()
+                    ),
+                )
+            }
+        }
     }
 }
 
@@ -4035,6 +4349,100 @@ pub enum StateConstraintView {
         at_root: String,
         proof_witness_index: usize,
     },
+    /// Aggregate over a named heap collection (the heap/layout rung —
+    /// arbitrary-N M-of-N councils, treasury sum-caps, ∀/∃ over collection
+    /// data). `pred` is the self-describing aggregate.
+    CollectionAggregate {
+        collection_id: u32,
+        stride: u32,
+        fuel: u32,
+        pred: CollPredView,
+    },
+}
+
+/// [`ElemPredAtom`] view (nested in [`CollPredView`]). 32-byte values are
+/// 64-hex strings; u64-lane sets are JSON numbers; `offset` is the
+/// element-relative field offset.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum ElemPredAtomView {
+    FieldEquals { offset: u32, value: String },
+    FieldGte { offset: u32, value: String },
+    FieldLte { offset: u32, value: String },
+    FieldInSet { offset: u32, set: Vec<u64> },
+}
+
+impl ElemPredAtom {
+    /// Project this per-element atom to its serving view. TOTAL.
+    pub fn to_view(&self) -> ElemPredAtomView {
+        match self {
+            ElemPredAtom::FieldEquals { offset, value } => ElemPredAtomView::FieldEquals {
+                offset: *offset,
+                value: view_hex(value),
+            },
+            ElemPredAtom::FieldGte { offset, value } => ElemPredAtomView::FieldGte {
+                offset: *offset,
+                value: view_hex(value),
+            },
+            ElemPredAtom::FieldLte { offset, value } => ElemPredAtomView::FieldLte {
+                offset: *offset,
+                value: view_hex(value),
+            },
+            ElemPredAtom::FieldInSet { offset, set } => ElemPredAtomView::FieldInSet {
+                offset: *offset,
+                set: set.clone(),
+            },
+        }
+    }
+}
+
+/// [`CollPred`] view, nested inside [`StateConstraintView::CollectionAggregate`].
+/// The council surfaces its own threshold `m` (the `AffineLe`-projection
+/// precedent: a live council shows its quorum).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind")]
+pub enum CollPredView {
+    CountSatGe { m: u32, p: ElemPredAtomView },
+    SumOfLe { offset: u32, bound: i64 },
+    SumOfGe { offset: u32, bound: i64 },
+    AllMembers { p: ElemPredAtomView },
+    ExistsMember { p: ElemPredAtomView },
+    MOfNDistinct {
+        m: u32,
+        key_offset: u32,
+        approved: ElemPredAtomView,
+    },
+}
+
+impl CollPred {
+    /// Project this aggregate to its serving view. TOTAL.
+    pub fn to_view(&self) -> CollPredView {
+        match self {
+            CollPred::CountSatGe { m, p } => CollPredView::CountSatGe {
+                m: *m,
+                p: p.to_view(),
+            },
+            CollPred::SumOfLe { offset, bound } => CollPredView::SumOfLe {
+                offset: *offset,
+                bound: *bound,
+            },
+            CollPred::SumOfGe { offset, bound } => CollPredView::SumOfGe {
+                offset: *offset,
+                bound: *bound,
+            },
+            CollPred::AllMembers { p } => CollPredView::AllMembers { p: p.to_view() },
+            CollPred::ExistsMember { p } => CollPredView::ExistsMember { p: p.to_view() },
+            CollPred::MOfNDistinct {
+                m,
+                key_offset,
+                approved,
+            } => CollPredView::MOfNDistinct {
+                m: *m,
+                key_offset: *key_offset,
+                approved: approved.to_view(),
+            },
+        }
+    }
 }
 
 /// [`HeapAtom`] view, nested inside [`StateConstraintView::HeapField`].
@@ -4496,6 +4904,17 @@ impl StateConstraint {
                 source_field: *source_field,
                 at_root: view_hex(at_root),
                 proof_witness_index: *proof_witness_index,
+            },
+            StateConstraint::CollectionAggregate {
+                collection_id,
+                stride,
+                fuel,
+                pred,
+            } => StateConstraintView::CollectionAggregate {
+                collection_id: *collection_id,
+                stride: *stride,
+                fuel: *fuel,
+                pred: pred.to_view(),
             },
         }
     }
@@ -4993,6 +5412,325 @@ mod tests {
         // `old` is 1; new slot 0 = 0 < 1.
         let bad_slot = heap_state(Some(9));
         assert!(heap_eval(&p, &bad_slot, Some(&old)).is_err());
+    }
+
+    // ── Aggregate-over-a-collection (CollectionAggregate — the heap/layout
+    //    rung; LAW #1 mirror of metatheory/Dregg2/Exec/Collections.lean) ─────
+    //
+    // The Lean §6/§6.1/§7 biting teeth, transported to the felt heap layout:
+    // a collection lives under `(collection_id, key)` with element `i` at the
+    // stride `[i*stride .. i*stride+stride)`. The council elements are
+    // `{voter: offset 0, vote: offset 1}` (the Lean `approver id v =
+    // {voter := sym id, vote := int v}`); `approved` = `vote == 1` (votedYes);
+    // `key_offset = 0` (the voter identity). The 3-of-5 ACCEPTS three distinct
+    // approvers, REFUSES sub-quorum, REFUSES the duplicate-padded forge (where
+    // a naive CountSatGe IS fooled — proven below), REFUSES the unbound forge,
+    // and FAILS CLOSED on an absent collection.
+
+    const COLL_ID: u32 = 7;
+    /// Element width: offset 0 = voter id (key), offset 1 = vote.
+    const COLL_STRIDE: u32 = 2;
+    /// Element-relative offsets, mirroring the Lean named fields.
+    const VOTER_OFF: u32 = 0;
+    const VOTE_OFF: u32 = 1;
+
+    /// Lay an approver collection (`(voter_id, vote)` pairs) into a fresh
+    /// cell's heap under `COLL_ID`, element `i` at stride `i*COLL_STRIDE`. The
+    /// Rust mirror of building the Lean `council3of5`/`councilSub`/… lists. A
+    /// voter id of 0 is written as a PRESENT zero-valued key (the element
+    /// exists; its identity key is 0) — presence is by map-membership, exactly
+    /// as `approver 0 _` is a real list element in Lean.
+    fn council_state(approvers: &[(u64, u64)]) -> CellState {
+        let mut s = CellState::new(0);
+        for (i, (voter, vote)) in approvers.iter().enumerate() {
+            let base = (i as u32) * COLL_STRIDE;
+            assert!(s.set_heap(COLL_ID, base + VOTER_OFF, field_from_u64(*voter)));
+            assert!(s.set_heap(COLL_ID, base + VOTE_OFF, field_from_u64(*vote)));
+        }
+        s
+    }
+
+    /// `votedYes` per element: the `vote` field (offset 1) equals 1.
+    fn voted_yes() -> ElemPredAtom {
+        ElemPredAtom::FieldEquals {
+            offset: VOTE_OFF,
+            value: field_from_u64(1),
+        }
+    }
+
+    /// A `CollectionAggregate` program over `COLL_ID` carrying `pred`, with
+    /// `fuel` large enough to read the whole council.
+    fn coll_prog(pred: CollPred) -> CellProgram {
+        CellProgram::Predicate(vec![StateConstraint::CollectionAggregate {
+            collection_id: COLL_ID,
+            stride: COLL_STRIDE,
+            fuel: 16,
+            pred,
+        }])
+    }
+
+    fn coll_eval(p: &CellProgram, new: &CellState) -> Result<(), ProgramError> {
+        p.evaluate_full(
+            new,
+            None,
+            None,
+            &TransitionMeta::wildcard(),
+            &WitnessBundle::empty(),
+        )
+    }
+
+    #[test]
+    fn council_3of5_accepts_refuses_subquorum_dupforge_unbound() {
+        // The council gate at threshold 3 (Lean `mOfNDistinct 3 "voter"
+        // votedYes`).
+        let council = coll_prog(CollPred::MOfNDistinct {
+            m: 3,
+            key_offset: VOTER_OFF,
+            approved: voted_yes(),
+        });
+
+        // ACCEPT — voters 0,1,2 vote YES (distinct); 3,4 vote NO. 3 distinct
+        // approvers reach the quorum (Lean `council_accepts`, N=5 past the
+        // documented N≤3 fixed-slot cap).
+        let ok = council_state(&[(0, 1), (1, 1), (2, 1), (3, 0), (4, 0)]);
+        assert!(coll_eval(&council, &ok).is_ok());
+
+        // REFUSE (sub-quorum) — only voters 0,1 vote YES ⇒ 2 distinct < 3
+        // (Lean `council_subquorum_refuses`).
+        let sub = council_state(&[(0, 1), (1, 1), (2, 0), (3, 0), (4, 0)]);
+        assert!(coll_eval(&council, &sub).is_err());
+
+        // REFUSE (DUPLICATE-PADDED forge) — voter 0 listed 3×, all YES. The
+        // raw satisfying-count is 3, but there is ONE distinct identity ⇒ the
+        // distinct quorum is 1 ⇒ refuses (Lean `council_dup_forge_refuses`,
+        // the anti-fake keystone).
+        let dup = council_state(&[(0, 1), (0, 1), (0, 1), (3, 0), (4, 0)]);
+        assert!(coll_eval(&council, &dup).is_err());
+
+        // REFUSE (UNBOUND forge) — voters 0,1 genuinely vote YES; a THIRD
+        // padding element (voter 7) votes NO. It fails `approved`, is filtered
+        // before the count ⇒ 2 distinct < 3 ⇒ refuses (Lean
+        // `council_unbound_forge_refuses`).
+        let unbound = council_state(&[(0, 1), (1, 1), (7, 0)]);
+        assert!(coll_eval(&council, &unbound).is_err());
+    }
+
+    #[test]
+    fn council_dup_forge_raw_vs_distinct_naive_countsatge_fooled() {
+        // The forge's anatomy as a discriminator (Lean
+        // `council_dup_forge_raw_vs_distinct`): the SAME duplicate-padded
+        // collection that a naive `CountSatGe 3` ADMITS, the distinctness-
+        // enforced `MOfNDistinct 3` REFUSES. Distinctness — not the raw count
+        // — is the load-bearing gate, and the naive aggregate is genuinely
+        // fooled where the council is not.
+        let dup = council_state(&[(0, 1), (0, 1), (0, 1), (3, 0), (4, 0)]);
+
+        // Naive raw-count aggregate IS fooled: raw satisfying-count is 3.
+        let naive = coll_prog(CollPred::CountSatGe {
+            m: 3,
+            p: voted_yes(),
+        });
+        assert!(
+            coll_eval(&naive, &dup).is_ok(),
+            "naive CountSatGe must be fooled by the duplicate-padded forge \
+             (raw count 3), so the council's distinctness is load-bearing"
+        );
+
+        // The distinct council is NOT fooled: 1 distinct identity < 3.
+        let council = coll_prog(CollPred::MOfNDistinct {
+            m: 3,
+            key_offset: VOTER_OFF,
+            approved: voted_yes(),
+        });
+        assert!(coll_eval(&council, &dup).is_err());
+
+        // And on the HONEST council the two agree (3 distinct == raw 3).
+        let ok = council_state(&[(0, 1), (1, 1), (2, 1), (3, 0), (4, 0)]);
+        assert!(coll_eval(&naive, &ok).is_ok());
+        assert!(coll_eval(&council, &ok).is_ok());
+    }
+
+    #[test]
+    fn collection_absent_fails_closed() {
+        // Fail-closed entry (Lean `collectionAggregate_absent_refuses` /
+        // `collectionCouncil_absent_refuses`): a cell with NO collection under
+        // COLL_ID has no element-0 anchor ⇒ `read_collection` is `None` ⇒ the
+        // aggregate REFUSES — an aggregate over an absent collection is
+        // unevaluable.
+        let council = coll_prog(CollPred::MOfNDistinct {
+            m: 3,
+            key_offset: VOTER_OFF,
+            approved: voted_yes(),
+        });
+        let empty = CellState::new(0);
+        assert!(coll_eval(&council, &empty).is_err());
+        // Every aggregate shape fails closed on the absent collection.
+        assert!(coll_eval(&coll_prog(CollPred::CountSatGe { m: 1, p: voted_yes() }), &empty).is_err());
+        assert!(
+            coll_eval(
+                &coll_prog(CollPred::SumOfLe { offset: VOTE_OFF, bound: 0 }),
+                &empty
+            )
+            .is_err()
+        );
+        assert!(coll_eval(&coll_prog(CollPred::AllMembers { p: voted_yes() }), &empty).is_err());
+        assert!(coll_eval(&coll_prog(CollPred::ExistsMember { p: voted_yes() }), &empty).is_err());
+    }
+
+    #[test]
+    fn collection_truncates_at_first_gap() {
+        // The `readIndexed` fail-closed truncation: the collection is exactly
+        // the contiguous present prefix; a hole truncates it (no phantom tail
+        // beyond a gap). We place 3 approvers, then SKIP element 3's anchor and
+        // place an approver at element 4 — element 4 must NOT be seen, so the
+        // gap caps the council at the 3-distinct prefix.
+        let council = coll_prog(CollPred::MOfNDistinct {
+            m: 4,
+            key_offset: VOTER_OFF,
+            approved: voted_yes(),
+        });
+        let mut s = council_state(&[(0, 1), (1, 1), (2, 1)]);
+        // Element 4 (base 8) is a fourth distinct approver — but element 3
+        // (base 6) is absent, so the read stops at index 3 and never reaches
+        // it. A threshold-4 council therefore REFUSES (only 3 visible).
+        assert!(s.set_heap(COLL_ID, 4 * COLL_STRIDE + VOTER_OFF, field_from_u64(9)));
+        assert!(s.set_heap(COLL_ID, 4 * COLL_STRIDE + VOTE_OFF, field_from_u64(1)));
+        assert!(coll_eval(&council, &s).is_err());
+        // Threshold 3 over the visible prefix still ACCEPTS — the prefix is
+        // intact, only the post-gap tail is dropped.
+        let council3 = coll_prog(CollPred::MOfNDistinct {
+            m: 3,
+            key_offset: VOTER_OFF,
+            approved: voted_yes(),
+        });
+        assert!(coll_eval(&council3, &s).is_ok());
+    }
+
+    #[test]
+    fn collection_sum_cap_discriminates() {
+        // The treasury sum-cap (Lean `sumCap_discriminates`, §6.1): three
+        // line-items with `amount` at offset 0 summing to 90. `SumOfLe 100`
+        // admits (within budget); `SumOfLe 80` refuses (over budget). A
+        // genuine discriminator over arbitrary-N data.
+        let ledger = {
+            let mut s = CellState::new(0);
+            for (i, amt) in [40u64, 30, 20].iter().enumerate() {
+                let base = (i as u32) * 1; // stride 1: one `amount` field.
+                assert!(s.set_heap(COLL_ID, base, field_from_u64(*amt)));
+            }
+            s
+        };
+        let prog = |bound: i64| {
+            CellProgram::Predicate(vec![StateConstraint::CollectionAggregate {
+                collection_id: COLL_ID,
+                stride: 1,
+                fuel: 16,
+                pred: CollPred::SumOfLe { offset: 0, bound },
+            }])
+        };
+        assert!(coll_eval(&prog(100), &ledger).is_ok());
+        assert!(coll_eval(&prog(80), &ledger).is_err());
+        // The sum FLOOR discriminates the other way: ≥ 90 holds, ≥ 91 fails.
+        let floor = |bound: i64| {
+            CellProgram::Predicate(vec![StateConstraint::CollectionAggregate {
+                collection_id: COLL_ID,
+                stride: 1,
+                fuel: 16,
+                pred: CollPred::SumOfGe { offset: 0, bound },
+            }])
+        };
+        assert!(coll_eval(&floor(90), &ledger).is_ok());
+        assert!(coll_eval(&floor(91), &ledger).is_err());
+    }
+
+    #[test]
+    fn collection_forall_exists_discriminate() {
+        // ∀ / ∃ over the collection (Lean §6.1 `allMembers`/`existsMember`).
+        // Ledger items with `amount` at offset 0: {40, 30, 20}.
+        let ledger = {
+            let mut s = CellState::new(0);
+            for (i, amt) in [40u64, 30, 20].iter().enumerate() {
+                assert!(s.set_heap(COLL_ID, i as u32, field_from_u64(*amt)));
+            }
+            s
+        };
+        let all_ge_1 = coll_prog_strided(
+            1,
+            CollPred::AllMembers {
+                p: ElemPredAtom::FieldGte {
+                    offset: 0,
+                    value: field_from_u64(1),
+                },
+            },
+        );
+        // Every item ≥ 1 ⇒ ∀ holds.
+        assert!(coll_eval(&all_ge_1, &ledger).is_ok());
+        // Zero out one item ⇒ ∀ fails (the Lean `:: ledger` zeroed-head twin).
+        let mut zeroed = ledger.clone();
+        // Prepend a zero by shifting: simplest is to overwrite item 2's amount.
+        assert!(zeroed.set_heap(COLL_ID, 2, field_from_u64(0)));
+        assert!(coll_eval(&all_ge_1, &zeroed).is_err());
+
+        // ∃ an item > 35 (the 40) ⇒ holds; none > 100 ⇒ fails.
+        let any_gt_35 = coll_prog_strided(
+            1,
+            CollPred::ExistsMember {
+                p: ElemPredAtom::FieldGte {
+                    offset: 0,
+                    value: field_from_u64(36),
+                },
+            },
+        );
+        assert!(coll_eval(&any_gt_35, &ledger).is_ok());
+        let any_gt_100 = coll_prog_strided(
+            1,
+            CollPred::ExistsMember {
+                p: ElemPredAtom::FieldGte {
+                    offset: 0,
+                    value: field_from_u64(101),
+                },
+            },
+        );
+        assert!(coll_eval(&any_gt_100, &ledger).is_err());
+    }
+
+    /// A `CollectionAggregate` program with an explicit stride.
+    fn coll_prog_strided(stride: u32, pred: CollPred) -> CellProgram {
+        CellProgram::Predicate(vec![StateConstraint::CollectionAggregate {
+            collection_id: COLL_ID,
+            stride,
+            fuel: 16,
+            pred,
+        }])
+    }
+
+    #[test]
+    fn collection_aggregate_view_round_trips() {
+        // The view-projection arm (StateConstraintView::CollectionAggregate):
+        // a council projects its threshold + key/approval shape for serving.
+        let council = StateConstraint::CollectionAggregate {
+            collection_id: COLL_ID,
+            stride: COLL_STRIDE,
+            fuel: 16,
+            pred: CollPred::MOfNDistinct {
+                m: 3,
+                key_offset: VOTER_OFF,
+                approved: voted_yes(),
+            },
+        };
+        match council.to_view() {
+            StateConstraintView::CollectionAggregate { collection_id, pred, .. } => {
+                assert_eq!(collection_id, COLL_ID);
+                match pred {
+                    CollPredView::MOfNDistinct { m, key_offset, .. } => {
+                        assert_eq!(m, 3);
+                        assert_eq!(key_offset, VOTER_OFF);
+                    }
+                    other => panic!("expected MOfNDistinct view, got {other:?}"),
+                }
+            }
+            other => panic!("expected CollectionAggregate view, got {other:?}"),
+        }
     }
 
     // ── New variants ──────────────────────────────────────────────────────
@@ -6834,6 +7572,22 @@ mod tests {
                 },
                 "ObservedFieldEquals",
             ),
+            (
+                StateConstraint::CollectionAggregate {
+                    collection_id: 1,
+                    stride: 2,
+                    fuel: 8,
+                    pred: CollPred::MOfNDistinct {
+                        m: 3,
+                        key_offset: 0,
+                        approved: ElemPredAtom::FieldEquals {
+                            offset: 1,
+                            value: field_from_u64(1),
+                        },
+                    },
+                },
+                "CollectionAggregate",
+            ),
         ];
 
         // COVERAGE TOOTH: this match must name every variant exactly once.
@@ -6891,7 +7645,8 @@ mod tests {
                 | StateConstraint::BalanceDeltaLte { .. }
                 | StateConstraint::BalanceDeltaGte { .. }
                 | StateConstraint::AffineDeltaLe { .. }
-                | StateConstraint::ObservedFieldEquals { .. } => {}
+                | StateConstraint::ObservedFieldEquals { .. }
+                | StateConstraint::CollectionAggregate { .. } => {}
             }
         }
 
