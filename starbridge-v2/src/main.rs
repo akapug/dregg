@@ -305,6 +305,31 @@ fn run_window(
             }
         })
         .detach();
+
+        // THE LIVE-NODE PUMP — drain the connected node's SSE receipt stream off
+        // gpui's async executor (the recovered cockpit-wire design). `render`'s
+        // top-of-frame drain only runs on `cx.notify()`/input; this foreground task
+        // ticks on a short timer so a remote node's receipts are drained — and the
+        // ReceiptInspector / live organ panels advance LIVE — even with NO user
+        // input. It stops itself immediately for the embedded-only image (no
+        // `--node`), so it costs the headline build nothing. (`window` is a `Copy`
+        // handle — the seeding task above and this pump each hold their own.)
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                let keep = match window.update(cx, |cockpit, _window, cx| cockpit.pump_live(cx)) {
+                    Ok(keep) => keep,
+                    // The window closed — stop the pump.
+                    Err(_) => break,
+                };
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
     });
 }
 

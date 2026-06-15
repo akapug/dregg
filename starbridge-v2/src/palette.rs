@@ -30,8 +30,19 @@ pub enum CommandId {
     Burn,
     OverGrant,
 
+    // --- the WHAT-IF / SIMULATE composer (predict before committing) ---
+    /// SIMULATE the composed intent — predict its consequences in a forked
+    /// throwaway world (the real executor, live world untouched).
+    SimRun,
+    /// COMMIT the simulated intent for real (the identical turn on the live world).
+    SimCommit,
+    /// Add the picked effect (on the picked target) to the SIMULATE draft forest.
+    SimAddEffect,
+
     // --- workspace tab switches ---
     GoComposer,
+    /// Navigate to the SIMULATE tab (the what-if intent composer).
+    GoSimulate,
     GoObjects,
     GoDebugger,
     GoReplay,
@@ -159,9 +170,9 @@ impl CommandId {
         use CommandId::*;
         match self {
             Transfer | ComposeMulti | Grant | CreateCell | Seal | Burn | OverGrant
-            | LaunchConfinedApp => Category::Verb,
-            GoHome | GoComposer | GoObjects | GoDebugger | GoReplay | GoCipherclerk | GoEditor
-            | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm | GoGraph | GoOrgans
+            | LaunchConfinedApp | SimRun | SimCommit | SimAddEffect => Category::Verb,
+            GoHome | GoComposer | GoSimulate | GoObjects | GoDebugger | GoReplay | GoCipherclerk
+            | GoEditor | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm | GoGraph | GoOrgans
             | GoProofs | GoPowerbox => Category::Navigate,
             BufferType | BufferCommit | BufferReadOnlyWrite | TerminalRunInMandate
             | TerminalRunOutOfMandate
@@ -192,8 +203,12 @@ impl CommandId {
             Seal => "Seal a fresh cell (lifecycle)",
             Burn => "Burn 1,000 (supply reduced)",
             OverGrant => "Over-grant (watch the executor REJECT)",
+            SimRun => "Simulate the draft (predict the post-state + receipt, live world untouched)",
+            SimCommit => "Commit the simulated intent for real (the identical turn)",
+            SimAddEffect => "Add the picked effect to the simulate draft forest",
             GoHome => "Go to Home (the live verified image · the front door)",
             GoComposer => "Go to Composer",
+            GoSimulate => "Go to Simulate (what-if intent composer · predict before committing)",
             GoObjects => "Go to Objects (proofs · nullifiers · lifecycle)",
             GoDebugger => "Go to Debugger",
             GoReplay => "Go to Replay (time-travel)",
@@ -265,8 +280,12 @@ impl CommandId {
             Seal => "freeze lifecycle lock close",
             Burn => "destroy supply reduce remove value",
             OverGrant => "amplification reject denied no-amplify security guard",
+            SimRun => "simulate predict what-if dry-run preview fork throwaway before commit",
+            SimCommit => "commit confirm apply for-real fire the simulated turn",
+            SimAddEffect => "add effect compose intent draft forest build",
             GoHome => "home landing portal welcome front door image overview start begin",
             GoComposer => "verbs actions run",
+            GoSimulate => "simulate what-if predict dry-run preview compose intent fork sandbox",
             GoObjects => "proof stark nullifier lifecycle reflect",
             GoDebugger => "step trace explain refusal",
             GoReplay => "history time travel scrub checkpoint",
@@ -387,6 +406,8 @@ pub fn all_commands() -> Vec<Command> {
     [
         // verbs first (the most common operator actions)
         Transfer, ComposeMulti, Grant, CreateCell, Seal, Burn, OverGrant,
+        // the what-if / simulate composer (predict before committing)
+        SimRun, SimCommit, SimAddEffect,
         // the runtime app-launcher (births a confined app → powerbox request)
         LaunchConfinedApp,
         // the cipherclerk loop
@@ -404,7 +425,7 @@ pub fn all_commands() -> Vec<Command> {
         KillerDemoRunAll, KillerDemoAdvance, KillerDemoOverShare, KillerDemoReset,
         // navigation
         GoHome,
-        GoComposer, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
+        GoComposer, GoSimulate, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
         GoAgent, GoBuffer, GoTerminal, GoSwarm, GoGraph, GoOrgans, GoProofs, GoPowerbox,
         // replay
         ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
