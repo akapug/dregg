@@ -60,10 +60,17 @@ pub struct WithdrawalRequest {
     pub note_commitment: [u8; 32],
 
     /// Secret values needed to prove ownership (not revealed on-chain):
-    /// - nullifier_key: 32 bytes
-    /// - blinding: 32 bytes
-    /// These are used by the STARK prover but NOT included in public outputs.
+    /// `nullifier_key` (32 bytes) and `blinding` (32 bytes). These are used by the
+    /// STARK prover but NOT included in public outputs.
     pub secrets: WithdrawalSecrets,
+
+    /// The serialized note-membership STARK proof (the `DREG`-format bytes the
+    /// circuit crate's prover emits for this note: membership in `note_tree_root`,
+    /// correct nullifier derivation, value/recipient binding). The real
+    /// (`prove`-feature) path re-verifies this inside the SP1 guest and wraps the
+    /// execution in Groth16; the `mock` path ignores it. Empty in mock requests.
+    #[serde(default)]
+    pub stark_proof_bytes: Vec<u8>,
 }
 
 /// Secret witness values for the withdrawal proof (never revealed on-chain).
@@ -274,6 +281,81 @@ async fn mock_generate_withdrawal_proof(
     })
 }
 
+/// Real withdrawal-proof generation (requires the `prove` feature + SP1 toolchain).
+///
+/// The structured note-membership STARK proof in `request.stark_proof_bytes` is
+/// re-verified inside the SP1 guest and wrapped to a Groth16/BN254 receipt by the
+/// shared [`crate::prove::wrap_for_evm`] path (the same real wrapper `wrap_for_evm`
+/// uses for the trust bridge — there is exactly one SP1 wrap in this crate). The
+/// withdrawal's public inputs (nullifier · token · amount · recipient · note-tree
+/// root, as field-limb `u32`s) are bound as the guest's public values, so the
+/// `DreggVault.withdraw()` call verifies the same claim on-chain.
+///
+/// Returns [`ChainError::InvalidProof`] if the request carries no STARK proof to
+/// wrap (the real path cannot fabricate one — that is the `mock` path's job).
+#[cfg(all(feature = "prove", not(feature = "mock")))]
+async fn real_generate_withdrawal_proof(
+    request: &WithdrawalRequest,
+) -> Result<WithdrawalProof, ChainError> {
+    if request.stark_proof_bytes.is_empty() {
+        return Err(ChainError::InvalidProof(
+            "real withdrawal proving requires request.stark_proof_bytes (the \
+             note-membership STARK proof from the circuit crate); none supplied"
+                .to_string(),
+        ));
+    }
+
+    // The public inputs the on-chain vault binds, as u32 field limbs. Order is
+    // fixed and mirrored by `WithdrawalPublicValues` / the contract decode.
+    let public_inputs = withdrawal_public_inputs(request);
+
+    // The single real SP1 wrap: guest re-verifies the STARK, Groth16-wraps it.
+    let evm_proof = crate::prove::wrap_for_evm(&request.stark_proof_bytes, &public_inputs).await?;
+
+    let calldata = encode_withdraw_calldata(
+        &request.note_asset,
+        request.note_value,
+        &request.recipient,
+        &evm_proof,
+    );
+
+    Ok(WithdrawalProof {
+        evm_proof,
+        nullifier: request.nullifier,
+        token: request.note_asset,
+        amount: request.note_value,
+        recipient: request.recipient,
+        calldata,
+    })
+}
+
+/// The withdrawal public inputs as `u32` field limbs, in the canonical order the
+/// guest commits and the `DreggVault` contract decodes: nullifier (8) · token (5)
+/// · amount (2) · recipient (5) · note-tree root (8). Each 32-byte hash is read as
+/// 8 big-endian `u32` limbs; each 20-byte address as 5; the `u64` amount as 2.
+#[cfg(all(feature = "prove", not(feature = "mock")))]
+fn withdrawal_public_inputs(request: &WithdrawalRequest) -> Vec<u32> {
+    let mut pis = Vec::with_capacity(8 + 5 + 2 + 5 + 8);
+    push_be_u32_limbs(&mut pis, &request.nullifier);
+    push_be_u32_limbs(&mut pis, &request.note_asset);
+    pis.push((request.note_value >> 32) as u32);
+    pis.push(request.note_value as u32);
+    push_be_u32_limbs(&mut pis, &request.recipient);
+    push_be_u32_limbs(&mut pis, &request.note_tree_root);
+    pis
+}
+
+/// Append `bytes` as big-endian `u32` limbs (4 bytes each). `bytes.len()` need not
+/// be a multiple of 4; a trailing partial limb is right-padded with zeros.
+#[cfg(all(feature = "prove", not(feature = "mock")))]
+fn push_be_u32_limbs(out: &mut Vec<u32>, bytes: &[u8]) {
+    for chunk in bytes.chunks(4) {
+        let mut limb = [0u8; 4];
+        limb[..chunk.len()].copy_from_slice(chunk);
+        out.push(u32::from_be_bytes(limb));
+    }
+}
+
 /// Encode the calldata for `vault.withdraw(address token, uint256 amount, address recipient, bytes sp1Proof)`.
 ///
 /// This produces the raw bytes that can be sent as transaction data to the vault contract.
@@ -397,6 +479,8 @@ mod tests {
                 nullifier_key,
                 blinding,
             },
+            // Mock requests carry no real STARK proof; the mock path ignores it.
+            stark_proof_bytes: Vec::new(),
         }
     }
 
@@ -508,5 +592,60 @@ mod tests {
         let proof = generate_withdrawal_proof(&req).await.unwrap();
         let verified = verify_withdrawal_proof_locally(&proof).unwrap();
         assert!(verified);
+    }
+
+    // ── teeth on the REAL (`--features prove`) path — fast + deterministic,
+    //    exercising the reachable logic without an actual (minutes-long) SP1 prove.
+
+    /// REJECT polarity on the real path: with no `stark_proof_bytes`, real
+    /// withdrawal proving fails closed (it cannot fabricate a membership proof) —
+    /// it must NOT silently succeed or fall through to a mock.
+    #[cfg(all(feature = "prove", not(feature = "mock")))]
+    #[tokio::test]
+    async fn test_real_generate_rejects_missing_stark_proof() {
+        let req = mock_request(); // stark_proof_bytes is empty
+        assert!(req.stark_proof_bytes.is_empty());
+        let err = real_generate_withdrawal_proof(&req).await.unwrap_err();
+        assert!(
+            matches!(err, ChainError::InvalidProof(_)),
+            "missing STARK proof must be InvalidProof, got {err:?}"
+        );
+    }
+
+    /// The public-input limb layout the on-chain `DreggVault` decodes: exactly
+    /// 8(nullifier)+5(token)+2(amount)+5(recipient)+8(root) = 28 `u32`s, with the
+    /// `u64` amount split into its two big-endian halves at the fixed offset. A
+    /// changed nullifier MUST change the bound public inputs (they are load-bearing).
+    #[cfg(all(feature = "prove", not(feature = "mock")))]
+    #[test]
+    fn test_withdrawal_public_inputs_layout_and_binding() {
+        let req = mock_request();
+        let pis = withdrawal_public_inputs(&req);
+        assert_eq!(pis.len(), 8 + 5 + 2 + 5 + 8, "fixed PI limb count");
+
+        // nullifier = [0x..;32] occupies limbs 0..8 as BE u32s.
+        let n0 = u32::from_be_bytes(req.nullifier[0..4].try_into().unwrap());
+        assert_eq!(pis[0], n0, "first nullifier limb is BE");
+
+        // amount = 1_000_000 (< 2^32): high half 0, low half = amount, at offset 13.
+        let amt_off = 8 + 5;
+        assert_eq!(pis[amt_off], 0, "amount high u32 limb");
+        assert_eq!(pis[amt_off + 1], 1_000_000u32, "amount low u32 limb");
+
+        // A 64-bit amount with high bits set splits correctly.
+        let mut big = mock_request();
+        big.note_value = 0x1234_5678_9ABC_DEF0;
+        let pb = withdrawal_public_inputs(&big);
+        assert_eq!(pb[amt_off], 0x1234_5678, "high half of u64 amount");
+        assert_eq!(pb[amt_off + 1], 0x9ABC_DEF0, "low half of u64 amount");
+
+        // Binding: flipping the nullifier changes the bound public inputs.
+        let mut tampered = mock_request();
+        tampered.nullifier[0] ^= 0x01;
+        assert_ne!(
+            withdrawal_public_inputs(&tampered),
+            pis,
+            "a different nullifier MUST yield different on-chain public inputs"
+        );
     }
 }

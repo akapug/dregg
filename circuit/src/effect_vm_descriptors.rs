@@ -808,7 +808,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "19e7e8affbddedfc55411438544b3f2101dbeb92df6f5f7e1b957fe9d39c0350";
+    "2d4a594b1deec12c111b1f965786f7c4550cabb4f71c6b50ffe2eb894fc2c5db";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1584,6 +1584,47 @@ mod tests {
             let json = it.next().expect("tsv json");
             let d = parse_vm_descriptor2(json)
                 .unwrap_or_else(|e| panic!("v3 registry {key} failed parse_vm_descriptor2: {e}"));
+
+            // THE CAP-OPEN MEMBER (`capOpenAttenuateV3`) carries the 58-column cap-membership
+            // APPENDIX past the shared 311-wide rotated layout (trace_width 369 = 311 + 58) plus
+            // 1 leaf + 16 node chip-lookups + the cap-open base gates. Its appendix shape is
+            // DELIBERATELY wider than the 36-member rotated cohort's uniform 311/4-pin shape, so
+            // it is audited on ITS OWN contract (width, PI count, cap-open chip lookups present)
+            // and SKIPS the rotated-cohort-specific absorb/digest/pin equalities below. This is
+            // not a relaxed check — it is the cap-open member's own width + lookup obligation.
+            if key == "attenuateCapOpenVmDescriptor2R24" {
+                assert_eq!(
+                    d.trace_width,
+                    V1_WIDTH + APPENDIX_SPAN + 58,
+                    "{key}: cap-open trace width = rotated 311 + 58-column cap-membership appendix"
+                );
+                assert_eq!(
+                    d.public_input_count, 38,
+                    "{key}: cap-open carries the rotated 38-PI vector"
+                );
+                // The cap-open appendix declares EXACTLY 17 poseidon2 chip lookups whose digest
+                // lands in the cap-open appendix (>= 311): 1 leaf absorb + 16 node absorbs.
+                let cap_open_base = V1_WIDTH + APPENDIX_SPAN; // 311
+                let cap_lookups = d
+                    .constraints
+                    .iter()
+                    .filter(|c| {
+                        if let VmConstraint2::Lookup(l) = c {
+                            l.tuple.iter().any(
+                                |e| matches!(e, LeanExpr::Var(v) if *v >= cap_open_base),
+                            )
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+                assert_eq!(
+                    cap_lookups, 17,
+                    "{key}: cap-open appendix declares 1 leaf + 16 node chip lookups"
+                );
+                continue;
+            }
+
             assert_eq!(
                 d.trace_width,
                 V1_WIDTH + APPENDIX_SPAN,
@@ -1732,8 +1773,9 @@ mod tests {
             }
         }
         assert_eq!(
-            n, 36,
-            "expected the full 36-member cohort (28 v2-graduated + 8 widened)"
+            n, 37,
+            "expected the 36-member rotated cohort (28 v2-graduated + 8 widened) + the cap-open \
+             member (capOpenAttenuateV3)"
         );
     }
 

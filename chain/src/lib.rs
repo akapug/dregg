@@ -77,15 +77,19 @@
 //! ```
 
 pub mod error;
+pub mod listener;
 pub mod prove;
 pub mod verify;
+pub mod withdraw;
 
 #[cfg(feature = "mock")]
 pub mod mock;
 
 pub use error::ChainError;
+pub use listener::{Address, NoteCreationRequest};
 pub use prove::{wrap_for_evm, EvmProof};
 pub use verify::verify_on_chain;
+pub use withdraw::{generate_withdrawal_proof, WithdrawalProof, WithdrawalRequest};
 
 /// Re-export canonical types used by callers when constructing proofs for settlement.
 ///

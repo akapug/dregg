@@ -51,10 +51,44 @@ use dregg_cell::{
     StateConstraint,
 };
 use dregg_cell::factory::FactoryDescriptor;
+use dregg_firmament::{NotifyCap, ObjectId, Rights};
 
 use crate::compositor::{label_of, CompositedSurface, CompositorScene, Present, PresentError, RegionId};
 use crate::dynamics::WorldEvent;
 use crate::world::{World, CommitOutcome};
+
+/// THE DAMAGE BADGE — the async-signal discriminator a compositor `present()`'s
+/// damage wake carries, projected to ONE bit of the 64-bit notify badge lattice.
+///
+/// A committed present is the compositor's **async signal** to whoever watches
+/// the surface for repaint (`docs/NOTIFY-PRIMITIVE.md` §2.4 — "the compositor
+/// `signal`s the surface's notification on damage, badge = the damage kind").
+/// The damage KIND here is the present's region extent (how much was painted):
+/// `region_count` projects to bit `region_count % 64`, so a small-region repaint
+/// and a full-surface repaint occupy distinct badge bits, and a watcher's mask
+/// can admit "wake me only for full-surface damage" or "any damage". This is the
+/// scene mirror of [`crate::swarm::topic_badge`] (the cross-agent edge's badge),
+/// now on the compositor's damage edge. `region_count == 0` (no regions painted)
+/// maps to bit 0; the open default mask (`u64::MAX`) admits every damage kind.
+#[must_use]
+pub fn damage_badge(region_count: usize) -> u64 {
+    1u64 << ((region_count as u64) % 64)
+}
+
+/// The per-surface notification OBJECT id the compositor's [`NotifyCap`] targets
+/// — the surface's own damage-wake accumulator (the §3.1 canonical `Notification`,
+/// one per surface owner). Derived deterministically from the owner cell id so the
+/// cap is target-bound: a forged cap aimed at a different surface's object signals
+/// nothing. The low 8 bytes of the owner cell id, as the firmament `u64` `ObjectId`
+/// — the SAME derivation [`crate::swarm::member_notify_object`] uses for the
+/// cross-agent edge, so the two async edges share one object-id discipline.
+#[must_use]
+fn surface_notify_object(owner: &CellId) -> ObjectId {
+    let b = owner.as_bytes();
+    ObjectId(u64::from_le_bytes([
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+    ]))
+}
 
 /// The compositor cell's frame-digest slot index (the scalar state a `present()`
 /// advances). Mirrors the Lean `presentDigestSlot := "present_digest"`; here a
@@ -222,6 +256,19 @@ pub struct VerifiedScene {
     /// slot the executor gates for that owner's presents). Allocated lazily as a
     /// genesis cell when an owner first opens.
     compositor_cell: std::collections::HashMap<CellId, CellId>,
+    /// THE HELD DAMAGE-NOTIFY AUTHORITY, per surface owner — a REAL
+    /// `dregg_firmament` [`NotifyCap`] over each surface's damage-wake object
+    /// ([`surface_notify_object`]). The compositor emits a
+    /// [`WorldEvent::SurfaceDamaged`] async signal on a committed present IFF the
+    /// damage badge ([`damage_badge`]) is within this cap's `badge_mask`
+    /// ([`NotifyCap::signal_admissible`], the Rust mirror of the verified
+    /// `Dregg2.Firmament.NotifyAuthority.NotifyCap.signalAdmissible`). This routes
+    /// the compositor's damage edge through the SAME held, attenuable async-signal
+    /// authority the swarm's cross-agent edge uses (`docs/NOTIFY-PRIMITIVE.md`
+    /// §2.4) — the ambient `emit_dynamics` becomes cap-gated. Seeded at `u64::MAX`
+    /// (wake-for-any-damage) when an owner opens, so the prior behaviour is
+    /// preserved until a watcher attenuates it via [`Self::restrict_damage_notify`].
+    damage_notify: std::collections::HashMap<CellId, NotifyCap>,
     /// The digest grid the frame ranges over (old-values the cell can hold).
     old_grid: Vec<u64>,
     /// The digest grid the frame can advance to (new-values a present may write).
@@ -237,6 +284,7 @@ impl VerifiedScene {
         VerifiedScene {
             scene: CompositorScene::default(),
             compositor_cell: std::collections::HashMap::new(),
+            damage_notify: std::collections::HashMap::new(),
             old_grid,
             new_grid,
         }
@@ -297,6 +345,14 @@ impl VerifiedScene {
         if let Some(existing) = self.compositor_cell.get(&owner) {
             return *existing;
         }
+        // Seed the compositor's HELD damage-notify authority over this surface's
+        // wake object — open by default (admit any damage kind) until a watcher
+        // attenuates it. The async damage edge is now a held cap, not ambient emit.
+        self.damage_notify.entry(owner).or_insert_with(|| NotifyCap {
+            target: surface_notify_object(&owner),
+            rights: Rights::Either,
+            badge_mask: u64::MAX,
+        });
         let cell = make_compositor_cell(owner, initial_digest);
         let id = world.genesis_install(cell);
         // The shell hands the presenter a surface cap on its compositor cell (the
@@ -357,12 +413,30 @@ impl VerifiedScene {
                     s.content_digest = new_digest;
                     s.source_state_root = p.source_state_root;
                 }
-                world.emit_dynamics(WorldEvent::SurfaceDamaged {
-                    owner,
-                    cell: cell_id,
-                    digest: new_digest,
-                    region_count: p.target.len(),
-                });
+                // THE DAMAGE-NOTIFY GATE — route the async damage signal through the
+                // compositor's HELD `NotifyCap` over this surface's wake object. The
+                // `SurfaceDamaged` wake is emitted IFF the damage badge (the present's
+                // region extent) is within the held `badge_mask` (the REAL
+                // `dregg_firmament::NotifyCap::signal_admissible`). An out-of-mask
+                // damage kind is REFUSED (fail-closed): the frame still advanced (the
+                // commit is the ground truth), but no damage wake is signalled — the
+                // async edge is a cap, not ambient routing (`docs/NOTIFY-PRIMITIVE.md`
+                // §2.4). Absent a cap (surface not opened through `open_surface`) the
+                // wake also does not fire — fail-closed, no ambient default.
+                let badge = damage_badge(p.target.len());
+                let obj = surface_notify_object(&owner);
+                let admitted = self
+                    .damage_notify
+                    .get(&owner)
+                    .is_some_and(|cap| cap.signal_admissible(obj, badge));
+                if admitted {
+                    world.emit_dynamics(WorldEvent::SurfaceDamaged {
+                        owner,
+                        cell: cell_id,
+                        digest: new_digest,
+                        region_count: p.target.len(),
+                    });
+                }
                 PresentVerdict::Committed { digest: new_digest }
             }
             CommitOutcome::Rejected { reason, .. } => {
@@ -396,6 +470,46 @@ impl VerifiedScene {
             }
             Err(e) => e,
         }
+    }
+
+    /// **ATTENUATE WHICH DAMAGE KINDS THIS SURFACE SIGNALS** — narrow `owner`'s
+    /// held damage-notify authority ([`Self::damage_notify`]) to admit ONLY presents
+    /// whose region-extent badge ([`damage_badge`]) is one of `region_counts`. After
+    /// this, a committed present painting a region-count outside the set advances the
+    /// frame but emits NO [`WorldEvent::SurfaceDamaged`] wake (the watcher asked to be
+    /// woken only for those damage kinds) — a real, non-amplifying attenuation of the
+    /// held [`NotifyCap`] on the SAME `granted ⊆ held` order the firmament mint gates
+    /// on. Returns `false` (grant unchanged) if `owner` has no surface open or the
+    /// requested mask would WIDEN the current one (a widening is refused — no
+    /// amplification, the §3.4 covert-edge bound).
+    pub fn restrict_damage_notify(&mut self, owner: &CellId, region_counts: &[usize]) -> bool {
+        let Some(cap) = self.damage_notify.get(owner) else {
+            return false;
+        };
+        let mask = region_counts
+            .iter()
+            .fold(0u64, |m, rc| m | damage_badge(*rc));
+        let rights = cap.rights.clone();
+        match cap.attenuate(rights, mask) {
+            Some(narrower) => {
+                self.damage_notify.insert(*owner, narrower);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Would a committed present painting `region_count` region(s) signal a damage
+    /// wake on `owner`'s surface? Iff `owner` holds a damage-notify cap whose mask
+    /// admits the damage badge — the REAL `dregg_firmament`
+    /// [`NotifyCap::signal_admissible`] over the surface's wake object. The
+    /// query the present-path gate runs; `false` if no surface is open (fail-closed).
+    #[must_use]
+    pub fn admits_damage(&self, owner: &CellId, region_count: usize) -> bool {
+        let obj = surface_notify_object(owner);
+        self.damage_notify
+            .get(owner)
+            .is_some_and(|cap| cap.signal_admissible(obj, damage_badge(region_count)))
     }
 }
 
@@ -735,5 +849,130 @@ mod tests {
         let verdict = vs.present(&mut w, stranger, p, 1);
         assert!(!verdict.is_committed());
         assert!(matches!(verdict.tooth(), Some(PresentError::NoSurface)));
+    }
+
+    // =====================================================================
+    // THE DAMAGE-NOTIFY WELD — the async damage signal is a HELD, attenuable
+    // `dregg_firmament::NotifyCap` (`docs/NOTIFY-PRIMITIVE.md` §2.4), routed
+    // through the SAME verified `signal_admissible` the swarm's cross-agent
+    // edge uses. BOTH POLARITIES at the real `present()` call-site: a committed
+    // present whose damage badge is within the held mask SIGNALS the wake; one
+    // outside the (attenuated) mask advances the frame but SIGNALS NOTHING.
+    // =====================================================================
+
+    #[test]
+    fn a_committed_present_signals_the_damage_wake_iff_the_badge_is_held() {
+        let mut w = World::new();
+        let (mut vs, wallet, _browser) = demo(&mut w);
+
+        // The wallet owns regions [10, 11]. A present painting ONE region
+        // (count 1, badge bit 1) and TWO regions (count 2, badge bit 2) both
+        // pass the scene-authority gate (subset of held), but occupy DIFFERENT
+        // damage badge bits — so the notify mask can discriminate them.
+        assert_ne!(
+            damage_badge(1),
+            damage_badge(2),
+            "one- vs two-region damage must land on distinct badge bits"
+        );
+
+        // ATTENUATE the surface's damage-notify to admit ONLY two-region damage
+        // (count 2). A widening back is refused; the open default is narrowed.
+        assert!(
+            vs.restrict_damage_notify(&wallet, &[2]),
+            "narrowing the damage-notify to a held kind must succeed"
+        );
+        assert!(vs.admits_damage(&wallet, 2), "two-region damage is now admitted");
+        assert!(
+            !vs.admits_damage(&wallet, 1),
+            "one-region damage is now OUTSIDE the mask (strictly fewer admitted)"
+        );
+
+        // NEGATIVE POLARITY — present ONE region (count 1, out-of-mask). The
+        // present COMMITS (the frame advances) but NO SurfaceDamaged wake fires:
+        // the held cap does not admit this damage badge (fail-closed).
+        let dyn_before = w.dynamics().cursor();
+        let p1 = Present {
+            target: vec![10], // count 1 — out of the {2} mask
+            source_state_root: 500,
+            declared_label: label_of(&wallet, 500),
+            claims_focus: true,
+            new_digest: 2,
+        };
+        let v1 = vs.present(&mut w, wallet, p1, 2);
+        assert!(v1.is_committed(), "the present itself commits, got {v1:?}");
+        assert!(
+            !w.dynamics()
+                .since(dyn_before)
+                .iter()
+                .any(|e| matches!(e, WorldEvent::SurfaceDamaged { .. })),
+            "an out-of-mask damage kind signals NO wake (the held cap refused it, fail-closed)"
+        );
+
+        // POSITIVE POLARITY — present TWO regions (count 2, in-mask). The
+        // present commits AND the SurfaceDamaged wake fires (the badge is held).
+        let dyn_before = w.dynamics().cursor();
+        let p2 = Present {
+            target: vec![10, 11], // count 2 — within the {2} mask
+            source_state_root: 501,
+            declared_label: label_of(&wallet, 501),
+            claims_focus: true,
+            new_digest: 3,
+        };
+        let v2 = vs.present(&mut w, wallet, p2, 3);
+        assert!(v2.is_committed(), "the in-mask present commits, got {v2:?}");
+        assert!(
+            w.dynamics()
+                .since(dyn_before)
+                .iter()
+                .any(|e| matches!(
+                    e,
+                    WorldEvent::SurfaceDamaged { owner, region_count, .. }
+                        if *owner == wallet && *region_count == 2
+                )),
+            "the in-mask damage kind SIGNALS the wake (the held cap admitted it)"
+        );
+    }
+
+    #[test]
+    fn restrict_damage_notify_is_non_amplifying_and_refuses_a_widening() {
+        // The scene-layer mirror of the firmament `NotifyCap` non-amplification:
+        // attenuating a surface's damage-notify only SHRINKS the damage kinds it
+        // signals, and a WIDENING (re-admitting a dropped kind) is refused.
+        let mut w = World::new();
+        let (mut vs, wallet, _browser) = demo(&mut w);
+
+        // Open default admits any damage kind.
+        assert!(vs.admits_damage(&wallet, 1), "open grant admits one-region damage");
+        assert!(vs.admits_damage(&wallet, 2), "open grant admits two-region damage");
+
+        // Narrow to {count 2}: one-region damage is now outside the mask.
+        assert!(vs.restrict_damage_notify(&wallet, &[2]));
+        assert!(vs.admits_damage(&wallet, 2), "still admits the kept kind");
+        assert!(
+            !vs.admits_damage(&wallet, 1),
+            "the dropped kind is now refused (strictly fewer admitted)"
+        );
+
+        // WIDENING refused: re-admitting count 1 (a bit not in the narrowed mask)
+        // is rejected — the grant is unchanged, no amplification.
+        assert!(
+            !vs.restrict_damage_notify(&wallet, &[1, 2]),
+            "a widening attenuation must be refused"
+        );
+        assert!(
+            !vs.admits_damage(&wallet, 1),
+            "after the refused widening, one-region damage is STILL refused (grant unchanged)"
+        );
+
+        // An owner with no open surface: attenuation is refused (no cap to narrow).
+        let stranger = w.genesis_cell(0x77, 0);
+        assert!(
+            !vs.restrict_damage_notify(&stranger, &[1]),
+            "attenuating a non-existent surface's damage-notify is refused (fail-closed)"
+        );
+        assert!(
+            !vs.admits_damage(&stranger, 1),
+            "an un-opened surface admits no damage wake (fail-closed, no ambient default)"
+        );
     }
 }

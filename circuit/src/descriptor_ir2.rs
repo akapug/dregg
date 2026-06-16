@@ -1409,6 +1409,22 @@ const MAP_OLD_CHAIN0: usize = MAP_NEW_LEAF + 1; // 41 (levels 0..14; level 15 = 
 const MAP_NEW_CHAIN0: usize = MAP_OLD_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 56
 const MAP_WIDTH: usize = MAP_NEW_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 71
 
+/// The DECLARED leaf-input column list for a `MapOp` absorb, parametric in the value
+/// column (`MAP_VALUE` for the new leaf, `MAP_OLD_VALUE` for the committed old leaf).
+///
+/// LAW#1: the leaf-absorb arity is DATA, not a hardcoded `2`. Both the AIR (`chip_absorb_tuple`)
+/// and the trace assembly (`absorb_tuple` in `assemble`) read the SAME list, so prover and
+/// verifier agree on the leaf shape by construction. Today the `MapOp` leaf is the 2-field sorted-
+/// `Heap` leaf `hash[key, value]` (Lean `Substrate.Heap.leafOf hash e = hash[e.1, e.2]`, the
+/// denotation `MapOp.holdsAt` opens against); the function is the single seam a wider declared map
+/// leaf would extend (the absorb code paths are already arity-generic). The 7-field cap leaf is a
+/// SEPARATE object (a binary-Merkle opening via generic chip `Lookup`s — Lean `DeployedCapOpen`),
+/// not a `MapOp` leaf; see the module-level note and the returned ledger.
+#[inline]
+fn map_leaf_input_cols(value_col: usize) -> [usize; 2] {
+    [MAP_KEY, value_col]
+}
+
 // -- Chip table layout. A row is EITHER a sponge-absorb permutation (`is_fact = 0`:
 //    state = (in0..in3, arity tag) — the hash_many shape every hash-site lookup queries)
 //    OR a Merkle-node permutation (`is_fact = 1`, arity pinned 0: state = fact_state
@@ -2070,29 +2086,50 @@ where
                 let not_insert: AB::Expr =
                     AB::Expr::ONE - inv6 * op.clone() * (op.clone() - AB::Expr::ONE);
 
-                // Leaf digests ride the chip bus: hash[key, old_value] and hash[key, value]
-                // are arity-2 absorb lookups (gated by is_real — pad rows query nothing).
-                // The old-leaf lookup is suppressed on insert rows.
+                // Leaf digests ride the chip bus as absorb lookups (gated by is_real — pad rows
+                // query nothing). The old-leaf lookup is suppressed on insert rows.
+                //
+                // LAW#1 / parametric leaf: the absorb arity is NOT a hardcoded `2`. The map-op
+                // declares its leaf as a list of INPUT COLUMNS (`map_leaf_input_cols`), and the
+                // absorb tuple is built generically from that list by `chip_absorb_tuple` — the
+                // Rust twin of the Lean `chipLookupTuple` (`arity :: padTo CHIP_RATE ins ++
+                // [digest]`). Today the declared list is the 2-field `[key, value]` shape (the
+                // sorted-`Heap` leaf `hash[addr, value]` the `MapOp` denotation pins); a wider
+                // leaf would extend the column list with ZERO new branches here. The 7-field cap
+                // leaf does NOT ride this op — it is a binary-Merkle membership opening realized
+                // as generic chip `Lookup`s (Lean `DeployedCapOpen.leafLookup`, arity 7), the
+                // SAME `chip_absorb_tuple` primitive at a different arity. See the module note.
                 let p2 = LookupBus::new(BUS_P2);
-                let leaf_tuple = |val_col: usize, leaf_col: usize| -> Vec<AB::Expr> {
+                let chip_absorb_tuple = |inputs: &[usize], digest_col: usize| -> Vec<AB::Expr> {
+                    debug_assert!(
+                        inputs.len() <= CHIP_RATE,
+                        "map-op leaf arity {} exceeds CHIP_RATE {CHIP_RATE}",
+                        inputs.len()
+                    );
                     let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-                    t.push(AB::Expr::from_u64(2));
-                    t.push(local[MAP_KEY].into());
-                    t.push(local[val_col].into());
-                    for _ in 2..CHIP_RATE {
+                    t.push(AB::Expr::from_u64(inputs.len() as u64));
+                    for &c in inputs {
+                        t.push(local[c].into());
+                    }
+                    for _ in inputs.len()..CHIP_RATE {
                         t.push(AB::Expr::ZERO);
                     }
-                    t.push(local[leaf_col].into());
+                    t.push(local[digest_col].into());
                     t
                 };
+                // The declared leaf input columns for read/write/insert: `[key, value-col]`. The
+                // old leaf reads the committed `MAP_OLD_VALUE`, the new leaf the written
+                // `MAP_VALUE` — same declared key column, the value column distinguishes them.
+                let old_leaf_cols = map_leaf_input_cols(MAP_OLD_VALUE);
+                let new_leaf_cols = map_leaf_input_cols(MAP_VALUE);
                 p2.lookup_key(
                     builder,
-                    leaf_tuple(MAP_OLD_VALUE, MAP_OLD_LEAF),
+                    chip_absorb_tuple(&old_leaf_cols, MAP_OLD_LEAF),
                     is_real.clone() * not_insert.clone(),
                 );
                 p2.lookup_key(
                     builder,
-                    leaf_tuple(MAP_VALUE, MAP_NEW_LEAF),
+                    chip_absorb_tuple(&new_leaf_cols, MAP_NEW_LEAF),
                     is_real.clone(),
                 );
 
@@ -3477,13 +3514,20 @@ fn build_traces(
                 cols[MAP_SIB0 + lvl] = sibs[lvl];
                 cols[MAP_DIR0 + lvl] = BabyBear::new(dirs[lvl] as u32);
             }
-            // The opening's permutations ride the chip table: the two leaf hashes are
-            // absorb (arity-2) tuples on the chip bus, the chains' node hashes are fact
-            // tuples on the fact bus. The row carries digests only, never aux.
+            // The opening's permutations ride the chip table: the leaf hashes are absorb
+            // tuples on the chip bus (arity = the declared leaf-input count, today 2 — the
+            // `[key, value]` `Heap` leaf), the chains' node hashes are fact tuples on the fact
+            // bus. The row carries digests only, never aux. The absorb tuple is built from the
+            // SAME declared leaf-input values the AIR's `chip_absorb_tuple` reads off the
+            // declared columns (`map_leaf_input_cols`), so prover/verifier agree on the arity.
             let leaf_digest = |a: BabyBear, b: BabyBear| perm_aux(hash2_state_c(a, b)).1;
             let absorb2_tuple = |a: BabyBear, b: BabyBear, d: BabyBear| -> Vec<u32> {
-                let mut t = vec![2u32, a.as_u32(), b.as_u32()];
-                t.extend(std::iter::repeat_n(0u32, CHIP_RATE - 2));
+                // The declared inputs are `[key, value]`; the histogram key mirrors the AIR's
+                // `arity :: inputs ++ pad ++ [digest]` tuple at the declared arity.
+                let inputs = [a.as_u32(), b.as_u32()];
+                let mut t = vec![inputs.len() as u32];
+                t.extend_from_slice(&inputs);
+                t.extend(std::iter::repeat_n(0u32, CHIP_RATE - inputs.len()));
                 t.push(d.as_u32());
                 t
             };

@@ -11,6 +11,144 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## IN-CIRCUIT CAP-TREE MEMBERSHIP-OPEN — Lean soundness LANDED; Rust AIR wiring + prover + mask-reconcile NAMED (2026-06-16)
+
+LANDED (green, #assert_axioms-clean, Poseidon2SpongeCR only): `metatheory/Dregg2/Circuit/DeployedCapOpen.lean`
+— the in-circuit cap-tree membership-open as a `CapOpenConstraint` whose denotation rides the Poseidon2 chip bus
+(`DescriptorIR2.chip_lookup_sound`) for the 7-field leaf absorb (= `capLeafDigest`) and each depth-16 `hash_fact`
+node fold (= `nodeOf`, mixed by the direction bit), CONSTRAINS the top == `cap_root` column, binds `leaf.target ==
+src` + `mask_lo == write-mask`. KEYSTONE `capOpen_sound`: `Satisfied ⟹ DeployedCapTree.MembersAt cap_root leaf ∧
+leaf.target = src ∧ confersWriteLeaf leaf`; `capOpen_authorizes` chains `deployedCapOpen_implies_authorizedB ⟹`
+kernel `authorizedB`. Discriminating teeth witness-FALSE (writeMaskGate/targetBindGate). Rust witness twin +
+recompose + binding + tests landed in `circuit/src/cap_root.rs` (`CapMembershipWitness`, `recompose_membership`,
+`membership_witness`, `recomposes`/`target_is`/`confers_write`; tests pin the depth-16 fold == root + forgery
+rejection + binding teeth).
+
+NAMED (remaining-steps, the Rust-AIR + prover legs of the original 4):
+  (1) RUST `CapMembership` AIR: add an `Ir2Air::CapMembership` variant to `circuit/src/descriptor_ir2.rs` mirroring
+      the MapOps Merkle-chain fold (lines ~2104-2136 `mix`/`fact_bus`) but with the 7-field leaf absorb on `BUS_P2`
+      and the root-pin/target/mask gates — plus its trace-fill (model on the MapOps fill ~3490-3537 using
+      `cap_root.rs::membership_witness`), bus registration, and the prove/verify entry-point plumbing + a golden
+      descriptor pin. (NOT done — deliberately not half-wired into the batch assembly; the Lean denotation IS the
+      spec the AIR must meet, and `cap_root.rs::recompose_membership` IS the witness-construction it consumes.)
+  (2) PROVER wire: `sdk/src/full_turn_proof.rs:662` — build the `CapMembershipWitness` from the actor's c-list and
+      pass it for cap turns (kill the `&[]`); re-emit the attenuate descriptor; note the new VK pin (VK changes —
+      authorized).
+  (3) MASK-CONVENTION RECONCILE (flag-day): the Lean `confersWriteLeaf` pins `mask_lo == rightsMaskOf(endpoint
+      [read,write])` over the abstract `Auth`-rights mask; the deployed `CapLeaf.mask_lo` is the low-16 of a
+      `cell/facet.rs` `EffectMask` (effect-kind bitmap — DIFFERENT convention). Align so the in-circuit write bit IS
+      the deployed `mask_lo`'s write-conferring bit (or document the leaf carries the rights mask, not the effect
+      mask). `cap_root.rs::confers_write` checks the submask SHAPE either convention shares; the constant alignment
+      is the open item — do NOT fake a Rust constant that pretends they agree.
+
+CLOSURE SHAPE: (1)+(2) are mechanical mirrors of the existing MapOps AIR + a witness pass; (3) is an ember-adjacent
+data-model decision (which mask the cap leaf commits). Named: in-circuit cap-membership-open, 2026-06-16.
+
+## CIRCUIT FUNCTIONAL CORRECTNESS — light-client unfoolability apex NAMED; #103 cap-family residue mapped (2026-06-16)
+
+NAMED: the leaf-circuit→kernel-step soundness rung does not yet exist as a composed apex over the live
+rotated registry — `lightclient_unfoolable` (`verifyBatch vk pi π = accept ⟺ ∃ kernel transition`,
+bidirectional per LAW#1) via `descriptorRefines (liveRegistry e) (fullActionStep e)` per live effect. Full
+diagnosis + corrected ground-truth coverage in `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md` (SUPERSEDES the
+pre-investigation plan whose premise — "the live circuit enforces no non-amp" — is FALSE: `attenuateV3_non_amp`
+(EffectVmEmitRotationV3.lean:1419) proves in-circuit non-amp on the LIVE wired attenuate descriptor).
+
+RESIDUE (= the open scope of #103; attenuate = the done template #37): introduce / refresh / revokeDelegation /
+grant route to FREEZE-AND-DEFER rotated descriptors (`v3Of {introduce,refresh,revoke}VmDescriptor` — cap_root
+frozen, mutation bound out-of-row / DELEG record-root), so a light client trusts the EXECUTOR for their non-amp
+(`EffectsAuthority.*_non_amplifying`, proven; Argus-term-IR modelled — neither is the descriptor the prover
+selects). `introduceVmDescriptorGenuineNonAmp`/`refreshVmDescriptorGenuineNonAmp` (= the 186-wide
+`attenuateVmDescriptorGenuineNonAmp`) are PROVEN-BUT-UNWIRED — the drift the apex's `vk=vkOfRegistry liveRegistry`
+binding + a drift-guard `#guard` must forbid. Two universal rungs DO hold for all 36 (`rotV3_sound_v1` row-intent,
+`rotV3_binds_published` whole-post-state commitment) — integrity complete, authority uneven.
+
+CLOSURE SHAPE: (1) named `StarkSound` floor over the audited p3-batch-stark verifier (none exists — implicit in
+`RecursiveAggregation.EngineSound`); (2) state `lightclient_unfoolable` + `descriptorRefines`, discharge per-effect
+vs `fullActionStep` (ActionDispatch.lean:168; `attenuateV3_non_amp` = worked instance); (3) BUILD the four missing
+in-row gadgets — NOT a transport (no V2 sibling source): introduce/grant = membership + cross-cell copy, refresh =
+DELEG-root open+submask, revokeDelegation = removal gate (the `revokeCapabilityV3` shape); (4) drift-guard `#guard`
+(every `*_non_amp` descriptor ∈ liveRegistry) + wire-or-delete the standalone Genuine descriptors; (5) VK epoch
+(ember-gated). TO CONFIRM: delegateAtten wire→selector mapping (if it rides ATTENUATE_CAPABILITY=48 the headline
+delegation is already covered); what `unfoolability_guarantee` grounds "executed correctly" on; `fullActionStep ⟺
+execFullA`; Argus IR live-vs-parallel. Named: circuit functional correctness apex, 2026-06-16.
+
+## DFA ROUTE-COMMITMENT — LANDED in the circuit + live verifier; node-relay binding NAMED (2026-06-15)
+
+LANDED: the real `dregg-dfa-routing-v1` route-commitment-binding AIR now SHIPS as a DSL circuit
+(`circuit/src/dsl/dfa_routing.rs`), faithful to the Lean model `Dregg2.Crypto.DfaAcceptanceAir` and the
+standalone test AIR (`dregg-tests/src/dfa_circuit.rs`). It closes GAP-B (the running-hash route commitment
+the generic `Lookup` DFA left open) via two new `ConstraintExpr` forms in `circuit/src/dsl/circuit.rs` —
+`ChainedHash2to1` (cross-row `next.running = compress(this.running, next.entry)`, the C3 chain) and
+`SeedHash2to1` (PI-seeded `running₀ = compress(table_commitment, entry₀)`, the Lean `seed` conjunct) —
+plus a FRI-safe `TableFunction` (bivariate-Lagrange table membership, closing GAP-A `next = step(state,sym)`
+where `Lookup` could NOT — `Lookup` is a non-polynomial step the native FRI rejects off-domain; this was a
+real pre-existing trap: no DSL `Lookup` circuit ever proved through `stark::prove`). Both polarities GREEN
+through the real `stark::prove`/`verify` FRI pipeline (8 tests, `cargo test -p dregg-circuit --lib
+dsl::dfa_routing`) AND through the LIVE `DslCircuitDfaVerifier` — the relay's verifier (4 tests,
+`executor::membership_verifier::tests::live_routing*` in `dregg-turn`): a correct route binds its
+route_commitment/final_state; a forged final_state or route_commitment is rejected at the B2/B3 boundary
+("a router cannot claim a delivery it did not make").
+
+NAMED (node-relay binding — the remaining live wire): the relay-operator template
+(`dregg-storage-templates/src/relay_operator.rs`) gates the `relay` method on `Witnessed { Dfa }` with a
+PLACEHOLDER commitment `[0u8;32]` (a labeled seam — the comment says "executor overrides via slot-bound
+resolution" but `cell/src/program.rs:3549` passes `wp.commitment` AS-IS), and `node`'s relay sets
+`route_table_root = blake3_field(…)` (`node/src/relay_service.rs:1228`), neither equal to the routing
+program's `vk_hash` — so the relay's Dfa caveat is currently FAIL-CLOSED at the node (the node never
+installs the Dfa verifier). NOTE the "blocker" is a NON-issue: `dregg_dsl_runtime::ProgramRegistry`
+(`node/src/state.rs:249`) is a `pub use` RE-EXPORT of `dregg_circuit::dsl::circuit::ProgramRegistry`
+(`dregg-dsl-runtime/src/lib.rs:58`) — the SAME type `DslCircuitDfaVerifier` holds. CLOSURE SHAPE (two
+edits, both in already-depended crates): (1) `dregg-storage-templates` — thread a `route_circuit_vk:
+[u8;32]` param into `relay_operator_program_with` so the `WitnessedPredicate::dfa` commitment is the
+routing `vk_hash`, not `[0u8;32]` (ripples to `relay_operator_program()` + the node/test callers); (2)
+`node` — at startup deploy `dregg_circuit::dsl::dfa_routing::dfa_routing_descriptor("dregg-dfa-routing-v1",
+router_transitions)` into `s.program_registry`, set `default_route_table_root()` := that `vk_hash`, and in
+`node/src/executor_setup.rs::configure_turn_executor` do
+`registry.register_builtin(Arc::new(dregg_turn::executor::DslCircuitDfaVerifier::new(Arc::new(
+s.program_registry.clone()))))` (upgrades ONLY Dfa from its fail-closed default; the other kinds stay as
+`registry_with_real_verifiers()` set them). The relay CLIENT produces wire bytes via
+`dregg_turn::executor::prove_dfa_transition(programs, vk_hash, build_routing_witness(...).0, n, pi)`.
+Both `DslCircuitDfaVerifier` + `prove_dfa_transition` are now re-exported from
+`dregg_turn::executor`. Named: DFA route-commitment node-relay wire, 2026-06-15.
+
+LAW#1 RESIDUAL (Lean-emit): `dfa_routing_descriptor` is a Rust-authored `CircuitDescriptor` faithful to
+the authoritative Lean `Satisfies` (`metatheory/Dregg2/Crypto/DfaAcceptanceAir.lean` §2) — it follows the
+SAME established pattern as every other DSL predicate circuit (`fold`, `committed_threshold`, `temporal`),
+none of which is Lean-emitted (the `CircuitEmit.lean → EmittedDescriptor` path serves the KERNEL effects,
+not the DSL predicate-circuit family). The new `ConstraintExpr` forms are generic data-driven gates, not a
+bespoke hand-coded AIR. The law-#1 ideal end-state is a Lean emitter that PRODUCES this descriptor from the
+`Satisfies` model with an emitted≡Satisfies proof (and the entry-hash/running-hash carriers consumed as
+named CR, exactly as the Lean model does). Named: Lean-emit the dfa-routing descriptor + the DSL-predicate
+family, 2026-06-15.
+
+## CAP-CROWN IR — LANDED: in-circuit non-amplification (`granted ⊑ held`) binds on the DELEGATION family at the Lean-emit layer (2026-06-15)
+
+The delegation/cap effects (`delegate`, `delegateAtten`, `attenuate`, `introduce`, `revoke`, `refresh`)
+carried an "IR GAP — needs IR extension: cap-root hash-site" in their EffectVM-emit modules: the genuine
+`cap_root` RECOMPUTE existed (§G, `attenuateVmDescriptorGenuine` — `new_cap_root = hash[edge_leaf,
+old_root]`, op-tagged) but the in-circuit non-amplification (`granted ⊑ held`) did NOT bind on these
+descriptors. CLOSED: a new shared GENUINE-NON-AMP descriptor `attenuateVmDescriptorGenuineNonAmp`
+(`metatheory/Dregg2/Circuit/Emit/EffectVmEmitAttenuateA.lean` §G.4) = the genuine recompute PLUS the
+shared `EffectVmEmitCapReshape.capDelegNonAmpGates` (the per-bit submask gate whose GRANTED mask
+reconstructs `cp.RIGHTS` — the SAME `rights` felt the recompute hashes into the cap-edge leaf). The two
+legs INTERLOCK on one felt: tamper `rights` to dodge the submask gate and the recomputed `cap_root` moves
+⇒ `state_commit` moves ⇒ UNSAT. Re-exported per effect (`delegateVmDescriptorGenuineNonAmp` …, with
+`*NonAmp_in_circuit` admits + `*NonAmp_rejects_amplify` rejects — both polarities, axiom-clean). Emitted
+from Lean (LAW#1, no hand-authored AIR): `EmitAllJson` re-emits the byte-pinned
+`circuit/descriptors/dregg-effectvm-attenuateA-v1-genuine-nonamp.json` (186-wide, 56 constraints, 6 hash
+sites — additive + width-neutral); the Rust standalone loader `circuit/src/cap_delegation_nonamp_descriptor.rs`
+parses it + fingerprints it (drift guard) + asserts the 8 delegation submask gates + the 2 recompute
+sites are present. `lake build Dregg2` green; the EmitAllJson run + the loader teeth are the gates.
+
+RESIDUAL (named, Phase E): the in-row recompute is the prepend-accumulator DIGEST advance, not yet the
+in-row sorted-TREE update (membership-open + sorted-key range-checks, mirroring the revocation circuit's
+C6/C7/C10/C11). The openable-root VALUE the digest carries is the cell≡circuit sorted-Poseidon2 root
+(`EffectVmEmitCapReshape` §1 model + `circuit/tests/cap_root_cell_circuit_differential.rs`); the Phase-B
+sorted OPEN is `EffectVmEmitV2.attenuateV2_non_amp`. This IR-layer non-amp is the descriptor-emit
+counterpart of the p3-AIR Phase-B gates tracked at the "#103 cap-crown — TWO EffectVM AIRs" item below;
+it does NOT itself graduate the bespoke sovereign `EffectVmAir` path (that remains the C5/C7-flip task).
+Named: cap-crown IR non-amp LANDED, 2026-06-15.
+
 ## FIRMAMENT KEYSTONE — LANDED: the 5-PD assembly BOOTS the verified turn through the REAL executor seat (2026-06-15)
 
 The `executor` seat of the 5-PD firmament (`sel4/dregg.system`) is a REAL Microkit PD
@@ -46,33 +184,41 @@ net-delivered live turn (the live `notified`-path read of `turn_in` is wired + c
 QEMU since net only brings the NIC up here — a real ingress→turn_in→executor delivery is the next strand).
 Named: firmament keystone LANDED, 2026-06-15.
 
-## DESKTOP KEYSTONE — LANDED: a REAL gpui render (cockpit-shaped) is on the seL4 framebuffer (TAB beside the live image, 2026-06-15)
+## DESKTOP KEYSTONE — CLOSED: the LIVE `cockpit::Cockpit` element tree renders on the seL4 framebuffer (TAB beside the live image, 2026-06-15)
 
-THE #1 PRECIOUS undone thing is done: the proven gpui-offscreen render is WIRED INTO the seL4
-framebuffer. The deos-image PD (`sel4/dregg-pd/deos-image/`) now has TWO live modes on one ramfb
-framebuffer, switched with **TAB**: `Mode::Image` (the Pharo cell browser) and `Mode::Cockpit` —
-a **real gpui render of a starbridge-v2-cockpit-shaped Scene** (the WORLD/SHELL/REFLECT columns + four-substance
-tiles + title/status bars), rendered at the framebuffer's exact 800×600 by the actual gpui renderer
-(`gpui_wgpu::WgpuRenderer::render_scene_to_image`, the offscreen patch) on lavapipe (llvmpipe,
-`type=Cpu`, no GPU/window) on persvati — 21 quads + 322 glyph sprites — baked into the `#![no_std]`
-PD as raw RGBA8 (`src/cockpit_frame.rgba`, 1.92 MiB, exactly as `image_data.rs` bakes real cells) and
-swizzled RGBA→XRGB8888 into the framebuffer at blit time. A TAB keypress (evdev 15) → the PD's
-`notified()` toggles mode + repaints. `make -C sel4 capture-image-modes` reproduces it end-to-end
-(boots headless, screendumps the image, QMP `send-key TAB`, screendumps the cockpit). Evidence:
-`docs/desktop-os-research/patches/cockpit-on-sel4-framebuffer.png` (the cockpit-shaped gpui render,
-scanned out of seL4 ramfb) + `deos-image-on-sel4-framebuffer.png` + `cockpit-render-800x600.png`. Serial:
-`ramfb CONFIGURED: addr=0x60600000 XRGB8888 800x600` then `-> MODE: the starbridge-v2 COCKPIT`.
+THE #1 PRECIOUS is fully done, including its last swap: the deos-image PD (`sel4/dregg-pd/deos-image/`)
+has TWO live modes on one ramfb framebuffer, switched with **TAB** — `Mode::Image` (the Pharo cell
+browser) and `Mode::Cockpit` — and the cockpit is now the **REAL, LIVE `starbridge_v2::cockpit::Cockpit`
+element tree** (not a hand-built look-alike): the CELL WORLD rail with the actual sovereign cells (ids,
+balances, cap counts, the issuer well at −supply), the INSPECTOR reflecting the image (cells/height/
+receipts/`state_root`/"executor embedded verified (TurnExecutor)"), the BLOCKLACE provenance (the real
+receipt chain), and the HOME/SHELL/AGENT workspace. Rendered at 800×600 by the actual gpui renderer
+(`gpui_wgpu::WgpuRenderer::render_scene_to_image`, the offscreen patch) on lavapipe (`type=Cpu`, no GPU/
+window) on persvati, baked into the `#![no_std]` PD as raw RGBA8 (`src/cockpit_frame.rgba`, 1.92 MiB)
+and swizzled RGBA→XRGB8888 at blit time. `make -C sel4 capture-image-modes` reproduces it end-to-end
+(boots headless, screendumps image, QMP `send-key TAB`, screendumps the LIVE cockpit). Evidence:
+`docs/desktop-os-research/patches/cockpit-on-sel4-framebuffer-LIVE.png` (the live cockpit scanned out
+of seL4 ramfb) + `cockpit-render-800x600-LIVE.png` (the persvati render).
 
-THE ONE REMAINING SWAP (named, not hidden — the honest frontier): the blitted Scene is a hand-built
-cockpit-shaped gpui `Scene` through the IDENTICAL renderer path the real `cockpit::Cockpit` resolves
-to, NOT yet the live element tree. Closure: a headless gpui `App`/`Window` in starbridge-v2 (beside
-`run_window`, `main.rs`) driving `cockpit::Cockpit` (its `shell::Scene` resolves to a gpui `Scene`
-only inside a live `Window`) → `render_scene_to_image` → the same `cockpit_frame.rgba` bake. The whole
-plumbing (render → RGBA → XRGB8888 → ramfb → scanout → TAB) is PROVEN; this is the last lane. Also
-durable-but-deferred (I don't run git): land the offscreen patch as a `breadstuffs/zed@offscreen-fork`
-branch off `fca2ccd` and repoint starbridge-v2's `gpui`/`gpui_platform` git deps (the patch lives at
-`docs/desktop-os-research/patches/gpui-offscreen.patch`; it is applied uncommitted on persvati
-`~/src/zed`). Named: desktop keystone LANDED, 2026-06-15.
+THE LAST SWAP — CLOSED (was "the one remaining swap"): the blitted Scene used to be a hand-built
+cockpit-*shaped* `gpui::Scene`; it is now the live element tree, resolved the intended way. HOW: a
+headless gpui `App`/`Window` (`gpui::HeadlessAppContext` over `TestPlatform`) drives the real
+`cockpit::Cockpit` over the fully-seeded `world::demo_world` image; gpui paints its element tree into a
+real frame; `Window::render_to_image` captures the resolved `gpui::Scene` through the offscreen wgpu
+renderer. Entry: `starbridge-v2/src/main.rs::render_cockpit_headless` (`--render-cockpit <out>`, behind
+a new `headless-render` feature). gpui reports a fixed 2× scale, so the 800-logical cockpit renders at
+1600×1200 device px and is Lanczos-downscaled to 800×600 (full layout, no crop). Byte-proof: the new
+`cockpit_frame.rgba` differs from the old hand-built bake in 1,376,735 / 1,920,000 bytes (a genuinely
+different image, same geometry). The offscreen patch GREW the missing Linux headless renderer:
+`gpui_wgpu::{WgpuRenderer::render_scene, WgpuHeadlessRenderer: PlatformHeadlessRenderer}` +
+`gpui_linux::current_headless_renderer` + `gpui_platform::current_headless_renderer` routing to it on
+Linux (the Metal headless renderer is the macOS counterpart). DEP REPOINT (committable, done): the
+patch is pushed as `emberian/zed@dregg-offscreen` (off `fca2ccd`, rev
+`407a6ffd977d82b828e392f92db5cb34edea9549`); starbridge-v2's `gpui`/`gpui_platform` git deps now point
+there + a new `gpui_wgpu` dep at the same rev (the canonical patch
+`docs/desktop-os-research/patches/gpui-offscreen.patch` carries the full offscreen+headless diff).
+Fonts vendored OFL (`starbridge-v2/assets/fonts/{Lilex,IBMPlexSans}-Regular.ttf`). Named: desktop
+keystone CLOSED — the live element tree is on glass, 2026-06-15.
 
 ## EVM BRIDGE — the STARK→SNARK wrap keystone: zkVM path BUILT, Plonky3-native BN254 terminal is the cost-optimization endgame (named 2026-06-15)
 
