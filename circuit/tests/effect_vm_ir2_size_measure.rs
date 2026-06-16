@@ -24,7 +24,7 @@
 //! (debug prove times would be lies):
 //!   cargo test -p dregg-circuit --release --features recursion --test effect_vm_ir2_size_measure -- --nocapture
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use std::time::Instant;
 

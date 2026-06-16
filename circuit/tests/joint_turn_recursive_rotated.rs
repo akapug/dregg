@@ -25,7 +25,7 @@
 //! Run the slow ones with:
 //!   cargo test -p dregg-circuit --features recursion --test joint_turn_recursive_rotated -- --ignored --nocapture
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;

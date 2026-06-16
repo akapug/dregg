@@ -1804,10 +1804,10 @@ pub fn descriptor_recursion_matrix(
 /// descriptor interpreter) on a BASE EffectVM trace + public inputs, via Plonky3's
 /// canonical `check_all_constraints` — the EXACT predicate the audited p3 verifier
 /// enforces (every constraint vanishing on every wrap-around row), but deterministic
-/// (no random FRI queries). This is the descriptor-side mirror of
-/// [`crate::effect_vm_p3_full_air::p3_air_accepts`], so a cutover differential can
-/// assert the interpreter and the hand-AIR decide accept/reject IDENTICALLY over a
-/// shared witness corpus.
+/// (no random FRI queries). This was the descriptor-side mirror of the retired v1
+/// `effect_vm_p3_full_air::p3_air_accepts` hand-AIR predicate, which a cutover
+/// differential used to assert the interpreter and the hand-AIR decided
+/// accept/reject IDENTICALLY over a shared witness corpus.
 ///
 /// `base_trace` is the `desc.trace_width`-column base trace (the same one
 /// `generate_effect_vm_trace` produces); it is extended with the Poseidon2 site-aux

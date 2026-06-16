@@ -87,7 +87,7 @@ use crate::poseidon2::hash_4_to_1;
 /// This whole descriptor-participant surface is `recursion`-gated: it feeds the recursion/aggregation
 /// cores ([`crate::ivc_turn_chain`] / [`crate::joint_turn_recursive`]), which compile only under
 /// `recursion`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub struct DescriptorParticipant {
     /// THE ROTATED LEG (Bucket-F mandatory leaf). The recursion cores
     /// ([`crate::ivc_turn_chain::prove_chain_core_rotated`] /
@@ -103,7 +103,7 @@ pub struct DescriptorParticipant {
 /// descriptor (needed to rebuild the AIR set for the in-circuit verifier), and the 38-PI
 /// vector it attests (the v1 prefix `[0..34)` + the 4 appended rotated commit/height/caveat
 /// pins). The chain roots are read from this PI vector's ROTATED commit positions (PI 34/35).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub struct RotatedParticipantLeg {
     /// The rotated multi-table batch proof, minted under
     /// [`crate::ivc_turn_chain::ir2_leaf_wrap_config`].
@@ -116,7 +116,7 @@ pub struct RotatedParticipantLeg {
     pub public_inputs: Vec<BabyBear>,
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 impl Clone for RotatedParticipantLeg {
     /// `Ir2BatchProof` (the p3 `BatchProof`) is `Serialize`/`Deserialize` but NOT
     /// `Clone`, so the leg cannot `#[derive(Clone)]`. Round-trip the proof through
@@ -148,7 +148,7 @@ impl Clone for RotatedParticipantLeg {
 // (lightclient / wasm / `circuit/tests/proof_economics.rs`) import the mint from
 // `dregg_turn::rotation_witness::mint_rotated_participant_leg`.
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 impl RotatedParticipantLeg {
     /// Build a [`RotatedParticipantLeg`] from already-produced rotated block witnesses
     /// (the `before`/`after` `(pre_limbs, iroot)` pairs `rotation_witness::produce` yields)
@@ -281,7 +281,7 @@ impl RotatedParticipantLeg {
     }
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 impl DescriptorParticipant {
     /// The shared turn identity this participant claims (`TURN_HASH` position 0 of the rotated
     /// leg's carried prefix).
@@ -314,7 +314,7 @@ impl DescriptorParticipant {
 /// ([`crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_config`]). A leg whose proof
 /// does not verify against its descriptor, or whose descriptor is not a registry member, is
 /// rejected here.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize, String> {
     use crate::descriptor_ir2::verify_vm_descriptor2_with_config;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
@@ -357,7 +357,7 @@ pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize,
 /// maps a selector → its wire name → the TSV row → that row's DISPLAY name, and compares THAT to
 /// the leg's `desc.name`. (The earlier version compared the wire name directly to `desc.name` and
 /// therefore rejected every valid rotated leg.)
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn rotated_descriptor_selector(name: &str) -> Option<usize> {
     use crate::effect_vm::trace_rotated::rotated_descriptor_name;
     use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
@@ -388,7 +388,7 @@ fn rotated_descriptor_selector(name: &str) -> Option<usize> {
 /// selector-binds through [`verify_descriptor_participant`], (3) all participants agree on the
 /// shared turn id. Returns the agreed shared turn id. (The aggregation trace/proof is produced
 /// from the same PI projections the recursive binding leaf folds.)
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn check_descriptor_joint_preconditions(
     participants: &[DescriptorParticipant],
 ) -> Result<BabyBear, JointAggError> {
@@ -539,7 +539,7 @@ fn trace_to_matrix(trace: &[[BabyBear; 4]]) -> RowMajorMatrix<P3BabyBear> {
 /// (Bucket-F: the v1 `recursion_binding_trace_descriptor` — which read the v1-prefix
 /// `cell_commit` — was deleted with the v1 joint core; the rotated commitment is the chain root
 /// the in-circuit fold binds.)
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn recursion_binding_trace_descriptor_rotated(
     participants: &[&DescriptorParticipant],
 ) -> Result<(RowMajorMatrix<P3BabyBear>, Vec<BabyBear>), JointAggError> {

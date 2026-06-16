@@ -468,6 +468,42 @@ theorem introduceGenuine_binds_edge (hash : List ℤ → ℤ)
 #assert_axioms introduceGenuine_sound
 #assert_axioms introduceGenuine_binds_edge
 
+/-! ### §G.4 — `introduce` carries IN-CIRCUIT NON-AMPLIFICATION (`granted ⊑ held`, the ARGUS linchpin).
+
+`introduce` installs a Granovetter edge conferring rights bounded by the introducer's held cap. It
+inherits the shared GENUINE-NON-AMP descriptor `attenuateVmDescriptorGenuineNonAmp`: the cap-root
+recompute binds the introduced edge's `rights` into `cap_root`, and the per-bit submask gate forces
+`granted ⊑ held` on that same felt — so an `introduce` cannot leak rights the introducer does not hold.
+In-circuit, on the SAME descriptor that recomputes the cap-root. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuineNonAmp attenuateGenuineNonAmp_in_circuit
+   attenuateGenuineNonAmp_rejects_amplify)
+
+/-- **`introduceVmDescriptorGenuineNonAmp`** — the GENUINE `introduce` circuit WITH in-circuit non-amp:
+definitionally the shared genuine-non-amp descriptor (recompute + `granted ⊑ held`). -/
+def introduceVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
+
+/-- **`introduceNonAmp_in_circuit`** — a satisfying `introduce` witness FORCES `granted ⊑ held` per bit.
+Inherited from the shared in-circuit non-amp tooth. -/
+theorem introduceNonAmp_in_circuit (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (hcon : ∀ c ∈ introduceVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
+    ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
+  attenuateGenuineNonAmp_in_circuit env hcon i hi
+
+/-- **`introduceNonAmp_rejects_amplify`** — an amplifying `introduce` (granted bit set, held bit clear)
+does NOT satisfy the descriptor. Inherited from the shared rejection. -/
+theorem introduceNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hg : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 1)
+    (hh : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ introduceVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false) :=
+  attenuateGenuineNonAmp_rejects_amplify env i hi hg hh
+
+#assert_axioms introduceNonAmp_in_circuit
+#assert_axioms introduceNonAmp_rejects_amplify
 
 /-! ## §11 — Axiom-hygiene tripwires. -/
 

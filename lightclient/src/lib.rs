@@ -76,7 +76,7 @@
 //! feature). Tests fold a real K-turn chain and light-verify it, and confirm a corrupted aggregate is
 //! rejected.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 #![forbid(unsafe_code)]
 
 use dregg_circuit::field::BabyBear;

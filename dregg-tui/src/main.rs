@@ -714,71 +714,21 @@ fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>, mut app: App) -> Resul
     Ok(())
 }
 
-/// `dregg-tui --selfcheck`: prove a real HEAD-version Effect-VM transfer turn
-/// through the audited plonky3 prover, then verify it through the SAME
-/// `verify_effect_vm_proof` the live-verify path uses. This is the version-
-/// matched GREEN of the light client's verify core — no node, no network, no
-/// mock: a fresh proof and the audited verifier, end to end. It exists because
-/// the live devnet was deployed with an OLDER public-input layout than the
-/// verifier at HEAD (its proofs carry 201 PIs; HEAD's `ACTIVE_BASE_COUNT` wants
-/// 204), so a live artifact rightly REJECTS on the version seam — this proves
-/// the verify path itself reaches VERIFIED when prover and verifier agree.
+/// `dregg-tui --selfcheck`: the v1 hand-AIR (`EffectVmAir`) verify-core selfcheck is
+/// RETIRED. The v1 single-proof Effect-VM STARK (prove + `verify_effect_vm_proof`) is gone;
+/// the live verify core is the rotated replay-chain verify
+/// (`dregg_verifier::verify_rotated_replay_chain`, the prover-free `verifier` floor). The
+/// selfcheck reports the retirement and exits 0 (nothing to fail) — a rotated-core selfcheck
+/// is the follow-up.
 fn run_selfcheck() -> i32 {
-    use dregg_circuit::effect_vm::{generate_effect_vm_trace, Effect};
-    use dregg_circuit::{stark, CellState, EffectVmAir};
-
-    println!("dregg-tui light client — verify-core selfcheck (version-matched, no node)");
-
-    // A real transfer turn: debit 1 from (balance 1000, nonce 7).
-    let state = CellState::new(1_000, 7);
-    let effects = vec![Effect::Transfer {
-        amount: 1,
-        direction: 1,
-    }];
-    let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    let air = EffectVmAir::new(trace.len());
-    println!("1. prove a real Effect-VM transfer turn (audited plonky3 STARK prover) ...");
-    let proof = stark::prove(&air, &trace, &public_inputs);
-    let proof_bytes = stark::proof_to_bytes(&proof);
-    let pi_u32: Vec<u32> = public_inputs.iter().map(|x| x.as_u32()).collect();
+    println!("dregg-tui light client — verify-core selfcheck");
     println!(
-        "   produced proof {} bytes, {} public inputs",
-        proof_bytes.len(),
-        pi_u32.len()
+        "  the v1 hand-AIR (EffectVmAir) single-proof verify core is RETIRED; the live core is"
     );
-
-    println!("2. dregg_verifier::verify_effect_vm_proof (the SAME core the live path calls) ...");
-    let (out, code) = dregg_verifier::verify_effect_vm_proof(
-        &proof_bytes,
-        &pi_u32,
-        dregg_verifier::AUTO_DETECT_VK_HASH,
+    println!(
+        "  the rotated replay-chain verify (dregg_verifier::verify_rotated_replay_chain, the"
     );
-    if out.verified && code == dregg_verifier::exit_code::VERIFIED {
-        println!("   VERIFIED — {}", out.reason);
-    } else {
-        println!("   REJECTED (exit {code}) — {}", out.reason);
-        return 1;
-    }
-
-    // Anti-ghost tooth: tamper the post-state PI; the verifier MUST reject.
-    println!("3. anti-ghost: tamper a public input; the verifier must REJECT ...");
-    let mut tampered = pi_u32.clone();
-    tampered[dregg_circuit::effect_vm::pi::INIT_BAL_LO] =
-        tampered[dregg_circuit::effect_vm::pi::INIT_BAL_LO].wrapping_add(1);
-    let (tout, tcode) = dregg_verifier::verify_effect_vm_proof(
-        &proof_bytes,
-        &tampered,
-        dregg_verifier::AUTO_DETECT_VK_HASH,
-    );
-    if !tout.verified && tcode != dregg_verifier::exit_code::VERIFIED {
-        println!("   correctly REJECTED tampered PI — {}", tout.reason);
-    } else {
-        println!("   FAILED: a tampered PI verified — soundness tooth broken");
-        return 1;
-    }
-
-    println!();
-    println!("RESULT: verify core VERIFIED a genuine turn and REJECTED a tampered one.");
+    println!("  prover-free `verifier` floor). Verify a rotated chain to exercise the live core.");
     0
 }
 

@@ -11,7 +11,7 @@
 //! `#[ignore]` so the cheap measurements stay runnable in CI:
 //!   cargo test -p dregg-circuit --release --test proof_economics -- --ignored --nocapture
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use std::time::Instant;
 

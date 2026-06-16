@@ -14,7 +14,15 @@ name = "dregg-verifier"
 path = "src/main.rs"
 
 [dependencies]
-dregg-circuit = { path = "../circuit" }
+# `default-features = false`: the verifier never needs the circuit's PROVER stack
+# (DFT / `prove_batch` / the p3-recursion prover crates). The crate's own `prover`
+# / `verifier` features (below) forward the matching circuit feature, so a default
+# build carries `dregg-circuit/prover` and the floor build (`no-lean-link`) carries
+# only `dregg-circuit/verifier` — the prover-free batch-STARK VERIFY surface that
+# `descriptor_ir2::verify_vm_descriptor2` (the rotated replay verify) rides. Without
+# this, the circuit's own default `prover` was always unified ON, so the floor's
+# `not(prover)` legs referenced the `prover`-deleted `EffectVmAir` (E0432).
+dregg-circuit = { path = "../circuit", default-features = false }
 dregg-types = { path = "../types" }
 dregg-commit = { path = "../commit" }
 # Federation primitives (cross-fed bundle, FederationReceipt verify path).
@@ -30,33 +38,43 @@ blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
 
 [features]
-# `recursion` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`, all of
-# which default to it): native builds compile the ROTATED stack, so the v1 hand-AIR (`EffectVmAir`)
-# is absent. It forwards to `dregg-circuit/recursion` so this crate's own `#[cfg(feature =
-# "recursion")]` gates align with the circuit's recursion state. The standalone v1 replay-chain
-# verify (`verify_effect_vm_proof` / `replay_one_with_prev`) is `not(recursion)`-only (the v1 floor);
-# under `recursion` it fails closed and the ROTATED replay-chain verify
-# (`rotated_replay::verify_rotated_replay_chain`, the `"effect-vm-rotated"` IR-v2 legs verified via
-# the audited `descriptor_ir2::verify_vm_descriptor2`) is the live path.
-default = ["recursion"]
-recursion = ["dregg-circuit/recursion"]
+# THE PROVE-vs-VERIFY AXIS (mirrors `dregg-circuit`: prover ⊃ verifier ⊃ plonky3).
+#
+# `verifier` = the PROVER-FREE rotated VERIFY floor. It forwards `dregg-circuit/
+# verifier` (the prover-free batch-STARK verify surface) so `rotated_replay`
+# (`#[cfg(feature = "verifier")]`) — the `"effect-vm-rotated"` IR-v2 legs verified
+# via the audited `descriptor_ir2::verify_vm_descriptor2` — is the LIVE replay-chain
+# verify on the seL4 verifier-PD floor, with NO prover linked.
+verifier = ["dregg-circuit/verifier"]
+# `prover` carries the full STARK prover (DFT / `prove_batch` / p3-recursion). It
+# implies `verifier` so the rotated verify is present under the prover too. The v1
+# single-proof / replay-chain entries (`verify_effect_vm_proof`, `replay_chain`)
+# are RETIRED — they fail closed under every config (the v1 hand-AIR `EffectVmAir`
+# is gone); a rotated chain is verified through `rotated_replay`.
+prover = ["verifier", "dregg-circuit/prover"]
+default = ["prover"]
 
 # PLATFORM gate, OFF by default (same polarity as the rest of the tree, see
 # docs/FEATURE-HYGIENE.md §Lean and docs/SEL4-EMBEDDING.md §2). The verifier's
 # only transitive reach to `libdregg_lean.a` is via {federation, captp, turn};
 # turning their `no-lean-link` on suppresses every Lean link directive, leaving a
 # pure reads-bytes→verify→exit binary with NO Lean runtime, NO libuv, NO POSIX IO
-# loop — the seL4 protection-domain build. The verify path itself never calls Lean
-# (it is plonky3 STARK + crypto only), so this is link-suppression, not a
-# guarantee downgrade for the verifier.
+# loop — the seL4 protection-domain build. It pulls the verifier crate's own
+# `verifier` feature so the prover-free rotated VERIFY surface (`rotated_replay`)
+# is present on the floor — the standalone-verifier-PD invariant: a rotated chain
+# verifies with NO prover, NO Lean, NO ledger. (The verify path itself never calls
+# Lean — plonky3 STARK + crypto only — so this is link-suppression, not a downgrade.)
 no-lean-link = [
+    "verifier",
     "dregg-federation/no-lean-link",
     "dregg-captp/no-lean-link",
     "dregg-turn/no-lean-link",
 ]
 
 [dev-dependencies]
-dregg-circuit = { path = "../circuit" }
+# Verify-surface only (the v1 hand-AIR integration tests are retired/ported to the
+# rotated path). `default cargo test` unifies this with the crate's `prover` default.
+dregg-circuit = { path = "../circuit", default-features = false, features = ["verifier"] }
 dregg-cell = { path = "../cell" }
 tempfile = { workspace = true }
 serde_json = { workspace = true }

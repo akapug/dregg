@@ -318,7 +318,7 @@ pub fn produce(
 ///
 /// Fails closed if the turn's effect is not a single rotated R=24 cohort member (the generator
 /// rejects a non-cohort / empty / heterogeneous slice).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 #[allow(clippy::too_many_arguments)]
 pub fn mint_rotated_participant_leg(
     initial_state: &dregg_circuit::effect_vm::CellState,

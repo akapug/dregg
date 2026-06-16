@@ -338,82 +338,13 @@ impl PeerExchange {
         new_commitment: &[u8; 32],
         _effects_hash: &[u8; 32],
     ) -> Result<(), PeerExchangeError> {
-        use dregg_circuit::field::BabyBear;
-        use dregg_circuit::stark;
-
-        // Deserialize proof.
-        let proof = stark::proof_from_bytes(proof_bytes)
-            .map_err(|e| PeerExchangeError::InvalidTransitionProof(e))?;
-
-        // Stage 1 (`EFFECT-VM-SHAPE-A.md`): widen commitment to 4 BabyBears.
-        let old_commit_4 = Self::commitment_to_4bb(old_commitment);
-        let new_commit_4 = Self::commitment_to_4bb(new_commitment);
-
-        // Validate minimum PI count.
-        use dregg_circuit::effect_vm::pi;
-        let min_pi_count = pi::ACTIVE_BASE_COUNT;
-        if proof.public_inputs.len() < min_pi_count {
-            return Err(PeerExchangeError::InvalidTransitionProof(format!(
-                "proof has {} public inputs, expected at least {}",
-                proof.public_inputs.len(),
-                min_pi_count
-            )));
-        }
-
-        // Build the public inputs vector in Stage 1 Effect VM layout.
-        // Most PIs are sourced from the proof (peer trusts the prover's
-        // declared values; the AIR's boundary + transition constraints
-        // bind them to the trace); commitments are independently checked.
-        let mut public_inputs: Vec<BabyBear> = (0..min_pi_count)
-            .map(|i| BabyBear::new_canonical(proof.public_inputs[i]))
-            .collect();
-        // Override the commitment slots with verifier-derived values from
-        // the stored commitments. PI matching below catches any divergence.
-        for i in 0..pi::OLD_COMMIT_LEN {
-            public_inputs[pi::OLD_COMMIT_BASE + i] = old_commit_4[i];
-        }
-        for i in 0..pi::NEW_COMMIT_LEN {
-            public_inputs[pi::NEW_COMMIT_BASE + i] = new_commit_4[i];
-        }
-
-        // Append custom proof entries from the proof's PIs.
-        let custom_count_val = public_inputs[pi::CUSTOM_EFFECT_COUNT].0 as usize;
-        for i in 0..custom_count_val {
-            let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
-            if base + pi::CUSTOM_ENTRY_SIZE > proof.public_inputs.len() {
-                break;
-            }
-            for j in 0..pi::CUSTOM_ENTRY_SIZE {
-                public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
-            }
-        }
-
-        // Verify commitment PIs match what we expect (all 4 felts each).
-        for i in 0..pi::OLD_COMMIT_LEN {
-            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::OLD_COMMIT_BASE + i]);
-            if proof_v != old_commit_4[i] {
-                return Err(PeerExchangeError::InvalidTransitionProof(format!(
-                    "old_commitment in proof does not match expected value (felt {})",
-                    i
-                )));
-            }
-        }
-        for i in 0..pi::NEW_COMMIT_LEN {
-            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::NEW_COMMIT_BASE + i]);
-            if proof_v != new_commit_4[i] {
-                return Err(PeerExchangeError::InvalidTransitionProof(format!(
-                    "new_commitment in proof does not match expected value (felt {})",
-                    i
-                )));
-            }
-        }
-
-        // Verify the STARK proof using EffectVmAir.
-        let air = dregg_circuit::EffectVmAir::new(proof.trace_len);
-        stark::verify(&air, &proof, &public_inputs)
-            .map_err(|e| PeerExchangeError::InvalidTransitionProof(e))?;
-
-        Ok(())
+        // RETIRED (v1 hand-AIR transition verify): the `EffectVmAir` STARK verify is gone.
+        // A v1 `transition_proof` in a peer exchange fails closed (the rotated proof-carrying
+        // turn is the transition attestation path).
+        let _ = (proof_bytes, old_commitment, new_commitment);
+        Err(PeerExchangeError::InvalidTransitionProof(
+            "v1 hand-AIR transition STARK verify is retired".to_string(),
+        ))
     }
 
     /// Stage 1: encode a stored [u8; 32] commitment as 4 BabyBear felts.

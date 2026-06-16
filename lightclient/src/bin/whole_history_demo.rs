@@ -14,7 +14,7 @@
 //!
 //! Run: `cargo run -p dregg-lightclient --bin whole_history_demo`.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 #![forbid(unsafe_code)]
 
 use std::time::Instant;

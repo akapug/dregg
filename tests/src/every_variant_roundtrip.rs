@@ -50,9 +50,9 @@ use dregg_cell::{
 // v1-only: the bespoke `EffectVmAir` prove/verify path (test #3 + the
 // every-variant summary) is recursion-absent. The executable (#1) and
 // projection (#2) tests below do not need these and stay feature-agnostic.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 use dregg_circuit::effect_vm::{Effect as VmEffect, EffectVmContext, generate_effect_vm_trace_ext};
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 use dregg_circuit::{CellState as VmCellState, EffectVmAir, stark};
 use dregg_turn::action::{BearerCapProof, DelegationProofData, symbol};
 use dregg_turn::eventual::EventualRef;
@@ -704,7 +704,7 @@ fn historically_weak_variants_project_to_dedicated_vm_selectors() {
 /// VM effect sequence. Fails when:
 ///   - the projection collapses to NoOp (no real constraint, test #2)
 ///   - the variant requires AIR coverage that has not been added yet
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn every_effect_variant_has_provable_air() {
     let agent = cell_id(b"variant-cell-a");
@@ -746,7 +746,7 @@ fn every_effect_variant_has_provable_air() {
 /// `Ok(())` on round-trip success; `Err("KNOWN_PENDING: ...")` when the
 /// variant projects to NoOp, which is now a test failure; `Err(other)` for
 /// genuine proof-generation or verification failures.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 fn prove_and_verify_variant(
     cell_id: &CellId,
     initial_state: &VmCellState,
@@ -771,7 +771,7 @@ fn prove_and_verify_variant(
     stark::verify(&air, &proof, &public_inputs).map_err(|e| format!("verify failed: {}", e))
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 fn prepare_variant_proof_fixture(
     initial_state: &mut VmCellState,
     projected: &mut [VmEffect],
@@ -791,7 +791,7 @@ fn prepare_variant_proof_fixture(
     );
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[derive(Debug)]
 enum ProofOutcome {
     Verified,
@@ -800,7 +800,7 @@ enum ProofOutcome {
     Panicked,
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 fn print_proof_summary(report: &[(String, ProofOutcome)]) {
     eprintln!("\n=== every_effect_variant_has_provable_air ===");
     let mut verified = 0;
@@ -847,7 +847,7 @@ fn print_proof_summary(report: &[(String, ProofOutcome)]) {
 ///
 /// v1-only: the proof column drives the bespoke `EffectVmAir` (recursion-absent).
 /// Tests #1 and #2 above retain executor + projection coverage under recursion.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn every_variant_summary() {
     use dregg_circuit::effect_vm::Effect as VmEffect;

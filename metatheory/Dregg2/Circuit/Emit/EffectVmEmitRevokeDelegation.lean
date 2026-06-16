@@ -473,6 +473,45 @@ theorem revokeGenuine_binds_edge (hash : List ℤ → ℤ)
 #assert_axioms revokeGenuine_sound
 #assert_axioms revokeGenuine_binds_edge
 
+/-! ### §G.4 — `revoke` carries the IN-CIRCUIT NON-AMP GUARD (`granted ⊑ held`, conservative for a removal).
+
+`revokeDelegation` REMOVES a cap edge — it confers NO new rights — so non-amplification is trivially
+honest (the removed edge's rights were `⊑` held when granted; a revoke grants nothing). It inherits the
+SAME shared GENUINE-NON-AMP descriptor `attenuateVmDescriptorGenuineNonAmp` as the granting family, so the
+WHOLE cap-graph family runs ONE gate set: the per-bit submask `granted ⊑ held` over the bound `rights`.
+For a revoke the gate is a conservative upper-bound guard (an honest revoke's granted mask is `⊑` held —
+the gate REJECTS only a malformed revoke that claims to confer rights beyond held). This keeps the family
+uniform (the op tag in the recompute distinguishes the mutation; the non-amp gate forbids amplification
+on ALL of them) without overclaiming a grant-semantics for a removal. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuineNonAmp attenuateGenuineNonAmp_in_circuit
+   attenuateGenuineNonAmp_rejects_amplify)
+
+/-- **`revokeVmDescriptorGenuineNonAmp`** — the GENUINE `revoke` circuit WITH the in-circuit non-amp
+guard: definitionally the shared genuine-non-amp descriptor (recompute + `granted ⊑ held`). -/
+def revokeVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
+
+/-- **`revokeNonAmp_in_circuit`** — a satisfying `revoke` witness FORCES `granted ⊑ held` per bit (the
+conservative no-amplify guard). Inherited from the shared in-circuit tooth. -/
+theorem revokeNonAmp_in_circuit (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (hcon : ∀ c ∈ revokeVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
+    ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
+  attenuateGenuineNonAmp_in_circuit env hcon i hi
+
+/-- **`revokeNonAmp_rejects_amplify`** — a malformed `revoke` that claims to confer a right beyond held
+(granted bit set, held bit clear) does NOT satisfy the descriptor. Inherited from the shared rejection. -/
+theorem revokeNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hg : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 1)
+    (hh : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ revokeVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false) :=
+  attenuateGenuineNonAmp_rejects_amplify env i hi hg hh
+
+#assert_axioms revokeNonAmp_in_circuit
+#assert_axioms revokeNonAmp_rejects_amplify
 
 /-! ## §11 — Axiom-hygiene tripwires. -/
 

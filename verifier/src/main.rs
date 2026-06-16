@@ -46,7 +46,7 @@ fn main() {
     if args.len() >= 2 && args[1] == "scope-recursive" {
         run_scope_recursive(&args[2..]);
     }
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "verifier")]
     if args.len() >= 2 && args[1] == "rotated-replay-chain" {
         run_rotated_replay_chain(&args[2..]);
     }
@@ -430,12 +430,13 @@ fn run_scope_recursive(args: &[String]) -> ! {
 }
 
 // ---------------------------------------------------------------------------
-// rotated-replay-chain subcommand (recursion build — the v1 replay-chain twin)
+// rotated-replay-chain subcommand (the prover-free `verifier` floor — the live
+// replacement for the retired v1 replay-chain)
 // ---------------------------------------------------------------------------
 
 /// On-disk request for the rotated replay-chain verify: the chained
 /// `"effect-vm-rotated"` legs plus the caller's trusted pre/post commitments.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "verifier")]
 #[derive(serde::Deserialize)]
 struct RotatedReplayRequest {
     /// The rotated legs in chain order (`s0 → s1 → … → sN`).
@@ -451,14 +452,14 @@ struct RotatedReplayRequest {
 /// `dregg-verifier rotated-replay-chain <path-to-request.json>`
 ///
 /// Reads `{ "legs": [..], "expected_old_commit": u32, "expected_new_commit": u32 }`
-/// and runs the ROTATED replay-chain verify (the recursion-build replacement for
-/// the v1 `replay-chain` subcommand, whose v1 hand-AIR is retired under
-/// `recursion`). Each leg is an `"effect-vm-rotated"` IR-v2 batch proof verified
-/// SELECTOR-BOUND via the audited `verify_vm_descriptor2`; the chain's endpoints
-/// and interior adjacency are then checked against the caller's commitments.
+/// and runs the ROTATED replay-chain verify (the live replacement for the retired
+/// v1 `replay-chain` subcommand — the v1 hand-AIR is gone). Each leg is an
+/// `"effect-vm-rotated"` IR-v2 batch proof verified SELECTOR-BOUND via the audited
+/// `verify_vm_descriptor2`; the chain's endpoints and interior adjacency are then
+/// checked against the caller's commitments.
 ///
 /// Exit code: 0 = chain verified, 1 = at least one rejection, 2 = read/parse error.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "verifier")]
 fn run_rotated_replay_chain(args: &[String]) -> ! {
     use dregg_verifier::verify_rotated_replay_chain;
 

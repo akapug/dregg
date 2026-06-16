@@ -25,9 +25,9 @@
 //! proof was valid, which transitively binds every fold proof's PI vector
 //! into the chain commitment.
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use p3_baby_bear::BabyBear as P3BabyBear;
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::field::BabyBear;
@@ -67,7 +67,7 @@ pub struct RecursiveIvcStep {
     pub step_number: u32,
     /// Postcard-serialized outer recursive proof bytes, set when the
     /// `recursion` feature is enabled. `None` in pure-`plonky3` builds.
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     pub recursive_layer_bytes: Option<Vec<u8>>,
 }
 
@@ -134,7 +134,7 @@ pub fn build_recursive_ivc_chain(
     let public_inputs = vec![BabyBear::ZERO, recursive_proof.final_accumulator];
     let step_number = recursive_proof.num_proofs as u32;
 
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     let recursive_layer_bytes = {
         // Wrap the aggregation_proof in the real recursive layer. The
         // aggregation_proof was produced with create_config() — a different
@@ -184,7 +184,7 @@ pub fn build_recursive_ivc_chain(
         proof: recursive_proof.aggregation_proof,
         public_inputs,
         step_number,
-        #[cfg(feature = "recursion")]
+        #[cfg(feature = "prover")]
         recursive_layer_bytes,
     })
 }
@@ -195,7 +195,7 @@ pub fn build_recursive_ivc_chain(
 /// is the same algorithm that lives inside `plonky3_recursion`, lifted
 /// here so the recursive-layer wrapper can re-prove with a different
 /// config without restructuring the original entrypoint.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn rebuild_aggregation_trace(
     fold_proofs: &[(&DreggProof, &[BabyBear])],
     expected_final: BabyBear,

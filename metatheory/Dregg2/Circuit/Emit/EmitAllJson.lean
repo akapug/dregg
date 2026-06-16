@@ -106,7 +106,21 @@ def allEntries : List Entry :=
     -- gates `granted ⊑ held`) + production-authority (the mint opens the issuer cap from the held-set
     -- root). Not selector-bound (the sdk authority-binding routes to it by name); byte-pinned by
     -- `circuit/src/cap_reshape_descriptor.rs` (a STANDALONE loader, not the locked selector registry).
-  , ⟨"capReshapeVmDescriptor",          EffectVmEmitCapReshape.capReshapeVmDescriptor⟩ ]
+  , ⟨"capReshapeVmDescriptor",          EffectVmEmitCapReshape.capReshapeVmDescriptor⟩
+    -- GENUINE NON-AMP cap-graph descriptors (the ARGUS linchpin on the delegation family): the §G
+    -- genuine cap-root RECOMPUTE (`new_cap_root = hash[edge_leaf, old_root]`, op-tagged) PLUS the
+    -- in-circuit `granted ⊑ held` submask gate (`EffectVmEmitCapReshape.capDelegNonAmpGates`) on the
+    -- SAME `rights` felt the recompute binds. So a verifying delegation/attenuate/introduce/revoke/
+    -- refresh proof now means BOTH: the cap-root is genuinely recomputed (no opaque digest) AND the
+    -- granted rights do not amplify (over-grant rejected in-circuit). Additive + width-neutral (186);
+    -- the shared `attenuateVmDescriptorGenuineNonAmp` object backs all six (the op tag distinguishes
+    -- the mutation, so one JSON serves the family — selector→JSON fan-out, like the v1 face above).
+  , ⟨"attenuateVmDescriptorGenuineNonAmp", EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNonAmp⟩
+  , ⟨"delegateVmDescriptorGenuineNonAmp",  EffectVmEmitDelegate.delegateVmDescriptorGenuineNonAmp⟩
+  , ⟨"delegateAttenVmDescriptorGenuineNonAmp", EffectVmEmitDelegateAtten.delegateAttenVmDescriptorGenuineNonAmp⟩
+  , ⟨"introduceVmDescriptorGenuineNonAmp",  EffectVmEmitIntroduce.introduceVmDescriptorGenuineNonAmp⟩
+  , ⟨"revokeVmDescriptorGenuineNonAmp",     EffectVmEmitRevokeDelegation.revokeVmDescriptorGenuineNonAmp⟩
+  , ⟨"refreshVmDescriptorGenuineNonAmp",    EffectVmEmitRefreshDelegation.refreshVmDescriptorGenuineNonAmp⟩ ]
 
 def main : IO Unit := do
   for e in allEntries do

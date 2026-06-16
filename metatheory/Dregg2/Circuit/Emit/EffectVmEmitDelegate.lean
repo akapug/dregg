@@ -30,12 +30,17 @@ transition IS universe-A's validated `caps`-digest transition; not a fourth spec
 
 ## BOUNDARY (precise)
 
-  * **IR GAP — needs IR extension: cap-root hash-site** (inherited from `EffectVmEmitAttenuateA`). The
-    `cap_root` column carries the SCALAR digest `D caps` of the cap-table FUNCTION; the EffectVM IR's
-    `VmHashSite` cannot re-derive `cap_root` IN-circuit from the cap-table rows. So the descriptor pins
-    the `cap_root` COLUMN transition (witness supplies the digest) and binds it into `state_commit`, but
-    the cap-table-is-Merkled binding lives in the `Function.Injective D` portal (carried,
-    realizable), the SAME bar `delegate_full_sound` uses. We connect through `capRootProj`.
+  * **cap-root recompute + non-amp: CLOSED (§G, §G.4), inherited from `EffectVmEmitAttenuateA`.** The v1
+    face (`delegateVmDescriptor`) pins the `cap_root` COLUMN to a witnessed digest; the genuine layers
+    DEEPEN that. `delegateVmDescriptorGenuine` (§G) RECOMPUTES `cap_root = hash[edge_leaf, old_root]`
+    in-row (the edge leaf carries op `capOp.DELEGATE`), so the post root is FORCED by the bound delegated
+    edge, not a witnessed parameter (`delegateGenuine_sound`/`delegateGenuine_binds_edge`).
+    `delegateVmDescriptorGenuineNonAmp` (§G.4) ADDS the in-circuit submask gate `granted ⊑ held` over the
+    SAME `rights` felt: a `delegate` cannot confer rights the delegator does not hold
+    (`delegateNonAmp_in_circuit` admits, `delegateNonAmp_rejects_amplify` rejects). So in-circuit
+    non-amplification holds on `delegate`. The cap-table-as-FUNCTION digest `D` is retained ONLY for the
+    v1 connector `capRootProj` to universe-A's `delegate_full_sound`; the residual seam is Phase E (the
+    in-row sorted-TREE update vs the prepend-accumulator digest advance — see `EffectVmEmitAttenuateA`).
 
   * **The Granovetter GUARD (`delegateGuard`) is NOT a `cap_root` ROW gate.** Unlike `attenuateA` (whose
     guard is the trivial `True`), `delegate` is gated by the connectivity premise. That guard is enforced
@@ -218,6 +223,45 @@ theorem delegateGenuine_binds_edge (hash : List ℤ → ℤ)
     ∧ e₁.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP)
         = e₂.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cp.OP) :=
   attenuateGenuine_binds_edge hash hCR e₁ e₂ hsCommit₁ hsCommit₂ hrec₁ hrec₂ hcommit
+
+/-! ### §G.4 — `delegate` carries IN-CIRCUIT NON-AMPLIFICATION (`granted ⊑ held`, the ARGUS linchpin).
+
+`delegate` is the SAME cap-graph row as `attenuateA`, so it inherits the shared GENUINE-NON-AMP descriptor
+`attenuateVmDescriptorGenuineNonAmp`: the cap-root recompute (binds the granted `rights` into `cap_root`)
+PLUS the per-bit submask gate `granted ⊑ held` on that same `rights` felt. So a `delegate` proof now
+genuinely means the delegator did NOT confer rights it lacks — non-amplification is IN-CIRCUIT, not an
+executor side-check. We re-export the descriptor + the two-valued in-circuit teeth for `delegate`. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuineNonAmp attenuateGenuineNonAmp_in_circuit
+   attenuateGenuineNonAmp_rejects_amplify)
+
+/-- **`delegateVmDescriptorGenuineNonAmp`** — the GENUINE `delegate` circuit WITH in-circuit non-amp:
+definitionally the shared genuine-non-amp descriptor (cap-root recompute + `granted ⊑ held` submask). -/
+def delegateVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
+
+/-- **`delegateNonAmp_in_circuit` — THE IN-CIRCUIT NON-AMP TOOTH for `delegate`.** A satisfying witness
+FORCES, per bit, `granted ⊑ held` — the delegated edge's conferred rights are `⊑` the delegator's held
+mask. Inherited from the shared `attenuateGenuineNonAmp_in_circuit`. -/
+theorem delegateNonAmp_in_circuit (env : VmRowEnv)
+    (hcon : ∀ c ∈ delegateVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
+    ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
+  attenuateGenuineNonAmp_in_circuit env hcon i hi
+
+/-- **`delegateNonAmp_rejects_amplify` — the anti-amplify tooth for `delegate` (witness FALSE).** A
+`delegate` row conferring a right the delegator does NOT hold (granted bit set, held bit clear) does NOT
+satisfy the descriptor — the over-grant is rejected in-circuit. Inherited from the shared rejection. -/
+theorem delegateNonAmp_rejects_amplify (env : VmRowEnv)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hg : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 1)
+    (hh : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ delegateVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false) :=
+  attenuateGenuineNonAmp_rejects_amplify env i hi hg hh
+
+#assert_axioms delegateNonAmp_in_circuit
+#assert_axioms delegateNonAmp_rejects_amplify
 
 /-! ## §W — THE MAGNESIUM LIFT: `delegate`'s RUNNABLE descriptor binds the FULL 17-field post-state.
 

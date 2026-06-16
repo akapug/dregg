@@ -1080,7 +1080,7 @@ pub struct AgentCipherclerk {
 /// [`WitnessedReceipt`]).
 // Several fields (trace, public_inputs, new_commitment, pre_state_commitment) are
 // read only by the WitnessedReceipt-lifting path, which is feature-gated; under the
-// recursion-unified build they carry replay material that isn't re-read in-process.
+// prover-unified build they carry replay material that isn't re-read in-process.
 #[allow(dead_code)]
 struct ProvenSovereignTurn {
     /// The proof-carrying turn, with `execution_proof` populated.
@@ -4986,19 +4986,19 @@ impl AgentCipherclerk {
         fee: u64,
     ) -> Result<Turn, SdkError> {
         // THE ROTATION (cutover C1): when the rotated IR-v2 producer is compiled
-        // (native default; `dregg-circuit/recursion` present), this matched-pair
+        // (native default; `dregg-circuit/prover` present), this matched-pair
         // path — producer here, verifier `executor::verify_and_commit_proof` —
         // mints the rotated `Ir2BatchProof` over the R=24 cohort descriptor and
         // carries the v9 felt commitment. This retires the weak hand-AIR
         // `EffectVmAir` leg on the sovereign path (a soundness win). The
         // `emit_witnessed_receipt` / bilateral-aggregator WR path stays on the v1
         // trace shape until the bilateral-aggregator rotation (cutover C4).
-        #[cfg(feature = "recursion")]
+        #[cfg(feature = "prover")]
         {
             let proven = self.prove_sovereign_turn_rotated(cell_id, effects, fee)?;
             Ok(proven.turn)
         }
-        #[cfg(not(feature = "recursion"))]
+        #[cfg(not(feature = "prover"))]
         {
             let proven = self.prove_sovereign_turn(cell_id, effects, fee)?;
             Ok(proven.turn)
@@ -5031,7 +5031,7 @@ impl AgentCipherclerk {
     /// returned [`Turn`] is the same proof-carrying turn; callers that want
     /// both the submittable turn and the WR can read `.turn` and `.receipt`
     /// off the returned [`SovereignWitnessedReceipt`].
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     pub fn emit_witnessed_receipt(
         &mut self,
         cell_id: &CellId,
@@ -5106,187 +5106,23 @@ impl AgentCipherclerk {
         })
     }
 
-    /// Internal: build the proof-carrying [`Turn`] AND retain the scope-2
-    /// trace + γ.2-projected public inputs through the v1 hand-AIR (`EffectVmAir`).
-    /// v1 floor only; the recursion tower's sovereign producer is
-    /// [`Self::prove_sovereign_turn_rotated`]. Both
-    /// [`Self::execute_sovereign_turn_with_proof`] (under `not(recursion)`) and
-    /// [`Self::emit_witnessed_receipt`] (the bilateral-aggregator WR path, v1-only)
-    /// call into this.
-    #[cfg(not(feature = "recursion"))]
+    /// RETIRED (v1 hand-AIR sovereign producer): the `EffectVmAir` STARK sovereign-turn
+    /// prover is gone. The live sovereign producer is [`Self::prove_sovereign_turn_rotated`]
+    /// (the rotated R=24 `Ir2BatchProof`, `prover`-gated). On a `not(prover)` build the v1
+    /// sovereign prover fails closed.
+    #[cfg(not(feature = "prover"))]
     fn prove_sovereign_turn(
         &mut self,
         cell_id: &CellId,
         effects: Vec<Effect>,
         fee: u64,
     ) -> Result<ProvenSovereignTurn, SdkError> {
-        // 1. Get our local cell state.
-        let cell_state = self
-            .sovereign_cells
-            .get(cell_id)
-            .ok_or_else(|| {
-                SdkError::MissingKey(format!(
-                    "no local sovereign state for cell {}; call store_sovereign_state() first",
-                    cell_id
-                ))
-            })?
-            .clone();
-
-        // 2. Compute old commitment. Captured BEFORE effects are applied so
-        //    the emitted WitnessedReceipt can carry a faithful pre_state_hash.
-        let pre_state_commitment = cell_state.state_commitment();
-
-        // 3. Determine transfer parameters from the effects.
-        // Phase 2 MVP: only supports a single Transfer effect.
-        let (_transfer_amount, _direction) = Self::extract_transfer_params(cell_id, &effects)?;
-
-        // 4. Apply effects locally to get the new state.
-        let mut new_cell_state = cell_state.clone();
-        for effect in &effects {
-            match effect {
-                Effect::Transfer { from, to, amount } => {
-                    if from == cell_id {
-                        new_cell_state.state.set_balance(
-                            new_cell_state
-                                .state
-                                .balance()
-                                .saturating_sub(*amount as i64),
-                        );
-                    }
-                    if to == cell_id {
-                        new_cell_state.state.set_balance(
-                            new_cell_state
-                                .state
-                                .balance()
-                                .saturating_add(*amount as i64),
-                        );
-                    }
-                }
-                Effect::SetField { cell, index, value } if cell == cell_id => {
-                    if *index < new_cell_state.state.fields.len() {
-                        new_cell_state.state.fields[*index] = *value;
-                    }
-                }
-                Effect::IncrementNonce { cell } if cell == cell_id => {
-                    let _ = new_cell_state.state.increment_nonce();
-                }
-                _ => {}
-            }
-        }
-
-        // 5. Generate the STARK proof using EffectVmAir (DSL cutover).
-        // Seed the circuit `cap_root` from the cell's REAL canonical capability
-        // root (the openable sorted-Poseidon2 felt), not ZERO (cap Phase A): a
-        // turn over a cell that holds capabilities now binds the SAME cap_root
-        // the cell commits to in `state_commitment()` above.
-        let vm_effects = Self::convert_effects_to_vm(cell_id, &effects);
-        // THE EPOCH: balances are SIGNED (i64); the circuit VM state is u64.
-        // The actor cell here is ORDINARY (non-negative) — use a checked
-        // conversion rather than an `as` cast that could wrap a negative.
-        let initial_vm_state = dregg_circuit::CellState::with_capability_root(
-            u64::try_from(cell_state.state.balance()).map_err(|_| {
-                SdkError::Wire(
-                    "cell balance is negative; cannot prove turn over a well cell here".into(),
-                )
-            })?,
-            cell_state.state.nonce() as u32,
-            dregg_cell::compute_canonical_capability_root_felt(&cell_state.capabilities),
-        );
-        let (_shape_trace, shape_public_inputs) =
-            dregg_circuit::generate_effect_vm_trace(&initial_vm_state, &vm_effects);
-
-        // 6. Extract new commitment from the trace public inputs (PI[NEW_COMMIT_BASE..+4]).
-        // Pack all 4 felts into 32 bytes using commitment_4bb_to_bytes — the executor's
-        // commitment_to_4bb reads them back the same way and compares against the proof's PI.
-        // Using babybear_to_commitment (only 1 felt) caused the stage2-canonical-vs-poseidon
-        // mismatch (GitHub #99): the verifier would see all-zero felts[1..3] while the proof
-        // carried compute_commitment_4's salted positions 1..3.
-        let new_commit_4 = [
-            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE],
-            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 1],
-            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 2],
-            shape_public_inputs[dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE + 3],
-        ];
-        let new_commitment = dregg_turn::TurnExecutor::commitment_4bb_to_bytes(new_commit_4);
-
-        // 7. Build the pre-proof turn identity. The AIR-bound TURN_HASH uses
-        // the proofless form to avoid self-referential proof bytes while still
-        // binding the action forest, target cell, and claimed new commitment.
-        let agent_cell = *cell_id;
-        let nonce = self.receipt_chain.len() as u64;
-        let mut forest = dregg_turn::forest::CallForest::new();
-        // Sealed-raw scaffold: a proof-carrying sovereign turn's authority
-        // is the attached STARK (the executor verifies it against the
-        // cell's commitment) — there is deliberately no signature leg.
-        let action = crate::raw::unsigned_action_named(
-            agent_cell,
-            "sovereign_execute_proven",
-            effects.clone(),
-        );
-        forest.add_root(action);
-
-        let mut turn = Turn {
-            agent: agent_cell,
-            nonce,
-            call_forest: forest,
-            fee,
-            memo: Some("sovereign_proof_carrying".to_string()),
-            valid_until: None,
-            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
-            depends_on: Vec::new(),
-            conservation_proof: None,
-            sovereign_witnesses: HashMap::new(), // Empty! Proof covers it.
-            execution_proof: None,
-            execution_proof_cell: Some(*cell_id),
-            execution_proof_new_commitment: Some(new_commitment),
-            custom_program_proofs: None,
-            effect_binding_proofs: Vec::new(),
-            cross_effect_dependencies: Vec::new(),
-            effect_witness_index_map: Vec::new(),
-        };
-
-        let (turn_hash, effects_hash_global, actor_nonce, previous_receipt_hash) =
-            dregg_turn::TurnExecutor::compute_turn_identity_pi(&turn);
-        let mut ctx = dregg_circuit::effect_vm::EffectVmContext::default();
-        ctx.turn_hash = turn_hash;
-        ctx.effects_hash_global = effects_hash_global;
-        ctx.actor_nonce = actor_nonce;
-        ctx.previous_receipt_hash = previous_receipt_hash;
-        ctx.is_sovereign_cell = true;
-        // γ.2 follow-up (#132): bind the owner cell id whose transition this
-        // proof attests. The verifier (`verify_and_commit_proof`) reconstructs
-        // commit(cell_id) and rejects any mismatch. federation_id stays at the
-        // [0u8; 32] default, matching this path's executor `local_federation_id`
-        // default (#131); cross-federation flows that set a non-zero local
-        // federation must thread it through here too.
-        ctx.owner_cell_id = *cell_id.as_bytes();
-
-        let (trace, mut public_inputs) = dregg_circuit::effect_vm::generate_effect_vm_trace_ext(
-            &initial_vm_state,
-            &vm_effects,
-            ctx,
-        );
-        let schedule = dregg_turn::bilateral_schedule::ExpectedBilateral::from_turn(&turn);
-        let counts = schedule.counts_for(cell_id);
-        let roots = schedule.roots_for(cell_id, actor_nonce);
-        dregg_turn::bilateral_schedule::project_into_pi(&mut public_inputs, &counts, &roots);
-        public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] =
-            dregg_circuit::field::BabyBear::ONE;
-        let air = dregg_circuit::EffectVmAir::new(trace.len());
-        let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
-        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
-
-        // 8. Update local sovereign state and attach proof bytes.
-        self.sovereign_cells.insert(*cell_id, new_cell_state);
-        turn.execution_proof = Some(proof_bytes);
-
-        Ok(ProvenSovereignTurn {
-            turn,
-            trace,
-            public_inputs,
-            new_commitment,
-            pre_state_commitment,
-        })
+        let _ = (cell_id, effects, fee);
+        Err(SdkError::Wire(
+            "v1 hand-AIR sovereign-turn prover is retired; the rotated sovereign producer \
+             (prove_sovereign_turn_rotated) is the live path"
+                .into(),
+        ))
     }
 
     /// THE ROTATED sovereign producer (cutover C1, decision #1: proving lives at
@@ -5305,7 +5141,7 @@ impl AgentCipherclerk {
     /// Turn-context (`cells_root`, `nullifier_root`, `iroot`) is published THROUGH the
     /// commitment, not reconstructed by the verifier: the producer is the side that
     /// holds the receipt log + ledger; the verifier trusts the bound commitment.
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     fn prove_sovereign_turn_rotated(
         &mut self,
         cell_id: &CellId,
@@ -5506,7 +5342,7 @@ impl AgentCipherclerk {
     /// Extract transfer parameters from effects for proof generation.
     ///
     /// Returns (amount, direction) where direction=1 for outgoing, 0 for incoming.
-    #[allow(dead_code)] // Used by the v1 (non-recursion) sovereign-prove path's effect validation.
+    #[allow(dead_code)] // Used by the v1 (non-prover) sovereign-prove path's effect validation.
     fn extract_transfer_params(
         cell_id: &CellId,
         effects: &[Effect],
@@ -7673,8 +7509,8 @@ mod tests {
     /// valid as one side of a γ.2 bilateral bundle. We build the matching peer
     /// side from the same turn's schedule and confirm the *pair* aggregates.
     ///
-    /// v1 floor only: `emit_witnessed_receipt` produces the v1 hand-AIR WR, retired under recursion.
-    #[cfg(not(feature = "recursion"))]
+    /// v1 floor only: `emit_witnessed_receipt` produces the v1 hand-AIR WR, retired under prover.
+    #[cfg(not(feature = "prover"))]
     #[test]
     fn test_emit_witnessed_receipt_bilateral_pair_aggregates() {
         use dregg_circuit::effect_vm::pi;

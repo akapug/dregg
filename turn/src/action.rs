@@ -645,7 +645,7 @@ impl core::fmt::Display for StarkDelegationBindingError {
 ///
 /// Note: this does NOT run the STARK FRI verification of `proof_bytes` itself
 /// (that is the executor's `EffectVmAir` leg, which is a v1-floor artifact gated
-/// to `not(feature = "recursion")`). It establishes that the proof is *bound to
+/// to `not(feature = "prover")`). It establishes that the proof is *bound to
 /// this scope*; a verifier that also has the FRI/AIR leg available composes the
 /// two.
 pub fn verify_stark_delegation_binding(

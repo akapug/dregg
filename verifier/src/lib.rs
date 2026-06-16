@@ -23,26 +23,24 @@
 //! (`"dregg-effect-vm-v1"`), identified by its 32-byte SHA-256 of the AIR name.
 //! Future versions will support additional cell programs by VK hash lookup.
 
-// The v1 hand-AIR STARK surface (`stark::{verify, proof_from_bytes}`, the `StarkAir`
-// width trait) is the `not(recursion)` floor only; under `recursion` the v1 single-proof
-// verify fails closed and the ROTATED path (`rotated_replay`) is live, so these are absent.
-#[cfg(not(feature = "recursion"))]
-use dregg_circuit::EffectVmAir;
-#[cfg(feature = "recursion")]
+// The v1 hand-AIR STARK surface (`EffectVmAir`, the bespoke `stark::{verify,
+// proof_from_bytes}`, the `StarkAir` width trait) is RETIRED. The single-proof and
+// replay-chain v1 entries fail closed under every config; the live replay-chain
+// verify is the rotated path (`rotated_replay`, prover-free `verifier` floor).
+// `BabyBear` stays — the rotated PI lift + the `replay_one_with_prev` u32→felt lift
+// use it on every build.
 use dregg_circuit::field::BabyBear;
-#[cfg(not(feature = "recursion"))]
-use dregg_circuit::stark::StarkAir;
-#[cfg(not(feature = "recursion"))]
-use dregg_circuit::{field::BabyBear, stark};
 use serde::{Deserialize, Serialize};
 
 pub mod aggregated_bundle;
 pub mod bilateral_pair;
 pub mod cross_fed;
-/// Rotated replay-chain verify — the recursion-build replacement for the v1
-/// `replay_chain` (the v1 hand-AIR is retired under `recursion`). Verifies a chain
-/// of `"effect-vm-rotated"` IR-v2 legs via the audited `verify_vm_descriptor2`.
-#[cfg(feature = "recursion")]
+/// Rotated replay-chain verify — the live replacement for the retired v1
+/// `replay_chain` (the v1 hand-AIR is gone). Verifies a chain of
+/// `"effect-vm-rotated"` IR-v2 legs via the audited `verify_vm_descriptor2`.
+/// Gated on `verifier` (the PROVER-FREE verify floor): rotated VERIFY belongs on
+/// the verify floor (the seL4 verifier-PD), NOT behind the STARK prover.
+#[cfg(feature = "verifier")]
 pub mod rotated_replay;
 pub use aggregated_bundle::{
     AggregatedBundleVerdict, verify_aggregated_bundle_json, verify_aggregated_bundle_struct,
@@ -54,7 +52,7 @@ pub use bilateral_pair::{
 pub use cross_fed::{
     CommitteeDescriptor, CrossFedVerdict, ValidatorDescriptor, verify_cross_fed_bundle,
 };
-#[cfg(feature = "recursion")]
+#[cfg(feature = "verifier")]
 pub use rotated_replay::{
     RotatedChainOutput, RotatedReplayLeg, RotatedReplayVerdict, verify_rotated_leg,
     verify_rotated_replay_chain,
@@ -148,15 +146,12 @@ pub const AUTO_DETECT_VK_HASH: &str = "auto";
 ///
 /// Returns `VerifierOutput` and the corresponding exit code.
 ///
-/// RECURSION FENCE: this is the v1 hand-AIR (`EffectVmAir`) single-proof verify, retained under
-/// `not(recursion)` as the v1 floor. The recursion build retires the v1 hand-AIR, so this fails
-/// closed (honest rejection, not a silent skip). The rotated replacement is no longer "a separate
-/// lane": under `recursion` a rotated chain is verified by
-/// [`rotated_replay::verify_rotated_replay_chain`] (the `"effect-vm-rotated"` IR-v2 legs via the
-/// audited `descriptor_ir2::verify_vm_descriptor2`). This entry stays fenced because a SINGLE v1
-/// STARK proof has no rotated single-proof analog — the rotated unit is a chain leg, verified
-/// through that path.
-#[cfg(feature = "recursion")]
+/// RETIRED (v1 hand-AIR): the single-proof `EffectVmAir` verify is gone. This entry
+/// fails closed on every build (honest rejection, not a silent skip) because a SINGLE
+/// v1 STARK proof has no rotated single-proof analog — the rotated unit is a chain
+/// leg, verified through [`rotated_replay::verify_rotated_replay_chain`] (the
+/// `"effect-vm-rotated"` IR-v2 legs via the audited
+/// `descriptor_ir2::verify_vm_descriptor2`).
 pub fn verify_effect_vm_proof(
     proof_bytes: &[u8],
     public_inputs_u32: &[u32],
@@ -165,132 +160,12 @@ pub fn verify_effect_vm_proof(
     let _ = (proof_bytes, public_inputs_u32, vk_hash_hex);
     (
         VerifierOutput::reject(
-            "v1 Effect VM STARK verification is retired under the recursion build; verify a \
-             rotated chain via rotated_replay::verify_rotated_replay_chain instead"
+            "v1 Effect VM STARK verification is retired; verify a rotated chain via \
+             rotated_replay::verify_rotated_replay_chain instead"
                 .to_string(),
         ),
         exit_code::ERROR,
     )
-}
-
-/// Verify an Effect VM STARK proof (v1 hand-AIR floor). See the recursion stub above.
-#[cfg(not(feature = "recursion"))]
-pub fn verify_effect_vm_proof(
-    proof_bytes: &[u8],
-    public_inputs_u32: &[u32],
-    vk_hash_hex: &str,
-) -> (VerifierOutput, i32) {
-    // Step 1: resolve VK hash to an AIR name.
-    let air_name = if vk_hash_hex == AUTO_DETECT_VK_HASH {
-        None // will read from proof
-    } else {
-        match resolve_vk_hash(vk_hash_hex) {
-            Some(name) => Some(name),
-            None => {
-                return (
-                    VerifierOutput::reject(format!(
-                        "unknown VK hash: {}; only '{}' (Effect VM v1) is supported in v1",
-                        vk_hash_hex, EFFECT_VM_VK_HASH_HEX
-                    )),
-                    exit_code::ERROR,
-                );
-            }
-        }
-    };
-
-    // Step 2: deserialise the proof.
-    let proof = match stark::proof_from_bytes(proof_bytes) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                VerifierOutput::reject(format!("proof deserialisation failed: {}", e)),
-                exit_code::ERROR,
-            );
-        }
-    };
-
-    // Step 3: check the proof's declared AIR name.
-    let effective_air_name = match air_name {
-        Some(name) => {
-            if proof.air_name != name {
-                return (
-                    VerifierOutput::reject(format!(
-                        "AIR name mismatch: VK hash resolves to '{}' but proof declares '{}'",
-                        name, proof.air_name
-                    )),
-                    exit_code::REJECTED,
-                );
-            }
-            name
-        }
-        None => {
-            // auto-detect: trust the proof's AIR name (dev/test mode)
-            proof.air_name.as_str()
-        }
-    };
-
-    if effective_air_name != EFFECT_VM_AIR_NAME {
-        return (
-            VerifierOutput::reject(format!(
-                "unsupported AIR: '{}'; only '{}' is supported in v1",
-                effective_air_name, EFFECT_VM_AIR_NAME
-            )),
-            exit_code::ERROR,
-        );
-    }
-
-    // Step 4: validate trace_len (must be power-of-two >= 2).
-    let trace_len = proof.trace_len;
-    if trace_len < 2 || !trace_len.is_power_of_two() {
-        return (
-            VerifierOutput::reject(format!(
-                "invalid trace_len {} in proof (must be power-of-two >= 2)",
-                trace_len
-            )),
-            exit_code::ERROR,
-        );
-    }
-
-    // Step 5: build the Effect VM AIR and convert public inputs.
-    if public_inputs_u32.len() < dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT {
-        return (
-            VerifierOutput::reject(format!(
-                "Effect VM PI too short: have {} elements, need at least {}",
-                public_inputs_u32.len(),
-                dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT
-            )),
-            exit_code::REJECTED,
-        );
-    }
-
-    let air = EffectVmAir::new(trace_len);
-    let pi: Vec<BabyBear> = public_inputs_u32
-        .iter()
-        .map(|&v| BabyBear::new_canonical(v))
-        .collect();
-
-    if let Err(e) = dregg_circuit::effect_vm::verify_balance_limb_pis(&pi) {
-        return (
-            VerifierOutput::reject(format!("Effect VM PI malformed: {e}")),
-            exit_code::REJECTED,
-        );
-    }
-
-    // Step 6: run the STARK verifier.
-    match stark::verify(&air, &proof, &pi) {
-        Ok(()) => (
-            VerifierOutput::accept(format!(
-                "Effect VM proof verified (trace_len={}, pi_count={})",
-                trace_len,
-                pi.len()
-            )),
-            exit_code::VERIFIED,
-        ),
-        Err(e) => (
-            VerifierOutput::reject(format!("STARK verification failed: {}", e)),
-            exit_code::REJECTED,
-        ),
-    }
 }
 
 /// Parse a JSON array of `u32` values from a string.
@@ -729,52 +604,15 @@ fn replay_one_with_prev(
         .map(|&v| BabyBear::new_canonical(v))
         .collect();
 
-    // Step 6 (V1 FLOOR): re-run the v1 hand-AIR (`EffectVmAir`) constraints across every
-    // consecutive row pair. Retired under recursion — the rotated replay-chain verify (a separate
-    // lane) is not yet built, so a recursion build fails closed here rather than re-running v1.
-    #[cfg(not(feature = "recursion"))]
-    {
-        // Build the AIR sized to the trace.
-        let air = EffectVmAir::new(trace_len);
-        if trace_bb[0].len() != air.width() {
-            return ReplayVerdict::Rejected {
-                reason: format!(
-                    "trace width {} != AIR width {}",
-                    trace_bb[0].len(),
-                    air.width()
-                ),
-            };
-        }
-
-        // Walk every consecutive (local, next) row pair across each alpha and confirm the
-        // AIR's combined constraint polynomial is zero.
-        for i in 0..(trace_len - 1) {
-            for &alpha in alphas {
-                let c = air.eval_constraints(&trace_bb[i], &trace_bb[i + 1], &pi_bb, alpha);
-                if c.as_u32() != 0 {
-                    return ReplayVerdict::Rejected {
-                        reason: format!(
-                            "constraint violation at row {}, alpha=0x{:08x}: residue={}",
-                            i,
-                            alpha.as_u32(),
-                            c.as_u32()
-                        ),
-                    };
-                }
-            }
-        }
-
-        // All checks passed.
-        ReplayVerdict::Verified
-    }
-    #[cfg(feature = "recursion")]
-    {
-        let _ = (&trace_bb, &pi_bb, trace_len, alphas);
-        ReplayVerdict::Rejected {
-            reason: "v1 hand-AIR replay-chain verification is retired under the recursion build; \
-                     verify a rotated chain via rotated_replay::verify_rotated_replay_chain"
-                .to_string(),
-        }
+    // Step 6 (RETIRED): the v1 hand-AIR (`EffectVmAir`) per-row-pair constraint replay
+    // is gone. This v1 replay-chain leg fails closed on every build; a rotated chain is
+    // verified through `rotated_replay::verify_rotated_replay_chain` (the prover-free
+    // `verifier`-floor path) instead.
+    let _ = (&trace_bb, &pi_bb, trace_len, alphas);
+    ReplayVerdict::Rejected {
+        reason: "v1 hand-AIR replay-chain verification is retired; verify a rotated chain \
+                 via rotated_replay::verify_rotated_replay_chain"
+            .to_string(),
     }
 }
 
@@ -1323,55 +1161,9 @@ mod tests {
         );
     }
 
-    // V1 floor: these exercise the v1 hand-AIR (`EffectVmAir`) proof + the v1 `verify_effect_vm_proof`,
-    // both retired under recursion (where the standalone verify fails closed).
-    #[cfg(not(feature = "recursion"))]
-    fn sample_effect_vm_proof_and_pi() -> (Vec<u8>, Vec<u32>) {
-        let initial_state = dregg_circuit::CellState::new(1_000, 7);
-        let effects = vec![dregg_circuit::effect_vm::Effect::Transfer {
-            amount: 1,
-            direction: 1,
-        }];
-        let (trace, public_inputs) =
-            dregg_circuit::effect_vm::generate_effect_vm_trace(&initial_state, &effects);
-        let air = dregg_circuit::EffectVmAir::new(trace.len());
-        let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
-        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
-        let pi_u32 = public_inputs.iter().map(|x| x.as_u32()).collect();
-        (proof_bytes, pi_u32)
-    }
-
-    #[cfg(not(feature = "recursion"))]
-    #[test]
-    fn effect_vm_verifier_rejects_short_base_pi() {
-        let (proof_bytes, mut pi_u32) = sample_effect_vm_proof_and_pi();
-        pi_u32.truncate(dregg_circuit::effect_vm::pi::ACTIVE_BASE_COUNT - 1);
-
-        let (out, code) = verify_effect_vm_proof(&proof_bytes, &pi_u32, EFFECT_VM_VK_HASH_HEX);
-        assert!(!out.verified);
-        assert_eq!(code, exit_code::REJECTED);
-        assert!(
-            out.reason.contains("PI too short"),
-            "expected short-PI rejection, got: {}",
-            out.reason
-        );
-    }
-
-    #[cfg(not(feature = "recursion"))]
-    #[test]
-    fn effect_vm_verifier_rejects_out_of_range_balance_limb_pi() {
-        let (proof_bytes, mut pi_u32) = sample_effect_vm_proof_and_pi();
-        pi_u32[dregg_circuit::effect_vm::pi::INIT_BAL_LO] = 1u32 << 30;
-
-        let (out, code) = verify_effect_vm_proof(&proof_bytes, &pi_u32, EFFECT_VM_VK_HASH_HEX);
-        assert!(!out.verified);
-        assert_eq!(code, exit_code::REJECTED);
-        assert!(
-            out.reason.contains("INIT_BAL_LO out of range"),
-            "expected balance-limb rejection, got: {}",
-            out.reason
-        );
-    }
+    // (The v1 hand-AIR `EffectVmAir` short-PI / balance-limb rejection tests were
+    // retired with the v1 single-proof verify — that entry now fails closed on every
+    // build, so there is no v1 proof to construct here.)
 
     // ---- scope-recursive subcommand wiring tests (Golden Vision Block 3) ----
 

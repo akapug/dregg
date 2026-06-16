@@ -177,10 +177,10 @@ fn main() {
 
     section("5. Bespoke `stark` vs audited p3 (the TCB-shrinking cost)");
     println!(
-        "  (RETIRED under recursion: both legs measured the v1 hand-AIR — the bespoke `stark` over"
+        "  (RETIRED: both legs measured the v1 hand-AIR — the bespoke `stark` over the v1 effect-vm"
     );
     println!(
-        "   `EffectVmAir` and the audited `prove_effect_vm_p3`. The live path is the rotated IR-v2"
+        "   AIR and its audited p3 prover. The live path is the rotated IR-v2"
     );
     println!(
         "   descriptor (§1); the audited multi-table batch verifier is `descriptor_ir2::verify_vm_descriptor2`.)"
@@ -232,7 +232,7 @@ fn main() {
 
     section("7. Silver joint-turn AGGREGATION (N-cell private joint turn)");
     println!(
-        "  (RETIRED under recursion: the v1 silver aggregation re-verified per-cell `EffectVmAir`"
+        "  (RETIRED: the v1 silver aggregation re-verified per-cell v1 hand-AIR proofs"
     );
     println!(
         "   proofs via `prove_joint_turn`. The rotated cohort now carries `DescriptorParticipant`"

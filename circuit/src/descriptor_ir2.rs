@@ -106,7 +106,7 @@
 //!     prove_vm_descriptor` untouched — both registries live until the flag-day.
 
 // Prover-only (the trace-assembly histograms): `recursion`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use std::collections::BTreeMap;
 
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
@@ -115,7 +115,7 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_lookup::InteractionBuilder;
 use p3_lookup::bus::{LookupBus, PermutationCheckBus};
 // Prover-only (`to_matrix` builds the LDE input matrix): `recursion`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use p3_matrix::dense::RowMajorMatrix;
 
 // VERIFY surface (compiles under the prover-free `verifier` feature): `verify_batch`
@@ -124,17 +124,17 @@ use p3_matrix::dense::RowMajorMatrix;
 // no `prove_batch`. The PROVE surface (`prove_batch` + `StarkInstance` trace assembly)
 // is `recursion`-only.
 use p3_batch_stark::{BatchProof, ProverData, verify_batch};
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use p3_batch_stark::{StarkInstance, prove_batch};
 // Generic-config (SIDESTEP) prove/verify surface: lets the rotated leaf-wrap mint/verify an
 // IR-v2 batch under an arbitrary `SC` (e.g. the recursion config with retargeted FRI knobs)
 // rather than only `DreggStarkConfig`. The bounds mirror `prove_batch`/`verify_batch`'s own.
 // On both the prover (`recursion`) and verify (`verifier`) surfaces, like `verify_batch`.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 use p3_commit::PolynomialSpace;
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 use p3_field::Algebra;
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 use p3_uni_stark::{Domain, StarkGenericConfig, SymbolicExpressionExt, Val};
 
 /// Re-export the IR-v2 wire proof type + its STARK config so external crates (the sdk's
@@ -147,7 +147,7 @@ use crate::field::{BABYBEAR_P, BabyBear};
 // `HEAP_TREE_DEPTH` indexes the map-absent AIR column layout (verify-needed); the tree
 // type / leaf / sentinels are prover-only (the witness map openings live in `build_traces`).
 use crate::heap_root::HEAP_TREE_DEPTH;
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use crate::heap_root::{CanonicalHeapTree, HeapLeaf, SENTINEL_MAX, SENTINEL_MIN};
 use crate::lean_descriptor_air::{
     EFFECTVM_STATE_AFTER_BASE, EFFECTVM_STATE_BEFORE_BASE, JsonCursor, LeanExpr, VmConstraint,
@@ -155,14 +155,14 @@ use crate::lean_descriptor_air::{
     parse_vm_constraint_body,
 };
 // `i64_to_babybear` is the concrete-eval constant lowering (prover-only, `eval_c`).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use crate::lean_descriptor_air::i64_to_babybear;
 use crate::lean_descriptor_air::{EffectVmDescriptor, RangeSpec};
 use crate::plonky3_prover::{
     POSEIDON2_PERM_AUX_COLS, POSEIDON2_WIDTH, create_config_with_fri, poseidon2_permute_expr, to_p3,
 };
 // The concrete permutation aux-witness fill is prover-only (`perm_aux`).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use crate::plonky3_prover::poseidon2_permute_aux_witness;
 
 // ============================================================================
@@ -225,7 +225,7 @@ pub const BYTE_TABLE_HEIGHT: usize = 1 << LIMB_BITS;
 
 /// Minimum height for the auxiliary tables (chip / memory / boundary / map-ops).
 /// Prover-only: it floors the witness table heights in `next_pow2` / `build_traces`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 const MIN_TABLE_HEIGHT: usize = 8;
 
 // The shared bus names (namespaced so sibling modules' buses never collide).
@@ -2508,7 +2508,7 @@ where
 // ============================================================================
 
 /// Concrete evaluation of a `LeanExpr` over one main row.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn eval_c(e: &LeanExpr, row: &[BabyBear]) -> BabyBear {
     match e {
         LeanExpr::Var(i) => row[*i],
@@ -2520,14 +2520,14 @@ fn eval_c(e: &LeanExpr, row: &[BabyBear]) -> BabyBear {
 
 /// Concrete permutation: full aux block (`poseidon2_permute_expr`'s committed
 /// round-state layout) + the squeezed digest (`state[0]` of the last round block).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn perm_aux(st: [BabyBear; POSEIDON2_WIDTH]) -> (Vec<BabyBear>, BabyBear) {
     let aux = poseidon2_permute_aux_witness(st);
     let digest = aux[aux.len() - POSEIDON2_WIDTH];
     (aux, digest)
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn hash2_state_c(a: BabyBear, b: BabyBear) -> [BabyBear; POSEIDON2_WIDTH] {
     let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
     st[0] = a;
@@ -2536,7 +2536,7 @@ fn hash2_state_c(a: BabyBear, b: BabyBear) -> [BabyBear; POSEIDON2_WIDTH] {
     st
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn fact_state_c(l: BabyBear, r: BabyBear) -> [BabyBear; POSEIDON2_WIDTH] {
     let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
     st[0] = l;
@@ -2548,7 +2548,7 @@ fn fact_state_c(l: BabyBear, r: BabyBear) -> [BabyBear; POSEIDON2_WIDTH] {
 
 /// Fill one `bits`-wide decomposition (limbs + top bits) of `val`, counting the byte-bus
 /// queries into `hist`. `val` must already be `< 2^bits`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn fill_decomp(
     val: u32,
     bits: usize,
@@ -2572,12 +2572,12 @@ fn fill_decomp(
     }
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn next_pow2(n: usize) -> usize {
     n.next_power_of_two().max(MIN_TABLE_HEIGHT)
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn to_matrix(rows: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
     let width = rows[0].len();
     let values: Vec<P3BabyBear> = rows
@@ -2611,7 +2611,7 @@ pub struct UMemBoundaryWitness {
 }
 
 impl UMemBoundaryWitness {
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     fn is_empty(&self) -> bool {
         self.addrs.is_empty() && self.init_vals.is_empty()
     }
@@ -2675,7 +2675,7 @@ impl Presence {
 
 /// One fully assembled multi-table witness (the PRESENT instance traces; absent tables
 /// are not built — and so contribute no byte-bus pad queries and no committed matrix).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 struct Ir2Traces {
     main: Vec<Vec<BabyBear>>,
     chip: Option<Vec<Vec<BabyBear>>>,
@@ -2690,7 +2690,7 @@ struct Ir2Traces {
 
 /// Witness fill of one canonical decomposition block `[hi4, lo27 limbs, is15, inv15]` of a
 /// canonical (`< p`) value. `real` gates the is15-forcing leg exactly as the AIR's `gate`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn fill_canon(v: u32, real: bool, out: &mut Vec<BabyBear>, hist: &mut [u64; BYTE_TABLE_HEIGHT]) {
     let hi4 = v >> KEY_LO_BITS;
     let lo27 = v & ((1u32 << KEY_LO_BITS) - 1);
@@ -2712,7 +2712,7 @@ fn fill_canon(v: u32, real: bool, out: &mut Vec<BabyBear>, hist: &mut [u64; BYTE
 
 /// Witness fill of one lexicographic strict-lt comparator block `[s, dhi, dlo, dlo limbs]`
 /// for `a < b` (both canonical), gated by `active`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn fill_lex_lt(
     a: u32,
     b: u32,
@@ -2739,7 +2739,7 @@ fn fill_lex_lt(
 /// Assemble the PRESENT instance traces from the base main trace + the boundary witness +
 /// the map heaps. `check` controls the prover-side pre-flight replay (the test harness
 /// disables it to exercise the in-circuit refusals).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn build_traces(
@@ -3698,7 +3698,7 @@ fn ir2_config() -> DreggStarkConfig {
     create_config_with_fri(6, 0, 3, 19, 16)
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 #[allow(clippy::too_many_arguments)]
 fn prove_vm_descriptor2_inner<SC>(
     desc: &EffectVmDescriptor2,
@@ -3830,7 +3830,7 @@ where
 /// a tampered memory read, a forged map opening, an out-of-range limb, an amplified
 /// submask — has no satisfying assembly (the pre-flight replay refuses it eagerly; with
 /// the replay bypassed the batch prover/verifier rejects).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_vm_descriptor2(
     desc: &EffectVmDescriptor2,
     base_trace: &[Vec<BabyBear>],
@@ -3855,7 +3855,7 @@ pub fn prove_vm_descriptor2(
 /// (`UMemBoundaryWitness`, Lean's `(uinit, ufin, uaddrs)` with `ufin` replayed). Everything
 /// else is identical — and a umem-only descriptor commits NO chip table: the one-multiset
 /// memory argument hashes nothing, intra-proof.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_vm_descriptor2_umem(
     desc: &EffectVmDescriptor2,
     base_trace: &[Vec<BabyBear>],
@@ -3880,7 +3880,7 @@ pub fn prove_vm_descriptor2_umem(
 /// (`tests/effect_vm_ir2_size_measure.rs` proves the SAME statement across the
 /// `(log_blowup, num_queries)` grid). Proofs from non-default configs must never leak
 /// onto the wire — the production IR-v2 config is `ir2_config` alone.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 #[doc(hidden)]
 pub fn prove_vm_descriptor2_with_config(
     desc: &EffectVmDescriptor2,
@@ -3910,7 +3910,7 @@ pub fn prove_vm_descriptor2_with_config(
 /// `ir2_config` (log_blowup 6, 19 queries, 16 query-PoW) so the proof has the same FRI shape
 /// the deployed descriptor proofs do — only the config TYPE differs (a newtype wrapper that
 /// also impls `FriRecursionConfig`). Self-verifies before return.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_vm_descriptor2_for_config<SC>(
     desc: &EffectVmDescriptor2,
     base_trace: &[Vec<BabyBear>],
@@ -3947,7 +3947,7 @@ where
 /// `BatchProof<SC>`. The `common` is built by the SAME
 /// `ProverData::from_airs_and_degrees(config, ..)` path the inner prover/verifier use, so it
 /// is the canonical common for this batch under `SC`.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn ir2_airs_and_common_for_config<SC>(
     desc: &EffectVmDescriptor2,
     proof: &BatchProof<SC>,
@@ -4051,7 +4051,7 @@ where
 // The IR-v2 test suite proves AND verifies (it mints proofs via `prove_batch` / the
 // trace assembly), so it is gated on `recursion` — the prover-free `verifier`-only
 // build compiles the verify surface without these prover-coupled tests.
-#[cfg(all(test, feature = "recursion"))]
+#[cfg(all(test, feature = "prover"))]
 mod tests {
     use super::*;
     use crate::poseidon2::hash_many;

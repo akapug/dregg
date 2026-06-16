@@ -89,7 +89,7 @@
 //!
 //! See `cell/src/vk_v2.rs` for the canonical encoder.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use crate::field::BabyBear;
 

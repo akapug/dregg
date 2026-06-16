@@ -168,6 +168,16 @@ pub mod presentation;
 /// the running `parse_vm_descriptor` (the prover authors no constraint). Standalone (not in the locked
 /// `effect_vm_descriptors` registry).
 pub mod cap_reshape_descriptor;
+/// The GENUINE-NON-AMP cap-graph descriptor loader (the ARGUS linchpin on the delegation family:
+/// `delegate`/`delegateAtten`/`attenuate`/`introduce`/`revoke`/`refresh`): the Lean-verified
+/// `EffectVmDescriptor` that, on a cap-graph row, RECOMPUTES `cap_root` (`hash[edge_leaf, old_root]`,
+/// op-tagged — no opaque digest) AND enforces in-circuit non-amplification (`granted ⊑ held` submask,
+/// per bit, over the SAME `rights` felt the recompute binds). Byte-pinned to
+/// `Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNonAmp`; parsed by the
+/// running `parse_vm_descriptor` (the prover authors no constraint). Standalone (not in the locked
+/// `effect_vm_descriptors` registry); ONE JSON serves all six effects (selector→JSON fan-out).
+#[cfg(feature = "plonky3")]
+pub mod cap_delegation_nonamp_descriptor;
 /// The canonical, openable capability-set commitment: a sorted Poseidon2 binary
 /// Merkle tree over a cell's c-list. The SINGLE source of truth for the
 /// `cap_root` value — `dregg-cell`'s `compute_canonical_capability_root` calls
@@ -219,7 +229,7 @@ pub mod plonky3_recursion;
 #[cfg(feature = "plonky3")]
 pub mod plonky3_verifier_air;
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub mod plonky3_recursion_impl;
 
 /// LogUp-style range-check lookups for the Lean-emitted descriptor path — the
@@ -228,7 +238,7 @@ pub mod plonky3_recursion_impl;
 /// booleanity constraints per 30-bit wire) with a shared `[0,256)` byte-table
 /// LogUp bus (4 byte-limb columns per 30-bit wire, table shared across all
 /// wires), proved via `p3-batch-stark`. See module docs.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub mod lean_lookup_air;
 
 /// Descriptor IR v2 — THE EPOCH multi-table batch-STARK interpreter
@@ -248,13 +258,13 @@ pub mod lean_lookup_air;
 /// (`verify_vm_descriptor2{,_with_config}`, the AIRs, `ir2_config`) compiles under the
 /// prover-free `verifier` feature so the wasm / no-lean-link verifier can verify
 /// rotated proofs without the prover DFT (cutover C2).
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub mod descriptor_ir2;
 
 /// Recursive (Golden Vision) compression bridge for `dregg_turn::WitnessedReceipt`
 /// scope-2 replay. See the module docs for the Silver→Golden mapping and
 /// the VK v2 layered encoding of the recursive VK hash.
-// The module's own inner `#![cfg(feature = "recursion")]` provides the gate.
+// The module's own inner `#![cfg(feature = "prover")]` provides the gate.
 pub mod recursive_witness_bundle;
 
 /// Stage 7-γ.2 Phase 2 joint bilateral aggregation AIR. Consumes N per-cell
@@ -267,14 +277,14 @@ pub mod bilateral_aggregation_air;
 /// docs — this is a *shape* mirror of `effect_vm::EffectVmAir` used to
 /// measure that the recursion library accepts the Effect VM's column and
 /// PI counts (Block 1/2 of the Golden Vision recursion lane).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub mod effect_vm_p3_air;
 
 /// Constraint-COMPLETE Plonky3 `Air` for the Effect VM (v1 hand-AIR): the v1
 /// commit-path EffectVM proof on the audited `p3-batch-stark` verifier. Retained
-/// under `#[cfg(not(feature = "recursion"))]` for the v1 floor; the recursion tower
+/// under `#[cfg(not(feature = "prover"))]` for the v1 floor; the recursion tower
 /// proves through the rotated IR-v2 multi-table descriptor (`crate::descriptor_ir2`).
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub mod effect_vm_p3_full_air;
 
 /// Sorted-set neighbor-adjacency STARK: proves two leaves are *consecutive*
@@ -284,10 +294,10 @@ pub mod effect_vm_p3_full_air;
 pub mod membership_adjacency_air;
 
 pub mod backends;
-// `ivc_turn_chain`'s inner `#![cfg(feature = "recursion")]` provides the gate.
+// `ivc_turn_chain`'s inner `#![cfg(feature = "prover")]` provides the gate.
 pub mod ivc_turn_chain;
 pub mod joint_turn_aggregation;
-// `joint_turn_recursive`'s inner `#![cfg(feature = "recursion")]` provides the gate.
+// `joint_turn_recursive`'s inner `#![cfg(feature = "prover")]` provides the gate.
 pub mod joint_turn_recursive;
 pub mod proof_forest;
 pub mod proof_tier;
@@ -336,7 +346,7 @@ pub use cross_state_derivation::{
     CombiningRule, CrossStateDerivationProof, SourceDerivation, SourceInput,
     prove_cross_state_derivation, verify_cross_state_derivation,
 };
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub use effect_vm::EffectVmAir;
 pub use effect_vm::{
     CellState, EFFECT_VM_WIDTH, Effect, NUM_EFFECTS, compute_effects_hash, encode_net_delta,

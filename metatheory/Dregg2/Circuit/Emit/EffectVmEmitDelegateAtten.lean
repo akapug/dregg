@@ -25,10 +25,14 @@ validated `caps`-digest transition; not a fourth spec.
 
 ## BOUNDARY (precise)
 
-  * **IR GAP — needs IR extension: cap-root hash-site** (inherited). The `cap_root` column is the SCALAR
-    digest of the cap-table FUNCTION; the IR cannot re-derive it IN-circuit from the cap-table rows. The
-    cap-table-is-Merkled binding lives in `Function.Injective D` (carried, realizable), the
-    SAME bar `delegateAttenA_full_sound` uses. We connect through `capRootProj`.
+  * **cap-root recompute + non-amp: CLOSED (§G, §G.4), inherited.** `delegateAttenVmDescriptorGenuine`
+    (§G) RECOMPUTES `cap_root = hash[edge_leaf, old_root]` in-row (edge op `capOp.DELEGATE_ATTEN`), so the
+    post root is FORCED by the bound attenuated-delegate edge. `delegateAttenVmDescriptorGenuineNonAmp`
+    (§G.4) ADDS the in-circuit `granted ⊑ held` submask over the SAME `rights` felt — and since
+    `delegateAtten` is the ATTENUATE-then-delegate effect, non-amplification is its DEFINING property,
+    now enforced in-circuit (`delegateAttenNonAmp_in_circuit`/`delegateAttenNonAmp_rejects_amplify`). The
+    cap-table-as-FUNCTION digest `D` is retained ONLY for the v1 connector `capRootProj` to
+    `delegateAttenA_full_sound`; the residual seam is Phase E (sorted-tree update vs digest advance).
 
   * **The attenuation premise (`DelegateAttenGuard`) is NOT a `cap_root` ROW gate.** It is enforced by
     `delegateAttenA_full_sound`'s `propBit (DelegateAttenGuard)` column, NOT by the cap-root-move row
@@ -203,6 +207,43 @@ theorem delegateAttenGenuine_binds_edge (hash : List ℤ → ℤ)
 
 #assert_axioms delegateAttenGenuine_sound
 #assert_axioms delegateAttenGenuine_binds_edge
+
+/-! ### §G.4 — `delegateAtten` carries IN-CIRCUIT NON-AMPLIFICATION (`granted ⊑ held`, the ARGUS linchpin).
+
+`delegateAtten` is the cap-graph effect that ATTENUATES-then-delegates, so non-amplification is its
+defining property: the granted edge confers a SUBSET of the delegator's held cap. It inherits the shared
+GENUINE-NON-AMP descriptor `attenuateVmDescriptorGenuineNonAmp` — the cap-root recompute binds the
+granted `rights` into `cap_root`, and the per-bit submask gate forces `granted ⊑ held` on that same felt.
+A `delegateAtten` proof now genuinely means the attenuated grant did NOT amplify — in-circuit. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuineNonAmp attenuateGenuineNonAmp_in_circuit
+   attenuateGenuineNonAmp_rejects_amplify)
+
+/-- **`delegateAttenVmDescriptorGenuineNonAmp`** — the GENUINE `delegateAtten` circuit WITH in-circuit
+non-amp: definitionally the shared genuine-non-amp descriptor (recompute + `granted ⊑ held`). -/
+def delegateAttenVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
+
+/-- **`delegateAttenNonAmp_in_circuit`** — a satisfying `delegateAtten` witness FORCES `granted ⊑ held`
+per bit. Inherited from the shared in-circuit non-amp tooth. -/
+theorem delegateAttenNonAmp_in_circuit (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (hcon : ∀ c ∈ delegateAttenVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
+    ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
+  attenuateGenuineNonAmp_in_circuit env hcon i hi
+
+/-- **`delegateAttenNonAmp_rejects_amplify`** — an amplifying `delegateAtten` (granted bit set, held bit
+clear) does NOT satisfy the descriptor. Inherited from the shared rejection. -/
+theorem delegateAttenNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hg : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 1)
+    (hh : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ delegateAttenVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false) :=
+  attenuateGenuineNonAmp_rejects_amplify env i hi hg hh
+
+#assert_axioms delegateAttenNonAmp_in_circuit
+#assert_axioms delegateAttenNonAmp_rejects_amplify
 
 /-! ## §W — THE MAGNESIUM LIFT: `delegateAtten`'s RUNNABLE descriptor binds the FULL 17-field post-state.
 

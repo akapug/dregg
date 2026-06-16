@@ -24,12 +24,12 @@ pub mod dfa_routing;
 // `dsl_p3_air` routes DSL circuits through the audited Plonky3 batch-STARK
 // prover; it requires `p3-air` / `p3-batch-stark` (the `recursion` feature) and
 // `crate::plonky3_prover` (gated on `plonky3`). Its only consumers
-// (`revocation::*_p3`, `derivation::*_p3`) are all `#[cfg(feature = "recursion")]`,
+// (`revocation::*_p3`, `derivation::*_p3`) are all `#[cfg(feature = "prover")]`,
 // so the module is gated to match — without this, a `mock`-only build of the
 // crate (e.g. transitively via `dregg-cell` on wasm32) fails to find
 // `AirBuilder::{Expr,Var}`.
 pub mod descriptors;
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub mod dsl_p3_air;
 pub mod fold;
 pub mod garbled;
