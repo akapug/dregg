@@ -94,24 +94,23 @@
 
   <!-- ==================== TRANSCLUSION ==================== -->
   <section class="section section--compact" id="transclusion">
-    <span class="section__label">Xanadu that shipped</span>
-    <h2 class="section__title">Transclusion: the honest quote, proven</h2>
+    <span class="section__label">Implemented · interactive</span>
+    <h2 class="section__title">Transclusion: include-by-reference, verified</h2>
     <p style="color: var(--fg-dim); margin-bottom: var(--s4);">
-      Ted Nelson's Xanadu named <strong>transclusion</strong>: include a piece of one document
-      inside another <em>by reference</em>, so the quote keeps its identity and its provenance —
-      the same bytes, the same source, visibly cited, never copied-and-cut, joined by two-way
-      links that do not break. Xanadu could never make it honest, because in an ambient-authority
-      world a "transcluded" quote is just a copy: nothing forces it to equal the source, nothing
-      stops it rotting when the source moves, nothing bounds what authority it confers. deos ships
-      transclusion — and the four things Nelson wanted are exactly four kernel theorems, each a
-      <em>naming</em> of the verified cross-cell import (<code>ImportedEq</code>), no new
-      machinery. A transclusion <em>is</em> the same verified observation a rehydrated screenshot
-      is, named for the docuverse.
+      <strong>Transclusion</strong> is include-by-reference: a cell quotes a span of another cell by
+      citing its receipt, not by copying its bytes. In dregg a transclusion is a <em>verified
+      cross-cell read</em> — the quote is the value the source actually committed, drawn from the
+      ledger. Four properties follow, and each is a theorem about that one read (it reuses the
+      kernel's existing cross-cell import, <code>ImportedEq</code> — no new machinery): the quote
+      equals its source, its provenance is visible, it confers no authority over the source, and it
+      does not change when the source advances. <strong>You can play with it in the playground
+      below</strong> — transclude a span, amend the source and watch the quote track it, then try to
+      forge the quote and watch it refuse.
     </p>
     <figure class="catalog-embed" data-catalog="transclusion">
       <table class="catalog-table">
         <thead>
-          <tr><th>What Xanadu wanted</th><th>What dregg provides</th><th>The Lean theorem</th></tr>
+          <tr><th>Guarantee</th><th>How dregg provides it</th><th>Verified by (Lean)</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -136,7 +135,7 @@
           </tr>
         </tbody>
       </table>
-      <figcaption>The four Xanadu properties as kernel theorems, in
+      <figcaption>The four guarantees as kernel theorems, in
       <code>Dregg2/Deos/Transclusion.lean</code> — each riding an existing
       <code>Authority.CrossCellImport</code> / <code>Authority.ImportBinding</code> /
       <code>Deos.Membrane</code> theorem. Every keystone is <code>#assert_all_clean</code>
@@ -152,8 +151,8 @@
       returns are content-addressed (<code>content_hash == blake3(bytes)</code>) and carry a
       receipt + a quorum-signed <code>AttestedRoot</code>, and
       <code>TranscludedField::project_for</code> is the real <code>Membrane::project</code> — the
-      Lean is the spec; the Rust mirrors the named theorems. The <em>other</em> direction of
-      Nelson's link is honest too: a <strong>backlink</strong> ("cell X is quoted by observer O, at
+      Lean is the spec; the Rust mirrors the named theorems. The <em>reverse</em> direction is
+      honest too: a <strong>backlink</strong> ("cell X is quoted by observer O, at
       receipt R, of value V") is the witness graph read the other way — a verifiable claim, not a
       hand-kept index that can drift.
     </p>
@@ -279,7 +278,7 @@
       </div>
       <div class="link-card">
         <span class="link-card__title">Transclusion fidelity</span>
-        <span class="link-card__desc">A quote equals its source provably (<code>transclusion_provenance_faithful</code>), a forge can't be cited (<code>transclusion_forge_refused</code>), it grants no authority over the source (<code>transclusion_no_amplify</code>), and it never rots as the source advances (<code>transclusion_stable_under_source_advance</code>). Xanadu's four wishes, each a naming of the verified cross-cell import.</span>
+        <span class="link-card__desc">A quote equals its source provably (<code>transclusion_provenance_faithful</code>), a forge can't be cited (<code>transclusion_forge_refused</code>), it grants no authority over the source (<code>transclusion_no_amplify</code>), and it never rots as the source advances (<code>transclusion_stable_under_source_advance</code>). Four properties, each a naming of the verified cross-cell import.</span>
       </div>
     </div>
   </section>
