@@ -476,6 +476,314 @@ pub fn empty_caveat_manifest() -> RotatedCaveatManifest {
     RotatedCaveatManifest::default()
 }
 
+// ============================================================================
+// THE CAP-OPEN APPENDIX (Lean `Dregg2.Circuit.Emit.CapOpenEmit` —
+// `capOpenAttenuateV3`, descriptor `dregg-effectvm-attenuateA-v1-rot24-v3-capopen`).
+//
+// The cap-open appendix EXTENDS the 311-wide rotated attenuate trace with 58 columns
+// that OPEN the deployed depth-16 cap-tree at a write-mask leaf whose target is the
+// turn's `src`. The Lean constraints (`DeployedCapOpen.Satisfied`) realize:
+//   * 1 leaf chip-absorb (arity 7: the 7 leaf fields → leafDigest);
+//   * 16 node chip-absorbs (arity 3: `[FACT_MARK, left, right]` → node), folded by the
+//     direction bits from the leaf digest up to the root;
+//   * 16 dir-bool gates, a rootPin (node[15] == capRoot), a targetBind (leaf[1] == src),
+//     and a writeMask (leaf[3] == 3 = the read+write endpoint mask).
+//
+// CRITICAL HASH SEAM (Lean `DeployedCapTree.nodeOf` / `capLeafDigest`): the chip lookups
+// realize `hash_many`-ABSORB nodes — `hash_many(&[FACT_MARK, left, right])` and
+// `hash_many(&[7 leaf fields])` — NOT `poseidon2::hash_fact` (which uses a different state
+// layout). The IR-v2 interpreter auto-gathers the chip table from these lookup tuples, so
+// filling the cap-open columns with genuine `hash_many` values makes every lookup land on a
+// real (arity, padded_inputs, hash) chip row. ZERO hand-authored constraint semantics here —
+// only column FILLS; the declared Lean chip lookups + base gates do all the enforcement.
+// ============================================================================
+
+/// The deployed cap-tree depth (`CapOpenEmit.DEPTH = 16`).
+pub const CAP_OPEN_DEPTH: usize = 16;
+/// The base column of the cap-open appendix (`CAP_OPEN_BASE = ROT_WIDTH = 311`).
+pub const CAP_OPEN_BASE: usize = ROT_WIDTH; // 311
+/// The cap-open appendix span: 7 leaf + 1 leafDigest + 16×(sib,dir,node) + capRoot + src = 58.
+pub const CAP_OPEN_SPAN: usize = 7 + 1 + 3 * CAP_OPEN_DEPTH + 2; // 58
+/// The cap-open trace width (`311 + 58 = 369`).
+pub const CAP_OPEN_WIDTH: usize = ROT_WIDTH + CAP_OPEN_SPAN; // 369
+
+/// The `FACT_MARK` node-tag felt (`DeployedCapTree.FACT_MARK = 0xFACF`).
+pub const FACT_MARK: u32 = 0xFACF; // 64207
+/// The read+write endpoint rights mask the `writeMaskGate` pins (`mask_lo == 3`).
+pub const WRITE_MASK_LO: u32 = 3;
+
+/// One cap-membership witness: the 7 leaf fields (in `CapOpenCols` order
+/// `[slot_hash, target, auth_tag, mask_lo, mask_hi, expiry, breadstuff]`), the 16 sibling
+/// digests + direction bits of the membership path, the recomposed `cap_root`, and the
+/// turn's `src` cell id. A `recomposes()` self-check rebuilds the root from the leaf digest
+/// over the path (ABSORB-node `hash_many`, NOT `hash_fact`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CapOpenWitness {
+    /// The 7 cap-leaf fields (`slot_hash, target, auth_tag, mask_lo, mask_hi, expiry, breadstuff`).
+    pub leaf: [BabyBear; 7],
+    /// The 16 sibling digests of the membership path.
+    pub siblings: [BabyBear; CAP_OPEN_DEPTH],
+    /// The 16 direction bits (0 ⇒ cur is the LEFT child at that level).
+    pub directions: [u8; CAP_OPEN_DEPTH],
+    /// The recomposed committed cap-tree root (must equal node[15]).
+    pub cap_root: BabyBear,
+    /// The turn's source-cell id (must equal `leaf[1]`, the leaf target).
+    pub src: BabyBear,
+}
+
+/// The leaf digest: `hash_many(&[the 7 leaf fields])` (Lean `capLeafDigest`).
+pub fn cap_leaf_digest(leaf: &[BabyBear; 7]) -> BabyBear {
+    hash_many(leaf)
+}
+
+/// One node hash: `hash_many(&[FACT_MARK, left, right])` (Lean `nodeOf` — the ABSORB-node
+/// tagged 3-list, NOT `hash_fact`).
+pub fn cap_node(left: BabyBear, right: BabyBear) -> BabyBear {
+    hash_many(&[BabyBear::new(FACT_MARK), left, right])
+}
+
+/// Mix `(cur, sib)` by the direction bit into `(left, right)` (Lean `leftExpr`/`rightExpr`):
+/// `dir = 0 ⇒ (cur, sib)` (cur is LEFT), `dir = 1 ⇒ (sib, cur)`.
+fn cap_mix(cur: BabyBear, sib: BabyBear, dir: u8) -> (BabyBear, BabyBear) {
+    if dir == 0 {
+        (cur, sib)
+    } else {
+        (sib, cur)
+    }
+}
+
+impl CapOpenWitness {
+    /// Recompute the root from the leaf digest over the `(sib, dir)` path using ABSORB-node
+    /// `hash_many` compression. The self-check the fold's soundness rests on.
+    pub fn recomposes(&self) -> BabyBear {
+        let mut cur = cap_leaf_digest(&self.leaf);
+        for lvl in 0..CAP_OPEN_DEPTH {
+            let (l, r) = cap_mix(cur, self.siblings[lvl], self.directions[lvl]);
+            cur = cap_node(l, r);
+        }
+        cur
+    }
+
+    /// Build a cap-open witness from a c-list of leaves and a chosen position. The depth-16
+    /// ABSORB-node tree is laid over `1 << DEPTH` leaf slots; the chosen leaf rides `position`,
+    /// the rest are zero-leaf padding (`hash_many(&[0;7])`). The membership `(siblings,
+    /// directions)` path + the recomposed root are computed; `src` is pinned to `leaf[1]` so
+    /// the target gate holds. The chosen leaf MUST carry `mask_lo == 3` (the writeMask pin).
+    pub fn build(leaves: &[[BabyBear; 7]], position: usize) -> Result<Self, String> {
+        if position >= leaves.len() {
+            return Err(format!(
+                "cap-open witness: position {position} >= {} leaves",
+                leaves.len()
+            ));
+        }
+        let chosen = leaves[position];
+        if chosen.len() != 7 {
+            return Err("cap-open witness: leaf must carry 7 fields".into());
+        }
+        if chosen[3] != BabyBear::new(WRITE_MASK_LO) {
+            return Err(format!(
+                "cap-open witness: chosen leaf mask_lo (col 3) must be {WRITE_MASK_LO} \
+                 (the read+write endpoint mask the writeMask gate pins), got {}",
+                chosen[3].as_u32()
+            ));
+        }
+        // Lay the depth-16 tree: level 0 = the leaf-digest layer over 2^16 slots, the chosen
+        // leaf at `position`, all others the zero-leaf padding digest. We materialize ONLY the
+        // path: at each level we need the sibling digest, which is the OTHER child of the
+        // current node. For a sparse tree with a single non-padding leaf, every sibling subtree
+        // is a uniform-padding subtree whose root is a known per-level constant.
+        let zero_leaf = cap_leaf_digest(&[BabyBear::ZERO; 7]);
+        // per-level padding subtree roots: pad[0] = zero leaf digest; pad[k+1] = node(pad,pad).
+        let mut pad = [BabyBear::ZERO; CAP_OPEN_DEPTH + 1];
+        pad[0] = zero_leaf;
+        for k in 0..CAP_OPEN_DEPTH {
+            pad[k + 1] = cap_node(pad[k], pad[k]);
+        }
+        let mut siblings = [BabyBear::ZERO; CAP_OPEN_DEPTH];
+        let mut directions = [0u8; CAP_OPEN_DEPTH];
+        let mut idx = position;
+        let mut cur = cap_leaf_digest(&chosen);
+        for lvl in 0..CAP_OPEN_DEPTH {
+            let dir = (idx & 1) as u8; // 0 ⇒ cur is LEFT child, sibling on the RIGHT.
+            // The sibling subtree at this level is uniform padding (single non-pad leaf).
+            let sib = pad[lvl];
+            siblings[lvl] = sib;
+            directions[lvl] = dir;
+            let (l, r) = cap_mix(cur, sib, dir);
+            cur = cap_node(l, r);
+            idx >>= 1;
+        }
+        let w = Self {
+            leaf: chosen,
+            siblings,
+            directions,
+            cap_root: cur,
+            src: chosen[1],
+        };
+        debug_assert_eq!(w.recomposes(), w.cap_root, "cap-open witness must recompose");
+        Ok(w)
+    }
+}
+
+/// Fill the 58 cap-open columns at `base` for ONE row from `w` (Lean `CapOpenCols` layout):
+///   * leaf field `i` at `base + i` (i = 0..6);
+///   * `leafDigest = hash_many(&leaf)` at `base + 7`;
+///   * level `lvl`: `sib` at `base + 8 + 3·lvl`, `dir` at `base + 9 + 3·lvl`,
+///     `node = hash_many(&[FACT_MARK, left, right])` at `base + 10 + 3·lvl`;
+///   * `capRoot` at `base + 56`, `src` at `base + 57`.
+/// The top node (`lvl = 15`) MUST equal `w.cap_root` (asserted). Every value is a genuine
+/// `hash_many`-absorb output, so the auto-gathered chip table carries a matching row for each
+/// of the 1 + 16 chip lookups.
+pub fn fill_cap_open(row: &mut [BabyBear], base: usize, w: &CapOpenWitness) {
+    for (i, &f) in w.leaf.iter().enumerate() {
+        row[base + i] = f;
+    }
+    let leaf_digest = cap_leaf_digest(&w.leaf);
+    row[base + 7] = leaf_digest;
+    let mut cur = leaf_digest;
+    for lvl in 0..CAP_OPEN_DEPTH {
+        let sib = w.siblings[lvl];
+        let dir = w.directions[lvl];
+        let (l, r) = cap_mix(cur, sib, dir);
+        let node = cap_node(l, r);
+        row[base + 8 + 3 * lvl] = sib;
+        row[base + 9 + 3 * lvl] = BabyBear::new(dir as u32);
+        row[base + 10 + 3 * lvl] = node;
+        cur = node;
+    }
+    debug_assert_eq!(cur, w.cap_root, "cap-open fill: top node must equal cap_root");
+    row[base + 56] = w.cap_root;
+    row[base + 57] = w.src;
+}
+
+/// Recompute one rotated block's chained `wireCommitR` digests + `state_commit` from the limbs
+/// ALREADY present in the row (cols `base..base+NUM_PRE_LIMBS` + the iroot at `base+B_IROOT`).
+/// Byte-identical to [`fill_block`]'s chain, but reads the limbs in place rather than from a
+/// witness — used after an in-place limb PATCH (e.g. a nonce-passthrough fixup) so the chain
+/// carriers + state_commit stay consistent with the patched limbs.
+fn recompute_block_commit(row: &mut [BabyBear], base: usize) {
+    let mut d = hash_many(&[row[base], row[base + 1], row[base + 2], row[base + 3]]);
+    let mut chain = 0usize;
+    row[base + B_CHAIN_BASE + chain] = d;
+    chain += 1;
+    let mut col = 4;
+    while col < NUM_PRE_LIMBS {
+        let remaining = NUM_PRE_LIMBS - col;
+        if remaining >= 3 {
+            d = hash_many(&[d, row[base + col], row[base + col + 1], row[base + col + 2]]);
+            col += 3;
+        } else {
+            d = hash_many(&[d, row[base + col]]);
+            col += 1;
+        }
+        row[base + B_CHAIN_BASE + chain] = d;
+        chain += 1;
+    }
+    row[base + B_STATE_COMMIT] = hash_many(&[d, row[base + B_IROOT]]);
+}
+
+/// Make a generated rotated AttenuateCapability trace satisfy the `attenuateV3` base
+/// constraints' phase-B bindings that the bare `generate_rotated_effect_vm_trace` output does
+/// not yet carry. THE TWO WITNESS WIRINGS (column fills only — ZERO constraint semantics):
+///
+///   * **nonce PASSTHROUGH** — the attenuate descriptor pins `after.nonce == before.nonce`
+///     (cols 78 == 56) AND the rotated after-block nonce weld (`r1`, col `AFTER_BASE+2`) to it.
+///     `generate_effect_vm_trace` ticks the nonce on every effect row; attenuate's audited
+///     shape is a passthrough (the cap-root advance, not the nonce, is the state move), so we
+///     copy the before-nonce into the v1 after-nonce + the rotated after-block r1 weld, then
+///     RECOMPUTE the after-block commit chain so its `state_commit` (and PI[35]) stay genuine.
+///   * **cap-root advance binding** — the descriptor pins `after.cap_root == param2` (cols
+///     87 == 70). The generator leaves param2 at 0; we wire it to the row's own advanced
+///     after-cap-root (col 87), the value the legacy 2-of-2 fold produced.
+///
+/// Returns the corrected 38-PI vector (PI[35] re-read from the recomputed after-block
+/// state_commit). The 311-wide trace is patched in place; widen it to the cap-open shape with
+/// [`widen_to_cap_open`].
+pub fn patch_attenuate_base_for_cap_open(
+    trace: &mut [Vec<BabyBear>],
+    pis: &[BabyBear],
+) -> Result<Vec<BabyBear>, String> {
+    use super::columns::state;
+    if trace.is_empty() {
+        return Err("patch_attenuate_base: empty trace".into());
+    }
+    if trace[0].len() != ROT_WIDTH {
+        return Err(format!(
+            "patch_attenuate_base: trace width {} != {ROT_WIDTH}",
+            trace[0].len()
+        ));
+    }
+    if pis.len() < ROT_PI_COUNT {
+        return Err(format!(
+            "patch_attenuate_base: PI vector {} shorter than {ROT_PI_COUNT}",
+            pis.len()
+        ));
+    }
+    let before_nonce_col = STATE_BEFORE_BASE + state::NONCE; // 56
+    let after_nonce_col = STATE_AFTER_BASE + state::NONCE; // 78
+    let after_cap_root_col = STATE_AFTER_BASE + state::CAP_ROOT; // 87
+    let param2_col = super::columns::PARAM_BASE + 2; // 70
+    // The v1 after-state column base + the AUX state-commit intermediate carriers the v1
+    // STATE_COMMIT poseidon lookups bind (cols 98/99/100 → 88): col 98 = hash_many(after[0..4]),
+    // col 99 = hash_many(after[4..8]), col 100 = hash_many(after[8..12]), col 88 =
+    // hash_many([98,99,100]). Patching the nonce changes after[2], so these must recompute.
+    let sa = STATE_AFTER_BASE; // 76
+    let inter1 = super::columns::AUX_BASE + 8; // 98
+    let inter2 = super::columns::AUX_BASE + 9; // 99
+    let inter3 = super::columns::AUX_BASE + 10; // 100
+    let commit_col = sa + state::STATE_COMMIT; // 88
+    for row in trace.iter_mut() {
+        // (1) nonce passthrough — v1 after-nonce + rotated after-block r1 weld.
+        let bn = row[before_nonce_col];
+        row[after_nonce_col] = bn;
+        row[AFTER_BASE + 2] = bn; // the rotated after-block r1 (nonce) weld.
+        // (2) cap-root advance binding: param2 := after.cap_root.
+        row[param2_col] = row[after_cap_root_col];
+        // (3) recompute the v1 after STATE_COMMIT intermediates over the patched nonce.
+        row[inter1] = hash_many(&[row[sa], row[sa + 1], row[sa + 2], row[sa + 3]]);
+        row[inter2] = hash_many(&[row[sa + 4], row[sa + 5], row[sa + 6], row[sa + 7]]);
+        row[inter3] = hash_many(&[row[sa + 8], row[sa + 9], row[sa + 10], row[sa + 11]]);
+        // #62's tuple is arity-4 with the fourth input an explicit const 0, so the digest is
+        // hash_many over FOUR inputs `[i1, i2, i3, 0]` (state[4] = 4, not 3).
+        row[commit_col] =
+            hash_many(&[row[inter1], row[inter2], row[inter3], BabyBear::ZERO]);
+        // (4) recompute the rotated after-block commit chain over the patched limbs.
+        recompute_block_commit(row, AFTER_BASE);
+    }
+    // The corrected PIs: PI[35] re-reads the recomputed last-row after state_commit.
+    let last = &trace[trace.len() - 1];
+    let mut dpis: Vec<BabyBear> = pis[..ROT_PI_COUNT].to_vec();
+    dpis[35] = last[AFTER_BASE + B_STATE_COMMIT];
+    Ok(dpis)
+}
+
+/// Widen an already-built 311-wide rotated attenuate trace to the 369-wide cap-open trace,
+/// filling the 58 cap-open columns on EVERY row uniformly with `w` (so the every-row base
+/// gates — dir-bool, rootPin, targetBind, writeMask — hold on every row, padding included).
+/// The base trace's own 311 columns + 38 PIs are unchanged; the cap-open appendix is purely
+/// additive. The base trace MUST be a 311-wide rotated trace the base `attenuateV3`
+/// constraints already accept (e.g. from [`generate_rotated_effect_vm_trace`] on an
+/// AttenuateCapability turn).
+pub fn widen_to_cap_open(trace: &mut [Vec<BabyBear>], w: &CapOpenWitness) -> Result<(), String> {
+    if trace.is_empty() {
+        return Err("cap-open widen: empty base trace".into());
+    }
+    if trace[0].len() != ROT_WIDTH {
+        return Err(format!(
+            "cap-open widen: base trace width {} != {ROT_WIDTH}",
+            trace[0].len()
+        ));
+    }
+    if w.recomposes() != w.cap_root {
+        return Err("cap-open widen: witness does not recompose its cap_root".into());
+    }
+    for row in trace.iter_mut() {
+        row.resize(CAP_OPEN_WIDTH, BabyBear::ZERO);
+        fill_cap_open(row, CAP_OPEN_BASE, w);
+    }
+    Ok(())
+}
+
 /// The honest transfer-turn caveat manifest the flip test + the cutover use: ONE register
 /// caveat (entry 0, domain registers, key = register 3) and one HEAP-KEY caveat (entry 1,
 /// domain heap, key well beyond u8 range). The remaining slots stay empty.
@@ -509,12 +817,22 @@ mod tests {
     /// names nothing the registry lacks (fail-closed for non-cohort effects).
     #[test]
     fn resolvers_cover_exactly_the_rotated_registry() {
+        // The cap-open member (`capOpenAttenuateV3`) is a SELF-VERIFY-only descriptor: it carries
+        // the 58-column cap-membership appendix and is NOT reached by the effect→descriptor
+        // resolvers (no live effect selects it; the rotated generator widens an attenuate trace
+        // into it explicitly via `widen_to_cap_open`). So it is excluded from the resolver-cohort
+        // completeness audit — the resolvers must still cover EXACTLY the 36 rotated cohort
+        // members.
         let registry: BTreeSet<&str> = V3_STAGED_REGISTRY_TSV
             .lines()
             .filter_map(|l| l.split('\t').next())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && *s != "attenuateCapOpenVmDescriptor2R24")
             .collect();
-        assert_eq!(registry.len(), 36, "the rotated registry has 36 members");
+        assert_eq!(
+            registry.len(),
+            36,
+            "the rotated resolver cohort has 36 members (cap-open is self-verify-only)"
+        );
 
         // Every name the resolvers produce: the 17 selector-mapped base effects, the cap-crown
         // RevokeCapability, the Custom recursive-proof-binding leg, the 8 STEP-1-widened LIVE-path

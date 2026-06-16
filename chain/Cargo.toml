@@ -32,8 +32,11 @@ serde_json = "1"
 blake3 = "1"
 bincode = "1"
 
-# Async runtime
-tokio = { version = "1", features = ["rt", "macros"] }
+# Async runtime (sync: mpsc channels for the listener; time: poll intervals)
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+
+# Structured logging for the event listener
+tracing = "0.1"
 
 # Error handling
 thiserror = "2"

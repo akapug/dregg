@@ -160,6 +160,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-sp1-program"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -614,15 +623,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "dregg-sp1-program"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "serde",
- "sp1-zkvm",
 ]
 
 [[package]]

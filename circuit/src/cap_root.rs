@@ -541,6 +541,105 @@ pub fn empty_capability_root() -> BabyBear {
     compute_capability_root(Vec::new())
 }
 
+/// A **cap-membership opening witness** for the IN-CIRCUIT authority leg: the
+/// genuine 7-field [`CapLeaf`] plus the depth-16 `(sibling, direction)` path that
+/// recomposes the committed `cap_root` from the leaf digest. This is the witness
+/// the `CapMembership` AIR consumes (and the value `full_turn_proof.rs` must pass
+/// in place of the `&[]` placeholder for a cap turn).
+///
+/// It is the Rust twin of the Lean `DeployedCapOpen.CapOpenCols` witness
+/// (`metatheory/Dregg2/Circuit/DeployedCapOpen.lean`): the AIR absorbs the 7 leaf
+/// fields into `leaf_digest` (= [`CapLeaf::digest`] = Lean `capLeafDigest`), folds
+/// up the path via [`recompose_membership`] (= Lean `recomposeUp`, `hash_fact`
+/// nodes mixed by the direction bit), and constrains the top `== cap_root`.
+#[derive(Clone, Debug)]
+pub struct CapMembershipWitness {
+    /// The opened (genuine, held) leaf — its 7 fields ride the chip absorb.
+    pub leaf: CapLeaf,
+    /// Sibling digests along the path from the leaf to the root (bottom-up).
+    pub siblings: Vec<BabyBear>,
+    /// Direction bits (0 = current is LEFT child at this level, 1 = right).
+    pub directions: Vec<u8>,
+    /// The committed cap-tree root the path recomposes to.
+    pub root: BabyBear,
+}
+
+/// **`recompose_membership`** — fold the held leaf's digest up the `(sibling,
+/// direction)` path to the root. The Rust twin of the Lean
+/// `DeployedCapTree.recomposeUp` / `DeployedCapOpen` per-level fold: at each level,
+/// `dir == 0` ⇒ the current node is the LEFT child (`hash_fact(cur, sib)`), else
+/// the RIGHT child (`hash_fact(sib, cur)`). This is EXACTLY the per-level `mix`
+/// the `descriptor_ir2.rs` Merkle-chain AIR computes (lines ~2109-2135), applied to
+/// the 7-field cap leaf rather than the 2-field heap leaf.
+pub fn recompose_membership(leaf_digest: BabyBear, siblings: &[BabyBear], directions: &[u8]) -> BabyBear {
+    assert_eq!(
+        siblings.len(),
+        directions.len(),
+        "membership path: siblings and directions must have equal length"
+    );
+    let mut cur = leaf_digest;
+    for level in 0..siblings.len() {
+        let sib = siblings[level];
+        cur = if directions[level] == 0 {
+            hash_fact(cur, &[sib])
+        } else {
+            hash_fact(sib, &[cur])
+        };
+    }
+    cur
+}
+
+impl CanonicalCapTree {
+    /// Build a [`CapMembershipWitness`] that opens the leaf at `slot_hash` (its
+    /// sort key) in this tree. Returns `None` if no leaf with that slot is present
+    /// (a fabricated leaf has no authenticated position — the in-circuit forgery
+    /// guard). The returned witness's path recomposes THIS tree's root from the
+    /// genuine held leaf's digest.
+    pub fn membership_witness(&self, slot_hash: BabyBear) -> Option<CapMembershipWitness> {
+        let pos = self.position_of(slot_hash)?;
+        let leaf = self.sorted_leaves[pos];
+        let (siblings, directions) = self.prove_membership(pos)?;
+        Some(CapMembershipWitness {
+            leaf,
+            siblings,
+            directions,
+            root: self.root(),
+        })
+    }
+}
+
+impl CapMembershipWitness {
+    /// Check the witness recomposes its committed `root` from the genuine leaf
+    /// digest — the soundness contract the AIR's root-pin constraint enforces
+    /// (Lean `capOpen_membership`). A fabricated leaf or tampered path fails here.
+    pub fn recomposes(&self) -> bool {
+        recompose_membership(self.leaf.digest(), &self.siblings, &self.directions) == self.root
+    }
+
+    /// The **leaf↔effect binding**: the opened leaf's `target` equals the turn's
+    /// `src` cell (folded to a felt). The Rust twin of the Lean `targetBindGate`
+    /// (`leaf.target == src`) — authenticate the ACTOR's cap over `src`, not an
+    /// arbitrary leaf.
+    pub fn target_is(&self, src: BabyBear) -> bool {
+        self.leaf.target == src
+    }
+
+    /// The write-rights binding: the opened leaf's `mask_lo` admits the write bit
+    /// `write_bit` (a submask check `write_bit & mask_lo == write_bit`). The Rust
+    /// twin of the Lean `writeMaskGate` (`write ∈ leaf.mask`).
+    ///
+    /// NB (the deliberate mask-convention reconciliation): the Lean
+    /// `DeployedCapTree.confersWriteLeaf` pins `mask_lo == rightsMaskOf(endpoint
+    /// [read,write])` over the abstract `Auth`-rights mask, whereas the deployed
+    /// `CapLeaf.mask_lo` is the low-16 of an `EffectMask` (cell/facet.rs effect
+    /// bitmap). Aligning the two mask conventions (so the in-circuit write bit IS
+    /// the deployed `mask_lo`'s write-conferring bit) is the documented flag-day
+    /// reconciliation; this checks the submask shape either convention shares.
+    pub fn confers_write(&self, write_bit: u32) -> bool {
+        (write_bit & self.leaf.mask_lo.as_u32()) == write_bit
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,6 +905,87 @@ mod tests {
         assert!(
             tree.revocation_witness(slot_hash(99)).is_none(),
             "a slot not in the tree has no revocation witness"
+        );
+    }
+
+    /// **THE IN-CIRCUIT MEMBERSHIP OPEN (the authority leg's witness).** A
+    /// `membership_witness` opens the genuine held leaf and its depth-16
+    /// `(sibling, direction)` path recomposes the committed root from the leaf
+    /// digest — the EXACT contract the `CapMembership` AIR's root-pin enforces
+    /// and the Lean `capOpen_membership` proves. This is the value
+    /// `full_turn_proof.rs` must pass for a cap turn (killing the `&[]` placeholder).
+    #[test]
+    fn membership_witness_recomposes_to_root() {
+        let held = leaf(7, 0x55, 1, 0xFFFF_FFFF);
+        let other_a = leaf(3, 0x22, 1, 0xFF);
+        let other_b = leaf(42, 0x33, 2, 0x1);
+        let tree = CanonicalCapTree::new(vec![held, other_a, other_b], CAP_TREE_DEPTH);
+
+        let w = tree
+            .membership_witness(held.slot_hash)
+            .expect("held slot present");
+        assert_eq!(w.leaf, held, "the witness opens the genuine held leaf");
+        assert_eq!(w.root, tree.root(), "the witness root is the committed tree root");
+        assert_eq!(w.siblings.len(), CAP_TREE_DEPTH);
+        assert_eq!(w.directions.len(), CAP_TREE_DEPTH);
+        assert!(
+            w.recomposes(),
+            "the depth-16 fold of the held leaf digest MUST reach the committed root (the AIR's root-pin)"
+        );
+    }
+
+    /// The leaf↔effect binding: a witness's opened leaf authenticates its
+    /// `target` against the turn's `src`, and the write submask against `mask_lo`.
+    /// The Rust twin of the Lean `targetBindGate` / `writeMaskGate`.
+    #[test]
+    fn membership_witness_binds_target_and_write() {
+        // A read+write cap (low-16 mask = 0xFFFF) over target byte 0x55.
+        let held = leaf(7, 0x55, 1, 0xFFFF);
+        let tree = CanonicalCapTree::new(vec![held], CAP_TREE_DEPTH);
+        let w = tree.membership_witness(held.slot_hash).unwrap();
+
+        // target binding: the opened leaf's target IS held.target …
+        assert!(w.target_is(held.target), "target binds to the committed leaf");
+        // … and REJECTS an arbitrary other src.
+        let mut other = [0u8; 32];
+        other[0] = 0x99;
+        assert!(
+            !w.target_is(fold_bytes32(&other)),
+            "target binding rejects a non-matching src (not an arbitrary leaf)"
+        );
+
+        // write submask: bit 1 (0x1) is set in mask_lo = 0xFFFF.
+        assert!(w.confers_write(0x1), "a present mask bit passes the write submask");
+        // a bit NOT in the mask is rejected.
+        let narrow = leaf(8, 0x55, 1, 0x1); // mask_lo = 0x1
+        let tree2 = CanonicalCapTree::new(vec![narrow], CAP_TREE_DEPTH);
+        let w2 = tree2.membership_witness(narrow.slot_hash).unwrap();
+        assert!(
+            !w2.confers_write(0x2),
+            "a bit absent from mask_lo fails the write submask (the anti-amplify tooth)"
+        );
+    }
+
+    /// A fabricated leaf or tampered path does NOT recompose to the committed
+    /// root — the in-circuit forgery guard (Lean: a forged leaf makes
+    /// `capOpen_membership` unsatisfiable). We swap the opened leaf's digest by
+    /// mutating a field and check the recompose now misses the root.
+    #[test]
+    fn membership_witness_rejects_forged_leaf() {
+        let held = leaf(7, 0x55, 1, 0xFFFF);
+        let tree = CanonicalCapTree::new(vec![held], CAP_TREE_DEPTH);
+        let mut w = tree.membership_witness(held.slot_hash).unwrap();
+        assert!(w.recomposes(), "genuine witness recomposes");
+
+        // Forge: replace the leaf with a rights-inflated one (different digest)
+        // while keeping the authenticated path. The fold now misses the root.
+        let mut forged = held;
+        forged.mask_lo = BabyBear::new(0xFFFF_u32); // already; bump high instead
+        forged.mask_hi = BabyBear::new(0x1);
+        w.leaf = forged;
+        assert!(
+            !w.recomposes(),
+            "a forged (digest-changed) leaf MUST fail to recompose to the committed root"
         );
     }
 }
