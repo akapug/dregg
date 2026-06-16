@@ -790,14 +790,11 @@ impl TurnExecutor {
                     at_action: vec![],
                 };
             }
-            // 8. Optional STARK transition proof. When present, the proof
-            //    is verified through the same path the executor uses for
-            //    Phase 3 proof-carrying turns (see `verify_and_commit_proof`).
-            //    The PIs bind `old_commitment -> new_commitment +
-            //    effects_hash + cell_id` via `EffectVmAir`. A failed verify
-            //    rejects the entire turn.
+            // 8. Optional STARK transition proof. The v1 hand-AIR witness-STARK verify is
+            //    RETIRED; a sovereign witness carrying a v1 `transition_proof` fails closed on
+            //    every build (the rotated proof-carrying turn is the sovereign attestation path).
             if let Some(proof_bytes) = &witness.transition_proof {
-                #[cfg(not(feature = "recursion"))]
+                #[cfg(not(feature = "prover"))]
                 if let Err(e) = self.verify_sovereign_witness_stark(
                     cell_id,
                     &witness.old_commitment,
@@ -813,7 +810,7 @@ impl TurnExecutor {
                 // Recursion tower: the v1 witness-STARK verify is retired. A sovereign witness
                 // carrying a v1 `transition_proof` cannot be verified here — fail closed (the
                 // rotated proof-carrying turn is the sovereign attestation path).
-                #[cfg(feature = "recursion")]
+                #[cfg(feature = "prover")]
                 {
                     let _ = proof_bytes;
                     return TurnResult::Rejected {

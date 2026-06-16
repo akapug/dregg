@@ -10,7 +10,7 @@ repository.workspace = true
 description = "Whole-history light client: verify ONE succinct IVC aggregate (WholeChainProof) and obtain the AggregateAttests verdict — re-witnessing nothing. The Rust embodiment of Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history."
 
 [dependencies]
-# The recursion feature is in dregg-circuit's default set (carries ivc_turn_chain +
+# The prover feature is in dregg-circuit's default set (carries ivc_turn_chain +
 # verify_turn_chain_recursive + WholeChainProof).
 dregg-circuit = { path = "../circuit" }
 # The REAL supermajority threshold (`2n/3 + 1`) the node's finality rule uses
@@ -24,12 +24,12 @@ dregg-cell = { path = "../cell" }
 # Bucket-F (PATH-PRESERVE Phase 5a): the rotated-leg MINTING recipe
 # (`rotation_witness::mint_rotated_participant_leg`) lives in `dregg-turn` (it drives
 # `rotation_witness::produce` over `Cell`s — `dregg-circuit` cannot host it, the cycle). The demo
-# binary + lib-test fixtures call it, so it is a normal dependency (its `recursion`-gated mint is
+# binary + lib-test fixtures call it, so it is a normal dependency (its `prover`-gated mint is
 # forwarded below).
 dregg-turn = { path = "../turn" }
 
 [features]
-# `recursion` forwards to dregg-circuit's recursion feature (which is in its default set) and gates
+# `prover` forwards to dregg-circuit's prover feature (which is in its default set) and gates
 # the whole-history light client. On by default so `cargo build -p dregg-lightclient` carries it.
-default = ["recursion"]
-recursion = ["dregg-circuit/recursion", "dregg-turn/recursion"]
+default = ["prover"]
+prover = ["dregg-circuit/prover", "dregg-turn/prover"]

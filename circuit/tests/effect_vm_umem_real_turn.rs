@@ -30,7 +30,7 @@
 //! proof is a REAL memory-leg proof of the REAL turn's trace — with the address/value
 //! codecs named as the rotation's remaining realization step.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;

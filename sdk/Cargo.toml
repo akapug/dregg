@@ -37,7 +37,7 @@ dregg-storage = { path = "../storage", optional = true }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 # The light-client artifact (`AttestedHistory`) — the SDK's second
-# user-facing noun. Pure verifier; rides the dregg-circuit recursion
+# user-facing noun. Pure verifier; rides the dregg-circuit prover
 # feature the SDK already carries.
 dregg-lightclient = { path = "../lightclient" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
@@ -74,13 +74,13 @@ zeroize = { workspace = true }
 # consumers (and any embedded callers that only want the cipherclerk/runtime)
 # pass `default-features = false`.
 #
-# `recursion` is in the DEFAULT set: native builds compile the rotated IR-v2
+# `prover` is in the DEFAULT set: native builds compile the rotated IR-v2
 # (R=24) producer + verifier (the cutover's target path; `descriptor_ir2` is
-# present via `dregg-circuit`'s own default `recursion`). Wasm / no-lean-link
+# present via `dregg-circuit`'s own default `prover`). Wasm / no-lean-link
 # verifier builds pass `default-features = false`, so they get NEITHER the SDK
-# rotated wrappers NOR `dregg-circuit/recursion` (the prover-free rotated VERIFY
+# rotated wrappers NOR `dregg-circuit/prover` (the prover-free rotated VERIFY
 # surface they need is C2 of the cutover, ROTATION-CUTOVER §EXEC).
-default = ["federation-client", "network", "captp", "recursion"]
+default = ["federation-client", "network", "captp", "prover"]
 federation-client = ["dep:reqwest"]
 network = ["dep:dregg-wire", "dep:tokio", "dep:futures-core"]
 # `embed-core`: the wire-free `DreggEngine` (executor + ledger + token + proof
@@ -104,10 +104,10 @@ no-lean-link = [
 dev = []
 # STAGED-ADDITIVE (G1): compile the rotated IR-v2 (R=24) turn-proof route beside the live
 # v1 path. OFF by default — the live v1 path stays the byte-identical default. Forwards to
-# `dregg-circuit/recursion` (which compiles `descriptor_ir2`, the rotated prover). Combined
+# `dregg-circuit/prover` (which compiles `descriptor_ir2`, the rotated prover). Combined
 # with the runtime gate `DREGG_ROTATED_PROVER=1` (precedent: `DREGG_DESCRIPTOR_PROVER`); the
 # default keeps the v1 route. The flag-day cutover (default → rotated) is G2, a separate act.
-recursion = ["dregg-circuit/recursion", "dregg-turn/recursion"]
+prover = ["dregg-circuit/prover", "dregg-turn/prover"]
 # Enables `DelegationAuthority::Open`, which accepts any well-signed envelope
 # without an authority check. This is a footgun in production and is gated
 # behind a feature flag so that production builds cannot construct it at all.

@@ -16,7 +16,7 @@
 //! verifier). Under `not(recursion)` the rotated path does not exist, so the
 //! test self-skips.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use dregg_cell::{Cell, CellId, CellMode, Ledger};
 use dregg_sdk::AgentCipherclerk;

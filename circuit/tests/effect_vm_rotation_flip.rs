@@ -33,7 +33,7 @@
 //! Gated on `recursion` (compiles `descriptor_ir2`). SLOW; run with
 //! `cargo test -p dregg-circuit --features recursion rotation_flip -- --nocapture`.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use dregg_cell::commitment::{V9RotationContext, compute_canonical_state_commitment_v9_felt};
 use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};

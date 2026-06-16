@@ -730,7 +730,7 @@ pub fn extract_from_pi(pi: &[BabyBear]) -> (BilateralCounts, BilateralRoots) {
 ///
 /// `recursion`/`verifier`-gated alongside `schedule_block_from_inner_pi` (the only feature configs
 /// that compile the aggregation path).
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn schedule_block_for_cell(
     turn: &Turn,
     cell_id: &CellId,
@@ -810,7 +810,7 @@ pub fn schedule_block_for_cell(
 /// 28 · is_agent 1). Fields OUTSIDE the window (e.g. the unilateral-attestation accumulator at
 /// v1 offset 168/169) stay zero — the sentinel a bilateral-only rotated WR carries, matching the
 /// empty `unilateral_attestations` schedule.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn pi_from_schedule_block(
     block: &[BabyBear; dregg_circuit::bilateral_aggregation_air::sched::WIDTH],
 ) -> Vec<BabyBear> {

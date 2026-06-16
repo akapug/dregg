@@ -120,7 +120,7 @@ pub fn single_transfer() -> (CellState, Vec<Effect>) {
 /// commits are READ FROM A PROVEN PROOF's `"effect-vm-rotated"` leg PI (the trace's
 /// own before/after state-commit carriers, NOT a separately-recomputed v9 — that is
 /// what `verify_full_turn` cross-binds; the C1 reference reads them the same way).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub struct RotatedTurn {
     pub witness: dregg_sdk::full_turn_proof::FullTurnWitness,
     pub old_commit: BabyBear,
@@ -131,7 +131,7 @@ pub struct RotatedTurn {
 /// proof — the exact carriers `verify_full_turn` expects (the C1 reference reads
 /// them this way). Panics if the rotated leg is absent (the recursion path must
 /// produce it).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn rotated_leg_commits(proof: &dregg_sdk::full_turn_proof::FullTurnProof) -> (BabyBear, BabyBear) {
     use dregg_circuit::effect_vm::pi;
     let rot_pi = &proof
@@ -149,7 +149,7 @@ pub fn rotated_leg_commits(proof: &dregg_sdk::full_turn_proof::FullTurnProof) ->
 /// `AgentCipherclerk::prove_sovereign_turn_rotated` (the C1 reference): produce the
 /// before/after rotation witnesses, seed the cap-rooted circuit pre-state, attach
 /// the per-effect rotation manifest. Returns the witness + the post-prove commit PIs.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn rotated_transfer_turn(balance: u64, amount: u64) -> RotatedTurn {
     use dregg_cell::{Cell, CellMode, Ledger};
     use dregg_sdk::full_turn_proof::{FullTurnWitness, RotationTurnWitness};
@@ -212,7 +212,7 @@ pub fn rotated_transfer_turn(balance: u64, amount: u64) -> RotatedTurn {
 /// The rotated-turn workload ladder (transfer amounts), SMOKE-vs-FULL aware.
 /// SMOKE: one transfer. FULL: a 1/4/16-effect-equivalent amount ladder (the
 /// single-cell rotated leg is fixed-height, so size scales via the manifest).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn rotated_turns() -> Vec<(&'static str, RotatedTurn)> {
     if !perf_full() {
         return vec![("transfer_100", rotated_transfer_turn(1_000_000, 100))];

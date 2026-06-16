@@ -35,16 +35,16 @@ impl TurnExecutor {
         // (`sdk::cipherclerk::execute_sovereign_turn_with_proof`) mints a rotated
         // R=24 `Ir2BatchProof` over the cohort descriptor, carrying the v9 felt
         // commitment. When that producer is compiled (native default,
-        // `dregg-circuit/recursion`), verify through `verify_vm_descriptor2` (the
+        // `dregg-circuit/prover`), verify through `verify_vm_descriptor2` (the
         // multi-table batch verifier), NOT the weak hand-AIR `EffectVmAir`. The
         // rotated wire is a postcard-serialized `BatchProof` (no `DREG` magic), so
         // it would (correctly) fail the v1 `stark::proof_from_bytes` — the two
         // halves move together.
-        #[cfg(feature = "recursion")]
+        #[cfg(feature = "prover")]
         {
             self.verify_and_commit_proof_rotated(cell_id, proof_bytes, turn, ledger)
         }
-        #[cfg(not(feature = "recursion"))]
+        #[cfg(not(feature = "prover"))]
         {
             self.verify_and_commit_proof_v1(cell_id, proof_bytes, turn, ledger)
         }
@@ -73,7 +73,7 @@ impl TurnExecutor {
     /// the verifier takes from trusted storage/claim. A tampered post-state commitment
     /// makes PI 35 disagree with the trace's bound carrier ⇒ UNSAT (the anti-ghost
     /// tooth, exercised in `tests/src/sovereign_proof.rs`).
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     pub(super) fn verify_and_commit_proof_rotated(
         &self,
         cell_id: &CellId,
@@ -227,533 +227,31 @@ impl TurnExecutor {
         Ok(())
     }
 
-    /// The legacy v1 hand-AIR (`EffectVmAir`) sovereign verify. Retained behind
-    /// `not(recursion)` for the wasm / no-lean-link verifier builds until the
-    /// prover-free rotated verify surface lands (cutover C2); deleted at C7.
-    #[cfg(not(feature = "recursion"))]
+    /// RETIRED (v1 hand-AIR sovereign verify): the `EffectVmAir` verify+commit leg is
+    /// gone. The live path verifies sovereign transitions through the rotated
+    /// proof-carrying turn (`verify_and_commit_proof` → `verify_and_commit_proof_rotated`,
+    /// `prover`-gated). On a `not(prover)` build the sovereign verify fails closed.
+    #[cfg(not(feature = "prover"))]
     pub(super) fn verify_and_commit_proof_v1(
         &self,
         cell_id: &CellId,
         proof_bytes: &[u8],
         turn: &Turn,
-        ledger: &mut Ledger,
+        _ledger: &mut Ledger,
     ) -> Result<(), TurnError> {
-        use dregg_circuit::effect_vm;
-        use dregg_circuit::field::BabyBear;
-        use dregg_circuit::stark;
-
-        // 1. Get stored commitment (check both legacy sovereign_commitments and registrations).
-        let old_commitment = if let Some(c) = ledger.get_sovereign_commitment(cell_id) {
-            *c
-        } else if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
-            reg.commitment
-        } else {
-            return Err(TurnError::SovereignNotRegistered { cell: *cell_id });
-        };
-
-        // 2. Deserialize the STARK proof.
-        let proof = stark::proof_from_bytes(proof_bytes)
-            .map_err(|e| TurnError::InvalidExecutionProof(e))?;
-
-        // 3. Get the new commitment from the turn.
-        let new_commitment = turn.execution_proof_new_commitment.ok_or_else(|| {
-            TurnError::InvalidExecutionProof(
-                "execution_proof_new_commitment is required".to_string(),
-            )
-        })?;
-
-        // 4. Reconstruct Effect VM public inputs (Stage 1 widened PI layout).
-        //
-        // OLD_COMMIT/NEW_COMMIT are 4 felts each, derived from the full 32-byte
-        // canonical commitment via `commitment_to_4bb` (resolves
-        // REVIEW[effect-vm-coord] / AUDIT P0-2: ~124-bit collision resistance,
-        // replacing the prior 4-byte truncation).
-        let old_commit_4 = Self::commitment_to_4bb(&old_commitment);
-        let new_commit_4 = Self::commitment_to_4bb(&new_commitment);
-
-        // 5. Compute effects hash using the circuit's Poseidon2-based hash
-        // (Stage 1 widened to 4 felts).
-        let vm_effects = convert_turn_effects_to_vm(cell_id, turn);
-        let effects_hash_4 = effect_vm::compute_effects_hash_4(&vm_effects);
-
-        // 6. Compute balance delta from effects.
-        let (delta_mag, delta_sign) = Self::compute_balance_delta_from_effects(cell_id, turn);
-
-        // 7. Count custom effects.
-        let custom_count = vm_effects
-            .iter()
-            .filter(|e| matches!(e, effect_vm::Effect::Custom { .. }))
-            .count();
-
-        // 8. Read per-cell `max_custom_effects` from the cell program
-        // manifest. For now this comes from the sovereign registration's
-        // optional field (Stage 1 added); falls back to the workspace
-        // default if unset (legacy / hosted cells).
-        let max_custom_effects = self.read_cell_max_custom_effects(cell_id, ledger);
-
-        // 8b. Per-cell enforcement: the executor rejects turns whose
-        // custom-effect count exceeds the cell's declared limit. The AIR's
-        // sum-check (Group 7, Stage 1) makes the `PI[CUSTOM_EFFECT_COUNT]`
-        // value algebraically binding; this executor check then enforces
-        // the per-cell ceiling on top of that.
-        if custom_count > max_custom_effects as usize {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "custom_count {} exceeds per-cell max_custom_effects {}",
-                custom_count, max_custom_effects,
-            )));
-        }
-
-        // Federation approved-handoffs root. Stage 1: empty sentinel; Stage 7
-        // populates from federation state.
-        let approved_handoffs_root: [BabyBear; 4] = self.read_approved_handoffs_root();
-
-        // 9. Build the public inputs vector (PI v3 layout).
-        let pi_len =
-            effect_vm::pi::ACTIVE_BASE_COUNT + custom_count * effect_vm::pi::CUSTOM_ENTRY_SIZE;
-        let mut public_inputs: Vec<BabyBear> = vec![BabyBear::ZERO; pi_len];
-        for i in 0..effect_vm::pi::OLD_COMMIT_LEN {
-            public_inputs[effect_vm::pi::OLD_COMMIT_BASE + i] = old_commit_4[i];
-        }
-        for i in 0..effect_vm::pi::NEW_COMMIT_LEN {
-            public_inputs[effect_vm::pi::NEW_COMMIT_BASE + i] = new_commit_4[i];
-        }
-        for i in 0..effect_vm::pi::EFFECTS_HASH_LEN {
-            public_inputs[effect_vm::pi::EFFECTS_HASH_BASE + i] = effects_hash_4[i];
-        }
-        public_inputs[effect_vm::pi::INIT_BAL_LO] = BabyBear::ZERO; // pinned from trace
-        public_inputs[effect_vm::pi::INIT_BAL_HI] = BabyBear::ZERO; // pinned from trace
-        public_inputs[effect_vm::pi::FINAL_BAL_LO] = BabyBear::ZERO; // pinned from trace
-        public_inputs[effect_vm::pi::FINAL_BAL_HI] = BabyBear::ZERO; // pinned from trace
-        public_inputs[effect_vm::pi::NET_DELTA_MAG] = BabyBear::new(delta_mag);
-        public_inputs[effect_vm::pi::NET_DELTA_SIGN] = BabyBear::new(delta_sign);
-        public_inputs[effect_vm::pi::CURRENT_BLOCK_HEIGHT] =
-            BabyBear::new((self.block_height & 0x7FFF_FFFF) as u32);
-        public_inputs[effect_vm::pi::MAX_CUSTOM_EFFECTS] = BabyBear::new(max_custom_effects as u32);
-        public_inputs[effect_vm::pi::CUSTOM_EFFECT_COUNT] = BabyBear::new(custom_count as u32);
-        for i in 0..effect_vm::pi::APPROVED_HANDOFFS_LEN {
-            public_inputs[effect_vm::pi::APPROVED_HANDOFFS_BASE + i] = approved_handoffs_root[i];
-        }
-
-        // Stage 7-γ.0c: populate the four turn-identity PI slots from the
-        // canonical Turn. These are the same values every per-cell proof
-        // of this turn must carry; the verifier rejects any mismatch.
-        let (turn_hash_4, effects_hash_global_4, actor_nonce, prev_receipt_4) =
-            Self::compute_turn_identity_pi(turn);
-        for i in 0..effect_vm::pi::TURN_HASH_LEN {
-            public_inputs[effect_vm::pi::TURN_HASH_BASE + i] = turn_hash_4[i];
-        }
-        for i in 0..effect_vm::pi::EFFECTS_HASH_GLOBAL_LEN {
-            public_inputs[effect_vm::pi::EFFECTS_HASH_GLOBAL_BASE + i] = effects_hash_global_4[i];
-        }
-        public_inputs[effect_vm::pi::ACTOR_NONCE] =
-            BabyBear::new((actor_nonce & 0x7FFF_FFFF) as u32);
-        for i in 0..effect_vm::pi::PREVIOUS_RECEIPT_HASH_LEN {
-            public_inputs[effect_vm::pi::PREVIOUS_RECEIPT_HASH_BASE + i] = prev_receipt_4[i];
-        }
-
-        // Stage 7-γ.2 Phase 1: bilateral cross-cell PI fields. Each per-cell
-        // proof carries its own outbound/inbound counts and accumulator
-        // roots over Transfer / Grant / Introduce. The verifier's off-AIR
-        // cross-cell match loop recomputes the expected schedule from
-        // (call_forest, ACTOR_NONCE) and rejects any per-cell PI that
-        // disagrees. See `STAGE-7-GAMMA-2-PI-DESIGN.md` §3-4.
-        {
-            use crate::bilateral_schedule::{ExpectedBilateral, project_into_pi};
-            let schedule = ExpectedBilateral::from_turn(turn);
-            let counts = schedule.counts_for(cell_id);
-            let roots = schedule.roots_for(cell_id, actor_nonce);
-            project_into_pi(&mut public_inputs, &counts, &roots);
-
-            // IS_AGENT_CELL: 1 iff this per-cell proof is the actor's
-            // (signer's) cell. The agent's row-0 NONCE column is pinned
-            // to PI[ACTOR_NONCE] in single-cell proofs today; in multi-
-            // cell bundles the non-agent cells are exempt from that pin
-            // — see verifier's bundle check.
-            public_inputs[effect_vm::pi::IS_AGENT_CELL] = if cell_id == &turn.agent {
-                BabyBear::new(1)
-            } else {
-                BabyBear::ZERO
-            };
-        }
-
-        // γ.2 follow-up (#131 + #132): bind the federation id + owner cell id
-        // into the per-cell PI. These are reconstructed here from TRUSTED
-        // inputs — the executor's `local_federation_id` and the cell whose
-        // proof we are verifying — so a proof minted under a different
-        // federation (or for a different owner cell) fails the PI-match loop
-        // below: its claimed PI[FEDERATION_ID]/PI[OWNER_CELL_ID] won't equal
-        // the commitments we recompute here. The AIR's row-0 boundary
-        // additionally pins these PI slots to the proof's own trace, so the
-        // prover cannot decouple the claimed federation/owner from what the
-        // trace committed. Closes the cross-federation / cross-cell proof
-        // substitution gap (#131/#132).
-        {
-            use dregg_commit::typed::canonical_32_to_felts_4;
-            let fed_id_4 = canonical_32_to_felts_4(&self.local_federation_id);
-            let owner_id_4 = canonical_32_to_felts_4(cell_id.as_bytes());
-            for i in 0..effect_vm::pi::FEDERATION_ID_LEN {
-                public_inputs[effect_vm::pi::FEDERATION_ID_BASE + i] = fed_id_4[i];
-            }
-            for i in 0..effect_vm::pi::OWNER_CELL_ID_LEN {
-                public_inputs[effect_vm::pi::OWNER_CELL_ID_BASE + i] = owner_id_4[i];
-            }
-        }
-
-        // D5: NoteSpend nullifier CROSS-BINDING (approach A) — off-AIR
-        // equality. Reconstruct PI[NOTESPEND_NULLIFIER] from the trusted
-        // nullifier source so the PI-match loop below rejects any EffectVM
-        // proof whose folded NoteSpend param0 disagrees.
-        //
-        // Source priority (mirrors the FEDERATION_ID/OWNER_CELL_ID cross-
-        // proof pattern above — reconstruct from the trusted side, then let
-        // the PI-match loop enforce equality):
-        //
-        //   (1) If the turn carries a `SCHEMA_NOTE_SPEND` binding proof for a
-        //       NoteSpend effect, take that proof's CERTIFIED nullifier
-        //       (fields[0]) — the proof that enforces the nullifier against
-        //       the spent note's preimage (note_spending_air) and is itself
-        //       STARK-verified + PI-matched in
-        //       `verify_effect_binding_proofs`. Folding it with the SAME
-        //       `fold_bytes32_to_bb` the trace uses yields the param0 the AIR
-        //       must carry. This is the real cross-proof weld: a malicious
-        //       executor that proves nullifier N via the binding/spending
-        //       proof but feeds a different M into the EffectVM gets
-        //       param0 = fold(M) ≠ fold(N) = PI[NOTESPEND_NULLIFIER], so the
-        //       AIR's gated boundary fails (if it lies in PI) or this PI-match
-        //       fails (if PI ≠ fold(N)).
-        //
-        //   (2) Otherwise (no binding proof — backwards-compat path), fall
-        //       back to the runtime NoteSpend's own nullifier. The AIR + PI
-        //       still pin param0 to the runtime value (no NEW rejection beyond
-        //       the existing executor trust), but the cross-PROOF certification
-        //       only kicks in once a binding proof is supplied.
-        //
-        // Sentinel ZERO when this cell's proof carries no NoteSpend row.
-        if let Some(nullifier_bb) = self.expected_notespend_nullifier_bb(cell_id, turn, &vm_effects)
-        {
-            public_inputs[effect_vm::pi::NOTESPEND_NULLIFIER] = nullifier_bb;
-        }
-
-        // D5b: NoteCreate commitment CROSS-BINDING (approach A) — off-AIR
-        // equality. Same shape as the NoteSpend weld above: reconstruct
-        // PI[NOTECREATE_COMMITMENT] from the SCHEMA_NOTE_CREATE binding
-        // proof's certified commitment (fields[0]) when present, else fall
-        // back to the runtime NoteCreate's commitment. The PI-match loop
-        // below rejects any EffectVM proof whose folded NoteCreate param0
-        // disagrees, welding the EffectVM's debited note-creation to the
-        // commitment the binding proof validated against its value/asset/
-        // range opening. Sentinel ZERO when this cell's proof carries no
-        // NoteCreate row.
-        if let Some(commitment_bb) = self.expected_notecreate_commitment_bb(turn, &vm_effects) {
-            public_inputs[effect_vm::pi::NOTECREATE_COMMITMENT] = commitment_bb;
-        }
-
-        // D5c: Burn target CROSS-BINDING (approach A) — off-AIR equality.
-        // Reconstruct PI[BURN_TARGET_PI] from the SCHEMA_BURN binding proof's
-        // certified target (fields[0]) when present, else from the runtime
-        // Burn's target. The binding proof validates `old - new == amount`
-        // for THAT target against the ledger snapshot, so welding the
-        // EffectVM's burn param0 to it forbids proving the arithmetic for one
-        // cell while attributing the burn to another. Sentinel ZERO when this
-        // cell's proof carries no Burn row.
-        if let Some(target_bb) = self.expected_burn_target_bb(turn, &vm_effects) {
-            public_inputs[effect_vm::pi::BURN_TARGET_PI] = target_bb;
-        }
-
-        // ---- PI v3 tail (THE ROTATION) ----
-        //
-        // Surface the committed-height commitment limb and the staged caveat
-        // tags. The committed height is read from the cell's state (not
-        // prover-chosen), closing the temporal-gate anti-ghost tooth. The
-        // rate-bound / challenge-window tags are zero sentinels today; the
-        // optimistic-proving / dispute machinery (#169) will populate them.
-        let committed_height = ledger
-            .get(cell_id)
-            .map(|c| c.state.committed_height())
-            .unwrap_or(0);
-        public_inputs[effect_vm::pi::v3::COMMITTED_HEIGHT] =
-            BabyBear::new((committed_height & 0x7FFF_FFFF) as u32);
-        public_inputs[effect_vm::pi::v3::RATE_BOUND_TAG] = BabyBear::ZERO;
-        public_inputs[effect_vm::pi::v3::CHALLENGE_WINDOW_TAG] = BabyBear::ZERO;
-
-        // Sovereign-witness AIR teeth (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2):
-        //
-        // This path (`verify_and_commit_proof`) is the proof-carrying path
-        // where `turn.execution_proof` is `Some`. The cell IS sovereign, so
-        // we set IS_SOVEREIGN_CELL == 1 and bind the cell's owning-pubkey
-        // hash + witness-sequence into PI. The PI-matching loop below
-        // catches any prover-side divergence. The prover (cipherclerk's
-        // `execute_sovereign_turn_with_proof`) populates the same slots
-        // from the same source (cell.public_key); the boundary constraint
-        // in the AIR catches any in-trace deviation.
-        //
-        // Phase 2: the execution_proof itself IS the transition proof in
-        // this path. We bind its Poseidon2 hash + the Effect VM AIR's
-        // VK hash (sentinel zero today; populated when the recursive
-        // verifier ships a stable VK).
-        Self::populate_sovereign_witness_pi(
-            &mut public_inputs,
-            cell_id,
-            ledger,
-            None,              // no witness object on the proof-carrying path
-            Some(proof_bytes), // execution_proof IS the transition proof
-        );
-
-        // Append custom proof entries (vk_hash + proof_commitment per custom
-        // effect). PI layout v3 (`effect_vm::pi::VK_PI_LAYOUT_VERSION == 3`):
-        // 8 felts vk_hash + 4 felts proof_commit per entry, appended after the
-        // 3-slot v3 tail. Pre-v2 layouts used a 4-felt low-half vk_hash and
-        // zero-padded the upper 16 bytes at registry-lookup time — that path
-        // is removed (closes AIR-SOUNDNESS-AUDIT.md #70).
-        let mut custom_idx = 0;
-        for effect in &vm_effects {
-            if let effect_vm::Effect::Custom {
-                program_vk_hash,
-                proof_commitment,
-            } = effect
-            {
-                let base = effect_vm::pi::CUSTOM_PROOFS_BASE
-                    + custom_idx * effect_vm::pi::CUSTOM_ENTRY_SIZE;
-                for j in 0..8 {
-                    public_inputs[base + j] = program_vk_hash[j];
-                }
-                for j in 0..4 {
-                    public_inputs[base + 8 + j] = proof_commitment[j];
-                }
-                custom_idx += 1;
-            }
-        }
-
-        // INIT/FINAL_BAL_* are sourced from the proof's PIs (the trace pins
-        // them at boundaries and Group 6 binds them algebraically). We copy
-        // them now so the PI matching loop below doesn't trip on zero.
-        if proof.public_inputs.len() >= effect_vm::pi::ACTIVE_BASE_COUNT {
-            public_inputs[effect_vm::pi::INIT_BAL_LO] =
-                BabyBear::new_canonical(proof.public_inputs[effect_vm::pi::INIT_BAL_LO]);
-            public_inputs[effect_vm::pi::INIT_BAL_HI] =
-                BabyBear::new_canonical(proof.public_inputs[effect_vm::pi::INIT_BAL_HI]);
-            public_inputs[effect_vm::pi::FINAL_BAL_LO] =
-                BabyBear::new_canonical(proof.public_inputs[effect_vm::pi::FINAL_BAL_LO]);
-            public_inputs[effect_vm::pi::FINAL_BAL_HI] =
-                BabyBear::new_canonical(proof.public_inputs[effect_vm::pi::FINAL_BAL_HI]);
-        }
-
-        // 9. Validate proof PI count and verify PI matching.
-        let expected_pi_count = public_inputs.len();
-        let vk_hash = self.get_cell_vk_hash(cell_id, ledger);
-        let has_custom_program = vk_hash.is_some();
-
-        // For the default EffectVmAir path, verify reconstructed PIs match the proof.
-        // Custom programs have their own PI layout — skip this check for them.
-        if !has_custom_program {
-            if proof.public_inputs.len() < expected_pi_count {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "proof has {} public inputs, expected at least {}",
-                    proof.public_inputs.len(),
-                    expected_pi_count
-                )));
-            }
-
-            for (i, expected_bb) in public_inputs.iter().enumerate() {
-                let got = BabyBear::new_canonical(proof.public_inputs[i]);
-                if got != *expected_bb {
-                    // Stage 1: PI layout has 4-felt slots for OLD_COMMIT,
-                    // NEW_COMMIT, EFFECTS_HASH; index ranges identify which.
-                    if (effect_vm::pi::OLD_COMMIT_BASE
-                        ..effect_vm::pi::OLD_COMMIT_BASE + effect_vm::pi::OLD_COMMIT_LEN)
-                        .contains(&i)
-                    {
-                        return Err(TurnError::SovereignCommitmentMismatch {
-                            cell: *cell_id,
-                            expected: old_commitment,
-                            got: new_commitment,
-                        });
-                    } else if (effect_vm::pi::NEW_COMMIT_BASE
-                        ..effect_vm::pi::NEW_COMMIT_BASE + effect_vm::pi::NEW_COMMIT_LEN)
-                        .contains(&i)
-                    {
-                        return Err(TurnError::InvalidExecutionProof(format!(
-                            "new_commitment in proof does not match claimed value (felt {} of 4)",
-                            i - effect_vm::pi::NEW_COMMIT_BASE,
-                        )));
-                    } else if (effect_vm::pi::EFFECTS_HASH_BASE
-                        ..effect_vm::pi::EFFECTS_HASH_BASE + effect_vm::pi::EFFECTS_HASH_LEN)
-                        .contains(&i)
-                    {
-                        return Err(TurnError::EffectsHashMismatch {
-                            expected: Self::babybear_pair_to_bytes32(
-                                effects_hash_4[0],
-                                effects_hash_4[1],
-                            ),
-                            got: Self::babybear_pair_to_bytes32(
-                                BabyBear::new_canonical(
-                                    proof.public_inputs[effect_vm::pi::EFFECTS_HASH_BASE],
-                                ),
-                                BabyBear::new_canonical(
-                                    proof.public_inputs[effect_vm::pi::EFFECTS_HASH_BASE + 1],
-                                ),
-                            ),
-                        });
-                    } else {
-                        return Err(TurnError::InvalidExecutionProof(format!(
-                            "public input mismatch at index {} (expected {:?}, got {:?})",
-                            i, expected_bb, got
-                        )));
-                    }
-                }
-            }
-        }
-
-        // 11. Verify the STARK proof.
-        if let Some(vk) = vk_hash {
-            if let Some(program) = self.program_registry.get(&vk) {
-                // Custom programs define their own PI layout. Extract PIs from
-                // the proof itself (the program's verifier will check them).
-                let custom_pis: Vec<BabyBear> = proof
-                    .public_inputs
-                    .iter()
-                    .map(|&v| BabyBear::new_canonical(v))
-                    .collect();
-                program
-                    .verify_transition(&custom_pis, proof_bytes)
-                    .map_err(|e| TurnError::ProofVerificationFailed(e.to_string()))?;
-            } else {
-                return Err(TurnError::ProofVerificationFailed(format!(
-                    "cell has verification_key_hash {:02x}{:02x}... but no matching program is deployed",
-                    vk[0], vk[1]
-                )));
-            }
-        } else {
-            let air = dregg_circuit::EffectVmAir::new(proof.trace_len);
-            stark::verify(&air, &proof, &public_inputs)
-                .map_err(|e| TurnError::ProofVerificationFailed(e))?;
-        }
-
-        // 12. Verify custom program proofs (CellProgram dispatch).
-        if let Some(custom_proofs) = turn.custom_program_proofs.as_ref() {
-            let custom_commitments =
-                dregg_circuit::extract_custom_proof_commitments(&public_inputs);
-            if custom_commitments.len() != custom_proofs.len() {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "custom proof count mismatch: PI declares {}, turn provides {}",
-                    custom_commitments.len(),
-                    custom_proofs.len()
-                )));
-            }
-            for (i, ((vk_hash_elems, proof_commit_elems), custom_proof)) in custom_commitments
-                .iter()
-                .zip(custom_proofs.iter())
-                .enumerate()
-            {
-                // PI layout v2: vk_hash_elems is 8 felts (full 32B). The
-                // pre-v2 zero-padded `expand_vk_hash_16_to_32` path is
-                // removed — registry dispatch now reads the entire 32-byte
-                // key (AIR-SOUNDNESS-AUDIT.md #70).
-                let actual_proof_hash = Self::hash_custom_proof(&custom_proof.proof_bytes);
-                let expected_commit = Self::babybear4_to_bytes16(proof_commit_elems);
-                if actual_proof_hash != expected_commit {
-                    return Err(TurnError::CustomProofCommitmentMismatch {
-                        index: i,
-                        expected: expected_commit,
-                        got: actual_proof_hash,
-                    });
-                }
-                let full_vk_hash = Self::babybear8_to_bytes32(vk_hash_elems);
-
-                // Per VK-AS-RE-EXECUTION-RECIPE.md §2.4 / §v2: the
-                // `Effect::Custom { vk_hash }` is dispatched through
-                // the canonical `CustomEffectRegistry` when one is
-                // wired. Apps that register an entry there get a
-                // unified custom-verifier surface (parallel to
-                // `WitnessedPredicateKind::Custom { vk_hash }`'s
-                // dispatch). When the registry is absent or the
-                // hash isn't registered there, the executor falls
-                // back to the legacy `program_registry` path
-                // (DSL-authored cells).
-                //
-                // TODO[vk-v2]: This dispatch path resolves vk_hash via
-                // `CustomEffectRegistry::contains`; the registry now
-                // stores v2 layered hashes (§v2.6). Callers must register
-                // verifiers under their v2 hash for this to find them.
-                // No code change needed here — the dispatch is correct;
-                // this is a documentation marker so callers know the
-                // bound contract has bumped from v1 to v2.
-                if let Some(reg) = self.custom_effect_registry.as_ref() {
-                    if reg.contains(&full_vk_hash) {
-                        // The CustomEffectRegistry verifier takes
-                        // serialized public inputs; we postcard-encode
-                        // the BabyBear PI vector for transport. The
-                        // verifier's own decoder reproduces the felts.
-                        let pi_bytes =
-                            postcard::to_allocvec(&custom_proof.public_inputs_babybear())
-                                .unwrap_or_default();
-                        reg.verify(&full_vk_hash, &pi_bytes, &custom_proof.proof_bytes)
-                            .map_err(|e| TurnError::CustomProgramVerificationFailed {
-                                index: i,
-                                program_vk: full_vk_hash,
-                                reason: e.to_string(),
-                            })?;
-                        continue;
-                    }
-                }
-
-                if let Some(program) = self.program_registry.get(&full_vk_hash) {
-                    program
-                        .verify_transition(
-                            &custom_proof.public_inputs_babybear(),
-                            &custom_proof.proof_bytes,
-                        )
-                        .map_err(|e| TurnError::CustomProgramVerificationFailed {
-                            index: i,
-                            program_vk: full_vk_hash,
-                            reason: e.to_string(),
-                        })?;
-                } else {
-                    return Err(TurnError::CustomProgramNotFound {
-                        index: i,
-                        vk_hash: full_vk_hash,
-                    });
-                }
-            }
-        } else {
-            let custom_commitments =
-                dregg_circuit::extract_custom_proof_commitments(&public_inputs);
-            if !custom_commitments.is_empty() {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "Effect VM proof declares {} custom effects but turn provides no custom proofs",
-                    custom_commitments.len()
-                )));
-            }
-        }
-
-        // 13. Update commitment. Try the legacy map first, then registrations.
-        if ledger.is_sovereign(cell_id) {
-            let _ = ledger.update_sovereign_commitment(cell_id, new_commitment);
-        } else {
-            let _ = ledger.update_sovereign_registration_commitment(
-                cell_id,
-                old_commitment,
-                new_commitment,
-                self.block_height,
-            );
-        }
-
-        Ok(())
+        let _ = (cell_id, proof_bytes, turn);
+        Err(TurnError::InvalidExecutionProof(
+            "v1 hand-AIR sovereign verify is retired; sovereign transitions verify through the \
+             rotated proof-carrying turn"
+                .to_string(),
+        ))
     }
 
-    /// Verify a sovereign-witness STARK transition proof (v1 hand-AIR floor).
-    ///
-    /// Mirrors `dregg_cell::peer_exchange::PeerExchange::verify_stark_transition`:
-    /// deserializes the proof, widens the 32-byte commitments to 4 BabyBear
-    /// felts each, overrides the proof's commitment PIs with verifier-
-    /// derived values, and verifies via `EffectVmAir`. A divergence on
-    /// commitment slots surfaces as `InvalidExecutionProof`.
-    ///
-    /// `not(recursion)`-only: the recursion tower verifies sovereign transitions through the
-    /// rotated proof-carrying turn (`verify_and_commit_proof` → `verify_and_commit_proof_rotated`),
-    /// not the v1 witness-STARK; a v1 `transition_proof` presented to a recursion build is rejected
-    /// at the `execute.rs` call site rather than verified here.
-    #[cfg(not(feature = "recursion"))]
+    /// RETIRED (v1 sovereign-witness STARK verify): the `EffectVmAir` witness-STARK verify
+    /// is gone. The recursion tower verifies sovereign transitions through the rotated
+    /// proof-carrying turn; a v1 `transition_proof` is rejected at the `execute.rs` call
+    /// site rather than verified here.
+    #[cfg(not(feature = "prover"))]
     pub(super) fn verify_sovereign_witness_stark(
         &self,
         _cell_id: &CellId,
@@ -762,95 +260,12 @@ impl TurnExecutor {
         effects_hash: &[u8; 32],
         proof_bytes: &[u8],
     ) -> Result<(), TurnError> {
-        use dregg_circuit::effect_vm::pi;
-        use dregg_circuit::field::BabyBear;
-        use dregg_circuit::stark;
-
-        let proof = stark::proof_from_bytes(proof_bytes)
-            .map_err(|e| TurnError::InvalidExecutionProof(e))?;
-
-        let old_commit_4 = Self::commitment_to_4bb(old_commitment);
-        let new_commit_4 = Self::commitment_to_4bb(new_commitment);
-        let effects_hash_4 = Self::commitment_to_4bb(effects_hash);
-
-        let min_pi_count = pi::ACTIVE_BASE_COUNT;
-        if proof.public_inputs.len() < min_pi_count {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "sovereign witness STARK proof has {} public inputs, expected at least {} \
-                 (PI v3 layout)",
-                proof.public_inputs.len(),
-                min_pi_count
-            )));
-        }
-
-        // Build PIs from the proof; override the commitment slots with
-        // verifier-derived values. The AIR's transition constraints bind
-        // the other PIs to the trace, so trusting them is safe.
-        let mut public_inputs: Vec<BabyBear> = (0..min_pi_count)
-            .map(|i| BabyBear::new_canonical(proof.public_inputs[i]))
-            .collect();
-        for i in 0..pi::OLD_COMMIT_LEN {
-            public_inputs[pi::OLD_COMMIT_BASE + i] = old_commit_4[i];
-        }
-        for i in 0..pi::NEW_COMMIT_LEN {
-            public_inputs[pi::NEW_COMMIT_BASE + i] = new_commit_4[i];
-        }
-        for i in 0..pi::EFFECTS_HASH_LEN {
-            public_inputs[pi::EFFECTS_HASH_BASE + i] = effects_hash_4[i];
-        }
-
-        // Append custom-effect entries from the proof's PIs (the AIR
-        // constrains CUSTOM_EFFECT_COUNT to match the trace, so trusting
-        // the proof's declared count here is sound).
-        let custom_count_val = public_inputs[pi::CUSTOM_EFFECT_COUNT].as_u32() as usize;
-        for i in 0..custom_count_val {
-            let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
-            if base + pi::CUSTOM_ENTRY_SIZE > proof.public_inputs.len() {
-                break;
-            }
-            for j in 0..pi::CUSTOM_ENTRY_SIZE {
-                public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
-            }
-        }
-
-        // Verify commitment PIs declared by the proof match what we expect.
-        for i in 0..pi::OLD_COMMIT_LEN {
-            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::OLD_COMMIT_BASE + i]);
-            if proof_v != old_commit_4[i] {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "sovereign witness STARK old_commitment mismatch at felt {}",
-                    i
-                )));
-            }
-        }
-        for i in 0..pi::NEW_COMMIT_LEN {
-            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::NEW_COMMIT_BASE + i]);
-            if proof_v != new_commit_4[i] {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "sovereign witness STARK new_commitment mismatch at felt {}",
-                    i
-                )));
-            }
-        }
-        for i in 0..pi::EFFECTS_HASH_LEN {
-            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + i]);
-            if proof_v != effects_hash_4[i] {
-                return Err(TurnError::EffectsHashMismatch {
-                    expected: *effects_hash,
-                    got: Self::commitment_4bb_to_bytes([
-                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE]),
-                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + 1]),
-                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + 2]),
-                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + 3]),
-                    ]),
-                });
-            }
-        }
-
-        let air = dregg_circuit::EffectVmAir::new(proof.trace_len);
-        stark::verify(&air, &proof, &public_inputs)
-            .map_err(|e| TurnError::ProofVerificationFailed(e))?;
-        Ok(())
+        let _ = (old_commitment, new_commitment, effects_hash, proof_bytes);
+        Err(TurnError::InvalidExecutionProof(
+            "v1 sovereign-witness STARK verify is retired; sovereign transitions verify through \
+             the rotated proof-carrying turn"
+                .to_string(),
+        ))
     }
 
     /// Stage 7-γ.0d: cross-proof PI matching for a bundle of per-cell proofs
@@ -1504,8 +919,8 @@ impl TurnExecutor {
     ///
     /// V1-only: consumed exclusively by `verify_and_commit_proof_v1` (the rotated
     /// verifier reconstructs PIs from the trace generator, not these per-effect
-    /// cross-binding helpers). Dead under `recursion`; deleted with the v1 leg at C7.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    /// cross-binding helpers). Dead under `prover`; deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     fn expected_notespend_nullifier_bb(
         &self,
         _cell_id: &CellId,
@@ -1559,7 +974,7 @@ impl TurnExecutor {
     ///      `verify_effect_binding_proofs` STARK-verifies + PI-matches against
     ///      its value/asset/range opening); failing that
     ///   2. the runtime NoteCreate effect's own commitment (backwards compat).
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     fn expected_notecreate_commitment_bb(
         &self,
         turn: &Turn,
@@ -1601,7 +1016,7 @@ impl TurnExecutor {
     ///      balance arithmetic `verify_effect_binding_proofs_with_ledger`
     ///      validates against the ledger snapshot); failing that
     ///   2. the runtime Burn effect's own target (backwards compat).
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     fn expected_burn_target_bb(
         &self,
         turn: &Turn,
@@ -1856,7 +1271,7 @@ impl TurnExecutor {
     /// multi-cell aggregation callers (Stage 7-γ.1+) a stable entry point.
     ///
     /// v1 floor only (takes a v1 `EffectVmAir` `StarkProof` bundle).
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     pub fn verify_bundle_with_stark(
         bundle: &[(
             dregg_circuit::stark::StarkProof,
@@ -1872,7 +1287,7 @@ impl TurnExecutor {
     /// who carry a Burn binding proof in `turn.effect_binding_proofs`.
     ///
     /// v1 floor only (takes a v1 `EffectVmAir` `StarkProof` bundle).
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     pub fn verify_bundle_with_stark_and_ledger(
         bundle: &[(
             dregg_circuit::stark::StarkProof,
@@ -1881,13 +1296,13 @@ impl TurnExecutor {
         turn: Option<&Turn>,
         ledger: Option<&Ledger>,
     ) -> Result<(), TurnError> {
-        use dregg_circuit::stark;
-
-        for (i, (proof, pis)) in bundle.iter().enumerate() {
-            let air = dregg_circuit::EffectVmAir::new(proof.trace_len);
-            stark::verify(&air, proof, pis).map_err(|e| {
-                TurnError::ProofVerificationFailed(format!("bundle proof {}: {}", i, e))
-            })?;
+        // The v1 hand-AIR (`EffectVmAir`) per-proof STARK verify is RETIRED; a v1
+        // `StarkProof` bundle fails closed (rotated bundles verify through the rotated
+        // proof-carrying path).
+        if !bundle.is_empty() {
+            return Err(TurnError::ProofVerificationFailed(
+                "v1 hand-AIR StarkProof bundle verify is retired".to_string(),
+            ));
         }
         let pi_vecs: Vec<Vec<_>> = bundle.iter().map(|(_, pis)| pis.clone()).collect();
         Self::verify_proof_carrying_turn_bundle_with_ledger(&pi_vecs, turn, ledger)
@@ -1904,8 +1319,8 @@ impl TurnExecutor {
     /// `cell::CellProgram::max_custom_effects` directly.
     ///
     /// V1-only (consumed by `verify_and_commit_proof_v1`'s PI reconstruction);
-    /// dead under `recursion`, deleted with the v1 leg at C7.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    /// dead under `prover`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn read_cell_max_custom_effects(&self, cell_id: &CellId, ledger: &Ledger) -> u8 {
         if let Some(reg) = ledger.get_sovereign_registration(cell_id) {
             if let Some(m) = reg.max_custom_effects {
@@ -1922,8 +1337,8 @@ impl TurnExecutor {
     /// emitters land. Per `DESIGN-captp-integration.md` §4.2.
     ///
     /// V1-only (consumed by `verify_and_commit_proof_v1`'s PI reconstruction);
-    /// dead under `recursion`, deleted with the v1 leg at C7.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    /// dead under `prover`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn read_approved_handoffs_root(&self) -> [dregg_circuit::field::BabyBear; 4] {
         [dregg_circuit::field::BabyBear::ZERO; 4]
     }
@@ -1950,8 +1365,8 @@ impl TurnExecutor {
 
     /// Convert 4 BabyBear elements to a 16-byte array (for custom proof commitment matching).
     /// V1-only (the rotated verify path reconstructs PIs from the trace generator); dead under
-    /// `recursion`, deleted with the v1 leg at C7.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    /// `prover`.
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn babybear4_to_bytes16(elems: &[dregg_circuit::field::BabyBear; 4]) -> [u8; 16] {
         let mut result = [0u8; 16];
         for (i, elem) in elems.iter().enumerate() {
@@ -1967,7 +1382,7 @@ impl TurnExecutor {
     /// `expand_vk_hash_16_to_32` (zero-padded upper 16 bytes), giving 80-bit
     /// effective security in a 128-bit system. The full 32-byte form
     /// distinguishes VK hashes whose lower 16 bytes collide.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn babybear8_to_bytes32(elems: &[dregg_circuit::field::BabyBear; 8]) -> [u8; 32] {
         let mut result = [0u8; 32];
         for (i, elem) in elems.iter().enumerate() {
@@ -1977,7 +1392,7 @@ impl TurnExecutor {
     }
 
     /// Hash custom proof bytes to produce a 16-byte commitment (matching BabyBear[4]).
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn hash_custom_proof(proof_bytes: &[u8]) -> [u8; 16] {
         let h = blake3::hash(proof_bytes);
         let bytes = h.as_bytes();
@@ -2182,7 +1597,7 @@ impl TurnExecutor {
     }
 
     /// Encode two BabyBear elements as a [u8; 32] for error reporting.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn babybear_pair_to_bytes32(
         lo: dregg_circuit::field::BabyBear,
         hi: dregg_circuit::field::BabyBear,
@@ -2297,8 +1712,8 @@ impl TurnExecutor {
     /// Returns (magnitude_u32, sign_u32) where sign=0 means positive/incoming,
     /// sign=1 means negative/outgoing.
     /// V1-only (the rotated verify reconstructs balance PIs from the trace generator);
-    /// dead under `recursion`, deleted with the v1 leg at C7.
-    #[cfg_attr(feature = "recursion", allow(dead_code))]
+    /// dead under `prover`, deleted with the v1 leg at C7.
+    #[cfg_attr(feature = "prover", allow(dead_code))]
     pub(super) fn compute_balance_delta_from_effects(cell_id: &CellId, turn: &Turn) -> (u32, u32) {
         fn walk_delta(tree: &CallTree, cell_id: &CellId, net: &mut i64) {
             for effect in &tree.action.effects {

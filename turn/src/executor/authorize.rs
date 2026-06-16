@@ -1367,49 +1367,18 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                // The recomputed scope vector is what the v1 FRI leg below checks
-                // the trace against; rebuild it once for that call.
-                #[cfg(not(feature = "recursion"))]
-                let public_inputs = crate::action::stark_delegation_expected_public_inputs(
-                    &proof.target,
-                    &proof.permissions,
-                    proof.expires_at,
-                    &self.local_federation_id,
-                    root_issuer_commitment,
-                );
-                // V1 FLOOR: the bearer-cap STARK is the v1 hand-AIR (`EffectVmAir`). The recursion
-                // tower retires this leg; a v1 bearer-cap STARK presented to a recursion build is
-                // rejected rather than verified.
-                #[cfg(not(feature = "recursion"))]
-                {
-                    use dregg_circuit::stark;
-                    let air = dregg_circuit::EffectVmAir::new(stark_proof.trace_len);
-                    stark::verify(&air, &stark_proof, &public_inputs).map_err(|e| {
-                        (
-                            TurnError::BearerCapInvalidProof {
-                                target: proof.target,
-                                reason: format!("STARK proof verification failed: {e}"),
-                            },
-                            path.to_vec(),
-                        )
-                    })?;
-                }
-                #[cfg(feature = "recursion")]
-                {
-                    let _ = &stark_proof;
-                    return Err((
-                        TurnError::BearerCapInvalidProof {
-                            target: proof.target,
-                            reason: "v1 bearer-cap STARK (EffectVmAir) is retired under recursion"
-                                .into(),
-                        },
-                        path.to_vec(),
-                    ));
-                }
-                // Reachable only under `not(feature = "recursion")`; the recursion
-                // cfg above diverges, so this tail is unreachable in that build.
-                #[allow(unreachable_code)]
-                Ok(())
+                // The v1 bearer-cap STARK (the v1 hand-AIR `EffectVmAir`) is RETIRED; a v1
+                // bearer-cap STARK is rejected rather than verified (the rotated proof-carrying
+                // path attests bearer-cap transitions). The recomputed scope vector that the v1
+                // FRI leg checked the trace against is no longer needed.
+                let _ = (&stark_proof, &root_issuer_commitment);
+                Err((
+                    TurnError::BearerCapInvalidProof {
+                        target: proof.target,
+                        reason: "v1 bearer-cap STARK (EffectVmAir) is retired".into(),
+                    },
+                    path.to_vec(),
+                ))
             }
         }
     }

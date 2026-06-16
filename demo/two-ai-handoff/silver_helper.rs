@@ -639,7 +639,7 @@ fn cmd_verify_captp_delivered_tampered(state_dir: &PathBuf) -> bool {
 // retired (no single-proof analog — the rotated unit is an `"effect-vm-rotated"`
 // IR-v2 chain leg verified via `descriptor_ir2::verify_vm_descriptor2`), so this
 // is compiled out and the dispatch arm reports the retirement honestly.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 fn cmd_make_captp_delivered_chain(state_dir: &PathBuf) {
     use dregg_circuit::effect_vm::{
         self as evm, CellState as VmCellState, EffectVmAir, EffectVmContext,
@@ -1398,7 +1398,7 @@ fn cmd_make_introduce(
 /// `recursion` the v1 hand-AIR is retired; this compiles out and the dispatch
 /// arm reports the retirement honestly (the rotated leaf is minted via
 /// `dregg_turn::rotation_witness::mint_rotated_participant_leg`).
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 fn cmd_make_recursive_witness(state_dir: &PathBuf, turn_nonce: u64) {
     use dregg_circuit::effect_vm::{
         self as evm, CellState as VmCellState, EffectVmAir, EffectVmContext,
@@ -1758,12 +1758,12 @@ fn run(cmd: &str, rest: &[String], state_dir: &PathBuf) -> Result<bool, String> 
             Ok(true)
         }
         "make-captp-delivered-chain" => {
-            #[cfg(not(feature = "recursion"))]
+            #[cfg(not(feature = "prover"))]
             {
                 cmd_make_captp_delivered_chain(state_dir);
                 Ok(true)
             }
-            #[cfg(feature = "recursion")]
+            #[cfg(feature = "prover")]
             {
                 let _ = state_dir;
                 Err(
@@ -1804,12 +1804,12 @@ fn run(cmd: &str, rest: &[String], state_dir: &PathBuf) -> Result<bool, String> 
         }
         "make-recursive-witness" => {
             let turn_nonce = need_u64("--turn-nonce", Some("1"))?;
-            #[cfg(not(feature = "recursion"))]
+            #[cfg(not(feature = "prover"))]
             {
                 cmd_make_recursive_witness(state_dir, turn_nonce);
                 Ok(true)
             }
-            #[cfg(feature = "recursion")]
+            #[cfg(feature = "prover")]
             {
                 let _ = (state_dir, turn_nonce);
                 Err(

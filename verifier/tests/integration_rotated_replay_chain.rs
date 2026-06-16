@@ -1,4 +1,4 @@
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 //! Integration tests: the ROTATED replay-chain verifier (the recursion-build
 //! replacement for `integration_replay_chain.rs`, whose v1 hand-AIR is retired
 //! under `recursion`).

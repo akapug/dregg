@@ -91,13 +91,13 @@ metrics-exporter-prometheus = "0.16"
 tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1"] }
 
 [features]
-# `recursion` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`, all of
+# `prover` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`, all of
 # which default to it): native builds compile the ROTATED stack, so the v1 hand-AIR (`EffectVmAir`)
-# is absent. It forwards to the deps' `recursion` so node's own `#[cfg(feature = "recursion")]`
-# gates (the mcp.rs v1-demo-tool fences) align with the circuit's recursion state. A `not(recursion)`
+# is absent. It forwards to the deps' `prover` so node's own `#[cfg(feature = "prover")]`
+# gates (the mcp.rs v1-demo-tool fences) align with the circuit's prover state. A `not(prover)`
 # node build keeps the v1 floor (the MCP standalone-effect-VM demo tools).
-default = ["recursion"]
-recursion = ["dregg-circuit/recursion", "dregg-sdk/recursion", "dregg-turn/recursion"]
+default = ["prover"]
+prover = ["dregg-circuit/prover", "dregg-sdk/prover", "dregg-turn/prover"]
 
 # Off by default: the node ships verified-turn MirrorBatches to a live pg18 ONLY when
 # this is on AND DREGG_PG_MIRROR_URL is set. With it off, the pg-mirror module still

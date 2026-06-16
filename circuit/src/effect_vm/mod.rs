@@ -176,20 +176,9 @@ mod trace;
 pub mod trace_rotated;
 mod verify;
 
-// Per-action proof granularity: prove a single call-forest Action's effects
-// and compose per-action sub-proofs into the per-turn/per-cell statement.
-/// Per-action proof granularity (v1 hand-AIR): `PerActionProof` carries a bespoke
-/// `EffectVmAir` `StarkProof`. Retained under `#[cfg(not(feature = "recursion"))]`
-/// for the v1 floor.
-#[cfg(not(feature = "recursion"))]
-pub mod per_action;
-
-// The large EffectVm-AIR test module exercises the v1 hand-AIR (`EffectVmAir`) +
-// the shared `generate_effect_vm_trace`/`EFFECT_VM_WIDTH` generator. It is gated to
-// the v1 floor (`not(feature = "recursion")`), where `EffectVmAir` is compiled; the
-// shared generator it also covers is byte-identical in both builds.
-#[cfg(all(test, not(feature = "recursion")))]
-mod tests;
+// (The v1 per-action proof granularity module + the large v1 hand-AIR test module
+// were retired with `EffectVmAir`. The shared trace generator they also covered
+// (`generate_effect_vm_trace` / `EFFECT_VM_WIDTH`) stays — the rotated leg rides it.)
 
 // ---- Re-export column layout (preserves pre-decomp paths) ----
 pub use columns::{
@@ -212,7 +201,7 @@ pub(crate) use helpers::{fill_balance_limb_bits, fill_reserved_bits};
 
 // ---- Re-export AIR ----
 pub use air::AIR_DESCRIPTOR;
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub use air::EffectVmAir;
 
 // ---- Re-export trace generation ----
@@ -233,12 +222,4 @@ pub use trace_rotated::{
 pub use verify::{
     verify_balance_limb_pis, verify_balance_limb_ranges, verify_slot_caveat_manifest,
     verify_state_integrity,
-};
-
-// ---- Re-export per-action proof granularity (v1 floor only) ----
-#[cfg(not(feature = "recursion"))]
-pub use per_action::{
-    ActionForestAccumulator, ComposeError, PerActionProof, PerActionSummary,
-    check_composition_matches_turn, compose_action_summaries, generate_action_proof,
-    summarize_action_proof, verify_action_proof,
 };

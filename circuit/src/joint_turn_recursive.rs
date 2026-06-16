@@ -79,7 +79,7 @@
 //! the same precise fork follow-up (thread `table_public_inputs` up the tree +
 //! host-check the circuit public vector).
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing as _;

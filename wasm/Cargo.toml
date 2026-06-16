@@ -31,15 +31,15 @@ dregg-cell = { path = "../cell", default-features = false }
 dregg-turn = { path = "../turn", default-features = false, features = ["no-lean-link"] }
 dregg-coord = { path = "../coord", default-features = false, features = ["no-lean-link"] }
 dregg-intent = { path = "../intent", default-features = false, features = ["no-lean-link"] }
-dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link", "recursion"] }
+dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link", "prover"] }
 # sdk pulls bulletproofs (via cell crypto) — already covered by the
 # clear_on_drop override below, but listing here for grep-ability.
 #
-# `recursion` is in the sdk's DEFAULT set; we re-add it here (default-features
+# `prover` is in the sdk's DEFAULT set; we re-add it here (default-features
 # is off for the no-lean-link split) so the SDK's cfg MATCHES the single
 # `dregg-circuit` instance in this graph, which feature-unification already
-# pins to `recursion` (lightclient/etc. pull it on). Without this the SDK
-# compiles its `#[cfg(not(feature = "recursion"))]` v1 effect-VM leg and dangles
+# pins to `prover` (lightclient/etc. pull it on). Without this the SDK
+# compiles its `#[cfg(not(feature = "prover"))]` v1 effect-VM leg and dangles
 # on the now-deleted `dregg_circuit::EffectVmAir` / `effect_vm_p3_full_air`
 # (the C7 v1-deletion cutover). Aligned, both prove/verify the rotated IR-v2.
 dregg-types = { path = "../types" }
@@ -80,7 +80,7 @@ dregg-token = { path = "../token", default-features = false, features = ["macaro
 # pulls `dregg-circuit` (recursion — already unified ON in this graph via
 # observability/bridge; the STEP-0 `[patch]` above supplies the fork's
 # `NativeBatchStark` variant) + `dregg-blocklace` (wasm-safe: blake3 + ed25519 +
-# postcard + types, no tokio). `recursion` is in its default set, so a plain dep
+# postcard + types, no tokio). `prover` is in its default set, so a plain dep
 # carries the light client.
 dregg-lightclient = { path = "../lightclient" }
 
@@ -146,7 +146,7 @@ ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "
 # THE FORK SEAM. This standalone workspace pulls `dregg-circuit` with its
 # DEFAULT features via `dregg-observability`/`dregg-bridge` (both depend on it
 # without `default-features = false`), so feature-unification turns on
-# `recursion` on the single circuit instance in this graph — which compiles
+# `prover` on the single circuit instance in this graph — which compiles
 # `circuit/src/plonky3_recursion_impl.rs` + `ivc_turn_chain.rs`, both of which
 # reference `RecursionInput::NativeBatchStark`. That variant now lives in the
 # pushed fork at rev `72ffc56`, which the root `[workspace.dependencies]` pins

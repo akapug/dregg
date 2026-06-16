@@ -33,16 +33,16 @@ use crate::witnessed_receipt::WitnessedReceipt;
 // use (LEAN-emitted, law #1). Gated on `recursion` exactly like `verify_aggregated_bundle` —
 // `dregg-turn` forwards `recursion = ["dregg-circuit/recursion"]` (which carries the prover-free
 // batch verifier too), and the wasm `not(recursion)` build gets the error stubs.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use dregg_circuit::bilateral_aggregation_air::{
     AggregationInnerRowV2, AggregationOuterPi, CrossSideHalfEdge, FOLD_PI_COUNT, agg,
     build_aggregation_trace_v2, build_tree_fold_trace, outer_pi_v2, prove_aggregation_v2,
     prove_cross_side_existence_v2, prove_tree_fold_v2, sched, schedule_block_from_inner_pi,
     verify_aggregation_v2, verify_cross_side_existence_v2, verify_tree_fold_v2,
 };
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof};
-#[cfg(any(feature = "recursion", test))]
+#[cfg(any(feature = "prover", test))]
 use dregg_circuit::effect_vm::pi as inner_pi;
 use dregg_circuit::field::BabyBear;
 use dregg_types::CellId;
@@ -50,7 +50,7 @@ use serde::{Deserialize, Serialize};
 
 /// The fixed outer-PI width of the DECOUPLED bilateral aggregation descriptor (Lean
 /// `OuterPi.COUNT` = 23), independent of N — the headline verifier-cost win.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 const OUTER_PI_COUNT: usize = outer_pi_v2::COUNT;
 
 // ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ fn pack_expected(
 /// block (projected from each WR's bilateral-schedule PI window) + the schedule-derived expected
 /// counts/roots. Returns the rows in `per_cell` order and the dedup'd federation list. Used by
 /// the prover to build the trace.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn build_inner_rows_v2(
     turn: &Turn,
     per_cell: &[(CellId, WitnessedReceipt)],
@@ -238,7 +238,7 @@ fn build_inner_rows_v2(
 /// re-derive the canonical 87-col trace and bind it to the proof. (The prover's
 /// `build_inner_rows_v2` pairs the WR-claimed schedule with the same canonical expected; in the
 /// honest case the two agree, and a divergent schedule cannot satisfy CG-3, so it never proves.)
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn build_inner_rows_v2_from_schedule(
     turn: &Turn,
     cells: &[CellId],
@@ -315,7 +315,7 @@ pub(crate) fn cell_id_to_felts_8(c: &CellId) -> [BabyBear; 8] {
 /// `not(recursion)` build (wasm32 / no-lean-link) has no batch prover, so the optional
 /// bilateral-aggregate demo there returns an error and the single-turn proof stands (the
 /// callers — wasm's `prove_bilateral_aggregate` — handle this gracefully).
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub fn prove_aggregated_bundle(
     _turn: &Turn,
     _per_cell: &[(CellId, WitnessedReceipt)],
@@ -328,7 +328,7 @@ pub fn prove_aggregated_bundle(
     ))
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_aggregated_bundle(
     turn: &Turn,
     per_cell: &[(CellId, WitnessedReceipt)],
@@ -459,7 +459,7 @@ pub fn prove_aggregated_bundle(
 /// prover-free (the `recursion` feature forwards `dregg-circuit/verifier`). The
 /// `not(recursion)` build has no batch verifier, so it rejects (the only such consumer is the
 /// optional wasm bilateral demo).
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub fn verify_aggregated_bundle(_bundle: &AggregatedBundle) -> Result<(), TurnError> {
     Err(TurnError::InvalidExecutionProof(
         "aggregate_bilateral: the descriptor batch verifier requires the `recursion`/`verifier` \
@@ -468,7 +468,7 @@ pub fn verify_aggregated_bundle(_bundle: &AggregatedBundle) -> Result<(), TurnEr
     ))
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnError> {
     // Step 1: outer PI sanity.
     if bundle.outer_pi.len() != OUTER_PI_COUNT {
@@ -685,7 +685,7 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
 /// the verifier rebuilds the *exact* multiset and the canonical (trace, pi), and the edge-sequence
 /// commitment PI binds the proof to it (together with the in-AIR balance==0 boundary), closing the
 /// missing-peer attack algebraically.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn canonical_half_edges(
     turn: &Turn,
     covered: &std::collections::HashSet<CellId>,
@@ -781,7 +781,7 @@ fn canonical_half_edges(
 ///
 /// The `not(recursion)` build has no batch prover, so it returns an error (the only such consumer
 /// is the optional wasm bilateral demo, which handles it gracefully).
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub fn prove_cross_side_existence(
     _turn: &Turn,
     _participating_cells: &[CellId],
@@ -793,7 +793,7 @@ pub fn prove_cross_side_existence(
     ))
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_cross_side_existence(
     turn: &Turn,
     participating_cells: &[CellId],
@@ -847,7 +847,7 @@ pub fn prove_cross_side_existence(
 ///      argument operated on exactly the schedule-derived edges (closing forged-edge-row attacks).
 ///
 /// The `not(recursion)`/`not(verifier)` build has no batch verifier, so it rejects.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub fn verify_cross_side_existence(
     _proof: &CrossSideExistenceProof,
     _turn: &Turn,
@@ -860,7 +860,7 @@ pub fn verify_cross_side_existence(
     ))
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn verify_cross_side_existence(
     proof: &CrossSideExistenceProof,
     turn: &Turn,
@@ -940,7 +940,7 @@ impl AggregatedTree {
 /// Digest a child bundle into a single field element: Poseidon2 over its
 /// outer PI vector. Binds the entire bundle summary (turn hash, effects hash,
 /// agent, n_cells, consistent flag) into one chain element.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 fn bundle_digest(bundle: &AggregatedBundle) -> BabyBear {
     let pi_bb: Vec<BabyBear> = bundle
         .outer_pi
@@ -957,7 +957,7 @@ fn bundle_digest(bundle: &AggregatedBundle) -> BabyBear {
 /// number of children for the fold step itself.
 ///
 /// The `not(recursion)` build has no batch prover, so it returns an error.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub fn prove_aggregated_tree(
     _children: Vec<AggregatedBundle>,
 ) -> Result<AggregatedTree, TurnError> {
@@ -968,7 +968,7 @@ pub fn prove_aggregated_tree(
     ))
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_aggregated_tree(children: Vec<AggregatedBundle>) -> Result<AggregatedTree, TurnError> {
     if children.is_empty() {
         return Err(TurnError::InvalidExecutionProof(
@@ -1022,7 +1022,7 @@ pub fn prove_aggregated_tree(children: Vec<AggregatedBundle>) -> Result<Aggregat
 ///   4. Verify the outer fold descriptor proof standalone against the digest-derived PI.
 ///
 /// The `not(recursion)`/`not(verifier)` build has no batch verifier, so it rejects.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub fn verify_aggregated_tree(_tree: &AggregatedTree) -> Result<(), TurnError> {
     Err(TurnError::InvalidExecutionProof(
         "aggregate_tree: the descriptor batch verifier requires the `recursion`/`verifier` \
@@ -1031,7 +1031,7 @@ pub fn verify_aggregated_tree(_tree: &AggregatedTree) -> Result<(), TurnError> {
     ))
 }
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn verify_aggregated_tree(tree: &AggregatedTree) -> Result<(), TurnError> {
     if tree.children.is_empty() {
         return Err(TurnError::InvalidExecutionProof(
@@ -1123,7 +1123,7 @@ pub fn verify_aggregated_tree(tree: &AggregatedTree) -> Result<(), TurnError> {
 // The aggregation tests exercise the LEAN-emitted descriptor prove/verify (the live
 // `recursion` path); they are gated accordingly (the `not(recursion)` wasm build neither
 // proves nor verifies the descriptor, so its bundle functions are stubs).
-#[cfg(all(test, feature = "recursion"))]
+#[cfg(all(test, feature = "prover"))]
 mod tests {
     use super::*;
     use crate::builder::{ActionBuilder, TurnBuilder};

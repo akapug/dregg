@@ -79,7 +79,7 @@ fn one_action_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
 
 // v1-only: builds the bespoke `EffectVmAir` (recursion-absent) and asserts a
 // control proof verifies before PI tampering. Used by T4/T5/T12/T15 below.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 fn effect_vm_rejects_tampered_pi(pi_index: usize, label: &str) {
     let initial_state = dregg_circuit::CellState::new(1_000, 7);
     let effects = vec![dregg_circuit::effect_vm::Effect::Transfer {
@@ -308,7 +308,7 @@ fn t3_receipt_signature_binds_effect_omission() {
 // T4 — Lie about pre/post state hash
 // ===========================================================================
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t4_air_binds_pre_state_hash_to_trace() {
     effect_vm_rejects_tampered_pi(
@@ -317,7 +317,7 @@ fn t4_air_binds_pre_state_hash_to_trace() {
     );
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t4_air_binds_post_state_hash_to_trace() {
     effect_vm_rejects_tampered_pi(
@@ -357,7 +357,7 @@ fn t5_executor_rejects_replayed_nonce() {
     );
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t5_air_rejects_proof_with_wrong_nonce_pi() {
     effect_vm_rejects_tampered_pi(dregg_circuit::effect_vm::pi::ACTOR_NONCE, "ACTOR_NONCE");
@@ -645,7 +645,7 @@ fn t11_stale_proof_replay_rejected_by_verifier() {
 // T12 — Lie about balance deltas
 // ===========================================================================
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t12_balance_delta_must_match_transfer_amounts() {
     effect_vm_rejects_tampered_pi(dregg_circuit::effect_vm::pi::NET_DELTA_MAG, "NET_DELTA_MAG");
@@ -672,7 +672,7 @@ fn t13_remote_stub_with_id_cannot_mint_arbitrary_cell_ids() {
 // v1-only: asserts the replay-chain rejection reason is the bespoke-AIR
 // "STARK verify failed / deserial" message. Under recursion the scope-1 step
 // fails closed with the retired-v1 reason, so the substring asserts break.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t14_receipt_without_proof_rejected_at_wire_level() {
     let agent = CellId([0xE1u8; 32]);
@@ -697,7 +697,7 @@ fn t14_receipt_without_proof_rejected_at_wire_level() {
 // v1-only: asserts `verify_effect_vm_proof` returns a "deserial" failure for
 // malformed bytes. Under recursion this entry-point is the fail-closed stub
 // that returns the retired-v1 reason instead, so the assert breaks.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t14_malformed_proof_bytes_rejected() {
     let (out, code) = dregg_verifier::verify_effect_vm_proof(
@@ -719,7 +719,7 @@ fn t14_malformed_proof_bytes_rejected() {
 // T15 — Forge the effects_hash → AIR pass over a different effect list
 // ===========================================================================
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn t15_trace_effects_must_match_pi_effects_hash() {
     for i in 0..dregg_circuit::effect_vm::pi::EFFECTS_HASH_LEN {

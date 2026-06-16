@@ -11,7 +11,7 @@
 //! Run: `cargo test -p dregg-circuit --test descriptor_leaf_recursion -- --nocapture`
 //! (recursion proving is slow; each wrap compiles + proves a verifier circuit).
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use std::time::Instant;
 

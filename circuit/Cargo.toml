@@ -48,12 +48,12 @@ itertools = { version = "0.14", optional = true }
 rand = { version = "0.10", optional = true }
 rmp-serde = { version = "1.2", optional = true }
 
-# PLATFORM gates only: `plonky3`/`recursion` gate the NATIVE prover stack (off for
+# PLATFORM gates only: `plonky3`/`prover` gate the NATIVE prover stack (off for
 # wasm32, which compiles the crate's always-present pure logic). The old `mock = []`
 # and `dev = []` features gated NOTHING (zero cfg uses) and were deleted.
 # See docs/FEATURE-HYGIENE.md.
 [features]
-default = ["plonky3", "recursion"]
+default = ["plonky3", "prover"]
 plonky3 = [
     "p3-field", "p3-baby-bear", "p3-air", "p3-matrix", "p3-uni-stark",
     "p3-challenger", "p3-commit", "p3-fri", "p3-symmetric", "p3-dft",
@@ -72,7 +72,7 @@ verifier = [
     "plonky3",
     "dep:p3-batch-stark", "dep:p3-lookup", "dep:p3-poseidon2-circuit-air",
 ]
-recursion = [
+prover = [
     "verifier",
     "dep:p3-recursion", "dep:p3-circuit", "dep:p3-circuit-prover",
 ]

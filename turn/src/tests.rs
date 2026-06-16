@@ -7889,9 +7889,9 @@ fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
 ///
 /// The `new_commitment` and `effects_hash` params are ignored (kept for API compat);
 /// the real new_commitment is determined by the Effect VM trace execution.
-// V1 hand-AIR proof helper: consumed only by the `not(recursion)`-gated v1 sovereign
-// tests. The recursion tower proves rotated, so this leg is compiled out under `recursion`.
-#[cfg(not(feature = "recursion"))]
+// V1 hand-AIR proof helper: consumed only by the `not(prover)`-gated v1 sovereign
+// tests. The recursion tower proves rotated, so this leg is compiled out under `prover`.
+#[cfg(not(feature = "prover"))]
 fn generate_valid_sovereign_proof(
     old_commitment: &[u8; 32],
     _new_commitment: &[u8; 32],
@@ -7909,9 +7909,9 @@ fn generate_valid_sovereign_proof(
 /// `TurnExecutor::commitment_4bb_to_bytes` (4 LE u32 felts in bytes 0..15).
 /// The returned `new_commitment` is in the same format, ready to be stored in the
 /// ledger and verified by `TurnExecutor::commitment_to_4bb`.
-// V1 hand-AIR proof helper (`EffectVmAir`): consumed only by the `not(recursion)`-gated v1
-// sovereign tests. Compiled out under `recursion` (the tower proves rotated).
-#[cfg(not(feature = "recursion"))]
+// V1 hand-AIR proof helper (`EffectVmAir`): consumed only by the `not(prover)`-gated v1
+// sovereign tests. Compiled out under `prover` (the tower proves rotated).
+#[cfg(not(feature = "prover"))]
 fn generate_valid_sovereign_proof_with_new_commit(
     _old_commitment: &[u8; 32],
 ) -> (Vec<u8>, [u8; 32]) {
@@ -7921,6 +7921,9 @@ fn generate_valid_sovereign_proof_with_new_commit(
     generate_sovereign_transfer_proof_for_turn(&turn, &sovereign_id, 5000)
 }
 
+// Consumed only by the `not(feature = "prover")`-gated v1 sovereign-proof tests (the v1
+// hand-AIR path is retired under `prover`), so the helper is gated to match.
+#[cfg(not(feature = "prover"))]
 fn build_transfer_turn_for_proof_test(agent_id: CellId, sovereign_id: CellId) -> Turn {
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
@@ -7940,9 +7943,9 @@ fn build_transfer_turn_for_proof_test(agent_id: CellId, sovereign_id: CellId) ->
     builder.fee(100).build()
 }
 
-// V1 hand-AIR proof helper (`EffectVmAir`): only the `not(recursion)`-gated v1 sovereign tests
-// call it. Compiled out under recursion.
-#[cfg(not(feature = "recursion"))]
+// V1 hand-AIR proof helper (`EffectVmAir`): only the `not(prover)`-gated v1 sovereign tests
+// call it. Compiled out under prover.
+#[cfg(not(feature = "prover"))]
 fn generate_sovereign_transfer_proof_for_turn(
     turn: &Turn,
     proof_cell: &CellId,
@@ -8025,10 +8028,10 @@ fn generate_sovereign_transfer_proof_for_turn(
 // The former canonical_32_to_felts_4 path is no longer used for state commitments
 // (it hashed the stored bytes, producing values unrelated to compute_commitment_4).
 // V1-only: validates the hand-AIR (`EffectVmAir`) sovereign verify
-// (`verify_and_commit_proof_v1`). Under `recursion` the sovereign path is rotated
+// (`verify_and_commit_proof_v1`). Under `prover` the sovereign path is rotated
 // (`sdk/tests/sovereign_rotated_c1.rs` is the matched-pair validation); this v1 test
-// runs only in the `not(recursion)` config and is deleted with the v1 leg at C7.
-#[cfg(not(feature = "recursion"))]
+// runs only in the `not(prover)` config and is deleted with the v1 leg at C7.
+#[cfg(not(feature = "prover"))]
 #[test]
 fn test_proof_carrying_turn_accepted() {
     let (mut ledger, agent_id, sovereign_id, _old_commitment) =
@@ -8062,7 +8065,7 @@ fn test_proof_carrying_turn_accepted() {
 }
 
 // V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn test_proof_carrying_turn_wrong_old_commitment() {
     let (mut ledger, agent_id, sovereign_id, _old_commitment) =
@@ -8113,7 +8116,7 @@ fn test_proof_carrying_turn_wrong_old_commitment() {
 }
 
 // V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn test_proof_carrying_turn_wrong_effects_hash() {
     let (mut ledger, agent_id, sovereign_id, old_commitment) =
@@ -8251,6 +8254,8 @@ fn test_proof_carrying_turn_no_cell_specified() {
 }
 
 /// Helper: hash effects from a tree (matches the executor's internal method).
+/// Consumed only by the `not(feature = "prover")`-gated v1 sovereign-proof tests.
+#[cfg(not(feature = "prover"))]
 fn hash_tree_effects_test(tree: &crate::forest::CallTree, hasher: &mut blake3::Hasher) {
     for effect in &tree.action.effects {
         hasher.update(&effect.hash());
@@ -8271,7 +8276,7 @@ fn hash_tree_effects_test(tree: &crate::forest::CallTree, hasher: &mut blake3::H
 // V1-only (hand-AIR / custom-program sovereign verify); see
 // `test_proof_carrying_turn_accepted`. The rotated path's custom-effect leg is the
 // `ProofBind` IR constraint (`customVmDescriptor2R24`), validated in the circuit.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn test_custom_program_proof_carrying_turn() {
     use dregg_circuit::field::BabyBear;
@@ -8428,7 +8433,7 @@ fn test_custom_program_proof_carrying_turn() {
 /// Test that a cell with a VK hash but no matching program in the registry
 /// is rejected (not silently falling through to the default AIR).
 // V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn test_custom_program_missing_from_registry_rejected() {
     use dregg_circuit::field::BabyBear;
@@ -8518,7 +8523,7 @@ fn test_custom_program_missing_from_registry_rejected() {
 /// Test that a sovereign cell WITHOUT a VK hash still uses the default
 /// EffectVmAir (backward compatibility).
 // V1-only (hand-AIR sovereign verify); see `test_proof_carrying_turn_accepted`.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 #[test]
 fn test_default_air_still_works_without_vk_hash() {
     // Same as test_proof_carrying_turn_accepted but with the program_registry set.
@@ -9385,7 +9390,7 @@ fn test_bearer_cap_stark_delegation_invalid_proof_rejected() {
 /// the deserialized `public_inputs` (and length); the FRI/query payload is not
 /// touched. So an empty-query proof with the chosen public inputs is a faithful
 /// vehicle for exercising the binding teeth, feature-uniform (works under
-/// `recursion`, where the v1 `EffectVmAir` prover is retired).
+/// `prover`, where the v1 `EffectVmAir` prover is retired).
 #[cfg(test)]
 fn stark_proof_bytes_with_public_inputs(public_inputs: &[u32]) -> Vec<u8> {
     use dregg_circuit::stark::{StarkProof, proof_to_bytes};

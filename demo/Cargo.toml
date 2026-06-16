@@ -4,16 +4,16 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# `recursion` is in the DEFAULT set (matching `dregg-circuit`/`dregg-turn`/`dregg-verifier`, all of
-# which default to it) and forwards to `dregg-circuit/recursion`, so this crate's own
-# `#[cfg(feature = "recursion")]` gates ALIGN with the circuit's recursion state. The two
+# `prover` is in the DEFAULT set (matching `dregg-circuit`/`dregg-turn`/`dregg-verifier`, all of
+# which default to it) and forwards to `dregg-circuit/prover`, so this crate's own
+# `#[cfg(feature = "prover")]` gates ALIGN with the circuit's prover state. The two
 # `silver-helper` subcommands that mint a v1 hand-AIR (`EffectVmAir`) NoOp STARK
-# (`make-captp-delivered-chain`, `make-recursive-witness`) are the wasm/v1 floor; under `recursion`
+# (`make-captp-delivered-chain`, `make-recursive-witness`) are the wasm/v1 floor; under `prover`
 # the v1 hand-AIR is retired (the rotated `"effect-vm-rotated"` IR-v2 leg is live), so those two
 # subcommands compile out and report the retirement honestly. Every other silver-helper subcommand
 # (handoff, sovereign-witness, slot-caveats, bilateral-bundle, …) is unaffected.
-default = ["recursion"]
-recursion = ["dregg-circuit/recursion"]
+default = ["prover"]
+prover = ["dregg-circuit/prover"]
 
 [dependencies]
 blake3 = "1"

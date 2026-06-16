@@ -28,7 +28,7 @@
 //!   — the same blowup is reused for lower-degree AIRs; it costs a little prover
 //!   work but the resulting recursion config is shared.
 
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub mod recursive {
     use std::sync::Arc;
 

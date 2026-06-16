@@ -1,4 +1,4 @@
-#![cfg(not(feature = "recursion"))]
+#![cfg(not(feature = "prover"))]
 //! End-to-end service mesh integration tests.
 //!
 //! Entirely v1: both live tests prove the CAS effects through the bespoke

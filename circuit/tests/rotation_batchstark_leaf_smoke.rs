@@ -16,7 +16,7 @@
 //! Gated on `recursion`. SLOW; run with
 //! `cargo test -p dregg-circuit --features recursion batchstark_leaf_smoke -- --nocapture`.
 
-#![cfg(feature = "recursion")]
+#![cfg(feature = "prover")]
 
 use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};
 use dregg_circuit::descriptor_ir2::{

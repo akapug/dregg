@@ -33,20 +33,37 @@ post-`cap_root` that still claims the published `NEW_COMMIT` is UNSAT (the anti-
 `D (attenuateSlotF k.caps actor idx keep)` — i.e. the column move the descriptor pins. So the runnable
 `cap_root` column transition IS universe-A's `caps`-digest transition; not a fourth spec.
 
-## BOUNDARY (precise — do NOT over-read) — the IR GAP, flagged loudly
+## THE THREE DESCRIPTOR LAYERS (read all three — the v1 boundary is CLOSED downstream in-module)
 
-  * **IR GAP — needs IR extension: cap-root hash-site.** The `cap_root` column carries the SCALAR digest
-    `D caps` of the cap-table FUNCTION `Caps = Label → List Cap`. The EffectVM IR's `VmHashSite` can only
-    absorb trace COLUMNS (`HashInput.col`) and earlier digests; it has NO site that re-derives `cap_root`
-    *inside the circuit* from the cap-table's per-row serialization. So the descriptor PINS the cap_root
-    column transition `new_cap_root = D(post.caps)` (as a column equality, the witness supplying the
-    digest), and binds that column into `state_commit` — but it does NOT prove *in-circuit* that
-    `cap_root` IS the genuine Merkle digest of the cap-table. That binding lives in universe-A's
-    `Function.Injective D` portal (carried, realizable — a Poseidon Merkle over the cap table), the SAME
-    bar `attenuateA_full_sound` uses. We connect to it through `capRootProj`; we do NOT claim a
-    cap-table-hash-site the IR cannot express. FLAG: a future IR extension (a `VmHashSite` that absorbs
-    the cap-table rows and outputs `cap_root`) would internalize this; until then the cap-table digest is
-    a NAMED hypothesis, not an in-circuit gate.
+This module emits the cap-graph row at THREE layers, each a strict deepening of the last:
+
+  1. **`attenuateVmDescriptor` (the v1 face, §1–§9).** The `cap_root` column carries the SCALAR digest
+     `D caps`; the descriptor PINS the column transition `new_cap_root = param.CAP_DIGEST_NEW` (the
+     witness supplies the digest) and binds that column into `state_commit`. It does NOT recompute
+     `cap_root` in-row — the cap-table-is-Merkled binding rides universe-A's `Function.Injective D`
+     portal (carried, realizable). The v1 BOUNDARY: the cap-table digest is a NAMED hypothesis here, not
+     an in-circuit gate. This is the OPAQUE-DIGEST layer the next two layers KILL.
+  2. **`attenuateVmDescriptorGenuine` (§G).** DROPS the opaque `gCapMove` and ADDS the SHARED
+     `EffectVmEmitCapRoot.capRecomputeSites`: two in-row hash-sites RECOMPUTE
+     `new_cap_root = hash[edge_leaf, old_cap_root]`, `edge_leaf = hash[holder,target,rights,op]`. The
+     post `cap_root` is now a FORCED function of the bound cap-edge mutation, not a witnessed parameter
+     (`attenuateGenuine_sound`), and `attenuateGenuine_binds_edge` anti-ghosts every edge field through
+     the commitment. The in-circuit cap-root recompute the v1 boundary flagged as a "future IR
+     extension" — DONE here, with NO deployment widening (the recomputed root rides the existing
+     `saCol CAP_ROOT`, already absorbed by GROUP-4 `site2`).
+  3. **`attenuateVmDescriptorGenuineNonAmp` (§G.4).** The genuine descriptor PLUS the shared
+     `EffectVmEmitCapReshape.capDelegNonAmpGates`: the per-bit submask gate `granted ⊑ held` over the
+     SAME `rights` felt the recompute hashes into the edge leaf. So a verifying cap-graph proof now means
+     BOTH that `cap_root` is genuinely recomputed AND that the granted rights do not amplify
+     (`attenuateGenuineNonAmp_in_circuit` admits, `attenuateGenuineNonAmp_rejects_amplify` rejects). This
+     is the ARGUS linchpin on the delegation family, additive + width-neutral (186).
+
+So the v1 layer's "IR GAP" is a layer boundary, not an open caveat: layers 2–3, in THIS module, supply
+the in-circuit cap-root recompute + non-amplification. The remaining seam — that the recompute is the
+prepend-accumulator DIGEST advance, not yet the in-row sorted-TREE update (membership-open + sorted-key
+range-checks) — is Phase E (`EffectVmEmitCapReshape` §1's openable-root model is the value the digest
+carries; `EffectVmEmitV2.attenuateV2_non_amp` is the Phase-B sorted open). The cap-table-as-FUNCTION
+digest `D` (layer 1) is universe-A's bar, retained only for the v1 connector `capRootProj`.
 
   * PER-CELL / PER-ROW. Single-row AIR: one cap-graph transition + its binding into the published
     `state_commit`. Cross-row composition is the turn layer (`TurnEmit`), cited not claimed.
@@ -63,6 +80,7 @@ are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Emit.EffectVmEmitCapRoot
+import Dregg2.Circuit.Emit.EffectVmEmitCapReshape
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Inst.attenuateA
@@ -696,6 +714,87 @@ theorem attenuateGenuine_op_tamper_refuted :
       ≠ capAdvanceOf Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN
         (edgeLeafOf Dregg2.Circuit.Emit.EffectVmEmitCapRoot.cN 7 13 42 3) 1000 :=
   tampered_op_moves_root
+
+/-! ## §G.4 — THE GENUINE NON-AMP DESCRIPTOR — cap-root recompute AND in-circuit `granted ⊑ held`.
+
+§G binds the `cap_root` GENUINELY (the recompute), and `attenuateGenuine_binds_edge` anti-ghosts every
+edge field — so a tampered `rights` MOVES the root. But binding the root is not yet ENFORCING
+non-amplification: a row may recompute a perfectly-bound root for an edge whose granted `rights` EXCEED
+the delegator's held rights. §G.4 closes that: it appends the SHARED `EffectVmEmitCapReshape`
+delegation non-amp gates (`capDelegNonAmpGates`) — the per-bit submask `granted ⊑ held` whose GRANTED
+mask reconstructs `cp.RIGHTS`, the SAME `rights` felt `siteCapEdgeLeaf` hashes into the recomputed root.
+
+So on the genuine-non-amp descriptor, the two legs INTERLOCK on one `rights` felt: the recompute BINDS
+it into `cap_root` (tamper ⇒ root moves ⇒ `state_commit` moves ⇒ UNSAT), and the non-amp gate BOUNDS it
+by the held mask (over-grant ⇒ submask gate fails ⇒ UNSAT). In-circuit non-amplification now holds on
+EVERY cap-graph effect that uses this descriptor — the ARGUS linchpin, additive + width-neutral (the
+delegation bit carriers are aux columns past the GROUP-4 block, all `< EFFECT_VM_WIDTH = 186`). -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitCapReshape
+  (capDelegNonAmpGates capDeleg_nonAmp_in_circuit capDeleg_rejects_amplify gDelegSubmaskBit
+   capDelegNonAmpGates_shape capDeleg_carriers_in_range)
+
+/-- **`attenuateVmDescriptorGenuineNonAmp`** — the GENUINE cap-graph circuit WITH in-circuit
+non-amplification: the §G genuine descriptor's frame-freeze + recompute + commitment, PLUS the shared
+delegation non-amp submask gates (`granted ⊑ held` over the bound `rights`). The cap-root is GENUINELY
+recomputed AND the granted rights are gated `⊑` held — both on the one `rights` felt. -/
+def attenuateVmDescriptorGenuineNonAmp : EffectVmDescriptor :=
+  { attenuateVmDescriptorGenuine with
+    name        := attenuateVmDescriptorGenuine.name ++ "-nonamp"
+    constraints := attenuateVmDescriptorGenuine.constraints ++ capDelegNonAmpGates }
+
+/-- The genuine-non-amp descriptor KEEPS the §G genuine descriptor's hash-sites (the cap-root recompute
++ GROUP-4 commitment) — non-amp is pure GATES, it adds NO hash-site — and stays at the base width. -/
+theorem attenuateGenuineNonAmp_keeps_recompute :
+    attenuateVmDescriptorGenuineNonAmp.hashSites = attenuateVmDescriptorGenuine.hashSites
+    ∧ attenuateVmDescriptorGenuineNonAmp.traceWidth = EFFECT_VM_WIDTH
+    ∧ attenuateVmDescriptorGenuineNonAmp.constraints
+        = attenuateVmDescriptorGenuine.constraints ++ capDelegNonAmpGates := by
+  refine ⟨rfl, ?_, rfl⟩
+  show attenuateVmDescriptorGenuine.traceWidth = EFFECT_VM_WIDTH
+  rfl
+
+/-- **`attenuateGenuineNonAmp_in_circuit` — THE IN-CIRCUIT NON-AMP TOOTH on the cap-graph family.** Any
+witness satisfying the genuine-non-amp descriptor's constraints FORCES, per bit, `granted ⊑ held` (the
+granted bit ≤ the held bit). Since the granted bits reconstruct `cp.RIGHTS` — the `rights` the recompute
+binds into `cap_root` — a verifying proof now genuinely means the delegation did NOT amplify. Extracted
+from the shared `capDeleg_nonAmp_in_circuit` (the non-amp gates are a sub-list of the descriptor's). -/
+theorem attenuateGenuineNonAmp_in_circuit (env : VmRowEnv)
+    (hcon : ∀ c ∈ attenuateVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
+    ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 := by
+  apply capDeleg_nonAmp_in_circuit env _ i hi
+  intro c hc
+  apply hcon
+  show c ∈ (attenuateVmDescriptorGenuine.constraints ++ capDelegNonAmpGates)
+  exact List.mem_append_right _ hc
+
+/-- **`attenuateGenuineNonAmp_rejects_amplify` — the in-circuit anti-amplify tooth (witness FALSE).** A
+genuine-non-amp row whose granted bit `i` is SET but held bit `i` is CLEAR (an over-grant: conferring a
+right the delegator does not hold) does NOT satisfy the descriptor — the submask gate fails. So the
+cap-graph family REJECTS over-grants in-circuit, on the SAME descriptor that recomputes the cap-root. -/
+theorem attenuateGenuineNonAmp_rejects_amplify (env : VmRowEnv)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hg : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 1)
+    (hh : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ attenuateVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false) := by
+  intro hcon
+  refine capDeleg_rejects_amplify env i hi hg hh ?_
+  intro c hc
+  apply hcon
+  show c ∈ (attenuateVmDescriptorGenuine.constraints ++ capDelegNonAmpGates)
+  exact List.mem_append_right _ hc
+
+-- The genuine-non-amp descriptor: the genuine constraints (12+14+4 = 30) ++ the non-amp gates
+-- (3·8+2 = 26), same 6 hash sites, same base width. Additive + width-neutral.
+#guard attenuateVmDescriptorGenuineNonAmp.constraints.length == (12 + 14 + 4) + (3 * 8 + 2)
+#guard attenuateVmDescriptorGenuineNonAmp.hashSites.length == 6
+#guard attenuateVmDescriptorGenuineNonAmp.traceWidth == 186
+
+#assert_axioms attenuateGenuineNonAmp_keeps_recompute
+#assert_axioms attenuateGenuineNonAmp_in_circuit
+#assert_axioms attenuateGenuineNonAmp_rejects_amplify
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
 

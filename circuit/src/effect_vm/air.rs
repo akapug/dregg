@@ -5,21 +5,21 @@
 use super::{EFFECT_VM_WIDTH, NUM_EFFECTS, pi};
 
 // The v1 hand-AIR (`EffectVmAir` + its `StarkAir` impl) is retained only under
-// `#[cfg(not(feature = "recursion"))]` for the v1 floor; the recursion tower proves the
+// `#[cfg(not(feature = "prover"))]` for the v1 floor; the recursion tower proves the
 // effect-VM transition through the rotated IR-v2 descriptor instead. These symbols are used
 // ONLY inside that gated `impl StarkAir` body, so the imports are gated to match — keeping
 // the ungated `AIR_DESCRIPTOR` (which needs only `EFFECT_VM_WIDTH`/`NUM_EFFECTS`/`pi`) clean
 // in the default (`recursion`) build.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 use super::{
     AUX_BASE, BAL_LIMB_BITS, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, aux_off, param, sel,
     state,
 };
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 use crate::field::BabyBear;
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 use crate::stark::{BoundaryConstraint, StarkAir};
 
 /// The Effect VM AIR's shape descriptor (VK v2; see
@@ -334,18 +334,18 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
 
 /// The Effect VM AIR. Proves an arbitrary sequence of effects in a single STARK.
 ///
-/// v1 hand-AIR: retained under `#[cfg(not(feature = "recursion"))]` for the v1 floor.
+/// v1 hand-AIR: retained under `#[cfg(not(feature = "prover"))]` for the v1 floor.
 /// The recursion tower proves the effect-VM transition through the rotated IR-v2
 /// multi-table descriptor (`crate::descriptor_ir2`) instead. The shape descriptor
 /// [`AIR_DESCRIPTOR`] and the shared trace+PI generator (`generate_effect_vm_trace`,
 /// `EFFECT_VM_WIDTH`) STAY in both builds — the rotated leg is built on them.
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 pub struct EffectVmAir {
     /// Maximum number of effects (trace height, padded to power of 2).
     pub max_effects: usize,
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 impl EffectVmAir {
     pub fn new(max_effects: usize) -> Self {
         // MIN 64 rows: closes the FRI single-row-gap (task #90). A short trace
@@ -364,7 +364,7 @@ impl EffectVmAir {
     }
 }
 
-#[cfg(not(feature = "recursion"))]
+#[cfg(not(feature = "prover"))]
 impl StarkAir for EffectVmAir {
     fn width(&self) -> usize {
         EFFECT_VM_WIDTH

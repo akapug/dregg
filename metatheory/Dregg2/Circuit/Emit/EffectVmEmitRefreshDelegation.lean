@@ -597,6 +597,44 @@ theorem refreshGenuine_binds_edge (hash : List ℤ → ℤ)
 #assert_axioms refreshGenuine_sound
 #assert_axioms refreshGenuine_binds_edge
 
+/-! ### §G.4 — `refresh` carries the IN-CIRCUIT NON-AMP GUARD (`granted ⊑ held`, `granted = held` for a re-issue).
+
+`refreshDelegation` RE-ISSUES an existing delegation (refreshed expiry, SAME conferred rights) — so its
+granted rights EQUAL the held rights, and `granted ⊑ held` holds by reflexivity (`submask_self`). It
+inherits the SAME shared GENUINE-NON-AMP descriptor `attenuateVmDescriptorGenuineNonAmp` as the granting
+family — one uniform gate set across the cap-graph family. For a refresh the gate is satisfied by the
+unchanged mask (`granted = held`) and REJECTS only a malformed refresh that silently WIDENS the rights
+beyond what was held — exactly the amplification a refresh must never introduce. In-circuit, on the SAME
+descriptor that recomputes the cap-root. -/
+
+open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
+  (attenuateVmDescriptorGenuineNonAmp attenuateGenuineNonAmp_in_circuit
+   attenuateGenuineNonAmp_rejects_amplify)
+
+/-- **`refreshVmDescriptorGenuineNonAmp`** — the GENUINE `refresh` circuit WITH the in-circuit non-amp
+guard: definitionally the shared genuine-non-amp descriptor (recompute + `granted ⊑ held`). -/
+def refreshVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
+
+/-- **`refreshNonAmp_in_circuit`** — a satisfying `refresh` witness FORCES `granted ⊑ held` per bit (for
+a re-issue, `granted = held`). Inherited from the shared in-circuit tooth. -/
+theorem refreshNonAmp_in_circuit (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (hcon : ∀ c ∈ refreshVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
+    ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
+  attenuateGenuineNonAmp_in_circuit env hcon i hi
+
+/-- **`refreshNonAmp_rejects_amplify`** — a malformed `refresh` that WIDENS rights beyond held (granted
+bit set, held bit clear) does NOT satisfy the descriptor. Inherited from the shared rejection. -/
+theorem refreshNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hg : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 1)
+    (hh : env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ refreshVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false) :=
+  attenuateGenuineNonAmp_rejects_amplify env i hi hg hh
+
+#assert_axioms refreshNonAmp_in_circuit
+#assert_axioms refreshNonAmp_rejects_amplify
 
 /-! ## §12 — Axiom-hygiene tripwires. -/
 

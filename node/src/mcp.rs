@@ -257,33 +257,12 @@ fn witnessed_receipt_from_effect_material(
         .iter()
         .map(|v| dregg_circuit::BabyBear::new(*v))
         .collect();
-    // V1 FLOOR: the receipt-bound WR carries a v1 hand-AIR (`EffectVmAir`) proof. The recursion
-    // tower's per-receipt attestation is the rotated finalized-turn proof produced by the node's
-    // async prove pool; this inline-trace v1 WR is a v1-only artifact, so under `recursion` the
-    // helper yields `None` (the receipt still commits; its rotated attestation arrives separately).
-    #[cfg(not(feature = "recursion"))]
-    {
-        let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
-        let receipt_bound_proof =
-            dregg_circuit::stark::try_prove(&air, &trace, &public_input_felts).ok()?;
-        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&receipt_bound_proof);
-
-        Some(dregg_turn::WitnessedReceipt::from_components(
-            receipt,
-            proof_bytes,
-            public_inputs,
-            if trace.is_empty() {
-                None
-            } else {
-                Some(trace.as_slice())
-            },
-        ))
-    }
-    #[cfg(feature = "recursion")]
-    {
-        let _ = (&trace, &public_input_felts, &public_inputs, receipt);
-        None
-    }
+    // The v1 hand-AIR (`EffectVmAir`) receipt-bound WR proof is RETIRED. The per-receipt
+    // attestation is the rotated finalized-turn proof produced by the node's async prove
+    // pool; this inline-trace v1 WR is a v1-only artifact, so the helper yields `None`
+    // (the receipt still commits; its rotated attestation arrives separately).
+    let _ = (&trace, &public_input_felts, &public_inputs, receipt);
+    None
 }
 
 fn project_effects_for_mcp(
@@ -485,47 +464,15 @@ fn try_generate_effect_vm_proof(
     // standalone `dregg-verifier replay-chain` rejects the chain with
     // "PI[IS_AGENT_CELL] = 0 but single-proof replay requires 1".
     public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] = dregg_circuit::BabyBear::ONE;
-    // V1 FLOOR: standalone effect-VM proof material via the v1 hand-AIR (`EffectVmAir`), for the
-    // MCP demo/tool surfaces. The recursion tower proves rotated finalized turns through the node's
-    // commit pipeline; this standalone v1 material is not produced under `recursion`.
-    #[cfg(not(feature = "recursion"))]
-    {
-        // The trace generator pads to the next power of two ≥ 2; the AIR must be
-        // sized to the actual trace height, not the raw effect count (passing
-        // `vm_effects.len()` panics when it's less than 2 or not a power of two).
-        let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
-        let proof = dregg_circuit::stark::try_prove(&air, &trace, &public_inputs)
-            .map_err(|e| e.to_string())?;
-        // Use the canonical DREG-prefixed byte format that the standalone
-        // dregg-verifier binary deserializes via stark::proof_from_bytes.
-        // postcard's encoding lacks the magic-header and is not what the
-        // verifier accepts on the wire.
-        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
-        let proof_hex = hex_encode(&proof_bytes);
-        let public_inputs_u64: Vec<u64> = public_inputs.iter().map(|f| f.as_u32() as u64).collect();
-        // Build the canonical WitnessBundle::Inline so we can both ship the
-        // trace shape and compute its BLAKE3 hash via the canonical
-        // postcard-serialised form. The demo writes both to disk; the verifier
-        // re-derives the hash to enforce binding.
-        let bundle = dregg_turn::WitnessBundle::inline_from_trace(&trace);
-        let trace_rows = bundle.trace_rows.clone();
-        let witness_hash_hex = hex_encode(&bundle.witness_hash());
-        Ok(EffectVmProofMaterial {
-            proof_hex,
-            public_inputs: public_inputs_u64,
-            trace_rows,
-            witness_hash_hex,
-        })
-    }
-    #[cfg(feature = "recursion")]
-    {
-        let _ = &trace;
-        Err(
-            "standalone v1 effect-vm proof material is not produced under the recursion build \
-             (finalized turns prove rotated through the node commit pipeline)"
-                .to_string(),
-        )
-    }
+    // The v1 hand-AIR (`EffectVmAir`) standalone effect-VM proof material is RETIRED.
+    // Finalized turns prove rotated through the node's commit pipeline; this standalone
+    // v1 material is no longer produced.
+    let _ = (&trace, &public_inputs);
+    Err(
+        "standalone v1 effect-vm proof material is retired (finalized turns prove rotated \
+         through the node commit pipeline)"
+            .to_string(),
+    )
 }
 
 // =============================================================================
@@ -4644,35 +4591,17 @@ async fn tool_prove_sovereign_turn(params: &Value, state: &NodeState) -> McpTool
     let (trace, public_inputs) =
         dregg_circuit::effect_vm::generate_effect_vm_trace(&initial_state, &vm_effects);
 
-    // V1 FLOOR: this demo tool proves a standalone effect-VM transition through the v1 hand-AIR
-    // (`EffectVmAir`). The recursion tower retires the v1 prover; under `recursion` the tool reports
-    // that the standalone v1 proof is unavailable (finalized turns prove rotated via the commit path).
-    #[cfg(not(feature = "recursion"))]
-    {
-        let air = dregg_circuit::effect_vm::EffectVmAir::new(vm_effects.len());
-        let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
-        let proof_hash = blake3::hash(&postcard::to_stdvec(&proof).unwrap_or_default());
-
-        McpToolResult::json(&serde_json::json!({
-            "proved": true,
-            "cell_id": cell_id_hex,
-            "effect_count": vm_effects.len(),
-            "proof_hash": hex_encode(proof_hash.as_bytes()),
-            "public_inputs_count": public_inputs.len(),
-            "proof_hex": hex_encode(&postcard::to_stdvec(&proof).unwrap_or_default()),
-        }))
-    }
-    #[cfg(feature = "recursion")]
-    {
-        let _ = (&trace, &public_inputs, &cell_id_hex);
-        McpToolResult::json(&serde_json::json!({
-            "proved": false,
-            "cell_id": cell_id_hex,
-            "effect_count": vm_effects.len(),
-            "error": "standalone v1 effect-vm proof is retired under the recursion build; \
-                      finalized turns prove rotated through the node commit pipeline",
-        }))
-    }
+    // The v1 hand-AIR (`EffectVmAir`) standalone effect-VM prove is RETIRED; this demo
+    // tool reports the standalone v1 proof is unavailable (finalized turns prove rotated
+    // through the node commit pipeline).
+    let _ = (&trace, &public_inputs, &cell_id_hex);
+    McpToolResult::json(&serde_json::json!({
+        "proved": false,
+        "cell_id": cell_id_hex,
+        "effect_count": vm_effects.len(),
+        "error": "standalone v1 effect-vm proof is retired; finalized turns prove rotated \
+                  through the node commit pipeline",
+    }))
 }
 
 async fn tool_verify_sovereign_proof(params: &Value, state: &NodeState) -> McpToolResult {
@@ -4708,31 +4637,16 @@ async fn tool_verify_sovereign_proof(params: &Value, state: &NodeState) -> McpTo
         .filter_map(|v| v.as_u64().map(|n| dregg_circuit::BabyBear::new(n as u32)))
         .collect();
 
-    // V1 FLOOR: verify the standalone v1 effect-VM `StarkProof` against the v1 hand-AIR
-    // (`EffectVmAir`). The recursion tower retires the v1 verifier; under `recursion` this demo tool
-    // reports that v1 verification is unavailable (rotated proofs verify via `verify_vm_descriptor2`).
-    #[cfg(not(feature = "recursion"))]
-    {
-        let effect_count = proof.num_cols; // Approximate from proof metadata.
-        let air = dregg_circuit::effect_vm::EffectVmAir::new(effect_count.max(1));
-        let result = dregg_circuit::stark::verify(&air, &proof, &public_inputs);
-
-        McpToolResult::json(&serde_json::json!({
-            "valid": result.is_ok(),
-            "error": result.err(),
-            "public_inputs_count": public_inputs.len(),
-        }))
-    }
-    #[cfg(feature = "recursion")]
-    {
-        let _ = &proof;
-        McpToolResult::json(&serde_json::json!({
-            "valid": false,
-            "error": "v1 effect-vm STARK verification is retired under the recursion build \
-                      (rotated proofs verify through verify_vm_descriptor2)",
-            "public_inputs_count": public_inputs.len(),
-        }))
-    }
+    // The v1 hand-AIR (`EffectVmAir`) standalone effect-VM `StarkProof` verify is RETIRED;
+    // this demo tool reports v1 verification is unavailable (rotated proofs verify through
+    // `verify_vm_descriptor2`).
+    let _ = &proof;
+    McpToolResult::json(&serde_json::json!({
+        "valid": false,
+        "error": "v1 effect-vm STARK verification is retired (rotated proofs verify through \
+                  verify_vm_descriptor2)",
+        "public_inputs_count": public_inputs.len(),
+    }))
 }
 
 // =============================================================================
@@ -8821,8 +8735,8 @@ mod tests {
     /// (line 1275), which set the same slot on their own paths.
     ///
     /// v1 floor only: `generate_effect_vm_proof` produces a v1 hand-AIR proof, which is absent
-    /// under the recursion build.
-    #[cfg(not(feature = "recursion"))]
+    /// under the prover build.
+    #[cfg(not(feature = "prover"))]
     #[test]
     fn generate_effect_vm_proof_pins_is_agent_cell_to_one() {
         use dregg_circuit::effect_vm::pi as evm_pi;
@@ -8951,9 +8865,9 @@ mod tests {
         serde_json::from_str(text).expect("tool result content must be JSON")
     }
 
-    // Used only by the recursion-gated v1-floor `*_produces_proof_carrying_receipt` /
+    // Used only by the prover-gated v1-floor `*_produces_proof_carrying_receipt` /
     // `forged_proof_bytes_*` tests (it asserts the synchronous v1 DREG `effect_vm_proof_hex`).
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     fn assert_proof_populated(label: &str, j: &Value) {
         assert_eq!(
             j.get("committed").and_then(|v| v.as_bool()),
@@ -9351,15 +9265,15 @@ mod tests {
         );
     }
 
-    // V1-FLOOR (recursion-gated): the MCP tool surface's SYNCHRONOUS standalone effect-vm proof is
+    // V1-FLOOR (prover-gated): the MCP tool surface's SYNCHRONOUS standalone effect-vm proof is
     // the v1 hand-AIR (`EffectVmAir`) DREG-format `StarkProof` that `try_generate_effect_vm_proof`
-    // produces and `require_effect_vm_proof` gates the commit on. Under `recursion` (default) the v1
-    // hand-AIR is retired (`EffectVmAir` is `#[cfg(not(recursion))]`) and the live attestation is the
+    // produces and `require_effect_vm_proof` gates the commit on. Under `prover` (default) the v1
+    // hand-AIR is retired (`EffectVmAir` is `#[cfg(not(prover))]`) and the live attestation is the
     // ROTATED finalized-turn proof the node's async prove pool produces through the commit pipeline
     // (covered by `turn_proving::tests::flow_b_*` + the executor rotated WR path). This standalone-
-    // proof tool surface is therefore a `not(recursion)` floor; the test runs under
+    // proof tool surface is therefore a `not(prover)` floor; the test runs under
     // `--no-default-features`.
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     #[tokio::test]
     async fn grant_capability_commits_witness_artifact_for_receipt_chain() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9580,11 +9494,11 @@ mod tests {
         );
     }
 
-    // V1-FLOOR (recursion-gated): these four `dregg_*_produces_proof_carrying_receipt` tests assert
+    // V1-FLOOR (prover-gated): these four `dregg_*_produces_proof_carrying_receipt` tests assert
     // the SYNCHRONOUS standalone v1 effect-vm DREG `StarkProof` (`assert_proof_populated`), which is
-    // retired under `recursion` (the live attestation is the rotated node-pipeline proof). They run
+    // retired under `prover` (the live attestation is the rotated node-pipeline proof). They run
     // under `--no-default-features`. See `grant_capability_commits_witness_artifact_for_receipt_chain`.
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     #[tokio::test]
     async fn dregg_register_name_produces_proof_carrying_receipt() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9607,7 +9521,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "recursion"))] // v1-floor standalone proof (see register_name above)
+    #[cfg(not(feature = "prover"))] // v1-floor standalone proof (see register_name above)
     #[tokio::test]
     async fn dregg_publish_subscription_produces_proof_carrying_receipt() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9633,7 +9547,7 @@ mod tests {
         assert!(j.get("payload_hash").and_then(|v| v.as_str()).is_some());
     }
 
-    #[cfg(not(feature = "recursion"))] // v1-floor standalone proof (see register_name above)
+    #[cfg(not(feature = "prover"))] // v1-floor standalone proof (see register_name above)
     #[tokio::test]
     async fn dregg_issue_credential_produces_proof_carrying_receipt() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9656,7 +9570,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "recursion"))] // v1-floor standalone proof (see register_name above)
+    #[cfg(not(feature = "prover"))] // v1-floor standalone proof (see register_name above)
     #[tokio::test]
     async fn dregg_register_service_produces_proof_carrying_receipt() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9685,13 +9599,13 @@ mod tests {
     /// Honest path: exercise_handoff_cert with a valid introducer key commits
     /// and emits a STARK proof. Mirrors the existing `dregg_captp_deliver`
     /// integration (CapTpDelivered cert + delivery-signature verification).
-    // V1-FLOOR (recursion-gated): both handoff-cert tests drive the tool through
+    // V1-FLOOR (prover-gated): both handoff-cert tests drive the tool through
     // `require_effect_vm_proof` (which gates the COMMIT on the v1 standalone DREG proof) and assert
-    // the v1 `effect_vm_proof_hex` / the v1-proof-generation error text. Under `recursion` that v1
+    // the v1 `effect_vm_proof_hex` / the v1-proof-generation error text. Under `prover` that v1
     // standalone proof is retired; the live attestation is the rotated node-pipeline proof. Runs
     // under `--no-default-features`. (The rotated handoff path is exercised by the silver-captp
     // integration + the executor rotated WR path.)
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     #[tokio::test]
     async fn exercise_handoff_cert_honest_path_commits() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9756,7 +9670,7 @@ mod tests {
     /// Security property: `verify_captp_delivered` step 2 checks
     /// `introducer_pk == cert.introducer.0`. A forged pk diverges and the
     /// executor returns `Rejected` rather than committing.
-    #[cfg(not(feature = "recursion"))] // v1-floor standalone proof (see honest_path_commits above)
+    #[cfg(not(feature = "prover"))] // v1-floor standalone proof (see honest_path_commits above)
     #[tokio::test]
     async fn exercise_handoff_cert_forged_introducer_pk_rejected() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -9807,10 +9721,10 @@ mod tests {
         );
     }
 
-    // These three cross-fed test helpers are used ONLY by the recursion-gated `silver_captp_*` tests
+    // These three cross-fed test helpers are used ONLY by the prover-gated `silver_captp_*` tests
     // (whose handoff-commit step is v1-floor-only), so they are gated to match — else they would be
-    // dead code under `recursion`.
-    #[cfg(not(feature = "recursion"))]
+    // dead code under `prover`.
+    #[cfg(not(feature = "prover"))]
     fn test_committee_descriptor(
         role: &str,
         pk: dregg_types::PublicKey,
@@ -9827,7 +9741,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "recursion"))] // silver-captp-only helper (see test_committee_descriptor)
+    #[cfg(not(feature = "prover"))] // silver-captp-only helper (see test_committee_descriptor)
     fn sign_test_attested_root(
         mut root: dregg_types::AttestedRoot,
         sk: &dregg_types::SigningKey,
@@ -9837,7 +9751,7 @@ mod tests {
         root
     }
 
-    #[cfg(not(feature = "recursion"))] // silver-captp-only helper (see test_committee_descriptor)
+    #[cfg(not(feature = "prover"))] // silver-captp-only helper (see test_committee_descriptor)
     fn test_attested_root_for_receipts(
         federation_id: [u8; 32],
         receipt_hashes: &[[u8; 32]],
@@ -9872,14 +9786,14 @@ mod tests {
         )
     }
 
-    // V1-FLOOR (recursion-gated): both silver-captp tests first COMMIT a handoff-cert exercise
+    // V1-FLOOR (prover-gated): both silver-captp tests first COMMIT a handoff-cert exercise
     // through the MCP tool, which under the v1 floor gates the commit on the standalone DREG proof
-    // (`require_effect_vm_proof`). Under `recursion` that v1 standalone proof is retired so the
+    // (`require_effect_vm_proof`). Under `prover` that v1 standalone proof is retired so the
     // handoff tool returns `proof_generation_failed` instead of committing; the cross-fed bundle
     // export they assert is downstream of that commit. They run under `--no-default-features`. (The
     // rotated cross-fed witnessed-receipt path is exercised by `silver_captp_*` at the verifiable-
     // bundle layer + the executor rotated WR path.)
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     #[tokio::test]
     async fn silver_captp_mcp_path_exports_cross_fed_verifiable_bundle() {
         let (state, _tmp) = fresh_unlocked_state().await;
@@ -10020,7 +9934,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "recursion"))] // v1-floor handoff commit gate (see the export test above)
+    #[cfg(not(feature = "prover"))] // v1-floor handoff commit gate (see the export test above)
     #[tokio::test]
     async fn silver_captp_node_to_node_exchange_imports_and_verifies_witness_artifact() {
         let (producer_state, _producer_tmp) = fresh_unlocked_state().await;
@@ -10230,13 +10144,13 @@ mod tests {
     /// the verifier binary in this lane), so we test the in-process
     /// `dregg_circuit::stark::proof_from_bytes` gate: forged bytes
     /// fail to deserialize as a valid proof.
-    // V1-FLOOR (recursion-gated): this test requires `dregg_circuit::stark::proof_from_bytes` to
+    // V1-FLOOR (prover-gated): this test requires `dregg_circuit::stark::proof_from_bytes` to
     // SUCCEED on the tool's `effect_vm_proof_hex` — i.e. it pins the DREG-magic v1 `StarkProof` wire
-    // format. Under `recursion` the standalone effect-vm proof is a postcard `Ir2BatchProof` (no DREG
+    // format. Under `prover` the standalone effect-vm proof is a postcard `Ir2BatchProof` (no DREG
     // magic — it correctly FAILS `proof_from_bytes`, the two halves move together; see
     // `turn/src/executor/proof_verify.rs`), and the tool surface produces no v1 proof at all. Runs
     // under `--no-default-features`.
-    #[cfg(not(feature = "recursion"))]
+    #[cfg(not(feature = "prover"))]
     #[tokio::test]
     async fn forged_proof_bytes_fail_to_deserialize() {
         let (state, _tmp) = fresh_unlocked_state().await;

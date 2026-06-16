@@ -1,4 +1,4 @@
-#![cfg(not(feature = "recursion"))]
+#![cfg(not(feature = "prover"))]
 //! GRADUATED RevokeCapability (sel 24) — the cap-crown cap-REMOVAL leg.
 //!
 //! These tests are the PROOF that a verifying `RevokeCapability` proof through

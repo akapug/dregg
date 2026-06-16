@@ -657,6 +657,131 @@ def capReshapeJson : String := emitVmJson capReshapeVmDescriptor
 #assert_axioms capReshape_carriers_in_range
 #assert_axioms capReshapeVmDescriptor_shape
 
+/-! ## §4D — THE DELEGATION-FAMILY NON-AMP GATES (the cap-root recompute's `granted ⊑ held` leg).
+
+`§4` above is the MINT/production flavour: the held mask is the OPENED issuer leaf and the production
+gate binds `held_target = asset` + the control bit. The cap-GRAPH family (`delegate`, `delegateAtten`,
+`attenuate`, `introduce`, `revoke`, `refresh`) needs the OTHER leg of the SAME non-amp shadow: every
+cap-graph row RECOMPUTES `cap_root` by hashing a `(holder, target, rights, op)` edge leaf
+(`EffectVmEmitCapRoot.siteCapEdgeLeaf`), where `rights` (`cp.RIGHTS`, param 4) is the GRANTED edge's
+conferred-rights mask — the value COMMITTED into the recomputed root. The delegation non-amp leg gates,
+IN-CIRCUIT, that this granted mask is a SUBMASK of the delegator's HELD mask (`granted ⊑ held`), so a
+grant cannot confer rights the delegator does not hold — and the very rights it binds into `cap_root`.
+
+The wiring that makes this LOAD-BEARING (not a free side-check): the GRANTED bit decomposition
+reconstructs `cp.RIGHTS` — the SAME param column `siteCapEdgeLeaf` hashes into the cap-edge leaf. So
+the in-circuit submask gate and the cap-root recompute read the SAME `rights` felt: an amplifying grant
+either FAILS the submask gate (caught here) or, if it tampers `rights` to dodge the gate, MOVES the
+recomputed `cap_root` ⇒ moves `state_commit` ⇒ UNSAT (`EffectVmEmitCapRoot.capRoot_binds_edge`). The
+held mask rides a free param (param 7); the held bits decode it; the per-bit gate `gᵢ·(1−hᵢ)=0` is the
+anti-amplify tooth. NO production gate (a delegate is not a mint), NO new width (aux columns < 186). -/
+
+namespace dcol
+/-- The GRANTED rights-mask column for a delegation row: `cp.RIGHTS` (param 4) — the rights the cap-edge
+leaf binds into the recomputed `cap_root`. The granted-bit decomposition reconstructs THIS, so the
+non-amp gate constrains the exact rights committed into the root (the load-bearing tie). -/
+def GRANTED_MASK : Nat := EffectVmEmitCapRoot.cp.RIGHTS
+/-- The HELD rights-mask param for a delegation row: param 7 (free on a cap-graph row — params 2..5 are
+the edge `(holder,target,rights,op)`, param 6 is the mint-flavour granted mask). The delegator's own
+held-cap mask, the upper bound the granted mask may not exceed. -/
+def HELD_MASK : Nat := 7
+/-- The base aux column of the delegation HELD mask's bit decomposition (`MASK_BITS` columns). Past the
+mint-flavour bit block (`col.GRANTED_BIT_BASE + MASK_BITS`), so the two non-amp legs never alias. -/
+def HELD_BIT_BASE : Nat := col.GRANTED_BIT_BASE + MASK_BITS
+/-- The base aux column of the delegation GRANTED mask's bit decomposition (`MASK_BITS` columns). -/
+def GRANTED_BIT_BASE : Nat := col.GRANTED_BIT_BASE + MASK_BITS + MASK_BITS
+/-- The delegation held bit at position `i`. -/
+def heldBit (i : Nat) : Nat := HELD_BIT_BASE + i
+/-- The delegation granted bit at position `i`. -/
+def grantedBit (i : Nat) : Nat := GRANTED_BIT_BASE + i
+end dcol
+
+/-- **`gDelegSubmaskBit i`** — the delegation per-bit NON-AMP gate body `gᵢ·(1 − hᵢ)`: zero iff the
+granted bit is NOT set OR the held bit IS set (`gᵢ ≤ hᵢ`). The in-row anti-amplify tooth, one bit at a
+time, over the DELEGATION bit carriers. -/
+def gDelegSubmaskBit (i : Nat) : EmittedExpr :=
+  .mul (eCol (dcol.grantedBit i)) (eSub (.const 1) (eCol (dcol.heldBit i)))
+
+/-- The delegation NON-AMP gates: boolean each held + granted bit, reconstruct the held mask from its
+bits AND the granted mask from its bits (the granted recon ties to `cp.RIGHTS` = the cap-edge leaf's
+rights), and the per-bit submask gate `granted ⊑ held`. No production gate (a delegate is not a mint). -/
+def capDelegNonAmpGates : List VmConstraint :=
+  ((List.range MASK_BITS).map (fun i => VmConstraint.gate (gBool (dcol.heldBit i))))
+    ++ ((List.range MASK_BITS).map (fun i => VmConstraint.gate (gBool (dcol.grantedBit i))))
+    ++ ((List.range MASK_BITS).map (fun i => VmConstraint.gate (gDelegSubmaskBit i)))
+    ++ [ VmConstraint.gate (gMaskRecon dcol.HELD_MASK dcol.heldBit)
+       , VmConstraint.gate (gMaskRecon dcol.GRANTED_MASK dcol.grantedBit) ]
+
+/-- **`capDeleg_nonAmp_in_circuit` — THE IN-CIRCUIT NON-AMP TOOTH for the cap-graph family.** A witness
+satisfying the delegation non-amp gates FORCES, for every bit `i < MASK_BITS`, the granted bit ≤ the
+held bit (`gᵢ = 0 ∨ hᵢ = 1`) — i.e. the granted edge's conferred rights are `⊑` the delegator's held
+mask, bitwise, per bit. Since the granted bits reconstruct `cp.RIGHTS` (the cap-edge leaf's rights, §4D),
+this binds the very rights the recomputed `cap_root` commits. The light client reads ONLY the proof; the
+delegation now carries in-circuit non-amplification, not an executor-trusted side-check. -/
+theorem capDeleg_nonAmp_in_circuit (env : VmRowEnv)
+    (hcon : ∀ c ∈ capDelegNonAmpGates, c.holdsVm env false false)
+    (i : Nat) (hi : i < MASK_BITS) :
+    env.loc (dcol.grantedBit i) = 0 ∨ env.loc (dcol.heldBit i) = 1 := by
+  have hsm : VmConstraint.gate (gDelegSubmaskBit i) ∈
+      (List.range MASK_BITS).map (fun j => VmConstraint.gate (gDelegSubmaskBit j)) :=
+    List.mem_map.mpr ⟨i, List.mem_range.mpr hi, rfl⟩
+  have hmem : VmConstraint.gate (gDelegSubmaskBit i) ∈ capDelegNonAmpGates := by
+    unfold capDelegNonAmpGates
+    exact List.mem_append_left _ (List.mem_append_right _ hsm)
+  have hg := hcon _ hmem
+  simp only [VmConstraint.holdsVm, gDelegSubmaskBit, eSub, eCol, EmittedExpr.eval] at hg
+  rcases mul_eq_zero.mp hg with h0 | h1
+  · exact Or.inl h0
+  · exact Or.inr (by linarith)
+
+/-- **`capDeleg_rejects_amplify` — the cap-graph anti-amplify rejection (witness FALSE).** A delegation
+row where granted bit `i` is SET (`= 1`) but held bit `i` is CLEAR (`= 0`) — an amplifying grant on bit
+`i` (conferring a right the delegator does NOT hold) — does NOT satisfy the non-amp gates: the submask
+gate `gᵢ·(1 − hᵢ) = 1·1 = 1 ≠ 0` FAILS. So the circuit rejects an over-grant at the bit level, on EVERY
+cap-graph effect that carries these gates. -/
+theorem capDeleg_rejects_amplify (env : VmRowEnv)
+    (i : Nat) (hi : i < MASK_BITS)
+    (hg : env.loc (dcol.grantedBit i) = 1) (hh : env.loc (dcol.heldBit i) = 0) :
+    ¬ (∀ c ∈ capDelegNonAmpGates, c.holdsVm env false false) := by
+  intro hcon
+  rcases capDeleg_nonAmp_in_circuit env hcon i hi with h0 | h1
+  · rw [hg] at h0; exact absurd h0 (by norm_num)
+  · rw [hh] at h1; exact absurd h1 (by norm_num)
+
+/-- The delegation non-amp bit carriers are DISTINCT from the mint-flavour `§4` carriers and all
+`< EFFECT_VM_WIDTH = 186` (so the Rust interpreter's bounds check accepts; aux columns past the
+mint-flavour bit block, within the base layout — width-neutral). -/
+theorem capDeleg_carriers_in_range :
+    (∀ i, i < MASK_BITS → dcol.heldBit i < EFFECT_VM_WIDTH)
+    ∧ (∀ i, i < MASK_BITS → dcol.grantedBit i < EFFECT_VM_WIDTH)
+    ∧ (∀ i, i < MASK_BITS → col.GRANTED_BIT_BASE + MASK_BITS ≤ dcol.heldBit i) := by
+  refine ⟨?_, ?_, ?_⟩
+  · intro i hi
+    simp only [MASK_BITS] at hi
+    simp only [dcol.heldBit, dcol.HELD_BIT_BASE, col.GRANTED_BIT_BASE, col.HELD_BIT_BASE, auxCol,
+      AUX_BASE, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, aux_off.STATE_INTER3, EFFECT_VM_WIDTH,
+      NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, MASK_BITS]
+    omega
+  · intro i hi
+    simp only [MASK_BITS] at hi
+    simp only [dcol.grantedBit, dcol.GRANTED_BIT_BASE, col.GRANTED_BIT_BASE, col.HELD_BIT_BASE, auxCol,
+      AUX_BASE, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, aux_off.STATE_INTER3, EFFECT_VM_WIDTH,
+      NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, MASK_BITS]
+    omega
+  · intro i hi
+    simp only [dcol.heldBit, dcol.HELD_BIT_BASE, MASK_BITS]
+    omega
+
+/-- The delegation non-amp segment has `3·MASK_BITS + 2` gates (held-bool + granted-bool + submask + 2
+recon) — non-trivial, and (unlike `§4`'s `productionGates`) carries NO production gate. -/
+theorem capDelegNonAmpGates_shape :
+    capDelegNonAmpGates.length = 3 * MASK_BITS + 2 := by decide
+
+#assert_axioms capDeleg_nonAmp_in_circuit
+#assert_axioms capDeleg_rejects_amplify
+#assert_axioms capDeleg_carriers_in_range
+#assert_axioms capDelegNonAmpGates_shape
+
 /-! ## §5 — NON-VACUITY witnesses (concrete TRUE openings on a computable reference sponge).
 
 The model is computable: a concrete held-set opens, a concrete production authorizes, on the same
@@ -711,6 +836,68 @@ theorem heldDemo_no_mint_wrong_slot :
     ¬ IssuerEntry 9 { target := 3, rightsMask := 1 } :=
   wrongAssetMint_rejected 9 3 _ (by decide) rfl
 
+/-! ### §5D — the DELEGATION non-amp gates fire BOTH polarities (a concrete cap-graph row).
+
+A concrete delegation row: the delegator HOLDS `{read, write}` (mask 3, bits `h₀=h₁=1`, rest 0) and
+GRANTS `{read}` (mask 1, bit `g₀=1`, rest 0) — an HONEST attenuation. The held/granted bit columns
+carry the genuine 8-bit decompositions; the granted recon ties to `cp.RIGHTS = 1`, the held recon to
+param 7 = 3. The submask gates all pass (`g₀=1 ≤ h₀=1`, every other `gᵢ=0`). The dual witness: an
+OVER-GRANT row (`g₁=1` but `h₁=0`, conferring `write` the delegator lacks) is REJECTED. -/
+
+/-- A concrete HONEST delegation row: held mask 3 (`{read,write}`, param 7 col 75; held bits col 120 = h₀=1,
+col 121 = h₁=1, cols 122..127 = 0), granted mask 1 (`{read}`, `cp.RIGHTS` param 4 col 72; granted bits
+col 128 = g₀=1, cols 129..135 = 0). The literal columns ARE what `dcol`/`prmCol` reduce to (anti-drift,
+checked by the `#guard`s below). Off-row columns are 0. -/
+def goodDelegRow : VmRowEnv where
+  loc := fun v =>
+    if v = 120 then 1            -- heldBit 0  (read held)
+    else if v = 121 then 1       -- heldBit 1  (write held)
+    else if v = 128 then 1       -- grantedBit 0 (read granted)
+    else 0
+  nxt := fun _ => 0
+  pub := fun _ => 0
+
+-- The witness row's literal columns ARE the symbolic delegation carrier columns (anti-drift).
+#guard dcol.heldBit 0 == 120
+#guard dcol.heldBit 1 == 121
+#guard dcol.grantedBit 0 == 128
+#guard prmCol dcol.HELD_MASK == 75
+#guard prmCol dcol.GRANTED_MASK == 72
+
+/-- **NON-VACUITY (witness TRUE — an HONEST delegation ADMITS).** The honest attenuation row (grant
+`{read}` from held `{read,write}`) satisfies EVERY delegation submask gate: each granted bit is `≤` its
+held bit (`g₀=1 ≤ h₀=1`; every other `gᵢ=0`). So the in-circuit non-amp predicate is INHABITED — an
+honest delegation binds its cap-root AND passes non-amp, not vacuously false. -/
+theorem goodDelegRow_admits (i : Nat) (hi : i < MASK_BITS) :
+    (VmConstraint.gate (gDelegSubmaskBit i)).holdsVm goodDelegRow false false := by
+  simp only [MASK_BITS] at hi
+  simp only [VmConstraint.holdsVm, gDelegSubmaskBit, eSub, eCol, EmittedExpr.eval]
+  -- `granted_i · (1 − held_i) = 0`: granted is 0 except bit 0 (where held bit 0 = 1).
+  interval_cases i <;>
+    simp only [dcol.grantedBit, dcol.heldBit, dcol.GRANTED_BIT_BASE, dcol.HELD_BIT_BASE,
+      col.GRANTED_BIT_BASE, col.HELD_BIT_BASE, auxCol, AUX_BASE, STATE_AFTER_BASE, PARAM_BASE,
+      STATE_BEFORE_BASE, aux_off.STATE_INTER3, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, MASK_BITS,
+      goodDelegRow] <;> norm_num
+
+/-- A concrete OVER-GRANT delegation row: the delegator does NOT hold `write` (all held bits 0) but
+GRANTS `write` (`grantedBit 1 = 1`, col 129). The amplifying grant the non-amp gate must reject. -/
+def overGrantDelegRow : VmRowEnv where
+  loc := fun v => if v = 129 then 1 else 0   -- grantedBit 1 (write granted) set; held bits all 0
+  nxt := fun _ => 0
+  pub := fun _ => 0
+
+/-- **NON-VACUITY (witness FALSE — a concrete OVER-GRANT is REJECTED).** A row conferring `write`
+(`grantedBit 1 = 1`) the delegator does NOT hold (`heldBit 1 = 0`) FAILS the delegation non-amp gates:
+the bit-1 submask gate `g₁·(1−h₁) = 1·1 = 1 ≠ 0`. The concrete anti-amplify UNSAT for the cap-graph
+family — a delegation cannot grant beyond what it holds. -/
+theorem overGrantDelegRow_rejected :
+    ¬ (∀ c ∈ capDelegNonAmpGates, c.holdsVm overGrantDelegRow false false) :=
+  capDeleg_rejects_amplify overGrantDelegRow 1 (by decide)
+    (by show overGrantDelegRow.loc (dcol.grantedBit 1) = 1
+        rw [show dcol.grantedBit 1 = 129 from by decide]; rfl)
+    (by show overGrantDelegRow.loc (dcol.heldBit 1) = 0
+        rw [show dcol.heldBit 1 = 121 from by decide]; rfl)
+
 /-! ## §5 — axiom hygiene pins. -/
 
 #guard heldDemo.length == 2
@@ -720,6 +907,13 @@ theorem heldDemo_no_mint_wrong_slot :
 -- the submask gate is two-valued on the demo masks: control ⊑ issuer-mask, read ⋢ control.
 #guard decide (submask CONTROL_BIT 64)
 #guard decide (¬ submask CONTROL_BIT 1)
+-- the delegation non-amp carriers are DISTINCT from the mint-flavour §4 carriers (no aliasing).
+#guard [col.heldBit 0, col.grantedBit 0, dcol.heldBit 0, dcol.grantedBit 0].dedup.length == 4
+#guard col.GRANTED_BIT_BASE + MASK_BITS == dcol.HELD_BIT_BASE
+-- the delegation granted mask reads the cap-edge leaf's rights param; held rides the free param 7.
+#guard dcol.GRANTED_MASK == EffectVmEmitCapRoot.cp.RIGHTS
+#guard dcol.HELD_MASK == 7
+#guard decide (dcol.HELD_MASK < NUM_PARAMS)
 
 #assert_axioms capLeaf_injective
 #assert_axioms capLeafList_injective
@@ -739,5 +933,7 @@ theorem heldDemo_no_mint_wrong_slot :
 #assert_axioms heldDemo_authorizes_mint_9
 #assert_axioms heldDemo_no_mint_absent_slot
 #assert_axioms heldDemo_no_mint_wrong_slot
+#assert_axioms goodDelegRow_admits
+#assert_axioms overGrantDelegRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitCapReshape

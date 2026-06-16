@@ -110,7 +110,7 @@ use crate::field::BabyBear;
 /// (two-row) constraint kind. Re-emit via `lake env lean --run` over a driver printing
 /// `emitVmJson2 bilateralAggDescriptor`; the SHA is pinned by
 /// `bilateral_aggregation_descriptor_matches_lean_pin`.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub const BILATERAL_AGGREGATION_DESCRIPTOR_JSON: &str =
     include_str!("../descriptors/dregg-bilateral-aggregation-v2.json");
 
@@ -121,7 +121,7 @@ pub const BILATERAL_AGGREGATION_DESCRIPTOR_NAME: &str = "dregg-bilateral-aggrega
 /// prover/verifier route through `descriptor_ir2::{prove,verify}_vm_descriptor2` against THIS
 /// descriptor — no Rust-authored constraint semantics (law #1). Fail-closed on any parse error
 /// (the pinned bytes are the Lean golden; a divergence is a hard refusal, never a warning).
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn bilateral_aggregation_descriptor() -> crate::descriptor_ir2::EffectVmDescriptor2 {
     crate::descriptor_ir2::parse_vm_descriptor2(BILATERAL_AGGREGATION_DESCRIPTOR_JSON)
         .expect("pinned bilateral-aggregation descriptor JSON must parse (Lean golden)")
@@ -209,14 +209,14 @@ pub mod outer_pi_v2 {
 /// the legacy `effect_vm::pi` vector that the decoupled `sched` block re-bases to 0. The WR
 /// carries the schedule independently; this is the ONE coupling to the v1 PI module, retired
 /// when the WR is restructured to emit `sched` natively (see `schedule_block_from_inner_pi`).
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub const SCHEDULE_PI_BASE: usize = inner_pi::TURN_HASH_BASE; // == 25
 
 /// Extract the 49-felt decoupled schedule block from a per-cell inner-PI vector. The block is
 /// `inner_pi[SCHEDULE_PI_BASE .. SCHEDULE_PI_BASE + Sched::WIDTH)` — a pure projection (the
 /// fields are contiguous in the v1 layout: turn-id 13 · counts 7 · roots 28 · is_agent 1). A
 /// restructured rotated WR carries this block directly; until then the bundle derives it here.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn schedule_block_from_inner_pi(inner_pi_vec: &[BabyBear]) -> [BabyBear; sched::WIDTH] {
     let mut block = [BabyBear::ZERO; sched::WIDTH];
     for (i, slot) in block.iter_mut().enumerate() {
@@ -417,7 +417,7 @@ pub fn build_aggregation_trace_v2(rows: &[AggregationInnerRowV2]) -> Vec<Vec<Bab
 /// via the multi-table batch prover. No tables/memory/maps are committed (the descriptor is
 /// pure row-window arithmetic). The caller serialises the returned `Ir2BatchProof` with
 /// `postcard`, exactly as the rotated effect-vm leg does.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_aggregation_v2(
     trace: &[Vec<BabyBear>],
     outer_pi: &[BabyBear],
@@ -434,7 +434,7 @@ pub fn prove_aggregation_v2(
 
 /// Verify a DECOUPLED bilateral aggregation proof against the Lean descriptor + the 23-felt
 /// outer PI. Prover-free (`verifier` feature). Fail-closed on verify error.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn verify_aggregation_v2(
     proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
     outer_pi: &[BabyBear],
@@ -459,7 +459,7 @@ pub fn verify_aggregation_v2(
 /// and `balance[last] == 0` is the missing-peer boundary. Re-emit via
 /// `lake env lean --run EmitBilateralLegs.lean`; the shape is pinned by
 /// `cross_side_descriptor_parses_with_lean_pinned_shape`.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub const CROSS_SIDE_EXISTENCE_DESCRIPTOR_JSON: &str =
     include_str!("../descriptors/dregg-cross-side-existence-v2.json");
 
@@ -468,7 +468,7 @@ pub const CROSS_SIDE_EXISTENCE_DESCRIPTOR_NAME: &str = "dregg-cross-side-existen
 
 /// Parse the byte-pinned Lean cross-side descriptor. Fail-closed on parse error (the pinned bytes
 /// are the Lean golden; a divergence is a hard refusal).
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn cross_side_existence_descriptor() -> crate::descriptor_ir2::EffectVmDescriptor2 {
     crate::descriptor_ir2::parse_vm_descriptor2(CROSS_SIDE_EXISTENCE_DESCRIPTOR_JSON)
         .expect("pinned cross-side-existence descriptor JSON must parse (Lean golden)")
@@ -482,7 +482,7 @@ pub fn cross_side_existence_descriptor() -> crate::descriptor_ir2::EffectVmDescr
 /// primitive and the first/last accumulator pins as `pi_binding`s. Re-emit via
 /// `lake env lean --run EmitBilateralLegs.lean`; shape pinned by
 /// `bundle_fold_descriptor_parses_with_lean_pinned_shape`.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub const BUNDLE_TREE_FOLD_DESCRIPTOR_JSON: &str =
     include_str!("../descriptors/dregg-bundle-tree-fold-v2.json");
 
@@ -490,7 +490,7 @@ pub const BUNDLE_TREE_FOLD_DESCRIPTOR_JSON: &str =
 pub const BUNDLE_TREE_FOLD_DESCRIPTOR_NAME: &str = "dregg-bundle-tree-fold-v2";
 
 /// Parse the byte-pinned Lean bundle-fold descriptor. Fail-closed on parse error.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn bundle_tree_fold_descriptor() -> crate::descriptor_ir2::EffectVmDescriptor2 {
     crate::descriptor_ir2::parse_vm_descriptor2(BUNDLE_TREE_FOLD_DESCRIPTOR_JSON)
         .expect("pinned bundle-tree-fold descriptor JSON must parse (Lean golden)")
@@ -503,7 +503,7 @@ pub fn bundle_tree_fold_descriptor() -> crate::descriptor_ir2::EffectVmDescripto
 /// constraint semantics: every gate + the balance/commit `windowGate`s + the two chip lookups come
 /// from the verified Lean module. The `pi` binds the proven trace to the canonical edge sequence
 /// (the IR-v2 analog of the hand-AIR's `recompute_trace_commitment`).
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_cross_side_existence_v2(
     trace: &[Vec<BabyBear>],
     pi: &[BabyBear],
@@ -520,7 +520,7 @@ pub fn prove_cross_side_existence_v2(
 
 /// Verify a cross-side-existence proof against the Lean descriptor + the `[commit_seed,
 /// edge_commit]` PI. Prover-free.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn verify_cross_side_existence_v2(
     proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
     pi: &[BabyBear],
@@ -533,7 +533,7 @@ pub fn verify_cross_side_existence_v2(
 /// `build_tree_fold_trace` output satisfies `bundle_tree_fold_descriptor()` against the
 /// `[initial, final]` PI, via the multi-table batch STARK (the chip table commits the compress
 /// chain). No Rust-authored constraint semantics.
-#[cfg(feature = "recursion")]
+#[cfg(feature = "prover")]
 pub fn prove_tree_fold_v2(
     trace: &[Vec<BabyBear>],
     pi: &[BabyBear],
@@ -550,7 +550,7 @@ pub fn prove_tree_fold_v2(
 
 /// Verify a bundle-tree-fold proof against the Lean descriptor + the `[initial, final]` PI.
 /// Prover-free.
-#[cfg(any(feature = "recursion", feature = "verifier"))]
+#[cfg(any(feature = "prover", feature = "verifier"))]
 pub fn verify_tree_fold_v2(
     proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
     pi: &[BabyBear],
@@ -1166,7 +1166,7 @@ mod tests {
     /// `EffectVmEmitBilateralAgg.lean`): width 87, PI 23, 70 constraints, EXACTLY two window
     /// gates, name `dregg-bilateral-aggregation-v2`. This is the law-#1 tooth — the Rust
     /// aggregation reads ONLY this descriptor; a drift from the Lean golden is a hard failure.
-    #[cfg(any(feature = "recursion", feature = "verifier"))]
+    #[cfg(any(feature = "prover", feature = "verifier"))]
     #[test]
     fn bilateral_descriptor_parses_with_lean_pinned_shape() {
         use crate::descriptor_ir2::VmConstraint2;
@@ -1201,7 +1201,7 @@ mod tests {
     /// ONE Poseidon2 chip table, 11 constraints, EXACTLY two window gates (balance + commit
     /// continuity) + two chip lookups (the arity-4 fingerprint + the arity-2 commitment), name
     /// `dregg-cross-side-existence-v2`. Law-#1 tooth: the Rust CG-5 leg reads ONLY this descriptor.
-    #[cfg(any(feature = "recursion", feature = "verifier"))]
+    #[cfg(any(feature = "prover", feature = "verifier"))]
     #[test]
     fn cross_side_descriptor_parses_with_lean_pinned_shape() {
         use crate::descriptor_ir2::{TableSem, VmConstraint2};
@@ -1246,7 +1246,7 @@ mod tests {
     /// constraints, EXACTLY one window gate + one (arity-2) chip lookup, name
     /// `dregg-bundle-tree-fold-v2`. The chip lookup is the in-circuit compress that RETIRES the
     /// hand-AIR's verifier-side residual.
-    #[cfg(any(feature = "recursion", feature = "verifier"))]
+    #[cfg(any(feature = "prover", feature = "verifier"))]
     #[test]
     fn bundle_fold_descriptor_parses_with_lean_pinned_shape() {
         use crate::descriptor_ir2::{TableSem, VmConstraint2};
@@ -1284,7 +1284,7 @@ mod tests {
     /// proving (the debug batch prover panics on an unsatisfiable trace), so we assert the
     /// nonzero-balance property here and leave the UNSAT rejection to the Lean tooth
     /// `cse_rejects_unbalanced` + the pre-flight.
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     #[test]
     fn cross_side_descriptor_proves_balanced_rejects_missing_peer() {
         // Balanced: one edge, both halves present (+fp and -fp cancel).
@@ -1320,7 +1320,7 @@ mod tests {
     /// END-TO-END (law #1): the tree-fold trace proves + verifies through the LEAN descriptor batch
     /// prover, and a tampered final-accumulator PI does NOT verify (the `pi_binding` boundary). The
     /// compress is a REAL chip lookup, strictly stronger than the hand-AIR.
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     #[test]
     fn tree_fold_descriptor_proves_rejects_tampered_final() {
         let (trace, pi) = build_tree_fold_trace(&[BabyBear::new(111), BabyBear::new(222)]);
@@ -1339,7 +1339,7 @@ mod tests {
     /// The decoupled `sched` block re-bases the v1 bilateral-schedule PI window `[25, 74)` to 0.
     /// Pin the contiguity assumption `schedule_block_from_inner_pi` relies on: every schedule
     /// field sits at `inner_pi::<field> == SCHEDULE_PI_BASE + sched::<field>`.
-    #[cfg(any(feature = "recursion", feature = "verifier"))]
+    #[cfg(any(feature = "prover", feature = "verifier"))]
     #[test]
     fn schedule_block_offsets_match_v1_pi_window() {
         assert_eq!(SCHEDULE_PI_BASE, 25);

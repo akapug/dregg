@@ -276,7 +276,7 @@ mod tests {
     /// Done by running the trace through the real Plonky3 prover/verifier
     /// pair (via the recursion-compatible config); a failing trace would
     /// be caught by `verify`.
-    #[cfg(feature = "recursion")]
+    #[cfg(feature = "prover")]
     #[test]
     fn minimal_trace_inner_proof_round_trips() {
         use crate::plonky3_recursion_impl::recursive::{prove_inner_for_air, verify_inner_for_air};
