@@ -558,7 +558,10 @@ pub fn prove_effect_vm_rotated_ir2(
         [VmEffectKind::Transfer { .. }] => transfer_caveat_manifest(),
         _ => empty_caveat_manifest(),
     };
-    prove_effect_vm_rotated_ir2_with_caveat(initial_state, effects, before_w, after_w, &caveat)
+    // The standalone wrapper carries NO nullifier-set context; a NoteSpend turn proved through it
+    // would have an EMPTY before nullifier tree (the grow-gate forces an insert into the empty
+    // accumulator). The chained path (`prove_cohort_run_chain`) threads the real freshness leaves.
+    prove_effect_vm_rotated_ir2_with_caveat(initial_state, effects, before_w, after_w, &caveat, None)
 }
 
 /// Re-derive the rotated 38-PI vector for a turn (the same `dpis` the rotated prover binds).
@@ -569,6 +572,7 @@ fn rotated_effect_pi_for(
     initial_state: &CellState,
     effects: &[VmEffectKind],
     rot: &RotationTurnWitness,
+    before_nullifiers: Option<&[BabyBear]>,
 ) -> Result<Vec<BabyBear>, SdkError> {
     use dregg_circuit::effect_vm::trace_rotated::{
         RotatedBlockWitness, generate_rotated_effect_vm_trace,
@@ -580,6 +584,22 @@ fn rotated_effect_pi_for(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
     let after = bridge(&rot.after)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
+    // NoteSpend re-derives through the nullifier-tree wiring so the OLD/NEW commit PIs (moved by
+    // the limb-26 grow-gate) match the proven dpis.
+    if matches!(effects.first(), Some(dregg_circuit::effect_vm::Effect::NoteSpend { .. })) {
+        use dregg_circuit::effect_vm::trace_rotated::generate_rotated_note_spend_trace_with_nullifier_tree;
+        use dregg_circuit::heap_root::HeapLeaf;
+        let leaves: Vec<HeapLeaf> = before_nullifiers
+            .unwrap_or(&[])
+            .iter()
+            .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
+            .collect();
+        let (_t, dpis, _mh) = generate_rotated_note_spend_trace_with_nullifier_tree(
+            initial_state, effects, &before, &after, &rot.caveat, &leaves,
+        )
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated note-spend PI re-derive: {e}")))?;
+        return Ok(dpis);
+    }
     let (_trace, dpis) =
         generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, &rot.caveat)
             .map_err(|e| SdkError::InvalidWitness(format!("rotated PI re-derive: {e}")))?;
@@ -598,6 +618,7 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
     before_w: &dregg_turn::rotation_witness::RotationWitness,
     after_w: &dregg_turn::rotation_witness::RotationWitness,
     caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    before_nullifiers: Option<&[BabyBear]>,
 ) -> Result<
     dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
     SdkError,
@@ -661,6 +682,34 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
     let after = bridge(after_w)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
+
+    // NOTESPEND KERNEL-SET GROW-GATE (the deployment-real nullifier set-insert + double-spend
+    // tooth): the live `noteSpendVmDescriptor2R24` carries two map-ops opening the limb-26
+    // nullifier accumulator (`nullifierFreshOp` `.absent` + `nullifierInsertOp` `.insert`,
+    // `EffectVmEmitRotationV3.noteSpendV3`). The bare generator's empty `map_heaps` cannot resolve
+    // them — proving needs the real BEFORE nullifier tree (the openable sorted-Poseidon2 leaves),
+    // wired here from `before_nullifiers` (the SDK threads the freshness set's leaves —
+    // `DslRevocationTree::revoked_leaves` — from the non-revocation witness, so the in-circuit
+    // grow-gate and the non-revocation leg agree on which nullifiers are already spent). This
+    // FORCES the set-insert (`after_root = insert(before_root, nf)`) and the in-circuit
+    // double-spend tooth bites (`.absent` refuses a present nullifier).
+    if matches!(lead, dregg_circuit::effect_vm::Effect::NoteSpend { .. }) {
+        use dregg_circuit::effect_vm::trace_rotated::generate_rotated_note_spend_trace_with_nullifier_tree;
+        use dregg_circuit::heap_root::HeapLeaf;
+        let leaves: Vec<HeapLeaf> = before_nullifiers
+            .unwrap_or(&[])
+            .iter()
+            .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
+            .collect();
+        let (trace, dpis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
+            initial_state, effects, &before, &after, caveat, &leaves,
+        )
+        .map_err(|e| {
+            SdkError::InvalidWitness(format!("rotated note-spend grow-gate generation: {e}"))
+        })?;
+        return prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &map_heaps)
+            .map_err(|e| SdkError::InvalidWitness(format!("rotated note-spend IR-v2 proof: {e}")));
+    }
 
     // LIVE-generate the 311-column rotated trace + 38-PI vector.
     let (trace, dpis) =
@@ -1019,6 +1068,7 @@ fn prove_cohort_run_chain(
     effects: &[VmEffectKind],
     rot: &RotationTurnWitness,
     cap_membership: Option<&CapMembershipWitness>,
+    before_nullifiers: Option<&[BabyBear]>,
 ) -> Result<Vec<AttachedSubProof>, SdkError> {
     let runs = split_into_cohort_runs(effects);
     if runs.is_empty() {
@@ -1084,6 +1134,7 @@ fn prove_cohort_run_chain(
                 &rot.before,
                 after_w,
                 &caveat,
+                before_nullifiers,
             )?;
             // Re-derive this run's rotated PI vector (the prover self-verified it; we need the felts
             // for the composed PI + the leg's `sub_public_inputs`). Build a throwaway per-run
@@ -1093,7 +1144,7 @@ fn prove_cohort_run_chain(
                 after: after_w.clone(),
                 caveat,
             };
-            let rot_pi = rotated_effect_pi_for(&s_k, run_effects, &run_rot)?;
+            let rot_pi = rotated_effect_pi_for(&s_k, run_effects, &run_rot, before_nullifiers)?;
             let proof_bytes = postcard::to_allocvec(&proof).map_err(|e| {
                 SdkError::InvalidWitness(format!(
                     "chained rotated proof serialize failed (run {k}): {e}"
@@ -1239,11 +1290,20 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // `rotation` is always `None`, so `rotated_effect_pis` is `None` and the guard fails closed.
     #[cfg(feature = "prover")]
     let rotated_effect_pis: Option<Vec<Vec<BabyBear>>> = if let Some(rot) = &witness.rotation {
+        // The BEFORE nullifier set for the EffectVM rotated note-spend grow-gate: the
+        // non-revocation witness's revocation accumulator IS the already-spent-nullifier set, so
+        // its leaves seed the in-circuit limb-26 accumulator the `.absent`/`.insert` map-ops open
+        // against — the grow-gate and the non-revocation leg agree on freshness by construction.
+        let before_nullifiers: Option<Vec<BabyBear>> = witness
+            .non_revocation
+            .as_ref()
+            .map(|nr| nr.tree.revoked_leaves());
         let legs = prove_cohort_run_chain(
             &witness.initial_cell_state,
             &witness.effects,
             rot,
             witness.cap_membership.as_ref(),
+            before_nullifiers.as_deref(),
         )?;
         let mut leg_pis: Vec<Vec<BabyBear>> = Vec::with_capacity(legs.len());
         for leg in legs {
@@ -3573,7 +3633,7 @@ mod tests {
                 ),
                 caveat: dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest(),
             };
-            let res = prove_cohort_run_chain(&initial, &[], &rot, None);
+            let res = prove_cohort_run_chain(&initial, &[], &rot, None, None);
             assert!(
                 res.is_err(),
                 "the chained prover must fail closed on an empty turn"
@@ -3694,7 +3754,7 @@ mod tests {
         let rot = rotation_witness_for_cells(&before_cell, &after_cell, &[[0x11u8; 32]]);
 
         // Build the chained legs directly (the prover the composed path uses).
-        let legs = prove_cohort_run_chain(&initial, &effects, &rot, None)
+        let legs = prove_cohort_run_chain(&initial, &effects, &rot, None, None)
             .expect("heterogeneous turn must prove as a chain of rotated legs");
         assert_eq!(legs.len(), 3, "three cohort runs ⇒ three rotated legs");
         for leg in &legs {

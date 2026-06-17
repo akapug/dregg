@@ -857,13 +857,108 @@ def rotateV3WithNullifierPin (d : EffectVmDescriptor) : EffectVmDescriptor :=
     piCount     := r.piCount + 1
     constraints := r.constraints ++ [.piBinding .first NULLIFIER_PARAM_COL ROT_NULLIFIER_PI] }
 
-/-- **`noteSpendV3`** — the rotated note-spend WITH the nullifier PI weld: the graduated
-`rotateV3WithNullifierPin noteSpendVmDescriptor`. `piCount = 39` (the 38-PI rotated prefix +
-the appended nullifier slot). THIS is the descriptor that lets a note-spending turn rotate:
-its PI[38] carries the spend row's folded nullifier, cross-checkable against the freshness
-proof's queried item. -/
+/-- The rotated BEFORE-block `nullifier_root` limb column (limb 26 of the before block at
+`base = traceWidth`). The deployed nullifier accumulator's PRE root — the openable
+sorted-Poseidon2 root the grow-gate opens against. -/
+def beforeNullifierRootCol (w : Nat) : Nat := w + 26
+
+/-- The rotated AFTER-block `nullifier_root` limb column (limb 26 of the after block at
+`base = traceWidth + 43`). The deployed nullifier accumulator's POST root — the grow-gate's
+`newRoot`. -/
+def afterNullifierRootCol (w : Nat) : Nat := w + 43 + 26
+
+/-! ## §5.N — the noteSpend KERNEL-SET GROW-GATE (the deployment-real set-insert + double-spend
+tooth).
+
+`RotatedKernelRefinementNotesFresh.lean` proves, against a MODELED nullifier tree, that a
+non-membership open (`GapOpen`/`opensTo … none`) FORCES `nf ∉ pre.nullifiers` and a set-insert
+gate FORCES `post.nullifiers = nf :: pre.nullifiers`. Until now the DEPLOYED rotated descriptor
+carried `nullifier_root` (limb 26) as a TURN-INVARIANT witness limb (before == after; no gate),
+so `kernel_set_insert_is_not_forced_by_the_live_descriptor` proved a frozen/forged nullifier
+root still verifies.
+
+These two `MapOp`s CLOSE that on the live wire — the EXISTING IR-v2 map-ops machinery (the same
+the cap-crown attenuate write rides) is the row-level grow-gate the negative test claimed the
+per-row IR "cannot express":
+
+  * **`nullifierFreshOp`** (`.absent`) — the in-circuit DOUBLE-SPEND tooth: the published
+    nullifier `param0` is NON-MEMBER of the BEFORE nullifier tree (limb 26). Under CR
+    (`opensTo_none_of_gap` / the gap bracketing) this is the deployed face of the Lean
+    `GapOpen` the `NotesFresh` rung consumes; a double-spend (`nf` already present) has no
+    bracketing witness and is UNSAT.
+  * **`nullifierInsertOp`** (`.insert`) — the SET-INSERT: the AFTER nullifier root (limb 26 of
+    the after block) IS the genuine sorted insert of `param0` into the BEFORE root. Under CR
+    (`writesTo_functional`) the after-root column cannot be frozen or forged — it is pinned to
+    the real grown tree. This is the deployed face of `gNoteGrow`.
+
+Both gated by the noteSpend selector (`SEL_NOTE_SPEND = 4`), so non-spend / NoOp pad rows (where
+the selector is 0) contribute nothing. The published nullifier `param0` (`NULLIFIER_PARAM_COL`)
+is ALREADY the spend row's folded nullifier (cross-bound to PI[38] by `rotateV3WithNullifierPin`),
+so the gate's key IS the same nullifier the apex reads. -/
+
+/-- The DOUBLE-SPEND tooth (the deployed `GapOpen` face): the published nullifier `param0` is a
+NON-MEMBER of the BEFORE nullifier tree (limb 26); the root is unchanged by an absent read. -/
+def nullifierFreshOp : MapOp :=
+  { guard   := .var EffectVmEmitNoteSpend.SEL_NOTE_SPEND
+  , root    := .var (beforeNullifierRootCol EFFECT_VM_WIDTH)
+  , key     := .var NULLIFIER_PARAM_COL
+  , value   := .const 0
+  , newRoot := .var (beforeNullifierRootCol EFFECT_VM_WIDTH)
+  , op      := .absent }
+
+/-- The SET-INSERT (the deployed `gNoteGrow` face): the AFTER nullifier root (limb 26 of the
+after block) IS the genuine sorted write of `param0` into the BEFORE root. The note value
+(`param::NOTE_VALUE_LO`) rides as the leaf value so a spent nullifier carries its note datum. -/
+def nullifierInsertOp : MapOp :=
+  { guard   := .var EffectVmEmitNoteSpend.SEL_NOTE_SPEND
+  , root    := .var (beforeNullifierRootCol EFFECT_VM_WIDTH)
+  , key     := .var NULLIFIER_PARAM_COL
+  , value   := .var (prmCol EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
+  , newRoot := .var (afterNullifierRootCol EFFECT_VM_WIDTH)
+  , op      := .insert }
+
+/-- **`noteSpendV3`** — the rotated note-spend WITH the nullifier PI weld AND the KERNEL-SET
+GROW-GATE (the deployment-real set-insert + double-spend tooth). `piCount = 39` (the 38-PI
+rotated prefix + the appended nullifier slot). Past the graduated `rotateV3WithNullifierPin`
+descriptor, it appends the two map-ops that FORCE the nullifier set-insert on the live wire:
+`nullifierFreshOp` (the `.absent` double-spend tooth — `nf ∉ pre`) and `nullifierInsertOp` (the
+`.insert` set-insert — `after_root = insert(before_root, nf)`). These repoint limb 26 from a
+turn-invariant witness limb into a FORCED, grown, fresh nullifier root. -/
 def noteSpendV3 : EffectVmDescriptor2 :=
-  graduateV1 (rotateV3WithNullifierPin EffectVmEmitNoteSpend.noteSpendVmDescriptor)
+  let base := graduateV1 (rotateV3WithNullifierPin EffectVmEmitNoteSpend.noteSpendVmDescriptor)
+  { base with
+    constraints := base.constraints ++ [.mapOp nullifierFreshOp, .mapOp nullifierInsertOp] }
+
+/-- **`noteSpendV3_grow_gate_forces_set_insert` — the live descriptor FORCES the nullifier
+set-insert + freshness (the deployment-real tooth).** On a satisfying `noteSpendV3` witness whose
+spend selector fires, the two appended map-ops hold: (1) the published nullifier is ABSENT from
+the BEFORE nullifier tree (limb 26) — the in-circuit double-spend tooth (`opensTo … none`); and
+(2) the AFTER nullifier root IS the genuine sorted insert of that nullifier into the BEFORE root
+(`writesTo`). Under CR these are FUNCTIONAL (`opensTo_functional` / `writesTo_functional`), so a
+frozen or forged after-root, or a double-spent (present) nullifier, cannot satisfy the descriptor
+— exactly the forgery `kernel_set_insert_is_not_forced_by_the_live_descriptor` documented, now
+REJECTED. The map-ops are the deployed faces of the `NotesFresh` `GapOpen` (`.absent`) and
+`gNoteGrow` (`.insert`). -/
+theorem noteSpendV3_grow_gate_forces_set_insert (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteSpendV3 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (hspend : (envAt t i).loc EffectVmEmitNoteSpend.SEL_NOTE_SPEND = 1) :
+    -- (1) the double-spend tooth: the published nullifier is absent from the BEFORE tree.
+    (opensTo hash ((envAt t i).loc (beforeNullifierRootCol EFFECT_VM_WIDTH))
+        ((envAt t i).loc NULLIFIER_PARAM_COL) none)
+    -- (2) the set-insert: the AFTER root is the genuine sorted write of the nullifier.
+    ∧ writesTo hash ((envAt t i).loc (beforeNullifierRootCol EFFECT_VM_WIDTH))
+        ((envAt t i).loc NULLIFIER_PARAM_COL)
+        ((envAt t i).loc (prmCol EffectVmEmitNoteSpend.param.NOTE_VALUE_LO))
+        ((envAt t i).loc (afterNullifierRootCol EFFECT_VM_WIDTH)) := by
+  have hrowc := hsat.rowConstraints i hi
+  have hfresh := hrowc (.mapOp nullifierFreshOp) (by simp [noteSpendV3])
+  have hins := hrowc (.mapOp nullifierInsertOp) (by simp [noteSpendV3])
+  -- the map-op denotations fire under the spend selector (`SEL_NOTE_SPEND = 1`).
+  have ha := hfresh hspend
+  have hw := hins hspend
+  exact ⟨ha.1, hw⟩
 
 /-- The appended pin is the only constraint past `rotateV3`'s, and it targets the new slot. -/
 theorem rotateV3WithNullifierPin_constraints (d : EffectVmDescriptor) :
@@ -936,8 +1031,12 @@ theorem noteSpendV3_satisfiedVm_v1 (hash : List ℤ → ℤ)
 -- Graduation survives the appended pin.
 #guard graduable (rotateV3WithNullifierPin EffectVmEmitNoteSpend.noteSpendVmDescriptor)
 -- The rotated commit pins are UNDISTURBED at 34..37 (the fifth pin is strictly appended);
--- `noteSpendV3` carries the four rotated commit pins PLUS exactly one more PI pin.
-#guard noteSpendV3.constraints.length == (v3Of EffectVmEmitNoteSpend.noteSpendVmDescriptor).constraints.length + 1
+-- `noteSpendV3` carries the four rotated commit pins PLUS one more PI pin (the nullifier weld)
+-- PLUS the two KERNEL-SET grow-gate map-ops (`nullifierFreshOp` `.absent` + `nullifierInsertOp`
+-- `.insert` — the deployment-real set-insert + double-spend tooth) = +3 constraints in total.
+#guard noteSpendV3.constraints.length == (v3Of EffectVmEmitNoteSpend.noteSpendVmDescriptor).constraints.length + 1 + 2
+-- The grow-gate map-ops ARE present on `noteSpendV3` (the live wire now carries the set-insert).
+#guard (mapOpsOf noteSpendV3).length == 2
 -- BOTH POLARITIES of the soundness tooth, executable on the toy environment: a row whose
 -- param0 equals PI[38] PASSES the pin; a tampered one FAILS it. (`decEnv` toy: param col 68
 -- carries `n`, PI 38 carries `p`.)
@@ -1665,6 +1764,7 @@ theorem customV3_binds_proof (hash : List ℤ → ℤ)
 #assert_axioms attenuateV3_non_amp
 #assert_axioms proofBindsOf_customV3
 #assert_axioms customV3_binds_proof
+#assert_axioms noteSpendV3_grow_gate_forces_set_insert
 
 -- NON-VACUITY of the bound block, executable (Horner toy sponge): moving the heap-root limb
 -- (offset 27) or the iroot moves the chained commitment the appendix pins.
