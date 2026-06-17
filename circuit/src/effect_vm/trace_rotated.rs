@@ -93,6 +93,10 @@ pub const B_RECORD_DIGEST: usize = B_AUTHORITY_DIGEST;
 pub const B_LIFECYCLE: usize = 28;
 /// In-block offset of the `cap_root` limb (the welded cap-root, limb 25).
 pub const B_CAP_ROOT: usize = 25;
+/// nullifier-root offset inside a block (limb 26) — the deployed nullifier accumulator's
+/// openable sorted-Poseidon2 root the noteSpend grow-gate (`nullifierFreshOp` / `nullifierInsertOp`)
+/// opens against.
+pub const B_NULLIFIER_ROOT: usize = 26;
 /// In-block offset of the `committed_height` limb (limb 30).
 pub const B_COMMITTED_HEIGHT: usize = 30;
 /// In-block offset of the iroot carrier (absorbed last, limb 31).
@@ -313,6 +317,91 @@ pub fn generate_rotated_effect_vm_trace(
     }
 
     Ok((trace, dpis))
+}
+
+/// **THE DEPLOYMENT-REAL noteSpend nullifier-tree wiring (the kernel-set grow-gate's witness).**
+///
+/// The live `noteSpendVmDescriptor2R24` now carries two map-ops gated by the spend selector — the
+/// `nullifierFreshOp` (`.absent`: the published nullifier is a NON-MEMBER of the BEFORE nullifier
+/// tree — the in-circuit double-spend tooth) and `nullifierInsertOp` (`.write`: the AFTER root IS
+/// the genuine sorted insert of the nullifier). Those map-ops open the rotated `nullifier_root`
+/// limb (limb 26) against a real sorted-Poseidon2 tree. The bare generator carries limb 26 as a
+/// turn-invariant `hash_bytes` witness, which the map-ops cannot open.
+///
+/// This wrapper makes limb 26 the DEPLOYED openable accumulator root for a NoteSpend turn:
+///   * `before_nullifiers` are the existing nullifier-set leaves (the spent nullifier MUST be
+///     absent — the freshness precondition; the `.absent` op refuses a double-spend);
+///   * limb 26 of EVERY before-block is overwritten with the BEFORE tree's root, and limb 26 of
+///     every after-block with the root of the BEFORE tree PLUS the inserted spent nullifier (the
+///     set-insert the `.write` op forces);
+///   * the affected `wireCommitR` chain + `STATE_COMMIT` carriers are recomputed in place, and the
+///     OLD/NEW rotated commit PIs are re-derived, so the published commitment binds the grown set;
+///   * the BEFORE tree's leaves are returned as the single `map_heaps` entry the prover threads
+///     into `prove_vm_descriptor2` to resolve both map-ops.
+///
+/// The nullifier's leaf key is the spend row's folded `param0` (`PARAM_BASE + param::NULLIFIER` —
+/// the SAME felt PI[38] pins), and the inserted leaf value is the note value (`param::NOTE_VALUE_LO`),
+/// so the gate's key/value are the row's own published columns. Returns `(trace, dpis, map_heaps)`.
+pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_nullifiers: &[crate::heap_root::HeapLeaf],
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+    use super::columns::{PARAM_BASE, param};
+    use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+
+    if !matches!(effects.first(), Some(Effect::NoteSpend { .. })) {
+        return Err("nullifier-tree wiring is only for a NoteSpend lead effect".into());
+    }
+
+    // The base rotated trace (carries the welds, the v1 economic block, the nullifier PI[38]).
+    let (mut trace, mut dpis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+
+    // The spent nullifier's leaf key + value, read from the spend row (row 0).
+    let nf_key = trace[0][PARAM_BASE + param::NULLIFIER];
+    let nf_value = trace[0][PARAM_BASE + param::NOTE_VALUE_LO];
+
+    // The BEFORE tree (the deployed accumulator before the spend) and the AFTER tree (= BEFORE +
+    // the inserted nullifier leaf). The spent nullifier MUST be absent from BEFORE — the freshness
+    // precondition the `.absent` op enforces; a double-spend has no bracketing witness and the
+    // prover REFUSES it.
+    let before_tree = CanonicalHeapTree::new(before_nullifiers.to_vec(), HEAP_TREE_DEPTH);
+    if before_tree.position_of(nf_key).is_some() {
+        return Err(
+            "double-spend: the nullifier is already in the BEFORE nullifier tree — the in-circuit \
+             freshness (`.absent`) op has no bracketing witness and refuses the turn"
+                .into(),
+        );
+    }
+    let before_root = before_tree.root();
+    let mut after_leaves = before_nullifiers.to_vec();
+    after_leaves.push(HeapLeaf {
+        addr: nf_key,
+        value: nf_value,
+    });
+    let after_root = CanonicalHeapTree::new(after_leaves.clone(), HEAP_TREE_DEPTH).root();
+
+    // Override limb 26 of BOTH blocks on EVERY row with the openable accumulator roots, then
+    // recompute the dependent chained commitments so the published `STATE_COMMIT` binds the grown
+    // set. (The bare limb-26 `hash_bytes` witness is replaced by the real tree roots.)
+    for row in trace.iter_mut() {
+        row[BEFORE_BASE + B_NULLIFIER_ROOT] = before_root;
+        row[AFTER_BASE + B_NULLIFIER_ROOT] = after_root;
+        recompute_block_commit(row, BEFORE_BASE);
+        recompute_block_commit(row, AFTER_BASE);
+    }
+
+    // Re-derive the OLD/NEW rotated commit PIs (the limb-26 override moved the commitments).
+    let r0_commit = trace[0][BEFORE_BASE + B_STATE_COMMIT];
+    let last_commit = trace[trace.len() - 1][AFTER_BASE + B_STATE_COMMIT];
+    dpis[V1_PI_COUNT] = r0_commit; // PI 34: rotated OLD commit
+    dpis[V1_PI_COUNT + 1] = last_commit; // PI 35: rotated NEW commit
+
+    Ok((trace, dpis, vec![before_nullifiers.to_vec()]))
 }
 
 /// The in-AFTER-block limb offset the record-forcing pin welds for a given lead effect, or
@@ -852,6 +941,16 @@ fn recompute_block_commit(row: &mut [BabyBear], base: usize) {
         chain += 1;
     }
     row[base + B_STATE_COMMIT] = hash_many(&[d, row[base + B_IROOT]]);
+}
+
+/// Test helper: recompute EVERY row's AFTER-block chained commitment in place (after an in-place
+/// limb patch, e.g. forging the after `nullifier_root` to test the grow-gate tooth). Exposed for
+/// the rotation-flip adversarial tests; not used on any honest path.
+#[doc(hidden)]
+pub fn recompute_after_blocks_for_test(trace: &mut [Vec<BabyBear>]) {
+    for row in trace.iter_mut() {
+        recompute_block_commit(row, AFTER_BASE);
+    }
 }
 
 /// Recompute one v1 state block's STATE_COMMIT intermediates + digest from the block's state

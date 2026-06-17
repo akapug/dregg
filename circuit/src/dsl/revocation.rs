@@ -488,6 +488,19 @@ impl DslRevocationTree {
         self.levels[self.depth][0]
     }
 
+    /// The real revocation-set leaves (the spent-nullifier felts), EXCLUDING the two sentinels.
+    /// Used to seed the EffectVM rotated note-spend's limb-26 nullifier accumulator (the
+    /// kernel-set grow-gate's BEFORE tree) from the SAME freshness set the non-revocation proof
+    /// opens against, so the in-circuit `.absent`/`.insert` map-ops and the non-revocation leg
+    /// agree on which nullifiers are already spent.
+    pub fn revoked_leaves(&self) -> Vec<BabyBear> {
+        self.sorted_leaves
+            .iter()
+            .copied()
+            .filter(|h| *h != SENTINEL_MIN && *h != SENTINEL_MAX)
+            .collect()
+    }
+
     /// Check if a hash is in the revocation set (excluding sentinels).
     pub fn contains(&self, hash: &BabyBear) -> bool {
         if *hash == SENTINEL_MIN || *hash == SENTINEL_MAX {

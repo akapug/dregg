@@ -136,8 +136,21 @@ impl TurnExecutor {
             })?;
         let pre_nonce = (cell.state.nonce().saturating_sub(1)) as u32;
         let cell_committed_height = cell.state.committed_height();
+        // P0-2 (commit `548ac920a`): the deployed commitment now binds the FULL kernel — the
+        // circuit `record_digest` aux column is seeded from the cell's authority residue
+        // (`compute_authority_digest_felt`), NOT the cell-independent `empty_record_digest()`.
+        // The producer seeds this same digest (`cipherclerk::prove_sovereign_turn_rotated`'s
+        // `with_capability_root_and_record_digest`), so the verifier MUST reproduce it to
+        // regenerate the identical trace + PI vector — otherwise the Fiat–Shamir transcript
+        // diverges and the FRI proof-of-work witness is rejected (`InvalidPowWitness`).
+        let record_digest = dregg_cell::compute_authority_digest_felt(cell);
         let initial_vm_state =
-            dregg_circuit::CellState::with_capability_root(pre_balance, pre_nonce, cap_root);
+            dregg_circuit::CellState::with_capability_root_and_record_digest(
+                pre_balance,
+                pre_nonce,
+                cap_root,
+                record_digest,
+            );
         let vm_effects = convert_turn_effects_to_vm(cell_id, turn);
 
         // 4. Resolve the cohort descriptor by the turn's lead effect (the SAME resolver

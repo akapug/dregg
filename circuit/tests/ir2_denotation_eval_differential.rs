@@ -125,12 +125,17 @@ enum MapKind {
     Read,
     Write,
     Absent,
+    /// Sorted insert at a FRESH key (Lean `MapOpKind.insert`, code 3). Denotation is `writesTo`
+    /// (same as `Write`); the wire code differs so the deployed map-ops table picks the fresh-key
+    /// insert procedure. Freshness is established by a paired `Absent` op (the noteSpend grow-gate).
+    Insert,
 }
 fn map_code(k: MapKind) -> i128 {
     match k {
         MapKind::Read => 0,
         MapKind::Write => 1,
         MapKind::Absent => 2,
+        MapKind::Insert => 3,
     }
 }
 
@@ -416,7 +421,7 @@ fn constraint_holds_at(
             match m.op {
                 MapKind::Read => op.members.contains(&(root, key, value)) && new_root == root,
                 MapKind::Absent => op.absents.contains(&(root, key)) && new_root == root,
-                MapKind::Write => op.writes.contains(&(root, key, value, new_root)),
+                MapKind::Write | MapKind::Insert => op.writes.contains(&(root, key, value, new_root)),
             }
         }
         // .windowGate w: w.holdsAt env isLast (Lean 325): on_transition ⇒ (¬isLast → body=0);
@@ -640,7 +645,7 @@ fn eval_enforces(
                     // MapOps:2133 — read returns committed value, root preserved.
                     MapKind::Read => op.members.contains(&(root, key, value)) && new_root == root,
                     MapKind::Absent => op.absents.contains(&(root, key)) && new_root == root,
-                    MapKind::Write => op.writes.contains(&(root, key, value, new_root)),
+                    MapKind::Write | MapKind::Insert => op.writes.contains(&(root, key, value, new_root)),
                 };
                 if !ok {
                     return false;

@@ -5329,6 +5329,10 @@ impl AgentCipherclerk {
             &before_w,
             &after_w,
             &caveat,
+            // This cipherclerk path threads no nullifier-set context; a NoteSpend turn here proves
+            // against an EMPTY before nullifier accumulator (the grow-gate inserts into empty). The
+            // full-turn chained path threads the real freshness leaves from the non-revocation witness.
+            None,
         )?;
         let proof_bytes = postcard::to_allocvec(&proof)
             .map_err(|e| SdkError::Wire(format!("rotated proof serialize: {e}")))?;

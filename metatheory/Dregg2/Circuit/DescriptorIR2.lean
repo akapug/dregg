@@ -219,15 +219,20 @@ structure UMemOp where
   kind        : MemoryChecking.Kind
   deriving Repr
 
-/-- Map reconciliation kind: a membership read, a non-membership read, or a (sorted insert-or-
-update) write. -/
+/-- Map reconciliation kind: a membership read, a non-membership read, a (sorted insert-or-
+update at an EXISTING key) write, or a (sorted insert at a FRESH key) insert. The `write` and
+`insert` denotations are both `writesTo` (sorted insert-or-update); they differ ONLY in the wire
+`op` column so the deployed map-ops table picks the right opening procedure (an update opens the
+old leaf's path; a fresh insert opens against the NEW tree). Freshness for `insert` is established
+SEPARATELY by a paired `absent` op against the same pre-root (the noteSpend double-spend tooth). -/
 inductive MapOpKind where
-  | read | write | absent
+  | read | write | absent | insert
   deriving Repr, DecidableEq, BEq
 
-/-- The wire code of a map-op kind (the map-ops table's `op` column value). -/
+/-- The wire code of a map-op kind (the map-ops table's `op` column value; matches the Rust
+`MapKind::code`). -/
 def MapOpKind.code : MapOpKind → ℤ
-  | .read => 0 | .write => 1 | .absent => 2
+  | .read => 0 | .write => 1 | .absent => 2 | .insert => 3
 
 /-- A boundary reconciliation `(root, key, value, op) → new_root`, as column expressions over the
 emitting main row. `guard` gates the contribution. -/
@@ -463,6 +468,8 @@ def MapOp.holdsAt (hash : List ℤ → ℤ) (env : VmRowEnv) (m : MapOp) : Prop 
     | .absent => opensTo hash (m.root.eval env.loc) (m.key.eval env.loc) none
                  ∧ m.newRoot.eval env.loc = m.root.eval env.loc
     | .write  => writesTo hash (m.root.eval env.loc) (m.key.eval env.loc)
+                   (m.value.eval env.loc) (m.newRoot.eval env.loc)
+    | .insert => writesTo hash (m.root.eval env.loc) (m.key.eval env.loc)
                    (m.value.eval env.loc) (m.newRoot.eval env.loc)
 
 /-! ## §5 — Memory-op semantics: the read/write multiset, WELDED to the proved Blum theorem.
@@ -1128,7 +1135,7 @@ def TableDef.toJson (td : TableDef) : String :=
 
 /-- The map-op kind wire strings. -/
 def MapOpKind.tag : MapOpKind → String
-  | .read => "read" | .write => "write" | .absent => "absent"
+  | .read => "read" | .write => "write" | .absent => "absent" | .insert => "insert"
 
 /-- Render one lookup. -/
 def Lookup.toJson (l : Lookup) : String :=
