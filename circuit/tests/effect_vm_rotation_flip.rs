@@ -804,6 +804,142 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
     );
 }
 
+/// THE ROTATED WIRE-COMMIT ↔ LEAN DIFFERENTIAL (the ACTUALLY-PUBLISHED commitment).
+///
+/// The Lean module `Dregg2.Circuit.RotatedCommitDifferential` pins the PUBLISHED rotated
+/// commitment (the `OLD_COMMIT`/`NEW_COMMIT` the light client verifies) as
+/// `wireCommitR(rotatedLimbs, iroot)` over the 31 pre-iroot limbs in the order
+///   `[cells_root, r0..r23, cap_root, nullifier_root, heap_root, lifecycle, epoch, committed_height]`
+/// with the authority residue (`compute_authority_digest_felt`) NAMED at index 24 (register r23),
+/// and proves `rotatedCommit_binds_authority_digest`: tampering the authority residue MOVES the
+/// published commitment.
+///
+/// This test is the Rust empirical twin in the SAME two forms the per-cell differential
+/// (`effect_vm_commit_lean_differential.rs`) carries:
+///
+///   (a) THE INDEPENDENT RE-FOLD: an `independent_wire_commit` written here, byte-for-byte the
+///       Lean `wireCommitR` chained absorption (4-wide head, 3-wide chip body while ≥ 3 pre-iroot
+///       limbs remain, the iroot ALONE last), folded over the SAME limb order the real
+///       `compute_rotated_pre_limbs` produces, EQUALS the deployed
+///       `compute_canonical_state_commitment_v9_felt` (the actually-published value). The shape
+///       MATCHES — no reorder, no dropped limb, no extra limb.
+///
+///   (b) THE P0-2 NON-VACUITY ON THE PUBLISHED COMMITMENT: a permission flip
+///       (`send: None -> Impossible`) — authority state that lives ONLY in the r23 authority digest,
+///       no named limb — MOVES the published rotated commitment. Two cells differing ONLY in a
+///       permission PUBLISH different `OLD_COMMIT`s, so the light client cannot be shown a
+///       wide-open cell as a locked-down one. (The pre-existing differential moved the per-cell
+///       `compute_commitment`; THIS moves the rotated `wire_commit` the light client actually pins.)
+#[test]
+fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
+    use dregg_cell::commitment::{
+        V9_NUM_PRE_LIMBS, compute_authority_digest_felt, compute_rotated_pre_limbs,
+    };
+    use dregg_circuit::poseidon2::hash_many;
+
+    // An independent re-fold of the rotated wire-commit, written to match the Lean
+    // `EffectVmEmitRotationR.wireCommitR` chained absorption EXACTLY (and the deployed
+    // `cell::commitment::v9_wire_commit`): 4-wide head, 3-wide groups while ≥ 3 remain, the iroot
+    // ALONE last. Independent of the deployed `v9_wire_commit` (re-derived here from the public
+    // `hash_many` primitive + the pre-limb vector), so agreement is a genuine differential.
+    fn independent_wire_commit(pre_limbs: &[BabyBear], iroot: BabyBear) -> BabyBear {
+        assert_eq!(pre_limbs.len(), V9_NUM_PRE_LIMBS, "31 pre-iroot limbs at R=24");
+        // 4-wide head over the first four limbs (cells_root, r0, r1, r2).
+        let mut d = hash_many(&[pre_limbs[0], pre_limbs[1], pre_limbs[2], pre_limbs[3]]);
+        let mut col = 4;
+        while col < V9_NUM_PRE_LIMBS {
+            let remaining = V9_NUM_PRE_LIMBS - col;
+            if remaining >= 3 {
+                d = hash_many(&[d, pre_limbs[col], pre_limbs[col + 1], pre_limbs[col + 2]]);
+                col += 3;
+            } else {
+                d = hash_many(&[d, pre_limbs[col]]);
+                col += 1;
+            }
+        }
+        // the iroot rides its OWN arity-2 final site, LITERALLY last.
+        hash_many(&[d, iroot])
+    }
+
+    // A residue-free baseline cell (default permissions / no VK) and a turn context.
+    let plain = producer_cell(100_000, 0);
+    let nullifier_root = [0u8; 32];
+    let iroot = BabyBear::new(0x1234);
+    let cells_root = BabyBear::new(0x5678);
+    let ctx = V9RotationContext {
+        cells_root,
+        nullifier_root,
+        iroot,
+    };
+
+    // -- (a) THE INDEPENDENT RE-FOLD == the deployed PUBLISHED commitment. --
+    // The deployed pre-limb vector (the Lean `rotatedLimbs` order) and the deployed published felt.
+    let pre = compute_rotated_pre_limbs(&plain, &ctx);
+    assert_eq!(pre.len(), V9_NUM_PRE_LIMBS, "31 limbs");
+    // The authority residue sits at index 24 (register r23) — the Lean `authority_digest_at_index_24`.
+    assert_eq!(
+        pre[24],
+        compute_authority_digest_felt(&plain),
+        "the rotated limb at index 24 IS compute_authority_digest_felt (the Lean r23 pin)"
+    );
+    let published = compute_canonical_state_commitment_v9_felt(&plain, &ctx);
+    let refold = independent_wire_commit(&pre, iroot);
+    assert_eq!(
+        published, refold,
+        "the deployed PUBLISHED rotated commitment == an independent re-fold over the Lean \
+         rotatedLimbs order (wireCommitR shape MATCHES — no reorder / drop / extra limb)"
+    );
+
+    // -- (b) P0-2 NON-VACUITY on the PUBLISHED commitment: a permission flip MOVES it. --
+    // The flip touches authority state that lives ONLY in the r23 authority digest (no named limb).
+    let mut locked = producer_cell(100_000, 0);
+    locked.permissions.send = AuthRequired::Impossible;
+
+    // First, the authority residue felt itself moves (the limb is genuinely load-bearing).
+    assert_ne!(
+        compute_authority_digest_felt(&plain),
+        compute_authority_digest_felt(&locked),
+        "a permission change MOVES compute_authority_digest_felt — the r23 residue is genuinely \
+         bound, not a constant stub"
+    );
+
+    // The pre-limb vectors differ ONLY at index 24 (the authority digest) — every OTHER named limb
+    // (cells_root, balance/nonce/fields, cap_root, nullifier/heap roots, lifecycle/epoch/height) is
+    // identical, since only `permissions.send` changed.
+    let pre_locked = compute_rotated_pre_limbs(&locked, &ctx);
+    for i in 0..V9_NUM_PRE_LIMBS {
+        if i == 24 {
+            assert_ne!(pre[i], pre_locked[i], "index 24 (authority digest) MUST move");
+        } else {
+            assert_eq!(
+                pre[i], pre_locked[i],
+                "limb {i} (a NAMED non-authority limb) must be unchanged by a permission flip"
+            );
+        }
+    }
+
+    // THE HEADLINE: the PUBLISHED rotated commitment (what the light client pins) MOVES.
+    let published_locked = compute_canonical_state_commitment_v9_felt(&locked, &ctx);
+    assert_ne!(
+        published, published_locked,
+        "P0-2 on the ACTUALLY-PUBLISHED commitment: a permission flip MOVES the rotated \
+         OLD/NEW_COMMIT the light client verifies — a wide-open cell cannot be presented as a \
+         locked-down one"
+    );
+    // The independent re-fold tracks the move too (the differential holds on the flipped cell).
+    assert_eq!(
+        published_locked,
+        independent_wire_commit(&pre_locked, iroot),
+        "the independent re-fold == the deployed published commitment on the flipped cell too"
+    );
+
+    eprintln!(
+        "ROTATED WIRE-COMMIT LEAN DIFFERENTIAL GREEN: the PUBLISHED rotated commitment == an \
+         independent re-fold over the Lean rotatedLimbs order, and a permission flip MOVES the \
+         published OLD/NEW_COMMIT (P0-2 non-vacuity on the commitment the light client pins)."
+    );
+}
+
 /// PATH-PRESERVE §4 / §6.1 — THE NON-SYNTHETIC-CELL DIFFERENTIAL (Phase 0, the §4-premise check).
 ///
 /// The other differential tests in this file run a real public-key cell but with ZERO fields. §4's
