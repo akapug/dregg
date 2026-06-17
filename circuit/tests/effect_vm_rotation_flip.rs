@@ -1223,3 +1223,163 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
          the binds-but-unforced deployment gap is closed for cellSeal."
     );
 }
+
+/// THE DEPLOYMENT-SOUNDNESS CLOSE for the field-NOT-bound AUDIT WRITES — `refusal` and
+/// `receiptArchive`. Before this, these two effects wrote a cell audit slot (`"refusal"` /
+/// `"lifecycle"` RECORD slots, `Spec.CellStateAudit.{RefusalSpec,ReceiptArchiveSpec}`) that the
+/// deployed rotated commitment carried but the rotated descriptor did NOT FORCE: a prover could
+/// publish a commitment to a post that CLAIMS a refusal / archive that did not happen, and the
+/// descriptor accepted (`v3Of` had no record pin). The audit slot is a NAMED record field that
+/// lands in the deployed cell's `fields_root` (the named-field map), which
+/// `compute_authority_digest_felt` FOLDS into the r23 authority residue (`B_RECORD_DIGEST` = limb
+/// 24). So a genuine audit write MOVES the AFTER `record_digest` limb; the record-forcing pin
+/// (`EffectVmEmitRotationV3.{refusalV3,receiptArchiveV3}`, `rotateV3WithRecordPin B_RECORD_DIGEST`)
+/// welds it to PI[38]. A FROZEN-audit-slot AFTER block (the forged refusal / archive) carries the
+/// unchanged record digest, FAILS the pin, and is UNSAT — the gap closed for the LIVE descriptor.
+#[test]
+fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
+    use dregg_circuit::effect_vm::trace_rotated::B_RECORD_DIGEST;
+
+    // An out-of-`fields[0..16]` audit key: writing it via `set_field_ext` lands in the cell's
+    // `fields_root` (the named-field map), exactly where the `"refusal"` / `"lifecycle"` audit
+    // slots live — so the after cell's authority digest (r23) genuinely moves. (Both slots use the
+    // SAME `B_RECORD_DIGEST` limb; this audit key stands for either named slot.)
+    const AUDIT_KEY: u64 = 4096;
+
+    // The two audit effects, each routed to `B_RECORD_DIGEST` by `record_pin_offset`.
+    let refusal = Effect::Refusal {
+        target: [BabyBear::new(0); 8],
+        reason_hash: [BabyBear::new(5); 8],
+    };
+    let archive = Effect::ReceiptArchive {
+        target: [BabyBear::new(0); 8],
+        archive_end_height: BabyBear::new(7),
+        terminal_receipt_hash: [BabyBear::new(11); 8],
+    };
+
+    for (effect, expect_name) in [
+        (refusal, "refusalVmDescriptor2R24"),
+        (archive, "receiptArchiveVmDescriptor2R24"),
+    ] {
+        let name = rotated_descriptor_name_for_effect(&effect)
+            .expect("audit effect is a rotated cohort member");
+        assert_eq!(name, expect_name);
+
+        let json = rotated_descriptor_json(name);
+        let desc = parse_vm_descriptor2(json).expect("rotated audit descriptor parses");
+        assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 311");
+        assert_eq!(
+            desc.public_input_count, 39,
+            "{name} carries the appended record-forcing pin (39 PIs)"
+        );
+
+        // A real audit turn: the audit slot is written (record_digest moves), nonce ticks, the
+        // economic block is otherwise frozen.
+        let balance: i64 = 50_000;
+        let st = CellState::new(balance as u64, 0);
+        let effects = vec![effect];
+
+        let mut ledger = Ledger::new();
+        let before_cell = producer_cell(balance, 0);
+        let mut after_cell = producer_cell(balance, 1); // nonce ticks
+        // The audit write: the named record slot flips to 1 (the audit commitment). This moves
+        // `fields_root` and therefore `compute_authority_digest_felt` (the r23 limb).
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        assert!(
+            after_cell.state.set_field_ext(AUDIT_KEY, one),
+            "the audit-slot write must take"
+        );
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
+
+        let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &receipt_log);
+
+        // The record-digest limb genuinely MOVED (the forgery the pin forbids would freeze it):
+        // the authority residue folds `fields_root`, which the audit write changed.
+        assert_ne!(
+            before_w.pre_limbs[B_RECORD_DIGEST], after_w.pre_limbs[B_RECORD_DIGEST],
+            "{name}: the producer witnesses a DISTINCT record digest for the audit post \
+             (the audit slot is bound by r23 — anti-omission)"
+        );
+
+        let caveat = empty_caveat_manifest();
+        let (trace, dpis) = generate_rotated_effect_vm_trace(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &caveat,
+        )
+        .unwrap_or_else(|e| panic!("live rotated generator must produce a {name} trace + 39 PIs: {e}"));
+        assert_eq!(trace[0].len(), ROT_WIDTH, "311-col rotated trace");
+
+        // THE FIFTH PI: 39 elements, and PI[38] == the LAST row's AFTER record-digest limb.
+        assert_eq!(dpis.len(), 39, "{name} rotated PI is 39 (the record-forcing slot appended)");
+        let last = &trace[trace.len() - 1];
+        assert_eq!(
+            dpis[38],
+            last[AFTER_BASE + B_RECORD_DIGEST],
+            "PI 38 = the AFTER block's correctly-written (audit) record-digest limb"
+        );
+        assert_eq!(
+            dpis[38], after_w.pre_limbs[B_RECORD_DIGEST],
+            "PI 38 = compute_authority_digest_felt(post) from the post-state producer witness"
+        );
+        assert_eq!(dpis[34], trace[0][BEFORE_BASE + B_STATE_COMMIT], "PI 34 = rotated OLD commit");
+
+        let mem_boundary = MemBoundaryWitness::default();
+        let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+
+        // PROVE + VERIFY the honest audit turn end-to-end.
+        let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+            .unwrap_or_else(|e| panic!("honest rotated {name} must prove end-to-end: {e}"));
+        verify_vm_descriptor2(&desc, &proof, &dpis)
+            .unwrap_or_else(|e| panic!("honest rotated {name} proof must verify: {e}"));
+
+        // -- THE SOUNDNESS TOOTH (anti-ghost): the FROZEN-audit-slot forgery is UNSAT. --
+        let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+            }));
+            match r {
+                Err(_) => true,
+                Ok(res) => res.is_err(),
+            }
+        };
+        // (a) publish a DIFFERENT post in PI[38] than the AFTER block carries.
+        {
+            let mut p = dpis.clone();
+            p[38] = p[38] + BabyBear::ONE;
+            assert!(
+                refused(&trace, &p),
+                "{name}: a published PI[38] differing from the AFTER record-digest limb MUST be \
+                 UNSAT (the record pin)"
+            );
+        }
+        // (b) THE CENTRAL FORGERY: FREEZE the AFTER record-digest limb to the PRE value — the
+        //     audit-slot-NOT-written post the deployed circuit USED to accept (claiming a refusal /
+        //     archive that did not happen) — while PI[38] stays the honest written felt. UNSAT.
+        {
+            let mut t = trace.clone();
+            let last_row = t.len() - 1;
+            t[last_row][AFTER_BASE + B_RECORD_DIGEST] = before_w.pre_limbs[B_RECORD_DIGEST]; // frozen
+            assert!(
+                refused(&t, &dpis),
+                "{name}: FREEZING the AFTER record-digest limb (audit-slot-NOT-written post) while \
+                 claiming the written PI[38] MUST be UNSAT — the forged refusal / archive a prover \
+                 could previously publish (the commitment did not even bind the audit write) is now \
+                 rejected in the LIVE deployed descriptor"
+            );
+        }
+
+        eprintln!(
+            "ROTATED AUDIT RECORD-PIN ({name}, R=24, 39-PI, LIVE-GENERATED): PROVED + VERIFIED; \
+             the committed record-digest limb (r23, folding the audit slot via fields_root) is \
+             FORCED at PI[38], and a FROZEN-audit-slot forgery is UNSAT — the field-NOT-bound \
+             deployment gap is closed."
+        );
+    }
+}

@@ -1288,10 +1288,12 @@ theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (
 #guard (let env : VmRowEnv := ⟨fun c => if c == 54 then 100 else if c == 76 then 999 else if c == 69 then 30 else 0, fun _ => 0, fun _ => 0⟩;
         decide (gBalLoCreditP1.eval env.loc ≠ 0))   -- 999 ≠ 100 + 30 ⇒ REJECTS
 
-/-! ### The RECORD-FORCING PIN (the deployment-soundness close for the 5 binds-but-unforced effects).
+/-! ### The RECORD-FORCING PIN (the deployment-soundness close for the 7 binds-but-unforced effects).
 
 `cellSeal` / `cellUnseal` / `cellDestroy` write the per-cell `lifecycle` side-table; `setPermissions`
-/ `setVK` write a record slot folded into the per-cell `authority_digest` (the `record_digest`). The
+/ `setVK` AND the audit writes `refusal` / `receiptArchive` write a record slot folded into the
+per-cell `authority_digest` (the `record_digest` — the audit slots `"refusal"`/`"lifecycle"` land in
+`fields_root`, which the digest folds, `cell/src/commitment.rs::compute_authority_digest_felt`). The
 rotated AFTER block CARRIES those writes (limb 28 = `lifecycle`, limb 24 = `authority_digest`, filled
 from the post-state producer witness, `turn/src/rotation_witness.rs`) and the rolled-up commitment
 BINDS them — but NOTHING in `rotateV3` FORCES the AFTER limb to equal the CORRECTLY-WRITTEN value. So
@@ -1411,6 +1413,29 @@ folds the written `verification_key := vk`). -/
 def setVKV3 : EffectVmDescriptor2 :=
   graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST EffectVmEmitSetVK.setVKVmDescriptor)
 
+/-- **`refusalV3`** — the LIVE rotated refusal WITH the record-digest-forcing pin (the deployment
+close for the field-NOT-bound audit-write gap). The `.refusalA` arm sets the cell record's `"refusal"`
+audit slot to `1` (`TurnExecutorFull.refusalField`, `Spec.CellStateAudit.RefusalSpec`). That named
+record slot lands in the deployed cell's `fields_root` (the named-field map — NOT one of the welded
+`fields[0..7]` indexed slots), and `compute_authority_digest_felt` FOLDS `fields_root` into the r23
+authority residue (`B_RECORD_DIGEST` = limb 24). So the AFTER block's `record_digest` limb MOVES on a
+genuine refusal; pinning it to PI `38` forces the write. A FROZEN-audit-slot AFTER block (claiming a
+refusal that did not happen) carries the unchanged record digest, FAILS the pin, and is UNSAT
+(`rotateV3WithRecordPin_rejects_wrong_post`) — the forgery the deployed commitment did not even bind
+before is now BITING. -/
+def refusalV3 : EffectVmDescriptor2 :=
+  graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST EffectVmEmitRefusal.refusalVmDescriptor)
+
+/-- **`receiptArchiveV3`** — the LIVE rotated receiptArchive WITH the record-digest-forcing pin. The
+`.receiptArchiveA` arm sets the cell record's `"lifecycle"` audit RECORD slot to `1`
+(`TurnExecutorFull.lifecycleField`, `Spec.CellStateAudit.ReceiptArchiveSpec` — the RECORD field, NOT
+the `k.lifecycle` liveness side-table). That named record slot also lands in `fields_root`, folded
+into the r23 authority residue, so the AFTER `record_digest` limb MOVES on a genuine archive; pinning
+it to PI `38` forces it. A frozen-audit-slot archive forgery is UNSAT. -/
+def receiptArchiveV3 : EffectVmDescriptor2 :=
+  graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST
+    EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
+
 #assert_axioms graduable_rotateV3WithRecordPin
 #assert_axioms rotateV3WithRecordPin_pins
 #assert_axioms rotateV3WithRecordPin_rejects_wrong_post
@@ -1424,6 +1449,11 @@ def setVKV3 : EffectVmDescriptor2 :=
 #guard cellDestroyV3.piCount == 39
 #guard setPermsV3.piCount == 39
 #guard setVKV3.piCount == 39
+#guard refusalV3.piCount == 39
+#guard receiptArchiveV3.piCount == 39
+#guard graduable (rotateV3WithRecordPin B_RECORD_DIGEST EffectVmEmitRefusal.refusalVmDescriptor)
+#guard graduable (rotateV3WithRecordPin B_RECORD_DIGEST
+        EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
 #guard graduable (rotateV3WithRecordPin B_LIFECYCLE EffectVmEmitCellSeal.cellSealVmDescriptor)
 #guard graduable (rotateV3WithRecordPin B_LIFECYCLE EffectVmEmitCellUnseal.cellUnsealVmDescriptor)
 #guard graduable (rotateV3WithRecordPin B_LIFECYCLE EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
@@ -1459,7 +1489,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   , ("noteCreateVmDescriptor2R24", v3Of EffectVmEmitNoteCreate.noteCreateVmDescriptor)
   , ("cellSealVmDescriptor2R24", cellSealV3)
   , ("cellDestroyVmDescriptor2R24", cellDestroyV3)
-  , ("refusalVmDescriptor2R24", v3Of EffectVmEmitRefusal.refusalVmDescriptor)
+  , ("refusalVmDescriptor2R24", refusalV3)
   , ("setPermsVmDescriptor2R24", setPermsV3)
   , ("setVKVmDescriptor2R24", setVKV3)
   , ("exerciseVmDescriptor2R24", v3Of EffectVmEmitExercise.exerciseVmDescriptor)
@@ -1488,8 +1518,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   , ("factoryVmDescriptor2R24",
       v3Of EffectVmEmitCreateCellFromFactory.factoryActorVmDescriptor)
   , ("spawnVmDescriptor2R24", v3Of EffectVmEmitSpawn.spawnActorVmDescriptor)
-  , ("receiptArchiveVmDescriptor2R24",
-      v3Of EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
+  , ("receiptArchiveVmDescriptor2R24", receiptArchiveV3)
   , ("cellUnsealVmDescriptor2R24", cellUnsealV3)
   , ("emitEventVmDescriptor2R24", v3Of EffectVmEmitEmitEvent.emitEventVmDescriptor) ]
   ++ (List.finRange 8).map fun slot =>
