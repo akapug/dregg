@@ -658,6 +658,66 @@ theorem turnDecodeChain_refines_turnSpec
       subst headPre
       exact ⟨fa :: acts, d.post, hstep, htail⟩
 
+/-- **`turnDecodeChain_refines_turnSpec_gen` — the fold, GENERIC over an arm + step relation.** The
+list-induction core of `turnDecodeChain_refines_turnSpec`, abstracted away from the toy `dispatchArm`/
+`fullActionStep`: given any per-effect arm `arm : EffectIdx → RecChainedState → RecChainedState → Prop`
+whose every step entails some `(fa, actionTag fa = e, stepRel pre fa post)` (the lowering hypothesis
+`harm`), a `TurnDecodeChain` whose every step is `arm e d.pre d.post` (the `harm`-style per-step rung
+`hsteps`) folds into `∃ acts, Spec.Turn.turnSpec stepRel start acts fin`. The toy fold
+(`turnDecodeChain_refines_turnSpec`) is the instance at `arm := dispatchArm`, `stepRel :=
+fullActionStep`; the FAITHFUL fold instantiates it at `arm := dispatchArmFacet …`, `stepRel :=
+fullActionStepFacet …`. The proof reads `arm` ONLY through `harm`, so the same induction serves both
+towers. -/
+theorem turnDecodeChain_refines_turnSpec_gen
+    (hash : List ℤ → ℤ) (S : CommitSurface) (R : Registry)
+    (arm : EffectIdx → RecChainedState → RecChainedState → Prop)
+    (stepRel : RecChainedState → FullActionA → RecChainedState → Prop)
+    (harm : ∀ e pre post, arm e pre post →
+      ∃ fa : FullActionA, actionTag fa = e ∧ stepRel pre fa post)
+    {start fin : RecChainedState} (c : TurnDecodeChain hash S start fin)
+    (hsteps : ∀ d ∈ c.steps, ∃ e : EffectIdx, d.descr = R e ∧ arm e d.pre d.post) :
+    ∃ acts : List FullActionA, Spec.Turn.turnSpec stepRel start acts fin := by
+  obtain ⟨steps, _sat, headPre, lastPost, seam, _pubSeam⟩ := c
+  simp only at hsteps headPre lastPost
+  suffices key : ∀ (steps : List (DecodedStep S)) (start : RecChainedState),
+      List.IsChain (fun a b => a.post = b.pre) steps →
+      steps.head?.elim (start = fin) (fun d => start = d.pre) →
+      steps.getLast?.elim (start = fin) (fun d => d.post = fin) →
+      (∀ d ∈ steps, ∃ e : EffectIdx, d.descr = R e ∧ arm e d.pre d.post) →
+      ∃ acts : List FullActionA, Spec.Turn.turnSpec stepRel start acts fin by
+    exact key steps start seam headPre lastPost hsteps
+  clear seam headPre lastPost hsteps _sat _pubSeam steps start
+  intro steps
+  induction steps with
+  | nil =>
+      intro start _seam headPre _lastPost _href
+      simp only [List.head?_nil, Option.elim_none] at headPre
+      exact ⟨[], by simpa [Spec.Turn.turnSpec] using headPre⟩
+  | cons d rest ih =>
+      intro start seam headPre lastPost href
+      simp only [List.head?_cons, Option.elim_some] at headPre
+      obtain ⟨e, _hde, harmStep⟩ := href d List.mem_cons_self
+      obtain ⟨fa, _htag, hstep⟩ := harm e d.pre d.post harmStep
+      have hseamRest : List.IsChain (fun a b => a.post = b.pre) rest := seam.tail
+      have hheadRest : rest.head?.elim (d.post = fin) (fun d' => d.post = d'.pre) := by
+        cases rest with
+        | nil => simpa using (by simpa using lastPost)
+        | cons d' _ =>
+            have hrel := (List.isChain_cons.mp seam).1 d' (by simp)
+            simpa using hrel
+      have hlastRest : rest.getLast?.elim (d.post = fin) (fun d' => d'.post = fin) := by
+        cases rest with
+        | nil => simpa using lastPost
+        | cons d' rest' =>
+            have heq : (d :: d' :: rest').getLast? = (d' :: rest').getLast? := by
+              simp [List.getLast?_cons_cons]
+            simpa [heq] using lastPost
+      have hrefRest : ∀ d'' ∈ rest, ∃ e' : EffectIdx, d''.descr = R e' ∧
+          arm e' d''.pre d''.post := fun d'' hd'' => href d'' (List.mem_cons_of_mem _ hd'')
+      obtain ⟨acts, htail⟩ := ih d.post hseamRest hheadRest hlastRest hrefRest
+      subst headPre
+      exact ⟨fa :: acts, d.post, hstep, htail⟩
+
 /-! ### §8.1 — the turn-level endpoint commitments (DERIVED from the chain's first/last step).
 
 The whole-turn headline must export the PUBLISHED turn-level `(pre, post)` as genuine commitments of
@@ -779,6 +839,7 @@ theorem lightclient_turn_unfoolable_forest
 #assert_axioms lightclient_turn_unfoolable
 #assert_axioms turnDecodeChain_seam_kernel_derived
 #assert_axioms turnDecodeChain_refines_turnSpec
+#assert_axioms turnDecodeChain_refines_turnSpec_gen
 #assert_axioms turnDecodeChain_endpoints_commit
 #assert_axioms lightclient_turn_unfoolable_forest
 
