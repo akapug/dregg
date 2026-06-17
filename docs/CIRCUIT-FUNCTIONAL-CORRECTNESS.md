@@ -109,6 +109,31 @@ as the executor projects them onto a generic `field[i]` slot or the `cap_root`. 
 two earlier PARTIAL guesses: `makeSovereign`'s `reserved += 256` mode bit is NOT in the preimage, so it
 is genuinely unbound, not partial.)
 
+### The deepest finding — the Lean commitment is RICHER than the circuit realizes
+
+The Lean apex's commitment is `recStateCommit k t = cmb(cellDigest …, RH k)` (`StateCommit.lean:196`),
+and `RH` is *assumed* injective on the **whole kernel** — `RestHashIffFrame` (`:229`) binds `accounts`,
+`caps`, `bal`, `nullifiers`, `revoked`, `commitments`, `slotCaveats`, `factories`, **`lifecycle`**,
+**`deathCert`**, `delegate`, `delegations`, `delegationEpoch(At)`, `heaps`. That is what makes
+`StateDecode` faithfulness (`stateDecode_post_faithful`) hold: equal commitment ⇒ equal *full* kernel.
+
+But the **deployed per-effect-VM circuit does not realize that commitment**. Its `state_commit` binds
+only `balance/nonce/8-generic-fields/cap_root` (`cell_state.rs:76`), and `circuit/src/effect_vm/pi.rs`
+publishes **no** `system_roots`. The Lean `system_roots` sub-block (`Exec/SystemRoots.lean`) is 8 roots
+indexed for specific side-tables, and `lifecycle`/`deathCert`/`permissions`/`verification_key` are **not
+among them**. So `RestHashIffFrame` is, for those fields, a CR carrier **stronger than the deployed
+circuit computes** — the circuit cannot distinguish two post-states that differ only in `lifecycle` (or
+permissions, deathCert, …), yet the apex assumes the commitment does.
+
+This is the precise reason the ~16 VALUE_MISSING effects need a **commitment change, not a proof**: the
+deployed circuit must actually bind those fields (extend the per-cell preimage, or publish system_roots
+covering them — the principled unification is a per-touched-cell **record-digest** column that realizes
+`RH`), and the runtime must emit them. Only then can the concrete `CommitSurface` instance satisfy
+`commit_binds` for those fields and the per-effect `descriptorRefines` discharge. Until then, the apex
+is faithful *to a commitment richer than the deployed VK* — honest as a Lean theorem, but its concrete
+realization is exactly this gap. (The 6 VALUE_FORCED effects move only columns the circuit DOES bind, so
+their rungs are realized.)
+
 ### The VALUE_MISSING wall — it is a runtime fix, not a Lean-only one (the session's key finding)
 
 The six VALUE_FORCED rungs are exactly the effects whose runtime writes one of those bound columns
