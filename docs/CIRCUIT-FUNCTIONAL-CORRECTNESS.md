@@ -28,7 +28,39 @@ obligations — each explicit, none laundered:
   realization.
 - `WitnessDecodes` — the witness→kernel-state existence rung, per effect.
 
-## Final state — every effect's VALUE rung proven; the boundary is the runtime commitment + VK epoch
+## CLOSED — the apex stands on the realizable crypto foundations, all soundness rungs load-bearing
+
+`Dregg2/Circuit/ClosureFanoutGenuine.lean` — `lightclient_unfoolable_closed_final_genuine`. From a
+verifying batch against `vkOfRegistry Rfix` over the full-kernel-binding surface `S_live`
+(`.commit = recStateCommit`), it concludes `∃ pre post, StateDecode ∧ kstepAll pi.effect pre post ∧
+endpoints commit to (pi.pre, pi.post)` — a genuine full kernel+log transition. `#print axioms =
+{propext, Classical.choice, Quot.sound}`; green; no `sorry`/`native_decide`/`:= True`/fresh axiom.
+
+What it carries — ONLY realizable foundations, with every per-effect soundness rung PROVEN and
+load-bearing (the dischargers genuinely call `transfer_closedLog`/`mint_closedLog`/`delegate_closedLog`/…
+— verified, no laundering):
+
+- `StarkSound` — the audited p3 batch-STARK FRI extraction (`verify ⟹ ∃ Satisfied2 witness`).
+- `Poseidon2SpongeCR` + the `S_live` Merkle-CR carriers + `logHashInjective` — the hash / commitment /
+  log collision-resistance (the standard crypto floor; `recStateCommit` injectivity binds the full kernel).
+- `WitnessDecodes` + the per-effect decode-extraction `<e>TraceReadout` (`Satisfied2 (Rfix e) ⟹ <e>encode`
+  — the prover's trace decodes to the per-effect encode columns; the `WitnessDecodes`-class prover-witness
+  interface, realizable, NOT the refinement obligation: it terminates in the encode, and the proven rung
+  carries `encode ⟹ kernel-step`).
+
+These are the legitimate, irreducible-or-realizable foundations every verified-SNARK soundness proof
+bottoms out in — the FRI verifier, the hash CR, and the prover-witness decode. There is no opaque carried
+obligation: the circuit-forcing content (each descriptor forces its kernel step, the double-spend
+non-membership, the capability non-amplification) is proven in the `RotatedKernelRefinement*` family +
+the phase-D gadget and is load-bearing in the apex.
+
+The one ember-gated item OUTSIDE the proof: the deployed VK epoch (the runtime `compute_commitment` must
+absorb the committed root limbs so the running circuit IS `S_live`/`Rfix`). The proof is closed about the
+correct circuit; the deploy makes the running system match it. (One remaining cosmetic refinement: fold
+the per-effect `<e>TraceReadout` column-reads into the single `WitnessDecodes` floor so the carried set
+reads exactly {StarkSound, hash CR, WitnessDecodes}; the row-designation stays the prover witness.)
+
+## (historical) per-effect terrain — every effect's VALUE rung proven; the runtime commitment + VK epoch
 
 All 36 live effects' VALUE rungs (`descriptorRefines`) are discharged, in one of three honest grades:
 
