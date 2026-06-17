@@ -814,7 +814,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "d8b75e8897db4f6e1658d6a4370df765a5a10768df9073dcb8b8db81a12e629f";
+    "17a22bc575518960103fff9d15db80929d5125efcd83d30dbbe9385c4188dbd4";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1759,18 +1759,26 @@ mod tests {
                 .collect();
             // THE RECORD-FORCING PIN (the deployment-soundness close, `EffectVmEmitRotationV3
             // .rotateV3WithRecordPin`): cellSeal/cellUnseal/cellDestroy force the AFTER block's
-            // lifecycle limb (col `after_base + B_LIFECYCLE`); setPermissions/setVK force the
-            // AFTER record-digest / authority-digest limb (col `after_base + B_AUTHORITY_DIGEST`).
-            // Each carries a FIFTH last-row PI pin to slot 38, so the committed write is FORCED.
+            // lifecycle limb (col `after_base + B_LIFECYCLE`); setPermissions/setVK AND the audit
+            // writes refusal/receiptArchive force the AFTER record-digest / authority-digest limb
+            // (col `after_base + B_AUTHORITY_DIGEST`) — the audit slots (`"refusal"`/`"lifecycle"`
+            // record fields) land in `fields_root`, which the r23 authority digest folds. Each
+            // carries a FIFTH last-row PI pin to slot 38, so the committed write is FORCED.
             use crate::effect_vm::trace_rotated::{B_AUTHORITY_DIGEST, B_LIFECYCLE};
-            let lifecycle_record_pin_member = matches!(
+            let record_digest_pin_member = matches!(
                 key,
-                "cellSealVmDescriptor2R24"
-                    | "cellUnsealVmDescriptor2R24"
-                    | "cellDestroyVmDescriptor2R24"
-                    | "setPermsVmDescriptor2R24"
+                "setPermsVmDescriptor2R24"
                     | "setVKVmDescriptor2R24"
+                    | "refusalVmDescriptor2R24"
+                    | "receiptArchiveVmDescriptor2R24"
             );
+            let lifecycle_record_pin_member = record_digest_pin_member
+                || matches!(
+                    key,
+                    "cellSealVmDescriptor2R24"
+                        | "cellUnsealVmDescriptor2R24"
+                        | "cellDestroyVmDescriptor2R24"
+                );
             if key == "noteSpendVmDescriptor2R24" {
                 assert_eq!(
                     d.public_input_count, 39,
@@ -1786,9 +1794,7 @@ mod tests {
                     d.public_input_count, 39,
                     "{key}: rotated 38-PI + the appended record-forcing slot"
                 );
-                let forced_col = if key == "setPermsVmDescriptor2R24"
-                    || key == "setVKVmDescriptor2R24"
-                {
+                let forced_col = if record_digest_pin_member {
                     after_base + B_AUTHORITY_DIGEST
                 } else {
                     after_base + B_LIFECYCLE
@@ -1806,7 +1812,7 @@ mod tests {
                 );
                 assert!(
                     nullifier_pins.is_empty(),
-                    "{key}: only note-spend / the 5 record-pin effects carry a fifth pin"
+                    "{key}: only note-spend / the 7 record-pin effects carry a fifth pin"
                 );
             }
         }

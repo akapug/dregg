@@ -293,17 +293,20 @@ pub fn generate_rotated_effect_vm_trace(
         debug_assert_eq!(dpis.len(), ROT_NULLIFIER_PI_COUNT);
     }
 
-    // THE RECORD-FORCING PIN (the deployment-soundness close for the 5 binds-but-unforced
-    // effects: cellSeal/cellUnseal/cellDestroy/setPermissions/setVK — `EffectVmEmitRotationV3
-    // .rotateV3WithRecordPin`). The rotated AFTER block CARRIES the per-cell write (limb
-    // `B_LIFECYCLE = 28` for the lifecycle flips, limb `B_RECORD_DIGEST = 24` for the
-    // permissions/VK record-digest), and the rolled-up commitment BINDS it — but bare `rotateV3`
-    // does NOT FORCE the AFTER limb to the correctly-written value. The descriptor for these five
-    // carries a FIFTH last-row PI pin welding that limb to rotated PI slot 38; a frozen-lifecycle
-    // / un-written-record AFTER block FAILS the pin and is UNSAT. We push the honest post value
-    // (read from the LAST row's AFTER block, exactly the column the pin binds) so the honest trace
-    // satisfies it; the verifier recomputes PI[38] from the committed pre-state + the effect, so a
-    // forgery cannot match it. The 35 other cohort members keep the 38-PI vector.
+    // THE RECORD-FORCING PIN (the deployment-soundness close for the 7 binds-but-unforced
+    // effects: cellSeal/cellUnseal/cellDestroy/setPermissions/setVK + the audit writes
+    // refusal/receiptArchive — `EffectVmEmitRotationV3.rotateV3WithRecordPin`). The rotated AFTER
+    // block CARRIES the per-cell write (limb `B_LIFECYCLE = 28` for the lifecycle flips, limb
+    // `B_RECORD_DIGEST = 24` for the permissions/VK record-digest AND the audit-slot writes —
+    // refusal/receiptArchive set a named record field in `fields_root`, which the r23 authority
+    // digest folds), and the rolled-up commitment BINDS it — but bare `rotateV3` does NOT FORCE
+    // the AFTER limb to the correctly-written value. The descriptor for these seven carries a
+    // FIFTH last-row PI pin welding that limb to rotated PI slot 38; a frozen-lifecycle /
+    // un-written-record / frozen-audit-slot AFTER block FAILS the pin and is UNSAT. We push the
+    // honest post value (read from the LAST row's AFTER block, exactly the column the pin binds)
+    // so the honest trace satisfies it; the verifier recomputes PI[38] from the committed
+    // pre-state + the effect, so a forgery cannot match it. The 33 other cohort members keep the
+    // 38-PI vector.
     if let Some(off) = record_pin_offset(effects.first()) {
         dpis.push(last[AFTER_BASE + off]); // PI 38: the correctly-written post lifecycle / record digest
         debug_assert_eq!(dpis.len(), ROT_PI_COUNT + 1);
@@ -325,6 +328,17 @@ fn record_pin_offset(lead: Option<&Effect>) -> Option<usize> {
         Some(Effect::SetPermissions { .. }) | Some(Effect::SetVerificationKey { .. }) => {
             Some(B_RECORD_DIGEST)
         }
+        // The deployment-soundness close for the field-NOT-bound audit writes. `Refusal` sets the
+        // cell record's `"refusal"` audit slot to 1; `ReceiptArchive` sets the `"lifecycle"` audit
+        // RECORD slot to 1. Both are NAMED record fields that land in the deployed cell's
+        // `fields_root` (the named-field map — NOT a welded `fields[0..7]` indexed slot), which
+        // `compute_authority_digest_felt` FOLDS into the r23 authority residue (`B_RECORD_DIGEST`).
+        // So the AFTER block's `record_digest` limb MOVES on a genuine refusal / archive; the
+        // record-forcing pin (`refusalV3` / `receiptArchiveV3`) welds it to PI 38. A frozen-audit-
+        // slot AFTER block (claiming a refusal / archive that did not happen) carries the unchanged
+        // record digest and is UNSAT. Mirrors Lean `EffectVmEmitRotationV3.{refusalV3,
+        // receiptArchiveV3}`.
+        Some(Effect::Refusal { .. }) | Some(Effect::ReceiptArchive { .. }) => Some(B_RECORD_DIGEST),
         _ => None,
     }
 }
