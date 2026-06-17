@@ -46,7 +46,7 @@ fn ir2_validate_transfer_proves_verifies_and_refuses_ghost() {
         .expect("transfer v2 descriptor must be registered");
     let desc = parse_vm_descriptor2(json).expect("transfer v2 descriptor must parse");
     assert_eq!(
-        desc.trace_width, 186,
+        desc.trace_width, 187,
         "graduated transfer keeps the 186 base width"
     );
     assert_eq!(desc.tables.len(), 5, "the five EPOCH tables");
@@ -86,7 +86,7 @@ fn ir2_validate_transfer_proves_verifies_and_refuses_ghost() {
         let (base_trace, pis) = generate_effect_vm_trace(&st, &effects);
         assert_eq!(
             base_trace[0].len(),
-            186,
+            187,
             "[{label}] canonical 186-col EffectVM layout"
         );
         let dpis: Vec<BabyBear> = pis[..desc.public_input_count].to_vec();

@@ -22,6 +22,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitRotation
 import Dregg2.Circuit.Emit.EffectVmEmitRotationR
 import Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+import Dregg2.Circuit.Emit.CapOpenEmit
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotation
@@ -29,6 +30,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationR (rotationProbeVmDescriptorR2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
   (rotationCaveatLayoutManifest rotationCaveatProbeVmDescriptor2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (v3Registry)
+open Dregg2.Circuit.Emit.CapOpenEmit (capOpenAttenuateV3)
 
 def main : IO Unit := do
   IO.println s!"rotationLayoutManifest\t{rotationLayoutManifest}"
@@ -46,3 +48,8 @@ def main : IO Unit := do
   -- `circuit/descriptors/rotation-v3-staged-registry.tsv`.
   for (key, d) in v3Registry do
     IO.println s!"v3rot\t{key}\t{d.name}\t{emitVmJson2 d}"
+  -- THE CAP-OPEN MEMBER (`capOpenAttenuateV3`): the rotated attenuate descriptor carrying the
+  -- in-circuit cap-membership open (58-column appendix past the shared rotated width). Its key
+  -- `attenuateCapOpenVmDescriptor2R24` is the 37th registry member the Rust v3 test audits on its
+  -- OWN width/PI/cap-lookup contract.
+  IO.println s!"v3rot\tattenuateCapOpenVmDescriptor2R24\t{capOpenAttenuateV3.name}\t{emitVmJson2 capOpenAttenuateV3}"

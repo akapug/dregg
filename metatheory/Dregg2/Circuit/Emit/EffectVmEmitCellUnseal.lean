@@ -50,10 +50,10 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins transferHashSites boundaryLast_pins)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbed_determined_by_commit)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
-   wideHashSites)
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
+   wide_rejects_root_tamper wideHashSites)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
@@ -338,7 +338,7 @@ theorem cellUnseal_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR : P
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   runnable_full_commit_binds (cellUnsealRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -388,8 +388,8 @@ theorem cellUnseal_clause_rejects_root_drop :
 
 #guard cellUnsealVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard cellUnsealVmDescriptor.hashSites.length == 4
-#guard cellUnsealVmDescriptor.traceWidth == 186
-#guard cellUnsealVmDescriptorWide.traceWidth == 188
+#guard cellUnsealVmDescriptor.traceWidth == 187
+#guard cellUnsealVmDescriptorWide.traceWidth == 189
 #guard cellUnsealVmDescriptorWide.constraints.length == cellUnsealVmDescriptor.constraints.length
 
 #assert_axioms cellUnsealVm_faithful

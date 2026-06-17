@@ -295,8 +295,8 @@ theorem delegateAtten_runnable_binds_full_state (capDigestNew : ℤ)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂) :
-    Dregg2.Circuit.Emit.EffectVmEmitTransferSound.absorbedCols e₁
-        = Dregg2.Circuit.Emit.EffectVmEmitTransferSound.absorbedCols e₂
+    Dregg2.Circuit.Emit.EffectVmFullStateRunnable.baseAbsorbedCols e₁
+        = Dregg2.Circuit.Emit.EffectVmFullStateRunnable.baseAbsorbedCols e₂
     ∧ (∀ i : Fin Dregg2.Exec.SystemRoots.N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   cap_runnable_binds_full_state capDigestNew preRoots hash hCR
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂

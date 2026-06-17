@@ -151,12 +151,17 @@ def site2 : VmHashSite :=
               , .col (saCol (state.FIELD_BASE + 7)), .col (saCol state.CAP_ROOT) ]
   , arity := 4 }
 
-/-- Site 3: `state_commit = H4(inter1, inter2, inter3, 0)` (the published post-state commitment).
-Result column is `state_after.state_commit` itself (the GROUP-4 `sa(STATE_COMMIT) == digest`
-binding), reading sites 0/1/2's digests. -/
+/-- Site 3: `state_commit = H4(inter1, inter2, inter3, record_digest)` (the published post-state
+commitment). Result column is `state_after.state_commit` itself (the GROUP-4 `sa(STATE_COMMIT) ==
+digest` binding), reading sites 0/1/2's digests. The FOURTH input is the witnessed authority-residue
+`record_digest` (`aux_off.STATE_RECORD_DIGEST`, absolute col `auxCol 96 = 186`) — replacing the old
+literal `.zero`, audit P0-2 — so `state_commit` (and thus `OLD_COMMIT`/`NEW_COMMIT`) binds the FULL
+cell state. Matches the Rust `cell_state.rs::compute_commitment` / `air.rs` GROUP-4
+(`local[AUX_BASE + aux_off::STATE_RECORD_DIGEST]`). A residue-free cell witnesses `0` here, so this is
+byte-identical to the legacy `…, 0)` form. -/
 def site3 : VmHashSite :=
   { digestCol := saCol state.STATE_COMMIT
-  , inputs := [ .digest 0, .digest 1, .digest 2, .zero ]
+  , inputs := [ .digest 0, .digest 1, .digest 2, .col (auxCol aux_off.STATE_RECORD_DIGEST) ]
   , arity := 4 }
 
 /-- The ordered GROUP-4 hash sites (site `i` ↔ aux block `i`, the Rust `hash_sites()` contract). -/
@@ -399,7 +404,7 @@ theorem transferHash_binds (hash : List ℤ → ℤ) (env : VmRowEnv)
                     , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4)) ]
              , hash [ env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
                     , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ]
-             , 0 ] := by
+             , env.loc (auxCol aux_off.STATE_RECORD_DIGEST) ] := by
   -- unfold the ordered site walk: sites 0,1,2,3 in order.
   unfold siteHoldsAll transferHashSites at h
   simp only [siteHoldsAll.go, site0, site1, site2, site3, VmHashSite.resolvedInputs,
@@ -547,7 +552,7 @@ theorem badRow_rejected : ¬ (VmConstraint.gate gBalLo).holdsVm badRow false fal
 #guard transferVmDescriptor.constraints.length == 14 + 14 + 4 + 3 + 1  -- gates+transitions+4first+3last+selectorGate
 #guard transferVmDescriptor.hashSites.length == 4
 #guard transferVmDescriptor.ranges.length == 2
-#guard transferVmDescriptor.traceWidth == 186
+#guard transferVmDescriptor.traceWidth == 187
 
 #assert_axioms transferRowGates_holds_iff
 #assert_axioms transferVm_faithful

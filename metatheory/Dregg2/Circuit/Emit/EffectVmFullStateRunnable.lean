@@ -132,6 +132,20 @@ load-bearing (the extension site reads `.digest 0/1/2`). -/
 def wideHashSites : List VmHashSite :=
   [ site0, site1, site2, sysRootsAbsorbSite (saCol state.STATE_COMMIT) ]
 
+/-- **`baseAbsorbedCols`** — the 12 inner-site absorbed columns (`bal_lo, bal_hi, nonce, fields[0..7],
+cap_root`), WITHOUT the deployed-track `record_digest` 13th limb. The WIDE descriptor's GROUP-4 4th
+input is the `sysRootsDigestCol` carrier (NOT `record_digest`, which the wide layout does not absorb),
+so the wide commitment binds exactly these 12 columns plus the side-table digest. (`absorbedCols` —
+the deployed-track 13-list — absorbs `record_digest` at its 4th outer slot instead; the two tracks
+diverge only in that 4th GROUP-4 input.) -/
+def baseAbsorbedCols (env : VmRowEnv) : List ℤ :=
+  [ env.loc (saCol state.BALANCE_LO), env.loc (saCol state.BALANCE_HI), env.loc (saCol state.NONCE)
+  , env.loc (saCol (state.FIELD_BASE + 0))
+  , env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
+  , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4))
+  , env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
+  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ]
+
 /-- **`wideCommitOf`** — the wide commitment as a direct scalar function: `H4(H4(bal_lo,bal_hi,nonce,
 fld0), H4(fld1..4), H4(fld5,fld6,fld7,cap), sysDig)` — exactly `commitOf` but with the 4th outer slot
 the `system_roots` digest instead of the literal `0`. Computes by `rfl` (no list match). -/
@@ -169,7 +183,7 @@ theorem wide_binds_everything (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR
     (hs₁ : siteHoldsAll hash e₁ wideHashSites)
     (hs₂ : siteHoldsAll hash e₂ wideHashSites)
     (hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT)) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ e₁.loc sysRootsDigestCol = e₂.loc sysRootsDigestCol := by
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ e₁.loc sysRootsDigestCol = e₂.loc sysRootsDigestCol := by
   rw [wide_commit_eq hash e₁ hs₁, wide_commit_eq hash e₂ hs₂] at hcommit
   unfold wideCommitOf at hcommit
   -- CR on the outer hash: the 4-element list agrees (4th element = the side-table digest).
@@ -185,8 +199,8 @@ theorem wide_binds_everything (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR
   obtain ⟨e_f1, e_f2, e_f3, e_f4, _⟩ := hB'
   obtain ⟨e_f5, e_f6, e_f7, e_cap, _⟩ := hC'
   refine ⟨?_, hDig⟩
-  rw [absorbedCols_eq, absorbedCols_eq, e_bLo, e_bHi, e_n, e_f0, e_f1, e_f2, e_f3, e_f4,
-    e_f5, e_f6, e_f7, e_cap]
+  unfold baseAbsorbedCols
+  rw [e_bLo, e_bHi, e_n, e_f0, e_f1, e_f2, e_f3, e_f4, e_f5, e_f6, e_f7, e_cap]
 
 /-! ## §2 — the `system_roots` sub-block bound BY the RUNNABLE commitment.
 
@@ -293,7 +307,7 @@ theorem runnable_full_commit_binds {St : Type} (E : RunnableFullStateSpec St)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) := by
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) := by
   have hs₁ : siteHoldsAll hash e₁ wideHashSites := E.usesWideSites ▸ hsat₁.2.1
   have hs₂ : siteHoldsAll hash e₂ wideHashSites := E.usesWideSites ▸ hsat₂.2.1
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
@@ -443,7 +457,7 @@ theorem wide_rejects_state_tamper {St : Type} (E : RunnableFullStateSpec St)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : absorbedCols e₁ ≠ absorbedCols e₂) : False :=
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
   htamper (runnable_full_commit_binds E hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂).1
 
 /-- **`wide_rejects_root_tamper` — side-table anti-ghost (the gap's headline tooth).** Two wide rows

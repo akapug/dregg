@@ -5,7 +5,7 @@ descriptor LIFTED to FULL-STATE (the magnesium breadth, on the circuit the prove
 ## What this module closes (vs the narrow `EffectVmEmitExercise`)
 
 `EffectVmEmitExercise.exerciseVmDescriptor` is the deployed `EFFECT_VM_WIDTH = 186` hold-layer row whose
-published `state_commit` absorbs ONLY the 13 state-block columns (`absorbedCols`). The `system_roots`
+published `state_commit` absorbs ONLY the 13 state-block columns (`baseAbsorbedCols`). The `system_roots`
 sub-block (escrow / nullifier / commitment / queue / swiss / sealedBox / delegation / refcount) is bound
 ONLY by a separate record-layer commitment the row does NOT carry — the dominant Class-C "pale ghost".
 Its per-cell soundness `exerciseDescriptor_full_sound` pins the cell's economic block (FROZEN) + nonce
@@ -57,12 +57,12 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitExerciseWide
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitExercise
   (SEL_EXERCISE IsExerciseRow exerciseRowGates exerciseVmDescriptor ExerciseRowIntent
    exerciseVm_faithful RowEncodesExercise ExerciseCellSpec intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -172,7 +172,7 @@ theorem exercise_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseidon
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   EffectVmFullStateRunnable.runnable_full_commit_binds (exerciseRunnableSpec preRoots)
     hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -243,7 +243,7 @@ theorem exerciseWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard exerciseVmDescriptorWide.traceWidth == 188
+#guard exerciseVmDescriptorWide.traceWidth == 189
 #guard exerciseVmDescriptorWide.hashSites.length == 4
 #guard exerciseVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

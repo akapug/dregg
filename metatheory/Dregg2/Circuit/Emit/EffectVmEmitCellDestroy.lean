@@ -455,7 +455,7 @@ theorem staleNonceDestroyRow_rejected :
 
 #guard cellDestroyVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard cellDestroyVmDescriptor.hashSites.length == 4
-#guard cellDestroyVmDescriptor.traceWidth == 186
+#guard cellDestroyVmDescriptor.traceWidth == 187
 
 #assert_axioms cellDestroyVm_faithful
 #assert_axioms cellDestroyVm_rejects_wrong_output

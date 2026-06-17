@@ -41,7 +41,7 @@ fn every_registered_descriptor_parses() {
             .unwrap_or_else(|e| panic!("{name} failed to parse via interpreter: {e}"));
         assert_eq!(&desc.name, name, "{name}: parsed name != registry key");
         assert_eq!(
-            desc.trace_width, 186,
+            desc.trace_width, 187,
             "{name}: all EffectVM descriptors share the 186-col base trace"
         );
     }

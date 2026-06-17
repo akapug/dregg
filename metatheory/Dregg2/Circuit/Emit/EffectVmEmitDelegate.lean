@@ -277,7 +277,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
   (attenuateVmDescriptorWide CapFullClause capRunnableSpec cap_runnable_full_sound
    cap_runnable_binds_full_state cap_runnable_rejects_cap_root_tamper cap_runnable_rejects_root_tamper
    IsAttenRow CapRowEncodes)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmFullStateRunnable (baseAbsorbedCols)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots)
 
@@ -319,7 +319,7 @@ theorem delegate_runnable_binds_full_state (capDigestNew : ℤ) (preRoots : SysR
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂
     ∧ (∀ i : Fin Dregg2.Exec.SystemRoots.N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   cap_runnable_binds_full_state capDigestNew preRoots hash hCR
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂

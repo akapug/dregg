@@ -911,6 +911,13 @@ pub fn generate_effect_vm_trace_ext(
         row[AUX_BASE + aux_off::STATE_INTER1] = inter1;
         row[AUX_BASE + aux_off::STATE_INTER2] = inter2;
         row[AUX_BASE + aux_off::STATE_INTER3] = inter3;
+        // P0-2: the authority-residue digest absorbed as the fourth root input.
+        // The EffectVM kernel turns carry no authority-residue mutation, so the
+        // state_after digest equals the state_before digest (the residue rides the
+        // rotated weld's r23 / the cell-side `compute_authority_digest_felt`); a
+        // residue-free cell carries `empty_record_digest()` (ZERO). The Group-4
+        // constraint reads this column as the fourth `hash_4_to_1` input.
+        row[AUX_BASE + aux_off::STATE_RECORD_DIGEST] = new_state.record_digest;
 
         // Stage 2 (sealing honesty): bit-decompose OLD reserved on every row.
         // The constraint in eval_constraints requires that
@@ -1019,6 +1026,9 @@ pub fn generate_effect_vm_trace_ext(
         row[AUX_BASE + aux_off::STATE_INTER1] = inter1;
         row[AUX_BASE + aux_off::STATE_INTER2] = inter2;
         row[AUX_BASE + aux_off::STATE_INTER3] = inter3;
+        // P0-2: NoOp pad rows pass state through unchanged, so the record_digest is
+        // the carried `current_state.record_digest` (the Group-4 fourth root input).
+        row[AUX_BASE + aux_off::STATE_RECORD_DIGEST] = current_state.record_digest;
 
         // Stage 2 (sealing honesty): bit-decompose OLD reserved.
         fill_reserved_bits(
@@ -1099,12 +1109,14 @@ pub fn generate_effect_vm_trace_ext(
         initial_state.nonce,
         &initial_state.fields,
         initial_state.capability_root,
+        initial_state.record_digest,
     );
     let new_commit_4 = CellState::compute_commitment_4(
         current_state.balance,
         current_state.nonce,
         &current_state.fields,
         current_state.capability_root,
+        current_state.record_digest,
     );
     public_inputs[pi::OLD_COMMIT_BASE..pi::OLD_COMMIT_BASE + pi::OLD_COMMIT_LEN]
         .copy_from_slice(&old_commit_4[..pi::OLD_COMMIT_LEN]);

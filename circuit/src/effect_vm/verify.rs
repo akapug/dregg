@@ -67,6 +67,7 @@ pub fn verify_state_integrity(state: &CellState) -> Result<(), String> {
         state.nonce,
         &state.fields,
         state.capability_root,
+        state.record_digest,
     );
     if state.state_commitment != expected_commit {
         return Err(format!(

@@ -464,7 +464,7 @@ theorem bridgeMintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (
 
 #guard bridgeMintVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard bridgeMintVmDescriptor.hashSites.length == 4
-#guard bridgeMintVmDescriptor.traceWidth == 186
+#guard bridgeMintVmDescriptor.traceWidth == 187
 
 #assert_axioms bridgeMintVm_faithful
 #assert_axioms bridgeMintVm_rejects_wrong_balance
@@ -497,7 +497,7 @@ AND the (frozen) 8 roots into the running commitment. (The minted-supply total /
 proof are turn/portal-level, cited at §8½, not a `system_roots` field.) -/
 
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
    wide_rejects_state_tamper wide_rejects_root_tamper wideHashSites hC)
 open Dregg2.Exec.SystemRoots
   (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
@@ -587,7 +587,7 @@ theorem bridgeMint_wide_rejects_state_tamper (hash : List ℤ → ℤ) (hCR : Po
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : absorbedCols e₁ ≠ absorbedCols e₂) : False :=
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
   wide_rejects_state_tamper (bridgeMintRunnableSpec hash 0 sr₁) hash hCR e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
@@ -655,7 +655,7 @@ theorem bridgeMint_wide_roots_clause_refutable :
   simp only [emptySystemRoots, wideRefRoots, if_pos rfl] at hesc
   norm_num at hesc
 
-#guard bridgeMintVmDescriptorWide.traceWidth == 188
+#guard bridgeMintVmDescriptorWide.traceWidth == 189
 #guard bridgeMintVmDescriptorWide.hashSites.length == 4
 #guard bridgeMintVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

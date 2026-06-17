@@ -7526,7 +7526,7 @@ mod tests {
     /// 14 transfer-row gates + 14 transition-continuity + 7 boundary PI pins, the 4
     /// ordered GROUP-4 H4 state-commit hash sites, and the 2 balance-limb range checks.
     /// Copied verbatim from the Lean toolchain output.
-    const TRANSFER_VM_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-effectvm-transfer-v1","trace_width":186,"public_input_count":34,"constraints":[{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":76},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":54}}},"r":{"t":"add","l":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":68}},"r":{"t":"mul","l":{"t":"const","v":2},"r":{"t":"mul","l":{"t":"var","v":69},"r":{"t":"var","v":68}}}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":77},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":55}}}},{"t":"gate","body":{"t":"mul","l":{"t":"var","v":69},"r":{"t":"add","l":{"t":"var","v":69},"r":{"t":"const","v":-1}}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":78},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":56}}},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"add","l":{"t":"const","v":1},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":87},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":65}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":89},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":67}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":79},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":57}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":80},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":58}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":81},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":59}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":82},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":60}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":83},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":61}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":84},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":62}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":85},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":63}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":86},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":64}}}},{"t":"transition","hi":0,"lo":0},{"t":"transition","hi":1,"lo":1},{"t":"transition","hi":2,"lo":2},{"t":"transition","hi":3,"lo":3},{"t":"transition","hi":4,"lo":4},{"t":"transition","hi":5,"lo":5},{"t":"transition","hi":6,"lo":6},{"t":"transition","hi":7,"lo":7},{"t":"transition","hi":8,"lo":8},{"t":"transition","hi":9,"lo":9},{"t":"transition","hi":10,"lo":10},{"t":"transition","hi":11,"lo":11},{"t":"transition","hi":12,"lo":12},{"t":"transition","hi":13,"lo":13},{"t":"pi_binding","row":"first","col":56,"pi_index":33},{"t":"pi_binding","row":"first","col":54,"pi_index":12},{"t":"pi_binding","row":"first","col":55,"pi_index":13},{"t":"pi_binding","row":"first","col":66,"pi_index":0},{"t":"pi_binding","row":"last","col":88,"pi_index":4},{"t":"pi_binding","row":"last","col":76,"pi_index":14},{"t":"pi_binding","row":"last","col":77,"pi_index":15}],"hash_sites":[{"digest_col":98,"arity":4,"inputs":[{"t":"col","c":76},{"t":"col","c":77},{"t":"col","c":78},{"t":"col","c":79}]},{"digest_col":99,"arity":4,"inputs":[{"t":"col","c":80},{"t":"col","c":81},{"t":"col","c":82},{"t":"col","c":83}]},{"digest_col":100,"arity":4,"inputs":[{"t":"col","c":84},{"t":"col","c":85},{"t":"col","c":86},{"t":"col","c":87}]},{"digest_col":88,"arity":4,"inputs":[{"t":"digest","k":0},{"t":"digest","k":1},{"t":"digest","k":2},{"t":"zero"}]}],"ranges":[{"wire":76,"bits":30},{"wire":77,"bits":30}]}"#;
+    const TRANSFER_VM_DESCRIPTOR_JSON: &str = r#"{"name":"dregg-effectvm-transfer-v1","trace_width":187,"public_input_count":34,"constraints":[{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":76},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":54}}},"r":{"t":"add","l":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":68}},"r":{"t":"mul","l":{"t":"const","v":2},"r":{"t":"mul","l":{"t":"var","v":69},"r":{"t":"var","v":68}}}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":77},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":55}}}},{"t":"gate","body":{"t":"mul","l":{"t":"var","v":69},"r":{"t":"add","l":{"t":"var","v":69},"r":{"t":"const","v":-1}}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":78},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":56}}},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"add","l":{"t":"const","v":1},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":87},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":65}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":89},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":67}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":79},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":57}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":80},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":58}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":81},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":59}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":82},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":60}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":83},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":61}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":84},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":62}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":85},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":63}}}},{"t":"gate","body":{"t":"add","l":{"t":"var","v":86},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":64}}}},{"t":"transition","hi":0,"lo":0},{"t":"transition","hi":1,"lo":1},{"t":"transition","hi":2,"lo":2},{"t":"transition","hi":3,"lo":3},{"t":"transition","hi":4,"lo":4},{"t":"transition","hi":5,"lo":5},{"t":"transition","hi":6,"lo":6},{"t":"transition","hi":7,"lo":7},{"t":"transition","hi":8,"lo":8},{"t":"transition","hi":9,"lo":9},{"t":"transition","hi":10,"lo":10},{"t":"transition","hi":11,"lo":11},{"t":"transition","hi":12,"lo":12},{"t":"transition","hi":13,"lo":13},{"t":"pi_binding","row":"first","col":56,"pi_index":33},{"t":"pi_binding","row":"first","col":54,"pi_index":12},{"t":"pi_binding","row":"first","col":55,"pi_index":13},{"t":"pi_binding","row":"first","col":66,"pi_index":0},{"t":"pi_binding","row":"last","col":88,"pi_index":4},{"t":"pi_binding","row":"last","col":76,"pi_index":14},{"t":"pi_binding","row":"last","col":77,"pi_index":15},{"t":"gate","body":{"t":"mul","l":{"t":"add","l":{"t":"const","v":1},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}},"r":{"t":"add","l":{"t":"const","v":1},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":1}}}}}],"hash_sites":[{"digest_col":98,"arity":4,"inputs":[{"t":"col","c":76},{"t":"col","c":77},{"t":"col","c":78},{"t":"col","c":79}]},{"digest_col":99,"arity":4,"inputs":[{"t":"col","c":80},{"t":"col","c":81},{"t":"col","c":82},{"t":"col","c":83}]},{"digest_col":100,"arity":4,"inputs":[{"t":"col","c":84},{"t":"col","c":85},{"t":"col","c":86},{"t":"col","c":87}]},{"digest_col":88,"arity":4,"inputs":[{"t":"digest","k":0},{"t":"digest","k":1},{"t":"digest","k":2},{"t":"col","c":186}]}],"ranges":[{"wire":76,"bits":30},{"wire":77,"bits":30}]}"#;
 
     /// The parser faithfully decodes the EffectVM grammar: the 35 constraints split
     /// 14 gates / 14 transitions / 7 pi-bindings, the 4 ordered hash sites (site 3
@@ -7536,9 +7536,10 @@ mod tests {
         let d = parse_vm_descriptor(TRANSFER_VM_DESCRIPTOR_JSON)
             .expect("Lean-emitted EffectVM transfer descriptor must parse");
         assert_eq!(d.name, "dregg-effectvm-transfer-v1");
-        assert_eq!(d.trace_width, 186);
+        assert_eq!(d.trace_width, 187);
         assert_eq!(d.public_input_count, 34);
-        assert_eq!(d.constraints.len(), 14 + 14 + 7);
+        // 14 per-row gates + 14 transitions + 7 boundary PI pins + 1 selector-binding gate.
+        assert_eq!(d.constraints.len(), 14 + 14 + 7 + 1);
         assert_eq!(d.hash_sites.len(), 4);
         assert_eq!(d.ranges.len(), 2);
 
@@ -7557,7 +7558,8 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, VmConstraint::PiBinding { .. }))
             .count();
-        assert_eq!((gates, transitions, pis), (14, 14, 7));
+        // The selector-binding gate is a Gate, so gates = 14 per-row + 1 selector = 15.
+        assert_eq!((gates, transitions, pis), (15, 14, 7));
 
         // The actor-nonce pin (the #49 anti-ghost tooth): state_before.nonce (col 56)
         // == PI[ACTOR_NONCE] (index 33), on the first row.
@@ -7578,17 +7580,19 @@ mod tests {
         // earlier sites' digests — the ordered state-commit chain.
         let s3 = &d.hash_sites[3];
         assert_eq!(s3.digest_col, 88);
+        // P0-2: the 4th root input is the authority-residue `record_digest` aux column
+        // (`AUX_BASE + aux_off::STATE_RECORD_DIGEST = 90 + 96 = 186`), not the old literal Zero.
         assert_eq!(
             s3.inputs,
             vec![
                 HashInput::Digest(0),
                 HashInput::Digest(1),
                 HashInput::Digest(2),
-                HashInput::Zero
+                HashInput::Col(186)
             ]
         );
-        // The full air width = 186 base + 4 sites * 352 + 2 ranges * 30 bits.
-        assert_eq!(d.air_width(), 186 + 4 * 352 + 2 * 30);
+        // The full air width = 187 base + 4 sites * 352 + 2 ranges * 30 bits.
+        assert_eq!(d.air_width(), 187 + 4 * 352 + 2 * 30);
     }
 
     /// THE EffectVM swap acceptance test: the REAL Lean-emitted transfer EffectVM

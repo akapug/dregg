@@ -61,12 +61,12 @@ open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (transitionAll boundaryFirstPins boundaryLastPins)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
   (gFreeze emitRowGates EmitRowIntent emitEventVm_faithful emitRowGates_flag_indep
    RowEncodes CellFreezeSpec intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -180,7 +180,7 @@ theorem noop_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Poseidon2Spo
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   EffectVmFullStateRunnable.runnable_full_commit_binds (noopRunnableSpec preRoots)
     hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -255,7 +255,7 @@ theorem noopWide_is_genuine_nonempty :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard noopVmDescriptorWide.traceWidth == 188
+#guard noopVmDescriptorWide.traceWidth == 189
 #guard noopVmDescriptorWide.hashSites.length == 4
 #guard noopVmDescriptorWide.constraints.length == 14 + 14 + 4 + 3
 #guard noopVmDescriptorWide.ranges.length == 0

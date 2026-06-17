@@ -265,25 +265,27 @@ def absorbedCols (env : VmRowEnv) : List ℤ :=
   , env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
   , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4))
   , env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
-  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ]
+  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT)
+  , env.loc (auxCol aux_off.STATE_RECORD_DIGEST) ]
 
 /-- The commitment as a direct function of the 12 absorbed scalar columns: `H4(H4(bal_lo,bal_hi,
 nonce,fld0), H4(fld1..4), H4(fld5,fld6,fld7,cap_root), 0)`. This is exactly the RHS of
 `transferHash_binds` — written as a scalar function (no list match) so it computes by `rfl`. -/
 def commitOf (hash : List ℤ → ℤ)
-    (bLo bHi n f0 f1 f2 f3 f4 f5 f6 f7 cap : ℤ) : ℤ :=
-  hash [ hash [bLo, bHi, n, f0], hash [f1, f2, f3, f4], hash [f5, f6, f7, cap], 0 ]
+    (bLo bHi n f0 f1 f2 f3 f4 f5 f6 f7 cap rd : ℤ) : ℤ :=
+  hash [ hash [bLo, bHi, n, f0], hash [f1, f2, f3, f4], hash [f5, f6, f7, cap], rd ]
 
-/-- The 12 absorbed columns of `env`'s after-state as a tuple. -/
-def absorbed (env : VmRowEnv) : ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ :=
+/-- The 13 absorbed columns of `env`'s after-state as a tuple (`record_digest` is the 13th). -/
+def absorbed (env : VmRowEnv) : ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ × ℤ :=
   ( env.loc (saCol state.BALANCE_LO), env.loc (saCol state.BALANCE_HI), env.loc (saCol state.NONCE)
   , env.loc (saCol (state.FIELD_BASE + 0))
   , env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
   , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4))
   , env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
-  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) )
+  , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT)
+  , env.loc (auxCol aux_off.STATE_RECORD_DIGEST) )
 
-/-- `absorbedCols env` equals the tuple `absorbed env` packed into a 12-list. -/
+/-- `absorbedCols env` equals the tuple `absorbed env` packed into a 13-list. -/
 theorem absorbedCols_eq (env : VmRowEnv) :
     absorbedCols env =
       [ env.loc (saCol state.BALANCE_LO), env.loc (saCol state.BALANCE_HI)
@@ -291,7 +293,8 @@ theorem absorbedCols_eq (env : VmRowEnv) :
       , env.loc (saCol (state.FIELD_BASE + 1)), env.loc (saCol (state.FIELD_BASE + 2))
       , env.loc (saCol (state.FIELD_BASE + 3)), env.loc (saCol (state.FIELD_BASE + 4))
       , env.loc (saCol (state.FIELD_BASE + 5)), env.loc (saCol (state.FIELD_BASE + 6))
-      , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT) ] := rfl
+      , env.loc (saCol (state.FIELD_BASE + 7)), env.loc (saCol state.CAP_ROOT)
+      , env.loc (auxCol aux_off.STATE_RECORD_DIGEST) ] := rfl
 
 /-- The published commitment IS `commitOf` of the 12 absorbed columns (a repackaging of
 `transferHash_binds`). -/
@@ -304,7 +307,8 @@ theorem commit_eq_commitOf (hash : List ℤ → ℤ) (env : VmRowEnv)
           (env.loc (saCol (state.FIELD_BASE + 1))) (env.loc (saCol (state.FIELD_BASE + 2)))
           (env.loc (saCol (state.FIELD_BASE + 3))) (env.loc (saCol (state.FIELD_BASE + 4)))
           (env.loc (saCol (state.FIELD_BASE + 5))) (env.loc (saCol (state.FIELD_BASE + 6)))
-          (env.loc (saCol (state.FIELD_BASE + 7))) (env.loc (saCol state.CAP_ROOT)) := by
+          (env.loc (saCol (state.FIELD_BASE + 7))) (env.loc (saCol state.CAP_ROOT))
+          (env.loc (auxCol aux_off.STATE_RECORD_DIGEST)) := by
   have hb := transferHash_binds hash env h
   rw [hb]; rfl
 
@@ -321,10 +325,10 @@ theorem absorbed_determined_by_commit (hash : List ℤ → ℤ) (hCR : Poseidon2
   -- rewrite both published commits as commitOf of the absorbed columns
   rw [commit_eq_commitOf hash e₁ hs₁, commit_eq_commitOf hash e₂ hs₂] at hcommit
   unfold commitOf at hcommit
-  -- CR on the outer hash gives the 4-element list equal (last element is the literal 0).
+  -- CR on the outer hash gives the 4-element list equal (last element is the record_digest).
   have houter := hCR _ _ hcommit
-  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
-  obtain ⟨hA, hB, hC, _⟩ := houter
+  rw [List.cons.injEq, List.cons.injEq, List.cons.injEq, List.cons.injEq] at houter
+  obtain ⟨hA, hB, hC, e_rd, _⟩ := houter
   -- CR on each inner hash gives the 4-element field tuples equal.
   have hA' := hCR _ _ hA
   have hB' := hCR _ _ hB
@@ -333,9 +337,9 @@ theorem absorbed_determined_by_commit (hash : List ℤ → ℤ) (hCR : Poseidon2
   obtain ⟨e_bLo, e_bHi, e_n, e_f0, _⟩ := hA'
   obtain ⟨e_f1, e_f2, e_f3, e_f4, _⟩ := hB'
   obtain ⟨e_f5, e_f6, e_f7, e_cap, _⟩ := hC'
-  -- reassemble the 12-element absorbed lists
+  -- reassemble the 13-element absorbed lists (the record_digest agrees via `e_rd`)
   rw [absorbedCols_eq, absorbedCols_eq, e_bLo, e_bHi, e_n, e_f0, e_f1, e_f2, e_f3, e_f4,
-    e_f5, e_f6, e_f7, e_cap]
+    e_f5, e_f6, e_f7, e_cap, e_rd]
 
 /-- **`transferDescriptor_commit_binds_state` — THE KEYSTONE anti-ghost tooth.** A row that satisfies
 the descriptor's hash-sites and publishes `state_commit = PI[NEW_COMMIT]` has EVERY absorbed
@@ -464,7 +468,14 @@ theorem reserved_not_bound_by_commitment :
       state.RESERVED at *
     omega
   refine ⟨?_, ?_⟩
-  · -- rewrite each of the 12 absorbed entries via `agree`
+  · -- rewrite each of the 13 absorbed entries via `agree` (the 13th is the record_digest aux column,
+    -- which is `auxCol 96 = 186 ≠ 89`, so the RESERVED overwrite leaves it untouched too).
+    have hrd : reservedTamperRow.loc (auxCol aux_off.STATE_RECORD_DIGEST)
+        = goodRow.loc (auxCol aux_off.STATE_RECORD_DIGEST) := by
+      show (if auxCol aux_off.STATE_RECORD_DIGEST = saCol state.RESERVED then (42:ℤ)
+          else goodRow.loc (auxCol aux_off.STATE_RECORD_DIGEST))
+          = goodRow.loc (auxCol aux_off.STATE_RECORD_DIGEST)
+      rw [if_neg (by decide)]
     unfold absorbedCols
     rw [agree state.BALANCE_LO (hneOff _ (by decide)),
         agree state.BALANCE_HI (hneOff _ (by decide)),
@@ -477,7 +488,7 @@ theorem reserved_not_bound_by_commitment :
         agree (state.FIELD_BASE + 5) (hneOff _ (by decide)),
         agree (state.FIELD_BASE + 6) (hneOff _ (by decide)),
         agree (state.FIELD_BASE + 7) (hneOff _ (by decide)),
-        agree state.CAP_ROOT (hneOff _ (by decide))]
+        agree state.CAP_ROOT (hneOff _ (by decide)), hrd]
   · -- the RESERVED columns differ: goodRow → 0, reservedTamperRow → 42
     have hg : goodRow.loc (saCol state.RESERVED) = 0 := by
       rw [hres]

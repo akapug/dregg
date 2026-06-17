@@ -28,7 +28,7 @@
 /// NB: aux[2..5] are reserved on row 0 for delta_mag / delta_sign /
 /// effects_hash_4[0..1] boundary writes. Per-effect witnesses must avoid
 /// those slots on row 0; aux[6..7] are exclusive per-row selector-gated.
-pub const EFFECT_VM_WIDTH: usize = 186;
+pub const EFFECT_VM_WIDTH: usize = AUX_BASE + NUM_AUX; // 90 + 97 = 187
 
 /// Number of effect types (selector COLUMNS).
 ///
@@ -203,7 +203,9 @@ pub const AUX_BASE: usize = STATE_AFTER_BASE + state::SIZE; // 76 + 14 = 90
 /// Sovereign-witness teeth: 28 (+ 4 WITNESS_KEY_COMMIT + 1 WITNESS_SEQUENCE).
 /// γ.2 federation+owner binding (#131/#132): 36 (+ 4 FEDERATION_ID + 4 OWNER_CELL_ID).
 /// W9-RANGECHECK: 96 (+ 30 NEW_BAL_LO_BIT + 30 NEW_BAL_HI_BIT).
-pub const NUM_AUX: usize = 96;
+/// P0-2 record-digest: 97 (+ 1 STATE_RECORD_DIGEST — the authority-residue limb
+/// absorbed as the fourth state-commit root input, replacing the literal ZERO).
+pub const NUM_AUX: usize = 97;
 
 /// Bit-width of each balance limb's in-circuit range proof. Both limbs are
 /// decomposed into `BAL_LIMB_BITS` boolean aux columns and recomposed; the
@@ -294,6 +296,18 @@ pub mod aux_off {
     /// Base offset of the 30 boolean columns decomposing
     /// `state_after.balance_hi`. Same two constraints as the lo limb.
     pub const NEW_BAL_HI_BIT_BASE: usize = 36 + super::BAL_LIMB_BITS; // 66
+
+    /// The `record_digest` witness column (audit P0-2): the single Poseidon2 felt
+    /// folding ALL authority-bearing cell state the welded state limbs do NOT carry
+    /// (permissions / VK / lifecycle / deathCert / delegate / delegation / program /
+    /// mode / visibility / side-table roots / `fields[8..]`). The Group-4 state-commit
+    /// constraint absorbs it as the FOURTH input of the root hash
+    /// (`state_commit == hash_4_to_1(inter1, inter2, inter3, record_digest)`),
+    /// replacing the old literal `ZERO` so the commitment binds the FULL cell state.
+    /// A residue-free cell witnesses `empty_record_digest()` (`ZERO`) — the no-op
+    /// fold, byte-identical to the legacy form. Mirrors the Lean `recStateCommit`'s
+    /// `RH` rest-hash limb / `cellCommitS`'s `systemRootsDigest` absorbed limb.
+    pub const STATE_RECORD_DIGEST: usize = 96;
 }
 
 /// THE ROTATED STATE BLOCK (THE ROTATION, STAGED — `docs/UNIVERSAL-MAP-ROTATION.md`

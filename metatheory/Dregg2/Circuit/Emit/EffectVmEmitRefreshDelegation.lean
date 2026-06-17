@@ -640,7 +640,7 @@ theorem refreshNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.Vm
 
 #guard refreshVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1  -- 13 freeze/tick gates + 14 transitions + 4 first + 3 last + selectorGate
 #guard refreshVmDescriptor.hashSites.length == 4
-#guard refreshVmDescriptor.traceWidth == 186
+#guard refreshVmDescriptor.traceWidth == 187
 
 #assert_axioms refreshVm_faithful
 #assert_axioms refreshVm_rejects_moved_capRoot
@@ -680,9 +680,8 @@ boundary §7-9 already states, now on the RUNNABLE (`wideHashSites`) commitment 
 record-layer `cellCommitS`. -/
 
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound wide_rejects_root_tamper
+  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound wide_rejects_root_tamper
    wide_rejects_state_tamper)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols)
 open Dregg2.Exec.SystemRoots (systemRootsDigest)
 
 /-- **`refreshVmDescriptorWide`** — the runnable `refreshDelegation` FULL-state circuit: `refreshVmDescriptor`
@@ -799,7 +798,7 @@ theorem refresh_runnable_rejects_state_tamper
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : absorbedCols e₁ ≠ absorbedCols e₂) : False :=
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
   wide_rejects_state_tamper (refreshRunnableSpec hash) hash hCR
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
@@ -831,7 +830,7 @@ theorem refreshWide_clause_not_trivial :
 #assert_axioms refreshWide_realizes
 #assert_axioms refreshWide_clause_not_trivial
 
-#guard refreshVmDescriptorWide.traceWidth == 188
+#guard refreshVmDescriptorWide.traceWidth == 189
 #guard refreshVmDescriptorWide.hashSites.length == 4
 
 end Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation

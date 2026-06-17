@@ -5197,7 +5197,13 @@ impl AgentCipherclerk {
         // 3. The Effect-VM marshalling + circuit pre-state (cap-root-seeded), identical
         //    to the v1 path so the rotated generator's v1 sub-trace is byte-identical.
         let vm_effects = Self::convert_effects_to_vm(cell_id, &effects);
-        let initial_vm_state = dregg_circuit::CellState::with_capability_root(
+        // P0-2 (audit `cell/src/commitment.rs`, REVIEW[circuit-fix-coordination]): seed the
+        // EffectVM `record_digest` from the cell's authority-residue digest so OLD_COMMIT/
+        // NEW_COMMIT bind the FULL cell state (permissions / VK / lifecycle / …), not the
+        // lossy balance/nonce/fields/cap_root subset. This is the SAME r23 the rotated weld
+        // carries (`dregg_cell::compute_authority_digest_felt`), so the v1-prefix and rotated
+        // legs agree.
+        let initial_vm_state = dregg_circuit::CellState::with_capability_root_and_record_digest(
             u64::try_from(before_cell.state.balance()).map_err(|_| {
                 SdkError::Wire(
                     "cell balance is negative; cannot prove turn over a well cell here".into(),
@@ -5205,6 +5211,7 @@ impl AgentCipherclerk {
             })?,
             before_cell.state.nonce() as u32,
             dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
+            dregg_cell::compute_authority_digest_felt(&before_cell),
         );
 
         // 4. The turn-context the rotated commitment absorbs. The cipherclerk is the

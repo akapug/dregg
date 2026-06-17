@@ -172,10 +172,12 @@ def site2 : VmHashSite :=
               , .col (saCol (state.FIELD_BASE + 7)), .col (saCol state.CAP_ROOT) ]
   , arity := 4 }
 
-/-- Site 3: `state_commit = H4(inter1, inter2, inter3, 0)` — reading sites 0/1/2. -/
+/-- Site 3: `state_commit = H4(inter1, inter2, inter3, record_digest)` — reading sites 0/1/2, with the
+authority-residue `record_digest` (`aux_off.STATE_RECORD_DIGEST`, abs col `auxCol 96 = 186`) as the
+4th input (audit P0-2; replaces the old literal `.zero`), matching the Rust GROUP-4. -/
 def site3 : VmHashSite :=
   { digestCol := saCol state.STATE_COMMIT
-  , inputs := [ .digest 0, .digest 1, .digest 2, .zero ]
+  , inputs := [ .digest 0, .digest 1, .digest 2, .col (auxCol aux_off.STATE_RECORD_DIGEST) ]
   , arity := 4 }
 
 /-- The ordered GROUP-4 hash sites (identical chain to the transfer keystone, so the moved `cap_root`
@@ -790,7 +792,7 @@ theorem attenuateGenuineNonAmp_rejects_amplify (env : VmRowEnv)
 -- (3·8+2 = 26), same 6 hash sites, same base width. Additive + width-neutral.
 #guard attenuateVmDescriptorGenuineNonAmp.constraints.length == (12 + 14 + 4) + (3 * 8 + 2)
 #guard attenuateVmDescriptorGenuineNonAmp.hashSites.length == 6
-#guard attenuateVmDescriptorGenuineNonAmp.traceWidth == 186
+#guard attenuateVmDescriptorGenuineNonAmp.traceWidth == 187
 
 #assert_axioms attenuateGenuineNonAmp_keeps_recompute
 #assert_axioms attenuateGenuineNonAmp_in_circuit
@@ -800,11 +802,11 @@ theorem attenuateGenuineNonAmp_rejects_amplify (env : VmRowEnv)
 
 #guard attenuateVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
 #guard attenuateVmDescriptor.hashSites.length == 4
-#guard attenuateVmDescriptor.traceWidth == 186
+#guard attenuateVmDescriptor.traceWidth == 187
 -- The genuine descriptor: 12 frame gates (no opaque cap-move), 6 hash sites (2 recompute + 4 GROUP-4).
 #guard attenuateVmDescriptorGenuine.constraints.length == 12 + 14 + 4
 #guard attenuateVmDescriptorGenuine.hashSites.length == 6
-#guard attenuateVmDescriptorGenuine.traceWidth == 186
+#guard attenuateVmDescriptorGenuine.traceWidth == 187
 
 #assert_axioms attenuateGenuineRowGates_holds_iff
 #assert_axioms attenuateGenuine_sound
@@ -848,9 +850,8 @@ section CapGraphWide
 
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferHashSites)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (absorbedCols)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
+  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
    wide_rejects_state_tamper wide_rejects_root_tamper)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -962,7 +963,7 @@ theorem cap_runnable_binds_full_state (capDigestNew : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   runnable_full_commit_binds (capRunnableSpec capDigestNew preRoots) hash hCR
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -980,7 +981,7 @@ theorem cap_runnable_rejects_cap_root_tamper (capDigestNew : ℤ) (preRoots : Sy
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : absorbedCols e₁ ≠ absorbedCols e₂) : False :=
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
   wide_rejects_state_tamper (capRunnableSpec capDigestNew preRoots) hash hCR
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
@@ -1062,7 +1063,7 @@ theorem capWide_roots_clause_not_trivial :
 #assert_axioms capWide_clause_not_trivial
 #assert_axioms capWide_roots_clause_not_trivial
 
-#guard attenuateVmDescriptorWide.traceWidth == 188
+#guard attenuateVmDescriptorWide.traceWidth == 189
 #guard attenuateVmDescriptorWide.hashSites.length == 4
 -- the wide constraint list is byte-identical to the base (13 gates + 14 transitions + 4 boundary):
 #guard attenuateVmDescriptorWide.constraints.length == 13 + 14 + 4

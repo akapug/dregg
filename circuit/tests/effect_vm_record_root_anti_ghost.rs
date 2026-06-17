@@ -95,7 +95,7 @@ fn record_descriptor_binds_fields_root_and_rejects_map_tamper() {
     let (base_trace, pis) = generate_effect_vm_trace(&st, &effects);
     assert_eq!(
         base_trace[0].len(),
-        186,
+        187,
         "canonical 186-col layout (width-neutral)"
     );
 
@@ -103,7 +103,7 @@ fn record_descriptor_binds_fields_root_and_rejects_map_tamper() {
         .expect("record descriptor must be registered");
     let desc = parse_vm_descriptor(json).expect("record descriptor must parse");
     assert_eq!(
-        desc.trace_width, 186,
+        desc.trace_width, 187,
         "record descriptor is width-neutral (186)"
     );
     let dpis = &pis[..desc.public_input_count];

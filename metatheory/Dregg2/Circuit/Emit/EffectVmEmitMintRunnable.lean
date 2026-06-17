@@ -49,13 +49,13 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitMintRunnable
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitMint
   (mintVmDescriptor mintRowGates mintRowGates_flag_indep mintVm_faithful intent_to_cellSpec
    CellMintSpec RowEncodes MintRowIntent IsMintRow mintVmAirName
    goodMintRow goodMintRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
    wide_rejects_state_tamper wide_rejects_root_tamper)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
@@ -171,7 +171,7 @@ theorem mint_rejects_state_tamper (amt : ℤ) (preRoots : SysRoots)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂)
-    (htamper : absorbedCols e₁ ≠ absorbedCols e₂) : False :=
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
   wide_rejects_state_tamper (mintRunnableSpec amt preRoots) hash hCR e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
@@ -237,7 +237,7 @@ theorem mintFullClause_not_trivial :
 
 /-! ## §6 — axiom-hygiene tripwires + structural pins. -/
 
-#guard mintVmDescriptorWide.traceWidth == 188
+#guard mintVmDescriptorWide.traceWidth == 189
 #guard mintVmDescriptorWide.hashSites.length == 4
 #guard mintVmDescriptorWide.constraints.length == mintVmDescriptor.constraints.length
 

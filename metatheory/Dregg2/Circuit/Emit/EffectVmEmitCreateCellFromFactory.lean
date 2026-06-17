@@ -336,7 +336,7 @@ theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false
 
 #guard factoryVmDescriptor.constraints.length == 13
 #guard factoryVmDescriptor.hashSites.length == 4
-#guard factoryVmDescriptor.traceWidth == 186
+#guard factoryVmDescriptor.traceWidth == 187
 
 #assert_axioms factoryVm_faithful
 #assert_axioms factoryVm_rejects_nonzero
@@ -440,7 +440,7 @@ theorem factoryActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
 
 #guard factoryActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard factoryActorVmDescriptor.hashSites.length == 4
-#guard factoryActorVmDescriptor.traceWidth == 186
+#guard factoryActorVmDescriptor.traceWidth == 187
 
 #assert_axioms factoryActor_faithful
 #assert_axioms factoryActor_full_sound
