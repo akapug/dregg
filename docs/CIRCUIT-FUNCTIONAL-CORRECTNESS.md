@@ -88,7 +88,31 @@ criterion above.
 |---|---|---|
 | **VALUE_FORCED** (rung provable now / proven) | `transfer`✓, `burn`✓, `mint`✓, `bridgeMint`✓, `setField`✓ | a gate pins the moved column into the commitment |
 | **VALUE_PARTIAL** (forces some, named gap) | `attenuate` (in-circuit submask non-amp ✓; base post-root is a *supplied* digest, recompute lives only in the unwired Genuine variant), `setFieldDyn` (value on memory readback, not the cell-write column), `incrementNonce` (forces a generic +1 tick, not the leaf's `nonce → n`), `makeSovereign` (forces one mode bit, not the rebind), `pipelinedSend` (freezes economic block; nonce-tick contradicts the leaf's literal-freeze frame; receipt unbound) | a real but partial binding |
-| **VALUE_MISSING** (real descriptor gap — freeze + nonce-tick + commit-recompute, the write is off-row) | `setPermissions`, `setVK`, `emitEvent`, `refusal`, `receiptArchive`, `createCell`, `createCellFromFactory`, `spawn`, `cellSeal`, `cellUnseal`, `cellDestroy`, `exercise`, `noteSpend`, `noteCreate`, `introduce`, `grantCap`, `refresh`, (`delegate`/`delegateAtten` have **no live descriptor at all**) | nothing forces `pubPost` to reflect the change — needs a descriptor FIX, then a proof |
+| **VALUE_MISSING** (real gap — the runtime freezes the target column and routes the write off-row) | `setPermissions`, `setVK`, `emitEvent`, `refusal`, `receiptArchive`, `createCell`, `createCellFromFactory`, `spawn`, `cellSeal`, `cellUnseal`, `cellDestroy`, `exercise`, `noteSpend`, `noteCreate`, `introduce`, `grantCap`, `refresh`, (`delegate`/`delegateAtten` have **no live descriptor at all**) | nothing forces `pubPost` to reflect the change — needs a RUNTIME+circuit fix (below), then a proof |
+
+### The VALUE_MISSING wall — it is a runtime fix, not a Lean-only one (the session's key finding)
+
+The circuit soundly binds, into the published commitment, only these columns: the economic block
+(`bal_lo`/…), the 8 cell-record `field[i]` slots, the per-row `nonce`, and the `cap_root`
+*prepend-accumulator* felt. The five VALUE_FORCED rungs are exactly the effects whose runtime writes one
+of those bound columns (`bal` for transfer/burn/mint, `field[slot]` for setField).
+
+For the ~17 VALUE_MISSING effects, the **runtime hand-AIR runs a Stage-3 passthrough row that FREEZES
+all 8 `field[i]` columns** and routes the actual write off-row — through `params[0]` + `effects_hash`
+(setPermissions/setVK/refusal/emitEvent/receiptArchive) or into kernel **side-tables that have no
+committed column or systemRoot** (`lifecycle` for seal/unseal/destroy, `deathCert` for destroy,
+`nullifiers`/`commitments` for the note family, the **sorted** cap-table for the capability family — see
+attenuate's accumulator-vs-sorted-tree note above). Because the value is not in a bound column, no gate
+can force `pubPost` to reflect it; transplanting a `setField`-style write-gate would force a column the
+runtime freezes and make the honest trace UNSAT (a degradation, not a fix).
+
+So closing these requires a **runtime + circuit change**: bind each effect's real write into a committed
+column/root and have the runtime emit it there, then a `setField`-style refinement discharges. The
+principled unification (matching the dregg3 "sorted-Poseidon2 everywhere" line): a **per-touched-cell
+record-digest column** recomputed in-circuit would bind *all* cell-field writes (permissions/vk/lifecycle/
+refusal/deathCert) at once; the capability family wants the **openable sorted cap-tree update**
+(cap-reshape phase-D, #103); the note family wants **accumulator-root columns** for `nullifiers`/
+`commitments`. Each is VK-affecting (and the deploy is the ember-gated VK epoch).
 
 Two flagged severities:
 

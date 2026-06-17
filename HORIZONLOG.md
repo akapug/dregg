@@ -25,12 +25,17 @@ bridgeMint, setField — `RotatedKernelRefinement{,MintBurn,SetField}.lean`, eac
 moved column with both-polarity forgery teeth.
 
 NAMED (the remaining campaign to "closed-closed" — each is a burn-down lane, not a parking lot):
-  1. ~17 VALUE_MISSING descriptor FIXES (the real gap): the descriptors freeze+nonce-tick+recompute while the
-     actual write is off-row → `descriptorRefines` is genuinely FALSE (a prover may publish a commitment to an
-     un-stepped post). Need gates that bind the write into the committed column, then a proof. Highest value:
-     the capability family (introduce/grantCap/refresh/delegate) — wire the PROVEN-but-unwired
-     `attenuateVmDescriptorGenuineNonAmp` (recompute + submask non-amp) in. Highest severity: `spawn` (freezes
-     cap_root while its spec IS a cap handoff — self-contradictory) and `heapWrite` (no live descriptor at all).
+  1. ~17 VALUE_MISSING fixes are RUNTIME+circuit, NOT Lean-only (the session's key finding): the runtime
+     hand-AIR FREEZES the 8 field columns and routes the real write off-row (params/effects_hash, or the
+     lifecycle/deathCert/nullifiers/commitments/sorted-cap side-tables that have NO committed column/root) →
+     no gate can force `pubPost` (a setField-style transplant would force a frozen column ⇒ honest trace
+     UNSAT). The fix per family = bind the write into a committed column/root + emit it in the runtime, then
+     a setField-style refinement discharges. Principled unification: a per-touched-cell RECORD-DIGEST column
+     (closes setPerms/setVK/refusal/lifecycle/deathCert at once); the capability family wants the openable
+     SORTED cap-tree update (cap-reshape phase-D, #103 — attenuate's cap_root is a prepend-ACCUMULATOR, not a
+     sorted tree, so non-amp is forced but the exact Caps move is not); the note family wants accumulator-root
+     columns. All VK-affecting (deploy = the ember-gated VK epoch). Severity flags: `spawn` (freezes cap_root
+     while its spec IS a cap handoff — self-contradictory) and `heapWrite` (no live descriptor at all).
   2. ~5 VALUE_PARTIAL (attenuate base-root-supplied-not-recomputed; setFieldDyn; incrementNonce generic-tick;
      makeSovereign rebind; pipelinedSend nonce-tick-vs-freeze) — bounded extra binding.
   3. Wire each effect's faithful arm into `fullActionStepFacet`; retire the forest `hidx0 : e=0` residual.
