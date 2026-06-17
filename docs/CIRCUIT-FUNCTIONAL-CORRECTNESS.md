@@ -86,16 +86,33 @@ criterion above.
 
 | class | effects | what it means |
 |---|---|---|
-| **VALUE_FORCED** (rung provable now / proven) | `transfer`✓, `burn`✓, `mint`✓, `bridgeMint`✓, `setField`✓ | a gate pins the moved column into the commitment |
+| **VALUE_FORCED** (rung PROVEN) | `transfer`✓, `burn`✓, `mint`✓, `bridgeMint`✓, `setField`✓, `incrementNonce`✓ | a gate pins the moved column into the commitment |
 | **VALUE_PARTIAL** (forces some, named gap) | `attenuate` (in-circuit submask non-amp ✓; base post-root is a *supplied* digest, recompute lives only in the unwired Genuine variant), `setFieldDyn` (value on memory readback, not the cell-write column), `incrementNonce` (forces a generic +1 tick, not the leaf's `nonce → n`), `makeSovereign` (forces one mode bit, not the rebind), `pipelinedSend` (freezes economic block; nonce-tick contradicts the leaf's literal-freeze frame; receipt unbound) | a real but partial binding |
 | **VALUE_MISSING** (real gap — the runtime freezes the target column and routes the write off-row) | `setPermissions`, `setVK`, `emitEvent`, `refusal`, `receiptArchive`, `createCell`, `createCellFromFactory`, `spawn`, `cellSeal`, `cellUnseal`, `cellDestroy`, `exercise`, `noteSpend`, `noteCreate`, `introduce`, `grantCap`, `refresh`, (`delegate`/`delegateAtten` have **no live descriptor at all**) | nothing forces `pubPost` to reflect the change — needs a RUNTIME+circuit fix (below), then a proof |
 
+### The commitment preimage — the exact binding boundary (the criterion, ground-truth)
+
+A light client's `pi.post` binds exactly the per-cell **state commitment**, whose preimage is
+(`circuit/src/effect_vm/cell_state.rs:76`, `compute_commitment`):
+
+```
+hash( balance_lo, balance_hi, nonce, field[0..7], capability_root )
+```
+
+and NOTHING else. The 8 `field[i]` slots are **generic** developer slots (`slotName slot =
+"slotfield{n}"`), not the kernel's semantic fields. So `reserved`/`mode_flag`/`sealed_field_mask` are
+**not** committed; and the kernel's semantic fields (`permissions`, `verification_key`, `lifecycle`,
+`deathCert`, `refusal`, the sorted cap-table, `nullifiers`, `commitments`) are committed only insofar
+as the executor projects them onto a generic `field[i]` slot or the `cap_root`. The criterion for
+`descriptorRefines` is therefore sharp: **a write is light-client-bound iff its target is `balance`,
+`nonce`, a `field[i]` slot, or `cap_root`, AND the runtime actually writes it there.** (This corrects
+two earlier PARTIAL guesses: `makeSovereign`'s `reserved += 256` mode bit is NOT in the preimage, so it
+is genuinely unbound, not partial.)
+
 ### The VALUE_MISSING wall — it is a runtime fix, not a Lean-only one (the session's key finding)
 
-The circuit soundly binds, into the published commitment, only these columns: the economic block
-(`bal_lo`/…), the 8 cell-record `field[i]` slots, the per-row `nonce`, and the `cap_root`
-*prepend-accumulator* felt. The five VALUE_FORCED rungs are exactly the effects whose runtime writes one
-of those bound columns (`bal` for transfer/burn/mint, `field[slot]` for setField).
+The six VALUE_FORCED rungs are exactly the effects whose runtime writes one of those bound columns
+(`bal` for transfer/burn/mint, `field[slot]` for setField, `nonce` for incrementNonce).
 
 For the ~17 VALUE_MISSING effects, the **runtime hand-AIR runs a Stage-3 passthrough row that FREEZES
 all 8 `field[i]` columns** and routes the actual write off-row — through `params[0]` + `effects_hash`
