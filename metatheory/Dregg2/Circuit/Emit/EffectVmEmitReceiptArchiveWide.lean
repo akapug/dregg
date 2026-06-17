@@ -6,7 +6,7 @@ to FULL-STATE (the magnesium breadth, on the circuit the prover RUNS).
 
 `EffectVmEmitReceiptArchive.receiptArchiveVmDescriptor` is the deployed `EFFECT_VM_WIDTH = 186` audit-write
 row (sets the `lifecycle` record-slot `field[1]` to the constant `1`, frame FROZEN — nonce included)
-whose published `state_commit` absorbs ONLY the 13 state-block columns (`absorbedCols`). The
+whose published `state_commit` absorbs ONLY the 13 state-block columns (`baseAbsorbedCols`). The
 `system_roots` sub-block (escrow / nullifier / commitment / queue / swiss / sealedBox / delegation /
 refcount) is bound ONLY by a separate record-layer commitment the row does NOT carry — the dominant
 Class-C "pale ghost". Its per-cell soundness `archiveDescriptor_full_sound` pins `field[1] = 1` + the
@@ -61,12 +61,12 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitReceiptArchiveWide
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
   (IsArchiveRow archiveRowGates receiptArchiveVmDescriptor ArchiveRowEncodes ArchiveCellSpec
    archiveDescriptor_full_sound LIFE_FIELD selRA.RECEIPT_ARCHIVE)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -177,7 +177,7 @@ theorem receiptArchive_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Po
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   EffectVmFullStateRunnable.runnable_full_commit_binds (archiveRunnableSpec preRoots)
     hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -254,7 +254,7 @@ theorem archiveWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard archiveVmDescriptorWide.traceWidth == 188
+#guard archiveVmDescriptorWide.traceWidth == 189
 #guard archiveVmDescriptorWide.hashSites.length == 4
 #guard archiveVmDescriptorWide.constraints.length == 13 + 14 + 4
 

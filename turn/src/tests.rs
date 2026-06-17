@@ -7871,6 +7871,7 @@ fn setup_sovereign_cell_for_proof_test() -> (Ledger, CellId, CellId, [u8; 32]) {
         vm_state.nonce,
         &vm_state.fields,
         vm_state.capability_root,
+        vm_state.record_digest,
     );
     let commitment = TurnExecutor::commitment_4bb_to_bytes(commit_4bb);
     ledger.insert_cell(sovereign_cell).unwrap();

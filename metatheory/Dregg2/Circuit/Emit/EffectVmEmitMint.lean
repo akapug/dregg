@@ -528,7 +528,7 @@ theorem mintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
 
 #guard mintVmDescriptor.constraints.length == 13 + 14 + 4 + 3
 #guard mintVmDescriptor.hashSites.length == 4
-#guard mintVmDescriptor.traceWidth == 186
+#guard mintVmDescriptor.traceWidth == 187
 -- The credit reads `param1` (the runtime value_lo), not `param0` (= `param.AMOUNT`, the MINT_HASH);
 -- the selector is the runtime `sel::BRIDGE_MINT = 40`.
 #guard VALUE_LO == 1

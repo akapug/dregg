@@ -428,7 +428,7 @@ theorem staleNonceSetVKRow_rejected :
 
 #guard setVKVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard setVKVmDescriptor.hashSites.length == 4
-#guard setVKVmDescriptor.traceWidth == 186
+#guard setVKVmDescriptor.traceWidth == 187
 
 #assert_axioms setVKVm_faithful
 #assert_axioms setVKVm_rejects_wrong_output

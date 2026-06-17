@@ -6,8 +6,8 @@ gadget, and column-indexed algebraic `ConstraintExpr` forms over a single `RowEn
 those is the shape the RUNNING EffectVM prover (`circuit/src/effect_vm_p3_full_air.rs`'s
 `EffectVmP3Air`, a faithful mirror of bespoke `effect_vm/air.rs`'s `EffectVmAir`) needs:
 
-  * a FIXED 186-column layout (46 selectors · 14 state_before · 8 params · 14 state_after ·
-    96 aux) read by *named* offsets (`sel`/`state`/`param`/`aux`);
+  * a FIXED 187-column layout (54 selectors · 14 state_before · 8 params · 14 state_after ·
+    97 aux) read by *named* offsets (`sel`/`state`/`param`/`aux`);
   * per-row gates GATED by the selector column (`s_transfer · (…) = 0`), reading
     `state_before`/`state_after`/`param`;
   * TRANSITION gates over the row window (`next.state_before[i] == this.state_after[i]`);
@@ -55,8 +55,11 @@ def PARAM_BASE : Nat := STATE_BEFORE_BASE + STATE_SIZE
 def STATE_AFTER_BASE : Nat := PARAM_BASE + NUM_PARAMS
 /-- Absolute base of the auxiliary block (`AUX_BASE = STATE_AFTER_BASE + STATE_SIZE`). -/
 def AUX_BASE : Nat := STATE_AFTER_BASE + STATE_SIZE
-/-- Total BASE trace width (`EFFECT_VM_WIDTH = 186`). -/
-def EFFECT_VM_WIDTH : Nat := 186
+/-- Total BASE trace width (`EFFECT_VM_WIDTH = 187`). The P0-2 record-digest aux column
+(`aux_off.STATE_RECORD_DIGEST = 96`, absolute `auxCol 96 = 186`) is the 97th aux slot, growing the
+base width by one (`AUX_BASE + 97 = 90 + 97 = 187`), matching the Rust
+`columns.rs::EFFECT_VM_WIDTH = AUX_BASE + NUM_AUX`. -/
+def EFFECT_VM_WIDTH : Nat := 187
 
 /-! State-column offsets within a state block (`state::*`). -/
 namespace state
@@ -139,7 +142,7 @@ The finding the per-effect files PROVE (`*_root_not_in_descriptor_commit`,
 aux_off_sys.SYSTEM_ROOTS_DIGEST = AUX_BASE + 96 = 186` is **PAST `EFFECT_VM_WIDTH = 186`** — the
 deployed EffectVM row carries **no such column**, so the running descriptor's `state_commit` does NOT
 absorb it. THIS section closes that, ADDITIVELY (the binding constraint: `EFFECT_VM_WIDTH = 186` is
-load-bearing in ~50 unowned `#guard …traceWidth == 186` sites — it MUST stay; the widening is a NEW
+load-bearing in ~50 unowned `#guard …traceWidth == 187` sites — it MUST stay; the widening is a NEW
 width + a NEW dedicated column block past 186, opted into by a v2 descriptor shape).
 
 The two dedicated carriers are placed at the FIRST TWO absolute columns past the old width (`186`,
@@ -185,6 +188,15 @@ namespace aux_off
 def STATE_INTER1 : Nat := 8
 def STATE_INTER2 : Nat := 9
 def STATE_INTER3 : Nat := 10
+/-- **`STATE_RECORD_DIGEST` (audit P0-2).** The single Poseidon2 felt folding ALL authority-bearing
+cell state the welded `balance`/`nonce`/`fields`/`cap_root` limbs do NOT carry (permissions / VK /
+lifecycle / deathCert / delegate / delegation / program / mode / sealed-field mask / visibility /
+side-table roots / `fields[8..]`). It is the FOURTH input of the GROUP-4 state-commit root hash
+(`state_commit = H4(inter1, inter2, inter3, record_digest)`), replacing the old literal `.zero`, so
+`OLD_COMMIT`/`NEW_COMMIT` bind the FULL cell state. Absolute column `auxCol 96 = 186`; matches the
+Rust `columns.rs::aux_off::STATE_RECORD_DIGEST = 96` (`AUX_BASE + 96 = 186`). A residue-free cell
+witnesses `0` here, so the absorption is byte-identical to the legacy `…, 0)` form for such cells. -/
+def STATE_RECORD_DIGEST : Nat := 96
 end aux_off
 
 /-! Public-input slot indices (`pi::*`). -/
@@ -424,8 +436,8 @@ boundary, and (being `≥ EFFECT_VM_WIDTH = 186`) from every column the 186-wide
 of which is `< 186`). So the widening is a clean, non-aliasing sub-block — unlike the early cohort's
 `SYS_DIG_AFTER = 96` (which lands at `auxCol 6`, inside the balance-bit block). -/
 theorem sysRootsDigest_cols_clean :
-    sysRootsDigestCol = 186
-    ∧ sysRootsDigestColBefore = 187
+    sysRootsDigestCol = 187
+    ∧ sysRootsDigestColBefore = 188
     ∧ sysRootsDigestCol ≠ sysRootsDigestColBefore
     ∧ EFFECT_VM_WIDTH ≤ sysRootsDigestCol
     ∧ EFFECT_VM_WIDTH ≤ sysRootsDigestColBefore
@@ -578,13 +590,14 @@ def emitVmJson (d : EffectVmDescriptor) : String :=
 
 /-! ## §8 — IR-widening tripwires (the additive `system_roots` column, verified backward-compatible). -/
 
--- BACKWARD-COMPAT: the old width is UNCHANGED (the ~50 unowned `#guard …traceWidth == 186` still hold).
-#guard EFFECT_VM_WIDTH == 186
--- The widened width is exactly two dedicated carriers past the old boundary.
-#guard EFFECT_VM_WIDTH_SYSROOTS == 188
-#guard sysRootsDigestCol == 186
-#guard sysRootsDigestColBefore == 187
--- The dedicated carriers do NOT alias each other or any 186-layout column (every aux slot is < 186).
+-- P0-2 record-digest: the base width is 187 (the 97th aux column `STATE_RECORD_DIGEST` absorbed into
+-- the GROUP-4 commitment — `#guard …traceWidth == 187` everywhere).
+#guard EFFECT_VM_WIDTH == 187
+-- The widened width is exactly two dedicated carriers past the new boundary.
+#guard EFFECT_VM_WIDTH_SYSROOTS == 189
+#guard sysRootsDigestCol == 187
+#guard sysRootsDigestColBefore == 188
+-- The dedicated carriers do NOT alias each other or any 187-layout column (every aux slot is < 187).
 #guard [sysRootsDigestCol, sysRootsDigestColBefore].dedup.length == 2
 #guard decide (EFFECT_VM_WIDTH ≤ sysRootsDigestCol ∧ sysRootsDigestColBefore < EFFECT_VM_WIDTH_SYSROOTS)
 -- The absorbing site replaces transfer's spare `.zero` 4th input with the `system_roots` carrier,

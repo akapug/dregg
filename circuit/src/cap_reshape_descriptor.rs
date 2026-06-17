@@ -37,7 +37,7 @@ pub const CAPRESHAPE_V1_JSON: &str =
 
 /// The SHA-256 of the committed bytes (the anti-drift fingerprint).
 pub const CAPRESHAPE_V1_FP: &str =
-    "69a443b58a65e9f47e37d856ceb4a0a269c9bfb00992441df55482e881d88e56";
+    "7d2db99b03d3f71c20001bc878a21ffa3498783465b8b144e23a040b52c8b58b";
 
 /// The descriptor name (the canonical wire identity).
 pub const CAPRESHAPE_V1_NAME: &str = "dregg-effectvm-capreshape-v1";
@@ -168,8 +168,8 @@ mod tests {
             cap_reshape_descriptor().expect("cap-reshape descriptor must parse via interpreter");
         assert_eq!(d.name, CAPRESHAPE_V1_NAME, "parsed name != wire identity");
         assert_eq!(
-            d.trace_width, 186,
-            "cap-reshape shares the 186-col EffectVM base trace"
+            d.trace_width, 187,
+            "cap-reshape shares the 187-col EffectVM base trace (P0-2 record-digest)"
         );
         assert_eq!(d.public_input_count, 1, "the minted-asset PI");
         // 8 held-bool + 8 granted-bool + 8 submask + 2 recon + 1 PI binding + 1 control gate = 28.

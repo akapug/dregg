@@ -194,37 +194,43 @@ DEFINITIONALLY the same hash input as the transfer site 3's `.zero` (both resolv
 keystone lifts verbatim. We prove the resolved-input lists coincide (the load-bearing equality that
 the digests, and hence every downstream binding, agree). -/
 
-/-- **`recordSite3_resolves_as_transfer_on_legacy`.** When the carrier `fields_root = 0`, record
-site 3's resolved inputs equal transfer site 3's resolved inputs (under any earlier-digest accumulator
-`digs`). So the two site sets compute the SAME `state_commit` on a legacy row. -/
+/-- **`recordSite3_resolves_as_transfer_on_legacy`.** When BOTH the record carrier `fields_root = 0`
+AND the transfer keystone's authority-residue carrier `record_digest = 0` (the residue-free legacy
+row), record site 3's resolved inputs equal transfer site 3's resolved inputs (under any earlier-digest
+accumulator `digs`). Record's 4th input is `fields_root` (col 89), transfer's is `record_digest`
+(`auxCol STATE_RECORD_DIGEST` = col 186); both resolve to `0` on a residue-free legacy row, so the two
+site sets compute the SAME `state_commit` there. -/
 theorem recordSite3_resolves_as_transfer_on_legacy (env : VmRowEnv) (digs : List ℤ)
-    (hlegacy : env.loc (saCol state.FIELDS_ROOT) = 0) :
+    (hlegacy : env.loc (saCol state.FIELDS_ROOT) = 0)
+    (hresidue : env.loc (auxCol aux_off.STATE_RECORD_DIGEST) = 0) :
     recordSite3.resolvedInputs env digs = site3.resolvedInputs env digs := by
   simp only [recordSite3, site3, VmHashSite.resolvedInputs, HashInput.resolve,
-    List.map_cons, List.map_nil, hlegacy]
+    List.map_cons, List.map_nil, hlegacy, hresidue]
 
 /-- **`recordSites_digest_eq_transfer_on_legacy`.** On a legacy row (`fields_root = 0`) the record
 GROUP-4 sites and the transfer GROUP-4 sites bind the SAME published `state_commit` value — so STAGE 2
 is byte-identical on legacy rows and the transfer keystone's commitment binding lifts unchanged. -/
 theorem recordSites_digest_eq_transfer_on_legacy (hash : List ℤ → ℤ) (env : VmRowEnv)
     (hlegacy : env.loc (saCol state.FIELDS_ROOT) = 0)
+    (hresidue : env.loc (auxCol aux_off.STATE_RECORD_DIGEST) = 0)
     (hT : siteHoldsAll hash env transferHashSites) :
     siteHoldsAll hash env transferHashSites ↔ siteHoldsAll hash env recordHashSites := by
   constructor
   · intro hTr
-    -- both site sets reduce to the same chained digests; the record site 3's 4th input is 0=ZERO.
+    -- both site sets reduce to the same chained digests; on a residue-free legacy row BOTH the record
+    -- site 3's 4th input (`fields_root`) AND the transfer site 3's 4th input (`record_digest`) are 0.
     unfold siteHoldsAll recordHashSites
     unfold siteHoldsAll transferHashSites at hTr
     simp only [siteHoldsAll.go, site0, site1, site2, site3, recordSite3,
       VmHashSite.resolvedInputs, HashInput.resolve, List.map_cons, List.map_nil, List.getD,
-      hlegacy] at hTr ⊢
+      hlegacy, hresidue] at hTr ⊢
     exact hTr
   · intro hRec
     unfold siteHoldsAll transferHashSites
     unfold siteHoldsAll recordHashSites at hRec
     simp only [siteHoldsAll.go, site0, site1, site2, site3, recordSite3,
       VmHashSite.resolvedInputs, HashInput.resolve, List.map_cons, List.map_nil, List.getD,
-      hlegacy] at hRec ⊢
+      hlegacy, hresidue] at hRec ⊢
     exact hRec
 
 /-! ## §6 — The RECORD descriptor: the transfer descriptor with the `fields_root`-binding GROUP-4.
@@ -314,7 +320,7 @@ theorem goodRow_fieldsRoot_zero : goodRow.loc (saCol state.FIELDS_ROOT) = 0 := b
 /-! ## §8 — Axiom-hygiene pins (the honesty tripwire). -/
 
 #guard recordHashSites.length == 4
-#guard recordVmDescriptor.traceWidth == 186
+#guard recordVmDescriptor.traceWidth == 187
 #guard recordVmDescriptor.hashSites.length == 4
 -- 14 per-row gates + 14 transitions + 4 boundary-first + 3 boundary-last + 1 selector-binding
 -- `sel[S]=1` tooth (task #74, added to `transferVmDescriptor` after this guard was first written;
@@ -323,8 +329,10 @@ theorem goodRow_fieldsRoot_zero : goodRow.loc (saCol state.FIELDS_ROOT) = 0 := b
 -- The record site 3 absorbs the FIELDS_ROOT cell (col 87), NOT the literal zero:
 #guard recordSite3.inputs == [HashInput.digest 0, HashInput.digest 1, HashInput.digest 2,
                               HashInput.col (saCol state.FIELDS_ROOT)]
--- The transfer site 3 STILL absorbs zero (transfer descriptor untouched / backward-compatible):
-#guard site3.inputs == [HashInput.digest 0, HashInput.digest 1, HashInput.digest 2, HashInput.zero]
+-- The transfer site 3 absorbs the authority-residue `record_digest` (`auxCol STATE_RECORD_DIGEST` =
+-- col 186), the P0-2 cut; record site 3 absorbs `fields_root` (col 89) instead — distinct 4th inputs.
+#guard site3.inputs == [HashInput.digest 0, HashInput.digest 1, HashInput.digest 2,
+                        HashInput.col (auxCol aux_off.STATE_RECORD_DIGEST)]
 
 #assert_axioms recordHash_binds
 #assert_axioms recordCommit_eq_commitOf

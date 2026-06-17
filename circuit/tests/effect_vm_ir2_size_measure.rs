@@ -80,7 +80,7 @@ fn ir2_vs_v1_transfer_proof_size() {
     let (base_trace, pis) = generate_effect_vm_trace(&state, &effects);
     assert_eq!(
         base_trace[0].len(),
-        186,
+        187,
         "canonical 186-col EffectVM layout"
     );
 
@@ -108,7 +108,7 @@ fn ir2_vs_v1_transfer_proof_size() {
     let v2_json = descriptor2_for_key("transferVmDescriptor2").expect("v2 transfer descriptor");
     let v2_desc = parse_vm_descriptor2(v2_json).expect("v2 transfer descriptor parses");
     assert_eq!(
-        v2_desc.trace_width, 186,
+        v2_desc.trace_width, 187,
         "graduated transfer keeps the 186 base width"
     );
     assert_eq!(v2_desc.tables.len(), 5, "the five EPOCH tables");

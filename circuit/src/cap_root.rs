@@ -601,6 +601,21 @@ pub fn empty_capability_root() -> BabyBear {
     compute_capability_root(Vec::new())
 }
 
+/// The EMPTY record digest — the cell-independent constant a cell with no
+/// authority residue beyond its carried (balance/nonce/fields/cap_root) limbs
+/// uses for the EffectVM `CellState::record_digest`. Absorbed as the fourth
+/// input of the state-commitment root hash, it is a uniform no-op for such cells
+/// (structurally mirroring the Lean `emptySystemRootsDigest` / `legacyReferenceCommitS`
+/// no-op fold). A real cell carries `dregg_cell::compute_authority_digest_felt(&cell)`.
+///
+/// It is `ZERO` so that the new full-state commitment is byte-identical to the
+/// OLD lossy `hash_4_to_1(inter1, inter2, inter3, ZERO)` for a residue-free cell —
+/// the flag-day-free no-op cutover. Cells carrying real authority residue get a
+/// different (binding) fourth limb.
+pub fn empty_record_digest() -> BabyBear {
+    BabyBear::ZERO
+}
+
 /// A **cap-membership opening witness** for the IN-CIRCUIT authority leg: the
 /// genuine 7-field [`CapLeaf`] plus the depth-16 `(sibling, direction)` path that
 /// recomposes the committed `cap_root` from the leaf digest. This is the witness

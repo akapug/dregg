@@ -5,7 +5,7 @@ to FULL-STATE (the magnesium breadth, on the circuit the prover RUNS).
 ## What this module closes (vs the narrow `EffectVmEmitPipelinedSend`)
 
 `EffectVmEmitPipelinedSend.pipelinedSendVmDescriptor` is the deployed `EFFECT_VM_WIDTH = 186` row whose
-published `state_commit` absorbs ONLY the 13 state-block columns (`absorbedCols`). The `system_roots`
+published `state_commit` absorbs ONLY the 13 state-block columns (`baseAbsorbedCols`). The `system_roots`
 sub-block (escrow / nullifier / commitment / queue / swiss / sealedBox / delegation / refcount) is bound
 ONLY by a separate record-layer commitment the row does NOT carry — the dominant Class-C "pale ghost".
 Its per-cell soundness `pipelinedSendDescriptor_full_sound` pins the cell's economic block (FROZEN) +
@@ -64,13 +64,13 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitPipelinedSendWide
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (boundaryLastPins boundaryLast_pins)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitPipelinedSend
   (SEL_PIPELINED_SEND IsPipelinedSendRow pipelinedSendRowGates pipelinedSendVmDescriptor
    PipelinedSendRowIntent pipelinedSendVm_faithful RowEncodesSend CellSendSpec intent_to_cellSpec
    goodSendRow goodSendRow_noop goodSendRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound)
+  (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
 
@@ -196,7 +196,7 @@ theorem pipelinedSend_wide_binds_full_state (hash : List ℤ → ℤ) (hCR : Pos
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   EffectVmFullStateRunnable.runnable_full_commit_binds (pipelinedSendRunnableSpec preRoots)
     hash hCR e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -277,7 +277,7 @@ theorem pipelinedSendWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard pipelinedSendVmDescriptorWide.traceWidth == 188
+#guard pipelinedSendVmDescriptorWide.traceWidth == 189
 #guard pipelinedSendVmDescriptorWide.hashSites.length == 4
 #guard pipelinedSendVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

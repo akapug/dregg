@@ -315,7 +315,7 @@ theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false
 
 #guard makeSovereignVmDescriptor.constraints.length == 13
 #guard makeSovereignVmDescriptor.hashSites.length == 4
-#guard makeSovereignVmDescriptor.traceWidth == 186
+#guard makeSovereignVmDescriptor.traceWidth == 187
 
 #assert_axioms makeSovereignVm_faithful
 #assert_axioms makeSovereignVm_rejects_nonzero
@@ -562,7 +562,7 @@ theorem badSovRow_rejected : ¬ (VmConstraint.gate gSovReserved).holdsVm badSovR
 
 #guard makeSovereignRuntimeVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard makeSovereignRuntimeVmDescriptor.hashSites.length == 4
-#guard makeSovereignRuntimeVmDescriptor.traceWidth == 186
+#guard makeSovereignRuntimeVmDescriptor.traceWidth == 187
 
 #assert_axioms sovereignRuntimeVm_faithful
 #assert_axioms sovereignRuntimeVm_rejects_unset_mode

@@ -232,14 +232,15 @@ impl RotationTurnWitness {
     /// already `fold_bytes32_to_bb`'d — copied verbatim, the same value the v1 state block
     /// carries) · `cap_root = pre_limbs[B_CAP_ROOT]` (the canonical openable root). The
     /// authority-bearing residue (permissions/VK/delegate/program/mode + fields[8..16]) rides
-    /// the witness-carried authority digest `r23` in the rotated commit — it is NOT part of the
-    /// v1-prefix `compute_commitment` (which hashes only balance/nonce/fields[0..8]/cap_root), so
-    /// the EffectVm `CellState` losslessly holds everything OLD_COMMIT binds. `sealed_field_mask`
-    /// / `mode_flag` do not enter `compute_commitment` either; left at 0 (their only trace home is
-    /// the v1 `RESERVED` column, which OLD_COMMIT does not absorb and the rotated weld carries via
-    /// r23).
+    /// the witness-carried authority digest `r23` in the rotated commit AND is now ABSORBED by the
+    /// v1-prefix `compute_commitment` as its FOURTH state-commit root input (the EffectVM
+    /// `CellState::record_digest`, read from `pre_limbs[B_AUTHORITY_DIGEST]`, replacing the old
+    /// literal ZERO). So OLD_COMMIT/NEW_COMMIT bind the FULL cell state on BOTH legs (audit P0-2,
+    /// `cell/src/commitment.rs`) — two cells differing only in permissions / lifecycle / VK get
+    /// DIFFERENT commitments. `sealed_field_mask` / `mode_flag` still ride the v1 `RESERVED` column
+    /// (left at 0; the rotated weld carries them via r23).
     pub fn before_cell_state(&self) -> Result<CellState, SdkError> {
-        use dregg_circuit::effect_vm::trace_rotated::B_CAP_ROOT;
+        use dregg_circuit::effect_vm::trace_rotated::{B_AUTHORITY_DIGEST, B_CAP_ROOT};
         let pre = &self.before.pre_limbs;
         // The before-block must carry the full pre-iroot limb vector (the rotated generator
         // requires it too). Guard so a malformed witness is a loud `InvalidWitness`, not a panic.
@@ -260,11 +261,19 @@ impl RotationTurnWitness {
             *f = pre[4 + i]; // r3..r10 — the already-folded field felts, verbatim.
         }
         let capability_root = pre[B_CAP_ROOT];
+        // P0-2: the authority-residue digest (r23 / `compute_authority_digest_felt`)
+        // welded into the rotated commitment, read off the SAME pre-limb vector. It
+        // becomes the EffectVM `CellState::record_digest`, so the v1-prefix
+        // OLD_COMMIT binds the FULL cell state (permissions / VK / lifecycle / …),
+        // consistent with the rotated leg's r23. Guarded above (`pre.len() > B_CAP_ROOT`,
+        // and `B_AUTHORITY_DIGEST < B_CAP_ROOT`).
+        let record_digest = pre[B_AUTHORITY_DIGEST];
         let mut s = CellState {
             balance,
             nonce,
             fields,
             capability_root,
+            record_digest,
             state_commitment: BabyBear::ZERO,
             sealed_field_mask: 0,
             mode_flag: 0,
@@ -809,11 +818,16 @@ fn cell_state_after_run(
     let reserved = row[STATE_AFTER_BASE + state::RESERVED].0;
     let sealed_field_mask = reserved & 0xFF;
     let mode_flag = reserved >> 8;
+    // P0-2: the authority-residue digest is turn-invariant for kernel turns (the
+    // EffectVM trace mutates balance/nonce/fields/cap_root, never the residue), so
+    // the post-state carries the SAME `record_digest` the seed (pre-state) holds.
+    let record_digest = seed_for_unchanged.record_digest;
     let mut s = CellState {
         balance,
         nonce,
         fields,
         capability_root,
+        record_digest,
         state_commitment: BabyBear::ZERO,
         sealed_field_mask,
         mode_flag,

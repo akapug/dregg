@@ -41,7 +41,7 @@ pub const GENUINE_NONAMP_JSON: &str =
 
 /// The SHA-256 of the committed bytes (the anti-drift fingerprint).
 pub const GENUINE_NONAMP_FP: &str =
-    "152e2d3b13e56cf24a593c8613c1ab3bfefe3c84e0460004fa89cfa1fc53b522";
+    "61b1cabb55a5f396f91dbca604c9a59a1e5d9bdca4d76bfd578bf8350e305cf4";
 
 /// The descriptor name (the canonical wire identity — shared across the six cap-graph effects).
 pub const GENUINE_NONAMP_NAME: &str = "dregg-effectvm-attenuateA-v1-genuine-nonamp";
@@ -168,8 +168,8 @@ mod tests {
             .expect("genuine-non-amp descriptor must parse via interpreter");
         assert_eq!(d.name, GENUINE_NONAMP_NAME, "parsed name != wire identity");
         assert_eq!(
-            d.trace_width, 186,
-            "the genuine-non-amp cap-graph row shares the 186-col EffectVM base trace (width-neutral)"
+            d.trace_width, 187,
+            "the genuine-non-amp cap-graph row shares the 187-col EffectVM base trace (P0-2 record-digest)"
         );
         // 30 genuine (12 frame freeze + 14 transition + 4 boundary) + 26 non-amp
         // (8 held-bool + 8 granted-bool + 8 submask + 2 recon) = 56.

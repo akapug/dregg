@@ -516,7 +516,7 @@ theorem staleNonceEmitRow_rejected :
 
 #guard emitEventVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard emitEventVmDescriptor.hashSites.length == 4
-#guard emitEventVmDescriptor.traceWidth == 186
+#guard emitEventVmDescriptor.traceWidth == 187
 #guard emitRowGates.length == 14
 
 #assert_axioms emitEventVm_faithful

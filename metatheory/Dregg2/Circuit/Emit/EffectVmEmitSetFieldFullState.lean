@@ -28,12 +28,12 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitSetFieldFullState
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitSetField
   (SEL_SET_FIELD VALUE IsSetFieldRow setFieldRowGates setFieldVmDescriptor RowEncodesSF CellSetFieldSpec
    setFieldVm_faithful intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
    wideHashSites)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
@@ -62,6 +62,7 @@ constraint list (membership is direct). All gates are `.gate`, flag-free. The wr
 `post.fields slot` via the `RowEncodesSF` value-carrier clause. -/
 
 theorem setFieldGates_give_cellSpec (slot : Fin 8) (env : VmRowEnv) (pre post : CellState)
+    (hrow : IsSetFieldRow env)
     (henc : RowEncodesSF slot env pre post)
     (hgates : ∀ c ∈ (setFieldVmDescriptor slot).constraints, c.holdsVm env true true) :
     CellSetFieldSpec slot pre (post.fields slot) post := by
@@ -86,7 +87,7 @@ theorem setFieldGates_give_cellSpec (slot : Fin 8) (env : VmRowEnv) (pre post : 
   have hval : env.loc (prmCol VALUE) = post.fields slot := by
     obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hVal, _, _⟩ := henc
     exact hVal
-  have := intent_to_cellSpec slot env pre post henc ((setFieldVm_faithful slot env).mp hrowgates)
+  have := intent_to_cellSpec slot env pre post henc ((setFieldVm_faithful slot env hrow).mp hrowgates)
   rw [hval] at this
   exact this
 
@@ -111,7 +112,7 @@ def setFieldRunnableSpec (slot : Fin 8) (preRoots : SysRoots) : RunnableFullStat
   decodeFull    := by
     intro env pre post postRoots hrow hdec hgates
     obtain ⟨henc, hroots⟩ := hdec
-    exact ⟨setFieldGates_give_cellSpec slot env pre post henc
+    exact ⟨setFieldGates_give_cellSpec slot env pre post hrow henc
             (setFieldWide_constraints_eq slot ▸ hgates), hroots⟩
 
 /-! ## §4 — THE DELIVERABLE: `setField_runnable_full_sound`. -/
@@ -140,7 +141,7 @@ theorem setField_runnable_full_commit_binds (slot : Fin 8) (hash : List ℤ → 
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   runnable_full_commit_binds (setFieldRunnableSpec slot preRoots) hash hCR e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -170,7 +171,7 @@ def setFieldPre : CellState :=
 
 /-- The post-state: `fields[0] := 7` (the written value), everything else frozen. -/
 def setFieldPost : CellState :=
-  { balLo := 100, balHi := 0, nonce := 5, fields := fun i => if i = 0 then 7 else 0
+  { balLo := 100, balHi := 0, nonce := 6, fields := fun i => if i = 0 then 7 else 0
   , capRoot := 0, reserved := 0, commit := 0 }
 
 /-- **NON-VACUITY (witness TRUE).** The setField `fullClause` (slot 0) is inhabited by a real field
@@ -204,7 +205,7 @@ theorem setField_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard (setFieldVmDescriptorWide 0).traceWidth == 188
+#guard (setFieldVmDescriptorWide 0).traceWidth == 189
 #guard (setFieldVmDescriptorWide 0).hashSites.length == 4
 #guard (setFieldVmDescriptorWide 0).constraints.length == (setFieldVmDescriptor 0).constraints.length
 

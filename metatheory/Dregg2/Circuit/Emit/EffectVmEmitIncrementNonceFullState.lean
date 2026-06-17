@@ -38,13 +38,13 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitIncrementNonceFullState
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gFieldPassAll)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce
   (SEL_INCREMENT_NONCE IsIncNonceRow incNonceRowGates incrementNonceVmDescriptor incNonceHashSites
    RowEncodesIncNonce CellIncNonceSpec incNonceVm_faithful intent_to_cellSpec
    goodIncNonceRow goodIncNonceRow_noop goodIncNonceRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
-  (RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
+  (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
    wideHashSites)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.SystemRoots (SysRoots systemRootsDigest emptySystemRoots N_SYSTEM_ROOTS)
@@ -160,7 +160,7 @@ theorem incrementNonce_runnable_full_commit_binds (hash : List ℤ → ℤ) (hCR
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = systemRootsDigest hash sr₂) :
-    absorbedCols e₁ = absorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
+    baseAbsorbedCols e₁ = baseAbsorbedCols e₂ ∧ (∀ i : Fin N_SYSTEM_ROOTS, sr₁ i = sr₂ i) :=
   runnable_full_commit_binds (incNonceRunnableSpec preRoots) hash hCR e₁ e₂ sr₁ sr₂
     hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂
 
@@ -228,7 +228,7 @@ theorem incNonce_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard incrementNonceVmDescriptorWide.traceWidth == 188
+#guard incrementNonceVmDescriptorWide.traceWidth == 189
 #guard incrementNonceVmDescriptorWide.hashSites.length == 4
 #guard incrementNonceVmDescriptorWide.constraints.length == incrementNonceVmDescriptor.constraints.length
 

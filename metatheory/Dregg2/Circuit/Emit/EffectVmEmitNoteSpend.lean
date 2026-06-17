@@ -826,10 +826,10 @@ clause is the RUNTIME credit `CellSpendSpec`; the universe-A balance-NEUTRAL con
 actually enforces, the named divergence is orthogonal. -/
 
 open EffectVmFullStateRunnable
-  (wideHashSites RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
+  (wideHashSites baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds
    wide_rejects_state_tamper wide_rejects_root_tamper)
 open Dregg2.Circuit.Emit.EffectVmEmit (sysRootsDigestCol sysRootsDigestColBefore EFFECT_VM_WIDTH_SYSROOTS)
-open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (RowEncodes CellState absorbedCols)
+open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (RowEncodes CellState)
 
 /-! ### §W.1 — the root-UPDATE gate over the DEDICATED carrier (`sysRootsDigestCol`/`…Before`).
 
@@ -1019,7 +1019,7 @@ theorem noteSpend_runnable_rejects_state_tamper (hash : List ℤ → ℤ)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT)
     (hd₁ : e₁.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₁)
     (hd₂ : e₂.loc sysRootsDigestCol = Dregg2.Exec.SystemRoots.systemRootsDigest hash sr₂)
-    (htamper : absorbedCols e₁ ≠ absorbedCols e₂) : False :=
+    (htamper : baseAbsorbedCols e₁ ≠ baseAbsorbedCols e₂) : False :=
   wide_rejects_state_tamper (noteSpendRunnableSpec hash value preRoots postRoots step) hash hCR
     e₁ e₂ sr₁ sr₂ hsat₁ hsat₂ hpin₁ hpin₂ hpub hd₁ hd₂ htamper
 
@@ -1076,13 +1076,13 @@ theorem noteSpend_fullClause_refutable (hash : List ℤ → ℤ) :
 /-! ### §W.6 — RECONCILIATION pins (the wide descriptor's shape). -/
 
 -- The wide descriptor carries the widened trace width + the dedicated carrier (NOT the old aux-96).
-#guard noteSpendVmDescriptorWide.traceWidth == 188
+#guard noteSpendVmDescriptorWide.traceWidth == 189
 #guard noteSpendVmDescriptorWide.hashSites.length == 4
 -- 13 credit/freeze gates + 1 wide-root gate + 14 transitions + 4 boundaryFirst + 3 boundaryLast + 1 selector.
 #guard noteSpendVmDescriptorWide.constraints.length == 13 + 1 + 14 + 4 + 3 + 1
--- The wide root gate reads the DEDICATED carriers (186/187), never the old aux-96 (96).
-#guard sysRootsDigestCol == 186
-#guard sysRootsDigestColBefore == 187
+-- The wide root gate reads the DEDICATED carriers (187/188), never the old aux-96 (96).
+#guard sysRootsDigestCol == 187
+#guard sysRootsDigestColBefore == 188
 #guard decide (sysRootsDigestCol ≠ SYS_DIG_AFTER)
 
 #assert_axioms gNullifierRootUpdateWide_faithful
@@ -1098,7 +1098,7 @@ theorem noteSpend_fullClause_refutable (hash : List ℤ → ℤ) :
 
 #guard noteSpendVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard noteSpendVmDescriptor.hashSites.length == 4
-#guard noteSpendVmDescriptor.traceWidth == 186
+#guard noteSpendVmDescriptor.traceWidth == 187
 
 #assert_axioms noteSpendVm_faithful
 #assert_axioms noteSpendVm_rejects_wrong_output

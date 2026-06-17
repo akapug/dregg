@@ -57,7 +57,7 @@ use crate::poseidon2::hash_many;
 // ============================================================================
 
 /// The v1 main-table width the rotated appendix extends.
-pub const V1_WIDTH: usize = EFFECT_VM_WIDTH; // 186
+pub const V1_WIDTH: usize = EFFECT_VM_WIDTH; // 187 (P0-2 record-digest aux column)
 
 /// The CONFIRMED rotated register count (ember 2026-06-12, `ROTATION-CUTOVER.md` §2b).
 pub const NUM_REGISTERS: usize = 24;
@@ -76,6 +76,14 @@ pub const APPENDIX: usize = 2 * B_SPAN + C_SPAN; // 125
 /// The rotated trace width.
 pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 311
 
+/// In-block offset of the AUTHORITY-DIGEST limb (r23, limb 24) — the single felt
+/// folding ALL authority-bearing cell state no other rotated limb carries
+/// (permissions / VK / delegate / delegation / program / mode / token_id +
+/// visibility / commitments / proved / side-table roots + fields[8..16]). This IS
+/// the EffectVM `CellState::record_digest` (the v1-prefix OLD_COMMIT's fourth root
+/// input), so the v1 OLD_COMMIT binds the SAME authority residue the rotated weld
+/// carries — closing audit P0-2 across BOTH legs.
+pub const B_AUTHORITY_DIGEST: usize = 24;
 /// In-block offset of the `cap_root` limb (the welded cap-root, limb 25).
 pub const B_CAP_ROOT: usize = 25;
 /// In-block offset of the `committed_height` limb (limb 30).
@@ -487,7 +495,8 @@ pub fn empty_caveat_manifest() -> RotatedCaveatManifest {
 //   * 16 node chip-absorbs (arity 3: `[FACT_MARK, left, right]` → node), folded by the
 //     direction bits from the leaf digest up to the root;
 //   * 16 dir-bool gates, a rootPin (node[15] == capRoot), a targetBind (leaf[1] == src),
-//     and a writeMask (leaf[3] == 3 = the read+write endpoint mask).
+//     and the FAITHFUL two-axis facet × tier: transferFacet (leaf[3] mask_lo == EFFECT_TRANSFER),
+//     facetHi (leaf[4] mask_hi == 0), authTag (leaf[2] auth_tag == Signature).
 //
 // CRITICAL HASH SEAM (Lean `DeployedCapTree.nodeOf` / `capLeafDigest`): the chip lookups
 // realize `hash_many`-ABSORB nodes — `hash_many(&[FACT_MARK, left, right])` and
@@ -509,8 +518,16 @@ pub const CAP_OPEN_WIDTH: usize = ROT_WIDTH + CAP_OPEN_SPAN; // 369
 
 /// The `FACT_MARK` node-tag felt (`DeployedCapTree.FACT_MARK = 0xFACF`).
 pub const FACT_MARK: u32 = 0xFACF; // 64207
-/// The read+write endpoint rights mask the `writeMaskGate` pins (`mask_lo == 3`).
-pub const WRITE_MASK_LO: u32 = 3;
+/// The leaf `mask_lo` the FAITHFUL two-axis facet gate (`DeployedCapOpen.transferFacetGate`)
+/// pins: `EFFECT_TRANSFER = 1 << 1 = 2` (`FacetAuthority.EFFECT_TRANSFER`). The decoded facet
+/// `maskOfLimbs mask_lo mask_hi` permits the `EFFECT_TRANSFER` effect-kind bit. This REPLACES
+/// the toy `writeMaskGate` (`mask_lo == 3`).
+pub const WRITE_MASK_LO: u32 = 2;
+/// The leaf `mask_hi` the `facetHiGate` pins (`== 0`, so the decoded facet is exactly `mask_lo`).
+pub const FACET_MASK_HI: u32 = 0;
+/// The leaf `auth_tag` the `authTagGate` pins: the `Signature` tier byte `1`
+/// (`tierOfTag 1 = .signature`).
+pub const SIGNATURE_AUTH_TAG: u32 = 1;
 
 /// One cap-membership witness: the 7 leaf fields (in `CapOpenCols` order
 /// `[slot_hash, target, auth_tag, mask_lo, mask_hi, expiry, breadstuff]`), the 16 sibling
@@ -572,7 +589,9 @@ impl CapOpenWitness {
     /// ABSORB-node tree is laid over `1 << DEPTH` leaf slots; the chosen leaf rides `position`,
     /// the rest are zero-leaf padding (`hash_many(&[0;7])`). The membership `(siblings,
     /// directions)` path + the recomposed root are computed; `src` is pinned to `leaf[1]` so
-    /// the target gate holds. The chosen leaf MUST carry `mask_lo == 3` (the writeMask pin).
+    /// the target gate holds. The chosen leaf MUST carry the FAITHFUL two-axis facet × tier the
+    /// descriptor's gates pin: `mask_lo == EFFECT_TRANSFER (2)` (`transferFacetGate`), `mask_hi
+    /// == 0` (`facetHiGate`), and `auth_tag == Signature (1)` (`authTagGate`).
     pub fn build(leaves: &[[BabyBear; 7]], position: usize) -> Result<Self, String> {
         if position >= leaves.len() {
             return Err(format!(
@@ -587,8 +606,22 @@ impl CapOpenWitness {
         if chosen[3] != BabyBear::new(WRITE_MASK_LO) {
             return Err(format!(
                 "cap-open witness: chosen leaf mask_lo (col 3) must be {WRITE_MASK_LO} \
-                 (the read+write endpoint mask the writeMask gate pins), got {}",
+                 (EFFECT_TRANSFER — the facet the transferFacetGate pins), got {}",
                 chosen[3].as_u32()
+            ));
+        }
+        if chosen[4] != BabyBear::new(FACET_MASK_HI) {
+            return Err(format!(
+                "cap-open witness: chosen leaf mask_hi (col 4) must be {FACET_MASK_HI} \
+                 (the facetHiGate pin — decoded facet is exactly mask_lo), got {}",
+                chosen[4].as_u32()
+            ));
+        }
+        if chosen[2] != BabyBear::new(SIGNATURE_AUTH_TAG) {
+            return Err(format!(
+                "cap-open witness: chosen leaf auth_tag (col 2) must be {SIGNATURE_AUTH_TAG} \
+                 (the Signature tier the authTagGate pins), got {}",
+                chosen[2].as_u32()
             ));
         }
         // Lay the depth-16 tree: level 0 = the leaf-digest layer over 2^16 slots, the chosen
@@ -805,7 +838,7 @@ pub fn patch_attenuate_base_for_cap_open(
 
 /// Widen an already-built 311-wide rotated attenuate trace to the 369-wide cap-open trace,
 /// filling the 58 cap-open columns on EVERY row uniformly with `w` (so the every-row base
-/// gates — dir-bool, rootPin, targetBind, writeMask — hold on every row, padding included).
+/// gates — dir-bool, rootPin, targetBind, transferFacet/facetHi/authTag — hold on every row).
 /// The base trace's own 311 columns + 38 PIs are unchanged; the cap-open appendix is purely
 /// additive. The base trace MUST be a 311-wide rotated trace the base `attenuateV3`
 /// constraints already accept (e.g. from [`generate_rotated_effect_vm_trace`] on an

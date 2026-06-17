@@ -25,9 +25,9 @@ use dregg_circuit::descriptor_ir2::{
     MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, RotatedBlockWitness, WRITE_MASK_LO,
-    empty_caveat_manifest, generate_rotated_effect_vm_trace, patch_attenuate_base_for_cap_open,
-    widen_to_cap_open,
+    CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, FACET_MASK_HI, RotatedBlockWitness,
+    SIGNATURE_AUTH_TAG, WRITE_MASK_LO, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+    patch_attenuate_base_for_cap_open, widen_to_cap_open,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
@@ -118,19 +118,22 @@ fn build_attenuate_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     (trace, dpis)
 }
 
-/// A real cap-membership witness: a chosen write-mask leaf (mask_lo == 3) at a position in a
-/// small c-list, the depth-16 ABSORB-node path + recomposed root, src pinned to leaf.target.
+/// A real cap-membership witness: a chosen transfer-conferring leaf (the FAITHFUL two-axis
+/// facet × tier — mask_lo == EFFECT_TRANSFER, mask_hi == 0, auth_tag == Signature) at a position
+/// in a small c-list, the depth-16 ABSORB-node path + recomposed root, src pinned to leaf.target.
 fn cap_open_witness() -> CapOpenWitness {
     // Leaf fields in CapOpenCols order: [slot_hash, target, auth_tag, mask_lo, mask_hi, expiry,
-    // breadstuff]. mask_lo MUST be 3 (the writeMask pin); target == src (the targetBind).
+    // breadstuff]. The FAITHFUL two-axis gate pins: auth_tag == 1 (Signature tier), mask_lo ==
+    // EFFECT_TRANSFER (the transferFacetGate), mask_hi == 0 (the facetHiGate); target == src
+    // (the targetBind).
     let chosen: [BabyBear; 7] = [
-        BabyBear::new(0xA11CE),         // slot_hash
-        BabyBear::new(7_777),           // target (== src)
-        BabyBear::new(0xC0DE),          // auth_tag
-        BabyBear::new(WRITE_MASK_LO),   // mask_lo (== 3)
-        BabyBear::new(0),               // mask_hi
-        BabyBear::new(0x00FF_FFFF),     // expiry
-        BabyBear::new(42),              // breadstuff
+        BabyBear::new(0xA11CE),                // slot_hash
+        BabyBear::new(7_777),                  // target (== src)
+        BabyBear::new(SIGNATURE_AUTH_TAG),     // auth_tag (== 1, Signature tier)
+        BabyBear::new(WRITE_MASK_LO),          // mask_lo (== EFFECT_TRANSFER = 2)
+        BabyBear::new(FACET_MASK_HI),          // mask_hi (== 0)
+        BabyBear::new(0x00FF_FFFF),            // expiry
+        BabyBear::new(42),                     // breadstuff
     ];
     // A second (distinct, non-write) leaf to make the c-list non-trivial.
     let other: [BabyBear; 7] = [
@@ -153,7 +156,7 @@ fn cap_open_witness() -> CapOpenWitness {
 #[test]
 fn cap_open_witness_and_appendix_are_genuine() {
     let desc = parse_vm_descriptor2(reg_json(CAP_OPEN_KEY)).expect("cap-open descriptor parses");
-    assert_eq!(desc.trace_width, CAP_OPEN_WIDTH, "cap-open width 369");
+    assert_eq!(desc.trace_width, CAP_OPEN_WIDTH, "cap-open width");
     assert_eq!(desc.public_input_count, 38, "cap-open carries the rotated 38 PIs");
 
     let (mut trace, pis) = build_attenuate_base();
@@ -169,11 +172,21 @@ fn cap_open_witness_and_appendix_are_genuine() {
     assert_eq!(
         w.leaf[3],
         BabyBear::new(WRITE_MASK_LO),
-        "the chosen leaf mask_lo must be the read+write endpoint mask (writeMask gate)"
+        "the chosen leaf mask_lo must be EFFECT_TRANSFER (transferFacetGate)"
+    );
+    assert_eq!(
+        w.leaf[4],
+        BabyBear::new(FACET_MASK_HI),
+        "the chosen leaf mask_hi must be 0 (facetHiGate)"
+    );
+    assert_eq!(
+        w.leaf[2],
+        BabyBear::new(SIGNATURE_AUTH_TAG),
+        "the chosen leaf auth_tag must be the Signature tier (authTagGate)"
     );
 
     widen_to_cap_open(&mut trace, &w).expect("widen to cap-open");
-    assert_eq!(trace[0].len(), CAP_OPEN_WIDTH, "369-col cap-open trace");
+    assert_eq!(trace[0].len(), CAP_OPEN_WIDTH, "370-col cap-open trace");
     assert_eq!(trace[0][CAP_OPEN_BASE + 3], BabyBear::new(WRITE_MASK_LO));
     assert_eq!(trace[0][CAP_OPEN_BASE + 56], w.cap_root);
     assert_eq!(trace[0][CAP_OPEN_BASE + 57], w.src);
@@ -234,11 +247,12 @@ fn cap_open_attenuate_self_verifies() {
         );
     }
 
-    // (6) NEGATIVE TOOTH B: a leaf whose mask_lo != 3 makes the writeMask gate non-zero → UNSAT.
+    // (6) NEGATIVE TOOTH B: a leaf whose mask_lo != EFFECT_TRANSFER makes the transferFacetGate
+    //     non-zero → UNSAT (the facet does not permit the transfer effect-kind).
     {
         let mut t = trace.clone();
         for row in t.iter_mut() {
-            row[CAP_OPEN_BASE + 3] = BabyBear::new(WRITE_MASK_LO + 1); // mask_lo off the pin
+            row[CAP_OPEN_BASE + 3] = BabyBear::new(WRITE_MASK_LO + 1); // mask_lo off the facet pin
         }
         let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, &t, &pis, &mem_boundary, &map_heaps)
@@ -246,9 +260,29 @@ fn cap_open_attenuate_self_verifies() {
         let rejected = matches!(refused, Err(_)) || matches!(refused, Ok(Err(_)));
         assert!(
             rejected,
-            "a leaf whose mask_lo != 3 (not the write-endpoint mask) MUST be UNSAT"
+            "a leaf whose mask_lo != EFFECT_TRANSFER (facet does not permit transfer) MUST be UNSAT"
         );
     }
 
-    eprintln!("CAP-OPEN NEGATIVE TEETH GREEN: forged sibling rejected; wrong write-mask rejected.");
+    // (7) NEGATIVE TOOTH C: a leaf whose auth_tag != Signature makes the authTagGate non-zero →
+    //     UNSAT (the committed tier is not the satisfiable Signature tier).
+    {
+        let mut t = trace.clone();
+        for row in t.iter_mut() {
+            row[CAP_OPEN_BASE + 2] = BabyBear::new(SIGNATURE_AUTH_TAG + 1); // auth_tag off the tier pin
+        }
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_vm_descriptor2(&desc, &t, &pis, &mem_boundary, &map_heaps)
+        }));
+        let rejected = matches!(refused, Err(_)) || matches!(refused, Ok(Err(_)));
+        assert!(
+            rejected,
+            "a leaf whose auth_tag != Signature (wrong tier) MUST be UNSAT"
+        );
+    }
+
+    eprintln!(
+        "CAP-OPEN NEGATIVE TEETH GREEN: forged sibling rejected; wrong facet rejected; wrong tier \
+         rejected."
+    );
 }

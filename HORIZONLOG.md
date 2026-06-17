@@ -50,6 +50,32 @@ ARGUS crown #103). The remaining boundary to literal closed-closed:
      at `sdk/src/full_turn_proof.rs:662`. Then the VK epoch (ember-gated).
   Crypto floors that legitimately remain: `StarkSound`, Poseidon2/permutation CR.
 
+## P0-2 FULL-STATE COMMITMENT CUT — keystone LANDED; descriptor re-emission NAMED (2026-06-17)
+
+LANDED (green: `dregg-circuit`/`dregg-cell`/`dregg-sdk`/`dregg-turn` build; P0-2 tests pass): the deployed
+per-cell `state_commit` now binds the FULL cell state. `CellState` carries a `record_digest` limb (the
+authority residue — permissions/VK/lifecycle/deathCert/delegate/delegation/program/mode/visibility/
+side-table-roots/fields[8..]), `compute_commitment`/`compute_commitment_4` ABSORB it as the FOURTH root-hash
+input (replacing the literal ZERO), and the EffectVM AIR Group-4 constraint reads it from a new aux column
+(`aux_off::STATE_RECORD_DIGEST`, `NUM_AUX` 96→97, `EFFECT_VM_WIDTH` 186→187). Seeded from
+`dregg_cell::compute_authority_digest_felt` on the live prover paths (cipherclerk + `before_cell_state` reads
+r23 = `pre_limbs[B_AUTHORITY_DIGEST]`), so the v1-prefix OLD_COMMIT and the rotated weld's r23 agree. A
+residue-free cell uses `cap_root::empty_record_digest()` (ZERO) — byte-identical to the legacy form (no-op
+cutover, tested `empty_record_digest_is_legacy_noop`). Mirrors Lean `recStateCommit = cmb(cellDigest, RH)` /
+`cellCommitS = compressN(rest ++ [systemRootsDigest])` (one absorbed digest limb).
+NAMED follow-up (the descriptor/registry re-emission — the EXACT items 1/2 above realized for this limb):
+  1. RE-EMIT the descriptor registry from Lean: `circuit/descriptors/*.json` pin `trace_width:186`/`311` and a
+     GROUP-4 hash site with `{"t":"zero"}` as the 4th root input — both now stale (real trace = 187/312, 4th
+     input = the record_digest column). The `EmitAllJson*.lean` emitter must add the record_digest column +
+     read it at the GROUP-4 site, then re-run + re-pin EVERY SHA fingerprint
+     (`effect_vm_descriptors.rs`, `lean_descriptor_air.rs::TRANSFER_VM_DESCRIPTOR_JSON`,
+     `cap_delegation_nonamp_descriptor.rs`). 3 lib + 5 rotation-flip integration tests fail ONLY on this
+     width/zero-input staleness (881 lib tests pass; the live AIR honest-prove path is self-consistent).
+  2. The Lean `StateCommit.recStateCommit`↔Rust differential: `record_digest` plays the `RH` rest-hash role
+     (the authority residue folded into one limb); pin a cell↔circuit differential asserting the Rust
+     `compute_commitment`'s 4th input equals the Lean `RH`/authority-digest limb (the `legacyReferenceCommitS`
+     no-op already mirrored by `empty_record_digest_is_legacy_noop`).
+
 ## IN-CIRCUIT CAP-TREE MEMBERSHIP-OPEN — Lean soundness LANDED; Rust AIR wiring + prover + mask-reconcile NAMED (2026-06-16)
 
 LANDED (green, #assert_axioms-clean, Poseidon2SpongeCR only): `metatheory/Dregg2/Circuit/DeployedCapOpen.lean`

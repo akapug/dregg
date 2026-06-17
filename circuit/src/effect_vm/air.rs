@@ -1689,8 +1689,20 @@ impl StarkAir for EffectVmAir {
             combined = combined + alpha_pow * c_inter3;
             alpha_pow = alpha_pow * alpha;
 
-            // Constraint: state_commit == hash_4_to_1(inter1, inter2, inter3, ZERO)
-            let expected_commit = hash_4_to_1(&[inter1, inter2, inter3, BabyBear::ZERO]);
+            // Constraint: state_commit == hash_4_to_1(inter1, inter2, inter3, record_digest)
+            //
+            // P0-2 (audit `cell/src/commitment.rs`, REVIEW[circuit-fix-coordination]):
+            // the FOURTH root input is the witnessed `record_digest` (the
+            // authority-residue limb — permissions / VK / lifecycle / … — that the
+            // welded balance/nonce/fields/cap_root limbs do NOT carry), replacing the
+            // old literal `ZERO`. So `state_commit` (and thus OLD_COMMIT/NEW_COMMIT)
+            // binds the FULL cell state. Two cells differing ONLY in permissions /
+            // lifecycle / VK now produce DIFFERENT commitments. A residue-free cell
+            // witnesses ZERO here, so this is byte-identical to the legacy form for
+            // such cells (the no-op cutover). Structurally mirrors Lean
+            // `recStateCommit = cmb(cellDigest, RH)` (the rest-hash absorbed limb).
+            let record_digest = local[AUX_BASE + aux_off::STATE_RECORD_DIGEST];
+            let expected_commit = hash_4_to_1(&[inter1, inter2, inter3, record_digest]);
             let c_commit = after_commit - expected_commit;
             combined = combined + alpha_pow * c_commit;
             alpha_pow = alpha_pow * alpha;

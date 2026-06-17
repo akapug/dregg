@@ -459,7 +459,7 @@ theorem staleNonceRefusalRow_rejected :
 
 #guard refusalVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard refusalVmDescriptor.hashSites.length == 4
-#guard refusalVmDescriptor.traceWidth == 186
+#guard refusalVmDescriptor.traceWidth == 187
 
 #assert_axioms refusalVm_faithful
 #assert_axioms refusalVm_rejects_wrong_output
