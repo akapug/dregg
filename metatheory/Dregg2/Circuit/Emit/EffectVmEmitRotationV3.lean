@@ -1822,11 +1822,21 @@ theorem rotateV3WithRecordPin_pins (off : Nat) (hash : List ℤ → ℤ) (d : Ef
     (by rw [rotateV3WithRecordPin_constraints]; exact List.mem_append_right _ List.mem_cons_self)
   simpa only [VmConstraint.holdsVm] using hpin rfl
 
-/-- **ANTI-GHOST (forced limb ≠ published post ⇒ UNSAT)** — the deployment tooth. A LAST row whose
-AFTER forced limb does NOT equal the published post value `PI[(rotateV3 d).piCount]` does NOT satisfy
-`rotateV3WithRecordPin off d`: the appended pin REJECTS it. This is EXACTLY the forgery the rungs'
-`gLifecycleSeal` / `gSlotSet` teeth reject (a frozen lifecycle / un-written record claiming a changed
-post), now BITING in the LIVE deployed descriptor — the gap closed. -/
+/-- **(forced limb ≠ published value ⇒ UNSAT)** — a LAST row whose AFTER forced limb does NOT equal the
+published PI `PI[(rotateV3 d).piCount]` does NOT satisfy `rotateV3WithRecordPin off d`: the appended pin
+REJECTS it.
+
+⚠ HONESTY BOUNDARY (task #214 — do NOT overclaim this as a closed anti-ghost): this theorem forces only
+`after_limb == PI[piCount]`, where `PI[piCount]` is a FREE public input. It is a genuine FORCING gate (a
+real anti-ghost rejecting a frozen lifecycle / un-written record) ONLY when the deployed verifier
+independently ANCHORS `PI[piCount]` to `compute_authority_digest_felt(trusted post-cell)` (= apply the
+effect to the cross-checked before-cell, then digest). The current deployed verifier
+(`turn/src/executor/proof_verify.rs verify_and_commit_proof_rotated`) does NOT do that — it leaves the
+record-pin PI at the placeholder reconstruction — so for the record-pin family this pin is a
+published-value binding, NOT yet a post-forcing gate, and those effects are NOT routed live (only
+`Transfer`, which is sound via the commitment chain + verifier-trusted `new_commitment`, is). The fix:
+verifier recomputes this PI from the trusted post-cell (the `dpis[34]/dpis[36]` pattern) + a genuine
+verifier-side forged-post-digest reject test. -/
 theorem rotateV3WithRecordPin_rejects_wrong_post (off : Nat) (hash : List ℤ → ℤ)
     (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool)
     (hwrong : env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≠ env.pub (rotateV3 d).piCount) :

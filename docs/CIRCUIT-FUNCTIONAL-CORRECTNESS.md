@@ -60,6 +60,26 @@ correct circuit; the deploy makes the running system match it. (One remaining co
 the per-effect `<e>TraceReadout` column-reads into the single `WitnessDecodes` floor so the carried set
 reads exactly {StarkSound, hash CR, WitnessDecodes}; the row-designation stays the prover witness.)
 
+> **⚠ CONNECTION-TO-DEPLOYMENT CORRECTION (2026-06-18, adversarial re-review — read before trusting the
+> "VALUE rung proven" grades below).** The Lean apex CORE is clean (axiom-checked, no laundering). But the
+> proof being "closed about the correct circuit" is NOT the same as the deployed verifier realizing it, and
+> the review found the gap is wider than "one VK epoch" for two families:
+> - **Record-pin family** (setPermissions/setVK/cellSeal/cellUnseal/cellDestroy/refusal/receiptArchive —
+>   the "PRINCIPLED-FIX ≈12" grade below). Their forcing gate `rotateV3WithRecordPin` pins `after_limb ==
+>   PI[piCount]` where `PI[piCount]` is a FREE public input the prover chooses; the deployed verifier does
+>   NOT anchor it to `compute_authority_digest_felt(trusted post-cell)`. So the "anti-ghost" is VACUOUS as a
+>   deployment-forcing gate (it forces published==published), and these effects are NOT routed live (the
+>   cipherclerk producer models only Transfer/SetField/IncNonce). Genuine but LATENT — no live forgery, but
+>   "SOUND-IN-DEPLOYED" is FALSE for them. Fix = verifier-anchored PI + producer models the after-state
+>   (task #214).
+> - **In-deployment truth:** only `transfer` (+ the economic effects that move a column the commitment
+>   already binds) is genuinely FORCED through the live sovereign verifier today; the Transfer path is sound
+>   (PI[35]↔col-261 STATE_COMMIT, tamper test green). The cap-open authority leg is now genuine submask
+>   membership + decoded tier, refining the LIVE descriptor (commits 3d139220d, a18c7a1c4). The note/set
+>   family's double-spend soundness lives in `verify_full_turn` (a different, sound verifier).
+> Read the grades below as "proven about the descriptor"; "realized in the deployed verifier" holds today
+> only for the VALUE_FORCED row + the cap-open authority. The rest are genuine residuals (#214/#215).
+
 ## (historical) per-effect terrain — every effect's VALUE rung proven; the runtime commitment + VK epoch
 
 All 36 live effects' VALUE rungs (`descriptorRefines`) are discharged, in one of three honest grades:
