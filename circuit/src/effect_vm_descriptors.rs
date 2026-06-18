@@ -814,7 +814,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "86dbf7d8520edd898c7e41563e0a28608fa1d0d4296024895b99452d1381381f";
+    "0432bd4f13f735d0b9f384f50c63da1c2616da9b0889cc6212e21b8bc7d41917";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1599,9 +1599,12 @@ mod tests {
             // not the constant EFFECT_TRANSFER). Both share the appendix (base-agnostic), so they are
             // audited on the SAME own contract (width, PI count, cap-open chip lookups present) and
             // SKIP the rotated-cohort absorb/digest/pin equalities below.
-            if key == "attenuateCapOpenVmDescriptor2R24"
-                || key == "transferCapOpenVmDescriptor2R24"
-            {
+            // The cap-open authority members: the 2 transfer/attenuate legs + the 6 effect-general
+            // fan-out legs (delegate, introduce, grantCap, revoke, refreshDelegation,
+            // revokeCapability), each carrying the SAME 59-column appendix (base-agnostic) over its
+            // own rotated base. The fan-out legs' appendix binds the cap to THAT effect-kind bit (the
+            // general `facetEffGate` / `effBitGateFor (1<<<n)`), not the constant EFFECT_TRANSFER.
+            if key.ends_with("CapOpenVmDescriptor2R24") {
                 assert_eq!(
                     d.trace_width,
                     V1_WIDTH + APPENDIX_SPAN + 59,
@@ -1862,9 +1865,10 @@ mod tests {
             }
         }
         assert_eq!(
-            n, 38,
-            "expected the 36-member rotated cohort (28 v2-graduated + 8 widened) + the two cap-open \
-             members (attenuateCapOpenVmDescriptor2R24 + transferCapOpenVmDescriptor2R24)"
+            n, 44,
+            "expected the 36-member rotated cohort (28 v2-graduated + 8 widened) + the 8 cap-open \
+             members (attenuate + transfer + the 6 fan-out: delegate/introduce/grantCap/revoke/\
+             refreshDelegation/revokeCapability — each *CapOpenVmDescriptor2R24)"
         );
     }
 

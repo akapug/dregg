@@ -891,6 +891,12 @@ pub struct CapOpenWitness {
     pub cap_root: BabyBear,
     /// The turn's source-cell id (must equal `leaf[1]`, the leaf target).
     pub src: BabyBear,
+    /// **(residual (a))** The turn's ACTUAL effect-kind bit (`EFFECT_<kind> = 1 << n`), written to
+    /// the `effBit` column (`base + 58`). The descriptor's `effBitGateFor` pins it; the general
+    /// `facetEffGate` binds `leaf.mask_lo == eff_bit` — so the cap must permit THAT effect-kind.
+    /// `EFFECT_TRANSFER (= WRITE_MASK_LO = 2)` for the transfer/attenuate legs; each fan-out leg
+    /// carries its own bit (delegate = `1<<16`, introduce = `1<<13`, grantCap = `1<<2`, …).
+    pub eff_bit: u32,
 }
 
 /// The leaf digest: the SINGLE rate-8 chip absorb of the 7 leaf fields (arity 7), byte-identical
@@ -938,6 +944,18 @@ impl CapOpenWitness {
     /// descriptor's gates pin: `mask_lo == EFFECT_TRANSFER (2)` (`transferFacetGate`), `mask_hi
     /// == 0` (`facetHiGate`), and `auth_tag == Signature (1)` (`authTagGate`).
     pub fn build(leaves: &[[BabyBear; 7]], position: usize) -> Result<Self, String> {
+        Self::build_for(leaves, position, WRITE_MASK_LO)
+    }
+
+    /// **`build_for` (THE FAN-OUT path builder).** Like [`Self::build`] but for an ARBITRARY
+    /// effect-kind bit `eff_bit` (the chosen leaf's `mask_lo` must equal `eff_bit`, not the constant
+    /// EFFECT_TRANSFER), and WITHOUT the `auth_tag == Signature` pin (the fan-out `capOpenConstraintsEff`
+    /// appendix reads the DECODED tier). `build` is the `eff_bit := EFFECT_TRANSFER` instance.
+    pub fn build_for(
+        leaves: &[[BabyBear; 7]],
+        position: usize,
+        eff_bit: u32,
+    ) -> Result<Self, String> {
         if position >= leaves.len() {
             return Err(format!(
                 "cap-open witness: position {position} >= {} leaves",
@@ -948,10 +966,10 @@ impl CapOpenWitness {
         if chosen.len() != 7 {
             return Err("cap-open witness: leaf must carry 7 fields".into());
         }
-        if chosen[3] != BabyBear::new(WRITE_MASK_LO) {
+        if chosen[3] != BabyBear::new(eff_bit) {
             return Err(format!(
-                "cap-open witness: chosen leaf mask_lo (col 3) must be {WRITE_MASK_LO} \
-                 (EFFECT_TRANSFER — the facet the transferFacetGate pins), got {}",
+                "cap-open witness: chosen leaf mask_lo (col 3) must be {eff_bit} \
+                 (the effect-kind bit the facetEffGate pins), got {}",
                 chosen[3].as_u32()
             ));
         }
@@ -1001,6 +1019,7 @@ impl CapOpenWitness {
             directions,
             cap_root: cur,
             src: chosen[1],
+            eff_bit: WRITE_MASK_LO,
         };
         debug_assert_eq!(w.recomposes(), w.cap_root, "cap-open witness must recompose");
         Ok(w)
@@ -1026,6 +1045,34 @@ impl CapOpenWitness {
         siblings: &[BabyBear],
         directions: &[u8],
     ) -> Result<Self, String> {
+        // The transfer/attenuate cap-open descriptors carry the ORIGINAL transfer-pinned appendix
+        // (`capOpenConstraints`), whose `authTagGate` ALSO pins `auth_tag == Signature (1)`. Enforce
+        // it here so the witness fails closed at build (the fan-out `from_membership_for` drops this
+        // pin — its `capOpenConstraintsEff` appendix reads the DECODED tier off `auth_tag`).
+        if leaf.auth_tag != BabyBear::new(SIGNATURE_AUTH_TAG) {
+            return Err(format!(
+                "cap-open from_membership: leaf auth_tag {} != Signature {SIGNATURE_AUTH_TAG} \
+                 (the authTagGate pin — wrong tier)",
+                leaf.auth_tag.as_u32()
+            ));
+        }
+        Self::from_membership_for(leaf, siblings, directions, WRITE_MASK_LO)
+    }
+
+    /// **`from_membership_for` (THE FAN-OUT GENERAL CONSTRUCTOR, residual (a)).** Build a cap-open
+    /// trace witness for an ARBITRARY effect-kind bit `eff_bit` (`EFFECT_<kind> = 1 << n`): the
+    /// consumed cap's facet must permit THAT effect-kind. The general `facetEffGate` binds
+    /// `leaf.mask_lo == eff_bit`, so we require `leaf.mask_lo == eff_bit` (NOT the constant
+    /// EFFECT_TRANSFER) and `mask_hi == 0`. The TIER rides the DECODED `auth_tag` (the
+    /// `SatisfiedEff` row carries no `authTagGate` constant pin), so any committed `auth_tag` is
+    /// accepted here — the off-circuit AuthContext supplies a `provided` the decoded tier admits.
+    /// `from_membership` is the `eff_bit := EFFECT_TRANSFER` instance.
+    pub fn from_membership_for(
+        leaf: &crate::cap_root::CapLeaf,
+        siblings: &[BabyBear],
+        directions: &[u8],
+        eff_bit: u32,
+    ) -> Result<Self, String> {
         if siblings.len() != CAP_OPEN_DEPTH || directions.len() != CAP_OPEN_DEPTH {
             return Err(format!(
                 "cap-open from_membership: path depth ({} sib / {} dir) != deployed depth {CAP_OPEN_DEPTH}",
@@ -1042,10 +1089,10 @@ impl CapOpenWitness {
             leaf.expiry,
             leaf.breadstuff,
         ];
-        if leaf[3] != BabyBear::new(WRITE_MASK_LO) {
+        if leaf[3] != BabyBear::new(eff_bit) {
             return Err(format!(
-                "cap-open from_membership: leaf mask_lo {} != EFFECT_TRANSFER {WRITE_MASK_LO} \
-                 (the consumed cap does not confer the transfer facet the transferFacetGate pins)",
+                "cap-open from_membership: leaf mask_lo {} != effect-kind bit {eff_bit} \
+                 (the consumed cap does not permit the turn's effect-kind — the facetEffGate bites)",
                 leaf[3].as_u32()
             ));
         }
@@ -1053,13 +1100,6 @@ impl CapOpenWitness {
             return Err(format!(
                 "cap-open from_membership: leaf mask_hi {} != {FACET_MASK_HI} (the facetHiGate pin)",
                 leaf[4].as_u32()
-            ));
-        }
-        if leaf[2] != BabyBear::new(SIGNATURE_AUTH_TAG) {
-            return Err(format!(
-                "cap-open from_membership: leaf auth_tag {} != Signature {SIGNATURE_AUTH_TAG} \
-                 (the authTagGate pin — wrong tier)",
-                leaf[2].as_u32()
             ));
         }
         let mut sib_arr = [BabyBear::ZERO; CAP_OPEN_DEPTH];
@@ -1081,6 +1121,7 @@ impl CapOpenWitness {
             directions: dir_arr,
             cap_root: cur,
             src: leaf[1],
+            eff_bit,
         };
         debug_assert_eq!(w.recomposes(), w.cap_root, "cap-open from_membership recompose");
         Ok(w)
@@ -1120,9 +1161,10 @@ pub fn fill_cap_open(row: &mut [BabyBear], base: usize, w: &CapOpenWitness) {
     debug_assert_eq!(cur, w.cap_root, "cap-open fill: top node must equal cap_root");
     row[base + 56] = w.cap_root;
     row[base + 57] = w.src;
-    // residual (a): the committed effect-bit column. The transfer cap-open pins it to
-    // EFFECT_TRANSFER (= WRITE_MASK_LO = 2); the `facetEffGate` binds `leaf.mask_lo == effBit`.
-    row[base + 58] = BabyBear::new(WRITE_MASK_LO);
+    // residual (a): the committed effect-bit column. Carries the turn's ACTUAL effect-kind bit
+    // (`w.eff_bit` — EFFECT_TRANSFER for transfer/attenuate, each fan-out leg its own `1<<n`); the
+    // `effBitGateFor` pins it and the `facetEffGate` binds `leaf.mask_lo == effBit`.
+    row[base + 58] = BabyBear::new(w.eff_bit);
 }
 
 /// Recompute one rotated block's chained `wireCommitR` digests + `state_commit` from the limbs
@@ -1346,11 +1388,7 @@ mod tests {
         let registry: BTreeSet<&str> = V3_STAGED_REGISTRY_TSV
             .lines()
             .filter_map(|l| l.split('\t').next())
-            .filter(|s| {
-                !s.is_empty()
-                    && *s != "attenuateCapOpenVmDescriptor2R24"
-                    && *s != "transferCapOpenVmDescriptor2R24"
-            })
+            .filter(|s| !s.is_empty() && !s.ends_with("CapOpenVmDescriptor2R24"))
             .collect();
         assert_eq!(
             registry.len(),

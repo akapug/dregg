@@ -668,6 +668,228 @@ theorem node_leaf_length_disjoint (l r : ℤ) (leaf : CapLeaf) :
     (packNode l r).length ≠ (leafFields leaf).length := by
   simp [packNode, leafFields]
 
+/-! ## §10.E — THE EFFECT-GENERAL CAP-OPEN (fan-out: any cap-authorized effect-kind, not just transfer).
+
+`Satisfied`/`capOpen_authorizes` PIN the facet to `EFFECT_TRANSFER` (via `effBitGate`/`transferFacetGate`/
+`authTagGate` constants), so they only ever authorize a TRANSFER-facet, Signature-tier cap. The fan-out to
+the OTHER cap-authorized effects (delegate, introduce, grantCap, revoke, refreshDelegation, …) reuses the
+WHOLE appendix verbatim EXCEPT the `effBitGate` constant: each effect's cap-open pins its OWN `EFFECT_<kind>`
+bit `1 <<< n` in the `effBit` column, and the GENERAL `facetEffGate` binds `mask_lo = effBit`, so the cap
+must permit THAT effect-kind. This section generalizes the gate by the bit exponent `n` and proves the
+effect-general authority bridge into `authorizedFacetEffB … (1 <<< n)`.
+
+The membership leg (`MembersAt`) and the target leg (`leaf.target = src`) are SHARED with `Satisfied` — they
+read no effect-bit column. We factor them as a membership CORE (`MembershipCore`) that both `Satisfied` and
+`SatisfiedEff` provide, so `capOpen_membership`/`capOpen_target` are restated over the core and reused. -/
+
+/-- **`MembershipCore sponge tf c env`** — the four fields the Merkle fold + target binding consume:
+the leaf-digest absorb, the per-level node absorbs, the direction-booleanity, and the root pin. Both
+`Satisfied` and `SatisfiedEff` carry these. -/
+structure MembershipCore (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOpenCols)
+    (env : VmRowEnv) : Prop where
+  leafHashed : (leafLookup c).holdsAt tf env
+  nodeHashed : ∀ lvl < DEPTH, (nodeLookup c lvl).holdsAt tf env
+  dirBool    : ∀ lvl < DEPTH, (dirBoolGate c lvl).eval env.loc = 0
+  rootPinned : (rootPinGate c).eval env.loc = 0
+
+/-- A `Satisfied` row provides the membership core. -/
+def Satisfied.toCore {sponge tf c env} (h : Satisfied sponge tf c env) :
+    MembershipCore sponge tf c env :=
+  ⟨h.leafHashed, h.nodeHashed, h.dirBool, h.rootPinned⟩
+
+/-- **`membershipCore_opens` — the core IS a `MembersAt` opening** (the fold lemmas re-keyed over the
+core, byte-identical to `capOpen_membership` but consuming only the four shared fields). -/
+theorem membershipCore_opens {State : Type} (S : CapHashScheme State)
+    (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv)
+    (hChip : ChipTableSound S.chipAbsorb (tf .poseidon2))
+    (hcore : MembershipCore S.chipAbsorb tf c env) :
+    MembersAt S (env.loc c.capRoot) (leafOf c env) := by
+  -- re-derive `leafDigest_sound`/`node_sound`/`recompose_reaches_cur` from the core fields by
+  -- packaging a `Satisfied` whose membership fields ARE the core; the non-membership fields are
+  -- never evaluated by the fold (it consumes only leafHashed/nodeHashed/dirBool/rootPinned), so we
+  -- prove the fold lemmas directly over the core rather than via `Satisfied`.
+  refine ⟨pathOf c env DEPTH, ?_⟩
+  -- leaf-digest soundness from the core's `leafHashed`.
+  have hleaf : env.loc c.leafDigest = capLeafDigest S (leafOf c env) := by
+    have hlen : (leafInputs c).length ≤ CHIP_RATE := by
+      simp [leafInputs, List.length_map, List.length_finRange, CHIP_RATE]; decide
+    have hmem : (chipLookupTuple (leafInputs c) c.leafDigest).map (·.eval env.loc) ∈ tf .poseidon2 := by
+      have := hcore.leafHashed; unfold Lookup.holdsAt leafLookup at this; exact this
+    have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc (leafInputs c) c.leafDigest hlen hmem
+    rw [h, leafInputs_eval, (chipAbsorb_realizes S).leafRealized]
+  -- the per-level node soundness from the core's `nodeHashed`/`dirBool`.
+  have hnode : ∀ lvl, lvl < DEPTH →
+      env.loc (c.node lvl)
+        = (if dirBoolVal c env lvl
+            then nodeOf S (env.loc (c.sib lvl)) (env.loc (curCol c lvl))
+            else nodeOf S (env.loc (curCol c lvl)) (env.loc (c.sib lvl))) := by
+    intro lvl hlvl
+    have hlen : ([EmittedExpr.const FACT_MARK, leftExpr c lvl, rightExpr c lvl]).length ≤ CHIP_RATE := by
+      show 3 ≤ CHIP_RATE; rw [show CHIP_RATE = 8 from rfl]; omega
+    have hmem : (chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl)).map
+        (·.eval env.loc) ∈ tf .poseidon2 := by
+      have := hcore.nodeHashed lvl hlvl; unfold Lookup.holdsAt nodeLookup at this; exact this
+    have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc
+      [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl) hlen hmem
+    rw [h]
+    simp only [List.map_cons, List.map_nil, EmittedExpr.eval, leftExpr, rightExpr]
+    rcases dir_zero_or_one c env lvl (hcore.dirBool lvl hlvl) with hd0 | hd1
+    · have hbool : dirBoolVal c env lvl = false := by simp only [dirBoolVal, hd0]; decide
+      rw [hbool, hd0]; simp only [Bool.false_eq_true, if_false]
+      rw [show ((1 : ℤ) + -1 * 0) * env.loc (curCol c lvl) + 0 * env.loc (c.sib lvl)
+            = env.loc (curCol c lvl) by ring,
+          show ((1 : ℤ) + -1 * 0) * env.loc (c.sib lvl) + 0 * env.loc (curCol c lvl)
+            = env.loc (c.sib lvl) by ring]
+      exact (chipAbsorb_realizes S).nodeRealized _ _
+    · have hbool : dirBoolVal c env lvl = true := by simp only [dirBoolVal, hd1]; decide
+      rw [hbool, hd1]; simp only [if_true]
+      rw [show ((1 : ℤ) + -1 * 1) * env.loc (curCol c lvl) + 1 * env.loc (c.sib lvl)
+            = env.loc (c.sib lvl) by ring,
+          show ((1 : ℤ) + -1 * 1) * env.loc (c.sib lvl) + 1 * env.loc (curCol c lvl)
+            = env.loc (curCol c lvl) by ring]
+      exact (chipAbsorb_realizes S).nodeRealized _ _
+  -- fold to the top.
+  have hreach : ∀ n, n ≤ DEPTH →
+      recomposeUp S (env.loc c.leafDigest) (pathOf c env n) = env.loc (curCol c n) := by
+    intro n
+    induction n with
+    | zero => intro _; simp [pathOf, recomposeUp, curCol]
+    | succ k ih =>
+      intro hk
+      have hkd : k < DEPTH := Nat.lt_of_succ_le hk
+      have hkle : k ≤ DEPTH := Nat.le_of_lt hkd
+      have hpath : pathOf c env (k + 1)
+          = pathOf c env k ++ [{ sib := env.loc (c.sib k), dir := dirBoolVal c env k }] := by
+        simp [pathOf, List.range_succ, List.map_append]
+      rw [hpath, recomposeUp_append, ih hkle]
+      simp only [recomposeUp]
+      have hns := hnode k hkd
+      have hcur : curCol c (k + 1) = c.node k := rfl
+      rw [hcur]
+      cases hb : dirBoolVal c env k
+      · simp only [hb, Bool.false_eq_true, if_false] at hns ⊢; rw [hns]
+      · simp only [hb, if_true] at hns ⊢; rw [hns]
+  have hfold := hreach DEPTH (le_refl _)
+  rw [hleaf] at hfold
+  have hcurTop : curCol c DEPTH = c.node (DEPTH - 1) := rfl
+  rw [hcurTop] at hfold
+  have hpin := hcore.rootPinned
+  unfold rootPinGate at hpin
+  simp only [EmittedExpr.eval] at hpin
+  have hroot : env.loc (c.node (DEPTH - 1)) = env.loc c.capRoot := by linarith
+  rw [hfold, hroot]
+
+/-- **`effBitGateFor c (eff : ℤ)`** — the GENERAL effect-bit pin: `effBit = eff`. `effBitGate` is the
+`eff := EFFECT_TRANSFER` instance (`effBitGate_eq_for`). Each fan-out effect's cap-open descriptor pins its
+OWN `EFFECT_<kind>` bit here. -/
+def effBitGateFor (c : CapOpenCols) (eff : ℤ) : EmittedExpr :=
+  .add (.var c.effBit) (.const (-eff))
+
+/-- `effBitGate` is the `eff := EFFECT_TRANSFER` instance of the general `effBitGateFor`. -/
+theorem effBitGate_eq_for (c : CapOpenCols) :
+    effBitGate c = effBitGateFor c EFFECT_TRANSFER := rfl
+
+/-- **`SatisfiedEff sponge tf c env n`** — the effect-GENERAL cap-membership row (residual (a), fan-out):
+the membership CORE + target binding (shared with `Satisfied`), the high-limb zero, and — instead of the
+transfer constant pins — the committed effect-bit column pinned to `1 <<< n` (`effBitGateFor … (1<<<n)`) and
+the general facet binding `mask_lo = effBit` (`facetEffGate`). A `SatisfiedEff … n` row opens the cap-tree at
+a leaf whose facet permits the effect-kind bit `1 <<< n` (NOT transfer), under the tier DECODED off the
+committed `auth_tag`. -/
+structure SatisfiedEff (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOpenCols)
+    (env : VmRowEnv) (n : Nat) : Prop where
+  /-- The membership core (Merkle fold + root pin) — shared with `Satisfied`. -/
+  core : MembershipCore sponge tf c env
+  /-- The leaf's target equals the turn's src (shared). -/
+  targetBound : (targetBindGate c).eval env.loc = 0
+  /-- The leaf's `mask_hi` is `0` (so the decoded facet is exactly `mask_lo`). -/
+  facetHiZero : (facetHiGate c).eval env.loc = 0
+  /-- **(residual (a))** The committed effect-bit column `effBit` is THIS effect's bit `1 <<< n`. -/
+  effBitPinned : (effBitGateFor c ((1 <<< n : Nat) : ℤ)).eval env.loc = 0
+  /-- **(residual (a))** The GENERAL facet binding holds: `mask_lo = effBit` (`facetEffGate`). -/
+  facetEffBound : (facetEffGate c).eval env.loc = 0
+
+/-- A `SatisfiedEff` row witnesses `MembersAt S cap_root leaf` (the shared Merkle fold over the core). -/
+theorem capOpenEff_membership {State : Type} (S : CapHashScheme State)
+    (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv) (n : Nat)
+    (hChip : ChipTableSound S.chipAbsorb (tf .poseidon2))
+    (hsat : SatisfiedEff S.chipAbsorb tf c env n) :
+    MembersAt S (env.loc c.capRoot) (leafOf c env) :=
+  membershipCore_opens S tf c env hChip hsat.core
+
+/-- A `SatisfiedEff` row binds `leaf.target = src` (shared target gate). -/
+theorem capOpenEff_target (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOpenCols)
+    (env : VmRowEnv) (n : Nat) (hsat : SatisfiedEff sponge tf c env n) :
+    (leafOf c env).target = env.loc c.src := by
+  have h := hsat.targetBound
+  unfold targetBindGate at h
+  simp only [EmittedExpr.eval] at h
+  simp only [leafOf]; linarith
+
+/-- **`capOpenEff_confers` (fan-out) — the cap-open confers `1 <<< n` (THIS effect-kind), tier DECODED.**
+A `SatisfiedEff … n` row confers the effect-kind bit `1 <<< n` for any `provided` satisfying the tier read
+off the committed `auth_tag` (NOT a constant): the `effBitPinned` pins `effBit = 1 <<< n`, the `facetEffGate`
+binds `mask_lo = effBit`, and `facetEffGate_permits` yields the genuine in-circuit `isEffectPermitted`
+against `1 <<< n` — the facet must permit THAT effect-kind. The tier rides the decoded `auth_tag`. -/
+theorem capOpenEff_confers (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOpenCols)
+    (env : VmRowEnv) (n : Nat) (hn : n < 32) (vkOfTag : ℤ → Nat) (provided : AuthProvided)
+    (hsat : SatisfiedEff sponge tf c env n)
+    (htier : (tierOfTag vkOfTag (leafOf c env).auth_tag).isSatisfiedBy provided = true) :
+    confersLeaf vkOfTag provided (1 <<< n) (leafOf c env) := by
+  have hbit : env.loc c.effBit = ((1 <<< n : Nat) : ℤ) := by
+    have h := hsat.effBitPinned
+    unfold effBitGateFor at h
+    simp only [EmittedExpr.eval] at h
+    linarith
+  have hperm : isEffectPermitted (facetOfLeaf (leafOf c env)) (1 <<< n) = true :=
+    facetEffGate_permits sponge tf c env n hn hbit hsat.facetEffBound hsat.facetHiZero
+  exact ⟨hperm, htier⟩
+
+/-- **`capOpenEff_authorizes` — THE EFFECT-GENERAL AUTHORITY LEG (fan-out keystone).** A `SatisfiedEff … n`
+row whose opened leaf IS the faithfulness contract's `(actor ⇒ src)` edge discharges the kernel's GENERAL
+`authorizedFacetEffB … (1 <<< n)` for the turn — over the effect-kind `1 <<< n` (NOT transfer), under any
+`provided` satisfying the committed tier. THE bridge each fan-out effect's cap-open descriptor consumes. -/
+theorem capOpenEff_authorizes {State : Type} (S : CapHashScheme State)
+    (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv) (n : Nat) (hn : n < 32) (vkOfTag : ℤ → Nat)
+    (provided : AuthProvided)
+    (hChip : ChipTableSound S.chipAbsorb (tf .poseidon2))
+    (hsat : SatisfiedEff S.chipAbsorb tf c env n)
+    (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
+    (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps (env.loc c.capRoot) leafAt)
+    (actor src dst : Label) (amt : ℤ)
+    (hsrc : env.loc c.src = (src : ℤ))
+    (hedge : leafOf c env = leafAt actor src)
+    (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
+    authorizedFacetEffB caps provided (1 <<< n)
+      { actor := actor, src := src, dst := dst, amt := amt } = true
+    ∧ (leafAt actor src).target = (src : ℤ) := by
+  have hmem : MembersAt S (env.loc c.capRoot) (leafAt actor src) := by
+    rw [← hedge]; exact capOpenEff_membership S tf c env n hChip hsat
+  have hconf : confersLeaf vkOfTag provided (1 <<< n) (leafAt actor src) := by
+    rw [← hedge]
+    exact capOpenEff_confers S.chipAbsorb tf c env n hn vkOfTag provided hsat (hedge ▸ htier)
+  have htgt : (leafAt actor src).target = (src : ℤ) := by
+    rw [← hedge, capOpenEff_target S.chipAbsorb tf c env n hsat, hsrc]
+  exact ⟨deployedCapOpen_implies_authorizedEffB S vkOfTag provided (1 <<< n) caps
+    (env.loc c.capRoot) leafAt hfaith actor src dst amt hmem hconf, htgt⟩
+
+/-- **`satisfiedEff_rejects_wrong_facet` (fan-out NEGATIVE — the wrong-facet tooth bites, witness FALSE).**
+A `SatisfiedEff … n` row pins `effBit = 1 <<< n`; a leaf whose `mask_lo` is a DIFFERENT effect-kind value
+`w ≠ 1 <<< n` (a cap permitting some OTHER effect) CANNOT satisfy the row — the general `facetEffGate` does
+not hold. The cap-open for effect-kind `n` authorizes THAT effect-kind ONLY; a wrong-facet cap is rejected
+in-circuit. -/
+theorem satisfiedEff_rejects_wrong_facet (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOpenCols)
+    (env : VmRowEnv) (n : Nat) (hbad : env.loc (c.leaf 3) ≠ ((1 <<< n : Nat) : ℤ)) :
+    ¬ SatisfiedEff sponge tf c env n := by
+  intro hsat
+  have hbit : env.loc c.effBit = ((1 <<< n : Nat) : ℤ) := by
+    have h := hsat.effBitPinned; unfold effBitGateFor at h
+    simp only [EmittedExpr.eval] at h; linarith
+  have hfacet := hsat.facetEffBound
+  unfold facetEffGate at hfacet
+  simp only [EmittedExpr.eval] at hfacet
+  apply hbad
+  rw [← hbit]; linarith
+
 /-! ## §11 — discriminating teeth (the gates are real). -/
 
 /-- **The transfer-facet gate is DISCRIMINATING (witness FALSE).** A leaf whose `mask_lo` is NOT
@@ -704,6 +926,12 @@ theorem targetBindGate_discriminates (c : CapOpenCols) (env : VmRowEnv)
 #assert_axioms capOpen_sound
 #assert_axioms capOpen_authorizes
 #assert_axioms capOpen_authorizes_tierGeneral
+#assert_axioms membershipCore_opens
+#assert_axioms capOpenEff_membership
+#assert_axioms capOpenEff_target
+#assert_axioms capOpenEff_confers
+#assert_axioms capOpenEff_authorizes
+#assert_axioms satisfiedEff_rejects_wrong_facet
 #assert_axioms schemeRealizedByChip_discharged
 #assert_axioms node_leaf_length_disjoint
 #assert_axioms transferFacetGate_discriminates
