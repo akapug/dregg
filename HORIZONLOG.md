@@ -63,7 +63,19 @@ CONNECTION-TO-DEPLOYMENT is NOT yet sound enough for completeness — must close
         anchored to the cross-checked before + the witness-independent v1 param, AND have the verifier recompute
         the after-limbs/new_commitment from the trusted before-cell+vm_effects (override, like dpis[34/36]).
         Until then the record-pin descriptors should fail-closed at the cohort resolver, not be advertised closed.
-  • **Findings 2/3/4 (tasks #213/#215)** — three OVER-STRICT cap-open siblings of the facetEffGate bug:
+  • **Finding 4 / #215 — CLOSED (pending commit, agent a9577e2a).** The 6 fan-out cap-effects'
+    authority is now FORCED in-circuit in the apex: new effect-specific keystones
+    `<effect>CapOpenV3_authorizes` (CapOpenEmit.lean §5.F) + a parametric `EffAuthoritySource`
+    (RotatedKernelRefinementFacet.lean §3.E; transfer preserved as the n=EFF_TRANSFER instance) +
+    `actionTagToPos` re-keyed to the fan-out positions 36-40 + the forest fold's per-effect authority
+    arm (RotatedKernelForestFacet.lean §6). Lean green (3990), apex #assert_axioms clean, drift PASS,
+    Rust routing tests pass. NAMED RESIDUAL: `revokeCapability` has a ready keystone (pos 41) + a live
+    wire route but NO `FullActionA`/`actionTag` Lean kernel-action constructor, so it is unreachable
+    from the apex dispatcher (the wire exists; the kernel action does not) — a small kernel-dispatcher
+    gap, not a soundness hole.
+  • **Findings 2/3 (task #213) — CLOSED** by the genuine-membership cap-open fix (the equality
+    transferFacetGate + the Signature-constant authTagGate were both dropped; tier decoded). The
+    over-strict cap-open siblings of the facetEffGate bug:
     (2) the equality `transferFacetGate` (`mask_lo==EFFECT_TRANSFER`) is STILL a co-present conjunct in the
     live `capOpenConstraints` (`CapOpenEmit.lean:142`), so the membership fix is dead-lettered unless removed
     (the fixer's DoD forces this — verify on return); (3) `authTagGate` pins Signature as a constant (proven

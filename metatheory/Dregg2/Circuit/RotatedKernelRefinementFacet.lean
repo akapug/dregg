@@ -84,7 +84,10 @@ open Dregg2.Circuit.DeployedCapTree.CapHashScheme
   (MembersAt confersTransferLeaf DeployedFaithful DeployedFaithfulEff tierOfTag)
 open Dregg2.Circuit.DeployedCapOpen (CapOpenCols leafOf)
 open Dregg2.Circuit.Emit.CapOpenEmit
-  (transferCapOpenEffV3 capOpenCols transferCapOpenEffV3_authorizes EFF_TRANSFER)
+  (transferCapOpenEffV3 capOpenCols transferCapOpenEffV3_authorizes EFF_TRANSFER
+   effCapOpenV3 effCapOpenV3_authorizes)
+open Dregg2.Exec.FacetAuthority (authorizedFacetEffB)
+open Dregg2.Circuit.DescriptorIR2 (EffectVmDescriptor2)
 open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 ChipTableSound TraceFamily envAt)
 open Dregg2.Circuit.CircuitSoundness
 
@@ -336,6 +339,107 @@ theorem authoritySourceG_authorizes (hash : List ℤ → ℤ) (fcaps : FacetCaps
     src0.i src0.hi fcaps src0.leafAt src0.hfaith tr.actor tr.src tr.dst tr.amt src0.hsrc
     src0.hedge src0.htier).1
 
+/-! ## §3.E — `EffAuthoritySource`: the EFFECT-PARAMETRIC cap-open authority source.
+
+`TransferAuthoritySource`/`…G` pin `transferCapOpenEffV3` + `EFF_TRANSFER`, so they discharge
+`authorizedFacetB` (the `turnEffectBit _ = EFFECT_TRANSFER` collapse). The 6 FAN-OUT cap-effects
+(introduce/delegate/grantCap/revoke/refreshDelegation/revokeCapability) ride DIFFERENT effect bits and
+do NOT collapse to `authorizedFacetB`; their authority is the GENERAL `authorizedFacetEffB caps provided
+(1 <<< n)` at the effect's OWN bit `n` — exactly what a per-effect authority gate needs. `EffAuthoritySource`
+generalizes the cap-open source to ANY fan-out descriptor `effCapOpenV3 base name n` at bit `n`, deriving
+`authorizedFacetEffB caps provided (1 <<< n)` from the in-circuit open (via `effCapOpenV3_authorizes`).
+The transfer source is the `base := transferV3, n := EFF_TRANSFER` instance (recovered below), so the
+load-bearing transfer leg is PRESERVED, not broken — it is a specialization of THIS. -/
+
+/-- **`EffAuthoritySource hash caps provided pre tr base name n`** — the EFFECT-PARAMETRIC cap-open
+authority source for the fan-out effect whose descriptor is `effCapOpenV3 base name n` at effect bit
+`n < MASK_BITS`. Carries the cap-open `Satisfied2` of THAT descriptor, the chip soundness, the deployed
+faithfulness over the ACTUAL effect bit `1 <<< n`, the `(actor ⇒ src)` edge identification, and the
+decoded-tier side condition. The authority conclusion `authorizedFacetEffB caps provided (1 <<< n)` is
+FORCED from it (`effAuthoritySource_authorizes`) — NOT carried. DATA-bearing (`Type 1`, like
+`TransferAuthoritySource`): it exhibits the cap-open trace + row + leaf assignment directly. -/
+structure EffAuthoritySource (hash : List ℤ → ℤ) (caps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Turn) (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    : Type 1 where
+  /-- the effect bit `n` is a valid mask bit (`< MASK_BITS = 32`); the submask-gate side condition. -/
+  hn : n < Dregg2.Circuit.DeployedCapOpen.MASK_BITS
+  /-- the deployed cap-hash scheme the cap-tree commits under (its existential state type). -/
+  State : Type
+  /-- the deployed cap-hash scheme carrier. -/
+  S : CapHashScheme State
+  /-- the `Custom`-tier vk decode (the named felt residual). -/
+  vkOfTag : ℤ → Nat
+  /-- the cap-open trace + its memory boundary (the prover's cap-tree opening witness). -/
+  minit : ℤ → ℤ
+  mfin : ℤ → ℤ × Nat
+  maddrs : List ℤ
+  t : VmTrace
+  /-- the chip table is sound (the chip's hash IS the deployed cap-hash `S.chipAbsorb`). -/
+  hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2)
+  /-- the LIVE fan-out cap-open descriptor's appendix is satisfied (the depth-16 Merkle open + the
+  genuine submask facet gate at bit `n` + the decoded tier). -/
+  hsat : Satisfied2 S.chipAbsorb (effCapOpenV3 base name n) minit mfin maddrs t
+  /-- the cap-open row index. -/
+  i : Nat
+  hi : i < t.rows.length
+  /-- the deployed leaf assignment the cap-tree root realizes. -/
+  leafAt : Dregg2.Authority.Label → Dregg2.Authority.Label → CapLeaf
+  /-- the decoded `caps` are deployed-faithfully realized by `leafAt` at the cap-open's root, over the
+  turn's ACTUAL effect bit `1 <<< n`. -/
+  hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
+    ((envAt t i).loc capOpenCols.capRoot) leafAt
+  /-- the cap-open row's `src` column IS the turn's `src`. -/
+  hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ)
+  /-- the opened leaf IS the faithful `(actor ⇒ src)` edge leaf. -/
+  hedge : leafOf capOpenCols (envAt t i) = leafAt tr.actor tr.src
+  /-- `provided` satisfies the tier DECODED off the committed leaf (NOT a Signature pin). -/
+  htier : (tierOfTag vkOfTag (leafAt tr.actor tr.src).auth_tag).isSatisfiedBy provided = true
+
+/-- **`effAuthoritySource_authorizes` — the fan-out cap-open FORCES the GENERAL-bit deployed authority.**
+From an `EffAuthoritySource … base name n`, the deployed two-axis `authorizedFacetEffB caps provided
+(1 <<< n) tr` PASSES at the effect's OWN bit: the in-circuit depth-16 cap-membership open discharges the
+faithful authority gate (`effCapOpenV3_authorizes`). The authority leg is NOT carried — it is forced by
+the circuit, at the GENUINE effect bit (a cap permitting a different effect would fail `hfaith`). -/
+theorem effAuthoritySource_authorizes (hash : List ℤ → ℤ) (caps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Turn) (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (src0 : EffAuthoritySource hash caps provided pre tr base name n) :
+    authorizedFacetEffB caps provided (1 <<< n) tr = true := by
+  show authorizedFacetEffB caps provided (1 <<< n)
+      { actor := tr.actor, src := tr.src, dst := tr.dst, amt := tr.amt } = true
+  exact (effCapOpenV3_authorizes (State := src0.State) base name n src0.hn
+    src0.S src0.vkOfTag provided src0.minit src0.mfin src0.maddrs src0.t src0.hChip src0.hsat
+    src0.i src0.hi caps src0.leafAt src0.hfaith tr.actor tr.src tr.dst tr.amt src0.hsrc
+    src0.hedge src0.htier).1
+
+/-- **`transferAuthoritySourceG_to_eff` — the transfer source IS the `EFF_TRANSFER` instance of
+`EffAuthoritySource`.** A `TransferAuthoritySourceG` (which pins `transferCapOpenEffV3 = effCapOpenV3
+transferV3 … EFF_TRANSFER`) yields the parametric `EffAuthoritySource` at `base := transferV3,
+n := EFF_TRANSFER`. This records that the load-bearing transfer leg is a SPECIALIZATION of the
+parametric source — not a separate, possibly-divergent path. -/
+def transferAuthoritySourceG_to_eff (hash : List ℤ → ℤ) (fcaps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Turn)
+    (src0 : TransferAuthoritySourceG hash fcaps provided pre tr) :
+    EffAuthoritySource hash fcaps provided pre tr
+      Dregg2.Circuit.RotatedKernelRefinement.transferV3
+      "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER where
+  hn := by decide
+  State := src0.State
+  S := src0.S
+  vkOfTag := src0.vkOfTag
+  minit := src0.minit
+  mfin := src0.mfin
+  maddrs := src0.maddrs
+  t := src0.t
+  hChip := src0.hChip
+  hsat := src0.hsat
+  i := src0.i
+  hi := src0.hi
+  leafAt := src0.leafAt
+  hfaith := src0.hfaith
+  hsrc := src0.hsrc
+  hedge := src0.hedge
+  htier := src0.htier
+
 /-! ## §4 — `transfer_descriptorRefines_facet`: the TEMPLATE keystone.
 
 The faithful refinement. From a satisfying transfer VALUE witness (`Satisfied2 hash transferV3 …`
@@ -502,6 +606,8 @@ theorem balanceMovementSpecFacet_owner_admits (fcaps : FacetCaps) (provided : Au
 #assert_axioms balanceMovementSpecFacet_to_toy
 #assert_axioms authoritySource_authorizes
 #assert_axioms authoritySourceG_authorizes
+#assert_axioms effAuthoritySource_authorizes
+#assert_axioms transferAuthoritySourceG_to_eff
 #assert_axioms transfer_descriptorRefines_facet
 #assert_axioms transfer_descriptorRefines_facet_tierGeneral
 #assert_axioms transfer_descriptorRefines_facet_rejects_unauthorized

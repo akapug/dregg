@@ -51,6 +51,7 @@
 use dregg_cell::commitment::{
     compute_authority_digest_felt, compute_canonical_capability_root_felt,
 };
+use crate::action::Effect;
 use dregg_cell::{Cell, Ledger, lifecycle::CellLifecycle};
 use dregg_circuit::effect_vm::{fold_bytes32_to_bb, split_u64};
 use dregg_circuit::field::BabyBear;
@@ -359,6 +360,48 @@ pub fn mint_rotated_participant_leg(
         &bridge(&after_w)?,
         turn_id,
     )
+}
+
+/// **The shared single-effect state projection onto a cell — the anti-drift weld.**
+///
+/// Applies ONE kernel effect's STATE change to `cell`, mirroring exactly what the executor's
+/// apply leg does (`turn::executor::apply`), but as a pure cell→cell projection with no ledger /
+/// journal / permission-check side effects. Both sides of the rotated record-pin gate call THIS
+/// function:
+///
+/// * the PRODUCER (`dregg_sdk::AgentCipherclerk::prove_sovereign_turn_rotated`) projects its
+///   local before-cell to the after-cell whose `compute_authority_digest_felt` seeds the rotated
+///   AFTER block's `B_RECORD_DIGEST` limb (the column the descriptor's last-row pin welds to
+///   rotated PI 38), and
+/// * the VERIFIER (`dregg_turn::executor::verify_and_commit_proof_rotated`) projects the trusted
+///   before-cell it holds and anchors `dpis[38] = compute_authority_digest_felt(post_cell)`.
+///
+/// If the two diverged the anchored PI 38 would not equal the prover's honest after-limb and an
+/// HONEST proof would be rejected; routing both through this one function is the guarantee they
+/// move together. A forged after-state (a permissions value the effect did NOT produce) makes the
+/// verifier's anchored PI 38 disagree with the proof's bound after-limb ⇒ `verify_vm_descriptor2`
+/// UNSAT ⇒ reject (the genuine forcing gate the Lean `rotateV3WithRecordPin` keystone names).
+///
+/// `cell_id` is the effect's target cell: an effect whose target is not `cell_id` is a NO-OP on
+/// this cell (matching the producer/verifier per-cell projection — the rotated sovereign proof is
+/// over a single cell's transition). Only the variants whose rotated record-pin descriptor is live
+/// are projected; everything else is a no-op (the digest does not move, which is correct for the
+/// effects that do not touch this cell's authority residue).
+///
+/// SetPermissions semantics MIRROR `apply_set_permissions` (`c.permissions = new_permissions`).
+pub fn apply_effect_to_cell(cell: &mut Cell, cell_id: &dregg_cell::CellId, effect: &Effect) {
+    match effect {
+        // The setPermissions BEACHHEAD (record-digest limb 24): set the cell's permissions to the
+        // effect's new value — byte-identical to the executor's `apply_set_permissions`. This moves
+        // `compute_authority_digest_felt` (permissions are folded into the v9 authority residue).
+        Effect::SetPermissions {
+            cell: target,
+            new_permissions,
+        } if target == cell_id => {
+            cell.permissions = new_permissions.clone();
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

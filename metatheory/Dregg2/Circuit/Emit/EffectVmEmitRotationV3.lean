@@ -1826,17 +1826,30 @@ theorem rotateV3WithRecordPin_pins (off : Nat) (hash : List ℤ → ℤ) (d : Ef
 published PI `PI[(rotateV3 d).piCount]` does NOT satisfy `rotateV3WithRecordPin off d`: the appended pin
 REJECTS it.
 
-⚠ HONESTY BOUNDARY (task #214 — do NOT overclaim this as a closed anti-ghost): this theorem forces only
-`after_limb == PI[piCount]`, where `PI[piCount]` is a FREE public input. It is a genuine FORCING gate (a
-real anti-ghost rejecting a frozen lifecycle / un-written record) ONLY when the deployed verifier
-independently ANCHORS `PI[piCount]` to `compute_authority_digest_felt(trusted post-cell)` (= apply the
-effect to the cross-checked before-cell, then digest). The current deployed verifier
-(`turn/src/executor/proof_verify.rs verify_and_commit_proof_rotated`) does NOT do that — it leaves the
-record-pin PI at the placeholder reconstruction — so for the record-pin family this pin is a
-published-value binding, NOT yet a post-forcing gate, and those effects are NOT routed live (only
-`Transfer`, which is sound via the commitment chain + verifier-trusted `new_commitment`, is). The fix:
-verifier recomputes this PI from the trusted post-cell (the `dpis[34]/dpis[36]` pattern) + a genuine
-verifier-side forged-post-digest reject test. -/
+⚠ HONESTY BOUNDARY (do NOT overclaim this as a closed anti-ghost for the WHOLE record-pin family): this
+theorem forces only `after_limb == PI[piCount]`, where `PI[piCount]` is a FREE public input. It is a
+genuine FORCING gate (a real anti-ghost rejecting a frozen lifecycle / un-written record) ONLY when the
+deployed verifier independently ANCHORS `PI[piCount]` to `compute_authority_digest_felt(trusted post-cell)`
+(= apply the effect to the cross-checked before-cell, then digest).
+
+CLOSED FOR `setPermissions` (the record-digest beachhead, limb `B_RECORD_DIGEST = 24`): the deployed
+verifier (`turn/src/executor/proof_verify.rs verify_and_commit_proof_rotated`, step 6b) NOW anchors PI 38
+for the `SetPermissions` lead — it clones the trusted before-cell, applies the kernel effect through the
+SHARED `dregg_turn::rotation_witness::apply_effect_to_cell` weld (the SAME projection the cipherclerk
+producer uses for its after-cell, so honest proofs are NOT rejected), and overrides
+`dpis[38] = compute_authority_digest_felt(post_cell)`. So for `setPermissions` this pin is a genuine
+post-forcing gate: a forged after-permissions disagrees with the anchored PI 38 ⇒ `verify_vm_descriptor2`
+UNSAT (tests `record_pin_anchor::{rotated_sovereign_set_permissions_proves_and_verifies,
+rotated_sovereign_forged_after_permissions_is_rejected}` in `sdk/tests/sovereign_rotated_c1.rs` —
+the honest accept itself BITES: without the anchor PI 38 stays at the placeholder reconstruction and the
+honest proof is rejected).
+
+STILL OPEN (un-fanned-out): the OTHER record-digest siblings `setVK` / `refusal` / `receiptArchive`
+(same `B_RECORD_DIGEST` anchor — they just need the same per-lead fan-out in step 6b) and the LIFECYCLE
+family `cellSeal` / `cellUnseal` / `cellDestroy` (limb `B_LIFECYCLE = 29`, a SECOND anchor via
+`lifecycle_felt` over the trusted post-lifecycle, NOT this beachhead). For those leads the verifier still
+leaves PI 38 at the placeholder reconstruction, so the pin is a published-value binding, NOT yet a
+post-forcing gate, and they are not routed live. -/
 theorem rotateV3WithRecordPin_rejects_wrong_post (off : Nat) (hash : List ℤ → ℤ)
     (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool)
     (hwrong : env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≠ env.pub (rotateV3 d).piCount) :

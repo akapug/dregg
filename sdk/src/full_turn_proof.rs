@@ -2820,6 +2820,103 @@ mod tests {
     use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
     use dregg_circuit::field::BabyBear;
 
+    /// **The 6 fan-out cap-effects + transfer/attenuate each route to their OWN cap-open descriptor at
+    /// their OWN effect-kind bit.** This is the wire-side mirror of the apex authority leg's re-key
+    /// (`CircuitSoundnessAssembled.actionTagToPos`: tag → `<effect>CapOpenVmDescriptor2R24`,
+    /// `RotatedKernelForestFacet.stepAuthorityFacetEff`: the cap-open forces `authorizedFacetEffB …
+    /// (1 << n)`). The deployed prover and the proven apex now bind the SAME (descriptor, eff_bit)
+    /// per effect — a cap permitting a DIFFERENT effect-kind than the run performs cannot satisfy the
+    /// `effBitGateFor`/submask gate the keyed descriptor carries. Both polarities: each fan-out routes
+    /// (positive), and non-cap-authorized / multi-effect runs fall through to `None` (negative).
+    #[cfg(feature = "prover")]
+    #[test]
+    fn cap_open_route_binds_each_fanout_effect_to_its_own_bit() {
+        const EFFECT_TRANSFER: u32 = 1 << 1;
+        const EFFECT_GRANT_CAPABILITY: u32 = 1 << 2;
+        const EFFECT_REVOKE_CAPABILITY: u32 = 1 << 3;
+        const EFFECT_INTRODUCE: u32 = 1 << 13;
+        const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
+
+        // (descriptor key, the effect-kind bit the keyed descriptor's appendix binds, the single-effect
+        // run). Each row asserts the deployed route binds the cap to THAT effect's bit (not transfer).
+        let cases: Vec<(&'static str, u32, Vec<VmEffect>)> = vec![
+            (
+                "transferCapOpenEffVmDescriptor2R24",
+                EFFECT_TRANSFER,
+                vec![VmEffect::Transfer { amount: 1, direction: 1 }],
+            ),
+            (
+                "attenuateCapOpenEffVmDescriptor2R24",
+                EFFECT_TRANSFER,
+                vec![VmEffect::AttenuateCapability {
+                    cap_slot_hash: [BabyBear::new(1); 8],
+                    narrower_commitment: [BabyBear::new(2); 8],
+                    phase_b: None,
+                }],
+            ),
+            (
+                "grantCapCapOpenVmDescriptor2R24",
+                EFFECT_GRANT_CAPABILITY,
+                vec![VmEffect::GrantCapability { cap_entry: [BabyBear::new(3); 8], phase_b: None }],
+            ),
+            (
+                "introduceCapOpenVmDescriptor2R24",
+                EFFECT_INTRODUCE,
+                vec![VmEffect::Introduce { intro_hash: [BabyBear::new(4); 8] }],
+            ),
+            (
+                "revokeCapOpenVmDescriptor2R24",
+                EFFECT_DELEGATION_OPS,
+                vec![VmEffect::RevokeDelegation { child_hash: [BabyBear::new(5); 8] }],
+            ),
+            (
+                "refreshDelegationCapOpenVmDescriptor2R24",
+                EFFECT_DELEGATION_OPS,
+                vec![VmEffect::RefreshDelegation],
+            ),
+            (
+                "revokeCapabilityCapOpenVmDescriptor2R24",
+                EFFECT_REVOKE_CAPABILITY,
+                vec![VmEffect::RevokeCapability { slot_hash: [BabyBear::new(6); 8], phase_b: None }],
+            ),
+        ];
+
+        for (key, eff_bit, effects) in &cases {
+            let route = cap_open_route_for_run(effects)
+                .unwrap_or_else(|| panic!("{key}: expected a cap-open route for {effects:?}"));
+            assert_eq!(route.key, *key, "{key}: route key mismatch");
+            assert_eq!(route.eff_bit, *eff_bit, "{key}: bound the WRONG effect-kind bit");
+            // each fan-out effect binds its OWN bit — never the transfer bit (unless it IS transfer).
+            if *key != "transferCapOpenEffVmDescriptor2R24"
+                && *key != "attenuateCapOpenEffVmDescriptor2R24"
+            {
+                assert_ne!(
+                    route.eff_bit, EFFECT_TRANSFER,
+                    "{key}: a fan-out cap-effect must NOT ride the transfer bit"
+                );
+            }
+        }
+
+        // NEGATIVE: a non-cap-authorized effect (EmitEvent) has no cap-open route.
+        assert!(
+            cap_open_route_for_run(&[VmEffect::EmitEvent {
+                topic_hash: [BabyBear::new(0); 8],
+                payload_hash: [BabyBear::new(0); 8],
+            }])
+            .is_none(),
+            "a non-cap-authorized effect must NOT route a cap-open descriptor"
+        );
+        // NEGATIVE: a multi-effect run is not a single cap-open route (the appendix opens one cap).
+        assert!(
+            cap_open_route_for_run(&[
+                VmEffect::Transfer { amount: 1, direction: 1 },
+                VmEffect::RefreshDelegation,
+            ])
+            .is_none(),
+            "a multi-effect run must NOT route a single cap-open descriptor"
+        );
+    }
+
     /// SOUNDNESS LOOP #5 — the cap-open authority leg is exercised END-TO-END.
     ///
     /// A turn whose authority rides a REAL consumed capability (an `AttenuateCapability` with a
