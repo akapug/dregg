@@ -219,6 +219,45 @@ impl TurnExecutor {
         dpis[35] = BabyBear::new(u32::from_le_bytes(new_commitment[0..4].try_into().unwrap()));
         dpis[36] = committed_height_felt(cell_committed_height);
 
+        // 6b. THE RECORD-PIN ANCHOR (the deployment-soundness close for the record-digest family;
+        // setPermissions BEACHHEAD). The record-pin descriptors ship at `public_input_count == 39`:
+        // the descriptor's last-row pin (`EffectVmEmitRotationV3.rotateV3WithRecordPin`) welds the
+        // AFTER block's `B_RECORD_DIGEST` limb (col 256) to rotated PI 38. The producer fills PI 38
+        // from its honest after-cell's authority digest, but PI 38 is otherwise a FREE public input
+        // the prover chooses — so the pin alone is a published-value binding, NOT a forcing gate,
+        // UNTIL the verifier independently ANCHORS PI 38 to the trusted post-cell. We do that here:
+        // clone the trusted before-cell (the SAME `cell` whose digest seeded the BEFORE `record_digest`
+        // at PI reconstruction, cross-checked by OLD_COMMIT/PI 34), apply the lead effect through the
+        // SHARED `apply_effect_to_cell` weld (the SAME projection the producer used for its after-cell —
+        // any drift would reject HONEST proofs), and override PI 38 with the post-cell authority digest.
+        // A forged after-permissions (a value the effect did NOT produce) makes this anchored PI 38
+        // disagree with the proof's bound after-limb ⇒ `verify_vm_descriptor2` UNSAT ⇒ reject.
+        //
+        // BEACHHEAD: only the `SetPermissions` lead (record-digest limb 24) is fanned out here. The
+        // record-digest siblings (setVK / refusal / receiptArchive) and the lifecycle family
+        // (cellSeal/Unseal/Destroy, a SECOND anchor via `lifecycle_felt` on limb 29) are NOT yet
+        // anchored — for those, PI 38 remains the placeholder reconstruction (a published-value
+        // binding, see `rotateV3WithRecordPin_rejects_wrong_post`'s honesty boundary).
+        if desc.public_input_count == 39 && dpis.len() == 39 {
+            if let dregg_circuit::effect_vm::Effect::SetPermissions { .. } = lead {
+                // Recover the kernel `SetPermissions` effect (the lead VmEffect only carries a hash).
+                // `dfs_collect_effects` walks the call forest in the SAME order as
+                // `convert_turn_effects_to_vm`, so the first SetPermissions targeting this cell is the
+                // lead's kernel pre-image.
+                if let Some(lead_effect) = Self::dfs_collect_effects(turn).into_iter().find(|e| {
+                    matches!(e, Effect::SetPermissions { cell, .. } if cell == cell_id)
+                }) {
+                    let mut post_cell = cell.clone();
+                    crate::rotation_witness::apply_effect_to_cell(
+                        &mut post_cell,
+                        cell_id,
+                        &lead_effect,
+                    );
+                    dpis[38] = dregg_cell::compute_authority_digest_felt(&post_cell);
+                }
+            }
+        }
+
         // 7. Verify through the multi-table batch verifier (the hand-AIR leg is gone).
         verify_vm_descriptor2(&desc, &ir2_proof, &dpis).map_err(|e| {
             // A post-state forgery surfaces here: PI 35 disagrees with the trace's

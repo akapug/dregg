@@ -149,6 +149,264 @@ fn rotated_sovereign_forged_post_state_is_rejected() {
 }
 
 // ===========================================================================
+// THE RECORD-PIN ANCHOR — setPermissions BEACHHEAD (deployment-soundness close).
+//
+// The rotated record-pin descriptor (`setPermsVmDescriptor2R24`, 39 PIs) welds the AFTER
+// block's `B_RECORD_DIGEST` limb (col 256) to rotated PI 38. PI 38 is a FREE public input the
+// prover fills from its honest after-cell's authority digest — so the pin alone is a
+// published-value binding, NOT a forcing gate, UNTIL the verifier independently ANCHORS PI 38 to
+// `compute_authority_digest_felt(trusted before-cell + effect)` through the SHARED
+// `apply_effect_to_cell` weld (`verify_and_commit_proof_rotated`'s record-pin anchor). These two
+// tests close that gate:
+//   * `rotated_sovereign_set_permissions_proves_and_verifies` — an HONEST setPermissions turn
+//     proves → verifies → ACCEPT, and the committed cell's permissions changed. This itself BITES:
+//     without the anchor the verifier leaves PI 38 at the placeholder reconstruction (0), which
+//     disagrees with the honest proof's nonzero after-digest ⇒ the honest turn would be REJECTED.
+//   * `rotated_sovereign_forged_after_permissions_is_rejected` — a proof whose after-block
+//     record-digest is for permissions the effect did NOT produce (the kernel effect sets
+//     `zkapp()`, the proof's after-block carries `frozen()`), with all OTHER PIs honest, is
+//     REJECTED: the anchored PI 38 = digest(zkapp) ≠ the proof's bound col-256 = digest(frozen)
+//     ⇒ `verify_vm_descriptor2` UNSAT.
+// ===========================================================================
+mod record_pin_anchor {
+    use dregg_cell::{Cell, CellMode, Ledger, Permissions};
+    use dregg_sdk::AgentCipherclerk;
+    use dregg_turn::rotation_witness as rw;
+    use dregg_turn::{ComputronCosts, Effect, Turn, TurnExecutor, TurnResult};
+
+    /// Re-derive the same sovereign-cell registration `setup_sovereign_cell` produces, but expose
+    /// the before-`Cell` so the forged test can build witnesses over it. Returns the live
+    /// cipherclerk + cell + ledger + the before-cell clone.
+    fn setup_with_cell(balance: u64) -> (AgentCipherclerk, dregg_cell::CellId, Ledger, Cell) {
+        let cclerk = AgentCipherclerk::new();
+        let pub_key = cclerk.public_key().0;
+        let token_id = *blake3::hash(b"c1-domain").as_bytes();
+
+        let mut cell = Cell::with_balance(pub_key, token_id, i64::try_from(balance).unwrap());
+        cell.mode = CellMode::Sovereign;
+        let cell_id = cell.id();
+
+        let nullifier_root = [0u8; 32];
+        let commitments_root = [0u8; 32];
+        let mut ctx_ledger = Ledger::new();
+        let _ = ctx_ledger.insert_cell(cell.clone());
+        let cells_root = rw::cells_root(&ctx_ledger);
+        let iroot = rw::iroot(&[]);
+        let v9_ctx = dregg_cell::commitment::V9RotationContext {
+            cells_root,
+            nullifier_root,
+            commitments_root,
+            iroot,
+        };
+        let commitment =
+            dregg_cell::commitment::compute_canonical_state_commitment_v9(&cell, &v9_ctx);
+
+        let mut cclerk = cclerk;
+        cclerk.store_sovereign_state(cell.clone());
+
+        let mut ledger = Ledger::new();
+        ledger.register_sovereign_cell(cell_id, commitment).unwrap();
+        let _ = ledger.insert_cell(cell.clone());
+
+        (cclerk, cell_id, ledger, cell)
+    }
+
+    /// CONTROL + BITE: an HONEST sovereign `SetPermissions` turn proves and verifies, the committed
+    /// permissions changed. This passes ONLY because the verifier anchors PI 38 to the trusted
+    /// post-cell digest; without the anchor the placeholder PI 38 (0) would reject this honest turn.
+    #[test]
+    fn rotated_sovereign_set_permissions_proves_and_verifies() {
+        let (mut cclerk, cell_id, mut ledger, _before) = setup_with_cell(1000);
+
+        // The before-cell carries the default permissions; the turn locks it down to `zkapp()`.
+        let new_perms = Permissions::zkapp();
+        assert_ne!(
+            new_perms,
+            Permissions::default(),
+            "the test must actually change permissions"
+        );
+
+        let effects = vec![Effect::SetPermissions {
+            cell: cell_id,
+            new_permissions: new_perms.clone(),
+        }];
+
+        let turn = cclerk
+            .execute_sovereign_turn_with_proof(&cell_id, effects, 0)
+            .expect("rotated sovereign setPermissions turn should prove");
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        match executor.execute(&turn, &mut ledger) {
+            // The proof VERIFYING (not rejected) is the proof the anchor accepted: the verifier's
+            // anchored PI 38 = digest(before + zkapp) EQUALS the proof's bound after-limb. Without
+            // the anchor the verifier would carry PI 38 = placeholder 0 ≠ the honest after-digest
+            // and reject — so a Committed result here exercises the anchor's accept side.
+            TurnResult::Committed { .. } => {}
+            other => panic!("honest setPermissions turn must commit, got {other:?}"),
+        }
+
+        // The federation sovereign commitment advanced to the proven post-state (the proof path is
+        // commitment-only at the federation; the cell's full state lives with the cipherclerk).
+        let committed_commitment = ledger
+            .get_sovereign_commitment(&cell_id)
+            .expect("sovereign commitment present after commit");
+        assert_eq!(
+            *committed_commitment,
+            turn.execution_proof_new_commitment.unwrap(),
+            "the sovereign commitment must advance to the proven post-state"
+        );
+
+        // The cipherclerk's LOCAL sovereign state carries the new permissions — the producer
+        // applied the effect through the SHARED `apply_effect_to_cell` weld, the SAME projection the
+        // verifier anchored PI 38 against (the anti-drift guarantee: both sides moved together).
+        let local = cclerk
+            .sovereign_state(&cell_id)
+            .expect("cipherclerk local sovereign state present");
+        assert_eq!(
+            local.permissions, new_perms,
+            "the cipherclerk's after-state permissions must be the turn's new value"
+        );
+    }
+
+    /// ANTI-GHOST (the anchor BITES): a proof whose after-block record-digest is for `frozen()`
+    /// permissions — which the `zkapp()` effect did NOT produce — is REJECTED. Every OTHER PI is
+    /// honest (the kernel effect sets `zkapp()`, so the verifier's reconstructed `vm_effects` /
+    /// `effects_hash` MATCH the proof), so the rejection is ISOLATED to the PI-38 anchor:
+    /// anchored digest(zkapp) ≠ the proof's bound col-256 digest(frozen) ⇒ UNSAT.
+    #[test]
+    fn rotated_sovereign_forged_after_permissions_is_rejected() {
+        use dregg_sdk::full_turn_proof::prove_effect_vm_rotated_ir2_with_caveat;
+
+        let (_cclerk, cell_id, mut ledger, before_cell) = setup_with_cell(1000);
+
+        // The HONEST effect the turn carries: set permissions to `zkapp()`.
+        let honest_perms = Permissions::zkapp();
+        let effects = vec![Effect::SetPermissions {
+            cell: cell_id,
+            new_permissions: honest_perms.clone(),
+        }];
+        // The HONEST vm-effects (zkapp identity) — what the verifier reconstructs from the kernel
+        // effect. The forged proof uses THESE, so PI 0..37 match the verifier by construction.
+        let vm_effects = AgentCipherclerk::convert_effects_to_vm(&cell_id, &effects);
+
+        // The FORGED after-cell: the prover claims the cell moved to `frozen()` — a value the
+        // `zkapp()` effect did NOT produce. (digest(frozen) ≠ digest(zkapp).)
+        let mut forged_after = before_cell.clone();
+        forged_after.permissions = Permissions::frozen();
+        assert_ne!(
+            dregg_cell::compute_authority_digest_felt(&forged_after),
+            {
+                let mut honest_after = before_cell.clone();
+                honest_after.permissions = honest_perms.clone();
+                dregg_cell::compute_authority_digest_felt(&honest_after)
+            },
+            "the forgery must move the authority digest off the honest post-value"
+        );
+
+        // Witness context, mirroring the cipherclerk producer's single-cell sovereign turn.
+        let nullifier_root = [0u8; 32];
+        let commitments_root = [0u8; 32];
+        let receipt_hashes: Vec<[u8; 32]> = Vec::new();
+        let mut ctx_ledger = Ledger::new();
+        let _ = ctx_ledger.insert_cell(before_cell.clone());
+
+        // BEFORE witness = the GENUINE before-cell (so OLD_COMMIT / PI 34 matches the registration).
+        let before_w = rw::produce(
+            &before_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
+        // AFTER witness = the FORGED after-cell (its r23 authority digest = digest(frozen)).
+        let after_w = rw::produce(
+            &forged_after,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
+
+        let initial_vm_state =
+            dregg_circuit::effect_vm::CellState::with_capability_root_and_record_digest(
+                u64::try_from(before_cell.state.balance()).unwrap(),
+                before_cell.state.nonce() as u32,
+                dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
+                dregg_cell::compute_authority_digest_felt(&before_cell),
+            );
+
+        let caveat = dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest();
+        let forged_proof = prove_effect_vm_rotated_ir2_with_caveat(
+            &initial_vm_state,
+            &vm_effects,
+            &before_w,
+            &after_w,
+            &caveat,
+            None,
+        )
+        .expect("the forged proof is internally consistent (it proves a frozen() after-state)");
+        let proof_bytes = postcard::to_allocvec(&forged_proof).expect("serialize forged proof");
+
+        // The forged NEW commitment = the v9 felt of the FORGED after-cell (so PI 35 matches the
+        // proof's after-block STATE_COMMIT — the forgery is NOT caught by the commitment chain, only
+        // by the record-digest anchor).
+        let new_commit_felt = dregg_cell::commitment::compute_canonical_state_commitment_v9_felt(
+            &forged_after,
+            &dregg_cell::commitment::V9RotationContext {
+                cells_root: after_w.pre_limbs[0],
+                nullifier_root,
+                commitments_root,
+                iroot: after_w.iroot,
+            },
+        );
+        let new_commitment = dregg_cell::commitment::felt_to_bytes32(new_commit_felt);
+
+        // Assemble the proof-carrying turn (mirroring the cipherclerk producer's turn shape).
+        let mut forest = dregg_turn::forest::CallForest::new();
+        let action = dregg_sdk::raw::unsigned_action_named(
+            cell_id,
+            "sovereign_execute_proven",
+            effects.clone(),
+        );
+        forest.add_root(action);
+        let turn = Turn {
+            agent: cell_id,
+            nonce: 0,
+            call_forest: forest,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: Some(proof_bytes),
+            execution_proof_cell: Some(cell_id),
+            execution_proof_new_commitment: Some(new_commitment),
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        match executor.execute(&turn, &mut ledger) {
+            TurnResult::Rejected { reason, .. } => {
+                let s = format!("{reason:?}");
+                assert!(
+                    s.contains("ProofVerificationFailed") || s.contains("rotated"),
+                    "expected a rotated verify rejection from the PI-38 anchor mismatch, got: {s}"
+                );
+            }
+            other => panic!(
+                "ANTI-GHOST: a forged after-permissions proof must be rejected by the record-pin \
+                 anchor, got {other:?}"
+            ),
+        }
+    }
+}
+
+// ===========================================================================
 // WALL A — the rotated `prove_full_turn` / `verify_full_turn` round-trip carries
 // ZERO v1 dependency. These drive `prove_full_turn` DIRECTLY with a rotation
 // witness (not the executor-mint path) so the rotated leg's vk_hash (A.1) and the

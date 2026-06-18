@@ -110,8 +110,12 @@ declaration order (which is NOT `actionTag` order). Effects with no own rotated 
 (→ the transfer fallback in `Rfix`). -/
 def actionTagToPos : EffectIdx → Nat
   | 0  => 0    -- transfer        → transferVmDescriptor2R24
-  | 1  => 15   -- delegate        → introduceVmDescriptor2R24 (cap-tree delegate; refines DelegateSpec)
-  | 2  => 14   -- revoke          → revokeVmDescriptor2R24
+  | 1  => 36   -- delegate        → delegateCapOpenVmDescriptor2R24 (FAN-OUT: the LIVE cap-open authority
+               --                   descriptor — delegateAtten base + the EFF_DELEGATION_OPS submask
+               --                   appendix; the deployed prover routes it AND the apex authority leg
+               --                   forces authorizedFacetEffB … (1 <<< EFF_DELEGATION_OPS))
+  | 2  => 39   -- revoke          → revokeCapOpenVmDescriptor2R24 (FAN-OUT: revokeDelegation base +
+               --                   EFF_DELEGATION_OPS appendix)
   | 3  => 2    -- mint            → mintVmDescriptor2R24
   | 4  => 1    -- burn            → burnVmDescriptor2R24
   | 5  => 28   -- setField        → setFieldVmDescriptor2-0R24
@@ -119,12 +123,14 @@ def actionTagToPos : EffectIdx → Nat
   | 7  => 13   -- incrementNonce  → incrementNonceVmDescriptor2R24
   | 8  => 8    -- setPermissions  → setPermsVmDescriptor2R24
   | 9  => 9    -- setVK           → setVKVmDescriptor2R24
-  | 10 => 15   -- introduce       → introduceVmDescriptor2R24
-  | 11 => 16   -- delegateAtten   → attenuateVmDescriptor2R24
+  | 10 => 37   -- introduce       → introduceCapOpenVmDescriptor2R24 (FAN-OUT: introduce base +
+               --                   EFF_INTRODUCE appendix; the BEACHHEAD — clean single bit)
+  | 11 => 38   -- delegateAtten   → grantCapCapOpenVmDescriptor2R24 (FAN-OUT: grantCap base [=
+               --                   attenuate/delegateAtten base] + EFF_GRANT_CAPABILITY appendix)
   | 12 => 43   -- attenuate       → attenuateCapOpenEffVmDescriptor2R24 (F5: the LIVE IN-CIRCUIT
                --                   authority descriptor — the genuine-submask + decoded-tier cap-open
                --                   the deployed prover routes AND the apex authority leg refines)
-  | 14 => 14   -- revokeDelegation→ revokeVmDescriptor2R24
+  | 14 => 39   -- revokeDelegation→ revokeCapOpenVmDescriptor2R24 (FAN-OUT: shares the revoke fan-out)
   | 16 => 10   -- exercise        → exerciseVmDescriptor2R24
   | 17 => 22   -- createCell      → createCellVmDescriptor2R24
   | 18 => 23   -- factory         → factoryVmDescriptor2R24
@@ -139,7 +145,8 @@ def actionTagToPos : EffectIdx → Nat
   | 52 => 5    -- cellSeal        → cellSealVmDescriptor2R24
   | 53 => 26   -- cellUnseal      → cellUnsealVmDescriptor2R24
   | 54 => 6    -- cellDestroy     → cellDestroyVmDescriptor2R24
-  | 55 => 12   -- refreshDelegation→ refreshVmDescriptor2R24
+  | 55 => 40   -- refreshDelegation→ refreshDelegationCapOpenVmDescriptor2R24 (FAN-OUT: refresh base +
+               --                   EFF_DELEGATION_OPS appendix)
   | _  => 1000 -- heapWrite (56) + off-range: past the registry → transfer fallback
 
 /-- **`Rfix` — the live registry as a total, `actionTag`-keyed lookup.** `Rfix e` is the rotated
@@ -172,6 +179,36 @@ over the SAME descriptor the deployed prover routes AND the apex authority leg r
 (`transferCapOpenEffV3_authorizes`): the one in-circuit authority gadget is INSIDE the registry the
 light-client apex commits, not beside it — and it is the LIVE one, not a pinned twin. -/
 theorem Rfix_capOpen : Rfix 12 = Dregg2.Circuit.Emit.CapOpenEmit.attenuateCapOpenEffV3 := rfl
+
+/-! ### The 6 FAN-OUT cap-effect tags route to their LIVE cap-open authority descriptors.
+
+Each cap-authorized fan-out tag re-keys (via `actionTagToPos`) to its `…CapOpenV3` fan-out descriptor
+(`v3RegistryCapOpen` positions 36..40), so `vkOfRegistry Rfix` / the apex's `StarkSound hash Rfix` quantify
+over the SAME descriptor the deployed prover routes (`cap_open_route_for_run`) AND the apex authority leg
+forces (`…CapOpenV3_authorizes` ⟹ `authorizedFacetEffB … (1 <<< n)`). Their authority is FORCED in-circuit
+at the effect's OWN bit, no longer riding the toy gate. (`revokeCapability` [position 41] has no
+`FullActionA`/`actionTag` constructor, so no tag routes to it — its keystone stands ready but is
+unreachable from the dispatcher; recorded in the apex docstring.) The fan-out descriptor is `base +
+appendix` (the appendix appends columns and reads NO base column — `effCapOpenV3_satisfiedEff`), so each
+tag's VALUE/`ClosedLog` rung — carried `Satisfied2 hash (Rfix <tag>)`-parametrically in
+`ClosureFanoutGenuine` — composes verbatim over the re-keyed descriptor (the base columns the readout
+reads are unchanged; the trace merely carries the extra appendix columns). -/
+
+/-- delegate (tag 1) routes to the LIVE delegate fan-out cap-open (`delegateCapOpenV3`, position 36). -/
+theorem Rfix_delegate_capOpen : Rfix 1 = Dregg2.Circuit.Emit.CapOpenEmit.delegateCapOpenV3 := rfl
+/-- revoke (tag 2) routes to the LIVE revoke fan-out cap-open (`revokeCapOpenV3`, position 39). -/
+theorem Rfix_revoke_capOpen : Rfix 2 = Dregg2.Circuit.Emit.CapOpenEmit.revokeCapOpenV3 := rfl
+/-- introduce (tag 10) routes to the LIVE introduce fan-out cap-open (`introduceCapOpenV3`, position 37);
+the BEACHHEAD. -/
+theorem Rfix_introduce_capOpen : Rfix 10 = Dregg2.Circuit.Emit.CapOpenEmit.introduceCapOpenV3 := rfl
+/-- delegateAtten (tag 11) routes to the LIVE grantCap fan-out cap-open (`grantCapCapOpenV3`, pos 38). -/
+theorem Rfix_grantCap_capOpen : Rfix 11 = Dregg2.Circuit.Emit.CapOpenEmit.grantCapCapOpenV3 := rfl
+/-- revokeDelegation (tag 14) shares the revoke fan-out cap-open (`revokeCapOpenV3`, position 39). -/
+theorem Rfix_revokeDelegation_capOpen : Rfix 14 = Dregg2.Circuit.Emit.CapOpenEmit.revokeCapOpenV3 := rfl
+/-- refreshDelegation (tag 55) routes to the LIVE refresh fan-out cap-open (`refreshDelegationCapOpenV3`,
+position 40). -/
+theorem Rfix_refreshDelegation_capOpen :
+    Rfix 55 = Dregg2.Circuit.Emit.CapOpenEmit.refreshDelegationCapOpenV3 := rfl
 
 /-! ## §2 — `kstepAll`: the assembled dispatcher arm.
 
@@ -308,6 +345,12 @@ theorem kstepAll_transfer_from_faithful
 #assert_axioms Rfix_total
 #assert_axioms Rfix_transfer
 #assert_axioms Rfix_capOpen
+#assert_axioms Rfix_delegate_capOpen
+#assert_axioms Rfix_revoke_capOpen
+#assert_axioms Rfix_introduce_capOpen
+#assert_axioms Rfix_grantCap_capOpen
+#assert_axioms Rfix_revokeDelegation_capOpen
+#assert_axioms Rfix_refreshDelegation_capOpen
 #assert_axioms hrefinesAll
 #assert_axioms lightclient_unfoolable_assembled
 #assert_axioms lightclient_turn_unfoolable_forest_assembled

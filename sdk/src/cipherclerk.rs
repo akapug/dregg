@@ -5190,6 +5190,21 @@ impl AgentCipherclerk {
                 Effect::IncrementNonce { cell } if cell == cell_id => {
                     let _ = after_cell.state.increment_nonce();
                 }
+                // The setPermissions BEACHHEAD (rotated record-pin, record-digest limb 24): project
+                // the new permissions onto the after-cell through the SHARED `apply_effect_to_cell`
+                // weld so the producer's `last[AFTER_BASE + B_RECORD_DIGEST]` (= the after-cell's
+                // `compute_authority_digest_felt`, seeded at step 3 below for the rotated leg) MOVES to
+                // exactly the felt the verifier anchors PI 38 to (`verify_and_commit_proof_rotated`'s
+                // record-pin anchor). The two sides MUST move together — both route through this one
+                // function — or an HONEST setPermissions proof would be rejected (the after-digest
+                // would not equal the anchored PI 38).
+                Effect::SetPermissions { cell, .. } if cell == cell_id => {
+                    dregg_turn::rotation_witness::apply_effect_to_cell(
+                        &mut after_cell,
+                        cell_id,
+                        effect,
+                    );
+                }
                 _ => {}
             }
         }
