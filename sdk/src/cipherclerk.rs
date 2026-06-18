@@ -5203,6 +5203,21 @@ impl AgentCipherclerk {
                         &mut after_cell,
                         cell_id,
                         effect,
+                        0,
+                    );
+                }
+                // setVK (record-digest limb 24): same anti-drift weld as setPermissions. The
+                // producer's after-cell installs the VK so its r23 authority digest (the AFTER
+                // block's `B_RECORD_DIGEST` limb) MOVES to exactly the felt the verifier anchors PI 38
+                // to. Both sides route through `apply_effect_to_cell`; the producer projects
+                // `SetVerificationKey → VmEffect::SetVerificationKey` and so does the executor bridge,
+                // so the descriptor (`setVKVmDescriptor2R24`) reconstructs identically.
+                Effect::SetVerificationKey { cell, .. } if cell == cell_id => {
+                    dregg_turn::rotation_witness::apply_effect_to_cell(
+                        &mut after_cell,
+                        cell_id,
+                        effect,
+                        0,
                     );
                 }
                 _ => {}
