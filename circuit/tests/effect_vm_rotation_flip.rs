@@ -1500,15 +1500,18 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
 /// unchanged record digest, FAILS the pin, and is UNSAT — the gap closed for the LIVE descriptor.
 #[test]
 fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
-    use dregg_circuit::effect_vm::trace_rotated::B_RECORD_DIGEST;
+    use dregg_circuit::effect_vm::trace_rotated::{B_LIFECYCLE, B_RECORD_DIGEST};
 
     // An out-of-`fields[0..16]` audit key: writing it via `set_field_ext` lands in the cell's
-    // `fields_root` (the named-field map), exactly where the `"refusal"` / `"lifecycle"` audit
-    // slots live — so the after cell's authority digest (r23) genuinely moves. (Both slots use the
-    // SAME `B_RECORD_DIGEST` limb; this audit key stands for either named slot.)
+    // `fields_root` (the named-field map), exactly where the `"refusal"` audit slot lives — so the
+    // after cell's authority digest (r23, `B_RECORD_DIGEST`) genuinely moves. (Used only by the
+    // refusal arm; receiptArchive's genuine mover is the lifecycle limb, not `fields_root`.)
     const AUDIT_KEY: u64 = 4096;
 
-    // The two audit effects, each routed to `B_RECORD_DIGEST` by `record_pin_offset`.
+    // The two audit effects. `record_pin_offset` routes them to DIFFERENT committed limbs (post
+    // #218/#219): a genuine `Refusal` moves `fields_root` → folds into the r23 authority residue
+    // (`B_RECORD_DIGEST`); a genuine `ReceiptArchive` transitions the cell lifecycle to `Archived`
+    // → `lifecycle_felt` (`B_LIFECYCLE = 29`). Each effect's pin welds ITS limb to PI[38].
     let refusal = Effect::Refusal {
         target: [BabyBear::new(0); 8],
         reason_hash: [BabyBear::new(5); 8],
@@ -1519,9 +1522,9 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         terminal_receipt_hash: [BabyBear::new(11); 8],
     };
 
-    for (effect, expect_name) in [
-        (refusal, "refusalVmDescriptor2R24"),
-        (archive, "receiptArchiveVmDescriptor2R24"),
+    for (effect, expect_name, pin_limb) in [
+        (refusal, "refusalVmDescriptor2R24", B_RECORD_DIGEST),
+        (archive, "receiptArchiveVmDescriptor2R24", B_LIFECYCLE),
     ] {
         let name = rotated_descriptor_name_for_effect(&effect)
             .expect("audit effect is a rotated cohort member");
@@ -1544,14 +1547,37 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         let mut ledger = Ledger::new();
         let before_cell = producer_cell(balance, 0);
         let mut after_cell = producer_cell(balance, 1); // nonce ticks
-        // The audit write: the named record slot flips to 1 (the audit commitment). This moves
-        // `fields_root` and therefore `compute_authority_digest_felt` (the r23 limb).
-        let mut one = [0u8; 32];
-        one[0] = 1;
-        assert!(
-            after_cell.state.set_field_ext(AUDIT_KEY, one),
-            "the audit-slot write must take"
-        );
+        // Move the AFTER cell's pinned limb by the effect's GENUINE mover (so `record_pin_offset`'s
+        // limb truly changes pre→post and the pin is non-vacuous):
+        match expect_name {
+            // Refusal: the welded audit slot flips to 1 in `fields_root` → `compute_authority_
+            // digest_felt` (the r23 `B_RECORD_DIGEST` limb) moves.
+            "refusalVmDescriptor2R24" => {
+                let mut one = [0u8; 32];
+                one[0] = 1;
+                assert!(
+                    after_cell.state.set_field_ext(AUDIT_KEY, one),
+                    "the audit-slot write must take"
+                );
+            }
+            // ReceiptArchive: transition the lifecycle to `Archived` → `lifecycle_felt`
+            // (`B_LIFECYCLE`) moves. This is the #219 re-route: the genuine mover is the lifecycle
+            // limb, NOT `fields_root`.
+            "receiptArchiveVmDescriptor2R24" => {
+                let attestation = dregg_cell::ArchivalAttestation {
+                    cell_id: after_cell.id(),
+                    archive_start_height: 0,
+                    archive_end_height: 7,
+                    archive_blob_hash: [9u8; 32],
+                    archive_terminal_commitment: [13u8; 32],
+                    archive_terminal_receipt_hash: [11u8; 32],
+                };
+                after_cell
+                    .archive(&attestation)
+                    .expect("archiving the after cell moves the B_LIFECYCLE limb");
+            }
+            other => panic!("unexpected audit descriptor {other}"),
+        }
         ledger.insert_cell(after_cell.clone()).unwrap();
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
@@ -1560,12 +1586,12 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
         let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
 
-        // The record-digest limb genuinely MOVED (the forgery the pin forbids would freeze it):
-        // the authority residue folds `fields_root`, which the audit write changed.
+        // The pinned limb genuinely MOVED pre→post (the forgery the pin forbids would freeze it):
+        // refusal moves the r23 authority residue via `fields_root`; archive moves `lifecycle_felt`.
         assert_ne!(
-            before_w.pre_limbs[B_RECORD_DIGEST], after_w.pre_limbs[B_RECORD_DIGEST],
-            "{name}: the producer witnesses a DISTINCT record digest for the audit post \
-             (the audit slot is bound by r23 — anti-omission)"
+            before_w.pre_limbs[pin_limb], after_w.pre_limbs[pin_limb],
+            "{name}: the producer witnesses a DISTINCT pinned limb for the audit post \
+             (the audit write is bound by the committed limb — anti-omission)"
         );
 
         let caveat = empty_caveat_manifest();
@@ -1584,12 +1610,13 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         let last = &trace[trace.len() - 1];
         assert_eq!(
             dpis[38],
-            last[AFTER_BASE + B_RECORD_DIGEST],
-            "PI 38 = the AFTER block's correctly-written (audit) record-digest limb"
+            last[AFTER_BASE + pin_limb],
+            "PI 38 = the AFTER block's correctly-written audit limb (r23 record-digest for refusal, \
+             lifecycle_felt for archive)"
         );
         assert_eq!(
-            dpis[38], after_w.pre_limbs[B_RECORD_DIGEST],
-            "PI 38 = compute_authority_digest_felt(post) from the post-state producer witness"
+            dpis[38], after_w.pre_limbs[pin_limb],
+            "PI 38 = the post-state producer witness's pinned limb"
         );
         assert_eq!(dpis[34], trace[0][BEFORE_BASE + B_STATE_COMMIT], "PI 34 = rotated OLD commit");
 
@@ -1628,7 +1655,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         {
             let mut t = trace.clone();
             let last_row = t.len() - 1;
-            t[last_row][AFTER_BASE + B_RECORD_DIGEST] = before_w.pre_limbs[B_RECORD_DIGEST]; // frozen
+            t[last_row][AFTER_BASE + pin_limb] = before_w.pre_limbs[pin_limb]; // frozen
             assert!(
                 refused(&t, &dpis),
                 "{name}: FREEZING the AFTER record-digest limb (audit-slot-NOT-written post) while \
