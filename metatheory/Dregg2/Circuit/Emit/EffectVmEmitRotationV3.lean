@@ -1536,8 +1536,128 @@ are the same circuit. -/
 theorem setFieldTickFace_eq_source (slot : Fin 8) :
     setFieldTickFace slot = EffectVmEmitSetField.setFieldVmDescriptor slot := rfl
 
-/-- **`setFieldV3 slot`** — the rotated tick-faced setField (the registry member). -/
-def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 := v3Of (setFieldTickFace slot)
+/-- In-block offset of the `lifecycle` limb (limb 29 in `preLimbsAt`, shifted +1 by the
+`commitments_root` flag-day): the per-cell lifecycle felt the producer witness carries
+(`rotation_witness.rs::lifecycle_felt`, `pre_limbs[29]`). The forced limb for `cellSeal` /
+`cellUnseal` / `cellDestroy`. -/
+def B_LIFECYCLE : Nat := 29
+
+/-- In-block offset of the `authority_digest` / `record_digest` limb (limb 24 = r23 in `preLimbsAt`):
+the single felt folding ALL authority-bearing cell state including the `permissions` / `verification_key`
+slots (`trace_rotated.rs::B_AUTHORITY_DIGEST`). The forced limb for `setPermissions` / `setVK`. -/
+def B_RECORD_DIGEST : Nat := 24
+
+/-- The rotated AFTER-block base offset (past the v1 layout + the BEFORE block, `B_SPAN = 45`). -/
+def AFTER_BLOCK_OFF : Nat := 45
+
+/-! ### THE AUTHORITY-FROZEN CONTINUITY WELD (the value cohort's light-client close, #1 WAVE 0).
+
+The deployed commitment now binds the authority residue `r23` (`B_RECORD_DIGEST`, the concrete
+realization of the Lean `StateCommit.RH` rest-hash) and `B_LIFECYCLE` into `state_commit`
+(`recompute_block_commit`). But `weldsAt` welds ONLY balance/nonce/fields[0..7]/cap_root — NOT `r23`
+or lifecycle. So for a VALUE effect (transfer/burn/mint/bridgeMint/incrementNonce/emitEvent/setField on
+slots 0..7) the BEFORE `r23` and AFTER `r23` are independent free felts: a malicious prover witnesses an
+AFTER `r23` folding ARBITRARY permissions/VK/lifecycle/mode, the value gate is satisfied, and
+`state_commit`/NEW_COMMIT binds the forged authority — a ledgerless light client cannot tell. That is a
+LIVE, publishable forgery (silently rewriting the authority half during an innocuous value move).
+
+The kernel leaves the WHOLE authority residue UNCHANGED for these effects, so the honest after-`r23`
+EQUALS the before. `rotateV3FrozenAuthority` forces exactly that — two same-row `colEq` welds tying the
+AFTER `r23`/lifecycle to the BEFORE. By `StateCommit.RestHashIffFrame` (`RH k = RH k' ↔` the 16 non-cell
+authority components agree), this FORCES the authority frame the apex previously CARRIED
+(`rotatedEncodes.frCaps`/`frLifecycle`). It mirrors the `rotateV3WithRecordPin` append shape — every v1
+column/constraint/hash-site/range is untouched, so the keystones compose verbatim. NOT for the authority
+MOVERS (setPermissions/setVK/seal/unseal/destroy/refusal/receiptArchive/makeSovereign/setField[8..15]),
+which legitimately change `r23`/lifecycle and keep their record-pin / future in-circuit recompute. -/
+def rotateV3FrozenAuthority (d : EffectVmDescriptor) : EffectVmDescriptor :=
+  let r := rotateV3 d
+  { r with constraints := r.constraints
+      ++ [ colEq (d.traceWidth + B_RECORD_DIGEST) (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
+         , colEq (d.traceWidth + B_LIFECYCLE)     (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) ] }
+
+/-- The two continuity welds are the only constraints past `rotateV3`'s. -/
+theorem rotateV3FrozenAuthority_constraints (d : EffectVmDescriptor) :
+    (rotateV3FrozenAuthority d).constraints
+      = (rotateV3 d).constraints
+        ++ [ colEq (d.traceWidth + B_RECORD_DIGEST) (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
+           , colEq (d.traceWidth + B_LIFECYCLE)     (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) ] := rfl
+
+/-- Continuity welds are CONSTRAINTS; `graduable` reads only sites/ranges (`rotateV3`'s verbatim). -/
+theorem graduable_rotateV3FrozenAuthority {d : EffectVmDescriptor}
+    (h : graduable d = true) : graduable (rotateV3FrozenAuthority d) = true := by
+  have hr := graduable_rotateV3 h
+  unfold rotateV3FrozenAuthority
+  unfold graduable at hr ⊢
+  simpa using hr
+
+/-- **The authority residue is FROZEN on a satisfying row**: a row satisfying
+`rotateV3FrozenAuthority d` carries AFTER `r23` = BEFORE `r23` AND AFTER lifecycle = BEFORE lifecycle. -/
+theorem rotateV3FrozenAuthority_freezes (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (env : VmRowEnv) (isFirst isLast : Bool)
+    (h : satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast) :
+    env.loc (d.traceWidth + B_RECORD_DIGEST)
+        = env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
+    ∧ env.loc (d.traceWidth + B_LIFECYCLE)
+        = env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) := by
+  obtain ⟨hc, _, _⟩ := h
+  refine ⟨?_, ?_⟩
+  · have hmem : colEq (d.traceWidth + B_RECORD_DIGEST)
+        (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST) ∈ (rotateV3FrozenAuthority d).constraints := by
+      rw [rotateV3FrozenAuthority_constraints]; exact List.mem_append_right _ (by simp)
+    exact (colEq_holds_iff env isFirst isLast _ _).mp (hc _ hmem)
+  · have hmem : colEq (d.traceWidth + B_LIFECYCLE)
+        (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) ∈ (rotateV3FrozenAuthority d).constraints := by
+      rw [rotateV3FrozenAuthority_constraints]; exact List.mem_append_right _ (by simp)
+    exact (colEq_holds_iff env isFirst isLast _ _).mp (hc _ hmem)
+
+/-- **(authority drift ⇒ UNSAT)** — the NEGATIVE TOOTH: a row whose AFTER `r23` differs from the BEFORE
+`r23` (a value turn smuggling an authority change into NEW_COMMIT) does NOT satisfy
+`rotateV3FrozenAuthority d`. This is the light-client bite: `verify_vm_descriptor2` alone rejects it,
+no trusted post-cell needed. -/
+theorem rotateV3FrozenAuthority_rejects_drift (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (env : VmRowEnv) (isFirst isLast : Bool)
+    (hdrift : env.loc (d.traceWidth + B_RECORD_DIGEST)
+        ≠ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)) :
+    ¬ satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast :=
+  fun h => hdrift (rotateV3FrozenAuthority_freezes hash d env isFirst isLast h).1
+
+/-- The v1 denotation survives the added continuity welds (the per-effect faithfulness theorems
+compose through, exactly as for the record / nullifier pins). -/
+theorem rotateV3FrozenAuthority_satisfiedVm_v1 (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (env : VmRowEnv) (isFirst isLast : Bool)
+    (h : satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast) :
+    satisfiedVm hash d env isFirst isLast := by
+  apply rotateV3_satisfiedVm_v1 hash d env isFirst isLast
+  obtain ⟨hc, hsites, hr⟩ := h
+  refine ⟨fun c hc' => hc c ?_, hsites, hr⟩
+  rw [rotateV3FrozenAuthority_constraints]
+  exact List.mem_append_left _ hc'
+
+/-- **`v3OfFrozen d`** — the graduated rotated descriptor of a value-cohort member WITH the authority
+continuity weld. Identical SHAPE to `v3Of d` (same width/piCount — the weld is two appended `colEq`
+constraints, no new column), so every width/graduability `#guard` and the per-effect value theorems
+lift verbatim (via `rotV3Frozen_sound_v1` below); it ADDS the authority-frame forcing. -/
+def v3OfFrozen (d : EffectVmDescriptor) : EffectVmDescriptor2 := graduateV1 (rotateV3FrozenAuthority d)
+
+/-- A `Satisfied2` witness of the FROZEN graduation yields the full v1 denotation of the original
+descriptor on every row — so the per-effect VALUE soundness chains (`*_pins_value`, etc.) lift to the
+frozen descriptor exactly as `rotV3_sound_v1` lifts them to `v3Of`. -/
+theorem rotV3Frozen_sound_v1 (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hchip : ChipTableSound hash (t.tf .poseidon2))
+    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
+    (hgrad : graduable d = true)
+    (hsat : Satisfied2 hash (v3OfFrozen d) minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) := by
+  intro i hi
+  exact rotateV3FrozenAuthority_satisfiedVm_v1 hash d _ _ _
+    (graduateV1_sound hash (rotateV3FrozenAuthority d) minit mfin maddrs t hchip hrange
+      (graduable_rotateV3FrozenAuthority hgrad) hsat i hi)
+
+/-- **`setFieldV3 slot`** — the rotated tick-faced setField (the registry member). setField[0..7] is a
+VALUE effect, so it carries the authority-frame freeze (`v3OfFrozen`): AFTER-r23 == BEFORE-r23 (+ lifecycle). -/
+def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 := v3OfFrozen (setFieldTickFace slot)
 
 /-- **The nonce TICK holds on a satisfying non-NoOp setField row.** A row satisfying the rotated
 tick-faced setField, with `s_noop = 0`, carries `after_nonce = before_nonce + 1` (the runtime
@@ -1636,7 +1756,7 @@ BridgeMint equals the source descriptor. The registry routing through `mintV3` i
 theorem mintTickFace_eq_source : mintTickFace = EffectVmEmitMint.mintVmDescriptor := rfl
 
 /-- **`mintV3`** — the rotated tick-faced BridgeMint (the `mintVmDescriptor2R24` registry member). -/
-def mintV3 : EffectVmDescriptor2 := v3Of mintTickFace
+def mintV3 : EffectVmDescriptor2 := v3OfFrozen mintTickFace
 
 /-- **The nonce TICK holds on a satisfying non-NoOp BridgeMint row.** -/
 theorem mintV3_pins_nonce_tick (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
@@ -1769,20 +1889,6 @@ committed pre-state + the effect (`lifecycle_felt(post)` for the lifecycle effec
 site, and the four commit pins are UNTOUCHED, so `rotateV3`'s keystones (`rotateV3_satisfiedVm_v1`,
 `rotV3_binds_published`, `graduable_rotateV3`) compose verbatim — this only ADDS one PI pin + one PI
 slot, exactly as the nullifier weld does. -/
-
-/-- In-block offset of the `lifecycle` limb (limb 29 in `preLimbsAt`, shifted +1 by the
-`commitments_root` flag-day): the per-cell lifecycle felt the producer witness carries
-(`rotation_witness.rs::lifecycle_felt`, `pre_limbs[29]`). The forced limb for `cellSeal` /
-`cellUnseal` / `cellDestroy`. -/
-def B_LIFECYCLE : Nat := 29
-
-/-- In-block offset of the `authority_digest` / `record_digest` limb (limb 24 = r23 in `preLimbsAt`):
-the single felt folding ALL authority-bearing cell state including the `permissions` / `verification_key`
-slots (`trace_rotated.rs::B_AUTHORITY_DIGEST`). The forced limb for `setPermissions` / `setVK`. -/
-def B_RECORD_DIGEST : Nat := 24
-
-/-- The rotated AFTER-block base offset (past the v1 layout + the BEFORE block, `B_SPAN = 45`). -/
-def AFTER_BLOCK_OFF : Nat := 45
 
 /-- **`rotateV3WithRecordPin off d`** — `rotateV3` PLUS a fifth appended last-row PI pin welding the
 AFTER block's limb at in-block offset `off` (`B_LIFECYCLE` or `B_RECORD_DIGEST`) to the new rotated PI
@@ -1988,9 +2094,9 @@ def receiptArchiveV3 : EffectVmDescriptor2 :=
 + the 8 STEP-1-widened; keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver
 `EmitRotationV3.lean`). -/
 def v3Registry : List (String × EffectVmDescriptor2) :=
-  [ ("transferVmDescriptor2R24", v3Of EffectVmEmitTransfer.transferVmDescriptor)
-  , ("burnVmDescriptor2R24", v3Of EffectVmEmitBurn.burnVmDescriptor)
-  , ("mintVmDescriptor2R24", mintV3)
+  [ ("transferVmDescriptor2R24", v3OfFrozen EffectVmEmitTransfer.transferVmDescriptor)
+  , ("burnVmDescriptor2R24", v3OfFrozen EffectVmEmitBurn.burnVmDescriptor)
+  , ("mintVmDescriptor2R24", v3OfFrozen mintTickFace)
   , ("noteSpendVmDescriptor2R24", noteSpendV3)
   , ("noteCreateVmDescriptor2R24", noteCreateV3)
   , ("cellSealVmDescriptor2R24", cellSealV3)
@@ -2002,7 +2108,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   , ("pipelinedSendVmDescriptor2R24", v3Of EffectVmEmitPipelinedSend.pipelinedSendVmDescriptor)
   , ("refreshVmDescriptor2R24", v3Of EffectVmEmitRefreshDelegation.refreshVmDescriptor)
   , ("incrementNonceVmDescriptor2R24",
-      v3Of EffectVmEmitIncrementNonce.incrementNonceVmDescriptor)
+      v3OfFrozen EffectVmEmitIncrementNonce.incrementNonceVmDescriptor)
   , ("revokeVmDescriptor2R24", v3Of EffectVmEmitRevokeDelegation.revokeVmDescriptor)
   , ("introduceVmDescriptor2R24", v3Of EffectVmEmitIntroduce.introduceVmDescriptor)
   , ("attenuateVmDescriptor2R24", attenuateV3)
@@ -2025,9 +2131,9 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   , ("spawnVmDescriptor2R24", spawnV3)
   , ("receiptArchiveVmDescriptor2R24", receiptArchiveV3)
   , ("cellUnsealVmDescriptor2R24", cellUnsealV3)
-  , ("emitEventVmDescriptor2R24", v3Of EffectVmEmitEmitEvent.emitEventVmDescriptor) ]
+  , ("emitEventVmDescriptor2R24", v3OfFrozen EffectVmEmitEmitEvent.emitEventVmDescriptor) ]
   ++ (List.finRange 8).map fun slot =>
-      (s!"setFieldVmDescriptor2-{slot.val}R24", setFieldV3 slot)
+      (s!"setFieldVmDescriptor2-{slot.val}R24", v3OfFrozen (setFieldTickFace slot))
 
 #guard v3Registry.length == 36
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five

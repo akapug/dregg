@@ -1486,6 +1486,137 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
     );
 }
 
+/// THE WAVE-0 LIGHT-CLIENT CLOSE — the AUTHORITY-FROZEN CONTINUITY WELD on a VALUE effect.
+///
+/// The deployed commitment binds the authority residue `r23` (`B_RECORD_DIGEST` = limb 24, the
+/// concrete realization of the Lean `StateCommit.RH` rest-hash) into `state_commit`/NEW_COMMIT. But
+/// the rotated value descriptor's economic gate welds ONLY balance/nonce/fields[0..7]/cap_root —
+/// NOT r23. So for a VALUE effect (here `Transfer`) the BEFORE-r23 and AFTER-r23 columns were
+/// independent free felts: a prover could witness an AFTER-r23 folding ARBITRARY
+/// permissions/VK/lifecycle/mode, the value gate still passed, NEW_COMMIT bound the FORGED authority
+/// half, and a ledgerless light client (verifying the descriptor proof ALONE, no trusted post-cell)
+/// could not tell. That is a LIVE, publishable forgery (silently rewriting the authority half during
+/// an innocuous value move).
+///
+/// The frozen value descriptor (`v3OfFrozen`, registry `transferVmDescriptor2R24`) appends two
+/// same-row `colEq` welds forcing AFTER-r23 == BEFORE-r23 (and AFTER lifecycle == BEFORE lifecycle).
+/// By Lean `StateCommit.RestHashIffFrame` that equals "the 16 authority components are unchanged" —
+/// exactly the frame the kernel leaves invariant on a value move. This test proves the honest frozen
+/// transfer end-to-end, then witnesses an AFTER-r23 ≠ BEFORE-r23 trace (authority drift) and asserts
+/// it is UNSAT via `prove`/`verify` ALONE — the deployment-soundness gap closed for the value cohort.
+#[test]
+fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
+    use dregg_circuit::effect_vm::trace_rotated::{B_LIFECYCLE, B_RECORD_DIGEST};
+
+    let desc =
+        parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
+    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.public_input_count, 38, "value descriptor keeps the 38-PI shape");
+
+    // -- a real value (transfer-out) turn; the authority half is UNCHANGED (a value move). --
+    let before_balance: i64 = 100_000;
+    let amount: u64 = 50;
+    let st = CellState::new(before_balance as u64, 0);
+    let effects = vec![Effect::Transfer {
+        amount,
+        direction: 1,
+    }];
+
+    let mut ledger = Ledger::new();
+    let before_cell = producer_cell(before_balance, 0);
+    let after_cell = producer_cell(before_balance - amount as i64, 0);
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+
+    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+
+    let caveat = transfer_caveat_manifest();
+    let (trace, dpis) = generate_rotated_effect_vm_trace(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &caveat,
+    )
+    .expect("live rotated generator must produce the frozen transfer trace + 38 PIs");
+    assert_eq!(trace[0].len(), ROT_WIDTH, "315-col rotated trace");
+
+    // THE FREEZE HOLDS HONESTLY: on a value move the kernel leaves the WHOLE authority residue
+    // unchanged, so the producer's AFTER-r23 limb EQUALS the BEFORE-r23 limb — the column-equality
+    // the two appended welds force. (Same for the lifecycle limb.) The welds are SATISFIABLE by the
+    // genuine honest trace; the close is NOT vacuous.
+    let last = &trace[trace.len() - 1];
+    let r0 = &trace[0];
+    assert_eq!(
+        before_w.pre_limbs[B_RECORD_DIGEST], after_w.pre_limbs[B_RECORD_DIGEST],
+        "a value move leaves the producer's r23 authority residue UNCHANGED (anti-vacuity)"
+    );
+    assert_eq!(
+        r0[BEFORE_BASE + B_RECORD_DIGEST], last[AFTER_BASE + B_RECORD_DIGEST],
+        "the honest frozen trace carries AFTER-r23 == BEFORE-r23 (the weld is satisfied)"
+    );
+    assert_eq!(
+        r0[BEFORE_BASE + B_LIFECYCLE], last[AFTER_BASE + B_LIFECYCLE],
+        "the honest frozen trace carries AFTER-lifecycle == BEFORE-lifecycle"
+    );
+
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+
+    // (1) PROVE + VERIFY the honest frozen transfer end-to-end (no trusted post-cell).
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("honest frozen transfer must prove end-to-end");
+    verify_vm_descriptor2(&desc, &proof, &dpis)
+        .expect("honest frozen transfer proof must verify independently");
+
+    // (2) THE NEGATIVE TOOTH (the light-client bite): a trace whose AFTER-r23 differs from the
+    //     BEFORE-r23 (authority drift smuggled into NEW_COMMIT during a value move) is UNSAT via
+    //     `prove`/`verify` ALONE — the forgery the deployed descriptor USED to accept.
+    let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+        }));
+        match r {
+            Err(_) => true,
+            Ok(res) => res.is_err(),
+        }
+    };
+    // (a) THE CENTRAL FORGERY: drift the AFTER-r23 authority limb away from the BEFORE — a value
+    //     turn rewriting the authority half (forged permissions/VK/lifecycle/mode) into NEW_COMMIT.
+    {
+        let mut t = trace.clone();
+        let last_row = t.len() - 1;
+        t[last_row][AFTER_BASE + B_RECORD_DIGEST] =
+            t[last_row][AFTER_BASE + B_RECORD_DIGEST] + BabyBear::ONE;
+        assert!(
+            refused(&t, &dpis),
+            "DRIFTING the AFTER-r23 authority residue (forged authority half) on a value move MUST \
+             be UNSAT — the frozen-authority weld bites; the light-client forgery is rejected in the \
+             LIVE descriptor with no trusted post-cell"
+        );
+    }
+    // (b) the lifecycle drift (the second weld) bites too.
+    {
+        let mut t = trace.clone();
+        let last_row = t.len() - 1;
+        t[last_row][AFTER_BASE + B_LIFECYCLE] =
+            t[last_row][AFTER_BASE + B_LIFECYCLE] + BabyBear::ONE;
+        assert!(
+            refused(&t, &dpis),
+            "DRIFTING the AFTER lifecycle limb on a value move MUST be UNSAT (the lifecycle weld)"
+        );
+    }
+
+    eprintln!(
+        "ROTATED TRANSFER FROZEN-AUTHORITY (WAVE 0, LIVE-GENERATED): PROVED + VERIFIED; AFTER-r23 \
+         is FORCED == BEFORE-r23, and an authority-drift forgery (AFTER-r23 != BEFORE-r23) is UNSAT \
+         via prove/verify alone — the live light-client authority-drift forgery is closed."
+    );
+}
+
 /// THE DEPLOYMENT-SOUNDNESS CLOSE for the field-NOT-bound AUDIT WRITES — `refusal` and
 /// `receiptArchive`. Before this, these two effects wrote a cell audit slot (`"refusal"` /
 /// `"lifecycle"` RECORD slots, `Spec.CellStateAudit.{RefusalSpec,ReceiptArchiveSpec}`) that the

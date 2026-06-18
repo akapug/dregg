@@ -58,7 +58,7 @@ set_option linter.unusedVariables false
 
 /-! ## §0 — the live rotated setField descriptor (per field slot).
 
-`setFieldV3 slot = v3Of (setFieldTickFace slot)` (`EffectVmEmitRotationV3`) is exactly the descriptor
+`setFieldV3 slot = v3OfFrozen (setFieldTickFace slot)` (`EffectVmEmitRotationV3`) is exactly the descriptor
 the rotated prover runs for a `setFieldA` writing slot `slot` (the registry's
 `setFieldVmDescriptor2-{slot}R24`). `setFieldTickFace slot = setFieldVmDescriptor slot`
 (`setFieldTickFace_eq_source`), so the source per-row gates / faithfulness theorems apply verbatim. -/
@@ -68,17 +68,17 @@ def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 :=
   EffectVmEmitRotationV3.setFieldV3 slot
 
 theorem setFieldV3_eq (slot : Fin 8) :
-    setFieldV3 slot = v3Of (EffectVmEmitRotationV3.setFieldTickFace slot) := rfl
+    setFieldV3 slot = v3OfFrozen (EffectVmEmitRotationV3.setFieldTickFace slot) := rfl
 
 /-- `setFieldTickFace slot` is graduable (it shares the per-effect descriptor's sites + ranges) — the
-decidable side condition `rotV3_sound_v1` requires. -/
+decidable side condition `rotV3Frozen_sound_v1` requires. -/
 theorem setField_graduable (slot : Fin 8) :
     graduable (EffectVmEmitRotationV3.setFieldTickFace slot) = true :=
   EffectVmEmitRotationV3.graduable_setFieldTickFace slot
 
 /-! ## §1 — the rotated→per-row decode chain (the witness side of the bridge).
 
-`rotV3_sound_v1` lifts a `Satisfied2 hash (setFieldV3 slot) …` witness to the v1 denotation
+`rotV3Frozen_sound_v1` lifts a `Satisfied2 hash (setFieldV3 slot) …` witness to the v1 denotation
 `satisfiedVm hash (setFieldTickFace slot) (envAt t i) …` on every row. Its gates are exactly
 `setFieldVmDescriptor slot`'s (`setFieldTickFace_eq_source`), all `.gate` (flag-free), so we extract
 them at `false false` and feed `setFieldVm_faithful` to get the field-write intent. -/
@@ -94,7 +94,7 @@ theorem rotated_row_gates (slot : Fin 8) (hash : List ℤ → ℤ)
     ∀ c ∈ setFieldRowGates slot, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash (EffectVmEmitRotationV3.setFieldTickFace slot)
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash (EffectVmEmitRotationV3.setFieldTickFace slot) minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash (EffectVmEmitRotationV3.setFieldTickFace slot) minit mfin maddrs t
       hside.chip hside.range (setField_graduable slot) hsat i hi
   intro c hc
   -- `setFieldTickFace slot = setFieldVmDescriptor slot`, whose constraints ARE `setFieldRowGates`.

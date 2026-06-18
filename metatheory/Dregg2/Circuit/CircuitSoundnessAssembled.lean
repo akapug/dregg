@@ -172,7 +172,7 @@ theorem Rfix_total (e : EffectIdx) : ∃ d : EffectVmDescriptor2, Rfix e = d := 
 
 /-- **`Rfix_transfer` — the key correspondence: the transfer tag lands at the transfer descriptor.**
 `actionTag (.balanceA …) = 0` and `actionTagToPos 0 = 0`, and `v3Registry`'s position-`0` entry is the
-transfer descriptor `v3Of transferVmDescriptor = transferV3`. So `Rfix 0` IS the genuine transfer
+transfer descriptor `v3OfFrozen transferVmDescriptor = transferV3`. So `Rfix 0` IS the genuine transfer
 descriptor — the rung at the transfer tag discharges its refinement about the right descriptor. -/
 theorem Rfix_transfer : Rfix 0 = Dregg2.Circuit.RotatedKernelRefinement.transferV3 := rfl
 
