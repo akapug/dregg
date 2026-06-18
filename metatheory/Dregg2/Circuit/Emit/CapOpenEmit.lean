@@ -83,7 +83,7 @@ open Dregg2.Circuit.DeployedCapTree (CapLeaf CapHashScheme)
 open Dregg2.Circuit.DeployedCapTree.CapHashScheme
   (capLeafDigest MembersAt confersTransferLeaf DeployedFaithful
    deployedCapOpen_implies_authorizedB)
-open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (attenuateV3 APPENDIX_SPAN B_CAP_ROOT v3Of)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (attenuateV3 APPENDIX_SPAN B_CAP_ROOT v3Of v3OfFrozen)
 open Dregg2.Authority (Label)
 open Dregg2.Exec.FacetAuthority (AuthProvided FacetCaps authorizedFacetB)
 
@@ -154,11 +154,13 @@ descriptors + their full lemma cohort (`capOpenConstraints`, `capOpenAttenuateV3
 `transferCapOpenV3*`) are DELETED (Stage D). The shared appendix helpers `nodeLookups`/`dirBoolGates`/
 `maskBitGates` survive — the effect-general `capOpenConstraintsEff n` (§5.F) reuses them. -/
 
-/-- The rotated TRANSFER cohort descriptor (`v3Of` of the transfer v1 face). Same width invariant as
-`attenuateV3` (`EFFECT_VM_WIDTH + APPENDIX_SPAN`), so the cap-open appendix at `CAP_OPEN_BASE` applies.
-Survives the §3 deletion — it is the base of the LIVE `transferCapOpenEffV3` (§5.F). -/
+/-- The rotated TRANSFER cohort descriptor (`v3OfFrozen` of the transfer v1 face — transfer-via-cap is a
+VALUE effect, so the authority-frame freeze welds apply). Same width invariant as `attenuateV3`
+(`EFFECT_VM_WIDTH + APPENDIX_SPAN`), so the cap-open appendix at `CAP_OPEN_BASE` applies. It is the base of
+the LIVE `transferCapOpenEffV3` (§5.F); freezing it forces AFTER-r23 == BEFORE-r23 (+ lifecycle) for the
+transfer-via-cap leg too, matching `RotatedKernelRefinement.transferV3` (`v3OfFrozen` of the same face). -/
 def transferV3 : EffectVmDescriptor2 :=
-  v3Of Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor
+  v3OfFrozen Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor
 
 /-! ## §5.F — THE FAN-OUT: the effect-GENERAL cap-open appendix + per-effect descriptors.
 

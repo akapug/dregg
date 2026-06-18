@@ -70,9 +70,9 @@ open Dregg2.Exec.TurnExecutorFull
 `transferVmDescriptor` lifted through the V3 rotation graduation. (`v3Registry`'s first entry.) -/
 
 /-- The live rotated transfer descriptor (`v3Registry`'s `transferVmDescriptor2R24`). -/
-def transferV3 : EffectVmDescriptor2 := v3Of EffectVmEmitTransfer.transferVmDescriptor
+def transferV3 : EffectVmDescriptor2 := v3OfFrozen EffectVmEmitTransfer.transferVmDescriptor
 
-theorem transferV3_eq : transferV3 = v3Of EffectVmEmitTransfer.transferVmDescriptor := rfl
+theorem transferV3_eq : transferV3 = v3OfFrozen EffectVmEmitTransfer.transferVmDescriptor := rfl
 
 /-- `transferVmDescriptor` is graduable — the decidable side condition `rotV3_sound_v1` needs (it is
 `v3Registry`'s `#guard graduable (rotateV3 transferVmDescriptor)` re-stated at the graduation
@@ -110,7 +110,7 @@ theorem rotated_row_gates (hash : List ℤ → ℤ)
       c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitTransfer.transferVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
       hside.chip hside.range transfer_graduable hsat i hi
   intro c hc
   -- the gate is a constraint of the descriptor, so it holds at the i-flags; gate holdsVm = body=0,
@@ -291,7 +291,7 @@ theorem availability_forced (hash : List ℤ → ℤ)
   -- the v1 denotation on the debit row (i-dependent flags).
   have hv1 : satisfiedVm hash EffectVmEmitTransfer.transferVmDescriptor
       (envAt t henc.di) (henc.di == 0) (henc.di + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
       hside.chip hside.range transfer_graduable hsat henc.di henc.hdi
   -- the balance-move gate (flag-independent) and the live range tooth (`hsat.2.2`, flag-free).
   have hbal := rotated_row_gates hash hside hsat henc.di henc.hdi

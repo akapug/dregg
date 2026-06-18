@@ -62,23 +62,23 @@ set_option linter.unusedVariables false
 
 /-! ## §0 — the live rotated incrementNonce descriptor.
 
-`incNonceV3 = v3Of incrementNonceVmDescriptor` is exactly the descriptor the rotated prover runs for
-an `incrementNonceA` (the registry's `incrementNonceVmDescriptor2R24`). Unlike setField, the source
+`incNonceV3 = v3OfFrozen incrementNonceVmDescriptor` is exactly the descriptor the rotated prover runs
+for an `incrementNonceA` (the registry's `incrementNonceVmDescriptor2R24`). Unlike setField, the source
 `incrementNonceVmDescriptor` ALREADY carries the runtime-reconciled nonce TICK gate (`gNonce` in
-`incNonceRowGates`), so the registry routes through `v3Of` directly — no tick-face re-routing. -/
+`incNonceRowGates`), so the registry routes through `v3OfFrozen` directly — no tick-face re-routing. -/
 
 /-- The live rotated incrementNonce descriptor (the registry member `incrementNonceVmDescriptor2R24`). -/
-def incNonceV3 : EffectVmDescriptor2 := v3Of incrementNonceVmDescriptor
+def incNonceV3 : EffectVmDescriptor2 := v3OfFrozen incrementNonceVmDescriptor
 
-theorem incNonceV3_eq : incNonceV3 = v3Of incrementNonceVmDescriptor := rfl
+theorem incNonceV3_eq : incNonceV3 = v3OfFrozen incrementNonceVmDescriptor := rfl
 
 /-- `incrementNonceVmDescriptor` is graduable (it shares the per-effect descriptor's sites + ranges) —
-the decidable side condition `rotV3_sound_v1` requires. (The `#guard` in `EffectVmEmitV2`.) -/
+the decidable side condition `rotV3Frozen_sound_v1` requires. (The `#guard` in `EffectVmEmitV2`.) -/
 theorem incNonce_graduable : graduable incrementNonceVmDescriptor = true := by decide
 
 /-! ## §1 — the rotated→per-row decode chain (the witness side of the bridge).
 
-`rotV3_sound_v1` lifts a `Satisfied2 hash incNonceV3 …` witness to the v1 denotation
+`rotV3Frozen_sound_v1` lifts a `Satisfied2 hash incNonceV3 …` witness to the v1 denotation
 `satisfiedVm hash incrementNonceVmDescriptor (envAt t i) …` on every row. We extract the per-row
 `incNonceRowGates` (all `.gate`, flag-free) at `false false` and feed `incNonceVm_faithful`. -/
 
@@ -93,7 +93,7 @@ theorem rotated_row_gates (hash : List ℤ → ℤ)
     ∀ c ∈ incNonceRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash incrementNonceVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash incrementNonceVmDescriptor minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash incrementNonceVmDescriptor minit mfin maddrs t
       hside.chip hside.range incNonce_graduable hsat i hi
   intro c hc
   have hmem : c ∈ incrementNonceVmDescriptor.constraints := by

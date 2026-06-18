@@ -11,8 +11,8 @@ together with the boundary decode FORCES the kernel leaf-spec's state movement
 ## The two worlds, and what the circuit FORCES vs. what the decode carries
 
 The live prover runs the ROTATED descriptors:
-  * `burnV3  := v3Of EffectVmEmitBurn.burnVmDescriptor`  (registry `burnVmDescriptor2R24`);
-  * `mintV3  := v3Of mintTickFace = v3Of EffectVmEmitMint.mintVmDescriptor` (`mintVmDescriptor2R24`).
+  * `burnV3  := v3OfFrozen EffectVmEmitBurn.burnVmDescriptor`  (registry `burnVmDescriptor2R24`);
+  * `mintV3  := v3OfFrozen mintTickFace = v3OfFrozen EffectVmEmitMint.mintVmDescriptor` (`mintVmDescriptor2R24`).
 The kernel leaves are `BurnSpec` (holder `(cell,a)` debit, well `(a,a)` credit; the W1 return-to-well)
 and `MintASpec` (well `(a,a)` debit, recipient `(cell,a)` credit; the W1 issuer-move). bridgeMint
 dispatches to the SAME `recCMintAsset` and meets `MintASpec` VERBATIM, so its refinement is the mint
@@ -63,18 +63,18 @@ set_option linter.unusedVariables false
 
 `burnV3` is exactly the descriptor the rotated prover runs for a burn (`v3Registry`'s
 `burnVmDescriptor2R24`). `mintV3` is the rotated tick-faced BridgeMint (`mintVmDescriptor2R24`); since
-`mintTickFace = EffectVmEmitMint.mintVmDescriptor` definitionally, `mintV3 = v3Of mintVmDescriptor`. -/
+`mintTickFace = EffectVmEmitMint.mintVmDescriptor` definitionally, `mintV3 = v3OfFrozen mintVmDescriptor`. -/
 
 /-- The live rotated burn descriptor (`v3Registry`'s `burnVmDescriptor2R24`). -/
-def burnV3 : EffectVmDescriptor2 := v3Of EffectVmEmitBurn.burnVmDescriptor
+def burnV3 : EffectVmDescriptor2 := v3OfFrozen EffectVmEmitBurn.burnVmDescriptor
 
-theorem burnV3_eq : burnV3 = v3Of EffectVmEmitBurn.burnVmDescriptor := rfl
+theorem burnV3_eq : burnV3 = v3OfFrozen EffectVmEmitBurn.burnVmDescriptor := rfl
 
 /-- The live rotated BridgeMint descriptor (`v3Registry`'s `mintVmDescriptor2R24`), through the
 tick-faced source which COINCIDES with `mintVmDescriptor` (`mintTickFace_eq_source`). -/
-theorem mintV3_eq_source : mintV3 = v3Of EffectVmEmitMint.mintVmDescriptor := rfl
+theorem mintV3_eq_source : mintV3 = v3OfFrozen EffectVmEmitMint.mintVmDescriptor := rfl
 
-/-- `burnVmDescriptor` is graduable — the decidable side condition `rotV3_sound_v1` needs. -/
+/-- `burnVmDescriptor` is graduable — the decidable side condition `rotV3Frozen_sound_v1` needs. -/
 theorem burn_graduable : graduable EffectVmEmitBurn.burnVmDescriptor = true := by decide
 
 /-- `mintVmDescriptor` is graduable. -/
@@ -82,7 +82,7 @@ theorem mint_graduable : graduable EffectVmEmitMint.mintVmDescriptor = true := b
 
 /-! ## §1 — BURN: the rotated→per-row→per-cell decode chain (the witness side).
 
-`rotV3_sound_v1` yields, on every row, the v1 denotation of `burnVmDescriptor`; the burn per-row gates
+`rotV3Frozen_sound_v1` yields, on every row, the v1 denotation of `burnVmDescriptor`; the burn per-row gates
 (`burnRowGates`, all flag-independent `.gate`s) hold; `burnVm_faithful` + `intent_to_cellSpec` lift the
 row's value block to `CellBurnSpec` (the `bal_lo` debit by `param1`, the frame freeze). -/
 
@@ -95,7 +95,7 @@ theorem rotated_row_gates_burn (hash : List ℤ → ℤ)
     ∀ c ∈ EffectVmEmitBurn.burnRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitBurn.burnVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
       hside.chip hside.range burn_graduable hsat i hi
   intro c hc
   have hmem : c ∈ EffectVmEmitBurn.burnVmDescriptor.constraints := by
@@ -207,7 +207,7 @@ theorem burn_availability_forced (hash : List ℤ → ℤ)
   -- the v1 denotation on the holder row (i-dependent flags).
   have hv1 : satisfiedVm hash EffectVmEmitBurn.burnVmDescriptor
       (envAt t henc.di) (henc.di == 0) (henc.di + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
       hside.chip hside.range burn_graduable hsat henc.di henc.hdi
   -- the balance-debit gate (flag-independent) and the live range tooth (`hv1.2.2`).
   have hbal := rotated_row_gates_burn hash hside hsat henc.di henc.hdi
@@ -295,7 +295,7 @@ theorem rotated_row_gates_mint (hash : List ℤ → ℤ)
     ∀ c ∈ EffectVmEmitMint.mintRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitMint.mintVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3_sound_v1 hash EffectVmEmitMint.mintVmDescriptor minit mfin maddrs t
+    rotV3Frozen_sound_v1 hash EffectVmEmitMint.mintVmDescriptor minit mfin maddrs t
       hside.chip hside.range mint_graduable hsat i hi
   intro c hc
   have hmem : c ∈ EffectVmEmitMint.mintVmDescriptor.constraints := by
