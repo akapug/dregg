@@ -63,6 +63,23 @@ CONNECTION-TO-DEPLOYMENT is NOT yet sound enough for completeness — must close
         anchored to the cross-checked before + the witness-independent v1 param, AND have the verifier recompute
         the after-limbs/new_commitment from the trusted before-cell+vm_effects (override, like dpis[34/36]).
         Until then the record-pin descriptors should fail-closed at the cohort resolver, not be advertised closed.
+  • **Record-pin family / #214 — setPermissions + setVK CLOSED (verifier-anchored, biting); the other 4
+    BLOCKED by 3 REAL bugs the vacuous pin masked (the model-finds-the-bug loop).** The genuine anchor
+    (verifier independently computes `dpis[38] = compute_authority_digest_felt(apply(trusted before, effect))`
+    via the shared `apply_effect_to_cell` helper) bites for setPermissions + setVK (forged-after REJECT
+    confirmed load-bearing). Fanning out EXPOSED three deployment bugs (tasks #218/#219/#220):
+      ‣ **#218 refusal** — deployed `apply_refusal` writes welded `fields[4]`, which `compute_authority_
+        digest_felt` does NOT fold (it reads `fields[8..16]`+`fields_root`) → the refusal audit record is
+        UNBOUND in the commitment; Lean spec models it in `fields_root` (a real Lean↔Rust divergence + a
+        soundness gap). Fix in the deployed executor apply.
+      ‣ **#219 receiptArchive** — `record_pin_offset` mis-routes it to `B_RECORD_DIGEST`; the genuine mover
+        is the lifecycle limb `B_LIFECYCLE`. Re-route the pin + use the `lifecycle_felt_cell` anchor.
+      ‣ **#220 cellSeal/cellUnseal/cellDestroy** — the cipherclerk producer collapses them to
+        `VmEffect::SetPermissions` while the executor bridge uses native variants → divergent descriptors,
+        honest proofs rejected pre-anchor; the lifecycle anchor WOULD bite once the producer is aligned
+        (+ a cellSeal `block_height`/`sealed_at` seam). Infra is in place (apply_effect_to_cell has all 6
+        arms + block_height; `lifecycle_felt_cell` exists) — the remaining closes are producer-projection /
+        executor-apply work, not new digest plumbing.
   • **Finding 4 / #215 — CLOSED (pending commit, agent a9577e2a).** The 6 fan-out cap-effects'
     authority is now FORCED in-circuit in the apex: new effect-specific keystones
     `<effect>CapOpenV3_authorizes` (CapOpenEmit.lean §5.F) + a parametric `EffAuthoritySource`

@@ -1832,24 +1832,52 @@ genuine FORCING gate (a real anti-ghost rejecting a frozen lifecycle / un-writte
 deployed verifier independently ANCHORS `PI[piCount]` to `compute_authority_digest_felt(trusted post-cell)`
 (= apply the effect to the cross-checked before-cell, then digest).
 
-CLOSED FOR `setPermissions` (the record-digest beachhead, limb `B_RECORD_DIGEST = 24`): the deployed
-verifier (`turn/src/executor/proof_verify.rs verify_and_commit_proof_rotated`, step 6b) NOW anchors PI 38
-for the `SetPermissions` lead — it clones the trusted before-cell, applies the kernel effect through the
-SHARED `dregg_turn::rotation_witness::apply_effect_to_cell` weld (the SAME projection the cipherclerk
-producer uses for its after-cell, so honest proofs are NOT rejected), and overrides
-`dpis[38] = compute_authority_digest_felt(post_cell)`. So for `setPermissions` this pin is a genuine
-post-forcing gate: a forged after-permissions disagrees with the anchored PI 38 ⇒ `verify_vm_descriptor2`
-UNSAT (tests `record_pin_anchor::{rotated_sovereign_set_permissions_proves_and_verifies,
-rotated_sovereign_forged_after_permissions_is_rejected}` in `sdk/tests/sovereign_rotated_c1.rs` —
-the honest accept itself BITES: without the anchor PI 38 stays at the placeholder reconstruction and the
-honest proof is rejected).
+CLOSED FOR `setPermissions` AND `setVK` (the record-digest movers, limb `B_RECORD_DIGEST = 24`): the
+deployed verifier (`turn/src/executor/proof_verify.rs verify_and_commit_proof_rotated`, step 6b) anchors PI
+38 for BOTH leads — it clones the trusted before-cell, applies the kernel effect through the SHARED
+`dregg_turn::rotation_witness::apply_effect_to_cell` weld (the SAME projection the cipherclerk producer uses
+for its after-cell, so honest proofs are NOT rejected), and overrides
+`dpis[38] = compute_authority_digest_felt(post_cell)`. `compute_authority_digest_felt` FOLDS both the cell's
+`permissions` and `verification_key.hash`, so a genuine setPermissions / setVK MOVES the AFTER r23 residue and
+a forged after-residue disagrees with the anchored PI 38 ⇒ `verify_vm_descriptor2` UNSAT. Tests
+(`sdk/tests/sovereign_rotated_c1.rs record_pin_anchor`):
+`{rotated_sovereign_set_permissions_proves_and_verifies, rotated_sovereign_forged_after_permissions_is_rejected,
+rotated_sovereign_set_vk_proves_and_verifies, rotated_sovereign_forged_after_vk_is_rejected}` — the honest
+accept BITES (without the anchor PI 38 stays at the placeholder and the honest proof is rejected), and the
+forged-after proof is rejected by the anchor mismatch.
 
-STILL OPEN (un-fanned-out): the OTHER record-digest siblings `setVK` / `refusal` / `receiptArchive`
-(same `B_RECORD_DIGEST` anchor — they just need the same per-lead fan-out in step 6b) and the LIFECYCLE
-family `cellSeal` / `cellUnseal` / `cellDestroy` (limb `B_LIFECYCLE = 29`, a SECOND anchor via
-`lifecycle_felt` over the trusted post-lifecycle, NOT this beachhead). For those leads the verifier still
-leaves PI 38 at the placeholder reconstruction, so the pin is a published-value binding, NOT yet a
-post-forcing gate, and they are not routed live. -/
+STILL OPEN — with PRECISE deployment blockers (verified empirically by
+`dregg_turn::rotation_witness::tests::forced_limb_movement_map`):
+
+  * `refusal` — the RUST executor's `apply_refusal` writes the WELDED `fields[4]` indexed slot + bumps the
+    nonce. NEITHER is folded by `compute_authority_digest_felt` (it reads `fields[8..16]` + the EXT
+    `fields_root`, not the welded `fields[0..8]` or the nonce). So the honest after `record_digest` does NOT
+    move off the before value — the record-pin is a published-value binding on the DEPLOYED path and the
+    anchor CANNOT bite. (This Lean model's claim that the refusal audit slot lands in `fields_root` describes
+    `TurnExecutorFull.refusalField`, the SPEC executor; the deployed Rust `apply_refusal` writes `fields[4]`
+    instead — a spec/deployment divergence.) Closing it requires a RUST EXECUTOR apply change (write the audit
+    via `set_field_ext` into `fields_root`), out of scope for a verifier-anchor-only change.
+
+  * `receiptArchive` — `apply_receipt_archive` writes the cell LIFECYCLE (`Archived`), which
+    `compute_authority_digest_felt` does NOT fold; the genuine mover is `lifecycle_felt` (limb `B_LIFECYCLE`).
+    The `record_pin_offset` routes receiptArchive to `B_RECORD_DIGEST`, which the deployed write does NOT
+    move — a MIS-ROUTE for the deployed apply. Closing it requires re-routing receiptArchive's pin to
+    `B_LIFECYCLE` (and anchoring via `lifecycle_felt_cell`).
+
+  * `cellSeal` / `cellUnseal` / `cellDestroy` (limb `B_LIFECYCLE = 29`) — the forced limb DOES move
+    (`lifecycle_felt` separates Live / Sealed / Destroyed, and folds the death certificate for Destroy), so a
+    lifecycle anchor via `lifecycle_felt_cell(post_cell)` WOULD bite. The blocker is a PRODUCER/VERIFIER
+    PROJECTION DIVERGENCE: the cipherclerk producer (`convert_effects_to_vm`) collapses these to
+    `VmEffect::SetPermissions` while the executor bridge (`convert_turn_effects_to_vm`) projects the NATIVE
+    `VmEffect::{CellSeal,CellUnseal,CellDestroy}`. The two resolve DIFFERENT descriptors, so the verifier's
+    reconstructed trace/PIs diverge from the proof and honest proofs are rejected BEFORE the anchor is reached.
+    Closing them requires aligning the producer projection to native AND (for `cellSeal` only) threading the
+    `block_height`/`sealed_at` seam into the otherwise-stateless cipherclerk producer (the helper
+    `apply_effect_to_cell` already takes `block_height` for exactly this).
+
+The shared `apply_effect_to_cell` (`turn/src/rotation_witness.rs`) and the cell-lifecycle anchor helper
+`lifecycle_felt_cell` already carry ALL SIX arms (matching the executor apply) so the remaining closes are
+producer-projection / executor-apply work, not new digest plumbing. -/
 theorem rotateV3WithRecordPin_rejects_wrong_post (off : Nat) (hash : List ℤ → ℤ)
     (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool)
     (hwrong : env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≠ env.pub (rotateV3 d).piCount) :

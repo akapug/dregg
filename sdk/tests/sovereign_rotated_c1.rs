@@ -404,6 +404,176 @@ mod record_pin_anchor {
             ),
         }
     }
+
+    /// CONTROL + BITE (setVK fan-out): an HONEST sovereign `SetVerificationKey` turn proves and
+    /// verifies. setVK is the record-digest sibling of setPermissions — `compute_authority_digest_felt`
+    /// folds `vk.hash`, so the after r23 residue MOVES, and the verifier anchor's accept side is
+    /// exercised (without the anchor the placeholder PI 38 = 0 would reject this honest turn).
+    #[test]
+    fn rotated_sovereign_set_vk_proves_and_verifies() {
+        let (mut cclerk, cell_id, mut ledger, before) = setup_with_cell(1000);
+        assert!(before.verification_key.is_none(), "before cell has no VK");
+
+        // A canonical VK whose declared hash == blake3(data) (the executor's apply integrity gate).
+        #[allow(deprecated)]
+        let vk = dregg_cell::VerificationKey::new(b"c1-setvk-program".to_vec());
+        let effects = vec![Effect::SetVerificationKey {
+            cell: cell_id,
+            new_vk: Some(vk.clone()),
+        }];
+
+        let turn = cclerk
+            .execute_sovereign_turn_with_proof(&cell_id, effects, 0)
+            .expect("rotated sovereign setVK turn should prove");
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        match executor.execute(&turn, &mut ledger) {
+            TurnResult::Committed { .. } => {}
+            other => panic!("honest setVK turn must commit, got {other:?}"),
+        }
+
+        // The cipherclerk's LOCAL sovereign state carries the installed VK (the producer applied the
+        // effect through the SHARED `apply_effect_to_cell` weld — the SAME projection the verifier
+        // anchored PI 38 against).
+        let local = cclerk
+            .sovereign_state(&cell_id)
+            .expect("cipherclerk local sovereign state present");
+        assert_eq!(
+            local.verification_key.as_ref().map(|v| v.hash),
+            Some(vk.hash),
+            "the cipherclerk's after-state VK must be the turn's new value"
+        );
+    }
+
+    /// ANTI-GHOST (the setVK anchor BITES): a proof whose after-block record-digest is for a
+    /// DIFFERENT VK than the kernel effect installs is REJECTED. Every other PI is honest (the
+    /// kernel effect installs `vk_honest`, so the reconstructed vm-effects / effects_hash MATCH), so
+    /// the rejection is ISOLATED to the PI-38 anchor: anchored digest(vk_honest) ≠ the proof's bound
+    /// col-256 digest(vk_forged) ⇒ UNSAT.
+    #[test]
+    fn rotated_sovereign_forged_after_vk_is_rejected() {
+        use dregg_sdk::full_turn_proof::prove_effect_vm_rotated_ir2_with_caveat;
+
+        let (_cclerk, cell_id, mut ledger, before_cell) = setup_with_cell(1000);
+
+        // The HONEST effect the turn carries: install `vk_honest`.
+        #[allow(deprecated)]
+        let vk_honest = dregg_cell::VerificationKey::new(b"c1-setvk-honest".to_vec());
+        let effects = vec![Effect::SetVerificationKey {
+            cell: cell_id,
+            new_vk: Some(vk_honest.clone()),
+        }];
+        let vm_effects = AgentCipherclerk::convert_effects_to_vm(&cell_id, &effects);
+
+        // The FORGED after-cell: the prover claims a DIFFERENT VK was installed.
+        #[allow(deprecated)]
+        let vk_forged = dregg_cell::VerificationKey::new(b"c1-setvk-FORGED".to_vec());
+        let mut forged_after = before_cell.clone();
+        forged_after.verification_key = Some(vk_forged.clone());
+        assert_ne!(
+            dregg_cell::compute_authority_digest_felt(&forged_after),
+            {
+                let mut honest_after = before_cell.clone();
+                honest_after.verification_key = Some(vk_honest.clone());
+                dregg_cell::compute_authority_digest_felt(&honest_after)
+            },
+            "the forgery must move the authority digest off the honest post-value"
+        );
+
+        let nullifier_root = [0u8; 32];
+        let commitments_root = [0u8; 32];
+        let receipt_hashes: Vec<[u8; 32]> = Vec::new();
+        let mut ctx_ledger = Ledger::new();
+        let _ = ctx_ledger.insert_cell(before_cell.clone());
+
+        let before_w = rw::produce(
+            &before_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
+        let after_w = rw::produce(
+            &forged_after,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
+
+        let initial_vm_state =
+            dregg_circuit::effect_vm::CellState::with_capability_root_and_record_digest(
+                u64::try_from(before_cell.state.balance()).unwrap(),
+                before_cell.state.nonce() as u32,
+                dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
+                dregg_cell::compute_authority_digest_felt(&before_cell),
+            );
+
+        let caveat = dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest();
+        let forged_proof = prove_effect_vm_rotated_ir2_with_caveat(
+            &initial_vm_state,
+            &vm_effects,
+            &before_w,
+            &after_w,
+            &caveat,
+            None,
+        )
+        .expect("the forged proof is internally consistent (it proves a vk_forged after-state)");
+        let proof_bytes = postcard::to_allocvec(&forged_proof).expect("serialize forged proof");
+
+        let new_commit_felt = dregg_cell::commitment::compute_canonical_state_commitment_v9_felt(
+            &forged_after,
+            &dregg_cell::commitment::V9RotationContext {
+                cells_root: after_w.pre_limbs[0],
+                nullifier_root,
+                commitments_root,
+                iroot: after_w.iroot,
+            },
+        );
+        let new_commitment = dregg_cell::commitment::felt_to_bytes32(new_commit_felt);
+
+        let mut forest = dregg_turn::forest::CallForest::new();
+        let action = dregg_sdk::raw::unsigned_action_named(
+            cell_id,
+            "sovereign_execute_proven",
+            effects.clone(),
+        );
+        forest.add_root(action);
+        let turn = Turn {
+            agent: cell_id,
+            nonce: 0,
+            call_forest: forest,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: None,
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: Some(proof_bytes),
+            execution_proof_cell: Some(cell_id),
+            execution_proof_new_commitment: Some(new_commitment),
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+
+        let executor = TurnExecutor::new(ComputronCosts::zero());
+        match executor.execute(&turn, &mut ledger) {
+            TurnResult::Rejected { reason, .. } => {
+                let s = format!("{reason:?}");
+                assert!(
+                    s.contains("ProofVerificationFailed") || s.contains("rotated"),
+                    "expected a rotated verify rejection from the PI-38 setVK anchor mismatch, got: {s}"
+                );
+            }
+            other => panic!(
+                "ANTI-GHOST: a forged after-vk proof must be rejected by the record-pin anchor, \
+                 got {other:?}"
+            ),
+        }
+    }
 }
 
 // ===========================================================================

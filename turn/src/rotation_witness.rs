@@ -389,7 +389,18 @@ pub fn mint_rotated_participant_leg(
 /// effects that do not touch this cell's authority residue).
 ///
 /// SetPermissions semantics MIRROR `apply_set_permissions` (`c.permissions = new_permissions`).
-pub fn apply_effect_to_cell(cell: &mut Cell, cell_id: &dregg_cell::CellId, effect: &Effect) {
+///
+/// `block_height` is the federation height the executor applies the effect at — it is load-bearing
+/// for ONE arm only (`CellSeal` writes `sealed_at = block_height` into the lifecycle, which
+/// `lifecycle_felt` folds). Every other arm ignores it. Both sides MUST pass the SAME height (the
+/// verifier passes `self.block_height`; the producer passes the height it proves against) or an
+/// honest seal proof's lifecycle felt would not equal the verifier's anchor.
+pub fn apply_effect_to_cell(
+    cell: &mut Cell,
+    cell_id: &dregg_cell::CellId,
+    effect: &Effect,
+    block_height: u64,
+) {
     match effect {
         // The setPermissions BEACHHEAD (record-digest limb 24): set the cell's permissions to the
         // effect's new value — byte-identical to the executor's `apply_set_permissions`. This moves
@@ -400,8 +411,94 @@ pub fn apply_effect_to_cell(cell: &mut Cell, cell_id: &dregg_cell::CellId, effec
         } if target == cell_id => {
             cell.permissions = new_permissions.clone();
         }
+        // setVK (record-digest limb 24): mirror `apply_set_verification_key`
+        // (`c.verification_key = new_vk.cloned()`). The executor first rejects a VK whose declared
+        // `hash != blake3(data)` — that rejection happens at the apply leg BEFORE this projection is
+        // reached on the verifier side, so a turn that reaches the anchor carries an integrity-valid
+        // VK; we install it verbatim. `compute_authority_digest_felt` folds `vk.hash` (commitment.rs
+        // §"Verification key"), so a genuine setVK MOVES the r23 authority residue.
+        Effect::SetVerificationKey {
+            cell: target,
+            new_vk,
+        } if target == cell_id => {
+            cell.verification_key = new_vk.clone();
+        }
+        // refusal (record-digest limb 24): mirror `apply_refusal`'s STATE writes — bump the nonce
+        // and write the audit commitment into `fields[4]`, clearing `commitments[4]`. NOTE: neither
+        // `fields[0..8]` nor the nonce is folded into `compute_authority_digest_felt` (it reads
+        // `fields[8..16]` + the ext `fields_root`), so this projection does NOT move the r23 residue
+        // — see the anchor's honesty note in `proof_verify.rs` (the refusal record-pin is a
+        // published-value binding, not a forcing gate, because the forced limb is record-digest yet
+        // the refusal write lands in a WELDED slot).
+        Effect::Refusal {
+            cell: target,
+            offered_action_commitment,
+            refusal_reason,
+            ..
+        } if target == cell_id => {
+            let _ = cell.state.increment_nonce();
+            let mut h = blake3::Hasher::new_derive_key("dregg-refusal-audit-v1");
+            h.update(offered_action_commitment);
+            match refusal_reason {
+                crate::action::RefusalReason::Declined => h.update(&[0u8]),
+                crate::action::RefusalReason::NoAuthority => h.update(&[1u8]),
+                crate::action::RefusalReason::WindowExpired => h.update(&[2u8]),
+                crate::action::RefusalReason::Custom { reason_hash } => {
+                    h.update(&[3u8]);
+                    h.update(reason_hash)
+                }
+            };
+            cell.state.fields[4] = *h.finalize().as_bytes();
+            if cell.state.commitments[4].is_some() {
+                cell.state.commitments[4] = None;
+            }
+        }
+        // receiptArchive (lifecycle limb 29 — see routing note below): mirror `apply_receipt_archive`'s
+        // STATE write — `c.archive(checkpoint)`, which moves the lifecycle to `Archived`. The executor's
+        // pre-checks (cell_id / height / live-head binding) gate the apply leg BEFORE the anchor; here
+        // we replay the lifecycle transition only. NOTE: `archive` writes the LIFECYCLE, which
+        // `lifecycle_felt` (limb 29) folds — NOT the r23 authority residue. The current
+        // `record_pin_offset` routes receiptArchive to `B_RECORD_DIGEST`, which this write does NOT
+        // move; the genuine forced limb is `B_LIFECYCLE`.
+        Effect::ReceiptArchive {
+            checkpoint, ..
+        } if checkpoint.cell_id == *cell_id => {
+            let _ = cell.archive(checkpoint);
+        }
+        // cellSeal (lifecycle limb 29): mirror `apply_cell_seal` (`c.seal(reason, block_height)`),
+        // which moves the lifecycle to `Sealed { reason_hash, sealed_at: block_height }`. The
+        // `sealed_at` is the load-bearing `block_height` dependence; `lifecycle_felt` folds both
+        // `reason_hash` and `sealed_at`, so a genuine seal MOVES limb 29.
+        Effect::CellSeal { target, reason } if target == cell_id => {
+            let _ = cell.seal(*reason, block_height);
+        }
+        // cellUnseal (lifecycle limb 29): mirror `apply_cell_unseal` (`c.unseal()` → `Live`). Moves
+        // limb 29 from `Sealed` back to `Live`.
+        Effect::CellUnseal { target } if target == cell_id => {
+            let _ = cell.unseal();
+        }
+        // cellDestroy (lifecycle limb 29, death-cert reflected): mirror `apply_cell_destroy`
+        // (`c.destroy(certificate)` → `Destroyed { death_certificate_hash, destroyed_at }`).
+        // `lifecycle_felt` folds the `death_certificate_hash`, so the death certificate is reflected
+        // in the forced limb.
+        Effect::CellDestroy {
+            target,
+            certificate,
+        } if target == cell_id => {
+            let _ = cell.destroy(certificate);
+        }
         _ => {}
     }
+}
+
+/// The cell-based lifecycle forced-limb felt: `lifecycle_felt(&cell.lifecycle)`. This is the value
+/// the verifier anchors PI 38 to for the LIFECYCLE record-pin family (cellSeal/cellUnseal/
+/// cellDestroy — `record_pin_offset` ⇒ `B_LIFECYCLE`, limb 29). A thin re-projection of the
+/// existing `lifecycle_felt` onto the post-cell so the verifier need not reach into `cell.lifecycle`
+/// itself (keeping the anchor's call shape uniform with the record-digest family's
+/// `compute_authority_digest_felt(&post_cell)`).
+pub fn lifecycle_felt_cell(cell: &Cell) -> BabyBear {
+    lifecycle_felt(&cell.lifecycle)
 }
 
 #[cfg(test)]
@@ -490,6 +587,113 @@ mod tests {
             "heap_root limb (28) is bound"
         );
         assert_ne!(c, wire_commit(&limbs, BabyBear::new(8)), "iroot is bound");
+    }
+
+    /// THE FORCED-LIMB MOVEMENT MAP — the load-bearing fact for whether each record-pin effect's
+    /// verifier anchor can BITE. `apply_effect_to_cell` mirrors the executor apply; for each effect
+    /// we assert whether the forced limb (record-digest = `compute_authority_digest_felt`, lifecycle
+    /// = `lifecycle_felt_cell`) genuinely moves between before and honest-after. Anchored effects
+    /// REQUIRE movement (a non-moving forced limb is a published-value pin, not a forcing gate).
+    #[test]
+    fn forced_limb_movement_map() {
+        use dregg_cell::lifecycle::{ArchivalAttestation, DeathCertificate, DeathReason};
+        let base = Cell::with_balance([3u8; 32], [0u8; 32], 100);
+        let id = base.id();
+        let rd = |c: &Cell| compute_authority_digest_felt(c);
+        let lf = |c: &Cell| lifecycle_felt_cell(c);
+
+        // setVK → record-digest: MOVES (anchored — the anchor bites).
+        {
+            let mut a = base.clone();
+            #[allow(deprecated)]
+            let vk = dregg_cell::VerificationKey::new(vec![1, 2, 3]);
+            apply_effect_to_cell(
+                &mut a,
+                &id,
+                &Effect::SetVerificationKey { cell: id, new_vk: Some(vk) },
+                0,
+            );
+            assert_ne!(rd(&base), rd(&a), "setVK MUST move the record digest (anchored)");
+        }
+        // refusal → record-digest pin, but the executor writes the WELDED fields[4] + nonce, which
+        // `compute_authority_digest_felt` does NOT fold ⇒ record digest does NOT move (the record-pin
+        // is a published-value binding on the deployed path; the anchor cannot bite without an
+        // executor apply change).
+        {
+            let mut a = base.clone();
+            apply_effect_to_cell(
+                &mut a,
+                &id,
+                &Effect::Refusal {
+                    cell: id,
+                    offered_action_commitment: [7u8; 32],
+                    refusal_reason: crate::action::RefusalReason::Declined,
+                    proof_witness_index: 0,
+                },
+                0,
+            );
+            assert_ne!(base.state.fields[4], a.state.fields[4], "refusal writes the welded fields[4]");
+            assert_eq!(
+                rd(&base),
+                rd(&a),
+                "refusal does NOT move the record digest (fields[4] is welded, not in the residue) — \
+                 the record-pin cannot bite on the deployed path"
+            );
+        }
+        // receiptArchive → record-digest pin, but the executor writes the LIFECYCLE (Archived), which
+        // `compute_authority_digest_felt` does NOT fold; the genuine mover is `lifecycle_felt`. The
+        // record-pin is mis-routed for the deployed apply.
+        {
+            let mut a = base.clone();
+            let att = ArchivalAttestation {
+                cell_id: id,
+                archive_start_height: 0,
+                archive_end_height: 5,
+                archive_blob_hash: [1u8; 32],
+                archive_terminal_commitment: [2u8; 32],
+                archive_terminal_receipt_hash: [3u8; 32],
+            };
+            apply_effect_to_cell(
+                &mut a,
+                &id,
+                &Effect::ReceiptArchive { prefix_end_height: 5, checkpoint: att },
+                0,
+            );
+            assert_eq!(rd(&base), rd(&a), "receiptArchive does NOT move the record digest");
+            assert_ne!(lf(&base), lf(&a), "receiptArchive moves the LIFECYCLE (the genuine forced limb)");
+        }
+        // cellSeal → lifecycle: MOVES (the lifecycle forced limb genuinely separates Live/Sealed).
+        {
+            let mut a = base.clone();
+            apply_effect_to_cell(&mut a, &id, &Effect::CellSeal { target: id, reason: [9u8; 32] }, 42);
+            assert_ne!(lf(&base), lf(&a), "cellSeal MUST move the lifecycle felt");
+        }
+        // cellUnseal → lifecycle: MOVES (Sealed → Live).
+        {
+            let mut sealed = base.clone();
+            sealed.seal([9u8; 32], 42).unwrap();
+            let mut a = sealed.clone();
+            apply_effect_to_cell(&mut a, &id, &Effect::CellUnseal { target: id }, 0);
+            assert_ne!(lf(&sealed), lf(&a), "cellUnseal MUST move the lifecycle felt");
+        }
+        // cellDestroy → lifecycle: MOVES, and the death certificate is REFLECTED (distinct certs ⇒
+        // distinct lifecycle felt, since `lifecycle_felt` folds `death_certificate_hash`).
+        {
+            let cert = DeathCertificate {
+                cell_id: id,
+                last_receipt_hash: [4u8; 32],
+                final_state_commitment: [5u8; 32],
+                destroyed_at_height: 9,
+                reason: DeathReason::Voluntary,
+            };
+            let cert2 = DeathCertificate { reason: DeathReason::Forced, ..cert.clone() };
+            let mut a = base.clone();
+            let mut a2 = base.clone();
+            apply_effect_to_cell(&mut a, &id, &Effect::CellDestroy { target: id, certificate: cert }, 0);
+            apply_effect_to_cell(&mut a2, &id, &Effect::CellDestroy { target: id, certificate: cert2 }, 0);
+            assert_ne!(lf(&base), lf(&a), "cellDestroy MUST move the lifecycle felt");
+            assert_ne!(lf(&a), lf(&a2), "cellDestroy reflects the death certificate (distinct certs distinct felt)");
+        }
     }
 
     /// Distinct lifecycle states yield distinct limbs (the anti-omission tooth).
