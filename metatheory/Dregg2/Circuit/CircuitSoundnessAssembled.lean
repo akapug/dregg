@@ -136,6 +136,11 @@ def actionTagToPos : EffectIdx → Nat
   | 18 => 23   -- factory         → factoryVmDescriptor2R24
   | 19 => 24   -- spawn           → spawnVmDescriptor2R24
   | 20 => 2    -- bridgeMint      → mintVmDescriptor2R24 (refines MintASpec)
+  | 24 => 41   -- revokeCapability→ revokeCapabilityCapOpenVmDescriptor2R24 (FAN-OUT: revokeCapability
+               --                   base + EFF_REVOKE_CAPABILITY appendix; bit 1<<3, DISTINCT from the
+               --                   revoke(Delegation) EFF_DELEGATION_OPS fan-out at pos 39. The Lean
+               --                   tag is the wire `sel::REVOKE_CAPABILITY` selector value 24 — the
+               --                   tag `cap_open_route_for_run` routes a `RevokeCapability` run to.)
   | 27 => 3    -- noteSpend       → noteSpendVmDescriptor2R24
   | 28 => 4    -- noteCreate      → noteCreateVmDescriptor2R24
   | 38 => 21   -- makeSovereign   → makeSovereignVmDescriptor2R24
@@ -186,9 +191,10 @@ Each cap-authorized fan-out tag re-keys (via `actionTagToPos`) to its `…CapOpe
 (`v3RegistryCapOpen` positions 36..40), so `vkOfRegistry Rfix` / the apex's `StarkSound hash Rfix` quantify
 over the SAME descriptor the deployed prover routes (`cap_open_route_for_run`) AND the apex authority leg
 forces (`…CapOpenV3_authorizes` ⟹ `authorizedFacetEffB … (1 <<< n)`). Their authority is FORCED in-circuit
-at the effect's OWN bit, no longer riding the toy gate. (`revokeCapability` [position 41] has no
-`FullActionA`/`actionTag` constructor, so no tag routes to it — its keystone stands ready but is
-unreachable from the dispatcher; recorded in the apex docstring.) The fan-out descriptor is `base +
+at the effect's OWN bit, no longer riding the toy gate. (`revokeCapability` [position 41] is the SEVENTH
+fan-out tag — Lean tag `24` = the wire `sel::REVOKE_CAPABILITY` selector — re-keyed below; its authority is
+forced at its OWN bit `1 <<< EFF_REVOKE_CAPABILITY = 1 <<< 3` and its genuine kernel transition is the shared
+`RevokeSpec` removeEdge step it lowers to. NO longer unreachable.) The fan-out descriptor is `base +
 appendix` (the appendix appends columns and reads NO base column — `effCapOpenV3_satisfiedEff`), so each
 tag's VALUE/`ClosedLog` rung — carried `Satisfied2 hash (Rfix <tag>)`-parametrically in
 `ClosureFanoutGenuine` — composes verbatim over the re-keyed descriptor (the base columns the readout
@@ -209,6 +215,13 @@ theorem Rfix_revokeDelegation_capOpen : Rfix 14 = Dregg2.Circuit.Emit.CapOpenEmi
 position 40). -/
 theorem Rfix_refreshDelegation_capOpen :
     Rfix 55 = Dregg2.Circuit.Emit.CapOpenEmit.refreshDelegationCapOpenV3 := rfl
+/-- revokeCapability (tag 24 = the wire `sel::REVOKE_CAPABILITY`) routes to the LIVE revokeCapability
+fan-out cap-open (`revokeCapabilityCapOpenV3`, position 41) — DISTINCT from the revoke(Delegation)
+fan-out (pos 39), binding the cap to its OWN bit `EFF_REVOKE_CAPABILITY = 3`. So `vkOfRegistry Rfix`
+ranges over the position-41 descriptor the deployed prover routes (`cap_open_route_for_run`) — the
+previously-unreachable keystone is now in the apex's registry image. -/
+theorem Rfix_revokeCapability_capOpen :
+    Rfix 24 = Dregg2.Circuit.Emit.CapOpenEmit.revokeCapabilityCapOpenV3 := rfl
 
 /-! ## §2 — `kstepAll`: the assembled dispatcher arm.
 
@@ -340,6 +353,90 @@ theorem kstepAll_transfer_from_faithful
     kstepAll 0 pre post :=
   RotatedKernelRefinementFacet.dispatchArmFacet_to_dispatchArm fcaps provided 0 pre post rfl h htoy
 
+/-! ## §7b — `revokeCapability`: the SEVENTH fan-out tag, REACHABLE + bit-3 authority FORCED.
+
+`revokeCapability` (Lean tag `24` = the wire `sel::REVOKE_CAPABILITY` selector; registry position `41`,
+pinned by `Rfix_revokeCapability_capOpen`) is the cap-authorized REVOCATION whose authority binds the OWN
+bit `EFF_REVOKE_CAPABILITY = 3` — DISTINCT from the `revoke(Delegation)` fan-out (`EFF_DELEGATION_OPS = 16`,
+pos 39). At the KERNEL it shares the `revoke` removeEdge step (`RevokeSpec` — the same shared mutator that
+`revoke`/`revokeDelegationA` lower to, `execFullA_revoke_iff_spec`/`execFullA_revokeDelegation_iff_spec`),
+so its VALUE leg needs NO new executor action — it lowers to the GENUINE `.revoke` kernel step (`dispatchArm
+2`). Only the AUTHORITY bit differs, and THAT is forced in-circuit at bit 3 from the live position-41 cap-open
+descriptor (`revokeCapabilityCapOpenV3 = effCapOpenV3 revokeCapabilityBaseV3 … EFF_REVOKE_CAPABILITY`) via the
+parametric `effAuthoritySource_authorizes` — exactly the mechanism the other 6 fan-out effects use, NOT the toy
+gate, NOT a safely-rejected-but-unreachable keystone.
+
+The reachability is GENUINE (not a fail-closed stub): a verifying `revokeCapability` turn yields a real
+`removeEdge` kernel transition AT tag 2 (the shared revoke kind it executes as) with its OWN-bit authority
+discharged from the in-circuit cap-open. -/
+
+open Dregg2.Circuit.Spec.AuthorityRevocation (RevokeSpec)
+open Dregg2.Circuit.Emit.CapOpenEmit (revokeCapabilityCapOpenV3 revokeCapabilityBaseV3 EFF_REVOKE_CAPABILITY)
+open Dregg2.Circuit.RotatedKernelRefinementFacet (EffAuthoritySource effAuthoritySource_authorizes)
+open Dregg2.Exec.FacetAuthority (FacetCaps AuthProvided authorizedFacetEffB)
+
+/-- **`revokeCapabilityArm fcaps provided pre tr post`** — the FAITHFUL `revokeCapability` dispatch arm at
+position 41. The VALUE leg is the GENUINE shared revoke kernel step `RevokeSpec` (`removeEdge` on the
+`tr.holder`/`tr.t` edge — the very transition `.revoke` executes); the AUTHORITY leg is the deployed two-axis
+`authorizedFacetEffB fcaps provided (1 <<< EFF_REVOKE_CAPABILITY)` at the effect's OWN bit `3`. The
+revokeCapability turn's `(holder, t)` is read off the carried `tr` (`tr.src`/`tr.dst`), the same `(actor ⇒
+src)` edge the cap-open opens. -/
+def revokeCapabilityArm (fcaps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Dregg2.Exec.Turn) (post : RecChainedState) : Prop :=
+  RevokeSpec pre tr.src tr.dst post
+  ∧ authorizedFacetEffB fcaps provided (1 <<< EFF_REVOKE_CAPABILITY) tr = true
+
+/-- **`revokeCapabilityArm_authority_forced` — bit-3 authority is FORCED from the in-circuit cap-open.**
+From the GENUINE shared revoke value step (`RevokeSpec`) PLUS the position-41 cap-open authority source
+(`EffAuthoritySource … revokeCapabilityBaseV3 … EFF_REVOKE_CAPABILITY` — the in-circuit depth-16 cap-membership
+open of the live `revokeCapabilityCapOpenV3` descriptor), the faithful `revokeCapabilityArm` holds: the
+authority leg is DISCHARGED at the effect's own bit by `effAuthoritySource_authorizes`, no longer riding the
+toy gate. -/
+theorem revokeCapabilityArm_authority_forced (hash : List ℤ → ℤ)
+    (fcaps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Dregg2.Exec.Turn) (post : RecChainedState)
+    (hval : RevokeSpec pre tr.src tr.dst post)
+    (src0 : EffAuthoritySource hash fcaps provided pre tr
+      revokeCapabilityBaseV3 "dregg-effectvm-revokeCapability-v1-rot24-v3-capopen" EFF_REVOKE_CAPABILITY) :
+    revokeCapabilityArm fcaps provided pre tr post :=
+  ⟨hval, effAuthoritySource_authorizes hash fcaps provided pre tr
+    revokeCapabilityBaseV3 "dregg-effectvm-revokeCapability-v1-rot24-v3-capopen" EFF_REVOKE_CAPABILITY src0⟩
+
+/-- **`revokeCapabilityArm_to_dispatch` — the faithful arm LOWERS to the GENUINE kernel revoke step.** A
+`revokeCapabilityArm` entails the assembled `kstepAll 2` (`= dispatchArm 2`): the shared `RevokeSpec` value
+leg IS the `.revoke` arm of `fullActionStep`, so the witness `fa := .revoke tr.src tr.dst` (whose `actionTag`
+is `2`) lands a genuine `removeEdge` kernel transition. This makes `revokeCapability` REACHABLE through the
+real revoke kind it executes as — its authority bit (3) is the STRONGER fact carried by the arm. -/
+theorem revokeCapabilityArm_to_dispatch (fcaps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Dregg2.Exec.Turn) (post : RecChainedState)
+    (h : revokeCapabilityArm fcaps provided pre tr post) :
+    kstepAll 2 pre post := by
+  obtain ⟨hval, _hauth⟩ := h
+  exact ⟨Dregg2.Exec.TurnExecutorFull.FullActionA.revoke tr.src tr.dst, rfl, hval⟩
+
+/-- **`revokeCapabilityArm_rejects_wrong_facet` (the both-polarity TOOTH).** If the deployed general gate
+REJECTS the turn at the revokeCapability bit (`authorizedFacetEffB fcaps provided (1 <<< EFF_REVOKE_CAPABILITY)
+tr = false`), then NO post-state is a faithful `revokeCapabilityArm` step — the bit-3 authority leg genuinely
+BITES (a cap permitting only `revoke(Delegation)` / a wrong tier / a missing cap cannot discharge a
+revokeCapability). The negative polarity of `revokeCapabilityArm_authority_forced`. -/
+theorem revokeCapabilityArm_rejects_wrong_facet (fcaps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Dregg2.Exec.Turn) (post : RecChainedState)
+    (hbad : authorizedFacetEffB fcaps provided (1 <<< EFF_REVOKE_CAPABILITY) tr = false) :
+    ¬ revokeCapabilityArm fcaps provided pre tr post := by
+  rintro ⟨_, hauth⟩
+  rw [hbad] at hauth
+  exact Bool.noConfusion hauth
+
+/-- **`revokeCapabilityArm_nonvacuous` — the faithful arm FIRES (value + authority both real).** Given a
+GENUINE shared revoke step and a turn the deployed gate ADMITS at bit 3, the arm is inhabited — so the
+reachability is not a vacuous fail-closed stub. -/
+theorem revokeCapabilityArm_nonvacuous (fcaps : FacetCaps) (provided : AuthProvided)
+    (pre : RecChainedState) (tr : Dregg2.Exec.Turn) (post : RecChainedState)
+    (hval : RevokeSpec pre tr.src tr.dst post)
+    (hauth : authorizedFacetEffB fcaps provided (1 <<< EFF_REVOKE_CAPABILITY) tr = true) :
+    revokeCapabilityArm fcaps provided pre tr post :=
+  ⟨hval, hauth⟩
+
 /-! ## §8 — axiom hygiene. -/
 
 #assert_axioms Rfix_total
@@ -351,9 +448,14 @@ theorem kstepAll_transfer_from_faithful
 #assert_axioms Rfix_grantCap_capOpen
 #assert_axioms Rfix_revokeDelegation_capOpen
 #assert_axioms Rfix_refreshDelegation_capOpen
+#assert_axioms Rfix_revokeCapability_capOpen
 #assert_axioms hrefinesAll
 #assert_axioms lightclient_unfoolable_assembled
 #assert_axioms lightclient_turn_unfoolable_forest_assembled
 #assert_axioms kstepAll_transfer_from_faithful
+#assert_axioms revokeCapabilityArm_authority_forced
+#assert_axioms revokeCapabilityArm_to_dispatch
+#assert_axioms revokeCapabilityArm_rejects_wrong_facet
+#assert_axioms revokeCapabilityArm_nonvacuous
 
 end Dregg2.Circuit.CircuitSoundnessAssembled
