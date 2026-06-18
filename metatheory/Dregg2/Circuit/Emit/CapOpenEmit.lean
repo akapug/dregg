@@ -464,6 +464,200 @@ theorem transferCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
 #guard transferCapOpenV3.constraints.length == transferV3.constraints.length + 40
 #guard transferCapOpenV3.traceWidth == transferV3.traceWidth + 59
 
+/-! ## §5.F — THE FAN-OUT: the effect-GENERAL cap-open appendix + per-effect descriptors.
+
+`capOpenConstraints` pins the facet to `EFFECT_TRANSFER` (the `effBitGate`/`transferFacetGate`/`authTagGate`
+constants). The fan-out to the OTHER cap-authorized effects (delegate, introduce, grantCap, revoke,
+refreshDelegation, …) reuses the WHOLE appendix EXCEPT those constant pins: `capOpenConstraintsEff n` swaps
+`effBitGate` for `effBitGateFor (1 <<< n)` (THIS effect's bit) and DROPS `transferFacetGate`/`authTagGate`
+(the general `facetEffGate` carries the facet axis; the tier rides the decoded `auth_tag`). A `Satisfied2`
+witness of `<effect>V3 ++ capOpenConstraintsEff n` rebuilds `DeployedCapOpen.SatisfiedEff … n`, hence
+`capOpenEff_authorizes` into `authorizedFacetEffB … (1 <<< n)` — the cap must permit THAT effect-kind. -/
+
+open Dregg2.Circuit.DeployedCapOpen
+  (SatisfiedEff MembershipCore effBitGateFor capOpenEff_authorizes satisfiedEff_rejects_wrong_facet)
+open Dregg2.Exec.FacetAuthority (authorizedFacetEffB)
+open Dregg2.Circuit.DeployedCapTree.CapHashScheme (DeployedFaithfulEff tierOfTag)
+
+/-- **`capOpenConstraintsEff n`** — the effect-GENERAL cap-open constraint list for effect-kind bit
+`1 <<< n`: the leaf lookup, the 16 node lookups, the 16 dir gates, the root pin, the target binding, the
+high-limb pin, the committed effect-bit pin `effBitGateFor … (1 <<< n)`, and the general facet gate. The
+transfer constant pins (`transferFacetGate`/`authTagGate`) are GONE — the facet is bound to the committed
+effect-bit column, the tier to the decoded `auth_tag`. Count: 1 + 16 + 16 + 5 = 38. -/
+def capOpenConstraintsEff (n : Nat) : List VmConstraint2 :=
+  .lookup (leafLookup capOpenCols)
+  :: nodeLookups
+  ++ dirBoolGates
+  ++ [ .base (.gate (rootPinGate capOpenCols))
+     , .base (.gate (targetBindGate capOpenCols))
+     , .base (.gate (facetHiGate capOpenCols))
+     , .base (.gate (effBitGateFor capOpenCols ((1 <<< n : Nat) : ℤ)))
+     , .base (.gate (facetEffGate capOpenCols)) ]
+
+/-- The effect-general constraint count is 38 (5 fewer gate-pins than the transfer 40: it drops the two
+transfer constant pins and the redundant `effBitGate`, keeping the general `effBitGateFor`). -/
+theorem capOpenConstraintsEff_length (n : Nat) : (capOpenConstraintsEff n).length = 38 := by
+  simp [capOpenConstraintsEff, nodeLookups, dirBoolGates, DEPTH]
+
+/-- **`effCapOpenV3 base name n`** — the GENERIC per-effect cap-open descriptor: an effect's rotated base
+descriptor `base` (a `v3Of …` member, same `EFFECT_VM_WIDTH + APPENDIX_SPAN` width) widened by the cap-open
+appendix at `CAP_OPEN_BASE`, carrying `capOpenConstraintsEff n` (THIS effect's bit). Every fan-out effect is
+`effCapOpenV3 <effect>V3 "dregg-…-capopen" n`. -/
+def effCapOpenV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : EffectVmDescriptor2 :=
+  { base with
+    name        := name
+    traceWidth  := base.traceWidth + CAP_OPEN_SPAN
+    constraints := base.constraints ++ capOpenConstraintsEff n }
+
+/-- Every effect-general cap-open constraint is a constraint of the descriptor. -/
+theorem effCapOpenV3_constraints_mem (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (c : VmConstraint2) (hc : c ∈ capOpenConstraintsEff n) :
+    c ∈ (effCapOpenV3 base name n).constraints :=
+  List.mem_append_right _ hc
+
+/-- **`effCapOpenV3_satisfiedEff`** — a `Satisfied2` witness of `effCapOpenV3 base name n` rebuilds
+`DeployedCapOpen.SatisfiedEff … n` on every row (the appendix constraints are satisfied regardless of the
+base — they read no base column). The fan-out analog of `transferCapOpenV3_satisfied`. -/
+theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hsat : Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) :
+    SatisfiedEff hash t.tf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) n := by
+  have hrow := hsat.rowConstraints i hi
+  have hmem := effCapOpenV3_constraints_mem base name n
+  refine
+    { core := ?_, targetBound := ?_, facetHiZero := ?_, effBitPinned := ?_, facetEffBound := ?_ }
+  · refine { leafHashed := ?_, nodeHashed := ?_, dirBool := ?_, rootPinned := ?_ }
+    · have hin : VmConstraint2.lookup (leafLookup capOpenCols) ∈ capOpenConstraintsEff n := by
+        simp [capOpenConstraintsEff]
+      have h := hrow _ (hmem _ hin)
+      simpa [VmConstraint2.holdsAt] using h
+    · intro lvl hlvl
+      have hin : VmConstraint2.lookup (nodeLookup capOpenCols lvl) ∈ capOpenConstraintsEff n := by
+        refine List.mem_cons_of_mem _ ?_
+        refine List.mem_append_left _ (List.mem_append_left _ ?_)
+        exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
+      have h := hrow _ (hmem _ hin)
+      simpa [VmConstraint2.holdsAt] using h
+    · intro lvl hlvl
+      have hin : VmConstraint2.base (.gate (dirBoolGate capOpenCols lvl)) ∈ capOpenConstraintsEff n := by
+        refine List.mem_cons_of_mem _ ?_
+        refine List.mem_append_left _ (List.mem_append_right _ ?_)
+        exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
+      have h := hrow _ (hmem _ hin)
+      simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+    · have hin : VmConstraint2.base (.gate (rootPinGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+        simp [capOpenConstraintsEff]
+      have h := hrow _ (hmem _ hin)
+      simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+  · have hin : VmConstraint2.base (.gate (targetBindGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+      simp [capOpenConstraintsEff]
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+  · have hin : VmConstraint2.base (.gate (facetHiGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+      simp [capOpenConstraintsEff]
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+  · have hin : VmConstraint2.base (.gate (effBitGateFor capOpenCols ((1 <<< n : Nat) : ℤ)))
+        ∈ capOpenConstraintsEff n := by simp [capOpenConstraintsEff]
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+  · have hin : VmConstraint2.base (.gate (facetEffGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+      simp [capOpenConstraintsEff]
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+
+/-- **`effCapOpenV3_authorizes` — THE FAN-OUT AUTHORITY LEG (generic, live).** A `Satisfied2` witness of
+`effCapOpenV3 base name n` whose opened leaf IS the faithfulness contract's `(actor ⇒ src)` edge discharges
+the kernel's GENERAL `authorizedFacetEffB … (1 <<< n)` for the turn — over effect-kind `1 <<< n` (NOT
+transfer), under any `provided` satisfying the committed tier. Every fan-out effect's authority leg is THIS
+theorem at its `<effect>V3`/`n`. -/
+theorem effCapOpenV3_authorizes {State : Type} (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (hn : n < 32) (S : CapHashScheme State) (vkOfTag : ℤ → Nat) (provided : AuthProvided)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
+    (hsat : Satisfied2 S.chipAbsorb (effCapOpenV3 base name n) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
+    (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+    (actor src dst : Label) (amt : ℤ)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
+    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
+    authorizedFacetEffB caps provided (1 <<< n)
+      { actor := actor, src := src, dst := dst, amt := amt } = true
+    ∧ (leafAt actor src).target = (src : ℤ) :=
+  capOpenEff_authorizes S t.tf capOpenCols _ n hn vkOfTag provided hChip
+    (effCapOpenV3_satisfiedEff base name n S.chipAbsorb minit mfin maddrs t hsat i hi)
+    caps leafAt hfaith actor src dst amt hsrc hedge htier
+
+-- The effect-general cap-open shares the appendix width (+59) and adds 38 constraints (5 gate-pins).
+section FanoutDescriptors
+
+/-- The effect-kind bit exponents (`facet.rs` `1 <<< n`) for the cap-authorized fan-out effects. -/
+def EFF_GRANT_CAPABILITY   : Nat := 2   -- grantCap, delegateAtten, attenuate (EFFECT_GRANT_CAPABILITY)
+def EFF_REVOKE_CAPABILITY  : Nat := 3   -- revokeCapability (EFFECT_REVOKE_CAPABILITY)
+def EFF_INTRODUCE          : Nat := 13  -- introduce (EFFECT_INTRODUCE)
+def EFF_DELEGATION_OPS     : Nat := 16  -- delegate, revoke(Delegation), refreshDelegation (EFFECT_DELEGATION_OPS)
+
+/-- The rotated INTRODUCE base (`v3Of` of the introduce v1 face). -/
+def introduceV3 : EffectVmDescriptor2 :=
+  v3Of Dregg2.Circuit.Emit.EffectVmEmitIntroduce.introduceVmDescriptor
+/-- The rotated GRANT-CAP / DELEGATE-ATTEN base (`v3Of` of the attenuate-A v1 face — the deployed
+grantCap base; `EffectVmEmitDelegateAtten.delegateAttenVmDescriptor` IS `attenuateVmDescriptor`, so
+delegate-via-cap shares this base, distinguished only by the descriptor name string). -/
+def grantCapV3 : EffectVmDescriptor2 :=
+  v3Of Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptor
+/-- The rotated REVOKE-DELEGATION base. -/
+def revokeDelegationV3 : EffectVmDescriptor2 :=
+  v3Of Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation.revokeVmDescriptor
+/-- The rotated REFRESH-DELEGATION base. -/
+def refreshDelegationV3 : EffectVmDescriptor2 :=
+  v3Of Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation.refreshVmDescriptor
+/-- The rotated REVOKE-CAPABILITY base. -/
+def revokeCapabilityBaseV3 : EffectVmDescriptor2 :=
+  v3Of Dregg2.Circuit.Emit.EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor
+
+/-- **`delegateCapOpenV3`** — delegate-via-cap (the delegateAtten/attenuate base + the
+`EFFECT_DELEGATION_OPS` appendix). The cross-vat delegate routes the in-circuit cap-membership open; the
+cap must permit `EFFECT_DELEGATION_OPS` (`1 <<< 16`). -/
+def delegateCapOpenV3 : EffectVmDescriptor2 :=
+  effCapOpenV3 grantCapV3 "dregg-effectvm-delegateAtten-v1-rot24-v3-capopen" EFF_DELEGATION_OPS
+/-- **`introduceCapOpenV3`** — introduce-via-cap; the cap must permit `EFFECT_INTRODUCE` (`1 <<< 13`). -/
+def introduceCapOpenV3 : EffectVmDescriptor2 :=
+  effCapOpenV3 introduceV3 "dregg-effectvm-introduce-v1-rot24-v3-capopen" EFF_INTRODUCE
+/-- **`grantCapCapOpenV3`** — grantCap-via-cap; the cap must permit `EFFECT_GRANT_CAPABILITY` (`1 <<< 2`). -/
+def grantCapCapOpenV3 : EffectVmDescriptor2 :=
+  effCapOpenV3 grantCapV3 "dregg-effectvm-grantCap-v1-rot24-v3-capopen" EFF_GRANT_CAPABILITY
+/-- **`revokeCapOpenV3`** — revoke(Delegation)-via-cap; the cap must permit `EFFECT_DELEGATION_OPS`. -/
+def revokeCapOpenV3 : EffectVmDescriptor2 :=
+  effCapOpenV3 revokeDelegationV3 "dregg-effectvm-revoke-v1-rot24-v3-capopen" EFF_DELEGATION_OPS
+/-- **`refreshDelegationCapOpenV3`** — refreshDelegation-via-cap; cap must permit `EFFECT_DELEGATION_OPS`. -/
+def refreshDelegationCapOpenV3 : EffectVmDescriptor2 :=
+  effCapOpenV3 refreshDelegationV3 "dregg-effectvm-refresh-v1-rot24-v3-capopen" EFF_DELEGATION_OPS
+/-- **`revokeCapabilityCapOpenV3`** — revokeCapability-via-cap; cap must permit `EFFECT_REVOKE_CAPABILITY`. -/
+def revokeCapabilityCapOpenV3 : EffectVmDescriptor2 :=
+  effCapOpenV3 revokeCapabilityBaseV3 "dregg-effectvm-revokeCapability-v1-rot24-v3-capopen" EFF_REVOKE_CAPABILITY
+
+-- Each fan-out descriptor adds the 38-constraint effect-general appendix + 59 cols past its base.
+#guard delegateCapOpenV3.constraints.length == grantCapV3.constraints.length + 38
+#guard introduceCapOpenV3.constraints.length == introduceV3.constraints.length + 38
+#guard grantCapCapOpenV3.constraints.length == grantCapV3.constraints.length + 38
+#guard revokeCapOpenV3.constraints.length == revokeDelegationV3.constraints.length + 38
+#guard refreshDelegationCapOpenV3.constraints.length == refreshDelegationV3.constraints.length + 38
+#guard revokeCapabilityCapOpenV3.constraints.length == revokeCapabilityBaseV3.constraints.length + 38
+#guard delegateCapOpenV3.traceWidth == grantCapV3.traceWidth + 59
+#guard introduceCapOpenV3.traceWidth == introduceV3.traceWidth + 59
+#guard grantCapCapOpenV3.traceWidth == grantCapV3.traceWidth + 59
+#guard revokeCapOpenV3.traceWidth == revokeDelegationV3.traceWidth + 59
+#guard refreshDelegationCapOpenV3.traceWidth == refreshDelegationV3.traceWidth + 59
+#guard revokeCapabilityCapOpenV3.traceWidth == revokeCapabilityBaseV3.traceWidth + 59
+
+end FanoutDescriptors
+
 /-! ## §6 — the registry WITH the cap-open: the 37th member (F5 — `Rfix` ranges over the
 authority descriptor).
 
@@ -484,17 +678,30 @@ residual (b)). The Lean twin of the staged registry TSV; the soundness apex's `R
 def v3RegistryCapOpen : List (String × EffectVmDescriptor2) :=
   Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry
     ++ [ ("attenuateCapOpenVmDescriptor2R24", capOpenAttenuateV3)
-       , ("transferCapOpenVmDescriptor2R24", transferCapOpenV3) ]
+       , ("transferCapOpenVmDescriptor2R24", transferCapOpenV3)
+       -- THE FAN-OUT (residual (a) closed for these 6): each carries the effect-GENERAL appendix
+       -- (`capOpenConstraintsEff n`) binding the cap to THAT effect-kind bit, not transfer.
+       , ("delegateCapOpenVmDescriptor2R24", delegateCapOpenV3)
+       , ("introduceCapOpenVmDescriptor2R24", introduceCapOpenV3)
+       , ("grantCapCapOpenVmDescriptor2R24", grantCapCapOpenV3)
+       , ("revokeCapOpenVmDescriptor2R24", revokeCapOpenV3)
+       , ("refreshDelegationCapOpenVmDescriptor2R24", refreshDelegationCapOpenV3)
+       , ("revokeCapabilityCapOpenVmDescriptor2R24", revokeCapabilityCapOpenV3) ]
 
-/-- The registry-with-cap-open has 38 members (36 cohort + the 2 cap-open authority members). -/
-theorem v3RegistryCapOpen_length : v3RegistryCapOpen.length = 38 := by
+/-- The registry-with-cap-open has 44 members (36 cohort + 2 transfer/attenuate + 6 fan-out). -/
+theorem v3RegistryCapOpen_length : v3RegistryCapOpen.length = 44 := by
   simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry]
 
--- The two cap-open authority members are the 37th/38th registry entries (positions 36/37).
-#guard v3RegistryCapOpen.length == 38
+-- The cap-open authority members are positions 36..43; the 36 cohort members are unchanged at 0..35.
+#guard v3RegistryCapOpen.length == 44
 #guard (v3RegistryCapOpen[36]?.map (·.1)) == some "attenuateCapOpenVmDescriptor2R24"
 #guard (v3RegistryCapOpen[37]?.map (·.1)) == some "transferCapOpenVmDescriptor2R24"
--- The 36 cohort members are unchanged at positions 0..35 (the prefix is verbatim `v3Registry`).
+#guard (v3RegistryCapOpen[38]?.map (·.1)) == some "delegateCapOpenVmDescriptor2R24"
+#guard (v3RegistryCapOpen[39]?.map (·.1)) == some "introduceCapOpenVmDescriptor2R24"
+#guard (v3RegistryCapOpen[40]?.map (·.1)) == some "grantCapCapOpenVmDescriptor2R24"
+#guard (v3RegistryCapOpen[41]?.map (·.1)) == some "revokeCapOpenVmDescriptor2R24"
+#guard (v3RegistryCapOpen[42]?.map (·.1)) == some "refreshDelegationCapOpenVmDescriptor2R24"
+#guard (v3RegistryCapOpen[43]?.map (·.1)) == some "revokeCapabilityCapOpenVmDescriptor2R24"
 #guard (v3RegistryCapOpen[0]?.map (·.1)) == some "transferVmDescriptor2R24"
 
 /-- The attenuate cap-open member of the registry IS `capOpenAttenuateV3` (position 36). -/
@@ -505,6 +712,14 @@ theorem v3RegistryCapOpen_capOpen :
 theorem v3RegistryCapOpen_transferCapOpen :
     (v3RegistryCapOpen[37]?.map (·.2)) = some transferCapOpenV3 := rfl
 
+/-- The delegate fan-out member IS `delegateCapOpenV3` (position 38). -/
+theorem v3RegistryCapOpen_delegate :
+    (v3RegistryCapOpen[38]?.map (·.2)) = some delegateCapOpenV3 := rfl
+
+/-- The revoke fan-out member IS `revokeCapOpenV3` (position 41). -/
+theorem v3RegistryCapOpen_revoke :
+    (v3RegistryCapOpen[41]?.map (·.2)) = some revokeCapOpenV3 := rfl
+
 /-! ## §7 — Axiom hygiene. -/
 
 #assert_axioms capOpenAttenuateV3_satisfied
@@ -513,8 +728,12 @@ theorem v3RegistryCapOpen_transferCapOpen :
 #assert_axioms capOpenAttenuateV3_authorizes_tierGeneral
 #assert_axioms transferCapOpenV3_satisfied
 #assert_axioms transferCapOpenV3_authorizes
+#assert_axioms effCapOpenV3_satisfiedEff
+#assert_axioms effCapOpenV3_authorizes
 #assert_axioms v3RegistryCapOpen_length
 #assert_axioms v3RegistryCapOpen_capOpen
 #assert_axioms v3RegistryCapOpen_transferCapOpen
+#assert_axioms v3RegistryCapOpen_delegate
+#assert_axioms v3RegistryCapOpen_revoke
 
 end Dregg2.Circuit.Emit.CapOpenEmit

@@ -738,21 +738,111 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
 ///     `<effect>CapOpenVmDescriptor2R24` = that effect's base + the appendix has not been registered).
 ///     These fail CLOSED here with a precise error. This is the remaining NAMED per-effect residual:
 ///     the routing + appendix are general, the per-effect descriptor coverage is attenuate + transfer.
+/// The cap-open ROUTE for a single-effect run: the registry key of its cap-open descriptor, the
+/// effect-kind bit (`EFFECT_<kind> = 1 << n`) the appendix's `effBitGateFor`/`facetEffGate` bind, and
+/// whether the base needs the attenuate phase-B nonce-freeze patch (`patch_attenuate_base_for_cap_open`).
+/// `None` (the fallthrough) means no cap-open descriptor for that effect-kind.
+#[cfg(feature = "prover")]
+struct CapOpenRoute {
+    key: &'static str,
+    eff_bit: u32,
+    /// the nonce-FREEZE + cap-root-advance bases (attenuate/grantCap/revokeCapability) need the
+    /// phase-B patch (`patch_attenuate_base_for_cap_open`); the nonce-TICK passthrough bases
+    /// (transfer/revoke/refresh/introduce) are directly valid (no patch).
+    needs_attenuate_patch: bool,
+    /// only the Transfer base threads the transfer caveat manifest; every other base uses the empty
+    /// manifest (mirroring `RotationTurnWitness::for_effects`).
+    transfer_caveat: bool,
+}
+
+#[cfg(feature = "prover")]
+fn cap_open_route_for_run(run_effects: &[VmEffectKind]) -> Option<CapOpenRoute> {
+    // The deployed `cell/facet.rs` effect-kind bits (`1 << n`).
+    const EFFECT_TRANSFER: u32 = 1 << 1;
+    const EFFECT_GRANT_CAPABILITY: u32 = 1 << 2;
+    const EFFECT_REVOKE_CAPABILITY: u32 = 1 << 3;
+    const EFFECT_INTRODUCE: u32 = 1 << 13;
+    const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
+    match run_effects {
+        [VmEffectKind::Transfer { .. }] => Some(CapOpenRoute {
+            key: "transferCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_TRANSFER,
+            needs_attenuate_patch: false,
+            transfer_caveat: true,
+        }),
+        // attenuate's cap-open is the ORIGINAL transfer-pinned appendix (`capOpenAttenuateV3` carries
+        // `capOpenConstraints`, whose `transferFacetGate`/`effBitGate` pin EFFECT_TRANSFER) — its leaf
+        // must permit EFFECT_TRANSFER, so eff_bit stays EFFECT_TRANSFER here (NOT grant). It is a
+        // nonce-FREEZE + cap-root-advance base (needs the patch). The fan-out
+        // `grantCapCapOpenVmDescriptor2R24` is the effect-general grant leg.
+        [VmEffectKind::AttenuateCapability { .. }] => Some(CapOpenRoute {
+            key: "attenuateCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_TRANSFER,
+            needs_attenuate_patch: true,
+            transfer_caveat: false,
+        }),
+        // THE FAN-OUT (residual (a) closed): each routes to its `<effect>CapOpenVmDescriptor2R24`,
+        // binding the cap to THAT effect-kind bit (not transfer). grantCap/revokeCapability are the
+        // nonce-FREEZE attenuate-family bases (need the patch); revoke/refresh/introduce are
+        // nonce-TICK passthrough bases (directly valid, NO patch — like transfer minus its caveat).
+        [VmEffectKind::GrantCapability { .. }] => Some(CapOpenRoute {
+            key: "grantCapCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_GRANT_CAPABILITY,
+            needs_attenuate_patch: true,
+            transfer_caveat: false,
+        }),
+        [VmEffectKind::Introduce { .. }] => Some(CapOpenRoute {
+            key: "introduceCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_INTRODUCE,
+            needs_attenuate_patch: false,
+            transfer_caveat: false,
+        }),
+        [VmEffectKind::RevokeDelegation { .. }] => Some(CapOpenRoute {
+            key: "revokeCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_DELEGATION_OPS,
+            needs_attenuate_patch: false,
+            transfer_caveat: false,
+        }),
+        [VmEffectKind::RefreshDelegation] => Some(CapOpenRoute {
+            key: "refreshDelegationCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_DELEGATION_OPS,
+            needs_attenuate_patch: false,
+            transfer_caveat: false,
+        }),
+        [VmEffectKind::RevokeCapability { .. }] => Some(CapOpenRoute {
+            key: "revokeCapabilityCapOpenVmDescriptor2R24",
+            eff_bit: EFFECT_REVOKE_CAPABILITY,
+            needs_attenuate_patch: true,
+            transfer_caveat: false,
+        }),
+        _ => None,
+    }
+}
+
+/// **`cap_open_supported_for_run`** (F1) — does a cap-open descriptor exist for this single-effect
+/// run's effect-kind? Maps the run to its `<effect>CapOpenVmDescriptor2R24` via `cap_open_route_for_run`.
+/// Transfer + attenuate + the 6 fan-out effects (grantCap, introduce, revoke(Delegation),
+/// refreshDelegation, revokeCapability) are WIRED — each binds the cap to its OWN effect-kind bit. Any
+/// other cap-authorized effect-kind (notably `ExerciseViaCapability` — its inner-fold base does not take
+/// the appendix cleanly) fails CLOSED here with a precise error (the remaining NAMED residual).
 #[cfg(feature = "prover")]
 fn cap_open_supported_for_run(run_effects: &[VmEffectKind]) -> Result<(), SdkError> {
-    match run_effects {
-        [VmEffectKind::AttenuateCapability { .. }] => Ok(()),
-        [VmEffectKind::Transfer { .. }] => Ok(()),
-        [other] => Err(SdkError::InvalidWitness(format!(
-            "cap-open routing: a cap witness was threaded for a {other:?} run, but no cap-open \
-             descriptor is emitted for that effect-kind yet (AttenuateCapability + Transfer are \
-             wired; delegate/exercise/etc. need their own <effect>CapOpenVmDescriptor2R24 — the \
-             NAMED per-effect residual). Drop the cap witness to prove the base cohort descriptor, \
-             or add the per-effect cap-open descriptor."
-        ))),
-        _ => Err(SdkError::InvalidWitness(
+    if run_effects.len() != 1 {
+        return Err(SdkError::InvalidWitness(
             "cap-open routing: expected exactly one cap-authorized effect in the run".into(),
-        )),
+        ));
+    }
+    if cap_open_route_for_run(run_effects).is_some() {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidWitness(format!(
+            "cap-open routing: a cap witness was threaded for a {:?} run, but no cap-open \
+             descriptor is emitted for that effect-kind (transfer/attenuate + the 6 fan-out \
+             grantCap/introduce/revoke/refreshDelegation/revokeCapability are wired; \
+             ExerciseViaCapability is the NAMED residual — its inner-fold base does not take the \
+             appendix). Drop the cap witness to prove the base cohort descriptor.",
+            run_effects[0]
+        )))
     }
 }
 
@@ -778,6 +868,7 @@ fn cap_open_supported_for_run(run_effects: &[VmEffectKind]) -> Result<(), SdkErr
 /// every committed cohort descriptor and binds the unique acceptor), so no verify-side change is
 /// needed beyond the cap-open vk_hash.
 #[cfg(feature = "prover")]
+#[cfg_attr(not(test), allow(dead_code))] // a thin test-only wrapper over the generic prover
 fn prove_effect_vm_cap_open_attenuate(
     initial_state: &CellState,
     effects: &[VmEffectKind],
@@ -791,58 +882,21 @@ fn prove_effect_vm_cap_open_attenuate(
     ),
     SdkError,
 > {
-    use dregg_circuit::descriptor_ir2::{
-        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
-    };
-    use dregg_circuit::effect_vm::trace_rotated::{
-        CapOpenWitness, RotatedBlockWitness, empty_caveat_manifest,
-        generate_rotated_effect_vm_trace, patch_attenuate_base_for_cap_open, widen_to_cap_open,
-    };
-
-    // This leg is ONLY for a single AttenuateCapability effect (the cap-open descriptor extends the
-    // attenuate base). A multi-effect or non-attenuate run never reaches here (the caller gates).
+    // This leg is ONLY for a single AttenuateCapability effect. A multi-effect or non-attenuate run
+    // never reaches here (the caller gates). Delegates to the generic prover at the attenuate route
+    // (the transfer-pinned `capOpenAttenuateV3` appendix: eff_bit = EFFECT_TRANSFER, phase-B patch).
     if !matches!(effects, [VmEffectKind::AttenuateCapability { .. }]) {
         return Err(SdkError::InvalidWitness(
             "cap-open prover: expects exactly one AttenuateCapability effect".into(),
         ));
     }
-
-    let (_name, json) = rotated_cap_open_descriptor_json()?;
-    let desc = parse_vm_descriptor2(json)
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open descriptor parse: {e}")))?;
-
-    let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
-        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+    let route = CapOpenRoute {
+        key: "attenuateCapOpenVmDescriptor2R24",
+        eff_bit: dregg_circuit::effect_vm::trace_rotated::WRITE_MASK_LO,
+        needs_attenuate_patch: true,
+        transfer_caveat: false,
     };
-    let before = bridge(before_w)
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open before-witness: {e}")))?;
-    let after = bridge(after_w)
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open after-witness: {e}")))?;
-
-    // The cap-open base is the attenuate path with the EMPTY caveat manifest (attenuate carries no
-    // in-circuit caveat operand; its map ops are guard-gated off, so an empty `map_heaps` is
-    // correct and the &[] 5th arg below is genuinely vacuous).
-    let caveat = empty_caveat_manifest();
-    let (mut trace, pis) =
-        generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, &caveat)
-            .map_err(|e| SdkError::InvalidWitness(format!("cap-open base trace: {e}")))?;
-    // Wire the attenuate phase-B bindings the bare generator does not carry (nonce passthrough +
-    // cap-root advance binding); returns the corrected 38-PI vector.
-    let dpis = patch_attenuate_base_for_cap_open(&mut trace, &pis)
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open base phase-B wiring: {e}")))?;
-
-    // Convert the SDK-threaded c-list opening (the actor's REAL consumed capability) to the
-    // trace-column witness, then widen the base trace with the 58-column membership appendix. The
-    // conversion fails closed if the cap does not recompose its root or does not confer the
-    // transfer facet/tier the descriptor's gates pin.
-    let cap_open = CapOpenWitness::from_membership(&cap.leaf, &cap.siblings, &cap.directions)
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open witness: {e}")))?;
-    widen_to_cap_open(&mut trace, &cap_open)
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open widen: {e}")))?;
-
-    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &[])
-        .map_err(|e| SdkError::InvalidWitness(format!("cap-open IR-v2 proof: {e}")))?;
-    Ok((proof, dpis))
+    prove_effect_vm_cap_open(initial_state, effects, before_w, after_w, cap, &route)
 }
 
 /// Look up a cap-open descriptor JSON by its registry key from the staged rotated registry. The
@@ -867,14 +921,6 @@ fn cap_open_descriptor_json_by_key(key: &str) -> Result<&'static str, SdkError> 
         .ok_or_else(|| SdkError::InvalidWitness(format!("{key} not in staged rotated registry")))
 }
 
-/// The committed ATTENUATE cap-open descriptor JSON (`attenuateCapOpenVmDescriptor2R24`). Returns
-/// `(key, json)`.
-#[cfg(feature = "prover")]
-fn rotated_cap_open_descriptor_json() -> Result<(&'static str, &'static str), SdkError> {
-    const CAP_OPEN_KEY: &str = "attenuateCapOpenVmDescriptor2R24";
-    Ok((CAP_OPEN_KEY, cap_open_descriptor_json_by_key(CAP_OPEN_KEY)?))
-}
-
 /// The cap-open leg's `vk_hash` for a given registry key: the blake3 fingerprint of the committed
 /// cap-open descriptor JSON (the SAME fingerprint `verify_effect_vm_rotated_with_cutover` re-derives
 /// from the uniquely accepting cap-open cohort descriptor). Distinct per descriptor, so the attached
@@ -887,6 +933,7 @@ fn cap_open_vk_hash_by_key(key: &str) -> Result<[u8; 32], SdkError> {
 
 /// The ATTENUATE cap-open leg's `vk_hash` (the blake3 fingerprint of its descriptor JSON).
 #[cfg(feature = "prover")]
+#[cfg_attr(not(test), allow(dead_code))] // test-only; the chain routes via `cap_open_vk_hash_by_key`
 fn rotated_cap_open_vk_hash() -> Result<[u8; 32], SdkError> {
     cap_open_vk_hash_by_key("attenuateCapOpenVmDescriptor2R24")
 }
@@ -894,6 +941,7 @@ fn rotated_cap_open_vk_hash() -> Result<[u8; 32], SdkError> {
 /// The TRANSFER cap-open leg's `vk_hash` (residual (b)) — the blake3 fingerprint of the
 /// `transferCapOpenVmDescriptor2R24` JSON.
 #[cfg(feature = "prover")]
+#[cfg_attr(not(test), allow(dead_code))] // test-only; the chain routes via `cap_open_vk_hash_by_key`
 fn rotated_transfer_cap_open_vk_hash() -> Result<[u8; 32], SdkError> {
     cap_open_vk_hash_by_key("transferCapOpenVmDescriptor2R24")
 }
@@ -912,6 +960,7 @@ fn rotated_transfer_cap_open_vk_hash() -> Result<[u8; 32], SdkError> {
 /// (`widen_to_cap_open`, which fails CLOSED if the cap does not recompose its root or does not
 /// confer the transfer facet/tier the descriptor's gates pin), then prove + self-verify.
 #[cfg(feature = "prover")]
+#[cfg_attr(not(test), allow(dead_code))] // a thin test-only wrapper over the generic prover
 fn prove_effect_vm_cap_open_transfer(
     initial_state: &CellState,
     effects: &[VmEffectKind],
@@ -925,52 +974,104 @@ fn prove_effect_vm_cap_open_transfer(
     ),
     SdkError,
 > {
-    use dregg_circuit::descriptor_ir2::{
-        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
-    };
-    use dregg_circuit::effect_vm::trace_rotated::{
-        CapOpenWitness, RotatedBlockWitness, generate_rotated_effect_vm_trace,
-        transfer_caveat_manifest, widen_to_cap_open,
-    };
-
-    // This leg is ONLY for a single Transfer effect (the cap-open extends the transfer base). A
-    // multi-effect or non-transfer run never reaches here (the caller gates via cap_open_supported_for_run).
+    // This leg is ONLY for a single Transfer effect. A multi-effect or non-transfer run never reaches
+    // here (the caller gates). Delegates to the generic prover at the transfer route (eff_bit =
+    // EFFECT_TRANSFER, no phase-B patch, transfer caveat manifest).
     if !matches!(effects, [VmEffectKind::Transfer { .. }]) {
         return Err(SdkError::InvalidWitness(
             "transfer cap-open prover: expects exactly one Transfer effect".into(),
         ));
     }
+    let route = CapOpenRoute {
+        key: "transferCapOpenVmDescriptor2R24",
+        eff_bit: dregg_circuit::effect_vm::trace_rotated::WRITE_MASK_LO,
+        needs_attenuate_patch: false,
+        transfer_caveat: true,
+    };
+    prove_effect_vm_cap_open(initial_state, effects, before_w, after_w, cap, &route)
+}
 
-    let json = cap_open_descriptor_json_by_key("transferCapOpenVmDescriptor2R24")?;
+/// **`prove_effect_vm_cap_open`** (THE GENERIC FAN-OUT PROVER, residual (a)) — prove a single
+/// cap-authorized turn through its `<effect>CapOpenVmDescriptor2R24` descriptor, binding the consumed
+/// cap to the turn's ACTUAL effect-kind bit (`route.eff_bit`), NOT transfer. The appendix + the
+/// `widen_to_cap_open` patch are BASE-AGNOSTIC, so this one routine serves every wired effect:
+///
+///   * resolve the cap-open descriptor JSON by `route.key`;
+///   * build the effect's rotated base trace (`route.needs_attenuate_patch` ⇒ the attenuate phase-B
+///     nonce-freeze + the empty caveat manifest; else the transfer caveat manifest, directly valid);
+///   * convert the SDK c-list opening to the trace-column [`CapOpenWitness`] FOR `route.eff_bit`
+///     (`from_membership_for`, which fails CLOSED if the cap's facet `mask_lo != eff_bit` — the cap
+///     does not permit THAT effect-kind), and widen the base with the 59-column appendix;
+///   * prove + self-verify.
+///
+/// The descriptor's `effBitGateFor` pins `effBit == route.eff_bit`; `facetEffGate` forces `leaf.mask_lo
+/// == effBit` — so the in-circuit cap-open authorizes the turn's effect-kind ONLY (a wrong-facet cap is
+/// UNSAT / refused). Returns `(proof, dpis)`.
+#[cfg(feature = "prover")]
+fn prove_effect_vm_cap_open(
+    initial_state: &CellState,
+    effects: &[VmEffectKind],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    cap: &CapMembershipWitness,
+    route: &CapOpenRoute,
+) -> Result<
+    (
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        Vec<BabyBear>,
+    ),
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
+    };
+    use dregg_circuit::effect_vm::trace_rotated::{
+        CapOpenWitness, RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+        patch_attenuate_base_for_cap_open, transfer_caveat_manifest, widen_to_cap_open,
+    };
+
+    let json = cap_open_descriptor_json_by_key(route.key)?;
     let desc = parse_vm_descriptor2(json)
-        .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open descriptor parse: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("cap-open descriptor parse ({}): {e}", route.key)))?;
 
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
     };
     let before = bridge(before_w)
-        .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open before-witness: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("cap-open before-witness: {e}")))?;
     let after = bridge(after_w)
-        .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open after-witness: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("cap-open after-witness: {e}")))?;
 
-    // The transfer base trace + its 38-PI vector — directly valid (no phase-B patch). A Transfer
-    // uses the TRANSFER caveat manifest (the same one the cohort transfer leg threads — its caveat
-    // commit constraints bind that manifest, NOT the empty one).
-    let caveat = transfer_caveat_manifest();
-    let (mut trace, dpis) =
+    // Only the Transfer base threads the transfer caveat manifest; every other base (attenuate-family
+    // AND the nonce-tick passthroughs) uses the empty manifest.
+    let caveat = if route.transfer_caveat {
+        transfer_caveat_manifest()
+    } else {
+        empty_caveat_manifest()
+    };
+    let (mut trace, pis) =
         generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, &caveat)
-            .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open base trace: {e}")))?;
+            .map_err(|e| SdkError::InvalidWitness(format!("cap-open base trace ({}): {e}", route.key)))?;
 
-    // Convert the SDK-threaded c-list opening to the trace-column witness, then widen the base with
-    // the 59-column cap-open membership appendix (fails closed if the cap does not recompose its
-    // root or does not confer the transfer facet/tier the descriptor's gates pin).
-    let cap_open = CapOpenWitness::from_membership(&cap.leaf, &cap.siblings, &cap.directions)
-        .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open witness: {e}")))?;
+    // Attenuate-family bases need the phase-B nonce-freeze + cap-root advance wiring; transfer is
+    // directly valid (its 38-PI vector is correct as generated).
+    let dpis = if route.needs_attenuate_patch {
+        patch_attenuate_base_for_cap_open(&mut trace, &pis)
+            .map_err(|e| SdkError::InvalidWitness(format!("cap-open base phase-B wiring: {e}")))?
+    } else {
+        pis
+    };
+
+    // Convert the c-list opening to the trace-column witness FOR the turn's effect-kind bit (fails
+    // closed if the cap's facet does not permit `route.eff_bit`), then widen.
+    let cap_open =
+        CapOpenWitness::from_membership_for(&cap.leaf, &cap.siblings, &cap.directions, route.eff_bit)
+            .map_err(|e| SdkError::InvalidWitness(format!("cap-open witness ({}): {e}", route.key)))?;
     widen_to_cap_open(&mut trace, &cap_open)
-        .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open widen: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("cap-open widen ({}): {e}", route.key)))?;
 
     let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &[])
-        .map_err(|e| SdkError::InvalidWitness(format!("transfer cap-open IR-v2 proof: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("cap-open IR-v2 proof ({}): {e}", route.key)))?;
     Ok((proof, dpis))
 }
 
@@ -1210,25 +1311,21 @@ fn prove_cohort_run_chain(
         };
         let (proof_bytes, rot_pi, vk_hash) = if let Some(cap) = cap_open_run {
             cap_open_supported_for_run(run_effects)?;
-            // Route the cap-open by effect-kind: a cross-vat Transfer-via-cap proves the TRANSFER
-            // cap-open descriptor (residual (b)); an AttenuateCapability proves the attenuate one.
-            // Each carries its OWN descriptor vk_hash (distinct JSON ⇒ distinct fingerprint).
-            let is_transfer = matches!(run_effects, [VmEffectKind::Transfer { .. }]);
-            let (proof, dpis) = if is_transfer {
-                prove_effect_vm_cap_open_transfer(&s_k, run_effects, &rot.before, after_w, cap)?
-            } else {
-                prove_effect_vm_cap_open_attenuate(&s_k, run_effects, &rot.before, after_w, cap)?
-            };
+            // Route the cap-open by effect-kind via `cap_open_route_for_run`: transfer + attenuate +
+            // the 6 fan-out effects each prove their OWN `<effect>CapOpenVmDescriptor2R24`, binding
+            // the cap to THAT effect-kind bit (not transfer). Each carries its own vk_hash (distinct
+            // JSON ⇒ distinct fingerprint).
+            let route = cap_open_route_for_run(run_effects).ok_or_else(|| {
+                SdkError::InvalidWitness("cap-open routing: unreachable (gated above)".into())
+            })?;
+            let (proof, dpis) =
+                prove_effect_vm_cap_open(&s_k, run_effects, &rot.before, after_w, cap, &route)?;
             let proof_bytes = postcard::to_allocvec(&proof).map_err(|e| {
                 SdkError::InvalidWitness(format!(
                     "cap-open rotated proof serialize failed (run {k}): {e}"
                 ))
             })?;
-            let vk_hash = if is_transfer {
-                rotated_transfer_cap_open_vk_hash()?
-            } else {
-                rotated_cap_open_vk_hash()?
-            };
+            let vk_hash = cap_open_vk_hash_by_key(route.key)?;
             (proof_bytes, dpis, vk_hash)
         } else {
             let proof = prove_effect_vm_rotated_ir2_with_caveat(
@@ -2958,6 +3055,7 @@ mod tests {
                 directions: wdir,
                 cap_root: BabyBear::ZERO,
                 src: wrong_leaf[1],
+                eff_bit: WRITE_MASK_LO, // the transfer descriptor pins effBit == EFFECT_TRANSFER
             };
             w.cap_root = w.recomposes();
             w
@@ -2997,6 +3095,189 @@ mod tests {
             "the GENERAL facet gate (facetEffGate: mask_lo == effBit, effBit pinned EFFECT_TRANSFER) \
              MUST reject a wrong-facet leaf IN-CIRCUIT — the cap-open authorizes the turn's ACTUAL \
              effect, not just a constant transfer pin"
+        );
+    }
+
+    /// THE FAN-OUT (residual (a) closed for the 6 effects) — a cap-authorized `RevokeDelegation`
+    /// (the "revoke" effect, `EFFECT_DELEGATION_OPS = 1 << 16`) routes its OWN cap-open descriptor
+    /// (`revokeCapOpenVmDescriptor2R24`) END-TO-END: the consumed cap's facet must permit
+    /// `EFFECT_DELEGATION_OPS` (NOT transfer). The general appendix (`capOpenConstraintsEff 16`) binds
+    /// the cap to THAT effect-kind bit. Then the NEGATIVE: a cap whose facet permits a DIFFERENT
+    /// effect-kind (`EFFECT_TRANSFER`, not delegation) is REJECTED — at witness build
+    /// (`from_membership_for` fail-closed) AND in-circuit (a hand-built wrong-facet witness makes the
+    /// descriptor's `facetEffGate`/`effBitGateFor` UNSAT, so the proof FAILS). The `delegateCapOpen`
+    /// route shares the SAME bit, proving the generic prover serves the whole family.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn cap_open_fanout_revoke_proves_verifies_and_wrong_facet_bites() {
+        use dregg_circuit::cap_root::CapLeaf;
+        use dregg_circuit::effect_vm::trace_rotated::{
+            CapOpenWitness, FACET_MASK_HI, SIGNATURE_AUTH_TAG,
+        };
+        use dregg_turn::rotation_witness as rw;
+
+        // `EFFECT_DELEGATION_OPS = 1 << 16` — the effect-kind the revoke cap-open binds.
+        const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
+        const EFFECT_TRANSFER: u32 = 1 << 1;
+
+        // A delegation-conferring leaf: mask_lo == EFFECT_DELEGATION_OPS (NOT transfer), mask_hi == 0,
+        // auth_tag == Signature (the fan-out appendix reads the DECODED tier; a Signature leaf is a
+        // valid decoded tier). target == src.
+        let chosen: [BabyBear; 7] = [
+            BabyBear::new(0xDE16A),
+            BabyBear::new(7_777), // target (== src)
+            BabyBear::new(SIGNATURE_AUTH_TAG),
+            BabyBear::new(EFFECT_DELEGATION_OPS), // mask_lo permits the delegation effect-kind
+            BabyBear::new(FACET_MASK_HI),
+            BabyBear::new(0x00FF_FFFF),
+            BabyBear::new(42),
+        ];
+        let other: [BabyBear; 7] = [
+            BabyBear::new(0xBEEF),
+            BabyBear::new(123),
+            BabyBear::new(1),
+            BabyBear::new(EFFECT_DELEGATION_OPS),
+            BabyBear::new(0),
+            BabyBear::new(9),
+            BabyBear::new(0),
+        ];
+        // Build the path with the generic constructor FOR the delegation bit.
+        let leaf_cl = |l: &[BabyBear; 7]| CapLeaf {
+            slot_hash: l[0],
+            target: l[1],
+            auth_tag: l[2],
+            mask_lo: l[3],
+            mask_hi: l[4],
+            expiry: l[5],
+            breadstuff: l[6],
+        };
+        let built = CapOpenWitness::build_for(&[other, chosen], 1, EFFECT_DELEGATION_OPS)
+            .expect("cap-open path builds");
+        let cap = CapMembershipWitness {
+            leaf: leaf_cl(&chosen),
+            siblings: built.siblings.to_vec(),
+            directions: built.directions.to_vec(),
+        };
+
+        // A real RevokeDelegation turn (nonce-tick state passthrough, attenuate-family base).
+        let before_balance: u64 = 100_000;
+        let initial = CellState::new(before_balance, 0);
+        let effects = vec![VmEffect::RevokeDelegation {
+            child_hash: [BabyBear::new(0x5C); 8],
+        }];
+
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        before_cell.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let mut after_cell = before_cell.clone();
+        let _ = after_cell.state.increment_nonce();
+
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let commitments_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
+        let before_w =
+            rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let after_w =
+            rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+
+        // The revoke route: key `revokeCapOpenVmDescriptor2R24`, eff_bit EFFECT_DELEGATION_OPS,
+        // attenuate-family patch.
+        let route = cap_open_route_for_run(&[VmEffect::RevokeDelegation {
+            child_hash: [BabyBear::new(0x5C); 8],
+        }])
+        .expect("revoke is a wired cap-open route");
+        assert_eq!(route.key, "revokeCapOpenVmDescriptor2R24");
+        assert_eq!(route.eff_bit, EFFECT_DELEGATION_OPS);
+
+        // PROVE the revoke cap-open leg (self-verifies internally) + re-verify through the live path.
+        let (proof, dpis) =
+            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route)
+                .expect("revoke cap-open fan-out leg must prove + self-verify");
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize revoke cap-open leg");
+        let vk_hash = cap_open_vk_hash_by_key(route.key).expect("revoke cap-open vk_hash");
+        verify_effect_vm_rotated_with_cutover(&proof_bytes, &dpis, &vk_hash).expect(
+            "the revoke cap-open fan-out leg MUST verify under its own cohort descriptor",
+        );
+
+        // NEGATIVE #1 (fail-closed at the seam): a cap whose facet permits EFFECT_TRANSFER (not the
+        // delegation kind the revoke route binds) is refused at witness build — `from_membership_for`
+        // requires mask_lo == route.eff_bit.
+        let wrong_facet = CapMembershipWitness {
+            leaf: CapLeaf { mask_lo: BabyBear::new(EFFECT_TRANSFER), ..cap.leaf },
+            siblings: cap.siblings.clone(),
+            directions: cap.directions.clone(),
+        };
+        assert!(
+            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &wrong_facet, &route)
+                .is_err(),
+            "a cap permitting a DIFFERENT effect (transfer, not delegation) MUST be refused (fail-closed)"
+        );
+
+        // NEGATIVE #2 (the GENERAL facet gate BITES IN-CIRCUIT): hand-build a CapOpenWitness whose
+        // leaf facet is the wrong bit (EFFECT_TRANSFER) but eff_bit is the route's (EFFECT_DELEGATION_OPS),
+        // bypassing the build pin. The descriptor's `effBitGateFor` pins effBit == EFFECT_DELEGATION_OPS
+        // while `facetEffGate` forces mask_lo == effBit — so the wrong-facet leaf is UNSAT.
+        let mut wrong_leaf = chosen;
+        wrong_leaf[3] = BabyBear::new(EFFECT_TRANSFER); // mask_lo = transfer, not delegation
+        let mut wsib = [BabyBear::ZERO; 16];
+        let mut wdir = [0u8; 16];
+        wsib.copy_from_slice(&built.siblings);
+        wdir.copy_from_slice(&built.directions);
+        let wrong_w = {
+            let mut w = CapOpenWitness {
+                leaf: wrong_leaf,
+                siblings: wsib,
+                directions: wdir,
+                cap_root: BabyBear::ZERO,
+                src: wrong_leaf[1],
+                eff_bit: EFFECT_DELEGATION_OPS, // the revoke descriptor pins effBit == DELEGATION_OPS
+            };
+            w.cap_root = w.recomposes();
+            w
+        };
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let in_circuit_rejected = std::panic::catch_unwind(|| {
+            use dregg_circuit::descriptor_ir2::{
+                MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
+            };
+            use dregg_circuit::effect_vm::trace_rotated::{
+                RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+                widen_to_cap_open,
+            };
+            let json = cap_open_descriptor_json_by_key("revokeCapOpenVmDescriptor2R24").unwrap();
+            let desc = parse_vm_descriptor2(json).unwrap();
+            let before =
+                RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap();
+            let after = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot).unwrap();
+            // revoke is a nonce-TICK passthrough base — directly valid, NO attenuate patch.
+            let caveat = empty_caveat_manifest();
+            let (mut trace, dpis) =
+                generate_rotated_effect_vm_trace(&initial, &effects, &before, &after, &caveat)
+                    .unwrap();
+            widen_to_cap_open(&mut trace, &wrong_w).unwrap();
+            prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &[]).is_ok()
+        })
+        .map(|ok| !ok)
+        .unwrap_or(true);
+        std::panic::set_hook(prev_hook);
+        assert!(
+            in_circuit_rejected,
+            "the GENERAL facet gate (facetEffGate: mask_lo == effBit, effBit pinned EFFECT_DELEGATION_OPS) \
+             MUST reject a wrong-facet leaf IN-CIRCUIT for the revoke fan-out — the cap-open authorizes \
+             the turn's ACTUAL effect-kind only"
         );
     }
 
