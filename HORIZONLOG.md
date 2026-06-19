@@ -95,6 +95,22 @@ refused to launder a partial):**
   `preLimbsAt` → binds the same 37 limbs + iroot at full width; does NOT in-place reshape B_STATE_COMMIT/PI34/35
   — the 1-felt pins stay, the 8-felt PIs are NEW, "replacing" happens consumer-side in the executor). Live consts:
   `B_STATE_COMMIT=38`, `B_SPAN=51`, `ROT_WIDTH=328`, `GRAD_ROT_WIDTH=608`, `{OLD,NEW}_COMMIT_LEN=4`.
+  ⚑ 2026-06-19 FINAL PRECISION (6th agent STOPPED clean at green HEAD `eb9578848`; the LEAN SIDE IS COMPLETE —
+  `wideAppend` + the gated-host tower proven, the flip needs NO Lean proof): the flip is an ATOMIC hardcoded-
+  geometry VK flag-day, NOT a `.map`. Three measured surfaces: **(i)** `trace_rotated.rs` producer geometry is
+  HARDCODED, not descriptor-driven — `ROT_WIDTH=328`/`BEFORE_BASE=186`/`AFTER_BASE=237`/`ROT_PI_COUNT=38` are
+  consts with `debug_assert_eq!(dpis.len(), ROT_PI_COUNT)` guards (:300/:359/:531); the +208 carriers + 16 PIs
+  must be filled/pushed BY HAND + threaded through the 6 crates (cell/turn/sdk×2/node + the trace builder). **(ii)**
+  the executor binds 1-felt TODAY (`proof_verify.rs:250-251` `dpis[34]=u32::from_le_bytes(old_commit[0..4])`,
+  the low-4-byte felt) — retire it, consume 8 felts via `bytes32_to_felt8` into 16 new PI slots, drop the
+  override. **(iii)** per-member `bb` is NON-UNIFORM: the 45 registry members split 608-wide (most) / 580 (custom,
+  setFieldDyn) / 818 (cap-open), so `wideAppend entry bb (bb+51)` needs each member's underlying-face `traceWidth`
+  as `bb` (187 base faces; the rest per the split) — NOT a uniform wrap; locate the OLD-commit pin structurally
+  per member. NEXT ADDITIVE SUB-STEP (green-able, advances the flip without touching wire/VK/producer): stage
+  `v3RegistryWide` (the Lean wide registry built from the underlying faces with their real per-member `bb`,
+  proven axiom-clean beside the live `v3Registry`) — turns the repoint into a one-line cutover once the per-member
+  `bb` table is established. THEN the atomic producer+executor+re-emit push. Six agents have refused to rush this —
+  it is a focused multi-session task, NOT an end-of-session dispatch.
   --- (original step list, subsumed by the recipe above): (1) trace geometry `B_STATE_COMMIT` 1→8 + `B_CHAIN_BASE`/`B_SPAN`/`ROT_WIDTH`
   follow, `fill_block` from `wire_commit_8` lanes, chain sites arity-4→11; (2) descriptor emits the rotated chain
   sites as arity-11 wide chip lookups binding 8 lanes (`chipLookupTupleN`/`chip_lookup_sound_N`); (3) `rotV3SitesAt`/
