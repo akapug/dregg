@@ -133,6 +133,16 @@ live-node = ["dep:reqwest"]
 # the SDK's un-gated core.
 embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells"]
 
+# OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
+# rasterizer + the cap-gated `render_dregg_page` content-tile entry) so the
+# web-of-cells tab can paint a real `dregg://` page. Kept OFF the default
+# `embedded-executor` build so the cockpit stays lean (no C++ swgl build) unless
+# real-content rendering is deliberately turned on. The heavy `libservo`/mozjs
+# WebView upgrade is a further feature INSIDE servo-render, not here. The actual
+# tile wiring (web_cells.rs populate + cockpit.rs `img()`) is the named-next 2-line
+# seam (HORIZONLOG) — this feature makes the renderer reachable.
+servo = ["embedded-executor", "dep:servo-render"]
+
 # The gpui renderer. `runtime_shaders` is LOAD-BEARING on macOS: it makes gpui
 # compile its Metal shaders AT RUNTIME (via `MTLDevice::newLibraryWithSource`,
 # using the system Metal framework) instead of at BUILD time (via `xcrun metal`,
@@ -289,6 +299,24 @@ starbridge-web-surface = { path = "../starbridge-web-surface", optional = true }
 # transclusion — the rich EDL span model welded into the cockpit's docuverse.
 # Gated on `embedded-executor` (the gpui-free, `cargo test`-able surface).
 deos-web-cells = { path = "../deos-web-cells", optional = true }
+# THE SERVO RENDER LANE — the HOST SWGL render path that IS deos's compositor
+# render pass (Stage A of docs/desktop-os-research/SERVO-ON-SEL4.md). Default
+# `swgl-standalone` features ONLY (swgl's CPU-only C++ rasterizer + gleam + the real
+# cap gate + the real compositor seam) — NOT the `libservo` feature, so this does
+# NOT pull the mozjs/SpiderMonkey elephant into the cockpit build. It gives the
+# web-of-cells tab (`src/web_cells.rs`) its FIRST real rendered `dregg://` content:
+# `servo_render::render_dregg_page(surface, origin, attested_bytes, w, h)` runs the
+# page's fetch through the REAL `CapGatedDelegate` (the SAME `granted ⊆ held` gate
+# the panel's affordance projection already uses) and rasterizes the attested page
+# bytes into a real, content-distinct RGBA8 `RgbaFrame` the cockpit can paint with a
+# gpui `img()`. It path-depends on the SAME `../starbridge-web-surface` +
+# `../sel4/dregg-firmament` this crate already pulls (so `SurfaceCapability` /
+# `CellId` / `Capability` UNIFY — the cap that gates the affordance surface IS the
+# cap that gates the render). Gated on `embedded-executor` (the gpui-free,
+# `cargo test`-able web-of-cells surface). The `libservo`/mozjs WebView upgrade
+# (full HTML layout into the SAME frame, behind the SAME gate) is a feature flip in
+# servo-render, NOT a new seam here.
+servo-render = { path = "../servo-render", optional = true }
 
 # --- wire contract (always available: remote-node + sel4-thin paths) --------
 serde = { version = "1", features = ["derive"] }
