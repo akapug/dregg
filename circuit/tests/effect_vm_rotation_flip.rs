@@ -2268,3 +2268,139 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
          #5 is CLOSED for the sovereign actor cell."
     );
 }
+
+/// **THE FAITHFUL 8-FELT WIDE TRANSFER ROUNDTRIP (STAGED-ADDITIVE slice).** The first REAL
+/// Plonky3 prove+verify at the wide geometry (`transferVmDescriptor2R24Wide`, width 816 / PI 54):
+/// the parallel wide producer (`generate_rotated_transfer_wide`) fills the two 13×8 wide
+/// commitment carriers (BEFORE + AFTER) re-absorbing the SAME rotated limbs the 1-felt block lays,
+/// and the 8-felt commit binds. The collision tooth: two transfer states differing ONLY in a HIGH
+/// position (a byte of `fields[15]`, which folds into the r23 authority digest) publish 8-felt
+/// commits differing in ≥1 felt, AND a proof for state A is REJECTED by `verify_vm_descriptor2`
+/// against state B's commit — the light-client bite, demonstrated on the wide path, NO executor.
+///
+/// ADDITIVE: the live 1-felt path is untouched; this rides the wide descriptor beside it.
+#[test]
+fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
+    use dregg_circuit::effect_vm::trace_rotated::{
+        WIDE_AFTER_CBASE, WIDE_BEFORE_CBASE, WIDE_COMMIT_CARRIER, WIDE_PI_COUNT, WIDE_WIDTH,
+        generate_rotated_transfer_wide,
+    };
+    use dregg_circuit::effect_vm_descriptors::WIDE_TRANSFER_STAGED_TSV;
+
+    // The wide descriptor JSON, from the ADDITIVE wide TSV (key\tname\tjson, one line).
+    let json = {
+        let line = WIDE_TRANSFER_STAGED_TSV.lines().next().expect("wide TSV line");
+        let mut it = line.splitn(3, '\t');
+        assert_eq!(it.next(), Some("transferVmDescriptor2R24Wide"), "wide TSV key");
+        let _name = it.next();
+        it.next().expect("wide json column")
+    };
+    let desc = parse_vm_descriptor2(json).expect("wide transfer descriptor parses");
+    assert_eq!(desc.trace_width, WIDE_WIDTH, "wide transfer width 816");
+    assert_eq!(desc.public_input_count, WIDE_PI_COUNT, "wide transfer 54 PIs (38 + 16)");
+
+    // -- a real transfer with a NON-ZERO high field (fields[15]) so the authority residue (r23) is
+    //    load-bearing: the wide commit binds it. --
+    let before_balance: i64 = 100_000;
+    let amount: u64 = 50;
+    let st = CellState::new(before_balance as u64, 0);
+    let effects = vec![Effect::Transfer { amount, direction: 1 }];
+
+    // A high-position byte: fields[15] carries a distinctive value. The before/after cells share
+    // the SAME high field (the transfer does not touch it), so it flows identically into both
+    // blocks' authority residue (limb r23) and thus into BOTH 8-felt commits.
+    let mut high_field = [0u8; 32];
+    high_field[0] = 0xA5; // a high-position field byte
+    let before_cell = producer_cell_with_field(before_balance, 0, 15, high_field);
+    let after_cell = producer_cell_with_field(before_balance - amount as i64, 0, 15, high_field);
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let caveat = transfer_caveat_manifest();
+
+    let (trace, dpis) = generate_rotated_transfer_wide(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &caveat,
+    )
+    .expect("wide transfer generator produces an 816-col trace + 54 PIs");
+    assert_eq!(trace[0].len(), WIDE_WIDTH, "816-col wide trace");
+    assert_eq!(dpis.len(), WIDE_PI_COUNT, "54 PIs");
+
+    // The 16 wide commit PIs are the BEFORE first-row + AFTER last-row 8-felt carrier-12 columns.
+    let before_commit_base = WIDE_BEFORE_CBASE + 8 * WIDE_COMMIT_CARRIER; // 704
+    let after_commit_base = WIDE_AFTER_CBASE + 8 * WIDE_COMMIT_CARRIER; // 808
+    let last = &trace[trace.len() - 1];
+    for j in 0..8 {
+        assert_eq!(dpis[38 + j], trace[0][before_commit_base + j], "PI {} = BEFORE commit felt {j}", 38 + j);
+        assert_eq!(dpis[46 + j], last[after_commit_base + j], "PI {} = AFTER commit felt {j}", 46 + j);
+    }
+
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+
+    // -- (1) THE REAL WIDE ROUNDTRIP: prove + verify at width 816. --
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("WIDE transfer must prove end-to-end (816 / 54-PI)");
+    verify_vm_descriptor2(&desc, &proof, &dpis)
+        .expect("WIDE transfer proof must verify independently");
+    eprintln!(
+        "WIDE TRANSFER (R=24, width 816, 54 PIs, FAITHFUL 8-felt commit): PROVED + VERIFIED — \
+         the first real Plonky3 roundtrip at the wide geometry."
+    );
+
+    // -- (2) THE LIVE COLLISION TOOTH (high-position, NO executor): a transfer state B differing
+    //    from A ONLY in a HIGH position (a byte of fields[15], folded into the r23 authority digest)
+    //    publishes a DIFFERENT 8-felt commit, AND the proof for state A is REJECTED against state
+    //    B's commit. --
+    let mut high_field_b = [0u8; 32];
+    high_field_b[0] = 0xC7; // a DIFFERENT high-position byte
+    let before_cell_b = producer_cell_with_field(before_balance, 0, 15, high_field_b);
+    let after_cell_b = producer_cell_with_field(before_balance - amount as i64, 0, 15, high_field_b);
+    let mut ledger_b = Ledger::new();
+    ledger_b.insert_cell(after_cell_b.clone()).unwrap();
+    let before_w_b = rw::produce(&before_cell_b, &ledger_b, &nullifier_root, &commitments_root, &receipt_log);
+    let after_w_b = rw::produce(&after_cell_b, &ledger_b, &nullifier_root, &commitments_root, &receipt_log);
+    let (_trace_b, dpis_b) = generate_rotated_transfer_wide(
+        &st,
+        &effects,
+        &bridge(&before_w_b),
+        &bridge(&after_w_b),
+        &caveat,
+    )
+    .expect("wide transfer generator (state B) produces an 816-col trace + 54 PIs");
+
+    // (2a) THE COMMITS DIFFER in ≥ 1 of the 8 felts — the high-position flip MOVED the commit
+    //      (a 1-felt commit could have collided; the 8-felt commit binds the authority residue).
+    let commit_a: Vec<BabyBear> = (0..8).map(|j| dpis[38 + j]).collect();
+    let commit_b: Vec<BabyBear> = (0..8).map(|j| dpis_b[38 + j]).collect();
+    assert_ne!(
+        commit_a, commit_b,
+        "the high-position (fields[15]) flip MUST move the 8-felt BEFORE commit — the authority \
+         residue r23 is bound by the wide commit"
+    );
+
+    // (2b) THE LIGHT-CLIENT BITE: the proof for state A, VERIFIED against state B's published
+    //      commit PIs, is REJECTED — NO executor, NO trusted reconstruction. A near-collision in a
+    //      high position cannot be passed off to a ledgerless client as state A. --
+    assert!(
+        verify_vm_descriptor2(&desc, &proof, &dpis_b).is_err(),
+        "the state-A proof MUST be REJECTED against state B's 8-felt commit PIs — the wide commit \
+         binds the high-position authority residue, so a near-collision is unforgeable to a \
+         light client (verify_vm_descriptor2 ALONE, no executor)"
+    );
+
+    eprintln!(
+        "WIDE COLLISION TOOTH BITES (LIVE, NO EXECUTOR): two transfer states differing only in a \
+         high position (fields[15] → r23 authority residue) publish DISTINCT 8-felt commits, and a \
+         proof for one is REJECTED against the other's commit by verify_vm_descriptor2 alone. The \
+         faithful ~124-bit commitment closes the light-client soundness floor on the wide path."
+    );
+}

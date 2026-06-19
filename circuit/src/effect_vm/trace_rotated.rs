@@ -1741,11 +1741,218 @@ pub fn transfer_caveat_manifest() -> RotatedCaveatManifest {
     m
 }
 
+// ============================================================================
+// THE FAITHFUL 8-FELT WIDE COMMITMENT APPENDIX (Lean
+// `EffectVmEmitRotationWide.wideAppend` over `transferV3`, the `v3RegistryWide`
+// transfer member — descriptor `transferVmDescriptor2R24Wide`, width 816 / PI 54).
+//
+// STAGED-ADDITIVE: this is a PARALLEL wide producer BESIDE the live 1-felt path. The live
+// `generate_rotated_effect_vm_trace` (608 / 38-PI) is UNTOUCHED; this WIDENS its output to 816
+// by appending two 13-carrier × 8-felt wide commitment chains (BEFORE + AFTER) that re-absorb the
+// SAME rotated limbs the 1-felt block already lays, exposing the genuine 8-felt (~124-bit) state
+// commitment. The 16 appended PIs publish the BEFORE first-row + AFTER last-row 8-felt commits.
+//
+// The geometry is read off the committed wide descriptor
+// (`circuit/descriptors/rotation-wide-transfer-staged.tsv`):
+//   * BEFORE wide carriers: base `WIDE_BEFORE_CBASE = 608`, carrier `k` at `608 + 8·k .. +7`
+//     (13 carriers → cols 608..711); carrier 12 (cols 704..711) = the BEFORE 8-felt commit.
+//   * AFTER  wide carriers: base `WIDE_AFTER_CBASE  = 712`, carrier `k` at `712 + 8·k .. +7`
+//     (13 carriers → cols 712..815); carrier 12 (cols 808..815) = the AFTER 8-felt commit.
+//   * The chain absorbs the rotated block's limbs (`BEFORE_BASE + 0..36` then iroot at
+//     `BEFORE_BASE + B_IROOT`) — the SAME columns the 1-felt `wireCommitR` reads. The chip lookups
+//     are: head arity-4 over `[l0..l3]`, eleven body arity-11 over `prev8 ‖ [l3i,l3i+1,l3i+2]`,
+//     final arity-9 over `prev8 ‖ [iroot]`. Each carrier is filled CHIP-FAITHFULLY (the chip table
+//     derives `out0..out7` from the genuine permutation with the arity-tag seeding, so a carrier
+//     must equal `chip_absorb_all_lanes(arity, inputs)` or the `out[i] == lane[i]` AIR bites).
+//   * PIs 38..45 ← BEFORE carrier-12 (cols 704..711) on the FIRST row; PIs 46..53 ← AFTER
+//     carrier-12 (cols 808..815) on the LAST row.
+// ============================================================================
+
+/// The committed wide trace width (`wideAppend` adds 208 = 2 × 13 × 8 carrier columns to the
+/// 608-wide rotated base): `transferVmDescriptor2R24Wide.trace_width`.
+pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + 208; // 816
+/// The base column of the BEFORE 13×8 wide carrier block (`wideBeforeCBase = h.traceWidth = 608`).
+pub const WIDE_BEFORE_CBASE: usize = GRAD_ROT_WIDTH; // 608
+/// The base column of the AFTER 13×8 wide carrier block (`wideAfterCBase = h.traceWidth + 104`).
+pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + 104; // 712
+/// The number of 8-felt carriers per wide commitment chain (head + 11 body + final).
+pub const WIDE_NUM_CARRIERS: usize = 13;
+/// The in-block carrier index of the final 8-felt commitment carrier (carrier 12).
+pub const WIDE_COMMIT_CARRIER: usize = WIDE_NUM_CARRIERS - 1; // 12
+/// The committed wide public-input count (`h.piCount + 16` = 38 + 16).
+pub const WIDE_PI_COUNT: usize = ROT_PI_COUNT + 16; // 54
+
+/// Fill one block's 13-carrier × 8-felt wide commitment chain at `cbase`, reading the limbs from
+/// the rotated block at `limb_base` (`BEFORE_BASE` / `AFTER_BASE`). Each carrier's 8 output lanes
+/// are filled CHIP-FAITHFULLY (`chip_absorb_all_lanes`), so the wide chip lookups' `out[i] ==
+/// lane[i]` equalities hold and the published 8-felt commit binds the 37 limbs + iroot. The chain
+/// shape (4-wide head, eleven 3-wide arity-11 body groups, arity-9 iroot final) is the byte twin of
+/// `poseidon2::wire_commit_8` and the Lean `wireCommitR8` — but seeded through the chip's arity tag.
+fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
+    use crate::descriptor_ir2::chip_absorb_all_lanes;
+    // head: arity-4 absorb of limbs l0..l3 → carrier 0.
+    let head_inputs = [
+        row[limb_base],
+        row[limb_base + 1],
+        row[limb_base + 2],
+        row[limb_base + 3],
+    ];
+    let mut d = chip_absorb_all_lanes(4, &head_inputs);
+    let mut carrier = 0usize;
+    row[cbase + 8 * carrier..cbase + 8 * carrier + 8].copy_from_slice(&d);
+    carrier += 1;
+    // body: while ≥ 3 pre-iroot limbs remain, an arity-11 absorb of `prev8 ‖ 3 limbs`.
+    let mut col = 4usize;
+    while col < NUM_PRE_LIMBS {
+        let remaining = NUM_PRE_LIMBS - col;
+        let mut inputs = [BabyBear::ZERO; 11];
+        inputs[..8].copy_from_slice(&d);
+        let arity;
+        if remaining >= 3 {
+            inputs[8] = row[limb_base + col];
+            inputs[9] = row[limb_base + col + 1];
+            inputs[10] = row[limb_base + col + 2];
+            arity = 11;
+            col += 3;
+        } else {
+            // (the 37-limb transfer shape has NO leftover — 33 body limbs = 11 groups of 3 — but
+            // keep the leftover arm faithful for parametricity: an arity-9 `prev8 ‖ 1 limb`.)
+            inputs[8] = row[limb_base + col];
+            arity = 9;
+            col += 1;
+        }
+        d = chip_absorb_all_lanes(arity, &inputs);
+        row[cbase + 8 * carrier..cbase + 8 * carrier + 8].copy_from_slice(&d);
+        carrier += 1;
+    }
+    // final: the iroot rides the wide ARITY-11 absorb (`prev8 ‖ iroot ‖ 0 ‖ 0`) → the commit
+    // carrier. The deployed chip AIR pins `in7..in10 == 0` on every NON-11 arity (it supports only
+    // narrow ≤ 7 and wide 11), so the final MUST be the wide arity-11 row with the two trailing
+    // limb lanes zero — `single_perm_compress` is invariant to those trailing zeros, so the digest
+    // is byte-identical to the arity-9 `prev8 ‖ iroot`. The wide descriptor declares arity 11 here.
+    let mut inputs = [BabyBear::ZERO; 11];
+    inputs[..8].copy_from_slice(&d);
+    inputs[8] = row[limb_base + B_IROOT];
+    d = chip_absorb_all_lanes(11, &inputs);
+    row[cbase + 8 * carrier..cbase + 8 * carrier + 8].copy_from_slice(&d);
+    debug_assert_eq!(carrier, WIDE_COMMIT_CARRIER, "wide chain must end on carrier 12");
+}
+
+/// **THE WIDE TRANSFER trace generator (`transferVmDescriptor2R24Wide`, faithful 8-felt commit).**
+///
+/// Widens the LIVE 608-wide rotated transfer trace ([`generate_rotated_effect_vm_trace`]) to the
+/// committed 816-wide wide descriptor: it appends the BEFORE/AFTER 13×8 wide commitment carriers
+/// (re-absorbing the rotated limbs the 1-felt block already lays) and the 16 wide commit PIs. The
+/// live 1-felt carriers/PIs (cols < 608, PIs 0..37) are CARRIED UNCHANGED — this is purely
+/// additive. Returns `(trace, dpis)` ready for `prove_vm_descriptor2` against the wide descriptor.
+pub fn generate_rotated_transfer_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    // The live 608-wide rotated trace + 38-PI vector (UNTOUCHED machinery).
+    let (mut trace, base_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if base_pis.len() != ROT_PI_COUNT {
+        return Err(format!(
+            "wide transfer generator: base PI vector {} != {ROT_PI_COUNT} (transfer carries the \
+             bare 38-PI rotated vector — a record/grow-gate pin would mis-shape the wide append)",
+            base_pis.len()
+        ));
+    }
+
+    // Widen each row to 816 and fill the BEFORE/AFTER wide commitment chains.
+    for row in trace.iter_mut() {
+        row.resize(WIDE_WIDTH, BabyBear::ZERO);
+        fill_wide_block(row, WIDE_BEFORE_CBASE, BEFORE_BASE);
+        fill_wide_block(row, WIDE_AFTER_CBASE, AFTER_BASE);
+    }
+
+    // The 16 appended wide PIs: BEFORE commit (carrier 12) on the FIRST row, AFTER commit on the
+    // LAST row — the exact columns the descriptor's `pi_binding` constraints pin (704..711 first,
+    // 808..815 last).
+    let mut dpis = base_pis;
+    let before_commit_base = WIDE_BEFORE_CBASE + 8 * WIDE_COMMIT_CARRIER; // 704
+    let after_commit_base = WIDE_AFTER_CBASE + 8 * WIDE_COMMIT_CARRIER; // 808
+    let r0 = trace[0].clone();
+    let last = trace[trace.len() - 1].clone();
+    for j in 0..8 {
+        dpis.push(r0[before_commit_base + j]); // PIs 38..45: BEFORE 8-felt commit
+    }
+    for j in 0..8 {
+        dpis.push(last[after_commit_base + j]); // PIs 46..53: AFTER 8-felt commit
+    }
+    debug_assert_eq!(dpis.len(), WIDE_PI_COUNT);
+
+    Ok((trace, dpis))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
     use std::collections::BTreeSet;
+
+    /// DIAGNOSTIC: every wide chip lookup tuple in the wide transfer descriptor is self-consistent
+    /// after `fill_chip_lanes` — for each `TID_P2` lookup, `out0..out7 == chip_absorb_all_lanes(
+    /// arity, in0..in10)` evaluated off the row. A mismatch pinpoints a carrier-base / seeding bug
+    /// WITHOUT the slow prove. Checks BOTH an active row (0) and a padding row (40).
+    #[cfg(feature = "prover")]
+    #[test]
+    fn wide_chip_lookups_are_self_consistent_after_lane_fill() {
+        use crate::descriptor_ir2::{
+            EffectVmDescriptor2, TID_P2, VmConstraint2, chip_absorb_all_lanes, eval_lean_expr,
+            fill_chip_lanes, parse_vm_descriptor2,
+        };
+        use crate::effect_vm_descriptors::WIDE_TRANSFER_STAGED_TSV;
+        use crate::lean_descriptor_air::LeanExpr;
+
+        let json = {
+            let line = WIDE_TRANSFER_STAGED_TSV.lines().next().unwrap();
+            line.splitn(3, '\t').nth(2).unwrap()
+        };
+        let desc: EffectVmDescriptor2 = parse_vm_descriptor2(json).unwrap();
+
+        // Build a transfer wide trace via the generator over a hand-made witness (no dregg_turn).
+        let limbs: Vec<BabyBear> = (0..NUM_PRE_LIMBS as u32).map(|i| BabyBear::new(i + 1)).collect();
+        let bw = RotatedBlockWitness::new(limbs.clone(), BabyBear::new(99)).unwrap();
+        let aw = RotatedBlockWitness::new(limbs, BabyBear::new(199)).unwrap();
+        let st = CellState::new(100_000, 0);
+        let effects = vec![Effect::Transfer { amount: 50, direction: 1 }];
+        let (mut trace, _dpis) =
+            generate_rotated_transfer_wide(&st, &effects, &bw, &aw, &empty_caveat_manifest()).unwrap();
+
+        let check_row = |row: &mut Vec<BabyBear>, label: &str| {
+            fill_chip_lanes(&desc, row);
+            for (ci, k) in desc.constraints.iter().enumerate() {
+                let VmConstraint2::Lookup(l) = k else { continue };
+                if l.table != TID_P2 {
+                    continue;
+                }
+                let ev = |e: &LeanExpr| -> BabyBear { eval_lean_expr(e, row) };
+                let arity = ev(&l.tuple[0]).as_u32() as usize;
+                // only the WIDE carriers (out col >= 608) — the live lookups are covered elsewhere.
+                let out0_is_wide = matches!(l.tuple[12], LeanExpr::Var(c) if c >= 608);
+                if !out0_is_wide {
+                    continue;
+                }
+                let ins: [BabyBear; 11] = core::array::from_fn(|i| ev(&l.tuple[1 + i]));
+                let expect = chip_absorb_all_lanes(arity, &ins);
+                for j in 0..8 {
+                    let got = ev(&l.tuple[12 + j]);
+                    assert_eq!(
+                        got, expect[j],
+                        "{label}: wide lookup {ci} (arity {arity}) out{j} mismatch (carrier not chip-faithful)"
+                    );
+                }
+            }
+        };
+        // an ACTIVE row (0) and a PADDING row (40 of the 64-tall trace) — both must be chip-faithful.
+        check_row(&mut trace[0], "row0");
+        check_row(&mut trace[40], "row40(padding)");
+    }
 
     /// The rotated descriptor resolvers cover EXACTLY the registry's 36 cohort members:
     /// every name the resolvers can return is in the registry, and every registry member is
