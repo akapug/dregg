@@ -2228,3 +2228,19 @@ Checked the Lean side of the two Rust findings. One is fine; the other is WORSE 
    Rust `when_transition()`, then RE-CHECK every refinement rung still holds (they should — the real traces they
    model become inhabitable) AND that #8's natural `nonce 0→1` trace now satisfies. HIGH PRIORITY — this gates
    whether the soundness apex is non-vacuous for real turns.
+
+## gate/transition divergence — CONFIRMED on BOTH Rust paths (2026-06-19, before the audit lands)
+
+The Lean-every-row vs Rust-when_transition divergence is confirmed on BOTH Rust evaluators:
+- IR-v2 deployed path: `descriptor_ir2.rs:1763` puts Gate + Transition under `builder.when_transition()`.
+- v1 hand-AIR: the frame-freeze `s_noop·(after−before)` (`air.rs:578`) + nonce-tick `new−old−(1−s_noop)`
+  (`air.rs:1630`) are "Enforced on all rows except the last" (`air.rs:1619`).
+Lean `holdsVm` (`EffectVmEmit.lean:410-411`) guards NEITHER `.gate` nor `.transition` on isLast → the last
+row's transition forces main `STATE_AFTER = 0`, the freeze chains it back through every pad → the main-table
+state chain collapses to 0 → a real `nonce 0→1` is unsatisfiable (#8's empirical wall).
+OPEN (audit dimension B decides hollow-vs-benign): the published 8-felt commit is welded from the ROTATED limb
+block (r0=bal_lo, r1=nonce), NOT main STATE_AFTER (#8's degenerate trace carried r0=10/r1=-1 with main-after
+zeroed). So the apex may not be FULLY vacuous (commit reads the rotated block) — but the main-table model is
+non-faithful regardless. FIX warranted either way: isLast-guard Lean `.gate`/`.transition` to match Rust
+`when_transition`, then re-verify every rung + that #8's natural trace becomes inhabitable. (The audit will
+resolve whether it was a live hole or "merely" non-faithful.)
