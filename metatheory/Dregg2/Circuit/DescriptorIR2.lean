@@ -977,6 +977,109 @@ theorem chip_lookup_sound (hash : List ℤ → ℤ) (tbl : Table) (hSound : Chip
   rw [hins]
   exact hd
 
+/-! ### §7w — the WIDE chip lever: force ALL `W` squeezed permutation columns.
+
+The legacy lever (`chip_lookup_sound`) forces ONE output column — the single squeezed felt that
+`hash_many` exposes (`state[0]`). The light-client-faithful state commitment needs the chip to
+expose a WIDE digest: the `W` genuinely-distinct squeezed felts of the real Poseidon2 permutation
+(`hash_many_8` → `W = 8`; the chip AIR already constrains the FULL 16-lane permutation and merely
+returns `state[0]`, so exposing `W` columns is "expose more of an already-constrained AIR").
+
+`permOut : List ℤ → List ℤ` is the wide squeeze: `permOut ins` is the `W`-felt output of the
+genuine permutation on the absorbed inputs. The wide row appends the WHOLE `permOut ins` block (not
+a single felt). `chip_lookup_sound_N` proves a wide lookup forces EVERY one of the `W` digest
+columns to its genuine permutation output — the exact widening the commitment binds through.
+
+The proof MIRRORS the legacy structure: arity tag + equal-length padding ⇒ a unique row
+decomposition (`padTo_inj` / `List.append_inj`); the only change is the tail is a `W`-felt block
+read column-by-column instead of a single felt. No new crypto enters — `permOut` is a parameter,
+exactly as `hash` is for the legacy lever; the crypto floor is the SAME `Poseidon2SpongeCR` at full
+width, supplied downstream where the wide digest is bound. -/
+
+/-- The WIDE chip ROW: `(arity, padded inputs, permOut inputs)`, where `permOut ins` is the full
+`W`-felt squeezed output of the genuine permutation. (The legacy `chipRow hash` is the `W = 1`
+instance with `permOut := fun xs => [hash xs]`.) -/
+def chipRowN (permOut : List ℤ → List ℤ) (ins : List ℤ) : List ℤ :=
+  (ins.length : ℤ) :: padTo CHIP_RATE ins ++ permOut ins
+
+/-- The WIDE chip LOOKUP tuple: `(arity, padded input exprs, W digest columns)`. The `W` digest
+columns are read as variables `digestCols.map (.var)`; the wide soundness forces each one. -/
+def chipLookupTupleN (ins : List EmittedExpr) (digestCols : List Nat) : List EmittedExpr :=
+  (.const (ins.length : ℤ)) :: padToE CHIP_RATE ins ++ digestCols.map .var
+
+/-- A WIDE chip table is SOUND when every row is a genuine `(arity, padded inputs, W-felt output)`
+tuple of the permutation — the chip AIR's faithfulness at full squeeze width. -/
+def ChipTableSoundN (permOut : List ℤ → List ℤ) (tbl : Table) : Prop :=
+  ∀ r ∈ tbl, ∃ ins : List ℤ, ins.length ≤ CHIP_RATE ∧ r = chipRowN permOut ins
+
+/-- **THE WIDE LEVER (`chip_lookup_sound_N`).** Against a sound WIDE chip table, a wide chip lookup
+ENFORCES the FULL permutation output: the `W` digest columns carry the genuine `W`-felt squeezed
+output of the evaluated inputs. The arity tag + equal-length input padding make the row
+decomposition unique, so no padding confusion survives, and the whole `permOut`-block tail is
+forced column-for-column — NOT just its head. The width-faithfulness floor (`permOut` is the REAL
+wide squeeze) is the parameter, mirroring the legacy lever's `hash`. -/
+theorem chip_lookup_sound_N (permOut : List ℤ → List ℤ) (tbl : Table)
+    (hSound : ChipTableSoundN permOut tbl)
+    (a : Assignment) (ins : List EmittedExpr) (digestCols : List Nat)
+    (hlen : ins.length ≤ CHIP_RATE)
+    (hmem : (chipLookupTupleN ins digestCols).map (·.eval a) ∈ tbl) :
+    digestCols.map a = permOut (ins.map (·.eval a)) := by
+  obtain ⟨ws, hwlen, hrow⟩ := hSound _ hmem
+  have hev : (chipLookupTupleN ins digestCols).map (·.eval a)
+      = (ins.length : ℤ) :: padTo CHIP_RATE (ins.map (·.eval a)) ++ digestCols.map a := by
+    simp [chipLookupTupleN, List.map_cons, List.map_append, map_eval_padToE, EmittedExpr.eval,
+      List.map_map, Function.comp_def]
+  rw [hev] at hrow
+  unfold chipRowN at hrow
+  injection hrow with hl htail
+  -- arity tag ⇒ equal input lengths
+  have hlens : (ins.map (·.eval a)).length = ws.length := by
+    have hcast : (ins.length : ℤ) = (ws.length : ℤ) := hl
+    have := Int.natCast_inj.mp hcast
+    simpa [List.length_map] using this
+  have hlenm : (ins.map (·.eval a)).length ≤ CHIP_RATE := by
+    simpa [List.length_map] using hlen
+  -- equal-length padded blocks ⇒ split the tail uniquely (inputs vs the W-felt output block)
+  have hpads := List.append_inj htail
+    (by rw [padTo_length hlenm, padTo_length hwlen])
+  have hins : ins.map (·.eval a) = ws := padTo_inj hlens hpads.1
+  -- the output block: `digestCols.map a = permOut ws`, then rewrite ws ↦ evaluated inputs
+  have hd : digestCols.map a = permOut ws := hpads.2
+  rw [hins]
+  exact hd
+
+/-- **The legacy lever IS the `W = 1` instance.** Setting `permOut := fun xs => [hash xs]` makes the
+wide row literally the legacy row (`chipRowN (fun xs => [hash xs]) = chipRow hash`), the wide table
+soundness literally the legacy soundness, and the single digest column the head of the forced
+output block. So `chip_lookup_sound` is a COROLLARY of `chip_lookup_sound_N` — the wide lever does
+not change the meaning of any existing single-output site; it strictly generalizes it. -/
+theorem chipRowN_one_eq_chipRow (hash : List ℤ → ℤ) (ins : List ℤ) :
+    chipRowN (fun xs => [hash xs]) ins = chipRow hash ins := rfl
+
+theorem ChipTableSoundN_one_iff (hash : List ℤ → ℤ) (tbl : Table) :
+    ChipTableSoundN (fun xs => [hash xs]) tbl ↔ ChipTableSound hash tbl := Iff.rfl
+
+/-- `chip_lookup_sound` re-derived as a corollary of the WIDE lever (the `W = 1` squeeze). The legacy
+single-output statement falls straight out: a one-column wide lookup forces the singleton output
+block `[a digestCol] = [hash (evaluated inputs)]`, whose head is the legacy equation. This witnesses
+that every existing `VmHashSite` keeps EXACTLY its meaning under the generalization. -/
+theorem chip_lookup_sound_of_N (hash : List ℤ → ℤ) (tbl : Table)
+    (hSound : ChipTableSound hash tbl)
+    (a : Assignment) (ins : List EmittedExpr) (digestCol : Nat)
+    (hlen : ins.length ≤ CHIP_RATE)
+    (hmem : (chipLookupTuple ins digestCol).map (·.eval a) ∈ tbl) :
+    a digestCol = hash (ins.map (·.eval a)) := by
+  have hSoundN : ChipTableSoundN (fun xs => [hash xs]) tbl :=
+    (ChipTableSoundN_one_iff hash tbl).mpr hSound
+  -- the single-output tuple is the W=1 wide tuple with `digestCols = [digestCol]`
+  have htuple : chipLookupTuple ins digestCol = chipLookupTupleN ins [digestCol] := by
+    simp [chipLookupTuple, chipLookupTupleN]
+  rw [htuple] at hmem
+  have hN := chip_lookup_sound_N (fun xs => [hash xs]) tbl hSoundN a ins [digestCol]
+    hlen hmem
+  -- `[a digestCol] = [hash (...)]` ⇒ heads equal
+  simpa using hN
+
 /-! ### Translating a v1 hash site to a chip lookup. -/
 
 instance : Inhabited VmHashSite := ⟨⟨0, [], 0⟩⟩
@@ -1246,6 +1349,51 @@ def demoV2 : EffectVmDescriptor2 :=
 #guard (chipRow (fun _ => 99) [1]).head? == some 1
 #guard (chipRow (fun _ => 99) [1, 0]).head? == some 2
 
+/-! ### §10w — the WIDE chip lever: faithful at full squeeze width + the ANTI-LAUNDERING tooth. -/
+
+-- The wide row is the legacy row at W=1, but strictly wider at W>1 (here W=8: the `hash_many_8`
+-- squeeze shape). The output BLOCK is the whole `permOut ins`, not a single felt.
+#guard chipRowN (fun xs => [(xs.length : ℤ)]) [1, 2] == chipRow (fun xs => (xs.length : ℤ)) [1, 2]
+#guard (chipRowN (fun _ => [10, 11, 12, 13, 14, 15, 16, 17]) [1, 2]).length == 1 + CHIP_RATE + 8
+-- the wide tuple carries W=8 distinct digest columns (here cols 40..47), not one.
+#guard (chipLookupTupleN [.var 0, .var 1] [40, 41, 42, 43, 44, 45, 46, 47]).length == 1 + CHIP_RATE + 8
+
+-- THE ANTI-LAUNDERING `#guard`: a laundered "wide" digest would be `[h]×8` (eight copies of one
+-- felt) or a stub — its squeeze would NOT depend on the full input past felt 0. Two inputs that
+-- agree on `output[0]` but differ on a HIGH output felt (the light-client near-collision shape) are
+-- DISTINGUISHED by the wide row's output block, while a 1-felt digest's forced value (`head`)
+-- coincides. Here `pA`/`pB` model two cell-states' genuine wide squeezes: equal head, different tail.
+private def pA : List ℤ → List ℤ := fun _ => [7, 100, 200, 300, 400, 500, 600, 700]
+private def pB : List ℤ → List ℤ := fun _ => [7, 100, 200, 300, 400, 500, 600, 999]  -- ← only felt 7 differs
+
+-- 1-felt (legacy) lever sees only `output[0]` = 7 for BOTH → cannot distinguish (the 31-bit hole):
+#guard (pA [1, 2]).head? == (pB [1, 2]).head?
+-- 8-felt (wide) lever forces the WHOLE block → the rows DIFFER (the near-collision is caught):
+#guard ¬ (chipRowN pA [1, 2] == chipRowN pB [1, 2])
+#guard (chipRowN pA [1, 2]).drop (1 + CHIP_RATE) == [7, 100, 200, 300, 400, 500, 600, 700]
+#guard (chipRowN pB [1, 2]).drop (1 + CHIP_RATE) == [7, 100, 200, 300, 400, 500, 600, 999]
+
+/-- **The anti-laundering THEOREM (the wide output is genuinely wider than 1 felt).** Whenever two
+genuine wide squeezes agree on `output[0]` but differ somewhere in the full `W`-felt block, then
+SIMULTANEOUSLY: (1) the legacy 1-felt lever is BLIND — the single forced felt (`output[0]`) is the
+SAME for both, so the narrow lever cannot tell the cell-states apart (the 31-bit collision a light
+client suffers); and (2) the WIDE rows DIFFER — the wide lever forces the whole block, catching the
+near-collision. So the widening is load-bearing, not `[output[0]]×W` and not a stub: it
+distinguishes EXACTLY where the narrow lever fails. (The light-client collision-distinguishing bite
+— the reason 8 felts replaces 1.) -/
+theorem chipRowN_distinguishes_wide
+    {permA permB : List ℤ → List ℤ} {ins : List ℤ}
+    (hhead : (permA ins).head? = (permB ins).head?)   -- legacy lever is blind: same `output[0]`
+    (hfull : permA ins ≠ permB ins) :                  -- but the full squeeze differs
+    -- (1) the legacy single-felt digest (`output[0]`) coincides (the narrow lever is blind), AND
+    -- (2) the WIDE chip rows DIFFER (the wide lever catches the near-collision).
+    (permA ins).head? = (permB ins).head? ∧ chipRowN permA ins ≠ chipRowN permB ins := by
+  refine ⟨hhead, ?_⟩
+  intro hrow
+  unfold chipRowN at hrow
+  injection hrow with _ htail
+  exact hfull (List.append_cancel_left htail)
+
 -- The embedded-v1 face is inert: no mem ops, no map ops.
 #guard (memOpsOf (embedV1 { name := "n", traceWidth := 1, piCount := 0, constraints := [.transition 0 0], hashSites := [], ranges := [] })).length == 0
 
@@ -1475,6 +1623,12 @@ def brokenEngine : ProofEngine :=
 
 #assert_axioms TableId.wireId_injective
 #assert_axioms domainCode_injective
+-- §7 chip lever (legacy single-output + the §7w WIDE generalization + the legacy corollary):
+#assert_axioms chip_lookup_sound
+#assert_axioms chip_lookup_sound_N
+#assert_axioms chip_lookup_sound_of_N
+#assert_axioms chipRowN_one_eq_chipRow
+#assert_axioms chipRowN_distinguishes_wide
 #assert_axioms optOf_roundtrip
 #assert_axioms satisfied2U_umem_sound
 #assert_axioms satisfied2U_pins_final
