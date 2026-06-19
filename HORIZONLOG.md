@@ -86,6 +86,33 @@ refused to launder a partial):**
   position → published 8-felt commits differ, proof for A REJECTED against B's commit with NO executor) is the
   light-client bite that proves it. Land as ONE coordinated flag-day (the B-GATE-OUTPUT precedent: it landed green
   in one push). The core is proven + de-risked; this is the geometry/PI/executor wiring.
+  **⚠ 2026-06-19 ORIENT (mapped, NOT yet attempted — STOPPED clean per green-or-bust-WHOLE-tree, tree untouched at
+  green HEAD `f6b61a5d7`):** the cutover is NOT a one-pass mechanical mirror. Two hard layers were under-scoped in
+  the original handoff: (a) **the Lean wide-lever emission lane is MISSING** — `graduateV1` emits the rotated chain
+  sites via the 1-felt `siteLookup`/`chipLookupTuple`/`siteLookups_sound` path (`EffectVmEmitV2.lean:155,275,326`);
+  the 8-felt commit needs the chain GROUP + FINAL sites to bind all 8 output lanes, i.e. a NEW wide emission lane
+  (`siteLookupN`/`chipLookupTupleN` discharged by `chip_lookup_sound_N` — the lever EXISTS in `DescriptorIR2.lean`
+  but is UNWIRED into rotV3) with its own `siteLookups_sound`-analog, threaded through `graduateV1`/`rotateV3`/`v3Of`
+  and re-proving `rotV3SitesAt_pin` (`EffectVmEmitRotationV3.lean:427`, the final iroot site h12 now 8-wide),
+  `rotV3_publishes` (752, 8 cols→8 PIs/block), `rotV3_binds_published` (789, swap `Poseidon2SpongeCR` floor →
+  `Poseidon2WideCR`+`Poseidon2Width8`, call `wireCommitR8_binds`). (b) **the PI-pin layout reshapes 4→18, NOT a
+  drop-in**: `rotateV3` (`EffectVmEmitRotationV3.lean:344`) is `piCount := d.piCount + 4` with `rotPins` pinning
+  ONE `B_STATE_COMMIT` col→1 PI/block; 8-felt makes it +18 (8 OLD + 8 NEW + height + caveat), shifting the height/
+  caveat/the per-effect FIFTH record-pin (currently PI 38, → PI 52+) across ALL 36 cohort descriptors + the 89 tree
+  sites referencing the 4-pin shape (`ROT_PI_COUNT`/`piCount+4`/`dpis[34]`/`dpis[35]`/`dpis[36]`/`dpis[37]`/`dpis[38]`).
+  Rust cascade is tractable-but-wide: `trace_rotated.rs` `B_STATE_COMMIT 38`→8 cols + `B_CHAIN_BASE`/`B_SPAN 51`/
+  `BEFORE/AFTER/CAVEAT_BASE`/`ROT_WIDTH 328`/`GRAD_ROT_WIDTH 608` follow; `fill_block`/`recompute_block_commit` (lines
+  903, 1478) chain via `wire_commit_8` lanes; ~10 `dpis[]` push-sites reshape; `pi.rs` `OLD/NEW_COMMIT_LEN 4→8`;
+  executor `proof_verify.rs:247-252` retire the low-4-byte override → `bytes32_to_felt8` 8-felt consume (`atomic.rs:
+  515-551` too); differential + flip `effect_vm_rotation_flip.rs:1067-1350` + `RotatedCommitDifferential.lean` to 8;
+  ~67 JSONs + ~64 FPs + `V3_STAGED_REGISTRY_FP` + probe FPs re-emit. **THE BLOCKER (file:line) = the atomic Lean
+  keystone tower:** `EffectVmEmitRotationV3.lean` (3067 lines, 210 defs/thms) — `rotateV3`:344 / `rotV3SitesAt_pin`:427
+  / `rotV3_publishes`:752 / `rotV3_binds_published`:789 must ALL re-prove together over the 8-felt carrier + 18-pin
+  shape, on top of a newly-built wide emission lane in `EffectVmEmitV2.lean`. The proven `wireCommitR8_binds`/
+  `chainFrom8_inj` (`EffectVmEmitRotationR.lean:330,298`, axiom-clean) are READY to be called once the lane exists.
+  This is multi-session atomic proof work; NO green sub-step exists in the LIVE wire (any partial geometry/PI shift
+  breaks the validator), so it must land whole. RESUME by FIRST building+proving the wide Lean emission lane in
+  isolation (additive, like B-ROTATION CORE), THEN the atomic geometry/PI/executor/JSON flip as one green push.
 - 🟥 ~~**PHASE B-ROTATION — BLOCKED at the chip INPUT-ARITY cap**~~ (RESOLVED by B-GATE-INPUT ✅ above; historical
   detail): the 8-wide chain (`d8 = perm_lanes(d8 ‖ new_limbs)[0..8]`, ONE permutation per step) was NOT
   expressible with the output-only B-GATE chip. B-GATE widened the chip OUTPUT to 8 lanes (`CHIP_OUT_LANES = 8`, the genuine
