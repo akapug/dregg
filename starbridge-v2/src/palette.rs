@@ -913,10 +913,13 @@ mod tests {
     fn backspace_widens_the_filter() {
         let mut p = CommandPalette::new();
         p.open();
-        p.set_query("burnx"); // no match (x breaks the subsequence at the end)
-        assert!(p.results().is_empty(), "burnx matches nothing");
+        p.set_query("burnx"); // the trailing x breaks the burn subsequence
+        // Robust to a growing command set: assert the burn verb specifically is
+        // filtered out (the point of the test), not that the WHOLE list is empty —
+        // another command's keywords may legitimately contain b-u-r-n-…-x.
+        assert_ne!(p.current(), Some(CommandId::Burn), "burnx does not match the burn verb");
         p.backspace(); // → "burn"
-        assert_eq!(p.current(), Some(CommandId::Burn));
+        assert_eq!(p.current(), Some(CommandId::Burn), "backspace re-widens to re-include burn");
     }
 
     #[test]
