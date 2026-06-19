@@ -235,6 +235,127 @@ theorem wireCommitR_binds_log (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR
 #assert_axioms wireCommitR_binds
 #assert_axioms wireCommitR_binds_log
 
+/-! ## §3.8 — `wireCommitR8`: the FAITHFUL 8-FELT chained commitment (Phase B-ROTATION).
+
+The 1-felt chain above (`chainFrom`/`wireCommitR`) threads a SINGLE ℤ accumulator — ~31-bit,
+collision in seconds. The faithful commitment threads an 8-FELT carrier: each step is ONE wide
+permutation `permW (acc ++ c)` exposing 8 output lanes (`acc : List ℤ`, length 8), so EVERY
+intermediate carrier is 8 felts — there is NO 31-bit intermediate (the anti-laundering crux; a
+1-felt-chain-with-wide-final-squeeze is the forbidden laundered version). The Rust twin is
+`poseidon2::wire_commit_8` over `single_perm_compress`; the in-circuit faithfulness floor is the
+wide chip lever `chip_lookup_sound_N` (the `permW`-parametric wide squeeze, CHIP_RATE = 11 ≥ the
+11 inputs of a carrier‖3-limb step).
+
+The wide floor `Poseidon2WideCR permW` is the EXACT analogue of `Poseidon2SpongeCR`: the wide
+permutation is injective on its argument list (collision-resistant at full squeeze width). The
+binding keystone lifts the 1-felt proof unchanged — the chain logic is the same fold, only the
+carrier widened from `ℤ` to `List ℤ`. -/
+
+/-- The WIDE collision-resistance floor: the 8-lane permutation is injective on its input list
+(the same CLASS as `Poseidon2SpongeCR`, at full squeeze width). -/
+def Poseidon2WideCR (permW : List ℤ → List ℤ) : Prop :=
+  ∀ xs ys : List ℤ, permW xs = permW ys → xs = ys
+
+/-- The wide permutation's output-width contract: every squeeze is exactly 8 felts (true of the
+Rust `single_perm_compress`, which reads `state[0..8]`). This is what keeps the carrier 8-wide
+THROUGHOUT — the anti-laundering invariant (no narrow intermediate). -/
+def Poseidon2Width8 (permW : List ℤ → List ℤ) : Prop :=
+  ∀ xs : List ℤ, (permW xs).length = 8
+
+/-- Fold the 8-FELT chained absorption: each later site permutes the running 8-felt carrier IN
+FRONT of its fresh inputs (`acc ++ c`), the 8-felt output becoming the next carrier. -/
+def chainFrom8 (permW : List ℤ → List ℤ) : List ℤ → List (List ℤ) → List ℤ
+  | acc, [] => acc
+  | acc, c :: cs => chainFrom8 permW (permW (acc ++ c)) cs
+
+theorem chainFrom8_snoc (permW : List ℤ → List ℤ) (acc : List ℤ) (cs : List (List ℤ))
+    (c : List ℤ) :
+    chainFrom8 permW acc (cs ++ [c]) = permW (chainFrom8 permW acc cs ++ c) := by
+  induction cs generalizing acc with
+  | nil => rfl
+  | cons d ds ih => simp only [List.cons_append, chainFrom8, ih]
+
+/-- A `chainFrom8` over a non-empty chunk list lands length 8 (its last step is a `permW`, whose
+output is width 8). The EMPTY case returns the seed, so a width-8 seed stays width 8. -/
+theorem chainFrom8_len (permW : List ℤ → List ℤ) (hW : Poseidon2Width8 permW) :
+    ∀ {acc : List ℤ} {cs : List (List ℤ)}, acc.length = 8 → (chainFrom8 permW acc cs).length = 8 := by
+  intro acc cs
+  induction cs generalizing acc with
+  | nil => intro hacc; simpa [chainFrom8] using hacc
+  | cons d ds ih => intro _; exact ih (hW (acc ++ d))
+
+/-- **`wireCommitR8`** — the chained 8-FELT commitment over an arbitrary pre-iroot limb list:
+the 4-wide head (no carrier), the `chunk31` body (carrier ‖ 3 limbs = arity 11), the iroot as
+its own final site (carrier ‖ iroot = arity 9), LITERALLY LAST. Returns 8 felts. -/
+def wireCommitR8 (permW : List ℤ → List ℤ) (l : List ℤ) (ir : ℤ) : List ℤ :=
+  chainFrom8 permW (permW (l.take 4)) (chunk31 (l.drop 4) ++ [[ir]])
+
+/-- The 8-felt fold is injective under the WIDE CR floor + width-8 contract, given equal CHUNK
+COUNTS: equal final 8-felt digests force equal seeds and equal chunk lists. `permW` injectivity
+collapses each `acc ++ c = acc' ++ c'` step; the width-8 contract makes the `acc`/`c` split unique
+(both carriers are length 8), and equal chunk counts peel from the outermost permutation rightward
+in — the EXACT structure of the 1-felt `chainFrom_inj`, carrier widened from ℤ to a length-8 list. -/
+theorem chainFrom8_inj (permW : List ℤ → List ℤ) (hCR : Poseidon2WideCR permW)
+    (hW : Poseidon2Width8 permW) :
+    ∀ {cs cs' : List (List ℤ)} {acc acc' : List ℤ}, cs.length = cs'.length → acc.length = 8 →
+      acc'.length = 8 → chainFrom8 permW acc cs = chainFrom8 permW acc' cs' → acc = acc' ∧ cs = cs' := by
+  intro cs
+  induction cs using List.reverseRecOn with
+  | nil =>
+    intro cs' acc acc' hlen _ _ h
+    have hnil : cs' = [] := List.length_eq_zero_iff.mp hlen.symm
+    subst hnil
+    exact ⟨h, rfl⟩
+  | append_singleton ds c ih =>
+    intro cs' acc acc' hlen hacc hacc' h
+    rcases List.eq_nil_or_concat cs' with rfl | ⟨ds', c', rfl⟩
+    · simp at hlen
+    · simp only [List.concat_eq_append] at hlen h ⊢
+      rw [chainFrom8_snoc, chainFrom8_snoc] at h
+      -- permW injective ⇒ the (carrier ++ chunk) arguments are equal lists.
+      have h2 := hCR _ _ h
+      have hlen' : ds.length = ds'.length := by simpa using hlen
+      have hcar8 : (chainFrom8 permW acc ds).length = 8 := chainFrom8_len permW hW hacc
+      have hcar8' : (chainFrom8 permW acc' ds').length = 8 := chainFrom8_len permW hW hacc'
+      have hsplit := List.append_inj h2 (by rw [hcar8, hcar8'])
+      obtain ⟨hcar, hcc⟩ := hsplit
+      obtain ⟨haccacc, hdsds⟩ := ih hlen' hacc hacc' hcar
+      exact ⟨haccacc, by rw [hdsds, hcc]⟩
+
+/-- **THE PARAMETRIC ANTI-GHOST KEYSTONE, 8-FELT** (`wireCommitR_binds`, wide carrier): equal
+8-felt chained wire commits over equal-length pre-iroot limb lists force equal limb lists AND
+equal iroots, under the wide CR floor + the width-8 contract. The genuine ~124-bit binding — the
+faithful commitment the light client trusts. The proof mirrors the 1-felt `wireCommitR_binds`
+exactly (peel the iroot site, then `chainFrom8_inj` on the body, then the head). -/
+theorem wireCommitR8_binds (permW : List ℤ → List ℤ) (hCR : Poseidon2WideCR permW)
+    (hW : Poseidon2Width8 permW)
+    {l l' : List ℤ} {ir ir' : ℤ} (hlen : l.length = l'.length)
+    (h : wireCommitR8 permW l ir = wireCommitR8 permW l' ir') : l = l' ∧ ir = ir' := by
+  unfold wireCommitR8 at h
+  rw [chainFrom8_snoc, chainFrom8_snoc] at h
+  -- peel the final iroot site (permW injective): the bodies AND the [ir] chunks are equal.
+  have h1 := hCR _ _ h
+  have hbodylen : (chainFrom8 permW (permW (l.take 4)) (chunk31 (l.drop 4))).length = 8 :=
+    chainFrom8_len permW hW (hW (l.take 4))
+  have hbodylen' : (chainFrom8 permW (permW (l'.take 4)) (chunk31 (l'.drop 4))).length = 8 :=
+    chainFrom8_len permW hW (hW (l'.take 4))
+  have hsplit := List.append_inj h1 (by rw [hbodylen, hbodylen'])
+  obtain ⟨hchain, hir⟩ := hsplit
+  have hir' : ir = ir' := by simpa using hir
+  -- the bodies are equal chained folds ⇒ equal heads + equal chunk lists.
+  obtain ⟨hhead, hchunks⟩ := chainFrom8_inj permW hCR hW
+    (by rw [chunk31_length, chunk31_length, List.length_drop, List.length_drop, hlen])
+    (hW (l.take 4)) (hW (l'.take 4)) hchain
+  have htake : l.take 4 = l'.take 4 := hCR _ _ hhead
+  have hdrop : l.drop 4 = l'.drop 4 := by
+    have := congrArg List.flatten hchunks
+    rwa [chunk31_flatten, chunk31_flatten] at this
+  refine ⟨?_, hir'⟩
+  rw [← List.take_append_drop 4 l, ← List.take_append_drop 4 l', htake, hdrop]
+
+#assert_axioms chainFrom8_inj
+#assert_axioms wireCommitR8_binds
+
 -- NON-VACUITY at the measured widths, both polarities (Horner toy sponge): a low register,
 -- a high register, the committed height, and the iroot each move the commit; the honest
 -- recompute is stable.
@@ -252,6 +373,22 @@ def demoPre32 : List ℤ := (List.range 39).map (fun i => 200 + (i : ℤ))
 #guard wireCommitR refSponge demoPre32 7 != wireCommitR refSponge (demoPre32.set 32 999) 7
 #guard wireCommitR refSponge demoPre32 7 != wireCommitR refSponge (demoPre32.set 38 999) 7
 #guard wireCommitR refSponge demoPre32 7 != wireCommitR refSponge demoPre32 8
+
+-- NON-VACUITY for the 8-FELT chain (`wireCommitR8`): a width-8 Horner toy `refWide` (each lane =
+-- `refSponge (tag :: xs)`, so all 8 lanes avalanche over the whole input). The wide commit
+-- DISTINGUISHES a low-register flip, a HIGH-position flip (the fields-root sub-limb's place — the
+-- collision-distinguishing tooth at the spec level), and the iroot, AND is stable on the honest
+-- recompute — the same both-polarity discipline the 1-felt guards above carry, at full width.
+def refWide : List ℤ → List ℤ := fun xs => (List.range 8).map (fun t => refSponge ((t : ℤ) :: xs))
+
+#guard (refWide [1, 2, 3]).length == 8
+#guard wireCommitR8 refWide demoPre24 7 != wireCommitR8 refWide (demoPre24.set 1 999) 7
+#guard wireCommitR8 refWide demoPre24 7 != wireCommitR8 refWide (demoPre24.set 30 999) 7   -- HIGH limb
+#guard wireCommitR8 refWide demoPre24 7 != wireCommitR8 refWide demoPre24 8                -- iroot bound
+#guard wireCommitR8 refWide demoPre24 7 == wireCommitR8 refWide demoPre24 7                -- honest stable
+-- the INTERMEDIATE-CARRIER tooth at the spec level: an EARLY limb (folded mid-chain) still moves
+-- the published 8-felt commit (the carrier is 8-wide throughout, no narrow waist).
+#guard wireCommitR8 refWide demoPre24 7 != wireCommitR8 refWide (demoPre24.set 5 999) 7
 
 /-! ## §4 — the probe descriptors, parametric in R. -/
 

@@ -4443,6 +4443,35 @@ mod tests {
     use super::*;
     use crate::poseidon2::hash_many;
 
+    /// **THE 8-FELT CHAIN ↔ CHIP BYTE-IDENTITY CROSS-CHECK** (Phase B-ROTATION). The plain
+    /// `poseidon2::single_perm_compress` (the cell/turn/Lean-mirrored chain step) computes lanes
+    /// `state[0..8]` of ONE wide arity-11 permutation. The in-circuit chip witness exposes the
+    /// SAME 8 lanes as `[perm_lanes(seed)[0]` (the digest, out0)` ‖ chip_absorb_lanes(11, ins)`
+    /// (lanes 1..7)]`. They MUST be byte-identical or the cell≡circuit differential cannot hold:
+    /// a forged chip lane is UNSAT, so the commitment the proof binds equals the plain primitive's.
+    #[test]
+    fn single_perm_compress_equals_chip_wide_lanes() {
+        let ins: Vec<BabyBear> = (1u32..=11).map(BabyBear::new).collect();
+        let plain = crate::poseidon2::single_perm_compress(&ins);
+        // The chip's arity-11 wide seed (identical to `chip_absorb_lanes`'s seeding).
+        let mut seed = [BabyBear::ZERO; POSEIDON2_WIDTH];
+        for i in 0..CHIP_WIDE_ARITY {
+            seed[i] = ins[i];
+        }
+        let chip_lanes = perm_lanes(seed); // state[0..8] of the single permutation
+        for i in 0..CHIP_OUT_LANES {
+            assert_eq!(
+                plain[i], chip_lanes[i],
+                "single_perm_compress lane {i} must byte-equal the chip's perm_lanes"
+            );
+        }
+        // And the lanes 1..7 the producer fill helper writes match plain[1..8].
+        let absorb = chip_absorb_lanes(CHIP_WIDE_ARITY, &ins);
+        for j in 0..(CHIP_OUT_LANES - 1) {
+            assert_eq!(plain[j + 1], absorb[j], "chip_absorb_lanes lane {} mismatch", j + 1);
+        }
+    }
+
     /// Compute per-instance max constraint degrees (incl. LogUp legs) for a descriptor's
     /// committed table set — the quantity that drives the FRI `log_blowup` floor
     /// (`log_blowup >= log2_ceil(max_degree - 1)` per instance).

@@ -1033,6 +1033,59 @@ pub fn compute_canonical_state_commitment_v9(cell: &Cell, ctx: &V9RotationContex
     felt_to_bytes32(compute_canonical_state_commitment_v9_felt(cell, ctx))
 }
 
+/// **THE FAITHFUL 8-FELT v9 ROTATED commitment (Phase B-ROTATION)** — the genuine ~124-bit-
+/// collision per-cell state digest, the wide twin of [`compute_canonical_state_commitment_v9_felt`].
+///
+/// Chains the SAME 37 pre-iroot limbs ([`compute_rotated_pre_limbs`]) and the iroot through the
+/// 8-felt single-permutation chain ([`dregg_circuit::poseidon2::wire_commit_8`]): each step is
+/// `single_perm_compress(d8 ‖ 3 limbs)[0..8]` — ONE arity-11 permutation, an 8-felt carrier
+/// THROUGHOUT, NO 31-bit intermediate (the anti-laundering crux). Byte-identical to the Lean
+/// `EffectVmEmitRotationR.wireCommitR8` and the producer twin
+/// `dregg_turn::rotation_witness::wire_commit_8`.
+///
+/// ADDITIVE / NOT-YET-WIRED: this is the staged faithful commitment. The live default
+/// ([`compute_canonical_state_commitment_v9_felt`]) is the 1-felt chain until the rotated trace +
+/// PI + executor flag-day cuts the proof-bound `STATE_COMMIT` over to all 8 felts (the trace-
+/// geometry cascade `B_STATE_COMMIT` 1→8 + the chip sites arity-4→arity-11). The collision-
+/// distinguishing / intermediate-carrier teeth on the chain primitive live in `dregg-circuit`
+/// (`poseidon2::wire_commit_8_*`).
+pub fn compute_canonical_state_commitment_v9_felt8(
+    cell: &Cell,
+    ctx: &V9RotationContext,
+) -> [dregg_circuit::field::BabyBear; 8] {
+    let pre = compute_rotated_pre_limbs(cell, ctx);
+    dregg_circuit::poseidon2::wire_commit_8(&pre, ctx.iroot)
+}
+
+/// The 32-byte encoding of the faithful 8-felt commitment: the 8 felts packed as 8×4 LE bytes
+/// ([`felt8_to_bytes32`]), filling the WHOLE 32-byte ledger slot — UNLIKE the 1-felt
+/// [`compute_canonical_state_commitment_v9`] which leaves 28 bytes zero.
+pub fn compute_canonical_state_commitment_v9_8(cell: &Cell, ctx: &V9RotationContext) -> [u8; 32] {
+    felt8_to_bytes32(&compute_canonical_state_commitment_v9_felt8(cell, ctx))
+}
+
+/// Pack 8 BabyBear felts into a 32-byte slot, each felt's 4 LE bytes (8×4 = 32). The faithful
+/// 8-felt commitment's canonical byte encoding — injective on canonical BabyBear values (< p, so
+/// each fits a u32) and fills the WHOLE slot. Inverse of [`bytes32_to_felt8`].
+pub fn felt8_to_bytes32(felts: &[dregg_circuit::field::BabyBear; 8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, f) in felts.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&f.as_u32().to_le_bytes());
+    }
+    out
+}
+
+/// Read 8 BabyBear felts out of a 32-byte slot (8×4 LE bytes). Inverse of [`felt8_to_bytes32`]
+/// on canonical encodings. The executor reads a ledger-slot commitment back into the 8 felts it
+/// anchors against the proof's 8-felt `STATE_COMMIT` PIs (the flag-day verifier consumption).
+pub fn bytes32_to_felt8(bytes: &[u8; 32]) -> [dregg_circuit::field::BabyBear; 8] {
+    core::array::from_fn(|i| {
+        dregg_circuit::field::BabyBear::new(u32::from_le_bytes(
+            bytes[i * 4..i * 4 + 4].try_into().unwrap(),
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
