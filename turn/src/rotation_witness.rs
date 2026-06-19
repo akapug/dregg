@@ -63,10 +63,10 @@ pub const NUM_REGISTERS: usize = 24;
 
 /// The number of pre-iroot absorption limbs (cells_root · r0..r23 · cap_root · nullifier_root ·
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
-/// perms_digest · vk_digest). Matches Lean `preLimbsAt_length = 35` at R = 24, after the WAVE-2
-/// perms/VK flag-day widening (NUM_PRE_LIMBS 33→35 — the committed perms-digest + vk-digest sub-limbs,
-/// the NEW LAST pre-iroot limbs).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 3; // 1 + 24 + 4 + 3 + 3 = 35
+/// perms_digest · vk_digest · mode · fields_root). Matches Lean `preLimbsAt_length = 37` at R = 24,
+/// after the WAVE-3 mode/fields-root flag-day widening (NUM_PRE_LIMBS 35→37 — the committed mode byte +
+/// fields_root digest sub-limbs, the NEW LAST pre-iroot limbs).
+pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5; // 1 + 24 + 4 + 3 + 5 = 37
 
 /// The collection id under which a present-cell existence leaf is keyed in the cells tree.
 const CELLS_COLLECTION: u32 = 0;
@@ -194,6 +194,25 @@ pub fn perms_digest_felt(perms: &dregg_cell::Permissions) -> BabyBear {
 /// (post-VK) light-client forgery.
 pub fn vk_digest_felt(vk: &Option<dregg_cell::VerificationKey>) -> BabyBear {
     dregg_cell::commitment::vk_digest_felt(vk)
+}
+
+/// The committed cell-MODE limb (`B_MODE = 35`, the WAVE-3 mode/fields-root flag-day). Delegates to the
+/// canonical `dregg_cell::commitment::mode_felt`: the raw `mode_flag` byte (`Hosted=0 / Sovereign=1`)
+/// as a felt. The makeSovereign mode gate (`EffectVmEmitRotationV3.rotateV3WithModeGate`) FORCES the
+/// AFTER mode limb to `Sovereign(1)` as a CONSTANT, so a ledgerless client cannot be shown an
+/// un-promoted sovereign.
+pub fn mode_felt(mode: &dregg_cell::CellMode) -> BabyBear {
+    dregg_cell::commitment::mode_felt(mode)
+}
+
+/// The committed `fields_root` digest limb (`B_FIELDS_ROOT = 36`, the WAVE-3 flag-day). Delegates to
+/// the canonical `dregg_cell::commitment::fields_root_felt`: `hash_bytes(fields_root)` (the SAME
+/// byte-root→felt the cap_root / nullifier_root / commitments_root limbs use). The setFieldDyn /
+/// refusal weld (`EffectVmEmitRotationV3.rotateV3WithFieldsRootGate`) FORCES the AFTER fields_root limb
+/// to the declared post-`fields_root` param (verifier-anchored), so a forged post-`fields_root` is
+/// UNSAT for a ledgerless light client.
+pub fn fields_root_felt(fields_root: &[u8; 32]) -> BabyBear {
+    dregg_cell::commitment::fields_root_felt(fields_root)
 }
 
 /// Felt-encode the parent-side delegation epoch — the `epoch` scalar limb.
@@ -334,9 +353,14 @@ pub fn produce(
     // limb).
     pre_limbs[32] = lifecycle_disc_felt(&cell.lifecycle);
     // limbs 33,34: perms_digest, vk_digest (the WAVE-2 flag-day committed authority sub-limbs — the
-    // setPerms / setVK welds force these to the declared param, the NEW LAST pre-iroot limbs).
+    // setPerms / setVK welds force these to the declared param).
     pre_limbs[33] = perms_digest_felt(&cell.permissions);
     pre_limbs[34] = vk_digest_felt(&cell.verification_key);
+    // limbs 35,36: mode, fields_root (the WAVE-3 flag-day committed authority sub-limbs — the
+    // makeSovereign mode CONSTANT-force limb and the setFieldDyn / refusal fields-root weld limb, the
+    // NEW LAST pre-iroot limbs).
+    pre_limbs[35] = mode_felt(&cell.mode);
+    pre_limbs[36] = fields_root_felt(&cell.state.fields_root);
 
     let iroot_val = iroot(receipt_hashes);
     let state_commit = wire_commit(&pre_limbs, iroot_val);

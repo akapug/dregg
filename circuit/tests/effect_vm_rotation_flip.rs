@@ -52,7 +52,7 @@ use dregg_circuit::field::BabyBear;
 use dregg_turn::rotation_witness as rw;
 
 const B_CAP_ROOT: usize = 25;
-const NUM_PRE: usize = rw::NUM_PRE_LIMBS; // 35
+const NUM_PRE: usize = rw::NUM_PRE_LIMBS; // 37
 
 /// Resolve a rotated descriptor JSON from the staged registry TSV by key.
 fn rotated_json(key: &str) -> &'static str {
@@ -225,6 +225,8 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         (32, "lifecycle_disc"),
         (33, "perms_digest"),
         (34, "vk_digest"),
+        (35, "mode"),
+        (36, "fields_root"),
     ] {
         assert_eq!(
             after_w.pre_limbs[idx],
@@ -1074,7 +1076,7 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
     // ALONE last. Independent of the deployed `v9_wire_commit` (re-derived here from the public
     // `hash_many` primitive + the pre-limb vector), so agreement is a genuine differential.
     fn independent_wire_commit(pre_limbs: &[BabyBear], iroot: BabyBear) -> BabyBear {
-        assert_eq!(pre_limbs.len(), V9_NUM_PRE_LIMBS, "35 pre-iroot limbs at R=24");
+        assert_eq!(pre_limbs.len(), V9_NUM_PRE_LIMBS, "37 pre-iroot limbs at R=24");
         // 4-wide head over the first four limbs (cells_root, r0, r1, r2).
         let mut d = hash_many(&[pre_limbs[0], pre_limbs[1], pre_limbs[2], pre_limbs[3]]);
         let mut col = 4;
@@ -1108,7 +1110,7 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
     // -- (a) THE INDEPENDENT RE-FOLD == the deployed PUBLISHED commitment. --
     // The deployed pre-limb vector (the Lean `rotatedLimbs` order) and the deployed published felt.
     let pre = compute_rotated_pre_limbs(&plain, &ctx);
-    assert_eq!(pre.len(), V9_NUM_PRE_LIMBS, "35 limbs");
+    assert_eq!(pre.len(), V9_NUM_PRE_LIMBS, "37 limbs");
     // The authority residue sits at index 24 (register r23) — the Lean `authority_digest_at_index_24`.
     assert_eq!(
         pre[24],
@@ -1291,13 +1293,70 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
         "the independent re-fold == the deployed published commitment on the vk-changed cell too"
     );
 
+    // -- (f) THE mode / fields_root FLIP (the WAVE-3 mode/fields-root flag-day's reason for the two
+    //    new limbs): a Hosted→Sovereign mode promotion MOVES the committed mode limb (35) AND the
+    //    published commitment; a fields_root change MOVES the committed fields-root limb (36) AND the
+    //    published commitment. This is the P0-2 non-vacuity on the mode / fields-root sub-limbs: an
+    //    un-promoted sovereign / a forged post-`fields_root` (or refusal audit) publishes a DIFFERENT
+    //    OLD/NEW commit than the honest one. The differential's Lean twin is `RotatedCommitDifferential`
+    //    load-bearing at indices 35 / 36. --
+    let mut sovereign = producer_cell(100_000, 0);
+    sovereign.mode = dregg_cell::CellMode::Sovereign;
+    let pre_sov = compute_rotated_pre_limbs(&sovereign, &ctx);
+    assert_ne!(
+        pre[35], pre_sov[35],
+        "index 35 (mode) MUST move on a Hosted→Sovereign promotion (the mode byte is committed)"
+    );
+    assert_eq!(pre[35], BabyBear::ZERO, "a Hosted cell's committed mode is 0");
+    assert_eq!(
+        pre_sov[35],
+        BabyBear::new(1),
+        "a Sovereign cell's committed mode is 1 (the makeSovereign constant force target)"
+    );
+    let published_sov = compute_canonical_state_commitment_v9_felt(&sovereign, &ctx);
+    assert_ne!(
+        published, published_sov,
+        "P0-2 on the mode: a Hosted→Sovereign flip MOVES the published rotated commitment \
+         (limb 35 is bound) — an un-promoted sovereign publishes a DIFFERENT commit"
+    );
+    assert_eq!(
+        published_sov,
+        independent_wire_commit(&pre_sov, iroot),
+        "the independent re-fold == the deployed published commitment on the sovereign cell too"
+    );
+
+    let mut fr_changed = producer_cell(100_000, 0);
+    fr_changed.state.fields_root = [9u8; 32]; // a DIFFERENT overflow-map root (a refusal audit / dyn write)
+    let pre_fr = compute_rotated_pre_limbs(&fr_changed, &ctx);
+    assert_ne!(
+        pre[36], pre_fr[36],
+        "index 36 (fields_root) MUST move on a fields_root change (the fields-root sub-limb is committed)"
+    );
+    assert_eq!(
+        pre[36],
+        dregg_turn::rotation_witness::fields_root_felt(&plain.state.fields_root),
+        "the committed fields-root limb IS the deployed fields_root digest"
+    );
+    let published_fr = compute_canonical_state_commitment_v9_felt(&fr_changed, &ctx);
+    assert_ne!(
+        published, published_fr,
+        "P0-2 on the fields-root: a fields_root change MOVES the published rotated commitment \
+         (limb 36 is bound) — a forged post-`fields_root` / refusal audit publishes a DIFFERENT commit"
+    );
+    assert_eq!(
+        published_fr,
+        independent_wire_commit(&pre_fr, iroot),
+        "the independent re-fold == the deployed published commitment on the fields_root-changed cell too"
+    );
+
     eprintln!(
         "ROTATED WIRE-COMMIT LEAN DIFFERENTIAL GREEN: the PUBLISHED rotated commitment == an \
          independent re-fold over the Lean rotatedLimbs order; a permission flip MOVES it (P0-2 on \
          the authority residue, limb 24); a note-commitment ADD MOVES it (P0-2 on the commitments \
          set, limb 27); a Live→Sealed flip MOVES it (P0-2 on the lifecycle disc, limb 32); a perms \
-         change MOVES it (P0-2 on the perms-digest, limb 33); and a VK change MOVES it (P0-2 on the \
-         vk-digest, limb 34)."
+         change MOVES it (P0-2 on the perms-digest, limb 33); a VK change MOVES it (P0-2 on the \
+         vk-digest, limb 34); a Hosted→Sovereign flip MOVES it (P0-2 on the mode, limb 35); and a \
+         fields_root change MOVES it (P0-2 on the fields-root, limb 36)."
     );
 }
 

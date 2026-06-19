@@ -641,9 +641,9 @@ pub fn canonical_to_babybear_pi(canonical: &[u8; 32]) -> [u32; 8] {
 pub const V9_NUM_REGISTERS: usize = 24;
 /// The number of pre-iroot absorption limbs (cells_root · r0..r23 · cap_root · nullifier_root ·
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
-/// perms_digest · vk_digest). Lean `preLimbsAt_length = 35` at R = 24, after the WAVE-2 perms/VK
-/// flag-day widening (33→35).
-pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 3; // 35 (+ disc + perms + vk)
+/// perms_digest · vk_digest · mode · fields_root). Lean `preLimbsAt_length = 37` at R = 24, after
+/// the WAVE-3 mode/fields-root flag-day widening (35→37).
+pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 5; // 37 (+ disc + perms + vk + mode + fields_root)
 
 /// The turn-level context the rotated commitment absorbs that is NOT cell-local: the
 /// boundary `cells_root` (the sorted-Poseidon2 root over present cells), the cell's committed
@@ -924,10 +924,38 @@ pub fn compute_rotated_pre_limbs(
     // gated disc-transition limb; byte-identical to `rotation_witness::lifecycle_disc_felt`).
     pre[32] = BabyBear::new(cell.lifecycle.discriminant() as u32);
     // limbs 33,34: perms_digest, vk_digest (the WAVE-2 flag-day committed authority sub-limbs — the
-    // declared-param felts the setPerms / setVK welds force, the NEW LAST pre-iroot limbs).
+    // declared-param felts the setPerms / setVK welds force).
     pre[33] = perms_digest_felt(&cell.permissions);
     pre[34] = vk_digest_felt(&cell.verification_key);
+    // limbs 35,36: mode, fields_root (the WAVE-3 flag-day committed authority sub-limbs — the
+    // makeSovereign mode CONSTANT-force limb and the setFieldDyn / refusal fields-root weld limb, the
+    // NEW LAST pre-iroot limbs). Byte-identical to `rotation_witness::{mode_felt,fields_root_felt}`.
+    pre[35] = mode_felt(&cell.mode);
+    pre[36] = hash_bytes(&cell.state.fields_root);
     pre
+}
+
+/// The committed cell-MODE sub-limb (`B_MODE = 35`, WAVE-3 mode/fields-root flag-day). The raw
+/// `mode_flag` byte (`Hosted=0 / Sovereign=1`) `compute_authority_digest_felt` folds, as a felt. The
+/// in-circuit makeSovereign gate (`EffectVmEmitRotationV3.rotateV3WithModeGate`) FORCES the AFTER mode
+/// limb to `Sovereign(1)` as a CONSTANT, so a ledgerless client cannot be shown an un-promoted
+/// sovereign. The CANONICAL definition; `turn::rotation_witness::mode_felt` calls it.
+pub fn mode_felt(mode: &crate::cell::CellMode) -> dregg_circuit::field::BabyBear {
+    dregg_circuit::field::BabyBear::new(match mode {
+        crate::cell::CellMode::Hosted => 0,
+        crate::cell::CellMode::Sovereign => 1,
+    })
+}
+
+/// The committed `fields_root` digest sub-limb (`B_FIELDS_ROOT = 36`, WAVE-3 flag-day). The overflow
+/// named-field map root `compute_authority_digest_felt` folds (`hash_bytes(cell.state.fields_root)`,
+/// the SAME byte-root→felt the cap_root / nullifier_root / commitments_root limbs use). The in-circuit
+/// setFieldDyn / refusal weld (`EffectVmEmitRotationV3.rotateV3WithFieldsRootGate`) FORCES the AFTER
+/// fields_root limb to the declared post-`fields_root` param (verifier-anchored), so a forged
+/// post-`fields_root` is UNSAT for a ledgerless client. CANONICAL; `turn::rotation_witness::
+/// fields_root_felt` calls it.
+pub fn fields_root_felt(fields_root: &[u8; 32]) -> dregg_circuit::field::BabyBear {
+    dregg_circuit::poseidon2::hash_bytes(fields_root)
 }
 
 /// The committed PERMISSIONS-DIGEST sub-limb (`B_PERMS = 33`, WAVE-2 perms/VK flag-day). BYTE-IDENTICAL
