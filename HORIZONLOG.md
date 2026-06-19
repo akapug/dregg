@@ -135,6 +135,37 @@ refused to launder a partial):**
   cell felt8 is consumer-facing): repoint `compute_canonical_state_commitment_v9_felt8` onto the chip chain (or
   publish a `wire_commit_8_chip` cell-side wrapper) so the deployed executor anchors. Until then the cell `_felt8`
   is NOT the deployed circuit's commit.
+- 🚧 **PHASE B-ROTATION — THE LIVE FLIP: TWO REAL BLOCKERS FOUND (7th agent, 2026-06-19, STOPPED CLEAN at green
+  HEAD `b533beef4`).** The atomic switch was BUILT in full (cell `_felt8`→`wire_commit_8_chip` + the turn-side
+  twin; cipherclerk producer → wide; executor → WIDE registry + retire `dpis[34/35]` + bind 16 wide PIs via
+  `bytes32_to_felt8`; the C1 registration → `_v9_8`; the wide-roundtrip seam-closed assertion) and ALL EDITS
+  BACKED OUT to green HEAD per green-or-bust. **What LANDED proven (the wins, now reverted but recipe-clear):**
+  (i) the missing FEE leg — `generate_rotated_transfer_shape_with_fee_wide` + `prove_effect_vm_rotated_wide_with_
+  fee` (the LIVE sovereign transfer is FEE'd; the proven slice-2b legs covered only the NON-fee transfer +
+  noteSpend — a real gap). NEW self-verifying test `wide_sovereign_fee_pipeline_proves_and_anchored_verify_accepts`
+  PROVED+VERIFIED (55-PI `transferFeeVmDescriptor2R24` wide, fee debited in-proof, forgery UNSAT) — GREEN. (ii)
+  the generic `generate_rotated_cohort_wide` (accepts 38-PI transfer-shape OR 39-PI record-pin base) — the
+  record-pin family (setPerms/setVK/cellSeal/…) carries 39 base PIs, which `_transfer_shape_wide` (38-only)
+  rejects. **BLOCKER 1 (the fatal one — needs Lean re-emit, NOT a Rust switch):** the wide descriptor (additive
+  `wideAppend`) KEEPS the host's 1-felt PI 34/35 pins (col 225/276 → the trace's 1-felt `STATE_COMMIT` carriers).
+  After retiring the executor's `dpis[34/35]` override, those PIs revert to the executor's PLACEHOLDER-reconstructed
+  carriers, which ≠ the producer's REAL carriers ⇒ Fiat-Shamir transcript mismatch ⇒ `InvalidPowWitness` (the C1
+  control fee-transfer rejected). The executor CANNOT reproduce the real 34/35 carriers: they depend on the
+  producer's `cells_root` (its SINGLE-CELL ctx_ledger of the before-cell) + `iroot` (the cipherclerk's receipt
+  chain) — NEITHER is derivable from the published turn + the executor's real ledger, and the 1-felt trusted value
+  is no longer stored (we store 8-felt). **FIX (genuine, VK-affecting):** retire the 1-felt PI 34/35 pins in Lean
+  `wideAppend` (drop/free the host's `B_STATE_COMMIT` pins — they ARE the ~31-bit waist we're eliminating) + re-emit
+  `WIDE_REGISTRY_STAGED_TSV` + re-pin its FP; OR thread the producer's full rotation context (cells_root/iroot)
+  onto the turn so the executor reconstructs the carriers faithfully. **BLOCKER 2 (smaller):** the initial sovereign
+  REGISTRATION must store the 8-felt commit (`compute_canonical_state_commitment_v9_8`), not the 1-felt `_v9` —
+  else the first turn's OLD wide anchor (felts 1..7 = 0) ≠ the producer's 8-felt BEFORE carrier. **VK/re-emit
+  finding (good):** repointing live CONSUMERS to the pre-existing `WIDE_REGISTRY_STAGED_TSV` (already FP-pinned +
+  drift-checked) needs NO descriptor re-emit and NO separate pinned VK (the IR-v2 descriptor TSV IS the verifying
+  material) — UNTIL Blocker 1's fix changes `wideAppend` (then a re-emit IS required). The Lean side
+  (`v3RegistryCapOpenWide` `_length=45`/`_sound`/`_binds`) is genuinely complete; Blocker 1 is a TARGETED
+  `wideAppend`-pin-retirement + re-emit, not new soundness proof. RESUME: land Blocker 1's Lean pin-retirement
+  first (it's the floor under everything), re-emit/re-pin, THEN the Rust switch (which is otherwise built + the
+  fee/cohort legs proven green).
 - ⬜ **PHASE B-ROTATION — the flag-day SWITCH (ember-gated, VK-affecting; all legs proven green)**: ~~(a) FAN-OUT~~
   (DONE) · ~~(b) EXECUTOR ANCHORING~~ (DONE) · ~~(c) the producer+executor flip LEGS~~ (DONE, slice 2b: proven
   coherent end-to-end). THE ATOMIC SWITCH (the ONLY thing left, ember-gated since it bumps the VK — a partial
