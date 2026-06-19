@@ -49,6 +49,7 @@ EMITTERS = [
     "EmitAllJsonV2.lean",                    # ir2: defName-keyed (V2_DESCRIPTORS)
     "EmitRotationV3.lean",                   # rotation v3-staged artifacts + registry tsv
     "EmitWideTransferProbe.lean",            # ADDITIVE: the faithful 8-felt wide transfer descriptor
+    "EmitWideRegistryProbe.lean",            # ADDITIVE: the FULL 45-member faithful 8-felt wide registry
     "EmitBilateralLegs.lean",                # bilateral-aggregation legs
 ]
 
@@ -143,6 +144,10 @@ ROTATION_TSV = "rotation-v3-staged-registry.tsv"
 # ADDITIVE: the faithful 8-felt wide transfer descriptor (a single `key\tname\tjson` line,
 # `EmitWideTransferProbe.lean`). Beside the live 1-felt registry — the live TSV is untouched.
 WIDE_TRANSFER_TSV = "rotation-wide-transfer-staged.tsv"
+# ADDITIVE: the FULL 45-member faithful 8-felt wide registry (`key\tname\tjson` per line,
+# `EmitWideRegistryProbe.lean`, trailing newline). The per-family wide-roundtrip slice consumes it.
+# Beside the live 1-felt registry — the live TSV / FP / VK are untouched.
+WIDE_REGISTRY_TSV = "rotation-wide-registry-staged.tsv"
 
 
 def split_rotation(stdout: str, written):
@@ -169,6 +174,20 @@ def split_wide(stdout: str, written):
     if not line.startswith("transferVmDescriptor2R24Wide\t"):
         sys.exit(f"emit_descriptors: wide emitter produced unexpected line: {line[:80]!r}")
     write_file(WIDE_TRANSFER_TSV, line, written)
+
+
+def split_wide_registry(stdout: str, written):
+    """The wide-registry emitter prints one `key\tname\tjson` line per wide member (45 lines).
+    The checked-in artifact is those lines joined with a trailing newline."""
+    lines = [ln for ln in stdout.splitlines() if ln.strip()]
+    if len(lines) != 45:
+        sys.exit(
+            f"emit_descriptors: wide registry emitter produced {len(lines)} lines (expected 45)"
+        )
+    for ln in lines:
+        if ln.count("\t") != 2:
+            sys.exit(f"emit_descriptors: wide registry line malformed: {ln[:80]!r}")
+    write_file(WIDE_REGISTRY_TSV, "\n".join(lines) + "\n", written)
 
 
 def split_bilateral(stdout: str, written):
@@ -251,6 +270,8 @@ def main():
             split_rotation(out, written)
         elif lean.endswith("EmitWideTransferProbe.lean"):
             split_wide(out, written)
+        elif lean.endswith("EmitWideRegistryProbe.lean"):
+            split_wide_registry(out, written)
         elif lean.endswith("EmitBilateralLegs.lean"):
             split_bilateral(out, written)
         else:

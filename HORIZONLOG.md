@@ -100,14 +100,52 @@ refused to launder a partial):**
   convention (`ins.length`) vs the chip's narrow/wide-only support — a chip-AIR generalization (seed lanes 7..10
   for any arity ≥8) would let the emit use the natural arity-9 (VK-affecting, ember-gated). THE STAGED PATH IS
   PROVEN GREEN-ABLE.
-- ⬜ **PHASE B-ROTATION — finish the staged flip (resume HERE)**: (a) FAN-OUT the wide producers to the other
-  cohort families (`generate_rotated_<family>_wide` — burn/mint reuse the transfer shape; noteSpend/noteCreate/
-  createCell/factory/spawn wrap their grow-gate generators + the same 13×8 carriers + 16 PIs; `fill_wide_block`
-  parametric, `bb=187`/`ab=238` uniform) + the 9 cap-open tail (distinct `bb` past the 210-col appendix), each
-  with a wide roundtrip — ADDITIVE, green-able like slice 1; (b) the EXECUTOR ANCHORING (the wide cell≡circuit
-  commit differential); (c) THEN the flag-day repoint `v3RegistryCapOpen → v3RegistryCapOpenWide` + the executor
-  1-felt-retire + TSV/VK cutover (the final atomic step, now small — all producers green-additive). Do NOT repoint
-  the apex `Rfix` (authority leg, detonates 11 rfl proofs).
+- ✅ **STAGED SLICE 2 — the wide producers FANNED OUT to every producer shape + the EXECUTOR ANCHORING** (GREEN,
+  NOT yet committed): the full 45-member wide registry emitted from verified Lean (`EmitWideRegistryProbe.lean` →
+  `WIDE_REGISTRY_STAGED_TSV`, FP-pinned + coverage test, name-stable with the live registry; key = the live
+  registry key). The Rust wide producers fanned out via a generic `append_wide_carriers(trace, base_pis,
+  host_width)` (carrier base = the host width — 608 for the 816-wide families, 818 for cap-open): transfer-shape
+  (`generate_rotated_transfer_shape_wide`, burn/mint), the 3 grow-gate families (`generate_rotated_note_spend_wide`/
+  `_note_create_wide`/`_create_cell_wide`, wrapping their limb-26/27/0 accumulator generators), and the cap-open
+  tail (`append_wide_carriers_cap_open`, width 1026). FIVE real wide `prove/verify_vm_descriptor2` roundtrips —
+  one per distinct producer shape — all PROVE+VERIFY (`tests/effect_vm_wide_roundtrip.rs` ×4 + `cap_open_self_
+  verify.rs::cap_open_wide_*`). The bb is UNIFORM=187 across all 45 (the inherited per-member-split note was
+  superseded — the cap-open `bb` is its FACE width 187, the appendix lands past the limbs). LIVE UNTOUCHED:
+  flip 13/13, cap-open 4/4, dregg-cell 660+, circuit lib 896, sovereign c1 19/19, drift byte-identical (no live
+  TSV/FP/VK change), `lake build Dregg2` 4004 axiom-clean.
+- ✅ **STAGED SLICE 2b — the WHOLE flip pipeline PROVEN COHERENT end-to-end** (GREEN, NOT committed): the
+  producer + executor flip LEGS are built ADDITIVELY and proven to cohere, so the flag-day is now a pure switch.
+  **Producer leg** `full_turn_proof::prove_effect_vm_rotated_wide` (mints a real wide `Ir2BatchProof` over
+  `WIDE_REGISTRY_STAGED_TSV` via the wide producers, publishes the 16 wide commit PIs). **Executor leg** (mirrored
+  in `sdk/tests/sovereign_rotated_wide.rs`): reconstructs the trusted before/after cell, computes the chip-faithful
+  8-felt commit (`wire_commit_8_chip` over `compute_rotated_pre_limbs`), OVERRIDES the 16 wide PIs, and
+  `verify_vm_descriptor2` ACCEPTS — BOTH the BEFORE (stored sovereign state) AND AFTER (EffectVM-applied
+  post-state, nonce ticked) commits match the producer's published ones. **Forgery tooth** bites (a forged 8-felt
+  commit is UNSAT). So the flag-day = repoint the live sovereign producer (`cipherclerk::prove_sovereign_turn_
+  rotated`) + executor (`proof_verify::verify_and_commit_proof_rotated`'s `dpis[34]/[35]` → 16 wide PIs from
+  `wire_commit_8_chip`) onto these legs + the cell `_felt8` chip-chain repoint + re-emit/re-pin the VK — ATOMIC,
+  ember-gated (VK-affecting). The legs are GREEN; the switch is mechanical.
+- ⚑ **STANDING SEAM (slice 2, the cell-side flip cutover) — `compute_canonical_state_commitment_v9_felt8` uses
+  the WRONG chain.** The circuit's published wide carrier is the CHIP chain (`fill_wide_block`/`chip_absorb_all_
+  lanes` — arity-tagged seeding: the head's `st[4]=4` tag), but the cell's `_felt8` delegates to `wire_commit_8`
+  (plain `single_perm_compress`, NO arity tag) — they DIVERGE from the head on (measured: the executor-anchoring
+  tests assert `_ne` on the plain chain). The new circuit primitive `poseidon2::wire_commit_8_chip` (byte-twin of
+  `fill_wide_block`) IS the deployed-circuit-anchoring chain; the executor-anchoring differential proves cell
+  pre_limbs → `wire_commit_8_chip` ≡ circuit carrier-12. CLOSURE (part of the flag-day, ember-gated since the
+  cell felt8 is consumer-facing): repoint `compute_canonical_state_commitment_v9_felt8` onto the chip chain (or
+  publish a `wire_commit_8_chip` cell-side wrapper) so the deployed executor anchors. Until then the cell `_felt8`
+  is NOT the deployed circuit's commit.
+- ⬜ **PHASE B-ROTATION — the flag-day SWITCH (ember-gated, VK-affecting; all legs proven green)**: ~~(a) FAN-OUT~~
+  (DONE) · ~~(b) EXECUTOR ANCHORING~~ (DONE) · ~~(c) the producer+executor flip LEGS~~ (DONE, slice 2b: proven
+  coherent end-to-end). THE ATOMIC SWITCH (the ONLY thing left, ember-gated since it bumps the VK — a partial
+  bricks the validator): in ONE commit, (1) repoint the live sovereign producer `cipherclerk::prove_sovereign_
+  turn_rotated` onto `prove_effect_vm_rotated_wide` (publish 16 wide PIs instead of `felt_to_bytes32(pi[34/35])`);
+  (2) repoint the executor `proof_verify::verify_and_commit_proof_rotated` to the WIDE registry + override the 16
+  wide PIs from `wire_commit_8_chip(compute_rotated_pre_limbs(trusted before/after cell))` (the slice-2b executor
+  leg) instead of `dpis[34]/[35]`; (3) repoint `compute_canonical_state_commitment_v9_felt8` onto the chip chain
+  (the slice-2 seam) so the stored sovereign commitment IS the deployed wide commit; (4) repoint the registry-
+  resolving consumers (`full_turn_proof`, `node`, the sdk wrappers) to `WIDE_REGISTRY_STAGED_TSV`; (5) re-emit +
+  re-pin all FPs + the VK. Do NOT repoint the apex `Rfix` (authority leg, detonates 11 rfl proofs).
 - ⬜ ~~**PHASE B-ROTATION LIVE CUTOVER — the pure Rust/executor flip**~~ (now the STAGED path above; original atomic framing): Now a ONE-LINE Lean repoint (`v3Registry →
   v3RegistryWide`) + the atomic Rust/executor: producer 8-felt carrier fill (+208) across 6 crates · executor
   retire `dpis[34]/[35]` → bind 16 wide PIs (`felt8_to_bytes32`) · the hardcoded geometry consts (`ROT_WIDTH`/

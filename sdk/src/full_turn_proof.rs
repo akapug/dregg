@@ -744,6 +744,111 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated IR-v2 proof: {e}")))
 }
 
+/// **THE FAITHFUL 8-FELT WIDE rotated prover (STAGED — the flip's producer leg).** The wide twin of
+/// [`prove_effect_vm_rotated_ir2_with_caveat`]: routes the WIDE descriptor (from
+/// `WIDE_REGISTRY_STAGED_TSV`, the verified Lean `v3RegistryCapOpenWide`), generates the trace
+/// through the WIDE producers (transfer-shape / grow-gate), and proves at the wide geometry (the two
+/// 13×8 BEFORE/AFTER carriers + 16 wide PIs). The published 8-felt commit binds the FULL 37 limbs +
+/// iroot (~124-bit), closing the ~31-bit 1-felt floor. Self-verifies before return. STAGED: the live
+/// 1-felt producer ([`prove_effect_vm_rotated_ir2_with_caveat`]) is UNTOUCHED — the flag-day repoints
+/// the sovereign producer here (+ the executor's wide verify). Returns `(proof, wide_dpis)` — the
+/// caller publishes the 16 wide commit PIs (the executor anchors them to the trusted cell).
+#[cfg(feature = "prover")]
+pub fn prove_effect_vm_rotated_wide(
+    initial_state: &CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    before_nullifiers: Option<&[BabyBear]>,
+) -> Result<
+    (
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        Vec<BabyBear>,
+    ),
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
+    };
+    use dregg_circuit::effect_vm::trace_rotated::{
+        RotatedBlockWitness, generate_rotated_note_spend_wide, generate_rotated_transfer_shape_wide,
+        rotated_descriptor_name_for_effect,
+    };
+    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+
+    let lead = effects
+        .first()
+        .ok_or_else(|| SdkError::InvalidWitness("wide rotated prover: empty turn".into()))?;
+    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "wide rotated prover: effect {lead:?} is not in the rotated cohort"
+        ))
+    })?;
+    if effects.len() > 1 {
+        for e in &effects[1..] {
+            if rotated_descriptor_name_for_effect(e) != Some(name) {
+                return Err(SdkError::InvalidWitness(
+                    "wide rotated prover: heterogeneous multi-effect turn".into(),
+                ));
+            }
+        }
+    }
+    // Resolve the WIDE descriptor JSON for that registry key.
+    let json = WIDE_REGISTRY_STAGED_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _name = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            SdkError::InvalidWitness(format!("{name} not in WIDE_REGISTRY_STAGED_TSV"))
+        })?;
+    let desc = parse_vm_descriptor2(json)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated descriptor parse: {e}")))?;
+
+    let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+    };
+    let before = bridge(before_w)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated before-witness: {e}")))?;
+    let after = bridge(after_w)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated after-witness: {e}")))?;
+
+    // NoteSpend routes through the grow-gate wide producer (the limb-26 accumulator); every other
+    // cohort lead routes through the transfer-shape wide producer (the bare-38-PI carrier). (The other
+    // grow-gate families — noteCreate/createCell/factory/spawn — extend identically when the sovereign
+    // producer routes them; transfer + noteSpend are the live sovereign leads.)
+    let (trace, dpis, map_heaps) =
+        if matches!(lead, dregg_circuit::effect_vm::Effect::NoteSpend { .. }) {
+            use dregg_circuit::heap_root::HeapLeaf;
+            let leaves: Vec<HeapLeaf> = before_nullifiers
+                .unwrap_or(&[])
+                .iter()
+                .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
+                .collect();
+            generate_rotated_note_spend_wide(
+                initial_state, effects, &before, &after, caveat, &leaves,
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide note-spend generation: {e}")))?
+        } else {
+            let (t, d) = generate_rotated_transfer_shape_wide(
+                initial_state, effects, &before, &after, caveat,
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide transfer-shape generation: {e}")))?;
+            (t, d, vec![])
+        };
+
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &map_heaps)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated IR-v2 proof: {e}")))?;
+    Ok((proof, dpis))
+}
+
 /// **THE FEE-IN-PROOF rotated prover (`transferFeeVmDescriptor2R24`).** The fee-path twin of
 /// [`prove_effect_vm_rotated_ir2_with_caveat`] for a plain sovereign `Transfer` lead: it routes the
 /// `transferFeeVmDescriptor2R24` descriptor (39 PIs), generates the fee-aware trace

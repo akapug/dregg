@@ -506,6 +506,49 @@ pub fn wire_commit_8(pre_limbs: &[BabyBear], iroot: BabyBear) -> [BabyBear; 8] {
     single_perm_compress(&seed)
 }
 
+/// **THE CHIP-FAITHFUL 8-felt rotated state commitment — the byte-twin of `fill_wide_block`** (the
+/// wide-carrier producer the circuit PUBLISHES). Identical chain SHAPE to [`wire_commit_8`] (4-wide
+/// head, arity-11 body groups, arity-11-padded iroot final) but each step is the chip table's
+/// [`chip_absorb_all_lanes`] — i.e. the SAME arity-tagged seeding the in-circuit `TID_P2` chip
+/// lookups derive (`st[4] = arity` for narrow arities; the `seed456` blend for arity 7/11; the wide
+/// lane tail). The two chains DIVERGE: [`wire_commit_8`]'s plain [`single_perm_compress`] seeds the
+/// raw inputs with NO arity tag, so its head (arity 4) leaves `st[4] = 0` where the chip seeds
+/// `st[4] = 4` — the chains differ from the head on. The CIRCUIT's published wide carrier IS this
+/// chip chain (`chip_absorb_all_lanes` per `fill_wide_block` step), so the deployed executor MUST
+/// anchor the 8 wide PIs against THIS primitive — the flip's cell-side cutover repoints
+/// `compute_canonical_state_commitment_v9_felt8` here.
+#[cfg(feature = "prover")]
+pub fn wire_commit_8_chip(pre_limbs: &[BabyBear], iroot: BabyBear) -> [BabyBear; 8] {
+    use crate::descriptor_ir2::chip_absorb_all_lanes;
+    let n = pre_limbs.len();
+    let mut d = chip_absorb_all_lanes(4, &[pre_limbs[0], pre_limbs[1], pre_limbs[2], pre_limbs[3]]);
+    let mut col = 4usize;
+    while col < n {
+        let remaining = n - col;
+        let mut seed = [BabyBear::ZERO; 11];
+        seed[..8].copy_from_slice(&d);
+        let arity = if remaining >= 3 {
+            seed[8] = pre_limbs[col];
+            seed[9] = pre_limbs[col + 1];
+            seed[10] = pre_limbs[col + 2];
+            col += 3;
+            11
+        } else {
+            seed[8] = pre_limbs[col];
+            col += 1;
+            9
+        };
+        d = chip_absorb_all_lanes(arity, &seed);
+    }
+    // final: the iroot rides the wide arity-11 absorb (`d8 ‖ iroot ‖ 0 ‖ 0`) — the chip AIR pins
+    // `in7..in10 == 0` for every non-11 arity, so the final is the arity-11 row with two trailing
+    // zero limb lanes (binding-preserving: `single_perm_compress` is invariant to them).
+    let mut seed = [BabyBear::ZERO; 11];
+    seed[..8].copy_from_slice(&d);
+    seed[8] = iroot;
+    chip_absorb_all_lanes(11, &seed)
+}
+
 /// Hash arbitrary bytes into a single BabyBear field element via Poseidon2.
 ///
 /// Packs the input bytes into field elements (4 bytes per element with modular

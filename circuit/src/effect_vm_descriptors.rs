@@ -827,6 +827,22 @@ pub const V3_STAGED_REGISTRY_FP: &str =
 pub const WIDE_TRANSFER_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-transfer-staged.tsv");
 
+/// **THE FAITHFUL 8-FELT WIDE REGISTRY (STAGED-ADDITIVE slice 2).** The FULL 45-member emit-source
+/// registry made 8-felt-wide: each `v3RegistryCapOpen` member wrapped through the proven
+/// `wideAppend member bb (bb+51)` (`bb = 187` uniform — the rotated BEFORE-limb base). The `key\t
+/// name\tjson` per line (key = the live registry key, e.g. `burnVmDescriptor2R24`, mirroring
+/// `rotation-v3-staged-registry.tsv`), emitted from the verified Lean
+/// `CapOpenEmit.v3RegistryCapOpenWide` (`metatheory/EmitWideRegistryProbe.lean`). ADDITIVE: the live
+/// 1-felt `V3_STAGED_REGISTRY_TSV` / FP / VK are UNTOUCHED — this is the parallel wide path beside
+/// them. The transfer row (row 0) is byte-identical to `WIDE_TRANSFER_STAGED_TSV`. The wide carriers
+/// land PAST each member's host width (608 for the 816-wide families, 818 for the 1026-wide cap-open
+/// tail), re-absorbing the SAME rotated limbs the 1-felt block lays into a genuine 8-felt
+/// (~124-bit) commitment.
+pub const WIDE_REGISTRY_STAGED_TSV: &str =
+    include_str!("../descriptors/rotation-wide-registry-staged.tsv");
+pub const WIDE_REGISTRY_STAGED_FP: &str =
+    "f96d3985ab6a4cb2f1ccfaf4e56bd494c083d3d8d4ed881c707ad34ab4991c37";
+
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
 /// 3-wide chip groups while ≥ 3 remain, singletons after — arity ∈ {2,4}, NEVER 3 — and the
@@ -1978,6 +1994,68 @@ mod tests {
              FEE-IN-PROOF transfer (transferFeeVmDescriptor2R24 — the fee debited in-proof, 39 PIs). \
              The Signature-pinned capOpenAttenuateV3/transferCapOpenV3 were DELETED (Stage D)."
         );
+    }
+
+    /// **THE WIDE REGISTRY drift + coverage pin (STAGED-ADDITIVE slice 2).** The 45-member faithful
+    /// 8-felt wide registry TSV is fingerprint-stable (the Lean `EmitWideRegistryProbe.lean` is the
+    /// byte source), parses member-for-member, and is name-stable against the live 1-felt registry
+    /// (the flip is a name-stable repoint). The transfer member (row 0) is byte-identical to the
+    /// single-line `WIDE_TRANSFER_STAGED_TSV`. ADDITIVE: pins the wide path WITHOUT touching the live
+    /// `V3_STAGED_REGISTRY_*`.
+    #[test]
+    fn wide_registry_parses_matches_fingerprint_and_is_name_stable() {
+        use crate::descriptor_ir2::parse_vm_descriptor2;
+
+        // Whole-TSV fingerprint (the Lean driver `EmitWideRegistryProbe.lean` is the byte source).
+        assert_eq!(
+            sha256_hex(WIDE_REGISTRY_STAGED_TSV.as_bytes()),
+            WIDE_REGISTRY_STAGED_FP,
+            "wide registry TSV: SHA-256 drift (re-run EmitWideRegistryProbe.lean)"
+        );
+
+        // Every wide member parses; the wide geometry is `host + 208` carrier columns + 16 PIs. The
+        // keys are NAME-STABLE against the live 1-felt registry, member-for-member (the flip repoint
+        // does not rename). The transfer member (row 0) JSON is byte-identical to the single-line
+        // `WIDE_TRANSFER_STAGED_TSV`.
+        let live_keys: Vec<&str> = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.split('\t').next().expect("live key"))
+            .collect();
+        let mut n = 0usize;
+        for (i, line) in WIDE_REGISTRY_STAGED_TSV.lines().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            n += 1;
+            let mut it = line.splitn(3, '\t');
+            let key = it.next().expect("wide key");
+            let _name = it.next().expect("wide name");
+            let json = it.next().expect("wide json");
+            assert_eq!(key, live_keys[i], "wide registry key {i} name-stable with the live registry");
+            let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} wide parses: {e}"));
+            // the wide member is `host + 208` (two 13×8 carrier blocks) and `host.piCount + 16`.
+            // The host widths in play are 580 (custom/setFieldDyn), 608 (816-wide), 818 (cap-open):
+            // every wide width is one of 788 / 816 / 1026.
+            assert!(
+                matches!(d.trace_width, 788 | 816 | 1026),
+                "{key}: wide width {} is a known wide geometry (788 / 816 / 1026)",
+                d.trace_width
+            );
+            assert!(
+                d.public_input_count >= 54,
+                "{key}: wide PI count {} carries the 16 wide PIs (base ≥ 38)",
+                d.public_input_count
+            );
+            if i == 0 {
+                assert_eq!(
+                    json,
+                    WIDE_TRANSFER_STAGED_TSV.lines().next().unwrap().splitn(3, '\t').nth(2).unwrap(),
+                    "wide registry row 0 (transfer) == the single-line WIDE_TRANSFER_STAGED_TSV"
+                );
+            }
+        }
+        assert_eq!(n, 45, "the wide registry covers all 45 emit-source members");
     }
 
     /// The widened-entry codec teeth: round-trip + FAIL-CLOSED decode. A forged

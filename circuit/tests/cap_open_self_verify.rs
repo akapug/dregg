@@ -344,3 +344,92 @@ fn cap_open_attenuate_foreign_selector_row_is_unsat() {
          attenuateCapOpenEffVmDescriptor2R24 is UNSAT (the selector-binding gate bites)."
     );
 }
+
+/// **THE CAP-OPEN TAIL WIDE ROUNDTRIP (STAGED-ADDITIVE slice 2).** The 1026-wide cap-open member
+/// `attenuateCapOpenEffVmDescriptor2R24` (host width `CAP_OPEN_WIDTH = 818` + the 208 wide carriers):
+/// the genuine cap-open attenuate trace, widened to cap-open (818) then to the wide geometry (1026)
+/// via `append_wide_carriers_cap_open` (carriers at 818/922), PROVES + VERIFIES at width 1026. The
+/// executor-anchoring differential holds: `wire_commit_8_chip(trusted before-limbs) == circuit BEFORE
+/// carrier-12`. The distinct cap-open producer shape (carrier base 818, NOT 608) is closed wide.
+///
+/// ADDITIVE: the live 1-felt cap-open path / TSV / VK are UNTOUCHED — the wide member is the parallel
+/// 8-felt lane from `CapOpenEmit.v3RegistryCapOpenWide` (`WIDE_REGISTRY_STAGED_TSV`).
+#[test]
+fn cap_open_wide_proves_verifies_and_executor_anchors() {
+    use dregg_circuit::descriptor_ir2::verify_vm_descriptor2;
+    use dregg_circuit::effect_vm::trace_rotated::{
+        BEFORE_BASE, append_wide_carriers_cap_open,
+    };
+    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+
+    // The wide cap-open descriptor (key `attenuateCapOpenEffVmDescriptor2R24`, width 1026 / PI 54).
+    let wide_json = WIDE_REGISTRY_STAGED_TSV
+        .lines()
+        .find_map(|l| {
+            let mut it = l.splitn(3, '\t');
+            if it.next() == Some(CAP_OPEN_KEY) {
+                let _ = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .expect("cap-open wide member in WIDE_REGISTRY_STAGED_TSV");
+    let desc = parse_vm_descriptor2(wide_json).expect("cap-open wide descriptor parses");
+    let host_width = CAP_OPEN_WIDTH; // 818
+    let wide_width = host_width + 208; // 1026
+    assert_eq!(desc.trace_width, wide_width, "cap-open wide width 1026");
+    assert_eq!(desc.public_input_count, 54, "cap-open wide 54 PIs (38 + 16)");
+
+    // The genuine cap-open base trace (818-wide) + 38 PIs.
+    let (mut trace, pis) = build_attenuate_base();
+    let w = cap_open_witness();
+    widen_to_cap_open(&mut trace, &w).expect("widen to cap-open (818)");
+    assert_eq!(trace[0].len(), CAP_OPEN_WIDTH, "cap-open base width 818");
+
+    // Append the wide carriers at 818/922 + the 16 wide PIs (the carrier base is the cap-open host
+    // width, NOT 608 — the distinct cap-open producer shape).
+    let dpis = append_wide_carriers_cap_open(&mut trace, pis).expect("cap-open wide widener");
+    assert_eq!(trace[0].len(), wide_width, "cap-open wide trace width 1026");
+    assert_eq!(dpis.len(), 54, "cap-open wide 38 base + 16 wide PIs");
+
+    // The BEFORE 8-felt commit carrier (carrier 12) at the cap-open host base (818).
+    let before_commit_base = host_width + 8 * 12; // 914
+    for j in 0..8 {
+        assert_eq!(
+            dpis[38 + j], trace[0][before_commit_base + j],
+            "cap-open wide PI {} = BEFORE 8-felt commit felt {j}", 38 + j
+        );
+    }
+
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<HeapLeaf>> = vec![];
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("CAP-OPEN WIDE must prove end-to-end (1026 / 54-PI)");
+    verify_vm_descriptor2(&desc, &proof, &dpis)
+        .expect("CAP-OPEN WIDE proof must verify independently");
+    eprintln!(
+        "CAP-OPEN WIDE (attenuate-eff, R=24, width 1026, 54 PIs, FAITHFUL 8-felt commit): \
+         PROVED + VERIFIED — the cap-open producer shape (carrier base 818) is closed wide."
+    );
+
+    // EXECUTOR ANCHORING: the trusted before-limbs (the row's own BEFORE block) through the
+    // chip-faithful chain == the circuit's published BEFORE carrier-12.
+    let before_limbs: Vec<BabyBear> = (0..37).map(|j| trace[0][BEFORE_BASE + j]).collect();
+    let before_iroot = trace[0][BEFORE_BASE + 37];
+    let anchored = dregg_circuit::poseidon2::wire_commit_8_chip(&before_limbs, before_iroot);
+    let circuit_carrier12: [BabyBear; 8] =
+        core::array::from_fn(|j| trace[0][before_commit_base + j]);
+    assert_eq!(
+        anchored, circuit_carrier12,
+        "cap-open wide: wire_commit_8_chip(trusted before-limbs) == circuit BEFORE carrier-12"
+    );
+    assert!(
+        circuit_carrier12[1..].iter().any(|f| *f != BabyBear::ZERO),
+        "cap-open wide: the commit is genuinely 8-felt-wide (lanes 1..8 not all zero)"
+    );
+    eprintln!(
+        "CAP-OPEN WIDE: executor-anchoring holds (wire_commit_8_chip(trusted before-limbs) ≡ \
+         circuit carrier-12)."
+    );
+}

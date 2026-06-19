@@ -1652,6 +1652,31 @@ pub fn widen_to_cap_open(trace: &mut [Vec<BabyBear>], w: &CapOpenWitness) -> Res
     Ok(())
 }
 
+/// **THE WIDE CAP-OPEN widener (the 1026-wide cap-open tail's faithful 8-felt commit).** Given a
+/// fully-laid `CAP_OPEN_WIDTH`-wide cap-open trace (a base rotated trace already passed through
+/// [`widen_to_cap_open`]) and its base PI vector, appends the two 13×8 BEFORE/AFTER wide carrier
+/// blocks at `CAP_OPEN_WIDTH = 818` / `+104` and the 16 wide commit PIs — the cap-open tail's wide
+/// member is `wideAppend (capOpenHost) 187 238` (width 1026), carriers PAST the 210-col cap-open
+/// appendix. The cap-open host constraints / membership columns are CARRIED UNCHANGED; the wide
+/// carriers re-absorb the SAME `BEFORE_BASE`/`AFTER_BASE` limbs. Returns the appended `dpis`. The
+/// trace is resized in place to `CAP_OPEN_WIDTH + 208 = 1026`.
+pub fn append_wide_carriers_cap_open(
+    trace: &mut [Vec<BabyBear>],
+    base_pis: Vec<BabyBear>,
+) -> Result<Vec<BabyBear>, String> {
+    if trace.is_empty() {
+        return Err("cap-open wide: empty base trace".into());
+    }
+    if trace[0].len() != CAP_OPEN_WIDTH {
+        return Err(format!(
+            "cap-open wide: base trace width {} != CAP_OPEN_WIDTH {CAP_OPEN_WIDTH} (widen_to_cap_open \
+             first)",
+            trace[0].len()
+        ));
+    }
+    Ok(append_wide_carriers(trace, base_pis, CAP_OPEN_WIDTH))
+}
+
 /// Fill the two TURN-IDENTITY columns of the TB (turn-bound) cap-open weld on a single row: the
 /// `actor` felt at `CAP_OPEN_TB_ACTOR_COL` (818) and the `dst` felt at `CAP_OPEN_TB_DST_COL` (819).
 /// (The `src` column — `CAP_OPEN_BASE + 57` = 665 — is the EXISTING cap-open `src` column already
@@ -1863,30 +1888,149 @@ pub fn generate_rotated_transfer_wide(
         ));
     }
 
-    // Widen each row to 816 and fill the BEFORE/AFTER wide commitment chains.
-    for row in trace.iter_mut() {
-        row.resize(WIDE_WIDTH, BabyBear::ZERO);
-        fill_wide_block(row, WIDE_BEFORE_CBASE, BEFORE_BASE);
-        fill_wide_block(row, WIDE_AFTER_CBASE, AFTER_BASE);
-    }
+    // Widen each row + append the 16 wide PIs via the generic widener (transfer's host width is
+    // `GRAD_ROT_WIDTH = 608`, so the carriers land at `WIDE_BEFORE_CBASE = 608`).
+    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    debug_assert_eq!(trace[0].len(), WIDE_WIDTH);
+    debug_assert_eq!(dpis.len(), WIDE_PI_COUNT);
+    Ok((trace, dpis))
+}
 
-    // The 16 appended wide PIs: BEFORE commit (carrier 12) on the FIRST row, AFTER commit on the
-    // LAST row — the exact columns the descriptor's `pi_binding` constraints pin (704..711 first,
-    // 808..815 last).
+/// **THE GENERIC WIDE WIDENER (parametric in the host width / carrier base).** Given a fully-laid
+/// rotated base trace (its `BEFORE_BASE`/`AFTER_BASE` limb blocks final, including any grow-gate root
+/// override + `recompute_block_commit`) and its base PI vector, this:
+///   * resizes each row to `host_width + 208` and fills the two 13×8 BEFORE/AFTER wide carrier blocks
+///     at `cbB = host_width` / `cbA = host_width + 104` (the `wideBeforeCBase`/`wideAfterCBase` Lean
+///     layout), chip-faithfully via [`fill_wide_block`] — reading the SAME `BEFORE_BASE`/`AFTER_BASE`
+///     limbs the 1-felt block lays (so the 8-felt commit binds the same 37 limbs + iroot);
+///   * APPENDS the 16 wide commit PIs PAST the base PIs: BEFORE commit (carrier 12, first row) then
+///     AFTER commit (carrier 12, last row).
+/// `host_width` is the wide member's HOST width (`d.traceWidth` in Lean): `GRAD_ROT_WIDTH = 608` for
+/// the 816-wide families, `CAP_OPEN_WIDTH = 818` for the 1026-wide cap-open tail. The wide carriers
+/// land STRICTLY PAST the host's columns + gates (the appendix is purely additive), member-uniform
+/// because `BEFORE_BASE`/`AFTER_BASE` (187/238) are uniform across the cohort. The number of base
+/// PIs is preserved (the grow-gate families carry an extra PI[38]); the 16 wide PIs append after.
+pub fn append_wide_carriers(
+    trace: &mut [Vec<BabyBear>],
+    base_pis: Vec<BabyBear>,
+    host_width: usize,
+) -> Vec<BabyBear> {
+    let cb_before = host_width;
+    let cb_after = host_width + 104;
+    let wide_width = host_width + 208;
+    for row in trace.iter_mut() {
+        row.resize(wide_width, BabyBear::ZERO);
+        fill_wide_block(row, cb_before, BEFORE_BASE);
+        fill_wide_block(row, cb_after, AFTER_BASE);
+    }
     let mut dpis = base_pis;
-    let before_commit_base = WIDE_BEFORE_CBASE + 8 * WIDE_COMMIT_CARRIER; // 704
-    let after_commit_base = WIDE_AFTER_CBASE + 8 * WIDE_COMMIT_CARRIER; // 808
+    let before_commit_base = cb_before + 8 * WIDE_COMMIT_CARRIER;
+    let after_commit_base = cb_after + 8 * WIDE_COMMIT_CARRIER;
     let r0 = trace[0].clone();
     let last = trace[trace.len() - 1].clone();
     for j in 0..8 {
-        dpis.push(r0[before_commit_base + j]); // PIs 38..45: BEFORE 8-felt commit
+        dpis.push(r0[before_commit_base + j]); // BEFORE 8-felt commit (first row)
     }
     for j in 0..8 {
-        dpis.push(last[after_commit_base + j]); // PIs 46..53: AFTER 8-felt commit
+        dpis.push(last[after_commit_base + j]); // AFTER 8-felt commit (last row)
     }
-    debug_assert_eq!(dpis.len(), WIDE_PI_COUNT);
+    dpis
+}
 
+/// **THE WIDE BURN/MINT trace generator (transfer-shape cohort).** Burn and mint carry the bare
+/// 38-PI rotated vector exactly as transfer does (no grow-gate root, no record pin); their wide
+/// member is `wideAppend burn 187 238` (width 816 / PI 54), the SAME carrier shape as transfer. This
+/// wraps the LIVE base generator ([`generate_rotated_effect_vm_trace`], which proves any cohort
+/// member's real turn) + the generic widener at `GRAD_ROT_WIDTH = 608`. Returns `(trace, dpis)`.
+pub fn generate_rotated_transfer_shape_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    let (mut trace, base_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if base_pis.len() != ROT_PI_COUNT {
+        return Err(format!(
+            "transfer-shape wide generator: base PI vector {} != {ROT_PI_COUNT} (this wrapper is for \
+             the bare-38-PI transfer-shape cohort — a grow-gate/record member carries an extra PI)",
+            base_pis.len()
+        ));
+    }
+    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
     Ok((trace, dpis))
+}
+
+/// **THE WIDE NOTESPEND trace generator (grow-gate cohort).** Wraps the deployment-real nullifier-
+/// tree generator ([`generate_rotated_note_spend_trace_with_nullifier_tree`], which overrides limb 26
+/// with the openable accumulator roots + recomputes the block commits), then appends the wide
+/// carriers at `GRAD_ROT_WIDTH = 608`. The grow-gate member carries the extra PI[38] (the nullifier
+/// pin) before the 16 wide PIs (wide member width 816 / PI 55). Returns `(trace, dpis, map_heaps)`.
+pub fn generate_rotated_note_spend_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_nullifiers: &[crate::heap_root::HeapLeaf],
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+    let (mut trace, base_pis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_nullifiers,
+    )?;
+    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    Ok((trace, dpis, map_heaps))
+}
+
+/// **THE WIDE NOTECREATE trace generator (grow-gate cohort).** Wraps the commitments-tree generator
+/// ([`generate_rotated_note_create_trace_with_commitments_tree`], limb-27 override + recompute), then
+/// appends the wide carriers at `GRAD_ROT_WIDTH = 608` (wide member width 816 / PI 55).
+pub fn generate_rotated_note_create_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_commitments: &[crate::heap_root::HeapLeaf],
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+    let (mut trace, base_pis, map_heaps) = generate_rotated_note_create_trace_with_commitments_tree(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_commitments,
+    )?;
+    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    Ok((trace, dpis, map_heaps))
+}
+
+/// **THE WIDE CREATECELL/FACTORY/SPAWN trace generator (grow-gate cohort).** Wraps the accounts-tree
+/// generator ([`generate_rotated_create_cell_trace_with_accounts_tree`], limb-0 override + recompute),
+/// then appends the wide carriers at `GRAD_ROT_WIDTH = 608` (wide member width 816 / PI 55).
+pub fn generate_rotated_create_cell_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_accounts: &[crate::heap_root::HeapLeaf],
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+    let (mut trace, base_pis, map_heaps) = generate_rotated_create_cell_trace_with_accounts_tree(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_accounts,
+    )?;
+    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    Ok((trace, dpis, map_heaps))
 }
 
 #[cfg(test)]
