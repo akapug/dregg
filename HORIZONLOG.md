@@ -166,6 +166,24 @@ refused to launder a partial):**
   `wideAppend`-pin-retirement + re-emit, not new soundness proof. RESUME: land Blocker 1's Lean pin-retirement
   first (it's the floor under everything), re-emit/re-pin, THEN the Rust switch (which is otherwise built + the
   fee/cohort legs proven green).
+- ✅ **BLOCKER 1 RESOLVED — the 1-felt PI 34/35 waist RETIRED from the staged wide registry** (Stage-1 flip
+  prerequisite, GREEN, NOT committed): `EffectVmEmitRotationWide.wideAppend` now FILTERS the host's two 1-felt
+  `STATE_COMMIT` commit pins (`isLegacyCommitPin1 bb ab` = the unique first-row pin on `bb+B_STATE_COMMIT` /
+  last-row on `ab+B_STATE_COMMIT`; the `rotPins` PI-34/35 carriers), so the 8-felt `commitPins` are the SOLE
+  commit binding. Tower re-proved axiom-clean: `wideAppend_memOpsOf`/`mapOpsOf` (new `filterMap_filter_legacyPin`
+  helper — the dropped pins carry no mem/map op), `wideAppend_satisfied2_host` now reduces to a `Satisfied2` of
+  the PIN-RETIRED host `dropLegacyCommitPins1 h bb ab` (gates survive — they are NOT the dropped commit pins),
+  `wideAppend_binds_published` UNCHANGED (the 8-felt `wireCommitR8_binds` never depended on the 1-felt pins),
+  folds `v3RegistryWide_sound`/`v3RegistryCapOpenWide_sound` re-stated over the pin-retired host. Re-emitted
+  `rotation-wide-registry-staged.tsv` (+ the transfer single-line) — each member's pi_binding list is 2 shorter
+  (PI 34/35 gone; 36/37 height/caveat + the 16 wide PIs 38..53 kept); `public_input_count` stays the host+16
+  (slots 34/35 now DEAD/unpinned — count unchanged is correct + valid: the load-bearing fix is removing the
+  PINS, not the slot count). Re-pinned `WIDE_REGISTRY_STAGED_FP`. GREEN: `lake build Dregg2` 4004 axiom-clean ·
+  descriptor drift 12/12 (live `V3_STAGED_REGISTRY` byte-identical, only the wide TSV/FP moved) · wide roundtrip
+  4/4 prove+verify at the pin-retired geometry · live flip 13/13. **STAGE-2 HANDOFF:** the executor can now
+  delete its `dpis[34]/dpis[35]` reconstruction (`trace_rotated.rs:1618-1619`, `:537`) — the verifier no longer
+  pins those PIs, so the placeholder no longer causes a Fiat-Shamir mismatch (`InvalidPowWitness` gone). Blocker
+  2 (initial-registration 8-felt commit) is independent + still open.
 - ⬜ **PHASE B-ROTATION — the flag-day SWITCH (ember-gated, VK-affecting; all legs proven green)**: ~~(a) FAN-OUT~~
   (DONE) · ~~(b) EXECUTOR ANCHORING~~ (DONE) · ~~(c) the producer+executor flip LEGS~~ (DONE, slice 2b: proven
   coherent end-to-end). THE ATOMIC SWITCH (the ONLY thing left, ember-gated since it bumps the VK — a partial

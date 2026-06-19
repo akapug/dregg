@@ -576,10 +576,32 @@ d.traceWidth`, `ab = d.traceWidth + 51`, UNMOVED by any gate, which only appends
 The wide lookups read the SAME `preLimbsAt bb`/`preLimbsAt ab` columns the host's 1-felt chain commits,
 so the 8-felt binding is over the same 37 limbs + iroot. -/
 
+/-! ### §7.0 — `isLegacyCommitPin1`: the ~31-bit 1-felt commit pin to RETIRE.
+
+The host `h` (a graduated/gated `rotateV3` member) carries the 1-felt `STATE_COMMIT` PI pins from
+`rotPins` (`EffectVmEmitRotationV3`): the rotated OLD commit `.piBinding .first (bb + B_STATE_COMMIT) p`
+(PI 34) and the rotated NEW commit `.piBinding .last (ab + B_STATE_COMMIT) p` (PI 35). Those are the
+~31-bit WAIST: a single felt of the rotated commit carrier pinned to a PI. Once the live executor
+retires its `dpis[34/35]` reconstruction those PIs revert to placeholders that mismatch the producer's
+real carriers (Fiat-Shamir mismatch). `wideAppend` therefore DROPS exactly those two pins, leaving the
+8-felt `commitPins` (§7) as the SOLE commit binding.
+
+The pins are identified by their (row, column): the BEFORE commit pin is the UNIQUE first-row PI
+binding on column `bb + B_STATE_COMMIT`, the AFTER commit pin the unique last-row PI binding on column
+`ab + B_STATE_COMMIT` (the rotated state-commit carrier columns, where the 1-felt chain lands its
+digest). The PI INDEX is left unmatched (it varies per member: `p`/`p+1` of `rotPins`); only the
+(row, carrier-column) shape is matched, which is precisely the two `rotPins` commit pins. -/
+def isLegacyCommitPin1 (bb ab : Nat) : VmConstraint2 → Bool
+  | .base (.piBinding .first col _) => col == bb + B_STATE_COMMIT
+  | .base (.piBinding .last  col _) => col == ab + B_STATE_COMMIT
+  | _ => false
+
 /-- **`wideAppend h bb ab`** — append the two wide BEFORE/AFTER carrier blocks (each 13×8, based past
 `h.traceWidth`) and their 16 commit PI pins (past `h.piCount`) onto an ARBITRARY graduated/gated host
-`h`. The host's name/hashSites/ranges and ALL its existing constraints (its gates) are untouched; only
-the wide lookups + PI pins are ADDED. -/
+`h`, RETIRING the host's two 1-felt `STATE_COMMIT` PI pins (the ~31-bit waist — `isLegacyCommitPin1`).
+The host's name/hashSites/ranges and ALL its OTHER existing constraints (its gates) are untouched; the
+1-felt commit carrier columns are left dead (unpinned), and the 8-felt wide `commitPins` are the SOLE
+commit binding. -/
 def wideAppend (h : EffectVmDescriptor2) (bb ab : Nat) : EffectVmDescriptor2 :=
   let w := h.traceWidth
   let cbB := wideBeforeCBase w
@@ -588,40 +610,63 @@ def wideAppend (h : EffectVmDescriptor2) (bb ab : Nat) : EffectVmDescriptor2 :=
     traceWidth := w + 208           -- + 2 × (13 carriers × 8)
     piCount    := h.piCount + 16
     tables     := v2Tables (w + 208)
-    constraints := h.constraints
+    constraints := (h.constraints.filter (fun c => !isLegacyCommitPin1 bb ab c))
       ++ rotV3WideLookups bb cbB
       ++ rotV3WideLookups ab cbA
       ++ commitPins .first (carrierCols cbB 12) h.piCount
       ++ commitPins .last  (carrierCols cbA 12) (h.piCount + 8) }
 
-/-- `wideAppend h bb ab`'s constraints are `h`'s plus the four appended wide blocks. -/
+/-- `wideAppend h bb ab`'s constraints are `h`'s PIN-RETIRED constraints plus the four appended wide
+blocks (the host's two 1-felt commit pins filtered out). -/
 theorem wideAppend_constraints (h : EffectVmDescriptor2) (bb ab : Nat) :
     (wideAppend h bb ab).constraints
-      = h.constraints
+      = (h.constraints.filter (fun c => !isLegacyCommitPin1 bb ab c))
         ++ rotV3WideLookups bb (wideBeforeCBase h.traceWidth)
         ++ rotV3WideLookups ab (wideAfterCBase h.traceWidth)
         ++ commitPins .first (carrierCols (wideBeforeCBase h.traceWidth) 12) h.piCount
         ++ commitPins .last  (carrierCols (wideAfterCBase h.traceWidth) 12) (h.piCount + 8) := by
   unfold wideAppend; simp [List.append_assoc]
 
-/-- `wideAppend` ONLY appends `.lookup` and `.base (.piBinding …)` constraints, so the gathered
-`memOpsOf` is `h`'s (no `.memOp` is added). -/
+/-- A `filterMap` whose selector ignores every `.base` constraint is INVARIANT to retiring the
+1-felt commit pins (which are `.base (.piBinding …)`): dropping them removes no extracted op. -/
+private theorem filterMap_filter_legacyPin {α : Type} (bb ab : Nat)
+    (f : VmConstraint2 → Option α) (hbase : ∀ c, f (.base c) = none) (cs : List VmConstraint2) :
+    (cs.filter (fun c => !isLegacyCommitPin1 bb ab c)).filterMap f = cs.filterMap f := by
+  induction cs with
+  | nil => simp
+  | cons c cs ih =>
+    cases hpin : isLegacyCommitPin1 bb ab c with
+    | true =>
+      -- a retired pin is a `.base (.piBinding …)`, so `f` drops it from the RHS too
+      have hfc : f c = none := by
+        unfold isLegacyCommitPin1 at hpin
+        split at hpin <;> first | exact hbase _ | simp at hpin
+      simp [List.filter_cons, hpin, List.filterMap_cons, hfc, ih]
+    | false =>
+      simp [List.filter_cons, hpin, List.filterMap_cons, ih]
+
+/-- `wideAppend` retires only `.base (.piBinding …)` pins and appends `.lookup` / `.base (.piBinding …)`
+constraints, so the gathered `memOpsOf` is `h`'s (no `.memOp` is added or dropped). -/
 theorem wideAppend_memOpsOf (h : EffectVmDescriptor2) (bb ab : Nat) :
     Dregg2.Circuit.DescriptorIR2.memOpsOf (wideAppend h bb ab)
       = Dregg2.Circuit.DescriptorIR2.memOpsOf h := by
   unfold Dregg2.Circuit.DescriptorIR2.memOpsOf
   rw [wideAppend_constraints]
   unfold rotV3WideLookups commitPins
-  simp [Function.comp_def]
+  simp only [List.filterMap_append, List.filterMap_map, Function.comp_def]
+  rw [filterMap_filter_legacyPin bb ab _ (by intro c; rfl)]
+  simp
 
-/-- ...and no `.mapOp` is added, so the gathered `mapOpsOf` is `h`'s. -/
+/-- ...and no `.mapOp` is added or dropped, so the gathered `mapOpsOf` is `h`'s. -/
 theorem wideAppend_mapOpsOf (h : EffectVmDescriptor2) (bb ab : Nat) :
     Dregg2.Circuit.DescriptorIR2.mapOpsOf (wideAppend h bb ab)
       = Dregg2.Circuit.DescriptorIR2.mapOpsOf h := by
   unfold Dregg2.Circuit.DescriptorIR2.mapOpsOf
   rw [wideAppend_constraints]
   unfold rotV3WideLookups commitPins
-  simp [Function.comp_def]
+  simp only [List.filterMap_append, List.filterMap_map, Function.comp_def]
+  rw [filterMap_filter_legacyPin bb ab _ (by intro c; rfl)]
+  simp
 
 /-- ...so the gathered memory log is `h`'s, op-for-op. -/
 theorem wideAppend_memLog (h : EffectVmDescriptor2) (bb ab : Nat)
@@ -803,16 +848,46 @@ theorem wideAppend_binds_published (hash : List ℤ → ℤ) (permW : List ℤ �
     exact wireCommitR8_binds permW hCR hW
       (by rw [preLimbsWide_length, preLimbsWide_length]) hwire
 
-/-! ### §7.3 — the host's gates are PRESERVED: `wideAppend h` reduces to a `Satisfied2` of `h`.
+/-! ### §7.3 — the host's gates are PRESERVED: `wideAppend h` reduces to a `Satisfied2` of the
+PIN-RETIRED host `dropLegacyCommitPins1 h bb ab`.
 
-`wideAppend h bb ab` appends ONLY `.lookup` and `.base (.piBinding …)` constraints, neither a mem/map
-op — so a trace satisfying `wideAppend h bb ab` satisfies `h` itself (the host's gates hold unchanged).
-This is the CONJUNCTION leg: the wide binding (§7.2) AND every soundness theorem `h` carries (its gates)
-both hold of any satisfying witness. The exact `withSelectorGate_satisfied2` argument, generalized. -/
+`wideAppend h bb ab` RETIRES the host's two 1-felt `STATE_COMMIT` PI pins (the ~31-bit waist) and
+appends ONLY `.lookup` / `.base (.piBinding …)` constraints, neither a mem/map op — so a trace
+satisfying `wideAppend h bb ab` satisfies `dropLegacyCommitPins1 h bb ab` itself (`h` with exactly
+those two commit pins dropped; every OTHER constraint — the gates — held unchanged). This is the
+CONJUNCTION leg: the wide 8-felt binding (§7.2) AND every soundness theorem the pin-retired host
+carries (its gates, which are NOT the dropped commit pins) both hold of any satisfying witness. The
+retired pins were the LEGACY 1-felt commit binding, now superseded by the wide 8-felt `commitPins`. -/
+
+/-- `h` with its two 1-felt `STATE_COMMIT` PI pins (`isLegacyCommitPin1 bb ab`) RETIRED. Same
+name/width/piCount/tables/hashSites/ranges as `h`; only those two `.base (.piBinding …)` commit pins
+are filtered from the constraints. (The width/piCount are `h`'s — the 8-felt widening lives in
+`wideAppend`, not here; this is purely the pin-retired host the gate-survival leg reduces to.) -/
+def dropLegacyCommitPins1 (h : EffectVmDescriptor2) (bb ab : Nat) : EffectVmDescriptor2 :=
+  { h with constraints := h.constraints.filter (fun c => !isLegacyCommitPin1 bb ab c) }
+
+/-- The pin-retired host's memory log is `h`'s (the dropped pins carry no mem op). -/
+theorem dropLegacyCommitPins1_memLog (h : EffectVmDescriptor2) (bb ab : Nat)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace) :
+    Dregg2.Circuit.DescriptorIR2.memLog (dropLegacyCommitPins1 h bb ab) t
+      = Dregg2.Circuit.DescriptorIR2.memLog h t := by
+  simp only [Dregg2.Circuit.DescriptorIR2.memLog, Dregg2.Circuit.DescriptorIR2.memOpsOf,
+    dropLegacyCommitPins1]
+  rw [filterMap_filter_legacyPin bb ab _ (by intro c; rfl)]
+
+/-- The pin-retired host's map log is `h`'s (the dropped pins carry no map op). -/
+theorem dropLegacyCommitPins1_mapLog (h : EffectVmDescriptor2) (bb ab : Nat)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace) :
+    Dregg2.Circuit.DescriptorIR2.mapLog (dropLegacyCommitPins1 h bb ab) t
+      = Dregg2.Circuit.DescriptorIR2.mapLog h t := by
+  simp only [Dregg2.Circuit.DescriptorIR2.mapLog, Dregg2.Circuit.DescriptorIR2.mapOpsOf,
+    dropLegacyCommitPins1]
+  rw [filterMap_filter_legacyPin bb ab _ (by intro c; rfl)]
+
 theorem wideAppend_satisfied2_host (hash : List ℤ → ℤ) (h : EffectVmDescriptor2) (bb ab : Nat)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash (wideAppend h bb ab) minit mfin maddrs t) :
-    Satisfied2 hash h minit mfin maddrs t :=
+    Satisfied2 hash (dropLegacyCommitPins1 h bb ab) minit mfin maddrs t :=
   { rowConstraints := fun i hi c hc =>
       hsat.rowConstraints i hi c (by
         rw [wideAppend_constraints]
@@ -821,11 +896,21 @@ theorem wideAppend_satisfied2_host (hash : List ℤ → ℤ) (h : EffectVmDescri
     rowHashes := hsat.rowHashes
     rowRanges := hsat.rowRanges
     memAddrsNodup := hsat.memAddrsNodup
-    memClosed := by have := hsat.memClosed; rwa [wideAppend_memLog] at this
-    memDisciplined := by have := hsat.memDisciplined; rwa [wideAppend_memLog] at this
-    memBalanced := by have := hsat.memBalanced; rwa [wideAppend_memLog] at this
-    memTableFaithful := by have := hsat.memTableFaithful; rwa [wideAppend_memLog] at this
-    mapTableFaithful := by have := hsat.mapTableFaithful; rwa [wideAppend_mapLog] at this }
+    memClosed := by
+      have := hsat.memClosed; rw [wideAppend_memLog] at this
+      rwa [dropLegacyCommitPins1_memLog]
+    memDisciplined := by
+      have := hsat.memDisciplined; rw [wideAppend_memLog] at this
+      rwa [dropLegacyCommitPins1_memLog]
+    memBalanced := by
+      have := hsat.memBalanced; rw [wideAppend_memLog] at this
+      rwa [dropLegacyCommitPins1_memLog]
+    memTableFaithful := by
+      have := hsat.memTableFaithful; rw [wideAppend_memLog] at this
+      rwa [dropLegacyCommitPins1_memLog]
+    mapTableFaithful := by
+      have := hsat.mapTableFaithful; rw [wideAppend_mapLog] at this
+      rwa [dropLegacyCommitPins1_mapLog] }
 
 #assert_axioms wideAppend_pins
 #assert_axioms wideAppend_publishes
@@ -861,6 +946,9 @@ theorem wideAppendOverGated_gate_survives (d : EffectVmDescriptor) (s : Nat) :
   rw [wideAppend_constraints]
   refine List.mem_append_left _ (List.mem_append_left _
     (List.mem_append_left _ (List.mem_append_left _ ?_)))
+  -- the selector gate is a `.gate`, NOT a 1-felt commit pin, so it SURVIVES the pin-retiring filter.
+  rw [List.mem_filter]
+  refine ⟨?_, by simp [isLegacyCommitPin1, selectorGate]⟩
   rw [withSelectorGate_constraints]
   exact List.mem_append_right _ (by simp)
 
@@ -994,17 +1082,19 @@ that member. -/
 
 /-- **`v3RegistryWide_sound` — THE GATE-SURVIVAL FOLD.** Every `v3RegistryWide` entry preserves its
 live member's gates: a `Satisfied2` witness of the wide entry is a `Satisfied2` of the underlying live
-`v3Registry` member `h`, so EVERY soundness theorem `h` carries (its disc / perms-vk / grow / record-pin
-gates) holds of the wide witness unchanged. The wide block is a CONJUNCTION appended past the host. -/
+`v3Registry` member `h` with its two 1-felt `STATE_COMMIT` PI pins RETIRED (`dropLegacyCommitPins1 h bb
+(bb+51)`), so EVERY soundness theorem `h` carries (its disc / perms-vk / grow / record-pin gates — which
+are NOT the dropped commit pins) holds of the wide witness unchanged. The wide block is a CONJUNCTION
+appended past the host; the retired pins were the LEGACY 1-felt commit binding, superseded by the wide. -/
 theorem v3RegistryWide_sound (hash : List ℤ → ℤ)
     (i : Nat) (hi : i < v3RegistryWide.length)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash v3RegistryWide[i].2 minit mfin maddrs t) :
-    ∃ (h : EffectVmDescriptor2),
+    ∃ (h : EffectVmDescriptor2) (bb : Nat),
       h ∈ Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry.map (·.2)
-      ∧ Satisfied2 hash h minit mfin maddrs t := by
+      ∧ Satisfied2 hash (dropLegacyCommitPins1 h bb (bb + 51)) minit mfin maddrs t := by
   obtain ⟨h, bb, hmem, heq⟩ := v3RegistryWide_is_wideAppend i hi
-  refine ⟨h, hmem, ?_⟩
+  refine ⟨h, bb, hmem, ?_⟩
   rw [heq] at hsat
   exact wideAppend_satisfied2_host hash h bb (bb + 51) minit mfin maddrs t hsat
 
