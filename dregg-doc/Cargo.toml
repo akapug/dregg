@@ -1,0 +1,35 @@
+# dregg-doc — the Pijul-shaped patch-theory core for the dreggverse document
+# language (docs/deos/DOCUMENT-LANGUAGE.md §4.1).
+#
+# A document is a GRAPH of alive/dead content atoms with order-edges; an edit is
+# a PATCH (`Add` / `Delete`(tombstone) / `Connect`); `merge` is the categorical
+# PUSHOUT (Mimram–Di Giusto), computed as a total graph union; a CONFLICT is a
+# first-class STATE — an antichain of >=2 live, mutually-unordered alternatives —
+# resolved by a later patch, never a merge failure.
+#
+# STANDALONE by design: this crate is its OWN workspace root (the empty
+# `[workspace]` below) so it stays OUT of the parent dregg workspace's build,
+# exactly as `pg-dregg` / `servo-render` do. It has NO dregg dependencies yet —
+# pure data structures + algorithms, fast and `cargo test`-able in isolation. It
+# will ride the cell substrate later (atoms = content-addressed heap leaves,
+# patches = turns, content = the patch-history fold) per the spec; that ride is
+# DEFERRED — let the language breathe.
+
+[package]
+name = "dregg-doc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+license = "AGPL-3.0-or-later"
+description = "Pijul-shaped patch-theory core for the dreggverse document language: a document as a graph of alive/dead atoms, patches as graph operations, merge as the total pushout/union, conflicts as first-class antichain states."
+homepage = "https://dregg.fg-goose.online"
+repository = "https://github.com/emberian/dregg"
+
+# Own (empty) workspace root: keeps dregg-doc out of the parent workspace's
+# `cargo build/test --workspace` without touching the root Cargo.toml.
+[workspace]
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
