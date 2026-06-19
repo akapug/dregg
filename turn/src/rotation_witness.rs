@@ -302,6 +302,23 @@ pub fn wire_commit(pre_limbs: &[BabyBear], iroot: BabyBear) -> BabyBear {
     hash_many(&[d, iroot])
 }
 
+/// **THE FAITHFUL 8-FELT chained rotated commitment (Phase B-ROTATION)** — the producer twin of
+/// `dregg_cell::commitment::compute_canonical_state_commitment_v9_felt8`, delegating to the shared
+/// `dregg_circuit::poseidon2::wire_commit_8`. Each chain step is a single arity-11 permutation over
+/// the 8-felt carrier ‖ 3 limbs, exposing 8 lanes — every intermediate carrier is 8 felts (no
+/// 31-bit waist). Byte-identical to the cell twin and the Lean `wireCommitR8`.
+///
+/// ADDITIVE: the live `wire_commit` is the 1-felt chain until the trace/PI/executor flag-day cuts
+/// the proof-bound `STATE_COMMIT` to all 8 felts.
+pub fn wire_commit_8(pre_limbs: &[BabyBear], iroot: BabyBear) -> [BabyBear; 8] {
+    assert_eq!(
+        pre_limbs.len(),
+        NUM_PRE_LIMBS,
+        "wire_commit_8: {NUM_PRE_LIMBS} pre-iroot limbs at R={NUM_REGISTERS}"
+    );
+    dregg_circuit::poseidon2::wire_commit_8(pre_limbs, iroot)
+}
+
 /// The full witness producer for one cell's before/after state in a real turn.
 ///
 /// `cell` is the per-cell `RecordKernelState` (after-state for the AFTER block; supply the
@@ -786,6 +803,63 @@ mod tests {
             assert_ne!(lf(&base), lf(&a), "cellDestroy MUST move the lifecycle felt");
             assert_ne!(lf(&a), lf(&a2), "cellDestroy reflects the death certificate (distinct certs distinct felt)");
         }
+    }
+
+    /// **THE FAITHFUL 8-FELT COLLISION-DISTINGUISHING TOOTH (Phase B-ROTATION), producer side.**
+    /// Two cell-states differing ONLY in a high position (one byte of the AUTHORITY DIGEST limb,
+    /// i.e. a permissions / VK flip folded into r23) produce 8-felt commitments differing in ≥ 1
+    /// felt — the binding a 1-felt (~31-bit) commit cannot promise. The producer twin equals the
+    /// cell twin equals the circuit primitive (the three-way differential).
+    #[test]
+    fn faithful_8felt_commit_distinguishes_authority_near_collision() {
+        use dregg_cell::commitment::{
+            compute_canonical_state_commitment_v9_felt8, V9RotationContext,
+        };
+        let mut ledger = Ledger::new();
+        let base = Cell::with_balance([3u8; 32], [0u8; 32], 100);
+        ledger.insert_cell(base.clone()).unwrap();
+        let ctx = V9RotationContext {
+            cells_root: cells_root(&ledger),
+            nullifier_root: [0u8; 32],
+            commitments_root: [0u8; 32],
+            iroot: BabyBear::new(7),
+        };
+        // a permission flip — folded into the authority-digest limb (r23), a HIGH limb.
+        let mut flipped = base.clone();
+        flipped.permissions.set_state = dregg_cell::permissions::AuthRequired::Impossible;
+        assert_ne!(
+            base.permissions.set_state, flipped.permissions.set_state,
+            "the near-collision must be a genuine authority difference"
+        );
+
+        let c_base = compute_canonical_state_commitment_v9_felt8(&base, &ctx);
+        let c_flip = compute_canonical_state_commitment_v9_felt8(&flipped, &ctx);
+        assert_ne!(c_base, c_flip, "an authority flip must move the 8-felt commitment");
+        assert!(
+            (0..8).any(|i| c_base[i] != c_flip[i]),
+            "≥ 1 of the 8 committed felts must differ"
+        );
+
+        // three-way differential: the producer twin == the cell twin (== the circuit primitive,
+        // since both delegate to `dregg_circuit::poseidon2::wire_commit_8`).
+        let pre = dregg_cell::commitment::compute_rotated_pre_limbs(&base, &ctx);
+        assert_eq!(
+            wire_commit_8(&pre, ctx.iroot),
+            c_base,
+            "producer 8-felt twin must equal the cell 8-felt twin"
+        );
+    }
+
+    /// THE INTERMEDIATE-CARRIER TOOTH (producer side): an EARLY-limb difference (the cap_root limb,
+    /// folded mid-chain) still moves the published 8-felt commit — the carrier is 8-wide throughout.
+    #[test]
+    fn faithful_8felt_commit_intermediate_carrier() {
+        let limbs: Vec<BabyBear> = (0..NUM_PRE_LIMBS).map(|i| BabyBear::new(7 * i as u32 + 1)).collect();
+        let base = wire_commit_8(&limbs, BabyBear::new(5));
+        // limb 1 (r0/balance_lo) is folded in the FIRST head site — deep before the final squeeze.
+        let mut early = limbs.clone();
+        early[1] += BabyBear::new(1);
+        assert_ne!(base, wire_commit_8(&early, BabyBear::new(5)), "early mid-chain limb is bound");
     }
 
     /// Distinct lifecycle states yield distinct limbs (the anti-omission tooth).
