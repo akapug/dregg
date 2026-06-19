@@ -2204,3 +2204,27 @@ ALSO FLAGGED (confirm pre-existing at settle): `cargo test -p dregg-circuit` (no
 in `circuit/tests/effect_vm_ir2_size_measure` (undefined p3 `from_ext_basis_coefficients`/
 `recompose_quotient_from_chunks`) — the #6 agent says that file is unmodified/clean-in-git; verify it's
 pre-existing (not a swarm interaction) at settle.
+
+## ⚠⚠ LEAN-SIDE CHECK of the Rust findings (2026-06-19, ember: "could be even worse issues there") — IT IS
+
+Checked the Lean side of the two Rust findings. One is fine; the other is WORSE on the Lean side (the trust anchor).
+
+1. CONSERVATION — Lean SPEC is FAITHFUL (per-asset, NOT laundered): `Spec/Conservation.lean` is per-domain/
+   per-asset parametric (`multi_domain_independent`: balance/note-per-asset/cross-cell conserve INDEPENDENTLY,
+   no cross-domain leakage). So the Lean is correct and the Rust scalar `atomic.rs` sum genuinely UNDER-delivers
+   vs the spec → the cross-asset hole is real (deployment doesn't meet its own Lean spec). The apex likely does
+   NOT prove per-asset conservation about the DEPLOYED path (only #6's new unwired AIR does) — confirm at settle.
+
+2. ⚠⚠ GATE/TRANSITION — the WORSE issue (potential HOLLOW-SOUNDNESS in the apex): the Lean every-row
+   `.transition` (no isLast guard, `EffectVmEmit.lean:411`) makes `Satisfied2` NON-INHABITABLE by a real
+   `nonce 0→1` trace: last row's `nxt = zeroAsg` forces `last.after = 0`; a noop pad freezes `after=before`; so
+   ANY trace (single or padded) is forced to `before.nonce = -1`. Rust's `when_transition()` skips the last row
+   → Rust handles `nonce 0→1` fine. CONSEQUENCE: a REAL deployed proof (Rust-accepts, real nonce) does NOT
+   satisfy the over-strict Lean `Satisfied2` ⇒ `Rust-accept ⟹ Lean-Sat` FAILS for real turns ⇒ the soundness
+   apex may be VACUOUS for the actual deployed trace family (proven, but covering only degenerate `nonce=-1`
+   traces no real turn produces). #8 hit this directly (couldn't build the natural trace; its witness is the
+   degenerate debit-to-zero). This is a faithfulness gap in the TRUST ANCHOR, worse than any Rust gap.
+   FIX (confirm + apply at settle): `isLast`-guard Lean `.gate`/`.transition` (`VmConstraint.holdsVm`) to match
+   Rust `when_transition()`, then RE-CHECK every refinement rung still holds (they should — the real traces they
+   model become inhabitable) AND that #8's natural `nonce 0→1` trace now satisfies. HIGH PRIORITY — this gates
+   whether the soundness apex is non-vacuous for real turns.
