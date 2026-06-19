@@ -809,12 +809,12 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 /// `key\tname\tjson` per line, sha-256 pinned by
 /// `v3_staged_registry_parses_matches_fingerprint_and_covers`.
 /// STAGED: a new constant, no VK bump, the live wire untouched. Each descriptor's
-/// `trace_width = EFFECT_VM_WIDTH (186) + APPENDIX_SPAN (137) = 323`; the rotated
+/// `trace_width = EFFECT_VM_WIDTH (186) + APPENDIX_SPAN (141) = 327`; the rotated
 /// commitments ride four appended PI slots (rotated OLD/NEW commit · height · caveat commit).
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "369f6fbb79ca5f8d56a1f3162a1f2f69f2b75bd2e2a9e405c92f7598998157c1";
+    "04e6219bbb839b02512f6a9e3762fe16b5fe7dae84102c7806b075ffe14d2792";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1568,15 +1568,15 @@ mod tests {
         // pre-iroot limbs — NOT the bare R=24 register probe `rotation_layout_for(24)`). Mirrors the
         // Lean `EffectVmEmitRotationV3` §1 constants and the caveat region inside it.
         const V1_WIDTH: usize = EFFECT_VM_WIDTH; // 186
-        const B_SPAN: usize = 49; // 35 limbs + iroot + state_commit + 12 chain carriers
-        const B_IROOT: usize = 35;
-        const B_STATE_COMMIT: usize = 36;
-        const B_CHAIN_BASE: usize = 37;
+        const B_SPAN: usize = 51; // 37 limbs + iroot + state_commit + 12 chain carriers
+        const B_IROOT: usize = 37;
+        const B_STATE_COMMIT: usize = 38;
+        const B_CHAIN_BASE: usize = 39;
         const B_NUM_CHAIN: usize = 12;
         const B_COMMITTED_HEIGHT: usize = 31;
         const C_SPAN: usize = 39;
         const C_COMMIT: usize = 38;
-        const APPENDIX_SPAN: usize = 2 * B_SPAN + C_SPAN; // 137
+        const APPENDIX_SPAN: usize = 2 * B_SPAN + C_SPAN; // 141
 
         let mut n = 0usize;
         for line in V3_STAGED_REGISTRY_TSV.lines() {
@@ -1627,8 +1627,8 @@ mod tests {
                     "{key}: cap-open carries the rotated 38-PI vector (+3 turn-identity PIs for TB)"
                 );
                 // The cap-open appendix declares EXACTLY 17 poseidon2 chip lookups whose digest
-                // lands in the cap-open appendix (>= 323): 1 leaf absorb + 16 node absorbs.
-                let cap_open_base = V1_WIDTH + APPENDIX_SPAN; // 323
+                // lands in the cap-open appendix (>= 327): 1 leaf absorb + 16 node absorbs.
+                let cap_open_base = V1_WIDTH + APPENDIX_SPAN; // 327
                 let cap_lookups = d
                     .constraints
                     .iter()
