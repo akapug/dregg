@@ -2181,3 +2181,26 @@ when_transition) across the rotated descriptor; (2) trace which row feeds the pu
 when_last_row pins it; (3) decide — make Lean `.gate`/`.transition` `isLast`-guarded to MATCH Rust (faithful), OR
 prove the last-row divergence benign. This makes #8's empty/degenerate-single-row witness a SYMPTOM, not the
 gap. (#8's real-row lemma is kept as the jointly-satisfiable-arithmetic witness; the natural trace awaits this.)
+
+## ⚠ #6 RECONCILIATION + a potential cross-asset hole (2026-06-19, #6 collector build-half)
+
+CORRECTION to `2f42998b1` ("#6: no aggregation point exists, per-cell-isolated"): that was the single-cell
+ROTATED path (`verify_and_commit_proof_rotated`). It MISSED the ATOMIC multi-cell path
+(`turn/src/executor/atomic.rs::execute_atomic_sovereign:597-612`), which DOES aggregate: extracts each cell's
+`extract_net_delta(public_inputs)` → `proven_deltas` → `net_excess = proven_deltas.iter().sum(); if != 0 →
+ConservationViolation`. So cross-cell conservation IS deployed for atomic turns — but with TWO gaps the #6
+`BlockConservation` collector closes:
+1. ⚠ SCALAR / ASSET-BLIND: `proven_delta` is a bare i64; the sum ignores AssetId. If a multi-asset atomic turn
+   is reachable (AssetId := issuer-cell → plausible), `A:−10 asset7 + B:+10 asset8` nets 0 and PASSES = mint
+   asset7 / burn asset8 (a CROSS-ASSET-BORROWING hole). #6's per-asset partition (`cross_asset_borrowing_rejected`
+   tooth) closes it. CONFIRM-AT-SETTLE: are multi-asset atomic turns reachable? If yes → live hole, not nicety.
+2. OFF-AIR: the `.sum()` is executor-trusted Rust, invisible to a ledgerless client. #6's collector is in-AIR.
+LIVE-WIRE (#6): replace the scalar `atomic.rs` sum with `BlockConservation` (pair each `public_inputs` with its
+`entry.cell_id` asset, per-asset `prove_and_verify`/`verify_with_proofs`); bundle seam =
+`proof_verify.rs::verify_proof_carrying_turn_bundle:774`. `BlockConservation` (`circuit/src/block_conservation.rs`)
++ 8/8 teeth built, uncommitted.
+
+ALSO FLAGGED (confirm pre-existing at settle): `cargo test -p dregg-circuit` (non --lib) hits a linker failure
+in `circuit/tests/effect_vm_ir2_size_measure` (undefined p3 `from_ext_basis_coefficients`/
+`recompose_quotient_from_chunks`) — the #6 agent says that file is unmodified/clean-in-git; verify it's
+pre-existing (not a swarm interaction) at settle.
