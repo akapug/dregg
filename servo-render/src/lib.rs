@@ -59,6 +59,13 @@ pub mod compositor_seam;
 #[cfg(feature = "swgl-standalone")]
 pub mod cap_gated_pipeline;
 
+/// The starbridge-v2 integration entry — an attested `dregg://` page's bytes
+/// rendered to a real, cap-gated SWGL [`swgl_context::RgbaFrame`] the cockpit
+/// web-of-cells tab paints (the FIRST real rendered `dregg://` content, today,
+/// without the `libservo`/mozjs elephant). See [`content_tile::render_dregg_page`].
+#[cfg(feature = "swgl-standalone")]
+pub mod content_tile;
+
 #[cfg(feature = "libservo")]
 pub mod webview;
 
@@ -72,3 +79,6 @@ pub use compositor_seam::{present_frame, FramePresentation};
 
 #[cfg(feature = "swgl-standalone")]
 pub use cap_gated_pipeline::{fetch_render_present, PipelineOutcome};
+
+#[cfg(feature = "swgl-standalone")]
+pub use content_tile::{render_dregg_page, TileOutcome};
