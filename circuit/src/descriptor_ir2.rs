@@ -159,7 +159,8 @@ use crate::lean_descriptor_air::{
 use crate::lean_descriptor_air::i64_to_babybear;
 use crate::lean_descriptor_air::{EffectVmDescriptor, RangeSpec};
 use crate::plonky3_prover::{
-    POSEIDON2_PERM_AUX_COLS, POSEIDON2_WIDTH, create_config_with_fri, poseidon2_permute_expr, to_p3,
+    POSEIDON2_PERM_AUX_COLS, POSEIDON2_WIDTH, create_config_with_fri, poseidon2_permute_expr_lanes,
+    to_p3,
 };
 // The concrete permutation aux-witness fill is prover-only (`perm_aux`).
 #[cfg(feature = "prover")]
@@ -198,10 +199,11 @@ pub const NULLIFIER_DOMAIN: u32 = 3;
 pub const DOMAIN_BOUND: u32 = 16;
 
 /// The chip lookup rate in base-field elements (`babyBearD4W16.rate = 8`); a chip tuple is
-/// `1 (arity) + CHIP_RATE (padded inputs) + 1 (output) = 10` wide.
+/// `1 (arity) + CHIP_RATE (padded inputs) + 8 (output lanes) = 17` wide (Phase B-GATE
+/// widened the output block 1 → 8).
 pub const CHIP_RATE: usize = 8;
-/// The chip tuple arity on the wire.
-pub const CHIP_TUPLE_LEN: usize = CHIP_RATE + 2;
+/// The chip tuple arity on the wire: `1 (arity) + CHIP_RATE (inputs) + 8 (output lanes)`.
+pub const CHIP_TUPLE_LEN: usize = CHIP_RATE + 1 + 8;
 
 /// The effect-mask width of the submask custom table (`EffectVmEmitV2.MASK_BITS`).
 pub const SUBMASK_BITS: usize = 30;
@@ -1387,7 +1389,12 @@ const MA_B_DEC0: usize = MA_K_DEC0 + MA_DECOMP_COLS; // 130 (hi_addr)
 const MA_CMP_COLS: usize = 3 + decomp_cols(KEY_LO_BITS); // 13
 const MA_CMP_LO0: usize = MA_B_DEC0 + MA_DECOMP_COLS; // 143 (lo_addr < key)
 const MA_CMP_HI0: usize = MA_CMP_LO0 + MA_CMP_COLS; // 156 (key < hi_addr)
-const MA_WIDTH: usize = MA_CMP_HI0 + MA_CMP_COLS; // 169
+// Phase B-GATE: the two leaf absorbs now ride the 17-wide chip bus, so each carries 7
+// extra output lanes (out1..out7) appended at the tail (the digest itself stays at
+// MA_LO_LEAF/MA_HI_LEAF = lane0). Appending avoids re-deriving the decomposition offsets.
+const MA_LO_LEAF1: usize = MA_CMP_HI0 + MA_CMP_COLS; // 169 (lanes 1..7 of the lo leaf)
+const MA_HI_LEAF1: usize = MA_LO_LEAF1 + (CHIP_OUT_LANES - 1); // 176 (lanes 1..7 of the hi leaf)
+const MA_WIDTH: usize = MA_HI_LEAF1 + (CHIP_OUT_LANES - 1); // 183
 
 // -- Map-ops table layout (one row per reconciliation, log order). Every permutation of
 //    the opening rides the chip bus: the row carries the two leaf digests and the two
@@ -1407,7 +1414,11 @@ const MAP_OLD_LEAF: usize = MAP_DIR0 + HEAP_TREE_DEPTH; // 39
 const MAP_NEW_LEAF: usize = MAP_OLD_LEAF + 1; // 40
 const MAP_OLD_CHAIN0: usize = MAP_NEW_LEAF + 1; // 41 (levels 0..14; level 15 = MAP_ROOT)
 const MAP_NEW_CHAIN0: usize = MAP_OLD_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 56
-const MAP_WIDTH: usize = MAP_NEW_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 71
+// Phase B-GATE: the old/new leaf absorbs ride the 17-wide chip bus. Lane0 stays at
+// MAP_OLD_LEAF/MAP_NEW_LEAF (the chained digest); lanes 1..7 are appended at the tail.
+const MAP_OLD_LEAF1: usize = MAP_NEW_CHAIN0 + (HEAP_TREE_DEPTH - 1); // 71 (lanes 1..7 old leaf)
+const MAP_NEW_LEAF1: usize = MAP_OLD_LEAF1 + (CHIP_OUT_LANES - 1); // 78 (lanes 1..7 new leaf)
+const MAP_WIDTH: usize = MAP_NEW_LEAF1 + (CHIP_OUT_LANES - 1); // 85
 
 /// The DECLARED leaf-input column list for a `MapOp` absorb, parametric in the value
 /// column (`MAP_VALUE` for the new leaf, `MAP_OLD_VALUE` for the committed old leaf).
@@ -1455,9 +1466,16 @@ fn map_leaf_input_cols(value_col: usize) -> [usize; 2] {
 //    recursion-gated, pre-cutover); it lands with the recursion aggregation. --
 const CHIP_ARITY: usize = 0;
 const CHIP_IN0: usize = 1;
-const CHIP_OUT: usize = CHIP_IN0 + CHIP_RATE; // 9
-const CHIP_MULT: usize = CHIP_OUT + 1; // 10
-const CHIP_IS_FACT: usize = CHIP_MULT + 1; // 11
+const CHIP_OUT: usize = CHIP_IN0 + CHIP_RATE; // 9 (= out0, the squeezed digest lane)
+/// The number of permutation-output lanes the chip exposes on the bus. Widened
+/// 1 → 8 (Phase B-GATE): the chip's bus tuple now carries `state[0..8]` of the
+/// SAME already-fully-constrained final permutation. Single-output sites bind
+/// only `out0` (`CHIP_OUT`) — lanes 1..8 are made AVAILABLE for the 8-felt
+/// commitment sponge (Phase B-ROTATION) but the deployed commitment is STILL
+/// 1-felt after this phase.
+pub const CHIP_OUT_LANES: usize = 8;
+const CHIP_MULT: usize = CHIP_OUT + CHIP_OUT_LANES; // 17
+const CHIP_IS_FACT: usize = CHIP_MULT + 1; // 18
 /// `big = [arity == 7]`: selects the rate-8 absorb seeding (inputs in lanes 0..6,
 /// length tag absent from lanes 4..6) from the rate-4 seeding (tag at lane 4).
 const CHIP_BIG: usize = CHIP_IS_FACT + 1; // 12
@@ -1948,10 +1966,21 @@ where
                 st[6] = local[CHIP_S6].into();
                 let aux: Vec<AB::Var> =
                     local[CHIP_AUX0..CHIP_AUX0 + POSEIDON2_PERM_AUX_COLS].to_vec();
-                let digest = poseidon2_permute_expr::<AB>(builder, st, &aux);
-                builder.assert_zero(local[CHIP_OUT].into() - digest);
+                // Expose the first 8 lanes `state[0..8]` of the SAME already-fully-constrained
+                // final permutation. Lane 0 is the squeezed digest the single-output sites bind;
+                // lanes 1..8 are the genuine distinct lanes the 8-felt commitment sponge will use
+                // (Phase B-GATE makes them AVAILABLE; the deployed commitment is still 1-felt).
+                let lanes = poseidon2_permute_expr_lanes::<AB>(builder, st, &aux);
+                // out0 == lane0 (the existing digest binding — UNCHANGED meaning).
+                builder.assert_zero(local[CHIP_OUT].into() - lanes[0].clone());
+                // out1..out7 == lanes 1..8: the 7 NEW constraints. These EQUALITY-bind the
+                // genuine distinct permutation lanes (out[i] is NOT a free column and NOT a copy
+                // of out[0]) — a witness with a forged out[i] is UNSAT (the anti-laundering crux).
+                for i in 1..CHIP_OUT_LANES {
+                    builder.assert_zero(local[CHIP_OUT + i].into() - lanes[i].clone());
+                }
 
-                // Provide the (arity, ins, out) tuple on the absorb bus, consumed `mult`
+                // Provide the (arity, ins, out0..out7) tuple on the absorb bus, consumed `mult`
                 // times — fact rows provide ZERO here (no fact digest can serve a
                 // hash-site lookup) and vice versa.
                 let bus = LookupBus::new(BUS_P2);
@@ -1960,7 +1989,9 @@ where
                 for i in 0..CHIP_RATE {
                     tuple.push(local[CHIP_IN0 + i].into());
                 }
-                tuple.push(local[CHIP_OUT].into());
+                for i in 0..CHIP_OUT_LANES {
+                    tuple.push(local[CHIP_OUT + i].into());
+                }
                 bus.table_entry(
                     builder,
                     tuple,
@@ -2163,23 +2194,32 @@ where
                 // as generic chip `Lookup`s (Lean `DeployedCapOpen.leafLookup`, arity 7), the
                 // SAME `chip_absorb_tuple` primitive at a different arity. See the module note.
                 let p2 = LookupBus::new(BUS_P2);
-                let chip_absorb_tuple = |inputs: &[usize], digest_col: usize| -> Vec<AB::Expr> {
-                    debug_assert!(
-                        inputs.len() <= CHIP_RATE,
-                        "map-op leaf arity {} exceeds CHIP_RATE {CHIP_RATE}",
-                        inputs.len()
-                    );
-                    let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-                    t.push(AB::Expr::from_u64(inputs.len() as u64));
-                    for &c in inputs {
-                        t.push(local[c].into());
-                    }
-                    for _ in inputs.len()..CHIP_RATE {
-                        t.push(AB::Expr::ZERO);
-                    }
-                    t.push(local[digest_col].into());
-                    t
-                };
+                // Phase B-GATE: the 17-wide tuple is `[arity, padTo CHIP_RATE inputs, out0..out7]`.
+                // `digest_col` is out0 (the chained leaf digest); `lane1_base..+6` are the 7
+                // exposed lanes 1..7 (witnessed in the appended leaf-lane columns). The map-op
+                // CONSTRAINS only out0 via the fact-chain seed below — lanes 1..7 are carried so
+                // the lookup matches the 17-wide chip row, then ignored.
+                let chip_absorb_tuple =
+                    |inputs: &[usize], digest_col: usize, lane1_base: usize| -> Vec<AB::Expr> {
+                        debug_assert!(
+                            inputs.len() <= CHIP_RATE,
+                            "map-op leaf arity {} exceeds CHIP_RATE {CHIP_RATE}",
+                            inputs.len()
+                        );
+                        let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
+                        t.push(AB::Expr::from_u64(inputs.len() as u64));
+                        for &c in inputs {
+                            t.push(local[c].into());
+                        }
+                        for _ in inputs.len()..CHIP_RATE {
+                            t.push(AB::Expr::ZERO);
+                        }
+                        t.push(local[digest_col].into());
+                        for i in 0..CHIP_OUT_LANES - 1 {
+                            t.push(local[lane1_base + i].into());
+                        }
+                        t
+                    };
                 // The declared leaf input columns for read/write/insert: `[key, value-col]`. The
                 // old leaf reads the committed `MAP_OLD_VALUE`, the new leaf the written
                 // `MAP_VALUE` — same declared key column, the value column distinguishes them.
@@ -2187,12 +2227,12 @@ where
                 let new_leaf_cols = map_leaf_input_cols(MAP_VALUE);
                 p2.lookup_key(
                     builder,
-                    chip_absorb_tuple(&old_leaf_cols, MAP_OLD_LEAF),
+                    chip_absorb_tuple(&old_leaf_cols, MAP_OLD_LEAF, MAP_OLD_LEAF1),
                     is_real.clone() * not_insert.clone(),
                 );
                 p2.lookup_key(
                     builder,
-                    chip_absorb_tuple(&new_leaf_cols, MAP_NEW_LEAF),
+                    chip_absorb_tuple(&new_leaf_cols, MAP_NEW_LEAF, MAP_NEW_LEAF1),
                     is_real.clone(),
                 );
 
@@ -2326,25 +2366,30 @@ where
                 // digests ride the chip bus (arity-2 absorbs), node hashes ride the fact
                 // bus, both final links ARE the root column — the map-ops chain shape, twice.
                 let p2 = LookupBus::new(BUS_P2);
-                let leaf_tuple = |addr_col: usize, val_col: usize, leaf_col: usize| {
-                    let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-                    t.push(AB::Expr::from_u64(2));
-                    t.push(local[addr_col].into());
-                    t.push(local[val_col].into());
-                    for _ in 2..CHIP_RATE {
-                        t.push(AB::Expr::ZERO);
-                    }
-                    t.push(local[leaf_col].into());
-                    t
-                };
+                // Phase B-GATE: 17-wide tuple; `leaf_col` is out0, `lane1_base..+6` the lanes 1..7.
+                let leaf_tuple =
+                    |addr_col: usize, val_col: usize, leaf_col: usize, lane1_base: usize| {
+                        let mut t: Vec<AB::Expr> = Vec::with_capacity(CHIP_TUPLE_LEN);
+                        t.push(AB::Expr::from_u64(2));
+                        t.push(local[addr_col].into());
+                        t.push(local[val_col].into());
+                        for _ in 2..CHIP_RATE {
+                            t.push(AB::Expr::ZERO);
+                        }
+                        t.push(local[leaf_col].into());
+                        for i in 0..CHIP_OUT_LANES - 1 {
+                            t.push(local[lane1_base + i].into());
+                        }
+                        t
+                    };
                 p2.lookup_key(
                     builder,
-                    leaf_tuple(MA_LO_ADDR, MA_LO_VALUE, MA_LO_LEAF),
+                    leaf_tuple(MA_LO_ADDR, MA_LO_VALUE, MA_LO_LEAF, MA_LO_LEAF1),
                     is_real.clone(),
                 );
                 p2.lookup_key(
                     builder,
-                    leaf_tuple(MA_HI_ADDR, MA_HI_VALUE, MA_HI_LEAF),
+                    leaf_tuple(MA_HI_ADDR, MA_HI_VALUE, MA_HI_LEAF, MA_HI_LEAF1),
                     is_real.clone(),
                 );
                 let fact_bus = LookupBus::new(BUS_FACT);
@@ -2625,6 +2670,68 @@ fn perm_aux(st: [BabyBear; POSEIDON2_WIDTH]) -> (Vec<BabyBear>, BabyBear) {
     let aux = poseidon2_permute_aux_witness(st);
     let digest = aux[aux.len() - POSEIDON2_WIDTH];
     (aux, digest)
+}
+
+/// The 8 exposed output lanes `state[0..8]` of the final permutation block — the
+/// genuine distinct lanes the chip's widened bus tuple carries (Phase B-GATE).
+/// `perm_lanes(st)[0]` equals `perm_aux(st).1` (the squeezed digest).
+#[cfg(feature = "prover")]
+fn perm_lanes(st: [BabyBear; POSEIDON2_WIDTH]) -> [BabyBear; CHIP_OUT_LANES] {
+    let aux = poseidon2_permute_aux_witness(st);
+    let base = aux.len() - POSEIDON2_WIDTH;
+    core::array::from_fn(|i| aux[base + i])
+}
+
+/// **Phase B-GATE producer helper: the 7 exposed chip lanes 1..7 of an absorb.** Seeds the
+/// permutation EXACTLY as the chip witness-gen (`build_traces`): the rate-8 inputs, with
+/// `state[4..7]` carrying the arity-blend (`big = arity == 7`, else `state[4] = arity`), and
+/// returns `perm_lanes(seed)[1..8]` — `state[1..8]` of the SINGLE final permutation. This is the
+/// fill every chip-bearing producer writes into a hash site's lane columns so the 17-wide chip
+/// lookup matches (`out[i] == lane[i]`); a forged lane is UNSAT. `arity ≤ CHIP_RATE`.
+#[cfg(feature = "prover")]
+pub(crate) fn chip_absorb_lanes(arity: usize, inputs: &[BabyBear]) -> [BabyBear; CHIP_OUT_LANES - 1] {
+    debug_assert!(arity <= CHIP_RATE && inputs.len() >= arity.min(CHIP_RATE));
+    let big = arity == 7;
+    let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    for i in 0..4 {
+        st[i] = inputs.get(i).copied().unwrap_or(BabyBear::ZERO);
+    }
+    if big {
+        st[4] = inputs.get(4).copied().unwrap_or(BabyBear::ZERO);
+        st[5] = inputs.get(5).copied().unwrap_or(BabyBear::ZERO);
+        st[6] = inputs.get(6).copied().unwrap_or(BabyBear::ZERO);
+    } else {
+        st[4] = BabyBear::new(arity as u32);
+    }
+    let lanes = perm_lanes(st);
+    core::array::from_fn(|j| lanes[j + 1])
+}
+
+/// **Phase B-GATE generic chip-lane fill.** For every declared `TID_P2` chip lookup, read the
+/// absorb's INPUT values off the row, compute the genuine permutation lanes 1..7
+/// (`chip_absorb_lanes`), and write them into the lookup's lane columns (the last
+/// `CHIP_OUT_LANES - 1` tuple elements, each a `.var`). Descriptor-driven, so a producer can never
+/// misalign with the emitted tuple; out0 (the digest) is assumed already filled by the caller's
+/// hash chain. This is the exact column fill the AIR's `out[i] == lane[i]` equality demands — a
+/// forged lane is UNSAT (`ir2_forged_output_lane_refuses`). Idempotent on the lane columns.
+#[cfg(feature = "prover")]
+pub fn fill_chip_lanes(desc: &EffectVmDescriptor2, row: &mut [BabyBear]) {
+    for k in &desc.constraints {
+        let VmConstraint2::Lookup(l) = k else { continue };
+        if l.table != TID_P2 {
+            continue;
+        }
+        // tuple = [arity, in0..in7, out0, lane1..lane7]; the arity tag is tuple[0].
+        let arity = eval_c(&l.tuple[0], row).as_u32() as usize;
+        let ins: [BabyBear; CHIP_RATE] = core::array::from_fn(|i| eval_c(&l.tuple[1 + i], row));
+        let lanes = chip_absorb_lanes(arity, &ins);
+        for j in 0..(CHIP_OUT_LANES - 1) {
+            let LeanExpr::Var(col) = l.tuple[CHIP_RATE + 2 + j] else {
+                panic!("chip lookup lane column {j} must be a bare Var");
+            };
+            row[col] = lanes[j];
+        }
+    }
 }
 
 #[cfg(feature = "prover")]
@@ -3419,20 +3526,26 @@ fn build_traces(
                 cols.push(hi.addr);
                 cols.push(hi.value);
                 // The two leaf digests (chip absorbs) + the two fact chains to the root.
-                let leaf_digest = |a: BabyBear, b: BabyBear| perm_aux(hash2_state_c(a, b)).1;
-                let absorb2_tuple = |a: BabyBear, b: BabyBear, d: BabyBear| -> Vec<u32> {
+                // Phase B-GATE: the absorb rides the 17-wide chip bus, so we keep all 8 lanes —
+                // lane0 is the digest (the fact-chain seed), lanes 1..7 are carried to match the
+                // chip row (appended at the tail of the row below).
+                let leaf_lanes = |a: BabyBear, b: BabyBear| perm_lanes(hash2_state_c(a, b));
+                // The 17-wide histogram key: `[2, a, b, 0×6, lane0..lane7]`.
+                let absorb2_tuple = |a: BabyBear, b: BabyBear, lanes: &[BabyBear]| -> Vec<u32> {
                     let mut t = vec![2u32, a.as_u32(), b.as_u32()];
                     t.extend(std::iter::repeat_n(0u32, CHIP_RATE - 2));
-                    t.push(d.as_u32());
+                    t.extend(lanes.iter().map(|d| d.as_u32()));
                     t
                 };
-                let lo_leaf = leaf_digest(lo.addr, lo.value);
-                let hi_leaf = leaf_digest(hi.addr, hi.value);
+                let lo_lanes = leaf_lanes(lo.addr, lo.value);
+                let hi_lanes = leaf_lanes(hi.addr, hi.value);
+                let lo_leaf = lo_lanes[0];
+                let hi_leaf = hi_lanes[0];
                 *chip_hist
-                    .entry(absorb2_tuple(lo.addr, lo.value, lo_leaf))
+                    .entry(absorb2_tuple(lo.addr, lo.value, &lo_lanes))
                     .or_insert(0) += 1;
                 *chip_hist
-                    .entry(absorb2_tuple(hi.addr, hi.value, hi_leaf))
+                    .entry(absorb2_tuple(hi.addr, hi.value, &hi_lanes))
                     .or_insert(0) += 1;
                 cols.push(lo_leaf);
                 cols.push(hi_leaf);
@@ -3476,6 +3589,10 @@ fn build_traces(
                 fill_canon(hi.addr.as_u32(), true, &mut cols, &mut byte_hist);
                 fill_lex_lt(lo.addr.as_u32(), key_u, true, &mut cols, &mut byte_hist)?;
                 fill_lex_lt(key_u, hi.addr.as_u32(), true, &mut cols, &mut byte_hist)?;
+                // Phase B-GATE: the appended leaf-lane columns (MA_LO_LEAF1.., MA_HI_LEAF1..).
+                debug_assert_eq!(cols.len(), MA_LO_LEAF1);
+                cols.extend_from_slice(&lo_lanes[1..]);
+                cols.extend_from_slice(&hi_lanes[1..]);
                 debug_assert_eq!(cols.len(), MA_WIDTH);
                 ma_rows.push(cols);
                 continue;
@@ -3583,33 +3700,43 @@ fn build_traces(
             // bus. The row carries digests only, never aux. The absorb tuple is built from the
             // SAME declared leaf-input values the AIR's `chip_absorb_tuple` reads off the
             // declared columns (`map_leaf_input_cols`), so prover/verifier agree on the arity.
-            let leaf_digest = |a: BabyBear, b: BabyBear| perm_aux(hash2_state_c(a, b)).1;
-            let absorb2_tuple = |a: BabyBear, b: BabyBear, d: BabyBear| -> Vec<u32> {
+            // Phase B-GATE: keep all 8 lanes of each leaf absorb (lane0 = the chained digest /
+            // fact-chain seed, lanes 1..7 carried to match the 17-wide chip row).
+            let leaf_lanes = |a: BabyBear, b: BabyBear| perm_lanes(hash2_state_c(a, b));
+            let absorb2_tuple = |a: BabyBear, b: BabyBear, lanes: &[BabyBear]| -> Vec<u32> {
                 // The declared inputs are `[key, value]`; the histogram key mirrors the AIR's
-                // `arity :: inputs ++ pad ++ [digest]` tuple at the declared arity.
+                // `arity :: inputs ++ pad ++ out0..out7` tuple at the declared arity.
                 let inputs = [a.as_u32(), b.as_u32()];
                 let mut t = vec![inputs.len() as u32];
                 t.extend_from_slice(&inputs);
                 t.extend(std::iter::repeat_n(0u32, CHIP_RATE - inputs.len()));
-                t.push(d.as_u32());
+                t.extend(lanes.iter().map(|d| d.as_u32()));
                 t
             };
             let is_insert = *kind == MapKind::Insert;
-            let new_leaf = leaf_digest(key, value);
+            let new_lanes = leaf_lanes(key, value);
+            let new_leaf = new_lanes[0];
             *chip_hist
-                .entry(absorb2_tuple(key, value, new_leaf))
+                .entry(absorb2_tuple(key, value, &new_lanes))
                 .or_insert(0) += 1;
             cols[MAP_NEW_LEAF] = new_leaf;
+            for i in 0..CHIP_OUT_LANES - 1 {
+                cols[MAP_NEW_LEAF1 + i] = new_lanes[i + 1];
+            }
             if is_insert {
                 // Insert rows have no committed old leaf; the AIR's old-path legs are gated
                 // away by `op - 3`. Leave old-leaf / old-chain columns at zero.
                 cols[MAP_OLD_VALUE] = BabyBear::ZERO;
             } else {
-                let old_leaf = leaf_digest(key, old_value);
+                let old_lanes = leaf_lanes(key, old_value);
+                let old_leaf = old_lanes[0];
                 *chip_hist
-                    .entry(absorb2_tuple(key, old_value, old_leaf))
+                    .entry(absorb2_tuple(key, old_value, &old_lanes))
                     .or_insert(0) += 1;
                 cols[MAP_OLD_LEAF] = old_leaf;
+                for i in 0..CHIP_OUT_LANES - 1 {
+                    cols[MAP_OLD_LEAF1 + i] = old_lanes[i + 1];
+                }
                 let mut cur_old = old_leaf;
                 for lvl in 0..HEAP_TREE_DEPTH {
                     let sib = sibs[lvl];
@@ -3675,6 +3802,10 @@ fn build_traces(
                 for _ in 0..2 {
                     fill_lex_lt(0, 0, false, &mut cols, &mut byte_hist)?;
                 }
+                // Phase B-GATE: the appended leaf-lane columns (is_real = 0 gates the lookup,
+                // so the lanes are unconstrained on a pad row — plain zeros).
+                debug_assert_eq!(cols.len(), MA_LO_LEAF1);
+                cols.resize(MA_WIDTH, BabyBear::ZERO);
                 debug_assert_eq!(cols.len(), MA_WIDTH);
                 ma_rows.push(cols);
             }
@@ -3688,12 +3819,15 @@ fn build_traces(
     let chip: Option<Vec<Vec<BabyBear>>> = if presence.chip {
         let mut chip_rows: Vec<Vec<BabyBear>> = Vec::new();
         for (tuple, mult) in &chip_hist {
-            // tuple = [arity, in0..in7, out] (CHIP_TUPLE_LEN wide).
+            // tuple = [arity, in0..in7, out0..out7] (CHIP_TUPLE_LEN = 17 wide).
             let arity_u = tuple[CHIP_ARITY];
             let big_row = arity_u == 7;
             let mut row = vec![BabyBear::ZERO; CHIP_AUX0];
-            for (j, &v) in tuple.iter().enumerate() {
-                row[j] = BabyBear::new(v);
+            // Copy only the [arity, in0..in7] prefix from the tuple; the out0..out7 lanes are
+            // DERIVED below from the genuine permutation (never trusted from the consumer's
+            // tuple), so the AIR's `out[i] == lane[i]` equality constraints hold by construction.
+            for j in 0..=CHIP_RATE {
+                row[j] = BabyBear::new(tuple[j]);
             }
             row[CHIP_MULT] = BabyBear::new((*mult % (BABYBEAR_P as u64)) as u32);
             row[CHIP_IS_FACT] = BabyBear::ZERO;
@@ -3714,6 +3848,11 @@ fn build_traces(
             st[4] = row[CHIP_S4];
             st[5] = row[CHIP_S5];
             st[6] = row[CHIP_S6];
+            // Fill the 8 exposed output lanes from the genuine final permutation state.
+            let lanes = perm_lanes(st);
+            for i in 0..CHIP_OUT_LANES {
+                row[CHIP_OUT + i] = lanes[i];
+            }
             let (aux, _digest) = perm_aux(st);
             row.extend(aux);
             chip_rows.push(row);
@@ -3731,14 +3870,26 @@ fn build_traces(
             row[CHIP_S4] = BabyBear::ZERO;
             row[CHIP_S5] = BabyBear::new(FACT_MARK);
             row[CHIP_S6] = BabyBear::ONE;
-            let (aux, _digest) = perm_aux(fact_state_c(BabyBear::new(l), BabyBear::new(r)));
+            // Fill the 8 exposed output lanes (the AIR's `out[i] == lane[i]` equality applies
+            // to fact rows too; only the fact bus's 3-wide `[l, r, out0]` is consumed though).
+            let fst = fact_state_c(BabyBear::new(l), BabyBear::new(r));
+            let lanes = perm_lanes(fst);
+            for i in 0..CHIP_OUT_LANES {
+                row[CHIP_OUT + i] = lanes[i];
+            }
+            debug_assert_eq!(row[CHIP_OUT], BabyBear::new(out));
+            let (aux, _digest) = perm_aux(fst);
             row.extend(aux);
             chip_rows.push(row);
         }
         // Pad: genuine arity-0 absorb permutation rows with multiplicity 0.
+        let pad_lanes = perm_lanes([BabyBear::ZERO; POSEIDON2_WIDTH]);
         let (aux, digest) = perm_aux([BabyBear::ZERO; POSEIDON2_WIDTH]);
         let mut pad = vec![BabyBear::ZERO; CHIP_AUX0];
-        pad[CHIP_OUT] = digest;
+        debug_assert_eq!(pad_lanes[0], digest);
+        for i in 0..CHIP_OUT_LANES {
+            pad[CHIP_OUT + i] = pad_lanes[i];
+        }
         pad.extend(aux);
         let target = next_pow2(chip_rows.len());
         while chip_rows.len() < target {
@@ -3950,6 +4101,28 @@ where
     Ok(proof)
 }
 
+/// Clone a base trace and fill every row's chip lane columns from the descriptor's chip lookups
+/// (Phase B-GATE). Honest producers fill the DIGEST (out0) chain but leave the 7 exposed lanes
+/// 1..7 to this descriptor-driven weld, so no producer needs per-site lane knowledge. The
+/// adversarial teeth use [`prove_vm_descriptor2_inner`] DIRECTLY (no lane fill), so a forged lane
+/// stays forged and is REJECTED. Idempotent: re-deriving genuine lanes is a no-op.
+#[cfg(feature = "prover")]
+fn trace_with_chip_lanes(
+    desc: &EffectVmDescriptor2,
+    base_trace: &[Vec<BabyBear>],
+) -> Vec<Vec<BabyBear>> {
+    let mut t = base_trace.to_vec();
+    for row in &mut t {
+        // A producer may build rows at the pre-lane width; grow to the descriptor width so the
+        // appended lane columns exist before filling (genuine producers fill out0; lanes ride here).
+        if row.len() < desc.trace_width {
+            row.resize(desc.trace_width, BabyBear::ZERO);
+        }
+        fill_chip_lanes(desc, row);
+    }
+    t
+}
+
 /// **`prove_vm_descriptor2`** — assemble + prove the multi-table batch STARK for a
 /// graduated v2 descriptor over a base main trace.
 ///
@@ -3973,7 +4146,7 @@ pub fn prove_vm_descriptor2(
 ) -> Result<BatchProof<DreggStarkConfig>, String> {
     prove_vm_descriptor2_inner(
         desc,
-        base_trace,
+        &trace_with_chip_lanes(desc, base_trace),
         public_inputs,
         mem_boundary,
         map_heaps,
@@ -3999,7 +4172,7 @@ pub fn prove_vm_descriptor2_umem(
 ) -> Result<BatchProof<DreggStarkConfig>, String> {
     prove_vm_descriptor2_inner(
         desc,
-        base_trace,
+        &trace_with_chip_lanes(desc, base_trace),
         public_inputs,
         mem_boundary,
         map_heaps,
@@ -4025,7 +4198,7 @@ pub fn prove_vm_descriptor2_with_config(
 ) -> Result<BatchProof<DreggStarkConfig>, String> {
     prove_vm_descriptor2_inner(
         desc,
-        base_trace,
+        &trace_with_chip_lanes(desc, base_trace),
         public_inputs,
         mem_boundary,
         map_heaps,
@@ -4061,7 +4234,7 @@ where
 {
     prove_vm_descriptor2_inner(
         desc,
-        base_trace,
+        &trace_with_chip_lanes(desc, base_trace),
         public_inputs,
         mem_boundary,
         map_heaps,
@@ -4288,7 +4461,7 @@ mod tests {
 
     /// The Lean `#guard`-pinned demo-v2 golden (DescriptorIR2 §10): every v2 constraint
     /// kind + the five tables, byte-for-byte.
-    const DEMO_V2: &str = "{\"name\":\"demo-v2\",\"ir\":2,\"trace_width\":2,\"public_input_count\":1,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":2,\"sem\":\"main\"},{\"id\":1,\"name\":\"poseidon2_chip\",\"arity\":10,\"sem\":\"poseidon2_chip\",\"params\":{\"field_modulus\":2013265921,\"d\":4,\"width\":16,\"sbox_degree\":7,\"sbox_registers\":1,\"half_full_rounds\":4,\"partial_rounds\":13,\"rate\":8,\"rc_source\":\"BABYBEAR_POSEIDON2_RC_16\",\"internal_diag_source\":\"BABYBEAR_POSEIDON2_INTERNAL_DIAG_16\"}},{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":30},{\"id\":3,\"name\":\"memory\",\"arity\":5,\"sem\":\"memory\"},{\"id\":4,\"name\":\"map_ops\",\"arity\":5,\"sem\":\"map_ops\"}],\"constraints\":[{\"t\":\"transition\",\"hi\":0,\"lo\":0},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":0}]},{\"t\":\"mem_op\",\"kind\":\"read\",\"guard\":{\"t\":\"const\",\"v\":1},\"addr\":{\"t\":\"var\",\"v\":0},\"value\":{\"t\":\"var\",\"v\":1},\"prev_value\":{\"t\":\"var\",\"v\":1},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"map_op\",\"op\":\"write\",\"guard\":{\"t\":\"const\",\"v\":1},\"root\":{\"t\":\"var\",\"v\":0},\"key\":{\"t\":\"var\",\"v\":1},\"value\":{\"t\":\"const\",\"v\":0},\"new_root\":{\"t\":\"var\",\"v\":1}}],\"hash_sites\":[],\"ranges\":[]}";
+    const DEMO_V2: &str = "{\"name\":\"demo-v2\",\"ir\":2,\"trace_width\":2,\"public_input_count\":1,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":2,\"sem\":\"main\"},{\"id\":1,\"name\":\"poseidon2_chip\",\"arity\":17,\"sem\":\"poseidon2_chip\",\"params\":{\"field_modulus\":2013265921,\"d\":4,\"width\":16,\"sbox_degree\":7,\"sbox_registers\":1,\"half_full_rounds\":4,\"partial_rounds\":13,\"rate\":8,\"rc_source\":\"BABYBEAR_POSEIDON2_RC_16\",\"internal_diag_source\":\"BABYBEAR_POSEIDON2_INTERNAL_DIAG_16\"}},{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":30},{\"id\":3,\"name\":\"memory\",\"arity\":5,\"sem\":\"memory\"},{\"id\":4,\"name\":\"map_ops\",\"arity\":5,\"sem\":\"map_ops\"}],\"constraints\":[{\"t\":\"transition\",\"hi\":0,\"lo\":0},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":0}]},{\"t\":\"mem_op\",\"kind\":\"read\",\"guard\":{\"t\":\"const\",\"v\":1},\"addr\":{\"t\":\"var\",\"v\":0},\"value\":{\"t\":\"var\",\"v\":1},\"prev_value\":{\"t\":\"var\",\"v\":1},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"map_op\",\"op\":\"write\",\"guard\":{\"t\":\"const\",\"v\":1},\"root\":{\"t\":\"var\",\"v\":0},\"key\":{\"t\":\"var\",\"v\":1},\"value\":{\"t\":\"const\",\"v\":0},\"new_root\":{\"t\":\"var\",\"v\":1}}],\"hash_sites\":[],\"ranges\":[]}";
 
     /// The byte-pinned Lean golden parses, with every v2 element decoded.
     #[test]
@@ -4348,17 +4521,24 @@ mod tests {
     /// 7 mem prev_serial, 8 mem guard, 9 map root, 10 map key, 11 map value,
     /// 12 map new_root, 13 map guard, 14 keep mask, 15 held mask.
     fn test_desc() -> EffectVmDescriptor2 {
-        let chip_tuple = |a: usize, b: usize, d: usize| -> Vec<LeanExpr> {
+        // Phase B-GATE: a single-output hash site emits the 17-wide chip tuple
+        // `[2, a, b, 0×6, out0..out7]` but binds only out0 (= col `d`, the digest). Lanes
+        // 1..7 are carried in cols 16..22 (witnessed = the genuine permutation lanes), so the
+        // lookup matches the 17-wide chip row; the descriptor constrains only out0.
+        let chip_tuple = |a: usize, b: usize, d: usize, lane1: usize| -> Vec<LeanExpr> {
             let mut t = vec![LeanExpr::Const(2), LeanExpr::Var(a), LeanExpr::Var(b)];
             for _ in 0..(CHIP_RATE - 2) {
                 t.push(LeanExpr::Const(0));
             }
             t.push(LeanExpr::Var(d));
+            for i in 0..(CHIP_OUT_LANES - 1) {
+                t.push(LeanExpr::Var(lane1 + i));
+            }
             t
         };
         EffectVmDescriptor2 {
             name: "ir2-test".to_string(),
-            trace_width: 16,
+            trace_width: 23,
             public_input_count: 0,
             tables: vec![TableDef2 {
                 id: TID_RANGE,
@@ -4369,7 +4549,7 @@ mod tests {
             constraints: vec![
                 VmConstraint2::Lookup(LookupSpec {
                     table: TID_P2,
-                    tuple: chip_tuple(0, 1, 2),
+                    tuple: chip_tuple(0, 1, 2, 16),
                 }),
                 VmConstraint2::Lookup(LookupSpec {
                     table: TID_RANGE,
@@ -4417,10 +4597,13 @@ mod tests {
     fn test_base_row() -> Vec<BabyBear> {
         let a = BabyBear::new(11);
         let b = BabyBear::new(22);
-        let digest = hash_many(&[a, b]);
+        // The genuine 8 lanes of the arity-2 absorb hash[a, b]; lane0 == hash_many(&[a, b]).
+        let lanes = perm_lanes(hash2_state_c(a, b));
+        let digest = lanes[0];
+        debug_assert_eq!(digest, hash_many(&[a, b]));
         let tree = CanonicalHeapTree::new(test_heap(), HEAP_TREE_DEPTH);
         let root = tree.root();
-        vec![
+        let mut row = vec![
             a,
             b,
             digest,
@@ -4437,7 +4620,11 @@ mod tests {
             BabyBear::ZERO,               // map guard (set per row)
             BabyBear::new(0b0101),        // keep ⊑ held
             BabyBear::new(0b0111),        // held
-        ]
+        ];
+        // cols 16..22: the 7 exposed lanes 1..7 of the hash site (Phase B-GATE).
+        row.extend_from_slice(&lanes[1..]);
+        debug_assert_eq!(row.len(), 23);
+        row
     }
 
     fn test_trace() -> Vec<Vec<BabyBear>> {
@@ -4575,6 +4762,69 @@ mod tests {
             Ok(res) => assert!(
                 res.is_err(),
                 "forged map opening produced an accepted proof — opening tooth OPEN"
+            ),
+        }
+    }
+
+    /// **Phase B-GATE anti-laundering — DISTINCTNESS.** The 8 exposed chip output lanes are
+    /// genuinely 8 distinct field elements (the final permutation state), NOT `[0]×8` and NOT
+    /// eight copies of the digest. Also: flipping ANY one input bit changes ALL 8 lanes
+    /// (full-input avalanche), so each lane depends on the whole input.
+    #[test]
+    fn ir2_chip_output_lanes_are_distinct() {
+        for (a, b) in [(11u32, 22u32), (1, 0), (7, 7), (123456, 999999)] {
+            let lanes = perm_lanes(hash2_state_c(BabyBear::new(a), BabyBear::new(b)));
+            // Pairwise distinct.
+            for i in 0..CHIP_OUT_LANES {
+                for j in (i + 1)..CHIP_OUT_LANES {
+                    assert_ne!(
+                        lanes[i], lanes[j],
+                        "lanes {i} and {j} collide for input ({a}, {b}) — chip output is not 8 distinct felts"
+                    );
+                }
+            }
+            // Avalanche: flipping input b's low bit changes every lane.
+            let lanes2 = perm_lanes(hash2_state_c(BabyBear::new(a), BabyBear::new(b ^ 1)));
+            for i in 0..CHIP_OUT_LANES {
+                assert_ne!(
+                    lanes[i], lanes2[i],
+                    "lane {i} unchanged after a 1-bit input flip — lane does not depend on the full input"
+                );
+            }
+        }
+    }
+
+    /// **Phase B-GATE anti-laundering — FORGED LANE IS UNSAT.** A single-output hash site carries
+    /// the 7 exposed lanes 1..7 in its trace; the chip AIR equality-binds each to the genuine
+    /// permutation lane. A witness with a FORGED lane (≠ the real lane) has NO matching chip row,
+    /// so the LogUp lookup is unsatisfiable — the proof is REJECTED. This is what makes the new
+    /// lane constraints REAL (out[i] is not a free column).
+    #[test]
+    fn ir2_forged_output_lane_refuses() {
+        let desc = test_desc();
+        let mut rows = test_trace();
+        // col 18 = the hash site's lane 3 (cols 16..22 hold lanes 1..7). Forge it.
+        let real = rows[0][18];
+        rows[0][18] = real + BabyBear::ONE;
+        // A forged lane makes the LogUp lookup unsatisfiable: the prover either returns Err or
+        // (in debug builds) the LogUp consistency checker panics. Either is a hard REJECTION.
+        let r = std::panic::catch_unwind(|| {
+            prove_vm_descriptor2_inner(
+                &desc,
+                &rows,
+                &[],
+                &test_boundary(),
+                &[test_heap()],
+                &UMemBoundaryWitness::default(),
+                false,
+                &ir2_config(),
+            )
+        });
+        match r {
+            Err(_) => {}
+            Ok(res) => assert!(
+                res.is_err(),
+                "forged output lane produced an accepted proof — the lane binding is OPEN"
             ),
         }
     }
@@ -5660,7 +5910,11 @@ mod tests {
     fn rotation_probe_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         use crate::effect_vm::columns::rotation as rot;
         use crate::poseidon2::hash_many;
-        let mut row = vec![BabyBear::ZERO; rot::PROBE_WIDTH];
+        // Phase B-GATE: the row is widened past PROBE_WIDTH by `7·n_sites` lane columns (the
+        // descriptor's graduated trace width). The digest chain is built first (out0 columns),
+        // then `fill_chip_lanes` writes the genuine lanes 1..7 for every chip lookup off the row.
+        let desc = rotation_probe_desc();
+        let mut row = vec![BabyBear::ZERO; desc.trace_width];
         for (i, cell) in row.iter_mut().enumerate().take(rot::IROOT + 1) {
             *cell = BabyBear::new(100 + i as u32);
         }
@@ -5678,6 +5932,7 @@ mod tests {
         row[rot::CHAIN_BASE + 7] = d;
         let commit = hash_many(&[d, row[rot::IROOT]]);
         row[rot::STATE_COMMIT] = commit;
+        fill_chip_lanes(&desc, &mut row);
         let pi = vec![commit, row[rot::COMMITTED_HEIGHT]];
         (vec![row; 4], pi)
     }
@@ -5736,7 +5991,17 @@ mod tests {
         use crate::effect_vm_descriptors::rotation_layout_for;
         use crate::poseidon2::hash_many;
         let lay = rotation_layout_for(r);
-        let mut row = vec![BabyBear::ZERO; lay.probe_width];
+        // Phase B-GATE: widen to the graduated descriptor's trace width (the lane columns appended
+        // past the probe width). Build the digest chain first, then `fill_chip_lanes` fills lanes
+        // 1..7 for every chip lookup off the row (descriptor-driven, so R=16 == the hand builder).
+        let key = match r {
+            16 => "rotationProbeVmDescriptor2",
+            24 => "rotationProbeVmDescriptorR24",
+            32 => "rotationProbeVmDescriptorR32",
+            _ => panic!("no staged rotation probe descriptor for R={r}"),
+        };
+        let desc = rotation_probe_desc_key(key);
+        let mut row = vec![BabyBear::ZERO; desc.trace_width];
         for (i, cell) in row.iter_mut().enumerate().take(lay.iroot + 1) {
             *cell = BabyBear::new(100 + i as u32);
         }
@@ -5760,6 +6025,7 @@ mod tests {
         assert_eq!(chain, lay.num_chain, "chain carrier count at R={r}");
         let commit = hash_many(&[d, row[lay.iroot]]);
         row[lay.state_commit] = commit;
+        fill_chip_lanes(&desc, &mut row);
         let pi = vec![commit, row[lay.committed_height]];
         (vec![row; 4], pi)
     }
@@ -5924,8 +6190,14 @@ mod tests {
         use crate::poseidon2::hash_many;
         let lay = rotation_layout_for(cav::R);
         let (rot_rows, rot_pi) = rotation_probe_trace_r(cav::R);
-        let mut row = vec![BabyBear::ZERO; cav::PROBE_WIDTH];
-        row[..lay.probe_width].copy_from_slice(&rot_rows[0]);
+        // Phase B-GATE: build at the caveat descriptor's graduated trace width; copy ONLY the
+        // rotated block's non-lane prefix (limbs + chain carriers + state_commit, all within
+        // `lay.probe_width`) — the caveat descriptor's own lane columns are filled below by
+        // `fill_chip_lanes` (the rotated lanes in `rot_rows` sit at the ROTATED descriptor's lane
+        // offsets, which differ from the caveat descriptor's, so they must NOT be copied).
+        let caveat_desc = rotation_caveat_probe_desc();
+        let mut row = vec![BabyBear::ZERO; caveat_desc.trace_width];
+        row[..lay.probe_width].copy_from_slice(&rot_rows[0][..lay.probe_width]);
         // The manifest block: count + the four entries (7 felts each).
         let e0 = RotCaveatEntry {
             type_tag: crate::effect_vm::pi::SLOT_CAVEAT_TAG_MONOTONIC,
@@ -5973,6 +6245,9 @@ mod tests {
         }
         assert_eq!(chain, cav::NUM_CHAIN, "caveat chain carrier count");
         row[cav::CAVEAT_COMMIT] = d;
+        // Phase B-GATE: fill the genuine lanes 1..7 for every chip lookup (rotated before/after
+        // sites + caveat sites) off the now-complete digest columns.
+        fill_chip_lanes(&caveat_desc, &mut row);
         let pi = vec![rot_pi[0], rot_pi[1], d];
         (vec![row; 4], pi)
     }

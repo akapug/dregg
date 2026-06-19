@@ -108,8 +108,8 @@ fn ir2_vs_v1_transfer_proof_size() {
     let v2_json = descriptor2_for_key("transferVmDescriptor2").expect("v2 transfer descriptor");
     let v2_desc = parse_vm_descriptor2(v2_json).expect("v2 transfer descriptor parses");
     assert_eq!(
-        v2_desc.trace_width, 187,
-        "graduated transfer keeps the 186 base width"
+        v2_desc.trace_width, 215,
+        "graduated transfer = 187 base + 7·4 chip lane cols (Phase B-GATE: 4 hash sites)"
     );
     assert_eq!(v2_desc.tables.len(), 5, "the five EPOCH tables");
     let v2_dpis: Vec<BabyBear> = pis[..v2_desc.public_input_count].to_vec();

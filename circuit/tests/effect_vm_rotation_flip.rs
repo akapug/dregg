@@ -43,7 +43,8 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, state};
 use dregg_circuit::effect_vm::trace_rotated::{
     AFTER_BASE, B_COMMITTED_HEIGHT, B_IROOT, B_STATE_COMMIT, BEFORE_BASE, C_SPAN, CAVEAT_BASE,
-    ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+    GRAD_ROT_WIDTH, ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest,
+    generate_rotated_effect_vm_trace,
     rotated_descriptor_name_for_effect, transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect, fold_bytes32_to_bb};
@@ -141,7 +142,7 @@ fn producer_cell_with_field(balance: i64, nonce: u64, field_idx: usize, field: [
 fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(desc.public_input_count, 38, "34 v1 PIs + 4 appended");
 
     // -- a real transfer: the validated v1 reference witness (transfer-out). --
@@ -397,7 +398,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         })
         .expect("burnVmDescriptor2R24 in registry");
     let desc = parse_vm_descriptor2(json).expect("burn descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(desc.public_input_count, 38);
 
     // A real burn turn: a 30-unit balance debit (no destination credit).
@@ -497,7 +498,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         })
         .expect("noteSpendVmDescriptor2R24 in the staged registry");
     let desc = parse_vm_descriptor2(json).expect("rotated note-spend descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(
         desc.public_input_count, 39,
         "the rotated note-spend carries 38 prefix PIs + the appended nullifier slot"
@@ -700,7 +701,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
     assert_eq!(name, "createCellVmDescriptor2R24");
     let desc =
         parse_vm_descriptor2(rotated_descriptor_json(name)).expect("rotated createCell parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(
         desc.public_input_count, 39,
         "rotated createCell carries 38 prefix PIs + the appended new-cell-key slot"
@@ -857,7 +858,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
         assert_eq!(name, "setFieldVmDescriptor2-0R24");
         let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
             .expect("rotated setField descriptor parses");
-        assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+        assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
         assert_eq!(
             desc.public_input_count, 38,
             "setField is a 38-PI cohort member"
@@ -959,7 +960,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
         assert_eq!(name, "mintVmDescriptor2R24");
         let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
             .expect("rotated bridgeMint descriptor parses");
-        assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+        assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
         assert_eq!(
             desc.public_input_count, 38,
             "bridgeMint is a 38-PI cohort member"
@@ -1545,7 +1546,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
 
     let json = rotated_descriptor_json(name);
     let desc = parse_vm_descriptor2(json).expect("rotated cellSeal descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(
         desc.public_input_count, 39,
         "cellSeal carries the appended record-forcing pin (39 PIs)"
@@ -1672,7 +1673,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
 
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(desc.public_input_count, 38, "value descriptor keeps the 38-PI shape");
 
     // -- a real value (transfer-out) turn; the authority half is UNCHANGED (a value move). --
@@ -1825,7 +1826,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
 
         let json = rotated_descriptor_json(name);
         let desc = parse_vm_descriptor2(json).expect("rotated audit descriptor parses");
-        assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+        assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
         assert_eq!(
             desc.public_input_count, 39,
             "{name} carries the appended record-forcing pin (39 PIs)"
@@ -2030,7 +2031,7 @@ fn note_create_pins_commitments_and_refuses_tamper() {
     assert_eq!(name, "noteCreateVmDescriptor2R24");
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated note-create descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
 
     // A real note-create turn (EffectVM credits balance by `value`, the shielding convention).
     let before_balance: i64 = 60_000;
@@ -2135,7 +2136,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
 
     let desc = parse_vm_descriptor2(rotated_json("transferFeeVmDescriptor2R24"))
         .expect("rotated fee'd transfer descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "fee'd transfer keeps the rotated width 315");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "fee'd transfer keeps the graduated rotated width 608");
     assert_eq!(
         desc.public_input_count, 39,
         "fee'd transfer: 38 rotated PIs + the appended fee PI (slot 38)"

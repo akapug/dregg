@@ -268,71 +268,71 @@ pub const DREGG_EFFECTVM_RECORD_V1_FP: &str =
 pub const DREGG_EFFECTVM_TRANSFER_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-transfer-ir2.json");
 pub const DREGG_EFFECTVM_TRANSFER_IR2_FP: &str =
-    "6b267ef4242cfcd74409a815c7b1cd7b33d04991f5e24a9fcfd987ee0fd8bfba";
+    "034ace8c7fa26f3ee1d6912a3668a2e1d9fc81150b392d67fa5fa9772477fc3d";
 pub const DREGG_EFFECTVM_BURN_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-burn-ir2.json");
 pub const DREGG_EFFECTVM_BURN_IR2_FP: &str =
-    "4189ff89c93210eb22bee8d76774c95559cd44a0720272831da028fdb022eb01";
+    "a0eacaf531ec92348b5e08bb654bea21def8d56763d867c8c019943ffb319027";
 pub const DREGG_EFFECTVM_MINT_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-mint-ir2.json");
 pub const DREGG_EFFECTVM_MINT_IR2_FP: &str =
-    "60857bc2572d02823937581026a0666b4c13038a6408a9c0a96648a432ce54b9";
+    "830e04ecdfac6a60d0fdd1732e5744dfd5d102dea6fe1a04b94822875a97a985";
 pub const DREGG_EFFECTVM_NOTE_SPEND_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-note-spend-ir2.json");
 pub const DREGG_EFFECTVM_NOTE_SPEND_IR2_FP: &str =
-    "39df8d1f0ec48ecb656b62114c5e65b5fe7eae38bca80890cd8622ded5c8a8cf";
+    "3eef45a67bb034f67b54484e3d3f4070fc871a7e605cfc62153101b698074c2c";
 pub const DREGG_EFFECTVM_NOTE_CREATE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-note-create-ir2.json");
 pub const DREGG_EFFECTVM_NOTE_CREATE_IR2_FP: &str =
-    "ac9117371c9d6af3a773f9591a57b06b6d1fd7fabccfa27790a5c0bb61b2719c";
+    "88a6834412439e9ef5fdfc71cf8e0d69c7e4aa9a8f025a49d4f5e2a9c16fda9b";
 pub const DREGG_EFFECTVM_CELL_SEAL_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-cell-seal-ir2.json");
 pub const DREGG_EFFECTVM_CELL_SEAL_IR2_FP: &str =
-    "386e20b367c555498e99ebdd68c28635cddf70d4bcac3c03830d5011896ce254";
+    "f73ae70c5c5843993edc1c5e1ff0a03f9a13a7e9d4f45455f424e0acf80804cd";
 pub const DREGG_EFFECTVM_CELL_DESTROY_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-cell-destroy-ir2.json");
 pub const DREGG_EFFECTVM_CELL_DESTROY_IR2_FP: &str =
-    "935ddab5a527a1c95d99d9dbae6597332c5b55619b755b4ad30a4f4760b4c04a";
+    "564fb6ed29e6b0a9a840d7da61381ddbab609f1fd588da223f2b85b022df94ea";
 pub const DREGG_EFFECTVM_REFUSAL_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-refusal-ir2.json");
 pub const DREGG_EFFECTVM_REFUSAL_IR2_FP: &str =
-    "72a0941220ed172c16cbd7f76acbdf22f0cba17ff38b911e882ce89975408e8b";
+    "c13743dc27860b8643cdaa97cfccd188e70d566c286086976f5691e1f9146cf2";
 pub const DREGG_EFFECTVM_SET_PERMS_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-perms-ir2.json");
 pub const DREGG_EFFECTVM_SET_PERMS_IR2_FP: &str =
-    "1396c2c7fab86f7f25fd6935a3e6ff63c3a80fa1ba5e17155db85938e1e24cf6";
+    "0a28e3604a60225b91f7d2238c3ed18bad339bff14aaa677317e2eb2508fb4c1";
 pub const DREGG_EFFECTVM_SET_VK_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-vk-ir2.json");
 pub const DREGG_EFFECTVM_SET_VK_IR2_FP: &str =
-    "ddee1f0499f4c6dfd6f375f51c550c3e50b1ddbe0d1fff61a67094d796b58191";
+    "4a778013ac1dbad835c29f888b3c86c2be7761762e7d930020a45033548b9239";
 pub const DREGG_EFFECTVM_EXERCISE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-exercise-ir2.json");
 pub const DREGG_EFFECTVM_EXERCISE_IR2_FP: &str =
-    "ac7edfb29eddaa785a6c445e09808b5a1999de522196ae7869f59e96aab95a44";
+    "8a00c46e167f4ae45ecee02398e578dbf5a4263b554dbe3e26f51cf7f4c75ba7";
 pub const DREGG_EFFECTVM_PIPELINED_SEND_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-pipelined-send-ir2.json");
 pub const DREGG_EFFECTVM_PIPELINED_SEND_IR2_FP: &str =
-    "b836607c00e0786da0fb47adbfe4d581c6e93a3fa31147000eb0a0627f705e77";
+    "b77aca46bf603ced70238e7c1151354bc9c19225e09ace8eb275ba3423ab5df4";
 pub const DREGG_EFFECTVM_REFRESH_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-refresh-ir2.json");
 pub const DREGG_EFFECTVM_REFRESH_IR2_FP: &str =
-    "837c92a0468576d50f8feb0d8ca4762524eb1262097d5b159e8fdc3a49f7f2e4";
+    "6dff21994c66cfdf03c2009f8656d4302a6f55bb29545f48c18f87da982d51fa";
 pub const DREGG_EFFECTVM_INCREMENT_NONCE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-increment-nonce-ir2.json");
 pub const DREGG_EFFECTVM_INCREMENT_NONCE_IR2_FP: &str =
-    "d1e28774f44a699e0d5358b4d5f628de308938b3521ec201b43e12e9a3a27e22";
+    "f8ee7f550569ca61b9799039f9fd948d4c3f1583f31aeadc59475c4aa9d65e29";
 pub const DREGG_EFFECTVM_REVOKE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-revoke-ir2.json");
 pub const DREGG_EFFECTVM_REVOKE_IR2_FP: &str =
-    "78eac6d5f2385b0c447f5451832b82291b0149472244f752d34fcabfc30b5204";
+    "6fd0c2431683d6e0d78c00e1c5f07006b6375c556a444f793cffce2af56e4116";
 pub const DREGG_EFFECTVM_INTRODUCE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-introduce-ir2.json");
 pub const DREGG_EFFECTVM_INTRODUCE_IR2_FP: &str =
-    "cd3fbf3c6d0acda5de4e8df052f7d2f82564c693f241e4bd84aefc6d44499b23";
+    "759e43ab87720f2984a1d8832227a70d3cd498de382674b1c122a900e3688866";
 pub const DREGG_EFFECTVM_ATTENUATE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-attenuate-ir2.json");
 pub const DREGG_EFFECTVM_ATTENUATE_IR2_FP: &str =
-    "3694628a0eeb296d1817fb819293fa48a248c74b7d0630fd7ea6e0d88e7bf352";
+    "a715a054d1dfd4c9af3d2d0e068c03f12c57ae3907bafb9d6885de1922403111";
 // GRADUATED (cap-crown): RevokeCapability (sel 24). The v2 leg of the cap-REMOVAL effect — a
 // held-membership map-read authenticated against the before cap_root + a ZERO-value remove-write
 // (the slot's rights deleted), NO submask (revoke deletes a slot, it does not narrow rights). Lean
@@ -341,7 +341,7 @@ pub const DREGG_EFFECTVM_ATTENUATE_IR2_FP: &str =
 pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-revoke-cap-ir2.json");
 pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_FP: &str =
-    "22c1fbc87a0000367fc5785944230284db5a1d95b62a3d5df5a99b9f661caf79";
+    "6fc7151536dfc827880a205e03d9359040b0da4ff2c1b7e15575b780157afd9b";
 // GRADUATED (Custom recursive-proof binding, sel 8): the runtime passthrough face graduated onto
 // IR-v2 PLUS the `proof_bind` op (`customProofBind`) that ties the row's `custom_proof_commitment`
 // to a VERIFYING external sub-proof of the recursion engine — the accumulator constraint the
@@ -350,43 +350,43 @@ pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_FP: &str =
 pub const DREGG_EFFECTVM_CUSTOM_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-custom-ir2.json");
 pub const DREGG_EFFECTVM_CUSTOM_IR2_FP: &str =
-    "ce76e2554abdfd8d0e00c80be0f38cc7dcc23453191300d42dc7c7cf6d123215";
+    "96058884c472a5a23b72424874b87a3e50b7031c651858313910ce2587a515c8";
 pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-dyn-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_FP: &str =
-    "7bf90f7883ea73a0362c0531af8584c74850c11d544562921992a6048f6f37db";
+    "12e5fe45964d83decba2f351f4d4be81c3f789bbcab857df5a195c5ca7ccf514";
 pub const DREGG_EFFECTVM_SET_FIELD_0_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-0-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_0_IR2_FP: &str =
-    "3d12bfe4e7e68264538b2a98a18c96f3ef3877adba7c47c1fe1c5e0ca9c36d5f";
+    "69b36069d6fc53ac3ca30e5c49b451d341ab4172ab023ddd3f0de57d3b589047";
 pub const DREGG_EFFECTVM_SET_FIELD_1_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-1-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_1_IR2_FP: &str =
-    "a72888f3ea3fca4cd99e8e2dc9b404dc7abdf507d1485bc497186d440d470bd1";
+    "337f8a22f5a10ae2c7f2c12199e231d2b20afc3848e0df0b47e3976d750666d8";
 pub const DREGG_EFFECTVM_SET_FIELD_2_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-2-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_2_IR2_FP: &str =
-    "343e22d34df7dbbd0aefa1d86f73c9693a66ad01fb942426ee2a72893f60aa66";
+    "d1c4ea0d79e735691faaa83bea292d051a6ece6d171fdc48329a501c40bdc298";
 pub const DREGG_EFFECTVM_SET_FIELD_3_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-3-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_3_IR2_FP: &str =
-    "e45fa4e2e3b02b1d0da74833c3dde821d0bd4e0a1d4c488ffb37e61cd445e1a9";
+    "0d9e1fed112f3866cfaed150e82ca3a8fb48f7a3f2da3153a47c46bd01f9672c";
 pub const DREGG_EFFECTVM_SET_FIELD_4_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-4-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_4_IR2_FP: &str =
-    "fa062174f0e1c272124f739f07f35489a6916bc003e8ba30678861e33474aeae";
+    "e8e66392b8b19485b74aca3276e7e9c3f3258685f9b86622e6f6a492f371dab3";
 pub const DREGG_EFFECTVM_SET_FIELD_5_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-5-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_5_IR2_FP: &str =
-    "2aee32a16aabd930fe442bf6f4ecfa216c3d0abd98a79ec2af9fce921ae97e5b";
+    "bab8bb539730c41ef20e62f39f0b1574887f838f8c5e41a254c559b4cb6aee0a";
 pub const DREGG_EFFECTVM_SET_FIELD_6_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-6-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_6_IR2_FP: &str =
-    "2dead9544699334b229245c92f168c39d35b5245b7bb5ecc6b0d397a5b2405e0";
+    "e98e1f03f5141578e7bc08803fd07a1b59ee0012c40b9bb7a1400f14d3d16033";
 pub const DREGG_EFFECTVM_SET_FIELD_7_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-7-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_7_IR2_FP: &str =
-    "d10e78cdd5b87beb9b70edea3302c2ae53633aa66b7da1312372bf03decdfd68";
+    "8d3b64c23a1d10d6f85209802850ff1e9f5a5a7f9a9e3500b74f87326e476d8d";
 
 // ==== selector index -> (descriptor name, const json, fingerprint) ====
 pub const SELECTOR_DESCRIPTORS: &[(usize, &str, &str, &str)] = &[
@@ -731,7 +731,7 @@ pub const ROTATION_LAYOUT_V3_STAGED_FP: &str =
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-rotation-state-v3-staged.json");
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_FP: &str =
-    "f80801c9eb428d005232c250ff2d873432a7edb982dd6c0bf39c669311554c26";
+    "32276271d1dd5949a2ce3e27f3884e8e3125f3e431df0ad59d5776f8914c0e43";
 
 /// The REGISTER-COUNT MEASUREMENT probes (`docs/ROTATION-CUTOVER.md` pre-gates): the same
 /// staged rotation probe emitted at R=24 and R=32 registers from the PARAMETRIC Lean
@@ -744,11 +744,11 @@ pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_FP: &str =
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R24_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-rotation-state-v3-staged-r24.json");
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R24_FP: &str =
-    "78924093cf0617e1c80b7384e99a72bffaff4df4283e131108797e7ea9a5f360";
+    "ed8e98ae4dab3363befbf093e994e14c1a5297415f333a6cb9441e782a4a2453";
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R32_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-rotation-state-v3-staged-r32.json");
 pub const DREGG_EFFECTVM_ROTATION_STATE_V3_STAGED_R32_FP: &str =
-    "cbe22881a7de7a73473f5ba75a445b1e7c2906b2f2fd39fd466364f616dfbdb5";
+    "d50d5d578eacb6bb6ba32668612d1841327bf14cb76026917a4e300f7311afe1";
 
 /// The v3-staged registry (keyed by Lean def-name, the `V2_DESCRIPTORS` pattern). Entry 0
 /// is the deployed R=16 reference; entries 1-2 are the register-count measurement probes.
@@ -787,7 +787,7 @@ pub const ROTATION_CAVEAT_LAYOUT_V3_STAGED_FP: &str =
 pub const DREGG_EFFECTVM_ROTATION_CAVEAT_V3_STAGED_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-rotation-caveat-v3-staged-r24.json");
 pub const DREGG_EFFECTVM_ROTATION_CAVEAT_V3_STAGED_FP: &str =
-    "a1d926d7c8cd8ac08e1957eae3353e87bf9bbcfaebf89bbb1dea6f981bdbb89b";
+    "6cd196b560ba85e7a0a12cf6a4038f10bc3129abebac81b3ebe6dd86b9ff054f";
 
 /// The caveat-operand staged registry (kept SEPARATE from `V3_STAGED_DESCRIPTORS`
 /// so the three rotation-probe pins stay byte-frozen and their coverage walker
@@ -814,7 +814,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "04e6219bbb839b02512f6a9e3762fe16b5fe7dae84102c7806b075ffe14d2792";
+    "a4ba528f1d1902291ad3ea08810a9d9ca838007f9370bf5a938968df2d0f23e6";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1260,8 +1260,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            t.trace_width, 187,
-            "graduated transfer keeps the 187 base width (P0-2 record-digest)"
+            t.trace_width, 215,
+            "graduated transfer = 187 base + 7·4 chip lane cols (Phase B-GATE: 4 hash sites)"
         );
         assert_eq!(t.public_input_count, 34);
     }
@@ -1363,7 +1363,13 @@ mod tests {
             );
             let d = parse_vm_descriptor2(json)
                 .unwrap_or_else(|e| panic!("v3 staged {key} failed parse_vm_descriptor2: {e}"));
-            assert_eq!(d.trace_width, lay.probe_width, "{key}: probe width");
+            // Phase B-GATE: graduated width = probe width + 7·n_sites lane cols
+            // (n_sites = num_chain head/body absorbs + 1 iroot absorb).
+            assert_eq!(
+                d.trace_width,
+                lay.probe_width + 7 * (lay.num_chain + 1),
+                "{key}: probe width + 7·n_sites chip lane cols"
+            );
             assert_eq!(d.public_input_count, 2);
             assert!(
                 d.hash_sites.is_empty() && d.ranges.is_empty(),
@@ -1386,7 +1392,13 @@ mod tests {
                             _ => None,
                         })
                         .collect();
-                    let (digest, inputs) = vars.split_last().expect("chip tuple has a digest");
+                    // Phase B-GATE: the 17-wide tuple's var run is `[input vars …, out0 (digest),
+                    // lane1..lane7]`. The output block is the last CHIP_OUT_LANES vars; the digest
+                    // (out0) is its HEAD, the inputs are everything before it.
+                    use crate::descriptor_ir2::CHIP_OUT_LANES;
+                    let split = vars.len() - CHIP_OUT_LANES;
+                    let inputs = &vars[..split];
+                    let digest = &vars[split];
                     digests.push(*digest);
                     let fresh: Vec<usize> = inputs
                         .iter()
@@ -1482,7 +1494,13 @@ mod tests {
         assert_eq!(&sha256_hex(json.as_bytes()), fp, "{key}: SHA-256 drift");
         let d = parse_vm_descriptor2(json)
             .unwrap_or_else(|e| panic!("{key} failed parse_vm_descriptor2: {e}"));
-        assert_eq!(d.trace_width, cav::PROBE_WIDTH, "{key}: probe width");
+        // Phase B-GATE: graduated width = caveat probe width + 7·n_sites chip lane cols (the
+        // before/after rotated absorbs + the caveat absorbs); the surplus is a multiple of 7.
+        assert!(
+            d.trace_width >= cav::PROBE_WIDTH
+                && (d.trace_width - cav::PROBE_WIDTH) % 7 == 0,
+            "{key}: caveat probe width + 7·n_sites chip lane cols"
+        );
         assert_eq!(d.public_input_count, 3, "{key}: three PI pins");
         assert!(
             d.hash_sites.is_empty() && d.ranges.is_empty(),
@@ -1508,7 +1526,12 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                let (digest, inputs) = vars.split_last().expect("chip tuple has a digest");
+                // Phase B-GATE: 17-wide tuple — output block is the last CHIP_OUT_LANES vars; out0
+                // (the digest) is its head, inputs precede it.
+                use crate::descriptor_ir2::CHIP_OUT_LANES;
+                let split = vars.len() - CHIP_OUT_LANES;
+                let inputs = &vars[..split];
+                let digest = &vars[split];
                 digests.push(*digest);
                 let fresh: Vec<usize> = inputs.iter().copied().filter(|v| is_fresh(*v)).collect();
                 let chained = inputs.len() - fresh.len();
@@ -1614,28 +1637,46 @@ mod tests {
                 let is_tb = key.contains("CapOpenTB");
                 let extra_cols = if is_tb { 2 } else { 0 };
                 let extra_pis = if is_tb { 3 } else { 0 };
-                assert_eq!(
-                    d.trace_width,
-                    V1_WIDTH + APPENDIX_SPAN + 91 + extra_cols,
-                    "{key}: cap-open trace width = rotated base + 91-column cap-membership appendix \
-                     (59 prior + 32 mask-bit columns for the genuine submask facet gate) \
-                     (+2 turn-identity columns for the TB weld)"
+                // Phase B-GATE: the rotated base graduation appends `7·n_rot_sites` lane columns,
+                // and the cap-open appendix is now 210 (91 base+mask + 7·17 lane cols for the leaf
+                // + 16 node absorbs). Both surpluses are multiples of 7; the concrete widths are
+                // pinned by the emit goldens + fingerprints.
+                let cap_span = 7 + 1 + 3 * 16 + 3 + 32 + 7 * 17; // CAP_OPEN_SPAN = 210
+                let rot_base = V1_WIDTH + APPENDIX_SPAN;
+                assert!(
+                    d.trace_width >= rot_base + cap_span + extra_cols
+                        && (d.trace_width - (rot_base + cap_span + extra_cols)) % 7 == 0,
+                    "{key}: cap-open trace width = rotated base (+ 7·n_rot_sites lane cols) + 210 \
+                     cap-membership appendix (91 base+mask + 7·17 chip lane cols) (+2 TB cols)"
                 );
                 assert_eq!(
                     d.public_input_count,
                     38 + extra_pis,
                     "{key}: cap-open carries the rotated 38-PI vector (+3 turn-identity PIs for TB)"
                 );
-                // The cap-open appendix declares EXACTLY 17 poseidon2 chip lookups whose digest
-                // lands in the cap-open appendix (>= 327): 1 leaf absorb + 16 node absorbs.
-                let cap_open_base = V1_WIDTH + APPENDIX_SPAN; // 327
+                // The cap-open appendix declares EXACTLY 17 poseidon2 chip lookups whose DIGEST
+                // (out0, tuple col CHIP_RATE+1) lands in the cap-membership column block
+                // `[cap_open_base, cap_open_base + 91)`: 1 leaf absorb + 16 node absorbs. (Phase
+                // B-GATE: the 7-felt lane columns are appended at the VERY END of the descriptor,
+                // so an `any(var >= cap_open_base)` heuristic would over-count — every lookup now
+                // carries lane cols past the base. Keying on out0's appendix range is exact.)
+                use crate::descriptor_ir2::CHIP_RATE;
+                // Phase B-GATE: the cap-membership appendix now starts at the GRADUATED rotated
+                // width (the rotated lanes are appended past 328, so the cap block was shifted to
+                // `base.traceWidth`). Recover that base from the total width: `cap_open_base =
+                // trace_width - CAP_OPEN_SPAN(210) - extra_cols`. The 91 cap-membership cols sit at
+                // `[cap_open_base, cap_open_base + 91)`; the 119 cap lane cols follow.
+                let cap_span = 7 + 1 + 3 * 16 + 3 + 32 + 7 * 17; // CAP_OPEN_SPAN = 210
+                let cap_open_base = d.trace_width - cap_span - extra_cols;
                 let cap_lookups = d
                     .constraints
                     .iter()
                     .filter(|c| {
                         if let VmConstraint2::Lookup(l) = c {
-                            l.tuple.iter().any(
-                                |e| matches!(e, LeanExpr::Var(v) if *v >= cap_open_base),
+                            matches!(
+                                l.tuple.get(CHIP_RATE + 1),
+                                Some(LeanExpr::Var(v))
+                                    if *v >= cap_open_base && *v < cap_open_base + 91
                             )
                         } else {
                             false
@@ -1649,10 +1690,13 @@ mod tests {
                 continue;
             }
 
-            assert_eq!(
-                d.trace_width,
-                V1_WIDTH + APPENDIX_SPAN,
-                "{key}: rotated trace width = v1 width + appendix"
+            // Phase B-GATE: graduation appends `7·n_sites` chip lane columns past the rotated base,
+            // so the surplus is a multiple of 7 (n_sites varies by v1 face); concrete widths pinned
+            // by the emit goldens + fingerprints.
+            assert!(
+                d.trace_width >= V1_WIDTH + APPENDIX_SPAN
+                    && (d.trace_width - (V1_WIDTH + APPENDIX_SPAN)) % 7 == 0,
+                "{key}: rotated trace width = v1 width + appendix + 7·n_sites lane cols"
             );
             assert!(
                 d.hash_sites.is_empty() && d.ranges.is_empty(),
@@ -1678,20 +1722,23 @@ mod tests {
             let mut absorbed: Vec<usize> = Vec::new();
             for c in &d.constraints {
                 if let VmConstraint2::Lookup(l) = c {
-                    let vars: Vec<usize> = l
-                        .tuple
-                        .iter()
-                        .filter_map(|e| match e {
-                            LeanExpr::Var(v) => Some(*v),
-                            _ => None,
-                        })
-                        .collect();
-                    let (digest, inputs) = vars.split_last().expect("chip tuple has a digest");
-                    if *digest >= V1_WIDTH {
-                        digests.push(*digest);
-                        for v in inputs {
-                            if is_limb(*v) {
-                                absorbed.push(*v);
+                    if l.table != crate::descriptor_ir2::TID_P2 {
+                        continue;
+                    }
+                    // Phase B-GATE: the 17-wide tuple is `[arity, in0..in7, out0, lane1..lane7]`.
+                    // out0 (the digest) is at fixed position CHIP_RATE + 1; the input vars are the
+                    // bare-Var entries in `[1 ..= CHIP_RATE]` (lanes are NOT inputs).
+                    use crate::descriptor_ir2::CHIP_RATE;
+                    let LeanExpr::Var(digest) = l.tuple[CHIP_RATE + 1] else {
+                        panic!("{key}: chip lookup out0 (col CHIP_RATE+1) must be a bare Var");
+                    };
+                    if digest >= V1_WIDTH {
+                        digests.push(digest);
+                        for e in &l.tuple[1..=CHIP_RATE] {
+                            if let LeanExpr::Var(v) = e {
+                                if is_limb(*v) {
+                                    absorbed.push(*v);
+                                }
                             }
                         }
                     }
@@ -1789,6 +1836,10 @@ mod tests {
                 "setPermsVmDescriptor2R24"
                     | "setVKVmDescriptor2R24"
                     | "refusalVmDescriptor2R24"
+                    // makeSovereign keeps the record pin on `B_RECORD_DIGEST` as belt-and-suspenders
+                    // for the opaque authority residue (Lean `makeSovereignV3`, the mode gate is the
+                    // primary soundness; PI 38 welds the AFTER authority-digest limb).
+                    | "makeSovereignVmDescriptor2R24"
             );
             let lifecycle_record_pin_member = record_digest_pin_member
                 || matches!(
@@ -1879,6 +1930,20 @@ mod tests {
                     nullifier_pins,
                     vec![(STATE_AFTER_BASE + state::RESERVED, pi_base + 4)],
                     "transferFee: the fifth pin welds the after-block RESERVED fee limb (col 89) to PI[38]"
+                );
+            } else if key == "setFieldDynVmDescriptor2R24" {
+                // THE DYNAMIC setField fields-root weld (WAVE 3): the fifth pin welds the AFTER
+                // block's committed `fields_root` sub-limb to PI[38] (col `afterFieldsRootCol
+                // setFieldDynV1Face.traceWidth` = 262, the declared post-`fields_root` param), so a
+                // forged post-`fields_root` is UNSAT in-circuit (Lean `setFieldDynForcedV3`).
+                assert_eq!(
+                    d.public_input_count, 39,
+                    "setFieldDyn: rotated 38-PI + the appended fields-root weld slot"
+                );
+                assert_eq!(
+                    nullifier_pins,
+                    vec![(262, pi_base + 4)],
+                    "setFieldDyn: the fifth pin welds the AFTER fields_root weld col (262) to PI[38]"
                 );
             } else {
                 assert_eq!(

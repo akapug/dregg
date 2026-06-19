@@ -224,11 +224,11 @@ structure CapOpenTraceFloor {State : Type} (S : CapHashScheme State) (effectBit 
   i : Nat
   hi : i < t.rows.length
   /-- the cap-open row's `src` column IS the edge's `src` (`c.target`). -/
-  hsrc : (envAt t i).loc capOpenCols.src = (c.target : ℤ)
+  hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (c.target : ℤ)
   /-- the opened leaf IS the CONSTRUCTED on-edge leaf. -/
-  hedge : leafOf capOpenCols (envAt t i) = authLeafAt actor0 c effectBit actor0 c.target
+  hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = authLeafAt actor0 c effectBit actor0 c.target
   /-- the trace's committed `cap_root` column IS the CONSTRUCTED root. -/
-  hroot : (envAt t i).loc capOpenCols.capRoot
+  hroot : (envAt t i).loc (capOpenCols base.traceWidth).capRoot
     = authConstructedRoot S actor0 c effectBit c.target
 
 /-- **`authConstructs_source` — ASSEMBLE the soundness carrier from `AuthorizedByCap` + the trace

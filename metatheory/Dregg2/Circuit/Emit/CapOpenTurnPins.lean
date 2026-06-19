@@ -93,7 +93,7 @@ row, matching the commit pins). -/
 /-- The three turn-identity PI pins for a cap-open base of width `w`, PI count `pc`: weld the cap-open
 `src` column to `PI[pc]`, the new `actor` column to `PI[pc+1]`, the new `dst` column to `PI[pc+2]`. -/
 def turnIdentityPins (w pc : Nat) : List VmConstraint2 :=
-  [ .base (.piBinding .last capOpenCols.src pc)
+  [ .base (.piBinding .last (capOpenCols w).src pc)
   , .base (.piBinding .last (capOpenActorCol w) (pc + 1))
   , .base (.piBinding .last (capOpenDstCol w) (pc + 2)) ]
 
@@ -190,7 +190,7 @@ theorem effCapOpenV3TB_publishes (base : EffectVmDescriptor2) (name : String) (n
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash (effCapOpenV3TB base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true) :
-    (envAt t i).loc capOpenCols.src = (envAt t i).pub (effCapOpenV3 base name n).piCount
+    (envAt t i).loc (capOpenCols base.traceWidth).src = (envAt t i).pub (effCapOpenV3 base name n).piCount
     ∧ (envAt t i).loc (capOpenActorCol base.traceWidth)
         = (envAt t i).pub ((effCapOpenV3 base name n).piCount + 1)
     ∧ (envAt t i).loc (capOpenDstCol base.traceWidth)
@@ -199,7 +199,7 @@ theorem effCapOpenV3TB_publishes (base : EffectVmDescriptor2) (name : String) (n
   set pc := (effCapOpenV3 base name n).piCount with hpc
   have hmem : ∀ c ∈ turnIdentityPins base.traceWidth pc, c ∈ (effCapOpenV3TB base name n).constraints :=
     fun c hc => List.mem_append_right _ hc
-  have memSrc : VmConstraint2.base (.piBinding .last capOpenCols.src pc)
+  have memSrc : VmConstraint2.base (.piBinding .last (capOpenCols base.traceWidth).src pc)
       ∈ (effCapOpenV3TB base name n).constraints :=
     hmem _ (by simp [turnIdentityPins])
   have memAct : VmConstraint2.base (.piBinding .last (capOpenActorCol base.traceWidth) (pc + 1))
@@ -235,7 +235,7 @@ theorem effCapOpenV3TB_hsrc (base : EffectVmDescriptor2) (name : String) (n : Na
     (hsat : Satisfied2 hash (effCapOpenV3TB base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
     (src actor dst : Label) (hanchor : TurnIdentityAnchored base name n t i src actor dst) :
-    (envAt t i).loc capOpenCols.src = (src : ℤ) := by
+    (envAt t i).loc (capOpenCols base.traceWidth).src = (src : ℤ) := by
   obtain ⟨hpubSrc, _, _⟩ := effCapOpenV3TB_publishes base name n hash minit mfin maddrs t hsat i hi hlast
   obtain ⟨hanSrc, _, _⟩ := hanchor
   rw [hpubSrc, hanSrc]
@@ -255,16 +255,16 @@ theorem effCapOpenV3TB_authorizes {State : Type} (base : EffectVmDescriptor2) (n
     (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
-      ((envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((envAt t i).loc (capOpenCols base.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
     (hanchor : TurnIdentityAnchored base name n t i src actor dst)
-    (hedge : leafOf capOpenCols (envAt t i) = leafAt actor src)
+    (hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< n)
       { actor := actor, src := src, dst := dst, amt := amt } = true
     ∧ (leafAt actor src).target = (src : ℤ) := by
   have hbase := effCapOpenV3TB_to_base base name n S.chipAbsorb minit mfin maddrs t hsat
-  have hsrc : (envAt t i).loc capOpenCols.src = (src : ℤ) :=
+  have hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (src : ℤ) :=
     effCapOpenV3TB_hsrc base name n S.chipAbsorb minit mfin maddrs t hsat i hi hlast src actor dst hanchor
   exact effCapOpenV3_authorizes base name n hn S vkOfTag provided minit mfin maddrs t hChip hbase
     i hi caps leafAt hfaith actor src dst amt hsrc hedge htier
@@ -284,7 +284,7 @@ anchor (`PI[piCount] = turn.src`), a forged `src ≠ turn.src` is UNSAT. -/
 theorem effCapOpenV3TB_rejects_mismatched_src (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
-    (hbad : (envAt t i).loc capOpenCols.src ≠ (envAt t i).pub (effCapOpenV3 base name n).piCount) :
+    (hbad : (envAt t i).loc (capOpenCols base.traceWidth).src ≠ (envAt t i).pub (effCapOpenV3 base name n).piCount) :
     ¬ Satisfied2 hash (effCapOpenV3TB base name n) minit mfin maddrs t := by
   intro hsat
   obtain ⟨hpubSrc, _, _⟩ := effCapOpenV3TB_publishes base name n hash minit mfin maddrs t hsat i hi hlast

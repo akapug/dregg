@@ -871,8 +871,14 @@ pub const CSE2_BALANCE_COL: usize = CSE2_PRESENT_COL + 1;
 pub const CSE2_COMMIT_IN_COL: usize = CSE2_BALANCE_COL + 1;
 /// CG-5 v2 trace column: rolling edge-sequence commitment AFTER absorbing this row's fingerprint.
 pub const CSE2_COMMIT_COL: usize = CSE2_COMMIT_IN_COL + 1;
-/// CG-5 v2 total trace width (mirrors `Cse.WIDTH = 10`).
-pub const CSE2_WIDTH: usize = CSE2_COMMIT_COL + 1;
+/// Phase B-GATE: the fingerprint absorb's 7 exposed lanes 1..7 (`Cse.FP_LANE1_COL`).
+pub const CSE2_FP_LANE1_COL: usize = CSE2_COMMIT_COL + 1;
+/// Phase B-GATE: the commitment absorb's 7 exposed lanes 1..7 (`Cse.COMMIT_LANE1_COL`).
+pub const CSE2_COMMIT_LANE1_COL: usize =
+    CSE2_FP_LANE1_COL + (crate::descriptor_ir2::CHIP_OUT_LANES - 1);
+/// CG-5 v2 total trace width (mirrors `Cse.WIDTH = 24`): chain cols + 2·7 chip lane cols.
+pub const CSE2_WIDTH: usize =
+    CSE2_COMMIT_LANE1_COL + (crate::descriptor_ir2::CHIP_OUT_LANES - 1);
 
 /// CG-5 v2 public input: the commitment seed (`commit_in[0]`, fixed at 0).
 pub const CSE2_PI_COMMIT_SEED: usize = 0;
@@ -888,6 +894,18 @@ pub const CSE2_PI_COUNT: usize = 2;
 /// `edge_fp = Poseidon2(0,0,0,0)` and continue the commitment chain (so both chip lookups hold on
 /// every row), with `present = sign = 0` so the balance is untouched. The off-AIR verifier
 /// re-derives the identical `(trace, pi)` from the canonical Turn edges.
+/// Phase B-GATE: fill a cross-side row's chip lane columns. The fingerprint absorb is arity-4 over
+/// the 4-felt edge id; the commitment absorb is arity-2 over `[commit_in, fp]`. Lanes 1..7 are the
+/// genuine permutation lanes (`chip_absorb_lanes`), so both 17-wide chip lookups match.
+#[cfg(feature = "prover")]
+fn cse2_fill_lanes(row: &mut [BabyBear], edge_id: &[BabyBear; 4], commit_in: BabyBear, fp: BabyBear) {
+    let fp_lanes = crate::descriptor_ir2::chip_absorb_lanes(4, edge_id);
+    let commit_lanes = crate::descriptor_ir2::chip_absorb_lanes(2, &[commit_in, fp]);
+    let n = crate::descriptor_ir2::CHIP_OUT_LANES - 1;
+    row[CSE2_FP_LANE1_COL..CSE2_FP_LANE1_COL + n].copy_from_slice(&fp_lanes);
+    row[CSE2_COMMIT_LANE1_COL..CSE2_COMMIT_LANE1_COL + n].copy_from_slice(&commit_lanes);
+}
+
 pub fn build_cross_side_trace_v2(
     half_edges: &[CrossSideHalfEdge],
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
@@ -917,6 +935,7 @@ pub fn build_cross_side_trace_v2(
         row[CSE2_BALANCE_COL] = balance;
         row[CSE2_COMMIT_IN_COL] = commit_in;
         row[CSE2_COMMIT_COL] = commit_out;
+        cse2_fill_lanes(&mut row, &he.edge_id, commit_in, fp);
         trace.push(row);
     }
 
@@ -933,6 +952,7 @@ pub fn build_cross_side_trace_v2(
         row[CSE2_BALANCE_COL] = balance;
         row[CSE2_COMMIT_IN_COL] = commit_in;
         row[CSE2_COMMIT_COL] = commit_out;
+        cse2_fill_lanes(&mut row, &edge_id, commit_in, fp);
         trace.push(row);
     }
 
@@ -975,8 +995,10 @@ pub const FOLD_ACC_IN_COL: usize = 0;
 pub const FOLD_DIGEST_COL: usize = 1;
 /// Tree-fold trace column: outgoing chain accumulator (acc_in ⊕ digest).
 pub const FOLD_ACC_OUT_COL: usize = 2;
-/// Tree-fold total trace width.
-pub const FOLD_WIDTH: usize = 3;
+/// Phase B-GATE: the compress absorb's 7 exposed lanes 1..7 (`Fold.LANE1_COL = 3`).
+pub const FOLD_LANE1_COL: usize = 3;
+/// Tree-fold total trace width: 3 chain cols + 7 chip lane cols (`Fold.WIDTH = 10`).
+pub const FOLD_WIDTH: usize = 3 + (crate::descriptor_ir2::CHIP_OUT_LANES - 1);
 
 /// Tree-fold public input: initial accumulator (seed).
 pub const FOLD_PI_INITIAL: usize = 0;
@@ -1111,6 +1133,15 @@ impl StarkAir for BundleTreeFoldAir {
 /// Pads to the next power of two by continuing the compress chain over a
 /// zero digest (so padding rows still satisfy continuity + the row-internal
 /// compress relation the verifier recomputes). Returns `(trace, public_inputs)`.
+/// Phase B-GATE: fill a tree-fold row's chip lane columns from the arity-2 compress absorb of
+/// `[acc_in, digest]` — lanes 1..7 are the genuine permutation lanes so the 17-wide chip matches.
+#[cfg(feature = "prover")]
+fn fold_fill_lanes(row: &mut [BabyBear], acc_in: BabyBear, digest: BabyBear) {
+    let lanes = crate::descriptor_ir2::chip_absorb_lanes(2, &[acc_in, digest]);
+    let n = crate::descriptor_ir2::CHIP_OUT_LANES - 1;
+    row[FOLD_LANE1_COL..FOLD_LANE1_COL + n].copy_from_slice(&lanes);
+}
+
 pub fn build_tree_fold_trace(child_digests: &[BabyBear]) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     assert!(
         !child_digests.is_empty(),
@@ -1134,6 +1165,7 @@ pub fn build_tree_fold_trace(child_digests: &[BabyBear]) -> (Vec<Vec<BabyBear>>,
         row[FOLD_ACC_IN_COL] = acc_in;
         row[FOLD_DIGEST_COL] = digest;
         row[FOLD_ACC_OUT_COL] = acc_out;
+        fold_fill_lanes(&mut row, acc_in, digest);
         trace.push(row);
         acc = acc_out;
     }
@@ -1145,6 +1177,7 @@ pub fn build_tree_fold_trace(child_digests: &[BabyBear]) -> (Vec<Vec<BabyBear>>,
         row[FOLD_ACC_IN_COL] = acc_in;
         row[FOLD_DIGEST_COL] = BabyBear::ZERO;
         row[FOLD_ACC_OUT_COL] = acc_out;
+        fold_fill_lanes(&mut row, acc_in, BabyBear::ZERO);
         trace.push(row);
         acc = acc_out;
     }
@@ -1208,7 +1241,7 @@ mod tests {
         let d = cross_side_existence_descriptor();
         assert_eq!(d.name, CROSS_SIDE_EXISTENCE_DESCRIPTOR_NAME);
         assert_eq!(d.trace_width, CSE2_WIDTH);
-        assert_eq!(d.trace_width, 10);
+        assert_eq!(d.trace_width, 24, "Phase B-GATE: 10 chain cols + 2·7 chip lane cols");
         assert_eq!(d.public_input_count, CSE2_PI_COUNT);
         assert_eq!(
             d.public_input_count, 2,
@@ -1253,7 +1286,7 @@ mod tests {
         let d = bundle_tree_fold_descriptor();
         assert_eq!(d.name, BUNDLE_TREE_FOLD_DESCRIPTOR_NAME);
         assert_eq!(d.trace_width, FOLD_WIDTH);
-        assert_eq!(d.trace_width, 3);
+        assert_eq!(d.trace_width, 10, "Phase B-GATE: 3 chain cols + 7 chip lane cols");
         assert_eq!(d.public_input_count, FOLD_PI_COUNT);
         assert_eq!(d.public_input_count, 2);
         assert_eq!(d.tables.len(), 1, "one declared table");

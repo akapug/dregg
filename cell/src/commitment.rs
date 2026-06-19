@@ -1685,7 +1685,7 @@ mod tests {
         let cell = Cell::with_balance(test_key(7), test_token(0), 100_000);
         let pre = compute_rotated_pre_limbs(&cell, &v9_ctx(11, 22));
         assert_eq!(pre.len(), V9_NUM_PRE_LIMBS);
-        assert_eq!(pre.len(), 35);
+        assert_eq!(pre.len(), 37, "33 base + disc + perms + vk + mode + fields_root (WAVE-2/3)");
         // cells_root rides limb 0; the welded r0 (balance_lo) is non-zero for a funded cell.
         assert_eq!(pre[0], BabyBear::new(11));
         let (lo, _hi) = dregg_circuit::effect_vm::split_u64(100_000u64);
@@ -1708,6 +1708,13 @@ mod tests {
             pre[34],
             vk_digest_felt(&cell.verification_key),
             "vk_digest rides limb 34 (= params[0] of a setVK row; None → 0)"
+        );
+        // limbs 35,36 are the WAVE-3 mode / fields_root sub-limbs (the LAST two pre-iroot limbs).
+        assert_eq!(pre[35], mode_felt(&cell.mode), "mode rides limb 35");
+        assert_eq!(
+            pre[36],
+            dregg_circuit::poseidon2::hash_bytes(&cell.state.fields_root),
+            "fields_root rides limb 36 (WAVE-3 flag-day)"
         );
     }
 

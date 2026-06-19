@@ -64,10 +64,14 @@ namespace Fold
 def ACC_IN_COL : Nat := 0
 /-- This child's bundle digest. -/
 def DIGEST_COL : Nat := 1
-/-- Chain accumulator after absorbing this child (`Poseidon2(acc_in, digest)`). -/
+/-- Chain accumulator after absorbing this child (`Poseidon2(acc_in, digest)` = out0). -/
 def ACC_OUT_COL : Nat := 2
-/-- Total trace width. -/
-def WIDTH : Nat := 3
+/-- Phase B-GATE: the compress absorb rides the 17-wide chip bus, so the row carries the 7 exposed
+lanes 1..7 at cols 3..9 (out0 stays `ACC_OUT_COL`; the lanes are matched to the chip row, NOT
+folded — the commitment stays 1-felt). -/
+def LANE1_COL : Nat := 3
+/-- Total trace width: 3 chain cols + 7 lane cols. -/
+def WIDTH : Nat := 3 + (CHIP_OUT_LANES - 1)
 
 /-- Public input: the initial (seed) accumulator. -/
 def PI_INITIAL : Nat := 0
@@ -90,7 +94,8 @@ verifier-side residual. -/
 def compressLookup : VmConstraint2 :=
   .lookup
     { table := .poseidon2
-    , tuple := chipLookupTuple [.var Fold.ACC_IN_COL, .var Fold.DIGEST_COL] Fold.ACC_OUT_COL }
+    , tuple := chipLookupTuple [.var Fold.ACC_IN_COL, .var Fold.DIGEST_COL] Fold.ACC_OUT_COL
+        (siteLaneCols Fold.LANE1_COL) }
 
 /-- First-row boundary `acc_in[0] = pi[initial]`. -/
 def firstAccBind : VmConstraint2 :=
@@ -128,8 +133,9 @@ def bundleFoldDescriptor : EffectVmDescriptor2 :=
 
 /-! ## §4 — Shape tripwires (byte-pinned both sides; the Rust twin pins the same). -/
 
--- The trace is 3 columns: acc_in, digest, acc_out.
-#guard Fold.WIDTH == 3
+-- The trace is 3 chain columns (acc_in, digest, acc_out) + 7 chip lane columns (Phase B-GATE).
+#guard Fold.WIDTH == 3 + (CHIP_OUT_LANES - 1)
+#guard Fold.WIDTH == 10
 -- Two public inputs: initial + final accumulator.
 #guard bundleFoldDescriptor.piCount == 2
 -- 4 constraints: 1 chip lookup + 2 piBindings + 1 window continuity.
@@ -180,7 +186,8 @@ theorem fold_compress_is_hashed
   have hc := h _ hmem
   simp only [compressLookup, VmConstraint2.holdsAt, Lookup.holdsAt] at hc
   have hkey := chip_lookup_sound hash (tf .poseidon2) hSound env.loc
-    [.var Fold.ACC_IN_COL, .var Fold.DIGEST_COL] Fold.ACC_OUT_COL (by unfold CHIP_RATE; decide) hc
+    [.var Fold.ACC_IN_COL, .var Fold.DIGEST_COL] Fold.ACC_OUT_COL (siteLaneCols Fold.LANE1_COL)
+    (by unfold CHIP_RATE; decide) hc
   simpa [EmittedExpr.eval] using hkey
 
 #assert_axioms fold_rejects_tampered_final

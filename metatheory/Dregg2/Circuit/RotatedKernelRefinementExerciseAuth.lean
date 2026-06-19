@@ -63,6 +63,7 @@ open Dregg2.Circuit.DeployedCapTree (CapLeaf CapHashScheme)
 open Dregg2.Circuit.DeployedCapTree.CapHashScheme (MembersAt confersTransferLeaf)
 open Dregg2.Circuit.DeployedCapOpen (CapOpenCols leafOf)
 open Dregg2.Circuit.Emit.CapOpenEmit (attenuateCapOpenEffV3 capOpenCols)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (attenuateV3)
 open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 ChipTableSound envAt)
 open Dregg2.Circuit.RotatedKernelRefinementExercise (exerciseEncodes)
 
@@ -118,9 +119,9 @@ structure ExerciseHoldSource (pre : RecChainedState) (actor target : CellId) : T
   i : Nat
   hi : i < t.rows.length
   /-- the opened leaf's target-column IS the exercise `target` (the held edge is the `target` edge). -/
-  htarget : (leafOf capOpenCols (envAt t i)).target = (target : ℤ)
+  htarget : (leafOf (capOpenCols attenuateV3.traceWidth) (envAt t i)).target = (target : ℤ)
   /-- the toy↔deployed faithful encoding for the opened leaf (the named cap-tree residual). -/
-  hfaith : ExerciseHoldFaithful pre actor target (leafOf capOpenCols (envAt t i))
+  hfaith : ExerciseHoldFaithful pre actor target (leafOf (capOpenCols attenuateV3.traceWidth) (envAt t i))
 
 /-- **`exercise_holdGate_forced` — the cap-open FORCES the exercise hold-gate (in-circuit membership).**
 From an `ExerciseHoldSource`, the toy hold-gate `exerciseGuard pre actor target` HOLDS: the in-circuit

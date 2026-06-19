@@ -351,7 +351,7 @@ def transferAuthoritySourceCanon_ofTB (hash : List ℤ → ℤ) (fcaps : FacetCa
     (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
     (hanchor : TurnIdentityAnchored Dregg2.Circuit.RotatedKernelRefinement.transferV3
       "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER t i tr.src tr.actor tr.dst)
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i)
+    (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i)
       = canonicalLeafAt fcaps tr.actor tr.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
       c ∈ fcaps actor → c.target = src → ∀ vk, c.tier ≠ .custom vk)
@@ -409,7 +409,7 @@ theorem transfer_descriptorRefines_facetTB_realized (hash : List ℤ → ℤ)
     (hanchor : TurnIdentityAnchored Dregg2.Circuit.RotatedKernelRefinement.transferV3
       "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER ct ci pc.turn.src pc.turn.actor
       pc.turn.dst)
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt ct ci)
+    (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt ct ci)
       = canonicalLeafAt fcaps pc.turn.actor pc.turn.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
       c ∈ fcaps actor → c.target = src → ∀ vk, c.tier ≠ .custom vk)

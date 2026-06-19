@@ -83,8 +83,14 @@ def BALANCE_COL : Nat := PRESENT_COL + 1
 def COMMIT_IN_COL : Nat := BALANCE_COL + 1
 /-- The rolling edge-sequence commitment AFTER absorbing this row's fingerprint. -/
 def COMMIT_COL : Nat := COMMIT_IN_COL + 1
-/-- Total trace width. -/
-def WIDTH : Nat := COMMIT_COL + 1
+/-- Phase B-GATE: the two chip absorbs (fingerprint + commit) each ride the 17-wide chip bus, so
+the row carries 7 exposed lanes 1..7 per site. The fingerprint absorb's lanes start at
+`FP_LANE1_COL`, the commit absorb's at `COMMIT_LANE1_COL` (out0 stays `EDGE_FP_COL`/`COMMIT_COL`;
+the lanes are matched to the chip row, NOT folded — the commitment stays 1-felt). -/
+def FP_LANE1_COL : Nat := COMMIT_COL + 1
+def COMMIT_LANE1_COL : Nat := FP_LANE1_COL + (CHIP_OUT_LANES - 1)
+/-- Total trace width: the chain cols + 2·7 chip lane cols. -/
+def WIDTH : Nat := COMMIT_LANE1_COL + (CHIP_OUT_LANES - 1)
 
 /-- Public input: the commitment seed (`commit_in[0]`). -/
 def PI_COMMIT_SEED : Nat := 0
@@ -115,14 +121,15 @@ def fingerprintLookup : VmConstraint2 :=
     , tuple := chipLookupTuple
         [.var (Cse.EDGE_ID_BASE + 0), .var (Cse.EDGE_ID_BASE + 1),
          .var (Cse.EDGE_ID_BASE + 2), .var (Cse.EDGE_ID_BASE + 3)]
-        Cse.EDGE_FP_COL }
+        Cse.EDGE_FP_COL (siteLaneCols Cse.FP_LANE1_COL) }
 
 /-- The chip lookup pinning `commit = Poseidon2(commit_in, edge_fp)` — an arity-2 absorb folding
 this row's fingerprint into the rolling edge-sequence commitment. -/
 def commitLookup : VmConstraint2 :=
   .lookup
     { table := .poseidon2
-    , tuple := chipLookupTuple [.var Cse.COMMIT_IN_COL, .var Cse.EDGE_FP_COL] Cse.COMMIT_COL }
+    , tuple := chipLookupTuple [.var Cse.COMMIT_IN_COL, .var Cse.EDGE_FP_COL] Cse.COMMIT_COL
+        (siteLaneCols Cse.COMMIT_LANE1_COL) }
 
 /-- `present·(sign² − 1) = 0` (a real half-edge has `sign ∈ {+1,−1}`). -/
 def signSquareGate : VmConstraint2 :=
@@ -201,7 +208,9 @@ def crossSideDescriptor : EffectVmDescriptor2 :=
 /-! ## §4 — Shape tripwires (byte-pinned both sides; the Rust twin pins the same). -/
 
 -- The trace is 10 columns: edge_id 4 + fp 1 + sign 1 + present 1 + balance 1 + commit_in 1 + commit 1.
-#guard Cse.WIDTH == 10
+-- Phase B-GATE: 10 chain cols + 2·7 chip lane cols = 24.
+#guard Cse.WIDTH == 10 + 2 * (CHIP_OUT_LANES - 1)
+#guard Cse.WIDTH == 24
 -- Two public inputs: the commitment seed + the final edge-sequence commitment.
 #guard crossSideDescriptor.piCount == 2
 -- 11 constraints: 3 row-local gates (present-bool, sign², padding-sign) + 2 chip lookups
@@ -274,7 +283,7 @@ theorem cse_fingerprint_is_hashed
   have hkey := chip_lookup_sound hash (tf .poseidon2) hSound env.loc
     [.var (Cse.EDGE_ID_BASE + 0), .var (Cse.EDGE_ID_BASE + 1),
      .var (Cse.EDGE_ID_BASE + 2), .var (Cse.EDGE_ID_BASE + 3)]
-    Cse.EDGE_FP_COL (by unfold CHIP_RATE; decide) hc
+    Cse.EDGE_FP_COL (siteLaneCols Cse.FP_LANE1_COL) (by unfold CHIP_RATE; decide) hc
   simpa [EmittedExpr.eval] using hkey
 
 #assert_axioms cse_rejects_unbalanced

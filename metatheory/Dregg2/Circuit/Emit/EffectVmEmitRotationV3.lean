@@ -1818,7 +1818,12 @@ def transferFeeV3 : EffectVmDescriptor2 :=
   graduateV1 (rotateV3WithFeePin (rotateV3FrozenAuthority EffectVmEmitTransfer.transferFeeVmDescriptor))
 
 #guard transferFeeV3.piCount == 39
-#guard transferFeeV3.traceWidth == EFFECT_VM_WIDTH + APPENDIX_SPAN
+-- Phase B-GATE: graduation appends `7 · n_sites` lane columns past the rotated width
+-- (`graduateV1 g` width = `g.traceWidth + 7·g.hashSites.length`).
+#guard transferFeeV3.traceWidth ==
+  EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
+    (rotateV3WithFeePin (rotateV3FrozenAuthority
+      EffectVmEmitTransfer.transferFeeVmDescriptor)).hashSites.length
 #guard graduable (rotateV3WithFeePin (rotateV3FrozenAuthority EffectVmEmitTransfer.transferFeeVmDescriptor))
 
 /-- A `Satisfied2` witness of the FROZEN graduation yields the full v1 denotation of the original
@@ -2005,8 +2010,12 @@ theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (
 -- nonce gate body changed): graduable, and the rotated form is the standard 311-col / 38-PI member.
 #guard graduable (setFieldTickFace 0)
 #guard graduable mintTickFace
-#guard (setFieldV3 0).traceWidth == EFFECT_VM_WIDTH + APPENDIX_SPAN
-#guard mintV3.traceWidth == EFFECT_VM_WIDTH + APPENDIX_SPAN
+#guard (setFieldV3 0).traceWidth ==
+  EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
+    (rotateV3FrozenAuthority (setFieldTickFace 0)).hashSites.length
+#guard mintV3.traceWidth ==
+  EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
+    (rotateV3FrozenAuthority mintTickFace).hashSites.length
 #guard (setFieldV3 0).piCount == 34 + 4
 #guard mintV3.piCount == 34 + 4
 -- The swap is a ONE-gate change: the tick-faced constraint list has the SAME length as the
@@ -2566,20 +2575,25 @@ def setVKV3 : EffectVmDescriptor2 :=
     (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
     EffectVmEmitSetVK.setVKVmDescriptor)
 
-/-- **`refusalV3`** — the LIVE rotated refusal WITH the LIVE fields-root weld (WAVE 3) AND the
-record-digest-forcing pin. The `.refusalA` arm sets the cell record's `"refusal"` audit slot to `1`
-(`TurnExecutorFull.refusalField`, `Spec.CellStateAudit.RefusalSpec`). That named record slot lands in
-the deployed cell's `fields_root` (the named-field map — NOT one of the welded `fields[0..7]` indexed
-slots), committed at the WAVE-3 sub-limb `B_FIELDS_ROOT = 36`. The fields-root weld
-(`rotateV3WithFieldsRootGate`, selector `SEL_REFUSAL = 52`) FORCES the AFTER `fields_root` sub-limb
-EQUAL to the declared post-`fields_root` param (verifier-anchored), so a forged refusal audit (committed
-`fields_root` ≠ declared) is UNSAT via the in-circuit weld ALONE — the forgery the deployed commitment
-did not even bind before is now BITING. The record pin on `B_RECORD_DIGEST` (PI 38) stays as
-belt-and-suspenders for the opaque r23 residue. -/
+/-- **`refusalV3`** — the LIVE rotated refusal WITH the record-digest-forcing pin. The `.refusalA`
+arm sets the cell record's `"refusal"` audit slot to `1` (`TurnExecutorFull.refusalField`,
+`Spec.CellStateAudit.RefusalSpec`). That named record slot lands in the deployed cell's `fields_root`
+(the named-field map — NOT one of the welded `fields[0..7]` indexed slots), which
+`compute_authority_digest_felt` FOLDS into the r23 authority residue (`B_RECORD_DIGEST = 24`). So a
+genuine refusal MOVES the AFTER `record_digest` limb. The record pin (`rotateV3WithRecordPin
+B_RECORD_DIGEST`) welds that limb to PI 38; the verifier anchors PI 38 to
+`compute_authority_digest_felt(post_cell)` (`cipherclerk`/`full_turn_proof`), so a frozen-audit-slot
+refusal forgery (the AFTER `record_digest` unchanged from the PRE) FAILS the pin and is UNSAT for a
+ledgerless client — the field-NOT-bound deployment gap is closed via the verifier-anchored pin.
+
+The deployed refusal row's declared params are `param0 = REFUSAL_TARGET`, `param1 =
+REFUSAL_REASON_HASH` (`effect_vm/trace.rs`, `columns::param`); NEITHER carries the post-`fields_root`
+digest, so the `fields_root`-sub-limb (`B_FIELDS_ROOT = 36`) has NO in-circuit declared-param weld for
+refusal — the record-digest pin on `B_RECORD_DIGEST` is the single in-circuit close, and it folds the
+`fields_root` audit write through the r23 residue. (Contrast `setPermsV3`/`setVKV3`, whose deployed
+`param0` IS the declared perms/vk hash, so their `permsVKWeldGate` weld on `param0` is genuine.) -/
 def refusalV3 : EffectVmDescriptor2 :=
-  graduateV1 (rotateV3WithFieldsRootGate 52
-    (afterFieldsRootCol EffectVmEmitRefusal.refusalVmDescriptor.traceWidth)
-    EffectVmEmitRefusal.refusalVmDescriptor)
+  graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST EffectVmEmitRefusal.refusalVmDescriptor)
 
 /-- **`makeSovereignV3`** — the LIVE rotated makeSovereign WITH the LIVE mode gate (WAVE 3): the AFTER
 block's committed MODE sub-limb (`B_MODE = 35`) is force-pinned to `Sovereign(1)` as a CONSTANT,
@@ -2726,18 +2740,6 @@ theorem makeSovereignV3_rejects_unpromoted (hash : List ℤ → ℤ) (env : VmRo
   apply rotateV3WithModeGate_rejects_unpromoted _ _ hash _ env isFirst isLast hsel
   rw [hunpromoted]; decide
 
-/-- **TOOTH — `refusalV3_rejects_forged` (LIVE).** A refusal whose committed AFTER `fields_root`
-sub-limb ≠ the declared post-`fields_root` param — a forged refusal audit (the audit slot committed to
-an arbitrary `fields_root`) — is UNSAT for a ledgerless client. -/
-theorem refusalV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
-    (hsel : env.loc 52 = 1)
-    (hforged : env.loc (afterFieldsRootCol EffectVmEmitRefusal.refusalVmDescriptor.traceWidth)
-      ≠ env.loc declaredFieldsRootCol) :
-    ¬ satisfiedVm hash (rotateV3WithFieldsRootGate 52
-      (afterFieldsRootCol EffectVmEmitRefusal.refusalVmDescriptor.traceWidth)
-      EffectVmEmitRefusal.refusalVmDescriptor) env isFirst isLast :=
-  rotateV3WithFieldsRootGate_rejects_forged _ _ hash _ env isFirst isLast hsel hforged
-
 /-- **TOOTH — `setFieldDynV3_rejects_forged` (LIVE).** A dynamic setField whose committed AFTER
 `fields_root` sub-limb ≠ the declared post-`fields_root` param — a forged post-`fields_root` (the
 dynamic write committed to an arbitrary overflow map) — is UNSAT for a ledgerless client. -/
@@ -2751,7 +2753,6 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
 
 #assert_axioms makeSovereignV3_forces_sovereign
 #assert_axioms makeSovereignV3_rejects_unpromoted
-#assert_axioms refusalV3_rejects_forged
 #assert_axioms setFieldDynV3_rejects_forged
 
 -- The mode / fields-root force-cols land at AFTER limb 35 / 36 (= traceWidth + 51 + 35 / +36).
@@ -2836,12 +2837,16 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
 #guard setVKV3.constraints.length
         == (v3Of EffectVmEmitSetVK.setVKVmDescriptor).constraints.length + 2
 -- The WAVE-3 movers: makeSovereign carries the record pin + the mode gate (+2 over bare rotateV3);
--- refusal carries the record pin + the fields-root weld (+2); setFieldDynForced carries the record
--- pin + the fields-root weld + its 2 mem ops.
+-- refusal carries the record pin ALONE (+1) — its deployed `param0`/`param1` carry the refusal
+-- target/reason, not a post-`fields_root` digest, so there is no in-circuit declared-param weld for
+-- its `fields_root` sub-limb; the record-digest pin (verifier-anchored to
+-- `compute_authority_digest_felt(post_cell)`, which folds the `fields_root` audit write) is the
+-- single in-circuit close. setFieldDynForced carries the record pin + the fields-root weld + its 2
+-- mem ops.
 #guard makeSovereignV3.constraints.length
         == (v3Of EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor).constraints.length + 2
 #guard refusalV3.constraints.length
-        == (v3Of EffectVmEmitRefusal.refusalVmDescriptor).constraints.length + 2
+        == (v3Of EffectVmEmitRefusal.refusalVmDescriptor).constraints.length + 1
 -- The forced AFTER limbs are the lifecycle limb (col tw+51+29) and the record-digest limb (col
 -- tw+51+24), plus the WAVE-3 mode (tw+51+35) / fields-root (tw+51+36) limbs — the producer-witnessed
 -- limbs the commitment binds but `rotateV3` did not force.
@@ -2907,7 +2912,13 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five
 -- EPOCH tables, and the four appended PI slots.
 #guard v3Registry.all fun (_, d) => (emitVmJson2 d).startsWith "{\"name\":\""
-#guard v3Registry.all fun (_, d) => d.traceWidth == EFFECT_VM_WIDTH + APPENDIX_SPAN
+-- Phase B-GATE: each graduated registry descriptor's width is the rotated base PLUS `7·n_sites`
+-- lane columns (n_sites varies by v1 face), so the width is `≥ base` and the surplus is a
+-- multiple of 7 (`CHIP_OUT_LANES - 1`). Concrete per-descriptor widths are pinned by the
+-- emit goldens + the Rust registry fingerprints.
+#guard v3Registry.all fun (_, d) =>
+  EFFECT_VM_WIDTH + APPENDIX_SPAN ≤ d.traceWidth
+    && (d.traceWidth - (EFFECT_VM_WIDTH + APPENDIX_SPAN)) % (CHIP_OUT_LANES - 1) == 0
 #guard v3Registry.all fun (_, d) => d.tables.length == 5
 #guard v3Registry.all fun (_, d) => d.hashSites.length == 0 && d.ranges.length == 0
 -- The rotated transfer: the v1 graduation's constraints + 24 welds + 4 pins + 36 chip sites.

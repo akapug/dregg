@@ -132,6 +132,13 @@ structure CapOpenCols where
   (`mask_lo = 0xFFFF`, all 16 facets) decomposes with bit `n` set, so it PERMITS the effect — the
   over-strict equality gate it replaces would reject it. -/
   bit        : Nat → Nat
+  /-- **(Phase B-GATE) The 7 exposed permutation-lane columns for the absorb at site `k`** (`k = 0`
+  is the leaf absorb; `k = lvl + 1` is node level `lvl`). The chip's 17-wide bus tuple carries
+  `out0 :: out1..out7`; `out0` is the bound digest (`leafDigest`/`node lvl`, UNCHANGED), and these
+  7 columns carry lanes 1..7 (the genuine permutation lanes, filled by the Rust producer). The
+  soundness lemmas force out0 ONLY — the lanes ride along (matched existentially) — so the cap-open
+  meaning is unchanged; the commitment stays 1-felt. -/
+  lanes      : Nat → List Nat
 
 /-! ## §2 — the leaf-field accessors (decode the 7 leaf columns to a `CapLeaf`). -/
 
@@ -157,9 +164,10 @@ theorem leafInputs_eval (c : CapOpenCols) (env : VmRowEnv) :
 
 /-! ## §3 — the chip-lookup tuples (leaf absorb + per-level node absorb). -/
 
-/-- The leaf-digest chip lookup tuple: absorb the 7 leaf-field columns, output = `leafDigest`. -/
+/-- The leaf-digest chip lookup tuple: absorb the 7 leaf-field columns, output = `leafDigest`
+(out0) + the 7 exposed lanes 1..7 at `c.lanes 0` (Phase B-GATE, 17-wide). -/
 def leafLookup (c : CapOpenCols) : Lookup :=
-  { table := .poseidon2, tuple := chipLookupTuple (leafInputs c) c.leafDigest }
+  { table := .poseidon2, tuple := chipLookupTuple (leafInputs c) c.leafDigest (c.lanes 0) }
 
 /-- The `cur` digest entering level `lvl`: the leaf digest at level 0, else the previous node. -/
 def curCol (c : CapOpenCols) : Nat → Nat
@@ -176,10 +184,12 @@ def rightExpr (c : CapOpenCols) (lvl : Nat) : EmittedExpr :=
   .add (.mul (.add (.const 1) (.mul (.const (-1)) (.var (c.dir lvl)))) (.var (c.sib lvl)))
        (.mul (.var (c.dir lvl)) (.var (curCol c lvl)))
 
-/-- The node chip lookup tuple at level `lvl`: absorb `[FACT_MARK, left, right]`, output = `node lvl`. -/
+/-- The node chip lookup tuple at level `lvl`: absorb `[FACT_MARK, left, right]`, output =
+`node lvl` (out0) + the 7 exposed lanes 1..7 at `c.lanes (lvl+1)` (Phase B-GATE, 17-wide). -/
 def nodeLookup (c : CapOpenCols) (lvl : Nat) : Lookup :=
   { table := .poseidon2
-  , tuple := chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl) }
+  , tuple := chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl)
+      (c.lanes (lvl + 1)) }
 
 /-! ## §4 — the gate equations (booleanity, root pin, leaf↔effect binding). -/
 
@@ -390,11 +400,13 @@ theorem leafDigest_sound {State : Type} (S : CapHashScheme State)
   have hlen : (leafInputs c).length ≤ CHIP_RATE := by
     simp [leafInputs, List.length_map, List.length_finRange, CHIP_RATE]
     decide
-  have hmem : (chipLookupTuple (leafInputs c) c.leafDigest).map (·.eval env.loc) ∈ tf .poseidon2 := by
+  have hmem : (chipLookupTuple (leafInputs c) c.leafDigest (c.lanes 0)).map (·.eval env.loc)
+      ∈ tf .poseidon2 := by
     have := hsat.leafHashed
     unfold Lookup.holdsAt leafLookup at this
     exact this
-  have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc (leafInputs c) c.leafDigest hlen hmem
+  have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc (leafInputs c) c.leafDigest
+    (c.lanes 0) hlen hmem
   rw [h, leafInputs_eval, (chipAbsorb_realizes S).leafRealized]
 
 /-- The direction BOOL value at a level. -/
@@ -425,13 +437,13 @@ theorem node_sound {State : Type} (S : CapHashScheme State)
   have hlen : ([EmittedExpr.const FACT_MARK, leftExpr c lvl, rightExpr c lvl]).length ≤ CHIP_RATE := by
     show 3 ≤ CHIP_RATE
     rw [show CHIP_RATE = 8 from rfl]; omega
-  have hmem : (chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl)).map
-      (·.eval env.loc) ∈ tf .poseidon2 := by
+  have hmem : (chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl)
+      (c.lanes (lvl + 1))).map (·.eval env.loc) ∈ tf .poseidon2 := by
     have := hsat.nodeHashed lvl hlvl
     unfold Lookup.holdsAt nodeLookup at this
     exact this
   have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc
-    [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl) hlen hmem
+    [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl) (c.lanes (lvl + 1)) hlen hmem
   rw [h]
   -- The absorbed list evaluates to `[FACT_MARK, leftVal, rightVal] = packNode leftVal rightVal`;
   -- the realization turns `S.chipAbsorb (packNode ·, ·)` into the deployed `nodeOf S`.
@@ -851,9 +863,11 @@ theorem membershipCore_opens {State : Type} (S : CapHashScheme State)
   have hleaf : env.loc c.leafDigest = capLeafDigest S (leafOf c env) := by
     have hlen : (leafInputs c).length ≤ CHIP_RATE := by
       simp [leafInputs, List.length_map, List.length_finRange, CHIP_RATE]; decide
-    have hmem : (chipLookupTuple (leafInputs c) c.leafDigest).map (·.eval env.loc) ∈ tf .poseidon2 := by
+    have hmem : (chipLookupTuple (leafInputs c) c.leafDigest (c.lanes 0)).map (·.eval env.loc)
+        ∈ tf .poseidon2 := by
       have := hcore.leafHashed; unfold Lookup.holdsAt leafLookup at this; exact this
-    have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc (leafInputs c) c.leafDigest hlen hmem
+    have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc (leafInputs c) c.leafDigest
+      (c.lanes 0) hlen hmem
     rw [h, leafInputs_eval, (chipAbsorb_realizes S).leafRealized]
   -- the per-level node soundness from the core's `nodeHashed`/`dirBool`.
   have hnode : ∀ lvl, lvl < DEPTH →
@@ -864,11 +878,11 @@ theorem membershipCore_opens {State : Type} (S : CapHashScheme State)
     intro lvl hlvl
     have hlen : ([EmittedExpr.const FACT_MARK, leftExpr c lvl, rightExpr c lvl]).length ≤ CHIP_RATE := by
       show 3 ≤ CHIP_RATE; rw [show CHIP_RATE = 8 from rfl]; omega
-    have hmem : (chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl)).map
-        (·.eval env.loc) ∈ tf .poseidon2 := by
+    have hmem : (chipLookupTuple [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl)
+        (c.lanes (lvl + 1))).map (·.eval env.loc) ∈ tf .poseidon2 := by
       have := hcore.nodeHashed lvl hlvl; unfold Lookup.holdsAt nodeLookup at this; exact this
     have h := chip_lookup_sound S.chipAbsorb (tf .poseidon2) hChip env.loc
-      [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl) hlen hmem
+      [.const FACT_MARK, leftExpr c lvl, rightExpr c lvl] (c.node lvl) (c.lanes (lvl + 1)) hlen hmem
     rw [h]
     simp only [List.map_cons, List.map_nil, EmittedExpr.eval, leftExpr, rightExpr]
     rcases dir_zero_or_one c env lvl (hcore.dirBool lvl hlvl) with hd0 | hd1

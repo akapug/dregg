@@ -24,7 +24,7 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2_with_config,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    ROT_WIDTH, RotatedBlockWitness, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
+    GRAD_ROT_WIDTH, RotatedBlockWitness, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
@@ -87,7 +87,7 @@ fn producer_cell(balance: i64, nonce: u64) -> Cell {
 fn rotated_transfer_leaf_folds_as_batchstark() {
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
-    assert_eq!(desc.trace_width, ROT_WIDTH, "rotated width 311");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
     assert_eq!(desc.public_input_count, 38, "34 v1 PIs + 4 appended");
 
     // -- a real transfer-out (the validated v1 reference witness). --
