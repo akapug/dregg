@@ -11,7 +11,23 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
-## ⚑⚑ FAITHFUL STATE COMMITMENT (8-felt light-client floor) — THE #1 SOUNDNESS FLOOR, phased campaign IN FLIGHT (2026-06-19)
+## ✅✅ FAITHFUL STATE COMMITMENT (8-felt light-client floor) — **LIVE** (commit `9e5a83935`, 2026-06-19)
+
+**THE #1 SOUNDNESS FLOOR IS CLOSED.** The deployed per-cell state commitment is now a chip-faithful 8-felt
+chain (~124-bit collision, matching the proof's ~130-bit FRI soundness); the ~31-bit 1-felt waist is retired
+end-to-end. A ledgerless client running `verify_and_commit_proof_rotated` trusts the published (pre,post) at
+the proof's own soundness. Verified live (every gate re-run): lake 4004 axiom-clean · drift PASS · the LIVE
+fee'd sovereign path `sovereign_rotated_c1` 19/19 (forged-post-state rejected) · the LIVE collision tooth bites
+at 8-felt with NO executor · flip 13/13 · cell/turn/sdk/node all green + node binary builds. Consumer-repoint
+strategy (the wide TSV IS the verifying material — no separate VK pin; Rfix authority leg lifts via
+`wideAppend_satisfied2_host`). N=8 uniform (ember: "consistency is king"; the dial `docs/COMMITMENT-WIDTH-DIAL.md`
+remains a documented future capability). Two named robustness tails (node API placeholder · split-process bare-
+cell registrar) recorded below — non-load-bearing API echoes, NOT live-soundness gaps. The campaign: design →
+`hash_many_8` → Phase A lever → B-GATE chip 1→8 out + 8-carrier in → `wire_commit_8`/`wireCommitR8_binds` →
+`wideAppend` gated-host tower → `v3Registry(CapOpen)Wide` → staged proof legs → Stage-1 waist-cut → Stage-2 live
+switch. (Historical phase detail below, superseded by this ✅.)
+
+## (superseded — the in-flight campaign that landed above) FAITHFUL STATE COMMITMENT — phased campaign (2026-06-19)
 
 **Why #1:** the deployed per-cell state commitment binds in-circuit by ONE BabyBear felt (~31-bit; `hash_many`
 squeezes `state[0]`); the 4-felt PI's positions 1..3 are bound OFF-circuit by the executor (`pi.rs
