@@ -50,17 +50,20 @@ refusal is **full-node-safe** (the 8-felt commitment already binds limb 36, anch
 NOT ledgerless-safe. **`setFieldDynForcedV3` is LIVE (`v3Registry:2889`) and shares this exact gate + the same
 `prmCol 0`-vs-fields_root mismatch, with NO end-to-end prove+verify roundtrip test — its deployed integration is
 genuinely incomplete; AUDIT whether the live setFieldDyn gate forces the wrong value or is simply inert.**
-| #2 whole-turn | the verifier proves `effects.first()` only | **BUILD-HALF PROVEN, NOT LIVE.** `RotatedKernelForestCohortChain.lean` proves the cohort-proof chain forces every effect + rejects an unchained tail; the deployed `split_into_cohort_runs` + SDK `verify_full_turn_bound` already provide the per-cohort proofs + chain check. NOT BEING until the node executor leg enforces it. | `proof_verify.rs:160` (lead-only, the live gap); `chainForcesEveryCohort`/`cohort_chain_forces_tail` (`RotatedKernelForestCohortChain.lean`, `fa35d5aa5`). LIVE-WIRE PENDING. |
+| #2 whole-turn | the verifier proves `effects.first()` only | ✅ **FORCED-LIVE** (`0eab40743`). the deployed `verify_and_commit_proof_rotated` now `split_into_cohort_runs` + verifies EVERY leg against its run's PI + chain-checks (`leg[0].before==OLD`, `leg[N-1].after==NEW`, `leg[i+1].before==leg[i].after`); interior boundaries cryptographically chained, NOT executor-trusted. Teeth bite: tail-omitted + tail-unchained REJECTED, honest multi-cohort accepts (`sovereign_rotated_c1` 22/0); single-effect byte-identical. SCOPE: the record-pin anchor projects from the before-cell (correct when earlier runs don't move the authority residue; a residue-mutating earlier run needs per-run before-cell threading — documented follow-up). | `proof_verify.rs` `verify_one_cohort_run`; `RotatedKernelForestCohortChain.lean` (`fa35d5aa5`). |
 | #3 agent signature | "the rightful agent authorized THIS turn" | **OPEN (largest — disclosure ≠ being).** A proven curve-constrained Schnorr signature-forcing rung exists (`turn_auth_signature_air` + `TurnAuthSignature.lean`, teeth bite, curve eqn constrained not a free bit) — but it is SCHNORR/BabyBear^8; the deployed turn auth is **Ed25519, off-circuit**. The Schnorr rung is a STEPPING-STONE, not the close. | `turn_auth_signature_air.rs`/`TurnAuthSignature.lean` (`fa35d5aa5`, the scaffold); BEING needs an Ed25519 AIR (Edwards decompress + `[S]B=R+[k]A`, heaviest unbuilt) OR re-bind turn auth to the in-circuit key. |
 | #4 replay | freshness | ✅ **FORCED (by analysis).** nonce folds into the commit + forced `+1` → strictly-monotone commit sequence → a chain-following client rejects a stale OLD_COMMIT; the 8-felt widening preserves it. Residual = chain-FORK resistance (consensus layer, not the per-proof circuit). | `cell/src/commitment.rs:896` (nonce in pre-limbs), `gNonce` `+1` gate; `fd7b79b89`. |
 | #5 fee-in-proof | the fee debit | ✅ **FORCED-LIVE.** live sovereign transfer routes the wide fee descriptor (55-PI); fee PI-published, gate forces `after = before − transfer − fee`; underclaimed/forged fee UNSAT. Residue: fee on a NON-sovereign agent cell still executor-trusted; the OLD_COMMIT block uses a blind `pre=post+fee` reconstruction (sound — OLD_COMMIT independently binds — but a trusted input). | `proof_verify.rs:171,301`; `3aa5debe8`; survived the flip (col-89 pin + debit gate in the wide TSV). |
-| #6 cross-cell Σδ=0 | turn-wide conservation | **BUILD-HALF PROVEN, NOT LIVE.** a real AIR (`cross_cell_conservation_air.rs`) + Lean (`CrossCellConservation.lean`) force per-asset Σ(signed NET_DELTA)=0; teeth bite (forged A−10/B+999 UNSAT, wrong-asset rejected). NOT BEING until `proof_verify.rs` sums the per-cell NET_DELTA PIs per asset + requires Σ=0. | `fa35d5aa5`; the per-cell proofs already publish NET_DELTA PIs (`pi 16/17`). LIVE-WIRE PENDING (the being-completion). |
+| #6 cross-cell Σδ=0 | turn-wide conservation | **BUILD-HALF PROVEN + DRIFT-GREEN; LIVE-ENFORCEMENT BLOCKED on a deeper gap.** the AIR (`cross_cell_conservation_air.rs`) + Lean (`CrossCellConservation.lean`) force per-asset Σ(signed NET_DELTA)=0, teeth bite, emitter registered (`2f42998b1`, drift PASS). BUT the deployed path proves PER-CELL-ISOLATED transitions — `convert_turn_effects_to_vm` (`effect_vm_bridge.rs:69`) filters a Transfer to ONE cell (debit OR credit), so the two legs are SEPARATE per-cell proofs and NO point holds ≥2 cells' deltas. Live-enforcement needs a NEW BATCH/BLOCK COLLECTOR first (collect every per-cell proof's `(NET_DELTA_MAG, NET_DELTA_SIGN, asset)` at `verifyBatch`/block-assembly + run `verify_cross_cell_conservation` per asset, reject unbalanced). NOT just wiring — a deeper architectural piece. | `fa35d5aa5`/`2f42998b1`; `execute.rs:446` (one proof/cell), `node turn_proving` `conservation:None`. BLOCKED on the batch collector. |
 | #8 non-vacuity | completeness | **TYPE-INHABITED (Lean) + SATISFIABILITY-WITNESSED (Rust).** `CircuitCompletenessNonVacuity.lean` inhabits `Satisfied2 transferV3` with the EMPTY trace (type-level only — gates vacuous). The MEANINGFUL satisfiability (real transfer satisfies the gates) is the deployed Rust roundtrips (`wide_transfer_proves_verifies`, sovereign 19/19). A non-empty Lean inhabitant is the residual. Does NOT affect soundness. | `CircuitCompletenessNonVacuity.lean` (`fa35d5aa5`, empty-trace); the Rust roundtrips are the being. |
 
 ## Remaining definition-of-done (ranked — trust-priority: *foolable* > *can't-prove*; regressions first)
 
-- [ ] **#8 — non-vacuity** (small, NEXT): construct one concrete `: Satisfied2 := by` inhabitant (an honest
-  transfer trace) so completeness is provably non-empty.
+- [~] **#8 — non-vacuity** — type-inhabited (Lean empty trace, `fa35d5aa5`) + satisfiability-WITNESSED (Rust
+  roundtrips build real satisfying traces). Residual: a non-empty Lean inhabitant (polish; the being is already
+  in Rust). Not a foolable gap.
+- [x] **#2 — whole forest** — ✅ FORCED-LIVE (`0eab40743`): deployed verifier checks every cohort + the chain;
+  tail-omitted/unchained rejected. (Follow-up: per-run before-cell threading for residue-mutating earlier runs.)
 - [x] **setFieldDyn gate audit** — DONE: **INERT, not a live bug.** SetField `field_idx` 0..7 routes to the
   frozen-face per-slot `setFieldVmDescriptor2-{0..7}R24` (no fields-root gate); `field_idx≥8` routes to
   `setFieldDynForcedV3` but PANICS in trace-gen pre-prove (`trace.rs:417` asserts `<8`) → the descriptor is in
@@ -72,13 +75,18 @@ genuinely incomplete; AUDIT whether the live setFieldDyn gate forces the wrong v
 - [ ] **refusal + setFieldDyn ledgerless authority** (medium, was mis-scoped as "R1 restore"): the OPENABLE-
   fields_root / map-op construction (#103 cap-reshape family) — derive the post-root in-circuit from the
   in-circuit pre-root + the public audit value. NEW soundness, not a re-point. Full-node-safe today.
-- [ ] **#6 — cross-cell Σδ=0** (medium): a turn-wide cross-cell conservation AIR over the per-cell NET_DELTA PIs
-  (lift the existing aggregation AIRs onto the deployed path).
-- [ ] **#2 — whole forest** (medium-large): prove every effect, not the lead — a multi-effect descriptor or
-  per-effect sub-proof; retire `effects.first()`-only (the forest apex exists in Lean to lift).
-- [ ] **#3 — agent signature** (large long-pole): wire `native_signature_air` (Ed25519 over the turn-hash)
-  into the rotated descriptor, forced in-circuit.
+- [~] **#6 — cross-cell Σδ=0** — AIR proven + drift-green (`2f42998b1`), but live-enforcement BLOCKED: the
+  deployed path proves per-cell-isolated transitions and no point collects ≥2 cells' deltas. **Prerequisite: a
+  BATCH/BLOCK COLLECTOR** (gather every per-cell proof's `(NET_DELTA, asset)` at `verifyBatch`/block-assembly +
+  run `verify_cross_cell_conservation` per asset). A new architectural piece, not wiring.
+- [ ] **refusal + setFieldDyn ledgerless authority** (medium): the OPENABLE-fields_root / map-op construction
+  (#103 cap-reshape family). Full-node-safe today.
+- [ ] **#3 — agent signature** (large, ember-design IN FLIGHT): the dual-scheme — Ed25519 off-circuit receipt
+  path + in-circuit curve key (the proven Schnorr rung) for proofs, cell-anchored scheme tag, Ed25519 never
+  circuit-ified. Stack-wide scheme-dispatch (cell/SDK/executor/client). Curve-only vs both-keyed = pending
+  ember decision.
 
-When all are forced, a ledgerless `verify_batch` client concludes the genuine/authorized/non-replayed/conserving
-transition with nothing trusted off-circuit. The commitment floor (the deepest piece) is already there; the
-residue is per-fact forcing of authority (refusal), forest, signature, and cross-cell conservation.
+REMAINING ARC: the commitment floor (deepest) is done; #2 forest + #4 replay + #5 fee are FORCED-LIVE; the
+residue is (a) #6 cross-cell — needs the batch collector; (b) #3 signature — the dual-scheme build; (c) refusal
+ledgerless authority — the openable-root; (d) #8 non-empty Lean inhabitant (polish). When (a)–(c) land, a
+ledgerless `verify_batch` client concludes genuine/authorized/non-replayed/conserving with nothing off-circuit.
