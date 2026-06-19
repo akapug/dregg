@@ -83,26 +83,32 @@ theorem setField_graduable (slot : Fin 8) :
 `setFieldVmDescriptor slot`'s (`setFieldTickFace_eq_source`), all `.gate` (flag-free), so we extract
 them at `false false` and feed `setFieldVm_faithful` to get the field-write intent. -/
 
-/-- The per-row setField GATES hold (flag-independent extraction): the rotated witness gives the v1
-denotation at the i-dependent boundary flags; `setFieldRowGates` are all `.gate` constraints whose
-`holdsVm` ignores the flags, so they hold at `false false`. -/
+/-- The per-row setField GATES hold at an ACTIVE row (`i` NOT the last row): the rotated witness gives
+the v1 denotation at the i-dependent boundary flags; `setFieldRowGates` are all `.gate` constraints
+which under the deployed `when_transition()` bind on every row but the last — so on a TRANSITION row
+(`i + 1 ≠ t.rows.length`, `isLast` flag `false`) their body equation holds at `false false`. (The
+`hnotlast` hypothesis is the faithful obligation that the designated active row is a genuine
+transition row, not the wrap/pad row.) -/
 theorem rotated_row_gates (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ setFieldRowGates slot, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash (EffectVmEmitRotationV3.setFieldTickFace slot)
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
     rotV3Frozen_sound_v1 hash (EffectVmEmitRotationV3.setFieldTickFace slot) minit mfin maddrs t
       hside.chip hside.range (setField_graduable slot) hsat i hi
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
   -- `setFieldTickFace slot = setFieldVmDescriptor slot`, whose constraints ARE `setFieldRowGates`.
   have hmem : c ∈ (EffectVmEmitRotationV3.setFieldTickFace slot).constraints := by
     rw [EffectVmEmitRotationV3.setFieldTickFace_eq_source]
     exact hc
   have hh := hv1.1 c hmem
-  -- the gate's `holdsVm` is the body equation, flag-free, so it equally holds at `false false`.
+  rw [hlastf] at hh
+  -- the gate's `holdsVm` is the body equation; off the last row it IS the body equation.
   unfold setFieldRowGates gOtherFieldsAll at hc
   simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
     List.mem_filter, List.mem_range, decide_eq_true_eq] at hc
@@ -118,12 +124,12 @@ theorem rotated_row_cellSpec (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState)
     (hrow : IsSetFieldRow (envAt t i))
     (henc : RowEncodesSF slot (envAt t i) pre post) :
     CellSetFieldSpec slot pre ((envAt t i).loc (prmCol VALUE)) post := by
-  have hgates := rotated_row_gates slot hash hside hsat i hi
+  have hgates := rotated_row_gates slot hash hside hsat i hi hnotlast
   have hint : SetFieldRowIntent slot (envAt t i) :=
     (setFieldVm_faithful slot (envAt t i) hrow).mp hgates
   exact intent_to_cellSpec slot (envAt t i) pre post henc hint
@@ -154,6 +160,10 @@ structure rotatedEncodesSF (slot : Fin 8) (hash : List ℤ → ℤ)
   -- the designated ACTIVE setField row + its decode.
   wi : Nat
   hwi : wi < t.rows.length
+  -- the designated active row is a TRANSITION row, NOT the wrap/pad last row: the deployed gates run
+  -- under `when_transition()`, so the write is forced only off the last row. Any real ≥2-row setField
+  -- trace carries this (the prover pads a wrap row after the effect row).
+  hwiNotLast : wi + 1 ≠ t.rows.length
   cellPre : CellState
   cellPost : CellState
   hwiRow : IsSetFieldRow (envAt t wi)
@@ -201,8 +211,8 @@ theorem setField_value_forced (slot : Fin 8) (hash : List ℤ → ℤ)
     henc.cellPost.fields slot = v := by
   -- the per-cell spec forces the written slot to the row's `param1`.
   have hspec : CellSetFieldSpec slot henc.cellPre ((envAt t henc.wi).loc (prmCol VALUE)) henc.cellPost :=
-    rotated_row_cellSpec slot hash hside hsat henc.wi henc.hwi henc.cellPre henc.cellPost
-      henc.hwiRow henc.hwiEnc
+    rotated_row_cellSpec slot hash hside hsat henc.wi henc.hwi henc.hwiNotLast henc.cellPre
+      henc.cellPost henc.hwiRow henc.hwiEnc
   -- `CellSetFieldSpec`'s first conjunct: `post.fields slot = param1`; read `param1 = v`.
   rw [hspec.1, henc.hwval]
 
@@ -277,8 +287,8 @@ theorem descriptorRefines_rejects_moved_bystander (slot : Fin 8) (hash : List �
     (hwrong : henc.cellPost.fields j ≠ henc.cellPre.fields j) :
     False := by
   have hspec : CellSetFieldSpec slot henc.cellPre ((envAt t henc.wi).loc (prmCol VALUE)) henc.cellPost :=
-    rotated_row_cellSpec slot hash hside hsat henc.wi henc.hwi henc.cellPre henc.cellPost
-      henc.hwiRow henc.hwiEnc
+    rotated_row_cellSpec slot hash hside hsat henc.wi henc.hwi henc.hwiNotLast henc.cellPre
+      henc.cellPost henc.hwiRow henc.hwiEnc
   exact hwrong (hspec.2.2.2.2.2.2 j hj)
 
 /-! ## §6 — Axiom-hygiene tripwires. -/

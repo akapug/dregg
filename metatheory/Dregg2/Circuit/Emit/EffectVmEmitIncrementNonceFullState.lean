@@ -82,7 +82,7 @@ decoded by `RowEncodesIncNonce` with `s_noop = 0`, force `CellIncNonceSpec`. Fla
 all `.gate`, whose `holdsVm` ignores the first/last flags. -/
 theorem incNonceGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesIncNonce env pre post)
-    (hgates : ∀ c ∈ incrementNonceVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ incrementNonceVmDescriptor.constraints, c.holdsVm env true false) :
     CellIncNonceSpec pre post := by
   have hrowgates : ∀ c ∈ incNonceRowGates, c.holdsVm env false false := by
     intro c hc
@@ -140,7 +140,7 @@ theorem incrementNonce_runnable_full_sound (hash : List ℤ → ℤ) (preRoots :
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsIncNonceRow env)
     (henc : RowEncodesIncNonce env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash incrementNonceVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash incrementNonceVmDescriptorWide env true false) :
     CellIncNonceSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (incNonceRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

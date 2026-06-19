@@ -335,15 +335,16 @@ theorem intent_to_cellSpec (slot : Fin 8) (env : VmRowEnv) (pre post : CellState
 theorem setFieldDescriptor_full_sound (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hrow : IsSetFieldRow env)
     (henc : RowEncodesSF slot env pre post)
-    (hsat : satisfiedVm hash (setFieldVmDescriptor slot) env true true) :
+    (hgatesat : satisfiedVm hash (setFieldVmDescriptor slot) env true false) :
     CellSetFieldSpec slot pre (env.loc (prmCol VALUE)) post := by
-  obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcs, _⟩ := hgatesat
   have hgates : ∀ c ∈ setFieldRowGates slot, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ (setFieldVmDescriptor slot).constraints := hc
     have hh := hcs c hmem
-    -- every constraint in `setFieldRowGates` is a `.gate`; `holdsVm` of a gate ignores the flags,
-    -- so the `true true` satisfaction gives the `false false` form definitionally.
+    -- every constraint in `setFieldRowGates` is a `.gate`; the deployed gates run under
+    -- `when_transition()`, so they bind at the ACTIVE row (`isLast = false`); `holdsVm` of a gate at
+    -- `isLast = false` IS the body equation, identical at `false false`.
     unfold setFieldRowGates gOtherFieldsAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_filter, List.mem_range, decide_eq_true_eq] at hc
@@ -443,12 +444,12 @@ theorem setFieldDescriptor_classA (slot : Fin 8) (hash : List ℤ → ℤ) (env 
     (hrow : IsSetFieldRow env)
     (henc : RowEncodesSF slot env (cellProjF s.kernel cell slot) post)
     (hval : env.loc (prmCol VALUE) = v)
-    (hsat : satisfiedVm hash (setFieldVmDescriptor slot) env true true)
+    (hgatesat : satisfiedVm hash (setFieldVmDescriptor slot) env true false)
     (hexec : execFullA s (.setFieldA actor cell (slotName slot) v) = some s') :
     CellSetFieldSpec slot (cellProjF s.kernel cell slot) v post
     ∧ post.fields slot = (cellProjF s'.kernel cell slot).fields slot
     ∧ post.balLo = (cellProjF s'.kernel cell slot).balLo := by
-  have hspec := setFieldDescriptor_full_sound slot hash env (cellProjF s.kernel cell slot) post hrow henc hsat
+  have hspec := setFieldDescriptor_full_sound slot hash env (cellProjF s.kernel cell slot) post hrow henc hgatesat
   rw [hval] at hspec
   obtain ⟨heVal, heBal⟩ := unify_setField_exec s s' actor cell slot v hexec
   refine ⟨hspec, ?_, ?_⟩

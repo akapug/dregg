@@ -127,8 +127,8 @@ body is decided by `!flag || decide P`. -/
 denotation `c.holdsVm env isFirst isLast`. CASE-COMPLETE: an arm for every `VmConstraint`
 constructor, with the boundary/PI arms split on the row tag exactly as `holdsVm` does. -/
 def decideConstraint (env : VmRowEnv) (isFirst isLast : Bool) : VmConstraint → Bool
-  | .gate body          => decide (body.eval env.loc = 0)
-  | .transition hi lo   => decide (env.nxt (sbCol hi) = env.loc (saCol lo))
+  | .gate body          => isLast || decide (body.eval env.loc = 0)
+  | .transition hi lo   => isLast || decide (env.nxt (sbCol hi) = env.loc (saCol lo))
   | .boundary .first b  => !isFirst || decide (b.eval env.loc = 0)
   | .boundary .last  b  => !isLast  || decide (b.eval env.loc = 0)
   | .piBinding .first col k => !isFirst || decide (env.loc col = env.pub k)
@@ -143,12 +143,14 @@ were dropped, the corresponding lemma would not type-check. Each proves the arm'
 theorem decideConstraint_gate (env : VmRowEnv) (iF iL : Bool) (body : EmittedExpr) :
     decideConstraint env iF iL (.gate body) = true
       ↔ (VmConstraint.gate body).holdsVm env iF iL := by
-  simp only [decideConstraint, VmConstraint.holdsVm, decide_eq_true_eq]
+  cases iL <;>
+    simp [decideConstraint, VmConstraint.holdsVm]
 
 theorem decideConstraint_transition (env : VmRowEnv) (iF iL : Bool) (hi lo : Nat) :
     decideConstraint env iF iL (.transition hi lo) = true
       ↔ (VmConstraint.transition hi lo).holdsVm env iF iL := by
-  simp only [decideConstraint, VmConstraint.holdsVm, decide_eq_true_eq]
+  cases iL <;>
+    simp [decideConstraint, VmConstraint.holdsVm]
 
 theorem decideConstraint_boundary_first (env : VmRowEnv) (iF iL : Bool) (b : EmittedExpr) :
     decideConstraint env iF iL (.boundary .first b) = true
@@ -195,9 +197,9 @@ theorem decideConstraint_iff (env : VmRowEnv) (iF iL : Bool) (c : VmConstraint) 
 no-missing-arm witness, stated as a definitional equality per arm). A constructor with no arm could
 not appear on the left, so this lemma's six conjuncts pin case-completeness mechanically. -/
 theorem decideConstraint_total (env : VmRowEnv) (iF iL : Bool) :
-    (∀ body, decideConstraint env iF iL (.gate body) = decide (body.eval env.loc = 0))
+    (∀ body, decideConstraint env iF iL (.gate body) = (iL || decide (body.eval env.loc = 0)))
     ∧ (∀ hi lo, decideConstraint env iF iL (.transition hi lo)
-        = decide (env.nxt (sbCol hi) = env.loc (saCol lo)))
+        = (iL || decide (env.nxt (sbCol hi) = env.loc (saCol lo))))
     ∧ (∀ b, decideConstraint env iF iL (.boundary .first b) = (!iF || decide (b.eval env.loc = 0)))
     ∧ (∀ b, decideConstraint env iF iL (.boundary .last b)  = (!iL || decide (b.eval env.loc = 0)))
     ∧ (∀ col k, decideConstraint env iF iL (.piBinding .first col k)
@@ -333,15 +335,16 @@ match arm: this is the explicit per-arm shape the interpreter transcribes (and t
 
 /-- **The full-arm agreement.** For EVERY constraint list — boundary forms included — the
 reference `decideConstraints` decides exactly the per-arm predicate the (now arm-complete) Rust
-interpreter transcribes: unguarded `gate`/`transition`, and `isFirst`/`isLast`-guarded
-`boundary`/`piBinding`. Non-vacuous on `.boundary`-carrying lists (contrast the tombstoned
-predecessor, which assumed them away). -/
+interpreter transcribes: `isLast`-guarded `gate`/`transition` (the deployed `when_transition()` —
+they bind on every row but the last) and `isFirst`/`isLast`-guarded `boundary`/`piBinding`.
+Non-vacuous on `.boundary`-carrying lists (contrast the tombstoned predecessor, which assumed them
+away). -/
 theorem decideConstraints_decides_all_arms (env : VmRowEnv) (iF iL : Bool)
     (cs : List VmConstraint) :
     decideConstraints env iF iL cs = true
       ↔ ∀ c ∈ cs, (match c with
-          | .gate body          => body.eval env.loc = 0
-          | .transition hi lo   => env.nxt (sbCol hi) = env.loc (saCol lo)
+          | .gate body          => iL = false → body.eval env.loc = 0
+          | .transition hi lo   => iL = false → env.nxt (sbCol hi) = env.loc (saCol lo)
           | .boundary .first b  => iF = true → b.eval env.loc = 0
           | .boundary .last  b  => iL = true → b.eval env.loc = 0
           | .piBinding .first col k => iF = true → env.loc col = env.pub k
@@ -351,15 +354,15 @@ theorem decideConstraints_decides_all_arms (env : VmRowEnv) (iF iL : Bool)
   · intro h c hc
     have hcc := h c hc
     cases c with
-    | gate body => exact hcc
-    | transition hi lo => exact hcc
+    | gate body => cases iL <;> simp_all [VmConstraint.holdsVm]
+    | transition hi lo => cases iL <;> simp_all [VmConstraint.holdsVm]
     | boundary row b => cases row <;> exact hcc
     | piBinding row col k => cases row <;> exact hcc
   · intro h c hc
     have hcc := h c hc
     cases c with
-    | gate body => exact hcc
-    | transition hi lo => exact hcc
+    | gate body => cases iL <;> simp_all [VmConstraint.holdsVm]
+    | transition hi lo => cases iL <;> simp_all [VmConstraint.holdsVm]
     | boundary row b => cases row <;> exact hcc
     | piBinding row col k => cases row <;> exact hcc
 
@@ -393,20 +396,23 @@ theorem decideVm_selectorOnly_accepts (hash : List ℤ → ℤ) (s : Nat) (env :
     exact selectorGate_holds_of_active s env true true hactive
   · simp [selectorOnlyDescriptor, siteHoldsAll, siteHoldsAll.go]
 
-/-- **Non-vacuity (reject).** On a NON-pad row (`loc NOOP = 0`) whose selector `s` is NOT set
-(`loc s ≠ 1`), `decideVm` REJECTS the selector-only descriptor — the cross-selector-replay tooth,
-decided through the verified core. Together with `_accepts`, this proves `decideVm` is NON-vacuous:
-it separates satisfying from violating environments. -/
+/-- **Non-vacuity (reject).** On a NON-pad TRANSITION row (`isLast = false`, `loc NOOP = 0`) whose
+selector `s` is NOT set (`loc s ≠ 1`), `decideVm` REJECTS the selector-only descriptor — the
+cross-selector-replay tooth, decided through the verified core. The `isLast = false` guard is
+FAITHFUL: `selectorGate` is a `.gate`, evaluated by the deployed circuit under `when_transition()`,
+so it binds on every row but the last; the rejection tooth fires exactly on the transition domain.
+Together with `_accepts`, this proves `decideVm` is NON-vacuous: it separates satisfying from
+violating environments. -/
 theorem decideVm_selectorOnly_rejects (hash : List ℤ → ℤ) (s : Nat) (env : VmRowEnv)
     (hpad : env.loc sel.NOOP = 0) (hwrong : env.loc s ≠ 1) :
-    decideVm hash (selectorOnlyDescriptor s) env true true = false := by
+    decideVm hash (selectorOnlyDescriptor s) env true false = false := by
   by_contra h
   rw [Bool.not_eq_false, decideVm_iff_satisfiedVm] at h
   obtain ⟨hcons, _⟩ := h
-  have : (selectorGate s).holdsVm env true true := by
+  have : (selectorGate s).holdsVm env true false := by
     apply hcons
     simp [selectorOnlyDescriptor]
-  exact selectorGate_rejects_wrong_selector s env true true hpad hwrong this
+  exact selectorGate_rejects_wrong_selector s env true false rfl hpad hwrong this
 
 #assert_axioms decideVm_selectorOnly_accepts
 #assert_axioms decideVm_selectorOnly_rejects

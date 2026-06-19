@@ -334,12 +334,15 @@ def transferCapOpenEffV3TB : Dregg2.Circuit.DescriptorIR2.EffectVmDescriptor2 :=
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER
 
 /-- **`transferAuthoritySourceCanon_ofTB` — the slim canonical transfer authority source with `hsrc`
-DERIVED from the turn-identity PI weld.** Build the `TransferAuthoritySourceCanon` over the LIVE
-`effCapOpenV3TB` cap-open whose `src` column the verifier-anchored PI pins to `tr.src`: the carried
-`hsrc` field is REPLACED by the forced `effCapOpenV3TB_hsrc` (the PI weld + the anchor). The base `hsat`
-is lifted from the TB descriptor via `effCapOpenV3TB_to_base`; every other field (`hChip`/`hedge`/
-`htier`/`hipc`/the bit bounds) is the same cap-tree residual as before — this constructor closes ONLY the
-`src`-binding leg, in-circuit. -/
+DERIVED from the turn-identity PI weld, on the FIRST (active) row.** Build the
+`TransferAuthoritySourceCanon` over the LIVE `effCapOpenV3TB` cap-open. The turn-identity weld rides the
+FIRST row (`.piBinding .first`), the SAME active row the membership binding gates bite on (`isFirst =
+true` AND `isLast = false`, in any real ≥2-row trace), so the published-src binding and the depth-16
+open constrain ONE `src` column — the source's row is `0`. The carried `hsrc` field is REPLACED by the
+forced first-row binding `effCapOpenV3TB_hsrc` (`.piBinding .first` + the verifier anchor force
+`capOpenCols.src(0) = tr.src`); `hiNotLast` comes from the genuine ≥2-row shape `hlen`. No cross-row
+residual — the weld is co-located with the membership. The base `hsat` lifts via `effCapOpenV3TB_to_base`;
+every other field (`hChip`/`hedge`/`htier`/`hipc`/the bit bounds) is the same cap-tree residual. -/
 def transferAuthoritySourceCanon_ofTB (hash : List ℤ → ℤ) (fcaps : FacetCaps) (provided : AuthProvided)
     (pre : RecChainedState) (tr : Turn)
     {State : Type} (S : CapHashScheme State) (vkOfTag : ℤ → Nat)
@@ -348,10 +351,12 @@ def transferAuthoritySourceCanon_ofTB (hash : List ℤ → ℤ) (fcaps : FacetCa
     (hChip : Dregg2.Circuit.DescriptorIR2.ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 S.chipAbsorb transferCapOpenEffV3TB
       minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
+    -- the FIRST row carries BOTH the membership gates (non-last) AND the turn-identity pin (first);
+    -- `hlen` is the genuine ≥2-row shape of a real cap-open trace (depth-16 open + its wrap row).
+    (hlen : 2 ≤ t.rows.length)
     (hanchor : TurnIdentityAnchored Dregg2.Circuit.RotatedKernelRefinement.transferV3
-      "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER t i tr.src tr.actor tr.dst)
-    (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i)
+      "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER t 0 tr.src tr.actor tr.dst)
+    (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t 0)
       = canonicalLeafAt fcaps tr.actor tr.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
       c ∈ fcaps actor → c.target = src → ∀ vk, c.tier ≠ .custom vk)
@@ -371,12 +376,15 @@ def transferAuthoritySourceCanon_ofTB (hash : List ℤ → ℤ) (fcaps : FacetCa
   -- THE LIFT: the TB descriptor's witness restricts to the cap-open base descriptor.
   hsat := effCapOpenV3TB_to_base Dregg2.Circuit.RotatedKernelRefinement.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER S.chipAbsorb minit mfin maddrs t hsat
-  i := i
-  hi := hi
-  -- THE DISCHARGE: `hsrc` is FORCED by the turn-identity PI weld + the verifier's anchor, not carried.
+  -- the source's cap-open row is the FIRST (active) row, where membership AND the pin co-fire.
+  i := 0
+  hi := by omega
+  hiNotLast := by omega
+  -- THE DISCHARGE: `hsrc` on the first row is the `.piBinding .first` weld + the verifier anchor
+  -- (`= tr.src`) — the SAME row the membership opens, no cross-row transport.
   hsrc := effCapOpenV3TB_hsrc Dregg2.Circuit.RotatedKernelRefinement.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER S.chipAbsorb minit mfin maddrs t hsat
-    i hi hlast tr.src tr.actor tr.dst hanchor
+    0 (by omega) rfl tr.src tr.actor tr.dst hanchor
   hedge := hedge
   hipc := hipc
   htier := htier
@@ -405,11 +413,13 @@ theorem transfer_descriptorRefines_facetTB_realized (hash : List ℤ → ℤ)
     (hChip : Dregg2.Circuit.DescriptorIR2.ChipTableSound Sc.chipAbsorb (ct.tf .poseidon2))
     (hcsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 Sc.chipAbsorb transferCapOpenEffV3TB
       cminit cmfin cmaddrs ct)
-    (ci : Nat) (hci : ci < ct.rows.length) (hclast : (ci + 1 == ct.rows.length) = true)
+    -- the cap-open membership + the turn-identity weld co-fire on the FIRST (active) row of the
+    -- ≥2-row cap-open trace; `hclen` is its genuine shape (depth-16 open + its wrap row).
+    (hclen : 2 ≤ ct.rows.length)
     (hanchor : TurnIdentityAnchored Dregg2.Circuit.RotatedKernelRefinement.transferV3
-      "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER ct ci pc.turn.src pc.turn.actor
+      "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER ct 0 pc.turn.src pc.turn.actor
       pc.turn.dst)
-    (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt ct ci)
+    (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt ct 0)
       = canonicalLeafAt fcaps pc.turn.actor pc.turn.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
       c ∈ fcaps actor → c.target = src → ∀ vk, c.tier ≠ .custom vk)
@@ -419,7 +429,7 @@ theorem transfer_descriptorRefines_facetTB_realized (hash : List ℤ → ℤ)
   -- build the slim canonical authority source with `hsrc` DERIVED from the in-circuit PI weld.
   have hauth : TransferAuthoritySourceCanon hash fcaps provided pre pc.turn :=
     transferAuthoritySourceCanon_ofTB hash fcaps provided pre pc.turn Sc vkOfTag cminit cmfin cmaddrs ct
-      hChip hcsat ci hci hclast hanchor hedge hipc htier
+      hChip hcsat hclen hanchor hedge hipc htier
   -- the VALUE leg over the witness turn `tr`, rewritten to `pc.turn` via the turn-identity binding.
   have hval : BalanceMovementSpec pre tr a post :=
     transfer_descriptorRefines hash hside hsat pre post tr a henc

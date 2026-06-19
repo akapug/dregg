@@ -80,7 +80,7 @@ gates (a constraint-list segment), on an exercise row decoded by `RowEncodesExer
 `ExerciseCellSpec`. No hash-site hypothesis. -/
 theorem exerciseGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesExercise env pre post)
-    (hgates : ∀ c ∈ exerciseVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ exerciseVmDescriptor.constraints, c.holdsVm env true false) :
     ExerciseCellSpec pre post := by
   have hrowgates : ∀ c ∈ exerciseRowGates, c.holdsVm env false false := by
     intro c hc
@@ -151,7 +151,7 @@ theorem exercise_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsExerciseRow env)
     (henc : RowEncodesExercise env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash exerciseVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash exerciseVmDescriptorWide env true false) :
     ExerciseCellSpec pre post ∧ sr = preRoots :=
   runnable_full_sound (exerciseRunnableSpec preRoots) hash env pre post sr
     hrow ⟨henc, hroots⟩ hsat

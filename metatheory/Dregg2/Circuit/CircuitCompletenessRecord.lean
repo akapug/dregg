@@ -120,6 +120,9 @@ structure IncNonceTraceProver (hash : List ℤ → ℤ)
     (n : Int) : Type where
   wi : Nat
   hwi : wi < t.rows.length
+  /-- the written row is an ACTIVE (transition) row, not the wrap/pad last row: the per-row gates run
+  under `when_transition()`, forced only off the last row (the honest prover lays it in the active domain). -/
+  hwiNotLast : wi + 1 ≠ t.rows.length
   cellPre : CellState
   cellPost : CellState
   hwiRow : Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce.IsIncNonceRow (envAt t wi)
@@ -139,6 +142,7 @@ def incrementNonce_rotatedEncodesIncNonce_construct (hash : List ℤ → ℤ)
     rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n where
   wi := prover.wi
   hwi := prover.hwi
+  hwiNotLast := prover.hwiNotLast
   cellPre := prover.cellPre
   cellPost := prover.cellPost
   hwiRow := prover.hwiRow

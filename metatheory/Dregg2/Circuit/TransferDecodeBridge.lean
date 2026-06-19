@@ -131,6 +131,10 @@ structure TransferEncodeResidual (hash : List ℤ → ℤ)
   ci : Nat
   hdi : di < t.rows.length
   hci : ci < t.rows.length
+  -- the debit/credit rows are ACTIVE (transition) rows, not the wrap/pad last row: the per-row transfer
+  -- gates run under `when_transition()`, so the row decode is forced only off the last row.
+  hdiNotLast : di + 1 ≠ t.rows.length
+  hciNotLast : ci + 1 ≠ t.rows.length
   srcPre : CellState
   srcPost : CellState
   dstPre : CellState
@@ -199,6 +203,8 @@ def transfer_decodeBridge (hash : List ℤ → ℤ) (S : CommitSurface)
   ci := res.ci
   hdi := res.hdi
   hci := res.hci
+  hdiNotLast := res.hdiNotLast
+  hciNotLast := res.hciNotLast
   srcPre := res.srcPre
   srcPost := res.srcPost
   dstPre := res.dstPre

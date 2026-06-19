@@ -95,7 +95,7 @@ theorem intent_to_zeroSpec (env : VmRowEnv) (post : CellState)
 
 theorem createCellGates_give_zeroSpec (env : VmRowEnv) (post : CellState)
     (henc : RowEncodesCreate env post)
-    (hgates : ∀ c ∈ createCellVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ createCellVmDescriptor.constraints, c.holdsVm env true false) :
     ZeroBlockSpec post := by
   have hrowgates : ∀ c ∈ createCellRowGates, c.holdsVm env false false := by
     intro c hc
@@ -138,7 +138,7 @@ theorem createCell_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : Sys
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsCreateCellRow env)
     (henc : RowEncodesCreate env post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash createCellVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash createCellVmDescriptorWide env true false) :
     ZeroBlockSpec post ∧ postRoots = preRoots :=
   runnable_full_sound (createCellRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

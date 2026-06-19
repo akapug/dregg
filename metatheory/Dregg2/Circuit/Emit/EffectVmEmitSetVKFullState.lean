@@ -54,7 +54,7 @@ theorem setVKWide_constraints_eq :
 
 theorem setVKGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesVK env pre post)
-    (hgates : ∀ c ∈ setVKVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ setVKVmDescriptor.constraints, c.holdsVm env true false) :
     CellSetVKSpec pre post := by
   have hrowgates : ∀ c ∈ setVKRowGates, c.holdsVm env false false := by
     intro c hc
@@ -97,7 +97,7 @@ theorem setVerificationKey_runnable_full_sound (hash : List ℤ → ℤ) (preRoo
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsSetVKRow env)
     (henc : RowEncodesVK env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash setVKVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash setVKVmDescriptorWide env true false) :
     CellSetVKSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (setVKRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

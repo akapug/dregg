@@ -276,10 +276,10 @@ theorem delegateAtten_runnable_full_sound (D : Caps → ℤ) (s : RecChainedStat
     (hrow : IsAttenRow env)
     (henc : CapRowEncodes env pre post (delegateAttenCapDigestNew D s args))
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash delegateAttenVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash delegateAttenVmDescriptorWide env true false) :
     CapFullClause (delegateAttenCapDigestNew D s args) preRoots pre post postRoots :=
   cap_runnable_full_sound (delegateAttenCapDigestNew D s args) preRoots hash env pre post postRoots
-    hrow henc hroots hsat
+    hrow henc hroots hgatesat
 
 /-- **`delegateAtten_runnable_binds_full_state` — the whole-17-field anti-ghost for `delegateAtten`.** Two
 wide `delegateAtten` rows publishing the same `NEW_COMMIT` agree on EVERY absorbed state-block column (the

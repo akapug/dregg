@@ -366,12 +366,12 @@ theorem noteCreate_runnable_full_sound_argus (hash : List ℤ → ℤ)
     (hrow : Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.IsNoteCreateRow env)
     (hdec : Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.NoteCreateDecode hash value preRoots postRoots step
               env pre post pr)
-    (hsat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash
-              Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptorWide env true true) :
+    (hgatesat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash
+              Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptorWide env true false) :
     Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.NoteCreateFullClause hash value preRoots postRoots step
       pre post pr :=
   Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreate_runnable_full_sound
-    hash value preRoots postRoots step env pre post pr hrow hdec hsat
+    hash value preRoots postRoots step env pre post pr hrow hdec hgatesat
 
 #assert_axioms noteCreate_runnable_full_sound_argus
 

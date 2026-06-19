@@ -312,9 +312,12 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState) (amt : ℤ)
 
 /-! ### The descriptor's per-row gates are a sub-list whose `holdsVm` is flag-independent. -/
 
-/-- The per-row gates hold under any flags iff they hold under `(false, false)` (all are `.gate _`). -/
-theorem burnRowGates_flag_indep (env : VmRowEnv) (b1 b2 : Bool)
-    (h : ∀ c ∈ burnRowGates, c.holdsVm env b1 b2) :
+/-- The per-row gates are all `.gate _`; under the deployed `when_transition()` they bind on every row
+but the last, so their body content is available at the ACTIVE row (`isLast = false`). This restates
+that content at the canonical `false false` flags. The hypothesis is taken at `b2 = false` (the gate
+content genuinely does not exist on the wrap row `isLast = true`). -/
+theorem burnRowGates_flag_indep (env : VmRowEnv) (b1 : Bool)
+    (h : ∀ c ∈ burnRowGates, c.holdsVm env b1 false) :
     ∀ c ∈ burnRowGates, c.holdsVm env false false := by
   intro c hc
   have := h c hc
@@ -329,14 +332,16 @@ structured per-cell `CellBurnSpec` AND publishes `post.commit = PI[NEW_COMMIT]`.
 theorem burnDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBurnRow env)
     (pre post : CellState) (amt : ℤ)
     (henc : RowEncodes env pre amt post)
+    (hgatesat : satisfiedVm hash burnVmDescriptor env true false)
     (hsat : satisfiedVm hash burnVmDescriptor env true true) :
     CellBurnSpec pre amt post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _hsites⟩ := hsat
-  have hgates : ∀ c ∈ burnRowGates, c.holdsVm env true true := by
-    intro c hc; apply hcs
+  obtain ⟨hcsT, _⟩ := hgatesat
+  have hgates : ∀ c ∈ burnRowGates, c.holdsVm env true false := by
+    intro c hc; apply hcsT
     unfold burnVmDescriptor; simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-  have hgates' := burnRowGates_flag_indep env true true hgates
+  have hgates' := burnRowGates_flag_indep env true hgates
   have hint := (burnVm_faithful env hrow).mp hgates'
   refine ⟨intent_to_cellSpec env pre post amt henc hint, ?_⟩
   -- last-row boundary pin: state_after.state_commit = PI[NEW_COMMIT]
@@ -469,6 +474,7 @@ theorem descriptor_agrees_with_executor
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBurnRow env)
     (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA s.kernel cell a) amt post)
+    (hgatesat : satisfiedVm hash burnVmDescriptor env true false)
     (hsat : satisfiedVm hash burnVmDescriptor env true true)
     (hexec : recCBurnAsset s actor cell a amt = some s') :
     post.balLo = (cellProjA s'.kernel cell a).balLo
@@ -477,7 +483,7 @@ theorem descriptor_agrees_with_executor
     ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
     ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
   obtain ⟨hcirc, _⟩ :=
-    burnDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hsat
+    burnDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hgatesat hsat
   obtain ⟨hcLo, hcHi, _hcN, hcF, hcCap, hcRes⟩ := hcirc
   obtain ⟨heLo, heHi, _heN, heF, heCap, heRes⟩ := unify_burn_exec s s' actor cell a amt hexec
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
@@ -573,6 +579,7 @@ executor's per-cell post-state on the bal/frame clauses. -/
 theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBurnRow env)
     (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA s.kernel cell a) amt post)
+    (hgatesat : satisfiedVm hash burnVmDescriptor env true false)
     (hsat : satisfiedVm hash burnVmDescriptor env true true)
     (hexec : recCBurnAsset s actor cell a amt = some s') :
     CellBurnSpec (cellProjA s.kernel cell a) amt post
@@ -583,9 +590,9 @@ theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
     ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
     ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
   obtain ⟨hspec, hcommit⟩ :=
-    burnDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hsat
+    burnDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hgatesat hsat
   obtain ⟨hLo, hHi, hF, hCap, hRes⟩ :=
-    descriptor_agrees_with_executor hash env hrow s s' actor cell a amt post henc hsat hexec
+    descriptor_agrees_with_executor hash env hrow s s' actor cell a amt post henc hgatesat hsat hexec
   exact ⟨hspec, hcommit, hLo, hHi, hF, hCap, hRes⟩
 
 /-! ## §9 — Axiom-hygiene tripwires. -/

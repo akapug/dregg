@@ -641,61 +641,173 @@ def setFieldVmDescriptor2 (slot : Fin 8) : EffectVmDescriptor2 :=
 #guard (List.finRange 8).all fun slot =>
   graduable (EffectVmEmitSetField.setFieldVmDescriptor slot)
 
-/-- **The validated reference, re-anchored.** A one-row `Satisfied2` witness of the graduated
-TRANSFER descriptor — sound chip table, faithful range table — realizes `TransferRowIntent` and
-publishes the post-state commitment: `transferVmDescriptor_pins_intent`, now against v2. -/
+/-- **The validated reference, re-anchored (FAITHFUL to `when_transition()`/`when_last_row()`).** The
+deployed circuit binds the effect gates only on TRANSITION rows (`isLast = false`) and the post-state
+commitment only on the LAST row (`isLast = true`); a single `(true,true)` row — the degenerate wrap row
+of a one-row trace — binds NEITHER's intent gates. So the faithful v2 re-anchor takes a trace with at
+least TWO rows (`htwo`), the transfer effect on the ACTIVE row 0 (a transition row, `0 + 1 < length`),
+and reads:
+  * `TransferRowIntent (envAt t 0)` — from row 0's gates, where `when_transition()` binds;
+  * the published commit `state_commit = NEW_COMMIT` on the LAST row (`envAt t (length-1)`), where the
+    `boundaryLastPins` (`.piBinding .last`) fire.
+This separates the two facts onto the rows where the deployed circuit genuinely enforces each, rather
+than over-pinning both onto one window. -/
 theorem transferV2_pins_intent (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hchip : ChipTableSound hash (t.tf .poseidon2))
     (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hone : t.rows.length = 1)
+    (htwo : 2 ≤ t.rows.length)
     (hrow : EffectVmEmitTransfer.IsTransferRow (envAt t 0))
     (hsat : Satisfied2 hash transferVmDescriptor2 minit mfin maddrs t) :
     EffectVmEmitTransfer.TransferRowIntent (envAt t 0)
-    ∧ (envAt t 0).loc (saCol state.STATE_COMMIT) = (envAt t 0).pub pi.NEW_COMMIT := by
-  have h := graduateV1_sound hash EffectVmEmitTransfer.transferVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by rw [hone]; exact Nat.one_pos)
-  rw [hone] at h
-  exact EffectVmEmitTransfer.transferVmDescriptor_pins_intent hash _ hrow h
+    ∧ (envAt t (t.rows.length - 1)).loc (saCol state.STATE_COMMIT)
+        = (envAt t (t.rows.length - 1)).pub pi.NEW_COMMIT := by
+  -- Row 0: active transition row (`isLast = false`, since `0 + 1 < length`). Gates ⟹ intent.
+  have h0 := graduateV1_sound hash EffectVmEmitTransfer.transferVmDescriptor
+    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by omega)
+  have hf0 : ((0 : Nat) + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne, Nat.zero_add]; omega
+  rw [show (0 == 0) = true from rfl, hf0] at h0
+  -- Last row: `isLast = true`; the `.piBinding .last` commit pin fires there.
+  have hlast := graduateV1_sound hash EffectVmEmitTransfer.transferVmDescriptor
+    minit mfin maddrs t hchip hrange (by decide) hsat (t.rows.length - 1) (by omega)
+  have hfl : ((t.rows.length - 1) + 1 == t.rows.length) = true := by
+    simp only [beq_iff_eq]; omega
+  rw [hfl] at hlast
+  refine ⟨?_, ?_⟩
+  · -- intent: gates at the active row (the first flag is immaterial to `.gate`s; `false false` flatten)
+    obtain ⟨hcsT, _⟩ := h0
+    have hgates' : ∀ c ∈ EffectVmEmitTransfer.transferRowGates, c.holdsVm (envAt t 0) false false := by
+      intro c hc
+      have hmem : c ∈ EffectVmEmitTransfer.transferVmDescriptor.constraints := by
+        unfold EffectVmEmitTransfer.transferVmDescriptor
+        simp only [List.mem_append]
+        exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+      have := hcsT c hmem
+      unfold EffectVmEmitTransfer.transferRowGates EffectVmEmitTransfer.gFieldPassAll at hc
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+        List.mem_range] at hc
+      rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+        simpa only [VmConstraint.holdsVm] using this
+    exact (EffectVmEmitTransfer.transferVm_faithful (envAt t 0) hrow).mp hgates'
+  · -- commit pin: the last-row `.piBinding .last` clause (`when_last_row()`), fires at `false true`
+    obtain ⟨hcs, _⟩ := hlast
+    have hl : ∀ c ∈ EffectVmEmitTransfer.boundaryLastPins,
+        c.holdsVm (envAt t (t.rows.length - 1)) false true := by
+      intro c hc
+      have hmem : c ∈ EffectVmEmitTransfer.transferVmDescriptor.constraints := by
+        unfold EffectVmEmitTransfer.transferVmDescriptor
+        simp only [List.mem_append]
+        exact Or.inl (Or.inr hc)
+      have hh := hcs c hmem
+      unfold EffectVmEmitTransfer.boundaryLastPins at hc
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl | rfl <;>
+        · simp only [VmConstraint.holdsVm] at hh ⊢
+          exact hh
+    exact (EffectVmEmitTransfer.boundaryLast_pins (envAt t (t.rows.length - 1)) hl).1
 
-/-- **The economic family, re-anchored (burn).** `burnDescriptor_full_sound` against v2: a
-one-row graduated-burn witness forces the structured `CellBurnSpec` and the published
-commitment. -/
+/-- **The economic family, re-anchored (burn) — FAITHFUL.** Exactly as `transferV2_pins_intent`: the
+deployed burn gates bind on the ACTIVE row 0 (`when_transition()`) and the post commitment on the LAST
+row (`when_last_row()`), so a faithful re-anchor takes a `≥ 2`-row trace and reads `CellBurnSpec` from
+row 0's gates and the published `state_commit = NEW_COMMIT` on the last row. (A one-row trace's sole
+`(true,true)` window binds NEITHER's gates — the degenerate wrap row.) `post.commit` is row 0's
+decoded after-state column; the commit pin is the LAST row's column, so the two are stated at their own
+rows rather than over-identified on a single window. -/
 theorem burnV2_full_sound (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hchip : ChipTableSound hash (t.tf .poseidon2))
     (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hone : t.rows.length = 1)
+    (htwo : 2 ≤ t.rows.length)
     (hrow : EffectVmEmitBurn.IsBurnRow (envAt t 0))
     (pre post : EffectVmEmitTransferSound.CellState) (amt : ℤ)
     (henc : EffectVmEmitBurn.RowEncodes (envAt t 0) pre amt post)
     (hsat : Satisfied2 hash burnVmDescriptor2 minit mfin maddrs t) :
     EffectVmEmitBurn.CellBurnSpec pre amt post
-    ∧ post.commit = (envAt t 0).pub pi.NEW_COMMIT := by
-  have h := graduateV1_sound hash EffectVmEmitBurn.burnVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by rw [hone]; exact Nat.one_pos)
-  rw [hone] at h
-  exact EffectVmEmitBurn.burnDescriptor_full_sound hash _ hrow pre post amt henc h
+    ∧ (envAt t (t.rows.length - 1)).loc (saCol state.STATE_COMMIT)
+        = (envAt t (t.rows.length - 1)).pub pi.NEW_COMMIT := by
+  -- Row 0: active transition row (`isLast = false`). Gates ⟹ `CellBurnSpec`.
+  have h0 := graduateV1_sound hash EffectVmEmitBurn.burnVmDescriptor
+    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by omega)
+  have hf0 : ((0 : Nat) + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne, Nat.zero_add]; omega
+  rw [show (0 == 0) = true from rfl, hf0] at h0
+  -- Last row: `isLast = true`; the boundary commit pin fires there.
+  have hlast := graduateV1_sound hash EffectVmEmitBurn.burnVmDescriptor
+    minit mfin maddrs t hchip hrange (by decide) hsat (t.rows.length - 1) (by omega)
+  have hfl : ((t.rows.length - 1) + 1 == t.rows.length) = true := by simp only [beq_iff_eq]; omega
+  rw [hfl] at hlast
+  refine ⟨?_, ?_⟩
+  · obtain ⟨hcsT, _⟩ := h0
+    have hgates : ∀ c ∈ EffectVmEmitBurn.burnRowGates, c.holdsVm (envAt t 0) true false := by
+      intro c hc; apply hcsT
+      unfold EffectVmEmitBurn.burnVmDescriptor; simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    have hgates' := EffectVmEmitBurn.burnRowGates_flag_indep (envAt t 0) true hgates
+    exact EffectVmEmitBurn.intent_to_cellSpec (envAt t 0) pre post amt henc
+      ((EffectVmEmitBurn.burnVm_faithful (envAt t 0) hrow).mp hgates')
+  · obtain ⟨hcs, _⟩ := hlast
+    have hl : ∀ c ∈ EffectVmEmitTransfer.boundaryLastPins,
+        c.holdsVm (envAt t (t.rows.length - 1)) false true := by
+      intro c hc
+      have hmem : c ∈ EffectVmEmitBurn.burnVmDescriptor.constraints := by
+        unfold EffectVmEmitBurn.burnVmDescriptor; simp only [List.mem_append]
+        exact Or.inl (Or.inr hc)
+      have hh := hcs c hmem
+      unfold EffectVmEmitTransfer.boundaryLastPins at hc
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl | rfl <;>
+        · simp only [VmConstraint.holdsVm] at hh ⊢; exact hh
+    exact (EffectVmEmitTransfer.boundaryLast_pins (envAt t (t.rows.length - 1)) hl).1
 
-/-- **The economic family, re-anchored (mint).** `mintDescriptor_full_sound` against v2. Carries the
-`IsMintRow` premise (the active BridgeMint row, `s_bridge_mint = 1`, `s_noop = 0`) the reconciled
-source now requires — exactly as `burnV2_full_sound` carries `IsBurnRow` (the runtime gates + ticks on
-the active row). -/
+/-- **The economic family, re-anchored (mint) — FAITHFUL.** As `burnV2_full_sound`: the mint gates bind
+on the ACTIVE row 0 (`when_transition()`), the post commitment on the LAST row (`when_last_row()`).
+Carries the `IsMintRow` premise (the active BridgeMint row, `s_bridge_mint = 1`, `s_noop = 0`). A
+`≥ 2`-row trace; `CellMintSpec` from row 0's gates, the published `state_commit = NEW_COMMIT` on the
+last row. -/
 theorem mintV2_full_sound (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hchip : ChipTableSound hash (t.tf .poseidon2))
     (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hone : t.rows.length = 1)
+    (htwo : 2 ≤ t.rows.length)
     (hrow : EffectVmEmitMint.IsMintRow (envAt t 0))
     (pre post : EffectVmEmitTransferSound.CellState) (amt : ℤ)
     (henc : EffectVmEmitMint.RowEncodes (envAt t 0) pre amt post)
     (hsat : Satisfied2 hash mintVmDescriptor2 minit mfin maddrs t) :
     EffectVmEmitMint.CellMintSpec pre amt post
-    ∧ post.commit = (envAt t 0).pub pi.NEW_COMMIT := by
-  have h := graduateV1_sound hash EffectVmEmitMint.mintVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by rw [hone]; exact Nat.one_pos)
-  rw [hone] at h
-  exact EffectVmEmitMint.mintDescriptor_full_sound hash _ hrow pre post amt henc h
+    ∧ (envAt t (t.rows.length - 1)).loc (saCol state.STATE_COMMIT)
+        = (envAt t (t.rows.length - 1)).pub pi.NEW_COMMIT := by
+  have h0 := graduateV1_sound hash EffectVmEmitMint.mintVmDescriptor
+    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by omega)
+  have hf0 : ((0 : Nat) + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne, Nat.zero_add]; omega
+  rw [show (0 == 0) = true from rfl, hf0] at h0
+  have hlast := graduateV1_sound hash EffectVmEmitMint.mintVmDescriptor
+    minit mfin maddrs t hchip hrange (by decide) hsat (t.rows.length - 1) (by omega)
+  have hfl : ((t.rows.length - 1) + 1 == t.rows.length) = true := by simp only [beq_iff_eq]; omega
+  rw [hfl] at hlast
+  refine ⟨?_, ?_⟩
+  · obtain ⟨hcsT, _⟩ := h0
+    have hgates : ∀ c ∈ EffectVmEmitMint.mintRowGates, c.holdsVm (envAt t 0) true false := by
+      intro c hc; apply hcsT
+      unfold EffectVmEmitMint.mintVmDescriptor; simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl hc))
+    have hgates' := EffectVmEmitMint.mintRowGates_flag_indep (envAt t 0) true hgates
+    exact EffectVmEmitMint.intent_to_cellSpec (envAt t 0) pre post amt henc
+      ((EffectVmEmitMint.mintVm_faithful (envAt t 0) hrow).mp hgates')
+  · obtain ⟨hcs, _⟩ := hlast
+    have hl : ∀ c ∈ EffectVmEmitTransfer.boundaryLastPins,
+        c.holdsVm (envAt t (t.rows.length - 1)) false true := by
+      intro c hc
+      have hmem : c ∈ EffectVmEmitMint.mintVmDescriptor.constraints := by
+        unfold EffectVmEmitMint.mintVmDescriptor; simp only [List.mem_append]
+        exact Or.inr hc
+      have hh := hcs c hmem
+      unfold EffectVmEmitTransfer.boundaryLastPins at hc
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl | rfl <;>
+        · simp only [VmConstraint.holdsVm] at hh ⊢; exact hh
+    exact (EffectVmEmitTransfer.boundaryLast_pins (envAt t (t.rows.length - 1)) hl).1
 
 /-! ## §7 — NEWLY EXPRESSIBLE I: the Attenuate cap-crown phase-B circuit leg.
 
@@ -1080,8 +1192,8 @@ def gSlotRange : EmittedExpr :=
        (.mul (.mul (slotMinus 4) (slotMinus 5)) (.mul (slotMinus 6) (slotMinus 7)))
 
 /-- The slot-range gate's denotation: the slot column carries a natural `< 8`. -/
-theorem gSlotRange_holds_iff (env : VmRowEnv) (isFirst isLast : Bool) :
-    (VmConstraint.gate gSlotRange).holdsVm env isFirst isLast ↔
+theorem gSlotRange_holds_iff (env : VmRowEnv) (isFirst : Bool) :
+    (VmConstraint.gate gSlotRange).holdsVm env isFirst false ↔
       ∃ j : Nat, j < 8 ∧ env.loc (prmCol SLOT) = (j : ℤ) := by
   simp only [VmConstraint.holdsVm, gSlotRange, slotMinus, eSlot, EmittedExpr.eval]
   constructor
@@ -1185,17 +1297,22 @@ theorem setFieldDyn_readback_genuine (hash : List ℤ → ℤ)
   have := hr rfl
   simpa [MemoryChecking.step] using this
 
-/-- The slot is genuinely bounded on every row of a satisfying trace (the dynamic index cannot
-escape the field block). -/
+/-- The slot is genuinely bounded on every ACTIVE row of a satisfying trace (the dynamic index
+cannot escape the field block). The bound is the `gSlotRange` degree-8 product GATE, which runs
+under the deployed `builder.when_transition()` — so it binds on every transition row (`isLast =
+false`, i.e. `i + 1 ≠ t.rows.length`) and is vacuous on the wrap/last row; the active effect row of
+any real trace is a transition row. -/
 theorem setFieldDyn_slot_bounded (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash setFieldDynVmDescriptor2 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnl : i + 1 ≠ t.rows.length) :
     ∃ j : Nat, j < 8 ∧ (envAt t i).loc (prmCol SLOT) = (j : ℤ) := by
   have hmem : VmConstraint2.base (.gate gSlotRange) ∈ setFieldDynVmDescriptor2.constraints := by
     simp [setFieldDynVmDescriptor2]
   have h := hsat.rowConstraints i hi _ hmem
-  exact (gSlotRange_holds_iff (envAt t i) (i == 0) (i + 1 == t.rows.length)).mp h
+  have hf : (i + 1 == t.rows.length) = false := by simp only [beq_eq_false_iff_ne]; exact hnl
+  rw [hf] at h
+  exact (gSlotRange_holds_iff (envAt t i) (i == 0)).mp h
 
 /-! ## §9 — The v2 registry + wire/shape tripwires. -/
 

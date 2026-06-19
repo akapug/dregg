@@ -745,7 +745,7 @@ theorem refresh_runnable_full_sound
     (hrow : IsRefreshRow env)
     (henc : RefreshRowEncodes env pre post)
     (hcarrier : env.loc sysRootsDigestCol = systemRootsDigest hash postRoots)
-    (hsat : satisfiedVm hash refreshVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash refreshVmDescriptorWide env true false) :
     RefreshCellSpec pre post := by
   -- the per-cell freeze+tick comes from the gates (hash-site-free); the `postRoots` binding is the
   -- carrier-into-commitment via `wideHashSites` (the anti-ghost below).

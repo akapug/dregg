@@ -306,8 +306,13 @@ private def rotV3SitesDigestAt0 : List VmHashSite :=
 def colEq (a b : Nat) : VmConstraint :=
   .gate (.add (.var a) (.mul (.const (-1)) (.var b)))
 
-theorem colEq_holds_iff (env : VmRowEnv) (isFirst isLast : Bool) (a b : Nat) :
+/-- The weld gate is a `.gate`; under the deployed `when_transition()` it binds on every row but the
+last. On a TRANSITION row (`isLast = false`) it holds iff the welded columns are equal. (On the wrap
+row it is vacuous — the faithful denotation; weld content is read at the active row.) -/
+theorem colEq_holds_iff (env : VmRowEnv) (isFirst isLast : Bool) (a b : Nat)
+    (hlast : isLast = false) :
     (colEq a b).holdsVm env isFirst isLast ↔ env.loc a = env.loc b := by
+  subst hlast
   simp only [colEq, VmConstraint.holdsVm, EmittedExpr.eval]
   constructor <;> intro h <;> linarith
 
@@ -593,9 +598,11 @@ theorem rotateV3_pins_commits (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
   · exact caveatV3SitesAt_pin hash env (d.traceWidth + 102) fun s hs =>
       heq s (hmem s (List.mem_append_right _ hs)) (caveatV3SitesAt_colOnly _ s hs)
 
-/-- A weld of the rotated descriptor holds on every satisfying row. -/
+/-- A weld of the rotated descriptor holds on every satisfying TRANSITION row (`isLast = false`).
+The weld is a `.gate`, which under the deployed `when_transition()` binds only off the last row, so
+the welded-column equality is read at the active row. -/
 theorem rotateV3_weld (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
-    (env : VmRowEnv) (isFirst isLast : Bool)
+    (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3 d) env isFirst isLast)
     {a b : Nat}
     (hw : colEq a b ∈ weldsAt d.traceWidth STATE_BEFORE_BASE
@@ -605,13 +612,13 @@ theorem rotateV3_weld (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     rcases hw with hw | hw
     · exact List.mem_append_left _ (List.mem_append_left _ hw)
     · exact List.mem_append_left _ (List.mem_append_right _ hw)))
-  exact (colEq_holds_iff env isFirst isLast a b).mp hc
+  exact (colEq_holds_iff env isFirst isLast a b hlast).mp hc
 
 /-- The CONFIRMED scalar welds, named: on every satisfying row, the rotated blocks' `r0`
 carries the v1 balance (low limb) and `r1` the v1 nonce, before AND after; the rotated
 `CAP_ROOT` limb carries the v1 cap root. -/
 theorem rotateV3_welds_named (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
-    (env : VmRowEnv) (isFirst isLast : Bool)
+    (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3 d) env isFirst isLast) :
     env.loc (d.traceWidth + 1) = env.loc (sbCol state.BALANCE_LO)
     ∧ env.loc (d.traceWidth + 2) = env.loc (sbCol state.NONCE)
@@ -620,12 +627,12 @@ theorem rotateV3_welds_named (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     ∧ env.loc (d.traceWidth + 51 + 2) = env.loc (saCol state.NONCE)
     ∧ env.loc (d.traceWidth + 51 + B_CAP_ROOT) = env.loc (saCol state.CAP_ROOT) := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · exact rotateV3_weld hash d env isFirst isLast h (Or.inl (by simp [weldsAt, sbCol]))
-  · exact rotateV3_weld hash d env isFirst isLast h (Or.inl (by simp [weldsAt, sbCol]))
-  · exact rotateV3_weld hash d env isFirst isLast h (Or.inl (by simp [weldsAt, sbCol]))
-  · exact rotateV3_weld hash d env isFirst isLast h (Or.inr (by simp [weldsAt, saCol]))
-  · exact rotateV3_weld hash d env isFirst isLast h (Or.inr (by simp [weldsAt, saCol]))
-  · exact rotateV3_weld hash d env isFirst isLast h (Or.inr (by simp [weldsAt, saCol]))
+  · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inl (by simp [weldsAt, sbCol]))
+  · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inl (by simp [weldsAt, sbCol]))
+  · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inl (by simp [weldsAt, sbCol]))
+  · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inr (by simp [weldsAt, saCol]))
+  · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inr (by simp [weldsAt, saCol]))
+  · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inr (by simp [weldsAt, saCol]))
 
 /-! ### Graduation side conditions lift parametrically. -/
 
@@ -1752,10 +1759,11 @@ theorem graduable_rotateV3FrozenAuthority {d : EffectVmDescriptor}
   unfold graduable at hr ⊢
   simpa using hr
 
-/-- **The authority residue is FROZEN on a satisfying row**: a row satisfying
-`rotateV3FrozenAuthority d` carries AFTER `r23` = BEFORE `r23` AND AFTER lifecycle = BEFORE lifecycle. -/
+/-- **The authority residue is FROZEN on a satisfying TRANSITION row** (`isLast = false`): a row
+satisfying `rotateV3FrozenAuthority d` carries AFTER `r23` = BEFORE `r23` AND AFTER lifecycle = BEFORE
+lifecycle. The freezes are `.gate`s (deployed `when_transition()`), so they bind at the active row. -/
 theorem rotateV3FrozenAuthority_freezes (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
-    (env : VmRowEnv) (isFirst isLast : Bool)
+    (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast) :
     env.loc (d.traceWidth + B_RECORD_DIGEST)
         = env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
@@ -1766,22 +1774,22 @@ theorem rotateV3FrozenAuthority_freezes (hash : List ℤ → ℤ) (d : EffectVmD
   · have hmem : colEq (d.traceWidth + B_RECORD_DIGEST)
         (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST) ∈ (rotateV3FrozenAuthority d).constraints := by
       rw [rotateV3FrozenAuthority_constraints]; exact List.mem_append_right _ (by simp)
-    exact (colEq_holds_iff env isFirst isLast _ _).mp (hc _ hmem)
+    exact (colEq_holds_iff env isFirst isLast _ _ hlast).mp (hc _ hmem)
   · have hmem : colEq (d.traceWidth + B_LIFECYCLE)
         (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) ∈ (rotateV3FrozenAuthority d).constraints := by
       rw [rotateV3FrozenAuthority_constraints]; exact List.mem_append_right _ (by simp)
-    exact (colEq_holds_iff env isFirst isLast _ _).mp (hc _ hmem)
+    exact (colEq_holds_iff env isFirst isLast _ _ hlast).mp (hc _ hmem)
 
 /-- **(authority drift ⇒ UNSAT)** — the NEGATIVE TOOTH: a row whose AFTER `r23` differs from the BEFORE
 `r23` (a value turn smuggling an authority change into NEW_COMMIT) does NOT satisfy
 `rotateV3FrozenAuthority d`. This is the light-client bite: `verify_vm_descriptor2` alone rejects it,
 no trusted post-cell needed. -/
 theorem rotateV3FrozenAuthority_rejects_drift (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
-    (env : VmRowEnv) (isFirst isLast : Bool)
+    (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (hdrift : env.loc (d.traceWidth + B_RECORD_DIGEST)
         ≠ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)) :
     ¬ satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast :=
-  fun h => hdrift (rotateV3FrozenAuthority_freezes hash d env isFirst isLast h).1
+  fun h => hdrift (rotateV3FrozenAuthority_freezes hash d env isFirst isLast hlast h).1
 
 /-- The v1 denotation survives the added continuity welds (the per-effect faithfulness theorems
 compose through, exactly as for the record / nullifier pins). -/
@@ -1850,9 +1858,10 @@ def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 := v3OfFrozen (setFieldTickF
 tick-faced setField, with `s_noop = 0`, carries `after_nonce = before_nonce + 1` (the runtime
 tick) — the rotated re-statement of the transfer/noteSpend nonce gate, now on setField. -/
 theorem setFieldV3_pins_nonce_tick (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (isFirst isLast : Bool) (hnoop : env.loc sel.NOOP = 0)
+    (isFirst isLast : Bool) (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
     (h : satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast) :
     env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1 := by
+  subst hlast
   have hmem : VmConstraint.gate EffectVmEmitTransfer.gNonce ∈ (rotateV3 (setFieldTickFace slot)).constraints := by
     apply List.mem_append_left
     show _ ∈ setFieldRowGatesTick slot
@@ -1869,10 +1878,10 @@ row whose nonce delta is NOT the tick (`after_nonce ≠ before_nonce + 1`) does 
 rotated tick-faced setField: the swapped tick gate REJECTS it. A forged passthrough
 (`after = before`) is the special case the FREEZE descriptor wrongly accepted; it is now UNSAT. -/
 theorem setFieldTick_rejects_wrong_nonce_delta (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (isFirst isLast : Bool) (hnoop : env.loc sel.NOOP = 0)
+    (isFirst isLast : Bool) (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
     ¬ satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast :=
-  fun h => hwrong (setFieldV3_pins_nonce_tick slot hash env isFirst isLast hnoop h)
+  fun h => hwrong (setFieldV3_pins_nonce_tick slot hash env isFirst isLast hlast hnoop h)
 
 /-- **The corrected WRITE binds the runtime value column on the ACTIVE row.** A row satisfying the
 rotated param1-corrected setField with `s_set_field = 1` (the active setField row) carries
@@ -1880,9 +1889,10 @@ rotated param1-corrected setField with `s_set_field = 1` (the active setField ro
 active row, reads the column the trace generator wrote the value to. (On NoOp rows
 `s_set_field = 0` the gate vanishes, so the binding is exactly the runtime's gated semantics.) -/
 theorem setFieldV3_pins_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (isFirst isLast : Bool) (hactive : env.loc SEL_SET_FIELD_COL = 1)
+    (isFirst isLast : Bool) (hlast : isLast = false) (hactive : env.loc SEL_SET_FIELD_COL = 1)
     (h : satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast) :
     env.loc (saCol (state.FIELD_BASE + slot.val)) = env.loc (prmCol RUNTIME_VALUE_PARAM) := by
+  subst hlast
   have hmem : VmConstraint.gate (gFieldWriteP1 slot) ∈ (rotateV3 (setFieldTickFace slot)).constraints := by
     apply List.mem_append_left
     show _ ∈ setFieldRowGatesTick slot
@@ -1898,10 +1908,10 @@ setField. An ACTIVE setField row (`s_set_field = 1`) whose written field does NO
 (the runtime value column) does NOT satisfy the corrected descriptor: the gated write gate, on the
 active row, REJECTS it. -/
 theorem setFieldP1_rejects_wrong_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (isFirst isLast : Bool) (hactive : env.loc SEL_SET_FIELD_COL = 1)
+    (isFirst isLast : Bool) (hlast : isLast = false) (hactive : env.loc SEL_SET_FIELD_COL = 1)
     (hwrong : env.loc (saCol (state.FIELD_BASE + slot.val)) ≠ env.loc (prmCol RUNTIME_VALUE_PARAM)) :
     ¬ satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast :=
-  fun h => hwrong (setFieldV3_pins_value slot hash env isFirst isLast hactive h)
+  fun h => hwrong (setFieldV3_pins_value slot hash env isFirst isLast hlast hactive h)
 
 /-! #### The TICK-faced + param1-corrected BridgeMint (= the `mintVmDescriptor2R24` member). -/
 
@@ -1947,9 +1957,10 @@ def mintV3 : EffectVmDescriptor2 := v3OfFrozen mintTickFace
 
 /-- **The nonce TICK holds on a satisfying non-NoOp BridgeMint row.** -/
 theorem mintV3_pins_nonce_tick (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
-    (hnoop : env.loc sel.NOOP = 0)
+    (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
     (h : satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast) :
     env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1 := by
+  subst hlast
   have hmem : VmConstraint.gate EffectVmEmitTransfer.gNonce ∈ (rotateV3 mintTickFace).constraints := by
     apply List.mem_append_left
     show _ ∈ mintTickFace.constraints
@@ -1963,18 +1974,20 @@ theorem mintV3_pins_nonce_tick (hash : List ℤ → ℤ) (env : VmRowEnv) (isFir
 
 /-- **ANTI-GHOST (wrong nonce delta ⇒ UNSAT)** — the C7 soundness tooth for BridgeMint. -/
 theorem mintTick_rejects_wrong_nonce_delta (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (isFirst isLast : Bool) (hnoop : env.loc sel.NOOP = 0)
+    (isFirst isLast : Bool) (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
     ¬ satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast :=
-  fun h => hwrong (mintV3_pins_nonce_tick hash env isFirst isLast hnoop h)
+  fun h => hwrong (mintV3_pins_nonce_tick hash env isFirst isLast hlast hnoop h)
 
 /-- **The corrected CREDIT binds the runtime value column.** A row satisfying the rotated
 param1-corrected BridgeMint carries `bal_lo_after = bal_lo_before + param1` (the runtime
 value_lo) — the credit gate now reads the column the trace generator credited from. -/
 theorem mintV3_pins_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast) :
     env.loc (saCol state.BALANCE_LO)
       = env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM) := by
+  subst hlast
   have hmem : VmConstraint.gate gBalLoCreditP1 ∈ (rotateV3 mintTickFace).constraints := by
     apply List.mem_append_left
     show _ ∈ mintTickFace.constraints
@@ -1988,10 +2001,11 @@ theorem mintV3_pins_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst i
 /-- **ANTI-GHOST (wrong credit ⇒ UNSAT)** — the C7 param-column soundness tooth for BridgeMint.
 A row whose post-balance is NOT `before + param1` (the runtime value_lo) is UNSAT. -/
 theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hwrong : env.loc (saCol state.BALANCE_LO)
       ≠ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM)) :
     ¬ satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast :=
-  fun h => hwrong (mintV3_pins_credit hash env isFirst isLast h)
+  fun h => hwrong (mintV3_pins_credit hash env isFirst isLast hlast h)
 
 #assert_axioms graduable_setFieldTickFace
 #assert_axioms setFieldTickFace_eq_source
@@ -2211,10 +2225,12 @@ On a row with `loc sel = 1` it forces `loc col = const` (the disc transition end
 def discForceGate (sel col : Nat) (const : ℤ) : VmConstraint :=
   .gate (.mul (.var sel) (.add (.var col) (.const (-const))))
 
-theorem discForceGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (sel col : Nat) (const : ℤ)
+theorem discForceGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
+    (sel col : Nat) (const : ℤ)
     (hsel : env.loc sel = 1)
     (h : (discForceGate sel col const).holdsVm env isFirst isLast) :
     env.loc col = const := by
+  subst hlast
   simp only [discForceGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
   rw [hsel] at h
   linarith
@@ -2265,10 +2281,11 @@ discriminant `afterC` — the deployed realization of
 `RotatedKernelRefinementLifecycleDisc.discAfterForced`, with NO trusted post-cell. -/
 theorem rotateV3WithDiscGate_forces_after (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithDiscGate sel beforeC? afterC d) env isFirst isLast) :
     env.loc (afterDiscCol d.traceWidth) = afterC :=
-  discForceGate_forces env isFirst isLast sel (afterDiscCol d.traceWidth) afterC hsel
+  discForceGate_forces env isFirst isLast hlast sel (afterDiscCol d.traceWidth) afterC hsel
     (h.1 _ (rotateV3WithDiscGate_afterMem sel beforeC? afterC d))
 
 /-- **TOOTH — `rotateV3WithDiscGate_rejects_wrong_after`.** An ACTIVE row whose AFTER disc is NOT the
@@ -2276,10 +2293,11 @@ mandated `afterC` (a frozen seal, a Destroyed→Live resurrection, a wrong-disc 
 `rotateV3WithDiscGate` — UNSAT for a ledgerless client, no anchor. -/
 theorem rotateV3WithDiscGate_rejects_wrong_after (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (hwrong : env.loc (afterDiscCol d.traceWidth) ≠ afterC) :
     ¬ satisfiedVm hash (rotateV3WithDiscGate sel beforeC? afterC d) env isFirst isLast :=
-  fun h => hwrong (rotateV3WithDiscGate_forces_after sel beforeC? afterC hash d env isFirst isLast hsel h)
+  fun h => hwrong (rotateV3WithDiscGate_forces_after sel beforeC? afterC hash d env isFirst isLast hlast hsel h)
 
 #assert_axioms discForceGate_forces
 #assert_axioms graduable_rotateV3WithDiscGate
@@ -2313,10 +2331,12 @@ authority sub-limb EQUAL to the in-circuit declared-param column; on a pad row i
 def permsVKWeldGate (sel afterCol paramCol : Nat) : VmConstraint :=
   .gate (.mul (.var sel) (.add (.var afterCol) (.mul (.const (-1)) (.var paramCol))))
 
-theorem permsVKWeldGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (sel afterCol paramCol : Nat)
+theorem permsVKWeldGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
+    (sel afterCol paramCol : Nat)
     (hsel : env.loc sel = 1)
     (h : (permsVKWeldGate sel afterCol paramCol).holdsVm env isFirst isLast) :
     env.loc afterCol = env.loc paramCol := by
+  subst hlast
   simp only [permsVKWeldGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
   rw [hsel] at h
   linarith
@@ -2362,10 +2382,11 @@ EQUALS the in-circuit declared-param column — the deployed realization of
 `RotatedKernelRefinementPermsVK.{setPermissions,setVK}_slot_forced`, with NO trusted post-cell. -/
 theorem rotateV3WithPermsVKGate_forces (sel afterCol : Nat)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithPermsVKGate sel afterCol d) env isFirst isLast) :
     env.loc afterCol = env.loc declaredParamCol :=
-  permsVKWeldGate_forces env isFirst isLast sel afterCol declaredParamCol hsel
+  permsVKWeldGate_forces env isFirst isLast hlast sel afterCol declaredParamCol hsel
     (h.1 _ (rotateV3WithPermsVKGate_mem sel afterCol d))
 
 /-- **TOOTH — `rotateV3WithPermsVKGate_rejects_forged`.** An ACTIVE row whose committed AFTER authority
@@ -2374,10 +2395,11 @@ diverges from the PI-anchored declared one) does NOT satisfy `rotateV3WithPermsV
 ledgerless client, no trusted post-cell. -/
 theorem rotateV3WithPermsVKGate_rejects_forged (sel afterCol : Nat)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (hforged : env.loc afterCol ≠ env.loc declaredParamCol) :
     ¬ satisfiedVm hash (rotateV3WithPermsVKGate sel afterCol d) env isFirst isLast :=
-  fun h => hforged (rotateV3WithPermsVKGate_forces sel afterCol hash d env isFirst isLast hsel h)
+  fun h => hforged (rotateV3WithPermsVKGate_forces sel afterCol hash d env isFirst isLast hlast hsel h)
 
 #assert_axioms permsVKWeldGate_forces
 #assert_axioms graduable_rotateV3WithPermsVKGate
@@ -2445,10 +2467,11 @@ theorem rotateV3WithModeGate_mem (sel : Nat) (afterC : ℤ) (d : EffectVmDescrip
 mandated constant `afterC` (`Sovereign(1)`), with NO trusted post-cell. -/
 theorem rotateV3WithModeGate_forces_after (sel : Nat) (afterC : ℤ)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithModeGate sel afterC d) env isFirst isLast) :
     env.loc (afterModeCol d.traceWidth) = afterC :=
-  discForceGate_forces env isFirst isLast sel (afterModeCol d.traceWidth) afterC hsel
+  discForceGate_forces env isFirst isLast hlast sel (afterModeCol d.traceWidth) afterC hsel
     (h.1 _ (rotateV3WithModeGate_mem sel afterC d))
 
 /-- **TOOTH — `rotateV3WithModeGate_rejects_unpromoted`.** An ACTIVE row whose committed AFTER mode is
@@ -2456,10 +2479,11 @@ NOT the mandated `afterC` (a makeSovereign whose committed mode stays `Hosted(0)
 sovereign) does NOT satisfy `rotateV3WithModeGate` — UNSAT for a ledgerless client, no anchor. -/
 theorem rotateV3WithModeGate_rejects_unpromoted (sel : Nat) (afterC : ℤ)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (hwrong : env.loc (afterModeCol d.traceWidth) ≠ afterC) :
     ¬ satisfiedVm hash (rotateV3WithModeGate sel afterC d) env isFirst isLast :=
-  fun h => hwrong (rotateV3WithModeGate_forces_after sel afterC hash d env isFirst isLast hsel h)
+  fun h => hwrong (rotateV3WithModeGate_forces_after sel afterC hash d env isFirst isLast hlast hsel h)
 
 #assert_axioms graduable_rotateV3WithModeGate
 #assert_axioms rotateV3WithModeGate_forces_after
@@ -2503,10 +2527,11 @@ sub-limb EQUALS the in-circuit declared-param column — NO trusted post-cell at
 column is verifier-anchored). -/
 theorem rotateV3WithFieldsRootGate_forces (sel afterCol : Nat)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithFieldsRootGate sel afterCol d) env isFirst isLast) :
     env.loc afterCol = env.loc declaredFieldsRootCol :=
-  permsVKWeldGate_forces env isFirst isLast sel afterCol declaredFieldsRootCol hsel
+  permsVKWeldGate_forces env isFirst isLast hlast sel afterCol declaredFieldsRootCol hsel
     (h.1 _ (rotateV3WithFieldsRootGate_mem sel afterCol d))
 
 /-- **TOOTH — `rotateV3WithFieldsRootGate_rejects_forged`.** An ACTIVE row whose committed AFTER
@@ -2515,10 +2540,11 @@ map diverges from the declared one) does NOT satisfy `rotateV3WithFieldsRootGate
 ledgerless client. -/
 theorem rotateV3WithFieldsRootGate_rejects_forged (sel afterCol : Nat)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (hforged : env.loc afterCol ≠ env.loc declaredFieldsRootCol) :
     ¬ satisfiedVm hash (rotateV3WithFieldsRootGate sel afterCol d) env isFirst isLast :=
-  fun h => hforged (rotateV3WithFieldsRootGate_forces sel afterCol hash d env isFirst isLast hsel h)
+  fun h => hforged (rotateV3WithFieldsRootGate_forces sel afterCol hash d env isFirst isLast hlast hsel h)
 
 #assert_axioms graduable_rotateV3WithFieldsRootGate
 #assert_axioms rotateV3WithFieldsRootGate_forces
@@ -2637,20 +2663,22 @@ def receiptArchiveV3 : EffectVmDescriptor2 :=
 AFTER disc to `Sealed(1)` with NO trusted post-cell.** The deployed face of
 `RotatedKernelRefinementLifecycleDisc.cellSeal_disc_forced.2`. -/
 theorem cellSealV3_disc_forces_sealed (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitCellSeal.SEL_CELLSEAL = 1)
     (h : satisfiedVm hash (rotateV3WithDiscGate EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
       discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast) :
     env.loc (afterDiscCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) = discSealed :=
-  rotateV3WithDiscGate_forces_after _ _ _ hash _ env isFirst isLast hsel h
+  rotateV3WithDiscGate_forces_after _ _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `cellSealV3_rejects_frozen` (LIVE).** A cellSeal whose AFTER disc stays `Live(0)` (the
 FROZEN seal — the headline lifecycle forgery) is UNSAT for a ledgerless client. -/
 theorem cellSealV3_rejects_frozen (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitCellSeal.SEL_CELLSEAL = 1)
     (hfrozen : env.loc (afterDiscCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) = discLive) :
     ¬ satisfiedVm hash (rotateV3WithDiscGate EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
       discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast := by
-  apply rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hsel
+  apply rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hlast hsel
   rw [hfrozen]; decide
 
 /-- **TOOTH — `cellDestroyV3_rejects_resurrection` (LIVE).** A cellDestroy whose AFTER disc is published
@@ -2658,11 +2686,12 @@ as `Live(0)` (a Destroyed cell republished as alive) is UNSAT for a ledgerless c
 forces `Destroyed(3)`, no trusted post-cell. The deployed face of
 `RotatedKernelRefinementLifecycleDisc.cellDestroy_disc_rejects_resurrection`. -/
 theorem cellDestroyV3_rejects_resurrection (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitCellDestroy.SEL_CELLDESTROY = 1)
     (hres : env.loc (afterDiscCol EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth) = discLive) :
     ¬ satisfiedVm hash (rotateV3WithDiscGate EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
       EffectVmEmitCellDestroy.cellDestroyVmDescriptor) env isFirst isLast := by
-  apply rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hsel
+  apply rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hlast hsel
   rw [hres]; decide
 
 #assert_axioms cellSealV3_disc_forces_sealed
@@ -2676,38 +2705,41 @@ theorem cellDestroyV3_rejects_resurrection (hash : List ℤ → ℤ) (env : VmRo
 committed AFTER perms-digest sub-limb EQUAL to the in-circuit declared param, with NO trusted post-cell.**
 The deployed face of `RotatedKernelRefinementPermsVK.setPermissions_slot_forced`. -/
 theorem setPermsV3_forces_declared (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetPermissions.SEL_SET_PERMS = 1)
     (h : satisfiedVm hash (rotateV3WithPermsVKGate EffectVmEmitSetPermissions.SEL_SET_PERMS
       (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       EffectVmEmitSetPermissions.setPermsVmDescriptor) env isFirst isLast) :
     env.loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       = env.loc declaredParamCol :=
-  rotateV3WithPermsVKGate_forces _ _ hash _ env isFirst isLast hsel h
+  rotateV3WithPermsVKGate_forces _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `setPermsV3_rejects_forged` (LIVE).** A setPermissions whose committed AFTER perms-digest
 ≠ the declared (PI-anchored) param — a forged post-permissions binding ARBITRARY permissions into
 NEW_COMMIT — is UNSAT for a ledgerless client. The headline setPermissions authority forgery, closed
 in-circuit with no trusted post-cell. -/
 theorem setPermsV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetPermissions.SEL_SET_PERMS = 1)
     (hforged : env.loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       ≠ env.loc declaredParamCol) :
     ¬ satisfiedVm hash (rotateV3WithPermsVKGate EffectVmEmitSetPermissions.SEL_SET_PERMS
       (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       EffectVmEmitSetPermissions.setPermsVmDescriptor) env isFirst isLast :=
-  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hsel hforged
+  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel hforged
 
 /-- **TOOTH — `setVKV3_rejects_forged` (LIVE).** A setVK whose committed AFTER vk-digest ≠ the declared
 (PI-anchored) param — a forged post-VK (the upgrade-safety forgery: binding an ARBITRARY verification
 key into NEW_COMMIT) — is UNSAT for a ledgerless client, no trusted post-cell. -/
 theorem setVKV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetVK.SEL_SET_VK = 1)
     (hforged : env.loc (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
       ≠ env.loc declaredParamCol) :
     ¬ satisfiedVm hash (rotateV3WithPermsVKGate EffectVmEmitSetVK.SEL_SET_VK
       (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
       EffectVmEmitSetVK.setVKVmDescriptor) env isFirst isLast :=
-  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hsel hforged
+  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel hforged
 
 #assert_axioms setPermsV3_forces_declared
 #assert_axioms setPermsV3_rejects_forged
@@ -2720,36 +2752,39 @@ descriptors). -/
 /-- **`makeSovereignV3_forces_sovereign` — the LIVE close: a satisfying makeSovereign witness FORCES the
 committed AFTER mode sub-limb to `Sovereign(1)` as a CONSTANT, with NO trusted post-cell.** -/
 theorem makeSovereignV3_forces_sovereign (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitMakeSovereign.SEL_MAKE_SOVEREIGN_RT = 1)
     (h : satisfiedVm hash (rotateV3WithModeGate EffectVmEmitMakeSovereign.SEL_MAKE_SOVEREIGN_RT
       modeSovereign EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor) env isFirst isLast) :
     env.loc (afterModeCol EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor.traceWidth)
       = modeSovereign :=
-  rotateV3WithModeGate_forces_after _ _ hash _ env isFirst isLast hsel h
+  rotateV3WithModeGate_forces_after _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `makeSovereignV3_rejects_unpromoted` (LIVE).** A makeSovereign whose committed AFTER mode
 stays `Hosted(0)` (an un-promoted sovereign — the cell claims sovereignty without flipping the committed
 mode) is UNSAT for a ledgerless client, no trusted post-cell. The headline makeSovereign forgery. -/
 theorem makeSovereignV3_rejects_unpromoted (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitMakeSovereign.SEL_MAKE_SOVEREIGN_RT = 1)
     (hunpromoted : env.loc
         (afterModeCol EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor.traceWidth)
       = modeHosted) :
     ¬ satisfiedVm hash (rotateV3WithModeGate EffectVmEmitMakeSovereign.SEL_MAKE_SOVEREIGN_RT
       modeSovereign EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor) env isFirst isLast := by
-  apply rotateV3WithModeGate_rejects_unpromoted _ _ hash _ env isFirst isLast hsel
+  apply rotateV3WithModeGate_rejects_unpromoted _ _ hash _ env isFirst isLast hlast hsel
   rw [hunpromoted]; decide
 
 /-- **TOOTH — `setFieldDynV3_rejects_forged` (LIVE).** A dynamic setField whose committed AFTER
 `fields_root` sub-limb ≠ the declared post-`fields_root` param — a forged post-`fields_root` (the
 dynamic write committed to an arbitrary overflow map) — is UNSAT for a ledgerless client. -/
 theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetField.SEL_SET_FIELD = 1)
     (hforged : env.loc (afterFieldsRootCol setFieldDynV1Face.traceWidth)
       ≠ env.loc declaredFieldsRootCol) :
     ¬ satisfiedVm hash (rotateV3WithFieldsRootGate EffectVmEmitSetField.SEL_SET_FIELD
       (afterFieldsRootCol setFieldDynV1Face.traceWidth) setFieldDynV1Face) env isFirst isLast :=
-  rotateV3WithFieldsRootGate_rejects_forged _ _ hash _ env isFirst isLast hsel hforged
+  rotateV3WithFieldsRootGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel hforged
 
 #assert_axioms makeSovereignV3_forces_sovereign
 #assert_axioms makeSovereignV3_rejects_unpromoted

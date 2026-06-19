@@ -109,15 +109,15 @@ gates (a constraint-list segment), on a row decoded by `RowEncodes`, force `Cell
 block FROZEN). No hash-site hypothesis. -/
 theorem noopGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (henc : RowEncodes env pre post)
-    (hgates : ∀ c ∈ noopVmDescriptorWide.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ noopVmDescriptorWide.constraints, c.holdsVm env true false) :
     CellFreezeSpec pre post := by
-  have hrowgates : ∀ c ∈ emitRowGates, c.holdsVm env true true := by
+  have hrowgates : ∀ c ∈ emitRowGates, c.holdsVm env true false := by
     intro c hc
     apply hgates
     unfold noopVmDescriptorWide
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl hc))
-  have hrowgates' := emitRowGates_flag_indep env true true hrowgates
+  have hrowgates' := emitRowGates_flag_indep env true hrowgates
   exact intent_to_cellSpec env pre post henc ((emitEventVm_faithful env).mp hrowgates')
 
 #assert_axioms noopGates_give_cellSpec
@@ -158,10 +158,10 @@ theorem noop_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsNoopRow env)
     (henc : RowEncodes env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash noopVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash noopVmDescriptorWide env true false) :
     CellFreezeSpec pre post ∧ sr = preRoots :=
   runnable_full_sound (noopRunnableSpec preRoots) hash env pre post sr
-    hrow ⟨henc, hroots⟩ hsat
+    hrow ⟨henc, hroots⟩ hgatesat
 
 #assert_axioms noop_runnable_full_sound
 

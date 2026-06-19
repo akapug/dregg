@@ -231,10 +231,14 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hsat : Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     SatisfiedEff hash t.tf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) n := by
   have hrow := hsat.rowConstraints i hi
   have hmem := effCapOpenV3_constraints_mem base name n
+  -- the cap-open `.gate` clauses bind under `when_transition()` — on this ACTIVE (non-last) row their
+  -- body equation holds; `hlastf` reduces the row's `isLast` flag to `false`.
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
   refine
     { core := ?_, targetBound := ?_, effBitPinned := ?_
     , maskBitsBool := ?_, maskRecon := ?_, facetEffBound := ?_ }
@@ -256,34 +260,34 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
         refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
         exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
       have h := hrow _ (hmem _ hin)
-      simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+      simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
     · have hin : VmConstraint2.base (.gate (rootPinGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
         simp [capOpenConstraintsEff]
       have h := hrow _ (hmem _ hin)
-      simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+      simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
   · have hin : VmConstraint2.base (.gate (targetBindGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
   · have hin : VmConstraint2.base (.gate (effBitGateFor (capOpenCols base.traceWidth) ((1 <<< n : Nat) : ℤ)))
         ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
   · intro j hj
     have hin : VmConstraint2.base (.gate (maskBitBoolGate (capOpenCols base.traceWidth) j)) ∈ capOpenConstraintsEff base.traceWidth n := by
       refine List.mem_cons_of_mem _ ?_
       refine List.mem_append_left _ (List.mem_append_right _ ?_)
       exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩
     have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
   · have hin : VmConstraint2.base (.gate (maskReconGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
   · have hin : VmConstraint2.base (.gate (selectedBitGate (capOpenCols base.traceWidth) n)) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
 
 /-- **`effCapOpenV3_authorizes` — THE FAN-OUT AUTHORITY LEG (generic, live).** A `Satisfied2` witness of
 `effCapOpenV3 base name n` whose opened leaf IS the faithfulness contract's `(actor ⇒ src)` edge discharges
@@ -296,7 +300,7 @@ theorem effCapOpenV3_authorizes {State : Type} (base : EffectVmDescriptor2) (nam
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb (effCapOpenV3 base name n) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols base.traceWidth).capRoot) leafAt)
@@ -308,7 +312,7 @@ theorem effCapOpenV3_authorizes {State : Type} (base : EffectVmDescriptor2) (nam
       { actor := actor, src := src, dst := dst, amt := amt } = true
     ∧ (leafAt actor src).target = (src : ℤ) :=
   capOpenEff_authorizes S t.tf (capOpenCols base.traceWidth) _ n hn vkOfTag provided hChip
-    (effCapOpenV3_satisfiedEff base name n S.chipAbsorb minit mfin maddrs t hsat i hi)
+    (effCapOpenV3_satisfiedEff base name n S.chipAbsorb minit mfin maddrs t hsat i hi hnotlast)
     caps leafAt hfaith actor src dst amt hsrc hedge htier
 
 -- The effect-general cap-open shares the appendix width (+59) and adds 38 constraints (5 gate-pins).
@@ -432,7 +436,7 @@ theorem transferCapOpenEffV3_authorizes {State : Type} (S : CapHashScheme State)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb transferCapOpenEffV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_TRANSFER) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols transferV3.traceWidth).capRoot) leafAt)
@@ -449,7 +453,7 @@ theorem transferCapOpenEffV3_authorizes {State : Type} (S : CapHashScheme State)
     _ minit mfin maddrs t hsat
   have h := effCapOpenV3_authorizes (State := State) transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER (by decide)
-    S vkOfTag provided minit mfin maddrs t hChip hsat i hi caps leafAt hfaith
+    S vkOfTag provided minit mfin maddrs t hChip hsat i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
   refine ⟨?_, h.2⟩
   -- `authorizedFacetB = authorizedFacetEffB … (turnEffectBit turn)`, and `turnEffectBit _ =
@@ -466,7 +470,7 @@ theorem attenuateCapOpenEffV3_authorizes {State : Type} (S : CapHashScheme State
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb attenuateCapOpenEffV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_TRANSFER) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols attenuateV3.traceWidth).capRoot) leafAt)
@@ -481,7 +485,7 @@ theorem attenuateCapOpenEffV3_authorizes {State : Type} (S : CapHashScheme State
     Dregg2.Circuit.Emit.EffectVmEmit.sel.ATTENUATE_CAPABILITY _ minit mfin maddrs t hsat
   have h := effCapOpenV3_authorizes (State := State) attenuateV3
     "dregg-effectvm-attenuateA-v1-rot24-v3-capopen-eff" EFF_TRANSFER (by decide)
-    S vkOfTag provided minit mfin maddrs t hChip hsat i hi caps leafAt hfaith
+    S vkOfTag provided minit mfin maddrs t hChip hsat i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
   refine ⟨?_, h.2⟩
   rw [authorizedFacetB_eq_eff]
@@ -494,6 +498,7 @@ half of the live keystone (a wrong-facet cap ⟹ UNSAT), ported onto the deploye
 theorem transferCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols transferV3.traceWidth).bit EFF_TRANSFER) = 0) :
     ¬ Satisfied2 hash transferCapOpenEffV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols transferV3.traceWidth)
@@ -501,13 +506,14 @@ theorem transferCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff transferV3 "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER
       hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.TRANSFER
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-- **`attenuateCapOpenEffV3_rejects_wrong_facet` (the LIVE attenuate authority tooth).** As above over
 `attenuateCapOpenEffV3`: a leaf lacking the `EFF_TRANSFER` facet bit ⟹ the appendix is UNSAT. -/
 theorem attenuateCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols attenuateV3.traceWidth).bit EFF_TRANSFER) = 0) :
     ¬ Satisfied2 hash attenuateCapOpenEffV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols attenuateV3.traceWidth)
@@ -515,7 +521,7 @@ theorem attenuateCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff attenuateV3 "dregg-effectvm-attenuateA-v1-rot24-v3-capopen-eff" EFF_TRANSFER
       hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.ATTENUATE_CAPABILITY
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-! ## §5.F — THE FAN-OUT AUTHORITY KEYSTONES (`…CapOpenV3_authorizes`): the 6 cap-effects' apex
 authority leg over their DEPLOYED fan-out descriptor.
@@ -539,7 +545,7 @@ theorem introduceCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb introduceCapOpenV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_INTRODUCE) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols introduceV3.traceWidth).capRoot) leafAt)
@@ -554,7 +560,7 @@ theorem introduceCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (
     "dregg-effectvm-introduce-v1-rot24-v3-capopen" EFF_INTRODUCE (by decide)
     S vkOfTag provided minit mfin maddrs t hChip
     (withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.INTRODUCE
-      _ minit mfin maddrs t hsat) i hi caps leafAt hfaith
+      _ minit mfin maddrs t hsat) i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
 
 /-- **`delegateCapOpenV3_authorizes`** — the LIVE delegate-via-cap authority keystone (the delegateAtten
@@ -565,7 +571,7 @@ theorem delegateCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb delegateCapOpenV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_DELEGATION_OPS) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols grantCapV3.traceWidth).capRoot) leafAt)
@@ -580,7 +586,7 @@ theorem delegateCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
     "dregg-effectvm-delegateAtten-v1-rot24-v3-capopen" EFF_DELEGATION_OPS (by decide)
     S vkOfTag provided minit mfin maddrs t hChip
     (withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
-      _ minit mfin maddrs t hsat) i hi caps leafAt hfaith
+      _ minit mfin maddrs t hsat) i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
 
 /-- **`grantCapCapOpenV3_authorizes`** — the LIVE grantCap-via-cap authority keystone. Discharges
@@ -590,7 +596,7 @@ theorem grantCapCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb grantCapCapOpenV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_GRANT_CAPABILITY) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols grantCapV3.traceWidth).capRoot) leafAt)
@@ -605,7 +611,7 @@ theorem grantCapCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
     "dregg-effectvm-grantCap-v1-rot24-v3-capopen" EFF_GRANT_CAPABILITY (by decide)
     S vkOfTag provided minit mfin maddrs t hChip
     (withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
-      _ minit mfin maddrs t hsat) i hi caps leafAt hfaith
+      _ minit mfin maddrs t hsat) i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
 
 /-- **`revokeCapOpenV3_authorizes`** — the LIVE revoke(Delegation)-via-cap authority keystone. Discharges
@@ -615,7 +621,7 @@ theorem revokeCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (vkO
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb revokeCapOpenV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_DELEGATION_OPS) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols revokeDelegationV3.traceWidth).capRoot) leafAt)
@@ -630,7 +636,7 @@ theorem revokeCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (vkO
     "dregg-effectvm-revoke-v1-rot24-v3-capopen" EFF_DELEGATION_OPS (by decide)
     S vkOfTag provided minit mfin maddrs t hChip
     (withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_DELEGATION
-      _ minit mfin maddrs t hsat) i hi caps leafAt hfaith
+      _ minit mfin maddrs t hsat) i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
 
 /-- **`refreshDelegationCapOpenV3_authorizes`** — the LIVE refreshDelegation-via-cap authority keystone.
@@ -640,7 +646,7 @@ theorem refreshDelegationCapOpenV3_authorizes {State : Type} (S : CapHashScheme 
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb refreshDelegationCapOpenV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_DELEGATION_OPS) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols refreshDelegationV3.traceWidth).capRoot) leafAt)
@@ -655,7 +661,7 @@ theorem refreshDelegationCapOpenV3_authorizes {State : Type} (S : CapHashScheme 
     "dregg-effectvm-refresh-v1-rot24-v3-capopen" EFF_DELEGATION_OPS (by decide)
     S vkOfTag provided minit mfin maddrs t hChip
     (withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.REFRESH_DELEGATION
-      _ minit mfin maddrs t hsat) i hi caps leafAt hfaith
+      _ minit mfin maddrs t hsat) i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
 
 /-- **`revokeCapabilityCapOpenV3_authorizes`** — the LIVE revokeCapability-via-cap authority keystone.
@@ -666,7 +672,7 @@ theorem revokeCapabilityCapOpenV3_authorizes {State : Type} (S : CapHashScheme S
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb revokeCapabilityCapOpenV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_REVOKE_CAPABILITY) caps
       ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols revokeCapabilityBaseV3.traceWidth).capRoot) leafAt)
@@ -681,7 +687,7 @@ theorem revokeCapabilityCapOpenV3_authorizes {State : Type} (S : CapHashScheme S
     "dregg-effectvm-revokeCapability-v1-rot24-v3-capopen" EFF_REVOKE_CAPABILITY (by decide)
     S vkOfTag provided minit mfin maddrs t hChip
     (withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_CAPABILITY
-      _ minit mfin maddrs t hsat) i hi caps leafAt hfaith
+      _ minit mfin maddrs t hsat) i hi hnotlast caps leafAt hfaith
     actor src dst amt hsrc hedge htier
 
 /-! ### The fan-out authority TEETH (`…CapOpenV3_rejects_wrong_facet`): a leaf lacking the effect's
@@ -692,6 +698,7 @@ cannot satisfy the introduce appendix (the submask gate bites in-circuit). -/
 theorem introduceCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols introduceV3.traceWidth).bit EFF_INTRODUCE) = 0) :
     ¬ Satisfied2 hash introduceCapOpenV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols introduceV3.traceWidth)
@@ -699,12 +706,13 @@ theorem introduceCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff introduceV3 "dregg-effectvm-introduce-v1-rot24-v3-capopen" EFF_INTRODUCE
       hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.INTRODUCE
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-- **`delegateCapOpenV3_rejects_wrong_facet`** — a leaf lacking the `EFF_DELEGATION_OPS` bit ⟹ UNSAT. -/
 theorem delegateCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols grantCapV3.traceWidth).bit EFF_DELEGATION_OPS) = 0) :
     ¬ Satisfied2 hash delegateCapOpenV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols grantCapV3.traceWidth)
@@ -712,12 +720,13 @@ theorem delegateCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff grantCapV3 "dregg-effectvm-delegateAtten-v1-rot24-v3-capopen"
       EFF_DELEGATION_OPS hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-- **`grantCapCapOpenV3_rejects_wrong_facet`** — a leaf lacking the `EFF_GRANT_CAPABILITY` bit ⟹ UNSAT. -/
 theorem grantCapCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols grantCapV3.traceWidth).bit EFF_GRANT_CAPABILITY) = 0) :
     ¬ Satisfied2 hash grantCapCapOpenV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols grantCapV3.traceWidth)
@@ -725,12 +734,13 @@ theorem grantCapCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff grantCapV3 "dregg-effectvm-grantCap-v1-rot24-v3-capopen"
       EFF_GRANT_CAPABILITY hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-- **`revokeCapOpenV3_rejects_wrong_facet`** — a leaf lacking the `EFF_DELEGATION_OPS` bit ⟹ UNSAT. -/
 theorem revokeCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols revokeDelegationV3.traceWidth).bit EFF_DELEGATION_OPS) = 0) :
     ¬ Satisfied2 hash revokeCapOpenV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols revokeDelegationV3.traceWidth)
@@ -738,12 +748,13 @@ theorem revokeCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff revokeDelegationV3 "dregg-effectvm-revoke-v1-rot24-v3-capopen"
       EFF_DELEGATION_OPS hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_DELEGATION
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-- **`refreshDelegationCapOpenV3_rejects_wrong_facet`** — a leaf lacking `EFF_DELEGATION_OPS` ⟹ UNSAT. -/
 theorem refreshDelegationCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols refreshDelegationV3.traceWidth).bit EFF_DELEGATION_OPS) = 0) :
     ¬ Satisfied2 hash refreshDelegationCapOpenV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols refreshDelegationV3.traceWidth)
@@ -751,12 +762,13 @@ theorem refreshDelegationCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff refreshDelegationV3 "dregg-effectvm-refresh-v1-rot24-v3-capopen"
       EFF_DELEGATION_OPS hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.REFRESH_DELEGATION
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-- **`revokeCapabilityCapOpenV3_rejects_wrong_facet`** — a leaf lacking `EFF_REVOKE_CAPABILITY` ⟹ UNSAT. -/
 theorem revokeCapabilityCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
     (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols revokeCapabilityBaseV3.traceWidth).bit EFF_REVOKE_CAPABILITY) = 0) :
     ¬ Satisfied2 hash revokeCapabilityCapOpenV3 minit mfin maddrs t := fun hsat =>
   satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols revokeCapabilityBaseV3.traceWidth)
@@ -764,7 +776,7 @@ theorem revokeCapabilityCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff revokeCapabilityBaseV3 "dregg-effectvm-revokeCapability-v1-rot24-v3-capopen"
       EFF_REVOKE_CAPABILITY hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_CAPABILITY
-        _ minit mfin maddrs t hsat) i hi)
+        _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-! ## §6 — the registry WITH the cap-open (F5 — `Rfix` ranges over the LIVE authority descriptor).
 

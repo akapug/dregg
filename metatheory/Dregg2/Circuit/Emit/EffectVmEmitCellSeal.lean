@@ -256,16 +256,18 @@ nonce tick) AND publishes the post-commit as `PI[NEW_COMMIT]`. -/
 theorem cellSealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesSeal env pre post)
+    (hgatesat : satisfiedVm hash cellSealVmDescriptor env true false)
     (hsat : satisfiedVm hash cellSealVmDescriptor env true true) :
     CellSealCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ cellSealRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ cellSealVmDescriptor.constraints := by
       unfold cellSealVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold cellSealRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -357,10 +359,11 @@ theorem descriptor_agrees_with_executor_seal
     (s s' : RecChainedState) (actor cell : CellId) (pre post : CellState)
     (hpre : pre = cellProj s.kernel cell)
     (henc : RowEncodesSeal env pre post)
+    (hgatesat : satisfiedVm hash cellSealVmDescriptor env true false)
     (hsat : satisfiedVm hash cellSealVmDescriptor env true true)
     (hspec : CellSealSpec s actor cell s') :
     post.balLo = (cellProj s'.kernel cell).balLo := by
-  obtain ⟨hcirc, _⟩ := cellSealDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := cellSealDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := cellSeal_balance_frozen s s' actor cell hspec
   subst hpre

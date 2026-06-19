@@ -233,16 +233,18 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem incNonceDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesIncNonce env pre post)
+    (hgatesat : satisfiedVm hash incrementNonceVmDescriptor env true false)
     (hsat : satisfiedVm hash incrementNonceVmDescriptor env true true) :
     CellIncNonceSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ incNonceRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ incrementNonceVmDescriptor.constraints := by
       unfold incrementNonceVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold incNonceRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -335,10 +337,11 @@ theorem descriptor_agrees_with_executor_incNonce
     (s s' : RecChainedState) (actor cell : CellId) (n : Int) (pre post : CellState)
     (hpre : pre = cellProjN s.kernel cell)
     (henc : RowEncodesIncNonce env pre post)
+    (hgatesat : satisfiedVm hash incrementNonceVmDescriptor env true false)
     (hsat : satisfiedVm hash incrementNonceVmDescriptor env true true)
     (hspec : IncrementNonceSpec s actor cell n s') :
     post.balLo = (cellProjN s'.kernel cell).balLo := by
-  obtain ⟨hcirc, _⟩ := incNonceDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := incNonceDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := incNonce_balance_frozen s s' actor cell n hspec
   subst hpre
@@ -390,6 +393,7 @@ advances, NOT a soundness gap. This is the transfer class-A capstone shape (`*_f
 theorem incNonceDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hnoop : env.loc sel.NOOP = 0)
     (s s' : RecChainedState) (actor cell : CellId) (n : Int) (post : CellState)
     (henc : RowEncodesIncNonce env (cellProjN s.kernel cell) post)
+    (hgatesat : satisfiedVm hash incrementNonceVmDescriptor env true false)
     (hsat : satisfiedVm hash incrementNonceVmDescriptor env true true)
     (hexec : execFullA s (.incrementNonceA actor cell n) = some s') :
     CellIncNonceSpec (cellProjN s.kernel cell) post
@@ -400,7 +404,7 @@ theorem incNonceDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hn
     ∧ post.capRoot = (cellProjN s'.kernel cell).capRoot
     ∧ post.reserved = (cellProjN s'.kernel cell).reserved := by
   obtain ⟨hcirc, hcommit⟩ :=
-    incNonceDescriptor_full_sound hash env (cellProjN s.kernel cell) post hnoop henc hsat
+    incNonceDescriptor_full_sound hash env (cellProjN s.kernel cell) post hnoop henc hgatesat hsat
   obtain ⟨hcLo, hcHi, _hcN, hcF, hcCap, hcRes⟩ := hcirc
   obtain ⟨heLo, heHi, heF, heCap, heRes⟩ := unify_incNonce_exec s s' actor cell n hexec
   refine ⟨⟨hcLo, hcHi, _hcN, hcF, hcCap, hcRes⟩, hcommit, ?_, ?_, ?_, ?_, ?_⟩

@@ -479,16 +479,18 @@ pins the full per-cell frame-freeze + mode-bit + nonce-tick post-state AND publi
 theorem sovereignRuntime_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesRevoke env pre post)
+    (hgatesat : satisfiedVm hash makeSovereignRuntimeVmDescriptor env true false)
     (hsat : satisfiedVm hash makeSovereignRuntimeVmDescriptor env true true) :
     SovRuntimeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ sovereignRuntimeRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ makeSovereignRuntimeVmDescriptor.constraints := by
       unfold makeSovereignRuntimeVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold sovereignRuntimeRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc

@@ -80,15 +80,15 @@ gates (a constraint-list segment), on an emit row decoded by `RowEncodesEmit` wi
 theorem emitEventGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodes env pre post)
-    (hgates : ∀ c ∈ emitEventVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ emitEventVmDescriptor.constraints, c.holdsVm env true false) :
     EmitTickCellSpec pre post := by
-  have hrowgates : ∀ c ∈ emitTickRowGates, c.holdsVm env true true := by
+  have hrowgates : ∀ c ∈ emitTickRowGates, c.holdsVm env true false := by
     intro c hc
     apply hgates
     unfold emitEventVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-  have hrowgates' := emitTickRowGates_flag_indep env true true hrowgates
+  have hrowgates' := emitTickRowGates_flag_indep env true hrowgates
   exact intent_to_tickCellSpec env pre post hnoop henc ((emitTickVm_faithful env).mp hrowgates')
 
 #assert_axioms emitEventGates_give_cellSpec
@@ -146,10 +146,10 @@ theorem emitEvent_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsEmitRow env)
     (henc : RowEncodes env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash emitEventVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash emitEventVmDescriptorWide env true false) :
     EmitTickCellSpec pre post ∧ sr = preRoots :=
   runnable_full_sound (emitEventRunnableSpec preRoots) hash env pre post sr
-    hrow ⟨henc, hroots⟩ hsat
+    hrow ⟨henc, hroots⟩ hgatesat
 
 #assert_axioms emitEvent_runnable_full_sound
 

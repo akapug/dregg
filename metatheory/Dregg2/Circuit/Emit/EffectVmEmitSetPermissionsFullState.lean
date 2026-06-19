@@ -56,7 +56,7 @@ theorem setPermsWide_constraints_eq :
 
 theorem setPermsGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesPerms env pre post)
-    (hgates : ∀ c ∈ setPermsVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ setPermsVmDescriptor.constraints, c.holdsVm env true false) :
     PermCellSpec pre post := by
   have hrowgates : ∀ c ∈ setPermsRowGates, c.holdsVm env false false := by
     intro c hc
@@ -99,7 +99,7 @@ theorem setPermissions_runnable_full_sound (hash : List ℤ → ℤ) (preRoots :
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsSetPermsRow env)
     (henc : RowEncodesPerms env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash setPermsVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash setPermsVmDescriptorWide env true false) :
     PermCellSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (setPermsRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

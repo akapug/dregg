@@ -242,16 +242,18 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem introduceDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesIntroduce env pre post)
+    (hgatesat : satisfiedVm hash introduceVmDescriptor env true false)
     (hsat : satisfiedVm hash introduceVmDescriptor env true true) :
     IntroduceCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ introduceRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ introduceVmDescriptor.constraints := by
       unfold introduceVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold introduceRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -606,10 +608,10 @@ theorem introduce_runnable_full_sound (preRoots : SysRoots)
     (hrow : IsIntroduceRow env)
     (henc : RowEncodesIntroduce env pre post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash introduceVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash introduceVmDescriptorWide env true false) :
     IntroduceFullClause preRoots pre post postRoots :=
   runnable_full_sound (introduceRunnableSpec preRoots) hash env pre post postRoots
-    hrow ⟨henc, hroots⟩ hsat
+    hrow ⟨henc, hroots⟩ hgatesat
 
 /-- **`introduce_runnable_rejects_root_tamper` — the side-table anti-ghost for `introduce`.** Two wide
 introduce rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) whose side-table

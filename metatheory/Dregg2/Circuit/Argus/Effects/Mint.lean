@@ -37,7 +37,7 @@ theorem mint_full_state_on_runnable (amt : ℤ) (preRoots : SysRoots) (hash : Li
     (hrow : IsMintRow env)
     (henc : RowEncodes env pre amt post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash mintVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash mintVmDescriptorWide env true false) :
     CellMintSpec pre amt post ∧ postRoots = preRoots :=
   mint_runnable_full_sound amt preRoots hash env pre post postRoots hrow henc hroots hsat
 

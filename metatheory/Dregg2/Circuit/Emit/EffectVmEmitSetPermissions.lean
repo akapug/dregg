@@ -232,16 +232,20 @@ theorem intent_to_permCellSpec (env : VmRowEnv) (pre post : CellState)
 theorem setPermsDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesPerms env pre post)
+    (hgatesat : satisfiedVm hash setPermsVmDescriptor env true false)
     (hsat : satisfiedVm hash setPermsVmDescriptor env true true) :
     PermCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
+  -- the per-row gates run under `when_transition()`, so their content is at the ACTIVE row
+  -- (`isLast = false`), drawn from `hgatesat`; the last-row commit pin is from `hsat`.
   have hgates' : ∀ c ∈ setPermsRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ setPermsVmDescriptor.constraints := by
       unfold setPermsVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold setPermsRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -339,10 +343,11 @@ theorem descriptor_agrees_with_executor_setPerms
     (s s' : RecChainedState) (actor cell : CellId) (p : Int) (pre post : CellState)
     (hpre : pre = cellProjP s.kernel cell)
     (henc : RowEncodesPerms env pre post)
+    (hgatesat : satisfiedVm hash setPermsVmDescriptor env true false)
     (hsat : satisfiedVm hash setPermsVmDescriptor env true true)
     (hspec : SetPermissionsSpec s actor cell p s') :
     post.balLo = (cellProjP s'.kernel cell).balLo := by
-  obtain ⟨hcirc, _⟩ := setPermsDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := setPermsDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := setPerms_balance_frozen s s' actor cell p hspec
   subst hpre

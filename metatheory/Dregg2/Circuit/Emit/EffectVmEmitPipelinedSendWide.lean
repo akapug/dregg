@@ -89,7 +89,7 @@ per-row gates (a constraint-list segment), on a pipelined-send row decoded by `R
 `CellSendSpec`. No hash-site hypothesis. -/
 theorem pipelinedSendGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesSend env pre post)
-    (hgates : ∀ c ∈ pipelinedSendVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ pipelinedSendVmDescriptor.constraints, c.holdsVm env true false) :
     CellSendSpec pre post := by
   -- the per-row gates are a sub-list of the descriptor's constraints; restrict to them (flag-free).
   have hrowgates : ∀ c ∈ pipelinedSendRowGates, c.holdsVm env false false := by
@@ -170,7 +170,7 @@ theorem pipelinedSend_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsPipelinedSendRow env)
     (henc : RowEncodesSend env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash pipelinedSendVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash pipelinedSendVmDescriptorWide env true false) :
     CellSendSpec pre post ∧ sr = preRoots :=
   runnable_full_sound (pipelinedSendRunnableSpec preRoots) hash env pre post sr
     hrow ⟨henc, hroots⟩ hsat

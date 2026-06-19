@@ -884,7 +884,7 @@ descriptor's full constraint list (`attenuateRowGates ++ transitionAll ++ bounda
 satisfying the full descriptor satisfies the row gates. The flag-free restriction the gate-only soundness
 (`attenuateDescriptor_full_sound`) consumes. -/
 theorem attenuateWide_rowGates_sub (env : VmRowEnv)
-    (hgates : ∀ c ∈ attenuateVmDescriptorWide.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ attenuateVmDescriptorWide.constraints, c.holdsVm env true false) :
     ∀ c ∈ attenuateRowGates, c.holdsVm env false false := by
   intro c hc
   -- the row gates are all `.gate _`; their `holdsVm` ignores the first/last flags.
@@ -943,7 +943,7 @@ theorem cap_runnable_full_sound (capDigestNew : ℤ) (preRoots : SysRoots)
     (hrow : IsAttenRow env)
     (henc : CapRowEncodes env pre post capDigestNew)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash attenuateVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash attenuateVmDescriptorWide env true false) :
     CapFullClause capDigestNew preRoots pre post postRoots :=
   runnable_full_sound (capRunnableSpec capDigestNew preRoots) hash env pre post postRoots
     hrow ⟨henc, hroots⟩ hsat

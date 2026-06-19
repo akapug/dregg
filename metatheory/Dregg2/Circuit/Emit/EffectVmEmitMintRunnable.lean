@@ -93,16 +93,16 @@ the gates (the sites bind the COMMITMENT — §1/§4 of the generic module — n
 theorem mintGates_give_cellSpec (env : VmRowEnv) (hrow : IsMintRow env)
     (pre post : CellState) (amt : ℤ)
     (henc : RowEncodes env pre amt post)
-    (hgates : ∀ c ∈ mintVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ mintVmDescriptor.constraints, c.holdsVm env true false) :
     CellMintSpec pre amt post := by
   -- the per-row gates are a sub-list of the descriptor's constraints; restrict + flatten flags.
-  have hrowgates : ∀ c ∈ mintRowGates, c.holdsVm env true true := by
+  have hrowgates : ∀ c ∈ mintRowGates, c.holdsVm env true false := by
     intro c hc
     apply hgates
     unfold mintVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl hc))
-  have hrowgates' := mintRowGates_flag_indep env true true hrowgates
+  have hrowgates' := mintRowGates_flag_indep env true hrowgates
   exact intent_to_cellSpec env pre post amt henc ((mintVm_faithful env hrow).mp hrowgates')
 
 /-! ## §3 — THE RUNNABLE FULL-STATE INSTANCE. -/
@@ -145,7 +145,7 @@ theorem mint_runnable_full_sound (amt : ℤ) (preRoots : SysRoots) (hash : List 
     (hrow : IsMintRow env)
     (henc : RowEncodes env pre amt post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash mintVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash mintVmDescriptorWide env true false) :
     CellMintSpec pre amt post ∧ postRoots = preRoots :=
   runnable_full_sound (mintRunnableSpec amt preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

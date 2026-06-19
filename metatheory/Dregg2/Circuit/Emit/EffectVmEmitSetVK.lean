@@ -233,16 +233,20 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem setVKDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesVK env pre post)
+    (hgatesat : satisfiedVm hash setVKVmDescriptor env true false)
     (hsat : satisfiedVm hash setVKVmDescriptor env true true) :
     CellSetVKSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
+  -- the per-row gates run under `when_transition()`, so their content is at the ACTIVE row
+  -- (`isLast = false`), drawn from `hgatesat`; the last-row commit pin is from `hsat`.
   have hgates' : ∀ c ∈ setVKRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ setVKVmDescriptor.constraints := by
       unfold setVKVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold setVKRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -336,10 +340,11 @@ theorem descriptor_agrees_with_executor_setVK
     (s s' : RecChainedState) (actor cell : CellId) (vk : Int) (pre post : CellState)
     (hpre : pre = cellProjV s.kernel cell)
     (henc : RowEncodesVK env pre post)
+    (hgatesat : satisfiedVm hash setVKVmDescriptor env true false)
     (hsat : satisfiedVm hash setVKVmDescriptor env true true)
     (hspec : SetVKSpec s actor cell vk s') :
     post.balLo = (cellProjV s'.kernel cell).balLo := by
-  obtain ⟨hcirc, _⟩ := setVKDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := setVKDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := setVK_balance_frozen s s' actor cell vk hspec
   subst hpre

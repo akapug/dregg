@@ -422,36 +422,14 @@ theorem transferHash_binds (hash : List ℤ → ℤ) (env : VmRowEnv)
 AND publishes the genuine post-state commitment. This is the corner-(b) statement at the concrete
 EffectVM level: the running circuit's satisfaction ⇒ the verified intent. -/
 
-/-- **`transferVmDescriptor_pins_intent` — corner (b), concrete.** A transfer row satisfying the
-whole emitted descriptor realizes `TransferRowIntent` and binds the published `state_commit` to the
-genuine digest of the after-state. (The first/last flags are taken `true` for the single-row trace
-window so the boundary clauses are active; on a multi-row trace the same holds per-row with the
-flags as supplied.) -/
-theorem transferVmDescriptor_pins_intent (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (hrow : IsTransferRow env)
+/-- **`transferVmDescriptor_pins_commit` — the last-row commit pin (FAITHFUL, `when_last_row()`).**
+A row satisfying the descriptor at `isLast = true` publishes `state_after.STATE_COMMIT = NEW_COMMIT`.
+This is purely the `boundaryLastPins` (`.piBinding .last`) clause, which fires under `when_last_row()`;
+it does NOT depend on the gates (which run under `when_transition()`). -/
+theorem transferVmDescriptor_pins_commit (hash : List ℤ → ℤ) (env : VmRowEnv)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
-    TransferRowIntent env
-    ∧ env.loc (saCol state.STATE_COMMIT) = env.pub pi.NEW_COMMIT := by
+    env.loc (saCol state.STATE_COMMIT) = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _hsites⟩ := hsat
-  -- the per-row gates are a sub-list of the descriptor's constraints.
-  have hgates : ∀ c ∈ transferRowGates, c.holdsVm env true true := by
-    intro c hc
-    apply hcs
-    unfold transferVmDescriptor
-    simp only [List.mem_append]
-    exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-  -- the per-row gates' `holdsVm` is flag-independent (gate clause ignores isFirst/isLast).
-  have hgates' : ∀ c ∈ transferRowGates, c.holdsVm env false false := by
-    intro c hc
-    have := hgates c hc
-    -- transferRowGates are all `.gate _`, whose holdsVm ignores the flags.
-    unfold transferRowGates gFieldPassAll at hc
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
-      List.mem_range] at hc
-    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
-      simpa only [VmConstraint.holdsVm] using this
-  refine ⟨(transferVm_faithful env hrow).mp hgates', ?_⟩
-  -- last-row boundary pin: state_after.state_commit = PI[NEW_COMMIT].
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
     have hmem : c ∈ transferVmDescriptor.constraints := by
@@ -466,6 +444,42 @@ theorem transferVmDescriptor_pins_intent (hash : List ℤ → ℤ) (env : VmRowE
       · simp only [VmConstraint.holdsVm] at hh ⊢
         exact hh
   exact (boundaryLast_pins env hlast).1
+
+/-- **`transferVmDescriptor_pins_intent` — corner (b), concrete (FAITHFUL to `when_transition()`).**
+The intent move and the commit pin are enforced on DIFFERENT rows of the deployed circuit, so the
+faithful statement takes them from the rows where they fire:
+  * `hgatesat` — the descriptor satisfied at the ACTIVE row (`isLast = false`): the deployed gates run
+    under `builder.when_transition()`, so they bind on every row but the last; the active effect row of
+    any real trace is a transition row. This yields `TransferRowIntent`.
+  * `hsat` — the descriptor satisfied with `isLast = true`: the `boundaryLastPins` (`.piBinding .last`)
+    run under `when_last_row()`, so the published `state_after.STATE_COMMIT = NEW_COMMIT` is pinned on
+    the LAST row.
+A SINGLE `(true,true)` row — the only row being simultaneously first and last — does NOT bind the gates
+(it is the wrap row), which is exactly the degenerate window a faithful denotation must not over-pin;
+hence the two evidences are separate. On the one-effect trace the active row's after-state equals the
+last row's after-state (frozen frame), so the two views agree on the decoded `env`. -/
+theorem transferVmDescriptor_pins_intent (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hrow : IsTransferRow env)
+    (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
+    (hsat : satisfiedVm hash transferVmDescriptor env true true) :
+    TransferRowIntent env
+    ∧ env.loc (saCol state.STATE_COMMIT) = env.pub pi.NEW_COMMIT := by
+  obtain ⟨hcsT, _⟩ := hgatesat
+  -- The per-row gates, drawn at the ACTIVE row (`isLast = false`), where `when_transition()` binds.
+  have hgates' : ∀ c ∈ transferRowGates, c.holdsVm env false false := by
+    intro c hc
+    have hmem : c ∈ transferVmDescriptor.constraints := by
+      unfold transferVmDescriptor
+      simp only [List.mem_append]
+      exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
+    have := hcsT c hmem
+    -- transferRowGates are all `.gate _`; at `isLast = false` `holdsVm` IS the body equation.
+    unfold transferRowGates gFieldPassAll at hc
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
+      List.mem_range] at hc
+    rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
+      simpa only [VmConstraint.holdsVm] using this
+  exact ⟨(transferVm_faithful env hrow).mp hgates', transferVmDescriptor_pins_commit hash env hsat⟩
 
 /-! ## §11.5 — NON-VACUITY: a concrete transfer row that satisfies the intent, and one that does not.
 

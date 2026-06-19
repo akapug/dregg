@@ -242,16 +242,18 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem pipelinedSendDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesSend env pre post)
+    (hgatesat : satisfiedVm hash pipelinedSendVmDescriptor env true false)
     (hsat : satisfiedVm hash pipelinedSendVmDescriptor env true true) :
     CellSendSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ pipelinedSendRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ pipelinedSendVmDescriptor.constraints := by
       unfold pipelinedSendVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold pipelinedSendRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc

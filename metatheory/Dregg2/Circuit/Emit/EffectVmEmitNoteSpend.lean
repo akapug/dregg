@@ -284,16 +284,18 @@ as `PI[NEW_COMMIT]`. -/
 theorem noteSpendDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsNoteSpendRow env)
     (pre post : CellState) (value : ℤ)
     (henc : RowEncodesSpend env pre value post)
+    (hgatesat : satisfiedVm hash noteSpendVmDescriptor env true false)
     (hsat : satisfiedVm hash noteSpendVmDescriptor env true true) :
     CellSpendSpec pre value post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ noteSpendRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ noteSpendVmDescriptor.constraints := by
       unfold noteSpendVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold noteSpendRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -408,12 +410,13 @@ theorem runtime_credit_vs_univA_neutral_divergence
     (st st' : RecChainedState) (nf : Nat) (actor c : CellId) (asset : AssetId) (spendProof : Bool)
     (post : CellState) (value : ℤ)
     (henc : RowEncodesSpend env (cellProjSpend st.kernel.bal c asset) value post)
+    (hgatesat : satisfiedVm hash noteSpendVmDescriptor env true false)
     (hsat : satisfiedVm hash noteSpendVmDescriptor env true true)
     (hspec : NoteSpendSpec st nf actor spendProof st')
     (hagree : post.balLo = (cellProjSpend st'.kernel.bal c asset).balLo) :
     value = 0 := by
   obtain ⟨hcirc, _⟩ :=
-    noteSpendDescriptor_full_sound hash env hrow (cellProjSpend st.kernel.bal c asset) post value henc hsat
+    noteSpendDescriptor_full_sound hash env hrow (cellProjSpend st.kernel.bal c asset) post value henc hgatesat hsat
   have hcredit : post.balLo = (cellProjSpend st.kernel.bal c asset).balLo + value := hcirc.1
   have hneutral := univA_spend_is_balance_neutral st st' nf actor c asset spendProof hspec
   rw [hagree, hneutral] at hcredit
@@ -638,8 +641,8 @@ def noteSpendVmDescriptorFull : EffectVmDescriptor :=
 
 /-- The amplified descriptor still forces the §2 whole-cell FREEZE (generalised over the boundary flags;
 the freeze gates are per-row `.gate`s whose `holdsVm` ignores `isFirst`/`isLast`). -/
-theorem noteSpendFull_forces_freeze (env : VmRowEnv) (hrow : IsNoteSpendRow env) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteSpendVmDescriptorFull.constraints, c.holdsVm env b1 b2) :
+theorem noteSpendFull_forces_freeze (env : VmRowEnv) (hrow : IsNoteSpendRow env) (b1 : Bool)
+    (hgates : ∀ c ∈ noteSpendVmDescriptorFull.constraints, c.holdsVm env b1 false) :
     NoteSpendRowIntent env := by
   apply (noteSpendVm_faithful env hrow).mp
   intro c hc
@@ -655,8 +658,8 @@ theorem noteSpendFull_forces_freeze (env : VmRowEnv) (hrow : IsNoteSpendRow env)
     simpa only [VmConstraint.holdsVm] using this
 
 /-- The amplified descriptor forces the `nullifiers`-ROOT update (the new content STAGE 3 buys). -/
-theorem noteSpendFull_forces_root (env : VmRowEnv) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteSpendVmDescriptorFull.constraints, c.holdsVm env b1 b2) :
+theorem noteSpendFull_forces_root (env : VmRowEnv) (b1 : Bool)
+    (hgates : ∀ c ∈ noteSpendVmDescriptorFull.constraints, c.holdsVm env b1 false) :
     NoteSpendRootIntent env := by
   apply (noteSpendRoot_gate_faithful env).mp
   have hmem : (VmConstraint.gate gNullifierRootUpdate) ∈ noteSpendVmDescriptorFull.constraints := by
@@ -708,13 +711,15 @@ AND publishes the post-commit — §7 lifted onto the root-bound descriptor. -/
 theorem noteSpendFull_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsNoteSpendRow env)
     (pre post : CellState) (value : ℤ)
     (henc : RowEncodesSpend env pre value post)
+    (hgatesat : satisfiedVm hash noteSpendVmDescriptorFull env true false)
     (hsat : satisfiedVm hash noteSpendVmDescriptorFull env true true) :
     CellSpendSpec pre value post
       ∧ NoteSpendRootIntent env
       ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, hsites, _⟩ := hsat
-  have hfreeze := noteSpendFull_forces_freeze env hrow true true hcs
-  have hroot := noteSpendFull_forces_root env true true hcs
+  obtain ⟨hcsT, _⟩ := hgatesat
+  have hfreeze := noteSpendFull_forces_freeze env hrow true hcsT
+  have hroot := noteSpendFull_forces_root env true hcsT
   refine ⟨intent_to_cellSpendSpec env pre post value henc hfreeze, hroot, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
@@ -880,8 +885,8 @@ theorem noteSpendWide_usesWideSites : noteSpendVmDescriptorWide.hashSites = wide
 
 /-- **`noteSpendWide_forces_credit`** — the wide descriptor still forces the §2 whole-cell credit/freeze
 intent (`NoteSpendRowIntent`); the gates are a sublist of the wide constraints, all per-row `.gate`s. -/
-theorem noteSpendWide_forces_credit (env : VmRowEnv) (hrow : IsNoteSpendRow env) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteSpendVmDescriptorWide.constraints, c.holdsVm env b1 b2) :
+theorem noteSpendWide_forces_credit (env : VmRowEnv) (hrow : IsNoteSpendRow env) (b1 : Bool)
+    (hgates : ∀ c ∈ noteSpendVmDescriptorWide.constraints, c.holdsVm env b1 false) :
     NoteSpendRowIntent env := by
   apply (noteSpendVm_faithful env hrow).mp
   intro c hc
@@ -898,8 +903,8 @@ theorem noteSpendWide_forces_credit (env : VmRowEnv) (hrow : IsNoteSpendRow env)
 
 /-- **`noteSpendWide_forces_root`** — the wide descriptor forces the dedicated-carrier `nullifiers`-root
 advance. -/
-theorem noteSpendWide_forces_root (env : VmRowEnv) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteSpendVmDescriptorWide.constraints, c.holdsVm env b1 b2) :
+theorem noteSpendWide_forces_root (env : VmRowEnv) (b1 : Bool)
+    (hgates : ∀ c ∈ noteSpendVmDescriptorWide.constraints, c.holdsVm env b1 false) :
     NoteSpendRootIntentWide env := by
   apply (gNullifierRootUpdateWide_faithful env).mp
   have hmem : (VmConstraint.gate gNullifierRootUpdateWide) ∈ noteSpendVmDescriptorWide.constraints := by
@@ -955,9 +960,9 @@ def noteSpendRunnableSpec (hash : List ℤ → ℤ) (value : ℤ) (preRoots post
   decodeFull    := by
     intro env pre post pr hrow hdec hgates
     obtain ⟨henc, hpr, hdigA, hdigB, hstep, hfreezeRoots⟩ := hdec
-    have hcredit := noteSpendWide_forces_credit env hrow true true hgates
+    have hcredit := noteSpendWide_forces_credit env hrow true hgates
     have hcell := intent_to_cellSpendSpec env pre post value henc hcredit
-    have hrootW := noteSpendWide_forces_root env true true hgates
+    have hrootW := noteSpendWide_forces_root env true hgates
     have hadvance : Dregg2.Exec.SystemRoots.systemRootsDigest hash postRoots
         = Dregg2.Exec.SystemRoots.systemRootsDigest hash preRoots + step := by
       have := hrootW
@@ -979,10 +984,10 @@ theorem noteSpend_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (pr : SysRoots)
     (hrow : IsNoteSpendRow env)
     (hdec : NoteSpendDecode hash value preRoots postRoots step env pre post pr)
-    (hsat : satisfiedVm hash noteSpendVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash noteSpendVmDescriptorWide env true false) :
     NoteSpendFullClause hash value preRoots postRoots step pre post pr :=
   runnable_full_sound (noteSpendRunnableSpec hash value preRoots postRoots step) hash env pre post pr
-    hrow hdec hsat
+    hrow hdec hgatesat
 
 /-- **`noteSpend_runnable_rejects_root_tamper` — the side-table anti-ghost (free from the generic crown).**
 Two wide rows publishing the SAME `NEW_COMMIT` (with `systemRootsDigest` carriers) but whose `system_roots`

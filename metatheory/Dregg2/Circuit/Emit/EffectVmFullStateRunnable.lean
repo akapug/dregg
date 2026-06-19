@@ -270,10 +270,13 @@ structure RunnableFullStateSpec (St : Type) where
   decodeAfter  : VmRowEnv → St → St → SysRoots → Prop
   /-- The DECLARATIVE full post-state predicate (all 17 fields' content for THIS effect). -/
   fullClause   : St → St → SysRoots → Prop
-  /-- THE THIN per-effect obligation: the satisfied per-row gates + the decode entail the full clause. -/
+  /-- THE THIN per-effect obligation: the satisfied per-row gates + the decode entail the full clause.
+  The gate content is taken at the ACTIVE row (`isLast = false`): the deployed gates run under
+  `builder.when_transition()`, so they bind on every row but the last; the active effect row is a
+  transition row. (A `true true` single-row window — the wrap row — does NOT bind the gates.) -/
   decodeFull   : ∀ (env : VmRowEnv) (pre post : St) (sr : SysRoots),
                    isRow env → decodeAfter env pre post sr →
-                   (∀ c ∈ descriptor.constraints, c.holdsVm env true true) →
+                   (∀ c ∈ descriptor.constraints, c.holdsVm env true false) →
                    fullClause pre post sr
 
 /-- **`runnable_full_sound` — THE GENERIC CROWN JEWEL.** A row satisfying the effect's WIDE runnable
@@ -286,9 +289,9 @@ theorem runnable_full_sound {St : Type} (E : RunnableFullStateSpec St) (hash : L
     (env : VmRowEnv) (pre post : St) (sr : SysRoots)
     (hrow : E.isRow env)
     (hdec : E.decodeAfter env pre post sr)
-    (hsat : satisfiedVm hash E.descriptor env true true) :
+    (hgatesat : satisfiedVm hash E.descriptor env true false) :
     E.fullClause pre post sr := by
-  obtain ⟨hgates, _hsites⟩ := hsat
+  obtain ⟨hgates, _hsites⟩ := hgatesat
   exact E.decodeFull env pre post sr hrow hdec hgates
 
 /-- **`runnable_full_commit_binds` — the whole-state anti-ghost over the WIDE commitment.** Two rows
@@ -361,9 +364,9 @@ the runnable per-cell soundness depends ONLY on the gates (the sites bind the CO
 not the per-cell spec). -/
 theorem transferGates_give_cellSpec (env : VmRowEnv) (pre post : CellState) (p : TransferParams)
     (hrow : IsTransferRow env) (henc : RowEncodes env pre p post)
-    (hgates : ∀ c ∈ transferVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ transferVmDescriptor.constraints, c.holdsVm env true false) :
     CellTransferSpec pre p post := by
-  -- the per-row gates are a sub-list of the descriptor's constraints; restrict to them (flag-free).
+  -- the per-row gates are a sub-list of the descriptor's constraints, drawn at the ACTIVE row.
   have hrowgates : ∀ c ∈ transferRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ transferVmDescriptor.constraints := by

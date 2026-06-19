@@ -97,7 +97,7 @@ theorem intent_to_zeroSpec (env : VmRowEnv) (post : CellState)
 
 theorem makeSovGates_give_zeroSpec (env : VmRowEnv) (post : CellState)
     (henc : RowEncodesMakeSov env post)
-    (hgates : ∀ c ∈ makeSovereignVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ makeSovereignVmDescriptor.constraints, c.holdsVm env true false) :
     ZeroBlockSpec post := by
   have hrowgates : ∀ c ∈ makeSovereignRowGates, c.holdsVm env false false := by
     intro c hc
@@ -142,7 +142,7 @@ theorem makeSovereign_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : 
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsMakeSovereignRow env)
     (henc : RowEncodesMakeSov env post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash makeSovereignVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash makeSovereignVmDescriptorWide env true false) :
     ZeroBlockSpec post ∧ postRoots = preRoots :=
   runnable_full_sound (makeSovRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

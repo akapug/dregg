@@ -37,7 +37,7 @@ theorem burn_full_state_on_runnable (amt : ℤ) (preRoots : SysRoots) (hash : Li
     (hrow : IsBurnRow env)
     (henc : RowEncodes env pre amt post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash burnVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash burnVmDescriptorWide env true false) :
     CellBurnSpec pre amt post ∧ postRoots = preRoots :=
   burn_runnable_full_sound amt preRoots hash env pre post postRoots hrow henc hroots hsat
 

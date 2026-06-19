@@ -85,7 +85,7 @@ gates (a constraint-list segment), on an audit-write row decoded by `ArchiveRowE
 `ArchiveCellSpec` (`field[1]` SET to `1`, the rest of the block FROZEN). No hash-site hypothesis. -/
 theorem archiveGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (henc : ArchiveRowEncodes env pre post)
-    (hgates : ∀ c ∈ receiptArchiveVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ receiptArchiveVmDescriptor.constraints, c.holdsVm env true false) :
     ArchiveCellSpec pre post := by
   have hrowgates : ∀ c ∈ archiveRowGates, c.holdsVm env false false := by
     intro c hc
@@ -155,7 +155,7 @@ theorem receiptArchive_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsArchiveRow env)
     (henc : ArchiveRowEncodes env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash archiveVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash archiveVmDescriptorWide env true false) :
     ArchiveCellSpec pre post ∧ sr = preRoots :=
   runnable_full_sound (archiveRunnableSpec preRoots) hash env pre post sr
     hrow ⟨henc, hroots⟩ hsat
