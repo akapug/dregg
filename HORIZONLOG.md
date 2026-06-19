@@ -90,8 +90,25 @@ refused to launder a partial):**
   `v3RegistryWide_sound`/`_binds` lifting member-by-member, axiom-clean, additive (live `v3Registry` untouched).
   Full proven stack: `chip_lookup_sound_N` · chip 8-out + 8-in · `wire_commit_8`/`wireCommitR8_binds` ·
   `wideAppend` gated-host tower · `v3RegistryWide`. The live flip needs NO more Lean proof.
-- ⬜ **PHASE B-ROTATION LIVE CUTOVER — the pure Rust/executor flip (THE VK flag-day = the actual ~124-bit trust;
-  irreducibly-atomic coordinated push, ember-gated, resume HERE)**. Now a ONE-LINE Lean repoint (`v3Registry →
+- ✅ **STAGED SLICE 1 — the FIRST real wide 8-felt prove+verify roundtrip** (commit `8578580b5`, GREEN): a
+  genuine `prove/verify_vm_descriptor2` at width 816/PI 54 PROVES+VERIFIES + the LIVE collision tooth bites (two
+  states differing in `fields[15]` → 8-felt commits differ, A rejected vs B, NO executor). `generate_rotated_
+  transfer_wide`/`fill_wide_block` (the 13×8 BEFORE/AFTER carriers, bases 608/712, chip-faithful via
+  `chip_absorb_all_lanes`); wide descriptor from `EmitWideTransferProbe.lean`. ADDITIVE — live 1-felt path
+  UNTOUCHED (flip 13/13, drift byte-identical). Fixed the make-or-break: the chain's arity-9 final → arity-11
+  (`carrier8‖[iroot,0,0]`) since the chip AIR supports only arity ≤7 or 11. ⚑ STANDING SEAM: the Lean-emit arity
+  convention (`ins.length`) vs the chip's narrow/wide-only support — a chip-AIR generalization (seed lanes 7..10
+  for any arity ≥8) would let the emit use the natural arity-9 (VK-affecting, ember-gated). THE STAGED PATH IS
+  PROVEN GREEN-ABLE.
+- ⬜ **PHASE B-ROTATION — finish the staged flip (resume HERE)**: (a) FAN-OUT the wide producers to the other
+  cohort families (`generate_rotated_<family>_wide` — burn/mint reuse the transfer shape; noteSpend/noteCreate/
+  createCell/factory/spawn wrap their grow-gate generators + the same 13×8 carriers + 16 PIs; `fill_wide_block`
+  parametric, `bb=187`/`ab=238` uniform) + the 9 cap-open tail (distinct `bb` past the 210-col appendix), each
+  with a wide roundtrip — ADDITIVE, green-able like slice 1; (b) the EXECUTOR ANCHORING (the wide cell≡circuit
+  commit differential); (c) THEN the flag-day repoint `v3RegistryCapOpen → v3RegistryCapOpenWide` + the executor
+  1-felt-retire + TSV/VK cutover (the final atomic step, now small — all producers green-additive). Do NOT repoint
+  the apex `Rfix` (authority leg, detonates 11 rfl proofs).
+- ⬜ ~~**PHASE B-ROTATION LIVE CUTOVER — the pure Rust/executor flip**~~ (now the STAGED path above; original atomic framing): Now a ONE-LINE Lean repoint (`v3Registry →
   v3RegistryWide`) + the atomic Rust/executor: producer 8-felt carrier fill (+208) across 6 crates · executor
   retire `dpis[34]/[35]` → bind 16 wide PIs (`felt8_to_bytes32`) · the hardcoded geometry consts (`ROT_WIDTH`/
   `BEFORE_BASE`/`AFTER_BASE`/`ROT_PI_COUNT`) move together · differential-over-8 + LIVE tooth · re-emit + re-pin.
