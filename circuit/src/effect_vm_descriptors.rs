@@ -841,7 +841,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "f96d3985ab6a4cb2f1ccfaf4e56bd494c083d3d8d4ed881c707ad34ab4991c37";
+    "19bff21f5db07dfb0e599d829eefc38c35ec56ff8499ef7721446dcf9eb459aa";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,

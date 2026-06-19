@@ -1029,11 +1029,13 @@ theorem v3RegistryCapOpenWide_sound (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hsat : Satisfied2 hash v3RegistryCapOpenWide[i].2 minit mfin maddrs t) :
-    ∃ (h : EffectVmDescriptor2),
+    ∃ (h : EffectVmDescriptor2) (bb : Nat),
       h ∈ v3RegistryCapOpen.map (·.2)
-      ∧ Satisfied2 hash h minit mfin maddrs t := by
+      ∧ Satisfied2 hash
+          (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.dropLegacyCommitPins1 h bb (bb + 51))
+          minit mfin maddrs t := by
   obtain ⟨h, bb, hmem, heq⟩ := v3RegistryCapOpenWide_is_wideAppend i hi
-  refine ⟨h, hmem, ?_⟩
+  refine ⟨h, bb, hmem, ?_⟩
   rw [heq] at hsat
   exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 51)
     minit mfin maddrs t hsat
