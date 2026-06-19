@@ -61,9 +61,14 @@ genuinely incomplete; AUDIT whether the live setFieldDyn gate forces the wrong v
 
 - [ ] **#8 — non-vacuity** (small, NEXT): construct one concrete `: Satisfied2 := by` inhabitant (an honest
   transfer trace) so completeness is provably non-empty.
-- [ ] **setFieldDyn gate audit** (small, do alongside #8): `setFieldDynForcedV3` is LIVE and shares the
-  refusal-class `fields_root` gate with the `prmCol 0`-vs-fields_root mismatch + no roundtrip test — confirm the
-  live gate is inert (not forcing a wrong value) or fix it.
+- [x] **setFieldDyn gate audit** — DONE: **INERT, not a live bug.** SetField `field_idx` 0..7 routes to the
+  frozen-face per-slot `setFieldVmDescriptor2-{0..7}R24` (no fields-root gate); `field_idx≥8` routes to
+  `setFieldDynForcedV3` but PANICS in trace-gen pre-prove (`trace.rs:417` asserts `<8`) → the descriptor is in
+  the registry/VK but UNREACHABLE; no honest proof exercises its gate, no forgery selects it. Dead weight + a
+  latent landmine (its gate welds the committed fields_root to `prmCol 0`=`FIELD_INDEX`, the same mismatch as
+  refusal — its doc-comment OVERCLAIMS "forces the declared post-fields_root"; moot while unreachable). If
+  dynamic (≥8) setField is ever enabled it needs the openable-root fix. Optional cleanup: delete the dead
+  descriptor + `_=>` arm (VK-affecting, low-value, deferred).
 - [ ] **refusal + setFieldDyn ledgerless authority** (medium, was mis-scoped as "R1 restore"): the OPENABLE-
   fields_root / map-op construction (#103 cap-reshape family) — derive the post-root in-circuit from the
   in-circuit pre-root + the public audit value. NEW soundness, not a re-point. Full-node-safe today.
