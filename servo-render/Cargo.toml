@@ -147,6 +147,18 @@ glow = { version = "0.16", optional = true }
 # lacks the `RecursionInput::NativeBatchStark` variant. Point at the SAME local
 # fork checkout. `../` = servo-render → breadstuffs → dev. Keep in sync with the
 # root/firmament blocks; all revert to the git rev once the fork is pushed.
+
+# THE ark-serialize FORK PATCH — same reason as the plonky3 block: the repo-root
+# `[patch]` does NOT reach this standalone workspace, so the transitive
+# `dregg-hints` (via `dregg-turn`'s `threshold-sig`, pulled through
+# `dregg-firmament`) cannot resolve `ark-serialize` with the `serde_with` feature
+# (that feature exists ONLY on the `emberian/algebra` fork, not crates.io 0.5.0).
+# Replicate the root/starbridge-v2 block so re-resolution succeeds. Reverts with
+# the others once the fork lands upstream.
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
 [patch."https://github.com/emberian/plonky3-recursion"]
 p3-recursion = { path = "../../plonky3-recursion/recursion" }
 p3-circuit = { path = "../../plonky3-recursion/circuit" }

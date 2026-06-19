@@ -56,7 +56,9 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use servo_paint_api::rendering_context::RenderingContext as ServoRenderingContext;
+// NB: the crate is `servo-paint-api` but its `[lib] name` is `paint_api` (verified
+// via `cargo metadata`), so it is imported as `paint_api`, not `servo_paint_api`.
+use paint_api::rendering_context::RenderingContext as ServoRenderingContext;
 use webrender_api::units::DeviceIntRect;
 use dpi::PhysicalSize;
 use image::RgbaImage;
@@ -117,7 +119,7 @@ impl ServoRenderingContext for ServoSwglContext {
         self.inner.present();
     }
 
-    fn make_current(&self) -> Result<(), servo_paint_api::rendering_context::Error> {
+    fn make_current(&self) -> Result<(), paint_api::rendering_context::Error> {
         use crate::swgl_context::RenderingContext as _;
         self.inner.make_current();
         Ok(())
@@ -154,7 +156,7 @@ impl ServoRenderingContext for ServoSwglContext {
 use std::cell::Cell;
 
 use servo::{
-    EventLoopWaker, LoadStatus, Servo, ServoBuilder, WebResourceLoad, WebResourceResponse, WebView,
+    EventLoopWaker, LoadStatus, ServoBuilder, WebResourceLoad, WebResourceResponse, WebView,
     WebViewBuilder, WebViewDelegate,
 };
 use url::Url;
@@ -216,7 +218,9 @@ impl WebViewDelegate for CapGate {
     /// affirmatively decide. Forward to the gate's navigate allowlist:
     /// [`NavigationDecision::Allow`] → `allow()`, else `deny()`.
     fn request_navigation(&self, _webview: WebView, navigation_request: servo::NavigationRequest) {
-        let origin = navigation_request.url().origin().ascii_serialization();
+        // `NavigationRequest::url` is a public FIELD in the published `servo 0.1.1`
+        // (not the `url()` accessor the pre-1.0 docs implied).
+        let origin = navigation_request.url.origin().ascii_serialization();
         match self.gate.allow_navigation(&self.surface, &origin) {
             NavigationDecision::Allow => navigation_request.allow(),
             NavigationDecision::Deny { .. } => navigation_request.deny(),
