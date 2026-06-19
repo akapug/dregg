@@ -432,7 +432,48 @@ genuinely-new module). The recommendation:
 4. **The patch-history fold = document content** — content as `replay_to(tip)` over the
    patch grammar, with the patch-history `Provenance` presentation.
 
-### 4.3 An honest now / soon / research split
+### 4.3 The native-substance overhaul (gpui-native · dregg-native · servo-native)
+
+A standing directive frames *how* §4.1–4.2 land: **the old/prototypy web faces get
+overhauled to be gpui-native, dregg-native, and servo-native — not bolted onto.** The
+existing hypermedia surfaces are deliberately prototypy in named places, and the document
+language should drive them *through* their named seams rather than inheriting the
+stand-ins:
+
+- **Servo-native (the content, not just the surface).** Today the web-of-cells browser
+  renders cap-gated affordance *surfaces* natively, but real `dregg://` *content* is the
+  `MockSurface` / `servo_layer_note` stand-in (`web_cells.rs`, `delegate.rs`; the
+  `feature = "servo"` `render_dregg_page` path is the first real tile). A document is the
+  canonical thing that *needs* real content rendering — so the document language is the
+  forcing function to **close the libservo `WebViewDelegate` seam**: a rendered document is a
+  servo render-pass over the document cell, cap-gated by the same `SurfaceCapability` the
+  membrane projects (the render gate is *in front of* the rasterizer; an out-of-cap region is
+  refused in-band). The conflict-view and the transcluded spans render as real content, not
+  text models.
+- **gpui-native (the cockpit editor).** The native `document` module follows the established
+  gpui-free-MODEL + thin-gpui-render discipline (`web_cells.rs`, `INSPECTOR-FRAMEWORK.md`
+  §1.3): the patch graph, conflict regions, and presentations are pure data (`cargo test`-able
+  without a GPU); the cockpit's gpui layer renders the presentation kinds and arms the
+  edit/resolve gadgets generically (the `Halo`/direct-manipulation layer over a document
+  `Presentable`). The overhaul is to *promote* the prototypy `DreggverseDocumentView` text
+  model into a real moldable gpui editor, not to keep it a panel readout.
+- **dregg-native (every edit a verified turn).** The seam that the prototypes only *named*
+  is closed by routing every edit/resolution through the real embedded executor — a patch IS
+  a turn (`fire_through_world` / `deos-leptos`'s closed-seam `fire_affordance` over a real
+  `TurnExecutor`). No parallel document store, no mock dispatch: the document's content is the
+  ledger's patch-fold, its commitment is the cell's commitment, its provenance is receipts.
+- **The discipline (per the memories): overhaul = drive the seam, never re-haze it.** A
+  labeled seam is a *severe problem to close*, not a wall to live behind
+  (`feedback-seams-are-work-not-walls`). The document language is precisely the workload that
+  makes the servo seam and the prototypy text-models worth closing — so the overhaul is
+  *staged-additive-then-cutover* (build the real native face beside the prototype, prove it,
+  then cut the prototype over), never a stash-and-rewrite.
+
+This is a cross-cutting *now/soon* thread, not a separate milestone: each piece of §4.1–4.2
+lands in its native substance (servo content / gpui editor / executor-backed turn) rather
+than as a prototype to be redone later.
+
+### 4.4 An honest now / soon / research split
 
 - **NOW (weld + a small new core; the substrate carries it).**
   - The `dregg-doc` crate skeleton: `DocGraph`, the `Patch` grammar, `apply`/`merge`/`resolve`,
@@ -442,8 +483,14 @@ genuinely-new module). The recommendation:
     the native cockpit `document` module and as a `deos-leptos` reactive view.
   - Lift the existing `{view,comment,edit,admin}` affordances to per-region edit caps over a
     document cell-subgraph (the membrane and the gate are already there).
+  - Build each face in its *native* substance from the start (§4.3): the gpui-free document
+    MODEL + thin gpui render in the cockpit; the `RwSignal`/`Memo` reactive view in
+    `deos-leptos`; every edit an executor-backed turn — not prototype-then-redo.
 
-- **SOON (the conflict semantics, end to end).**
+- **SOON (the conflict semantics + the native cutover, end to end).**
+  - **Close the servo content seam** for documents: a rendered document / conflict-view as a
+    real cap-gated servo render-pass over the document cell, cutting over the `MockSurface` /
+    text-model stand-ins (`web_cells.rs` `servo_layer_note`, `delegate.rs` `WebViewDelegate`).
   - First-class conflict states through the full stitch: an author's branch publish that
     contests a region yields a stored `Conflict` state, not a rejected merge
     (`BRANCH-AND-STITCH-PROTOCOL.md` §3 `Stitch`, the linear-logic-forced explicit drop).
