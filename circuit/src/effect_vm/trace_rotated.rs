@@ -79,8 +79,23 @@ pub const B_SPAN: usize = 51;
 pub const C_SPAN: usize = 39;
 /// The appendix: two blocks + the caveat region.
 pub const APPENDIX: usize = 2 * B_SPAN + C_SPAN; // 141
-/// The rotated trace width.
-pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 327
+/// The UN-GRADUATED rotated trace width (the rotated main columns BEFORE Phase B-GATE appends the
+/// per-chip-lookup 7-lane blocks). `187 + 141 = 328`.
+pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 328
+
+/// The number of poseidon2-chip lookup SITES the graduated rotated descriptor
+/// (`*VmDescriptor2R24`, e.g. `attenuateVmDescriptor2R24`) carries — the per-site lane blocks
+/// Phase B-GATE appends at the END of the rotated layout (each chip tuple is now 17-wide:
+/// `1 arity + 8 inputs + out0 + 7 output-lanes`, the 7 lanes witnessed in appended columns). The
+/// committed graduated width is `ROT_WIDTH + 7 * N_ROT_SITES = 328 + 280 = 608`, matching the TSV
+/// `attenuateVmDescriptor2R24.trace_width`. Graduation APPENDS (positions < ROT_WIDTH unchanged).
+pub const N_ROT_SITES: usize = 40;
+
+/// The GRADUATED rotated trace width: the un-graduated rotated columns PLUS the 7×`N_ROT_SITES`
+/// appended chip-lane columns (`328 + 280 = 608` = the committed `attenuateVmDescriptor2R24`
+/// trace_width). The honest rotated lane columns (`ROT_WIDTH .. GRAD_ROT_WIDTH`) are filled
+/// automatically by the prove wrapper's `descriptor_ir2::fill_chip_lanes`.
+pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 608
 
 /// In-block offset of the AUTHORITY-DIGEST limb (r23, limb 24) — the single felt
 /// folding ALL authority-bearing cell state no other rotated limb carries
@@ -1095,32 +1110,46 @@ pub fn empty_caveat_manifest() -> RotatedCaveatManifest {
 
 /// The deployed cap-tree depth (`CapOpenEmit.DEPTH = 16`).
 pub const CAP_OPEN_DEPTH: usize = 16;
-/// The base column of the cap-open appendix (`CAP_OPEN_BASE = ROT_WIDTH = 327`).
-pub const CAP_OPEN_BASE: usize = ROT_WIDTH; // 327
+/// The base column of the cap-open appendix. Phase B-GATE GRADUATED the rotated base (appending the
+/// 7-lane chip blocks at the END), so the cap-open appendix now starts at the GRADUATED rotated
+/// width `GRAD_ROT_WIDTH = 608` (the committed `attenuateVmDescriptor2R24.trace_width`), NOT at the
+/// un-graduated `ROT_WIDTH = 328`. The cap-open builds ON the graduated rotated layout.
+pub const CAP_OPEN_BASE: usize = GRAD_ROT_WIDTH; // 608
 /// The width of the FULL `EffectMask` bit decomposition (residual (a) — GENUINE MEMBERSHIP). The
 /// decoded facet is the full `u32` mask `maskOfLimbs(mask_lo, mask_hi) = mask_lo + mask_hi·65536`
 /// (`EFFECT_ALL = 0xFFFF_FFFF`), so the decomposition spans all 32 bits: any deployed effect-kind bit
 /// `1 << n` (`n < 32`, up to `EFFECT_ATTENUATE_CAPABILITY = 1 << 23`) is selectable AND a broad cap
 /// (`mask_hi = 0xFFFF`) decomposes fully. The Lean twin is `DeployedCapOpen.MASK16_BITS`.
 pub const CAP_OPEN_MASK_BITS: usize = 32;
-/// The cap-open appendix span: 7 leaf + 1 leafDigest + 16×(sib,dir,node) + capRoot + src + effBit
-/// + 32 mask-bit columns = 91. The trailing 32 mask-bit columns carry the boolean decomposition of
-/// the FULL effect mask the genuine SUBMASK facet gate (`maskBitBoolGate`/`maskReconGate`/
-/// `selectedBitGate`) reads — NOT the over-strict equality `mask_lo == effBit` (and NO `mask_hi == 0`
-/// pin, so a broad `EFFECT_ALL` cap is admitted).
-pub const CAP_OPEN_SPAN: usize = 7 + 1 + 3 * CAP_OPEN_DEPTH + 3 + CAP_OPEN_MASK_BITS; // 91
-/// The cap-open trace width (`ROT_WIDTH + 91`).
-pub const CAP_OPEN_WIDTH: usize = ROT_WIDTH + CAP_OPEN_SPAN;
+/// The cap-MEMBERSHIP columns `fill_cap_open` writes (the genuine non-lane witness): 7 leaf + 1
+/// leafDigest + 16×(sib,dir,node) + capRoot + src + effBit + 32 mask-bit columns = 91. The trailing
+/// 32 mask-bit columns carry the boolean decomposition of the FULL effect mask the genuine SUBMASK
+/// facet gate (`maskBitBoolGate`/`maskReconGate`/`selectedBitGate`) reads — NOT the over-strict
+/// equality `mask_lo == effBit` (and NO `mask_hi == 0` pin, so a broad `EFFECT_ALL` cap is admitted).
+pub const CAP_OPEN_MEMBERSHIP_COLS: usize = 7 + 1 + 3 * CAP_OPEN_DEPTH + 3 + CAP_OPEN_MASK_BITS; // 91
+/// The number of poseidon2-chip lookup SITES the cap-membership appendix adds atop the graduated
+/// rotated layout: 1 leaf absorb (arity 7) + 16 node absorbs (arity 3) = 17. Phase B-GATE appends a
+/// 7-lane block per site, so the cap-open appendix's chip-lane columns number `7 × 17 = 119`.
+pub const CAP_OPEN_LANE_SITES: usize = 1 + CAP_OPEN_DEPTH; // 17
+/// The FULL cap-open appendix span: the 91 cap-membership columns PLUS the 7×17 = 119 appended
+/// chip-lane columns Phase B-GATE graduates = 210. The 91 membership columns are written by
+/// `fill_cap_open` at `CAP_OPEN_BASE + 0..91`; the 119 cap-lane columns (`CAP_OPEN_BASE + 91..210`)
+/// are filled automatically by the prove wrapper's `descriptor_ir2::fill_chip_lanes`.
+pub const CAP_OPEN_SPAN: usize = CAP_OPEN_MEMBERSHIP_COLS + 7 * CAP_OPEN_LANE_SITES; // 210
+/// The cap-open trace width (`GRAD_ROT_WIDTH + 210 = 818` = the committed
+/// `attenuateCapOpenEffVmDescriptor2R24.trace_width`).
+pub const CAP_OPEN_WIDTH: usize = CAP_OPEN_BASE + CAP_OPEN_SPAN;
 
 /// The turn-identity `actor` column of the TB (turn-bound) cap-open weld
-/// (`CapOpenTurnPins.capOpenActorCol w = w + CAP_OPEN_SPAN`, i.e. the first column PAST the
-/// cap-open appendix). `= CAP_OPEN_BASE + CAP_OPEN_SPAN = 327 + 91 = 418`.
+/// (`CapOpenTurnPins.capOpenActorCol w = w + CAP_OPEN_SPAN`, i.e. the first column PAST the full
+/// cap-open appendix). `= CAP_OPEN_BASE + CAP_OPEN_SPAN = 608 + 210 = 818` (the committed
+/// `transferCapOpenTBVmDescriptor2R24` turn-identity column, PI 39).
 pub const CAP_OPEN_TB_ACTOR_COL: usize = CAP_OPEN_BASE + CAP_OPEN_SPAN;
 /// The turn-identity `dst` column of the TB cap-open weld (`CapOpenTurnPins.capOpenDstCol w = w +
-/// CAP_OPEN_SPAN + 1`). `= CAP_OPEN_BASE + CAP_OPEN_SPAN + 1 = 412`.
+/// CAP_OPEN_SPAN + 1`). `= CAP_OPEN_BASE + CAP_OPEN_SPAN + 1 = 819` (PI 40).
 pub const CAP_OPEN_TB_DST_COL: usize = CAP_OPEN_BASE + CAP_OPEN_SPAN + 1;
 /// The turn-bound cap-open trace width: the cap-open width PLUS the two turn-identity columns
-/// (`effCapOpenV3TB`'s `traceWidth := d.traceWidth + 2`). `= CAP_OPEN_WIDTH + 2 = 409`.
+/// (`effCapOpenV3TB`'s `traceWidth := d.traceWidth + 2`). `= CAP_OPEN_WIDTH + 2 = 820`.
 pub const CAP_OPEN_TB_WIDTH: usize = CAP_OPEN_WIDTH + 2;
 /// The cap-open base descriptor's PI count (`effCapOpenV3.piCount = 38` — the rotated 38-PI vector;
 /// the cap-open appendix adds no PIs). The TB weld appends THREE turn-identity PIs at `38/39/40`.
@@ -1391,7 +1420,7 @@ impl CapOpenWitness {
     }
 }
 
-/// Fill the 59 cap-open columns at `base` for ONE row from `w` (Lean `CapOpenCols` layout):
+/// Fill the 91 cap-MEMBERSHIP columns at `base` for ONE row from `w` (Lean `CapOpenCols` layout):
 ///   * leaf field `i` at `base + i` (i = 0..6);
 ///   * `leafDigest = hash_many(&leaf)` at `base + 7`;
 ///   * level `lvl`: `sib` at `base + 8 + 3·lvl`, `dir` at `base + 9 + 3·lvl`,
@@ -1594,12 +1623,15 @@ pub fn patch_attenuate_base_for_cap_open(
 }
 
 /// Widen an already-built rotated base trace (`ROT_WIDTH`-wide) to the `CAP_OPEN_WIDTH`-wide
-/// cap-open trace, filling the 59 cap-open columns on EVERY row uniformly with `w` (so the every-row base
-/// gates — dir-bool, rootPin, targetBind, transferFacet/facetHi/authTag — hold on every row).
-/// The base trace's own 327 columns + 38 PIs are unchanged; the cap-open appendix is purely
-/// additive. The base trace MUST be a 327-wide rotated trace the base `attenuateV3`
-/// constraints already accept (e.g. from [`generate_rotated_effect_vm_trace`] on an
-/// AttenuateCapability turn).
+/// cap-open trace, filling the 91 cap-MEMBERSHIP columns on EVERY row uniformly with `w` (so the
+/// every-row base gates — dir-bool, rootPin, targetBind, transferFacet/facetHi/authTag — hold on
+/// every row). The base trace's own `ROT_WIDTH` columns + 38 PIs are unchanged; the cap-open
+/// appendix is purely additive and lands at `CAP_OPEN_BASE = GRAD_ROT_WIDTH` (the cap-open builds on
+/// the GRADUATED rotated layout). The graduated rotated chip-lane columns (`ROT_WIDTH..GRAD_ROT_WIDTH`)
+/// and the cap chip-lane columns (`CAP_OPEN_BASE + 91 ..`) are filled automatically by the prove
+/// wrapper's `descriptor_ir2::fill_chip_lanes` — NOT here. The base trace MUST be a `ROT_WIDTH`-wide
+/// rotated trace the base `attenuateV3` constraints already accept (e.g. from
+/// [`generate_rotated_effect_vm_trace`] on an AttenuateCapability turn).
 pub fn widen_to_cap_open(trace: &mut [Vec<BabyBear>], w: &CapOpenWitness) -> Result<(), String> {
     if trace.is_empty() {
         return Err("cap-open widen: empty base trace".into());
@@ -1621,8 +1653,8 @@ pub fn widen_to_cap_open(trace: &mut [Vec<BabyBear>], w: &CapOpenWitness) -> Res
 }
 
 /// Fill the two TURN-IDENTITY columns of the TB (turn-bound) cap-open weld on a single row: the
-/// `actor` felt at `CAP_OPEN_TB_ACTOR_COL` (415) and the `dst` felt at `CAP_OPEN_TB_DST_COL` (416).
-/// (The `src` column — `CAP_OPEN_BASE + 57` = 381 — is the EXISTING cap-open `src` column already
+/// `actor` felt at `CAP_OPEN_TB_ACTOR_COL` (818) and the `dst` felt at `CAP_OPEN_TB_DST_COL` (819).
+/// (The `src` column — `CAP_OPEN_BASE + 57` = 665 — is the EXISTING cap-open `src` column already
 /// filled by [`fill_cap_open`] from `w.src`; the TB weld pins THAT column, not a new one.) The three
 /// `CapOpenTurnPins.turnIdentityPins` are LAST-row `.piBinding` gates welding these columns to the
 /// published turn PIs (`src → 38`, `actor → 39`, `dst → 40`).

@@ -32,14 +32,32 @@ refused to launder a partial):**
   `chipRowN_distinguishes_wide`). Additive Lean, axiom-clean. Commit `05d297503`. STEP-0 finding: the deployed
   `poseidon2_chip` AIR already constrains the full 16-lane permutation and exposes only `state[0]` — so exposing
   8 is "return more columns of an already-full AIR."
-- ⬜ **PHASE B-GATE — widen the SHARED `poseidon2_chip` table 1→8 outputs** (THE prerequisite; a system-wide
-  chip-AIR flag-day, NOT rotation-local): the chip is shared on `BUS_P2` with a FROZEN 10-wide tuple
-  (`CHIP_TUPLE_LEN = CHIP_RATE+2 = 10`, `CHIP_OUT=9`, descriptor_ir2.rs) embedded in EVERY hashing descriptor's
-  JSON+fingerprint (cap-root, map-ops absorbs, fact bus, all non-rotation descriptors). Widen the chip AIR +
-  witness-gen (`row[CHIP_OUT]`→`[CHIP_OUT..+8]`) + codec + bus tuple 10→17 + the frozen chip JSON + its FP,
-  discharged by `chip_lookup_sound_N`, keeping single-output sites as the W=1 corollary. Then define a
-  `compress8` that BYTE-MIRRORS the widened chip's lane seeding (a single permutation exposing `state[0..8]`,
-  NOT `hash_many_8`'s squeeze-permute-squeeze).
+- 🟡 **PHASE B-GATE — widen the SHARED `poseidon2_chip` table 1→8 outputs** (THE prerequisite; a system-wide
+  chip-AIR flag-day, NOT rotation-local). **RUST PROVIDER + MAP CONSUMERS + ANTI-LAUNDERING TEETH LANDED, GREEN,
+  uncommitted (2026-06-19); the Lean-emit + producer-fill half is the atomic remainder (NON-GREEN until it lands
+  — the migration cannot be partial, the validator now demands 17).** DONE: `poseidon2_permute_expr_lanes`
+  (`plonky3_prover.rs`, returns the 8 final-state lanes; the legacy `poseidon2_permute_expr` delegates → lane0,
+  every v1 inline site UNCHANGED); the chip AIR (`Ir2Air::Chip`) exposes `state[0..8]` and adds the 7 `assert_zero(
+  local[CHIP_OUT+i] - lanes[i])` constraints (i=1..7) — REAL bindings (forged-lane UNSAT proven); `CHIP_OUT_LANES=8`,
+  `CHIP_TUPLE_LEN 10→17` (`[arity,in0..7,out0..7]`), `CHIP_MULT/IS_FACT/BIG/S4..S6/AUX0` auto-shift; witness-gen
+  `perm_lanes` fills `row[CHIP_OUT..+8]` from the genuine permutation (chip/fact/pad rows); the MapOps/MapAbsent
+  inline consumers widened (`chip_absorb_tuple`/`leaf_tuple` carry out0..out7; `MAP_OLD/NEW_LEAF1`, `MA_LO/HI_LEAF1`
+  appended at the tail, `MAP_WIDTH 71→85`, `MA_WIDTH 169→183`; all 4 `chip_hist.entry` keys 17-wide). TEETH GREEN:
+  `ir2_chip_output_lanes_are_distinct` (8 pairwise-distinct + 1-bit-flip avalanche), `ir2_forged_output_lane_refuses`
+  (a forged out[3] is UNSAT — the lane binding bites), `ir2_honest_witness_proves_and_verifies` (a 17-wide
+  single-output site PROVES+VERIFIES in the full multi-table batch — the `degree_bits.len()==2` STOP-condition is
+  NOT triggered, the assembly carries 17 cleanly). The commitment is STILL 1-felt (lane0); B-ROTATION delivers the
+  trust. **REMAINING (the atomic Lean-emit half):** (a) `poseidon2ChipTableDef` arity 10→17 + `siteLookup` →
+  `chipLookupTupleN [s.digestCol, lane1..lane7]` (the 7 lane cols appended per descriptor's traceWidth; lane0 stays
+  the chained `digestCol`), re-prove `go_of_siteLookups`/`siteLookups_sound`/`graduateV1_sound` via the W=1 corollary
+  `chip_lookup_sound_of_N` + the rotation `rotV3SitesAt_pin`/`caveatV3SitesAt_pin`/`wireCommitR_binds` (42 Lean files
+  reference `VmHashSite`/`siteLookup`/`digestCol`); (b) every producer fills the `7×n_sites` new lane cols
+  (`trace_rotated.rs`, the bilateral/cross-side/bundle-fold trace builders, `cell`/`turn`/`sdk`/`node` rotation
+  producers — each runs the permutation + emits 8 lanes/site); (c) re-emit the 32 chip-bus descriptors + all per-FP +
+  `V3_STAGED_REGISTRY_FP` + the 3 `rotationProbe*` JSONs/FPs + the frozen `poseidon2_chip` JSON+FP via
+  `scripts/emit-descriptors.sh`; (d) the await-Lean-emit Rust tests go green (`ir2_degree_budget`, the rotation
+  probes, bilateral/cross-side/tree-fold, `v3_staged_registry_parses…`). The `compress8` byte-mirror is a B-ROTATION
+  concern, not B-GATE.
 - ⬜ **PHASE B-ROTATION — the 8-wide sponge commitment + geometry**: `v9_wire_commit`/`wire_commit`/`fill_block`
   rewritten so the chaining carrier `d8` is 8 felts THROUGHOUT (no 31-bit intermediate — THE anti-laundering
   crux; a 1-felt-chain-with-wide-final-squeeze is the laundered version). `B_STATE_COMMIT` 1→8 + the 12 chain

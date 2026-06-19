@@ -120,6 +120,15 @@ same source; the Lean emission pins them BY NAME exactly as `Poseidon2RealParams
 /-- The chip lookup rate in BASE field elements: `babyBearD4W16.rate = rate_ext · d = 8`. -/
 def CHIP_RATE : Nat := babyBearD4W16.rate
 
+/-- The number of permutation-output lanes the chip exposes on the bus tuple. Phase B-GATE
+widened the output block `1 → 8`: the chip row carries `state[0..8]` of the SAME already
+fully-constrained final permutation. Lane 0 is the squeezed digest every single-output site
+binds (`hash`); lanes 1..7 are the genuine distinct lanes the 8-felt commitment sponge will use
+(Phase B-ROTATION). The deployed commitment STAYS 1-felt (lane0) after this phase — the extra
+lanes are CARRIED (made available + bound to the genuine permutation by the Rust chip AIR) but
+NOT yet folded into any commitment. -/
+def CHIP_OUT_LANES : Nat := 8
+
 /-- The canonical limb width for the shared range table: the two-limb signed-well discipline
 (the deployed balance limbs are 30-bit — `EffectVmEmitTransfer`'s `VmRange ⟨…, 30⟩` teeth). -/
 def BAL_LIMB_BITS : Nat := 30
@@ -128,8 +137,10 @@ def BAL_LIMB_BITS : Nat := 30
 descriptor's own trace width). -/
 def mainTableDef (width : Nat) : TableDef := ⟨.main, "main", width, .mainRow⟩
 
-/-- The Poseidon2 chip table: `1 (arity tag) + CHIP_RATE (padded inputs) + 1 (output)` columns. -/
-def poseidon2ChipTableDef : TableDef := ⟨.poseidon2, "poseidon2_chip", CHIP_RATE + 2, .permutation⟩
+/-- The Poseidon2 chip table: `1 (arity tag) + CHIP_RATE (padded inputs) + CHIP_OUT_LANES (output
+lanes)` columns (Phase B-GATE widened the output block `1 → 8`). -/
+def poseidon2ChipTableDef : TableDef :=
+  ⟨.poseidon2, "poseidon2_chip", CHIP_RATE + 1 + CHIP_OUT_LANES, .permutation⟩
 
 /-- The range (limb) table: one column, rows `[0, 2^bits)`. -/
 def rangeTableDef (bits : Nat) : TableDef := ⟨.range, "range", 1, .rangeLimb bits⟩
@@ -934,31 +945,48 @@ theorem map_eval_padToE (n : Nat) (es : List EmittedExpr) (a : Assignment) :
     (padToE n es).map (·.eval a) = padTo n (es.map (·.eval a)) := by
   simp [padToE, padTo, List.map_append, List.map_replicate, EmittedExpr.eval]
 
-/-- The chip ROW of an absorb: `(arity, padded inputs, hash inputs)`. -/
-def chipRow (hash : List ℤ → ℤ) (ins : List ℤ) : List ℤ :=
-  (ins.length : ℤ) :: padTo CHIP_RATE ins ++ [hash ins]
+/-- The chip ROW of an absorb (Phase B-GATE, 17-wide): `(arity, padded inputs, hash inputs ::
+lanes)`. The output BLOCK is `hash ins :: lanes`, where `lanes` are the `CHIP_OUT_LANES - 1`
+exposed permutation lanes 1..7 (genuine distinct felts the chip AIR binds; their VALUES are not
+a function of `hash` alone, so they ride existentially in the table-soundness predicate). Lane 0
+is the squeezed digest `hash ins` — the single felt every single-output site binds, UNCHANGED. -/
+def chipRow (hash : List ℤ → ℤ) (ins : List ℤ) (lanes : List ℤ) : List ℤ :=
+  (ins.length : ℤ) :: padTo CHIP_RATE ins ++ (hash ins :: lanes)
 
-/-- The chip LOOKUP tuple of an absorb: `(arity, padded input exprs, digest column)`. -/
-def chipLookupTuple (ins : List EmittedExpr) (digestCol : Nat) : List EmittedExpr :=
-  (.const (ins.length : ℤ)) :: padToE CHIP_RATE ins ++ [.var digestCol]
+/-- The chip LOOKUP tuple of an absorb (Phase B-GATE, 17-wide): `(arity, padded input exprs,
+digest column :: lane columns)`. `digestCol` is out0 (the bound digest, UNCHANGED meaning);
+`laneCols` are the `CHIP_OUT_LANES - 1` columns carrying the exposed lanes 1..7 (witnessed = the
+genuine permutation lanes, so the lookup matches the 17-wide chip row, then NOT constrained by
+the single-output site denotation). -/
+def chipLookupTuple (ins : List EmittedExpr) (digestCol : Nat) (laneCols : List Nat) :
+    List EmittedExpr :=
+  (.const (ins.length : ℤ)) :: padToE CHIP_RATE ins ++ (.var digestCol :: laneCols.map .var)
 
-/-- A chip table is SOUND when every row is a genuine `(arity, padded inputs, output)` tuple of
-the permutation (the chip AIR's own faithfulness — the per-permutation constraint family). -/
+/-- A chip table is SOUND when every row is a genuine `(arity, padded inputs, hash inputs ::
+lanes)` tuple of the permutation (the chip AIR's own faithfulness — the per-permutation
+constraint family). The `lanes` ride existentially: their VALUES are the genuine permutation
+lanes 1..7 (bound by the Rust chip AIR's `out[i] == lane[i]` equalities), but they are not a
+function of `hash`, so the `hash`-parameterized soundness predicate quantifies over them. -/
 def ChipTableSound (hash : List ℤ → ℤ) (tbl : Table) : Prop :=
-  ∀ r ∈ tbl, ∃ ins : List ℤ, ins.length ≤ CHIP_RATE ∧ r = chipRow hash ins
+  ∀ r ∈ tbl, ∃ (ins lanes : List ℤ),
+    ins.length ≤ CHIP_RATE ∧ lanes.length = CHIP_OUT_LANES - 1 ∧ r = chipRow hash ins lanes
 
 /-- **THE LEVER (`chip_lookup_sound`).** Against a sound chip table, a chip lookup ENFORCES the
-hash equation: the digest column carries the genuine hash of the evaluated inputs. The arity tag
-+ equal-length padding make the row decomposition unique, so no padding confusion survives. -/
+hash equation: the digest column (out0, the HEAD of the output block) carries the genuine hash of
+the evaluated inputs. The arity tag + equal-length input padding make the input/output split
+unique, so no padding confusion survives; the lanes 1..7 ride along (matched existentially) and
+do NOT enter the single-output denotation — the commitment STAYS 1-felt (out0). -/
 theorem chip_lookup_sound (hash : List ℤ → ℤ) (tbl : Table) (hSound : ChipTableSound hash tbl)
-    (a : Assignment) (ins : List EmittedExpr) (digestCol : Nat)
+    (a : Assignment) (ins : List EmittedExpr) (digestCol : Nat) (laneCols : List Nat)
     (hlen : ins.length ≤ CHIP_RATE)
-    (hmem : (chipLookupTuple ins digestCol).map (·.eval a) ∈ tbl) :
+    (hmem : (chipLookupTuple ins digestCol laneCols).map (·.eval a) ∈ tbl) :
     a digestCol = hash (ins.map (·.eval a)) := by
-  obtain ⟨ws, hwlen, hrow⟩ := hSound _ hmem
-  have hev : (chipLookupTuple ins digestCol).map (·.eval a)
-      = (ins.length : ℤ) :: padTo CHIP_RATE (ins.map (·.eval a)) ++ [a digestCol] := by
-    simp [chipLookupTuple, List.map_cons, List.map_append, map_eval_padToE, EmittedExpr.eval]
+  obtain ⟨ws, lanes, hwlen, _hlanes, hrow⟩ := hSound _ hmem
+  have hev : (chipLookupTuple ins digestCol laneCols).map (·.eval a)
+      = (ins.length : ℤ) :: padTo CHIP_RATE (ins.map (·.eval a))
+          ++ (a digestCol :: laneCols.map a) := by
+    simp [chipLookupTuple, List.map_cons, List.map_append, map_eval_padToE, EmittedExpr.eval,
+      List.map_map, Function.comp_def]
   rw [hev] at hrow
   unfold chipRow at hrow
   injection hrow with hl htail
@@ -971,9 +999,9 @@ theorem chip_lookup_sound (hash : List ℤ → ℤ) (tbl : Table) (hSound : Chip
   have hpads := List.append_inj htail
     (by rw [padTo_length hlenm, padTo_length hwlen])
   have hins : ins.map (·.eval a) = ws := padTo_inj hlens hpads.1
-  have hd : a digestCol = hash ws := by
-    have := hpads.2
-    simpa using this
+  -- the output blocks are equal lists; their HEADS give the digest equation
+  have hblock : a digestCol :: laneCols.map a = hash ws :: lanes := hpads.2
+  have hd : a digestCol = hash ws := (List.cons.injEq _ _ _ _).mp hblock |>.1
   rw [hins]
   exact hd
 
@@ -1048,37 +1076,19 @@ theorem chip_lookup_sound_N (permOut : List ℤ → List ℤ) (tbl : Table)
   rw [hins]
   exact hd
 
-/-- **The legacy lever IS the `W = 1` instance.** Setting `permOut := fun xs => [hash xs]` makes the
-wide row literally the legacy row (`chipRowN (fun xs => [hash xs]) = chipRow hash`), the wide table
-soundness literally the legacy soundness, and the single digest column the head of the forced
-output block. So `chip_lookup_sound` is a COROLLARY of `chip_lookup_sound_N` — the wide lever does
-not change the meaning of any existing single-output site; it strictly generalizes it. -/
-theorem chipRowN_one_eq_chipRow (hash : List ℤ → ℤ) (ins : List ℤ) :
-    chipRowN (fun xs => [hash xs]) ins = chipRow hash ins := rfl
-
-theorem ChipTableSoundN_one_iff (hash : List ℤ → ℤ) (tbl : Table) :
-    ChipTableSoundN (fun xs => [hash xs]) tbl ↔ ChipTableSound hash tbl := Iff.rfl
-
-/-- `chip_lookup_sound` re-derived as a corollary of the WIDE lever (the `W = 1` squeeze). The legacy
-single-output statement falls straight out: a one-column wide lookup forces the singleton output
-block `[a digestCol] = [hash (evaluated inputs)]`, whose head is the legacy equation. This witnesses
-that every existing `VmHashSite` keeps EXACTLY its meaning under the generalization. -/
-theorem chip_lookup_sound_of_N (hash : List ℤ → ℤ) (tbl : Table)
-    (hSound : ChipTableSound hash tbl)
-    (a : Assignment) (ins : List EmittedExpr) (digestCol : Nat)
-    (hlen : ins.length ≤ CHIP_RATE)
-    (hmem : (chipLookupTuple ins digestCol).map (·.eval a) ∈ tbl) :
-    a digestCol = hash (ins.map (·.eval a)) := by
-  have hSoundN : ChipTableSoundN (fun xs => [hash xs]) tbl :=
-    (ChipTableSoundN_one_iff hash tbl).mpr hSound
-  -- the single-output tuple is the W=1 wide tuple with `digestCols = [digestCol]`
-  have htuple : chipLookupTuple ins digestCol = chipLookupTupleN ins [digestCol] := by
-    simp [chipLookupTuple, chipLookupTupleN]
-  rw [htuple] at hmem
-  have hN := chip_lookup_sound_N (fun xs => [hash xs]) tbl hSoundN a ins [digestCol]
-    hlen hmem
-  -- `[a digestCol] = [hash (...)]` ⇒ heads equal
-  simpa using hN
+/-- **The legacy lever IS the head of the wide instance.** The deployed `chipRow hash`/
+`chip_lookup_sound` (Phase B-GATE) are themselves 17-wide: the output block is `hash ins ::
+lanes`, and `chip_lookup_sound` forces its HEAD (out0). The `permOut`-parametric wide lever
+(`chip_lookup_sound_N`) is the general statement that ALSO forces lanes 1..7 — used when the
+8-felt commitment binds the whole block (Phase B-ROTATION). The two agree on out0: a wide row
+whose `permOut` has head `hash` carries `chipRow hash ins (permOut ins).tail` in its tail, so the
+single-output binding is exactly `chip_lookup_sound`'s conclusion. (Phase B-GATE keeps the
+commitment 1-felt — only out0 is bound — so the deployed soundness rides `chip_lookup_sound`.) -/
+theorem chipRowN_head_eq_hash (permOut : List ℤ → List ℤ) (ins : List ℤ) (out0 : ℤ)
+    (lanes : List ℤ) (hsplit : permOut ins = out0 :: lanes) :
+    chipRowN permOut ins = chipRow (fun _ => out0) ins lanes := by
+  unfold chipRowN chipRow
+  rw [hsplit]
 
 /-! ### Translating a v1 hash site to a chip lookup. -/
 
@@ -1092,10 +1102,21 @@ def HashInput.toExpr (sites : List VmHashSite) : HashInput → EmittedExpr
   | .digest k => .var ((sites.getD k default).digestCol)
   | .zero     => .const 0
 
-/-- The chip lookup replacing site `s` of the ordered family `sites`. -/
-def siteLookup (sites : List VmHashSite) (s : VmHashSite) : Lookup :=
+/-- The 7 lane columns (`CHIP_OUT_LANES - 1`) carrying a site's exposed permutation lanes 1..7.
+Phase B-GATE allocates them as a contiguous block at `[base, base+1, …, base+6]` — `graduateV1`
+threads `base = traceWidth + 7·i` for the `i`-th site, appending the lane block past the v1 trace
+width. (The values are the genuine permutation lanes, filled by the Rust producer; lane0 stays
+the chained `digestCol`.) -/
+def siteLaneCols (base : Nat) : List Nat :=
+  (List.range (CHIP_OUT_LANES - 1)).map (base + ·)
+
+/-- The chip lookup replacing site `s` of the ordered family `sites`. Phase B-GATE: the 17-wide
+tuple `[arity, padded inputs, digestCol :: laneCols base]`. `digestCol` is out0 (the bound
+digest, UNCHANGED meaning); the 7 lane columns at `base..base+6` carry the exposed lanes 1..7
+(matched to the chip row, NOT constrained by the single-output denotation). -/
+def siteLookup (sites : List VmHashSite) (s : VmHashSite) (base : Nat) : Lookup :=
   { table := .poseidon2
-  , tuple := chipLookupTuple (s.inputs.map (HashInput.toExpr sites)) s.digestCol }
+  , tuple := chipLookupTuple (s.inputs.map (HashInput.toExpr sites)) s.digestCol (siteLaneCols base) }
 
 /-- **The site-to-lookup replacement is SOUND.** If the earlier sites' digest columns carry the
 resolved digests (the `siteHoldsAll` invariant, hypothesis `hdig`) and the chip table is sound,
@@ -1103,13 +1124,13 @@ then the translated lookup enforces EXACTLY the site equation `loc digestCol = h
 inputs)` — the v1 in-row Poseidon2 constraint, at lookup cost. -/
 theorem siteLookup_replaces_site (hash : List ℤ → ℤ) (tbl : Table)
     (hSound : ChipTableSound hash tbl) (env : VmRowEnv)
-    (sites : List VmHashSite) (s : VmHashSite) (digs : List ℤ)
+    (sites : List VmHashSite) (s : VmHashSite) (base : Nat) (digs : List ℤ)
     (hdig : ∀ k, env.loc ((sites.getD k default).digestCol) = digs.getD k 0)
     (hlen : s.inputs.length ≤ CHIP_RATE)
-    (hmem : (siteLookup sites s).tuple.map (·.eval env.loc) ∈ tbl) :
+    (hmem : (siteLookup sites s base).tuple.map (·.eval env.loc) ∈ tbl) :
     env.loc s.digestCol = hash (s.resolvedInputs env digs) := by
   have h := chip_lookup_sound hash tbl hSound env.loc
-    (s.inputs.map (HashInput.toExpr sites)) s.digestCol
+    (s.inputs.map (HashInput.toExpr sites)) s.digestCol (siteLaneCols base)
     (by simpa [List.length_map] using hlen) hmem
   rw [h]
   congr 1
@@ -1316,12 +1337,15 @@ def demoV2 : EffectVmDescriptor2 :=
 -- kind exercised; the chip params are the REAL babyBearD4W16 pins). The Rust v2 decoder's
 -- grammar is THIS string's grammar; v1 strings (no `"ir"` key) parse as version 1 unchanged.
 #guard emitVmJson2 demoV2 ==
-  "{\"name\":\"demo-v2\",\"ir\":2,\"trace_width\":2,\"public_input_count\":1,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":2,\"sem\":\"main\"},{\"id\":1,\"name\":\"poseidon2_chip\",\"arity\":10,\"sem\":\"poseidon2_chip\",\"params\":{\"field_modulus\":2013265921,\"d\":4,\"width\":16,\"sbox_degree\":7,\"sbox_registers\":1,\"half_full_rounds\":4,\"partial_rounds\":13,\"rate\":8,\"rc_source\":\"BABYBEAR_POSEIDON2_RC_16\",\"internal_diag_source\":\"BABYBEAR_POSEIDON2_INTERNAL_DIAG_16\"}},{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":30},{\"id\":3,\"name\":\"memory\",\"arity\":5,\"sem\":\"memory\"},{\"id\":4,\"name\":\"map_ops\",\"arity\":5,\"sem\":\"map_ops\"}],\"constraints\":[{\"t\":\"transition\",\"hi\":0,\"lo\":0},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":0}]},{\"t\":\"mem_op\",\"kind\":\"read\",\"guard\":{\"t\":\"const\",\"v\":1},\"addr\":{\"t\":\"var\",\"v\":0},\"value\":{\"t\":\"var\",\"v\":1},\"prev_value\":{\"t\":\"var\",\"v\":1},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"map_op\",\"op\":\"write\",\"guard\":{\"t\":\"const\",\"v\":1},\"root\":{\"t\":\"var\",\"v\":0},\"key\":{\"t\":\"var\",\"v\":1},\"value\":{\"t\":\"const\",\"v\":0},\"new_root\":{\"t\":\"var\",\"v\":1}}],\"hash_sites\":[],\"ranges\":[]}"
+  "{\"name\":\"demo-v2\",\"ir\":2,\"trace_width\":2,\"public_input_count\":1,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":2,\"sem\":\"main\"},{\"id\":1,\"name\":\"poseidon2_chip\",\"arity\":17,\"sem\":\"poseidon2_chip\",\"params\":{\"field_modulus\":2013265921,\"d\":4,\"width\":16,\"sbox_degree\":7,\"sbox_registers\":1,\"half_full_rounds\":4,\"partial_rounds\":13,\"rate\":8,\"rc_source\":\"BABYBEAR_POSEIDON2_RC_16\",\"internal_diag_source\":\"BABYBEAR_POSEIDON2_INTERNAL_DIAG_16\"}},{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":30},{\"id\":3,\"name\":\"memory\",\"arity\":5,\"sem\":\"memory\"},{\"id\":4,\"name\":\"map_ops\",\"arity\":5,\"sem\":\"map_ops\"}],\"constraints\":[{\"t\":\"transition\",\"hi\":0,\"lo\":0},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":0}]},{\"t\":\"mem_op\",\"kind\":\"read\",\"guard\":{\"t\":\"const\",\"v\":1},\"addr\":{\"t\":\"var\",\"v\":0},\"value\":{\"t\":\"var\",\"v\":1},\"prev_value\":{\"t\":\"var\",\"v\":1},\"prev_serial\":{\"t\":\"const\",\"v\":0}},{\"t\":\"map_op\",\"op\":\"write\",\"guard\":{\"t\":\"const\",\"v\":1},\"root\":{\"t\":\"var\",\"v\":0},\"key\":{\"t\":\"var\",\"v\":1},\"value\":{\"t\":\"const\",\"v\":0},\"new_root\":{\"t\":\"var\",\"v\":1}}],\"hash_sites\":[],\"ranges\":[]}"
 
--- The chip rate is the REAL babyBearD4W16 base rate (8); the chip row is 10 wide.
+-- The chip rate is the REAL babyBearD4W16 base rate (8); the chip row is 17 wide (Phase B-GATE
+-- widened the output block 1 → 8: `1 (arity) + 8 (inputs) + 8 (output lanes)`).
 #guard CHIP_RATE == 8
-#guard poseidon2ChipTableDef.arity == CHIP_RATE + 2
-#guard (chipRow (fun _ => 0) [1, 2]).length == CHIP_RATE + 2
+#guard CHIP_OUT_LANES == 8
+#guard poseidon2ChipTableDef.arity == CHIP_RATE + 1 + CHIP_OUT_LANES
+#guard poseidon2ChipTableDef.arity == 17
+#guard (chipRow (fun _ => 0) [1, 2] [0, 0, 0, 0, 0, 0, 0]).length == CHIP_RATE + 1 + CHIP_OUT_LANES
 -- The five table ids are distinct on the wire.
 #guard ([TableId.main, .poseidon2, .range, .memory, .mapOps].map TableId.wireId).dedup.length == 5
 
@@ -1346,15 +1370,18 @@ def demoV2 : EffectVmDescriptor2 :=
 -- Padding discipline: the arity tag disambiguates ([1] at rate 8 vs [1,0] at rate 8 share the
 -- padded block but NOT the tag).
 #guard padTo 4 [1, 2] == [1, 2, 0, 0]
-#guard (chipRow (fun _ => 99) [1]).head? == some 1
-#guard (chipRow (fun _ => 99) [1, 0]).head? == some 2
+#guard (chipRow (fun _ => 99) [1] [0, 0, 0, 0, 0, 0, 0]).head? == some 1
+#guard (chipRow (fun _ => 99) [1, 0] [0, 0, 0, 0, 0, 0, 0]).head? == some 2
 
 /-! ### §10w — the WIDE chip lever: faithful at full squeeze width + the ANTI-LAUNDERING tooth. -/
 
--- The wide row is the legacy row at W=1, but strictly wider at W>1 (here W=8: the `hash_many_8`
--- squeeze shape). The output BLOCK is the whole `permOut ins`, not a single felt.
-#guard chipRowN (fun xs => [(xs.length : ℤ)]) [1, 2] == chipRow (fun xs => (xs.length : ℤ)) [1, 2]
+-- The wide `chipRowN` (output BLOCK = the whole `permOut ins`) at W=8 IS the deployed 17-wide
+-- shape: head = out0 (the bound digest), tail = the 7 carried lanes. The deployed `chipRow`'s
+-- output block `hash ins :: lanes` is exactly `chipRowN`'s block split at the head.
+#guard chipRowN (fun _ => [10, 11, 12, 13, 14, 15, 16, 17]) [1, 2]
+  == chipRow (fun _ => 10) [1, 2] [11, 12, 13, 14, 15, 16, 17]
 #guard (chipRowN (fun _ => [10, 11, 12, 13, 14, 15, 16, 17]) [1, 2]).length == 1 + CHIP_RATE + 8
+#guard (chipRow (fun _ => 10) [1, 2] [11, 12, 13, 14, 15, 16, 17]).length == 1 + CHIP_RATE + CHIP_OUT_LANES
 -- the wide tuple carries W=8 distinct digest columns (here cols 40..47), not one.
 #guard (chipLookupTupleN [.var 0, .var 1] [40, 41, 42, 43, 44, 45, 46, 47]).length == 1 + CHIP_RATE + 8
 
@@ -1623,11 +1650,10 @@ def brokenEngine : ProofEngine :=
 
 #assert_axioms TableId.wireId_injective
 #assert_axioms domainCode_injective
--- §7 chip lever (legacy single-output + the §7w WIDE generalization + the legacy corollary):
+-- §7 chip lever (the deployed 17-wide single-output head lever + the §7w WIDE generalization):
 #assert_axioms chip_lookup_sound
 #assert_axioms chip_lookup_sound_N
-#assert_axioms chip_lookup_sound_of_N
-#assert_axioms chipRowN_one_eq_chipRow
+#assert_axioms chipRowN_head_eq_hash
 #assert_axioms chipRowN_distinguishes_wide
 #assert_axioms optOf_roundtrip
 #assert_axioms satisfied2U_umem_sound

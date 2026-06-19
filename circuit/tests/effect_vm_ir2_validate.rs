@@ -46,8 +46,8 @@ fn ir2_validate_transfer_proves_verifies_and_refuses_ghost() {
         .expect("transfer v2 descriptor must be registered");
     let desc = parse_vm_descriptor2(json).expect("transfer v2 descriptor must parse");
     assert_eq!(
-        desc.trace_width, 187,
-        "graduated transfer keeps the 186 base width"
+        desc.trace_width, 215,
+        "graduated transfer = 187 base + 7·4 chip lane cols (Phase B-GATE: 4 hash sites)"
     );
     assert_eq!(desc.tables.len(), 5, "the five EPOCH tables");
     // Transfer is a graduated v1 face: chip + range lookups only, no mem/map ops.

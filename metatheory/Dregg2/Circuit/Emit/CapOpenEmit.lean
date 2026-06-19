@@ -107,24 +107,31 @@ leaf's low mask limb, against which the genuine SUBMASK gate `facetEffGate` (`ma
 `maskReconGate` + `selectedBitGate`) checks `(effBit &&& mask_lo) = effBit` — NOT the over-strict
 equality `mask_lo == effBit`. The bit columns are appended at the END of the block to localize the shift. -/
 def CAP_OPEN_SPAN : Nat := 7 + 1 + DEPTH * 3 + 3 + MASK_BITS
+  + (Dregg2.Circuit.DescriptorIR2.CHIP_OUT_LANES - 1) * (DEPTH + 1)
 
 /-- The concrete cap-open column layout, pinned to the appendix. Leaf fields 0..6 at
 `CAP_OPEN_BASE..+6`; leaf digest at `+7`; level `lvl`'s sibling/direction/node at `+8+3·lvl`,
 `+9+3·lvl`, `+10+3·lvl`; cap_root at `+56`; src at `+57`; effBit at `+58`; the 24 mask-bit columns at
 `+59..+82` (`bit i = CAP_OPEN_BASE + 59 + i`). -/
-def capOpenCols : CapOpenCols :=
-  { leaf       := fun i => CAP_OPEN_BASE + i.val
-  , leafDigest := CAP_OPEN_BASE + 7
-  , sib        := fun lvl => CAP_OPEN_BASE + 8 + 3 * lvl
-  , dir        := fun lvl => CAP_OPEN_BASE + 9 + 3 * lvl
-  , node       := fun lvl => CAP_OPEN_BASE + 10 + 3 * lvl
-  , capRoot    := CAP_OPEN_BASE + 8 + 3 * DEPTH       -- = CAP_OPEN_BASE + 56
-  , src        := CAP_OPEN_BASE + 8 + 3 * DEPTH + 1   -- = CAP_OPEN_BASE + 57
-  , effBit     := CAP_OPEN_BASE + 8 + 3 * DEPTH + 2   -- = CAP_OPEN_BASE + 58
-  , bit        := fun i => CAP_OPEN_BASE + 8 + 3 * DEPTH + 3 + i } -- = CAP_OPEN_BASE + 59 + i
+def capOpenCols (w : Nat) : CapOpenCols :=
+  { leaf       := fun i => w + i.val
+  , leafDigest := w + 7
+  , sib        := fun lvl => w + 8 + 3 * lvl
+  , dir        := fun lvl => w + 9 + 3 * lvl
+  , node       := fun lvl => w + 10 + 3 * lvl
+  , capRoot    := w + 8 + 3 * DEPTH       -- = w + 56
+  , src        := w + 8 + 3 * DEPTH + 1   -- = w + 57
+  , effBit     := w + 8 + 3 * DEPTH + 2   -- = w + 58
+  , bit        := fun i => w + 8 + 3 * DEPTH + 3 + i -- = w + 59 + i
+    -- Phase B-GATE: the 17 chip absorbs (leaf + 16 nodes) each carry 7 exposed lanes 1..7. The
+    -- `7·17 = 119` lane columns are appended at the END of the appendix (past the mask bits),
+    -- block `k` (k=0 leaf, k=lvl+1 node) at `LANE_BASE + 7·k`.
+  , lanes      := fun k =>
+      (List.range (Dregg2.Circuit.DescriptorIR2.CHIP_OUT_LANES - 1)).map
+        (w + 8 + 3 * DEPTH + 3 + MASK_BITS + (Dregg2.Circuit.DescriptorIR2.CHIP_OUT_LANES - 1) * k + ·) }
 
-/-- The cap-open appendix width is 83 (the 59-col base + 24 mask-bit columns). -/
-theorem cap_open_span : CAP_OPEN_SPAN = 91 := by decide
+/-- The cap-open appendix width is 210 (the 91-col base+mask block + `7·17 = 119` lane columns). -/
+theorem cap_open_span : CAP_OPEN_SPAN = 210 := by decide
 
 /-! ## §2 — the constraint list: the proven `DeployedCapOpen` constraints, assembled.
 
@@ -132,18 +139,18 @@ theorem cap_open_span : CAP_OPEN_SPAN = 91 := by decide
 realizes); the four gate equations ride `.base (.gate …)` (the transition-builder gates). The list
 is EXACTLY the constraints `DeployedCapOpen.Satisfied` quantifies over. -/
 
-/-- The 16 per-level node-absorb chip lookups (`nodeLookup capOpenCols 0..15`). -/
-def nodeLookups : List VmConstraint2 :=
-  (List.range DEPTH).map (fun lvl => .lookup (nodeLookup capOpenCols lvl))
+/-- The 16 per-level node-absorb chip lookups (`nodeLookup (capOpenCols w) 0..15`). -/
+def nodeLookups (w : Nat) : List VmConstraint2 :=
+  (List.range DEPTH).map (fun lvl => .lookup (nodeLookup (capOpenCols w) lvl))
 
-/-- The 16 per-level direction-boolean gates (`dirBoolGate capOpenCols 0..15`). -/
-def dirBoolGates : List VmConstraint2 :=
-  (List.range DEPTH).map (fun lvl => .base (.gate (dirBoolGate capOpenCols lvl)))
+/-- The 16 per-level direction-boolean gates (`dirBoolGate (capOpenCols w) 0..15`). -/
+def dirBoolGates (w : Nat) : List VmConstraint2 :=
+  (List.range DEPTH).map (fun lvl => .base (.gate (dirBoolGate (capOpenCols w) lvl)))
 
 /-- The `MASK_BITS` per-bit boolean gates for the `mask_lo` decomposition (`maskBitBoolGate
-capOpenCols 0..23`) — each `mask_lo` bit column is `0` or `1`. -/
-def maskBitGates : List VmConstraint2 :=
-  (List.range MASK_BITS).map (fun i => .base (.gate (maskBitBoolGate capOpenCols i)))
+(capOpenCols w) 0..23`) — each `mask_lo` bit column is `0` or `1`. -/
+def maskBitGates (w : Nat) : List VmConstraint2 :=
+  (List.range MASK_BITS).map (fun i => .base (.gate (maskBitBoolGate (capOpenCols w) i)))
 
 /-! ## §3 — (DELETED) the Signature-pinned `capOpenAttenuateV3`/`transferCapOpenV3` descriptors.
 
@@ -183,21 +190,21 @@ open Dregg2.Circuit.DeployedCapTree.CapHashScheme (DeployedFaithfulEff tierOfTag
 high-limb pin, the committed effect-bit pin `effBitGateFor … (1 <<< n)`, and the general facet gate. The
 transfer constant pins (`transferFacetGate`/`authTagGate`) are GONE — the facet is bound to the committed
 effect-bit column, the tier to the decoded `auth_tag`. Count: 1 + 16 + 16 + 5 = 38. -/
-def capOpenConstraintsEff (n : Nat) : List VmConstraint2 :=
-  .lookup (leafLookup capOpenCols)
-  :: nodeLookups
-  ++ dirBoolGates
-  ++ maskBitGates
-  ++ [ .base (.gate (rootPinGate capOpenCols))
-     , .base (.gate (targetBindGate capOpenCols))
-     , .base (.gate (effBitGateFor capOpenCols ((1 <<< n : Nat) : ℤ)))
-     , .base (.gate (maskReconGate capOpenCols))
-     , .base (.gate (selectedBitGate capOpenCols n)) ]
+def capOpenConstraintsEff (w : Nat) (n : Nat) : List VmConstraint2 :=
+  .lookup (leafLookup (capOpenCols w))
+  :: nodeLookups w
+  ++ dirBoolGates w
+  ++ maskBitGates w
+  ++ [ .base (.gate (rootPinGate (capOpenCols w)))
+     , .base (.gate (targetBindGate (capOpenCols w)))
+     , .base (.gate (effBitGateFor (capOpenCols w) ((1 <<< n : Nat) : ℤ)))
+     , .base (.gate (maskReconGate (capOpenCols w)))
+     , .base (.gate (selectedBitGate (capOpenCols w) n)) ]
 
 /-- The effect-general constraint count is 1 leaf + 16 node + 16 dir + 32 mask-bit + 5 binding gates
 (rootPin, targetBind, effBitGateFor, maskRecon, selectedBit) = 70. (NO `facetHiGate` — the FULL mask is
 decomposed, so a broad `EFFECT_ALL` cap with `mask_hi ≠ 0` is admitted.) -/
-theorem capOpenConstraintsEff_length (n : Nat) : (capOpenConstraintsEff n).length = 70 := by
+theorem capOpenConstraintsEff_length (w : Nat) (n : Nat) : (capOpenConstraintsEff w n).length = 70 := by
   simp [capOpenConstraintsEff, nodeLookups, dirBoolGates, maskBitGates, DEPTH, MASK_BITS]
 
 /-- **`effCapOpenV3 base name n`** — the GENERIC per-effect cap-open descriptor: an effect's rotated base
@@ -208,11 +215,11 @@ def effCapOpenV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : Effect
   { base with
     name        := name
     traceWidth  := base.traceWidth + CAP_OPEN_SPAN
-    constraints := base.constraints ++ capOpenConstraintsEff n }
+    constraints := base.constraints ++ capOpenConstraintsEff base.traceWidth n }
 
 /-- Every effect-general cap-open constraint is a constraint of the descriptor. -/
 theorem effCapOpenV3_constraints_mem (base : EffectVmDescriptor2) (name : String) (n : Nat)
-    (c : VmConstraint2) (hc : c ∈ capOpenConstraintsEff n) :
+    (c : VmConstraint2) (hc : c ∈ capOpenConstraintsEff base.traceWidth n) :
     c ∈ (effCapOpenV3 base name n).constraints :=
   List.mem_append_right _ hc
 
@@ -224,55 +231,55 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
     (hsat : Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
-    SatisfiedEff hash t.tf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) n := by
+    SatisfiedEff hash t.tf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) n := by
   have hrow := hsat.rowConstraints i hi
   have hmem := effCapOpenV3_constraints_mem base name n
   refine
     { core := ?_, targetBound := ?_, effBitPinned := ?_
     , maskBitsBool := ?_, maskRecon := ?_, facetEffBound := ?_ }
   · refine { leafHashed := ?_, nodeHashed := ?_, dirBool := ?_, rootPinned := ?_ }
-    · have hin : VmConstraint2.lookup (leafLookup capOpenCols) ∈ capOpenConstraintsEff n := by
+    · have hin : VmConstraint2.lookup (leafLookup (capOpenCols base.traceWidth)) ∈ capOpenConstraintsEff base.traceWidth n := by
         simp [capOpenConstraintsEff]
       have h := hrow _ (hmem _ hin)
       simpa [VmConstraint2.holdsAt] using h
     · intro lvl hlvl
-      have hin : VmConstraint2.lookup (nodeLookup capOpenCols lvl) ∈ capOpenConstraintsEff n := by
+      have hin : VmConstraint2.lookup (nodeLookup (capOpenCols base.traceWidth) lvl) ∈ capOpenConstraintsEff base.traceWidth n := by
         refine List.mem_cons_of_mem _ ?_
         refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ ?_))
         exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
       have h := hrow _ (hmem _ hin)
       simpa [VmConstraint2.holdsAt] using h
     · intro lvl hlvl
-      have hin : VmConstraint2.base (.gate (dirBoolGate capOpenCols lvl)) ∈ capOpenConstraintsEff n := by
+      have hin : VmConstraint2.base (.gate (dirBoolGate (capOpenCols base.traceWidth) lvl)) ∈ capOpenConstraintsEff base.traceWidth n := by
         refine List.mem_cons_of_mem _ ?_
         refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
         exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
       have h := hrow _ (hmem _ hin)
       simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
-    · have hin : VmConstraint2.base (.gate (rootPinGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+    · have hin : VmConstraint2.base (.gate (rootPinGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
         simp [capOpenConstraintsEff]
       have h := hrow _ (hmem _ hin)
       simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
-  · have hin : VmConstraint2.base (.gate (targetBindGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+  · have hin : VmConstraint2.base (.gate (targetBindGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
-  · have hin : VmConstraint2.base (.gate (effBitGateFor capOpenCols ((1 <<< n : Nat) : ℤ)))
-        ∈ capOpenConstraintsEff n := by simp [capOpenConstraintsEff]
+  · have hin : VmConstraint2.base (.gate (effBitGateFor (capOpenCols base.traceWidth) ((1 <<< n : Nat) : ℤ)))
+        ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
   · intro j hj
-    have hin : VmConstraint2.base (.gate (maskBitBoolGate capOpenCols j)) ∈ capOpenConstraintsEff n := by
+    have hin : VmConstraint2.base (.gate (maskBitBoolGate (capOpenCols base.traceWidth) j)) ∈ capOpenConstraintsEff base.traceWidth n := by
       refine List.mem_cons_of_mem _ ?_
       refine List.mem_append_left _ (List.mem_append_right _ ?_)
       exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩
     have h := hrow _ (hmem _ hin)
     simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
-  · have hin : VmConstraint2.base (.gate (maskReconGate capOpenCols)) ∈ capOpenConstraintsEff n := by
+  · have hin : VmConstraint2.base (.gate (maskReconGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
-  · have hin : VmConstraint2.base (.gate (selectedBitGate capOpenCols n)) ∈ capOpenConstraintsEff n := by
+  · have hin : VmConstraint2.base (.gate (selectedBitGate (capOpenCols base.traceWidth) n)) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
@@ -291,15 +298,15 @@ theorem effCapOpenV3_authorizes {State : Type} (base : EffectVmDescriptor2) (nam
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols base.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols base.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< n)
       { actor := actor, src := src, dst := dst, amt := amt } = true
     ∧ (leafAt actor src).target = (src : ℤ) :=
-  capOpenEff_authorizes S t.tf capOpenCols _ n hn vkOfTag provided hChip
+  capOpenEff_authorizes S t.tf (capOpenCols base.traceWidth) _ n hn vkOfTag provided hChip
     (effCapOpenV3_satisfiedEff base name n S.chipAbsorb minit mfin maddrs t hsat i hi)
     caps leafAt hfaith actor src dst amt hsrc hedge htier
 
@@ -380,8 +387,8 @@ def attenuateCapOpenEffV3 : EffectVmDescriptor2 :=
 -- a `.base`, no new column).
 #guard transferCapOpenEffV3.constraints.length == transferV3.constraints.length + 71
 #guard attenuateCapOpenEffV3.constraints.length == attenuateV3.constraints.length + 71
-#guard transferCapOpenEffV3.traceWidth == transferV3.traceWidth + 91
-#guard attenuateCapOpenEffV3.traceWidth == attenuateV3.traceWidth + 91
+#guard transferCapOpenEffV3.traceWidth == transferV3.traceWidth + CAP_OPEN_SPAN
+#guard attenuateCapOpenEffV3.traceWidth == attenuateV3.traceWidth + CAP_OPEN_SPAN
 
 -- Each fan-out descriptor adds the 70-constraint effect-general appendix + the selector-gate tooth
 -- (+71 constraints total) + 91 cols past its base.
@@ -391,12 +398,12 @@ def attenuateCapOpenEffV3 : EffectVmDescriptor2 :=
 #guard revokeCapOpenV3.constraints.length == revokeDelegationV3.constraints.length + 71
 #guard refreshDelegationCapOpenV3.constraints.length == refreshDelegationV3.constraints.length + 71
 #guard revokeCapabilityCapOpenV3.constraints.length == revokeCapabilityBaseV3.constraints.length + 71
-#guard delegateCapOpenV3.traceWidth == grantCapV3.traceWidth + 91
-#guard introduceCapOpenV3.traceWidth == introduceV3.traceWidth + 91
-#guard grantCapCapOpenV3.traceWidth == grantCapV3.traceWidth + 91
-#guard revokeCapOpenV3.traceWidth == revokeDelegationV3.traceWidth + 91
-#guard refreshDelegationCapOpenV3.traceWidth == refreshDelegationV3.traceWidth + 91
-#guard revokeCapabilityCapOpenV3.traceWidth == revokeCapabilityBaseV3.traceWidth + 91
+#guard delegateCapOpenV3.traceWidth == grantCapV3.traceWidth + CAP_OPEN_SPAN
+#guard introduceCapOpenV3.traceWidth == introduceV3.traceWidth + CAP_OPEN_SPAN
+#guard grantCapCapOpenV3.traceWidth == grantCapV3.traceWidth + CAP_OPEN_SPAN
+#guard revokeCapOpenV3.traceWidth == revokeDelegationV3.traceWidth + CAP_OPEN_SPAN
+#guard refreshDelegationCapOpenV3.traceWidth == refreshDelegationV3.traceWidth + CAP_OPEN_SPAN
+#guard revokeCapabilityCapOpenV3.traceWidth == revokeCapabilityBaseV3.traceWidth + CAP_OPEN_SPAN
 
 end FanoutDescriptors
 
@@ -427,10 +434,10 @@ theorem transferCapOpenEffV3_authorizes {State : Type} (S : CapHashScheme State)
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_TRANSFER) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols transferV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols transferV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetB caps provided
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -461,10 +468,10 @@ theorem attenuateCapOpenEffV3_authorizes {State : Type} (S : CapHashScheme State
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_TRANSFER) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols attenuateV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols attenuateV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols attenuateV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetB caps provided
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -486,9 +493,9 @@ half of the live keystone (a wrong-facet cap ⟹ UNSAT), ported onto the deploye
 theorem transferCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_TRANSFER) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols transferV3.traceWidth).bit EFF_TRANSFER) = 0) :
     ¬ Satisfied2 hash transferCapOpenEffV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols transferV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_TRANSFER hclear
     (effCapOpenV3_satisfiedEff transferV3 "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER
       hash minit mfin maddrs t
@@ -500,9 +507,9 @@ theorem transferCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
 theorem attenuateCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_TRANSFER) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols attenuateV3.traceWidth).bit EFF_TRANSFER) = 0) :
     ¬ Satisfied2 hash attenuateCapOpenEffV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols attenuateV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_TRANSFER hclear
     (effCapOpenV3_satisfiedEff attenuateV3 "dregg-effectvm-attenuateA-v1-rot24-v3-capopen-eff" EFF_TRANSFER
       hash minit mfin maddrs t
@@ -534,10 +541,10 @@ theorem introduceCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_INTRODUCE) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols introduceV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols introduceV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols introduceV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< EFF_INTRODUCE)
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -560,10 +567,10 @@ theorem delegateCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_DELEGATION_OPS) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols grantCapV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols grantCapV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols grantCapV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< EFF_DELEGATION_OPS)
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -585,10 +592,10 @@ theorem grantCapCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (v
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_GRANT_CAPABILITY) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols grantCapV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols grantCapV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols grantCapV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< EFF_GRANT_CAPABILITY)
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -610,10 +617,10 @@ theorem revokeCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (vkO
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_DELEGATION_OPS) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols revokeDelegationV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols revokeDelegationV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols revokeDelegationV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< EFF_DELEGATION_OPS)
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -635,10 +642,10 @@ theorem refreshDelegationCapOpenV3_authorizes {State : Type} (S : CapHashScheme 
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_DELEGATION_OPS) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols refreshDelegationV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols refreshDelegationV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols refreshDelegationV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< EFF_DELEGATION_OPS)
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -661,10 +668,10 @@ theorem revokeCapabilityCapOpenV3_authorizes {State : Type} (S : CapHashScheme S
     (i : Nat) (hi : i < t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_REVOKE_CAPABILITY) caps
-      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.capRoot) leafAt)
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols revokeCapabilityBaseV3.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc capOpenCols.src = (src : ℤ))
-    (hedge : leafOf capOpenCols (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols revokeCapabilityBaseV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols revokeCapabilityBaseV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< EFF_REVOKE_CAPABILITY)
       { actor := actor, src := src, dst := dst, amt := amt } = true
@@ -684,9 +691,9 @@ cannot satisfy the introduce appendix (the submask gate bites in-circuit). -/
 theorem introduceCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_INTRODUCE) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols introduceV3.traceWidth).bit EFF_INTRODUCE) = 0) :
     ¬ Satisfied2 hash introduceCapOpenV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols introduceV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_INTRODUCE hclear
     (effCapOpenV3_satisfiedEff introduceV3 "dregg-effectvm-introduce-v1-rot24-v3-capopen" EFF_INTRODUCE
       hash minit mfin maddrs t
@@ -697,9 +704,9 @@ theorem introduceCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
 theorem delegateCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_DELEGATION_OPS) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols grantCapV3.traceWidth).bit EFF_DELEGATION_OPS) = 0) :
     ¬ Satisfied2 hash delegateCapOpenV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols grantCapV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_DELEGATION_OPS hclear
     (effCapOpenV3_satisfiedEff grantCapV3 "dregg-effectvm-delegateAtten-v1-rot24-v3-capopen"
       EFF_DELEGATION_OPS hash minit mfin maddrs t
@@ -710,9 +717,9 @@ theorem delegateCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
 theorem grantCapCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_GRANT_CAPABILITY) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols grantCapV3.traceWidth).bit EFF_GRANT_CAPABILITY) = 0) :
     ¬ Satisfied2 hash grantCapCapOpenV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols grantCapV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_GRANT_CAPABILITY hclear
     (effCapOpenV3_satisfiedEff grantCapV3 "dregg-effectvm-grantCap-v1-rot24-v3-capopen"
       EFF_GRANT_CAPABILITY hash minit mfin maddrs t
@@ -723,9 +730,9 @@ theorem grantCapCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
 theorem revokeCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_DELEGATION_OPS) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols revokeDelegationV3.traceWidth).bit EFF_DELEGATION_OPS) = 0) :
     ¬ Satisfied2 hash revokeCapOpenV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols revokeDelegationV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_DELEGATION_OPS hclear
     (effCapOpenV3_satisfiedEff revokeDelegationV3 "dregg-effectvm-revoke-v1-rot24-v3-capopen"
       EFF_DELEGATION_OPS hash minit mfin maddrs t
@@ -736,9 +743,9 @@ theorem revokeCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
 theorem refreshDelegationCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_DELEGATION_OPS) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols refreshDelegationV3.traceWidth).bit EFF_DELEGATION_OPS) = 0) :
     ¬ Satisfied2 hash refreshDelegationCapOpenV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols refreshDelegationV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_DELEGATION_OPS hclear
     (effCapOpenV3_satisfiedEff refreshDelegationV3 "dregg-effectvm-refresh-v1-rot24-v3-capopen"
       EFF_DELEGATION_OPS hash minit mfin maddrs t
@@ -749,9 +756,9 @@ theorem refreshDelegationCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
 theorem revokeCapabilityCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
-    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols.bit EFF_REVOKE_CAPABILITY) = 0) :
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols revokeCapabilityBaseV3.traceWidth).bit EFF_REVOKE_CAPABILITY) = 0) :
     ¬ Satisfied2 hash revokeCapabilityCapOpenV3 minit mfin maddrs t := fun hsat =>
-  satisfiedEff_rejects_wrong_facet hash t.tf capOpenCols
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols revokeCapabilityBaseV3.traceWidth)
     (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_REVOKE_CAPABILITY hclear
     (effCapOpenV3_satisfiedEff revokeCapabilityBaseV3 "dregg-effectvm-revokeCapability-v1-rot24-v3-capopen"
       EFF_REVOKE_CAPABILITY hash minit mfin maddrs t

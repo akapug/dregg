@@ -525,9 +525,32 @@ pub const POSEIDON2_WIDTH: usize = WIDTH;
 /// digest constraint is algebraically enforced by the audited p3 verifier.
 pub fn poseidon2_permute_expr<AB: AirBuilder>(
     builder: &mut AB,
-    mut state: [AB::Expr; WIDTH],
+    state: [AB::Expr; WIDTH],
     aux: &[AB::Var],
 ) -> AB::Expr
+where
+    AB::F: PrimeField32,
+{
+    let lanes = poseidon2_permute_expr_lanes::<AB>(builder, state, aux);
+    lanes[0].clone()
+}
+
+/// Like [`poseidon2_permute_expr`] but returns the first 8 lanes of the
+/// permutation output (`state[0..8]`) instead of only the squeezed `state[0]`.
+///
+/// Every one of the 16 final-state lanes is already equality-constrained to the
+/// genuine permutation output (`aux[last_block + j]`) by the round-by-round
+/// arithmetization — this just EXPOSES the first 8 of them. The lanes are
+/// genuinely 8 distinct field elements (the final permutation state), NOT eight
+/// copies of `state[0]`. Used by the IR-v2 chip table to widen its bus tuple's
+/// output block from 1 to 8 (`CHIP_RATE`-faithful squeeze). The aux block and
+/// every internal constraint are byte-identical to [`poseidon2_permute_expr`];
+/// only the return arity differs.
+pub fn poseidon2_permute_expr_lanes<AB: AirBuilder>(
+    builder: &mut AB,
+    mut state: [AB::Expr; WIDTH],
+    aux: &[AB::Var],
+) -> [AB::Expr; 8]
 where
     AB::F: PrimeField32,
 {
@@ -602,7 +625,7 @@ where
         off += ROUND_COLS;
     }
 
-    state[0].clone()
+    core::array::from_fn(|i| state[i].clone())
 }
 
 /// Compute the full intermediate-state aux block (length

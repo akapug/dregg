@@ -262,11 +262,11 @@ structure TransferAuthoritySource (hash : List ℤ → ℤ) (fcaps : FacetCaps)
   /-- the decoded `fcaps` are deployed-faithfully realized by `leafAt` at the cap-open's root, over the
   turn's ACTUAL effect bit (`1 <<< EFF_TRANSFER`), the effect-general faithfulness. -/
   hfaith : DeployedFaithfulEff S vkOfTag .signature (1 <<< EFF_TRANSFER) fcaps
-    ((envAt t i).loc capOpenCols.capRoot) leafAt
+    ((envAt t i).loc (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth).capRoot) leafAt
   /-- the cap-open row's `src` column IS the turn's `src`. -/
-  hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ)
+  hsrc : (envAt t i).loc (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth).src = (tr.src : ℤ)
   /-- the opened leaf IS the faithful `(actor ⇒ src)` edge leaf. -/
-  hedge : leafOf capOpenCols (envAt t i) = leafAt tr.actor tr.src
+  hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (envAt t i) = leafAt tr.actor tr.src
   /-- the pinned `.signature` satisfies the tier DECODED off the committed leaf (the decoded-tier
   side condition the live keystone consumes; for the `.signature` pin this is the realizable fact that
   the committed cap's tier admits a signature). -/
@@ -317,9 +317,9 @@ structure TransferAuthoritySourceG (hash : List ℤ → ℤ) (fcaps : FacetCaps)
   hi : i < t.rows.length
   leafAt : Dregg2.Authority.Label → Dregg2.Authority.Label → CapLeaf
   hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_TRANSFER) fcaps
-    ((envAt t i).loc capOpenCols.capRoot) leafAt
-  hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ)
-  hedge : leafOf capOpenCols (envAt t i) = leafAt tr.actor tr.src
+    ((envAt t i).loc (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth).capRoot) leafAt
+  hsrc : (envAt t i).loc (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth).src = (tr.src : ℤ)
+  hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (envAt t i) = leafAt tr.actor tr.src
   /-- the off-circuit auth satisfies the tier DECODED off the committed leaf (NOT a Signature pin). -/
   htier : (tierOfTag vkOfTag
       (leafAt tr.actor tr.src).auth_tag).isSatisfiedBy provided = true
@@ -387,11 +387,11 @@ structure EffAuthoritySource (hash : List ℤ → ℤ) (caps : FacetCaps) (provi
   /-- the decoded `caps` are deployed-faithfully realized by `leafAt` at the cap-open's root, over the
   turn's ACTUAL effect bit `1 <<< n`. -/
   hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
-    ((envAt t i).loc capOpenCols.capRoot) leafAt
+    ((envAt t i).loc (capOpenCols base.traceWidth).capRoot) leafAt
   /-- the cap-open row's `src` column IS the turn's `src`. -/
-  hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ)
+  hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (tr.src : ℤ)
   /-- the opened leaf IS the faithful `(actor ⇒ src)` edge leaf. -/
-  hedge : leafOf capOpenCols (envAt t i) = leafAt tr.actor tr.src
+  hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = leafAt tr.actor tr.src
   /-- `provided` satisfies the tier DECODED off the committed leaf (NOT a Signature pin). -/
   htier : (tierOfTag vkOfTag (leafAt tr.actor tr.src).auth_tag).isSatisfiedBy provided = true
 
@@ -482,8 +482,8 @@ def effAuthoritySource_ofCanonical (hash : List ℤ → ℤ) (caps : FacetCaps) 
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb (effCapOpenV3 base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length)
-    (hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ))
-    (hedge : leafOf capOpenCols (envAt t i) = canonicalLeafAt caps tr.actor tr.src)
+    (hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (tr.src : ℤ))
+    (hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = canonicalLeafAt caps tr.actor tr.src)
     -- the named IPC-tier residual: no held cap over the relevant edge is a `Custom` tier.
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
       c ∈ caps actor → c.target = src → ∀ vk, c.tier ≠ .custom vk)
@@ -506,7 +506,7 @@ def effAuthoritySource_ofCanonical (hash : List ℤ → ℤ) (caps : FacetCaps) 
   leafAt := canonicalLeafAt caps
   -- THE DISCHARGE: faithfulness is CONSTRUCTED from the canonical leaf set, not carried.
   hfaith := deployedFaithfulEff_canonical S vkOfTag provided n hn32 caps
-    ((envAt t i).loc capOpenCols.capRoot) hipc
+    ((envAt t i).loc (capOpenCols base.traceWidth).capRoot) hipc
   hsrc := hsrc
   hedge := hedge
   htier := htier
@@ -527,8 +527,8 @@ theorem effAuthoritySource_ofCanonical_authorizes (hash : List ℤ → ℤ) (cap
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb (effCapOpenV3 base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length)
-    (hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ))
-    (hedge : leafOf capOpenCols (envAt t i) = canonicalLeafAt caps tr.actor tr.src)
+    (hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (tr.src : ℤ))
+    (hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = canonicalLeafAt caps tr.actor tr.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
       c ∈ caps actor → c.target = src → ∀ vk, c.tier ≠ .custom vk)
     (htier : (tierOfTag vkOfTag (canonicalLeafAt caps tr.actor tr.src).auth_tag).isSatisfiedBy
@@ -589,9 +589,9 @@ structure EffAuthoritySourceCanon (hash : List ℤ → ℤ) (caps : FacetCaps) (
   i : Nat
   hi : i < t.rows.length
   /-- the cap-open row's `src` column IS the turn's `src`. -/
-  hsrc : (envAt t i).loc capOpenCols.src = (tr.src : ℤ)
+  hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (tr.src : ℤ)
   /-- the opened leaf IS the CANONICAL `(actor ⇒ src)` edge leaf — "the prover opens the canonical tree". -/
-  hedge : leafOf capOpenCols (envAt t i) = canonicalLeafAt caps tr.actor tr.src
+  hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = canonicalLeafAt caps tr.actor tr.src
   /-- the NAMED IPC-tier residual: no held cap over the relevant edge is a `Custom` tier (a `Custom` cap
   rides the `vkOfTag` felt residual). -/
   hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),

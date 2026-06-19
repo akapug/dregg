@@ -157,12 +157,13 @@ becomes a chip lookup, every range tooth becomes a range lookup; the five EPOCH 
 declared; the legacy carriers empty. -/
 def graduateV1 (d : EffectVmDescriptor) : EffectVmDescriptor2 :=
   { name        := d.name
-  , traceWidth  := d.traceWidth
+  , traceWidth  := d.traceWidth + (CHIP_OUT_LANES - 1) * d.hashSites.length
   , piCount     := d.piCount
-  , tables      := v2Tables d.traceWidth
+  , tables      := v2Tables (d.traceWidth + (CHIP_OUT_LANES - 1) * d.hashSites.length)
   , constraints :=
       d.constraints.map .base
-        ++ d.hashSites.map (fun s => .lookup (siteLookup d.hashSites s))
+        ++ d.hashSites.mapIdx (fun i s =>
+             .lookup (siteLookup d.hashSites s (d.traceWidth + (CHIP_OUT_LANES - 1) * i)))
         ++ d.ranges.map (fun r => .lookup (rangeLookup r))
   , hashSites   := []
   , ranges      := [] }
@@ -174,8 +175,8 @@ theorem constraints_graduateV1_shapes (d : EffectVmDescriptor) :
       (∃ c₀, c = .base c₀) ∨ (∃ l, c = .lookup l) := by
   intro c hc
   unfold graduateV1 at hc
-  simp only [List.mem_append, List.mem_map] at hc
-  rcases hc with (⟨c₀, _, rfl⟩ | ⟨s, _, rfl⟩) | ⟨r, _, rfl⟩
+  simp only [List.mem_append, List.mem_map, List.mem_mapIdx] at hc
+  rcases hc with (⟨c₀, _, rfl⟩ | ⟨i, s, _, rfl⟩) | ⟨r, _, rfl⟩
   · exact Or.inl ⟨c₀, rfl⟩
   · exact Or.inr ⟨_, rfl⟩
   · exact Or.inr ⟨_, rfl⟩
@@ -272,7 +273,7 @@ theorem hacc_extend (env : VmRowEnv) (pre ss : List VmHashSite) (s : VmHashSite)
 /-- **The soundness induction.** With the prefix invariant established, the suffix's chip
 lookups (against a sound chip table) realize the v1 site walk from the current accumulator. -/
 theorem go_of_siteLookups (hash : List ℤ → ℤ) (tbl : Table)
-    (hSound : ChipTableSound hash tbl) (env : VmRowEnv) (all : List VmHashSite)
+    (hSound : ChipTableSound hash tbl) (env : VmRowEnv) (all : List VmHashSite) (width : Nat)
     (rest : List VmHashSite) :
     ∀ (pre : List VmHashSite) (acc : List ℤ),
       all = pre ++ rest →
@@ -280,7 +281,9 @@ theorem go_of_siteLookups (hash : List ℤ → ℤ) (tbl : Table)
       (∀ k, k < acc.length → env.loc ((all.getD k default).digestCol) = acc.getD k 0) →
       sitesWFAux acc.length rest = true →
       (∀ s ∈ rest, s.inputs.length ≤ CHIP_RATE) →
-      (∀ s ∈ rest, (siteLookup all s).tuple.map (·.eval env.loc) ∈ tbl) →
+      (∀ i, (h : i < rest.length) →
+        (siteLookup all rest[i] (width + (CHIP_OUT_LANES - 1) * (pre.length + i))).tuple.map
+          (·.eval env.loc) ∈ tbl) →
       siteHoldsAll.go hash env acc rest := by
   induction rest with
   | nil => intro pre acc _ _ _ _ _ _; trivial
@@ -288,10 +291,16 @@ theorem go_of_siteLookups (hash : List ℤ → ℤ) (tbl : Table)
     intro pre acc hall hlen hacc hwf hfit hlk
     simp only [sitesWFAux, Bool.and_eq_true] at hwf
     obtain ⟨hwfs, hwfss⟩ := hwf
+    -- the head site sits at global index `pre.length` (= `i = 0` of `rest`); its lane base is
+    -- `width + 7·pre.length`. The base does NOT enter the conclusion — `chip_lookup_sound`
+    -- forces out0 only, lanes ride existentially — so the per-site base is purely positional.
+    have hlk0 := hlk 0 (by simp)
+    simp only [List.getElem_cons_zero, Nat.add_zero] at hlk0
     have hchip := chip_lookup_sound hash tbl hSound env.loc
       (s.inputs.map (HashInput.toExpr all)) s.digestCol
+      (siteLaneCols (width + (CHIP_OUT_LANES - 1) * pre.length))
       (by simpa [List.length_map] using hfit s List.mem_cons_self)
-      (hlk s List.mem_cons_self)
+      hlk0
     rw [siteTuple_eval_resolved env all acc s hwfs hacc] at hchip
     refine ⟨hchip, ?_⟩
     apply ih (pre ++ [s]) (acc ++ [hash (s.resolvedInputs env acc)])
@@ -301,18 +310,30 @@ theorem go_of_siteLookups (hash : List ℤ → ℤ) (tbl : Table)
     · exact hacc_extend env pre ss s acc _ all hall hlen hacc hchip
     · simpa using hwfss
     · exact fun s' hs' => hfit s' (List.mem_cons_of_mem s hs')
-    · exact fun s' hs' => hlk s' (List.mem_cons_of_mem s hs')
+    · -- the tail's site `ss[i]` is at global index `(pre.length+1) + i = pre.length + (i+1)`,
+      -- matching `rest[i+1]` of the original list.
+      intro i hi
+      have := hlk (i + 1) (by simpa using Nat.succ_lt_succ hi)
+      simp only [List.getElem_cons_succ] at this
+      rw [List.length_append, List.length_singleton]
+      have heq : pre.length + 1 + i = pre.length + (i + 1) := by omega
+      rw [heq]
+      exact this
 
 /-- **`siteLookups_sound`** — the whole ordered family: per-site chip lookups against a sound
-chip table ⟹ the full v1 hash-site denotation `siteHoldsAll`. -/
+chip table ⟹ the full v1 hash-site denotation `siteHoldsAll`. The `i`-th site's lane block sits
+at `width + 7·i` (the contiguous append `graduateV1` threads past the v1 trace width). -/
 theorem siteLookups_sound (hash : List ℤ → ℤ) (tbl : Table)
-    (hSound : ChipTableSound hash tbl) (env : VmRowEnv) (sites : List VmHashSite)
+    (hSound : ChipTableSound hash tbl) (env : VmRowEnv) (sites : List VmHashSite) (width : Nat)
     (hwf : sitesWF sites = true)
     (hfit : ∀ s ∈ sites, s.inputs.length ≤ CHIP_RATE)
-    (hlk : ∀ s ∈ sites, (siteLookup sites s).tuple.map (·.eval env.loc) ∈ tbl) :
+    (hlk : ∀ i, (h : i < sites.length) →
+      (siteLookup sites sites[i] (width + (CHIP_OUT_LANES - 1) * i)).tuple.map
+        (·.eval env.loc) ∈ tbl) :
     siteHoldsAll hash env sites :=
-  go_of_siteLookups hash tbl hSound env sites sites [] [] rfl rfl
-    (fun k hk => absurd hk (by simp)) hwf hfit hlk
+  go_of_siteLookups hash tbl hSound env sites width sites [] [] rfl rfl
+    (fun k hk => absurd hk (by simp)) hwf hfit
+    (fun i hi => by simpa using hlk i hi)
 
 /-! ## §4 — `graduateV1_sound`: THE re-anchor keystone.
 
@@ -336,19 +357,22 @@ theorem graduateV1_sound (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     intro c hc
     have hmem : VmConstraint2.base c ∈ (graduateV1 d).constraints := by
       unfold graduateV1
-      simp only [List.mem_append, List.mem_map]
+      simp only [List.mem_append, List.mem_map, List.mem_mapIdx]
       exact Or.inl (Or.inl ⟨c, hc, rfl⟩)
     exact hrow _ hmem
-  · -- the hash sites, via the chip-lookup induction
-    apply siteLookups_sound hash (t.tf .poseidon2) hchip (envAt t i) d.hashSites hwf
+  · -- the hash sites, via the chip-lookup induction (the `i`-th site's lane base is
+    -- `d.traceWidth + 7·i`, the contiguous append `graduateV1` threads)
+    apply siteLookups_sound hash (t.tf .poseidon2) hchip (envAt t i) d.hashSites d.traceWidth hwf
     · intro s hs
       exact of_decide_eq_true (List.all_eq_true.mp hfit s hs)
-    · intro s hs
-      have hmem : VmConstraint2.lookup (siteLookup d.hashSites s)
+    · intro j hj
+      have hmem : VmConstraint2.lookup
+          (siteLookup d.hashSites d.hashSites[j]
+            (d.traceWidth + (CHIP_OUT_LANES - 1) * j))
           ∈ (graduateV1 d).constraints := by
         unfold graduateV1
-        simp only [List.mem_append, List.mem_map]
-        exact Or.inl (Or.inr ⟨s, hs, rfl⟩)
+        simp only [List.mem_append, List.mem_map, List.mem_mapIdx]
+        exact Or.inl (Or.inr ⟨j, hj, rfl⟩)
       exact hrow _ hmem
   · -- the range teeth, via the range-table lookup
     intro r hr
@@ -358,7 +382,7 @@ theorem graduateV1_sound (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     have hmem : VmConstraint2.lookup (rangeLookup ⟨w, BAL_LIMB_BITS⟩)
         ∈ (graduateV1 d).constraints := by
       unfold graduateV1
-      simp only [List.mem_append, List.mem_map]
+      simp only [List.mem_append, List.mem_map, List.mem_mapIdx]
       exact Or.inr ⟨⟨w, BAL_LIMB_BITS⟩, hr, rfl⟩
     exact lookup_replaces_range BAL_LIMB_BITS t.tf hrange (envAt t i) w (hrow _ hmem)
 
@@ -373,46 +397,54 @@ re-anchor loses nothing: `graduateV1_faithful` is the round trip. -/
 def envOf (rows : List Assignment) (pub : Assignment) (i : Nat) : VmRowEnv :=
   { loc := rows.getD i zeroAsg, nxt := rows.getD (i + 1) zeroAsg, pub := pub }
 
-/-- The gathered chip rows: every row's every site lookup tuple, evaluated. -/
-def chipLogOf (sites : List VmHashSite) (rows : List Assignment) : Table :=
-  rows.flatMap fun a => sites.map fun s => (siteLookup sites s).tuple.map (·.eval a)
+/-- The gathered chip rows: every row's every site lookup tuple, evaluated (Phase B-GATE: the
+`i`-th site rides the lane base `width + 7·i`, mirroring `graduateV1`'s `mapIdx`). -/
+def chipLogOf (sites : List VmHashSite) (width : Nat) (rows : List Assignment) : Table :=
+  rows.flatMap fun a =>
+    sites.mapIdx fun i s =>
+      (siteLookup sites s (width + (CHIP_OUT_LANES - 1) * i)).tuple.map (·.eval a)
 
 /-- **The completeness induction.** Under the same prefix invariant, a v1 site walk makes every
-suffix site's lookup tuple evaluate to a GENUINE chip row. -/
+suffix site's lookup tuple evaluate to a GENUINE 17-wide chip row (output block `hash ins ::
+lanes`, the lanes carried from the row's lane columns). -/
 theorem go_siteLookups_complete (hash : List ℤ → ℤ) (env : VmRowEnv) (all : List VmHashSite)
     (rest : List VmHashSite) :
-    ∀ (pre : List VmHashSite) (acc : List ℤ),
+    ∀ (pre : List VmHashSite) (acc : List ℤ) (base : Nat),
       all = pre ++ rest →
       acc.length = pre.length →
       (∀ k, k < acc.length → env.loc ((all.getD k default).digestCol) = acc.getD k 0) →
       sitesWFAux acc.length rest = true →
       siteHoldsAll.go hash env acc rest →
-      ∀ s ∈ rest, ∃ ins : List ℤ, ins.length = s.inputs.length ∧
-        (siteLookup all s).tuple.map (·.eval env.loc) = chipRow hash ins := by
+      ∀ s ∈ rest, ∃ (ins lanes : List ℤ), ins.length = s.inputs.length
+        ∧ lanes.length = CHIP_OUT_LANES - 1
+        ∧ (siteLookup all s base).tuple.map (·.eval env.loc) = chipRow hash ins lanes := by
   induction rest with
-  | nil => intro pre acc _ _ _ _ _ s hs; cases hs
+  | nil => intro pre acc base _ _ _ _ _ s hs; cases hs
   | cons s ss ih =>
-    intro pre acc hall hlen hacc hwf hgo s' hs'
+    intro pre acc base hall hlen hacc hwf hgo s' hs'
     simp only [sitesWFAux, Bool.and_eq_true] at hwf
     obtain ⟨hwfs, hwfss⟩ := hwf
     obtain ⟨hd, hgo'⟩ := hgo
     rcases List.mem_cons.mp hs' with rfl | hs''
-    · -- the head site: its tuple IS the genuine chip row of its resolved inputs
-      refine ⟨s'.resolvedInputs env acc, by simp [VmHashSite.resolvedInputs], ?_⟩
-      have hev : (chipLookupTuple (s'.inputs.map (HashInput.toExpr all)) s'.digestCol).map
-            (·.eval env.loc)
+    · -- the head site: its 17-wide tuple IS a genuine chip row (out0 = hash, lanes = the
+      -- evaluated lane columns)
+      refine ⟨s'.resolvedInputs env acc, (siteLaneCols base).map env.loc,
+        by simp [VmHashSite.resolvedInputs], by simp [siteLaneCols], ?_⟩
+      have hev : (chipLookupTuple (s'.inputs.map (HashInput.toExpr all)) s'.digestCol
+            (siteLaneCols base)).map (·.eval env.loc)
           = ((s'.inputs.map (HashInput.toExpr all)).length : ℤ)
             :: padTo CHIP_RATE ((s'.inputs.map (HashInput.toExpr all)).map (·.eval env.loc))
-            ++ [env.loc s'.digestCol] := by
+            ++ (env.loc s'.digestCol :: (siteLaneCols base).map env.loc) := by
         simp [chipLookupTuple, List.map_cons, List.map_append, map_eval_padToE,
-          EmittedExpr.eval]
-      show (chipLookupTuple (s'.inputs.map (HashInput.toExpr all)) s'.digestCol).map
-          (·.eval env.loc) = chipRow hash (s'.resolvedInputs env acc)
+          EmittedExpr.eval, List.map_map, Function.comp_def]
+      show (chipLookupTuple (s'.inputs.map (HashInput.toExpr all)) s'.digestCol
+          (siteLaneCols base)).map (·.eval env.loc)
+          = chipRow hash (s'.resolvedInputs env acc) ((siteLaneCols base).map env.loc)
       rw [hev, siteTuple_eval_resolved env all acc s' hwfs hacc, hd]
       unfold chipRow
       simp [VmHashSite.resolvedInputs, List.length_map]
     · -- a later site: recurse with the extended prefix
-      exact ih (pre ++ [s]) (acc ++ [hash (s.resolvedInputs env acc)])
+      exact ih (pre ++ [s]) (acc ++ [hash (s.resolvedInputs env acc)]) base
         (by rw [hall, List.append_assoc]; rfl)
         (by simp [hlen])
         (hacc_extend env pre ss s acc _ all hall hlen hacc hd)
@@ -425,30 +457,32 @@ theorem chipLogOf_sound (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (hgrad : graduable d = true)
     (hsat : ∀ i, i < rows.length →
       satisfiedVm hash d (envOf rows pub i) (i == 0) (i + 1 == rows.length)) :
-    ChipTableSound hash (chipLogOf d.hashSites rows) := by
+    ChipTableSound hash (chipLogOf d.hashSites d.traceWidth rows) := by
   obtain ⟨hwf, hfit, _⟩ := graduable_spec hgrad
   intro r hr
   unfold chipLogOf at hr
   rw [List.mem_flatMap] at hr
   obtain ⟨a, ha, hr⟩ := hr
-  rw [List.mem_map] at hr
-  obtain ⟨s, hs, rfl⟩ := hr
+  rw [List.mem_mapIdx] at hr
+  obtain ⟨j, hj, rfl⟩ := hr
   obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp ha
   have hloc : (envOf rows pub i).loc = rows[i] := by
     simp [envOf, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
   have hgo : siteHoldsAll hash (envOf rows pub i) d.hashSites := (hsat i hi).2.1
-  obtain ⟨ins, hlen, heq⟩ := go_siteLookups_complete hash (envOf rows pub i) d.hashSites
-    d.hashSites [] [] rfl rfl (fun k hk => absurd hk (by simp)) hwf hgo s hs
+  have hsmem : d.hashSites[j] ∈ d.hashSites := List.getElem_mem hj
+  obtain ⟨ins, lanes, hlen, hlanes, heq⟩ := go_siteLookups_complete hash (envOf rows pub i)
+    d.hashSites d.hashSites [] [] (d.traceWidth + (CHIP_OUT_LANES - 1) * j)
+    rfl rfl (fun k hk => absurd hk (by simp)) hwf hgo d.hashSites[j] hsmem
   rw [hloc] at heq
-  refine ⟨ins, ?_, heq.symm ▸ rfl⟩
+  refine ⟨ins, lanes, ?_, hlanes, heq.symm ▸ rfl⟩
   rw [hlen]
-  exact of_decide_eq_true (List.all_eq_true.mp hfit s hs)
+  exact of_decide_eq_true (List.all_eq_true.mp hfit d.hashSites[j] hsmem)
 
 /-- The constructed trace family: gathered chip rows, the faithful range table, empty
 memory/map/custom tables, main unconstrained. -/
 def v2TF (d : EffectVmDescriptor) (rows : List Assignment) : TraceFamily := fun tid =>
   match tid with
-  | .poseidon2 => chipLogOf d.hashSites rows
+  | .poseidon2 => chipLogOf d.hashSites d.traceWidth rows
   | .range => rangeRows BAL_LIMB_BITS
   | _ => []
 
@@ -480,19 +514,22 @@ theorem graduateV1_complete (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
   · -- rowConstraints
     intro i hi c hc
     unfold graduateV1 at hc
-    simp only [List.mem_append, List.mem_map] at hc
-    rcases hc with (⟨c₀, hc₀, rfl⟩ | ⟨s, hs, rfl⟩) | ⟨r, hr, rfl⟩
+    simp only [List.mem_append, List.mem_map, List.mem_mapIdx] at hc
+    rcases hc with (⟨c₀, hc₀, rfl⟩ | ⟨j, hj, rfl⟩) | ⟨r, hr, rfl⟩
     · exact (hsat i hi).1 c₀ hc₀
     · -- chip lookup: membership in the gathered table, by construction
       have hi' : i < rows.length := hi
-      show (siteLookup d.hashSites s).tuple.map (·.eval (envAt (v2TraceOf d rows pub) i).loc)
-        ∈ chipLogOf d.hashSites rows
+      show (siteLookup d.hashSites d.hashSites[j]
+            (d.traceWidth + (CHIP_OUT_LANES - 1) * j)).tuple.map
+          (·.eval (envAt (v2TraceOf d rows pub) i).loc)
+        ∈ chipLogOf d.hashSites d.traceWidth rows
       have hloc : (envAt (v2TraceOf d rows pub) i).loc = rows[i] := by
         simp [v2TraceOf, envAt, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi']
       rw [hloc]
       unfold chipLogOf
       rw [List.mem_flatMap]
-      exact ⟨rows[i], List.getElem_mem hi', List.mem_map.mpr ⟨s, hs, rfl⟩⟩
+      exact ⟨rows[i], List.getElem_mem hi',
+        List.mem_mapIdx.mpr ⟨j, hj, rfl⟩⟩
     · -- range lookup: completeness of the limb table
       obtain ⟨w, bits⟩ := r
       have hb : bits = BAL_LIMB_BITS := hbits ⟨w, bits⟩ hr
