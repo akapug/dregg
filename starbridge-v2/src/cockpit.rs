@@ -38,6 +38,21 @@ use starbridge_v2::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
 use starbridge_v2::shell::{Scene, Shell};
 use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
 use starbridge_v2::world::{self, CommitOutcome, World};
+// The L1 PRESENTATION SPINE + the moldable inspector framework primitives.
+use starbridge_v2::presentable::{
+    FocusTarget, GaugeView, GraphView, Halo, LatticeView, MerkleTreeView, PresentationBody,
+    Registry, Spotter, SpotterHit, StateMachineView, TimelineView, TraceView,
+};
+// The standalone moldable surfaces + the lane gadgets — each drives its real model
+// methods (validate→predict→commit), surfacing refusals as features.
+use starbridge_v2::inspect_act::{InspectAct, InspectFocus, SendResult};
+use starbridge_v2::workspace::Workspace;
+use starbridge_v2::wonder::WonderRoom;
+use starbridge_v2::predicate_composer::{self, Atom, Composite, PredicateComposer};
+use starbridge_v2::turn_builder::CommittingTurnGadget;
+use starbridge_v2::cap_inspector::{AttenuationDial, HeldCapability};
+use starbridge_v2::token_inspector::TokenLoopGadget;
+use starbridge_v2::{Gadget, GadgetInput};
 // The feature panels — wired in as tabs of the master interface.
 use starbridge_v2::{cipherclerk, debug, edit, replay};
 // The A1 DEVELOPER content surfaces — the IDE's editor + terminal panes.
@@ -128,11 +143,43 @@ pub enum Tab {
     /// powerbox MINTS a fresh ATTENUATED capability into the app's c-list via a REAL
     /// grant turn through the embedded executor. See [`starbridge_v2::powerbox`].
     Powerbox,
+    /// THE MOLDABLE INSPECTOR (the Pharo moldable inspector made visible) — picks a
+    /// focused object, resolves its [`Registry`]-built presentation SET, and renders
+    /// it as a tab-strip (one sub-tab per [`Presentation`]) through the GENERIC
+    /// presentation renderer (one widget per [`PresentationBody`] variant), with the
+    /// [`Halo`] ring and a [`Spotter`] search box (⌘K-style) that re-focuses. Adding
+    /// a new `Presentable` later needs NO new gpui code. See
+    /// [`starbridge_v2::presentable`] + `docs/deos/INSPECTOR-FRAMEWORK.md`.
+    Moldable,
+    /// THE INSPECT→ACT loop — the Smalltalk inspect→act→inspect keystone: the
+    /// focused object's reflected state PLUS the messages it understands (its
+    /// cap-gated affordances, each with a cap badge), sending one as a REAL verified
+    /// turn and re-inspecting the post-state. See [`starbridge_v2::inspect_act`].
+    InspectAct,
+    /// THE WORKSPACE — the doIt / printIt / inspectIt evaluator: compose an intent,
+    /// evaluate it in a FORKED throwaway world (predict, never mutate), print the
+    /// predicted receipt, inspect the predicted post-state as live objects, then
+    /// commit-or-discard. See [`starbridge_v2::workspace`].
+    Workspace,
+    /// THE WONDER ROOM — the AOL-wonder front door: every cell a pokeable glowing
+    /// object (glow = real recent activity), with direct-manipulation halos
+    /// (inspect / grab / explain). See [`starbridge_v2::wonder`].
+    Wonder,
+    /// THE LANES — the moldable-inspector gadgets made reachable: the predicate
+    /// composer (caveat language), the turn builder, the attenuation dial, and the
+    /// macaroon token loop — each driving its real model methods
+    /// (validate→predict→commit / build), surfacing refusals as features.
+    Lanes,
 }
 
 impl Tab {
-    const ALL: [Tab; 19] = [
+    const ALL: [Tab; 24] = [
         Tab::Home,
+        Tab::Wonder,
+        Tab::Moldable,
+        Tab::InspectAct,
+        Tab::Workspace,
+        Tab::Lanes,
         Tab::Shell,
         Tab::Agent,
         Tab::Swarm,
@@ -164,6 +211,11 @@ impl Tab {
             Tab::WebOfCells => "WEB-OF-CELLS",
             Tab::LinksHere => "WHAT-LINKS-HERE",
             Tab::Powerbox => "POWERBOX",
+            Tab::Moldable => "INSPECTOR",
+            Tab::InspectAct => "INSPECT-ACT",
+            Tab::Workspace => "WORKSPACE",
+            Tab::Wonder => "WONDER",
+            Tab::Lanes => "LANES",
             Tab::Buffer => "BUFFER",
             Tab::Terminal => "TERMINAL",
             Tab::Composer => "COMPOSER",
@@ -407,6 +459,47 @@ pub struct Cockpit {
     /// A short banner for the last commit-for-real (the REAL executor's verdict on
     /// the committed intent), distinct from the prediction. `None` until committed.
     sim_commit_banner: Option<String>,
+
+    // --- THE MOLDABLE INSPECTOR (the Pharo moldable inspector) ---------------
+    /// The cell the moldable inspector is focused on (the [`FocusTarget`] anchors
+    /// on a cell). `None` focuses the first sorted cell. The [`Registry`] resolves
+    /// it to its presentation SET fresh each render off the live world.
+    moldable_focus: Option<CellId>,
+    /// Which presentation in the resolved SET the tab-strip has open (an index into
+    /// the `Registry::present` vector; clamped each render so it survives re-focus).
+    moldable_present_idx: usize,
+    /// The [`Spotter`] search query (the ⌘K-style box). Each typed char re-runs the
+    /// universal search; a hit click re-focuses the inspector.
+    moldable_query: String,
+
+    // --- THE INSPECT→ACT loop -----------------------------------------------
+    /// The cell the inspect→act loop is focused on. `None` focuses the first cell.
+    inspect_act_focus: Option<CellId>,
+    /// The last `send` outcome banner (a REAL committed receipt / an in-band refusal).
+    inspect_act_outcome: Option<String>,
+
+    // --- THE WORKSPACE (doIt / printIt / inspectIt) -------------------------
+    /// The live workspace evaluator — composes an intent, evaluates it in a forked
+    /// throwaway world (predict, never mutate), and commits-or-discards.
+    workspace: Workspace,
+    /// Index into [`sorted_cells`] the workspace's "+ add transfer to" picker cycles.
+    workspace_target_idx: usize,
+
+    // --- THE LANES (the gadget surfaces) ------------------------------------
+    /// Which lane the LANES panel has open (0=predicate · 1=turn · 2=cap · 3=token).
+    lane_idx: usize,
+    /// The predicate composer's current composite (the caveat-language gadget). Built
+    /// over the focused cell; `validate()` / `build()` are the real model methods.
+    lane_composite: Composite,
+    /// The committing turn-builder gadget (emits a real `IntentDraft` → predict/commit).
+    lane_turn: CommittingTurnGadget,
+    /// The attenuation dial over a held cap (the cap-attenuation value gadget), if the
+    /// cockpit principal holds one (else the lane explains the absence honestly).
+    lane_dial: Option<AttenuationDial>,
+    /// The macaroon mint→attenuate→delegate→discharge loop gadget (a verifier gadget).
+    lane_token: TokenLoopGadget,
+    /// The last lane-gadget outcome banner (a REAL build/predict/commit/discharge verdict).
+    lane_outcome: Option<String>,
 }
 
 impl Cockpit {
@@ -553,6 +646,13 @@ impl Cockpit {
         };
         let live_feed = starbridge_v2::live_node::ReceiptFeed::new(256);
 
+        // The attenuation dial's ceiling: the FIRST cap the `user` principal genuinely
+        // holds (the constructor granted user→service + user→treasury via the real
+        // genesis grant path). Computed here, before `world` is moved into the struct.
+        let lane_dial = HeldCapability::all_for(&world.borrow(), user)
+            .first()
+            .map(AttenuationDial::over_held);
+
         Self {
             world,
             cells,
@@ -630,6 +730,49 @@ impl Cockpit {
             sim_effect_idx: 0,
             sim_outcome: None,
             sim_commit_banner: None,
+
+            // THE MOLDABLE INSPECTOR boots focused on the treasury (a populated
+            // presentation set: RawFields + Affordances + Provenance + Graph +
+            // Lifecycle), on its first sub-tab, with an empty spotter box.
+            moldable_focus: Some(treasury),
+            moldable_present_idx: 0,
+            moldable_query: String::new(),
+
+            // THE INSPECT→ACT loop boots on the treasury too.
+            inspect_act_focus: Some(treasury),
+            inspect_act_outcome: None,
+
+            // THE WORKSPACE boots with a seeded conserving transfer draft so the
+            // panel opens on a runnable doIt rather than an empty expression.
+            workspace: {
+                let mut ws = Workspace::new(treasury);
+                ws.draft_mut().add_action(treasury);
+                let ai = 0;
+                ws.draft_mut().add_effect(
+                    ai,
+                    starbridge_v2::simulate::EffectKind::Transfer { to: user, amount: 250 },
+                );
+                ws
+            },
+            workspace_target_idx: 0,
+
+            // THE LANES boot on the predicate composer, with a real non-vacuous
+            // composite (a solvency floor), a turn-builder seeded with a conserving
+            // transfer, the attenuation dial over a cap the user genuinely holds (the
+            // constructor granted user→service + user→treasury), and a macaroon loop.
+            lane_idx: 0,
+            lane_composite: Composite::Leaf(Atom::BalanceGte { min: 100 }),
+            lane_turn: {
+                let mut g = CommittingTurnGadget::new(treasury);
+                g.action_with(
+                    user,
+                    starbridge_v2::simulate::EffectKind::Transfer { to: user, amount: 250 },
+                );
+                g
+            },
+            lane_dial,
+            lane_token: TokenLoopGadget::new([0x5Au8; 64], "dregg/service", [0x11u8; 32]),
+            lane_outcome: None,
         }
     }
 
@@ -2492,6 +2635,879 @@ impl Cockpit {
             .child(txt)
     }
 
+    // =======================================================================
+    // THE GENERIC PRESENTATION RENDERER — the keystone of the moldable inspector.
+    //
+    // ONE gpui function per `PresentationBody` variant. Every `Presentable` (cell,
+    // receipt chain, held cap, reflected constraint, inspected token, …) renders
+    // through this single dispatch — adding a `Presentable` later needs NO new gpui
+    // code; adding a genuinely new visual kind adds ONE arm here. The model is pure
+    // data (proven by `cargo test`); this is the thin render layer the doc's §1.3
+    // promises.
+    // =======================================================================
+
+    /// THE dispatch: one `PresentationBody` → one widget. Pure (reads the body data
+    /// the model already computed off the live world; touches no `self`).
+    fn render_presentation_body(body: &PresentationBody) -> gpui::AnyElement {
+        match body {
+            PresentationBody::Fields(i) => inspectable_row(i).into_any_element(),
+            PresentationBody::Graph(g) => render_graph_body(g).into_any_element(),
+            PresentationBody::StateMachine(sm) => render_state_machine(sm).into_any_element(),
+            PresentationBody::Gauge(g) => render_gauge(g).into_any_element(),
+            PresentationBody::Timeline(t) => render_timeline(t).into_any_element(),
+            PresentationBody::MerkleTree(m) => render_merkle(m).into_any_element(),
+            PresentationBody::Lattice(l) => render_lattice(l).into_any_element(),
+            PresentationBody::Trace(t) => render_trace(t).into_any_element(),
+            PresentationBody::Prose(p) => div()
+                .p_2()
+                .text_xs()
+                .text_color(theme::text())
+                .child(p.clone())
+                .into_any_element(),
+        }
+    }
+
+    // =======================================================================
+    // THE MOLDABLE INSPECTOR panel — the Pharo moldable inspector made visible.
+    // =======================================================================
+
+    /// THE MOLDABLE INSPECTOR — pick a focused object, render its `Registry`-resolved
+    /// presentation SET as a tab-strip (one sub-tab per `Presentation`) through the
+    /// generic renderer, with the `Halo` ring + a `Spotter` search box that re-focuses.
+    fn moldable_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let w = self.world.borrow();
+        let cells = sorted_cells(&w);
+        let focus = self.moldable_focus.or_else(|| cells.first().copied());
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title(
+            "INSPECTOR · the moldable presentation set (Registry · Spotter · Halo)",
+        ));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "Every protocol object offers a SET of named presentations (the 7 kinds; \
+             RawFields is the universal floor). Pick an object, browse its lenses across \
+             the tab-strip — each rendered by the ONE generic widget per body. Search \
+             every object's every presentation with the spotter; a hit re-focuses here.",
+        ));
+
+        // --- the ⌘K-style Spotter search box + its ranked hits ---
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child("🔍 spotter:"))
+                .child(
+                    div()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(theme::panel())
+                        .border_1()
+                        .border_color(theme::border())
+                        .text_xs()
+                        .text_color(theme::text())
+                        .min_w(px(220.))
+                        .child(if self.moldable_query.is_empty() {
+                            "(type to search every object's every presentation)".to_string()
+                        } else {
+                            self.moldable_query.clone()
+                        }),
+                )
+                .child(small_button(cx, "mold-clear", "clear", theme::muted(), Cockpit::moldable_clear_query)),
+        );
+        // A small fixed set of example queries the operator can fire (a click drives
+        // the REAL `Spotter::search` — gpui has no text input here; the box mirrors it).
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child("try:"))
+                .child(cycle_chip(cx, "mold-q-life", "lifecycle".into(), theme::accent(), |this, cx| {
+                    this.moldable_query = "lifecycle".into();
+                    cx.notify();
+                }))
+                .child(cycle_chip(cx, "mold-q-graph", "ocap Graph".into(), theme::accent(), |this, cx| {
+                    this.moldable_query = "ocap Graph".into();
+                    cx.notify();
+                }))
+                .child(cycle_chip(cx, "mold-q-bal", "balance".into(), theme::accent(), |this, cx| {
+                    this.moldable_query = "balance".into();
+                    cx.notify();
+                })),
+        );
+        if let Some(viewer) = focus {
+            let spotter = Spotter::new(&w, viewer);
+            let hits: Vec<SpotterHit> = spotter.search(&self.moldable_query);
+            if !self.moldable_query.trim().is_empty() {
+                let mut hits_box = div().flex().flex_col().gap_0p5().p_2().rounded_md().bg(theme::panel());
+                if hits.is_empty() {
+                    hits_box = hits_box.child(div().text_xs().text_color(theme::muted()).child("(no hits)"));
+                }
+                for (n, h) in hits.iter().take(8).enumerate() {
+                    let hit_cell = h.focus.cell();
+                    let id = SharedString::from(format!("mold-hit-{n}"));
+                    hits_box = hits_box.child(
+                        div()
+                            .id(id)
+                            .flex()
+                            .justify_between()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::border()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _ev, _w, cx| {
+                                    this.moldable_focus = Some(hit_cell);
+                                    this.moldable_present_idx = 0;
+                                    cx.notify();
+                                }),
+                            )
+                            .child(div().text_xs().text_color(theme::text()).child(format!(
+                                "⬡ {} · {}",
+                                reflect::short_hex(hit_cell.as_bytes()),
+                                h.snippet
+                            )))
+                            .child(pill(format!("{} · {}", h.matched_kind.slug(), h.score), theme::accent())),
+                    );
+                }
+                col = col.child(hits_box);
+            }
+        }
+
+        // --- the object picker (cycle the focused cell) + the Halo ring ---
+        let Some(focus) = focus else {
+            return col
+                .child(div().text_xs().text_color(theme::muted()).child("(no cells in the image yet)"))
+                .into_any_element();
+        };
+        let reg = Registry::new(&w);
+        let halo: Halo = reg.halo(FocusTarget::Cell(focus));
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child("focus:"))
+                .child(cycle_chip(
+                    cx,
+                    "mold-focus",
+                    format!("⬡ {} (cycle)", reflect::short_hex(focus.as_bytes())),
+                    theme::good(),
+                    Cockpit::moldable_cycle_focus,
+                ))
+                .child(div().text_xs().text_color(theme::muted()).child("· halo:"))
+                .children(halo.commands.iter().map(|c| {
+                    pill(format!("{} {}", c.glyph(), c.label()), theme::accent())
+                })),
+        );
+
+        // --- the presentation SET as a tab-strip + the rendered body ---
+        let Some(set) = reg.present(FocusTarget::Cell(focus), focus) else {
+            return col
+                .child(div().text_xs().text_color(theme::bad()).child(
+                    "(the focused object is absent from the live image — a dangling focus)",
+                ))
+                .into_any_element();
+        };
+        let idx = self.moldable_present_idx.min(set.len().saturating_sub(1));
+        // the tab-strip (one sub-tab per Presentation).
+        let mut strip = div().flex().flex_wrap().gap_1().mt_1();
+        for (i, p) in set.iter().enumerate() {
+            let active = i == idx;
+            let id = SharedString::from(format!("mold-sub-{i}"));
+            strip = strip.child(
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if active { theme::panel_hi() } else { theme::panel() })
+                    .text_xs()
+                    .text_color(if active { theme::accent() } else { theme::muted() })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::border()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| {
+                            this.moldable_present_idx = i;
+                            cx.notify();
+                        }),
+                    )
+                    .child(format!("{} · {}", p.kind.slug(), p.label)),
+            );
+        }
+        col = col.child(strip);
+        if let Some(p) = set.get(idx) {
+            col = col.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_2()
+                    .mt_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::panel())
+                    .child(Self::render_presentation_body(&p.body)),
+            );
+        }
+        col.into_any_element()
+    }
+
+    // =======================================================================
+    // THE INSPECT→ACT loop panel.
+    // =======================================================================
+
+    /// THE INSPECT→ACT loop — the focused object's reflected state + the messages it
+    /// understands (cap-badged), sending one as a REAL verified turn + re-inspecting.
+    fn inspect_act_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let w = self.world.borrow();
+        let cells = sorted_cells(&w);
+        let focus = self.inspect_act_focus.or_else(|| cells.first().copied());
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title("INSPECT-ACT · the messages it understands → send → re-inspect"));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The Smalltalk inspect→act→inspect loop: an inspected object shows the messages \
+             it understands inline (cap-badged for the viewer), you send one as a REAL verified \
+             turn, and the post-state re-inspects. A refused send is shown in-band, never swallowed.",
+        ));
+        let Some(focus) = focus else {
+            return col.child(div().text_xs().text_color(theme::muted()).child("(no cells yet)")).into_any_element();
+        };
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child("focus:"))
+                .child(cycle_chip(
+                    cx,
+                    "ia-focus",
+                    format!("⬡ {} (cycle)", reflect::short_hex(focus.as_bytes())),
+                    theme::good(),
+                    Cockpit::inspect_act_cycle_focus,
+                )),
+        );
+
+        // Build the genuine inspect→act view for the viewer (the cockpit acts as the
+        // focused cell itself — the highest authority over its own window).
+        let ia = InspectAct::build(&w, InspectFocus::Cell(focus), focus, dregg_cell::AuthRequired::Either);
+        if let Some(insp) = &ia.inspectable {
+            col = col.child(section_title("inspected state"));
+            col = col.child(inspectable_row(insp));
+        }
+        col = col.child(section_title("messages understood"));
+        if ia.messages.is_empty() {
+            col = col.child(div().text_xs().text_color(theme::muted()).child("(no messages)"));
+        }
+        for m in &ia.messages {
+            let name = m.name.clone();
+            let (badge, badge_color) = if m.authorized {
+                ("you may send", theme::good())
+            } else {
+                ("refused: insufficient authority", theme::bad())
+            };
+            let id = SharedString::from(format!("ia-send-{name}"));
+            let row = div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .bg(theme::panel())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_xs().text_color(theme::text()).child(format!("⟶ {} · {}", m.name, m.effect)))
+                        .child(div().text_xs().text_color(theme::muted()).child(format!("requires {:?}", m.required))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(pill(badge, badge_color))
+                        .when(m.authorized, |d| {
+                            let send_name = name.clone();
+                            d.child(
+                                div()
+                                    .id(id)
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(theme::panel_hi())
+                                    .border_1()
+                                    .border_color(theme::border())
+                                    .text_xs()
+                                    .text_color(theme::accent())
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme::border()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _ev, _w, cx| {
+                                            this.inspect_act_send(&send_name, cx);
+                                        }),
+                                    )
+                                    .child("send"),
+                            )
+                        }),
+                );
+            col = col.child(row);
+        }
+        if let Some(b) = &self.inspect_act_outcome {
+            let color = if b.contains("REFUSED") { theme::bad() } else { theme::good() };
+            col = col.child(div().mt_1().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(color).child(b.clone()));
+        }
+        col.into_any_element()
+    }
+
+    // =======================================================================
+    // THE WORKSPACE panel — doIt / printIt / inspectIt.
+    // =======================================================================
+
+    /// THE WORKSPACE — compose an intent, evaluate it in a forked throwaway world
+    /// (doIt = predict, never mutate), print the predicted receipt (printIt), inspect
+    /// the predicted post-state as live objects (inspectIt), then commit-or-discard.
+    fn workspace_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let cells = sorted_cells(&self.world.borrow());
+        let target = cells.get(self.workspace_target_idx).copied().unwrap_or(self.workspace.draft().agent);
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title("WORKSPACE · doIt · printIt · inspectIt"));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The live evaluator: compose an expression (a turn), doIt to evaluate it in a \
+             FORKED throwaway world (predict, never mutate), printIt to echo the predicted \
+             receipt, inspectIt to browse the predicted post-state as live objects, then \
+             commit-for-real or discard. The live image is untouched until commit.",
+        ));
+
+        // the expression composer.
+        let agent_short = reflect::short_hex(&self.workspace.draft().agent.0);
+        let n_actions = self.workspace.draft().actions.len();
+        let n_effects = self.workspace.draft().effect_count();
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child(format!("agent {agent_short} ·")))
+                .child(div().text_xs().text_color(theme::muted()).child("transfer 100 →"))
+                .child(cycle_chip(
+                    cx,
+                    "ws-target",
+                    format!("⬡ {} (cycle)", reflect::short_hex(&target.0)),
+                    theme::good(),
+                    Cockpit::workspace_cycle_target,
+                ))
+                .child(small_button(cx, "ws-add", "+ add transfer", theme::good(), Cockpit::workspace_add_transfer))
+                .child(small_button(cx, "ws-clear", "clear", theme::muted(), Cockpit::workspace_clear)),
+        );
+        col = col.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(pill(format!("{n_actions} action(s)"), theme::accent()))
+                .child(pill(format!("{n_effects} effect(s)"), theme::accent())),
+        );
+
+        // the doIt / commit / discard verbs.
+        let can_commit = self.workspace.can_commit();
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(small_button(cx, "ws-doit", "▶ doIt (evaluate)", theme::accent(), Cockpit::workspace_do_it))
+                .child({
+                    let (label, color) = if can_commit {
+                        ("✓ commit for real", theme::good())
+                    } else {
+                        ("✓ commit (doIt first)", theme::muted())
+                    };
+                    small_button(cx, "ws-commit", label, color, Cockpit::workspace_commit)
+                })
+                .child(small_button(cx, "ws-discard", "discard", theme::muted(), Cockpit::workspace_discard)),
+        );
+
+        // printIt + inspectIt.
+        if let Some(eval) = self.workspace.last() {
+            let printed = eval.print_it();
+            let color = if printed.contains("REFUSED") { theme::bad() } else { theme::good() };
+            col = col.child(section_title("printIt"));
+            col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(color).child(printed));
+            let inspected = eval.inspect_it();
+            if !inspected.is_empty() {
+                col = col.child(section_title("inspectIt · predicted post-state"));
+                let mut ibox = div().flex().flex_col().gap_1().max_h(px(260.)).overflow_hidden();
+                for ins in inspected.iter().take(8) {
+                    ibox = ibox.child(inspectable_row(ins));
+                }
+                col = col.child(ibox);
+            }
+        } else {
+            col = col.child(div().text_xs().text_color(theme::muted()).child("(no evaluation yet — press ▶ doIt)"));
+        }
+        if let Some(b) = &self.lane_outcome {
+            // shared commit banner reuse is avoided; the workspace uses its own echo above.
+            let _ = b;
+        }
+        col.into_any_element()
+    }
+
+    // =======================================================================
+    // THE WONDER ROOM panel — the AOL glowing-cell room.
+    // =======================================================================
+
+    /// THE WONDER ROOM — the AOL-wonder front door: every cell a pokeable glowing
+    /// object (glow = real recent activity), with the direct-manipulation halo ring.
+    fn wonder_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let w = self.world.borrow();
+        let room = WonderRoom::build(&w);
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title("WONDER · every cell a glowing pokeable object"));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The AOL-wonder front door: click around, absorb, no comprehension needed. Every \
+             cell GLOWS with its real recent activity; each carries the universal halo \
+             (inspect · grab · explain). A brighter cell did more, lately.",
+        ));
+
+        // the glowing-cell grid.
+        let mut grid = div().flex().flex_wrap().gap_2().mt_1();
+        for id in &cells_of(&w) {
+            let Some(gc) = room.cell(id) else { continue };
+            let glowing = gc.is_glowing();
+            let (border, text) = if glowing {
+                (theme::accent(), theme::text())
+            } else {
+                (theme::border(), theme::muted())
+            };
+            let cell_id = *id;
+            let dom = SharedString::from(format!("wonder-{}", reflect::short_hex(id.as_bytes())));
+            grid = grid.child(
+                div()
+                    .id(dom)
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_0p5()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(border)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::panel_hi()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| {
+                            // poke = inspect: re-focus the moldable inspector on it.
+                            this.moldable_focus = Some(cell_id);
+                            this.moldable_present_idx = 0;
+                            this.tab = Tab::Moldable;
+                            cx.notify();
+                        }),
+                    )
+                    .child(div().text_lg().text_color(if glowing { theme::accent() } else { theme::muted() }).child(if glowing { "✦" } else { "○" }))
+                    .child(div().text_xs().text_color(text).child(reflect::short_hex(id.as_bytes())))
+                    .child(div().text_xs().text_color(theme::muted()).child(if glowing { "glowing" } else { "quiet" })),
+            );
+        }
+        col = col.child(grid);
+
+        // explain the brightest cell (a plain-sentence "what just happened here").
+        if let Some(bright) = room.brightest() {
+            if let Some(sentence) = room.explain(&bright.cell) {
+                col = col.child(section_title("the brightest cell explains itself"));
+                col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(theme::text()).child(sentence));
+            }
+        }
+        col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("(click a cell to inspect it in the moldable INSPECTOR)"));
+        col.into_any_element()
+    }
+
+    // =======================================================================
+    // THE LANES panel — the gadget surfaces (validate→predict→commit / build).
+    // =======================================================================
+
+    /// THE LANES — the moldable-inspector gadgets made reachable: the predicate
+    /// composer, the turn builder, the attenuation dial, and the macaroon token loop.
+    /// Each drives its REAL model methods; a refusal is surfaced as a feature.
+    fn lanes_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title("LANES · the moldable gadgets (validate → predict → commit)"));
+        // the lane selector.
+        let names = ["predicate composer", "turn builder", "attenuation dial", "token loop"];
+        let mut strip = div().flex().flex_wrap().gap_1();
+        for (i, name) in names.iter().enumerate() {
+            let active = i == self.lane_idx;
+            let id = SharedString::from(format!("lane-sel-{i}"));
+            strip = strip.child(
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if active { theme::panel_hi() } else { theme::panel() })
+                    .text_xs()
+                    .text_color(if active { theme::accent() } else { theme::muted() })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::border()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| {
+                            this.lane_idx = i;
+                            this.lane_outcome = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(*name),
+            );
+        }
+        col = col.child(strip);
+
+        col = col.child(match self.lane_idx {
+            0 => self.lane_predicate(cx),
+            1 => self.lane_turn(cx),
+            2 => self.lane_cap(cx),
+            _ => self.lane_token(cx),
+        });
+
+        if let Some(b) = &self.lane_outcome {
+            let color = if b.contains("REFUSED") || b.contains("DENIED") || b.contains("incomplete") {
+                theme::bad()
+            } else {
+                theme::good()
+            };
+            col = col.child(div().mt_1().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(color).child(b.clone()));
+        }
+        col.into_any_element()
+    }
+
+    /// LANE 0 — the predicate composer (the caveat-language gadget). Drives the REAL
+    /// `validate`/`build`, showing the live fail-closed verdict + the source prose +
+    /// cost class. A vacuous/strippable caveat is REFUSED (surfaced as a feature).
+    fn lane_predicate(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let validation = predicate_composer::validate(&self.lane_composite);
+        let mut col = div().flex().flex_col().gap_1().mt_1();
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "Compose a predicate caveat from real atoms; validate() runs the genuine \
+             non-vacuity / anti-strip / cost check; build() lowers to the protocol \
+             StateConstraint. A vacuous or proof-strippable caveat is refused.",
+        ));
+        // a few pickable atoms — each replaces the composite (a Leaf) and re-validates.
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child("atom:"))
+                .child(cycle_chip(cx, "lp-bgte", "balance ≥ 100".into(), theme::accent(), |this, cx| {
+                    this.lane_composite = Composite::Leaf(Atom::BalanceGte { min: 100 });
+                    this.lane_outcome = None;
+                    cx.notify();
+                }))
+                .child(cycle_chip(cx, "lp-blte", "balance ≤ 1000".into(), theme::accent(), |this, cx| {
+                    this.lane_composite = Composite::Leaf(Atom::BalanceLte { max: 1000 });
+                    this.lane_outcome = None;
+                    cx.notify();
+                }))
+                .child(cycle_chip(cx, "lp-feq", "slot 0 = 7".into(), theme::accent(), |this, cx| {
+                    this.lane_composite = Composite::Leaf(Atom::FieldEquals { index: 0, value: 7 });
+                    this.lane_outcome = None;
+                    cx.notify();
+                }))
+                .child(cycle_chip(cx, "lp-empty", "∅ AnyOf (vacuous!)".into(), theme::warn(), |this, cx| {
+                    this.lane_composite = Composite::AnyOf(vec![]);
+                    this.lane_outcome = None;
+                    cx.notify();
+                })),
+        );
+        // the live verdict.
+        let composer = PredicateComposer::new(
+            self.anchors[0],
+            self.anchors[0],
+            self.lane_composite.clone(),
+        );
+        let (vtext, vcolor) = match composer.build() {
+            Ok(c) => (format!("✓ buildable · lowers to {c:?}"), theme::good()),
+            Err(e) => (format!("REFUSED · {e:?}"), theme::bad()),
+        };
+        col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(vcolor).child(vtext));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(format!("validate(): {validation:?}")));
+        // the source prose (the "what-is" face).
+        if let Ok(c) = composer.build() {
+            let refl = predicate_composer::ReflectedConstraint::new(c);
+            col = col.child(section_title("source"));
+            col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(theme::text()).child(refl.source_prose()));
+            col = col.child(Self::render_presentation_body(&PresentationBody::Trace(refl.trace())));
+        }
+        col.into_any_element()
+    }
+
+    /// LANE 1 — the committing turn builder. Drives the REAL `validate`/`predict`,
+    /// showing the live fail-closed verdict + the predicted outcome (no commit here —
+    /// the SIMULATE/COMPOSER tabs commit; this lane demonstrates the gadget shape).
+    fn lane_turn(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let w = self.world.borrow();
+        let mut col = div().flex().flex_col().gap_1().mt_1();
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The committing turn gadget: build a call-forest, validate() the well-formedness \
+             floor, then predict() its consequences in a fork (the same IntentDraft → simulate \
+             spine). An empty/malformed turn cannot build.",
+        ));
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child("agent:"))
+                .child(pill(reflect::short_hex(&self.lane_turn.agent_cell().0), theme::accent()))
+                .child(small_button(cx, "lt-add", "+ add transfer action", theme::good(), Cockpit::lane_turn_add))
+                .child(small_button(cx, "lt-clear", "clear", theme::muted(), Cockpit::lane_turn_clear)),
+        );
+        col = col.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(pill(format!("{} action(s)", self.lane_turn.draft().actions.len()), theme::accent()))
+                .child(pill(format!("{} effect(s)", self.lane_turn.effect_count()), theme::accent())),
+        );
+        // the live validate() + predict().
+        let (vtext, vcolor) = match self.lane_turn.validate() {
+            starbridge_v2::GadgetValidation::Ok => ("✓ validate(): Ok".to_string(), theme::good()),
+            starbridge_v2::GadgetValidation::Invalid { reason } => (format!("REFUSED · {reason}"), theme::bad()),
+        };
+        col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(vcolor).child(vtext));
+        col = col.child(section_title("predict()"));
+        let predicted = starbridge_v2::turn_builder::render_prediction(&self.lane_turn, &w);
+        col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(theme::text()).child(predicted));
+        col.into_any_element()
+    }
+
+    /// LANE 2 — the attenuation dial (the cap-attenuation value gadget). Drives the
+    /// REAL `is_attenuation` check; an amplifying designation is REFUSED.
+    fn lane_cap(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut col = div().flex().flex_col().gap_1().mt_1();
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The attenuation dial: pick a narrower rights tier; the dial's build() runs the \
+             REAL is_attenuation lattice check, refusing any tier that would AMPLIFY the held \
+             ceiling. Granting mints a real attenuated cap through the powerbox.",
+        ));
+        let Some(dial) = &self.lane_dial else {
+            return col
+                .child(div().text_xs().text_color(theme::warn()).child(
+                    "(the cockpit principal holds no firmament cap to attenuate — the lane is honest about the absence)",
+                ))
+                .into_any_element();
+        };
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child(format!("ceiling {:?} · designate:", dial.ceiling()))),
+        );
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(cycle_chip(cx, "lc-sig", "Signature".into(), theme::accent(), |this, cx| {
+                    this.lane_dial_set("Signature", cx);
+                }))
+                .child(cycle_chip(cx, "lc-proof", "Proof".into(), theme::accent(), |this, cx| {
+                    this.lane_dial_set("Proof", cx);
+                }))
+                .child(cycle_chip(cx, "lc-imposs", "Impossible (narrowest)".into(), theme::accent(), |this, cx| {
+                    this.lane_dial_set("Impossible", cx);
+                }))
+                .child(cycle_chip(cx, "lc-none", "None (amplify! refused)".into(), theme::warn(), |this, cx| {
+                    this.lane_dial_set("None", cx);
+                })),
+        );
+        let (vtext, vcolor) = match dial.build() {
+            Ok(c) => (format!("✓ buildable attenuated cap · rights {:?}", c.rights), theme::good()),
+            Err(e) => (format!("REFUSED · {e:?}"), theme::bad()),
+        };
+        col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(vcolor).child(vtext));
+        col.into_any_element()
+    }
+
+    /// LANE 3 — the macaroon token loop (a verifier gadget). build() runs the REAL
+    /// mint → attenuate → delegate → discharge crypto end-to-end + returns the verdict.
+    fn lane_token(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut col = div().flex().flex_col().gap_1().mt_1();
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The macaroon loop: mint a root token, attenuate (confine to a service/action), \
+             delegate, and DISCHARGE service-side — build() runs the REAL cipherclerk crypto \
+             (HMAC chain + caveat evaluation) and returns the live verdict.",
+        ));
+        col = col.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(small_button(cx, "ltok-run", "▶ run the loop (build)", theme::accent(), Cockpit::lane_token_run)),
+        );
+        col.into_any_element()
+    }
+
+    // =======================================================================
+    // THE HANDLERS — the `&mut Cockpit` verbs the new panels' buttons call. Each
+    // drives a REAL model method; a refusal is captured into the panel's banner.
+    // =======================================================================
+
+    fn moldable_clear_query(&mut self, cx: &mut Context<Self>) {
+        self.moldable_query.clear();
+        cx.notify();
+    }
+
+    fn moldable_cycle_focus(&mut self, cx: &mut Context<Self>) {
+        let cells = sorted_cells(&self.world.borrow());
+        if cells.is_empty() {
+            return;
+        }
+        let cur = self.moldable_focus.and_then(|f| cells.iter().position(|c| *c == f)).unwrap_or(0);
+        self.moldable_focus = Some(cells[(cur + 1) % cells.len()]);
+        self.moldable_present_idx = 0;
+        cx.notify();
+    }
+
+    fn inspect_act_cycle_focus(&mut self, cx: &mut Context<Self>) {
+        let cells = sorted_cells(&self.world.borrow());
+        if cells.is_empty() {
+            return;
+        }
+        let cur = self.inspect_act_focus.and_then(|f| cells.iter().position(|c| *c == f)).unwrap_or(0);
+        self.inspect_act_focus = Some(cells[(cur + 1) % cells.len()]);
+        self.inspect_act_outcome = None;
+        cx.notify();
+    }
+
+    /// SEND a message through the REAL inspect→act loop (a verified turn), capturing
+    /// the executor's verdict / the in-band refusal into the banner + refreshing.
+    fn inspect_act_send(&mut self, message: &str, cx: &mut Context<Self>) {
+        let Some(focus) = self.inspect_act_focus.or_else(|| sorted_cells(&self.world.borrow()).first().copied()) else {
+            return;
+        };
+        let result = {
+            let mut w = self.world.borrow_mut();
+            let ia = InspectAct::build(&w, InspectFocus::Cell(focus), focus, dregg_cell::AuthRequired::Either);
+            ia.send(&mut w, message, dregg_cell::AuthRequired::Either)
+        };
+        self.inspect_act_outcome = Some(match result {
+            SendResult::Committed { receipt, .. } => format!(
+                "committed `{message}` · receipt {} · {} action(s)",
+                reflect::short_hex(&receipt.receipt_hash()),
+                receipt.action_count
+            ),
+            SendResult::Refused { reason, by_executor } => format!(
+                "REFUSED `{message}` ({}): {reason}",
+                if by_executor { "executor" } else { "cap-gate" }
+            ),
+        });
+        self.refresh_cells();
+        cx.notify();
+    }
+
+    fn workspace_cycle_target(&mut self, cx: &mut Context<Self>) {
+        let n = sorted_cells(&self.world.borrow()).len().max(1);
+        self.workspace_target_idx = (self.workspace_target_idx + 1) % n;
+        cx.notify();
+    }
+
+    fn workspace_add_transfer(&mut self, cx: &mut Context<Self>) {
+        let cells = sorted_cells(&self.world.borrow());
+        let Some(target) = cells.get(self.workspace_target_idx).copied() else { return };
+        let agent = self.workspace.draft().agent;
+        let ai = self.workspace.draft_mut().add_action(agent);
+        self.workspace.draft_mut().add_effect(
+            ai,
+            starbridge_v2::simulate::EffectKind::Transfer { to: target, amount: 100 },
+        );
+        cx.notify();
+    }
+
+    fn workspace_clear(&mut self, cx: &mut Context<Self>) {
+        let agent = self.workspace.draft().agent;
+        self.workspace = Workspace::new(agent);
+        cx.notify();
+    }
+
+    fn workspace_do_it(&mut self, cx: &mut Context<Self>) {
+        let w = self.world.borrow();
+        self.workspace.evaluate(&w);
+        cx.notify();
+    }
+
+    fn workspace_commit(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace.can_commit() {
+            return;
+        }
+        {
+            let mut w = self.world.borrow_mut();
+            self.workspace.commit(&mut w);
+        }
+        self.refresh_cells();
+        cx.notify();
+    }
+
+    fn workspace_discard(&mut self, cx: &mut Context<Self>) {
+        self.workspace.discard();
+        cx.notify();
+    }
+
+    fn lane_turn_add(&mut self, cx: &mut Context<Self>) {
+        let agent = self.lane_turn.agent_cell();
+        self.lane_turn.action_with(
+            agent,
+            starbridge_v2::simulate::EffectKind::Transfer { to: agent, amount: 50 },
+        );
+        cx.notify();
+    }
+
+    fn lane_turn_clear(&mut self, cx: &mut Context<Self>) {
+        self.lane_turn = CommittingTurnGadget::new(self.lane_turn.agent_cell());
+        cx.notify();
+    }
+
+    /// Set the attenuation dial's designated tier through the REAL `Gadget::set`
+    /// (the same path the form's keystroke drives), then capture build()'s verdict.
+    fn lane_dial_set(&mut self, slug: &str, cx: &mut Context<Self>) {
+        if let Some(dial) = &mut self.lane_dial {
+            dial.set("rights", GadgetInput::Variant(slug.to_string()));
+            self.lane_outcome = Some(match dial.build() {
+                Ok(c) => format!("designated {slug} → buildable attenuated cap (rights {:?})", c.rights),
+                Err(e) => format!("REFUSED designation {slug}: {e:?}"),
+            });
+        }
+        cx.notify();
+    }
+
+    /// RUN the macaroon loop's REAL crypto via the gadget's `build()` (mint →
+    /// attenuate → delegate → discharge), capturing the live verdict into the banner.
+    fn lane_token_run(&mut self, cx: &mut Context<Self>) {
+        self.lane_outcome = Some(match self.lane_token.build() {
+            Ok(r) => format!(
+                "loop ran · service `{}` mask `{}` · authorizes_own={} denies_wider={} · {} caveat(s) added",
+                r.service, r.mask, r.authorizes_own, r.denies_wider, r.caveats_added
+            ),
+            Err(e) => format!("REFUSED · the loop could not build: {e:?}"),
+        });
+        cx.notify();
+    }
+
     fn dynamics_feed(&self) -> impl IntoElement {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_0p5().p_2();
@@ -2556,6 +3572,11 @@ impl Cockpit {
             Tab::WebOfCells => self.web_of_cells_panel(cx).into_any_element(),
             Tab::LinksHere => self.links_here_panel(cx).into_any_element(),
             Tab::Powerbox => self.powerbox_panel(cx).into_any_element(),
+            Tab::Moldable => self.moldable_panel(cx).into_any_element(),
+            Tab::InspectAct => self.inspect_act_panel(cx).into_any_element(),
+            Tab::Workspace => self.workspace_panel(cx).into_any_element(),
+            Tab::Wonder => self.wonder_panel(cx).into_any_element(),
+            Tab::Lanes => self.lanes_panel(cx).into_any_element(),
             Tab::Buffer => self.buffer_panel(cx).into_any_element(),
             Tab::Terminal => self.terminal_panel(cx).into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
@@ -5241,6 +6262,205 @@ fn sorted_cells(w: &World) -> Vec<CellId> {
     let mut ids: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
     ids.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
     ids
+}
+
+/// The sorted live cells (alias used by the wonder-room grid for legibility).
+fn cells_of(w: &World) -> Vec<CellId> {
+    sorted_cells(w)
+}
+
+// ===========================================================================
+// THE GENERIC PER-BODY RENDER HELPERS — one widget per `PresentationBody` variant.
+// Pure (they read the body data the model already computed). The Fields + Prose
+// variants are rendered inline by `render_presentation_body`; these cover the
+// six structural visual kinds.
+// ===========================================================================
+
+/// Graph body — reuses the GRAPH tab's drawing vocabulary (nodes + directed
+/// `holder ──rights──▶ target` edges), centered on the focused cell.
+fn render_graph_body(g: &GraphView) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap_0p5();
+    col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
+        "{} node(s) · {} edge(s){}",
+        g.nodes.len(),
+        g.edges.len(),
+        g.focus.map(|f| format!(" · focus ⬡ {}", reflect::short_hex(f.as_bytes()))).unwrap_or_default(),
+    )));
+    if g.edges.is_empty() {
+        col = col.child(div().text_xs().text_color(theme::muted()).child("(no capability edges)"));
+    }
+    for e in g.edges.iter().take(24) {
+        col = col.child(
+            div()
+                .flex()
+                .justify_between()
+                .px_2()
+                .py_0p5()
+                .child(div().text_xs().text_color(theme::text()).child(format!(
+                    "⬡ {} ──▶ {}",
+                    reflect::short_hex(e.holder.as_bytes()),
+                    reflect::short_hex(e.target.as_bytes()),
+                )))
+                .child(div().text_xs().text_color(theme::accent()).child(format!("[{}]", e.rights_label()))),
+        );
+    }
+    col
+}
+
+/// StateMachine body — states (terminal marked) + the current readout + the
+/// directed verb transitions.
+fn render_state_machine(sm: &StateMachineView) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap_0p5();
+    col = col.child(div().text_xs().text_color(theme::good()).child(format!("current: {}", sm.current)));
+    let mut states_row = div().flex().flex_wrap().gap_1();
+    for st in &sm.states {
+        let active = st.name == sm.current;
+        let color = if active {
+            theme::accent()
+        } else if st.terminal {
+            theme::warn()
+        } else {
+            theme::muted()
+        };
+        states_row = states_row.child(pill(
+            if st.terminal { format!("{} ⊣", st.name) } else { st.name.clone() },
+            color,
+        ));
+    }
+    col = col.child(states_row);
+    col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("transitions"));
+    for t in &sm.transitions {
+        col = col.child(div().text_xs().text_color(theme::text()).child(format!(
+            "{} ──{}──▶ {}",
+            t.from, t.verb, t.to
+        )));
+    }
+    col
+}
+
+/// Gauge body — a bounded value (drawn / ceiling) drawn as a simple bar, with the
+/// named ratchet rungs.
+fn render_gauge(g: &GaugeView) -> impl IntoElement {
+    let frac: f32 = match g.ceiling {
+        Some(c) if c > 0 => (g.value as f32 / c as f32).clamp(0.0, 1.0),
+        _ => 0.0,
+    };
+    let mut col = div().flex().flex_col().gap_0p5();
+    col = col.child(div().text_xs().text_color(theme::text()).child(format!(
+        "{}: {}{}",
+        g.label,
+        g.value,
+        g.ceiling.map(|c| format!(" / {c}")).unwrap_or_else(|| " (unbounded)".into()),
+    )));
+    if g.ceiling.is_some() {
+        col = col.child(
+            div()
+                .w_full()
+                .h(px(8.))
+                .rounded_md()
+                .bg(theme::panel_hi())
+                .child(
+                    div()
+                        .h(px(8.))
+                        .w(gpui::relative(frac))
+                        .rounded_md()
+                        .bg(if frac > 0.9 { theme::bad() } else { theme::accent() }),
+                ),
+        );
+    }
+    if !g.rungs.is_empty() {
+        let mut rungs = div().flex().flex_wrap().gap_1();
+        for r in &g.rungs {
+            rungs = rungs.child(pill(r.clone(), theme::muted()));
+        }
+        col = col.child(rungs);
+    }
+    col
+}
+
+/// Timeline body — ordered events (a receipt chain / epoch history / lineage), each
+/// with its monotone key + an optional navigable hash.
+fn render_timeline(t: &TimelineView) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap_0p5();
+    if t.events.is_empty() {
+        col = col.child(div().text_xs().text_color(theme::muted()).child("(no events yet)"));
+    }
+    for e in t.events.iter().take(32) {
+        col = col.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).min_w(px(28.)).child(format!("#{}", e.at)))
+                .child(div().text_xs().text_color(theme::text()).child(e.label.clone()))
+                .when(e.hash.is_some(), |d| {
+                    d.child(pill(reflect::short_hex(&e.hash.unwrap()), theme::good()))
+                }),
+        );
+    }
+    col
+}
+
+/// MerkleTree body — leaves + the committed root + an optional highlighted path.
+fn render_merkle(m: &MerkleTreeView) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap_0p5();
+    col = col.child(div().text_xs().text_color(theme::text()).child(format!("{} · {} leaf/leaves", m.label, m.leaves.len())));
+    col = col.child(
+        div()
+            .flex()
+            .gap_1()
+            .child(div().text_xs().text_color(theme::muted()).child("root:"))
+            .child(pill(reflect::short_hex(&m.root), theme::accent())),
+    );
+    for (i, leaf) in m.leaves.iter().take(24).enumerate() {
+        let on_path = m.path.contains(leaf);
+        col = col.child(div().text_xs().text_color(if on_path { theme::good() } else { theme::muted() }).child(format!(
+            "{} leaf[{i}] {}",
+            if on_path { "▣" } else { "·" },
+            leaf
+        )));
+    }
+    col
+}
+
+/// Lattice body — a partial order (rights tiers / finality levels), with the live
+/// current element + the covering relations.
+fn render_lattice(l: &LatticeView) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap_0p5();
+    let mut nodes_row = div().flex().flex_wrap().gap_1();
+    for (i, n) in l.nodes.iter().enumerate() {
+        let active = l.current == Some(i);
+        nodes_row = nodes_row.child(pill(
+            if active { format!("● {n}") } else { n.clone() },
+            if active { theme::accent() } else { theme::muted() },
+        ));
+    }
+    col = col.child(nodes_row);
+    col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("⊑ covering relations"));
+    for (a, b) in &l.edges {
+        if let (Some(na), Some(nb)) = (l.nodes.get(*a), l.nodes.get(*b)) {
+            col = col.child(div().text_xs().text_color(theme::text()).child(format!("{na} ⊑ {nb}")));
+        }
+    }
+    col
+}
+
+/// Trace body — step-by-step evaluation (an HMAC chain / constraint eval / absorb),
+/// numbered in evaluation order.
+fn render_trace(t: &TraceView) -> impl IntoElement {
+    let mut col = div().flex().flex_col().gap_0p5();
+    if t.steps.is_empty() {
+        col = col.child(div().text_xs().text_color(theme::muted()).child("(no steps)"));
+    }
+    for s in t.steps.iter().take(32) {
+        col = col.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).min_w(px(24.)).child(format!("{}.", s.index)))
+                .child(div().text_xs().text_color(theme::text()).child(s.label.clone())),
+        );
+    }
+    col
 }
 
 /// A human reason for a refused shell op (the window-manager ocap guarantee
