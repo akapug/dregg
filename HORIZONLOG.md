@@ -63,7 +63,25 @@ refused to launder a partial):**
   `scripts/emit-descriptors.sh`; (d) the await-Lean-emit Rust tests go green (`ir2_degree_budget`, the rotation
   probes, bilateral/cross-side/tree-fold, `v3_staged_registry_parses…`). The `compress8` byte-mirror is a B-ROTATION
   concern, not B-GATE.
-- ⬜ **PHASE B-ROTATION — the 8-wide sponge commitment + geometry**: `v9_wire_commit`/`wire_commit`/`fill_block`
+- 🟥 **PHASE B-ROTATION — BLOCKED at the chip INPUT-ARITY cap (grounded, 2026-06-19)**: the 8-wide chain the
+  task prescribes (`d8 = perm_lanes(d8 ‖ new_limbs)[0..8]`, ONE permutation per step) is NOT expressible with the
+  B-GATE chip AS CONSTRAINED. B-GATE widened the chip OUTPUT to 8 lanes (`CHIP_OUT_LANES = 8`, the genuine
+  distinct `state[0..8]` of one permutation — that half works), but the chip's INPUT side is hard-capped: AIR
+  admits arities `{0,2,3,4,7}` only, seeds `state[0..7]` (st[0..4]=in0..3, st[4..6]=S4/S5/S6 on the arity-7
+  branch), and `builder.assert_zero(local[CHIP_IN0 + 7])` PINS `state[7]` to ZERO with `state[8..16]` never
+  seeded (`circuit/src/descriptor_ir2.rs:1928-1933, 1955-1966`). So ONE chip permutation absorbs at most **7
+  genuine input felts**. An 8-felt carrier `d8` needs 8 input slots just to thread itself forward injectively
+  (plus ≥1 for a new limb ⇒ ≥9), which exceeds 7. A step that re-absorbs only 7 of the 8 carrier felts is
+  collidable on the dropped felt (the carrier is then 7-wide-throughput, not 8) — exactly the laundering the
+  task forbids. Widest faithful carrier that still absorbs ≥1 new limb per step on THIS chip = **6 felts (~185
+  bit, ~92-bit collision)** — above 4-felt (62-bit) and vastly above 1-felt, but BELOW the ~124-bit target. The
+  Lean side IS ready (`chip_lookup_sound_N` forces all 8 output cols = `permOut ins`; `Poseidon2SpongeCR` floor
+  holds at full width); the wall is purely Rust chip-input geometry. CLOSURE = a B-GATE-class chip flag-day to
+  admit a wide absorb (arity-15/16: carry the 8-felt `d8` across the full 16-wide state incl. capacity lanes,
+  one genuine sponge step per absorb), re-prove the chip AIR seed constraints + `ChipTableSoundN`, THEN the
+  carrier-widening + geometry below. NO code shipped (tree stays green); STOPPED per the task's own
+  "if the chain can't be made 8-wide cleanly, STOP and report exactly where" clause.
+  (Original spec, deferred behind the chip-input flag-day): `v9_wire_commit`/`wire_commit`/`fill_block`
   rewritten so the chaining carrier `d8` is 8 felts THROUGHOUT (no 31-bit intermediate — THE anti-laundering
   crux; a 1-felt-chain-with-wide-final-squeeze is the laundered version). `B_STATE_COMMIT` 1→8 + the 12 chain
   carriers ×2 blocks (`ROT_WIDTH` 327→~509), `wireCommitR`/`chainFrom` carry an 8-felt accumulator,
