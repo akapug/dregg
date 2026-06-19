@@ -816,6 +816,17 @@ pub const V3_STAGED_REGISTRY_TSV: &str =
 pub const V3_STAGED_REGISTRY_FP: &str =
     "e4f1dbdb53ef680cd3c1039f74d365bb1523d787310384a64c5a45233a17c189";
 
+/// **THE FAITHFUL 8-FELT WIDE TRANSFER descriptor (STAGED-ADDITIVE slice).** The
+/// `v3RegistryWide` transfer member (`wideAppend transferV3 bb (bb+51)`, width 816 / PI 54) —
+/// the byte source of the first wide prove+verify roundtrip. Emitted from the verified Lean
+/// `EffectVmEmitRotationWide.v3RegistryWide` (`metatheory/EmitWideTransferProbe.lean`), a `key\t
+/// name\tjson` single line. ADDITIVE: the live 1-felt `V3_STAGED_REGISTRY_TSV` is UNTOUCHED — this
+/// is the parallel wide path beside it. The wide carriers (cols 608..815) re-absorb the SAME
+/// rotated limbs the 1-felt block lays into a genuine 8-felt (~124-bit) commitment, published on
+/// PIs 38..53.
+pub const WIDE_TRANSFER_STAGED_TSV: &str =
+    include_str!("../descriptors/rotation-wide-transfer-staged.tsv");
+
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
 /// 3-wide chip groups while ≥ 3 remain, singletons after — arity ∈ {2,4}, NEVER 3 — and the

@@ -286,9 +286,13 @@ theorem chainFrom8_len (permW : List ℤ → List ℤ) (hW : Poseidon2Width8 per
 
 /-- **`wireCommitR8`** — the chained 8-FELT commitment over an arbitrary pre-iroot limb list:
 the 4-wide head (no carrier), the `chunk31` body (carrier ‖ 3 limbs = arity 11), the iroot as
-its own final site (carrier ‖ iroot = arity 9), LITERALLY LAST. Returns 8 felts. -/
+its own final site, LITERALLY LAST. The final chunk is `[ir, 0, 0]` (carrier ‖ iroot ‖ 2 zero
+pads = arity 11): `permW` is invariant to trailing zero inputs, so the two pads do NOT change the
+digest value, but they land the EMITTED final chip lookup on the chip AIR's WIDE (arity-11) row
+(the deployed Rust chip pins `in7..in10 == 0` for every arity != 11, refusing the arity-9 final
+whose in7/in8 = carrier-lane-7/iroot are nonzero). Returns 8 felts. -/
 def wireCommitR8 (permW : List ℤ → List ℤ) (l : List ℤ) (ir : ℤ) : List ℤ :=
-  chainFrom8 permW (permW (l.take 4)) (chunk31 (l.drop 4) ++ [[ir]])
+  chainFrom8 permW (permW (l.take 4)) (chunk31 (l.drop 4) ++ [[ir, 0, 0]])
 
 /-- The 8-felt fold is injective under the WIDE CR floor + width-8 contract, given equal CHUNK
 COUNTS: equal final 8-felt digests force equal seeds and equal chunk lists. `permW` injectivity

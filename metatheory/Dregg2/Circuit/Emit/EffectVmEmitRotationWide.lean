@@ -144,8 +144,13 @@ def rotV3WideSpecs (base cbase : Nat) : List (List EmittedExpr × List Nat) :=
   , (bodyIns cbase 8 (base+28) (base+29) (base+30), carrierCols cbase 9)
   , (bodyIns cbase 9 (base+31) (base+32) (base+33), carrierCols cbase 10)
   , (bodyIns cbase 10 (base+34) (base+35) (base+36), carrierCols cbase 11)
-  , -- final: carrier 11 ‖ iroot → carrier 12 (state commit)
-    ((carrierCols cbase 11).map .var ++ [.var (base+37)], carrierCols cbase 12) ]
+  , -- final: carrier 11 ‖ iroot ‖ 2 zero pads → carrier 12 (state commit).
+    -- The two trailing `.const 0` inputs land the emitted tuple on the chip's WIDE (arity-11) row:
+    -- the deployed Rust chip AIR pins `in7..in10 == 0` for every arity != 11, so the arity-9 final
+    -- (which genuinely seeds in7 = carrier lane 7 and in8 = iroot, both nonzero) is REFUSED. Padding
+    -- to arity 11 is binding-preserving — `permW` is invariant to trailing zero inputs, so the
+    -- wide commit value is unchanged (`wireCommitR8`'s final chunk is `[ir, 0, 0]` to match).
+    ((carrierCols cbase 11).map .var ++ [.var (base+37), .const 0, .const 0], carrierCols cbase 12) ]
 
 /-- The wide lookups for a rotated block (one `.lookup` constraint per spec). -/
 def rotV3WideLookups (base cbase : Nat) : List VmConstraint2 :=
@@ -242,8 +247,9 @@ theorem rotV3WidePin (permW : List ℤ → List ℤ) (tbl : Table)
     have := m (bodyIns cbase 10 (base+34) (base+35) (base+36), carrierCols cbase 11)
       (by simp [rotV3WideSpecs]); rw [bodyIns_eval] at this; simpa [carrierVals] using this
   have h12 : carrierVals cbase 12 env.loc
-      = permW (carrierVals cbase 11 env.loc ++ [env.loc (base+37)]) := by
-    have := m ((carrierCols cbase 11).map .var ++ [.var (base+37)], carrierCols cbase 12)
+      = permW (carrierVals cbase 11 env.loc ++ [env.loc (base+37), 0, 0]) := by
+    have := m ((carrierCols cbase 11).map .var ++ [.var (base+37), .const 0, .const 0],
+        carrierCols cbase 12)
       (by simp [rotV3WideSpecs])
     simpa [carrierVals, EmittedExpr.eval, List.map_append, List.map_map, Function.comp_def] using this
   -- fold: `wireCommitR8 = chainFrom8 (permW head) (chunk31 body ++ [[ir]])`.

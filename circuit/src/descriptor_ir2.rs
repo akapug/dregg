@@ -2716,6 +2716,12 @@ where
 // memory rows from state accesses, map-op rows from boundary reconciliations)
 // ============================================================================
 
+/// Concrete evaluation of a `LeanExpr` over one main row (diagnostic/producer helper).
+#[cfg(feature = "prover")]
+pub fn eval_lean_expr(e: &LeanExpr, row: &[BabyBear]) -> BabyBear {
+    eval_c(e, row)
+}
+
 /// Concrete evaluation of a `LeanExpr` over one main row.
 #[cfg(feature = "prover")]
 fn eval_c(e: &LeanExpr, row: &[BabyBear]) -> BabyBear {
@@ -2769,14 +2775,54 @@ pub(crate) fn chip_absorb_lanes(arity: usize, inputs: &[BabyBear]) -> [BabyBear;
     } else {
         st[4] = BabyBear::new(arity as u32);
     }
-    // The wide carrier/limb tail (lanes 7..10): genuine inputs only on the wide arity.
-    if wide {
-        for i in 7..CHIP_WIDE_ARITY {
-            st[i] = inputs.get(i).copied().unwrap_or(BabyBear::ZERO);
-        }
+    // The wide carrier/limb tail (lanes 7..10): seeded from the genuine (zero-padded) inputs on
+    // EVERY arity — BYTE-IDENTICAL to the chip-row gather (`for i in 7..CHIP_WIDE_ARITY { st[i] =
+    // in_i }`, no `wide` guard). The narrow live arities (≤ 7) zero-pad in7..in10, so this is a
+    // no-op for them; the wide commitment's arity-9 final (`prev8 ‖ iroot`, 9 real inputs) genuinely
+    // seeds in7/in8, which the prior `if wide` guard DROPPED — making its lanes 1..7 disagree with
+    // the chip table (and the carrier pi_binding fail). Matching the gather closes that.
+    let _ = wide;
+    for i in 7..CHIP_WIDE_ARITY {
+        st[i] = inputs.get(i).copied().unwrap_or(BabyBear::ZERO);
     }
     let lanes = perm_lanes(st);
     core::array::from_fn(|j| lanes[j + 1])
+}
+
+/// **THE chip-faithful 8-lane absorb (Phase B-ROTATION wide carriers).** Returns ALL 8 output
+/// lanes `state[0..8]` of the SINGLE permutation the chip table derives for a `(arity, inputs)`
+/// lookup — seeding lanes 0..6/7..10 BYTE-IDENTICALLY to the chip-row gather (the `seed456` blend
+/// and the unconditional `st[7..11] = in7..in10` tail). This is the column fill a wide-commitment
+/// producer writes into EACH 8-felt carrier (`out0..out7` of the wide chip tuple), so the AIR's
+/// `out[i] == lane[i]` equality holds on every carrier and the 8-felt commit binds. Lane 0 is the
+/// squeezed digest (out0); `chip_absorb_lanes` returns exactly lanes 1..7 of this. Unlike
+/// `chip_absorb_lanes` it ALWAYS seeds the wide tail (matching the chip gather's
+/// `for i in 7..CHIP_WIDE_ARITY { st[i] = in_i }`), so the arity-9 final (which seeds genuine
+/// in7/in8) is faithful. `arity ≤ CHIP_RATE`; `inputs` is read up to `CHIP_RATE`, zero-padded.
+#[cfg(feature = "prover")]
+pub fn chip_absorb_all_lanes(arity: usize, inputs: &[BabyBear]) -> [BabyBear; CHIP_OUT_LANES] {
+    debug_assert!(arity <= CHIP_RATE);
+    let big = arity == 7;
+    let wide = arity == CHIP_WIDE_ARITY;
+    let seed456 = big || wide;
+    let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    for i in 0..4 {
+        st[i] = inputs.get(i).copied().unwrap_or(BabyBear::ZERO);
+    }
+    if seed456 {
+        st[4] = inputs.get(4).copied().unwrap_or(BabyBear::ZERO);
+        st[5] = inputs.get(5).copied().unwrap_or(BabyBear::ZERO);
+        st[6] = inputs.get(6).copied().unwrap_or(BabyBear::ZERO);
+    } else {
+        st[4] = BabyBear::new(arity as u32);
+    }
+    // The wide carrier/limb tail (lanes 7..10): seeded from the genuine (zero-padded) inputs on
+    // EVERY arity — byte-identical to the chip-row gather (`for i in 7..CHIP_WIDE_ARITY`), so an
+    // arity-9 absorb (`prev8 ‖ iroot` with 9 real inputs) seeds in7/in8 faithfully.
+    for i in 7..CHIP_WIDE_ARITY {
+        st[i] = inputs.get(i).copied().unwrap_or(BabyBear::ZERO);
+    }
+    perm_lanes(st)
 }
 
 /// **Phase B-GATE generic chip-lane fill.** For every declared `TID_P2` chip lookup, read the

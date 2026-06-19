@@ -48,6 +48,7 @@ EMITTERS = [
     "Dregg2/Circuit/Emit/EmitAllJson.lean",  # v1: name-keyed
     "EmitAllJsonV2.lean",                    # ir2: defName-keyed (V2_DESCRIPTORS)
     "EmitRotationV3.lean",                   # rotation v3-staged artifacts + registry tsv
+    "EmitWideTransferProbe.lean",            # ADDITIVE: the faithful 8-felt wide transfer descriptor
     "EmitBilateralLegs.lean",                # bilateral-aggregation legs
 ]
 
@@ -139,6 +140,9 @@ ROTATION_SINGLE = {
     "rotationCaveatProbeVmDescriptor2": (2, "dregg-effectvm-rotation-caveat-v3-staged-r24.json"),
 }
 ROTATION_TSV = "rotation-v3-staged-registry.tsv"
+# ADDITIVE: the faithful 8-felt wide transfer descriptor (a single `key\tname\tjson` line,
+# `EmitWideTransferProbe.lean`). Beside the live 1-felt registry — the live TSV is untouched.
+WIDE_TRANSFER_TSV = "rotation-wide-transfer-staged.tsv"
 
 
 def split_rotation(stdout: str, written):
@@ -156,6 +160,15 @@ def split_rotation(stdout: str, written):
             sys.exit(f"emit_descriptors: rotation key {key!r} has no routing")
     # the registry tsv is the v3rot cohort, one line each, trailing newline.
     write_file(ROTATION_TSV, "\n".join(v3rot) + "\n", written)
+
+
+def split_wide(stdout: str, written):
+    """The wide transfer emitter prints ONE `key\tname\tjson` line — the staged wide TSV verbatim
+    (no trailing newline, matching the single-line checked-in artifact)."""
+    line = stdout.rstrip("\n")
+    if not line.startswith("transferVmDescriptor2R24Wide\t"):
+        sys.exit(f"emit_descriptors: wide emitter produced unexpected line: {line[:80]!r}")
+    write_file(WIDE_TRANSFER_TSV, line, written)
 
 
 def split_bilateral(stdout: str, written):
@@ -236,6 +249,8 @@ def main():
             split_ir2(out, dn2file, written)
         elif lean.endswith("EmitRotationV3.lean"):
             split_rotation(out, written)
+        elif lean.endswith("EmitWideTransferProbe.lean"):
+            split_wide(out, written)
         elif lean.endswith("EmitBilateralLegs.lean"):
             split_bilateral(out, written)
         else:
