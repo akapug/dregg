@@ -97,30 +97,33 @@ structure RotTableSide (hash : List ℤ → ℤ) (t : VmTrace) : Prop where
   chip   : ChipTableSound hash (t.tf .poseidon2)
   range  : t.tf .range = rangeRows BAL_LIMB_BITS
 
-/-- The per-row transfer GATES hold (flag-independent extraction). The rotated witness gives the v1
-denotation at the i-dependent boundary flags; the `transferRowGates` are all `.gate` constraints,
-whose `holdsVm` ignores the flags, so they hold at `false false` regardless. (The boundary/PI pins —
-the only flag-sensitive clauses — are NOT needed for the intent.) -/
+/-- The per-row transfer GATES hold at an ACTIVE row (`i` NOT the last row). The rotated witness gives
+the v1 denotation at the i-dependent boundary flags; the `transferRowGates` are all `.gate` constraints,
+which under the deployed `when_transition()` bind on every row but the last — so on a TRANSITION row
+(`i + 1 ≠ t.rows.length`, where the row's `isLast` flag is `false`) their body equation holds, and they
+hold at `false false`. (The hypothesis `hnotlast` is the faithful obligation that the designated effect
+row is a genuine transition row, not the wrap/pad row; any real ≥2-row trace carries it.) -/
 theorem rotated_row_gates (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ EffectVmEmitTransfer.transferRowGates,
       c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitTransfer.transferVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
     rotV3Frozen_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
       hside.chip hside.range transfer_graduable hsat i hi
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
-  -- the gate is a constraint of the descriptor, so it holds at the i-flags; gate holdsVm = body=0,
-  -- flag-independent, so it equally holds at false false.
   have hmem : c ∈ EffectVmEmitTransfer.transferVmDescriptor.constraints := by
     unfold EffectVmEmitTransfer.transferVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
   have hh := hv1.1 c hmem
-  -- transferRowGates are all `.gate _`; their holdsVm is the body equation, flag-free.
+  rw [hlastf] at hh
+  -- transferRowGates are all `.gate _`; at `isLast = false` `holdsVm` IS the body equation.
   unfold EffectVmEmitTransfer.transferRowGates EffectVmEmitTransfer.gFieldPassAll at hc
   simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
     List.mem_range] at hc
@@ -136,14 +139,14 @@ theorem rotated_row_cellSpec (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState) (p : TransferParams)
     (henc : RowEncodes (envAt t i) pre p post)
     (hrow : IsTransferRow (envAt t i)) :
     CellTransferSpec pre p post := by
   have hint : TransferRowIntent (envAt t i) :=
     (EffectVmEmitTransfer.transferVm_faithful (envAt t i) hrow).mp
-      (rotated_row_gates hash hside hsat i hi)
+      (rotated_row_gates hash hside hsat i hi hnotlast)
   exact intent_to_cellSpec (envAt t i) pre post p henc hint
 
 /-! ## §2 — `rotatedEncodes`: the witness boundary ⟷ kernel state decode.
@@ -175,6 +178,11 @@ structure rotatedEncodes (hash : List ℤ → ℤ)
   ci : Nat
   hdi : di < t.rows.length
   hci : ci < t.rows.length
+  -- the two designated effect rows are ACTIVE (transition) rows, NOT the wrap/pad last row: the
+  -- deployed gates run under `when_transition()`, so the move is forced only off the last row. Any
+  -- real ≥2-row transfer trace carries this (the prover pads a wrap row after the effect rows).
+  hdiNotLast : di + 1 ≠ t.rows.length
+  hciNotLast : ci + 1 ≠ t.rows.length
   srcPre : CellState
   srcPost : CellState
   dstPre : CellState
@@ -251,7 +259,7 @@ theorem debit_forced (hash : List ℤ → ℤ)
     post.kernel.bal tr.src a = pre.kernel.bal tr.src a - tr.amt := by
   -- the circuit pins the debit row's moved limb: srcPost.balLo = srcPre.balLo + signedMove srcParams.
   have hspec : CellTransferSpec henc.srcPre henc.srcParams henc.srcPost :=
-    rotated_row_cellSpec hash hside hsat henc.di henc.hdi henc.srcPre henc.srcPost
+    rotated_row_cellSpec hash hside hsat henc.di henc.hdi henc.hdiNotLast henc.srcPre henc.srcPost
       henc.srcParams henc.hdiEnc henc.hdiRow
   obtain ⟨_, hmove, _, _, _, _, _⟩ := hspec
   -- signedMove on a debit row (direction = 1) is −amount.
@@ -270,7 +278,7 @@ theorem credit_forced (hash : List ℤ → ℤ)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
     post.kernel.bal tr.dst a = pre.kernel.bal tr.dst a + tr.amt := by
   have hspec : CellTransferSpec henc.dstPre henc.dstParams henc.dstPost :=
-    rotated_row_cellSpec hash hside hsat henc.ci henc.hci henc.dstPre henc.dstPost
+    rotated_row_cellSpec hash hside hsat henc.ci henc.hci henc.hciNotLast henc.dstPre henc.dstPost
       henc.dstParams henc.hciEnc henc.hciRow
   obtain ⟨_, hmove, _, _, _, _, _⟩ := hspec
   have hsm : signedMove henc.dstParams = henc.dstParams.amount := by
@@ -294,7 +302,7 @@ theorem availability_forced (hash : List ℤ → ℤ)
     rotV3Frozen_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
       hside.chip hside.range transfer_graduable hsat henc.di henc.hdi
   -- the balance-move gate (flag-independent) and the live range tooth (`hsat.2.2`, flag-free).
-  have hbal := rotated_row_gates hash hside hsat henc.di henc.hdi
+  have hbal := rotated_row_gates hash hside hsat henc.di henc.hdi henc.hdiNotLast
     (.gate EffectVmEmitTransfer.gBalLo)
     (by simp [EffectVmEmitTransfer.transferRowGates])
   have hrng := hv1.2.2 (⟨saCol state.BALANCE_LO, 30⟩) (by simp [EffectVmEmitTransfer.transferVmDescriptor])

@@ -86,23 +86,31 @@ theorem mint_graduable : graduable EffectVmEmitMint.mintVmDescriptor = true := b
 (`burnRowGates`, all flag-independent `.gate`s) hold; `burnVm_faithful` + `intent_to_cellSpec` lift the
 row's value block to `CellBurnSpec` (the `bal_lo` debit by `param1`, the frame freeze). -/
 
-/-- The per-row burn GATES hold (flag-independent extraction), mirroring transfer's `rotated_row_gates`. -/
+/-- The per-row burn GATES hold at an ACTIVE row (`i` NOT the last row), mirroring transfer's
+`rotated_row_gates`. The burn gates are all `.gate` constraints which under the deployed
+`when_transition()` bind on every row but the last — so on a TRANSITION row (`i + 1 ≠ t.rows.length`,
+`isLast` flag `false`) their body equation holds at `false false`. (The `hnotlast` hypothesis is the
+faithful obligation that the designated effect row is a genuine transition row, not the wrap/pad row;
+any real ≥2-row trace carries it.) -/
 theorem rotated_row_gates_burn (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ EffectVmEmitBurn.burnRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitBurn.burnVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
     rotV3Frozen_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
       hside.chip hside.range burn_graduable hsat i hi
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
   have hmem : c ∈ EffectVmEmitBurn.burnVmDescriptor.constraints := by
     unfold EffectVmEmitBurn.burnVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
   have hh := hv1.1 c hmem
+  rw [hlastf] at hh
   unfold EffectVmEmitBurn.burnRowGates EffectVmEmitBurn.gFieldFixAll at hc
   simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
     List.mem_range] at hc
@@ -114,14 +122,14 @@ theorem rotated_row_cellSpec_burn (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState) (amt : ℤ)
     (henc : EffectVmEmitBurn.RowEncodes (envAt t i) pre amt post)
     (hrow : EffectVmEmitBurn.IsBurnRow (envAt t i)) :
     EffectVmEmitBurn.CellBurnSpec pre amt post := by
   have hint : EffectVmEmitBurn.BurnRowIntent (envAt t i) :=
     (EffectVmEmitBurn.burnVm_faithful (envAt t i) hrow).mp
-      (rotated_row_gates_burn hash hside hsat i hi)
+      (rotated_row_gates_burn hash hside hsat i hi hnotlast)
   exact EffectVmEmitBurn.intent_to_cellSpec (envAt t i) pre post amt henc hint
 
 /-! ## §2 — `rotatedEncodesBurn`: the witness boundary ⟷ kernel state decode (burn).
@@ -143,6 +151,10 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
   -- the designated holder-debit row + its decode
   di : Nat
   hdi : di < t.rows.length
+  -- the designated debit row is an ACTIVE (transition) row, NOT the wrap/pad last row: the deployed
+  -- gates run under `when_transition()`, so the move is forced only off the last row. Any real ≥2-row
+  -- burn trace carries this (the prover pads a wrap row after the effect row).
+  hdiNotLast : di + 1 ≠ t.rows.length
   holderPre : CellState
   holderPost : CellState
   hdiRow : EffectVmEmitBurn.IsBurnRow (envAt t di)
@@ -189,8 +201,8 @@ theorem burn_debit_forced (hash : List ℤ → ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
     post.kernel.bal cell a = pre.kernel.bal cell a - amt := by
   have hspec : EffectVmEmitBurn.CellBurnSpec henc.holderPre amt henc.holderPost :=
-    rotated_row_cellSpec_burn hash hside hsat henc.di henc.hdi henc.holderPre henc.holderPost
-      amt henc.hdiEnc henc.hdiRow
+    rotated_row_cellSpec_burn hash hside hsat henc.di henc.hdi henc.hdiNotLast henc.holderPre
+      henc.holderPost amt henc.hdiEnc henc.hdiRow
   obtain ⟨hmove, _, _, _, _, _⟩ := hspec
   rw [← henc.hholderPost, ← henc.hholderPre, hmove]
 
@@ -210,7 +222,7 @@ theorem burn_availability_forced (hash : List ℤ → ℤ)
     rotV3Frozen_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
       hside.chip hside.range burn_graduable hsat henc.di henc.hdi
   -- the balance-debit gate (flag-independent) and the live range tooth (`hv1.2.2`).
-  have hbal := rotated_row_gates_burn hash hside hsat henc.di henc.hdi
+  have hbal := rotated_row_gates_burn hash hside hsat henc.di henc.hdi henc.hdiNotLast
     (.gate EffectVmEmitBurn.gBalLoDebit)
     (by simp [EffectVmEmitBurn.burnRowGates])
   have hrng := hv1.2.2 (⟨saCol state.BALANCE_LO, 30⟩) (by simp [EffectVmEmitBurn.burnVmDescriptor])
@@ -286,23 +298,30 @@ designated row is the RECIPIENT's credit row (`(cell,a)`): the mint gate credits
 `param1`. The well debit (`(a,a)` falls) + the cross-cell ledger frame are the named `recTransferBal a
 cell a amt` leg. -/
 
-/-- The per-row mint GATES hold (flag-independent extraction). -/
+/-- The per-row mint GATES hold at an ACTIVE row (`i` NOT the last row). The mint gates are all
+`.gate` constraints which under the deployed `when_transition()` bind on every row but the last — so
+on a TRANSITION row (`i + 1 ≠ t.rows.length`, `isLast` flag `false`) their body equation holds at
+`false false`. (The `hnotlast` hypothesis is the faithful obligation that the designated effect row
+is a genuine transition row, not the wrap/pad row.) -/
 theorem rotated_row_gates_mint (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ EffectVmEmitMint.mintRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitMint.mintVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
     rotV3Frozen_sound_v1 hash EffectVmEmitMint.mintVmDescriptor minit mfin maddrs t
       hside.chip hside.range mint_graduable hsat i hi
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
   have hmem : c ∈ EffectVmEmitMint.mintVmDescriptor.constraints := by
     unfold EffectVmEmitMint.mintVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl hc))
   have hh := hv1.1 c hmem
+  rw [hlastf] at hh
   unfold EffectVmEmitMint.mintRowGates EffectVmEmitMint.gFieldFixAll at hc
   simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
     List.mem_range] at hc
@@ -314,14 +333,14 @@ theorem rotated_row_cellSpec_mint (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState) (amt : ℤ)
     (henc : EffectVmEmitMint.RowEncodes (envAt t i) pre amt post)
     (hrow : EffectVmEmitMint.IsMintRow (envAt t i)) :
     EffectVmEmitMint.CellMintSpec pre amt post := by
   have hint : EffectVmEmitMint.MintRowIntent (envAt t i) :=
     (EffectVmEmitMint.mintVm_faithful (envAt t i) hrow).mp
-      (rotated_row_gates_mint hash hside hsat i hi)
+      (rotated_row_gates_mint hash hside hsat i hi hnotlast)
   exact EffectVmEmitMint.intent_to_cellSpec (envAt t i) pre post amt henc hint
 
 /-! ## §5 — `rotatedEncodesMint`: the witness boundary ⟷ kernel state decode (mint).
@@ -338,6 +357,10 @@ structure rotatedEncodesMint (hash : List ℤ → ℤ)
   -- the designated recipient-credit row + its decode
   ci : Nat
   hci : ci < t.rows.length
+  -- the designated credit row is an ACTIVE (transition) row, NOT the wrap/pad last row: the deployed
+  -- gates run under `when_transition()`, so the move is forced only off the last row. Any real ≥2-row
+  -- mint trace carries this (the prover pads a wrap row after the effect row).
+  hciNotLast : ci + 1 ≠ t.rows.length
   recipPre : CellState
   recipPost : CellState
   hciRow : EffectVmEmitMint.IsMintRow (envAt t ci)
@@ -384,8 +407,8 @@ theorem mint_credit_forced (hash : List ℤ → ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
     post.kernel.bal cell a = pre.kernel.bal cell a + amt := by
   have hspec : EffectVmEmitMint.CellMintSpec henc.recipPre amt henc.recipPost :=
-    rotated_row_cellSpec_mint hash hside hsat henc.ci henc.hci henc.recipPre henc.recipPost
-      amt henc.hciEnc henc.hciRow
+    rotated_row_cellSpec_mint hash hside hsat henc.ci henc.hci henc.hciNotLast henc.recipPre
+      henc.recipPost amt henc.hciEnc henc.hciRow
   obtain ⟨hmove, _, _, _, _, _⟩ := hspec
   rw [← henc.hrecipPost, ← henc.hrecipPre, hmove]
 

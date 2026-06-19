@@ -233,8 +233,8 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState) (value : ℤ)
   · rw [← hsaCap, ← hsbCap]; exact hcap
   · rw [← hsaRes, ← hsbRes]; exact hres
 
-theorem bridgeMintRowGates_flag_indep (env : VmRowEnv) (b1 b2 : Bool)
-    (h : ∀ c ∈ bridgeMintRowGates, c.holdsVm env b1 b2) :
+theorem bridgeMintRowGates_flag_indep (env : VmRowEnv) (b1 : Bool)
+    (h : ∀ c ∈ bridgeMintRowGates, c.holdsVm env b1 false) :
     ∀ c ∈ bridgeMintRowGates, c.holdsVm env false false := by
   intro c hc
   have := h c hc
@@ -247,14 +247,16 @@ theorem bridgeMintRowGates_flag_indep (env : VmRowEnv) (b1 b2 : Bool)
 theorem bridgeMintDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
     (pre post : CellState) (value : ℤ)
     (henc : RowEncodes env pre value post)
+    (hgatesat : satisfiedVm hash bridgeMintVmDescriptor env true false)
     (hsat : satisfiedVm hash bridgeMintVmDescriptor env true true) :
     CellBridgeMintSpec pre value post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _hsites⟩ := hsat
-  have hgates : ∀ c ∈ bridgeMintRowGates, c.holdsVm env true true := by
-    intro c hc; apply hcs
+  obtain ⟨hcsT, _⟩ := hgatesat
+  have hgates : ∀ c ∈ bridgeMintRowGates, c.holdsVm env true false := by
+    intro c hc; apply hcsT
     unfold bridgeMintVmDescriptor; simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-  have hgates' := bridgeMintRowGates_flag_indep env true true hgates
+  have hgates' := bridgeMintRowGates_flag_indep env true hgates
   have hint := (bridgeMintVm_faithful env hrow).mp hgates'
   refine ⟨intent_to_cellSpec env pre post value henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
@@ -348,6 +350,7 @@ theorem descriptor_agrees_with_executor
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
     (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (value : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA s.kernel cell a) value post)
+    (hgatesat : satisfiedVm hash bridgeMintVmDescriptor env true false)
     (hsat : satisfiedVm hash bridgeMintVmDescriptor env true true)
     (hexec : execFullA s (.bridgeMintA actor cell a value) = some s') :
     post.balLo = (cellProjA s'.kernel cell a).balLo
@@ -356,7 +359,7 @@ theorem descriptor_agrees_with_executor
     ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
     ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
   obtain ⟨hcirc, _⟩ :=
-    bridgeMintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post value henc hsat
+    bridgeMintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post value henc hgatesat hsat
   obtain ⟨hcLo, hcHi, _hcN, hcF, hcCap, hcRes⟩ := hcirc
   obtain ⟨heLo, heHi, _heN, heF, heCap, heRes⟩ := unify_bridgeMint_exec s s' actor cell a value hexec
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
@@ -443,6 +446,7 @@ bal/frame clauses. -/
 theorem bridgeMintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
     (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (value : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA s.kernel cell a) value post)
+    (hgatesat : satisfiedVm hash bridgeMintVmDescriptor env true false)
     (hsat : satisfiedVm hash bridgeMintVmDescriptor env true true)
     (hexec : execFullA s (.bridgeMintA actor cell a value) = some s') :
     CellBridgeMintSpec (cellProjA s.kernel cell a) value post
@@ -453,9 +457,9 @@ theorem bridgeMintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (
     ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
     ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
   obtain ⟨hspec, hcommit⟩ :=
-    bridgeMintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post value henc hsat
+    bridgeMintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post value henc hgatesat hsat
   obtain ⟨hLo, hHi, hF, hCap, hRes⟩ :=
-    descriptor_agrees_with_executor hash env hrow s s' actor cell a value post henc hsat hexec
+    descriptor_agrees_with_executor hash env hrow s s' actor cell a value post henc hgatesat hsat hexec
   exact ⟨hspec, hcommit, hLo, hHi, hF, hCap, hRes⟩
 
 /-! ## §9 — Axiom-hygiene tripwires. -/
@@ -524,15 +528,15 @@ The per-row gates of the bridgeMint descriptor, on a bridge-mint row decoded by 
 factors through `bridgeMintVm_faithful` + `intent_to_cellSpec`, NEITHER of which reads the sites. -/
 theorem bridgeMintGates_give_cellSpec (env : VmRowEnv) (pre post : CellState) (value : ℤ)
     (hrow : IsBridgeMintRow env) (henc : RowEncodes env pre value post)
-    (hgates : ∀ c ∈ bridgeMintVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ bridgeMintVmDescriptor.constraints, c.holdsVm env true false) :
     CellBridgeMintSpec pre value post := by
-  have hrowgates : ∀ c ∈ bridgeMintRowGates, c.holdsVm env true true := by
+  have hrowgates : ∀ c ∈ bridgeMintRowGates, c.holdsVm env true false := by
     intro c hc
     apply hgates
     unfold bridgeMintVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-  have hrowgates' := bridgeMintRowGates_flag_indep env true true hrowgates
+  have hrowgates' := bridgeMintRowGates_flag_indep env true hrowgates
   exact intent_to_cellSpec env pre post value henc ((bridgeMintVm_faithful env hrow).mp hrowgates')
 
 /-- **`BridgeMintFullClause`** — the full declarative post-state for bridgeMint over `(pre, post,
@@ -572,7 +576,7 @@ theorem bridgeMint_runnable_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv
     (hrow : IsBridgeMintRow env)
     (henc : RowEncodes env pre value post) (hroots : postRoots = preRoots)
     (hcar : env.loc sysRootsDigestCol = systemRootsDigest hash postRoots)
-    (hsat : satisfiedVm hash bridgeMintVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash bridgeMintVmDescriptorWide env true false) :
     BridgeMintFullClause value preRoots pre post postRoots :=
   runnable_full_sound (bridgeMintRunnableSpec hash value preRoots) hash env pre post postRoots
     hrow ⟨henc, hroots, hcar⟩ hsat

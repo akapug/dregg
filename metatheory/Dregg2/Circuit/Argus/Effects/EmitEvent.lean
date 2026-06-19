@@ -417,7 +417,7 @@ theorem emitEvent_runnable_full_state_weld
     (hrow : Dregg2.Circuit.Emit.EffectVmEmitEmitEvent.IsEmitRow env)
     (henc : RowEncodes env pre post) (hroots : sr = preRoots)
     (hpre : pre = cellProjE s.kernel c)
-    (hsat : satisfiedVm hash emitEventVmDescriptorWide env true true)
+    (hgatesat : satisfiedVm hash emitEventVmDescriptorWide env true false)
     (hexec : execFullA s (.emitEventA actor cell topic data) = some s') :
     ( post.balLo = (cellProjE s'.kernel c).balLo
       ∧ post.balHi = (cellProjE s'.kernel c).balHi
@@ -429,7 +429,7 @@ theorem emitEvent_runnable_full_state_weld
   -- RUNNABLE circuit side: the wide descriptor pins `EmitTickCellSpec pre post` (economic block frozen,
   -- the actor nonce ticked) + frozen roots.
   obtain ⟨hfreeze, hsr⟩ :=
-    emitEvent_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hsat
+    emitEvent_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hgatesat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ := hfreeze
   -- executor side: the committed emit freezes the WHOLE kernel (all 6 block components, INCLUDING the
   -- cell-nonce FIELD), so `cellProjE` of pre = post per cell.

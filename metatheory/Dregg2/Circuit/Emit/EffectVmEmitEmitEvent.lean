@@ -111,8 +111,8 @@ theorem emitEventVm_faithful (env : VmRowEnv) :
     simp only [VmConstraint.holdsVm, gFreeze, eSA, eSB, eSub, EmittedExpr.eval]
     rw [h off hoff]; ring
 
-theorem emitRowGates_flag_indep (env : VmRowEnv) (b1 b2 : Bool)
-    (h : ∀ c ∈ emitRowGates, c.holdsVm env b1 b2) :
+theorem emitRowGates_flag_indep (env : VmRowEnv) (b1 : Bool)
+    (h : ∀ c ∈ emitRowGates, c.holdsVm env b1 false) :
     ∀ c ∈ emitRowGates, c.holdsVm env false false := by
   intro c hc
   have := h c hc
@@ -228,8 +228,8 @@ theorem emitTickVm_faithful (env : VmRowEnv) :
 /-- **Flag-independence of the RUNNABLE tick gates.** Pure per-row polynomial gates, no transition/boundary
 terms, so satisfaction is independent of the `isFirst`/`isLast` flags. (Used by the wide full-state lift,
 which passes `true true`.) -/
-theorem emitTickRowGates_flag_indep (env : VmRowEnv) (b1 b2 : Bool)
-    (h : ∀ c ∈ emitTickRowGates, c.holdsVm env b1 b2) :
+theorem emitTickRowGates_flag_indep (env : VmRowEnv) (b1 : Bool)
+    (h : ∀ c ∈ emitTickRowGates, c.holdsVm env b1 false) :
     ∀ c ∈ emitTickRowGates, c.holdsVm env false false := by
   intro c hc
   have := h c hc
@@ -310,16 +310,18 @@ theorem intent_to_tickCellSpec (env : VmRowEnv) (pre post : CellState)
 theorem emitEventDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodes env pre post)
+    (hgatesat : satisfiedVm hash emitEventVmDescriptor env true false)
     (hsat : satisfiedVm hash emitEventVmDescriptor env true true) :
     EmitTickCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ emitTickRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ emitEventVmDescriptor.constraints := by
       unfold emitEventVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold emitTickRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -424,10 +426,11 @@ theorem descriptor_agrees_with_executor
     (s s' : RecChainedState) (actor cell c : CellId) (topic data : Int) (pre post : CellState)
     (hpre : pre = cellProjE s.kernel c)
     (henc : RowEncodes env pre post)
+    (hgatesat : satisfiedVm hash emitEventVmDescriptor env true false)
     (hsat : satisfiedVm hash emitEventVmDescriptor env true true)
     (hexec : execFullA s (.emitEventA actor cell topic data) = some s') :
     post.balLo = (cellProjE s'.kernel c).balLo := by
-  obtain ⟨hcirc, _⟩ := emitEventDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := emitEventDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   obtain ⟨heLo, _, _, _, _, _⟩ := unify_emitEvent_exec s s' actor cell c topic data hexec
   subst hpre

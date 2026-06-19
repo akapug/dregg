@@ -376,7 +376,7 @@ theorem balanceA_runnable_full_sound (p : TransferParams) (preRoots : SysRoots) 
     (hrow : IsTransferRow env)
     (henc : RowEncodes env pre p post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash transferVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash transferVmDescriptorWide env true false) :
     CellTransferSpec pre p post ∧ postRoots = preRoots :=
   runnable_full_sound (transferRunnableSpec p preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

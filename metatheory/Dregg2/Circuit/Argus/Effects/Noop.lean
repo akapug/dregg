@@ -330,9 +330,9 @@ theorem noop_runnable_full_state_weld
     (hash : List ℤ → ℤ) (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsNoopRow env)
     (henc : RowEncodes env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash noopVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash noopVmDescriptorWide env true false) :
     CellFreezeSpec pre post ∧ sr = preRoots :=
-  noop_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hsat
+  noop_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hgatesat
 
 #assert_axioms noop_runnable_full_state_weld
 

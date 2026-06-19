@@ -234,6 +234,11 @@ structure TransferTraceProver (hash : List ℤ → ℤ)
   ci : Nat
   hdi : di < t.rows.length
   hci : ci < t.rows.length
+  /-- the designated debit/credit rows are ACTIVE (transition) rows, not the wrap/pad last row: the
+  per-row transfer gates run under `when_transition()`, forced only off the last row (the honest prover
+  lays the effect rows in the active domain). -/
+  hdiNotLast : di + 1 ≠ t.rows.length
+  hciNotLast : ci + 1 ≠ t.rows.length
   /-- the per-row column decodes (the honest assignment). -/
   hdiRow : IsTransferRow (Dregg2.Circuit.DescriptorIR2.envAt t di)
   hciRow : IsTransferRow (Dregg2.Circuit.DescriptorIR2.envAt t ci)
@@ -268,6 +273,8 @@ def transfer_rotatedEncodes_construct (hash : List ℤ → ℤ)
   ci := prover.ci
   hdi := prover.hdi
   hci := prover.hci
+  hdiNotLast := prover.hdiNotLast
+  hciNotLast := prover.hciNotLast
   srcPre := srcPre
   srcPost := srcPost
   dstPre := dstPre

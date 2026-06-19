@@ -97,15 +97,15 @@ the gates (the sites bind the COMMITMENT — §1/§4 of the generic module — n
 row hypothesis `IsBurnRow` is carried (the global nonce-tick gate factors on `s_noop = 0`). -/
 theorem burnGates_give_cellSpec (env : VmRowEnv) (pre post : CellState) (amt : ℤ)
     (hrow : IsBurnRow env) (henc : RowEncodes env pre amt post)
-    (hgates : ∀ c ∈ burnVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ burnVmDescriptor.constraints, c.holdsVm env true false) :
     CellBurnSpec pre amt post := by
-  have hrowgates : ∀ c ∈ burnRowGates, c.holdsVm env true true := by
+  have hrowgates : ∀ c ∈ burnRowGates, c.holdsVm env true false := by
     intro c hc
     apply hgates
     unfold burnVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-  have hrowgates' := burnRowGates_flag_indep env true true hrowgates
+  have hrowgates' := burnRowGates_flag_indep env true hrowgates
   exact intent_to_cellSpec env pre post amt henc ((burnVm_faithful env hrow).mp hrowgates')
 
 /-! ## §3 — THE RUNNABLE FULL-STATE INSTANCE. -/
@@ -149,7 +149,7 @@ theorem burn_runnable_full_sound (amt : ℤ) (preRoots : SysRoots) (hash : List 
     (hrow : IsBurnRow env)
     (henc : RowEncodes env pre amt post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash burnVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash burnVmDescriptorWide env true false) :
     CellBurnSpec pre amt post ∧ postRoots = preRoots :=
   runnable_full_sound (burnRunnableSpec amt preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

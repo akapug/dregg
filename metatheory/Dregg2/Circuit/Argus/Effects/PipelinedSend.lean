@@ -352,7 +352,7 @@ theorem pipelinedSend_runnable_full_state_weld
     (hash : List ℤ → ℤ) (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsPipelinedSendRow env)
     (henc : RowEncodesSend env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash pipelinedSendVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash pipelinedSendVmDescriptorWide env true false) :
     CellSendSpec pre post ∧ sr = preRoots :=
   pipelinedSend_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hsat
 

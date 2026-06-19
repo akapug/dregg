@@ -35,6 +35,21 @@ welding `src` to the published `pi.src` welds the OPENED LEAF's target to the li
   5. **`effCapOpenV3TB_hsrc`** — from the pin + the verifier's PI anchor (`PI[piCount] = turn.src`),
      `capOpenCols.src = turn.src` — the `hsrc` obligation FORCED, not carried.
 
+## The row-domain match (the turn-identity weld pins on the FIRST row)
+
+Under the deployed `when_transition()` denotation (`VmConstraint.holdsVm`), the cap-open MEMBERSHIP
+binding gates (`rootPinGate`/`targetBindGate`/`effBitGateFor`/the facet gates) are `.base (.gate …)` —
+FORCED only on NON-last rows. A `.piBinding .last` weld fires on the LAST row, a DISJOINT domain, so it
+could never constrain the membership row, and on a single-effect trace whose cap-open row IS the last row
+the membership would be vacuous (the prior `.last` choice was UNSOUND there). `turnIdentityPins`
+therefore rides the FIRST row (`when_first_row()` — the deployed mechanism the rotation's BEFORE-commit
+pin already uses, `EffectVmEmitRotationV3.rotPins`'s `.piBinding .first`). On the first row of any real
+(≥2-row) cap-open trace, `isFirst = true` (the weld fires) AND `isLast = false` (the membership gates
+bite): ONE active row carries both, so `capOpenCols.src` is welded to the published source EXACTLY where
+the depth-16 open reads it — no cross-row residual. The `≥2-row` fact (`hlen : 2 ≤ rows.length`) is the
+genuine shape of a real cap-open trace (a depth-16 open plus its wrap/pad row); it gives `0 + 1 ≠
+rows.length`, the `hiNotLast` the membership keystone needs on the first row.
+
 ## Honest residual (named, not faked)
 
 The PI **anchor** (`PI[piCount] = turn.src` etc.) is the deployed verifier's override (it recomputes the
@@ -86,16 +101,28 @@ def capOpenDstCol (w : Nat) : Nat := w + CAP_OPEN_SPAN + 1
 
 `effCapOpenV3 base name n` does NOT add PIs to `base` (it appends only `capOpenConstraintsEff`), so the
 base's `piCount` is `(v3Of …).piCount = base'.piCount + 4` (the rotated commit pins). The three
-turn-identity pins ride the first slots past those four: `base.piCount + 0/1/2`. Each is a LAST-row pin
-(the cap-open row is the witness's designated authority row; the deployed assembly pins it on the last
-row, matching the commit pins). -/
+turn-identity pins ride the first slots past those four: `base.piCount + 0/1/2`. Each is a FIRST-row pin
+(`when_first_row()`, the deployed mechanism the rotation's BEFORE-commit pin already uses —
+`EffectVmEmitRotationV3.rotPins`'s `.piBinding .first`).
+
+THE ROW-DOMAIN MATCH (why `.first`, not `.last`): the cap-open MEMBERSHIP binding gates
+(`rootPinGate`/`targetBindGate`/`effBitGateFor`/the facet gates) ride `.base (.gate …)` — under the
+deployed `when_transition()` denotation (`VmConstraint.holdsVm`) they are FORCED only on NON-last rows.
+A `.piBinding .last` weld would fire on the LAST row, a DISJOINT domain — so the turn-identity binding
+and the membership it must constrain could never share a row, and on a single-effect trace whose cap-open
+row IS the last row the membership would be vacuous (the prior `.last` choice was UNSOUND there). Pinning
+on the FIRST row co-locates the weld with the membership: on the first row of any real (≥2-row) cap-open
+trace, `isFirst = true` (the pin fires) AND `isLast = false` (the membership gates bite). One active row
+carries both — `capOpenCols.src` welded to the published source EXACTLY where it is opened. -/
 
 /-- The three turn-identity PI pins for a cap-open base of width `w`, PI count `pc`: weld the cap-open
-`src` column to `PI[pc]`, the new `actor` column to `PI[pc+1]`, the new `dst` column to `PI[pc+2]`. -/
+`src` column to `PI[pc]`, the new `actor` column to `PI[pc+1]`, the new `dst` column to `PI[pc+2]`. They
+ride the FIRST row (`when_first_row()`) — the same active row the membership binding gates are forced on,
+so the published-src weld and the depth-16 open constrain ONE row. -/
 def turnIdentityPins (w pc : Nat) : List VmConstraint2 :=
-  [ .base (.piBinding .last (capOpenCols w).src pc)
-  , .base (.piBinding .last (capOpenActorCol w) (pc + 1))
-  , .base (.piBinding .last (capOpenDstCol w) (pc + 2)) ]
+  [ .base (.piBinding .first (capOpenCols w).src pc)
+  , .base (.piBinding .first (capOpenActorCol w) (pc + 1))
+  , .base (.piBinding .first (capOpenDstCol w) (pc + 2)) ]
 
 /-! ## §3 — `effCapOpenV3TB`: the cap-open descriptor PLUS the turn-identity weld. -/
 
@@ -181,15 +208,16 @@ theorem effCapOpenV3TB_to_base (base : EffectVmDescriptor2) (name : String) (n :
   · have := hsat.memTableFaithful; rwa [effCapOpenV3TB_memLog] at this
   · have := hsat.mapTableFaithful; rwa [effCapOpenV3TB_mapLog] at this
 
-/-! ## §4 — `effCapOpenV3TB_publishes`: the LAST row pins src/actor/dst to the three new PIs. -/
+/-! ## §4 — `effCapOpenV3TB_publishes`: the FIRST row pins src/actor/dst to the three new PIs. -/
 
-/-- **`effCapOpenV3TB_publishes`** — on the LAST row of a `Satisfied2` witness of `effCapOpenV3TB`, the
+/-- **`effCapOpenV3TB_publishes`** — on the FIRST row of a `Satisfied2` witness of `effCapOpenV3TB`, the
 cap-open `src` column equals `PI[piCount]`, the new `actor` column `PI[piCount+1]`, the new `dst` column
-`PI[piCount+2]` (`piCount` = the cap-open base's PI count). The three turn-identity pins are FORCED. -/
+`PI[piCount+2]` (`piCount` = the cap-open base's PI count). The three turn-identity `.piBinding .first`
+pins are FORCED — on the SAME active row the membership binding gates bite (in any ≥2-row trace). -/
 theorem effCapOpenV3TB_publishes (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash (effCapOpenV3TB base name n) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true) :
+    (i : Nat) (hi : i < t.rows.length) (hfirst : (i == 0) = true) :
     (envAt t i).loc (capOpenCols base.traceWidth).src = (envAt t i).pub (effCapOpenV3 base name n).piCount
     ∧ (envAt t i).loc (capOpenActorCol base.traceWidth)
         = (envAt t i).pub ((effCapOpenV3 base name n).piCount + 1)
@@ -199,20 +227,20 @@ theorem effCapOpenV3TB_publishes (base : EffectVmDescriptor2) (name : String) (n
   set pc := (effCapOpenV3 base name n).piCount with hpc
   have hmem : ∀ c ∈ turnIdentityPins base.traceWidth pc, c ∈ (effCapOpenV3TB base name n).constraints :=
     fun c hc => List.mem_append_right _ hc
-  have memSrc : VmConstraint2.base (.piBinding .last (capOpenCols base.traceWidth).src pc)
+  have memSrc : VmConstraint2.base (.piBinding .first (capOpenCols base.traceWidth).src pc)
       ∈ (effCapOpenV3TB base name n).constraints :=
     hmem _ (by simp [turnIdentityPins])
-  have memAct : VmConstraint2.base (.piBinding .last (capOpenActorCol base.traceWidth) (pc + 1))
+  have memAct : VmConstraint2.base (.piBinding .first (capOpenActorCol base.traceWidth) (pc + 1))
       ∈ (effCapOpenV3TB base name n).constraints :=
     hmem _ (by simp [turnIdentityPins])
-  have memDst : VmConstraint2.base (.piBinding .last (capOpenDstCol base.traceWidth) (pc + 2))
+  have memDst : VmConstraint2.base (.piBinding .first (capOpenDstCol base.traceWidth) (pc + 2))
       ∈ (effCapOpenV3TB base name n).constraints :=
     hmem _ (by simp [turnIdentityPins])
   have hsrc := hrow _ memSrc
   have hact := hrow _ memAct
   have hdst := hrow _ memDst
   simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm] at hsrc hact hdst
-  exact ⟨hsrc hlast, hact hlast, hdst hlast⟩
+  exact ⟨hsrc hfirst, hact hfirst, hdst hfirst⟩
 
 /-! ## §5 — `TurnIdentityAnchored`: the verifier's PI override (NAMED), and `hsrc` DISCHARGED. -/
 
@@ -227,67 +255,79 @@ def TurnIdentityAnchored (base : EffectVmDescriptor2) (name : String) (n : Nat)
   ∧ (envAt t i).pub ((effCapOpenV3 base name n).piCount + 2) = (dst : ℤ)
 
 /-- **`effCapOpenV3TB_hsrc` — the cap-open `src` column = the turn's `src`, FORCED.** From a `Satisfied2`
-witness of `effCapOpenV3TB` on the LAST row and the verifier's PI anchor `PI[piCount] = turn.src`, the
+witness of `effCapOpenV3TB` on the FIRST row and the verifier's PI anchor `PI[piCount] = turn.src`, the
 cap-open's `src` column EQUALS `turn.src` — the `hsrc` obligation of `effCapOpenV3_authorizes` is now
-DISCHARGED from a real in-circuit PI binding, no longer a carried hypothesis. -/
+DISCHARGED from a real in-circuit PI binding on the SAME active row the membership opens, no longer a
+carried hypothesis. -/
 theorem effCapOpenV3TB_hsrc (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash (effCapOpenV3TB base name n) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
+    (i : Nat) (hi : i < t.rows.length) (hfirst : (i == 0) = true)
     (src actor dst : Label) (hanchor : TurnIdentityAnchored base name n t i src actor dst) :
     (envAt t i).loc (capOpenCols base.traceWidth).src = (src : ℤ) := by
-  obtain ⟨hpubSrc, _, _⟩ := effCapOpenV3TB_publishes base name n hash minit mfin maddrs t hsat i hi hlast
+  obtain ⟨hpubSrc, _, _⟩ := effCapOpenV3TB_publishes base name n hash minit mfin maddrs t hsat i hi hfirst
   obtain ⟨hanSrc, _, _⟩ := hanchor
   rw [hpubSrc, hanSrc]
 
-/-- **`effCapOpenV3TB_authorizes` — the AUTHORITY leg with `hsrc` DISCHARGED from the PI weld.** The
-fan-out cap-open authority `effCapOpenV3_authorizes`, but the `hsrc` hypothesis is REPLACED by the
-turn-identity PI anchor: a `Satisfied2` witness of `effCapOpenV3TB` (the appended pins lift to the base
-via `effCapOpenV3TB_to_base`) whose verifier anchored `PI[piCount] = turn.src` discharges the kernel's
-`authorizedFacetEffB … (1 <<< n)` for the turn — the cap-open `src` welded to the PUBLISHED source, NOT a
-free column. The `hedge`/`htier`/`hfaith` residuals (the cap-tree leaf identification) remain the named
-cap-tree floor, exactly as before — this module closes ONLY the `src`-binding smuggle. -/
+/-- **`effCapOpenV3TB_authorizes` — the AUTHORITY leg, the turn-identity weld and the cap-open membership
+co-located on the FIRST (active) row.**
+
+Under the deployed `when_transition()` denotation (`VmConstraint.holdsVm`) the cap-open MEMBERSHIP
+binding gates (`rootPinGate`/`targetBindGate`/`effBitGateFor`/the facet gates) ride `.base (.gate …)` —
+FORCED only on NON-last rows — while the turn-identity weld `turnIdentityPins` rides `.piBinding .first`
+— FORCED on the FIRST row. On the first row of any real ≥2-row cap-open trace these COINCIDE: `isFirst =
+true` (the weld fires, anchoring `capOpenCols.src = src`) AND `isLast = false` (the membership gates
+bite). So a SINGLE active row carries both — the published-src binding and the depth-16 open constrain
+the same `src` column. No cross-row residual: the `≥2-row` fact `hlen` gives the `hiNotLast` the
+membership keystone needs on row `0`. The `hedge`/`htier`/`hfaith` cap-tree-leaf residuals remain. -/
 theorem effCapOpenV3TB_authorizes {State : Type} (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hn : n < MASK_BITS) (S : CapHashScheme State) (vkOfTag : ℤ → Nat) (provided : AuthProvided)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
     (hsat : Satisfied2 S.chipAbsorb (effCapOpenV3TB base name n) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
+    -- the FIRST row carries BOTH the membership gates (non-last) AND the turn-identity pin (first);
+    -- `hlen` is the genuine ≥2-row shape of a real cap-open trace (depth-16 open + its wrap row).
+    (hlen : 2 ≤ t.rows.length)
     (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
     (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< n) caps
-      ((envAt t i).loc (capOpenCols base.traceWidth).capRoot) leafAt)
+      ((envAt t 0).loc (capOpenCols base.traceWidth).capRoot) leafAt)
     (actor src dst : Label) (amt : ℤ)
-    (hanchor : TurnIdentityAnchored base name n t i src actor dst)
-    (hedge : leafOf (capOpenCols base.traceWidth) (envAt t i) = leafAt actor src)
+    (hanchor : TurnIdentityAnchored base name n t 0 src actor dst)
+    (hedge : leafOf (capOpenCols base.traceWidth) (envAt t 0) = leafAt actor src)
     (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
     authorizedFacetEffB caps provided (1 <<< n)
       { actor := actor, src := src, dst := dst, amt := amt } = true
     ∧ (leafAt actor src).target = (src : ℤ) := by
   have hbase := effCapOpenV3TB_to_base base name n S.chipAbsorb minit mfin maddrs t hsat
-  have hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (src : ℤ) :=
-    effCapOpenV3TB_hsrc base name n S.chipAbsorb minit mfin maddrs t hsat i hi hlast src actor dst hanchor
+  have hi : 0 < t.rows.length := by omega
+  have hiNotLast : (0 : Nat) + 1 ≠ t.rows.length := by omega
+  -- the published-src binding on the FIRST row (the `.piBinding .first` weld + the anchor) — the SAME
+  -- active row the membership opens, so no cross-row transport is needed.
+  have hsrc : (envAt t 0).loc (capOpenCols base.traceWidth).src = (src : ℤ) :=
+    effCapOpenV3TB_hsrc base name n S.chipAbsorb minit mfin maddrs t hsat 0 hi rfl src actor dst hanchor
+  -- the membership on the FIRST (active) row FORCES authority for the PUBLISHED `src`.
   exact effCapOpenV3_authorizes base name n hn S vkOfTag provided minit mfin maddrs t hChip hbase
-    i hi caps leafAt hfaith actor src dst amt hsrc hedge htier
+    0 hi hiNotLast caps leafAt hfaith actor src dst amt hsrc hedge htier
 
 /-! ## §6 — the NEGATIVE tooth: a mismatched turn-identity PI ⟹ the pin is UNSATISFIABLE.
 
-A LAST row whose cap-open `src` column does NOT equal the published `PI[piCount]` does NOT satisfy the
-turn-identity pin — the appended `piBinding` REJECTS it. Composed with the verifier's anchor
+A FIRST row whose cap-open `src` column does NOT equal the published `PI[piCount]` does NOT satisfy the
+turn-identity pin — the appended `.piBinding .first` REJECTS it. Composed with the verifier's anchor
 (`PI[piCount] = turn.src`), a trace whose cap-open `src` ≠ `turn.src` cannot be a satisfying witness of
 `effCapOpenV3TB`: the equality gate BITES. This is the light-client-relevant tooth — a proof whose
 published turn-src does not match the committed cap-open source is rejected. -/
 
 /-- **`effCapOpenV3TB_rejects_mismatched_src` (the turn-identity TOOTH).** If the cap-open `src` column on
-the last row differs from the published `PI[piCount]`, NO `Satisfied2` witness of `effCapOpenV3TB` has that
+the first row differs from the published `PI[piCount]`, NO `Satisfied2` witness of `effCapOpenV3TB` has that
 row's columns/PI — the pin forces `src = PI[piCount]`, so a mismatch is contradictory. With the verifier's
 anchor (`PI[piCount] = turn.src`), a forged `src ≠ turn.src` is UNSAT. -/
 theorem effCapOpenV3TB_rejects_mismatched_src (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (i : Nat) (hi : i < t.rows.length) (hlast : (i + 1 == t.rows.length) = true)
+    (i : Nat) (hi : i < t.rows.length) (hfirst : (i == 0) = true)
     (hbad : (envAt t i).loc (capOpenCols base.traceWidth).src ≠ (envAt t i).pub (effCapOpenV3 base name n).piCount) :
     ¬ Satisfied2 hash (effCapOpenV3TB base name n) minit mfin maddrs t := by
   intro hsat
-  obtain ⟨hpubSrc, _, _⟩ := effCapOpenV3TB_publishes base name n hash minit mfin maddrs t hsat i hi hlast
+  obtain ⟨hpubSrc, _, _⟩ := effCapOpenV3TB_publishes base name n hash minit mfin maddrs t hsat i hi hfirst
   exact hbad hpubSrc
 
 /-! ## §7 — Axiom hygiene. -/

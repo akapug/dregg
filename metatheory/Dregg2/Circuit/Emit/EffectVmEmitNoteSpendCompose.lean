@@ -187,9 +187,9 @@ theorem compose_perRow_is_full_state (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (pr : SysRoots)
     (hrow : IsNoteSpendRow env)
     (hdec : NoteSpendDecode hash value preRoots postRoots step env pre post pr)
-    (hsat : satisfiedVm hash noteSpendVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash noteSpendVmDescriptorWide env true false) :
     NoteSpendFullClause hash value preRoots postRoots step pre post pr :=
-  noteSpend_runnable_full_sound hash value preRoots postRoots step env pre post pr hrow hdec hsat
+  noteSpend_runnable_full_sound hash value preRoots postRoots step env pre post pr hrow hdec hgatesat
 
 /-- **`compose_freshness_still_turn_level` — the precise residual AFTER the per-row full-state lift.** Even
 with the per-row wide descriptor binding the WHOLE post-state (including the nullifier-set insert's

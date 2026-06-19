@@ -59,7 +59,7 @@ def IsCellDestroyRow (env : VmRowEnv) : Prop :=
 
 theorem cellDestroyGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesDestroy env pre post)
-    (hgates : ∀ c ∈ cellDestroyVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ cellDestroyVmDescriptor.constraints, c.holdsVm env true false) :
     CellDestroyCellSpec pre post := by
   have hrowgates : ∀ c ∈ cellDestroyRowGates, c.holdsVm env false false := by
     intro c hc
@@ -102,7 +102,7 @@ theorem cellDestroy_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : Sy
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsCellDestroyRow env)
     (henc : RowEncodesDestroy env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash cellDestroyVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash cellDestroyVmDescriptorWide env true false) :
     CellDestroyCellSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (cellDestroyRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

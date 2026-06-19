@@ -82,25 +82,31 @@ theorem incNonce_graduable : graduable incrementNonceVmDescriptor = true := by d
 `satisfiedVm hash incrementNonceVmDescriptor (envAt t i) …` on every row. We extract the per-row
 `incNonceRowGates` (all `.gate`, flag-free) at `false false` and feed `incNonceVm_faithful`. -/
 
-/-- The per-row incrementNonce GATES hold (flag-independent extraction): the rotated witness gives the
-v1 denotation at the i-dependent boundary flags; `incNonceRowGates` are all `.gate` constraints whose
-`holdsVm` ignores the flags, so they hold at `false false`. -/
+/-- The per-row incrementNonce GATES hold at an ACTIVE row (`i` NOT the last row): the rotated witness
+gives the v1 denotation at the i-dependent boundary flags; `incNonceRowGates` are all `.gate`
+constraints which under the deployed `when_transition()` bind on every row but the last — so on a
+TRANSITION row (`i + 1 ≠ t.rows.length`, `isLast` flag `false`) their body equation holds at
+`false false`. (The `hnotlast` hypothesis is the faithful obligation that the designated active row
+is a genuine transition row, not the wrap/pad row.) -/
 theorem rotated_row_gates (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) :
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ incNonceRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash incrementNonceVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
     rotV3Frozen_sound_v1 hash incrementNonceVmDescriptor minit mfin maddrs t
       hside.chip hside.range incNonce_graduable hsat i hi
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
   have hmem : c ∈ incrementNonceVmDescriptor.constraints := by
     unfold incrementNonceVmDescriptor
     simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
   have hh := hv1.1 c hmem
+  rw [hlastf] at hh
   unfold incNonceRowGates gFieldPassAll at hc
   simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
     List.mem_range] at hc
@@ -116,12 +122,12 @@ theorem rotated_row_cellSpec (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hside : RotTableSide hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState)
     (hrow : IsIncNonceRow (envAt t i))
     (henc : RowEncodesIncNonce (envAt t i) pre post) :
     CellIncNonceSpec pre post := by
-  have hgates := rotated_row_gates hash hside hsat i hi
+  have hgates := rotated_row_gates hash hside hsat i hi hnotlast
   have hint : IncNonceRowIntent (envAt t i) := (incNonceVm_faithful (envAt t i)).mp hgates
   exact intent_to_cellSpec (envAt t i) pre post hrow.2 henc hint
 
@@ -151,6 +157,10 @@ structure rotatedEncodesIncNonce (hash : List ℤ → ℤ)
   -- the designated ACTIVE incrementNonce row + its decode.
   wi : Nat
   hwi : wi < t.rows.length
+  -- the designated active row is a TRANSITION row, NOT the wrap/pad last row: the deployed gates run
+  -- under `when_transition()`, so the tick is forced only off the last row. Any real ≥2-row
+  -- incrementNonce trace carries this (the prover pads a wrap row after the effect row).
+  hwiNotLast : wi + 1 ≠ t.rows.length
   cellPre : CellState
   cellPost : CellState
   hwiRow : IsIncNonceRow (envAt t wi)
@@ -199,7 +209,7 @@ theorem incNonce_nonce_forced (hash : List ℤ → ℤ)
     (henc : rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n) :
     henc.cellPost.nonce = henc.cellPre.nonce + 1 := by
   have hspec : CellIncNonceSpec henc.cellPre henc.cellPost :=
-    rotated_row_cellSpec hash hside hsat henc.wi henc.hwi henc.cellPre henc.cellPost
+    rotated_row_cellSpec hash hside hsat henc.wi henc.hwi henc.hwiNotLast henc.cellPre henc.cellPost
       henc.hwiRow henc.hwiEnc
   exact hspec.2.2.1
 
@@ -277,7 +287,7 @@ theorem descriptorRefines_rejects_moved_balance (hash : List ℤ → ℤ)
     (hwrong : henc.cellPost.balLo ≠ henc.cellPre.balLo) :
     False := by
   have hspec : CellIncNonceSpec henc.cellPre henc.cellPost :=
-    rotated_row_cellSpec hash hside hsat henc.wi henc.hwi henc.cellPre henc.cellPost
+    rotated_row_cellSpec hash hside hsat henc.wi henc.hwi henc.hwiNotLast henc.cellPre henc.cellPost
       henc.hwiRow henc.hwiEnc
   exact hwrong hspec.1
 

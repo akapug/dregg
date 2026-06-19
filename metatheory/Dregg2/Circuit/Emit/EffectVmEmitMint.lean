@@ -256,8 +256,13 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState) (amt : ℤ)
   · rw [← hsaCap, ← hsbCap]; exact hcap
   · rw [← hsaRes, ← hsbRes]; exact hres
 
-theorem mintRowGates_flag_indep (env : VmRowEnv) (b1 b2 : Bool)
-    (h : ∀ c ∈ mintRowGates, c.holdsVm env b1 b2) :
+/-- The mint row-gates are `.gate`s; under the deployed `when_transition()` they bind on every row
+but the last, so their body content is available at the ACTIVE row (`isLast = false`). This restates
+that content at the canonical `false false` flags. It is NOT flag-INDEPENDENT (the unfaithful claim):
+the gate content genuinely does not exist on the wrap row (`isLast = true`), so the hypothesis is
+taken at `b2 = false`. -/
+theorem mintRowGates_flag_indep (env : VmRowEnv) (b1 : Bool)
+    (h : ∀ c ∈ mintRowGates, c.holdsVm env b1 false) :
     ∀ c ∈ mintRowGates, c.holdsVm env false false := by
   intro c hc
   have := h c hc
@@ -272,14 +277,16 @@ structured per-cell `CellMintSpec` AND publishes `post.commit = PI[NEW_COMMIT]`.
 theorem mintDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsMintRow env)
     (pre post : CellState) (amt : ℤ)
     (henc : RowEncodes env pre amt post)
+    (hgatesat : satisfiedVm hash mintVmDescriptor env true false)
     (hsat : satisfiedVm hash mintVmDescriptor env true true) :
     CellMintSpec pre amt post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _hsites⟩ := hsat
-  have hgates : ∀ c ∈ mintRowGates, c.holdsVm env true true := by
-    intro c hc; apply hcs
+  obtain ⟨hcsT, _⟩ := hgatesat
+  have hgates : ∀ c ∈ mintRowGates, c.holdsVm env true false := by
+    intro c hc; apply hcsT
     unfold mintVmDescriptor; simp only [List.mem_append]
     exact Or.inl (Or.inl (Or.inl hc))
-  have hgates' := mintRowGates_flag_indep env true true hgates
+  have hgates' := mintRowGates_flag_indep env true hgates
   have hint := (mintVm_faithful env hrow).mp hgates'
   refine ⟨intent_to_cellSpec env pre post amt henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
@@ -401,6 +408,7 @@ theorem descriptor_agrees_with_executor
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsMintRow env)
     (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA s.kernel cell a) amt post)
+    (hgatesat : satisfiedVm hash mintVmDescriptor env true false)
     (hsat : satisfiedVm hash mintVmDescriptor env true true)
     (hexec : recCMintAsset s actor cell a amt = some s') :
     post.balLo = (cellProjA s'.kernel cell a).balLo
@@ -409,7 +417,7 @@ theorem descriptor_agrees_with_executor
     ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
     ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
   obtain ⟨hcirc, _⟩ :=
-    mintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hsat
+    mintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hgatesat hsat
   obtain ⟨hcLo, hcHi, _hcN, hcF, hcCap, hcRes⟩ := hcirc
   obtain ⟨heLo, heHi, _heN, heF, heCap, heRes⟩ := unify_mint_exec s s' actor cell a amt hexec
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
@@ -507,6 +515,7 @@ transfer/burn class-A bar, per cell. -/
 theorem mintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsMintRow env)
     (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA s.kernel cell a) amt post)
+    (hgatesat : satisfiedVm hash mintVmDescriptor env true false)
     (hsat : satisfiedVm hash mintVmDescriptor env true true)
     (hexec : recCMintAsset s actor cell a amt = some s') :
     CellMintSpec (cellProjA s.kernel cell a) amt post
@@ -517,9 +526,9 @@ theorem mintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
     ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
     ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
   obtain ⟨hspec, hcommit⟩ :=
-    mintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hsat
+    mintDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hgatesat hsat
   obtain ⟨hLo, hHi, hF, hCap, hRes⟩ :=
-    descriptor_agrees_with_executor hash env hrow s s' actor cell a amt post henc hsat hexec
+    descriptor_agrees_with_executor hash env hrow s s' actor cell a amt post henc hgatesat hsat hexec
   exact ⟨hspec, hcommit, hLo, hHi, hF, hCap, hRes⟩
 
 /-! ## §9 — Axiom-hygiene tripwires. -/

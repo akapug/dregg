@@ -284,16 +284,18 @@ as `PI[NEW_COMMIT]`. -/
 theorem noteCreateDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsNoteCreateRow env)
     (pre post : CellState) (value : ℤ)
     (henc : RowEncodesNote env pre value post)
+    (hgatesat : satisfiedVm hash noteCreateVmDescriptor env true false)
     (hsat : satisfiedVm hash noteCreateVmDescriptor env true true) :
     CellNoteSpec pre value post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ noteCreateRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ noteCreateVmDescriptor.constraints := by
       unfold noteCreateVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold noteCreateRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -399,11 +401,12 @@ theorem noteCreate_balance_neutral_matches_univA
     (st st' : RecChainedState) (cm : Nat) (actor c : CellId) (asset : AssetId)
     (post : CellState) (value : ℤ)
     (henc : RowEncodesNote env (cellProjNote st.kernel.bal c asset) value post)
+    (hgatesat : satisfiedVm hash noteCreateVmDescriptor env true false)
     (hsat : satisfiedVm hash noteCreateVmDescriptor env true true)
     (hspec : NoteCreateASpec st cm actor st') :
     post.balLo = (cellProjNote st'.kernel.bal c asset).balLo := by
   obtain ⟨hcirc, _⟩ :=
-    noteCreateDescriptor_full_sound hash env hrow (cellProjNote st.kernel.bal c asset) post value henc hsat
+    noteCreateDescriptor_full_sound hash env hrow (cellProjNote st.kernel.bal c asset) post value henc hgatesat hsat
   have hfreeze : post.balLo = (cellProjNote st.kernel.bal c asset).balLo := hcirc.1
   have hneutral := univA_note_is_balance_neutral st st' cm actor c asset hspec
   -- descriptor freezes: post.balLo = pre.balLo; universe-A freezes: pre'.balLo = pre.balLo. Agree.
@@ -630,8 +633,8 @@ def noteCreateVmDescriptorFull : EffectVmDescriptor :=
 /-- The amplified descriptor still forces the §2 whole-cell FREEZE (the root-update gate is additive and
 the freeze gates are a sublist of its constraints). Generalised over the boundary flags — the freeze
 gates are per-row `.gate`s, whose `holdsVm` ignores `isFirst`/`isLast`. -/
-theorem noteCreateFull_forces_freeze (env : VmRowEnv) (hrow : IsNoteCreateRow env) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteCreateVmDescriptorFull.constraints, c.holdsVm env b1 b2) :
+theorem noteCreateFull_forces_freeze (env : VmRowEnv) (hrow : IsNoteCreateRow env) (b1 : Bool)
+    (hgates : ∀ c ∈ noteCreateVmDescriptorFull.constraints, c.holdsVm env b1 false) :
     NoteCreateRowIntent env := by
   apply (noteCreateVm_faithful env hrow).mp
   intro c hc
@@ -649,8 +652,8 @@ theorem noteCreateFull_forces_freeze (env : VmRowEnv) (hrow : IsNoteCreateRow en
 
 /-- The amplified descriptor forces the `commitments`-ROOT update (the new content STAGE 3 buys).
 Generalised over the boundary flags (the root gate is a per-row `.gate`). -/
-theorem noteCreateFull_forces_root (env : VmRowEnv) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteCreateVmDescriptorFull.constraints, c.holdsVm env b1 b2) :
+theorem noteCreateFull_forces_root (env : VmRowEnv) (b1 : Bool)
+    (hgates : ∀ c ∈ noteCreateVmDescriptorFull.constraints, c.holdsVm env b1 false) :
     NoteCreateRootIntent env := by
   apply (noteCreateRoot_gate_faithful env).mp
   have hmem : (VmConstraint.gate gCommitRootUpdate) ∈ noteCreateVmDescriptorFull.constraints := by
@@ -706,13 +709,15 @@ lifted onto the root-bound descriptor. -/
 theorem noteCreateFull_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsNoteCreateRow env)
     (pre post : CellState) (value : ℤ)
     (henc : RowEncodesNote env pre value post)
+    (hgatesat : satisfiedVm hash noteCreateVmDescriptorFull env true false)
     (hsat : satisfiedVm hash noteCreateVmDescriptorFull env true true) :
     CellNoteSpec pre value post
       ∧ NoteCreateRootIntent env
       ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, hsites, _⟩ := hsat
-  have hfreeze := noteCreateFull_forces_freeze env hrow true true hcs
-  have hroot := noteCreateFull_forces_root env true true hcs
+  obtain ⟨hcsT, _⟩ := hgatesat
+  have hfreeze := noteCreateFull_forces_freeze env hrow true hcsT
+  have hroot := noteCreateFull_forces_root env true hcsT
   refine ⟨intent_to_cellNoteSpec env pre post value henc hfreeze, hroot, ?_⟩
   -- the post-commit publication is the last-row PI pin (unchanged from §7).
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
@@ -864,8 +869,8 @@ theorem noteCreateWide_usesWideSites : noteCreateVmDescriptorWide.hashSites = wi
 /-- **`noteCreateWide_forces_freeze`** — the wide descriptor still forces the §2 whole-cell FREEZE
 (`NoteCreateRowIntent`); the freeze gates are a sublist of the wide constraints, all per-row `.gate`s
 (flag-independent). -/
-theorem noteCreateWide_forces_freeze (env : VmRowEnv) (hrow : IsNoteCreateRow env) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteCreateVmDescriptorWide.constraints, c.holdsVm env b1 b2) :
+theorem noteCreateWide_forces_freeze (env : VmRowEnv) (hrow : IsNoteCreateRow env) (b1 : Bool)
+    (hgates : ∀ c ∈ noteCreateVmDescriptorWide.constraints, c.holdsVm env b1 false) :
     NoteCreateRowIntent env := by
   apply (noteCreateVm_faithful env hrow).mp
   intro c hc
@@ -882,8 +887,8 @@ theorem noteCreateWide_forces_freeze (env : VmRowEnv) (hrow : IsNoteCreateRow en
 
 /-- **`noteCreateWide_forces_root`** — the wide descriptor forces the dedicated-carrier `commitments`-root
 advance. -/
-theorem noteCreateWide_forces_root (env : VmRowEnv) (b1 b2 : Bool)
-    (hgates : ∀ c ∈ noteCreateVmDescriptorWide.constraints, c.holdsVm env b1 b2) :
+theorem noteCreateWide_forces_root (env : VmRowEnv) (b1 : Bool)
+    (hgates : ∀ c ∈ noteCreateVmDescriptorWide.constraints, c.holdsVm env b1 false) :
     NoteCreateRootIntentWide env := by
   apply (gCommitRootUpdateWide_faithful env).mp
   have hmem : (VmConstraint.gate gCommitRootUpdateWide) ∈ noteCreateVmDescriptorWide.constraints := by
@@ -949,10 +954,10 @@ def noteCreateRunnableSpec (hash : List ℤ → ℤ) (value : ℤ) (preRoots pos
     intro env pre post pr hrow hdec hgates
     obtain ⟨henc, hpr, hdigA, hdigB, hstep, hfreezeRoots⟩ := hdec
     -- per-cell freeze: the wide freeze gates ⟹ NoteCreateRowIntent ⟹ CellNoteSpec.
-    have hfreeze := noteCreateWide_forces_freeze env hrow true true hgates
+    have hfreeze := noteCreateWide_forces_freeze env hrow true hgates
     have hcell := intent_to_cellNoteSpec env pre post value henc hfreeze
     -- the dedicated-carrier root gate ⟹ the digest advances by the `param2` step …
-    have hrootW := noteCreateWide_forces_root env true true hgates
+    have hrootW := noteCreateWide_forces_root env true hgates
     -- … which, decoded, is the `commitments`-root digest advance over `postRoots`/`preRoots`.
     have hadvance : Dregg2.Exec.SystemRoots.systemRootsDigest hash postRoots
         = Dregg2.Exec.SystemRoots.systemRootsDigest hash preRoots + step := by
@@ -974,10 +979,10 @@ theorem noteCreate_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (pr : SysRoots)
     (hrow : IsNoteCreateRow env)
     (hdec : NoteCreateDecode hash value preRoots postRoots step env pre post pr)
-    (hsat : satisfiedVm hash noteCreateVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash noteCreateVmDescriptorWide env true false) :
     NoteCreateFullClause hash value preRoots postRoots step pre post pr :=
   runnable_full_sound (noteCreateRunnableSpec hash value preRoots postRoots step) hash env pre post pr
-    hrow hdec hsat
+    hrow hdec hgatesat
 
 /-- **`noteCreate_runnable_rejects_root_tamper` — the side-table anti-ghost (free from the generic
 crown).** Two rows satisfying the wide descriptor publishing the SAME `NEW_COMMIT` (with

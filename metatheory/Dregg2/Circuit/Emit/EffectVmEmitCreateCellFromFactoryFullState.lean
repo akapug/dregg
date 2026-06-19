@@ -93,7 +93,7 @@ theorem intent_to_zeroSpec (env : VmRowEnv) (post : CellState)
 
 theorem factoryGates_give_zeroSpec (env : VmRowEnv) (post : CellState)
     (henc : RowEncodesFactory env post)
-    (hgates : ∀ c ∈ factoryVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ factoryVmDescriptor.constraints, c.holdsVm env true false) :
     ZeroBlockSpec post := by
   have hrowgates : ∀ c ∈ factoryRowGates, c.holdsVm env false false := by
     intro c hc
@@ -137,7 +137,7 @@ theorem createCellFromFactory_runnable_full_sound (hash : List ℤ → ℤ) (pre
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsFactoryRow env)
     (henc : RowEncodesFactory env post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash factoryVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash factoryVmDescriptorWide env true false) :
     ZeroBlockSpec post ∧ postRoots = preRoots :=
   runnable_full_sound (factoryRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

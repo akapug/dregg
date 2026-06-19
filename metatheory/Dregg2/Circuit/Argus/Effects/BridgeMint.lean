@@ -272,6 +272,7 @@ theorem bridgeMint_compile_sound
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
     (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (value : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA k cell a) value post)
+    (hgatesat : satisfiedVm hash compileBridgeMint env true false)
     (hsat : satisfiedVm hash compileBridgeMint env true true)
     (hexec : interp (bridgeMintStmt actor cell a value) k = some k') :
     -- the conserved balance + the whole frame agree with the executor's credited (cell, asset) entry …
@@ -286,9 +287,9 @@ theorem bridgeMint_compile_sound
     ∧ NonceReconciled (cellProjA k cell a).nonce post.nonce (cellProjA k' cell a).nonce := by
   -- circuit side: `compileBridgeMint` IS `bridgeMintVmDescriptor`; the audited soundness forces
   -- `CellBridgeMintSpec` (balLo credited by `value`, frame frozen, nonce ticked).
-  rw [compileBridgeMint_eq] at hsat
+  rw [compileBridgeMint_eq] at hsat hgatesat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ :=
-    (bridgeMintDescriptor_full_sound hash env hrow (cellProjA k cell a) post value henc hsat).1
+    (bridgeMintDescriptor_full_sound hash env hrow (cellProjA k cell a) post value henc hgatesat hsat).1
   -- executor side: the §2 cornerstone turns the IR term's `interp` into the verified `recKMintAsset`; its
   -- per-(cell,asset) projection gives the credited balLo (the frozen limbs are `0 = 0`).
   rw [interp_bridgeMintStmt_eq_recKMintAsset] at hexec
@@ -310,6 +311,7 @@ theorem bridgeMint_compile_sound_nonce_is_turn_tick
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
     (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (value : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA k cell a) value post)
+    (hgatesat : satisfiedVm hash compileBridgeMint env true false)
     (hsat : satisfiedVm hash compileBridgeMint env true true)
     (hexec : interp (bridgeMintStmt actor cell a value) k = some k')
     (s : RecChainedState) (fee : Int)
@@ -323,7 +325,7 @@ theorem bridgeMint_compile_sound_nonce_is_turn_tick
         ((Dregg2.Exec.Admission.commitPrologue s cell fee).kernel.cell cell)
     ∧ post.nonce = (cellProjA k' cell a).nonce + 1 := by
   have hr : NonceReconciled (cellProjA k cell a).nonce post.nonce (cellProjA k' cell a).nonce :=
-    (bridgeMint_compile_sound hash env hrow k k' actor cell a value post henc hsat hexec).2
+    (bridgeMint_compile_sound hash env hrow k k' actor cell a value post henc hgatesat hsat hexec).2
   obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
     Dregg2.Circuit.Argus.perEffect_nonce_reconciles_to_turn hr s cell fee hexecAgent hpre
   exact ⟨htick, hmatch, hresid⟩

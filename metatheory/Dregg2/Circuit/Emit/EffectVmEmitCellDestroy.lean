@@ -240,16 +240,18 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem cellDestroyDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesDestroy env pre post)
+    (hgatesat : satisfiedVm hash cellDestroyVmDescriptor env true false)
     (hsat : satisfiedVm hash cellDestroyVmDescriptor env true true) :
     CellDestroyCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ cellDestroyRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ cellDestroyVmDescriptor.constraints := by
       unfold cellDestroyVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold cellDestroyRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -335,10 +337,11 @@ theorem descriptor_agrees_with_executor_destroy
     (s s' : RecChainedState) (actor cell : CellId) (certHash : Nat) (pre post : CellState)
     (hpre : pre = cellProj s.kernel cell)
     (henc : RowEncodesDestroy env pre post)
+    (hgatesat : satisfiedVm hash cellDestroyVmDescriptor env true false)
     (hsat : satisfiedVm hash cellDestroyVmDescriptor env true true)
     (hspec : CellDestroySpec s actor cell certHash s') :
     post.balLo = (cellProj s'.kernel cell).balLo := by
-  obtain ⟨hcirc, _⟩ := cellDestroyDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := cellDestroyDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := cellDestroy_balance_frozen s s' actor cell certHash hspec
   subst hpre

@@ -156,6 +156,7 @@ theorem transfer_compile_sound
     (k k' : RecordKernelState) (turn : Turn) (post : CellState)
     (henc : RowEncodes env (cellProj k turn.src) (debitParams turn) post)
     (hrow : IsTransferRow env)
+    (hgatesat : satisfiedVm hash (compile (transferStmt turn)) env true false)
     (hsat : satisfiedVm hash (compile (transferStmt turn)) env true true)
     (hexec : interp (transferStmt turn) k = some k') :
     -- the conserved balance + the whole frame agree with the executor's SRC post-cell …
@@ -169,13 +170,13 @@ theorem transfer_compile_sound
     ∧ NonceReconciled (cellProj k turn.src).nonce post.nonce (cellProj k' turn.src).nonce := by
   -- circuit side: `compile (transferStmt turn)` IS `transferVmDescriptor`, so the satisfaction
   -- hypothesis is over the audited runnable descriptor.
-  rw [compile_transferStmt] at hsat
+  rw [compile_transferStmt] at hgatesat hsat
   -- executor side: the cornerstone turns the IR term's `interp` into the verified `recKExec`.
   rw [interp_transferStmt_eq_recKExec] at hexec
   -- the reused per-cell circuit⟺executor agreement, with everything now over the right surfaces; its
   -- two nonce facts (tick + freeze) ARE `NonceReconciled`'s two clauses.
   obtain ⟨hframe, hTick, hFreeze⟩ :=
-    descriptor_agrees_with_executor_debit hash env k k' turn post henc hrow hsat hexec
+    descriptor_agrees_with_executor_debit hash env k k' turn post henc hrow hgatesat hsat hexec
   exact ⟨hframe, ⟨hTick, hFreeze⟩⟩
 
 #assert_axioms transfer_compile_sound
@@ -191,6 +192,7 @@ theorem transfer_compile_sound_nonce_is_turn_tick
     (k k' : RecordKernelState) (turn : Turn) (post : CellState)
     (henc : RowEncodes env (cellProj k turn.src) (debitParams turn) post)
     (hrow : IsTransferRow env)
+    (hgatesat : satisfiedVm hash (compile (transferStmt turn)) env true false)
     (hsat : satisfiedVm hash (compile (transferStmt turn)) env true true)
     (hexec : interp (transferStmt turn) k = some k')
     (s : Dregg2.Exec.RecChainedState) (fee : Int)
@@ -203,7 +205,7 @@ theorem transfer_compile_sound_nonce_is_turn_tick
     ∧ post.nonce = nonceOf ((commitPrologue s turn.src fee).kernel.cell turn.src)
     ∧ post.nonce = (cellProj k' turn.src).nonce + 1 := by
   have hr : NonceReconciled (cellProj k turn.src).nonce post.nonce (cellProj k' turn.src).nonce :=
-    (transfer_compile_sound hash env k k' turn post henc hrow hsat hexec).2
+    (transfer_compile_sound hash env k k' turn post henc hrow hgatesat hsat hexec).2
   obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
     perEffect_nonce_reconciles_to_turn hr s turn.src fee hexecAgent hpre
   exact ⟨htick, hmatch, hresid⟩
@@ -406,6 +408,7 @@ theorem mint_compile_sound
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsMintRow env)
     (k k' : RecordKernelState) (actor cell : CellId) (amt : ℤ) (post : CellState)
     (henc : Dregg2.Circuit.Emit.EffectVmEmitMint.RowEncodes env (cellProj k cell) amt post)
+    (hgatesat : satisfiedVm hash (compileE .mint) env true false)
     (hsat : satisfiedVm hash (compileE .mint) env true true)
     (hexec : interp (mintStmt actor cell amt) k = some k') :
     ( post.balLo = (cellProj k' cell).balLo
@@ -417,9 +420,9 @@ theorem mint_compile_sound
     --   net = the turn's single prologue tick (`Argus.Nonce.perEffect_nonce_reconciles_to_turn`).
     ∧ NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce := by
   -- circuit side: `compileE .mint` IS `mintVmDescriptor`, so the audited soundness forces `CellMintSpec`.
-  rw [compile_mintStmt] at hsat
+  rw [compile_mintStmt] at hgatesat hsat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ :=
-    (mintDescriptor_full_sound hash env hrow (cellProj k cell) post amt henc hsat).1
+    (mintDescriptor_full_sound hash env hrow (cellProj k cell) post amt henc hgatesat hsat).1
   -- executor side: the cornerstone turns the IR term's `interp` into the verified `recKMint`.
   rw [interp_mintStmt_eq_recKMint] at hexec
   have heLo := recKMint_proj_balLo hexec
@@ -446,6 +449,7 @@ theorem burn_compile_sound
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBurnRow env)
     (k k' : RecordKernelState) (actor cell : CellId) (amt : ℤ) (post : CellState)
     (henc : Dregg2.Circuit.Emit.EffectVmEmitBurn.RowEncodes env (cellProj k cell) amt post)
+    (hgatesat : satisfiedVm hash (compileE .burn) env true false)
     (hsat : satisfiedVm hash (compileE .burn) env true true)
     (hexec : interp (burnStmt actor cell amt) k = some k') :
     ( post.balLo = (cellProj k' cell).balLo
@@ -457,9 +461,9 @@ theorem burn_compile_sound
     --   net = the turn's single prologue tick (`Argus.Nonce.perEffect_nonce_reconciles_to_turn`).
     ∧ NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce := by
   -- circuit side: `compileE .burn` IS `burnVmDescriptor`; the audited soundness forces `CellBurnSpec`.
-  rw [compile_burnStmt] at hsat
+  rw [compile_burnStmt] at hgatesat hsat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ :=
-    (burnDescriptor_full_sound hash env hrow (cellProj k cell) post amt henc hsat).1
+    (burnDescriptor_full_sound hash env hrow (cellProj k cell) post amt henc hgatesat hsat).1
   -- executor side: the cornerstone turns the IR term's `interp` into the verified `recKBurn`.
   rw [interp_burnStmt_eq_recKBurn] at hexec
   have heLo := recKBurn_proj_balLo hexec
@@ -481,6 +485,7 @@ theorem mint_compile_sound_nonce_is_turn_tick
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsMintRow env)
     (k k' : RecordKernelState) (actor cell : CellId) (amt : ℤ) (post : CellState)
     (henc : Dregg2.Circuit.Emit.EffectVmEmitMint.RowEncodes env (cellProj k cell) amt post)
+    (hgatesat : satisfiedVm hash (compileE .mint) env true false)
     (hsat : satisfiedVm hash (compileE .mint) env true true)
     (hexec : interp (mintStmt actor cell amt) k = some k')
     (s : Dregg2.Exec.RecChainedState) (fee : Int)
@@ -490,7 +495,7 @@ theorem mint_compile_sound_nonce_is_turn_tick
     ∧ post.nonce = nonceOf ((commitPrologue s cell fee).kernel.cell cell)
     ∧ post.nonce = (cellProj k' cell).nonce + 1 := by
   have hr : NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce :=
-    (mint_compile_sound hash env hrow k k' actor cell amt post henc hsat hexec).2
+    (mint_compile_sound hash env hrow k k' actor cell amt post henc hgatesat hsat hexec).2
   obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
     perEffect_nonce_reconciles_to_turn hr s cell fee hexecAgent hpre
   exact ⟨htick, hmatch, hresid⟩
@@ -506,6 +511,7 @@ theorem burn_compile_sound_nonce_is_turn_tick
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBurnRow env)
     (k k' : RecordKernelState) (actor cell : CellId) (amt : ℤ) (post : CellState)
     (henc : Dregg2.Circuit.Emit.EffectVmEmitBurn.RowEncodes env (cellProj k cell) amt post)
+    (hgatesat : satisfiedVm hash (compileE .burn) env true false)
     (hsat : satisfiedVm hash (compileE .burn) env true true)
     (hexec : interp (burnStmt actor cell amt) k = some k')
     (s : Dregg2.Exec.RecChainedState) (fee : Int)
@@ -515,7 +521,7 @@ theorem burn_compile_sound_nonce_is_turn_tick
     ∧ post.nonce = nonceOf ((commitPrologue s cell fee).kernel.cell cell)
     ∧ post.nonce = (cellProj k' cell).nonce + 1 := by
   have hr : NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce :=
-    (burn_compile_sound hash env hrow k k' actor cell amt post henc hsat hexec).2
+    (burn_compile_sound hash env hrow k k' actor cell amt post henc hgatesat hsat hexec).2
   obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
     perEffect_nonce_reconciles_to_turn hr s cell fee hexecAgent hpre
   exact ⟨htick, hmatch, hresid⟩

@@ -243,16 +243,18 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem revokeDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesRevoke env pre post)
+    (hgatesat : satisfiedVm hash revokeVmDescriptor env true false)
     (hsat : satisfiedVm hash revokeVmDescriptor env true true) :
     RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ revokeVmDescriptor.constraints := by
       unfold revokeVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold revokeRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -618,7 +620,7 @@ theorem revokeDelegation_runnable_full_sound (preRoots : SysRoots)
     (hrow : IsRevokeRow env)
     (henc : RowEncodesRevoke env pre post)
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash revokeDelegationVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash revokeDelegationVmDescriptorWide env true false) :
     RevokeFullClause preRoots pre post postRoots :=
   runnable_full_sound (revokeRunnableSpec preRoots) hash env pre post postRoots
     hrow ⟨henc, hroots⟩ hsat

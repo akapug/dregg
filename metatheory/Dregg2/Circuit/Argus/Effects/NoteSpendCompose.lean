@@ -403,12 +403,12 @@ theorem noteSpendCompose_runnable_full_sound (hash : List ℤ → ℤ)
     (hrow : Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.IsNoteSpendRow env)
     (hdec : Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.NoteSpendDecode hash value preRoots postRoots step
               env pre post pr)
-    (hsat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash
-              Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptorWide env true true) :
+    (hgatesat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash
+              Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptorWide env true false) :
     Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.NoteSpendFullClause hash value preRoots postRoots step
       pre post pr :=
   Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpend_runnable_full_sound
-    hash value preRoots postRoots step env pre post pr hrow hdec hsat
+    hash value preRoots postRoots step env pre post pr hrow hdec hgatesat
 
 #assert_axioms noteSpendCompose_runnable_full_sound
 

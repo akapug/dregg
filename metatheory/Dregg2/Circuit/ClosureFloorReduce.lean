@@ -137,6 +137,8 @@ def transferTraceReadout_of_residual (hash : List ℤ → ℤ)
   ci := r.desig.ci
   hdi := r.desig.hdi
   hci := r.desig.hci
+  hdiNotLast := r.desig.hdiNotLast
+  hciNotLast := r.desig.hciNotLast
   srcPre := decodeCellPre (envAt t r.desig.di)
   srcPost := decodeCellPost (envAt t r.desig.di)
   dstPre := decodeCellPre (envAt t r.desig.ci)

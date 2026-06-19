@@ -321,6 +321,7 @@ theorem descriptor_agrees_with_executor_debit
     (k k' : RecordKernelState) (t : Turn) (post : CellState)
     (henc : RowEncodes env (cellProj k t.src) (debitParams t) post)
     (hrow : IsTransferRow env)
+    (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true)
     (hexec : recKExec k t = some k') :
     -- the conserved balance + the whole frame agree with the executor's SRC post-cell …
@@ -334,7 +335,7 @@ theorem descriptor_agrees_with_executor_debit
         ∧ (cellProj k' t.src).nonce = (cellProj k t.src).nonce ) := by
   -- descriptor side: the keystone forces `CellTransferSpec pre (debitParams t) post`
   obtain ⟨hcirc, _⟩ := transferDescriptor_full_sound hash env (cellProj k t.src) post (debitParams t)
-    henc hrow hsat
+    henc hrow hgatesat hsat
   obtain ⟨_, hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ := hcirc
   -- executor side: the freeze-nonce unification on the SRC cell
   obtain ⟨_, heLo, heHi, heN, heF, heCap, heRes⟩ := unify_debit_exec k k' t hexec

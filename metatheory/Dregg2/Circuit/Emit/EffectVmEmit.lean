@@ -405,14 +405,90 @@ The boundary/PI clauses are GUARDED by `isFirst`/`isLast` — matching `when_fir
 `when_last_row()`, which are vacuous off the boundary. This is the faithful denotation of the
 running AIR's row-quantified constraint set on a single row window. -/
 
-/-- Meaning of one constraint on a row window with first/last flags. -/
+/-- Meaning of one constraint on a row window with first/last flags.
+
+`.gate` and `.transition` fire under the deployed Rust `builder.when_transition()` — every row
+EXCEPT the last (the IR-v2 emitter `descriptor_ir2.rs` and the v1 hand-AIR both gate the per-row
+algebra and the continuity on the transition domain `0..n-2`, where `nxt` is a genuine next row).
+So both are GUARDED by `isLast = false`, exactly as `.boundary .last` / `.piBinding .last` guard
+`isLast`: on the wrap row (`isLast = true`, where `nxt = zeroAsg`) they are vacuous, matching the
+running circuit. This is the FAITHFUL denotation: a Lean rung may rely only on what the deployed
+AIR actually forces. -/
 def VmConstraint.holdsVm (env : VmRowEnv) (isFirst isLast : Bool) : VmConstraint → Prop
-  | .gate body          => body.eval env.loc = 0
-  | .transition hi lo   => env.nxt (sbCol hi) = env.loc (saCol lo)
+  | .gate body          => match isLast with | true => True | false => body.eval env.loc = 0
+  | .transition hi lo   =>
+      match isLast with | true => True | false => env.nxt (sbCol hi) = env.loc (saCol lo)
   | .boundary .first b  => isFirst = true → b.eval env.loc = 0
   | .boundary .last  b  => isLast = true → b.eval env.loc = 0
   | .piBinding .first col k => isFirst = true → env.loc col = env.pub k
   | .piBinding .last  col k => isLast = true → env.loc col = env.pub k
+
+/-! ### `holdsVm` reduction lemmas — the STABLE interface to the row-quantified denotation.
+
+`holdsVm` is the denotation EVERY rung consumes; its body shape (the `when_transition()` guard on
+`.gate`/`.transition`, the `when_first/last_row()` guard on the boundary forms) is an implementation
+detail a rung should not have to unfold by hand. These lemmas + the `reduce_holdsVm` tactic give the
+stable surface: a rung names the ROW IT IS ON (active = `isLast = false`, wrap = `isLast = true`,
+first = `isFirst = true`) and the constraint reduces to its plain content — `body = 0` / the
+continuity equation / the PI equality — or to `True` where the deployed AIR does not bind it. Adding
+a new guard to `holdsVm` later means re-proving these lemmas ONCE, not re-editing every rung. -/
+
+/-- A `.gate` on a TRANSITION row (`isLast = false`) IS its body equation — the deployed
+`when_transition()` arm binds. -/
+@[simp] theorem holdsVm_gate_false (env : VmRowEnv) (isFirst : Bool) (body : EmittedExpr) :
+    VmConstraint.holdsVm env isFirst false (.gate body) = (body.eval env.loc = 0) := rfl
+
+/-- A `.gate` on the WRAP row (`isLast = true`) is vacuous — `when_transition()` does not fire. -/
+@[simp] theorem holdsVm_gate_true (env : VmRowEnv) (isFirst : Bool) (body : EmittedExpr) :
+    VmConstraint.holdsVm env isFirst true (.gate body) = True := rfl
+
+/-- A `.transition` on a TRANSITION row IS its continuity equation. -/
+@[simp] theorem holdsVm_transition_false (env : VmRowEnv) (isFirst : Bool) (hi lo : Nat) :
+    VmConstraint.holdsVm env isFirst false (.transition hi lo)
+      = (env.nxt (sbCol hi) = env.loc (saCol lo)) := rfl
+
+/-- A `.transition` on the WRAP row is vacuous. -/
+@[simp] theorem holdsVm_transition_true (env : VmRowEnv) (isFirst : Bool) (hi lo : Nat) :
+    VmConstraint.holdsVm env isFirst true (.transition hi lo) = True := rfl
+
+/-- A `.boundary .first` on the FIRST row IS its body equation. -/
+@[simp] theorem holdsVm_boundaryFirst_true (env : VmRowEnv) (isLast : Bool) (b : EmittedExpr) :
+    VmConstraint.holdsVm env true isLast (.boundary .first b) ↔ b.eval env.loc = 0 := by
+  simp [VmConstraint.holdsVm]
+
+/-- A `.boundary .last` on the LAST row IS its body equation. -/
+@[simp] theorem holdsVm_boundaryLast_true (env : VmRowEnv) (isFirst : Bool) (b : EmittedExpr) :
+    VmConstraint.holdsVm env isFirst true (.boundary .last b) ↔ b.eval env.loc = 0 := by
+  simp [VmConstraint.holdsVm]
+
+/-- A `.piBinding .first` on the FIRST row IS its PI equality. -/
+@[simp] theorem holdsVm_piFirst_true (env : VmRowEnv) (isLast : Bool) (col k : Nat) :
+    VmConstraint.holdsVm env true isLast (.piBinding .first col k) ↔ env.loc col = env.pub k := by
+  simp [VmConstraint.holdsVm]
+
+/-- A `.piBinding .last` on the LAST row IS its PI equality. -/
+@[simp] theorem holdsVm_piLast_true (env : VmRowEnv) (isFirst : Bool) (col k : Nat) :
+    VmConstraint.holdsVm env isFirst true (.piBinding .last col k) ↔ env.loc col = env.pub k := by
+  simp [VmConstraint.holdsVm]
+
+/-- **`holdsVm` at a known `isLast = false`, abstract `isFirst`.** A `.gate`/`.transition` reduces to
+its plain content from the FACT that the row is a transition row — the form rungs that thread
+`hnotlast : i + 1 ≠ t.rows.length` (whence `(i+1 == len) = false`) use. -/
+theorem holdsVm_gate_of_notLast (env : VmRowEnv) (isFirst isLast : Bool) (body : EmittedExpr)
+    (h : isLast = false) :
+    VmConstraint.holdsVm env isFirst isLast (.gate body) = (body.eval env.loc = 0) := by
+  subst h; rfl
+
+theorem holdsVm_transition_of_notLast (env : VmRowEnv) (isFirst isLast : Bool) (hi lo : Nat)
+    (h : isLast = false) :
+    VmConstraint.holdsVm env isFirst isLast (.transition hi lo)
+      = (env.nxt (sbCol hi) = env.loc (saCol lo)) := by
+  subst h; rfl
+
+-- The `@[simp]`-tagged `holdsVm_*` reduction lemmas above ARE the stable surface: a future change to
+-- `holdsVm`'s guards is absorbed by re-proving those lemmas, then `simp only [holdsVm_gate_false, …]`
+-- at the call sites. (A `reduce_holdsVm` wrapper tactic lived here but was removed — unused, and its
+-- `(location)?` parser scoping did not compile; re-add it as its own clean pass if wanted.)
 
 /-- **`satisfiedVm hash d env isFirst isLast`** — the emitted descriptor's denotation: every
 constraint holds on the row window AND every hash site carries its genuine digest. -/
@@ -492,12 +568,17 @@ def selectorGate (s : Nat) : VmConstraint := .gate (selectorGateBody s)
 /-- The selector-binding gate, as a one-element constraint list (the descriptor segment). -/
 def selectorGates (s : Nat) : List VmConstraint := [selectorGate s]
 
-/-- **The selector-binding gate's denotation.** On a row, `selectorGate s` holds iff the row is a
-NoOp pad (`sel[NOOP] = 1`) OR carries selector `s` (`sel[s] = 1`). In particular, on a NON-pad row
-(`sel[NOOP] = 0`) it forces `sel[s] = 1`. -/
-theorem selectorGate_holds_iff (s : Nat) (env : VmRowEnv) (isFirst isLast : Bool) :
+/-- **The selector-binding gate's denotation (on the transition domain).** This is a `.gate`, so
+under the deployed `when_transition()` it binds only off the last row. GIVEN `isLast = false`,
+`selectorGate s` holds iff the row is a NoOp pad (`sel[NOOP] = 1`) OR carries selector `s`
+(`sel[s] = 1`). In particular, on a NON-pad transition row (`sel[NOOP] = 0`) it forces `sel[s] = 1`.
+(On the last row the gate is vacuous — matching the running circuit; see `_holds_of_active`/`_of_pad`,
+which prove the honest direction without the `isLast` hypothesis.) -/
+theorem selectorGate_holds_iff (s : Nat) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false) :
     (selectorGate s).holdsVm env isFirst isLast
       ↔ env.loc sel.NOOP = 1 ∨ env.loc s = 1 := by
+  subst hlast
   simp only [selectorGate, selectorGateBody, VmConstraint.holdsVm, EmittedExpr.eval]
   constructor
   · intro h
@@ -510,10 +591,10 @@ theorem selectorGate_holds_iff (s : Nat) (env : VmRowEnv) (isFirst isLast : Bool
 NOT set (`sel[s] ≠ 1`), `selectorGate s` REJECTS — the cross-selector replay tooth. A trace for a
 different effect `s'` (which sets `sel[s'] = 1`, `sel[s] = 0`) is rejected by descriptor `s`. -/
 theorem selectorGate_rejects_wrong_selector (s : Nat) (env : VmRowEnv) (isFirst isLast : Bool)
-    (hpad : env.loc sel.NOOP = 0) (hwrong : env.loc s ≠ 1) :
+    (hlast : isLast = false) (hpad : env.loc sel.NOOP = 0) (hwrong : env.loc s ≠ 1) :
     ¬ (selectorGate s).holdsVm env isFirst isLast := by
   intro h
-  rcases (selectorGate_holds_iff s env isFirst isLast).mp h with h1 | h2
+  rcases (selectorGate_holds_iff s env isFirst isLast hlast).mp h with h1 | h2
   · rw [hpad] at h1; exact absurd h1 (by norm_num)
   · exact hwrong h2
 
@@ -521,15 +602,23 @@ theorem selectorGate_rejects_wrong_selector (s : Nat) (env : VmRowEnv) (isFirst 
 (`sel[s] = 1`), `selectorGate s` holds — every honest `s`-trace passes the tooth. -/
 theorem selectorGate_holds_of_active (s : Nat) (env : VmRowEnv) (isFirst isLast : Bool)
     (hactive : env.loc s = 1) :
-    (selectorGate s).holdsVm env isFirst isLast :=
-  (selectorGate_holds_iff s env isFirst isLast).mpr (Or.inr hactive)
+    (selectorGate s).holdsVm env isFirst isLast := by
+  cases isLast with
+  | true  => exact trivial
+  | false =>
+    simp only [selectorGate, selectorGateBody, VmConstraint.holdsVm, EmittedExpr.eval]
+    rw [hactive]; ring
 
 /-- **Selector-binding acceptance (the pad leg).** On a NoOp pad row (`sel[NOOP] = 1`),
 `selectorGate s` holds — pad rows pass the tooth for every `s`. -/
 theorem selectorGate_holds_of_pad (s : Nat) (env : VmRowEnv) (isFirst isLast : Bool)
     (hpad : env.loc sel.NOOP = 1) :
-    (selectorGate s).holdsVm env isFirst isLast :=
-  (selectorGate_holds_iff s env isFirst isLast).mpr (Or.inl hpad)
+    (selectorGate s).holdsVm env isFirst isLast := by
+  cases isLast with
+  | true  => exact trivial
+  | false =>
+    simp only [selectorGate, selectorGateBody, VmConstraint.holdsVm, EmittedExpr.eval]
+    rw [hpad]; ring
 
 /-! ## §7 — Wire rendering (the canonical JSON the Rust decoder ingests).
 

@@ -58,7 +58,7 @@ def IsRefusalRow (env : VmRowEnv) : Prop :=
 
 theorem refusalGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesRefusal env pre post)
-    (hgates : ∀ c ∈ refusalVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ refusalVmDescriptor.constraints, c.holdsVm env true false) :
     RefusalCellSpec pre post := by
   have hrowgates : ∀ c ∈ refusalRowGates, c.holdsVm env false false := by
     intro c hc
@@ -101,10 +101,10 @@ theorem refusal_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : SysRoo
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsRefusalRow env)
     (henc : RowEncodesRefusal env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash refusalVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash refusalVmDescriptorWide env true false) :
     RefusalCellSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (refusalRunnableSpec preRoots) hash env pre post postRoots hrow
-    ⟨henc, hroots⟩ hsat
+    ⟨henc, hroots⟩ hgatesat
 
 /-! ## §5 — THE ANTI-GHOST. -/
 

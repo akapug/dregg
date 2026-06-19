@@ -67,7 +67,7 @@ def IsCellSealRow (env : VmRowEnv) : Prop :=
 `RowEncodesSeal` with `s_noop = 0`, force `CellSealCellSpec`. Flag-free (all gates are `.gate`). -/
 theorem cellSealGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesSeal env pre post)
-    (hgates : ∀ c ∈ cellSealVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ cellSealVmDescriptor.constraints, c.holdsVm env true false) :
     CellSealCellSpec pre post := by
   have hrowgates : ∀ c ∈ cellSealRowGates, c.holdsVm env false false := by
     intro c hc
@@ -114,7 +114,7 @@ theorem cellSeal_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : SysRo
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsCellSealRow env)
     (henc : RowEncodesSeal env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash cellSealVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash cellSealVmDescriptorWide env true false) :
     CellSealCellSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (cellSealRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

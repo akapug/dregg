@@ -239,9 +239,10 @@ theorem transferDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (p : TransferParams)
     (henc : RowEncodes env pre p post)
     (hrow : IsTransferRow env)
+    (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
     CellTransferSpec pre p post ∧ post.commit = env.pub pi.NEW_COMMIT := by
-  obtain ⟨hint, hcommit⟩ := transferVmDescriptor_pins_intent hash env hrow hsat
+  obtain ⟨hint, hcommit⟩ := transferVmDescriptor_pins_intent hash env hrow hgatesat hsat
   refine ⟨intent_to_cellSpec env pre post p henc hint, ?_⟩
   -- post.commit = env.loc (saCol STATE_COMMIT) = env.pub NEW_COMMIT
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
@@ -357,8 +358,8 @@ theorem transferDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : P
   have hs₁ := hsat₁.2.1
   have hs₂ := hsat₂.2.1
   -- each row's published state_commit equals its NEW_COMMIT (pins_intent), which are equal
-  have hc₁ := (transferVmDescriptor_pins_intent hash e₁ hrow₁ hsat₁).2
-  have hc₂ := (transferVmDescriptor_pins_intent hash e₂ hrow₂ hsat₂).2
+  have hc₁ := transferVmDescriptor_pins_commit hash e₁ hsat₁
+  have hc₂ := transferVmDescriptor_pins_commit hash e₂ hsat₂
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
     rw [hc₁, hc₂, hpub]
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
@@ -548,6 +549,7 @@ together with the now-live range tooth. (The Rust↔ℤ_p faithfulness — that 
 this by wrapping `amount` past the modulus — is the interpreter-edge's job: the descriptor's range
 teeth bound the operands so the prime-field gate realizes this ℤ statement.) -/
 theorem transferVm_enforces_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
     -- (non-neg) the post-balance limb is non-negative — no underflow disguised as a small balance
     0 ≤ env.loc (saCol state.BALANCE_LO)
@@ -558,7 +560,8 @@ theorem transferVm_enforces_availability (hash : List ℤ → ℤ) (env : VmRowE
     -- (AVAILABILITY) on a debit row, the amount cannot exceed the pre-balance
     ∧ (env.loc (prmCol param.DIRECTION) = 1
         → env.loc (prmCol param.AMOUNT) ≤ env.loc (sbCol state.BALANCE_LO)) := by
-  have hbal := hsat.1 (.gate gBalLo) (by simp [transferVmDescriptor, transferRowGates])
+  -- the balance-move gate is drawn at the ACTIVE row (`isLast = false`), where `when_transition()` binds.
+  have hbal := hgatesat.1 (.gate gBalLo) (by simp [transferVmDescriptor, transferRowGates])
   have hrng := hsat.2.2 (⟨saCol state.BALANCE_LO, 30⟩) (by simp [transferVmDescriptor])
   simp only [VmConstraint.holdsVm, gBalLo, eSA, eSB, ePrm, eSub,
     Dregg2.Exec.CircuitEmit.EmittedExpr.eval] at hbal

@@ -230,16 +230,18 @@ the post-commit as `PI[NEW_COMMIT]`. -/
 theorem cellUnsealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesUnseal env pre post)
+    (hgatesat : satisfiedVm hash cellUnsealVmDescriptor env true false)
     (hsat : satisfiedVm hash cellUnsealVmDescriptor env true true) :
     CellUnsealCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ cellUnsealRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ cellUnsealVmDescriptor.constraints := by
       unfold cellUnsealVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold cellUnsealRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -280,7 +282,7 @@ theorem cellUnsealWide_constraints_eq :
 /-- The GATE-ONLY per-cell soundness (no hash-site hypothesis — the THIN per-effect content). -/
 theorem cellUnsealGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesUnseal env pre post)
-    (hgates : ∀ c ∈ cellUnsealVmDescriptor.constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ cellUnsealVmDescriptor.constraints, c.holdsVm env true false) :
     CellUnsealCellSpec pre post := by
   have hrowgates : ∀ c ∈ cellUnsealRowGates, c.holdsVm env false false := by
     intro c hc
@@ -322,7 +324,7 @@ theorem cellUnseal_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : Sys
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsCellUnsealRow env)
     (henc : RowEncodesUnseal env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash cellUnsealVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash cellUnsealVmDescriptorWide env true false) :
     CellUnsealCellSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (cellUnsealRunnableSpec preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

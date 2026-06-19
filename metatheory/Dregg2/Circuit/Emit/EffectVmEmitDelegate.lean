@@ -299,10 +299,10 @@ theorem delegate_runnable_full_sound (D : Caps → ℤ) (s : RecChainedState) (a
     (hrow : IsAttenRow env)
     (henc : CapRowEncodes env pre post (delegateCapDigestNew D s args))
     (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash delegateVmDescriptorWide env true true) :
+    (hgatesat : satisfiedVm hash delegateVmDescriptorWide env true false) :
     CapFullClause (delegateCapDigestNew D s args) preRoots pre post postRoots :=
   cap_runnable_full_sound (delegateCapDigestNew D s args) preRoots hash env pre post postRoots
-    hrow henc hroots hsat
+    hrow henc hroots hgatesat
 
 /-- **`delegate_runnable_binds_full_state` — the whole-17-field anti-ghost for `delegate`.** Two wide
 `delegate` rows publishing the same `NEW_COMMIT` (with `systemRootsDigest` carriers) agree on EVERY

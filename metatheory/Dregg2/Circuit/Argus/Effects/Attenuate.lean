@@ -291,13 +291,15 @@ a packed `satisfiedVm`). `satisfiedVm hash attenuateVmDescriptorGenuine env true
 `constraints = attenuateGenuineRowGates ++ …` and `hashSites = capRecomputeSites ++ attenuateHashSites`.
 We split it into the two ingredients the soundness needs. -/
 
-/-- **`satisfied_gives_row_gates`.** A satisfying genuine-descriptor witness gives the frame-freeze row
-gates (the row gates are pure `.gate` bodies, so the boundary flags `true true` collapse to `false
-false`). The first `++`-summand of the descriptor's constraint list. -/
+/-- **`satisfied_gives_row_gates`.** A genuine-descriptor witness at the ACTIVE row (`isLast = false`,
+where the deployed gates run under `builder.when_transition()`) gives the frame-freeze row gates (the
+row gates are pure `.gate` bodies, so the active-row flags `true false` collapse to `false false`). The
+first `++`-summand of the descriptor's constraint list. A `true true` window — the wrap row — does NOT
+bind these gates. -/
 theorem satisfied_gives_row_gates (hash : List ℤ → ℤ) (env : VmRowEnv)
-    (hsat : satisfiedVm hash attenuateVmDescriptorGenuine env true true) :
+    (hgatesat : satisfiedVm hash attenuateVmDescriptorGenuine env true false) :
     ∀ c ∈ attenuateGenuineRowGates, c.holdsVm env false false := by
-  obtain ⟨hcon, _hsites⟩ := hsat
+  obtain ⟨hcon, _hsites⟩ := hgatesat
   intro c hc
   -- `constraints = (attenuateGenuineRowGates ++ transitionAll) ++ boundaryFirstPins`; lift `hc` through both.
   have hmem : c ∈ attenuateVmDescriptorGenuine.constraints :=
@@ -369,6 +371,7 @@ theorem attenuate_compile_sound
     (k k' : RecordKernelState) (actor : CellId) (idx : Nat) (keep : List Auth)
     (pre post : Dregg2.Circuit.Emit.EffectVmEmitTransferSound.CellState) (capDigestNew : ℤ)
     (henc : CapRowEncodes env pre post capDigestNew)
+    (hgatesat : satisfiedVm hash attenuateVmDescriptorGenuine env true false)
     (hsat : satisfiedVm hash attenuateVmDescriptorGenuine env true true)
     (hexec : interp (attenuateStmt actor idx keep) k = some k') :
     -- the GENUINE per-cell post-state: `post.capRoot` is the FORCED cap-root recompute, frame frozen …
@@ -377,7 +380,7 @@ theorem attenuate_compile_sound
     ∧ attenuateStep k ⟨actor, idx, keep⟩ = some k'
     ∧ k'.caps = attenuateSlotF k.caps actor idx keep := by
   -- circuit side: split the satisfying witness into its two ingredients, feed the audited class-A soundness.
-  have hgates := satisfied_gives_row_gates hash env hsat
+  have hgates := satisfied_gives_row_gates hash env hgatesat
   have hrec := satisfied_gives_capRootHolds hash env hsat
   have hspec := attenuateGenuine_sound hash env pre post capDigestNew henc hgates hrec
   -- executor side: the §2 cornerstone turns the IR term's `interp` into the kernel step `attenuateStep`.
@@ -469,7 +472,7 @@ theorem attenuate_runnable_full_sound (capDigestNew : ℤ)
     (henc : Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.CapRowEncodes env pre post capDigestNew)
     (hroots : postRoots = preRoots)
     (hsat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash
-              Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptorWide env true true) :
+              Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptorWide env true false) :
     Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.CapFullClause capDigestNew preRoots pre post postRoots :=
   Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.cap_runnable_full_sound
     capDigestNew preRoots hash env pre post postRoots hrow henc hroots hsat

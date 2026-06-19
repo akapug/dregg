@@ -314,6 +314,7 @@ theorem exercise_compile_sound
     (hpreBal : env.loc (Dregg2.Circuit.Emit.EffectVmEmit.sbCol
                  Dregg2.Circuit.Emit.EffectVmEmit.state.BALANCE_LO) = balProj s.kernel c)
     (henc : RowEncodesExercise env pre post)
+    (hgatesat : satisfiedVm hash compileExercise env true false)
     (hsat : satisfiedVm hash compileExercise env true true)
     (hexec : interp (exerciseStmt actor target) s.kernel = some k') :
     -- frozen-frame leg: the whole economic block is frozen at the hold layer (pre = post on bal/fields/…) …
@@ -325,8 +326,8 @@ theorem exercise_compile_sound
     ∧ ( post.nonce = pre.nonce + 1 ) := by
   -- circuit side: the audited descriptor soundness forces the per-cell `ExerciseCellSpec` (frame freeze +
   -- nonce tick) on this `s_noop = 0` exercise row.
-  rw [compileExercise_eq] at hsat
-  obtain ⟨hcs, _hcommit⟩ := exerciseDescriptor_full_sound hash env pre post hnoop henc hsat
+  rw [compileExercise_eq] at hsat hgatesat
+  obtain ⟨hcs, _hcommit⟩ := exerciseDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   -- executor side: the IR-term commit yields the connector's `ExerciseHoldSpec` (§3a) on the chained
   -- post-state `s' = ⟨k', authReceipt actor :: s.log⟩` (whose kernel is `k'`).
   have hhold : ExerciseHoldSpec s actor target { kernel := k', log := authReceipt actor :: s.log } :=
@@ -336,7 +337,7 @@ theorem exercise_compile_sound
   have hagree : post.balLo = balProj k' c :=
     descriptor_agrees_with_executor_exercise hash env hnoop s
       { kernel := k', log := authReceipt actor :: s.log } actor target c pre post
-      hpreBal henc hsat hhold
+      hpreBal henc hgatesat hsat hhold
   -- the nonce-tick conjunct is the THIRD clause of `ExerciseCellSpec` (`post.nonce = pre.nonce + 1`).
   exact ⟨hcs, hagree, hcs.2.2.1⟩
 
@@ -442,7 +443,7 @@ theorem exercise_runnable_full_state_weld
     (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : Dregg2.Circuit.Emit.EffectVmEmitExercise.IsExerciseRow env)
     (henc : RowEncodesExercise env pre post) (hroots : sr = preRoots)
-    (hsat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash exerciseVmDescriptorWide env true true) :
+    (hsat : Dregg2.Circuit.Emit.EffectVmEmit.satisfiedVm hash exerciseVmDescriptorWide env true false) :
     ExerciseCellSpec pre post ∧ sr = preRoots :=
   exercise_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hsat
 

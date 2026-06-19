@@ -534,13 +534,16 @@ def capReshapeVmDescriptor : EffectVmDescriptor :=
 
 We extract the per-bit submask (non-amp) and the issuer binding (production) from a satisfying witness.
 The boundary flags: the production `piBinding .first` fires on the (single active) first row, so we take
-`isFirst = true`. The per-bit gates are pure `.gate` bodies (flag-independent). -/
+`isFirst = true`. The per-bit gates are `.gate` bodies — under the deployed `when_transition()` they bind
+on EVERY row but the last, so the in-circuit teeth are extracted at `isLast = false` (the active
+transition row, which any real ≥2-row trace carries; the final row is the wrap/pad row). -/
 
-/-- **`capReshape_nonAmp_in_circuit` — THE IN-CIRCUIT NON-AMP TOOTH.** A satisfying witness FORCES, for
-every bit `i < MASK_BITS`, the granted bit ≤ the held bit (`gᵢ = 0 ∨ hᵢ = 1`) — i.e. `granted ⊑ held`
-bitwise, per bit. The light client reads ONLY the proof; this is the in-circuit non-amplification it now
-sees, not an executor-trusted side-check. -/
+/-- **`capReshape_nonAmp_in_circuit` — THE IN-CIRCUIT NON-AMP TOOTH.** A satisfying witness FORCES, on a
+transition row (`isLast = false`), for every bit `i < MASK_BITS`, the granted bit ≤ the held bit
+(`gᵢ = 0 ∨ hᵢ = 1`) — i.e. `granted ⊑ held` bitwise, per bit. The light client reads ONLY the proof;
+this is the in-circuit non-amplification it now sees, not an executor-trusted side-check. -/
 theorem capReshape_nonAmp_in_circuit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (hsat : satisfiedVm hash capReshapeVmDescriptor env isFirst isLast)
     (i : Nat) (hi : i < MASK_BITS) :
     env.loc (col.grantedBit i) = 0 ∨ env.loc (col.heldBit i) = 1 := by
@@ -555,7 +558,8 @@ theorem capReshape_nonAmp_in_circuit (hash : List ℤ → ℤ) (env : VmRowEnv) 
     unfold nonAmpGates
     exact List.mem_append_left _ (List.mem_append_right _ hsm)
   have hg := hcon _ hmem
-  -- the gate body `gᵢ·(1 − hᵢ) = 0` forces `gᵢ = 0 ∨ hᵢ = 1`.
+  -- the gate body `gᵢ·(1 − hᵢ) = 0` forces `gᵢ = 0 ∨ hᵢ = 1` (on the transition row).
+  subst hlast
   simp only [VmConstraint.holdsVm, gSubmaskBit, eSub, eCol, EmittedExpr.eval] at hg
   rcases mul_eq_zero.mp hg with h0 | h1
   · exact Or.inl h0
@@ -567,6 +571,7 @@ issuer cap targets the asset) AND the control bit is set (`h₆ = 1`, the mint r
 genuinely means the producer OPENED a held issuer cap for the asset — production gated on held authority,
 in-circuit. -/
 theorem capReshape_production_in_circuit (hash : List ℤ → ℤ) (env : VmRowEnv) (isLast : Bool)
+    (hlast : isLast = false)
     (hsat : satisfiedVm hash capReshapeVmDescriptor env true isLast) :
     env.loc (prmCol col.TARGET) = env.pub PI_ASSET
     ∧ env.loc (col.heldBit CONTROL_BIT_POS) = 1 := by
@@ -585,6 +590,7 @@ theorem capReshape_production_in_circuit (hash : List ℤ → ℤ) (env : VmRowE
     exact List.mem_cons_of_mem _ List.mem_cons_self
   have hPI := hcon _ hmemPI
   have hCtl := hcon _ hmemCtl
+  subst hlast
   simp only [VmConstraint.holdsVm, true_implies] at hPI
   simp only [VmConstraint.holdsVm, eSub, eCol, EmittedExpr.eval] at hCtl
   exact ⟨hPI, by linarith⟩
@@ -594,11 +600,12 @@ granted bit `i` is SET (`= 1`) but the held bit `i` is CLEAR (`= 0`) — an ampl
 does NOT satisfy the descriptor: the submask gate `gᵢ·(1 − hᵢ) = 1·1 = 1 ≠ 0` FAILS. So the circuit
 rejects amplification at the bit level. -/
 theorem capReshape_rejects_amplify (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
     (i : Nat) (hi : i < MASK_BITS)
     (hg : env.loc (col.grantedBit i) = 1) (hh : env.loc (col.heldBit i) = 0) :
     ¬ satisfiedVm hash capReshapeVmDescriptor env isFirst isLast := by
   intro hsat
-  rcases capReshape_nonAmp_in_circuit hash env isFirst isLast hsat i hi with h0 | h1
+  rcases capReshape_nonAmp_in_circuit hash env isFirst isLast hlast hsat i hi with h0 | h1
   · rw [hg] at h0; exact absurd h0 (by norm_num)
   · rw [hh] at h1; exact absurd h1 (by norm_num)
 
@@ -607,10 +614,11 @@ on the active (first) boundary whose held control bit is CLEAR (`= 0`) does NOT 
 the production-authority control gate `h₆ − 1 = −1 ≠ 0` FAILS. So a mint WITHOUT the held issuer cap's
 mint bit is rejected in-circuit. -/
 theorem capReshape_rejects_no_control (hash : List ℤ → ℤ) (env : VmRowEnv) (isLast : Bool)
+    (hlast : isLast = false)
     (hh : env.loc (col.heldBit CONTROL_BIT_POS) = 0) :
     ¬ satisfiedVm hash capReshapeVmDescriptor env true isLast := by
   intro hsat
-  have := (capReshape_production_in_circuit hash env isLast hsat).2
+  have := (capReshape_production_in_circuit hash env isLast hlast hsat).2
   rw [hh] at this
   exact absurd this (by norm_num)
 

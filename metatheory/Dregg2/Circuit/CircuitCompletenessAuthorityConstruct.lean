@@ -223,6 +223,10 @@ structure CapOpenTraceFloor {State : Type} (S : CapHashScheme State) (effectBit 
   /-- the cap-open row index. -/
   i : Nat
   hi : i < t.rows.length
+  /-- the cap-open row is an ACTIVE (transition) row, not the wrap/pad last row: the deployed cap-open
+  membership gates run under `when_transition()`, so the depth-16 open + submask facet gate are forced
+  only off the last row (the honest prover lays the cap-open in the active domain). -/
+  hiNotLast : i + 1 ≠ t.rows.length
   /-- the cap-open row's `src` column IS the edge's `src` (`c.target`). -/
   hsrc : (envAt t i).loc (capOpenCols base.traceWidth).src = (c.target : ℤ)
   /-- the opened leaf IS the CONSTRUCTED on-edge leaf. -/
@@ -264,6 +268,7 @@ def authConstructs_source {State : Type} (S : CapHashScheme State)
       hsat := floor.hsat
       i := floor.i
       hi := floor.hi
+      hiNotLast := floor.hiNotLast
       leafAt := authLeafAt actor0 c (1 <<< n)
       hfaith := by
         -- the CONSTRUCTED faithfulness, at the trace's committed root (= the constructed root).

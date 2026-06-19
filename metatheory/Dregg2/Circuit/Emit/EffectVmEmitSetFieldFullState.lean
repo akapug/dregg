@@ -64,7 +64,7 @@ constraint list (membership is direct). All gates are `.gate`, flag-free. The wr
 theorem setFieldGates_give_cellSpec (slot : Fin 8) (env : VmRowEnv) (pre post : CellState)
     (hrow : IsSetFieldRow env)
     (henc : RowEncodesSF slot env pre post)
-    (hgates : ∀ c ∈ (setFieldVmDescriptor slot).constraints, c.holdsVm env true true) :
+    (hgates : ∀ c ∈ (setFieldVmDescriptor slot).constraints, c.holdsVm env true false) :
     CellSetFieldSpec slot pre (post.fields slot) post := by
   -- the per-row gates are the whole constraint list; restrict to the flag-free `false false` form.
   have hrowgates : ∀ c ∈ setFieldRowGates slot, c.holdsVm env false false := by
@@ -125,7 +125,7 @@ theorem setField_runnable_full_sound (slot : Fin 8) (hash : List ℤ → ℤ) (p
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
     (hrow : IsSetFieldRow env)
     (henc : RowEncodesSF slot env pre post) (hroots : postRoots = preRoots)
-    (hsat : satisfiedVm hash (setFieldVmDescriptorWide slot) env true true) :
+    (hsat : satisfiedVm hash (setFieldVmDescriptorWide slot) env true false) :
     CellSetFieldSpec slot pre (post.fields slot) post ∧ postRoots = preRoots :=
   runnable_full_sound (setFieldRunnableSpec slot preRoots) hash env pre post postRoots hrow
     ⟨henc, hroots⟩ hsat

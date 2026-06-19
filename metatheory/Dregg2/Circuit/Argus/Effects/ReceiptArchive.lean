@@ -463,7 +463,7 @@ theorem receiptArchive_runnable_full_state_weld
     (hash : List ℤ → ℤ) (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
     (hrow : IsArchiveRow env)
     (henc : ArchiveRowEncodes env pre post) (hroots : sr = preRoots)
-    (hsat : satisfiedVm hash archiveVmDescriptorWide env true true) :
+    (hsat : satisfiedVm hash archiveVmDescriptorWide env true false) :
     ArchiveCellSpec pre post ∧ sr = preRoots :=
   receiptArchive_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hsat
 

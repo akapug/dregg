@@ -241,16 +241,18 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 theorem exerciseDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
     (henc : RowEncodesExercise env pre post)
+    (hgatesat : satisfiedVm hash exerciseVmDescriptor env true false)
     (hsat : satisfiedVm hash exerciseVmDescriptor env true true) :
     ExerciseCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
   obtain ⟨hcs, _⟩ := hsat
+  obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ exerciseRowGates, c.holdsVm env false false := by
     intro c hc
     have hmem : c ∈ exerciseVmDescriptor.constraints := by
       unfold exerciseVmDescriptor
       simp only [List.mem_append]
       exact Or.inl (Or.inl (Or.inl (Or.inl hc)))
-    have := hcs c hmem
+    have := hcsT c hmem
     unfold exerciseRowGates gFieldPassAll at hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -347,10 +349,11 @@ theorem descriptor_agrees_with_executor_exercise
     (s s' : RecChainedState) (actor target c : CellId) (pre post : CellState)
     (hpreBal : env.loc (sbCol state.BALANCE_LO) = balProj s.kernel c)
     (henc : RowEncodesExercise env pre post)
+    (hgatesat : satisfiedVm hash exerciseVmDescriptor env true false)
     (hsat : satisfiedVm hash exerciseVmDescriptor env true true)
     (hspec : ExerciseHoldSpec s actor target s') :
     post.balLo = balProj s'.kernel c := by
-  obtain ⟨hcirc, _⟩ := exerciseDescriptor_full_sound hash env pre post hnoop henc hsat
+  obtain ⟨hcirc, _⟩ := exerciseDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   obtain ⟨heBal, _⟩ := unify_exercise (fun _ => 0) s actor target s' c hspec
   obtain ⟨hsbLo, _⟩ := henc

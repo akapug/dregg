@@ -174,6 +174,10 @@ structure TransferRowDesignation (t : VmTrace) : Type where
   ci : Nat
   hdi : di < t.rows.length
   hci : ci < t.rows.length
+  -- the designated debit/credit rows are ACTIVE (transition) rows, not the wrap/pad last row: the
+  -- per-row transfer gates run under `when_transition()`, forced only off the last row.
+  hdiNotLast : di + 1 ≠ t.rows.length
+  hciNotLast : ci + 1 ≠ t.rows.length
   -- the two rows' publish-commitment ties (the `piBinding` hash-CR-class facts).
   hdiOld : (envAt t di).pub pi.OLD_COMMIT = (envAt t di).loc (sbCol state.STATE_COMMIT)
   hdiNew : (envAt t di).pub pi.NEW_COMMIT = (envAt t di).loc (saCol state.STATE_COMMIT)

@@ -97,6 +97,9 @@ structure BurnTraceProver (hash : List ℤ → ℤ)
   /-- the designated holder-debit row + its bound. -/
   di : Nat
   hdi : di < t.rows.length
+  /-- the holder row is an ACTIVE (transition) row, not the wrap/pad last row: the per-row gates run
+  under `when_transition()`, forced only off the last row (the honest prover lays it in the active domain). -/
+  hdiNotLast : di + 1 ≠ t.rows.length
   /-- the decoded boundary `CellState`s of the holder row. -/
   holderPre : CellState
   holderPost : CellState
@@ -120,6 +123,7 @@ def burn_rotatedEncodesBurn_construct (hash : List ℤ → ℤ)
     rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt where
   di := prover.di
   hdi := prover.hdi
+  hdiNotLast := prover.hdiNotLast
   holderPre := prover.holderPre
   holderPost := prover.holderPost
   hdiRow := prover.hdiRow
@@ -220,6 +224,9 @@ structure MintTraceProver (hash : List ℤ → ℤ)
     (pre post : RecChainedState) (cell : CellId) (a : AssetId) (amt : ℤ) : Type where
   ci : Nat
   hci : ci < t.rows.length
+  /-- the recipient row is an ACTIVE (transition) row, not the wrap/pad last row: the per-row gates run
+  under `when_transition()`, forced only off the last row (the honest prover lays it in the active domain). -/
+  hciNotLast : ci + 1 ≠ t.rows.length
   recipPre : CellState
   recipPost : CellState
   hciRow : Dregg2.Circuit.Emit.EffectVmEmitMint.IsMintRow (envAt t ci)
@@ -239,6 +246,7 @@ def mint_rotatedEncodesMint_construct (hash : List ℤ → ℤ)
     rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt where
   ci := prover.ci
   hci := prover.hci
+  hciNotLast := prover.hciNotLast
   recipPre := prover.recipPre
   recipPost := prover.recipPost
   hciRow := prover.hciRow
@@ -366,6 +374,9 @@ structure SetFieldTraceProver (slot : Fin 8) (hash : List ℤ → ℤ)
     (v : Int) : Type where
   wi : Nat
   hwi : wi < t.rows.length
+  /-- the written row is an ACTIVE (transition) row, not the wrap/pad last row: the per-row gates run
+  under `when_transition()`, forced only off the last row (the honest prover lays it in the active domain). -/
+  hwiNotLast : wi + 1 ≠ t.rows.length
   cellPre : CellState
   cellPost : CellState
   hwiRow : Dregg2.Circuit.Emit.EffectVmEmitSetField.IsSetFieldRow (envAt t wi)
@@ -385,6 +396,7 @@ def setField_rotatedEncodesSF_construct (slot : Fin 8) (hash : List ℤ → ℤ)
     rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v where
   wi := prover.wi
   hwi := prover.hwi
+  hwiNotLast := prover.hwiNotLast
   cellPre := prover.cellPre
   cellPost := prover.cellPost
   hwiRow := prover.hwiRow
