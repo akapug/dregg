@@ -236,6 +236,12 @@ pub mod cell_inspector;
 // live. Lights up the cockpit's "🔒 read-cap / privacy" lens (was a weld placeholder).
 #[cfg(feature = "embedded-executor")]
 pub mod read_cap_lens;
+// THE DOCUMENT lens — a literate `dregg_doc` document through the moldable inspector
+// (docs/deos/DOCUMENT-LANGUAGE.md §4): rendered content · patch-history trail ·
+// conflict-as-state · commitment + two-regime. The uniform INSPECT face to the DOCS
+// tab's AUTHOR face, riding the green dregg-doc patch core. First-class ObjectKind.
+#[cfg(feature = "embedded-executor")]
+pub mod doc_lens;
 #[cfg(feature = "embedded-executor")]
 pub mod receipts_inspector;
 #[cfg(feature = "embedded-executor")]
