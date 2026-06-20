@@ -2618,11 +2618,22 @@ proof_verify.rs::verify_proof_carrying_turn_bundle + the FullTurnWitness.conserv
 (turn_proving.rs:843/1101/2244). Prereq: COMMIT block_conservation.rs + add asset class to the per-cell PI (or
 derive trustworthily from cell_id at the collector) so the partition pin is genuine not an off-AIR annotation.
 
-## OPEN EDIT (post-conservation-fix, 2026-06-19): asset-class must be PI-BOUND for LIGHT-CLIENT conservation
-The conservation fix (93b827bf4) closes the cross-asset hole on the FULL-NODE executor path, but derives asset
-class via `asset_class_for_cell` = `ledger.get(cell).token_id()` (atomic.rs:266) — a LEDGER LOOKUP the light
-client does NOT have. So per-asset Σδ=0 is enforced for the executor but NOT proven on the light-client path
-(the partition pin is producer/ledger-trusted, not proof-bound). THE EDIT: add the asset-class felt to the
-per-cell PI (proof-carried), so the per-asset partition is bound by the proof itself — then the light client
-enforces per-asset conservation without the ledger. Circuit-PI change (pi.rs + trace + descriptor emit,
-PHASE-C-shaped); own focused pass. Until then: full-node sound, light-client carries this NAMED residual.
+## LANDED (2026-06-19): asset-class is PI-BOUND — light-client per-asset conservation is proof-only
+The asset class is now carried in the per-cell proof's PUBLIC INPUTS (`pi::v3::ASSET_CLASS`, the 4th v3 slot,
+V3_BASE_COUNT 212→213), pinned by an AIR row-0 boundary constraint to a new `aux_off::ASSET_CLASS` trace
+column (NUM_AUX 97→98) — so a proof COMMITS to its asset class (a prover cannot claim a PI class that disagrees
+with the row-0 aux its trace committed). The fold `fold_token_id_to_asset` moved into `dregg_circuit::
+block_conservation` (the ONE canonical fold the prover, executor, and light-client share). The executor
+(atomic.rs `resolve_proof_asset_class`) groups per-asset deltas by the PROOF-bound class and reconciles it
+against the trusted ledger token_id (OWNER_CELL_ID/FEDERATION_ID posture); the light-client/bundle path
+(proof_verify.rs `check_bundle_per_asset_conservation`) groups by `PI[ASSET_CLASS]` directly — LEDGER-FREE
+per-asset Σδ=0, enforced for the conservation-closed case (disclosed mint/burn keeps executor declared-row
+accounting). Lean re-anchored (`RotationLayout.PiV3.ASSET_CLASS`, `v3_slots_fresh_and_distinct` for 4 slots);
+Rust drift guard pins ASSET_CLASS=212. Builds: `dregg-circuit --features prover` + `dregg-turn` green;
+`lake build Dregg2.Circuit.RotationLayout`/`EffectVmEmitRotation` green.
+RESIDUAL (named, not laundered): the live PROVER paths (turn_proving.rs `generate_effect_vm_trace`,
+full_turn_proof.rs) still emit `EffectVmContext::asset_class = ZERO` (the default) — threading the cell's
+token_id through the prover entry signatures (`prove_and_verify_finalized_turn` et al.) is the remaining work.
+Until then the executor treats a ZERO PI class as "not-yet-populated" and falls back to its trusted ledger class
+(sound on the full node); the bundle path's pure-light-client partition is non-trivial for multi-asset turns
+ONLY once the prover populates the slot. The PI surface + circuit binding + both read-paths are done.

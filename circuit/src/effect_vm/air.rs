@@ -305,6 +305,15 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
                 offset: pi::BURN_TARGET_PI,
                 length_in_felts: 1,
             },
+            // Light-client conservation: per-cell ASSET CLASS (PI v3). Single
+            // felt (the folded committed token_id); row-0-pinned to the
+            // aux_off::ASSET_CLASS column so the per-asset conservation gate
+            // partitions each proof's NET_DELTA by the PI-bound class.
+            crate::air_descriptor::PiSlot {
+                name: "asset_class",
+                offset: pi::v3::ASSET_CLASS,
+                length_in_felts: 1,
+            },
         ],
         // Constraint groups: selector validity (NUM_EFFECTS+1), per-effect
         // gated constraints (~NUM_EFFECTS large groups), boundary bindings
@@ -326,8 +335,9 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
         //   `s_burn * (param0 - PI[BURN_TARGET_PI])`).
         constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS + 1 + 1 + 1 + 1,
         // 32 prior + 8 (γ.2 #131/#132: 4 FEDERATION_ID + 4 OWNER_CELL_ID
-        // row-0 boundary bindings).
-        boundary_constraint_count: 40,
+        // row-0 boundary bindings) + 1 (light-client conservation: ASSET_CLASS
+        // row-0 boundary binding to PI[v3::ASSET_CLASS]).
+        boundary_constraint_count: 41,
         max_degree: 9,
         source_hash: None,
     };
@@ -2036,6 +2046,33 @@ impl StarkAir for EffectVmAir {
                 row: 0,
                 col: AUX_BASE + aux_off::OWNER_CELL_ID_0 + i,
                 value: public_inputs[pi::OWNER_CELL_ID_BASE + i],
+            });
+        }
+
+        // ====================================================================
+        // LIGHT-CLIENT CONSERVATION: per-cell ASSET CLASS binding (PI v3).
+        //
+        // Row-0 boundary: pin the in-trace `aux_off::ASSET_CLASS` column to
+        // PI[v3::ASSET_CLASS]. The trace generator writes the folded committed
+        // token_id (the asset / issuer-cell class) into that aux column; this
+        // constraint forces the PI face to equal it, so the proof COMMITS to
+        // its asset class — a prover cannot claim a PI asset class that
+        // disagrees with the row-0 aux column its trace committed.
+        //
+        // Effect: the per-asset cross-cell conservation gate
+        // (`block_conservation::BlockConservation`) partitions each per-cell
+        // proof's NET_DELTA by `PI[v3::ASSET_CLASS]`, enforcing per-asset Σδ=0
+        // INDEPENDENTLY — WITHOUT a ledger lookup. A ledgerless light client
+        // therefore enforces per-asset conservation proof-only.
+        //
+        // The PI vector must carry the active v3 layout for the slot to exist;
+        // shorter vectors (pre-v3) skip the constraint (the gate's PI-length
+        // check rejects them elsewhere).
+        if public_inputs.len() > pi::v3::ASSET_CLASS {
+            constraints.push(BoundaryConstraint {
+                row: 0,
+                col: AUX_BASE + aux_off::ASSET_CLASS,
+                value: public_inputs[pi::v3::ASSET_CLASS],
             });
         }
 

@@ -274,18 +274,13 @@ impl TurnExecutor {
         Self::fold_token_id_to_asset(&token_id)
     }
 
-    /// Fold a 32-byte `token_id` to a single asset-class field element. The
-    /// distinct-token-ids-stay-distinct property is what the per-asset
-    /// partition needs; a domain-separated BLAKE3 reduction gives a stable,
-    /// collision-resistant-to-the-field-modulus class (the residual on the
-    /// fold's collision bound is subsumed by the asset-PI-binding prerequisite
-    /// above — both are resolved by binding the asset class in-circuit).
+    /// Fold a 32-byte `token_id` to a single asset-class field element.
+    /// Delegates to `dregg_circuit::block_conservation::fold_token_id_to_asset`
+    /// — the ONE canonical fold the prover (`PI[v3::ASSET_CLASS]`), the executor
+    /// reconciliation, and the light-client/bundle partition all share, so the
+    /// proof-bound class and the ledger-derived class agree by construction.
     fn fold_token_id_to_asset(token_id: &[u8; 32]) -> dregg_circuit::field::BabyBear {
-        use dregg_circuit::field::BabyBear;
-        let h = blake3::derive_key("dregg-asset-class-from-token-id-v1", token_id);
-        // Reduce 4 bytes into the BabyBear field (canonical reduction).
-        let v = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
-        BabyBear::new_canonical(v)
+        dregg_circuit::block_conservation::fold_token_id_to_asset(token_id)
     }
 
     /// THE PER-ASSET CONSERVATION GATE. Given each verified entry's
@@ -301,6 +296,11 @@ impl TurnExecutor {
     /// `balance[last]==0` boundary); under the `prover` feature the full
     /// per-asset AIR is additionally proven+verified so the gate is genuinely
     /// in-circuit, not a re-implemented off-AIR scalar.
+    ///
+    /// Retained for the ledger-keyed in-AIR collector test; the live executor
+    /// paths now group by the PROOF-BOUND class via
+    /// [`Self::check_per_asset_conservation_by_asset`].
+    #[allow(dead_code)]
     fn check_per_asset_conservation(
         ledger: &Ledger,
         entries: &[(CellId, i64)],
@@ -342,6 +342,107 @@ impl TurnExecutor {
         // would be redundant); the light client runs `verify_with_proofs` over
         // the carried per-asset proofs. The new test exercises the full
         // prove+verify to witness the in-AIR property end-to-end.
+        if let Err(dregg_circuit::block_conservation::BlockConservationError::AssetImbalanced {
+            asset,
+            imbalance,
+        }) = block.check()
+        {
+            return Err(AtomicTurnError::PerAssetConservationViolation {
+                asset: asset.0,
+                imbalance,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Resolve the per-cell ASSET CLASS for the per-asset conservation gate on
+    /// the EXECUTOR path (which holds the ledger).
+    ///
+    /// The proof publishes its asset class at `PI[v3::ASSET_CLASS]`, pinned by
+    /// the AIR's row-0 boundary constraint to the trace's committed class — this
+    /// is the LIGHT-CLIENT-sound partition key (the ledgerless bundle path
+    /// groups by it directly in `check_bundle_per_asset_conservation`). The
+    /// executor reconciles it against the cell's committed `token_id`:
+    ///   * if the proof carries a NON-zero (populated) class, it MUST equal the
+    ///     ledger token_id's fold — a mismatch is a mislabeled asset and is
+    ///     REJECTED (the verifier-reconstruction posture of
+    ///     OWNER_CELL_ID/FEDERATION_ID);
+    ///   * if the proof carries the ZERO sentinel (the prover has not yet
+    ///     surfaced the class into the PI on this leg — the named remainder),
+    ///     the executor falls back to the trusted ledger class for ITS OWN
+    ///     grouping. This keeps the executor path sound (ledger-backed) without
+    ///     blocking on the prover threading; the BUNDLE/light-client path still
+    ///     groups strictly by the PI value, so closing the remainder (prover
+    ///     populates `EffectVmContext::asset_class`) is what makes the pure
+    ///     light-client partition non-trivial for multi-asset turns.
+    ///
+    /// Fails closed when the PI vector is too short to carry the active v3
+    /// layout (it cannot be a valid v3 proof).
+    fn resolve_proof_asset_class(
+        public_inputs: &[dregg_circuit::field::BabyBear],
+        ledger: &Ledger,
+        cell: &CellId,
+    ) -> Result<dregg_circuit::field::BabyBear, AtomicTurnError> {
+        use dregg_circuit::field::BabyBear;
+        let proof_asset = dregg_circuit::extract_asset_class(public_inputs).ok_or_else(|| {
+            AtomicTurnError::ProofFailed {
+                cell: *cell,
+                reason: "failed to extract ASSET_CLASS from proof PI (PI vector shorter than the \
+                         active v3 layout)"
+                    .to_string(),
+            }
+        })?;
+        let ledger_asset = Self::asset_class_for_cell(ledger, cell);
+        if proof_asset == BabyBear::ZERO {
+            // Prover has not yet surfaced the class on this leg — executor
+            // falls back to its trusted ledger class (sound here; the named
+            // light-client remainder).
+            return Ok(ledger_asset);
+        }
+        if proof_asset != ledger_asset {
+            return Err(AtomicTurnError::ProofFailed {
+                cell: *cell,
+                reason: "proof-bound asset class (PI[ASSET_CLASS]) does not match the cell's \
+                         committed token_id — refusing a mislabeled asset partition"
+                    .to_string(),
+            });
+        }
+        Ok(proof_asset)
+    }
+
+    /// THE LIGHT-CLIENT-SOUND PER-ASSET CONSERVATION GATE. Identical arithmetic
+    /// to [`check_per_asset_conservation`] but keyed by the PROOF-BOUND asset
+    /// class (`PI[v3::ASSET_CLASS]`) supplied per entry rather than a ledger
+    /// lookup. Each `(asset, proven_net_delta)` is grouped by `asset` and EACH
+    /// asset is required to conserve to zero independently. The light client /
+    /// bundle path uses THIS variant because it has no ledger; the executor
+    /// uses it too (after reconciling the proof-bound class against its trusted
+    /// ledger token_id) so both paths partition identically.
+    fn check_per_asset_conservation_by_asset(
+        entries: &[(dregg_circuit::field::BabyBear, i64)],
+        declared_supply: &[dregg_circuit::block_conservation::DeclaredSupplyChange],
+    ) -> Result<(), AtomicTurnError> {
+        use dregg_circuit::block_conservation::{BlockConservation, PerCellContribution};
+        use dregg_circuit::field::BabyBear;
+
+        let mut block = BlockConservation::new();
+        for (asset, delta) in entries {
+            let sign_credit = *delta >= 0;
+            block.add_contribution(PerCellContribution {
+                asset: *asset,
+                net_delta_mag: BabyBear::new_canonical(delta.unsigned_abs() as u32),
+                net_delta_sign: if sign_credit {
+                    BabyBear::ZERO
+                } else {
+                    BabyBear::ONE
+                },
+            });
+        }
+        for s in declared_supply {
+            block.add_supply_change(*s);
+        }
+
         if let Err(dregg_circuit::block_conservation::BlockConservationError::AssetImbalanced {
             asset,
             imbalance,
@@ -605,6 +706,11 @@ impl TurnExecutor {
         let mut new_commitments: Vec<(CellId, [u8; 32])> =
             Vec::with_capacity(atomic_turn.proofs.len());
         let mut proven_deltas: Vec<i64> = Vec::with_capacity(atomic_turn.proofs.len());
+        // Per-entry PROOF-BOUND asset class (PI[v3::ASSET_CLASS]), the partition
+        // key the per-asset conservation gate groups by — read from the proof,
+        // not the ledger (light-client soundness).
+        let mut proven_assets: Vec<dregg_circuit::field::BabyBear> =
+            Vec::with_capacity(atomic_turn.proofs.len());
         // Per-entry (old_commitment, vk_hash) cached for receipt construction
         // at commit time. Indexed parallel to `atomic_turn.proofs`.
         let mut entry_receipt_inputs: Vec<([u8; 32], Option<[u8; 32]>)> =
@@ -746,7 +852,17 @@ impl TurnExecutor {
                         reason: "failed to extract balance_delta from proof PI".to_string(),
                     }
                 })?;
+
+            // Resolve the per-cell ASSET CLASS the conservation gate partitions
+            // on. The proof publishes it at PI[v3::ASSET_CLASS] (light-client
+            // path); the executor — which HAS the ledger — reconciles it against
+            // the cell's committed token_id (the OWNER_CELL_ID/FEDERATION_ID
+            // verifier-reconstruction posture). See `resolve_proof_asset_class`.
+            let proven_asset =
+                Self::resolve_proof_asset_class(&public_inputs, ledger, &entry.cell_id)?;
+
             proven_deltas.push(proven_delta);
+            proven_assets.push(proven_asset);
             new_commitments.push((entry.cell_id, entry.new_commitment));
             entry_receipt_inputs.push((entry.old_commitment, vk_hash));
         }
@@ -755,18 +871,19 @@ impl TurnExecutor {
         //    entry.balance_delta). The old asset-BLIND scalar sum
         //    (`proven_deltas.iter().sum() == 0`) forged value across asset
         //    boundaries: a turn (asset 7 −10, asset 8 +10) netted to 0 and was
-        //    accepted. The replacement groups each proven delta by its asset
-        //    class (the cell's committed token_id) and requires EACH asset's
-        //    Σδ=0 INDEPENDENTLY through the in-AIR-backed `BlockConservation`
+        //    accepted. The replacement groups each proven delta by its PROOF-
+        //    BOUND asset class (PI[v3::ASSET_CLASS], read from the verified
+        //    proof — NOT a ledger lookup) and requires EACH asset's Σδ=0
+        //    INDEPENDENTLY through the in-AIR-backed `BlockConservation`
         //    collector. An AtomicSovereignTurn carries no declared mint/burn
         //    rows, so a hidden mint within any asset (or any cross-asset
         //    borrowing) is rejected.
-        let conservation_entries: Vec<(CellId, i64)> = new_commitments
+        let conservation_entries: Vec<(dregg_circuit::field::BabyBear, i64)> = proven_assets
             .iter()
-            .map(|(cell_id, _)| *cell_id)
+            .copied()
             .zip(proven_deltas.iter().copied())
             .collect();
-        Self::check_per_asset_conservation(ledger, &conservation_entries, &[])?;
+        Self::check_per_asset_conservation_by_asset(&conservation_entries, &[])?;
 
         // 4. All proofs verified + conservation holds. Commit atomically.
         // Deduct fee and increment nonce. THE EPOCH §5 ("fees as moves"):
@@ -919,6 +1036,8 @@ impl TurnExecutor {
 
         // Verify sovereign proofs and extract proven deltas.
         let mut sovereign_deltas: Vec<i64> = Vec::new();
+        // Parallel PROOF-BOUND asset class per sovereign entry (PI[v3::ASSET_CLASS]).
+        let mut sovereign_assets: Vec<dregg_circuit::field::BabyBear> = Vec::new();
         let mut new_commitments: Vec<(CellId, [u8; 32])> = Vec::new();
         // Parallel to sovereign_entries: (old_commitment, vk_hash) needed at
         // receipt-emission time.
@@ -1050,7 +1169,15 @@ impl TurnExecutor {
                         reason: "failed to extract balance_delta from proof PI".to_string(),
                     }
                 })?;
+
+            // PROOF-BOUND asset class from PI[v3::ASSET_CLASS], reconciled
+            // against the cell's committed ledger token_id (executor has the
+            // ledger; the light client trusts the PI-bound class directly).
+            let proven_asset =
+                Self::resolve_proof_asset_class(&public_inputs, ledger, &entry.cell_id)?;
+
             sovereign_deltas.push(proven_delta);
+            sovereign_assets.push(proven_asset);
             new_commitments.push((entry.cell_id, entry.new_commitment));
             sovereign_receipt_inputs.push((entry.old_commitment, vk_hash));
         }
@@ -1195,21 +1322,29 @@ impl TurnExecutor {
 
         // Cross-domain PER-ASSET conservation: sovereign + hosted deltas must
         // conserve to zero WITHIN EACH ASSET (not merely in a single asset-blind
-        // scalar sum). Each sovereign proven delta and each hosted per-cell delta
-        // is grouped by its cell's asset class (committed token_id) and EACH
-        // asset is required to conserve independently — so a turn that nets to
-        // zero ACROSS assets but forges value WITHIN an asset (or borrows across
-        // asset boundaries) is rejected. token_id is immutable across a turn, so
-        // reading the asset class after hosted mutations is exact.
-        let mut conservation_entries: Vec<(CellId, i64)> = new_commitments
+        // scalar sum). Each asset is required to conserve independently — so a
+        // turn that nets to zero ACROSS assets but forges value WITHIN an asset
+        // (or borrows across asset boundaries) is rejected.
+        //
+        // The SOVEREIGN side groups by the PROOF-BOUND asset class
+        // (PI[v3::ASSET_CLASS], read from each verified proof and reconciled
+        // against the ledger above) — the light-client-sound partition key. The
+        // HOSTED side carries NO per-cell proof (deltas are derived by the
+        // executor from `apply_effect`), so its asset class is read from the
+        // committed ledger token_id (token_id is immutable across a turn, so
+        // reading after hosted mutations is exact). The hosted side is therefore
+        // executor-bound, not proof-bound — the stated residual for a PURELY
+        // light-client mixed-turn (no ledger); the sovereign side is fully
+        // proof-bound.
+        let mut conservation_entries: Vec<(dregg_circuit::field::BabyBear, i64)> = sovereign_assets
             .iter()
-            .map(|(cell_id, _)| *cell_id)
+            .copied()
             .zip(sovereign_deltas.iter().copied())
             .collect();
         for (cell_id, delta) in &hosted_cell_deltas {
-            conservation_entries.push((*cell_id, *delta));
+            conservation_entries.push((Self::asset_class_for_cell(ledger, cell_id), *delta));
         }
-        if let Err(e) = Self::check_per_asset_conservation(ledger, &conservation_entries, &[]) {
+        if let Err(e) = Self::check_per_asset_conservation_by_asset(&conservation_entries, &[]) {
             // Roll back ALL hosted mutations before returning.
             journal.rollback(ledger, &self.bridged_nullifiers, &self.note_nullifiers);
             return Err(e);

@@ -349,13 +349,22 @@ def RATE_BOUND_TAG : Nat := V2_BASE_COUNT + 1
 /-- The challengeWindow caveat tag column (what the optimistic proving mode reads — #169). -/
 def CHALLENGE_WINDOW_TAG : Nat := V2_BASE_COUNT + 2
 
-/-- The v3 base count: the v2 prefix + the three new slots. -/
-def V3_BASE_COUNT : Nat := V2_BASE_COUNT + 3
+/-- The per-cell ASSET CLASS column (light-client conservation soundness). The asset /
+issuer-cell class (dregg3: AssetId := issuer-cell), a single field element folding the cell's
+committed `token_id`, surfaced to the PI and pinned (row-0 boundary) to the trace's committed
+class. The per-asset cross-cell conservation gate partitions each per-cell proof's NET_DELTA by
+THIS PI-bound class, so a ledgerless light client enforces per-asset Σδ=0 WITHOUT a ledger
+lookup. Appended as the 4th v3 slot. -/
+def ASSET_CLASS : Nat := V2_BASE_COUNT + 3
 
-/-- The three v3 slots are fresh (≥ the v2 prefix) and pairwise distinct. -/
+/-- The v3 base count: the v2 prefix + the four new slots. -/
+def V3_BASE_COUNT : Nat := V2_BASE_COUNT + 4
+
+/-- The four v3 slots are fresh (≥ the v2 prefix) and pairwise distinct. -/
 theorem v3_slots_fresh_and_distinct :
     V2_BASE_COUNT ≤ COMMITTED_HEIGHT ∧ COMMITTED_HEIGHT < RATE_BOUND_TAG
-      ∧ RATE_BOUND_TAG < CHALLENGE_WINDOW_TAG ∧ CHALLENGE_WINDOW_TAG < V3_BASE_COUNT := by
+      ∧ RATE_BOUND_TAG < CHALLENGE_WINDOW_TAG ∧ CHALLENGE_WINDOW_TAG < ASSET_CLASS
+      ∧ ASSET_CLASS < V3_BASE_COUNT := by
   decide
 
 /-- A PI vector carries the committed height: the v3 column EQUALS the commitment's

@@ -359,7 +359,10 @@ pub const ACTIVE_BASE_COUNT: usize = v3::V3_BASE_COUNT;
 ///   201     COMMITTED_HEIGHT                   (PI v3)
 ///   202     RATE_BOUND_TAG                     (PI v3)
 ///   203     CHALLENGE_WINDOW_TAG               (PI v3)
-/// and custom proof entries start at offset 204 (`ACTIVE_BASE_COUNT`).
+///   204     ASSET_CLASS                        (PI v3 — light-client conservation)
+/// and custom proof entries start at offset 205 (`ACTIVE_BASE_COUNT`).
+/// (Offsets above the frozen v2 prefix are illustrative pre-Phase-C numbers;
+/// the live values are computed from `BASE_COUNT = 209`, so ASSET_CLASS = 212.)
 /// The v2 prefix is frozen so that pre-v3 descriptors and Lean facts
 /// remain byte-identical; new PI fields land in the v3+ tail.
 ///
@@ -743,9 +746,33 @@ pub mod v3 {
     /// What the optimistic proving mode reads (#169) — the tag ships at the
     /// flag-day, the mode ships later.
     pub const CHALLENGE_WINDOW_TAG: usize = BASE_COUNT + 2;
+
+    /// ASSET_CLASS — the per-cell asset / issuer-cell class (dregg3: AssetId :=
+    /// issuer-cell), as a single field element folded from the cell's committed
+    /// `token_id` (`fold_token_id_to_asset` in `dregg_turn`, the exact fold the
+    /// executor's per-asset collector already uses). Lean: `PiV3.ASSET_CLASS`.
+    ///
+    /// WHY THIS SLOT EXISTS (light-client conservation soundness). The per-asset
+    /// cross-cell conservation gate (`block_conservation::BlockConservation`)
+    /// must partition each per-cell proof's NET_DELTA by its asset class so that
+    /// EACH asset conserves to zero INDEPENDENTLY — a turn that nets to zero
+    /// ACROSS assets but forges value WITHIN an asset is rejected. Without this
+    /// slot the collector read the asset class via a LEDGER LOOKUP
+    /// (`ledger.get(cell).token_id()`), which a ledgerless light client cannot
+    /// do — so the partition was producer/ledger-TRUSTED, not proof-bound.
+    ///
+    /// Binding it as a PI slot (pinned by the row-0 boundary constraint to the
+    /// `aux_off::ASSET_CLASS` aux column, the same posture as OWNER_CELL_ID /
+    /// FEDERATION_ID) makes the asset partition PROOF-BOUND: a prover cannot
+    /// claim a PI asset class that disagrees with the row-0 aux column its trace
+    /// committed. The off-AIR verifier / light-client bundle path then groups by
+    /// `PI[ASSET_CLASS]` directly, so per-asset Σδ=0 is enforced WITHOUT a
+    /// ledger. Single felt: matches the collector's per-asset partition key
+    /// (`PerCellContribution::asset`).
+    pub const ASSET_CLASS: usize = BASE_COUNT + 3;
     /// The v3 base count (Lean: `PiV3.V3_BASE_COUNT`). At the cutover,
     /// `VK_PI_LAYOUT_VERSION` bumps 2 → 3 and `CUSTOM_PROOFS_BASE` moves here.
-    pub const V3_BASE_COUNT: usize = BASE_COUNT + 3;
+    pub const V3_BASE_COUNT: usize = BASE_COUNT + 4;
 }
 
 #[cfg(test)]
@@ -769,6 +796,9 @@ mod v3_drift_guard {
         assert_eq!(super::v3::COMMITTED_HEIGHT, 209);
         assert_eq!(super::v3::RATE_BOUND_TAG, 210);
         assert_eq!(super::v3::CHALLENGE_WINDOW_TAG, 211);
-        assert_eq!(super::v3::V3_BASE_COUNT, 212);
+        // ASSET_CLASS appended as the 4th v3 slot (light-client conservation
+        // soundness): V3_BASE_COUNT 212 -> 213, CUSTOM_PROOFS_BASE shifts +1.
+        assert_eq!(super::v3::ASSET_CLASS, 212);
+        assert_eq!(super::v3::V3_BASE_COUNT, 213);
     }
 }

@@ -28,7 +28,7 @@
 /// NB: aux[2..5] are reserved on row 0 for delta_mag / delta_sign /
 /// effects_hash_4[0..1] boundary writes. Per-effect witnesses must avoid
 /// those slots on row 0; aux[6..7] are exclusive per-row selector-gated.
-pub const EFFECT_VM_WIDTH: usize = AUX_BASE + NUM_AUX; // 90 + 97 = 187
+pub const EFFECT_VM_WIDTH: usize = AUX_BASE + NUM_AUX; // 90 + 98 = 188
 
 /// Number of effect types (selector COLUMNS).
 ///
@@ -205,7 +205,9 @@ pub const AUX_BASE: usize = STATE_AFTER_BASE + state::SIZE; // 76 + 14 = 90
 /// W9-RANGECHECK: 96 (+ 30 NEW_BAL_LO_BIT + 30 NEW_BAL_HI_BIT).
 /// P0-2 record-digest: 97 (+ 1 STATE_RECORD_DIGEST — the authority-residue limb
 /// absorbed as the fourth state-commit root input, replacing the literal ZERO).
-pub const NUM_AUX: usize = 97;
+/// Light-client conservation: 98 (+ 1 ASSET_CLASS — the row-0 aux column pinned
+/// to PI[v3::ASSET_CLASS], binding the per-cell asset class into the proof).
+pub const NUM_AUX: usize = 98;
 
 /// Bit-width of each balance limb's in-circuit range proof. Both limbs are
 /// decomposed into `BAL_LIMB_BITS` boolean aux columns and recomposed; the
@@ -308,6 +310,16 @@ pub mod aux_off {
     /// fold, byte-identical to the legacy form. Mirrors the Lean `recStateCommit`'s
     /// `RH` rest-hash limb / `cellCommitS`'s `systemRootsDigest` absorbed limb.
     pub const STATE_RECORD_DIGEST: usize = 96;
+
+    /// Light-client conservation: the per-cell ASSET CLASS (the folded committed
+    /// `token_id`), written into row 0 and row-0-pinned to `PI[v3::ASSET_CLASS]`
+    /// by a boundary constraint. The proof thereby COMMITS to its asset class so
+    /// the per-asset cross-cell conservation gate can partition each proof's
+    /// NET_DELTA by the PI-bound class — enforcing per-asset Σδ=0 WITHOUT a
+    /// ledger. Zero sentinel = the native / computron asset. Like
+    /// FEDERATION_ID/OWNER_CELL_ID, the binding is at row 0 only (the asset class
+    /// is a property of the cell, not of individual effect rows).
+    pub const ASSET_CLASS: usize = 97;
 }
 
 /// THE ROTATED STATE BLOCK (THE ROTATION, STAGED — `docs/UNIVERSAL-MAP-ROTATION.md`

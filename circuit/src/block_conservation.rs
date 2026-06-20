@@ -75,6 +75,22 @@ use crate::cross_cell_conservation_air::{
 use crate::field::BabyBear;
 use std::collections::BTreeMap;
 
+/// Fold a 32-byte `token_id` to a single asset-class field element (dregg3:
+/// AssetId := issuer-cell). This is the canonical fold the per-asset
+/// conservation partition keys on AND the value the prover surfaces into
+/// `PI[v3::ASSET_CLASS]` — defining it HERE (in `dregg_circuit`) keeps the
+/// prover, the executor, and the light-client/bundle path byte-identical.
+///
+/// The distinct-token-ids-stay-distinct property is what the partition needs; a
+/// domain-separated BLAKE3 reduction gives a stable, collision-resistant-to-the-
+/// field-modulus class. The native / computron asset (the zero token_id) folds
+/// to a stable class, matching the `PI[v3::ASSET_CLASS]` zero-default posture.
+pub fn fold_token_id_to_asset(token_id: &[u8; 32]) -> BabyBear {
+    let h = blake3::derive_key("dregg-asset-class-from-token-id-v1", token_id);
+    let v = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
+    BabyBear::new_canonical(v)
+}
+
 /// A declared mint / burn supply-change row for one asset, disclosed by the block. Enters the
 /// per-asset conservation sum as an explicit signed delta exactly like a per-cell delta — so a
 /// disclosed mint balances, but an UNdisclosed one (no matching row) does not.

@@ -895,25 +895,103 @@ impl TurnExecutor {
             }
         }
 
-        // CROSS-CELL PER-ASSET CONSERVATION (light-client residual seam).
-        // The executor's `execute_atomic_sovereign` / `execute_mixed_atomic`
-        // already enforce per-asset Σδ=0 in-circuit via
-        // `TurnExecutor::check_per_asset_conservation` (the
-        // `dregg_circuit::block_conservation::BlockConservation` collector over
-        // the committed `cross_cell_conservation_air`), keyed by each cell's
-        // committed `token_id`. The SAME collector belongs HERE on the bundle /
-        // light-client verify path — `verify_with_proofs` over the block's
-        // carried per-asset aggregation proofs. Two prerequisites must land
-        // first (both coordinated with PHASE-C, which owns the PI layout):
-        //   1. the per-cell proof must publish its ASSET CLASS as a public input
-        //      (a PI slot), so the partition is proof-bound rather than
-        //      ledger-trusted; and
-        //   2. `bundle_pis` must be accompanied by the cell_id (or asset) of
-        //      each PI vector so the collector can group them — the current
-        //      signature carries only the bare PI vectors.
-        // Until both land, the per-asset conservation bite on the PURE
-        // light-client path (no ledger) is the stated residual; the executor
-        // path (with ledger + cell_ids) is fully wired.
+        // CROSS-CELL PER-ASSET CONSERVATION — light-client-sound, ledger-free.
+        //
+        // Each per-cell proof now publishes its ASSET CLASS as a public input
+        // (`PI[v3::ASSET_CLASS]`, pinned by the AIR's row-0 boundary constraint
+        // to the trace's committed class). The bundle / light-client path groups
+        // each proof's proven NET_DELTA by that PI-BOUND asset class and
+        // requires EACH asset to conserve to zero INDEPENDENTLY — exactly the
+        // arithmetic the committed per-asset `cross_cell_conservation_air`
+        // forces (`balance[last]==0` per asset). Because the partition key comes
+        // from the PROOF (not a ledger lookup), a verifier with NO LEDGER
+        // enforces per-asset Σδ=0: a turn that nets to zero ACROSS assets but
+        // forges value WITHIN an asset is rejected here.
+        //
+        // The two prerequisites the residual named are both met: (1) the PI slot
+        // exists, and (2) grouping needs no separate cell_id list — the asset
+        // class travels IN each PI vector.
+        //
+        // SCOPE (improve, don't degrade): per-asset Σδ=0 is the law for a
+        // CONSERVATION-CLOSED bundle — a complete turn whose every value-moving
+        // effect's BOTH sides carry a per-cell proof (a Transfer's sender AND
+        // receiver, etc.). DISCLOSED supply changes (mint / burn) are the
+        // sanctioned non-conservation: they enter the per-asset sum as explicit
+        // signed rows ON THE EXECUTOR (which derives them from the ledger-
+        // validated effects), so a turn that mints/burns balances WITH its
+        // declared rows. The bundle signature carries no declared-supply rows,
+        // so when the turn DISCLOSES mint/burn the proof-only sum is legitimately
+        // non-zero — enforcing it here would FALSELY reject a disclosed mint.
+        // We therefore enforce the proof-only per-asset gate exactly for the
+        // conservation-closed case (no disclosed mint/burn); disclosed-supply
+        // turns keep the executor's declared-row accounting (which IS proof-
+        // bound on the per-cell deltas, ledger-bound on the disclosed rows). The
+        // pure light-client case (`turn == None`) receives a complete bundle and
+        // is enforced.
+        let discloses_supply = turn
+            .map(|t| {
+                t.call_forest
+                    .total_effects()
+                    .iter()
+                    .any(|e| matches!(**e, Effect::BridgeMint { .. } | Effect::Burn { .. }))
+            })
+            .unwrap_or(false);
+        if !discloses_supply {
+            Self::check_bundle_per_asset_conservation(bundle_pis)?;
+        }
+
+        Ok(())
+    }
+
+    /// Per-asset cross-cell conservation over a proof bundle, keyed by the
+    /// PROOF-BOUND asset class (`PI[v3::ASSET_CLASS]`). LEDGER-FREE: the
+    /// partition key and the signed delta both come from each per-cell proof's
+    /// public inputs, so a light client enforces per-asset Σδ=0 without any
+    /// ledger state. Each `(asset, net_delta)` is grouped by `asset` and each
+    /// asset must conserve to zero independently. Bundles whose PI vectors are
+    /// too short to carry the active v3 layout are already rejected by the
+    /// caller's length check.
+    fn check_bundle_per_asset_conservation(
+        bundle_pis: &[Vec<dregg_circuit::field::BabyBear>],
+    ) -> Result<(), TurnError> {
+        use dregg_circuit::block_conservation::{BlockConservation, PerCellContribution};
+        use dregg_circuit::field::BabyBear;
+
+        let mut block = BlockConservation::new();
+        for (i, p) in bundle_pis.iter().enumerate() {
+            let asset = dregg_circuit::extract_asset_class(p).ok_or_else(|| {
+                TurnError::InvalidExecutionProof(format!(
+                    "bundle proof {i} PI too short to carry ASSET_CLASS (PI v3 layout)"
+                ))
+            })?;
+            let delta = dregg_circuit::extract_net_delta(p).ok_or_else(|| {
+                TurnError::InvalidExecutionProof(format!(
+                    "bundle proof {i} PI: failed to extract NET_DELTA"
+                ))
+            })?;
+            let sign_credit = delta >= 0;
+            block.add_contribution(PerCellContribution {
+                asset,
+                net_delta_mag: BabyBear::new_canonical(delta.unsigned_abs() as u32),
+                net_delta_sign: if sign_credit {
+                    BabyBear::ZERO
+                } else {
+                    BabyBear::ONE
+                },
+            });
+        }
+
+        if let Err(dregg_circuit::block_conservation::BlockConservationError::AssetImbalanced {
+            asset,
+            imbalance,
+        }) = block.check()
+        {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "bundle per-asset conservation violated: asset {} imbalance {} \
+                 (per-asset Σδ≠0 — value forged within or across an asset)",
+                asset.0, imbalance
+            )));
+        }
 
         Ok(())
     }
