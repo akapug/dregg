@@ -2979,3 +2979,21 @@ PROVEN-BUT-UNJOINED weld, and the descriptor (VK-affecting) work is ALREADY DEPL
   rotateV3With*Gate realization AND rides only the published-value record pin without a verifier anchor. cellSeal is
   NOT one. The disc-class (cellSeal/unseal/destroy/receiptArchive) + declared-param/constant classes (setPerms/setVK/
   makeSovereign/setFieldDyn) have their *_forces_* lemmas at HEAD = LAZY-join. Scrutinize the rest with the discriminator.
+
+## ⚑ ENGINESOUND WELD landed (a242052f, NOT yet banked — waiting for cellSeal to settle the shared closure)
+engineSound_of_apex (NEW Dregg2/Circuit/EngineSoundOfApex.lean, axiom-clean {propext,Classical.choice,Quot.sound})
+GENUINELY discharges leaf_sound: leafStep_of_bundle FIRES lightclient_unfoolable_circuit_sound on each verifying
+leaf + lowers to recCexec s.pre s.turn = some s.post. So leaf_sound is NO LONGER a free sibling axiom —
+multiTurn_rests_on_apex -> AggregateAttests AND finalized_rests_on_apex -> FinalizedHistoryAttested both now follow
+from {apex + the 2 FRI recursion legs}. It is an honest REDUCTION: the residual is crystallized into ONE named
+realizable field `apexLowers` (witnessed inhabited on the honest transfer step, NOT a weakening), because of a REAL
+structural finding:
+⚑ THE MULTI-TURN LAYER IS BUILT ON AN OLDER/NARROWER KERNEL than the apex. The ChainStep/HistoryAggregation
+multi-turn model rides the TRANSFER-ONLY legacy recCexec/recKExec over Turn={actor,src,dst,amt} on the
+balOf(cell) slice; the apex's kstepAll is the general 30-effect dispatchArm over the per-asset bal:CellId->AssetId->ℤ
+ledger (balancemovement.lean:118). DISJOINT RecordKernelState components. So apex->recCexec lowers only at
+pi.effect=0 (transfer) and even there across the bal-vs-balOf-cell split. THE NEXT LEMMA to drop apexLowers
+entirely: re-base ChainStep/recCexec onto the genuine per-asset recCexecAsset/execFullA (a step = a FullActionA
+whole-turn over bal, matching the apex), retiring legacy recKExec -> then apexLowers becomes
+execFullA_balanceA_iff_spec-shaped + provable outright. (= a real distributed-layer modernization, own campaign.)
+BANK STATUS: hold until the parallel cellSeal agent settles the shared ClosureFanoutGenuine closure (tree was mid-edit).
