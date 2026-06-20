@@ -128,15 +128,15 @@ pub enum MoldableLens {
     /// ([`CvProvenance`](crate::cv_provenance::CvProvenance)). Degrades honestly when
     /// cv is absent from PATH — never a fabricated provenance edge.
     Blame,
-    /// 🔒 READ-CAP / PRIVACY (the read-confidentiality WELD) — the focused cell's
-    /// read-confidentiality view: who may *read* it, the encrypted-field membrane.
-    /// A placeholder until the privacy weld lands; it degrades honestly ("not yet
-    /// available") so the lens is reachable the moment the weld commits.
+    /// 🔒 READ-CAP / PRIVACY — the focused cell's read-confidentiality membrane,
+    /// welded onto the `dregg_cell::read_cap` organ ([`crate::read_cap_lens`]): the
+    /// encrypted-field set off the live field-visibility, the `granted ⊆ held`
+    /// read-lattice, and the byte-identical-commitment invariant demonstrated live.
     ReadCap,
-    /// ⟲ HISTORY / UNDO (the reversibility WELD) — the cell's reversible history:
-    /// the rewind/undo timeline (RCCS reversibility). A placeholder until the
-    /// reversibility weld lands; it degrades honestly so the lens lights up the
-    /// moment the weld commits.
+    /// ⟲ HISTORY / UNDO — the cell's per-cell reversibility, welded onto the
+    /// `dregg_turn::reversible` organ ([`crate::history_lens`]): the reversibility
+    /// map (each change-kind classified by the real `Effect::invert` over the live
+    /// ledger) + the cell's lifecycle posture + the un-turn model.
     History,
 }
 
@@ -193,50 +193,9 @@ const MOLDABLE_TOKEN_ROOT_KEY: [u8; 32] = [0x11u8; 32];
 /// §2.5).
 const CV_BLAME_SOURCE_PATH: &str = "starbridge-v2/src/cockpit.rs";
 
-/// An HONEST "this weld is not yet available" presentation for a lens whose backing
-/// type is not present in the image yet (the read-cap / privacy + history / undo
-/// WELD placeholders). It carries the focused cell id + a Source prose that names
-/// what the lens WILL show — so the lens is reachable now and lights up the moment
-/// the weld commits, degrading honestly (never a fabricated view) in the meantime.
-/// Renders through the SAME generic body widget (RawFields + Source), so it needs no
-/// new gpui code.
-fn weld_pending_presentation(
-    focus: CellId,
-    lens: &str,
-    title: &str,
-    prose: &str,
-) -> Vec<Presentation> {
-    // The mandatory RawFields floor (the L1 universal-coverage invariant) — records
-    // the lens is not yet available, honestly.
-    let insp = Inspectable {
-        kind: ObjectKind::Cell,
-        title: title.to_string(),
-        subtitle: format!("cell {} · {lens} (weld pending)", reflect::short_hex(focus.as_bytes())),
-        fields: vec![
-            Field::id("cell", *focus.as_bytes()),
-            Field::text("lens", lens.to_string()),
-            Field::boolean("available", false),
-            Field::text("status", "weld not yet available in this image".to_string()),
-        ],
-    };
-    vec![
-        Presentation {
-            kind: PresentationKind::RawFields,
-            label: format!("{lens} (pending)"),
-            search_text: PresentationBody::Fields(insp.clone()).search_text(),
-            body: PresentationBody::Fields(insp),
-        },
-        Presentation {
-            kind: PresentationKind::Source,
-            label: lens.to_string(),
-            search_text: format!("{lens} weld pending not yet available {title}"),
-            body: PresentationBody::Prose(format!(
-                "{title}\n\ncell {}\n\n{prose}",
-                reflect::short_hex(focus.as_bytes())
-            )),
-        },
-    ]
-}
+// (`weld_pending_presentation` removed: both the read-cap/privacy and history/undo
+// lenses are now WELDED onto their landed organs — `read_cap_lens` + `history_lens`.
+// No moldable lens degrades to a "weld pending" placeholder any more.)
 
 /// Which workspace tab the right-hand pane presents. The master interface
 /// surfaces the composer alongside the four feature panels.
@@ -3252,23 +3211,16 @@ impl Cockpit {
                     .map(|v| v.present(&ctx))
             }
 
-            // ⟲ HISTORY / UNDO — the reversibility WELD placeholder. The cell's
-            // reversible history (the rewind/undo timeline, RCCS reversibility) is
-            // not yet present as a per-cell lens; reachable now, lights up when the
-            // reversibility weld commits. Degrade honestly.
-            MoldableLens::History => Some(weld_pending_presentation(
-                focus,
-                "history / undo",
-                "REVERSIBILITY — the rewind/undo timeline of this cell",
-                "The history / undo weld is not yet available in this image. When it \
-                 lands, this lens shows the cell's reversible history: the per-cell \
-                 rewind timeline (RCCS reversibility), the undo frontier, and the \
-                 settlement boundary past which a reversal can no longer apply. The \
-                 lens is reachable now so it lights up the instant the weld commits — \
-                 the same generic renderer, no parallel framework. (The cockpit's \
-                 REPLAY tab already time-travels the WHOLE image; this is the \
-                 per-cell, lens-shaped view of the same reversibility.)",
-            )),
+            // ⟲ HISTORY / UNDO — per-cell reversibility, WELDED onto the landed
+            // `dregg_turn::reversible` organ (M-REV-0). The reversibility map (each
+            // change-kind to this cell classified by the real Effect::invert over the
+            // live ledger into clean/contextual/committed) + the cell's lifecycle
+            // posture + the un-turn model. The per-cell, lens-shaped view of the same
+            // reversibility the REPLAY tab time-travels for the whole image.
+            MoldableLens::History => {
+                crate::history_lens::CellReversibility::from_world(w, focus)
+                    .map(|v| v.present(&ctx))
+            }
         }
     }
 
