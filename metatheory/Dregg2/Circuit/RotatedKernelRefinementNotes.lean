@@ -77,6 +77,13 @@ open Dregg2.Circuit.Spec.NoteNullifier
   (NoteSpendSpec noteSpendGuard noteSpendReceipt execFullA_noteSpend_iff_spec)
 open Dregg2.Circuit.Spec.NoteCommitment
   (NoteCreateASpec noteCreateAdmit noteCreateReceipt execNoteCreateA_iff_spec)
+open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt opensTo writesTo)
+open Dregg2.Circuit.Emit.EffectVmEmit (prmCol EFFECT_VM_WIDTH)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (noteSpendV3 noteCreateV3
+   noteSpendV3_grow_gate_forces_set_insert noteCreateV3_grow_gate_forces_set_insert
+   beforeNullifierRootCol afterNullifierRootCol beforeCommitmentsRootCol afterCommitmentsRootCol
+   NULLIFIER_PARAM_COL COMMITMENT_KEY_PARAM_COL)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 
@@ -381,6 +388,167 @@ private def newNf : Nat := 9
 -- The note leaf encoder is injective on the toy domain (the carrier is committing the ids):
 #guard decide (noteLeaf 1 = noteLeaf 2) == false
 
+/-! ## §4.A — CLASS A: the shielded-set growth is FORCED by the DEPLOYED descriptors (`noteSpendV3` /
+`noteCreateV3`), not a modelled gate.
+
+§2–§3 force the growth from `*GenuineEncodes.gate`, the MODELLED `gNoteGrow` the decode ASSERTS —
+editing the LIVE `*V3` constraints does NOT break it. This section closes that gap exactly as Birth's §6.A
+/ `RotatedKernelRefinementCellSeal` §6.5 do: each `*_forced_sat` derives the shielded set-insert from a
+`Satisfied2 hash *V3` witness DIRECTLY, by
+
+  * `noteSpendV3_grow_gate_forces_set_insert` / `noteCreateV3_grow_gate_forces_set_insert` — the DEPLOYED
+    in-circuit `.insert` map-op FORCES the live wire's `writesTo before_root key value after_root` (the
+    committed BEFORE/AFTER nullifier/commitment root limbs — limb 26 / limb 27, openable sorted-Poseidon2
+    roots chaining into `state_commit`) on the active row whose runtime selector fires;
+  * `*TraceReadout.growthDecodes` — the realizable `WitnessDecodes`-class seam: the deployed forced write of
+    the note id (with its note-value leaf) into the BEFORE shielded root IS the kernel list set-insert (the
+    deployed trace-fill emits the genuine grown root as `after_root`, so the felt-level write and the kernel
+    cons are the SAME growth by construction — the limb-level decode the COMMITMENT cannot certify, supplied
+    by `StarkSound`, exactly as cellSeal's `discLimbDecodes`).
+
+Editing `*V3`'s grow-gate breaks `*V3_grow_gate_forces_set_insert`, hence the forced `writesTo`, hence
+`growthDecodes`'s antecedent, hence `*_forced_sat`, hence `*_descriptorRefines_sat` — Class A. -/
+
+/-- **`NoteSpendTraceReadout`** — the realizable circuit-witness extraction for noteSpend (NAMED), the
+`WitnessDecodes` class of cellSeal's `CellSealTraceReadout`. The grow GATE is NOT a field — the forced
+`writesTo` is derived from `Satisfied2 hash noteSpendV3` (`noteSpend_forced_sat`). The FRESHNESS
+`nf ∉ pre.nullifiers` and the `spendProof = true` gate remain the named PHASE-D residuals (VALUE_PARTIAL),
+exactly as §2's `noteSpendGenuineEncodes`. -/
+structure NoteSpendTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (nf : Nat) (actor : CellId) (spendProof : Bool) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND = 1
+  -- the realizable `WitnessDecodes`-class seam: the deployed forced write of the spent nullifier into the
+  -- BEFORE nullifier root IS the kernel list set-insert `post.nullifiers = nf :: pre.nullifiers`.
+  growthDecodes :
+    writesTo hash ((envAt t row).loc (beforeNullifierRootCol EFFECT_VM_WIDTH))
+        ((envAt t row).loc NULLIFIER_PARAM_COL)
+        ((envAt t row).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO))
+        ((envAt t row).loc (afterNullifierRootCol EFFECT_VM_WIDTH))
+      → post.kernel.nullifiers = nf :: pre.kernel.nullifiers
+  -- ⚑ THE PHASE-D RESIDUAL #1: the DOUBLE-SPEND FRESHNESS (the sorted non-membership open is PHASE-D).
+  freshness : nf ∉ pre.kernel.nullifiers
+  -- ⚑ THE PHASE-D RESIDUAL #2: the §8 spending proof gate.
+  proof : spendProof = true
+  logAdv : post.log = noteSpendReceipt actor :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCell : post.kernel.cell = pre.kernel.cell
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`noteSpend_forced_sat`** — the nullifier set-insert FORCED by the DEPLOYED `noteSpendV3` (Class A). -/
+theorem noteSpend_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteSpendV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (nf : Nat) (actor : CellId) (spendProof : Bool)
+    (rd : NoteSpendTraceReadout hash minit mfin maddrs t pre post nf actor spendProof) :
+    post.kernel.nullifiers = nf :: pre.kernel.nullifiers :=
+  rd.growthDecodes
+    (noteSpendV3_grow_gate_forces_set_insert hash hsat rd.row rd.hrow rd.hsel).2
+
+/-- **`noteSpend_descriptorRefines_sat` — THE CLASS-A REFINEMENT for noteSpend (VALUE_PARTIAL).** The
+nullifier set-insert is forced from the DEPLOYED grow-gate's `Satisfied2` (`noteSpend_forced_sat`); the
+FRESHNESS and the proof gate are the named PHASE-D residuals. -/
+theorem noteSpend_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteSpendV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (nf : Nat) (actor : CellId) (spendProof : Bool)
+    (rd : NoteSpendTraceReadout hash minit mfin maddrs t pre post nf actor spendProof) :
+    NoteSpendSpec pre nf actor spendProof post := by
+  refine ⟨⟨rd.proof, rd.freshness⟩, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+    rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats, rd.frFactories,
+    rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations, rd.frDelegationEpoch,
+    rd.frDelegationEpochAt, rd.frHeaps⟩
+  exact noteSpend_forced_sat hash hsat pre post nf actor spendProof rd
+
+/-- **CLASS-A TOOTH** — a forged wrong-nullifiers noteSpend witness is UNSAT (the grow-gate bites). -/
+theorem noteSpend_sat_rejects_wrong_nullifiers (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteSpendV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (nf : Nat) (actor : CellId) (spendProof : Bool)
+    (rd : NoteSpendTraceReadout hash minit mfin maddrs t pre post nf actor spendProof)
+    (hwrong : post.kernel.nullifiers ≠ nf :: pre.kernel.nullifiers) :
+    False :=
+  hwrong (noteSpend_forced_sat hash hsat pre post nf actor spendProof rd)
+
+/-- **`NoteCreateTraceReadout`** — the realizable circuit-witness extraction for noteCreate (NAMED),
+PROVEN-FIX: the whole load-bearing set-insert is forced (no guard to carry). -/
+structure NoteCreateTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (cm : Nat) (actor : CellId) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.SEL_NOTE_CREATE = 1
+  growthDecodes :
+    writesTo hash ((envAt t row).loc (beforeCommitmentsRootCol EFFECT_VM_WIDTH))
+        ((envAt t row).loc COMMITMENT_KEY_PARAM_COL)
+        ((envAt t row).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO))
+        ((envAt t row).loc (afterCommitmentsRootCol EFFECT_VM_WIDTH))
+      → post.kernel.commitments = cm :: pre.kernel.commitments
+  logAdv : post.log = noteCreateReceipt actor :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCell : post.kernel.cell = pre.kernel.cell
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`noteCreate_forced_sat`** — the commitment set-insert FORCED by the DEPLOYED `noteCreateV3` (Class A;
+the whole load-bearing content, no guard). -/
+theorem noteCreate_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteCreateV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (cm : Nat) (actor : CellId)
+    (rd : NoteCreateTraceReadout hash minit mfin maddrs t pre post cm actor) :
+    post.kernel.commitments = cm :: pre.kernel.commitments :=
+  rd.growthDecodes
+    (noteCreateV3_grow_gate_forces_set_insert hash hsat rd.row rd.hrow rd.hsel)
+
+/-- **`noteCreate_descriptorRefines_sat` — THE CLASS-A REFINEMENT for noteCreate (PROVEN-FIX).** -/
+theorem noteCreate_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteCreateV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (cm : Nat) (actor : CellId)
+    (rd : NoteCreateTraceReadout hash minit mfin maddrs t pre post cm actor) :
+    NoteCreateASpec pre cm actor post := by
+  refine ⟨trivial, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps, rd.frNullifiers,
+    rd.frRevoked, rd.frBal, rd.frSlotCaveats, rd.frFactories, rd.frLifecycle,
+    rd.frDeathCert, rd.frDelegate, rd.frDelegations, rd.frDelegationEpoch,
+    rd.frDelegationEpochAt, rd.frHeaps⟩
+  exact noteCreate_forced_sat hash hsat pre post cm actor rd
+
+/-- **CLASS-A TOOTH** — a forged wrong-commitments noteCreate witness is UNSAT (the grow-gate bites). -/
+theorem noteCreate_sat_rejects_wrong_commitments (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash noteCreateV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (cm : Nat) (actor : CellId)
+    (rd : NoteCreateTraceReadout hash minit mfin maddrs t pre post cm actor)
+    (hwrong : post.kernel.commitments ≠ cm :: pre.kernel.commitments) :
+    False :=
+  hwrong (noteCreate_forced_sat hash hsat pre post cm actor rd)
+
 /-! ## §5 — axiom-hygiene tripwires. -/
 
 #assert_axioms noteLeaf_injective
@@ -395,5 +563,11 @@ private def newNf : Nat := 9
 #assert_axioms noteCreate_descriptorRefines
 #assert_axioms noteCreate_descriptorRefines_execFullA
 #assert_axioms noteCreate_descriptorRefines_rejects_wrong_commitments
+#assert_axioms noteSpend_forced_sat
+#assert_axioms noteSpend_descriptorRefines_sat
+#assert_axioms noteSpend_sat_rejects_wrong_nullifiers
+#assert_axioms noteCreate_forced_sat
+#assert_axioms noteCreate_descriptorRefines_sat
+#assert_axioms noteCreate_sat_rejects_wrong_commitments
 
 end Dregg2.Circuit.RotatedKernelRefinementNotes

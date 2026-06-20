@@ -45,6 +45,7 @@ import Dregg2.Circuit.Spec.cellstatelog
 namespace Dregg2.Circuit.RotatedKernelRefinementPermsVK
 
 open Dregg2.Circuit
+open Dregg2.Circuit.Emit
 open Dregg2.Circuit.ListCommit
 open Dregg2.Circuit.StateCommit (compressNInjective)
 open Dregg2.Circuit.RotatedKernelRefinementLifecycle
@@ -55,6 +56,13 @@ open Dregg2.Circuit.Spec.CellStateVK
   (SetVKSpec setVKGuard setVKCellMap)
 open Dregg2.Circuit.Spec.CellStateLog
   (EmitEventSpec emitGuard emitReceipt)
+open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt)
+open Dregg2.Circuit.Emit.EffectVmEmit (satisfiedVm)
+open Dregg2.Circuit.Emit.EffectVmEmitV2 (graduateV1 graduateV1_sound graduable)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (setPermsV3 setVKV3 afterPermsCol afterVKCol declaredParamCol
+   rotateV3WithPermsVKGate rotateV3WithPermsVKGate_forces)
+open Dregg2.Circuit.RotatedKernelRefinement (RotTableSide)
 open Dregg2.Exec
 open Dregg2.Exec.EffectsState
 open Dregg2.Exec.TurnExecutorFull
@@ -255,6 +263,211 @@ theorem setVK_descriptorRefines_rejects_wrong_map (compressN : List FieldElem �
     False :=
   hwrong henc.cellMapMove
 
+/-! ## §2.A — CLASS A: setPermissions / setVK FORCED by the DEPLOYED descriptors `setPermsV3` / `setVKV3`.
+
+§1/§2 force the slot from `setPermissionsEncodes.gate` / `setVKEncodes.gate`, MODELLED `gSlotSet` the decode
+ASSERTS — editing the LIVE descriptors does NOT break them. This section closes that gap, the
+`RotatedKernelRefinementCellSeal` §6.5 shape, against the WAVE-2 perms/VK WELD: the committed AFTER
+authority sub-limb is welded to the in-circuit declared-param column. The `_forced_sat` lemmas derive the
+slot value from a `Satisfied2` of the DEPLOYED descriptor DIRECTLY, by
+
+  * `graduateV1_sound` — lift the v2 `Satisfied2` of `setPermsV3 = graduateV1 (rotateV3WithPermsVKGate …)`
+    to the v1 per-row `satisfiedVm` of the underlying weld-gated descriptor (chip/range from `RotTableSide`,
+    graduability by `decide`);
+  * `rotateV3WithPermsVKGate_forces` — the DEPLOYED weld FORCES the committed AFTER authority limb EQUAL to
+    the declared-param column on the active row;
+  * the readout's `limbDecodes` / `paramDecodes` seam — the committed AFTER limb IS
+    `fieldOf permsField (post.cell cell)` (resp. `vkField`), the declared-param column IS `p` (resp. `vk`).
+    Combined with the weld: `fieldOf permsField (post.cell cell) = p`. The whole-`cell`-map move rides as the
+    structural residual `cellStructResidual` (the post map is SOME perms-write — the off-slot/off-cell
+    structure the per-slot limb cannot certify); substituting the FORCED slot value reconstructs
+    `setPermsCellMap … p`, so `_descriptorRefines_sat` genuinely consumes the deployed force. -/
+
+/-- `rotateV3WithPermsVKGate SEL_SET_PERMS (afterPermsCol …) setPermsVmDescriptor` is graduable. -/
+theorem setPerms_weld_graduable :
+    graduable (rotateV3WithPermsVKGate EffectVmEmitSetPermissions.SEL_SET_PERMS
+      (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
+      EffectVmEmitSetPermissions.setPermsVmDescriptor) = true := by decide
+
+/-- **`SetPermsTraceReadout` — the realizable circuit-witness extraction for setPermissions (NAMED).** -/
+structure SetPermsTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor cell : CellId) (p : Int) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hrowNotLast : row + 1 ≠ t.rows.length
+  hsel : (envAt t row).loc EffectVmEmitSetPermissions.SEL_SET_PERMS = 1
+  -- the realizable seam: the committed AFTER perms limb IS the written slot felt; the declared-param IS `p`.
+  limbDecodes : (envAt t row).loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
+      = fieldOf permsField (post.kernel.cell cell)
+  paramDecodes : (envAt t row).loc declaredParamCol = p
+  -- the structural residual: the post map is SOME perms-write (off-slot/off-cell the limb cannot certify).
+  cellStructResidual : post.kernel.cell
+      = setPermsCellMap pre.kernel cell (fieldOf permsField (post.kernel.cell cell))
+  guard : setPermsGuard pre actor cell
+  logAdv : post.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`setPermissions_forced_sat` — the perms slot is FORCED by the DEPLOYED `setPermsV3` (Class A).** -/
+theorem setPermissions_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash setPermsV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (p : Int)
+    (rd : SetPermsTraceReadout hash minit mfin maddrs t pre post actor cell p) :
+    fieldOf permsField (post.kernel.cell cell) = p := by
+  have hv1 : satisfiedVm hash
+      (rotateV3WithPermsVKGate EffectVmEmitSetPermissions.SEL_SET_PERMS
+        (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
+        EffectVmEmitSetPermissions.setPermsVmDescriptor)
+      (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range setPerms_weld_graduable
+      hsat rd.row rd.hrow
+  have hlastf : (rd.row + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
+  rw [hlastf] at hv1
+  have hweld : (envAt t rd.row).loc
+      (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
+      = (envAt t rd.row).loc declaredParamCol :=
+    rotateV3WithPermsVKGate_forces _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+  rw [rd.limbDecodes, rd.paramDecodes] at hweld
+  exact hweld
+
+/-- **`setPermissions_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for setPermissions.**
+The `"permissions" := p` write is forced from the DEPLOYED perms weld's `Satisfied2`
+(`setPermissions_forced_sat`); substituting the forced slot into the structural residual reconstructs
+`setPermsCellMap … p`. Editing `setPermsV3`'s weld turns this RED. -/
+theorem setPermissions_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash setPermsV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (p : Int)
+    (rd : SetPermsTraceReadout hash minit mfin maddrs t pre post actor cell p) :
+    SetPermissionsSpec pre actor cell p post := by
+  have hforced : fieldOf permsField (post.kernel.cell cell) = p :=
+    setPermissions_forced_sat hash hside hsat pre post actor cell p rd
+  have hcellMap : post.kernel.cell = setPermsCellMap pre.kernel cell p := by
+    rw [rd.cellStructResidual, hforced]
+  exact ⟨rd.guard, hcellMap, rd.logAdv, rd.frAccounts, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+
+/-- **CLASS-A TOOTH — a forged setPermissions witness is UNSAT.** -/
+theorem setPermissions_sat_rejects_wrong_value (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash setPermsV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (p : Int)
+    (rd : SetPermsTraceReadout hash minit mfin maddrs t pre post actor cell p)
+    (hwrong : fieldOf permsField (post.kernel.cell cell) ≠ p) :
+    False :=
+  hwrong (setPermissions_forced_sat hash hside hsat pre post actor cell p rd)
+
+/-- `rotateV3WithPermsVKGate SEL_SET_VK (afterVKCol …) setVKVmDescriptor` is graduable. -/
+theorem setVK_weld_graduable :
+    graduable (rotateV3WithPermsVKGate EffectVmEmitSetVK.SEL_SET_VK
+      (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
+      EffectVmEmitSetVK.setVKVmDescriptor) = true := by decide
+
+/-- **`SetVKTraceReadout` — the realizable circuit-witness extraction for setVK (NAMED).** -/
+structure SetVKTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor cell : CellId) (vk : Int) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hrowNotLast : row + 1 ≠ t.rows.length
+  hsel : (envAt t row).loc EffectVmEmitSetVK.SEL_SET_VK = 1
+  limbDecodes : (envAt t row).loc (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
+      = fieldOf vkField (post.kernel.cell cell)
+  paramDecodes : (envAt t row).loc declaredParamCol = vk
+  cellStructResidual : post.kernel.cell
+      = setVKCellMap pre.kernel cell (fieldOf vkField (post.kernel.cell cell))
+  guard : setVKGuard pre actor cell
+  logAdv : post.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`setVK_forced_sat` — the vk slot is FORCED by the DEPLOYED `setVKV3` (Class A).** -/
+theorem setVK_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash setVKV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (vk : Int)
+    (rd : SetVKTraceReadout hash minit mfin maddrs t pre post actor cell vk) :
+    fieldOf vkField (post.kernel.cell cell) = vk := by
+  have hv1 : satisfiedVm hash
+      (rotateV3WithPermsVKGate EffectVmEmitSetVK.SEL_SET_VK
+        (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
+        EffectVmEmitSetVK.setVKVmDescriptor)
+      (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range setVK_weld_graduable
+      hsat rd.row rd.hrow
+  have hlastf : (rd.row + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
+  rw [hlastf] at hv1
+  have hweld : (envAt t rd.row).loc
+      (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
+      = (envAt t rd.row).loc declaredParamCol :=
+    rotateV3WithPermsVKGate_forces _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+  rw [rd.limbDecodes, rd.paramDecodes] at hweld
+  exact hweld
+
+/-- **`setVK_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for setVK.** -/
+theorem setVK_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash setVKV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (vk : Int)
+    (rd : SetVKTraceReadout hash minit mfin maddrs t pre post actor cell vk) :
+    SetVKSpec pre actor cell vk post := by
+  have hforced : fieldOf vkField (post.kernel.cell cell) = vk :=
+    setVK_forced_sat hash hside hsat pre post actor cell vk rd
+  have hcellMap : post.kernel.cell = setVKCellMap pre.kernel cell vk := by
+    rw [rd.cellStructResidual, hforced]
+  exact ⟨rd.guard, hcellMap, rd.logAdv, rd.frAccounts, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+
+/-- **CLASS-A TOOTH — a forged setVK witness is UNSAT.** -/
+theorem setVK_sat_rejects_wrong_value (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash setVKV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (vk : Int)
+    (rd : SetVKTraceReadout hash minit mfin maddrs t pre post actor cell vk)
+    (hwrong : fieldOf vkField (post.kernel.cell cell) ≠ vk) :
+    False :=
+  hwrong (setVK_forced_sat hash hside hsat pre post actor cell vk rd)
+
 /-! ## §3 — emitEvent: `log := emitReceipt(actor,cell) :: log`, whole kernel frozen. LIVE DESCRIPTOR.
 
 NO new committed root. The deployed circuit's `sel::EMIT_EVENT` constraints
@@ -363,6 +576,14 @@ private def cNC : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 100
 #assert_axioms setVK_descriptorRefines_execFullA
 #assert_axioms setVK_descriptorRefines_rejects_wrong_value
 #assert_axioms setVK_descriptorRefines_rejects_wrong_map
+#assert_axioms setPerms_weld_graduable
+#assert_axioms setPermissions_forced_sat
+#assert_axioms setPermissions_descriptorRefines_sat
+#assert_axioms setPermissions_sat_rejects_wrong_value
+#assert_axioms setVK_weld_graduable
+#assert_axioms setVK_forced_sat
+#assert_axioms setVK_descriptorRefines_sat
+#assert_axioms setVK_sat_rejects_wrong_value
 #assert_axioms emitEvent_descriptorRefines
 #assert_axioms emitEvent_descriptorRefines_execFullA
 #assert_axioms emitEvent_descriptorRefines_rejects_wrong_receipt
