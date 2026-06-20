@@ -58,7 +58,6 @@ import Dregg2.Circuit.Emit.EffectVmEmitCapReshape
 namespace Dregg2.Circuit.CapRootBridge
 
 open Dregg2.Circuit
-open Dregg2.Circuit.DescriptorIR2 (opensTo opensTo_functional)
 open Dregg2.Substrate
 open Dregg2.Authority (Cap Auth Caps Label capAuthConferred)
 open Dregg2.Exec (authorizedB Turn)
@@ -142,7 +141,30 @@ realizes `caps`. This is what "the `cap_root` column commits the kernel cap-tabl
 def CapsEncodes (hash : List ℤ → ℤ) (caps : Caps) (cap_root : ℤ) : Prop :=
   ∃ h : Heap.FeltHeap, FaithfulCapTree hash caps h ∧ Heap.root hash h = cap_root
 
-/-! ## §4 — THE BRIDGE: a write-rights `opensTo` discharges the kernel authority gate. -/
+/-! ### The flat-sponge cap-tree opening (this SUPERSEDED cap bridge commits via `Heap.root`).
+
+`DescriptorIR2.opensTo` now denotes the DEPLOYED depth-16 BINARY-MERKLE map root (the map-ops leg).
+This module is the SUPERSEDED flat-sponge cap-authority bridge (its live replacement is the
+binary-Merkle `DeployedCapTree.DeployedEncodes`/`deployedCapOpen_implies_authorizedB`); it commits the
+cap-tree via the flat sponge `Heap.root`, so it carries its OWN flat-sponge opening `capOpensTo` (the
+former shared `opensTo` shape) and its functional anti-ghost `capOpensTo_functional` (against the
+sponge `Heap.root_injective`). No live consumer reads this bridge; it stays self-contained and green. -/
+
+/-- The flat-sponge cap-tree opening: some sorted heap behind the SPONGE root `r` reads `o` at `k`. -/
+def capOpensTo (hash : List ℤ → ℤ) (r k : ℤ) (o : Option ℤ) : Prop :=
+  ∃ h : Heap.FeltHeap, Heap.SortedKeys h ∧ Heap.root hash h = r ∧ Heap.get h k = o
+
+/-- The flat-sponge opening is FUNCTIONAL under CR (`Heap.root_injective`): the sponge root + key
+determine the read. -/
+theorem capOpensTo_functional (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {r k : ℤ} {o₁ o₂ : Option ℤ}
+    (h₁ : capOpensTo hash r k o₁) (h₂ : capOpensTo hash r k o₂) : o₁ = o₂ := by
+  obtain ⟨m₁, _, hr₁, hg₁⟩ := h₁
+  obtain ⟨m₂, _, hr₂, hg₂⟩ := h₂
+  have hm : m₁ = m₂ := Heap.root_injective hash hCR (hr₁.trans hr₂.symm)
+  rw [← hg₁, ← hg₂, hm]
+
+/-! ## §4 — THE BRIDGE: a write-rights `capOpensTo` discharges the kernel authority gate. -/
 
 /-- **`capOpen_implies_authorizedB` — THE AUTHORITY BRIDGE.** GIVEN the commitment relation
 `CapsEncodes hash caps cap_root`, AND an in-circuit cap-tree opening `opensTo hash cap_root key (some m)`
@@ -158,7 +180,7 @@ theorem capOpen_implies_authorizedB
     (caps : Caps) (cap_root : ℤ)
     (henc : CapsEncodes hash caps cap_root)
     (actor src dst : Label) (amt : ℤ) (m : ℤ) (r : List Auth)
-    (hopen : opensTo hash cap_root
+    (hopen : capOpensTo hash cap_root
         (capEdgeKey hash (actor : ℤ) (src : ℤ) m WRITE_HELD) (some m))
     (hmask : m = rightsMaskOf (Cap.endpoint src r))
     (hwrite : confersWrite (Cap.endpoint src r)) :
@@ -166,12 +188,12 @@ theorem capOpen_implies_authorizedB
   -- 1. Unpack the commitment: cap_root is the root of a faithful heap `h`.
   obtain ⟨h, hfaith, hroot⟩ := henc
   -- 2. The faithful heap itself opens at the key (membership opening of its own root).
-  have hopenH : opensTo hash cap_root
+  have hopenH : capOpensTo hash cap_root
       (capEdgeKey hash (actor : ℤ) (src : ℤ) m WRITE_HELD)
       (Heap.get h (capEdgeKey hash (actor : ℤ) (src : ℤ) m WRITE_HELD)) :=
     ⟨h, hfaith.sorted, hroot, rfl⟩
   -- 3. Under CR, the two openings of the SAME root at the SAME key AGREE: the heap opens to `some m`.
-  have hagree := opensTo_functional hash hCR hopen hopenH
+  have hagree := capOpensTo_functional hash hCR hopen hopenH
   have hget : Heap.get h (capEdgeKey hash (actor : ℤ) (src : ℤ) m WRITE_HELD) = some m :=
     hagree.symm
   -- 4. Faithfulness: this write-rights opening is backed by a REAL held endpoint cap.
