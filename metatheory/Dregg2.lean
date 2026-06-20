@@ -635,3 +635,86 @@ import Dregg2.Circuit.RotatedKernelForestCohortChain -- THE DEPLOYED PER-COHORT 
 import Dregg2.Circuit.CouncilCommit -- RECOVERY circuit-binding: the guardian COUNCIL commitment bound into the state commitment (light-client-unfoolable recovery; StaticThresholdSigPolicy host-trust retired in-circuit).
 import Dregg2.Circuit.SettlementSoundness -- THE SETTLEMENT SOUNDNESS KEYSTONE (compose): verifyBatch accept ⟹ genuine kstepAll transition (apex) AND authority-live-AT-SETTLEMENT (Revocation at the settlement coordinate, NOT branch time). Teeth: settlement_gap_real; n=1 collapses the window. #assert_axioms-clean.
 import Dregg2.Deos.BranchStitch -- BRANCH-AND-STITCH: nesting=firmament-capability-confinement (a Virtual branch holds no cap to main ⇒ side-effects imaginary) + stitch=pushout-correctness; the operable protocol of distributed time-travel.
+
+-- ── ENMESHMENT: 72 formerly-orphan modules pulled into the root build graph so their
+-- #assert_axioms / #assert_namespace_axioms hygiene pins run by default under `lake build Dregg2`.
+-- (8 orphans EXCLUDED as genuinely broken at this HEAD — see report/HORIZONLOG; their pins
+--  fire sorryAx or they fail to compile against drifted APIs. Re-add once fixed. Also excluded:
+--  Dregg2.Circuit.Argus (imports 3 broken Effects); Dregg2.Claims (imports root = build cycle).)
+import Dregg2.Agent.Mandate
+import Dregg2.Authority.CSpace
+import Dregg2.Circuit.Argus.Coeffect
+import Dregg2.Circuit.Argus.CompileE
+import Dregg2.Circuit.Argus.CompileFold
+import Dregg2.Circuit.Argus.Disclose
+import Dregg2.Circuit.Argus.Effects.Attenuate
+import Dregg2.Circuit.Argus.Effects.BalanceA
+import Dregg2.Circuit.Argus.Effects.Burn
+import Dregg2.Circuit.Argus.Effects.CellDestroy
+import Dregg2.Circuit.Argus.Effects.CellSeal
+import Dregg2.Circuit.Argus.Effects.CellUnseal
+import Dregg2.Circuit.Argus.Effects.CreateCell
+import Dregg2.Circuit.Argus.Effects.Delegate
+import Dregg2.Circuit.Argus.Effects.DelegateAtten
+import Dregg2.Circuit.Argus.Effects.EmitEvent
+import Dregg2.Circuit.Argus.Effects.ExerciseViaCapability
+import Dregg2.Circuit.Argus.Effects.IncrementNonce
+import Dregg2.Circuit.Argus.Effects.Introduce
+import Dregg2.Circuit.Argus.Effects.MakeSovereign
+import Dregg2.Circuit.Argus.Effects.Mint
+import Dregg2.Circuit.Argus.Effects.Noop
+import Dregg2.Circuit.Argus.Effects.NoteCreate
+import Dregg2.Circuit.Argus.Effects.NoteSpendCompose
+import Dregg2.Circuit.Argus.Effects.PipelinedSend
+import Dregg2.Circuit.Argus.Effects.ReceiptArchive
+import Dregg2.Circuit.Argus.Effects.RefreshDelegation
+import Dregg2.Circuit.Argus.Effects.Refusal
+import Dregg2.Circuit.Argus.Effects.RevokeDelegation
+import Dregg2.Circuit.Argus.Effects.SetField
+import Dregg2.Circuit.Argus.Effects.SetPermissions
+import Dregg2.Circuit.Argus.Effects.SetVerificationKey
+import Dregg2.Circuit.Argus.EmitRoundtrip
+import Dregg2.Circuit.Argus.Joint
+import Dregg2.Circuit.DecideSatisfied2Golden
+import Dregg2.Circuit.Emit.EffectVmEmitBridge
+import Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
+import Dregg2.Circuit.Emit.EffectVmEmitBurnRunnable
+import Dregg2.Circuit.Emit.EffectVmEmitCellDestroyFullState
+import Dregg2.Circuit.Emit.EffectVmEmitCellSealFullState
+import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactoryFullState
+import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFullState
+import Dregg2.Circuit.Emit.EffectVmEmitDelegate
+import Dregg2.Circuit.Emit.EffectVmEmitDelegateAtten
+import Dregg2.Circuit.Emit.EffectVmEmitEmitEventWide
+import Dregg2.Circuit.Emit.EffectVmEmitExerciseWide
+import Dregg2.Circuit.Emit.EffectVmEmitIncrementNonceFullState
+import Dregg2.Circuit.Emit.EffectVmEmitMakeSovereignFullState
+import Dregg2.Circuit.Emit.EffectVmEmitMintRunnable
+import Dregg2.Circuit.Emit.EffectVmEmitNoopWide
+import Dregg2.Circuit.Emit.EffectVmEmitPipelinedSendWide
+import Dregg2.Circuit.Emit.EffectVmEmitReceiptArchiveWide
+import Dregg2.Circuit.Emit.EffectVmEmitRecordRoot
+import Dregg2.Circuit.Emit.EffectVmEmitRefusalFullState
+import Dregg2.Circuit.Emit.EffectVmEmitSetFieldFullState
+import Dregg2.Circuit.Emit.EffectVmEmitSetPermissionsFullState
+import Dregg2.Circuit.Emit.EffectVmEmitSetVKFullState
+-- Dregg2.Circuit.Emit.EmitAllJson / EmitGraduate EXCLUDED: pure `def main` JSON-emitter
+-- executables (zero theorems / zero hygiene pins); their top-level `main` collides with
+-- Dregg2.Apps.AgentOrchestration.main already in root. Nothing to enmesh.
+-- Dregg2.Claims EXCLUDED: it imports `Dregg2` (the root) as a corpus-wide CI pin-net, so
+-- enmeshing it here is a build cycle. It remains a separately-buildable top-of-graph target.
+import Dregg2.Distributed.CrashRecovery
+import Dregg2.Distributed.FinalityGate
+import Dregg2.Distributed.MembershipSafety
+import Dregg2.Exec.CapTPConsentLace
+import Dregg2.Exec.CapTPHandoffSound
+import Dregg2.Exec.CapTPSettlement
+import Dregg2.Exec.CapTPStoreForward
+import Dregg2.Exec.CellCarryG
+import Dregg2.Exec.CellGated
+import Dregg2.Paco.UpTo.Guarded
+import Dregg2.Substrate.IssuerLedger
+import Dregg2.Verify.ContractG
+import Dregg2.Verify.FramesG
+import Dregg2.Verify.QueueFactoryProbe
+import Dregg2.Verify.TacticsG
