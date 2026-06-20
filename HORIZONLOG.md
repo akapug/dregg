@@ -3187,3 +3187,26 @@ apex-wired, but the deployed Rust wire still runs the OLD authority-READ-only ca
 wire. FOLLOW-UP (the deploy step of the cap-write soundness fix; non-VK-blocked, just a script + Lean-emit-list
 edit): add the new descriptor names to the emitter so the deployed JSON carries exactly what the apex proves about,
 then re-pin the drift gate. Real, named, driveable next (VK-freedom era).
+
+## ⚑⚑⚑ AUTHORITY FLOOR — CORRECTION (2026-06-20, a40fea04) — the cap-open authority crown is proven-in-Lean, NOT-on-the-wire (light-client gap)
+Investigating the producer-selection layer surfaced a real gap (verdict (b): light-client gap, NOT a full-node
+hole). The earlier "guarantee A apex-forced ~28/30" was about the LEAN apex; the DEPLOYED WIRE is weaker:
+- FULL NODES SAFE: TurnExecutor::verify_authorization -> check_breadstuff (authorize.rs:1080) reads the actor's
+  real c-list from the ledger -> PermissionDenied for a cap effect by an actor holding no cap, before commit. No forge.
+- LIGHT-CLIENT GAP: the deployed producer selects the PLAIN cohort descriptors for cap effects
+  (trace_rotated.rs:1042: INTRODUCE->introduceVmDescriptor2R24 etc.) which carry NO in-circuit cap-membership
+  check. The 70-constraint cap-open authority appendix (capOpenConstraintsEff = the ARGUS depth-16 cap-membership
+  crown) is proven in Lean but NEVER SELECTED on the wire. It is producer-opt-in (cap_membership:Some,
+  full_turn_proof.rs:1687) + verifier-opt-in (checked only when the caller passes expected_cap_membership;
+  verify_full_turn passes None,None at :2171). So a ledgerless light client can't distinguish "agent held the cap"
+  from "host asserted it" — a malicious producer proves the cap effect via the non-cap path -> plain descriptor ->
+  passes. SAME SHAPE as the conservation hole (enforced executor-side, off-AIR, light-client fail-open).
+- THE WRITE half (the 5 …WriteCapOpen descriptors just emitted) is even further un-selected — both old-authority-only
+  AND new-write cap-open families are un-routed in rotated_descriptor_name.
+CLOSURE (named, the deploy step's real content): make cap-effect descriptor selection FORCED BY EFFECT KIND —
+(producer) rotated_descriptor_name routes cap effects -> the …WriteCapOpenVmDescriptor2R24 (authority appendix +
+write op), AND (verifier) verify_one_cohort_run + the light-client verify_full_turn REJECT a cap effect proven
+under the plain base (require the cap-open binding). = a producer-behavior + VK change. This is the real "safely
+live" authority item: an autonomous agent's caps must be LIGHT-CLIENT-verifiable, not host-trusted. Matches the
+memory's "we do NOT have a proven-secure circuit for ~17 effects whose gate must bind into the commitment."
+HONEST RESTATEMENT: authority floor = FULL-NODE sound, LIGHT-CLIENT named (the in-circuit crown un-selected).
