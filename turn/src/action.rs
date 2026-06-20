@@ -996,6 +996,30 @@ pub enum Effect {
         cell: CellId,
         new_vk: Option<dregg_cell::VerificationKey>,
     },
+    /// Re-program a cell's [`CellProgram`] (its caveat table) as an ORDERED
+    /// effect — the in-protocol home for the genuinely-dynamic reprogram case
+    /// (the per-present compositor re-bake, a live trustline/flash-well program
+    /// install). Replaces the timeless out-of-band genesis-path `set_cell_program`
+    /// mutation: by riding a turn it lands a `CommitRecord`, so a durable image
+    /// reproduces it on replay instead of mis-recording it as timeless genesis
+    /// (the persist-durability category error — runtime customization is an
+    /// ORDERED turn, not build-time genesis).
+    ///
+    /// Authority-gated by cell ownership: applied LAST within an action (like
+    /// [`SetPermissions`]/[`SetVerificationKey`]), and a cross-cell program
+    /// install requires the actor to hold `SetVerificationKey` permission on the
+    /// target (the closest existing program-authority gate — a cell's program
+    /// and VK are one authority surface).
+    ///
+    /// CIRCUIT WITNESS (FOLLOW-UP): this is a light-client-relevant ordered
+    /// effect, but it has NO descriptor rung yet — binding the program write into
+    /// the turn commitment is VK-affecting (ember-gated). The EXECUTOR path lands
+    /// now so the redirect away from genesis works; the in-circuit witness is the
+    /// owed follow-up (HORIZONLOG / circuit-soundness-apex).
+    SetProgram {
+        cell: CellId,
+        program: dregg_cell::CellProgram,
+    },
     /// Spend (consume) a note by revealing its nullifier.
     /// The proof must demonstrate: the nullifier corresponds to a valid note
     /// in the note tree, and the spender has authority.
@@ -1614,6 +1638,7 @@ impl Effect {
             Effect::EmitEvent { .. } => LinearityClass::Neutral,
             Effect::SetPermissions { .. } => LinearityClass::Neutral,
             Effect::SetVerificationKey { .. } => LinearityClass::Neutral,
+            Effect::SetProgram { .. } => LinearityClass::Neutral,
             Effect::RefreshDelegation => LinearityClass::Neutral,
             Effect::PipelinedSend { .. } => LinearityClass::Neutral,
             Effect::ExerciseViaCapability { .. } => LinearityClass::Neutral,
@@ -1719,6 +1744,15 @@ impl Effect {
                     hasher.update(&vk.data);
                 } else {
                     hasher.update(&[0u8]);
+                }
+            }
+            Effect::SetProgram { cell, program } => {
+                hasher.update(&[54u8]);
+                hasher.update(cell.as_bytes());
+                // Fold the program's canonical postcard bytes so distinct
+                // programs hash distinctly (deterministic, like the wire codec).
+                if let Ok(bytes) = postcard::to_allocvec(program) {
+                    hasher.update(&bytes);
                 }
             }
             Effect::NoteSpend {
@@ -2114,6 +2148,10 @@ impl Effect {
             Effect::Burn { .. } => 32 + 4 + 8,  // target + slot + amount
             Effect::AttenuateCapability { .. } => 32 + 4 + 1 + 4 + 8, // cell + slot + perms + mask + expiry
             Effect::ReceiptArchive { .. } => 8 + 32,                  // height + checkpoint hash
+            // cell + the program's canonical postcard length.
+            Effect::SetProgram { program, .. } => {
+                32 + postcard::to_allocvec(program).map(|b| b.len()).unwrap_or(0)
+            }
         }
     }
 
@@ -2125,7 +2163,9 @@ impl Effect {
     pub fn is_permission_effect(&self) -> bool {
         matches!(
             self,
-            Effect::SetPermissions { .. } | Effect::SetVerificationKey { .. }
+            Effect::SetPermissions { .. }
+                | Effect::SetVerificationKey { .. }
+                | Effect::SetProgram { .. }
         )
     }
 
@@ -2145,6 +2185,10 @@ impl Effect {
             Effect::CreateCell { .. } => dregg_cell::EFFECT_CREATE_CELL,
             Effect::SetPermissions { .. } => dregg_cell::EFFECT_SET_PERMISSIONS,
             Effect::SetVerificationKey { .. } => dregg_cell::EFFECT_SET_VERIFICATION_KEY,
+            // A program install is the cell's program-identity authority surface,
+            // the same facet as its VK (no new mask bit — a new bit is
+            // circuit-affecting; the in-circuit witness is the VK follow-up).
+            Effect::SetProgram { .. } => dregg_cell::EFFECT_SET_VERIFICATION_KEY,
             Effect::NoteSpend { .. } => dregg_cell::EFFECT_NOTE_SPEND,
             Effect::NoteCreate { .. } => dregg_cell::EFFECT_NOTE_CREATE,
 

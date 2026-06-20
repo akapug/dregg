@@ -409,7 +409,7 @@ fn upsert_cell(ledger: &mut Ledger, cell: Cell) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{bare_turn, transfer, World};
+    use crate::world::{bare_turn, set_program, transfer, World};
     use dregg_cell::CellId;
     use dregg_turn::ComputronCosts;
     use std::path::PathBuf;
@@ -585,6 +585,61 @@ mod tests {
         let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
             .expect("reopen is clean — the guard prevented the non-reopenable image");
         assert!(reopened.is_durable());
+    }
+
+    /// THE ROOT FIX (the category error dissolved): a mid-session program change
+    /// RIDDEN AS AN ORDERED `SetProgram` TURN survives close+reopen — where the
+    /// out-of-band genesis-path `set_cell_program` mutation would have poisoned
+    /// recovery (the guard above refuses that). The reprogram is now part of the
+    /// durable COMMIT LOG (a `RecordedStep::Committed`), so recovery re-executes it
+    /// in order and the recovered cell carries the new program. Runtime
+    /// customization is an ordered turn, not timeless genesis.
+    #[test]
+    fn a_mid_session_set_program_turn_survives_reopen() {
+        use dregg_cell::CellProgram;
+        let path = scratch_path();
+        let cell_id;
+        {
+            let mut w = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
+                .expect("fresh open of an empty store");
+            let treasury = w.genesis_cell(0x11, 1_000);
+            let user = w.genesis_cell(0x33, 0);
+            // A turn TOUCHES the user cell mid-session (the credit).
+            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
+            assert!(w.commit_turn(t).is_committed(), "the mid-session turn commits");
+            // NOW reprogram the ALREADY-TOUCHED cell — but as an ORDERED `SetProgram`
+            // turn (self-targeted on the user cell, whose open permissions gate the
+            // program install). This is the redirect the genesis-path mutation used
+            // to do unsoundly.
+            let prog_turn = w.turn(user, vec![set_program(user, CellProgram::Predicate(vec![]))]);
+            assert!(
+                w.commit_turn(prog_turn).is_committed(),
+                "the mid-session SetProgram turn commits"
+            );
+            assert_eq!(
+                w.ledger().get(&user).unwrap().program,
+                CellProgram::Predicate(vec![]),
+                "the live cell carries the new program"
+            );
+            cell_id = user;
+            // w dropped — the redb file persists.
+        }
+        // Reopen REPRODUCES the reprogram (it is in the durable commit log, NOT a
+        // timeless genesis fact) — the durability bug is fixed AT ITS ROOT.
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
+            .expect("reopen recovers — the reprogram rode the commit log, in order");
+        assert_eq!(
+            reopened.ledger().get(&cell_id).expect("cell restored").program,
+            CellProgram::Predicate(vec![]),
+            "a mid-session SetProgram TURN survives reopen (the category error dissolved)"
+        );
+        // And the rewindable history replays cleanly at every step.
+        let h = reopened.recorded_turns();
+        for k in 0..=h.len() {
+            assert!(h.replay_to(k).is_ok(), "rewind step {k} verifies after reopen");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     /// The same fail-fast guard covers the OTHER two genesis-path mutators

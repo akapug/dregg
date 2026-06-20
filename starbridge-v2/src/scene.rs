@@ -359,7 +359,17 @@ impl VerifiedScene {
         // Lean `compositorState`'s `[.endpoint cell …]`): the authority leg of a
         // `present()`. The SCENE CAVEAT, not this cap, is the load-bearing gate —
         // even an authorized-to-present cell cannot overpaint/spoof/steal-focus.
-        let _ = world.genesis_grant_cap(&owner, id);
+        //
+        // The grant is an ORDERED turn: the compositor cell SELF-GRANTS the surface
+        // cap to `owner` (the cap target IS the compositor cell, so the executor's
+        // self-grant arm authorizes it by the cell-owner's consent). This replaces
+        // the out-of-band `genesis_grant_cap` mutation — riding a turn lands a
+        // `CommitRecord` so a durable image reproduces the grant on replay.
+        let grant = world.turn(
+            id,
+            vec![crate::world::grant_capability(id, owner, id, 0)],
+        );
+        let _ = world.commit_turn(grant);
         self.compositor_cell.insert(owner, id);
         id
     }
@@ -397,14 +407,30 @@ impl VerifiedScene {
         // freshly-baked `AllowedTransitions` so the executor gates THIS scene —
         // the Lean closes `(sc, presenter, p)` into the spec; here we close it into
         // the live cell's caveat at present-time (the scene is the closed-over
-        // authority of §4). This re-bake is a genesis-path program update (the
-        // shell, the trusted window manager, owns the compositor cell).
+        // authority of §4).
+        //
+        // THE GENUINELY-DYNAMIC REPROGRAM: a per-present re-bake is real runtime
+        // customization, so it rides an ORDERED `SetProgram` effect (the escape
+        // hatch), NOT a timeless genesis mutation — landing a `CommitRecord` so a
+        // durable image reproduces it on replay (the persist-durability category-
+        // error fix). It is folded into the SAME present turn as the digest advance:
+        // `SetProgram` is applied LAST (an `is_permission_effect`), so the
+        // `SetField` digest advance runs FIRST, THEN the new scene caveat installs,
+        // and the executor's program gate evaluates the FRESHLY-baked allow-list
+        // against the (old → new) digest transition — admitting iff the scene admits
+        // the present (the closed-over §4 authority, now a verified turn). The
+        // presenter `owner` agents the turn (exercising its surface cap reaching the
+        // compositor cell — the Lean `[.endpoint cell …]` leg); both effects are
+        // cross-cell onto `cell_id` (the compositor's `set_state`/`set_verification_
+        // key == None` permissions gate them).
         let program = compositor_program(&self.scene, &owner, &p, &self.old_grid, &self.new_grid);
-        world.set_cell_program(&cell_id, program);
-
-        // Commit the present as a real `SetField` turn through the executor.
-        let effect = crate::world::set_field(cell_id, PRESENT_DIGEST_SLOT as usize, field_from_u64(new_digest));
-        let turn = world.turn(owner, vec![effect]);
+        let turn = world.turn(
+            owner,
+            vec![
+                crate::world::set_field(cell_id, PRESENT_DIGEST_SLOT as usize, field_from_u64(new_digest)),
+                crate::world::set_program(cell_id, program),
+            ],
+        );
         match world.commit_turn(turn) {
             CommitOutcome::Committed { .. } => {
                 // Advance the live scene's frame digest for the presenter and emit

@@ -8,8 +8,8 @@
 use std::sync::Mutex;
 
 use dregg_cell::{
-    CapabilityRef, CellId, DelegatedRef, Ledger, NoteCommitment, Nullifier, Permissions,
-    VerificationKey,
+    CapabilityRef, CellId, CellProgram, DelegatedRef, Ledger, NoteCommitment, Nullifier,
+    Permissions, VerificationKey,
     lifecycle::CellLifecycle,
     note_bridge::BridgedNullifierSet,
     nullifier_set::NullifierSet,
@@ -57,6 +57,12 @@ pub(crate) enum JournalEntry {
     SetVerificationKey {
         cell: CellId,
         old_vk: Option<VerificationKey>,
+    },
+    /// A cell's program (caveat table) was changed. Records the old program
+    /// so a rejected turn restores it (atomic reversibility).
+    SetProgram {
+        cell: CellId,
+        old_program: CellProgram,
     },
     /// A cell's delegation was changed. Records the old delegation.
     SetDelegation {
@@ -192,6 +198,12 @@ impl LedgerJournal {
     pub fn record_set_verification_key(&mut self, cell: CellId, old_vk: Option<VerificationKey>) {
         self.entries
             .push(JournalEntry::SetVerificationKey { cell, old_vk });
+    }
+
+    /// Record a program (caveat table) change.
+    pub fn record_set_program(&mut self, cell: CellId, old_program: CellProgram) {
+        self.entries
+            .push(JournalEntry::SetProgram { cell, old_program });
     }
 
     /// Record a delegation change.
@@ -346,6 +358,11 @@ impl LedgerJournal {
                 JournalEntry::SetVerificationKey { cell, old_vk } => {
                     if let Some(c) = ledger.get_mut(&cell) {
                         c.verification_key = old_vk;
+                    }
+                }
+                JournalEntry::SetProgram { cell, old_program } => {
+                    if let Some(c) = ledger.get_mut(&cell) {
+                        c.program = old_program;
                     }
                 }
                 JournalEntry::SetDelegation {

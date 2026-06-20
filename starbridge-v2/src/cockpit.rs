@@ -891,15 +891,28 @@ impl Cockpit {
         // can only ever offer the user's own authority (`mint_needs_held_factory`).
         let powerbox_app = world.borrow_mut().genesis_cell(0xA9, 0);
         // The user holds full (None) authority reaching `service` — the powerbox can
-        // confer this or any narrower right, never wider.
-        let _ = world.borrow_mut().genesis_grant_cap(&user, service);
-        // …and reaching `treasury` too, so the WEB-OF-CELLS ⚡ "make interactive"
-        // upgrade (a real powerbox grant over the transcluded SOURCE) lands on a cell
-        // the user genuinely holds whatever the transclusion picks as its source among
-        // the principal cells (the powerbox still REFUSES any source the user does not
-        // hold — `mint_needs_held_factory` — so this broadens the demo's reach without
-        // faking authority). Both caps are installed via the real genesis grant path.
-        let _ = world.borrow_mut().genesis_grant_cap(&user, treasury);
+        // confer this or any narrower right, never wider. The grant rides an ORDERED
+        // turn: `service` SELF-GRANTS the cap to `user` (the cap target IS the
+        // service cell, so the executor's self-grant arm authorizes it by service's
+        // own consent — service is an open anchor cell). The anchors are already
+        // turn-touched by the seed turns, so a genesis-path grant here would be a
+        // MID-SESSION genesis mutation (the persist-durability category error); the
+        // turn lands a `CommitRecord` so a durable cockpit image reproduces it.
+        {
+            let mut w = world.borrow_mut();
+            let t = w.turn(service, vec![world::grant_capability(service, user, service, 0)]);
+            let _ = w.commit_turn(t);
+        }
+        // …and reaching `treasury` too (same self-grant shape), so the WEB-OF-CELLS ⚡
+        // "make interactive" upgrade (a real powerbox grant over the transcluded
+        // SOURCE) lands on a cell the user genuinely holds whatever the transclusion
+        // picks as its source among the principal cells (the powerbox still REFUSES
+        // any source the user does not hold — `mint_needs_held_factory`).
+        {
+            let mut w = world.borrow_mut();
+            let t = w.turn(treasury, vec![world::grant_capability(treasury, user, treasury, 0)]);
+            let _ = w.commit_turn(t);
+        }
 
         // The A1 TERMINAL surface: the SERVICE cell backs it — it holds a REAL
         // cap reaching the user cell (a genuine mandate), so a command targeting

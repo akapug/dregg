@@ -104,6 +104,9 @@ impl TurnExecutor {
                 cell,
                 new_vk.as_ref(),
             ),
+            Effect::SetProgram { cell, program } => {
+                self.apply_set_program(ledger, path, action_target, actor, journal, cell, program)
+            }
             Effect::NoteSpend {
                 nullifier,
                 note_tree_root,
@@ -700,6 +703,52 @@ impl TurnExecutor {
         Ok(())
     }
 
+    /// Re-program a cell's [`CellProgram`] (its caveat table) as an ordered
+    /// effect — the in-protocol replacement for the out-of-band genesis-path
+    /// `set_cell_program` mutation (the persist-durability category error: a
+    /// runtime reprogram is an ORDERED turn, not timeless genesis).
+    ///
+    /// Authority: a SELF-targeted install (the cell re-programming itself) is
+    /// authorized by the signed action exactly as `apply_set_verification_key`
+    /// is — a cell's program and VK are one program-identity authority surface.
+    /// A CROSS-CELL install requires the actor to hold `SetVerificationKey`
+    /// permission on the target (the same program-identity gate). Applied LAST
+    /// within an action ([`Effect::is_permission_effect`]) so an action cannot
+    /// loosen its own caveats and then exploit the loosened gate in a later
+    /// effect of the same action.
+    ///
+    /// CIRCUIT WITNESS (FOLLOW-UP): no descriptor rung binds this write into the
+    /// turn commitment yet — that is VK-affecting (ember-gated). The executor
+    /// path lands now so the genesis redirect works; the in-circuit witness is
+    /// the owed follow-up.
+    fn apply_set_program(
+        &self,
+        ledger: &mut Ledger,
+        path: &[usize],
+        action_target: &CellId,
+        actor: &CellId,
+        journal: &mut LedgerJournal,
+        cell: &CellId,
+        program: &dregg_cell::CellProgram,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        if cell != action_target {
+            self.check_cross_cell_permission(
+                ledger,
+                actor,
+                cell,
+                dregg_cell::permissions::Action::SetVerificationKey,
+                "SetProgram",
+                path,
+            )?;
+        }
+        let c = ledger
+            .get_mut(cell)
+            .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        journal.record_set_program(*cell, c.program.clone());
+        c.program = program.clone();
+        Ok(())
+    }
+
     fn apply_note_spend(
         &self,
         path: &[usize],
@@ -1284,6 +1333,10 @@ impl TurnExecutor {
                 Effect::SetVerificationKey { .. } => Some((
                     dregg_cell::permissions::Action::SetVerificationKey,
                     "SetVerificationKey",
+                )),
+                Effect::SetProgram { .. } => Some((
+                    dregg_cell::permissions::Action::SetVerificationKey,
+                    "SetProgram",
                 )),
                 _ => None,
             };
