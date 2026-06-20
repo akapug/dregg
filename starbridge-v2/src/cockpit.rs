@@ -37,13 +37,22 @@ use starbridge_v2::palette::{Category, CommandId, CommandPalette};
 use starbridge_v2::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
 use starbridge_v2::shell::{Scene, Shell};
 use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
-use starbridge_v2::world::{self, CommitOutcome, World};
+use starbridge_v2::world::{self, CommitOutcome, ResumeMode, World};
+use starbridge_v2::meta_debug::MetaStack;
+use starbridge_v2::time_travel::TimeCockpitModel;
+use starbridge_v2::ui_snapshot::{Liveness, UiSnapshot};
+// THE ⤳ SHARE surface — the frustum / snapshot editor (cull + pare + verify + share).
+use starbridge_v2::affordance::{AffordanceSurface, CellAffordance};
+use starbridge_v2::snapshot_editor::{
+    recipient_window_cap, PareOutcome, ShareError, SnapshotEditor,
+};
 // The L1 PRESENTATION SPINE + the moldable inspector framework primitives.
 use starbridge_v2::presentable::{
     FocusTarget, GaugeView, GraphView, Halo, LatticeView, MerkleTreeView, PresentCtx, PresentMemo,
-    Presentable, Presentation, PresentationBody, Registry, Spotter, SpotterHit, StateMachineView,
-    TimelineView, TraceView,
+    Presentable, Presentation, PresentationBody, PresentationKind, Registry, Spotter, SpotterHit,
+    StateMachineView, TimelineView, TraceView,
 };
+use starbridge_v2::cv_provenance::CvProvenance;
 // The newer inspector LANES (L4–L10) — each a real `Presentable` over a live
 // protocol object. The moldable inspector reaches them through its lens-family
 // picker, projecting each through the SAME generic `render_presentation_body`.
@@ -113,11 +122,27 @@ pub enum MoldableLens {
     /// L8 — the federation survey (the captp-only remote-path catalog in the
     /// embedded image, surfaced honestly via [`FederationSurvey`]).
     Federation,
+    /// ⌖ BLAME (cv) — "why does this cell exist": the ClusterVision provenance of
+    /// the focused cell's backing source file (the swarm's reasoning that wrote it),
+    /// dialed live as a subprocess and rendered through the SAME generic body widget
+    /// ([`CvProvenance`](crate::cv_provenance::CvProvenance)). Degrades honestly when
+    /// cv is absent from PATH — never a fabricated provenance edge.
+    Blame,
+    /// 🔒 READ-CAP / PRIVACY (the read-confidentiality WELD) — the focused cell's
+    /// read-confidentiality view: who may *read* it, the encrypted-field membrane.
+    /// A placeholder until the privacy weld lands; it degrades honestly ("not yet
+    /// available") so the lens is reachable the moment the weld commits.
+    ReadCap,
+    /// ⟲ HISTORY / UNDO (the reversibility WELD) — the cell's reversible history:
+    /// the rewind/undo timeline (RCCS reversibility). A placeholder until the
+    /// reversibility weld lands; it degrades honestly so the lens lights up the
+    /// moment the weld commits.
+    History,
 }
 
 impl MoldableLens {
     /// The lens families in picker order (Cell first — the established spine).
-    const ALL: [MoldableLens; 8] = [
+    const ALL: [MoldableLens; 11] = [
         MoldableLens::Cell,
         MoldableLens::Capability,
         MoldableLens::DeepCell,
@@ -126,6 +151,9 @@ impl MoldableLens {
         MoldableLens::Circuit,
         MoldableLens::Settlement,
         MoldableLens::Federation,
+        MoldableLens::Blame,
+        MoldableLens::ReadCap,
+        MoldableLens::History,
     ];
 
     /// The operator-legible lens label + lane tag.
@@ -139,6 +167,9 @@ impl MoldableLens {
             MoldableLens::Circuit => "circuit (L9)",
             MoldableLens::Settlement => "settlement (L10)",
             MoldableLens::Federation => "federation (L8)",
+            MoldableLens::Blame => "⌖ blame (cv)",
+            MoldableLens::ReadCap => "🔒 read-cap / privacy",
+            MoldableLens::History => "⟲ history / undo",
         }
     }
 
@@ -153,6 +184,59 @@ impl MoldableLens {
 /// SAME key the cockpit's `lane_token` gadget is built with (so the L7 lens
 /// decodes the minted macaroon against the right service key).
 const MOLDABLE_TOKEN_ROOT_KEY: [u8; 32] = [0x11u8; 32];
+
+/// The source path the ⌖ BLAME (cv) lens dials ClusterVision on. A domain cell is
+/// content-addressed (it carries no filesystem path), so "why does this cell exist"
+/// resolves to the inspector IMAGE's own provenance — the agent reasoning that wrote
+/// the live cockpit — keyed on the focused cell's identity. The cv-bridge degrades
+/// honestly when cv is absent from PATH (`docs/deos/REFLEXIVE-DISTRIBUTED-IMAGE.md`
+/// §2.5).
+const CV_BLAME_SOURCE_PATH: &str = "starbridge-v2/src/cockpit.rs";
+
+/// An HONEST "this weld is not yet available" presentation for a lens whose backing
+/// type is not present in the image yet (the read-cap / privacy + history / undo
+/// WELD placeholders). It carries the focused cell id + a Source prose that names
+/// what the lens WILL show — so the lens is reachable now and lights up the moment
+/// the weld commits, degrading honestly (never a fabricated view) in the meantime.
+/// Renders through the SAME generic body widget (RawFields + Source), so it needs no
+/// new gpui code.
+fn weld_pending_presentation(
+    focus: CellId,
+    lens: &str,
+    title: &str,
+    prose: &str,
+) -> Vec<Presentation> {
+    // The mandatory RawFields floor (the L1 universal-coverage invariant) — records
+    // the lens is not yet available, honestly.
+    let insp = Inspectable {
+        kind: ObjectKind::Cell,
+        title: title.to_string(),
+        subtitle: format!("cell {} · {lens} (weld pending)", reflect::short_hex(focus.as_bytes())),
+        fields: vec![
+            Field::id("cell", *focus.as_bytes()),
+            Field::text("lens", lens.to_string()),
+            Field::boolean("available", false),
+            Field::text("status", "weld not yet available in this image".to_string()),
+        ],
+    };
+    vec![
+        Presentation {
+            kind: PresentationKind::RawFields,
+            label: format!("{lens} (pending)"),
+            search_text: PresentationBody::Fields(insp.clone()).search_text(),
+            body: PresentationBody::Fields(insp),
+        },
+        Presentation {
+            kind: PresentationKind::Source,
+            label: lens.to_string(),
+            search_text: format!("{lens} weld pending not yet available {title}"),
+            body: PresentationBody::Prose(format!(
+                "{title}\n\ncell {}\n\n{prose}",
+                reflect::short_hex(focus.as_bytes())
+            )),
+        },
+    ]
+}
 
 /// Which workspace tab the right-hand pane presents. The master interface
 /// surfaces the composer alongside the four feature panels.
@@ -252,12 +336,46 @@ pub enum Tab {
     /// macaroon token loop — each driving its real model methods
     /// (validate→predict→commit / build), surfacing refusals as features.
     Lanes,
+    /// THE TEMPORAL COCKPIT (⏳ TIME) — the headline livability surface: time-travel
+    /// + suspend + fractal meta-debug as ONE control panel. The REWIND SCRUBBER drags
+    /// over the verified witness history (genesis → head) and re-derives the focused
+    /// views at any past point (root-verified [`crate::replay::History::replay_to`])
+    /// with a live [`Liveness`] badge; the ⏸ SUSPEND button halts the real loop (the
+    /// M5 gate) and stages the continuation, ▶ RESUME drains it; the METASTACK
+    /// navigator climbs a reflective tower over the suspended world (debug the
+    /// debugger). All over the REAL models — see [`starbridge_v2::time_travel`] /
+    /// [`starbridge_v2::replay`] / [`starbridge_v2::meta_debug`].
+    Time,
+    /// THE ⤳ SHARE surface (the FRUSTUM / SNAPSHOT EDITOR) — the share-with-
+    /// attenuation pre-send editor: take a [`crate::ui_snapshot::UiSnapshot`] of the
+    /// focused view, then CULL the frustum (which lenses / sub-objects are in the
+    /// shared slice), PARE the authority (the REAL [`crate::cap_inspector::AttenuationDial`]
+    /// over `is_attenuation` — an amplifying choice is REFUSED in-band), VERIFY live
+    /// (the membrane-projected per-viewer preview = the genuine
+    /// [`crate::affordance::AffordanceSnapshot::rehydrate_for`]), and SHARE a
+    /// revocable, attenuated, rehydratable [`crate::snapshot_editor::SharedArtifact`].
+    /// The GitHub-org-settings cap UX over the sound substrate. See
+    /// [`starbridge_v2::snapshot_editor`] + `docs/desktop-os-research/REHYDRATABLE-SURFACES.md`.
+    Share,
+    /// THE DOCS EDITOR (📄 DOCS) — the dreggverse DOCUMENT LANGUAGE as a cockpit
+    /// surface (`docs/deos/DOCUMENT-LANGUAGE.md`). A document IS a real cell; an
+    /// edit IS a cap-gated turn through the genuine `dregg_turn::TurnExecutor`
+    /// (riding [`dregg_doc::ExecutorDrivenDoc`]) leaving a real receipt — an
+    /// unauthorized region-edit is REFUSED in-band (the anti-ghost tooth). A
+    /// CONFLICT is a first-class STATE you live in: two live alternatives rendered
+    /// inline, EACH tagged with who wrote it (the provenance receipt), with a
+    /// one-click RESOLVE (a resolving patch). Transclusion + backlinks reuse the
+    /// built Nelson pieces (`web_cells` / `links_here`). See
+    /// [`starbridge_v2::doc_editor`].
+    Docs,
 }
 
 impl Tab {
-    const ALL: [Tab; 24] = [
+    const ALL: [Tab; 27] = [
+        Tab::Docs,
         Tab::Home,
         Tab::Wonder,
+        Tab::Time,
         Tab::Moldable,
         Tab::InspectAct,
         Tab::Workspace,
@@ -271,6 +389,7 @@ impl Tab {
         Tab::WebOfCells,
         Tab::LinksHere,
         Tab::Powerbox,
+        Tab::Share,
         Tab::Buffer,
         Tab::Terminal,
         Tab::Composer,
@@ -281,6 +400,19 @@ impl Tab {
         Tab::Cipherclerk,
         Tab::Editor,
     ];
+    /// This tab's index in [`Tab::ALL`] — the `u64` the [`WorkspaceCell`] witnesses
+    /// (the §3.4 selector that moves from a Rust field to a cell read).
+    fn index(self) -> usize {
+        Tab::ALL.iter().position(|t| *t == self).unwrap_or(0)
+    }
+
+    /// The tab at `idx` in [`Tab::ALL`] (the inverse of [`Tab::index`]) — how
+    /// `render()` resolves the witnessed [`WorkspaceCell`] index back to a `Tab`.
+    /// Out-of-range degrades to the first tab (`Home`), never panics.
+    fn from_index(idx: usize) -> Tab {
+        Tab::ALL.get(idx).copied().unwrap_or(Tab::Home)
+    }
+
     fn label(self) -> &'static str {
         match self {
             Tab::Home => "HOME",
@@ -298,6 +430,9 @@ impl Tab {
             Tab::Workspace => "WORKSPACE",
             Tab::Wonder => "WONDER",
             Tab::Lanes => "LANES",
+            Tab::Time => "⏳ TIME",
+            Tab::Share => "⤳ SHARE",
+            Tab::Docs => "📄 DOCS",
             Tab::Buffer => "BUFFER",
             Tab::Terminal => "TERMINAL",
             Tab::Composer => "COMPOSER",
@@ -334,8 +469,20 @@ pub struct Cockpit {
     last_outcome: Option<String>,
     /// Three anchor cells for the demo verbs (treasury, service, user).
     anchors: [CellId; 3],
-    /// The active right-pane tab.
+    /// The active right-pane tab — the FREE in-memory draft selector (a tab switch
+    /// conserves nothing, the §3.5 stream weight class: mutated freely, no ledger
+    /// cost). It is the *visible* aim; the witnessed (rewindable) selector rides
+    /// [`Self::workspace_cell`], to which it is synced + occasionally committed.
     tab: Tab,
+    /// M3 WIDEN (`docs/deos/REFLEXIVE-MIGRATION.md` §3.4 — `render(workspace_subgraph)`).
+    /// The cockpit's active-tab SELECTOR self-hosted as a REAL cell: the same
+    /// [`BufferCell`] two-tier split [`ViewCell`] uses, only the payload is the
+    /// active-tab index. `render()` resolves its dispatch FROM this cell's committed
+    /// index ([`Self::active_tab`]), so the WHOLE cockpit selector is cell-driven —
+    /// the 24-arm `Tab` match stays; only its *source* moved from a Rust field to a
+    /// witnessed cell read. A tab switch advances the cell's nonce (the rewindable
+    /// UI history), conserving nothing.
+    workspace_cell: starbridge_v2::view_cell::WorkspaceCell,
 
     // --- DEBUGGER panel state ----------------------------------------------
     /// The turn the debugger inspects (a demo transfer the operator can run);
@@ -349,6 +496,19 @@ pub struct Cockpit {
     replay_cursor: usize,
     /// An optional pinned what-if fork (the cockpit owns it; `replay::Fork`).
     replay_fork: Option<replay::Fork>,
+
+    // --- ⏳ TEMPORAL COCKPIT (the TIME tab) state --------------------------
+    /// The REWIND SCRUBBER cursor — a step in `0..=history.len()` (the live
+    /// world's own [`World::recorded_turns`] history). Dragging it re-derives the
+    /// focused views at that past point (root-verified replay) with a `Liveness`
+    /// badge; `head` = the live present. Distinct from `replay_cursor` so the TIME
+    /// tab and the legacy REPLAY tab scrub independently.
+    time_cursor: usize,
+    /// THE METASTACK — the lazily-materialized reflective tower over the suspended
+    /// world (the M5 fractal meta-debug: BASE → meta¹ → meta² …). The cockpit owns
+    /// it; "suspend & inspect" pushes a level, "descend" pops. Empty until the
+    /// operator first suspends + climbs (the live system runs un-reflected).
+    meta_stack: MetaStack,
 
     // --- CIPHERCLERK panel state -------------------------------------------
     /// The HD-derived identity vault (real `AgentCipherclerk`s).
@@ -508,6 +668,17 @@ pub struct Cockpit {
     /// (Distinct from the web-of-cells `web_cells_viewer_rights`, whose None ⇄ Either
     /// drives the affordance attenuation — a different lattice line.)
     links_here_viewer_rights: dregg_cell::AuthRequired,
+
+    // --- the DOCS editor panel state (the dreggverse document language) -----
+    /// THE DOCUMENT EDITOR — a document riding a real cell, edited through the
+    /// genuine executor (a patch IS a cap-gated turn), with conflicts-as-states +
+    /// the hypermedia (transclusion/backlinks) faces. See
+    /// [`starbridge_v2::doc_editor`].
+    doc_editor: starbridge_v2::doc_editor::DocEditor,
+    /// The last DOCS-editor edit/resolve outcome banner (a REAL executor verdict:
+    /// committed receipt or the in-band cap refusal).
+    doc_outcome: Option<String>,
+
     /// The confined APP-cell whose capability request the powerbox is mediating —
     /// a real cell in the live ledger holding NO ambient authority (a freshly
     /// "launched" app-as-cell). The powerbox grants designated, attenuated caps
@@ -603,6 +774,24 @@ pub struct Cockpit {
     lane_token: TokenLoopGadget,
     /// The last lane-gadget outcome banner (a REAL build/predict/commit/discharge verdict).
     lane_outcome: Option<String>,
+
+    // --- THE ⤳ SHARE surface (the frustum / snapshot editor) ----------------
+    /// The live snapshot editor the ⤳ SHARE tab sculpts: a captured
+    /// `UiSnapshot` of the focused view + the `Frustum` being culled + the
+    /// `AttenuationDial` paring the authority. `None` until the operator captures
+    /// the focused view (the tab shows the "capture this view" call-to-action).
+    /// Built fresh by [`Self::share_capture`] so it tracks the live focus.
+    share_editor: Option<starbridge_v2::snapshot_editor::SnapshotEditor>,
+    /// The shared artifacts this session has minted (the audit trail — each a
+    /// revocable, attenuated, rehydratable slice). Newest last; "⊘ revoke" flips one.
+    share_artifacts: Vec<starbridge_v2::snapshot_editor::SharedArtifact>,
+    /// The recipient-preview tier the SHARE tab previews "what they would see" AS:
+    /// `true` = a WIDE (Either) recipient, `false` = a NARROW (Signature) recipient.
+    /// The membrane-projected preview re-derives per this toggle (the two members).
+    share_preview_wide: bool,
+    /// The last SHARE action's outcome banner (a captured slice / a refused pare /
+    /// a minted artifact / a revocation — REAL verdicts, surfaced).
+    share_outcome: Option<String>,
 }
 
 impl Cockpit {
@@ -643,6 +832,8 @@ impl Cockpit {
 
         // Start the replay scrubber at the head of the live world's history.
         let replay_cursor = world.borrow().recorded_turns().len();
+        // The ⏳ TIME tab's scrubber also starts at the live present (the head).
+        let time_cursor = replay_cursor;
 
         // Boot the cap-first SHELL: open the privileged console surface (the
         // cockpit's own trusted root, run as the treasury/operator identity),
@@ -703,6 +894,23 @@ impl Cockpit {
             // Land the initial aim so the witnessed state matches the boot draft.
             let _ = v.commit(&mut world.borrow_mut());
             v
+        };
+
+        // M3 WIDEN — THE WORKSPACE CELL (the §3.4 selector move): the cockpit's
+        // active-tab selector is self-hosted as a REAL cell (the same two-tier split
+        // as the inspector's view cell). A fresh dedicated cell backs it; the draft is
+        // seeded to the boot tab (`Home` = index 0) and committed once so the witnessed
+        // (prior-frame) selector is populated. A tab switch mutates the free draft
+        // (`self.tab`) and lands an occasional witnessed `SetField` commit — the active
+        // tab becomes a rewindable dregg-graph mutation, conserving nothing.
+        let workspace_cell_backing = world.borrow_mut().genesis_cell(0x5F, 0);
+        let workspace_cell = {
+            let ws = starbridge_v2::view_cell::WorkspaceCell::new(
+                workspace_cell_backing,
+                Tab::Home.index(),
+            );
+            let _ = ws.commit(&mut world.borrow_mut());
+            ws
         };
 
         // The POWERBOX (CapDesk) demo: birth a fresh CONFINED app-cell that holds
@@ -791,10 +999,13 @@ impl Cockpit {
             // live verified image (text-rich, self-describing). SHELL and the
             // other rooms are one click (or ⌘K) away.
             tab: Tab::Home,
+            workspace_cell,
             debug_turn,
             breakpoints: vec![debug::Breakpoint::OnRefusal, debug::Breakpoint::OnConservationBreak],
             replay_cursor,
             replay_fork: None,
+            time_cursor,
+            meta_stack: MetaStack::new(),
             clerk,
             clerk_outcome: None,
             editor,
@@ -832,6 +1043,10 @@ impl Cockpit {
             links_here_focus: None,
             links_here_depth: 2,
             links_here_viewer_rights: dregg_cell::AuthRequired::None,
+            // THE DOCS EDITOR boots on a real document cell with a single seeded
+            // sentence (a real cap-gated turn), so the panel opens on live content.
+            doc_editor: starbridge_v2::doc_editor::DocEditor::new(),
+            doc_outcome: None,
             powerbox_app: Some(powerbox_app),
             // Default to the narrow Signature tier so a click demonstrates real
             // attenuation away from the user's wider (None) held authority.
@@ -903,6 +1118,12 @@ impl Cockpit {
             lane_dial,
             lane_token: TokenLoopGadget::new([0x5Au8; 64], "dregg/service", [0x11u8; 32]),
             lane_outcome: None,
+            // The ⤳ SHARE surface starts empty — the operator captures the focused
+            // view to open the editor. The preview defaults to the WIDE recipient.
+            share_editor: None,
+            share_artifacts: Vec::new(),
+            share_preview_wide: true,
+            share_outcome: None,
         }
     }
 
@@ -2203,7 +2424,40 @@ impl Cockpit {
             let _ = self.killer_demo();
         }
         self.tab = tab;
+        // M3 WIDEN — witness the tab move into the workspace cell (the §3.4 selector
+        // is now a rewindable dregg-graph mutation). The free draft (`self.tab`)
+        // already moved; this lands the occasional `SetField` commit so the cell
+        // read `render()` dispatches on catches up.
+        self.witness_tab();
         cx.notify();
+    }
+
+    /// M3 WIDEN — THE WITNESSED ACTIVE TAB (`render(workspace_subgraph)`, §3.4). The
+    /// tab `render()` dispatches on, read FROM the [`WorkspaceCell`]'s committed
+    /// (prior-frame) selector index — the whole cockpit selector is cell-driven, not
+    /// a Rust field. The free draft (`self.tab`) is the *visible* aim; the committed
+    /// cell index is the *witnessed* one. They agree after [`Self::witness_tab`]; a
+    /// dangling cell (gone from the ledger) degrades to the live draft.
+    fn active_tab(&self) -> Tab {
+        match self.workspace_cell.committed_tab(&self.world.borrow()) {
+            Some(idx) => Tab::from_index(idx),
+            // The backing cell is absent (never in the boot path) — fall to the free
+            // draft so the cockpit is never blank.
+            None => self.tab,
+        }
+    }
+
+    /// M3 WIDEN — sync the workspace cell's free draft to the live `self.tab` and land
+    /// an occasional witnessed `SetField` commit (the [`BufferCell`] commit discipline,
+    /// generalized to the tab selector). A no-op when already clean. A commit failure
+    /// leaves the free draft moved (the panel still reflects the operator's aim); the
+    /// witnessed selector catches up on the next successful witness. The active tab is
+    /// therefore a real, rewindable cell mutation, conserving nothing (§3.5).
+    fn witness_tab(&mut self) {
+        self.workspace_cell.set_active_tab(self.tab.index());
+        if !self.workspace_cell.is_clean(&self.world.borrow()) {
+            let _ = self.workspace_cell.commit(&mut self.world.borrow_mut());
+        }
     }
 
     /// Focus the cockpit root so it receives key events (called on window open).
@@ -2974,6 +3228,52 @@ impl Cockpit {
                 let survey = FederationSurvey::disconnected();
                 Some(vec![survey.remote_presentation()])
             }
+
+            // ⌖ BLAME (cv) — "why does this cell exist": dial ClusterVision for the
+            // agent reasoning that wrote the focused cell's backing source file. A
+            // domain cell is content-addressed (no path of its own), so the question
+            // resolves to the inspector image's OWN provenance: the swarm reasoning
+            // that wrote the cockpit, keyed on the focused cell's identity. The dial
+            // degrades HONESTLY inside `CvProvenance::dial` when cv is absent from
+            // PATH — never a fabricated provenance edge. Renders through the SAME
+            // generic body widget (Timeline / Prose / Fields all already handled).
+            MoldableLens::Blame => {
+                Some(CvProvenance::dial(focus, CV_BLAME_SOURCE_PATH).present(&ctx))
+            }
+
+            // 🔒 READ-CAP / PRIVACY — the read-confidentiality WELD placeholder. The
+            // cell's read-confidentiality view (who may READ it, the encrypted-field
+            // membrane) is not yet present in this image; the lens is REACHABLE now
+            // and lights up the moment the privacy weld commits. Degrade honestly.
+            MoldableLens::ReadCap => Some(weld_pending_presentation(
+                focus,
+                "read-cap / privacy",
+                "READ-CONFIDENTIALITY — who may READ this cell",
+                "The read-cap / privacy weld is not yet available in this image. When \
+                 it lands, this lens shows the cell's read-confidentiality membrane: \
+                 which principals' caps admit a READ, the encrypted-field set, and the \
+                 selective-disclosure boundary. The lens is reachable now so it lights \
+                 up the instant the weld commits — no new gpui code, no new lens \
+                 framework (the same generic presentation renderer).",
+            )),
+
+            // ⟲ HISTORY / UNDO — the reversibility WELD placeholder. The cell's
+            // reversible history (the rewind/undo timeline, RCCS reversibility) is
+            // not yet present as a per-cell lens; reachable now, lights up when the
+            // reversibility weld commits. Degrade honestly.
+            MoldableLens::History => Some(weld_pending_presentation(
+                focus,
+                "history / undo",
+                "REVERSIBILITY — the rewind/undo timeline of this cell",
+                "The history / undo weld is not yet available in this image. When it \
+                 lands, this lens shows the cell's reversible history: the per-cell \
+                 rewind timeline (RCCS reversibility), the undo frontier, and the \
+                 settlement boundary past which a reversal can no longer apply. The \
+                 lens is reachable now so it lights up the instant the weld commits — \
+                 the same generic renderer, no parallel framework. (The cockpit's \
+                 REPLAY tab already time-travels the WHOLE image; this is the \
+                 per-cell, lens-shaped view of the same reversibility.)",
+            )),
         }
     }
 
@@ -3746,9 +4046,457 @@ impl Cockpit {
     }
 
     // =======================================================================
+    // THE ⤳ SHARE panel — the FRUSTUM / SNAPSHOT EDITOR (the share-with-attenuation
+    // surface): cull the frustum · pare the authority · verify live · share.
+    // =======================================================================
+
+    /// THE ⤳ SHARE surface — sculpt a UI-slice snapshot of the focused view, pare
+    /// its authority (the REAL [`AttenuationDial`] over `is_attenuation`), watch the
+    /// membrane-projected per-viewer preview live, then mint a revocable, attenuated,
+    /// rehydratable artifact. The GitHub-org-settings cap UX over the sound substrate
+    /// (`docs/desktop-os-research/REHYDRATABLE-SURFACES.md`). gpui-free model below.
+    fn share_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title(
+            "⤳ SHARE · sculpt → pare → verify → extend a revocable attenuated right to re-view",
+        ));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "\"Sharing a screenshot\" becomes \"extending a revocable, attenuated, audited \
+             right to re-view a witnessed slice.\" CULL the frustum (which lenses / \
+             sub-objects are in the slice — visibility) · PARE the authority (the role, \
+             on the REAL attenuation lattice — a widening is REFUSED in-band) · VERIFY \
+             live (the membrane projects what each recipient would actually see) · SHARE.",
+        ));
+
+        let Some(editor) = &self.share_editor else {
+            // No editor yet — the call-to-action: capture the focused view.
+            let focus = self
+                .inspector_view
+                .doc()
+                .focus()
+                .or_else(|| self.cells.first().copied());
+            let focus_label = focus
+                .map(|c| reflect::short_hex(c.as_bytes()))
+                .unwrap_or_else(|| "(no focus)".to_string());
+            return col
+                .child(div().mt_2().text_xs().text_color(theme::text()).child(format!(
+                    "focused object: {focus_label} — capture this view to open the share editor."
+                )))
+                .child(
+                    div().mt_1().child(small_button(
+                        cx,
+                        "share-capture",
+                        "📸 capture this view (open the editor)",
+                        theme::accent(),
+                        Cockpit::share_capture,
+                    )),
+                )
+                .into_any_element();
+        };
+
+        // ── the captured snapshot header (focus + lens + the witness cursor) ──
+        let snap = editor.snapshot();
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child("captured slice:"))
+                .child(pill(format!("focus {}", reflect::short_hex(snap.focus.cell().as_bytes())), theme::accent()))
+                .child(pill(format!("lens {}", snap.kind.slug()), theme::accent()))
+                .child(pill(format!("@ height {}", snap.cursor.height), theme::muted()))
+                .child(small_button(cx, "share-recapture", "↺ recapture focus", theme::muted(), Cockpit::share_capture)),
+        );
+
+        // ── 1. CULL THE FRUSTUM (visibility) ─────────────────────────────────
+        col = col.child(section_title("1 · cull the frustum (visibility — what's in the slice)"));
+        // lens toggles.
+        let mut lens_row = div().flex().flex_wrap().gap_1().items_center()
+            .child(div().text_xs().text_color(theme::muted()).child("lenses:"));
+        for lens in starbridge_v2::snapshot_editor::ALL_LENSES {
+            let inside = editor.frustum().has_lens(lens);
+            let id = SharedString::from(format!("share-lens-{}", lens.slug()));
+            let slug = lens.slug().to_string();
+            lens_row = lens_row.child(
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if inside { theme::panel_hi() } else { theme::panel() })
+                    .text_xs()
+                    .text_color(if inside { theme::good() } else { theme::muted() })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::border()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| this.share_cull_lens(&slug, cx)),
+                    )
+                    .child(format!("{} {}", if inside { "✓" } else { "○" }, lens.slug())),
+            );
+        }
+        col = col.child(lens_row);
+        // affordance (sub-object) toggles.
+        let mut aff_row = div().flex().flex_wrap().gap_1().items_center()
+            .child(div().text_xs().text_color(theme::muted()).child("sub-objects:"));
+        for name in editor.frustum().captured_affordances() {
+            let inside = editor.frustum().has_affordance(name);
+            let id = SharedString::from(format!("share-aff-{name}"));
+            let nm = name.clone();
+            aff_row = aff_row.child(
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if inside { theme::panel_hi() } else { theme::panel() })
+                    .text_xs()
+                    .text_color(if inside { theme::good() } else { theme::muted() })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::border()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| this.share_cull_affordance(&nm, cx)),
+                    )
+                    .child(format!("{} {name}", if inside { "✓" } else { "○" })),
+            );
+        }
+        col = col.child(aff_row);
+
+        // ── 2. PARE THE AUTHORITY (the role, on the lattice) ─────────────────
+        col = col.child(section_title("2 · pare the authority (the recipient's role — attenuation-only)"));
+        let mut role_row = div().flex().flex_wrap().gap_1().items_center()
+            .child(div().text_xs().text_color(theme::muted()).child(format!(
+                "held ceiling {:?} · grant the recipient:", editor.held().rights()
+            )));
+        for slug in editor.pare_choices() {
+            let id = SharedString::from(format!("share-pare-{slug}"));
+            let s = slug.clone();
+            // A choice that would amplify the held ceiling is colored as a warning
+            // (it will be REFUSED in-band when picked — surfaced, never silent).
+            role_row = role_row.child(
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .text_xs()
+                    .text_color(theme::accent())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::border()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| this.share_pare(&s, cx)),
+                    )
+                    .child(slug),
+            );
+        }
+        col = col.child(role_row);
+
+        // ── 3. LIVE VERIFICATION (the membrane-projected preview) ────────────
+        col = col.child(section_title("3 · verify (the membrane projects what each recipient sees)"));
+        let v = editor.verify();
+        let (vtext, vcolor) = if v.sound {
+            (
+                format!("✓ SOUND attenuation · recipient role {:?} ⊆ held (is_attenuation holds)", v.pared_rights),
+                theme::good(),
+            )
+        } else {
+            (
+                "✗ NOT a sound attenuation yet — pick a role ⊆ the held ceiling (a widening is refused)".to_string(),
+                theme::bad(),
+            )
+        };
+        col = col.child(div().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(vcolor).child(vtext));
+        // the preview-as toggle (which recipient member we preview).
+        let preview_wide = self.share_preview_wide;
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .items_center()
+                .child(div().text_xs().text_color(theme::muted()).child("preview as:"))
+                .child(small_button(
+                    cx,
+                    "share-preview-toggle",
+                    if preview_wide { "a WIDE recipient (Either)" } else { "a NARROW recipient (Signature)" },
+                    theme::accent(),
+                    Cockpit::share_toggle_preview,
+                )),
+        );
+        // the genuine membrane-projected preview for the chosen recipient tier.
+        let preview = self.share_recipient_preview(editor);
+        let lens_names: Vec<String> = v.recipient_lenses.iter().map(|l| l.slug().to_string()).collect();
+        col = col.child(
+            div()
+                .p_2()
+                .rounded_md()
+                .bg(theme::panel())
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_xs().text_color(theme::muted()).child(format!(
+                    "this recipient would SEE — lenses: [{}]",
+                    lens_names.join(", ")
+                )))
+                .child(div().text_xs().text_color(theme::text()).child(format!(
+                    "affordances (membrane-projected through is_attenuation, frustum-confined): [{}]",
+                    if preview.is_empty() { "(nothing)".to_string() } else { preview.join(", ") }
+                ))),
+        );
+
+        // ── 4. SHARE (mint the revocable artifact) ───────────────────────────
+        col = col.child(section_title("4 · share (extend the revocable, attenuated, audited right)"));
+        col = col.child(
+            div().child(small_button(
+                cx,
+                "share-mint",
+                "⤳ share this slice (mint the revocable artifact)",
+                if v.sound { theme::good() } else { theme::muted() },
+                Cockpit::share_mint,
+            )),
+        );
+
+        if let Some(b) = &self.share_outcome {
+            let color = if b.contains("REFUSED") || b.contains("amplif") || b.contains("AMPLIFY") {
+                theme::bad()
+            } else {
+                theme::good()
+            };
+            col = col.child(div().mt_1().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(color).child(b.clone()));
+        }
+
+        // ── the audit trail of minted artifacts (members of the org) ─────────
+        if !self.share_artifacts.is_empty() {
+            col = col.child(section_title("shared artifacts (the audit trail — revocable per recipient)"));
+            let mut list = div().flex().flex_col().gap_1().max_h(px(220.)).overflow_hidden();
+            for (i, art) in self.share_artifacts.iter().enumerate() {
+                let live = art.is_live();
+                let id = SharedString::from(format!("share-revoke-{i}"));
+                let mut row = div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .p_1()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .child(pill(
+                        format!("slice → {} · role {:?}", reflect::short_hex(art.backing.as_bytes()), art.attenuated_rights),
+                        if live { theme::accent() } else { theme::muted() },
+                    ))
+                    .child(pill(
+                        format!("{} sub-object(s)", art.affordance_scope.affordance_names.len()),
+                        theme::muted(),
+                    ))
+                    .child(pill(if live { "LIVE" } else { "REVOKED" }.to_string(), if live { theme::good() } else { theme::bad() }));
+                if live {
+                    row = row.child(
+                        div()
+                            .id(id)
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .bg(theme::panel_hi())
+                            .text_xs()
+                            .text_color(theme::bad())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::border()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _ev, _w, cx| this.share_revoke(i, cx)),
+                            )
+                            .child("⊘ revoke"),
+                    );
+                }
+                list = list.child(row);
+            }
+            col = col.child(list);
+        }
+
+        col.into_any_element()
+    }
+
+    /// Build a real native [`AffordanceSurface`] over `cell` — the four-tier shape
+    /// (view / comment / edit / admin) that genuinely exercises the membrane
+    /// (`is_attenuation` divides them per recipient). Each affordance fires a REAL
+    /// `dregg_turn::Effect`; the surface is the witness-graph the membrane projects
+    /// through. The same htmx-on-crack shape `web_cells` publishes, native here.
+    fn share_surface_for(cell: CellId) -> AffordanceSurface {
+        use dregg_cell::AuthRequired;
+        use dregg_turn::action::{Effect, Event};
+        AffordanceSurface::new(cell)
+            .declare(CellAffordance::new(
+                "view",
+                AuthRequired::Signature, // tier-1: any signer
+                Effect::EmitEvent { cell, event: Event::new([1u8; 32], vec![]) },
+            ))
+            .declare(CellAffordance::new(
+                "comment",
+                AuthRequired::Either, // tier-2: the editor tier
+                Effect::EmitEvent { cell, event: Event::new([2u8; 32], vec![]) },
+            ))
+            .declare(CellAffordance::new(
+                "edit",
+                AuthRequired::Either, // tier-2: a real SetField write
+                Effect::SetField { cell, index: 1, value: [7u8; 32] },
+            ))
+            .declare(CellAffordance::new(
+                "admin",
+                AuthRequired::None, // tier-3: only the root holder clears it
+                Effect::IncrementNonce { cell },
+            ))
+    }
+
+    /// The membrane-projected preview for the chosen recipient tier — the REAL
+    /// per-viewer slice (`AffordanceSnapshot::rehydrate_for` through `is_attenuation`,
+    /// frustum-confined). The preview-as toggle picks WIDE (Either) vs NARROW
+    /// (Signature) — the two members the org-settings page lets you "view as".
+    fn share_recipient_preview(&self, editor: &SnapshotEditor) -> Vec<String> {
+        let backing = editor.snapshot().focus.cell();
+        let rights = if self.share_preview_wide {
+            dregg_cell::AuthRequired::Either
+        } else {
+            dregg_cell::AuthRequired::Signature
+        };
+        let recipient = recipient_window_cap(SurfaceId(0xA1), backing, rights);
+        editor.preview_for(&recipient)
+    }
+
+    // =======================================================================
     // THE HANDLERS — the `&mut Cockpit` verbs the new panels' buttons call. Each
     // drives a REAL model method; a refusal is captured into the panel's banner.
     // =======================================================================
+
+    /// ⤳ CAPTURE — pause the camera on the focused view and OPEN the share editor.
+    /// Takes a REAL [`UiSnapshot`] of the focused cell at the live head, builds the
+    /// native four-tier affordance surface, and mints a held window cap over it (the
+    /// attenuation ceiling). Re-captures fresh so the editor tracks the live focus.
+    fn share_capture(&mut self, cx: &mut Context<Self>) {
+        let world = self.world.borrow();
+        let Some(focus) = self
+            .inspector_view
+            .doc()
+            .focus()
+            .or_else(|| self.cells.first().copied())
+        else {
+            self.share_outcome = Some("REFUSED · no focused cell to capture".to_string());
+            drop(world);
+            cx.notify();
+            return;
+        };
+        // The captured snapshot — the inspector's own paused camera (we carry it).
+        let snap = UiSnapshot::capture(&world, FocusTarget::Cell(focus), PresentationKind::Affordances);
+        drop(world);
+        let surface = Self::share_surface_for(focus);
+        // The held window cap = the ceiling. The cockpit principal holds the broad
+        // root tier over the focused surface (it is the operator); the pare narrows
+        // from there. (A narrower honest ceiling would only restrict the dial more.)
+        let held = recipient_window_cap(SurfaceId(0xA1), focus, dregg_cell::AuthRequired::None);
+        let n_aff = surface.all_names().len();
+        self.share_editor = Some(SnapshotEditor::open(snap, surface, held));
+        self.share_outcome = Some(format!(
+            "captured the focused view ({}) — {n_aff} sub-object(s), every lens, the full slice. Now cull + pare.",
+            reflect::short_hex(focus.as_bytes())
+        ));
+        cx.notify();
+    }
+
+    /// Cull a presentation LENS in/out of the shared slice (visibility).
+    fn share_cull_lens(&mut self, slug: &str, cx: &mut Context<Self>) {
+        if let Some(ed) = &mut self.share_editor {
+            if let Some(lens) = starbridge_v2::snapshot_editor::ALL_LENSES
+                .into_iter()
+                .find(|l| l.slug() == slug)
+            {
+                let inside = ed.cull_lens(lens);
+                self.share_outcome = Some(format!(
+                    "lens `{slug}` {} the shared slice",
+                    if inside { "→ added back to" } else { "← culled OUT of" }
+                ));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Cull an affordance SUB-OBJECT in/out of the shared slice (visibility).
+    fn share_cull_affordance(&mut self, name: &str, cx: &mut Context<Self>) {
+        if let Some(ed) = &mut self.share_editor {
+            let inside = ed.cull_affordance(name);
+            self.share_outcome = Some(format!(
+                "sub-object `{name}` {} the shared slice",
+                if inside { "→ added back to" } else { "← culled OUT of" }
+            ));
+        }
+        cx.notify();
+    }
+
+    /// PARE the authority to a rights tier — the REAL [`AttenuationDial`]. An
+    /// amplifying choice is REFUSED in-band (fail-closed), surfaced in the banner.
+    fn share_pare(&mut self, slug: &str, cx: &mut Context<Self>) {
+        if let Some(ed) = &mut self.share_editor {
+            self.share_outcome = Some(match ed.pare_to(slug) {
+                PareOutcome::Pared { rights } => {
+                    format!("pared the recipient role to {rights:?} (a sound attenuation ⊆ held)")
+                }
+                PareOutcome::Refused { reason } => format!("REFUSED · {reason}"),
+            });
+        }
+        cx.notify();
+    }
+
+    /// Toggle the recipient preview tier (WIDE Either ↔ NARROW Signature).
+    fn share_toggle_preview(&mut self, cx: &mut Context<Self>) {
+        self.share_preview_wide = !self.share_preview_wide;
+        cx.notify();
+    }
+
+    /// ⤳ SHARE — mint the revocable, attenuated, rehydratable artifact. The
+    /// no-amplification gate is IN-BAND: an over-wide / incomplete pare is REFUSED
+    /// (you cannot mint an over-wide artifact through this editor).
+    fn share_mint(&mut self, cx: &mut Context<Self>) {
+        if let Some(ed) = &self.share_editor {
+            match ed.share() {
+                Ok(artifact) => {
+                    let role = artifact.attenuated_rights.clone();
+                    let n = artifact.affordance_scope.affordance_names.len();
+                    self.share_artifacts.push(artifact);
+                    self.share_outcome = Some(format!(
+                        "⤳ shared · minted a revocable artifact (role {role:?}, {n} sub-object(s)). \
+                         The recipient gets a re-runnable camera + an attenuated cap — not your session."
+                    ));
+                }
+                Err(ShareError::PareIncomplete) => {
+                    self.share_outcome = Some(
+                        "REFUSED · pick a recipient role first (the pare is incomplete — fail-closed)".to_string(),
+                    );
+                }
+                Err(ShareError::WouldAmplify { held, pared }) => {
+                    self.share_outcome = Some(format!(
+                        "REFUSED · role {pared:?} would AMPLIFY the held {held:?} — \
+                         you cannot share more than you hold (is_attenuation refused it)"
+                    ));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// ⊘ REVOKE a shared artifact — withdraw the right to re-view (org "remove
+    /// member"). The membrane re-checks authority at each reacquisition, so a revoked
+    /// artifact rehydrates NOTHING thereafter, regardless of caps held.
+    fn share_revoke(&mut self, idx: usize, cx: &mut Context<Self>) {
+        if let Some(art) = self.share_artifacts.get_mut(idx) {
+            art.revoke();
+            self.share_outcome = Some(format!(
+                "⊘ revoked artifact #{idx} — the right to re-view is withdrawn (rehydrates nothing now)"
+            ));
+        }
+        cx.notify();
+    }
 
     fn moldable_clear_query(&mut self, cx: &mut Context<Self>) {
         self.moldable_query.clear();
@@ -3959,8 +4707,10 @@ impl Cockpit {
     /// The tab strip that switches the right-pane workspace.
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div().flex().gap_1().p_2().border_b_1().border_color(theme::border());
+        // M3 WIDEN — the active-tab highlight reads the witnessed cell selector too.
+        let active_tab = self.active_tab();
         for t in Tab::ALL {
-            let active = self.tab == t;
+            let active = active_tab == t;
             row = row.child(
                 div()
                     .id(SharedString::from(format!("tab-{}", t.label())))
@@ -3975,8 +4725,9 @@ impl Cockpit {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _ev, _w, cx| {
-                            this.tab = t;
-                            cx.notify();
+                            // M3 WIDEN — a tab click witnesses through `set_tab` (the
+                            // single selector seam: lazy-boots SWARM + commits the cell).
+                            this.set_tab(t, cx);
                         }),
                     )
                     .child(t.label()),
@@ -3987,7 +4738,10 @@ impl Cockpit {
 
     /// The active right-pane workspace panel.
     fn workspace(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        match self.tab {
+        // M3 WIDEN — the dispatch SELECTOR is the witnessed [`WorkspaceCell`] read
+        // (`render(workspace_subgraph)`, §3.4), not the Rust field. The per-tab match
+        // is unchanged; only its source moved to a cell read.
+        match self.active_tab() {
             Tab::Home => self.home_panel().into_any_element(),
             Tab::Shell => self.shell_panel(cx).into_any_element(),
             Tab::Agent => self.agent_panel().into_any_element(),
@@ -4003,6 +4757,9 @@ impl Cockpit {
             Tab::Workspace => self.workspace_panel(cx).into_any_element(),
             Tab::Wonder => self.wonder_panel(cx).into_any_element(),
             Tab::Lanes => self.lanes_panel(cx).into_any_element(),
+            Tab::Time => self.time_panel(cx).into_any_element(),
+            Tab::Share => self.share_panel(cx).into_any_element(),
+            Tab::Docs => self.docs_panel(cx).into_any_element(),
             Tab::Buffer => self.buffer_panel(cx).into_any_element(),
             Tab::Terminal => self.terminal_panel(cx).into_any_element(),
             Tab::Composer => self.composer(cx).into_any_element(),
@@ -6649,6 +7406,12 @@ impl Render for Cockpit {
         // the projection memo reflects exactly the cells that changed (O(changed),
         // not O(ledger)) — the producer↔consumer JOIN (EFFICIENCY-WELD-PLAN §2.1).
         self.fold_dynamics();
+        // M3 WIDEN: witness the active tab into the workspace cell. The scattered free
+        // `self.tab = …` draft writes (the §3.5 stream weight class) catch up here with
+        // an occasional `SetField` commit, so `render()` dispatches on the cell read
+        // (`active_tab()`) — the §3.4 `render(workspace_subgraph)` selector is now
+        // cell-driven, not a Rust field. Clean ⟹ no commit (idempotent).
+        self.witness_tab();
         let palette_open = self.palette.is_open();
         div()
             .id("cockpit-root")
@@ -7226,4 +7989,833 @@ fn rgba_frame_to_image(frame: &servo_render::RgbaFrame) -> std::sync::Arc<gpui::
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, bgra)
         .expect("RgbaFrame carries width*height*4 RGBA8 bytes");
     std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]))
+}
+
+// ===========================================================================
+// ⏳ THE TEMPORAL COCKPIT — the headline livability surface (the "⏳ TIME" tab):
+// time-travel + suspend + fractal meta-debug as ONE clickable control panel.
+//
+// This block holds the TIME tab's verbs (the rewind scrubber, the M5 suspend
+// gate, the MetaStack navigator) + its render, all over the REAL models
+// (`time_travel::TimeCockpitModel` over `World::recorded_turns` / the suspend gate /
+// `meta_debug::MetaStack`). Appended as its own `impl Cockpit` so it stays out of
+// the way of the densely-co-edited Tab/dispatch/state regions above.
+// ===========================================================================
+impl Cockpit {
+    /// The head step of the live history (the live present — where `Liveness::Live`).
+    fn time_head(&self) -> usize {
+        self.world.borrow().recorded_turns().len()
+    }
+
+    /// Drag the REWIND SCRUBBER to history step `k` (clamped to the head). The TIME
+    /// tab re-derives the focused views at that point (root-verified replay); the
+    /// image rewinds, the `Liveness` badge flips to `ReplayedDeterministic`.
+    fn time_scrub_to(&mut self, k: usize, cx: &mut Context<Self>) {
+        self.time_cursor = k.min(self.time_head());
+        cx.notify();
+    }
+
+    /// Rewind the scrubber one turn (one history step back).
+    fn time_step_back(&mut self, cx: &mut Context<Self>) {
+        self.time_cursor = self.time_cursor.saturating_sub(1);
+        cx.notify();
+    }
+
+    /// Advance the scrubber one turn (toward the live head).
+    fn time_step_forward(&mut self, cx: &mut Context<Self>) {
+        self.time_cursor = (self.time_cursor + 1).min(self.time_head());
+        cx.notify();
+    }
+
+    /// Jump the scrubber to genesis (the empty pre-history image).
+    fn time_to_genesis(&mut self, cx: &mut Context<Self>) {
+        self.time_cursor = 0;
+        cx.notify();
+    }
+
+    /// Jump the scrubber back to the live head (the present — `Liveness::Live`).
+    fn time_to_head(&mut self, cx: &mut Context<Self>) {
+        self.time_cursor = self.time_head();
+        cx.notify();
+    }
+
+    /// ⏸ SUSPEND — halt the live loop via the M5 gate ([`World::suspend`]). The head
+    /// FREEZES; a turn submitted while suspended STAGES in the pending queue (the
+    /// continuation) instead of committing. Distinct from the scrubber being in the
+    /// past: this stops the REAL loop.
+    fn time_suspend(&mut self, cx: &mut Context<Self>) {
+        self.world.borrow_mut().suspend();
+        cx.notify();
+    }
+
+    /// ▶ RESUME (drain) — drain the staged continuation through the executor gate
+    /// ([`ResumeMode::Drain`]): the queued turns commit in arrival order and the
+    /// loop runs again. The scrubber follows the head forward; the tower grounds.
+    fn time_resume(&mut self, cx: &mut Context<Self>) {
+        let outcomes = self.world.borrow_mut().resume(ResumeMode::Drain);
+        let committed = outcomes.iter().filter(|o| o.is_committed()).count();
+        self.time_cursor = self.time_head();
+        self.last_outcome = Some(format!(
+            "▶ resumed · {committed} staged turn(s) drained through the gate"
+        ));
+        self.meta_stack = MetaStack::new();
+        cx.notify();
+    }
+
+    /// STAGE a demo continuation turn while suspended — a small transfer the operator
+    /// can watch QUEUE (it does not commit; the head stays frozen). Proves the
+    /// suspend gate live: the pending queue grows, the image is untouched.
+    fn time_stage_demo_turn(&mut self, cx: &mut Context<Self>) {
+        let [treasury, _service, user] = self.anchors;
+        let turn = {
+            let w = self.world.borrow();
+            w.turn(treasury, vec![world::transfer(treasury, user, 1)])
+        };
+        let outcome = self.world.borrow_mut().commit_turn(turn);
+        self.last_outcome = Some(match outcome {
+            CommitOutcome::Queued { .. } => {
+                "⏸ staged · a turn QUEUED into the frozen continuation".to_string()
+            }
+            CommitOutcome::Committed { receipt, .. } => {
+                self.time_cursor = self.time_head();
+                format!(
+                    "committed (not suspended) · {}",
+                    reflect::short_hex(&receipt.receipt_hash())
+                )
+            }
+            CommitOutcome::Rejected { reason, .. } => format!("refused · {reason}"),
+        });
+        cx.notify();
+    }
+
+    /// SUSPEND & INSPECT — push a meta-level onto the [`MetaStack`] (the fractal
+    /// meta-debug). The first push suspends the loop (if not already) + materializes
+    /// `BASE`; each subsequent push climbs one level — "debug the debugger". The new
+    /// level captures the frozen head as an inspectable object.
+    fn time_metastack_push(&mut self, cx: &mut Context<Self>) {
+        {
+            let mut w = self.world.borrow_mut();
+            if !w.is_suspended() {
+                w.suspend();
+            }
+        }
+        let focus = {
+            let w = self.world.borrow();
+            self.meta_stack.push(&w)
+        };
+        self.last_outcome = Some(format!(
+            "⊕ pushed meta-level · debugging {focus:?} (the tower climbed)"
+        ));
+        cx.notify();
+    }
+
+    /// DESCEND — pop the innermost meta-level (close the inner debugger). The floor
+    /// (the gpui loop) stops the pop: you cannot descend below the base.
+    fn time_metastack_pop(&mut self, cx: &mut Context<Self>) {
+        match self.meta_stack.pop() {
+            Some(view) => {
+                self.last_outcome =
+                    Some(format!("⊖ popped meta-level {} (descended)", view.level.depth()));
+            }
+            None => {
+                self.last_outcome =
+                    Some("(at the floor — the gpui loop is not a level to pop)".to_string());
+            }
+        }
+        cx.notify();
+    }
+
+    /// THE ⏳ TIME PANEL — the temporal cockpit, painted from the pure
+    /// [`TimeCockpitModel`] (built fresh from the live world + the scrubber cursor +
+    /// the MetaStack). Three clickable powers stacked: (1) the REWIND SCRUBBER with
+    /// the live `Liveness` badge + the verified reconstruction at the cursor; (2) the
+    /// ⏸ SUSPEND / ▶ RESUME gate + the staged continuation; (3) the METASTACK
+    /// breadcrumb navigator (push to climb / pop to descend — debug the debugger).
+    fn time_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let model = {
+            let w = self.world.borrow();
+            TimeCockpitModel::build(&w, self.time_cursor, &self.meta_stack)
+        };
+
+        let mut col = div().flex().flex_col().gap_2().p_3().size_full().overflow_hidden();
+        col = col.child(section_title(
+            "⏳ TEMPORAL COCKPIT · time-travel · suspend · fractal meta-debug",
+        ));
+
+        // --- the LIVENESS badge — am I at the live present, or a re-derived past? --
+        let (badge_color, badge_bg) = match model.liveness {
+            Liveness::Live => (theme::good(), theme::panel()),
+            Liveness::ReplayedDeterministic => (theme::warn(), theme::panel_hi()),
+            Liveness::ReconstructedApproximate => (theme::bad(), theme::panel_hi()),
+        };
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .p_2()
+                .rounded_md()
+                .border_1()
+                .border_color(badge_color)
+                .bg(badge_bg)
+                .child(div().text_sm().text_color(badge_color).child(model.liveness_badge()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(format!("k{} / head k{}", model.cursor, model.head)),
+                )
+                .child(if model.cursor_verified {
+                    pill(format!("✓ root {}", short_root(&model.cursor_root)), theme::good())
+                } else {
+                    pill("✗ root UNVERIFIED".to_string(), theme::bad())
+                }),
+        );
+
+        // ====================================================================
+        // (2) THE ⏸ SUSPEND GATE — halt the real loop; the staged continuation.
+        // ====================================================================
+        col = col.child(section_title("⏸ SUSPEND GATE · halt the live loop (M5)").mt_1());
+        if model.suspended {
+            // SUSPENDED banner — the head is FROZEN.
+            col = col.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme::warn())
+                    .bg(theme::panel_hi())
+                    .child(div().text_sm().text_color(theme::warn()).child("⏸ SUSPENDED"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(format!("head FROZEN @h{} · the loop is halted", model.live_height)),
+                    ),
+            );
+            col = col.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(time_button(cx, "time-resume", "▶ RESUME (drain)", theme::good(), Cockpit::time_resume))
+                    .child(time_button(cx, "time-stage", "⊕ stage a turn", theme::accent(), Cockpit::time_stage_demo_turn)),
+            );
+            // The staged continuation (the pending queue) — the real partial turn.
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .mt_1()
+                    .child(format!("STAGED CONTINUATION · {} pending turn(s)", model.pending.len())),
+            );
+            if model.pending.is_empty() {
+                col = col.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .px_2()
+                        .child("(empty — stage a turn to fill the continuation)"),
+                );
+            }
+            for line in &model.pending {
+                col = col.child(div().text_xs().text_color(theme::accent()).px_2().child(format!("· {line}")));
+            }
+        } else {
+            // RUNNING — the loop is live; offer the suspend button.
+            col = col.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_xs().text_color(theme::good()).child(format!("● running @h{}", model.live_height)))
+                    .child(time_button(cx, "time-suspend", "⏸ SUSPEND", theme::warn(), Cockpit::time_suspend)),
+            );
+        }
+
+        // ====================================================================
+        // (1) THE REWIND SCRUBBER — drag over the verified witness history.
+        // ====================================================================
+        col = col.child(section_title("⟲ REWIND SCRUBBER · the verified witness history").mt_2());
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(time_button(cx, "time-genesis", "⏮ genesis", theme::muted(), Cockpit::time_to_genesis))
+                .child(time_button(cx, "time-back", "◀ −1 turn", theme::accent(), Cockpit::time_step_back))
+                .child(time_button(cx, "time-fwd", "+1 turn ▶", theme::accent(), Cockpit::time_step_forward))
+                .child(time_button(cx, "time-head", "live head ⏭", theme::good(), Cockpit::time_to_head)),
+        );
+        // The ticks — every landing (genesis → head). Each is CLICKABLE: drag the
+        // scrubber to that step. The cursor tick glows; turns vs genesis are distinct.
+        let mut ticks = div().flex().flex_col().gap_0p5().mt_1();
+        for tick in &model.ticks {
+            let at_cursor = tick.step == model.cursor;
+            let is_head = tick.step == model.head;
+            let step = tick.step;
+            let marker = if at_cursor { "▸" } else if tick.is_turn { "•" } else { "·" };
+            let label_color = if at_cursor {
+                theme::accent()
+            } else if tick.is_turn {
+                theme::text()
+            } else {
+                theme::muted()
+            };
+            ticks = ticks.child(
+                div()
+                    .id(SharedString::from(format!("time-tick-{step}")))
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if at_cursor { theme::panel_hi() } else { theme::panel() })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::border()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev, _w, cx| {
+                            this.time_scrub_to(step, cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(label_color)
+                            .child(format!("{marker} k{step}  {}{}", tick.label, if is_head { "  ⟵ head (live)" } else { "" })),
+                    )
+                    .child(div().text_xs().text_color(theme::muted()).child(short_root(&tick.root))),
+            );
+        }
+        col = col.child(ticks);
+
+        // The VERIFIED reconstruction at the cursor — the image, rewound. Re-derived
+        // by root-verified replay (`time_travel` → `History::replay_to`).
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_1()
+                .child(format!("IMAGE @k{} ({} cells, verified replay)", model.cursor, model.cursor_cells.len())),
+        );
+        if model.cursor_cells.is_empty() && !model.cursor_verified {
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::bad())
+                    .px_2()
+                    .child("(replay refused — the witnessed log does not support this point)"),
+            );
+        }
+        for (id, bal, caps) in &model.cursor_cells {
+            col = col.child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .px_2()
+                    .child(div().text_xs().text_color(theme::text()).child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if *bal < 0 { theme::warn() } else { theme::text() })
+                            .child(format!("{bal} · {caps} caps")),
+                    ),
+            );
+        }
+        // The diff from the previous step — what the cursor's turn DID (the receipt).
+        if let Some(diff) = &model.diff_from_prev {
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .mt_1()
+                    .child(format!("Δ this turn (k{}→k{}) · {} cell(s) changed", model.cursor.saturating_sub(1), model.cursor, diff.len())),
+            );
+            for (id, change) in &diff.changes {
+                col = col.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .px_2()
+                        .child(format!("{} {}", reflect::short_hex(id.as_bytes()), change.label())),
+                );
+            }
+        }
+
+        // ====================================================================
+        // (3) THE METASTACK NAVIGATOR — the fractal meta-debug tower.
+        // ====================================================================
+        col = col.child(section_title("⊞ METASTACK · debug the debugger (the reflective tower)").mt_2());
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(time_button(cx, "meta-push", "⊕ suspend & inspect (climb)", theme::accent(), Cockpit::time_metastack_push))
+                .child(time_button(cx, "meta-pop", "⊖ descend (pop)", theme::muted(), Cockpit::time_metastack_pop)),
+        );
+        // The breadcrumb: BASE → meta¹ → meta² … (the top is the current debugger).
+        let mut crumbs = div().flex().flex_wrap().items_center().gap_1().mt_1();
+        crumbs = crumbs.child(div().text_xs().text_color(theme::muted()).child("BASE (the live image)"));
+        if model.metastack.is_empty() {
+            crumbs = crumbs.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("— un-reflected (push to suspend & climb)"),
+            );
+        }
+        for crumb in &model.metastack {
+            let color = if crumb.is_top { theme::accent() } else { theme::text() };
+            crumbs = crumbs.child(div().text_xs().text_color(theme::muted()).child("→"));
+            crumbs = crumbs.child(
+                div()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if crumb.is_top { theme::panel_hi() } else { theme::panel() })
+                    .border_1()
+                    .border_color(if crumb.is_top { theme::accent() } else { theme::border() })
+                    .text_xs()
+                    .text_color(color)
+                    .child(format!(
+                        "meta{} · frozen@h{}{}",
+                        crumb.level,
+                        crumb.frozen_height,
+                        if crumb.is_top { " ◀ debugging" } else { "" }
+                    )),
+            );
+        }
+        col = col.child(crumbs);
+
+        // The action banner (the last suspend/resume/stage/meta verdict).
+        if let Some(msg) = &self.last_outcome {
+            col = col.child(
+                div()
+                    .mt_2()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(msg.clone()),
+            );
+        }
+
+        col
+    }
+}
+
+/// A ⏳ TIME-tab action button — an explicit-id clickable verb (so two buttons
+/// that share a label don't collide), driving a `&mut Cockpit` verb. Mirrors
+/// `small_button`, kept local to the temporal cockpit block.
+fn time_button(
+    cx: &mut Context<Cockpit>,
+    id: &'static str,
+    label: &str,
+    color: Hsla,
+    handler: fn(&mut Cockpit, &mut Context<Cockpit>),
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(theme::panel_hi())
+        .border_1()
+        .border_color(theme::border())
+        .text_xs()
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::border()))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev, _window, cx| {
+                handler(this, cx);
+            }),
+        )
+        .child(label.to_string())
+}
+
+/// First 6 bytes of a 32-byte canonical root, hex — the scrubber-tick root tooth.
+fn short_root(root: &[u8; 32]) -> String {
+    reflect::short_hex(root)
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE 📄 DOCS EDITOR — the dreggverse document language as a cockpit surface.
+// Each edit/resolve is a real cap-gated TURN through the genuine executor
+// (riding `dregg_doc::ExecutorDrivenDoc`); a CONFLICT is a first-class STATE
+// (both alternatives rendered, each tagged with who wrote it); transclusion +
+// backlinks reuse the built Nelson pieces. See `starbridge_v2::doc_editor`.
+// (A SEPARATE impl block at EOF so it never clobbers a peer's mid-file edits.)
+// ══════════════════════════════════════════════════════════════════════════
+impl Cockpit {
+    // ── the edit verbs (each an edit = a real cap-gated turn) ─────────────────
+
+    /// Append text to the document as ALICE — a real cap-gated turn leaving a
+    /// receipt. The banner shows the executor verdict.
+    fn doc_append_alice(&mut self, _cx: &mut Context<Cockpit>) {
+        let out = self.doc_editor.append(
+            "And every edit is a witnessed turn. ",
+            starbridge_v2::doc_editor::DocAuthor::ALICE,
+        );
+        self.doc_outcome = Some(out.banner());
+    }
+
+    /// Attempt the same append on the UNAUTHORIZED editor (no region cap) — the
+    /// executor's cross-cell cap gate REFUSES it IN-BAND (`CapabilityNotHeld`); the
+    /// document is untouched. The refusal is the feature (the anti-ghost tooth).
+    fn doc_attempt_unauthorized(&mut self, _cx: &mut Context<Cockpit>) {
+        let out = self.doc_editor.attempt_unauthorized(
+            "a forbidden region edit ",
+            starbridge_v2::doc_editor::DocAuthor::BOB,
+        );
+        self.doc_outcome = Some(out.banner());
+    }
+
+    /// Sow a first-class PROSE conflict: two co-authors append a different
+    /// continuation after the same tail atom (both real turns). The document now
+    /// LIVES IN a conflict state.
+    fn doc_sow_prose_conflict(&mut self, _cx: &mut Context<Cockpit>) {
+        let (a, b) = self
+            .doc_editor
+            .sow_prose_conflict("Cats are the best. ", "Dogs are the best. ");
+        self.doc_outcome = Some(format!(
+            "sowed a prose conflict · alice: {} · bob: {}",
+            if a.committed() { "✓" } else { "✗" },
+            if b.committed() { "✓" } else { "✗" },
+        ));
+    }
+
+    /// Sow a first-class FIELD conflict (the conservation/authority regime): two
+    /// co-authors set a different `title` — both survive as a clash a resolution
+    /// must CHOOSE (it may need consensus).
+    fn doc_sow_field_conflict(&mut self, _cx: &mut Context<Cockpit>) {
+        let (a, b) = self.doc_editor.sow_field_conflict("title", "On Cats", "On Dogs");
+        self.doc_outcome = Some(format!(
+            "sowed a field conflict (title) · alice: {} · bob: {}",
+            if a.committed() { "✓" } else { "✗" },
+            if b.committed() { "✓" } else { "✗" },
+        ));
+    }
+
+    /// RESOLVE the first prose conflict by KEEPING its first alternative (drop the
+    /// rest) — a real cap-gated resolving turn that collapses the antichain.
+    fn doc_resolve_prose_keep(&mut self, _cx: &mut Context<Cockpit>) {
+        let prose: Vec<_> = self
+            .doc_editor
+            .conflicts()
+            .into_iter()
+            .filter(|c| c.regime == dregg_doc::Regime::Prose)
+            .collect();
+        if let Some(c) = prose.first() {
+            let heads: Vec<dregg_doc::AtomId> = c.alternatives.iter().map(|a| a.head).collect();
+            if let Some((keep, drop)) = heads.split_first() {
+                let out = self.doc_editor.resolve_prose_keep(
+                    *keep,
+                    drop,
+                    starbridge_v2::doc_editor::DocAuthor::ALICE,
+                );
+                self.doc_outcome = Some(format!("resolve (keep alice's): {}", out.banner()));
+            }
+        } else {
+            self.doc_outcome = Some("no prose conflict to resolve".into());
+        }
+    }
+
+    /// RESOLVE the first prose conflict by ORDERING its alternatives (both kept) —
+    /// a real cap-gated resolving `Connect` turn.
+    fn doc_resolve_prose_order(&mut self, _cx: &mut Context<Cockpit>) {
+        let prose: Vec<_> = self
+            .doc_editor
+            .conflicts()
+            .into_iter()
+            .filter(|c| c.regime == dregg_doc::Regime::Prose)
+            .collect();
+        if let Some(c) = prose.first() {
+            let heads: Vec<dregg_doc::AtomId> = c.alternatives.iter().map(|a| a.head).collect();
+            let out = self
+                .doc_editor
+                .resolve_prose_order(&heads, starbridge_v2::doc_editor::DocAuthor::ALICE);
+            self.doc_outcome = Some(format!("resolve (order both): {}", out.banner()));
+        } else {
+            self.doc_outcome = Some("no prose conflict to resolve".into());
+        }
+    }
+
+    /// RESOLVE the title FIELD conflict by CHOOSING alice's value — a real
+    /// superseding `SetField` turn (the settling authority recorded).
+    fn doc_resolve_field(&mut self, _cx: &mut Context<Cockpit>) {
+        let out = self.doc_editor.resolve_field_choose(
+            "title",
+            "On Cats",
+            starbridge_v2::doc_editor::DocAuthor::ALICE,
+        );
+        self.doc_outcome = Some(format!("settle title = 'On Cats': {}", out.banner()));
+    }
+
+    /// THE 📄 DOCS PANEL — the document editor surface: the linearized content,
+    /// conflicts-as-states inline (both alternatives + provenance), one-click
+    /// resolve, and the transclusion/backlinks hypermedia faces.
+    fn docs_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let rendered = self.doc_editor.rendered();
+        let conflicts = self.doc_editor.conflicts();
+        let region = self.doc_editor.region_id();
+        let editor = self.doc_editor.editor_id();
+        let commitment = self.doc_editor.commitment();
+        let seam_ok = self.doc_editor.commitment_matches();
+
+        // The hypermedia faces, reusing the built `web_cells`/`links_here` pieces.
+        let viewer = self.anchors[2]; // the cockpit `user` principal
+        let (transclusion, backlinks) = {
+            let w = self.world.borrow();
+            let t = self
+                .doc_editor
+                .transclusion(&w, viewer, dregg_cell::AuthRequired::None);
+            let b = self
+                .doc_editor
+                .backlinks(&w, region, dregg_cell::AuthRequired::None, 1);
+            (t, b)
+        };
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .size_full()
+            .overflow_hidden();
+        col = col.child(
+            section_title("📄 DOCS · the dreggverse document language · a patch IS a turn").mb_1(),
+        );
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "A document is a CELL; an edit is a PATCH is a cap-gated TURN (a real receipt). A \
+             CONFLICT is a first-class STATE you live in — two live alternatives, each tagged \
+             with who wrote it — resolved by a later patch, never an error. Transclusion is a \
+             verified cross-cell quote; backlinks are the witness-graph read backward.",
+        ));
+
+        // ── THE SUBSTRATE HEADER — the document IS a real cell ───────────────
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .mt_1()
+                .child(pill(format!("doc cell {}", reflect::short_hex(&region.0)), theme::accent()))
+                .child(pill(format!("editor {}", reflect::short_hex(&editor.0)), theme::accent()))
+                .child(pill(format!("commit {}", reflect::short_hex(&commitment)), theme::muted()))
+                .child(pill(
+                    if seam_ok { "seam: commitment == projection" } else { "seam DRIFT" },
+                    if seam_ok { theme::good() } else { theme::bad() },
+                ))
+                .child(pill(
+                    if rendered.has_conflict() { "conflicted" } else { "clean" },
+                    if rendered.has_conflict() { theme::warn() } else { theme::good() },
+                )),
+        );
+
+        // ── THE EDIT VERBS (each an edit = a real cap-gated turn) ────────────
+        col = col.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .mt_1()
+                .child(small_button(cx, "docs-append", "✎ edit (commit a turn)", theme::good(), Cockpit::doc_append_alice))
+                .child(small_button(cx, "docs-unauthorized", "⛔ try unauthorized edit", theme::bad(), Cockpit::doc_attempt_unauthorized))
+                .child(small_button(cx, "docs-sow-prose", "⑂ sow prose conflict", theme::warn(), Cockpit::doc_sow_prose_conflict))
+                .child(small_button(cx, "docs-sow-field", "⑂ sow field conflict (title)", theme::warn(), Cockpit::doc_sow_field_conflict)),
+        );
+
+        // ── THE OUTCOME BANNER (the real executor verdict) ───────────────────
+        if let Some(banner) = &self.doc_outcome {
+            col = col.child(
+                div()
+                    .mt_1()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(theme::panel_hi())
+                    .border_1()
+                    .border_color(theme::border())
+                    .text_xs()
+                    .font_family("Menlo")
+                    .text_color(theme::text())
+                    .child(banner.clone()),
+            );
+        }
+
+        // ── THE RENDERED DOCUMENT (clean runs + inline conflict markers) ─────
+        col = col.child(section_title("THE DOCUMENT (linearized content)").mt_2().mb_1());
+        let mut doc_box = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .rounded_md()
+            .bg(theme::panel())
+            .border_1()
+            .border_color(theme::border());
+        for seg in &rendered.segments {
+            match seg {
+                dregg_doc::Segment::Clean(t) => {
+                    doc_box = doc_box.child(div().text_sm().text_color(theme::text()).child(t.clone()));
+                }
+                dregg_doc::Segment::Conflict(_) => {
+                    doc_box = doc_box.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::warn())
+                            .child("⑂ — a conflict region lives here (see below) —"),
+                    );
+                }
+            }
+        }
+        col = col.child(doc_box);
+
+        // ── CONFLICTS-AS-STATES: both alternatives, each with PROVENANCE ─────
+        if !conflicts.is_empty() {
+            col = col.child(
+                section_title("CONFLICTS — a STATE you live in (both alternatives + who wrote each)")
+                    .mt_2()
+                    .mb_1(),
+            );
+            for c in conflicts.iter() {
+                let regime_color = if c.needs_consensus { theme::bad() } else { theme::warn() };
+                let mut cbox = div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme::panel_hi())
+                    .border_1()
+                    .border_color(regime_color);
+                cbox = cbox.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_1()
+                        .child(pill(format!("{} regime", c.regime.label()), regime_color))
+                        .when(c.field.is_some(), |d| {
+                            d.child(pill(
+                                format!("field: {}", c.field.clone().unwrap_or_default()),
+                                theme::accent(),
+                            ))
+                        })
+                        .child(pill(
+                            if c.needs_consensus { "may need consensus" } else { "unilaterally resolvable" },
+                            theme::muted(),
+                        )),
+                );
+                for alt in &c.alternatives {
+                    let prov = match alt.receipt_hash {
+                        Some(h) => format!("receipt {}", reflect::short_hex(&h)),
+                        None => "(witness-only)".to_string(),
+                    };
+                    cbox = cbox.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(theme::panel())
+                            .border_1()
+                            .border_color(theme::border())
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(pill(format!("@{}", alt.author_name), theme::accent()))
+                                    .child(pill(prov, theme::muted())),
+                            )
+                            .child(div().text_sm().text_color(theme::text()).child(
+                                if alt.text.is_empty() { "(empty)".to_string() } else { alt.text.clone() },
+                            )),
+                    );
+                }
+                let resolve_row = if c.regime == dregg_doc::Regime::Field {
+                    div().flex().flex_wrap().gap_1().mt_1().child(small_button(
+                        cx,
+                        "docs-resolve-field",
+                        "✓ settle title = alice's",
+                        theme::good(),
+                        Cockpit::doc_resolve_field,
+                    ))
+                } else {
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .mt_1()
+                        .child(small_button(cx, "docs-resolve-keep", "✓ resolve: keep alice's", theme::good(), Cockpit::doc_resolve_prose_keep))
+                        .child(small_button(cx, "docs-resolve-order", "✓ resolve: order both", theme::good(), Cockpit::doc_resolve_prose_order))
+                };
+                cbox = cbox.child(resolve_row);
+                col = col.child(cbox);
+            }
+        }
+
+        // ── THE HYPERMEDIA FACES (the built Nelson pieces, reused) ───────────
+        col = col.child(
+            section_title("HYPERMEDIA · transclusion + backlinks (Nelson, verified)").mt_2().mb_1(),
+        );
+        if let Some(t) = &transclusion {
+            col = col.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(div().text_xs().text_color(theme::muted()).child(
+                        "TRANSCLUSION — a verified cross-cell quote (content-addressed + receipt; \
+                         the quote IS the source's committed value, never a copy):",
+                    ))
+                    .child(div().text_xs().text_color(theme::text()).font_family("Menlo").child(format!(
+                        "{} quotes {} · field {} · receipt {} · {}",
+                        reflect::short_hex(&t.host.0),
+                        reflect::short_hex(&t.source.0),
+                        t.transcluded_field,
+                        t.provenance_receipt,
+                        if t.source_finalized { "FINALIZED" } else { "tentative" },
+                    ))),
+            );
+        } else {
+            col = col.child(
+                div().text_xs().text_color(theme::muted()).child("(too few cells to compose a transclusion yet)"),
+            );
+        }
+        col = col.child(
+            div().text_xs().text_color(theme::muted()).mt_1().child(format!(
+                "WHAT-LINKS-HERE (who transcludes this document) · {} backlink(s) · viewer holds {} \
+                 — a backlink the viewer's caps cannot admit is fogged",
+                backlinks.backlinks.len(),
+                backlinks.viewer_tier,
+            )),
+        );
+        for bl in backlinks.backlinks.iter().take(6) {
+            col = col.child(
+                div().text_xs().text_color(theme::text()).font_family("Menlo").child(format!("← {}", bl.observer_uri)),
+            );
+        }
+
+        col.into_any_element()
+    }
 }

@@ -77,6 +77,17 @@ pub mod dreggverse_map;
 #[cfg(feature = "embedded-executor")]
 pub mod links_here;
 
+// THE DOCUMENT EDITOR model (the DOCS tab) — the dreggverse document language made a
+// cockpit surface (`docs/deos/DOCUMENT-LANGUAGE.md`). A document IS a real
+// `dregg_cell::Cell`, an edit IS a cap-gated turn through the genuine
+// `dregg_turn::TurnExecutor` (riding `dregg_doc::ExecutorDrivenDoc`), a conflict is a
+// first-class `ConflictRegion` STATE (two live alternatives, each attributed to who
+// wrote it — provenance IS the receipt), resolved by a later patch. Transclusion +
+// backlinks reuse the existing `web_cells`/`links_here` Nelson pieces. gpui-free,
+// `cargo test`-able (pure model over the `dregg-doc` patch core, like `web_cells`).
+#[cfg(feature = "embedded-executor")]
+pub mod doc_editor;
+
 // The interactive POWERBOX (CapDesk) — the trusted designation flow: an app-cell
 // requests a capability it lacks; the trusted UI (the cockpit principal, NOT the app)
 // presents a picker filtered to what the USER actually holds (mint_needs_held_factory
@@ -182,6 +193,16 @@ pub mod presentable;
 // ReconstructedApproximate). The screenshot keeps the angle, drops the frame. See REHYDRATABLE-SURFACES.md.
 #[cfg(feature = "embedded-executor")]
 pub mod ui_snapshot;
+// THE FRUSTUM / SNAPSHOT EDITOR (the ⤳ SHARE surface) — the pre-send editor where you
+// sculpt a UI-slice snapshot, CULL the frustum (which lenses/sub-objects are IN the
+// shared slice), PARE the authority (the real `AttenuationDial` over `is_attenuation` —
+// it REFUSES amplification in-band), VERIFY live (the membrane-projected per-viewer
+// preview), and SHARE a revocable, attenuated, rehydratable `SharedArtifact`. Reuses
+// `ui_snapshot` + `affordance` (the membrane `rehydrate_for`) + `cap_inspector`
+// (`AttenuationDial`) + the genuine `is_attenuation`. gpui-free, `cargo test`-able. The
+// GitHub-org-settings cap UX. See `docs/desktop-os-research/REHYDRATABLE-SURFACES.md`.
+#[cfg(feature = "embedded-executor")]
+pub mod snapshot_editor;
 // THE UI-CELL SUBSTRATE (M3 · reflexive migration §3) — the cockpit's own view-state
 // self-hosted as real dregg cells via the proven BufferCell two-tier split: ViewCell
 // (a view's focus/present-idx camera-aim, free in-memory draft + occasional witnessed
@@ -199,6 +220,13 @@ pub mod view_cell;
 // the gpui loop. See docs/deos/{FIRMAMENT-REFLEXIVE-SUBSTRATE,REFLEXIVE-MIGRATION,STRATIFIED-FIXPOINT}.md.
 #[cfg(feature = "embedded-executor")]
 pub mod meta_debug;
+// THE TEMPORAL COCKPIT model — the gpui-free brain behind the "⏳ TIME" tab: the
+// rewind scrubber (verified History::replay_to + the Liveness badge), the ⏸ suspend
+// gate readout (the M5 World gate + the staged continuation), and the MetaStack
+// breadcrumb (the reflective tower). Reuses replay/ui_snapshot/meta_debug — never a
+// parallel time/debug model. The cockpit's TIME tab paints this pure projection.
+#[cfg(feature = "embedded-executor")]
+pub mod time_travel;
 #[cfg(feature = "embedded-executor")]
 pub mod cell_inspector;
 #[cfg(feature = "embedded-executor")]
@@ -254,6 +282,11 @@ pub use affordance::{
     FireError, FireOutcome, Rehydration,
 };
 #[cfg(feature = "embedded-executor")]
+pub use snapshot_editor::{
+    recipient_window_cap, Frustum, PareOutcome, SharedArtifact, SnapshotEditor, ShareError,
+    Verification, ALL_LENSES,
+};
+#[cfg(feature = "embedded-executor")]
 pub use web_cells::{
     AffordanceRow, CellRow, SemiReinteractiveTransclusion, Transclusion, WebCellsBrowser,
 };
@@ -261,6 +294,10 @@ pub use web_cells::{
 pub use dreggverse_map::{DreggverseGraph, DreggverseLink, DreggverseMap};
 #[cfg(feature = "embedded-executor")]
 pub use links_here::{BacklinkRow, LinksHerePanel};
+#[cfg(feature = "embedded-executor")]
+pub use doc_editor::{
+    AttributedAlternative, ConflictView, DocAuthor, DocEditor, EditOutcome,
+};
 #[cfg(feature = "embedded-executor")]
 pub use powerbox::{
     AppLauncher, CapabilityRequest, GrantableTarget, GrantedCap, LaunchedApp, Powerbox,

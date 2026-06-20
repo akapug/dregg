@@ -640,6 +640,45 @@ mod tests {
         assert!(ws.is_clean(&w), "after commit the workspace is clean");
     }
 
+    // ── WIDEN: the cockpit's active-tab resolution path (cell-driven selector) ──
+
+    #[test]
+    fn the_active_tab_resolves_from_the_committed_cell_not_the_draft() {
+        // This mirrors the cockpit's `active_tab()` widen: the render dispatch reads
+        // the active tab from the WorkspaceCell's COMMITTED index (a cell read), not
+        // the free draft. A free tab move that has NOT committed leaves the witnessed
+        // selector at the prior index — the §3.4 `render(workspace_subgraph)` source.
+        let (mut w, _treasury, _sink, ui) = world_with_ui_cell();
+        let mut ws = WorkspaceCell::new(ui, 3);
+        ws.commit(&mut w).expect("commit the boot tab index (3)");
+        assert_eq!(ws.committed_tab(&w), Some(3), "the witnessed selector is index 3");
+
+        // Move the FREE draft to index 7 but do NOT commit (a free tab switch).
+        ws.set_active_tab(7);
+        assert_eq!(ws.active_tab(), 7, "the free draft moved");
+        assert_eq!(
+            ws.committed_tab(&w),
+            Some(3),
+            "render() still dispatches on the COMMITTED index (3) until the witness lands"
+        );
+
+        // Witness it (the occasional commit `witness_tab` lands) → the cell read catches up.
+        ws.commit(&mut w).expect("witness the tab move");
+        assert_eq!(ws.committed_tab(&w), Some(7), "after the witness, render() reads index 7");
+    }
+
+    #[test]
+    fn a_missing_workspace_cell_has_no_committed_tab_so_render_falls_to_the_draft() {
+        // The cockpit's `active_tab()` degrades to the live `self.tab` draft when the
+        // backing cell is absent (never the boot path) — so the cockpit is never blank.
+        let mut w = World::new();
+        let ghost = CellId::from_bytes([0x77; 32]); // never installed
+        let ws = WorkspaceCell::new(ghost, 4);
+        assert!(ws.committed_tab(&w).is_none(), "a missing cell has no committed tab");
+        assert!(!ws.is_clean(&w), "an unbacked workspace cell is not clean");
+        assert!(matches!(ws.commit(&mut w), Err(ViewError::Unbacked)), "it cannot commit");
+    }
+
     // ── a view over a missing cell is unbacked and cannot commit ────────────
 
     #[test]
