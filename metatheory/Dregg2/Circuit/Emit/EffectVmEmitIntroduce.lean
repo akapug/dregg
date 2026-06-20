@@ -511,7 +511,7 @@ theorem introduceNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.
 
 #guard introduceVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard introduceVmDescriptor.hashSites.length == 4
-#guard introduceVmDescriptor.traceWidth == 187
+#guard introduceVmDescriptor.traceWidth == 188
 
 #assert_axioms introduceVm_faithful
 #assert_axioms introduceVm_rejects_wrong_output
@@ -661,7 +661,7 @@ theorem introduceWide_clause_not_trivial :
 #assert_axioms introduceWide_realizes
 #assert_axioms introduceWide_clause_not_trivial
 
-#guard introduceVmDescriptorWide.traceWidth == 189
+#guard introduceVmDescriptorWide.traceWidth == 190
 #guard introduceVmDescriptorWide.hashSites.length == 4
 
 end Dregg2.Circuit.Emit.EffectVmEmitIntroduce

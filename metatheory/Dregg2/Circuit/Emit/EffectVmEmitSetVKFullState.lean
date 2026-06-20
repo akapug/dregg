@@ -160,7 +160,7 @@ theorem setVK_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard setVKVmDescriptorWide.traceWidth == 189
+#guard setVKVmDescriptorWide.traceWidth == 190
 #guard setVKVmDescriptorWide.hashSites.length == 4
 #guard setVKVmDescriptorWide.constraints.length == setVKVmDescriptor.constraints.length
 

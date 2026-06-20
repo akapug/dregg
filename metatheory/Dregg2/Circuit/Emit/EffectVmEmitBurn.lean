@@ -601,7 +601,7 @@ theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
 
 #guard burnVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1  -- gates(5+8) + transitions + 4 + 3 + selectorGate
 #guard burnVmDescriptor.hashSites.length == 4
-#guard burnVmDescriptor.traceWidth == 187
+#guard burnVmDescriptor.traceWidth == 188
 
 #assert_axioms burnVm_faithful
 #assert_axioms burnVm_rejects_wrong_balance

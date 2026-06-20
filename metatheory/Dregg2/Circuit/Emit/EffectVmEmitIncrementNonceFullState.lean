@@ -228,7 +228,7 @@ theorem incNonce_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard incrementNonceVmDescriptorWide.traceWidth == 189
+#guard incrementNonceVmDescriptorWide.traceWidth == 190
 #guard incrementNonceVmDescriptorWide.hashSites.length == 4
 #guard incrementNonceVmDescriptorWide.constraints.length == incrementNonceVmDescriptor.constraints.length
 

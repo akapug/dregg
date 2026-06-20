@@ -235,7 +235,7 @@ theorem burnFullClause_not_trivial :
 
 /-! ## §6 — axiom-hygiene tripwires + structural pins. -/
 
-#guard burnVmDescriptorWide.traceWidth == 189
+#guard burnVmDescriptorWide.traceWidth == 190
 #guard burnVmDescriptorWide.hashSites.length == 4
 #guard burnVmDescriptorWide.constraints.length == burnVmDescriptor.constraints.length
 

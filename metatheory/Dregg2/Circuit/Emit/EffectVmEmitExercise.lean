@@ -443,7 +443,7 @@ theorem staleNonceExRow_rejected :
 
 #guard exerciseVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard exerciseVmDescriptor.hashSites.length == 4
-#guard exerciseVmDescriptor.traceWidth == 187
+#guard exerciseVmDescriptor.traceWidth == 188
 
 #assert_axioms exerciseVm_faithful
 #assert_axioms exerciseVm_rejects_wrong_output

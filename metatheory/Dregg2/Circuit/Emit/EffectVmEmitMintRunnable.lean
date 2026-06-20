@@ -237,7 +237,7 @@ theorem mintFullClause_not_trivial :
 
 /-! ## §6 — axiom-hygiene tripwires + structural pins. -/
 
-#guard mintVmDescriptorWide.traceWidth == 189
+#guard mintVmDescriptorWide.traceWidth == 190
 #guard mintVmDescriptorWide.hashSites.length == 4
 #guard mintVmDescriptorWide.constraints.length == mintVmDescriptor.constraints.length
 

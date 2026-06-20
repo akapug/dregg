@@ -162,7 +162,7 @@ theorem setPerms_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard setPermsVmDescriptorWide.traceWidth == 189
+#guard setPermsVmDescriptorWide.traceWidth == 190
 #guard setPermsVmDescriptorWide.hashSites.length == 4
 #guard setPermsVmDescriptorWide.constraints.length == setPermsVmDescriptor.constraints.length
 

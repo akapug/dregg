@@ -482,7 +482,7 @@ theorem staleNonceSealRow_rejected :
 
 #guard cellSealVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard cellSealVmDescriptor.hashSites.length == 4
-#guard cellSealVmDescriptor.traceWidth == 187
+#guard cellSealVmDescriptor.traceWidth == 188
 
 #assert_axioms cellSealVm_faithful
 #assert_axioms cellSealVm_rejects_wrong_output

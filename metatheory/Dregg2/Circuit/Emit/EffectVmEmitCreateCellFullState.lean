@@ -202,7 +202,7 @@ theorem createCell_clause_rejects_root_drop :
 
 /-! ## §8 — layout + axiom-hygiene tripwires. -/
 
-#guard createCellVmDescriptorWide.traceWidth == 189
+#guard createCellVmDescriptorWide.traceWidth == 190
 #guard createCellVmDescriptorWide.hashSites.length == 4
 #guard createCellVmDescriptorWide.constraints.length == createCellVmDescriptor.constraints.length
 

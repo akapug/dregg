@@ -469,7 +469,7 @@ theorem archiveBadRow_rejected : ¬ (VmConstraint.gate gLifeSet).holdsVm archive
 
 #guard receiptArchiveVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
 #guard receiptArchiveVmDescriptor.hashSites.length == 4
-#guard receiptArchiveVmDescriptor.traceWidth == 187
+#guard receiptArchiveVmDescriptor.traceWidth == 188
 
 #assert_axioms archiveRowGates_holds_iff
 #assert_axioms archiveVm_faithful
@@ -578,7 +578,7 @@ theorem receiptArchiveActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv
 
 #guard receiptArchiveActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard receiptArchiveActorVmDescriptor.hashSites.length == 4
-#guard receiptArchiveActorVmDescriptor.traceWidth == 187
+#guard receiptArchiveActorVmDescriptor.traceWidth == 188
 
 #assert_axioms receiptArchiveActor_faithful
 #assert_axioms receiptArchiveActor_full_sound

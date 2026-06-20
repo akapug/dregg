@@ -697,12 +697,12 @@ theorem transferFeeVm_rejects_wrong_fee (env : VmRowEnv)
 #guard transferVmDescriptor.constraints.length == 14 + 14 + 4 + 3 + 1  -- gates+transitions+4first+3last+selectorGate
 #guard transferVmDescriptor.hashSites.length == 4
 #guard transferVmDescriptor.ranges.length == 2
-#guard transferVmDescriptor.traceWidth == 187
+#guard transferVmDescriptor.traceWidth == 188
 
 -- The fee'd descriptor: one fewer per-row gate (RESERVED passthrough dropped), one more range check.
 #guard transferFeeVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard transferFeeVmDescriptor.ranges.length == 3
-#guard transferFeeVmDescriptor.traceWidth == 187
+#guard transferFeeVmDescriptor.traceWidth == 188
 #assert_axioms transferFeeVm_faithful
 #assert_axioms transferFeeVm_rejects_wrong_fee
 

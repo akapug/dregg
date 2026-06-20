@@ -497,7 +497,7 @@ theorem staleNonceIncNonceRow_rejected :
 
 #guard incrementNonceVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard incrementNonceVmDescriptor.hashSites.length == 4
-#guard incrementNonceVmDescriptor.traceWidth == 187
+#guard incrementNonceVmDescriptor.traceWidth == 188
 
 #assert_axioms incNonceVm_faithful
 #assert_axioms incNonceVm_rejects_wrong_output

@@ -519,7 +519,7 @@ theorem revokeNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.VmR
 
 #guard revokeVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard revokeVmDescriptor.hashSites.length == 4
-#guard revokeVmDescriptor.traceWidth == 187
+#guard revokeVmDescriptor.traceWidth == 188
 
 #assert_axioms revokeVm_faithful
 #assert_axioms revokeVm_rejects_wrong_output
@@ -701,7 +701,7 @@ theorem revoke_DELEG_epoch_residual (D : Caps → ℤ)
 #assert_axioms revokeWide_clause_not_trivial
 #assert_axioms revoke_DELEG_epoch_residual
 
-#guard revokeDelegationVmDescriptorWide.traceWidth == 189
+#guard revokeDelegationVmDescriptorWide.traceWidth == 190
 #guard revokeDelegationVmDescriptorWide.hashSites.length == 4
 
 end Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation

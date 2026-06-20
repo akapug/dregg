@@ -320,7 +320,7 @@ theorem goodRow_fieldsRoot_zero : goodRow.loc (saCol state.FIELDS_ROOT) = 0 := b
 /-! ## §8 — Axiom-hygiene pins (the honesty tripwire). -/
 
 #guard recordHashSites.length == 4
-#guard recordVmDescriptor.traceWidth == 187
+#guard recordVmDescriptor.traceWidth == 188
 #guard recordVmDescriptor.hashSites.length == 4
 -- 14 per-row gates + 14 transitions + 4 boundary-first + 3 boundary-last + 1 selector-binding
 -- `sel[S]=1` tooth (task #74, added to `transferVmDescriptor` after this guard was first written;

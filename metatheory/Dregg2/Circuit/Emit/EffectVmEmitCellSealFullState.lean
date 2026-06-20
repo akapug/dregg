@@ -185,7 +185,7 @@ theorem cellSeal_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard cellSealVmDescriptorWide.traceWidth == 189
+#guard cellSealVmDescriptorWide.traceWidth == 190
 #guard cellSealVmDescriptorWide.hashSites.length == 4
 #guard cellSealVmDescriptorWide.constraints.length == cellSealVmDescriptor.constraints.length
 

@@ -44,7 +44,7 @@ pub const GENUINE_NONAMP_JSON: &str =
 /// SHA-256 cache-freshness pin for the committed bytes (re-pinned by the emit script; NOT a
 /// faithfulness check — the Lean↔JSON gate is generate-fresh `scripts/check-descriptor-drift.sh`).
 pub const GENUINE_NONAMP_FP: &str =
-    "55bc5205205e9fb4c2ea4cee52eb173f95595fe43a0b96c6997b7d4e1eadbfad";
+    "0af7917a00213ab458a29be0c9e96d9facdd13b055b8d0030933c039b2afd227";
 
 /// The descriptor name (the canonical wire identity — shared across the six cap-graph effects).
 pub const GENUINE_NONAMP_NAME: &str = "dregg-effectvm-attenuateA-v1-genuine-nonamp";
@@ -82,8 +82,8 @@ mod tests {
             .expect("genuine-non-amp descriptor must parse via interpreter");
         assert_eq!(d.name, GENUINE_NONAMP_NAME, "parsed name != wire identity");
         assert_eq!(
-            d.trace_width, 187,
-            "the genuine-non-amp cap-graph row shares the 187-col EffectVM base trace (P0-2 record-digest)"
+            d.trace_width, 188,
+            "the genuine-non-amp cap-graph row shares the 188-col EffectVM base trace (P0-2 record-digest + asset-class)"
         );
         // 30 genuine (12 frame freeze + 14 transition + 4 boundary) + 26 non-amp
         // (8 held-bool + 8 granted-bool + 8 submask + 2 recon) = 56.

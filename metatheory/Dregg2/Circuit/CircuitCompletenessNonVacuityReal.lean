@@ -139,13 +139,13 @@ theorem lookup_holdsAt_tfOf2_right (d : EffectVmDescriptor2) (a b : Assignment)
 /-! ## §2 — the concrete REAL transfer row + trace.
 
 A single transfer row, columns set to the genuine debit values; everything unmentioned is `0`. The
-rotated welded limbs `r0 ↔ bal_lo` (col 188) and `r1 ↔ nonce` (col 189) carry the BEFORE-state
+rotated welded limbs `r0 ↔ bal_lo` (col 189) and `r1 ↔ nonce` (col 190) carry the BEFORE-state
 balance/nonce (so the `weldsAt` `colEq` ties hold); the after block and all other rotated/caveat
 limbs are `0`. -/
 
 /-- The concrete real NATURAL transfer row (`Assignment`): `s_transfer = 1`, before-`bal_lo = 100`,
 before-`nonce = 0`, after-`bal_lo = 90`, after-`nonce = 1`, `amount = 10`, `direction = 1`; the
-two welded BEFORE rotated limbs `r0`(col 188)`= bal_lo = 100` and `r1`(col 189)`= nonce = 0`; all
+two welded BEFORE rotated limbs `r0`(col 189)`= bal_lo = 100` and `r1`(col 190)`= nonce = 0`; all
 other limbs `0`. (`after.nonce = 1` rides `saCol NONCE`; `after.bal_lo = 90` rides `saCol BALANCE_LO`.) -/
 def realRow : Assignment := fun v =>
   if v = sel.TRANSFER then 1                    -- col 1
@@ -154,9 +154,9 @@ def realRow : Assignment := fun v =>
   else if v = saCol state.NONCE then 1          -- col 78 (after nonce)
   else if v = prmCol param.AMOUNT then 10       -- col 68
   else if v = prmCol param.DIRECTION then 1     -- col 69
-  else if v = 188 then 100                       -- rotated BEFORE r0 (welded to bal_lo = 100)
-  else if v = 239 then 90                        -- rotated AFTER r0 (welded to after bal_lo = 90)
-  else if v = 240 then 1                         -- rotated AFTER r1 (welded to after nonce = 1)
+  else if v = 189 then 100                       -- rotated BEFORE r0 (welded to bal_lo = 100)
+  else if v = 240 then 90                        -- rotated AFTER r0 (welded to after bal_lo = 90)
+  else if v = 241 then 1                         -- rotated AFTER r1 (welded to after nonce = 1)
   else 0                                          -- before-nonce 0, everything else 0
 
 /-- The public inputs forced by the boundary/rotated PI pins. The v1 first-row pins
@@ -268,9 +268,9 @@ theorem transferRowIntent_envReal : TransferRowIntent envReal := by
       have e4 : ¬ (76 + (3 + i) = 78) := by omega
       have e5 : ¬ (76 + (3 + i) = 68) := by omega
       have e6 : ¬ (76 + (3 + i) = 69) := by omega
-      have e7 : ¬ (76 + (3 + i) = 188) := by omega
-      have e8 : ¬ (76 + (3 + i) = 239) := by omega
-      have e9 : ¬ (76 + (3 + i) = 240) := by omega
+      have e7 : ¬ (76 + (3 + i) = 189) := by omega
+      have e8 : ¬ (76 + (3 + i) = 240) := by omega
+      have e9 : ¬ (76 + (3 + i) = 241) := by omega
       simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg e5, if_neg e6, if_neg e7,
         if_neg e8, if_neg e9]
     have hb : realRow (sbCol (state.FIELD_BASE + i)) = 0 := by
@@ -283,19 +283,19 @@ theorem transferRowIntent_envReal : TransferRowIntent envReal := by
       have e4 : ¬ (54 + (3 + i) = 78) := by omega
       have e5 : ¬ (54 + (3 + i) = 68) := by omega
       have e6 : ¬ (54 + (3 + i) = 69) := by omega
-      have e7 : ¬ (54 + (3 + i) = 188) := by omega
-      have e8 : ¬ (54 + (3 + i) = 239) := by omega
-      have e9 : ¬ (54 + (3 + i) = 240) := by omega
+      have e7 : ¬ (54 + (3 + i) = 189) := by omega
+      have e8 : ¬ (54 + (3 + i) = 240) := by omega
+      have e9 : ¬ (54 + (3 + i) = 241) := by omega
       simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg e5, if_neg e6, if_neg e7,
         if_neg e8, if_neg e9]
     rw [ha, hb]
 
 /-! ## §5 — `realRow` is `0` off the seven named columns (the bulk evaluator). -/
 
-/-- Off the nine named columns (`1, 54, 76, 78, 68, 69, 188, 239, 240`), `realRow` is `0`. -/
+/-- Off the nine named columns (`1, 54, 76, 78, 68, 69, 189, 240, 241`), `realRow` is `0`. -/
 theorem realRow_zero_of {v : Nat} (h1 : v ≠ 1) (h54 : v ≠ 54) (h76 : v ≠ 76)
-    (h78 : v ≠ 78) (h68 : v ≠ 68) (h69 : v ≠ 69) (h188 : v ≠ 188) (h239 : v ≠ 239)
-    (h240 : v ≠ 240) : realRow v = 0 := by
+    (h78 : v ≠ 78) (h68 : v ≠ 68) (h69 : v ≠ 69) (h188 : v ≠ 189) (h239 : v ≠ 240)
+    (h240 : v ≠ 241) : realRow v = 0 := by
   simp only [realRow, sel.TRANSFER, sbCol, saCol, prmCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
     PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE, param.AMOUNT,
     param.DIRECTION]
@@ -399,13 +399,13 @@ theorem base_constraints_hold :
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hsel
       rw [hsel]
       exact selectorGate_holds_of_active sel.TRANSFER envReal true false ht
-    · -- before-block welds: r0(188)=bal_lo(54)=100; r1(189)=nonce(56)=0; every other welded pair
+    · -- before-block welds: r0(189)=bal_lo(54)=100; r1(190)=nonce(56)=0; every other welded pair
       -- `0 = 0` — all reduce by computation (`realRow` evaluates each column to its literal).
       unfold weldsAt at hwb
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hwb
       rcases hwb with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
         · rw [colEq_holds_iff _ _ _ _ _ rfl]; rfl
-    · -- after-block welds: base 238. r0(239)=after bal_lo(76)=90; r1(240)=after nonce(78)=1; the
+    · -- after-block welds: base 239. r0(240)=after bal_lo(76)=90; r1(241)=after nonce(78)=1; the
       -- rest `0 = 0`. All reduce by computation.
       unfold weldsAt at hwa
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hwa

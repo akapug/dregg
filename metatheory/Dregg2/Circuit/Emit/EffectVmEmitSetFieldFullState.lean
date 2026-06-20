@@ -205,7 +205,7 @@ theorem setField_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard (setFieldVmDescriptorWide 0).traceWidth == 189
+#guard (setFieldVmDescriptorWide 0).traceWidth == 190
 #guard (setFieldVmDescriptorWide 0).hashSites.length == 4
 #guard (setFieldVmDescriptorWide 0).constraints.length == (setFieldVmDescriptor 0).constraints.length
 

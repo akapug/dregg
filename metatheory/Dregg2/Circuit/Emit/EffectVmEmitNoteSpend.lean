@@ -1081,13 +1081,13 @@ theorem noteSpend_fullClause_refutable (hash : List ℤ → ℤ) :
 /-! ### §W.6 — RECONCILIATION pins (the wide descriptor's shape). -/
 
 -- The wide descriptor carries the widened trace width + the dedicated carrier (NOT the old aux-96).
-#guard noteSpendVmDescriptorWide.traceWidth == 189
+#guard noteSpendVmDescriptorWide.traceWidth == 190
 #guard noteSpendVmDescriptorWide.hashSites.length == 4
 -- 13 credit/freeze gates + 1 wide-root gate + 14 transitions + 4 boundaryFirst + 3 boundaryLast + 1 selector.
 #guard noteSpendVmDescriptorWide.constraints.length == 13 + 1 + 14 + 4 + 3 + 1
 -- The wide root gate reads the DEDICATED carriers (187/188), never the old aux-96 (96).
-#guard sysRootsDigestCol == 187
-#guard sysRootsDigestColBefore == 188
+#guard sysRootsDigestCol == 188
+#guard sysRootsDigestColBefore == 189
 #guard decide (sysRootsDigestCol ≠ SYS_DIG_AFTER)
 
 #assert_axioms gNullifierRootUpdateWide_faithful
@@ -1103,7 +1103,7 @@ theorem noteSpend_fullClause_refutable (hash : List ℤ → ℤ) :
 
 #guard noteSpendVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard noteSpendVmDescriptor.hashSites.length == 4
-#guard noteSpendVmDescriptor.traceWidth == 187
+#guard noteSpendVmDescriptor.traceWidth == 188
 
 #assert_axioms noteSpendVm_faithful
 #assert_axioms noteSpendVm_rejects_wrong_output

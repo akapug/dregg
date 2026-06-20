@@ -209,7 +209,7 @@ theorem makeSov_clause_rejects_root_drop :
 
 /-! ## §8 — layout + axiom-hygiene tripwires. -/
 
-#guard makeSovereignVmDescriptorWide.traceWidth == 189
+#guard makeSovereignVmDescriptorWide.traceWidth == 190
 #guard makeSovereignVmDescriptorWide.hashSites.length == 4
 #guard makeSovereignVmDescriptorWide.constraints.length == makeSovereignVmDescriptor.constraints.length
 

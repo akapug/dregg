@@ -640,7 +640,7 @@ theorem refreshNonAmp_rejects_amplify (env : Dregg2.Circuit.Emit.EffectVmEmit.Vm
 
 #guard refreshVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1  -- 13 freeze/tick gates + 14 transitions + 4 first + 3 last + selectorGate
 #guard refreshVmDescriptor.hashSites.length == 4
-#guard refreshVmDescriptor.traceWidth == 187
+#guard refreshVmDescriptor.traceWidth == 188
 
 #assert_axioms refreshVm_faithful
 #assert_axioms refreshVm_rejects_moved_capRoot
@@ -830,7 +830,7 @@ theorem refreshWide_clause_not_trivial :
 #assert_axioms refreshWide_realizes
 #assert_axioms refreshWide_clause_not_trivial
 
-#guard refreshVmDescriptorWide.traceWidth == 189
+#guard refreshVmDescriptorWide.traceWidth == 190
 #guard refreshVmDescriptorWide.hashSites.length == 4
 
 end Dregg2.Circuit.Emit.EffectVmEmitRefreshDelegation
