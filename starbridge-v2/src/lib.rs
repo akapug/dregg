@@ -242,6 +242,13 @@ pub mod read_cap_lens;
 // tab's AUTHOR face, riding the green dregg-doc patch core. First-class ObjectKind.
 #[cfg(feature = "embedded-executor")]
 pub mod doc_lens;
+// THE HISTORY / UNDO lens — per-cell reversibility welded onto the landed
+// `dregg_turn::reversible` organ (M-REV-0): the reversibility map (each change-kind
+// classified by the real Effect::invert over the live ledger into clean/contextual/
+// committed) + the cell's lifecycle posture + the un-turn model. Lights up the
+// cockpit's "⟲ history / undo" lens (was the last weld placeholder).
+#[cfg(feature = "embedded-executor")]
+pub mod history_lens;
 #[cfg(feature = "embedded-executor")]
 pub mod receipts_inspector;
 #[cfg(feature = "embedded-executor")]
