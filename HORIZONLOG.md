@@ -2918,3 +2918,26 @@ ONE SOLID TOWER + a third-of-a-circle of real-but-unorbited moons. Two-axis trut
 3. THE 24 CLASS-B CIRCUIT SLOTS — make each <e>Encodes consume Satisfied2(Rfix e) (transfer's
    closedLogExtract_transfer_closed = template) so circuit-constraint edits propagate red for ALL effects, not 6.
 Plus: joint-turn aggregation AIR; promise-hole-as-nullifier weld; the stale "Stated sorry" docstring Boundary.lean:217.
+
+## ⚑⚑ CLASS-B DIAGNOSIS (2026-06-20, a7b6aece) — NOT garbage, NOT false: a missing Lean JOIN; the VK work is DEPLOYED
+cellSeal probe verdict: the Class-B decoupling is neither lazy-sloppy nor a false-but-hidden rung. It is a
+PROVEN-BUT-UNJOINED weld, and the descriptor (VK-affecting) work is ALREADY DEPLOYED.
+- REFUTES hypothesis (b) for cellSeal: cellSealV3 DOES constrain the seal — the WAVE-1 disc flag-day gate
+  rotateV3WithDiscGate forces committed limb B_DISC=32 (one of the 37 pre-iroot limbs chaining into state_commit);
+  cellSealV3_rejects_frozen makes a frozen-seal forgery UNSAT in-circuit (axiom-clean, EffectVmEmitRotationV3.lean:2655/2665).
+- THE DECOUPLING = a missing JOIN inside Lean (ClosureFanoutGenuine.lean:360): the rung consumes Satisfied2(Rfix 52)
+  only as the DOMAIN of an opaque universally-quantified `readout` floor producing the MODELLED cellSealGenuineEncodes.gate,
+  instead of EXTRACTING the deployed cellSealV3_disc_forces_sealed. Two facts about the same seal, proven separately,
+  never joined -> descriptor edit doesn't propagate red.
+- THE FIX = non-VK-affecting PROOF-COMPLETION (not descriptor-completion): a cellSeal_forced extraction (transfer's
+  debit_forced analog). The ONE load-bearing new artifact per slot = a WitnessDecodes-class trace-column DECODE floor
+  (discCol(trace) = discRoot(post.kernel) — realizable, same committed felt, but genuine multi-step). Agent REFUSED
+  to land a half-weld with an assumed decode (correct — no laundering).
+- THE RECIPE (Class-B -> Class-A, fan the ~23): (1) confirm eV3 = rotateV3With*Gate on a committed pre-iroot limb +
+  the eV3_*_forces_* lemma exists; (2) write the trace-column decode floor; (3) e_forced = compose Satisfied2 ->
+  active-row satisfiedVm -> *_forces -> decode -> root_binds -> kernel field; (4) rewire e_descriptorRefines +
+  closedLogExtract_e_closed to take hsat:Satisfied2 and call e_forced; (5) #assert_axioms + green.
+- ⚑ THE (b)-GAP DISCRIMINATOR: a slot is a REAL descriptor gap (VK-affecting) iff its committed limb has NO
+  rotateV3With*Gate realization AND rides only the published-value record pin without a verifier anchor. cellSeal is
+  NOT one. The disc-class (cellSeal/unseal/destroy/receiptArchive) + declared-param/constant classes (setPerms/setVK/
+  makeSovereign/setFieldDyn) have their *_forces_* lemmas at HEAD = LAZY-join. Scrutinize the rest with the discriminator.
