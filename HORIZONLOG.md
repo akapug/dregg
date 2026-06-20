@@ -3155,3 +3155,24 @@ fanout ClosureFanoutGenuine (13 already wired; +receiptArchive/heapWrite/5 cap s
 descriptor regen for the new/changed descriptors (introduceWriteV3/CapOpen wrappers/heapWriteV3 — widths recorded);
 (c) re-pin the drift gate. THEN guarantee A is forced AND apex-wired for ~28/30 — the authority floor of
 "safely live within dregg" essentially COMPLETE.
+
+## ⚑⚑ GENESIS REFRAME — BOTH HALVES SHIPPED (2026-06-20, b5ab3592f + 99b7dfe51)
+The category error is dissolved + the front door is built:
+- PHASE 1 (b5ab3592f): Effect::SetProgram (ordered, fully executor-wired) + production mid-session genesis sites
+  redirected to TURNS (scene re-bake/organ install -> SetProgram; demo grant/open on the factory-born token ->
+  Grant/SetPermissions turns). The apparatus CORRECTLY STAYS as the setup boundary (its remaining call sites are
+  TESTS validating setup-vs-mid-session). PROVEN: a_mid_session_set_program_turn_survives_reopen passes (the
+  post-turn reprogram-as-turn survives reopen). persistence 8/8. The persist durability bug's SOUND root closure.
+- PHASE 2 (99b7dfe51): the EROS image-builder (persist/src/image_builder.rs) — manifest -> sealed Snapshot +
+  attestation -> fail-closed verifier, 8/8 incl. 5 tamper-rejections. "Here's my OS + a proof of what it can't do."
+FOLLOW-UPS (named, VK-free-driveable): (a) SetProgram's OWN circuit descriptor witness (reuses
+EFFECT_SET_VERIFICATION_KEY's tag today, executor-sound; the descriptor rung is the VK follow-up); (b) wire the
+Hatchery hpres prove-once-holds-forever proofs into the image attestation (the reserved Option slot); (c) the seL4
+boot-wire (generate image_data.rs from a manifest via the builder — render-from-artifact codegen); (d) network
+genesis as a coordination ceremony of turns (the houyhnhnm/branch-stitch distributed lift — own campaign).
+
+## ⚑ THE SERIAL INTEGRATION TAIL (main-loop owned, queued for a quiet tree)
+After the soundness waves: (1) wire the new _descriptorRefines_sat + capOpenSat rungs (receiptArchive, heapWrite,
+the 5 cap slots) into the apex fanout ClosureFanoutGenuine (13 wired, ~7-9 to add); (2) the JSON descriptor regen
+for the new/changed descriptors (introduceWriteV3/CapOpen wrappers/heapWriteV3) + drift re-pin; (3) compact
+HORIZONLOG (~half is closed-but-logged, sweepable per the af232dd sweep); (4) the SetProgram circuit witness.
