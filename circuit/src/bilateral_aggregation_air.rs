@@ -906,6 +906,7 @@ fn cse2_fill_lanes(row: &mut [BabyBear], edge_id: &[BabyBear; 4], commit_in: Bab
     row[CSE2_COMMIT_LANE1_COL..CSE2_COMMIT_LANE1_COL + n].copy_from_slice(&commit_lanes);
 }
 
+#[cfg(feature = "prover")]
 pub fn build_cross_side_trace_v2(
     half_edges: &[CrossSideHalfEdge],
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
@@ -1142,6 +1143,7 @@ fn fold_fill_lanes(row: &mut [BabyBear], acc_in: BabyBear, digest: BabyBear) {
     row[FOLD_LANE1_COL..FOLD_LANE1_COL + n].copy_from_slice(&lanes);
 }
 
+#[cfg(feature = "prover")]
 pub fn build_tree_fold_trace(child_digests: &[BabyBear]) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     assert!(
         !child_digests.is_empty(),
