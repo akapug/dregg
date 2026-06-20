@@ -154,3 +154,29 @@ The lever is one rung deeper than the W→X mapping:
   lavapipe submit-thread synchronous for the single-frame headless render. The
   real-TCB route is preferred — it is the honest OS capability, and it generalizes
   (every Vulkan device on this PD then works).
+
+## UPDATE — the `__clone`/TCB lever is CLOSED; the wall is now the LLVM JIT target
+
+The submit-thread wall is down. The real characterization differed from the
+hypothesis above in three ways, all now fixed (`src/thread.rs`, `scripts/musl-compat.c`,
+`src/main.rs`); see `docs/desktop-os-research/SEL4-RENDER-PATH.md` §"IN-VM STATUS"
+for the measured detail:
+
+1. The seL4/musllibc `__clone` for `aarch64_sel4` is a STUB (`mov w0,#-38; ret`)
+   that returns `-ENOSYS` WITHOUT issuing a syscall — it never reached the handler.
+   Fixed by OVERRIDING `__clone` (link precedence, like `getenv`) → `dregg_clone`,
+   which materializes a real seL4 **TCB** (shared CSpace/VSpace, fresh IPC buffer +
+   stack + TLS, priority, resume). Serial now prints `__clone -> seL4 TCB #2 live`.
+2. Two PREREQUISITES the hypothesis didn't see: musl's `__pthread_create` is gated
+   on `__libc.can_do_threads` (never set by the seL4 std runtime), and musl's TLS
+   bookkeeping (`__libc.tls_*`) is uninitialized so `__copy_tls` faulted. Both fixed
+   in `musl-compat.c` (`dregg_enable_musl_threads` + `dregg_init_libc_tls`, the
+   field-population half of musl's `static_init_tls` over this image's `PT_TLS`).
+3. Past the threads, the JIT's host probe wanted `/proc/cpuinfo` (now served
+   synthetically as cortex-a53 in `src/main.rs`).
+
+The render now stops one layer deeper: `vkCreateDevice` faults in
+`lp_build_create_jit_compiler_for_module` at a NULL-vtable virtual call —
+`EngineBuilder::selectTarget()` returning NULL (a triple/target mismatch in the
+cross-built JIT). The next lever is LLVM-JIT-config (resolve/set the JIT module
+target triple, or drive `LLVMInitializeAArch64Target*` explicitly), not threading.

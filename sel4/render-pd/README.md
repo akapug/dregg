@@ -46,14 +46,36 @@ header leak, the `llvm-c` source-header path) — NONE was a musl/seL4 capabilit
 Full measured outcome: `docs/desktop-os-research/SEL4-RENDER-PATH.md` §"THE SPIKE
 RESULT".
 
-## The render-PD wiring (after the gate)
+## The render-PD wiring (after the gate) — BUILT + BOOTED; lavapipe RUNS in-VM
 
-A std-on-musl root-task PD (clone of `dregg-pd/executor-rootserver`) whose C
-driver, instead of running the verified turn, calls the gpui-offscreen
-`render_scene_to_image` on one cockpit `Scene` → RGBA → the existing RGBA→XRGB8888
-→ ramfb blit (`dregg-pd/deos-image/src/cockpit_frame.rs`'s blit, minus the
-`include_bytes!` bake). The sel4-musl syscall handler must service lavapipe's
-runtime surface: `mmap`/`mprotect` with PROT_EXEC (the LLVM JIT's W→X), `getenv`
-(`LP_NUM_THREADS=0` → single-threaded, no `pthread_create`), no DRM/`/dev`.
-Success = the first per-frame in-VM gpui render on glass; byte-compare against the
-persvati bake to prove parity.
+A std-on-musl root-task PD (clone of `dregg-pd/executor-rootserver`) that links the
+lavapipe ICD statically (the PD target has no dynamic loader, so the same Mesa +
+LLVM 20.1.8 inputs the gate's `.so` was built from are relinked into the root-task
+ELF — `build.rs`) + a C render driver, with the sel4-musl syscall handler extended
+for lavapipe's runtime surface. **`make build && make image && make run` boots it
+headless and lavapipe runs inside the seL4 PD:**
+
+```
+[driver] vkCreateInstance OK — lavapipe VkInstance live in the PD
+[driver] VkPhysicalDevice[0] = "llvmpipe (LLVM 20.1.8, 128 bits)" (apiVersion 1.4.305)
+[driver] STAGE 3: vkCreateDevice = -13 (VK_ERROR_UNKNOWN)
+```
+
+- **The genuine new OS demand — the JIT's W→X executable mapping — is implemented**
+  (`src/main.rs`): a static RWX `JIT_ARENA` (executable because the
+  `aarch64-sel4-roottask-musl` target links `--no-rosegment`, so the kernel maps the
+  whole root-task image with execute permission) backs every `mmap(PROT_EXEC)`; the
+  `mprotect(→PROT_EXEC)` flip is a faithful no-op (the page is already X). No new
+  seL4 capability needed.
+- **The wall is one rung deeper: `thrd_create`.** lavapipe's Vulkan device
+  unconditionally spawns a submit thread (`vk_queue_enable_submit_thread`, not gated
+  by `LP_NUM_THREADS`); the seL4 musl `pthread_create`→`__clone` returns `-ENOSYS`
+  in a single-thread root task → `VK_ERROR_UNKNOWN`. The JIT W→X path is wired and
+  ready but lies one stage past device creation (lavapipe JITs lazily at pipeline
+  build). The NEXT OS demand = a real seL4 TCB for `__clone` (the executor-PD-class
+  follow-on). Full measured detail + the lever: `WIRING.md`.
+
+Once `__clone` is serviced: `vkCreateDevice` succeeds → a pipeline JITs (the first
+W→X flip) → the gpui `render_scene_to_image` Scene → RGBA → `src/render_blit.rs`
+(the staged RGBA→XRGB8888→ramfb blit, the deos-image loop minus the bake) → the
+byte-compare against `cockpit_frame.rgba` proves parity.
