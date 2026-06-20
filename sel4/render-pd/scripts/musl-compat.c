@@ -126,6 +126,126 @@ int memfd_create(const char *name, unsigned int flags) {
     return -1;
 }
 
+// ── enable musl threads (THE gate before __clone) ────────────────────────────
+// musl's `__pthread_create` (reached by lavapipe via thrd_create) returns -ENOSYS
+// unless TWO startup steps that musl normally does in `__libc_start_main` ran —
+// and the seL4 `sel4-root-task-with-std` runtime (which sets up TLS its OWN way)
+// ran NEITHER:
+//
+//   (1) `__libc.can_do_threads = 1` — the gate at the very top of
+//       `__pthread_create` (a load at struct offset 0; -ENOSYS if zero).
+//   (2) `__libc.tls_head / tls_size / tls_align / tls_cnt` populated from the
+//       PT_TLS program header — `__pthread_create` calls `__copy_tls()` to build
+//       the new thread's TLS, which reads exactly those fields. With them zero,
+//       `__copy_tls` computes a garbage thread pointer and FAULTS (the measured
+//       `vm fault on data at -8` inside `__copy_tls`).
+//
+// We do BOTH here, replicating the field-population half of musl's
+// `static_init_tls` (src/env/__init_tls.c) — scanning this image's program headers
+// for PT_TLS and filling `__libc.tls_*` — but WITHOUT calling `__init_tp` on the
+// main thread (its thread pointer is already set up by the seL4 runtime; we must
+// not disturb it). `struct __libc` (this libc's libc.h):
+//   int can_do_threads; int threaded; int secure; volatile int threads_minus_1;
+//   size_t *auxv; struct tls_module *tls_head; size_t tls_size, tls_align, tls_cnt;
+// → offsets: can_do_threads@0, threaded@4, tls_head@24, tls_size@32,
+//   tls_align@40, tls_cnt@48 (matches the disassembly of __copy_tls in this libc).
+
+#include <stdint.h>
+#include <elf.h>
+
+// `struct tls_module` (libc.h): next, image, len, size, align, offset.
+struct dregg_tls_module {
+    struct dregg_tls_module *next;
+    void *image;
+    size_t len, size, align, offset;
+};
+
+// `struct __libc` as a field-addressable view (only the fields we set).
+struct dregg_libc_view {
+    int can_do_threads;          // 0
+    int threaded;                // 4
+    int secure;                  // 8
+    volatile int threads_minus_1;// 12
+    size_t *auxv;                // 16
+    struct dregg_tls_module *tls_head; // 24
+    size_t tls_size, tls_align, tls_cnt; // 32, 40, 48
+};
+extern struct dregg_libc_view __libc;
+
+// The ELF header at the image base (provided by the linker; the seL4 root-task
+// image is loaded such that __ehdr_start is the Elf64_Ehdr).
+extern const Elf64_Ehdr __ehdr_start;
+
+// `sizeof(struct pthread)` for this libc — musl computes tls_size as
+// `2*sizeof(void*) + sizeof(struct pthread) + main_tls.size + main_tls.align`
+// rounded to MIN_TLS_ALIGN. We obtain sizeof(struct pthread) from the libc itself
+// via the exported helper if present; else a safe upper bound. The seL4 musl
+// exports `__pthread_self` but not the size, so we use musl's known aarch64
+// `struct pthread` size as a conservative, page-padded reservation: the exact
+// value only affects how much memory __copy_tls reserves, and __pthread_create
+// mmaps `tls_size + guard + stack` — over-reserving TLS is safe. We use 2048,
+// comfortably above aarch64 musl's `struct pthread` (~200 bytes) + DTV slack.
+#define DREGG_PTHREAD_SIZE 2048u
+#define DREGG_MIN_TLS_ALIGN (4u * sizeof(void *)) // musl MIN_TLS_ALIGN on aarch64
+
+static struct dregg_tls_module dregg_main_tls;
+
+// Populate __libc.tls_* from PT_TLS so __copy_tls builds a valid per-thread block.
+static void dregg_init_libc_tls(void) {
+    const Elf64_Ehdr *eh = &__ehdr_start;
+    uintptr_t base = (uintptr_t)eh;
+    const Elf64_Phdr *ph = (const Elf64_Phdr *)(base + eh->e_phoff);
+    const Elf64_Phdr *tls = 0;
+    // For a non-PIE static root-task image, p_vaddr is the absolute load address,
+    // so the TLS image lives at p_vaddr directly (base offset 0). Match musl's
+    // static_init_tls: base = AT_PHDR - PT_PHDR.p_vaddr (== 0 here).
+    for (int i = 0; i < eh->e_phnum; i++) {
+        if (ph[i].p_type == PT_TLS) tls = &ph[i];
+    }
+    if (!tls) return; // no TLS segment: nothing to set (threads w/o TLS still work)
+
+    dregg_main_tls.image  = (void *)(uintptr_t)tls->p_vaddr;
+    dregg_main_tls.len    = tls->p_filesz;
+    dregg_main_tls.size   = tls->p_memsz;
+    dregg_main_tls.align  = tls->p_align ? tls->p_align : 1;
+    __libc.tls_cnt  = 1;
+    __libc.tls_head = &dregg_main_tls;
+
+    // musl: round the TLS size for alignment (variant-I / TLS_ABOVE_TP on aarch64).
+    dregg_main_tls.size += (-dregg_main_tls.size - (uintptr_t)dregg_main_tls.image)
+                           & (dregg_main_tls.align - 1);
+    if (dregg_main_tls.align < DREGG_MIN_TLS_ALIGN)
+        dregg_main_tls.align = DREGG_MIN_TLS_ALIGN;
+
+    __libc.tls_align = dregg_main_tls.align;
+    __libc.tls_size  = (2 * sizeof(void *) + DREGG_PTHREAD_SIZE
+                        + dregg_main_tls.size + dregg_main_tls.align
+                        + DREGG_MIN_TLS_ALIGN - 1) & -DREGG_MIN_TLS_ALIGN;
+}
+
+void dregg_enable_musl_threads(void) {
+    __libc.can_do_threads = 1; // pass the __pthread_create gate
+    __libc.threaded = 1;
+    dregg_init_libc_tls();     // make __copy_tls produce a valid TLS block
+}
+
+// ── __clone (THE submit-thread lever) ────────────────────────────────────────
+// The seL4/musllibc fork's `__clone` for the `aarch64_sel4` ARCH is a STUB that
+// returns -ENOSYS without issuing any syscall (`mov w0,#-38; ret`). lavapipe's
+// `lvp_queue_init` reaches it (thrd_create -> pthread_create -> __clone) and the
+// -ENOSYS surfaces as `vkCreateDevice = VK_ERROR_UNKNOWN`. We OVERRIDE `__clone`
+// here (whole-archived ⇒ chosen over libc's `clone.o`, which lld then never pulls,
+// exactly as with `getenv` above) and forward to the Rust `dregg_clone`
+// (src/thread.rs), which materializes a real seL4 TCB sharing this PD's CSpace +
+// VSpace. The ABI is musl's __clone(fn, stack, flags, arg, ptid, tls, ctid).
+extern long dregg_clone(long fn, long stack, long flags, long arg,
+                        long ptid, long tls, long ctid);
+int __clone(int (*fn)(void *), void *stack, int flags, void *arg,
+            void *ptid, void *tls, void *ctid) {
+    return (int) dregg_clone((long)fn, (long)stack, (long)flags, (long)arg,
+                             (long)ptid, (long)tls, (long)ctid);
+}
+
 // ── reallocarray ─────────────────────────────────────────────────────────────
 // realloc(ptr, nmemb*size) with multiplication-overflow protection (the BSD/glibc
 // extension util/ code uses). The seL4 musl ships realloc but not this wrapper.

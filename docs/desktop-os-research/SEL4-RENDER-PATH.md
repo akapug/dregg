@@ -381,3 +381,72 @@ provisioned seL4 substrate + loader.)
   github.com/seL4/camkes-vm-examples.
 - sDDF device classes incl. virtio-gpu (2D): github.com/au-ts/sddf/blob/main/docs/drivers.md;
   github.com/sel4-cap/sDDF.
+
+---
+
+## IN-VM STATUS (the live re-flow) — the submit-thread `__clone` wall is DOWN; the JIT walls deeper
+
+The render-PD (`sel4/render-pd/`) boots the lavapipe ICD inside a real seL4 root-task
+PD and drives `vkCreateInstance` → device enumeration loader-less. The path to a
+live in-VM render now clears **four** OS walls (each by an actual `make build && make
+run` in QEMU `-cpu cortex-a53`); it currently stops in the LLVM JIT's target setup.
+
+### Cleared in this lane (all measured in QEMU)
+
+1. **The submit-thread `__clone` → a real seL4 TCB.** lavapipe's `lvp_queue_init` →
+   `vk_queue_start_submit_thread` → `thrd_create` → `pthread_create` → the
+   seL4/musllibc `__clone` — which on the `aarch64_sel4` ARCH is a **stub that
+   returns `-ENOSYS` without issuing any syscall** (`mov w0,#-38; ret`; it never
+   reaches the syscall handler — the earlier "handler returns -ENOSYS" framing was
+   off). The fix (`sel4/render-pd/src/thread.rs`): override `__clone` (via
+   `musl-compat.c` link precedence) → `dregg_clone`, which retypes a **TCB** from a
+   BootInfo untyped, shares the root task's CSpace+VSpace, gives it a fresh IPC-
+   buffer frame (resolved from the user-image frames) + the musl-supplied stack +
+   TLS (TPIDR_EL0), sets priority, and resumes. Serial: `__clone -> seL4 TCB #2
+   live`. The submit thread now exists, so `vkCreateDevice` proceeds. (`exit`
+   syscall 93 is serviced per-thread: it suspends the *calling* TCB, identified by
+   TPIDR_EL0, not the whole PD.)
+
+2. **musl threads were GATED before `__clone` even ran.** `__pthread_create` returns
+   `-ENOSYS` immediately unless `__libc.can_do_threads` is set — a flag musl sets in
+   its own `__libc_start_main`, which the `sel4-root-task-with-std` runtime never
+   runs. Fix: `dregg_enable_musl_threads` (`musl-compat.c`) sets it.
+
+3. **musl's per-thread TLS bookkeeping was uninitialized** → `__copy_tls` faulted
+   (measured `vm fault on data at -8` inside `__copy_tls`) building the new thread's
+   TLS, because `__libc.tls_head/tls_size/tls_align/tls_cnt` were zero (the seL4
+   runtime sets up TLS its own way, never running musl's `static_init_tls`). Fix:
+   `dregg_init_libc_tls` (`musl-compat.c`) replicates the field-population half of
+   musl's `static_init_tls` — scanning this image's `PT_TLS` program header — so the
+   stock `__copy_tls` builds a valid TLS block, WITHOUT calling `__init_tp` (the main
+   thread's thread pointer is the seL4 runtime's and must not be disturbed).
+
+4. **LLVM's host-CPU probe read `/proc/cpuinfo`.** `lp_build_create_jit_compiler_for_module`
+   → `sys::getHostCPUName`/`getHostCPUFeatures` open `/proc/cpuinfo`; with none, LLVM
+   printed "Can't read /proc/cpuinfo" then faulted. Fix: the syscall handler serves a
+   synthetic faithful cortex-a53 `/proc/cpuinfo` (`CPUINFO` in `src/main.rs`:
+   implementer 0x41, part 0xd03, a `Features:` line) on a sentinel fd. LLVM now reads
+   it cleanly (the message is gone, the fault advances past it).
+
+### The current wall (measured, stable)
+
+`vkCreateDevice` faults inside `lp_build_create_jit_compiler_for_module` at a
+**NULL-vtable virtual call** (`ldr x2,[x19]; ldr x2,[x2,#184]` with `x19=0`), right
+after the cpuinfo read — i.e. a NULL `TargetMachine`/engine object dispatched
+virtually. This is the LLVM JIT's `EngineBuilder::selectTarget()` returning NULL: the
+AArch64 target is linked (`_GLOBAL__sub_I_AArch64TargetMachine.cpp` IS in
+`.init_array`, and instance/driver ctors ran — instance creation succeeds), so the
+likely cause is a **triple/target mismatch** in `selectTarget` (the module/host
+triple the cross-built JIT computes does not match the registered AArch64 target),
+not missing registration.
+
+**The next lever:** confirm via the module's target triple + `TargetRegistry::lookupTarget`
+error string (have the driver call `LLVMGetFirstTarget`/`lookupTarget` and print the
+triple it resolves), then either (a) set the JIT module's target triple explicitly to
+the registered `aarch64-...-musl` triple before `selectTarget`, or (b) drive
+`LLVMInitializeAArch64TargetInfo/Target/TargetMC` explicitly from the driver ahead of
+device creation. This is an LLVM-JIT-config rung, one layer past the threading work —
+the submit-thread/TCB lever this lane targeted is closed.
+
+Touched only `sel4/render-pd/` (`src/thread.rs` new; `src/main.rs` + `scripts/musl-compat.c`
+extended) + this note.

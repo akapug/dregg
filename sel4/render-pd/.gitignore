@@ -3,3 +3,7 @@ out/
 *.a
 build/
 *-build/
+# render-PD build outputs (reproducible from the gate + `make build`):
+target-roottask/
+sel4-prefix
+Cargo.lock

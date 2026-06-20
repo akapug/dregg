@@ -64,6 +64,34 @@ const EBADF: SyscallReturnValue = 9;
 // the executor PD's deterministic answer.
 const URANDOM_FD: SyscallReturnValue = 1000;
 
+// The sentinel fd `openat("/proc/cpuinfo")` returns. lavapipe's LLVM JIT
+// (`lp_build_create_jit_compiler_for_module` → `sys::getHostCPUName` +
+// `getHostCPUFeatures`) reads `/proc/cpuinfo` to pick the host CPU + feature flags.
+// With NO cpuinfo it returns an empty CPU name + empty feature map, and the
+// downstream EngineBuilder/target-select then faults (measured: a NULL deref right
+// after LLVM's "Can't read /proc/cpuinfo"). We serve a faithful aarch64
+// (cortex-a53 — the QEMU `-cpu cortex-a53` we boot) cpuinfo so the JIT gets a real
+// host description: `CPU implementer 0x41` (ARM) + `CPU part 0xd03` (Cortex-A53) →
+// `getHostCPUName` returns "cortex-a53"; the `Features:` line drives the MAttrs.
+const CPUINFO_FD: SyscallReturnValue = 1001;
+
+/// The synthetic /proc/cpuinfo (one cortex-a53 core; the QEMU cpu we boot). The
+/// `Features:` keywords map (LLVM `getHostCPUFeatures`): fp→fp-armv8, asimd→neon,
+/// etc. `CPU implementer/part` let `getHostCPUNameForARM` resolve "cortex-a53".
+const CPUINFO: &[u8] = b"processor\t: 0\n\
+BogoMIPS\t: 100.00\n\
+Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32\n\
+CPU implementer\t: 0x41\n\
+CPU architecture: 8\n\
+CPU variant\t: 0x0\n\
+CPU part\t: 0xd03\n\
+CPU revision\t: 4\n\n";
+
+/// Per-fd read cursor for the synthetic /proc/cpuinfo (single-threaded reads of it;
+/// the JIT reads it once during device creation).
+static CPUINFO_CURSOR: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
 // PROT_* (the musl/Linux aarch64 mmap protection bits). sel4-linux-syscall-types
 // gives MAP_ANONYMOUS; the PROT bits we read off the raw Mmap/Mprotect args.
 const PROT_EXEC: usize = 0x4;
@@ -93,6 +121,12 @@ use sel4_root_task_with_std::{debug_print, debug_println, declare_root_task};
 #[allow(dead_code)]
 mod render_blit;
 
+// Real seL4 thread bring-up: services musl's `__clone` (which lavapipe's
+// `lvp_queue_init` reaches via `thrd_create`) by materializing a second seL4 TCB.
+// The seL4-musl `__clone` is a `-ENOSYS` stub; `musl-compat.c` overrides it (link
+// precedence) to call `thread::dregg_clone`. See `src/thread.rs` + WIRING.md.
+mod thread;
+
 declare_root_task!(main = main);
 
 // The C driver that drives one lavapipe smoke (scripts/driver-render.c). Returns
@@ -117,8 +151,16 @@ unsafe extern "C" fn install_syscall_handler_preinit() {
 static PREINIT_INSTALL_SYSCALL_HANDLER: unsafe extern "C" fn() =
     install_syscall_handler_preinit;
 
-fn main(_: &sel4::BootInfoPtr) -> ! {
+fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // Handler already installed by the .preinit_array hook above.
+    //
+    // CAPTURE the BootInfo for the seL4 thread bring-up: `thread::dregg_clone`
+    // (servicing lavapipe's submit-thread `__clone`) retypes a TCB from an untyped
+    // and resolves its IPC-buffer frame cap — both reached through this BootInfo.
+    // The BootInfo lives for the whole program, so the 'static is sound.
+    let bootinfo_static: &'static sel4::BootInfo =
+        unsafe { &*(&**bootinfo as *const sel4::BootInfo) };
+    thread::init(bootinfo_static);
     //
     // THE SINGLE-THREAD LEVER is supplied by the compat shim's `getenv` override
     // (scripts/musl-compat.c): it returns "0" for LP_NUM_THREADS so llvmpipe runs
@@ -195,6 +237,7 @@ mod nr {
     pub const PRLIMIT64: SyscallNumber = 261;
     pub const GETRANDOM: SyscallNumber = 278;
     pub const TGKILL: SyscallNumber = 131;
+    pub const EXIT: SyscallNumber = 93;
     pub const EXIT_GROUP: SyscallNumber = 94;
     pub const RSEQ: SyscallNumber = 293;
     pub const MEMBARRIER: SyscallNumber = 283;
@@ -301,6 +344,9 @@ fn handle_by_number(
             let path_ptr: *const u8 = args.next_arg::<usize>().unwrap_or(0) as *const u8;
             if path_is(path_ptr, b"/dev/urandom") || path_is(path_ptr, b"/dev/random") {
                 URANDOM_FD
+            } else if path_is(path_ptr, b"/proc/cpuinfo") {
+                CPUINFO_CURSOR.store(0, core::sync::atomic::Ordering::Relaxed);
+                CPUINFO_FD
             } else {
                 -ENOENT
             }
@@ -316,6 +362,16 @@ fn handle_by_number(
                     unsafe { buf.add(i).write(0) };
                 }
                 count as SyscallReturnValue
+            } else if fd == CPUINFO_FD && !buf.is_null() {
+                use core::sync::atomic::Ordering;
+                let pos = CPUINFO_CURSOR.load(Ordering::Relaxed);
+                let remaining = CPUINFO.len().saturating_sub(pos);
+                let n = remaining.min(count);
+                for i in 0..n {
+                    unsafe { buf.add(i).write(CPUINFO[pos + i]) };
+                }
+                CPUINFO_CURSOR.store(pos + n, Ordering::Relaxed);
+                n as SyscallReturnValue
             } else {
                 0
             }
@@ -342,9 +398,27 @@ fn handle_by_number(
             }
             len as SyscallReturnValue
         }
+        nr::EXIT => {
+            // A pthread tearing down: musl's `__pthread_exit` ends in `exit(93)`.
+            // Suspend the CALLING seL4 thread (identified by its TPIDR_EL0), NOT the
+            // whole PD — a secondary (e.g. the lavapipe submit) thread exiting must
+            // not take down the render. If the caller is the main thread, this parks
+            // the PD (its `exit` is the process exit).
+            thread::suspend_current_thread()
+        }
         nr::EXIT_GROUP => {
             debug_println!("[render-pd] (libc exit_group during/after the render — parking)");
             sel4::init_thread::suspend_self()
+        }
+        220 => {
+            // CLONE by raw number — if pthread_create issues SYS_clone via __syscall
+            // (rather than the __clone asm we override), service it here.
+            debug_println!("[render-pd] CLONE syscall (#220) reached handle_by_number");
+            let fn_: usize = args.next_arg().unwrap_or(0);
+            let stack: usize = args.next_arg().unwrap_or(0);
+            let flags: usize = args.next_arg().unwrap_or(0);
+            let arg: usize = args.next_arg().unwrap_or(0);
+            unsafe { thread::dregg_clone(fn_, stack, flags, arg, 0, 0, 0) as SyscallReturnValue }
         }
         other => {
             debug_println!("[render-pd] UNHANDLED SYSCALL number {other} (a precise wall)");
