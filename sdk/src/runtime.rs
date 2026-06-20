@@ -384,6 +384,19 @@ impl AgentRuntime {
         self.executor.block_height
     }
 
+    /// The executor's recorded receipt-chain head for `agent` (the hash a
+    /// directly-built [`Turn::previous_receipt_hash`] must carry to satisfy the
+    /// executor's `check_previous_receipt_hash`), or `None` if `agent` has
+    /// committed no turn yet.
+    ///
+    /// Callers who hand-assemble a [`Turn`] for an agent that has already acted
+    /// (e.g. a governed identity cell that adopted itself, then is driven by a
+    /// custom-authorized rotation) read the chain head here rather than passing
+    /// `None` and tripping `ReceiptChainMismatch`.
+    pub fn agent_receipt_head(&self, agent: &CellId) -> Option<[u8; 32]> {
+        self.executor.get_last_receipt_hash(agent)
+    }
+
     /// Replace this runtime's executor's witnessed-predicate registry.
     ///
     /// `AgentRuntime` defaults (via [`executor_with_real_verifiers`]) to the
