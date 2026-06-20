@@ -602,6 +602,7 @@ fn rotated_effect_pi_for(
     };
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
     };
     let before = bridge(&rot.before)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
@@ -700,6 +701,7 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
     // Bridge the producer witnesses into the pure-circuit generator inputs.
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
     };
     let before = bridge(before_w)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
@@ -814,6 +816,7 @@ pub fn prove_effect_vm_rotated_wide(
 
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
     };
     let before = bridge(before_w)
         .map_err(|e| SdkError::InvalidWitness(format!("wide rotated before-witness: {e}")))?;
@@ -939,6 +942,7 @@ pub fn prove_effect_vm_rotated_wide_with_fee(
 
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
     };
     let before = bridge(before_w)
         .map_err(|e| SdkError::InvalidWitness(format!("wide fee before-witness: {e}")))?;
@@ -1031,6 +1035,7 @@ pub fn prove_effect_vm_rotated_ir2_with_fee(
 
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
     };
     let before = bridge(before_w)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated fee before-witness: {e}")))?;
@@ -1388,6 +1393,7 @@ fn prove_effect_vm_cap_open(
 
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
     };
     let before = bridge(before_w)
         .map_err(|e| SdkError::InvalidWitness(format!("cap-open before-witness: {e}")))?;
