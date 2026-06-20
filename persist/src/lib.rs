@@ -54,6 +54,40 @@ pub use note_tree::{NoteTree, PersistentNullifierSet};
 pub use poseidon2_note_tree::Poseidon2NoteTree;
 pub use snapshot::{Snapshot, SnapshotHead};
 
+/// THE canonical ledger root — the byte-pinned full-ledger commitment both the
+/// node (attested-root convergence across the quorum) and the single-image World
+/// (durable-reopen convergence) check against. This is the ONE shared
+/// implementation, lifted here so callers stop duplicating it (it was the node's
+/// `pub(crate)` copy in `blocklace_sync.rs` + a byte-for-byte replica in
+/// `starbridge-v2/src/persistence.rs`; the M4 "shared pub fn lift" tail).
+///
+/// `BLAKE3-derive-key("dregg-ledger-root-v2")` over the cells sorted by id,
+/// length-prefixed, each leaf `BLAKE3(postcard(WHOLE cell))` — committing the whole
+/// cell (public_key / token_id / capabilities / lifecycle / state), so two ledgers
+/// that finalized the same turns but ended with divergent cell CONTENT (not just
+/// balance/nonce) produce DIFFERENT roots — the divergence is loud, not silent.
+///
+/// Byte-stability is load-bearing (a persisted/attested root must reproduce
+/// exactly), so the construction (domain key, sort order, length prefix, whole-cell
+/// postcard leaves) is fixed; do not alter it without a domain bump.
+pub fn canonical_ledger_root(ledger: &dregg_cell::Ledger) -> [u8; 32] {
+    let mut entries: Vec<([u8; 32], [u8; 32])> = ledger
+        .iter()
+        .map(|(id, cell)| {
+            let bytes = postcard::to_stdvec(cell).unwrap_or_default();
+            (*id.as_bytes(), *blake3::hash(&bytes).as_bytes())
+        })
+        .collect();
+    entries.sort_by_key(|a| a.0);
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-ledger-root-v2");
+    hasher.update(&(entries.len() as u64).to_le_bytes());
+    for (id, h) in &entries {
+        hasher.update(id);
+        hasher.update(h);
+    }
+    *hasher.finalize().as_bytes()
+}
+
 /// Errors that can occur during store operations.
 #[derive(Debug)]
 pub enum StoreError {
