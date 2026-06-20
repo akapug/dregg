@@ -47,7 +47,7 @@
 
 use super::columns::rotation::caveat as cav;
 use super::columns::{STATE_AFTER_BASE, STATE_BEFORE_BASE, state};
-use super::{EFFECT_VM_WIDTH, generate_effect_vm_trace};
+use super::{EFFECT_VM_WIDTH, EffectVmContext, generate_effect_vm_trace_ext};
 use crate::effect_vm::{CellState, Effect};
 use crate::field::BabyBear;
 use crate::poseidon2::hash_many;
@@ -187,10 +187,22 @@ pub struct RotatedBlockWitness {
     pub pre_limbs: Vec<BabyBear>,
     /// The receipt-index MMR root (absorbed last).
     pub iroot: BabyBear,
+    /// Light-client conservation: the per-cell ASSET CLASS folded from the
+    /// cell's committed `token_id` (`block_conservation::fold_token_id_to_asset`,
+    /// dregg3: AssetId := issuer-cell). Threaded into the v1 sub-trace's
+    /// `EffectVmContext.asset_class` so the proof COMMITS to its genuine asset
+    /// class (the row-0 `aux_off::ASSET_CLASS` column + `PI[v3::ASSET_CLASS]`),
+    /// making the light-client per-asset partition non-trivial for multi-asset
+    /// turns. Only the BEFORE block's value is read (it is the cell whose state
+    /// the EffectVM row proves); the AFTER block carries the same class. Zero is
+    /// the back-compat / native-asset sentinel — the executor then falls back to
+    /// its trusted ledger class (`resolve_proof_asset_class`).
+    pub asset_class: BabyBear,
 }
 
 impl RotatedBlockWitness {
-    /// Build from raw limbs, validating the count.
+    /// Build from raw limbs, validating the count. Asset class defaults to the
+    /// ZERO sentinel; use [`Self::with_asset_class`] to thread the real class.
     pub fn new(pre_limbs: Vec<BabyBear>, iroot: BabyBear) -> Result<Self, String> {
         if pre_limbs.len() != NUM_PRE_LIMBS {
             return Err(format!(
@@ -199,7 +211,13 @@ impl RotatedBlockWitness {
                 pre_limbs.len()
             ));
         }
-        Ok(Self { pre_limbs, iroot })
+        Ok(Self { pre_limbs, iroot, asset_class: BabyBear::ZERO })
+    }
+
+    /// Set the per-cell asset class (the fold of the cell's committed `token_id`).
+    pub fn with_asset_class(mut self, asset_class: BabyBear) -> Self {
+        self.asset_class = asset_class;
+        self
     }
 }
 
@@ -261,8 +279,20 @@ pub fn generate_rotated_effect_vm_trace(
         ));
     }
 
-    // The v1 reference trace + PIs — the byte-identical live machinery.
-    let (mut trace, pis) = generate_effect_vm_trace(initial_state, effects);
+    // The v1 reference trace + PIs — the byte-identical live machinery. The only
+    // context departure from the default wrapper (`generate_effect_vm_trace`) is the
+    // per-cell ASSET CLASS threaded off the BEFORE block witness: it populates the
+    // row-0 `aux_off::ASSET_CLASS` column + `PI[v3::ASSET_CLASS]` so the proof commits
+    // to its genuine asset class (the light-client per-asset conservation partition).
+    // `actor_nonce` keeps the default wrapper's single-cell boundary invariant
+    // (`state_before.nonce == PI[ACTOR_NONCE]`); a ZERO `asset_class` reproduces the
+    // exact byte-identical default-context trace.
+    let v1_ctx = EffectVmContext {
+        actor_nonce: initial_state.nonce as u64,
+        asset_class: before_w.asset_class,
+        ..Default::default()
+    };
+    let (mut trace, pis) = generate_effect_vm_trace_ext(initial_state, effects, v1_ctx);
     if trace.is_empty() {
         return Err("rotated generator: v1 trace is empty".into());
     }
@@ -1660,6 +1690,7 @@ pub fn widen_to_cap_open(trace: &mut [Vec<BabyBear>], w: &CapOpenWitness) -> Res
 /// appendix. The cap-open host constraints / membership columns are CARRIED UNCHANGED; the wide
 /// carriers re-absorb the SAME `BEFORE_BASE`/`AFTER_BASE` limbs. Returns the appended `dpis`. The
 /// trace is resized in place to `CAP_OPEN_WIDTH + 208 = 1026`.
+#[cfg(feature = "prover")]
 pub fn append_wide_carriers_cap_open(
     trace: &mut [Vec<BabyBear>],
     base_pis: Vec<BabyBear>,
@@ -1813,6 +1844,7 @@ pub const WIDE_PI_COUNT: usize = ROT_PI_COUNT + 16; // 54
 /// lane[i]` equalities hold and the published 8-felt commit binds the 37 limbs + iroot. The chain
 /// shape (4-wide head, eleven 3-wide arity-11 body groups, arity-9 iroot final) is the byte twin of
 /// `poseidon2::wire_commit_8` and the Lean `wireCommitR8` — but seeded through the chip's arity tag.
+#[cfg(feature = "prover")]
 fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
     use crate::descriptor_ir2::chip_absorb_all_lanes;
     // head: arity-4 absorb of limbs l0..l3 → carrier 0.
@@ -1870,6 +1902,7 @@ fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
 /// (re-absorbing the rotated limbs the 1-felt block already lays) and the 16 wide commit PIs. The
 /// live 1-felt carriers/PIs (cols < 608, PIs 0..37) are CARRIED UNCHANGED — this is purely
 /// additive. Returns `(trace, dpis)` ready for `prove_vm_descriptor2` against the wide descriptor.
+#[cfg(feature = "prover")]
 pub fn generate_rotated_transfer_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -1910,6 +1943,7 @@ pub fn generate_rotated_transfer_wide(
 /// land STRICTLY PAST the host's columns + gates (the appendix is purely additive), member-uniform
 /// because `BEFORE_BASE`/`AFTER_BASE` (187/238) are uniform across the cohort. The number of base
 /// PIs is preserved (the grow-gate families carry an extra PI[38]); the 16 wide PIs append after.
+#[cfg(feature = "prover")]
 pub fn append_wide_carriers(
     trace: &mut [Vec<BabyBear>],
     base_pis: Vec<BabyBear>,
@@ -1955,6 +1989,7 @@ pub fn append_wide_carriers(
 /// member is `wideAppend burn 187 238` (width 816 / PI 54), the SAME carrier shape as transfer. This
 /// wraps the LIVE base generator ([`generate_rotated_effect_vm_trace`], which proves any cohort
 /// member's real turn) + the generic widener at `GRAD_ROT_WIDTH = 608`. Returns `(trace, dpis)`.
+#[cfg(feature = "prover")]
 pub fn generate_rotated_transfer_shape_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -1980,6 +2015,7 @@ pub fn generate_rotated_transfer_shape_wide(
 /// ([`generate_rotated_effect_vm_trace`]) pushes the record/lifecycle pin as PI 38 for these leads (39
 /// base PIs); this appends the wide carriers at `GRAD_ROT_WIDTH = 608` (so the published 8-felt commit
 /// rides PIs 39..54, after the record pin at 38). Returns `(trace, dpis)`.
+#[cfg(feature = "prover")]
 pub fn generate_rotated_record_pin_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -2011,6 +2047,7 @@ pub fn generate_rotated_record_pin_wide(
 /// laid, the published 8-felt commit (PIs 39..54, after the fee's PI 38) binds the post-fee state at
 /// ~124 bits. The live sovereign transfer IS fee'd — this is its wide producer leg. Returns
 /// `(trace, dpis)` ready for `prove_vm_descriptor2` against the wide fee descriptor.
+#[cfg(feature = "prover")]
 pub fn generate_rotated_transfer_shape_with_fee_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -2041,6 +2078,7 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
 /// with the openable accumulator roots + recomputes the block commits), then appends the wide
 /// carriers at `GRAD_ROT_WIDTH = 608`. The grow-gate member carries the extra PI[38] (the nullifier
 /// pin) before the 16 wide PIs (wide member width 816 / PI 55). Returns `(trace, dpis, map_heaps)`.
+#[cfg(feature = "prover")]
 pub fn generate_rotated_note_spend_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -2064,6 +2102,7 @@ pub fn generate_rotated_note_spend_wide(
 /// **THE WIDE NOTECREATE trace generator (grow-gate cohort).** Wraps the commitments-tree generator
 /// ([`generate_rotated_note_create_trace_with_commitments_tree`], limb-27 override + recompute), then
 /// appends the wide carriers at `GRAD_ROT_WIDTH = 608` (wide member width 816 / PI 55).
+#[cfg(feature = "prover")]
 pub fn generate_rotated_note_create_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -2087,6 +2126,7 @@ pub fn generate_rotated_note_create_wide(
 /// **THE WIDE CREATECELL/FACTORY/SPAWN trace generator (grow-gate cohort).** Wraps the accounts-tree
 /// generator ([`generate_rotated_create_cell_trace_with_accounts_tree`], limb-0 override + recompute),
 /// then appends the wide carriers at `GRAD_ROT_WIDTH = 608` (wide member width 816 / PI 55).
+#[cfg(feature = "prover")]
 pub fn generate_rotated_create_cell_wide(
     initial_state: &CellState,
     effects: &[Effect],
