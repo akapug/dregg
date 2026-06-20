@@ -183,6 +183,28 @@ theorem cellSeal_closedLog
   Dregg2.Circuit.ClosureLog.cellSeal_descriptorRefines_closedLog
     compressN2 hN pre post actor cell pc pubLogPre pubLogPost hdec hpub logNeeds
 
+/-- cellSeal (tag 52), CLASS A — re-exported. The seal is forced from the DEPLOYED `cellSealV3`
+(`Satisfied2` + the chip/range `RotTableSide` + the realizable `CellSealTraceReadout`), NOT a modelled gate. -/
+theorem cellSeal_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementCellSeal.CellSealTraceReadout
+        hash minit mfin maddrs t pre post actor cell) :
+    kstepAll 52 pre post :=
+  Dregg2.Circuit.ClosureLog.cellSeal_descriptorRefines_closedLog_sat
+    hash hside hsat pre post actor cell pc pubLogPre pubLogPost hdec hpub logNeeds
+
 /-- revoke (tag 2) — re-exported. -/
 theorem revoke_closedLog
     {State : Type} (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)

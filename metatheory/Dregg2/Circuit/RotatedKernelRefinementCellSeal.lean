@@ -76,6 +76,12 @@ open Dregg2.Circuit.ListCommit
 open Dregg2.Circuit.StateCommit (compressNInjective)
 open Dregg2.Circuit.Spec.CellLifecycle
   (CellSealSpec CellSealGuard sealLifecycleMap cellLifecycleReceipt)
+open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt)
+open Dregg2.Circuit.Emit.EffectVmEmit (satisfiedVm)
+open Dregg2.Circuit.Emit.EffectVmEmitV2 (graduateV1 graduateV1_sound graduable)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (cellSealV3 afterDiscCol discSealed discLive rotateV3WithDiscGate cellSealV3_disc_forces_sealed)
+open Dregg2.Circuit.RotatedKernelRefinement (RotTableSide)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 
@@ -329,6 +335,173 @@ theorem cellSeal_descriptorRefines_rejects_wrong_map (compressN : List FieldElem
     False :=
   hwrong (cellSeal_lifecycle_forced compressN hN pre post actor cell henc)
 
+/-! ## §6.5 — CLASS A: the seal is FORCED by the DEPLOYED descriptor `cellSealV3` (not a modelled gate).
+
+§1–§6 force the seal from `cellSealGenuineEncodes.gate`, the MODELLED `gLifecycleSeal`. That gate is a
+property the decode ASSERTS — editing the LIVE `cellSealV3` constraints does NOT break it. This section
+closes that gap: `cellSeal_forced` derives `post.kernel.lifecycle cell = lcSealed` from a `Satisfied2 hash
+cellSealV3` witness DIRECTLY, by
+
+  * `graduateV1_sound` — lift the v2 `Satisfied2` of `cellSealV3 = graduateV1 (rotateV3WithDiscGate …)` to
+    the v1 per-row `satisfiedVm` of the underlying disc-gated descriptor (the chip/range table side
+    `RotTableSide` discharges its `hchip`/`hrange`, `graduable` by `decide`);
+  * `cellSealV3_disc_forces_sealed` — the DEPLOYED in-circuit disc gate FORCES the committed AFTER disc
+    TRACE limb (`afterDiscCol`, `B_DISC = 32`, a pre-iroot committed limb chaining into `state_commit`) to
+    `discSealed (= 1)` on the active row;
+  * `CellSealTraceReadout.discLimbDecodes` — the realizable `WitnessDecodes`-class seam: the committed disc
+    limb IS the post kernel's lifecycle discriminant cast to ℤ (`= (post.kernel.lifecycle cell : ℤ)`). The
+    deployed trace-fill emits the `u8` discriminant of `post.lifecycle[cell]` into exactly that limb, so the
+    two are the SAME committed felt by construction — the analog of transfer's `TransferTraceReadout` row
+    reads (the limb-level decode the COMMITMENT does not certify, supplied by `StarkSound`).
+
+Editing `cellSealV3`'s disc gate breaks `cellSealV3_disc_forces_sealed`, hence `cellSeal_forced`, hence
+`cellSeal_descriptorRefines` — Class A. The seam is a NAMED realizable carrier (a structure field), never a
+`sorry`: it is `#assert_axioms`-clean, the `WitnessDecodes`-class floor transfer carries too. -/
+
+/-- **`CellSealTraceReadout` — the realizable circuit-witness extraction for cellSeal (NAMED).**
+The trace-determined part a satisfying `cellSealV3` witness supplies, EXACTLY the `WitnessDecodes` class of
+transfer's `TransferTraceReadout`: the prover's designated ACTIVE cellSeal row + its selector fact + the
+realizable disc-limb decode (the committed AFTER disc limb IS the post lifecycle discriminant felt) + the
+whole-map / guard / log / 16-field residual the per-cell committed column cannot witness. Data-bearing
+(`Type`, like `cellSealGenuineEncodes`). The disc GATE is NOT a field here — it is FORCED from
+`Satisfied2 hash cellSealV3` (`cellSeal_forced`), unlike §3's modelled `gate`. -/
+structure CellSealTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor cell : CellId) : Type where
+  -- the designated ACTIVE cellSeal row (the one whose `SEL_CELLSEAL = 1`).
+  row : Nat
+  hrow : row < t.rows.length
+  -- the active row is a TRANSITION row, NOT the wrap/pad last row: the disc gate runs under
+  -- `when_transition()`, so the AFTER-disc force binds only off the last row.
+  hrowNotLast : row + 1 ≠ t.rows.length
+  -- the selector is hot on the designated row (the prover's row designation, the column fact a real
+  -- cellSeal trace exhibits — the analog of transfer's `IsTransferRow`/direction tags).
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL = 1
+  -- the realizable `WitnessDecodes`-class seam: the committed AFTER disc TRACE limb (`afterDiscCol`,
+  -- B_DISC = 32) IS the post kernel's lifecycle discriminant cast to ℤ. The deployed trace-fill emits
+  -- the `u8` discriminant of `post.lifecycle[cell]` into exactly that limb, so they are the SAME committed
+  -- felt by construction — the limb-level decode the COMMITMENT cannot certify, supplied by `StarkSound`.
+  discLimbDecodes :
+    (envAt t row).loc (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
+      = ((post.kernel.lifecycle cell : Nat) : ℤ)
+  -- the off-`cell` lifecycle entries are FROZEN (the WHOLE-MAP residual the per-cell limb cannot carry).
+  frameOther : ∀ c, c ≠ cell → post.kernel.lifecycle c = pre.kernel.lifecycle c
+  -- the admissibility guard (self-authority + is-Live; the off-row guard).
+  guard : CellSealGuard pre actor cell
+  -- the self-targeted receipt-log advance (off the per-row block — the record-layer commitment).
+  logAdv : post.log = cellLifecycleReceipt actor cell :: pre.log
+  -- the 16 non-`lifecycle` kernel frame fields (the full `CellSealSpec` frame residual).
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCell : post.kernel.cell = pre.kernel.cell
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- `rotateV3WithDiscGate SEL_CELLSEAL (some discLive) discSealed cellSealVmDescriptor` is graduable
+(the appended disc gates are CONSTRAINTS; graduation reads only sites/ranges). The decidable side
+condition `graduateV1_sound` requires. (The `#guard` in `EffectVmEmitRotationV3`.) -/
+theorem cellSeal_disc_graduable :
+    graduable (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL
+      (some discLive) discSealed Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor) = true := by
+  decide
+
+/-- **`cellSeal_forced` — the seal is FORCED by the DEPLOYED descriptor `cellSealV3` (Class A).**
+A `Satisfied2 hash cellSealV3` witness (with the chip/range table side `RotTableSide`) plus the realizable
+`CellSealTraceReadout` forces `post.kernel.lifecycle cell = lcSealed`. The committed AFTER disc limb is
+pinned to `discSealed (= 1)` by the LIVE disc gate (`cellSealV3_disc_forces_sealed`, via `graduateV1_sound`
+on the active transition row), and the readout's `discLimbDecodes` identifies that limb with the post
+lifecycle discriminant — so the discriminant is `1 = lcSealed`. The analog of transfer's `debit_forced` /
+incrementNonce's `incNonce_nonce_forced`: the forced fact rides the DEPLOYED constraints, so editing
+`cellSealV3`'s disc gate turns this RED. -/
+theorem cellSeal_forced (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellSealTraceReadout hash minit mfin maddrs t pre post actor cell) :
+    post.kernel.lifecycle cell = lcSealed := by
+  -- lift the v2 `Satisfied2` of `cellSealV3 = graduateV1 (rotateV3WithDiscGate …)` to the v1 per-row
+  -- `satisfiedVm` of the disc-gated descriptor (chip/range from `RotTableSide`, graduability by `decide`).
+  have hv1 : satisfiedVm hash
+      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
+        discSealed Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor)
+      (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellSeal_disc_graduable
+      hsat rd.row rd.hrow
+  -- the active row is a TRANSITION row, so its `isLast` flag is `false`.
+  have hlastf : (rd.row + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
+  rw [hlastf] at hv1
+  -- the DEPLOYED disc gate FORCES the committed AFTER disc limb to `discSealed`.
+  have hlimb : (envAt t rd.row).loc
+      (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) = discSealed :=
+    cellSealV3_disc_forces_sealed hash (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+  -- the limb IS the post discriminant (the realizable seam): `(post.lifecycle cell : ℤ) = discSealed = 1`.
+  have hcast : ((post.kernel.lifecycle cell : Nat) : ℤ) = ((lcSealed : Nat) : ℤ) := by
+    rw [← rd.discLimbDecodes, hlimb]; rfl
+  exact_mod_cast hcast
+
+/-- **`cellSeal_forced_map` — the post lifecycle MAP is `sealLifecycleMap` (Class A, whole map).** From the
+DEPLOYED-forced `cell` entry (`cellSeal_forced`) AND the off-`cell` freeze residual the readout carries, the
+whole post lifecycle map equals `sealLifecycleMap pre.kernel cell`. -/
+theorem cellSeal_forced_map (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellSealTraceReadout hash minit mfin maddrs t pre post actor cell) :
+    post.kernel.lifecycle = sealLifecycleMap pre.kernel cell := by
+  have hcell : post.kernel.lifecycle cell = lcSealed :=
+    cellSeal_forced hash hside hsat pre post actor cell rd
+  funext c
+  show post.kernel.lifecycle c = (if c = cell then lcSealed else pre.kernel.lifecycle c)
+  by_cases hc : c = cell
+  · subst hc; rw [if_pos rfl]; exact hcell
+  · rw [if_neg hc]; exact rd.frameOther c hc
+
+/-- **`cellSeal_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for cellSeal.** A satisfying
+DEPLOYED `cellSealV3` witness (with the chip/range table side) plus the realizable `CellSealTraceReadout`
+forces the KERNEL's seal step `CellSealSpec pre actor cell post`. Unlike §5's `cellSeal_descriptorRefines`
+(which consumes a modelled `gate`), the `lifecycle := Sealed` write here is forced from the DEPLOYED disc
+gate's `Satisfied2` (`cellSeal_forced_map`) — editing `cellSealV3`'s constraints turns this RED. The guard,
+the 16-field frame, and the log are the named decode residual. -/
+theorem cellSeal_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellSealTraceReadout hash minit mfin maddrs t pre post actor cell) :
+    CellSealSpec pre actor cell post := by
+  refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+  exact cellSeal_forced_map hash hside hsat pre post actor cell rd
+
+/-- **CLASS-A TOOTH — a forged un-sealed cellSeal witness is UNSAT.** A `CellSealTraceReadout` whose post
+`cell` lifecycle is NOT `lcSealed` cannot ride a satisfying `cellSealV3` witness: the DEPLOYED disc gate
+pins the seal. This is the headline lifecycle forgery the deployed circuit now rejects — forced from
+`Satisfied2`, not the modelled gate. -/
+theorem cellSeal_sat_rejects_unsealed (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellSealTraceReadout hash minit mfin maddrs t pre post actor cell)
+    (hwrong : post.kernel.lifecycle cell ≠ lcSealed) :
+    False :=
+  hwrong (cellSeal_forced hash hside hsat pre post actor cell rd)
+
 /-! ## §7 — NON-VACUITY: the lifecycle root + the gate are load-bearing (no carrier secretly `True`).
 
 A concrete injective `compressN` (a positional Horner sponge, NOT `List.sum`). The lifecycle root of a
@@ -374,5 +547,10 @@ private def cell0 : CellId := 0
 #assert_axioms cellSeal_descriptorRefines_execFullA
 #assert_axioms cellSeal_descriptorRefines_rejects_unsealed
 #assert_axioms cellSeal_descriptorRefines_rejects_wrong_map
+#assert_axioms cellSeal_disc_graduable
+#assert_axioms cellSeal_forced
+#assert_axioms cellSeal_forced_map
+#assert_axioms cellSeal_descriptorRefines_sat
+#assert_axioms cellSeal_sat_rejects_unsealed
 
 end Dregg2.Circuit.RotatedKernelRefinementCellSeal
