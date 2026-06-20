@@ -11,6 +11,57 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ✅ HUMAN-LAYER M1 — SOCIAL RECOVERY SEAM + TRUST PANEL v1 (2026-06-19, this lane)
+`docs/deos/HUMAN-LAYER.md` Milestone 1, the "you cannot lose your own OS" weld.
+TWO pieces landed, both REUSING the green crypto (no parallel auth):
+- **The recovery e2e seam** — `sdk/tests/identity_social_recovery_e2e.rs`: a
+  fresh cipherclerk holding NO old keys, given a real 3-of-5 HINTS guardian
+  quorum (`dregg-federation` committee → `hints::sign_aggregate`), recovers the
+  identity cell through the REAL executor — the rotation is authorized by
+  `Authorization::Custom` discharged by `ThresholdSigVerifier` →
+  `hints::verify_aggregate` on the identity cell's `set_state`, while the
+  `KeyRotationGate` independently enforces the pre-rotation mechanics
+  (preimage exhibit + forward-chain + cooling). Teeth: headline
+  (recovered + chain advanced + height stamped), sub-threshold REFUSED (2-of-5
+  can't aggregate), wrong-committee REFUSED (host-pinned VK). Added
+  `dregg-federation`+`hints` to `sdk/Cargo.toml` `[dev-dependencies]`.
+- **Trust panel v1** — `starbridge-v2/src/trust_panel.rs`: a gpui-free
+  `Presentable`-shaped WHO-I-AM face (identity card: devices, guardians-as-faces
+  with the K-of-N threshold drawn, the KEL rotation timeline) + the recovery UX
+  (`RecoveryProgress`: "ask your guardians" quorum gauge mirroring the executor's
+  threshold floor, the cooling window as a safety feature). Built off the REAL
+  `dregg_sdk::identity::inspect_identity` decode + the council charter; 4 lib
+  tests green, `cargo check` clean.
+- **HARD PARTS LEFT (named with closure lanes, §5):** device-pairing ceremony
+  (the authenticated old↔new-device channel — a powerbox-style designation);
+  guardian-set ROTATION (changing your council, ~polis amendment by the current
+  quorum — set-once today); the council-commitment must be bound INTO the
+  circuit commitment for light-client-unfoolable recovery (host-trusted
+  `StaticThresholdSigPolicy` today — the circuit-soundness tie-in); the
+  HINTS guardian-onboarding ceremony UX (publish key+hint, whose universal
+  params).
+
+## ✅ LIVE CONSERVATION HOLE — EXECUTOR PATH CLOSED (2026-06-19, this lane)
+The asset-BLIND scalar `proven_deltas.iter().sum()==0` at `atomic.rs` (both
+`execute_atomic_sovereign` AND the mixed-turn cross-domain site) is REPLACED by
+the per-asset, in-AIR-backed collector
+`TurnExecutor::check_per_asset_conservation` →
+`dregg_circuit::block_conservation::BlockConservation` (over the committed
+`cross_cell_conservation_air`). AssetId := the cell's committed `token_id`
+(dregg3 issuer-cell), read from the verifier's own ledger. New teeth in
+`atomic.rs` tests: `cross_asset_forge_rejected_mixed_atomic` (the asset 7 −10 /
+asset 8 +10 forge now REJECTED — it was accepted), `same_asset_transfer_still_
+accepted_mixed_atomic` (no false reject), `per_asset_collector_in_air_accept_
+reject` (prove+verify through the committed per-asset AIR). `block_conservation.rs`
+git-added into the build. **RESIDUAL (the one coordinated remainder, named at
+`proof_verify.rs::verify_proof_carrying_turn_bundle`'s tail):** the PURE
+light-client / bundle path is NOT yet wired — it needs (1) the per-cell proof to
+publish its ASSET CLASS as a PI slot (proof-bound partition, not ledger-trusted —
+PHASE C owns the PI layout) and (2) `bundle_pis` to carry each PI's cell_id/asset
+so the collector can group. Until both land, the per-asset bite holds on the
+EXECUTOR path (ledger + cell_ids present); the light-client path is the stated
+prerequisite.
+
 ## ⚡ THE EFFICIENCY WELD — M2 DELTA LOOP (2026-06-19) — LANDED, gate held
 
 `docs/deos/EFFICIENCY-WELD-PLAN.md` §2-§4. The producer (`dynamics().since(cursor)`)
@@ -72,6 +123,45 @@ residuals, each with its closure shape:
   NOT for the executor/ledger (the authoritative, soundness-load-bearing transition
   stays explicit/verifiable). Closure: a spike porting the moldable-inspector
   projection tree to Salsa; the hand-rolled memo proves the shape first.
+
+## ⟲ M3 — SELF-HOST UI STATE AS CELLS (2026-06-19) — first increment + widen LANDED
+
+`docs/deos/REFLEXIVE-MIGRATION.md` §3. The inspector's `(focus, present_idx)`
+camera-aim is self-hosted as a REAL cell (`starbridge-v2/src/view_cell.rs`): a
+`ViewCell` generalizes the `BufferCell` two-tier split — a FREE in-memory draft
+(`ViewDoc`, re-aim costs nothing) + an occasional witnessed `Effect::SetField`
+commit (revision = backing nonce); the §3.5 stream weight class (conserves
+nothing). A `ViewCell` is itself `Presentable` via the new `FocusTarget::ViewCell`
+arm (`presentable.rs`), so the cockpit can focus the inspector ON its own view cell
+— *inspect the inspector*. `present` stays PURE and reads the COMMITTED
+(prior-frame) aim (`ViewCell::from_world` reconstructs from witnessed cell state) —
+the unit-delay that breaks the reflexive self-cycle (STRATIFIED-FIXPOINT §7.3).
+WIDEN: `WorkspaceCell` carries the active-tab selector as a witnessed cell
+(`render(workspace_subgraph)` shape). Cockpit wired: `moldable_focus`/
+`moldable_present_idx` Rust fields SUBSUMED into `inspector_view: ViewCell` +
+`inspector_reflexive` toggle; the moldable panel reads its selector from the cell;
+re-focus/lens/poke handlers go through `moldable_refocus`/`moldable_set_present_idx`
+(witnessed re-aim). 8 gpui-free `view_cell::tests` GREEN (free-draft · witnessed
+commit · inspect-the-inspector · Registry/`FocusTarget::ViewCell` dispatch ·
+unit-delay purity · WorkspaceCell selector · unbacked). Both gates clean
+(`embedded-executor --tests`, `gpui-ui`). Named residuals:
+
+- **WIDEN-TAIL — tab/selection NOT yet cell-driven in the cockpit's live render.**
+  The `WorkspaceCell` substrate + its commit + test exist, but the cockpit's actual
+  `tab`/`selection`/open-views/pins fields still drive render directly (only the
+  inspector's focus/present-idx moved). Closure: route the 24-arm `Tab` match's
+  *selector* through a cockpit-held `WorkspaceCell` read (the substrate is ready;
+  this is the wiring), folding `replay_cursor`/`breakpoints`/`sim_*`/`lane_*` into
+  `PanelCell`/`GadgetCell` per §3.1. Sequence with the cockpit-tabs pass.
+- **Commit cadence is every-re-aim (open question §7.4 / ROADMAP §7).** `moldable_refocus`
+  commits a witnessed turn on EVERY re-focus — durable but turn-heavy. Closure: the
+  ember-decision on cadence (blur / Nth / explicit-save / snapshot); the free-draft
+  already supports deferring the commit (just stop calling `.commit()` eagerly).
+- **The reflexive arm uses the same `PresentMemo` — the self-cell IS in the memo.**
+  A `ViewCell`'s own `FieldSet` (a commit) invalidates its cached projection
+  (`invalidate_cell`), so the unit-delay + the M2 fold compose correctly; no
+  within-frame fixpoint. Closure: none needed (verified by `present` reading
+  committed state), noted so a future Salsa port preserves the unit-delay.
 
 ## 🖥 DEOS DESKTOP / MOLDABLE INSPECTOR (2026-06-19) — the live build-down
 
@@ -2527,3 +2617,12 @@ BlockConservation::prove_and_verify so each asset's Σδ=0 is IN-AIR + independe
 proof_verify.rs::verify_proof_carrying_turn_bundle + the FullTurnWitness.conservation:None slot
 (turn_proving.rs:843/1101/2244). Prereq: COMMIT block_conservation.rs + add asset class to the per-cell PI (or
 derive trustworthily from cell_id at the collector) so the partition pin is genuine not an off-AIR annotation.
+
+## OPEN EDIT (post-conservation-fix, 2026-06-19): asset-class must be PI-BOUND for LIGHT-CLIENT conservation
+The conservation fix (93b827bf4) closes the cross-asset hole on the FULL-NODE executor path, but derives asset
+class via `asset_class_for_cell` = `ledger.get(cell).token_id()` (atomic.rs:266) — a LEDGER LOOKUP the light
+client does NOT have. So per-asset Σδ=0 is enforced for the executor but NOT proven on the light-client path
+(the partition pin is producer/ledger-trusted, not proof-bound). THE EDIT: add the asset-class felt to the
+per-cell PI (proof-carried), so the per-asset partition is bound by the proof itself — then the light client
+enforces per-asset conservation without the ledger. Circuit-PI change (pi.rs + trace + descriptor emit,
+PHASE-C-shaped); own focused pass. Until then: full-node sound, light-client carries this NAMED residual.
