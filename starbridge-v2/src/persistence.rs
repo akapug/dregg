@@ -537,6 +537,46 @@ mod tests {
     /// until the sound fix lands (distinguish pre-chain vs post-chain genesis-path
     /// mutations in the durable log + apply post-chain ones AFTER turn re-execution).
     #[test]
+    fn a_genesis_setup_set_cell_program_survives_reopen() {
+        // THE SAFE BOUNDARY (the companion to the #[ignore]'d after-turn bug): a
+        // `set_cell_program` at genesis SETUP — before the cell's first turn — DOES
+        // survive close+reopen, because the genesis-mirror snapshot IS the cell's
+        // pre-turn base, so recovery's turn re-execution sees the right program. This
+        // pins the exact line: genesis-setup mutations are sound; post-turn ones are
+        // the bug. (The predicate composer / organ setup are safe iff they program a
+        // cell before any turn touches it.)
+        use dregg_cell::CellProgram;
+        let path = scratch_path();
+        let cell_id;
+        {
+            let mut w = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
+                .expect("fresh open of an empty store");
+            let treasury = w.genesis_cell(0x11, 1_000);
+            let user = w.genesis_cell(0x33, 0);
+            // Program the user cell at SETUP — before any turn touches it.
+            assert!(
+                w.set_cell_program(&user, CellProgram::Predicate(vec![])),
+                "genesis-setup set_cell_program succeeds"
+            );
+            // THEN commit a turn that does NOT mutate the programmed cell's program
+            // (a transfer crediting it — its program is unchanged by the credit).
+            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
+            assert!(w.commit_turn(t).is_committed(), "the turn commits");
+            cell_id = user;
+            // w dropped — the redb file persists.
+        }
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
+            .expect("reopen recovers (the setup program is in the pre-turn base)");
+        let prog = reopened.ledger().get(&cell_id).expect("cell restored").program.clone();
+        assert_eq!(
+            prog,
+            CellProgram::Predicate(vec![]),
+            "a genesis-SETUP program survives reopen (the safe boundary)"
+        );
+    }
+
+    #[test]
     #[ignore = "REPRODUCES the genesis-mirror-after-turn recovery bug — see HORIZONLOG (asserts the fixed behavior)"]
     fn a_mid_session_set_cell_program_survives_reopen() {
         // SEAM §2 durability: an in-place `set_cell_program` bypasses the executor
