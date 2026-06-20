@@ -79,6 +79,9 @@ pub enum ObjectKind {
     Factory,
     /// A consumed nullifier / spent-capability witness (the privacy axis).
     Nullifier,
+    /// A literate document — the Pijul-shaped patch-theory object (`dregg_doc`):
+    /// rendered content, patch history, conflict-as-state, provenance.
+    Document,
 }
 
 /// The uniform reflective view of ANY dregg object. Every view consumes this;

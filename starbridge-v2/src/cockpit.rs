@@ -7707,6 +7707,7 @@ fn kind_badge(kind: ObjectKind) -> impl IntoElement {
         ObjectKind::Proof => ("proof", theme::good()),
         ObjectKind::Factory => ("factory", theme::accent()),
         ObjectKind::Nullifier => ("nullifier", theme::warn()),
+        ObjectKind::Document => ("document", theme::accent()),
     };
     div().mb_2().child(pill(label, color))
 }
