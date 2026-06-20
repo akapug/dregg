@@ -600,6 +600,13 @@ pub struct TurnExecutor {
     /// AT WRITE TIME, removing the cipherclerk's ability to silently break the
     /// chain by submitting every turn as if it were genesis.
     pub last_receipt_hash: Mutex<HashMap<CellId, [u8; 32]>>,
+    /// Per-cell PROVENANCE chain heads — the head of each cell's own receipt
+    /// history (every turn that TOUCHED the cell, agent or not). Distinct from the
+    /// authority chain `last_receipt_hash` above, which gates a turn's
+    /// `previous_receipt_hash` and advances ONLY for the submitting agent: a
+    /// merely-touched cell gets a walkable per-cell receipt chain here without its
+    /// head locking that cell's next authored turn to a causal edge it never made.
+    pub per_cell_receipt_head: Mutex<HashMap<CellId, [u8; 32]>>,
     /// Optional X25519 keypair used to decrypt `EncryptedTurn` submissions.
     ///
     /// When set, callers may submit privacy-preserving `EncryptedTurn`
@@ -748,6 +755,7 @@ impl TurnExecutor {
             factory_registry: std::cell::RefCell::new(dregg_cell::FactoryRegistry::new()),
             epoch_minter: None,
             last_receipt_hash: Mutex::new(HashMap::new()),
+            per_cell_receipt_head: Mutex::new(HashMap::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
             require_validity_proof: false,
@@ -789,6 +797,7 @@ impl TurnExecutor {
             factory_registry: std::cell::RefCell::new(dregg_cell::FactoryRegistry::new()),
             epoch_minter: None,
             last_receipt_hash: Mutex::new(HashMap::new()),
+            per_cell_receipt_head: Mutex::new(HashMap::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
             require_validity_proof: false,
@@ -826,6 +835,7 @@ impl TurnExecutor {
             factory_registry: std::cell::RefCell::new(dregg_cell::FactoryRegistry::new()),
             epoch_minter: None,
             last_receipt_hash: Mutex::new(HashMap::new()),
+            per_cell_receipt_head: Mutex::new(HashMap::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
             require_validity_proof: false,
@@ -1273,6 +1283,25 @@ impl TurnExecutor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(agent, receipt_hash);
+    }
+
+    /// The per-cell PROVENANCE chain head — `build_atomic_per_cell_receipt`'s
+    /// `previous_receipt_hash` source + any per-cell receipt-history walk. Advances
+    /// for every touched cell, unlike `last_receipt_hash` (agent-only authority).
+    fn get_per_cell_head(&self, cell: &CellId) -> Option<[u8; 32]> {
+        self.per_cell_receipt_head
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(cell)
+            .copied()
+    }
+
+    /// Advance a cell's per-cell provenance chain head (every touched cell).
+    fn record_per_cell_head(&self, cell: CellId, receipt_hash: [u8; 32]) {
+        self.per_cell_receipt_head
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(cell, receipt_hash);
     }
 
     /// Set the current block height (used for network preconditions).

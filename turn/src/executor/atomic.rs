@@ -576,10 +576,14 @@ impl TurnExecutor {
     }
 
     /// Build a `TurnReceipt` for one cell-entry in an atomic turn, chain it to
-    /// that cell's previous receipt, sign it (if configured), and record the
-    /// new chain head. Each entry produces its OWN receipt: per the central
-    /// law `execute_turn(S,T) = (S', R)`, atomic turns produce one R per cell
-    /// they advance.
+    /// that cell's previous receipt, and sign it (if configured). Each entry
+    /// produces its OWN witness receipt: per the central law
+    /// `execute_turn(S,T) = (S', R)`, atomic turns produce one R per cell they
+    /// advance. The chain-integrity HEAD is recorded by the CALLER, and ONLY for
+    /// the submitting AGENT — a merely-touched cell gets its witness receipt but
+    /// no gating head, so a touch never locks a causal edge the cell's next
+    /// authored turn must thread (and the agent's head stays deterministic: one
+    /// cell, fixed data).
     #[allow(clippy::too_many_arguments)]
     fn build_atomic_per_cell_receipt(
         &self,
@@ -592,12 +596,11 @@ impl TurnExecutor {
         was_burn: bool,
         consumed_capabilities: Vec<crate::turn::ConsumedCapWitness>,
     ) -> TurnReceipt {
-        let prev = self
-            .last_receipt_hash
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&cell_id)
-            .copied();
+        // Chain the per-cell receipt to this cell's PROVENANCE head (its own
+        // receipt history), not the authority chain — so the per-cell chain stays
+        // walkable while the authority head (which gates `previous_receipt_hash`)
+        // advances only for the submitting agent (recorded by the caller).
+        let prev = self.get_per_cell_head(&cell_id);
         let effects_hash = Self::atomic_entry_effects_hash(
             &cell_id,
             &old_commitment,
@@ -632,7 +635,8 @@ impl TurnExecutor {
             consumed_capabilities,
         };
         receipt.executor_signature = self.maybe_sign_receipt(&receipt);
-        self.record_receipt_hash(cell_id, receipt.receipt_hash());
+        // NB: the chain-integrity HEAD is no longer recorded here. The caller
+        // records it, and ONLY for the submitting AGENT — see the doc comment.
         receipt
     }
 
@@ -956,6 +960,15 @@ impl TurnExecutor {
                 // hosted-side capability — no consumed-cap witness.
                 vec![],
             );
+            // Per-cell PROVENANCE chain advances for EVERY touched cell (a walkable
+            // per-cell receipt history); the AUTHORITY head (which gates a turn's
+            // previous_receipt_hash) advances ONLY for the submitting agent, so a
+            // cell merely advanced by another agent's turn isn't locked to a causal
+            // edge it never made (don't lock intended causality).
+            self.record_per_cell_head(*cell_id, receipt.receipt_hash());
+            if *cell_id == atomic_turn.agent {
+                self.record_receipt_hash(*cell_id, receipt.receipt_hash());
+            }
             receipts.push(receipt);
         }
 
@@ -1424,6 +1437,10 @@ impl TurnExecutor {
                 // hosted-side capability.
                 vec![],
             );
+            self.record_per_cell_head(*cell_id, receipt.receipt_hash());
+            if *cell_id == mixed_turn.agent {
+                self.record_receipt_hash(*cell_id, receipt.receipt_hash());
+            }
             receipts.push(receipt);
         }
         for (idx, (cell_id, pre, post, vk_hash, was_burn)) in
@@ -1443,6 +1460,10 @@ impl TurnExecutor {
                     .cloned()
                     .collect(),
             );
+            self.record_per_cell_head(*cell_id, receipt.receipt_hash());
+            if *cell_id == mixed_turn.agent {
+                self.record_receipt_hash(*cell_id, receipt.receipt_hash());
+            }
             receipts.push(receipt);
         }
 
@@ -2586,9 +2607,12 @@ mod hardening_tests {
         // (delta = -100) is computed. The receipts themselves are not
         // returned on failure (the function rolls back). This test pins
         // the failure shape and the delta accounting.
+        // The per-asset conservation cutover (AssetId := issuer-cell, every asset's
+        // sum is identically zero) surfaces a Burn's missing supply as a per-asset
+        // imbalance, not the old scalar ConservationViolation.
         assert!(
-            matches!(r, Err(AtomicTurnError::ConservationViolation { net_excess }) if net_excess == -100),
-            "expected ConservationViolation(-100) from a 100-token Burn, got: {:?}",
+            matches!(r, Err(AtomicTurnError::PerAssetConservationViolation { imbalance, .. }) if imbalance == -100),
+            "expected PerAssetConservationViolation(imbalance -100) from a 100-token Burn, got: {:?}",
             r
         );
     }
