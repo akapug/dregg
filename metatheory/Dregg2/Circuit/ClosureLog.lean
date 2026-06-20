@@ -149,7 +149,8 @@ theorem transfer_descriptorRefines_closedLog
     {LH : List Turn → ℤ}
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Dregg2.Exec.Turn) (a : AssetId)

@@ -678,7 +678,7 @@ decoded `fcaps` are wired to the cap-open's opened leaf through `TransferAuthori
 `hedge`. -/
 theorem transfer_descriptorRefines_facet (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)
@@ -703,7 +703,7 @@ The §10 tier residual is closed in the refinement keystone: the faithful spec n
 two-axis gate at the GENUINE committed tier. -/
 theorem transfer_descriptorRefines_facet_tierGeneral (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)

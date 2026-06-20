@@ -77,7 +77,8 @@ guards, and the log advance. NO `srcPre`/…/`srcParams` records, NO `RowEncodes
 reconstructed by reading `env.loc`. -/
 structure TransferReadoutResidual (hash : List ℤ → ℤ) (t : VmTrace)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId) : Type where
-  hside : RotTableSide hash t
+  permOut : List ℤ → List ℤ
+  hside : RotTableSide permOut hash t
   desig : TransferRowDesignation t
   -- the row shapes (a satisfying transfer trace exhibits them; StarkSound-class).
   hdiRow : IsTransferRow (envAt t desig.di)
@@ -132,6 +133,7 @@ def transferTraceReadout_of_residual (hash : List ℤ → ℤ)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (r : TransferReadoutResidual hash t pre post tr a) :
     TransferTraceReadout hash minit mfin maddrs t pre post tr a where
+  permOut := r.permOut
   hside := r.hside
   di := r.desig.di
   ci := r.desig.ci

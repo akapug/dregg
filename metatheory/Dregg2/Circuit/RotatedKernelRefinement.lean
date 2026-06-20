@@ -90,12 +90,48 @@ per-cell `CellTransferSpec` — the moved limb, the nonce tick, the frame freeze
 We package the two hops into one lemma over a designated row index, so the refinement proof reads a
 single per-cell fact per (debit / credit) leg. -/
 
-/-- The chip / range table side conditions the rotated denotation carries (the EPOCH boundary tables
-are sound, and the range table is the genuine `BAL_LIMB_BITS` range). Bundled so `rotatedEncodes`
-and the refinement carry exactly the hypotheses `rotV3_sound_v1` requires. -/
-structure RotTableSide (hash : List ℤ → ℤ) (t : VmTrace) : Prop where
-  chip   : ChipTableSound hash (t.tf .poseidon2)
-  range  : t.tf .range = rangeRows BAL_LIMB_BITS
+/-- The chip / range table FAITHFULNESS the rotated denotation carries — bound to the GENUINE deployed
+permutation, NOT a free lever. `RotTableSide permOut hash t` carries the deployed `Ir2Air::Chip` as the
+WIDE genuine-permutation soundness `ChipTableSoundN permOut` (the chip rows ARE the real permutation),
+the chip width, the lane-0 digest identity, and the genuine range table. The legacy single-output
+`ChipTableSound hash` the rotated denotation needs is DERIVED (`.chip`), not assumed; the range leg is
+`.range`. So a `RotTableSide` is the table half of `Satisfied2Faithful`: combined with a `Satisfied2`
+witness it produces the faithful object (`toFaithful`), and `rotV3Frozen_sound_v1` consumes that
+faithful object — there is no free `hchip`/`hrange` lever anywhere in the refinement tower. -/
+structure RotTableSide (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ) (t : VmTrace) : Prop where
+  /-- the genuine permutation exposes exactly `CHIP_OUT_LANES` output lanes (the deployed chip width). -/
+  permWidth : ∀ ins, (permOut ins).length = CHIP_OUT_LANES
+  /-- the v1 digest IS lane 0 of the genuine permutation (the deployed squeeze). -/
+  chipHashIsLane0 : ∀ ins, hash ins = (permOut ins).headD 0
+  /-- THE CHIP-TABLE-FAITHFUL CONJUNCT: every chip row is a genuine wide permutation tuple
+  (`Ir2Air::Chip`), bound to `t.tf .poseidon2` — not a free lever. -/
+  chipTableFaithful : ChipTableSoundN permOut (t.tf .poseidon2)
+  /-- THE RANGE-FAITHFUL CONJUNCT: the range table is the genuine limb table (the deployed height). -/
+  range : t.tf .range = rangeRows BAL_LIMB_BITS
+
+/-- The legacy chip soundness, DERIVED from the faithful wide soundness — the `hchip` shape the rotated
+denotation needs, discharged from the structure (not assumed). -/
+theorem RotTableSide.chip {permOut : List ℤ → List ℤ} {hash : List ℤ → ℤ} {t : VmTrace}
+    (hside : RotTableSide permOut hash t) : ChipTableSound hash (t.tf .poseidon2) := by
+  have hcs := chipSoundN_implies_chipSound permOut hside.permWidth (t.tf .poseidon2)
+    hside.chipTableFaithful
+  have hfun : (fun ins => (permOut ins).headD 0) = hash := by
+    funext ins; exact (hside.chipHashIsLane0 ins).symm
+  rwa [hfun] at hcs
+
+/-- **`RotTableSide.toFaithful`** — assemble the faithful object from the table side + a `Satisfied2`
+witness. The chip/range faithfulness rides the `RotTableSide`; the accept-set rides `hsat`. This is how
+the apex threads `Satisfied2Faithful` into `rotV3Frozen_sound_v1` with NO free lever. -/
+theorem RotTableSide.toFaithful {permOut : List ℤ → List ℤ} {hash : List ℤ → ℤ}
+    {d : EffectVmDescriptor2} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash d minit mfin maddrs t) :
+    Satisfied2Faithful permOut hash d minit mfin maddrs t :=
+  { hsat with
+    permWidth := hside.permWidth
+    chipHashIsLane0 := hside.chipHashIsLane0
+    chipTableFaithful := hside.chipTableFaithful
+    rangeTableFaithful := hside.range }
 
 /-- The per-row transfer GATES hold at an ACTIVE row (`i` NOT the last row). The rotated witness gives
 the v1 denotation at the i-dependent boundary flags; the `transferRowGates` are all `.gate` constraints,
@@ -105,15 +141,15 @@ hold at `false false`. (The hypothesis `hnotlast` is the faithful obligation tha
 row is a genuine transition row, not the wrap/pad row; any real ≥2-row trace carries it.) -/
 theorem rotated_row_gates (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ EffectVmEmitTransfer.transferRowGates,
       c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitTransfer.transferVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
-      hside.chip hside.range transfer_graduable hsat i hi
+    rotV3Frozen_sound_v1 permOut hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
+      transfer_graduable (hside.toFaithful hsat) i hi
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
@@ -137,7 +173,7 @@ the signed amount, the nonce ticks, the frame is frozen. This is the LIVE circui
 content — the raw material both refinement legs consume. -/
 theorem rotated_row_cellSpec (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState) (p : TransferParams)
@@ -252,7 +288,7 @@ amt`, and `0 ≤ post.bal src a`. The circuit FORCES both (the gate moves the li
 tooth pins non-negativity), so they cannot be forged in the decode. -/
 theorem debit_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
@@ -272,7 +308,7 @@ theorem debit_forced (hash : List ℤ → ℤ)
 amt`. The circuit FORCES it (the credit row's gate moves the limb by `+amount`). -/
 theorem credit_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
@@ -291,7 +327,7 @@ srcPost.balLo`; with the gate `srcPost.balLo = srcPre.balLo − amount` (debit),
 circuit enforces it. -/
 theorem availability_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
@@ -299,8 +335,8 @@ theorem availability_forced (hash : List ℤ → ℤ)
   -- the v1 denotation on the debit row (i-dependent flags).
   have hv1 : satisfiedVm hash EffectVmEmitTransfer.transferVmDescriptor
       (envAt t henc.di) (henc.di == 0) (henc.di + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
-      hside.chip hside.range transfer_graduable hsat henc.di henc.hdi
+    rotV3Frozen_sound_v1 permOut hash EffectVmEmitTransfer.transferVmDescriptor minit mfin maddrs t
+      transfer_graduable (hside.toFaithful hsat) henc.di henc.hdi
   -- the balance-move gate (flag-independent) and the live range tooth (`hsat.2.2`, flag-free).
   have hbal := rotated_row_gates hash hside hsat henc.di henc.hdi henc.hdiNotLast
     (.gate EffectVmEmitTransfer.gBalLo)
@@ -341,7 +377,7 @@ log) comes from the decode. Equivalently this is the `.balanceA tr a` arm of `fu
 post`. -/
 theorem transfer_descriptorRefines (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
@@ -375,7 +411,7 @@ theorem transfer_descriptorRefines (hash : List ℤ → ℤ)
 `fullActionStep pre (.balanceA tr a) post` — the live circuit refines the kernel step. -/
 theorem transfer_descriptorRefines_fullActionStep (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
@@ -396,7 +432,7 @@ witness realizes that decode: the assumption is `False`. The circuit pins the de
 wrong-amount / non-conserving move is UNSAT. -/
 theorem descriptorRefines_rejects_wrong_amount (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)
@@ -408,7 +444,7 @@ theorem descriptorRefines_rejects_wrong_amount (hash : List ℤ → ℤ)
 credit `pre.bal dst a + amt` is likewise UNSAT — the circuit forces the credit limb. -/
 theorem descriptorRefines_rejects_wrong_credit (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)

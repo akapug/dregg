@@ -113,8 +113,10 @@ commitment cannot carry — supplied by the `StarkSound` circuit. Data-bearing (
 structure TransferTraceReadout (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId) : Type where
-  -- the table side condition (chip/range) the rotated denotation requires.
-  hside : RotTableSide hash t
+  -- the genuine deployed chip permutation the faithful table side rides.
+  permOut : List ℤ → List ℤ
+  -- the table FAITHFULNESS (chip/range) the rotated denotation requires (bound to `permOut`).
+  hside : RotTableSide permOut hash t
   -- the two designated rows + their decodes (the per-row column reads).
   di : Nat
   ci : Nat

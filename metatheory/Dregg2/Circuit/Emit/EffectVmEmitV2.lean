@@ -386,6 +386,90 @@ theorem graduateV1_sound (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
       exact Or.inr ⟨⟨w, BAL_LIMB_BITS⟩, hr, rfl⟩
     exact lookup_replaces_range BAL_LIMB_BITS t.tf hrange (envAt t i) w (hrow _ hmem)
 
+/-! ## §4F — `Satisfied2Faithful`: the deployed accept-set with the chip / range soundness as
+STRUCTURAL conjuncts (not free levers), plus the COLLAPSE RECIPE.
+
+`graduateV1_sound` carries the chip- and range-table soundness as FREE hypotheses. The deployed
+`Ir2Air::Chip` CONSTRAINS every Poseidon2 chip row to a genuine permutation and the range table to
+the genuine limb table — so they are NOT free levers; they are STRUCTURAL facts the deployed circuit
+forces. `Satisfied2Faithful` folds them INTO the denotation as CONJUNCTS (`chipTableFaithful :
+ChipTableSoundN permOut` — the WIDE genuine-permutation chip soundness — and `rangeTableFaithful`).
+`satisfied2Faithful_satisfiedVm` is THE COLLAPSE RECIPE: from a faithful witness of a graduated
+descriptor, the v1 denotation `satisfiedVm` holds on every row WITHOUT a free `hchip`/`hrange` lever.
+Placed here (right after `graduateV1_sound`) so every rotation rung and the apex consume the faithful
+object with no upward dependency. -/
+
+/-- A WIDE-sound chip table is legacy-sound for the digest `hash := fun ins => (permOut ins).headD 0`
+it exposes at lane 0: the wide row's output block is `permOut ins` (length `CHIP_OUT_LANES`); its head
+is the single squeezed digest, the remaining lanes ride existentially — exactly `ChipTableSound`'s
+shape. Binding the genuine wide permutation (the deployed `Ir2Air::Chip`) DISCHARGES the legacy chip
+soundness the `graduateV1` hash sites need. -/
+theorem chipSoundN_implies_chipSound (permOut : List ℤ → List ℤ)
+    (hlen : ∀ ins, (permOut ins).length = CHIP_OUT_LANES) (tbl : Table)
+    (hN : ChipTableSoundN permOut tbl) :
+    ChipTableSound (fun ins => (permOut ins).headD 0) tbl := by
+  intro r hr
+  obtain ⟨ins, hins, hrow⟩ := hN r hr
+  have hl := hlen ins
+  cases hpo : permOut ins with
+  | nil =>
+      rw [hpo] at hl; simp [CHIP_OUT_LANES] at hl
+  | cons d lanes =>
+      refine ⟨ins, lanes, hins, ?_, ?_⟩
+      · have : (d :: lanes).length = CHIP_OUT_LANES := by rw [← hpo]; exact hl
+        simp only [List.length_cons] at this
+        omega
+      · rw [hrow]
+        unfold chipRowN chipRow
+        simp only [hpo, List.headD_cons]
+
+/-- **`Satisfied2Faithful permOut hash d minit mfin maddrs t`** — the FAITHFUL deployed denotation:
+`Satisfied2` PLUS the deployed circuit's own table-faithfulness, carried as STRUCTURE fields. This
+binds `t.tf .poseidon2`/`t.tf .range` to the genuine permutation / limb rows IN the structure,
+matching the deployed `Ir2Air::Chip` — chip-table-faithful + range-faithful as conjuncts rather than
+free `hchip`/`hrange` levers. -/
+structure Satisfied2Faithful (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor2) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : VmTrace) : Prop extends Satisfied2 hash d minit mfin maddrs t where
+  /-- the genuine permutation exposes exactly `CHIP_OUT_LANES` output lanes. -/
+  permWidth : ∀ ins, (permOut ins).length = CHIP_OUT_LANES
+  /-- the v1 digest IS lane 0 of the genuine permutation (the deployed squeeze). -/
+  chipHashIsLane0 : ∀ ins, hash ins = (permOut ins).headD 0
+  /-- THE CHIP-TABLE-FAITHFUL CONJUNCT: every chip row is a genuine wide permutation tuple
+  (`Ir2Air::Chip`), bound to `t.tf .poseidon2` — not a free lever. -/
+  chipTableFaithful : ChipTableSoundN permOut (t.tf .poseidon2)
+  /-- THE RANGE-FAITHFUL CONJUNCT: the range table is the genuine limb table (the deployed height). -/
+  rangeTableFaithful : t.tf .range = rangeRows BAL_LIMB_BITS
+
+/-- The legacy chip soundness (`ChipTableSound hash`) FOLLOWS from the faithful structure's wide
+soundness + the lane-0 digest identity — the `hchip` lever `graduateV1_sound` needs, DISCHARGED from
+the structure, not assumed. -/
+theorem Satisfied2Faithful.chipSound {permOut : List ℤ → List ℤ} {hash : List ℤ → ℤ}
+    {d : EffectVmDescriptor2} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2Faithful permOut hash d minit mfin maddrs t) :
+    ChipTableSound hash (t.tf .poseidon2) := by
+  have hcs := chipSoundN_implies_chipSound permOut h.permWidth (t.tf .poseidon2) h.chipTableFaithful
+  have hfun : (fun ins => (permOut ins).headD 0) = hash := by
+    funext ins; exact (h.chipHashIsLane0 ins).symm
+  rwa [hfun] at hcs
+
+/-- **`satisfied2Faithful_satisfiedVm` — THE COLLAPSE RECIPE.** From a `Satisfied2Faithful` witness of
+the GRADUATED descriptor `graduateV1 d` (and `graduable d`), the v1 denotation `satisfiedVm` holds on
+every row window — with NO free `hchip`/`hrange` lever: the structure CARRIES them
+(`Satisfied2Faithful.chipSound` discharges `hchip`; `rangeTableFaithful` IS `hrange`). -/
+theorem satisfied2Faithful_satisfiedVm (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hgrad : graduable d = true)
+    (h : Satisfied2Faithful permOut hash (graduateV1 d) minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
+  graduateV1_sound hash d minit mfin maddrs t h.chipSound h.rangeTableFaithful hgrad h.toSatisfied2
+
+#assert_axioms chipSoundN_implies_chipSound
+#assert_axioms Satisfied2Faithful.chipSound
+#assert_axioms satisfied2Faithful_satisfiedVm
+
 /-! ## §5 — Completeness: a v1-satisfying row family BUILDS a satisfying v2 witness.
 
 The chip table is the gathered genuine permutation rows (`chipLogOf`), sound BY CONSTRUCTION
@@ -652,25 +736,23 @@ and reads:
     `boundaryLastPins` (`.piBinding .last`) fire.
 This separates the two facts onto the rows where the deployed circuit genuinely enforces each, rather
 than over-pinning both onto one window. -/
-theorem transferV2_pins_intent (hash : List ℤ → ℤ)
+theorem transferV2_pins_intent (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (htwo : 2 ≤ t.rows.length)
     (hrow : EffectVmEmitTransfer.IsTransferRow (envAt t 0))
-    (hsat : Satisfied2 hash transferVmDescriptor2 minit mfin maddrs t) :
+    (hf : Satisfied2Faithful permOut hash transferVmDescriptor2 minit mfin maddrs t) :
     EffectVmEmitTransfer.TransferRowIntent (envAt t 0)
     ∧ (envAt t (t.rows.length - 1)).loc (saCol state.STATE_COMMIT)
         = (envAt t (t.rows.length - 1)).pub pi.NEW_COMMIT := by
   -- Row 0: active transition row (`isLast = false`, since `0 + 1 < length`). Gates ⟹ intent.
-  have h0 := graduateV1_sound hash EffectVmEmitTransfer.transferVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by omega)
+  have h0 := satisfied2Faithful_satisfiedVm permOut hash EffectVmEmitTransfer.transferVmDescriptor
+    minit mfin maddrs t (by decide) hf 0 (by omega)
   have hf0 : ((0 : Nat) + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne, Nat.zero_add]; omega
   rw [show (0 == 0) = true from rfl, hf0] at h0
   -- Last row: `isLast = true`; the `.piBinding .last` commit pin fires there.
-  have hlast := graduateV1_sound hash EffectVmEmitTransfer.transferVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat (t.rows.length - 1) (by omega)
+  have hlast := satisfied2Faithful_satisfiedVm permOut hash EffectVmEmitTransfer.transferVmDescriptor
+    minit mfin maddrs t (by decide) hf (t.rows.length - 1) (by omega)
   have hfl : ((t.rows.length - 1) + 1 == t.rows.length) = true := by
     simp only [beq_iff_eq]; omega
   rw [hfl] at hlast
@@ -714,27 +796,25 @@ row 0's gates and the published `state_commit = NEW_COMMIT` on the last row. (A 
 `(true,true)` window binds NEITHER's gates — the degenerate wrap row.) `post.commit` is row 0's
 decoded after-state column; the commit pin is the LAST row's column, so the two are stated at their own
 rows rather than over-identified on a single window. -/
-theorem burnV2_full_sound (hash : List ℤ → ℤ)
+theorem burnV2_full_sound (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (htwo : 2 ≤ t.rows.length)
     (hrow : EffectVmEmitBurn.IsBurnRow (envAt t 0))
     (pre post : EffectVmEmitTransferSound.CellState) (amt : ℤ)
     (henc : EffectVmEmitBurn.RowEncodes (envAt t 0) pre amt post)
-    (hsat : Satisfied2 hash burnVmDescriptor2 minit mfin maddrs t) :
+    (hf : Satisfied2Faithful permOut hash burnVmDescriptor2 minit mfin maddrs t) :
     EffectVmEmitBurn.CellBurnSpec pre amt post
     ∧ (envAt t (t.rows.length - 1)).loc (saCol state.STATE_COMMIT)
         = (envAt t (t.rows.length - 1)).pub pi.NEW_COMMIT := by
   -- Row 0: active transition row (`isLast = false`). Gates ⟹ `CellBurnSpec`.
-  have h0 := graduateV1_sound hash EffectVmEmitBurn.burnVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by omega)
+  have h0 := satisfied2Faithful_satisfiedVm permOut hash EffectVmEmitBurn.burnVmDescriptor
+    minit mfin maddrs t (by decide) hf 0 (by omega)
   have hf0 : ((0 : Nat) + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne, Nat.zero_add]; omega
   rw [show (0 == 0) = true from rfl, hf0] at h0
   -- Last row: `isLast = true`; the boundary commit pin fires there.
-  have hlast := graduateV1_sound hash EffectVmEmitBurn.burnVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat (t.rows.length - 1) (by omega)
+  have hlast := satisfied2Faithful_satisfiedVm permOut hash EffectVmEmitBurn.burnVmDescriptor
+    minit mfin maddrs t (by decide) hf (t.rows.length - 1) (by omega)
   have hfl : ((t.rows.length - 1) + 1 == t.rows.length) = true := by simp only [beq_iff_eq]; omega
   rw [hfl] at hlast
   refine ⟨?_, ?_⟩
@@ -765,25 +845,23 @@ on the ACTIVE row 0 (`when_transition()`), the post commitment on the LAST row (
 Carries the `IsMintRow` premise (the active BridgeMint row, `s_bridge_mint = 1`, `s_noop = 0`). A
 `≥ 2`-row trace; `CellMintSpec` from row 0's gates, the published `state_commit = NEW_COMMIT` on the
 last row. -/
-theorem mintV2_full_sound (hash : List ℤ → ℤ)
+theorem mintV2_full_sound (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (htwo : 2 ≤ t.rows.length)
     (hrow : EffectVmEmitMint.IsMintRow (envAt t 0))
     (pre post : EffectVmEmitTransferSound.CellState) (amt : ℤ)
     (henc : EffectVmEmitMint.RowEncodes (envAt t 0) pre amt post)
-    (hsat : Satisfied2 hash mintVmDescriptor2 minit mfin maddrs t) :
+    (hf : Satisfied2Faithful permOut hash mintVmDescriptor2 minit mfin maddrs t) :
     EffectVmEmitMint.CellMintSpec pre amt post
     ∧ (envAt t (t.rows.length - 1)).loc (saCol state.STATE_COMMIT)
         = (envAt t (t.rows.length - 1)).pub pi.NEW_COMMIT := by
-  have h0 := graduateV1_sound hash EffectVmEmitMint.mintVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat 0 (by omega)
+  have h0 := satisfied2Faithful_satisfiedVm permOut hash EffectVmEmitMint.mintVmDescriptor
+    minit mfin maddrs t (by decide) hf 0 (by omega)
   have hf0 : ((0 : Nat) + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne, Nat.zero_add]; omega
   rw [show (0 == 0) = true from rfl, hf0] at h0
-  have hlast := graduateV1_sound hash EffectVmEmitMint.mintVmDescriptor
-    minit mfin maddrs t hchip hrange (by decide) hsat (t.rows.length - 1) (by omega)
+  have hlast := satisfied2Faithful_satisfiedVm permOut hash EffectVmEmitMint.mintVmDescriptor
+    minit mfin maddrs t (by decide) hf (t.rows.length - 1) (by omega)
   have hfl : ((t.rows.length - 1) + 1 == t.rows.length) = true := by simp only [beq_iff_eq]; omega
   rw [hfl] at hlast
   refine ⟨?_, ?_⟩

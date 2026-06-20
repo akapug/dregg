@@ -721,26 +721,22 @@ def v3Of (d : EffectVmDescriptor) : EffectVmDescriptor2 := graduateV1 (rotateV3 
 /-- A `Satisfied2` witness of the rotated graduation yields the FULL v1 denotation of the
 ORIGINAL descriptor on every row — the per-effect soundness chains lift to v3 by THIS one
 composition. -/
-theorem rotV3_sound_v1 (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+theorem rotV3_sound_v1 (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (hgrad : graduable d = true)
-    (hsat : Satisfied2 hash (v3Of d) minit mfin maddrs t) :
+    (hf : Satisfied2Faithful permOut hash (v3Of d) minit mfin maddrs t) :
     ∀ i, i < t.rows.length →
       satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) := by
   intro i hi
   exact rotateV3_satisfiedVm_v1 hash d _ _ _
-    (graduateV1_sound hash (rotateV3 d) minit mfin maddrs t hchip hrange
-      (graduable_rotateV3 hgrad) hsat i hi)
+    (satisfied2Faithful_satisfiedVm permOut hash (rotateV3 d) minit mfin maddrs t
+      (graduable_rotateV3 hgrad) hf i hi)
 
 /-- Every row of a `Satisfied2` witness pins all three rotated commitments. -/
-theorem rotV3_pins (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+theorem rotV3_pins (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (hgrad : graduable d = true)
-    (hsat : Satisfied2 hash (v3Of d) minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash (v3Of d) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
     (envAt t i).loc (d.traceWidth + 38)
       = wireCommitR hash (preLimbsAt d.traceWidth (envAt t i).loc)
@@ -751,17 +747,15 @@ theorem rotV3_pins (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     ∧ (envAt t i).loc (d.traceWidth + 102 + 38)
       = caveatCommit hash (manifestAt (d.traceWidth + 102) (envAt t i).loc) :=
   rotateV3_pins_commits hash d _ _ _
-    (graduateV1_sound hash (rotateV3 d) minit mfin maddrs t hchip hrange
-      (graduable_rotateV3 hgrad) hsat i hi)
+    (satisfied2Faithful_satisfiedVm permOut hash (rotateV3 d) minit mfin maddrs t
+      (graduable_rotateV3 hgrad) hf i hi)
 
 /-- The rotated descriptor PUBLISHES: first row → rotated OLD commit on PI `d.piCount`;
 last row → rotated NEW commit, rotated height, caveat commit on `d.piCount + 1..3`. -/
-theorem rotV3_publishes (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+theorem rotV3_publishes (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (hgrad : graduable d = true)
-    (hsat : Satisfied2 hash (v3Of d) minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash (v3Of d) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
     ((i == 0) = true →
       (envAt t i).loc (d.traceWidth + B_STATE_COMMIT) = (envAt t i).pub d.piCount)
@@ -770,8 +764,8 @@ theorem rotV3_publishes (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
       ∧ (envAt t i).loc (d.traceWidth + 51 + B_COMMITTED_HEIGHT)
           = (envAt t i).pub (d.piCount + 2)
       ∧ (envAt t i).loc (d.traceWidth + 102 + C_COMMIT) = (envAt t i).pub (d.piCount + 3)) := by
-  have h := graduateV1_sound hash (rotateV3 d) minit mfin maddrs t hchip hrange
-    (graduable_rotateV3 hgrad) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash (rotateV3 d) minit mfin maddrs t
+    (graduable_rotateV3 hgrad) hf i hi
   have hmem : ∀ c ∈ rotPins d.traceWidth d.piCount, c ∈ (rotateV3 d).constraints :=
     fun c hc => List.mem_append_right _ (List.mem_append_right _ hc)
   have h0 := h.1 _ (hmem (.piBinding .first (d.traceWidth + B_STATE_COMMIT) d.piCount)
@@ -793,17 +787,14 @@ block (all 24 registers — balance/nonce included by the welds — every map ro
 epoch, height), BOTH iroots, the published height, AND the WHOLE caveat manifest (every
 entry's type tag, DOMAIN TAG, KEY, params) — under the ONE CR floor, via the PARAMETRIC
 `wireCommitR_binds` / `caveatCommit_binds`. -/
-theorem rotV3_binds_published (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+theorem rotV3_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (hCR : Poseidon2SpongeCR hash)
     (d : EffectVmDescriptor)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hchip' : ChipTableSound hash (t'.tf .poseidon2))
-    (hrange' : t'.tf .range = rangeRows BAL_LIMB_BITS)
     (hgrad : graduable d = true)
-    (hsat : Satisfied2 hash (v3Of d) minit mfin maddrs t)
-    (hsat' : Satisfied2 hash (v3Of d) minit' mfin' maddrs' t')
+    (hf : Satisfied2Faithful permOut hash (v3Of d) minit mfin maddrs t)
+    (hf' : Satisfied2Faithful permOut hash (v3Of d) minit' mfin' maddrs' t')
     (i j : Nat) (hi : i < t.rows.length) (hj : j < t'.rows.length)
     (hfirst : (i == 0) = true) (hfirst' : (j == 0) = true)
     (k l : Nat) (hk : k < t.rows.length) (hl : l < t'.rows.length)
@@ -819,10 +810,10 @@ theorem rotV3_binds_published (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR
       ∧ (envAt t k).pub (d.piCount + 2) = (envAt t' l).pub (d.piCount + 2))
     ∧ manifestAt (d.traceWidth + 102) (envAt t k).loc
         = manifestAt (d.traceWidth + 102) (envAt t' l).loc := by
-  have hp := rotV3_pins hash d minit mfin maddrs t hchip hrange hgrad hsat
-  have hp' := rotV3_pins hash d minit' mfin' maddrs' t' hchip' hrange' hgrad hsat'
-  have hq := rotV3_publishes hash d minit mfin maddrs t hchip hrange hgrad hsat
-  have hq' := rotV3_publishes hash d minit' mfin' maddrs' t' hchip' hrange' hgrad hsat'
+  have hp := rotV3_pins permOut hash d minit mfin maddrs t hgrad hf
+  have hp' := rotV3_pins permOut hash d minit' mfin' maddrs' t' hgrad hf'
+  have hq := rotV3_publishes permOut hash d minit mfin maddrs t hgrad hf
+  have hq' := rotV3_publishes permOut hash d minit' mfin' maddrs' t' hgrad hf'
   refine ⟨?_, ?_, ?_⟩
   · -- the before block, via the first-row pins
     have hc := (hq i hi).1 hfirst
@@ -1837,18 +1828,17 @@ def transferFeeV3 : EffectVmDescriptor2 :=
 /-- A `Satisfied2` witness of the FROZEN graduation yields the full v1 denotation of the original
 descriptor on every row — so the per-effect VALUE soundness chains (`*_pins_value`, etc.) lift to the
 frozen descriptor exactly as `rotV3_sound_v1` lifts them to `v3Of`. -/
-theorem rotV3Frozen_sound_v1 (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+theorem rotV3Frozen_sound_v1 (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
     (hgrad : graduable d = true)
-    (hsat : Satisfied2 hash (v3OfFrozen d) minit mfin maddrs t) :
+    (hf : Satisfied2Faithful permOut hash (v3OfFrozen d) minit mfin maddrs t) :
     ∀ i, i < t.rows.length →
       satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) := by
   intro i hi
   exact rotateV3FrozenAuthority_satisfiedVm_v1 hash d _ _ _
-    (graduateV1_sound hash (rotateV3FrozenAuthority d) minit mfin maddrs t hchip hrange
-      (graduable_rotateV3FrozenAuthority hgrad) hsat i hi)
+    (satisfied2Faithful_satisfiedVm permOut hash (rotateV3FrozenAuthority d) minit mfin maddrs t
+      (graduable_rotateV3FrozenAuthority hgrad) hf i hi)
 
 /-- **`setFieldV3 slot`** — the rotated tick-faced setField (the registry member). setField[0..7] is a
 VALUE effect, so it carries the authority-frame freeze (`v3OfFrozen`): AFTER-r23 == BEFORE-r23 (+ lifecycle). -/

@@ -398,33 +398,29 @@ theorem rotationCaveatSites_pin_caveat (hash : List ℤ → ℤ) (env : VmRowEnv
 #assert_axioms rotationCaveatSites_pin_caveat
 
 /-- The probe pins BOTH commitments on EVERY row of a `Satisfied2` witness. -/
-theorem rotationCaveatProbe_pins (hash : List ℤ → ℤ)
+theorem rotationCaveatProbe_pins (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
     (envAt t i).loc (stateCommitCol 24)
         = wireCommitR hash (preLimbs 24 (envAt t i).loc) ((envAt t i).loc (irootCol 24))
     ∧ (envAt t i).loc CAVEAT_COMMIT = caveatCommit hash (blockManifest (envAt t i).loc) := by
-  have h := graduateV1_sound hash rotationCaveatProbeVmDescriptor minit mfin maddrs t
-    hchip hrange (by decide) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash rotationCaveatProbeVmDescriptor
+    minit mfin maddrs t (by decide) hf i hi
   exact ⟨rotationCaveatSites_pin_state hash _ h.2.1,
     rotationCaveatSites_pin_caveat hash _ h.2.1⟩
 
 /-- The probe PUBLISHES: last row, PI 0 = the state commit, PI 1 = the height limb,
 PI 2 = the caveat commit. -/
-theorem rotationCaveatProbe_publishes (hash : List ℤ → ℤ)
+theorem rotationCaveatProbe_publishes (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
     (envAt t i).loc (stateCommitCol 24) = (envAt t i).pub PUB_COMMIT
     ∧ (envAt t i).loc (committedHeightCol 24) = (envAt t i).pub PUB_HEIGHT
     ∧ (envAt t i).loc CAVEAT_COMMIT = (envAt t i).pub PUB_CAVEAT := by
-  have h := graduateV1_sound hash rotationCaveatProbeVmDescriptor minit mfin maddrs t
-    hchip hrange (by decide) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash rotationCaveatProbeVmDescriptor
+    minit mfin maddrs t (by decide) hf i hi
   have h1 := h.1 (.piBinding .last (stateCommitCol 24) PUB_COMMIT)
     (by simp [rotationCaveatProbeVmDescriptor])
   have h2 := h.1 (.piBinding .last (committedHeightCol 24) PUB_HEIGHT)
@@ -439,16 +435,12 @@ state commit and the SAME caveat commit agree on the WHOLE rotated block (all 24
 every map root, lifecycle/epoch/height), the iroot, the published height, AND the WHOLE
 caveat manifest — every entry's type tag, DOMAIN TAG, KEY, and params. A forged domain tag
 or a tampered heap key in the manifest moves PI 2: REFUSED. Under the ONE CR floor. -/
-theorem rotationCaveatProbe_binds_published (hash : List ℤ → ℤ)
+theorem rotationCaveatProbe_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (hCR : Poseidon2SpongeCR hash)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hchip' : ChipTableSound hash (t'.tf .poseidon2))
-    (hrange' : t'.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
-    (hsat' : Satisfied2 hash rotationCaveatProbeVmDescriptor2 minit' mfin' maddrs' t')
+    (hf : Satisfied2Faithful permOut hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
+    (hf' : Satisfied2Faithful permOut hash rotationCaveatProbeVmDescriptor2 minit' mfin' maddrs' t')
     (i j : Nat) (hi : i < t.rows.length) (hj : j < t'.rows.length)
     (hlast : i + 1 = t.rows.length) (hlast' : j + 1 = t'.rows.length)
     (hpub : (envAt t i).pub PUB_COMMIT = (envAt t' j).pub PUB_COMMIT)
@@ -457,13 +449,13 @@ theorem rotationCaveatProbe_binds_published (hash : List ℤ → ℤ)
     ∧ (envAt t i).loc (irootCol 24) = (envAt t' j).loc (irootCol 24)
     ∧ (envAt t i).pub PUB_HEIGHT = (envAt t' j).pub PUB_HEIGHT
     ∧ blockManifest (envAt t i).loc = blockManifest (envAt t' j).loc := by
-  obtain ⟨hc, hh, hk⟩ := rotationCaveatProbe_publishes hash minit mfin maddrs t
-    hchip hrange hsat i hi hlast
-  obtain ⟨hc', hh', hk'⟩ := rotationCaveatProbe_publishes hash minit' mfin' maddrs' t'
-    hchip' hrange' hsat' j hj hlast'
-  obtain ⟨hp, hq⟩ := rotationCaveatProbe_pins hash minit mfin maddrs t hchip hrange hsat i hi
-  obtain ⟨hp', hq'⟩ := rotationCaveatProbe_pins hash minit' mfin' maddrs' t'
-    hchip' hrange' hsat' j hj
+  obtain ⟨hc, hh, hk⟩ := rotationCaveatProbe_publishes permOut hash minit mfin maddrs t
+    hf i hi hlast
+  obtain ⟨hc', hh', hk'⟩ := rotationCaveatProbe_publishes permOut hash minit' mfin' maddrs' t'
+    hf' j hj hlast'
+  obtain ⟨hp, hq⟩ := rotationCaveatProbe_pins permOut hash minit mfin maddrs t hf i hi
+  obtain ⟨hp', hq'⟩ := rotationCaveatProbe_pins permOut hash minit' mfin' maddrs' t'
+    hf' j hj
   have hwire : wireCommitR hash (preLimbs 24 (envAt t i).loc) ((envAt t i).loc (irootCol 24))
       = wireCommitR hash (preLimbs 24 (envAt t' j).loc) ((envAt t' j).loc (irootCol 24)) := by
     rw [← hp, ← hp', hc, hc', hpub]

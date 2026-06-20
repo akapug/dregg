@@ -91,14 +91,14 @@ which under the deployed `when_transition()` bind on every row but the last — 
 transition row, not the wrap/pad row.) -/
 theorem rotated_row_gates (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ setFieldRowGates slot, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash (EffectVmEmitRotationV3.setFieldTickFace slot)
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash (EffectVmEmitRotationV3.setFieldTickFace slot) minit mfin maddrs t
-      hside.chip hside.range (setField_graduable slot) hsat i hi
+    rotV3Frozen_sound_v1 permOut hash (EffectVmEmitRotationV3.setFieldTickFace slot) minit mfin maddrs t
+      (setField_graduable slot) (hside.toFaithful hsat) i hi
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
@@ -122,7 +122,7 @@ row `i` to `(pre, post)` through `RowEncodesSF`, on an ACTIVE setField row the v
 is the LIVE circuit's per-cell content. -/
 theorem rotated_row_cellSpec (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState)
@@ -204,7 +204,7 @@ the gated write gate forces `cellPost.fields slot = param1 = v`. So the moved fi
 by the running circuit; a decode claiming a different written value is UNSAT (the §4 tooth). -/
 theorem setField_value_forced (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (v : Int)
     (henc : rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v) :
@@ -230,7 +230,7 @@ column); the whole-map shape, the guard, the 16-field frame, and the log are the
 residual. -/
 theorem setField_descriptorRefines (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (v : Int)
     (henc : rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v) :
@@ -246,7 +246,7 @@ arm of the kernel dispatcher, so a satisfying rotated setField witness forces
 `fullActionStep pre (.setFieldA …) post`. -/
 theorem setField_descriptorRefines_fullActionStep (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (v : Int)
     (henc : rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v) :
@@ -266,7 +266,7 @@ realizes that decode: the assumption is `False`. The circuit pins the written co
 wrong-value setField is UNSAT. -/
 theorem descriptorRefines_rejects_wrong_value (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (v : Int)
     (henc : rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v)
@@ -279,7 +279,7 @@ theorem descriptorRefines_rejects_wrong_value (slot : Fin 8) (hash : List ℤ �
 likewise UNSAT — the circuit freezes the bystander columns. -/
 theorem descriptorRefines_rejects_moved_bystander (slot : Fin 8) (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash (setFieldV3 slot) minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (v : Int)
     (henc : rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v)

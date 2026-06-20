@@ -95,8 +95,8 @@ extraction — the `WitnessDecodes`-class circuit-witness readout. -/
 abbrev MintTraceReadout (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pubLogPost : ℤ) (pre post : RecChainedState) : Type :=
   Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 minit mfin maddrs t →
-  Σ' (actor cell : CellId) (a : AssetId) (amt : ℤ),
-    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t ×'
+  Σ' (actor cell : CellId) (a : AssetId) (amt : ℤ) (permOut : List ℤ → List ℤ),
+    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
     PLift (pubLogPost = LH (Dregg2.Circuit.Spec.SupplyCreation.mintReceipt actor cell a amt :: pre.log)) ×'
     (post.log = Dregg2.Circuit.Spec.SupplyCreation.mintReceipt actor cell a amt :: pre.log →
       Dregg2.Circuit.RotatedKernelRefinementMintBurn.rotatedEncodesMint
@@ -112,7 +112,7 @@ theorem closedLogExtract_mint_closed
   -- appended selector-binding gate to recover the bare-`mintV3` witness the readout/rung consume.
   have hsat := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate_satisfied2
     hash _ Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 minit mfin maddrs t hsat
-  obtain ⟨actor, cell, a, amt, hside, hpub, logNeeds⟩ :=
+  obtain ⟨actor, cell, a, amt, permOut, hside, hpub, logNeeds⟩ :=
     readout minit mfin maddrs t pubLogPost pre post hsat
   exact mint_closedLog hash hside hsat pre post actor cell a amt pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds
@@ -121,8 +121,8 @@ theorem closedLogExtract_mint_closed
 abbrev BurnTraceReadout (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pubLogPost : ℤ) (pre post : RecChainedState) : Type :=
   Satisfied2 hash (Dregg2.Circuit.RotatedKernelRefinementMintBurn.burnV3) minit mfin maddrs t →
-  Σ' (actor cell : CellId) (a : AssetId) (amt : ℤ),
-    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t ×'
+  Σ' (actor cell : CellId) (a : AssetId) (amt : ℤ) (permOut : List ℤ → List ℤ),
+    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
     PLift (pubLogPost = LH (Dregg2.Circuit.Spec.SupplyDestruction.burnReceipt actor cell a amt :: pre.log)) ×'
     (post.log = Dregg2.Circuit.Spec.SupplyDestruction.burnReceipt actor cell a amt :: pre.log →
       Dregg2.Circuit.RotatedKernelRefinementMintBurn.rotatedEncodesBurn
@@ -134,7 +134,7 @@ theorem closedLogExtract_burn_closed
       BurnTraceReadout (LH := LH) (hash := hash) minit mfin maddrs t pubLogPost pre post) :
     ClosedLogExtract Slive LH hash Rfix 4 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, a, amt, hside, hpub, logNeeds⟩ :=
+  obtain ⟨actor, cell, a, amt, permOut, hside, hpub, logNeeds⟩ :=
     readout minit mfin maddrs t pubLogPost pre post hsat
   exact burn_closedLog hash hside hsat pre post actor cell a amt pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds
@@ -143,8 +143,8 @@ theorem closedLogExtract_burn_closed
 abbrev BridgeMintTraceReadout (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pubLogPost : ℤ) (pre post : RecChainedState) : Type :=
   Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 minit mfin maddrs t →
-  Σ' (actor cell : CellId) (a : AssetId) (amt : ℤ),
-    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t ×'
+  Σ' (actor cell : CellId) (a : AssetId) (amt : ℤ) (permOut : List ℤ → List ℤ),
+    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
     PLift (pubLogPost = LH (Dregg2.Circuit.Spec.SupplyCreation.mintReceipt actor cell a amt :: pre.log)) ×'
     (post.log = Dregg2.Circuit.Spec.SupplyCreation.mintReceipt actor cell a amt :: pre.log →
       Dregg2.Circuit.RotatedKernelRefinementMintBurn.rotatedEncodesMint
@@ -160,7 +160,7 @@ theorem closedLogExtract_bridgeMint_closed
   -- appended selector-binding gate to recover the bare-`mintV3` witness the readout/rung consume.
   have hsat := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate_satisfied2
     hash _ Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 minit mfin maddrs t hsat
-  obtain ⟨actor, cell, a, amt, hside, hpub, logNeeds⟩ :=
+  obtain ⟨actor, cell, a, amt, permOut, hside, hpub, logNeeds⟩ :=
     readout minit mfin maddrs t pubLogPost pre post hsat
   exact bridgeMint_closedLog hash hside hsat pre post actor cell a amt pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds
@@ -169,8 +169,8 @@ theorem closedLogExtract_bridgeMint_closed
 abbrev IncNonceTraceReadout (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pubLogPost : ℤ) (pre post : RecChainedState) : Type :=
   Satisfied2 hash Dregg2.Circuit.RotatedKernelRefinementIncNonce.incNonceV3 minit mfin maddrs t →
-  Σ' (actor cell : CellId) (n : ℤ),
-    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t ×'
+  Σ' (actor cell : CellId) (n : ℤ) (permOut : List ℤ → List ℤ),
+    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
     PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
     (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
       Dregg2.Circuit.RotatedKernelRefinementIncNonce.rotatedEncodesIncNonce
@@ -182,7 +182,7 @@ theorem closedLogExtract_incrementNonce_closed
       IncNonceTraceReadout (LH := LH) (hash := hash) minit mfin maddrs t pubLogPost pre post) :
     ClosedLogExtract Slive LH hash Rfix 7 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, n, hside, hpub, logNeeds⟩ :=
+  obtain ⟨actor, cell, n, permOut, hside, hpub, logNeeds⟩ :=
     readout minit mfin maddrs t pubLogPost pre post hsat
   exact incrementNonce_closedLog hash hside hsat pre post actor cell n pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds
@@ -191,9 +191,9 @@ theorem closedLogExtract_incrementNonce_closed
 abbrev SetFieldTraceReadout (slot : Fin 8) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : VmTrace) (pubLogPost : ℤ) (pre post : RecChainedState) : Type :=
   Satisfied2 hash (Rfix 5) minit mfin maddrs t →
-  Σ' (actor cell : CellId) (v : ℤ),
+  Σ' (actor cell : CellId) (v : ℤ) (permOut : List ℤ → List ℤ),
     Satisfied2 hash (Dregg2.Circuit.RotatedKernelRefinementSetField.setFieldV3 slot) minit mfin maddrs t ×'
-    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t ×'
+    Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
     PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
     (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
       Dregg2.Circuit.RotatedKernelRefinementSetField.rotatedEncodesSF
@@ -205,7 +205,7 @@ theorem closedLogExtract_setField_closed (slot : Fin 8)
       SetFieldTraceReadout (LH := LH) (hash := hash) slot minit mfin maddrs t pubLogPost pre post) :
     ClosedLogExtract Slive LH hash Rfix 5 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, v, hsat2, hside, hpub, logNeeds⟩ :=
+  obtain ⟨actor, cell, v, permOut, hsat2, hside, hpub, logNeeds⟩ :=
     readout minit mfin maddrs t pubLogPost pre post hsat
   exact setField_closedLog slot hash hside hsat2 pre post actor cell v pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds

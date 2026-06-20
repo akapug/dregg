@@ -492,42 +492,36 @@ theorem rotationSitesR32_pin (hash : List ℤ → ℤ) (env : VmRowEnv)
 #assert_axioms rotationSitesR32_pin
 
 /-- The R=24 probe pins the rotated commitment on EVERY row of a `Satisfied2` witness. -/
-theorem rotationProbeR24_pins_commit (hash : List ℤ → ℤ)
+theorem rotationProbeR24_pins_commit (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash (rotationProbeVmDescriptorR2 24) minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 24) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
     (envAt t i).loc (stateCommitCol 24)
       = wireCommitR hash (preLimbs 24 (envAt t i).loc) ((envAt t i).loc (irootCol 24)) := by
-  have h := graduateV1_sound hash (rotationProbeVmDescriptorR 24) minit mfin maddrs t
-    hchip hrange (by decide) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash (rotationProbeVmDescriptorR 24)
+    minit mfin maddrs t (by decide) hf i hi
   exact rotationSitesR24_pin hash _ h.2.1
 
 /-- The R=32 probe pins the rotated commitment on EVERY row likewise. -/
-theorem rotationProbeR32_pins_commit (hash : List ℤ → ℤ)
+theorem rotationProbeR32_pins_commit (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash (rotationProbeVmDescriptorR2 32) minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 32) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
     (envAt t i).loc (stateCommitCol 32)
       = wireCommitR hash (preLimbs 32 (envAt t i).loc) ((envAt t i).loc (irootCol 32)) := by
-  have h := graduateV1_sound hash (rotationProbeVmDescriptorR 32) minit mfin maddrs t
-    hchip hrange (by decide) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash (rotationProbeVmDescriptorR 32)
+    minit mfin maddrs t (by decide) hf i hi
   exact rotationSitesR32_pin hash _ h.2.1
 
 /-- The R=24 probe PUBLISHES: last row, PI 0 = the commitment, PI 1 = the height limb. -/
-theorem rotationProbeR24_publishes (hash : List ℤ → ℤ)
+theorem rotationProbeR24_publishes (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash (rotationProbeVmDescriptorR2 24) minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 24) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
     (envAt t i).loc (stateCommitCol 24) = (envAt t i).pub PUB_COMMIT
     ∧ (envAt t i).loc (committedHeightCol 24) = (envAt t i).pub PUB_HEIGHT := by
-  have h := graduateV1_sound hash (rotationProbeVmDescriptorR 24) minit mfin maddrs t
-    hchip hrange (by decide) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash (rotationProbeVmDescriptorR 24)
+    minit mfin maddrs t (by decide) hf i hi
   have h1 := h.1 (.piBinding .last (stateCommitCol 24) PUB_COMMIT)
     (by simp [rotationProbeVmDescriptorR])
   have h2 := h.1 (.piBinding .last (committedHeightCol 24) PUB_HEIGHT)
@@ -536,16 +530,14 @@ theorem rotationProbeR24_publishes (hash : List ℤ → ℤ)
   exact ⟨h1 (by simp [hlast]), h2 (by simp [hlast])⟩
 
 /-- The R=32 probe PUBLISHES likewise. -/
-theorem rotationProbeR32_publishes (hash : List ℤ → ℤ)
+theorem rotationProbeR32_publishes (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash (rotationProbeVmDescriptorR2 32) minit mfin maddrs t)
+    (hf : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 32) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
     (envAt t i).loc (stateCommitCol 32) = (envAt t i).pub PUB_COMMIT
     ∧ (envAt t i).loc (committedHeightCol 32) = (envAt t i).pub PUB_HEIGHT := by
-  have h := graduateV1_sound hash (rotationProbeVmDescriptorR 32) minit mfin maddrs t
-    hchip hrange (by decide) hsat i hi
+  have h := satisfied2Faithful_satisfiedVm permOut hash (rotationProbeVmDescriptorR 32)
+    minit mfin maddrs t (by decide) hf i hi
   have h1 := h.1 (.piBinding .last (stateCommitCol 32) PUB_COMMIT)
     (by simp [rotationProbeVmDescriptorR])
   have h2 := h.1 (.piBinding .last (committedHeightCol 32) PUB_HEIGHT)
@@ -557,28 +549,24 @@ theorem rotationProbeR32_publishes (hash : List ℤ → ℤ)
 the measured width): two `Satisfied2` witnesses publishing the SAME commit agree on the WHOLE
 pre-iroot limb list (all 24 registers, every map root, lifecycle/epoch/height), the iroot,
 and the published height — under the ONE CR floor, via the PARAMETRIC keystone. -/
-theorem rotationProbeR24_commit_binds_published (hash : List ℤ → ℤ)
+theorem rotationProbeR24_commit_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (hCR : Poseidon2SpongeCR hash)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hchip' : ChipTableSound hash (t'.tf .poseidon2))
-    (hrange' : t'.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash (rotationProbeVmDescriptorR2 24) minit mfin maddrs t)
-    (hsat' : Satisfied2 hash (rotationProbeVmDescriptorR2 24) minit' mfin' maddrs' t')
+    (hf : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 24) minit mfin maddrs t)
+    (hf' : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 24) minit' mfin' maddrs' t')
     (i j : Nat) (hi : i < t.rows.length) (hj : j < t'.rows.length)
     (hlast : i + 1 = t.rows.length) (hlast' : j + 1 = t'.rows.length)
     (hpub : (envAt t i).pub PUB_COMMIT = (envAt t' j).pub PUB_COMMIT) :
     preLimbs 24 (envAt t i).loc = preLimbs 24 (envAt t' j).loc
     ∧ (envAt t i).loc (irootCol 24) = (envAt t' j).loc (irootCol 24)
     ∧ (envAt t i).pub PUB_HEIGHT = (envAt t' j).pub PUB_HEIGHT := by
-  obtain ⟨hc, hh⟩ := rotationProbeR24_publishes hash minit mfin maddrs t
-    hchip hrange hsat i hi hlast
-  obtain ⟨hc', hh'⟩ := rotationProbeR24_publishes hash minit' mfin' maddrs' t'
-    hchip' hrange' hsat' j hj hlast'
-  have hp := rotationProbeR24_pins_commit hash minit mfin maddrs t hchip hrange hsat i hi
-  have hp' := rotationProbeR24_pins_commit hash minit' mfin' maddrs' t' hchip' hrange' hsat' j hj
+  obtain ⟨hc, hh⟩ := rotationProbeR24_publishes permOut hash minit mfin maddrs t
+    hf i hi hlast
+  obtain ⟨hc', hh'⟩ := rotationProbeR24_publishes permOut hash minit' mfin' maddrs' t'
+    hf' j hj hlast'
+  have hp := rotationProbeR24_pins_commit permOut hash minit mfin maddrs t hf i hi
+  have hp' := rotationProbeR24_pins_commit permOut hash minit' mfin' maddrs' t' hf' j hj
   have hwire : wireCommitR hash (preLimbs 24 (envAt t i).loc) ((envAt t i).loc (irootCol 24))
       = wireCommitR hash (preLimbs 24 (envAt t' j).loc) ((envAt t' j).loc (irootCol 24)) := by
     rw [← hp, ← hp', hc, hc', hpub]
@@ -589,28 +577,24 @@ theorem rotationProbeR24_commit_binds_published (hash : List ℤ → ℤ)
   exact congrArg (fun L => L.getD (committedHeightCol 24) 0) hpre
 
 /-- **THE R=32 END-TO-END KEYSTONE** likewise. -/
-theorem rotationProbeR32_commit_binds_published (hash : List ℤ → ℤ)
+theorem rotationProbeR32_commit_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
     (hCR : Poseidon2SpongeCR hash)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
-    (hchip : ChipTableSound hash (t.tf .poseidon2))
-    (hrange : t.tf .range = rangeRows BAL_LIMB_BITS)
-    (hchip' : ChipTableSound hash (t'.tf .poseidon2))
-    (hrange' : t'.tf .range = rangeRows BAL_LIMB_BITS)
-    (hsat : Satisfied2 hash (rotationProbeVmDescriptorR2 32) minit mfin maddrs t)
-    (hsat' : Satisfied2 hash (rotationProbeVmDescriptorR2 32) minit' mfin' maddrs' t')
+    (hf : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 32) minit mfin maddrs t)
+    (hf' : Satisfied2Faithful permOut hash (rotationProbeVmDescriptorR2 32) minit' mfin' maddrs' t')
     (i j : Nat) (hi : i < t.rows.length) (hj : j < t'.rows.length)
     (hlast : i + 1 = t.rows.length) (hlast' : j + 1 = t'.rows.length)
     (hpub : (envAt t i).pub PUB_COMMIT = (envAt t' j).pub PUB_COMMIT) :
     preLimbs 32 (envAt t i).loc = preLimbs 32 (envAt t' j).loc
     ∧ (envAt t i).loc (irootCol 32) = (envAt t' j).loc (irootCol 32)
     ∧ (envAt t i).pub PUB_HEIGHT = (envAt t' j).pub PUB_HEIGHT := by
-  obtain ⟨hc, hh⟩ := rotationProbeR32_publishes hash minit mfin maddrs t
-    hchip hrange hsat i hi hlast
-  obtain ⟨hc', hh'⟩ := rotationProbeR32_publishes hash minit' mfin' maddrs' t'
-    hchip' hrange' hsat' j hj hlast'
-  have hp := rotationProbeR32_pins_commit hash minit mfin maddrs t hchip hrange hsat i hi
-  have hp' := rotationProbeR32_pins_commit hash minit' mfin' maddrs' t' hchip' hrange' hsat' j hj
+  obtain ⟨hc, hh⟩ := rotationProbeR32_publishes permOut hash minit mfin maddrs t
+    hf i hi hlast
+  obtain ⟨hc', hh'⟩ := rotationProbeR32_publishes permOut hash minit' mfin' maddrs' t'
+    hf' j hj hlast'
+  have hp := rotationProbeR32_pins_commit permOut hash minit mfin maddrs t hf i hi
+  have hp' := rotationProbeR32_pins_commit permOut hash minit' mfin' maddrs' t' hf' j hj
   have hwire : wireCommitR hash (preLimbs 32 (envAt t i).loc) ((envAt t i).loc (irootCol 32))
       = wireCommitR hash (preLimbs 32 (envAt t' j).loc) ((envAt t' j).loc (irootCol 32)) := by
     rw [← hp, ← hp', hc, hc', hpub]

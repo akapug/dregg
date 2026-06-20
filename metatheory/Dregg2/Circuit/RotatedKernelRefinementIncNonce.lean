@@ -90,14 +90,14 @@ TRANSITION row (`i + 1 ≠ t.rows.length`, `isLast` flag `false`) their body equ
 is a genuine transition row, not the wrap/pad row.) -/
 theorem rotated_row_gates (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ incNonceRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash incrementNonceVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash incrementNonceVmDescriptor minit mfin maddrs t
-      hside.chip hside.range incNonce_graduable hsat i hi
+    rotV3Frozen_sound_v1 permOut hash incrementNonceVmDescriptor minit mfin maddrs t
+      incNonce_graduable (hside.toFaithful hsat) i hi
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
@@ -120,7 +120,7 @@ From a `Satisfied2 hash incNonceV3` witness (+ the table side conditions) and th
 column frozen. This is the LIVE circuit's per-cell content. -/
 theorem rotated_row_cellSpec (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState)
@@ -203,7 +203,7 @@ is pinned by the running circuit; a decode claiming a frozen / wrong-delta nonce
 tooth). -/
 theorem incNonce_nonce_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (n : Int)
     (henc : rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n) :
@@ -229,7 +229,7 @@ column); the whole-map bump, the guard, the 16-field frame, and the log are the 
 residual. -/
 theorem incrementNonce_descriptorRefines (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (n : Int)
     (henc : rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n) :
@@ -246,7 +246,7 @@ nonce, and `hnVal` certifies the decode used exactly that value. So the live wit
 `IncrementNonceSpec` at the genuine increment. -/
 theorem incrementNonce_descriptorRefines_incremented (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (n : Int)
     (henc : rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n) :
@@ -267,7 +267,7 @@ the pre-reconcile convention), then NO `Satisfied2` witness realizes that decode
 `False`. The reconciled `gNonce` gate pins the tick, so a stale-nonce incrementNonce is UNSAT. -/
 theorem descriptorRefines_rejects_frozen_nonce (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (n : Int)
     (henc : rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n)
@@ -280,7 +280,7 @@ theorem descriptorRefines_rejects_frozen_nonce (hash : List ℤ → ℤ)
 a nonce bump cannot silently move value. -/
 theorem descriptorRefines_rejects_moved_balance (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash incNonceV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (n : Int)
     (henc : rotatedEncodesIncNonce hash minit mfin maddrs t pre post actor cell n)

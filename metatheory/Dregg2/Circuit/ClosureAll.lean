@@ -151,7 +151,8 @@ local notation "Slive" => S_live CH RH cmb compress compressN hCmb hCompress hCo
 theorem transfer_closedLog
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
@@ -479,7 +480,8 @@ theorem emitEvent_closedLog
 theorem incrementNonce_closedLog
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       Dregg2.Circuit.RotatedKernelRefinementIncNonce.incNonceV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (n : Int)
@@ -505,7 +507,8 @@ theorem incrementNonce_closedLog
 theorem mint_closedLog
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
@@ -530,7 +533,8 @@ theorem mint_closedLog
 theorem burn_closedLog
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
@@ -555,7 +559,8 @@ theorem burn_closedLog
 theorem bridgeMint_closedLog
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
@@ -582,7 +587,8 @@ theorem bridgeMint_closedLog
 theorem setField_closedLog (slot : Fin 8)
     (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
-    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t)
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
     (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       (Dregg2.Circuit.RotatedKernelRefinementSetField.setFieldV3 slot) minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (v : Int)
@@ -956,8 +962,8 @@ theorem closedLogExtract_transfer
         Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t →
       -- the genuine circuit extraction: the receipt `tr`/asset `a`, the table side-condition, the
       -- published receipt-prepend, and the encode-minus-log (a `Type`, so carried by `PSigma`).
-      Σ' (tr : Turn) (_a : AssetId),
-        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide hash t ×'
+      Σ' (tr : Turn) (_a : AssetId) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH (tr :: pre.log)) ×'
         (post.log = tr :: pre.log →
           Dregg2.Circuit.RotatedKernelRefinement.rotatedEncodes hash minit mfin maddrs t
@@ -968,7 +974,7 @@ theorem closedLogExtract_transfer
   -- `Rfix 0` is `transferV3` definitionally (registry position 0).
   have hsat' : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t := hsat
-  obtain ⟨tr, a, hside, hpub, logNeeds⟩ := extract minit mfin maddrs t pubLogPost pre post hsat'
+  obtain ⟨tr, a, permOut, hside, hpub, logNeeds⟩ := extract minit mfin maddrs t pubLogPost pre post hsat'
   exact transfer_closedLog hash hside hsat' pre post tr a pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds
 
