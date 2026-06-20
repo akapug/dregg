@@ -147,6 +147,34 @@ impl DocGraph {
         self.fields.keys().map(|s| s.as_str())
     }
 
+    /// TEST-ONLY forge hook: rewrite one field-assignment's provenance to a new
+    /// author, leaving its *value* unchanged. Used to prove the anti-forge tooth
+    /// (a forged alternative renders identically but changes the commitment).
+    /// Gated `#[cfg(test)]` — provenance is NEVER publicly mutable, because a
+    /// public setter would itself be a forge vector.
+    #[cfg(test)]
+    pub(crate) fn forge_field_provenance(
+        &mut self,
+        name: &str,
+        value: &str,
+        new_author: crate::atom::Author,
+    ) {
+        if let Some(slot) = self.fields.get_mut(name)
+            && let Some(a) = slot.iter_mut().find(|a| a.value == value)
+        {
+            a.provenance.author = new_author;
+        }
+    }
+
+    /// TEST-ONLY forge hook: drop one field-assignment entirely (hiding an
+    /// alternative). Used to prove a dropped alternative changes the commitment.
+    #[cfg(test)]
+    pub(crate) fn drop_field_assignment(&mut self, name: &str, value: &str) {
+        if let Some(slot) = self.fields.get_mut(name) {
+            slot.retain(|a| a.value != value);
+        }
+    }
+
     // ── Additive graph primitives (monotone) ─────────────────────────────────
 
     /// Add a vertex. Idempotent: re-adding the same id is a no-op (the same
