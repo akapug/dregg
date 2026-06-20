@@ -8261,16 +8261,47 @@ impl Cockpit {
                 .child(time_button(cx, "time-fwd", "+1 turn ▶", theme::accent(), Cockpit::time_step_forward))
                 .child(time_button(cx, "time-head", "live head ⏭", theme::good(), Cockpit::time_to_head)),
         );
+        // THE UN-TURN FRONTIER — where the rewind can reach, in reversibility terms
+        // (the reversibility organ classifies each step; the floor is the latest
+        // committed boundary). The headline livability readout above the scrubber.
+        {
+            let floor = model.undo_floor();
+            col = col.child(
+                div()
+                    .text_xs()
+                    .mt_1()
+                    .text_color(if floor == 0 { theme::good() } else { theme::warn() })
+                    .child(model.undo_floor_badge()),
+            );
+        }
         // The ticks — every landing (genesis → head). Each is CLICKABLE: drag the
-        // scrubber to that step. The cursor tick glows; turns vs genesis are distinct.
+        // scrubber to that step. The cursor tick glows; turns vs genesis are distinct;
+        // a ⊘ tick is a committed boundary the rewind cannot un-turn past.
         let mut ticks = div().flex().flex_col().gap_0p5().mt_1();
         for tick in &model.ticks {
             let at_cursor = tick.step == model.cursor;
             let is_head = tick.step == model.head;
             let step = tick.step;
-            let marker = if at_cursor { "▸" } else if tick.is_turn { "•" } else { "·" };
+            // The marker carries the reversibility verdict: ⊘ = a committed boundary
+            // the rewind cannot un-turn past; • = a reversible turn; · = genesis/empty.
+            let marker = if at_cursor {
+                "▸"
+            } else if tick.reversible == Some(false) {
+                "⊘"
+            } else if tick.is_turn {
+                "•"
+            } else {
+                "·"
+            };
+            let rev_note = match tick.reversible {
+                Some(true) => "  ↺ reversible",
+                Some(false) => "  ⊘ committed (no un-turn past here)",
+                None => "",
+            };
             let label_color = if at_cursor {
                 theme::accent()
+            } else if tick.reversible == Some(false) {
+                theme::warn()
             } else if tick.is_turn {
                 theme::text()
             } else {
@@ -8298,7 +8329,7 @@ impl Cockpit {
                         div()
                             .text_xs()
                             .text_color(label_color)
-                            .child(format!("{marker} k{step}  {}{}", tick.label, if is_head { "  ⟵ head (live)" } else { "" })),
+                            .child(format!("{marker} k{step}  {}{}{}", tick.label, rev_note, if is_head { "  ⟵ head (live)" } else { "" })),
                     )
                     .child(div().text_xs().text_color(theme::muted()).child(short_root(&tick.root))),
             );

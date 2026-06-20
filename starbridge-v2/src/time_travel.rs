@@ -51,6 +51,15 @@ pub struct ScrubTick {
     /// `true` iff this tick is a committed TURN (vs a genesis install or the
     /// empty root) — the scrubber draws turns as the "real" ticks.
     pub is_turn: bool,
+    /// Whether the turn AT this tick can be UN-TURNED (the reversibility organ's
+    /// verdict, `dregg_turn::Turn::is_reversible` over the pre-state): `Some(true)`
+    /// = a reversible step (clean/contextual — rewinding past it restores state
+    /// modulo the monotone nonce); `Some(false)` = a COMMITTED boundary (a spend /
+    /// burn / revoke / terminal lifecycle — the scrubber cannot un-turn past it);
+    /// `None` for genesis / the empty root (nothing to invert). This is the
+    /// per-step reversibility the rewind UI draws so you SEE where the un-turn
+    /// frontier is, not just where the cursor sits.
+    pub reversible: Option<bool>,
 }
 
 // ===========================================================================
@@ -129,14 +138,28 @@ impl TimeCockpitModel {
         // The scrubber ticks — every landing (the empty root + each genesis/turn).
         let mut ticks: Vec<ScrubTick> = Vec::with_capacity(head + 1);
         for cp in history.checkpoints() {
-            let (label, is_turn) = if cp.step == 0 {
-                ("genesis (empty image)".to_string(), false)
+            let (label, is_turn, reversible) = if cp.step == 0 {
+                ("genesis (empty image)".to_string(), false, None)
             } else {
                 let step = &history.steps()[cp.step - 1];
-                let is_turn = matches!(step, crate::replay::RecordedStep::Committed { .. });
-                (step.label(), is_turn)
+                match step {
+                    // A committed turn — classify whether it can be un-turned, off
+                    // the REAL `Turn::is_reversible` over the pre-state (the ledger
+                    // before this turn = `replay_to(step-1)`). A reversible step
+                    // rewinds cleanly; a committed boundary (spend/burn/revoke/
+                    // terminal) cannot be un-turned past. (Replay-per-tick is O(step);
+                    // the cockpit history is short, so the total is fine.)
+                    crate::replay::RecordedStep::Committed { turn, .. } => {
+                        let rev = history
+                            .replay_to(cp.step - 1)
+                            .ok()
+                            .map(|pre| turn.is_reversible(&pre));
+                        (step.label(), true, rev)
+                    }
+                    crate::replay::RecordedStep::Genesis { .. } => (step.label(), false, None),
+                }
             };
-            ticks.push(ScrubTick { step: cp.step, root: cp.root, label, is_turn });
+            ticks.push(ScrubTick { step: cp.step, root: cp.root, label, is_turn, reversible });
         }
 
         // The verified reconstruction at the cursor.
@@ -214,6 +237,35 @@ impl TimeCockpitModel {
         self.cursor == self.head
     }
 
+    /// The UN-TURN FLOOR: the highest step that is a COMMITTED boundary (a turn the
+    /// reversibility organ classifies irreversible — a spend / burn / revoke /
+    /// terminal). `undo_to` reverses a contiguous suffix most-recent-first, so it
+    /// can rewind the image down to (but NOT past) this floor; `0` iff the whole
+    /// history is reversible. The headline "you can rewind to k{floor}, not past the
+    /// committed move there."
+    pub fn undo_floor(&self) -> usize {
+        self.ticks
+            .iter()
+            .filter(|t| t.reversible == Some(false))
+            .map(|t| t.step)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// A human badge for the un-turn floor: where the rewind frontier is, in
+    /// reversibility terms (the cockpit's TIME tab draws this above the scrubber).
+    pub fn undo_floor_badge(&self) -> String {
+        let floor = self.undo_floor();
+        if floor == 0 {
+            "↺ fully reversible — the whole image can be un-turned to genesis".to_string()
+        } else {
+            format!(
+                "⊘ un-turn floor at k{floor} — a committed move (spend/burn/revoke/terminal) \
+                 there cannot be reversed; the image rewinds to k{floor}, not past it"
+            )
+        }
+    }
+
     /// The human badge text for the cursor's liveness (the operator reads "am I
     /// looking at the live present, or a re-derived past?").
     pub fn liveness_badge(&self) -> String {
@@ -250,6 +302,44 @@ mod tests {
             assert!(w.commit_turn(t).is_committed());
         }
         (w, treasury, sink)
+    }
+
+    // ── the SCRUBBER classifies per-step REVERSIBILITY (the un-turn frontier) ─
+
+    #[test]
+    fn the_scrubber_classifies_per_step_reversibility() {
+        use crate::world::burn;
+        let mut w = World::new();
+        let treasury = w.genesis_cell(0x11, 1_000);
+        let sink = w.genesis_cell(0x22, 0);
+        // A reversible transfer, then an IRREVERSIBLE burn (a committed boundary).
+        let t1 = w.turn(treasury, vec![transfer(treasury, sink, 10)]);
+        assert!(w.commit_turn(t1).is_committed());
+        let t2 = w.turn(treasury, vec![burn(treasury, 5)]);
+        assert!(w.commit_turn(t2).is_committed(), "the burn commits");
+
+        let stack = MetaStack::new();
+        let m = TimeCockpitModel::build(&w, w.recorded_turns().len(), &stack);
+        let turns: Vec<_> = m.ticks.iter().filter(|t| t.is_turn).collect();
+        assert_eq!(turns.len(), 2, "two committed turns");
+        // The REAL Turn::is_reversible verdict, per step — not a transcription.
+        assert_eq!(turns[0].reversible, Some(true), "transfer reverses (clean)");
+        assert_eq!(turns[1].reversible, Some(false), "burn is a committed boundary");
+        // The un-turn floor sits AT the burn step — the rewind can't go past it.
+        assert_eq!(m.undo_floor(), turns[1].step);
+        assert!(m.undo_floor_badge().contains("un-turn floor"));
+        // Genesis / empty-root ticks have nothing to invert → None.
+        assert!(m.ticks.iter().filter(|t| !t.is_turn).all(|t| t.reversible.is_none()));
+    }
+
+    #[test]
+    fn a_fully_reversible_history_has_a_zero_undo_floor() {
+        let (w, _t, _s) = fixture(); // three transfers — all reversible
+        let stack = MetaStack::new();
+        let m = TimeCockpitModel::build(&w, w.recorded_turns().len(), &stack);
+        assert!(m.ticks.iter().filter(|t| t.is_turn).all(|t| t.reversible == Some(true)));
+        assert_eq!(m.undo_floor(), 0, "no committed boundary → rewind to genesis");
+        assert!(m.undo_floor_badge().contains("fully reversible"));
     }
 
     // ── the SCRUBBER ticks span genesis → head, turns flagged ────────────────
