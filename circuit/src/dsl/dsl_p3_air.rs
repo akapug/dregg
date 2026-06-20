@@ -829,6 +829,90 @@ fn to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
     RowMajorMatrix::new(values, width)
 }
 
+// ============================================================================
+// Zero-knowledge (hiding) seam: route a `DslCircuit` through the statistically-
+// ZK uni-STARK path (`crate::stark_zk::create_zk_config` over `HidingFriPcs`).
+// ============================================================================
+//
+// `prove_dsl_p3`/`verify_dsl_p3` above ride `p3-batch-stark` over the NON-hiding
+// `DreggStarkConfig` — succinct + sound but the FRI openings reveal witness
+// evaluations. For the privacy lane (shielded actions) we need the SAME
+// descriptor-driven `DslP3Air`, but proved with the hiding PCS so the openings
+// reveal nothing about the witness beyond the public inputs.
+//
+// The clean weld: `DslP3Air` already implements `p3_air::Air<AB>` with exactly
+// the bounds (`AB: AirBuilder, AB::F: PrimeField32`) that `crate::stark_zk`'s
+// `P3MerklePoseidon2Air` does, and `prove_zk` runs THAT air through
+// `p3_uni_stark::{prove,verify}` over the hiding config. So a `DslP3Air` rides
+// the identical hiding uni-STARK entry points — no AIR change, just the config.
+//
+// This is the shielded lane's only dependency on a shared circuit file; it is
+// additive (no existing path touched) and reuses the internal aux-extension +
+// AIR builder so the hiding proof binds the SAME constraints the audited
+// non-hiding path does.
+#[cfg(feature = "plonky3")]
+pub use zk_seam::*;
+
+#[cfg(feature = "plonky3")]
+mod zk_seam {
+    use super::{DslP3Air, DslP3Error, extend_trace_with_hash_aux, to_matrix};
+    use crate::dsl::circuit::DslCircuit;
+    use crate::field::BabyBear;
+    use crate::plonky3_prover::to_p3;
+    use crate::stark_zk::{DreggZkProof, create_zk_config};
+    use p3_baby_bear::BabyBear as P3BabyBear;
+    use p3_uni_stark::{prove, verify};
+
+    /// A hiding (zero-knowledge) proof of a `DslCircuit`, produced through the
+    /// `HidingFriPcs` uni-STARK config. Same proof type the rest of the ZK path
+    /// uses (`crate::stark_zk::DreggZkProof`).
+    pub type DslZkProof = DreggZkProof;
+
+    /// Prove a `DslCircuit` with **zero knowledge**: the resulting proof is
+    /// statistically hiding (trace doubling + random FRI codeword + salted
+    /// Merkle leaves), so its openings reveal nothing about the witness beyond
+    /// the public inputs. The constraints enforced are exactly those of the
+    /// audited [`prove_dsl_p3`](super::prove_dsl_p3) path (same `DslP3Air`, same
+    /// hash-aux extension).
+    ///
+    /// `trace` is the base-width witness (descriptor `trace_width`); the hash
+    /// constraints' Poseidon2 aux blocks are appended internally exactly as the
+    /// non-hiding path does.
+    pub fn prove_dsl_zk(
+        dsl: &DslCircuit,
+        trace: &[Vec<BabyBear>],
+        public_inputs: &[BabyBear],
+    ) -> Result<DslZkProof, DslP3Error> {
+        let air = DslP3Air::try_from_dsl(dsl)?;
+        let full_trace = extend_trace_with_hash_aux(dsl, trace);
+        let matrix = to_matrix(&full_trace);
+        let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+        let config = create_zk_config();
+        let proof = prove(&config, &air, matrix, &pis);
+        // Self-verify (a returned proof is one the hiding verifier accepts).
+        verify(&config, &air, &proof, &pis).map_err(|e| DslP3Error::VerificationFailed {
+            reason: format!("{e:?}"),
+        })?;
+        Ok(proof)
+    }
+
+    /// Verify a hiding `DslCircuit` proof produced by [`prove_dsl_zk`]. Witness-
+    /// free: reconstructs the `DslP3Air` from the descriptor and checks the
+    /// proof against the public inputs through the hiding uni-STARK verifier.
+    pub fn verify_dsl_zk(
+        dsl: &DslCircuit,
+        proof: &DslZkProof,
+        public_inputs: &[BabyBear],
+    ) -> Result<(), DslP3Error> {
+        let air = DslP3Air::try_from_dsl(dsl)?;
+        let pis: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
+        let config = create_zk_config();
+        verify(&config, &air, proof, &pis).map_err(|e| DslP3Error::VerificationFailed {
+            reason: format!("{e:?}"),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

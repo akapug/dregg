@@ -319,6 +319,13 @@ pub mod joint_turn_recursive;
 pub mod proof_forest;
 pub mod proof_tier;
 
+/// Shielded actions — privacy M2 (single-asset shielded transfer toehold). Its
+/// own composed proof object over the existing notes / nullifiers / commitment
+/// tree + the p3 `HidingFriPcs` ZK path; NOT woven into `effect_vm`. Gated on
+/// `prover` (it rides the `dsl::dsl_p3_air` hiding seam). See module docs.
+#[cfg(feature = "prover")]
+pub mod shielded;
+
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests;
