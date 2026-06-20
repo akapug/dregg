@@ -3058,3 +3058,26 @@ descriptor change (bind the audit record slot) OR reconciling the spec to the de
 semantics. = an EMBER/descriptor decision, not Lean wiring. Documented at RotatedKernelRefinementLifecycleDisc §6.
 So the Class-B frontier is now: ~13 LAZY (3 lifecycle done) + 5 cap-write VK gaps + receiptArchive (spec divergence)
 + heapWrite (registry) = the real gaps total 7. Agent correctly did NOT fake the receiptArchive seam.
+
+## ⚑⚑⚑ AUTHORITY FLOOR — guarantee A now circuit-forced for ~26 of 30 effects (2026-06-20, banked d3dfc7f88+ba8efd53f)
+The Class-B campaign wave LANDED green (lake 4096, axiom-clean) — survived a server-rate-limit storm (2 agents
+died mid-edit, 1 repair agent finished their whole proofs: a missing Classical instance + a Prop->Type mistype +
+an unqualified name, over COMPLETE proofs).
+FORCED (circuit-edit -> red, mutation-confirmed) — guarantee A enforced in-circuit:
+- 6 originally Class-A (transfer/mint/burn/setField/incNonce/bridgeMint)
+- 11 LAZY fanned: cellSeal, cellUnseal, cellDestroy, refusal, setPerms, setVK, createCell, factory, spawn,
+  noteSpend, noteCreate, makeSovereign, setFieldDyn (recipe = deployed force-lemma + WitnessDecodes decode seam)
+- 4 cap slots FORCED: attenuate (was done) + delegate, grantCap, delegateAtten (the dead VK agent had completed
+  the insertWriteOp descriptor + _forces_write keystones) + revokeCapability (removeWriteOp deployed)
+= ~26 of 30 effects guarantee-A circuit-forced.
+STILL OPEN (the real remaining gaps — all named, none faked):
+- 3 FROZEN-FACE cap slots: introduce, revokeDelegation, refreshDelegation — v1 face freezes cap_root on-row
+  (gCapPass), insertWriteOp jointly UNSAT with the freeze; fix = rebase their V3 base on the moving/recompute
+  …Genuine face (a VK cutover, the …Genuine descriptors EXIST but aren't deployed). Cleanly Class-B-pending.
+- receiptArchive: spec↔descriptor CONTRADICTION (spec writes record-slot+freezes lifecycle; descriptor forces
+  lifecycle=Archived) — ember/descriptor decision.
+- heapWrite: ABSENT from registry (Rfix 56 -> transfer fallback); machinery+proof exist, construct the entry.
+- 3 NO-WRITE (not gaps): emitEvent, pipelinedSend, exercise.
+NEXT: (a) wire the new *_descriptorRefines_sat into the apex fanout (ClosureFanoutGenuine — MAIN LOOP owns, serial);
+(b) the VK JSON descriptor regen + drift-gate for the cap-write changes; (c) the 3 frozen-face cutover; (d)
+receiptArchive + heapWrite decisions. The recovery/durability floor (node first-writer-wins) is a parallel lane.
