@@ -59,6 +59,7 @@ import Dregg2.Circuit.Spec.authorityunattenuated
 import Dregg2.Circuit.Spec.authorityattenuation
 import Dregg2.Circuit.Spec.authorityrevocation
 import Dregg2.Circuit.Spec.refreshdelegation
+import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 
 namespace Dregg2.Circuit.RotatedKernelRefinementCapFamily
 
@@ -75,9 +76,17 @@ open Dregg2.Circuit.CapTreeUpdate
 open Dregg2.Circuit.Spec.AuthorityUnattenuated (DelegateSpec delegateGuard)
 open Dregg2.Circuit.Spec.AuthorityAttenuation
   (AttenuateSpec DelegateAttenSpec DelegateAttenGuard)
-open Dregg2.Circuit.Spec.AuthorityRevocation (RevokeSpec removeEdgeCaps)
+open Dregg2.Circuit.Spec.AuthorityRevocation
+  (RevokeSpec removeEdgeCaps execFullA_revoke_iff_spec)
 open Dregg2.Circuit.Spec.RefreshDelegation
   (RefreshDelegationSpec RefreshDelegationGuard refreshDelegationsMap refreshDelegationReceipt)
+open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt opensTo writesTo)
+open Dregg2.Circuit.Emit.EffectVmEmit (prmCol sbCol saCol)
+open Dregg2.Circuit.Emit.EffectVmEmit.state (CAP_ROOT)
+open Dregg2.Circuit.Emit.EffectVmEmitV2 (heldReadOp removeWriteOp CAP_KEY KEEP_MASK HELD_MASK)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (revokeCapabilityV3 delegateV3 delegateAttenV3 grantCapWriteV3
+   delegateV3_forces_write grantCapWriteV3_forces_write delegateAttenV3_non_amp)
 
 set_option autoImplicit false
 
@@ -471,6 +480,138 @@ theorem revoke_drops_edge {State : Type} (S : CapHashScheme State)
   Dregg2.Circuit.Spec.AuthorityRevocation.revoke_drops_holder_edges pre holder t post
     (revoke_descriptorRefines S pre post holder t henc)
 
+/-! ## §3.5 — CLASS A: the cap-tree WRITE is FORCED by the DEPLOYED descriptor (the 5-gap close).
+
+§1–§3 above force the sorted-tree SET move from the decode's `SpineCommits` data — but those root
+bindings (`hold`/`hnew`) were PROVER-SUPPLIED hypotheses, unanchored to any deployed write gate: a prover
+could publish a wrong post-cap-root undetected (guarantee A — Authority — unforced for these slots).
+
+This section closes that for the MOVING-face slots (delegate / delegateAtten / grantCap, whose v1 face is
+the attenuate-A `gCapMove` face — the on-row `cap_root` MOVES, so the deployed `insertWriteOp` binds it).
+Mirroring `RotatedKernelRefinementCellSeal.cellSeal_descriptorRefines_sat`: the rung now CONSUMES
+`Satisfied2 hash <slot>V3` via `<slot>V3_forces_write` (the DEPLOYED held-read + insert-write map ops),
+which FORCES `writesTo cap_root_before key value cap_root_after` on the committed `state.CAP_ROOT` limbs
+(`writesTo` FUNCTIONAL under CR — a forged `new_cap_root` is UNSAT). The realizable
+`WitnessDecodes`-class seam (the SAME class `cellSeal`'s `discLimbDecodes` / the existing `SpineCommits`
+residual is) is that the committed `state.CAP_ROOT` BEFORE/AFTER limbs ARE the decode's `oldRoot`/`newRoot`
+— a trace-fill identity, a NAMED carrier, never a sorry. Editing `<slot>V3`'s write op turns the forced
+`writesTo` RED (mutation-confirmed). The kernel `Caps`-move + frame + log ride the §1/§2 decode residual.
+
+The FROZEN-face slots (introduce / revokeDelegation / refreshDelegation) are NOT closed here: their v1
+face FREEZES `cap_root` on-row (`gCapPass`: `saCol CAP_ROOT = sbCol CAP_ROOT`), so the genuine cap-tree
+move rides OFF-ROW (universe-A / the `DELEG` system-root for refresh) and a `writesTo (sbCol CAP_ROOT) k v
+(saCol CAP_ROOT)` map-op is jointly UNSAT with the freeze for any genuine insert/remove. Forcing those in
+this same map-op shape requires rebasing their V3 base on a MOVING (recompute) face — the
+`introduceVmDescriptorGenuine`/`…Genuine` descriptors that already exist but are not the deployed base —
+a deeper descriptor-architecture change (a separate VK cutover), reported as the precise obstruction. -/
+
+/-- **`DelegateWriteAnchor` — the realizable trace seam: the decode's sorted-tree roots ARE the committed
+`state.CAP_ROOT` limbs (NAMED carrier).** The prover's designated ACTIVE cap-graph row + its selector fact
++ the `WitnessDecodes`-class identity that the SpineCommits `oldRoot`/`newRoot` equal the committed BEFORE/
+AFTER `state.CAP_ROOT` limbs on that row (a trace-fill identity — the SAME residue class `SpineCommits`
+itself carries), plus the touched edge's key/value column reads. From these + `Satisfied2 delegateV3` the
+post-cap-root is FORCED to the genuine sorted insert (`delegate_forces_committed_write`). DATA-bearing. -/
+structure DelegateWriteAnchor {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (del rec t : CellId)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (henc : DelegateCapsTreeEncodes S pre post del rec t) : Type where
+  row : Nat
+  hrow : row < tr.rows.length
+  hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.selA.ATTENUATE = 1
+  -- the WitnessDecodes seam: the decode's sorted-tree roots ARE the committed cap-root limbs.
+  oldAnchored : henc.oldRoot = (envAt tr row).loc (sbCol CAP_ROOT)
+  newAnchored : henc.newRoot = (envAt tr row).loc (saCol CAP_ROOT)
+
+/-- **`delegate_forces_committed_write` — the post cap-root is FORCED to the genuine sorted insert.** From
+`Satisfied2 hash delegateV3` (via the DEPLOYED `insertWriteOp`, `delegateV3_forces_write`) the committed
+AFTER `state.CAP_ROOT` limb is the genuine `writesTo` of the conferred grant at the edge key against the
+committed BEFORE limb — under CR a forged post-root is excluded (`writesTo` is FUNCTIONAL). The forced
+fact rides the DEPLOYED constraints: editing `delegateV3`'s write op turns this RED. -/
+theorem delegate_forces_committed_write {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (del rec t : CellId)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsat : Satisfied2 hash delegateV3 mi mf ma tr)
+    (henc : DelegateCapsTreeEncodes S pre post del rec t)
+    (anc : DelegateWriteAnchor S pre post del rec t hash mi mf ma tr henc) :
+    writesTo hash henc.oldRoot
+      ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
+      henc.newRoot := by
+  rw [anc.oldAnchored, anc.newAnchored]
+  exact (delegateV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+
+/-- **`delegate_descriptorRefines_sat` — THE DELEGATE CLASS-A REFINEMENT (write FORCED).** From
+`Satisfied2 hash delegateV3` + the decode + the realizable write-anchor, the kernel `DelegateSpec pre del
+rec t post` HOLDS AND the post cap-root is the DEPLOYED-FORCED genuine sorted insert
+(`delegate_forces_committed_write`). Unlike `delegate_descriptorRefines` (whose `newRoot` was a free
+decode field), the post-root here is pinned by the LIVE `insertWriteOp` — guarantee A is circuit-forced.
+The `grant` `Caps`-move + frame + log are the named §1 decode residual. -/
+theorem delegate_descriptorRefines_sat {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (del rec t : CellId)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsat : Satisfied2 hash delegateV3 mi mf ma tr)
+    (henc : DelegateCapsTreeEncodes S pre post del rec t)
+    (anc : DelegateWriteAnchor S pre post del rec t hash mi mf ma tr henc) :
+    DelegateSpec pre del rec t post
+    ∧ writesTo hash henc.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
+        henc.newRoot :=
+  ⟨delegate_descriptorRefines S pre post del rec t henc,
+   delegate_forces_committed_write S pre post del rec t hash mi mf ma tr hsat henc anc⟩
+
+/-- **`grantCap_descriptorRefines_sat` — THE GRANTCAP CLASS-A REFINEMENT (write FORCED).** As
+`delegate_descriptorRefines_sat`, consuming `Satisfied2 hash grantCapWriteV3` via
+`grantCapWriteV3_forces_write` (grantCap shares the moving attenuate-A base + the cap-crown write leg).
+The bare grant routes to `DelegateSpec` (the same insert), so the SAME decode delivers the kernel spec. -/
+theorem grantCap_descriptorRefines_sat {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (del rec t : CellId)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsat : Satisfied2 hash grantCapWriteV3 mi mf ma tr)
+    (henc : DelegateCapsTreeEncodes S pre post del rec t)
+    (anc : DelegateWriteAnchor S pre post del rec t hash mi mf ma tr henc) :
+    DelegateSpec pre del rec t post
+    ∧ writesTo hash henc.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
+        henc.newRoot := by
+  refine ⟨delegate_descriptorRefines S pre post del rec t henc, ?_⟩
+  rw [anc.oldAnchored, anc.newAnchored]
+  exact (grantCapWriteV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+
+/-- **`DelegateAttenWriteAnchor` — the realizable trace seam for delegateAtten** (the attenuated grant's
+INSERT). As `DelegateWriteAnchor` over the `DelegateAttenCapsTreeEncodes` decode. -/
+structure DelegateAttenWriteAnchor {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (henc : DelegateAttenCapsTreeEncodes S pre post del rec t keep) : Type where
+  row : Nat
+  hrow : row < tr.rows.length
+  hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.selA.ATTENUATE = 1
+  oldAnchored : henc.oldRoot = (envAt tr row).loc (sbCol CAP_ROOT)
+  newAnchored : henc.newRoot = (envAt tr row).loc (saCol CAP_ROOT)
+
+/-- **`delegateAtten_descriptorRefines_sat` — THE DELEGATEATTEN CLASS-A REFINEMENT (write FORCED + non-amp).**
+From `Satisfied2 hash delegateAttenV3` (via `delegateAttenV3_non_amp` — the DEPLOYED held-read + insert-write
++ submask lookup), the kernel `DelegateAttenSpec` HOLDS, the post cap-root is the DEPLOYED-FORCED genuine
+sorted insert of the attenuated grant, AND the conferred mask `⊑` the held mask (non-amplification, FORCED
+in-circuit). The attenuated-`grant` `Caps`-move + frame + log are the named §2.b decode residual. -/
+theorem delegateAtten_descriptorRefines_sat {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsub : tr.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
+      = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
+    (hsat : Satisfied2 hash delegateAttenV3 mi mf ma tr)
+    (henc : DelegateAttenCapsTreeEncodes S pre post del rec t keep)
+    (anc : DelegateAttenWriteAnchor S pre post del rec t keep hash mi mf ma tr henc) :
+    DelegateAttenSpec pre del rec t keep post
+    ∧ writesTo hash henc.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
+        henc.newRoot
+    ∧ ∃ a b : Nat, (envAt tr anc.row).loc (prmCol KEEP_MASK) = (a : ℤ)
+        ∧ (envAt tr anc.row).loc (prmCol HELD_MASK) = (b : ℤ) ∧ a &&& b = a := by
+  have hforced := delegateAttenV3_non_amp hash mi mf ma tr hsub hsat anc.row anc.hrow anc.hactive
+  refine ⟨delegateAtten_descriptorRefines S pre post del rec t keep henc, ?_, hforced.2.2⟩
+  rw [anc.oldAnchored, anc.newAnchored]
+  exact hforced.2.1
+
 /-! ## §4 — non-vacuity: the sorted-tree teeth BITE on the cap family (the moves are real).
 
 The three operations move the committed key set observably: insert grows it (a delegate adds a key),
@@ -508,5 +649,109 @@ private def demoSpine : List ℤ := [10, 20, 30]
 #assert_axioms revoke_execFullA
 #assert_axioms revokeDelegation_execFullA
 #assert_axioms revoke_drops_edge
+-- §3.5 CLASS-A: the cap-tree WRITE forced from the DEPLOYED descriptor (the moving-face 3 of 5 gaps).
+#assert_axioms delegate_forces_committed_write
+#assert_axioms delegate_descriptorRefines_sat
+#assert_axioms grantCap_descriptorRefines_sat
+#assert_axioms delegateAtten_descriptorRefines_sat
+
+/-! ## §3.A — revokeCapability: CLASS A from the DEPLOYED `revokeCapabilityV3` (the write-leg IS deployed).
+
+Unlike the §1–§3 modelled-`SpineCommits` decodes and §3.5's moving-face gaps, `revokeCapability` carries its
+remove-WRITE on the live wire AT HEAD already: `revokeCapabilityV3 = v3OfWith … [.mapOp heldReadOp, .mapOp
+removeWriteOp]`, `removeWriteOp` being the genuine `writesTo cap_root key 0 cap_root_after` (the ZERO-sentinel
+remove). So `revokeCapability` is CLASS A by the same recipe Birth/Notes/cellSeal use — the DEPLOYED gate
+forces the felt-level cap-tree write, and a `WitnessDecodes`-class seam lifts it to the kernel `removeEdgeCaps`
+move. `revokeCapabilityV3_non_amp` (mirrors `attenuateV3_non_amp`) forces `opensTo` (held authenticated) +
+`writesTo … 0 …` (the ZERO remove) from `Satisfied2 hash revokeCapabilityV3`; the `capsMoveDecodes` seam lifts
+the forced write to `removeEdgeCaps`. No submask lookup — revoke deletes a slot, non-amplification is
+structural. -/
+
+theorem revokeCapabilityV3_non_amp (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (hactive : (envAt t i).loc Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.selA.ATTENUATE = 1) :
+    opensTo hash ((envAt t i).loc (sbCol CAP_ROOT))
+        ((envAt t i).loc (prmCol CAP_KEY))
+        (some ((envAt t i).loc (prmCol HELD_MASK)))
+    ∧ writesTo hash ((envAt t i).loc (sbCol CAP_ROOT))
+        ((envAt t i).loc (prmCol CAP_KEY)) 0
+        ((envAt t i).loc (saCol CAP_ROOT)) := by
+  have hrowc := hsat.rowConstraints i hi
+  have hmem : ∀ c ∈ ([.mapOp heldReadOp, .mapOp removeWriteOp] :
+      List Dregg2.Circuit.DescriptorIR2.VmConstraint2), c ∈ revokeCapabilityV3.constraints :=
+    fun c hc => List.mem_append_right _ hc
+  have hread := hrowc (.mapOp heldReadOp) (hmem _ (by simp))
+  have hwrite := hrowc (.mapOp removeWriteOp) (hmem _ (by simp))
+  exact ⟨(hread hactive).1, hwrite hactive⟩
+
+/-- **`RevokeCapabilityTraceReadout` — the realizable circuit-witness extraction for revokeCapability.** The
+`WitnessDecodes` class of cellSeal's `CellSealTraceReadout`: the ACTIVE cap-graph row + its selector + the
+cap-remove seam (the deployed-forced ZERO-write IS the kernel `removeEdgeCaps` move) + receipt + frame. -/
+structure RevokeCapabilityTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (holder target : CellId) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.selA.ATTENUATE = 1
+  capsMoveDecodes :
+    writesTo hash ((envAt t row).loc (sbCol CAP_ROOT))
+        ((envAt t row).loc (prmCol CAP_KEY)) 0
+        ((envAt t row).loc (saCol CAP_ROOT))
+      → post.kernel.caps = removeEdgeCaps pre.kernel.caps holder target
+  logAdv : post.log = authReceipt holder :: pre.log
+  frame : KernelFrameExceptCaps pre post
+
+/-- **`revokeCapability_forced_sat` — the cap-edge removal is FORCED by the DEPLOYED `revokeCapabilityV3`.** -/
+theorem revokeCapability_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (holder target : CellId)
+    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    post.kernel.caps = removeEdgeCaps pre.kernel.caps holder target :=
+  rd.capsMoveDecodes
+    (revokeCapabilityV3_non_amp hash hsat rd.row rd.hrow rd.hsel).2
+
+/-- **`revokeCapability_descriptorRefines_sat` — THE CLASS-A REFINEMENT for revokeCapability.** The
+`removeEdgeCaps` move is forced from the DEPLOYED remove-write's `Satisfied2`; editing `revokeCapabilityV3`'s
+constraints turns this RED. -/
+theorem revokeCapability_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (holder target : CellId)
+    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    RevokeSpec pre holder target post :=
+  ⟨trivial, revokeCapability_forced_sat hash hsat pre post holder target rd, rd.logAdv,
+   rd.frame.frAccounts, rd.frame.frCell, rd.frame.frNullifiers, rd.frame.frRevoked,
+   rd.frame.frCommitments, rd.frame.frBal, rd.frame.frSlotCaveats, rd.frame.frFactories,
+   rd.frame.frLifecycle, rd.frame.frDeathCert, rd.frame.frDelegate, rd.frame.frDelegations,
+   rd.frame.frDelegationEpoch, rd.frame.frDelegationEpochAt, rd.frame.frHeaps⟩
+
+/-- **`revokeCapability_execFullA_sat` — the Class-A refinement against the executor arm.** -/
+theorem revokeCapability_execFullA_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (holder target : CellId)
+    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    execFullA pre (.revoke holder target) = some post :=
+  (execFullA_revoke_iff_spec pre holder target post).mpr
+    (revokeCapability_descriptorRefines_sat hash hsat pre post holder target rd)
+
+/-- **CLASS-A TOOTH — a forged wrong-caps revokeCapability witness is UNSAT.** -/
+theorem revokeCapability_sat_rejects_wrong_caps (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (holder target : CellId)
+    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target)
+    (hwrong : post.kernel.caps ≠ removeEdgeCaps pre.kernel.caps holder target) :
+    False :=
+  hwrong (revokeCapability_forced_sat hash hsat pre post holder target rd)
+
+#assert_axioms revokeCapabilityV3_non_amp
+#assert_axioms revokeCapability_forced_sat
+#assert_axioms revokeCapability_descriptorRefines_sat
+#assert_axioms revokeCapability_execFullA_sat
+#assert_axioms revokeCapability_sat_rejects_wrong_caps
 
 end Dregg2.Circuit.RotatedKernelRefinementCapFamily
