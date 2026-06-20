@@ -11,6 +11,16 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ✅ M2 EFFICIENCY — VALIDATED AT SCALE (the #[ignore]'d microbench, run 2026-06-20)
+The headline livability claim — per-render projection is O(changed), not O(ledger) — is now
+EMPIRICALLY confirmed (CI never runs this; the `projection_cost_is_flat_in_cell_count` bench
+is `#[ignore]`'d, ~30 min / 1781s). Memo-HIT per-render time is FLAT across the ledger growing
+16→16384 cells (1499ns → 1416ns; ratio 0.94× < the 8× gate), while COLD (pre-M2) grows
+23.6µs → 4.76ms — so the win WIDENS with scale: 15.8× @16 → **3363× @16384**. SOUNDNESS arm
+also passes (a touched-focus re-render recomputes — no stale memo hit). The M2 weld
+(`docs/deos/EFFICIENCY-WELD-PLAN.md`: state_root memo + dynamics-cursor projection memo + the
+lazy/batched ledger) holds at scale; no regression.
+
 ## ✅ M4 — canonical_ledger_root SHARED-LIFT COMPLETE (2026-06-20)
 The M4 "shared pub fn lift" tail, DONE: `canonical_ledger_root` lives ONCE in
 `dregg_persist::canonical_ledger_root`; BOTH callers migrated — starbridge's byte-for-byte
