@@ -11,6 +11,17 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## 🟧 PERSIST BUG — GUARDED (fail-fast); sound full fix queued (2026-06-20)
+UPDATE: a FAIL-FAST GUARD now landed (`World::genesis_mutation_would_break_reopen` +
+`set_cell_program` refusal): a genesis-path mutation on a turn-touched cell is REFUSED on a
+durable image (honest refusal > silent data-loss-on-reopen), via the cheap `touched_cells`
+scan over `history.steps()`; ephemeral worlds + genesis-SETUP mutations pass through. Tests:
+`a_mid_session_set_cell_program_on_a_touched_cell_is_refused` (guard) +
+`a_genesis_setup_set_cell_program_survives_reopen` (safe boundary). The guard now covers ALL THREE
+genesis-path mutators (`set_cell_program` + `genesis_grant_cap` + `genesis_open_permissions`).
+REMAINING: the SOUND FULL FIX so a post-turn mutation SUCCEEDS+survives (ordered pre/post-chain
+genesis events in the durable log — load-bearing recovery, ember's design/review). Original finding ↓.
+
 ## 🟥 PERSIST BUG — genesis-path mutation AFTER a turn makes the image non-reopenable (FOUND + reproduced 2026-06-20)
 The M4 "mid-session genesis set_cell_program rebuild tail" — investigated, and it's a REAL bug, not done.
 A genesis-path mutation (`World::set_cell_program` / `genesis_grant_cap` / `genesis_open_permissions` —

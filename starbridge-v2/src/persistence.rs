@@ -103,12 +103,15 @@ const TURN_KEY_PREFIX: &str = "sbv2_turn:";
 ///
 /// ⚠ KNOWN LIMITATION (reproduced + HORIZONLOG'd, 2026-06-20): this is sound ONLY
 /// for a genesis-path mutation on a cell that NO committed turn has touched. A
-/// mutation AFTER a turn touched the cell records the post-mutation cell as timeless
-/// "genesis", so recovery re-executes that turn against the poisoned base, diverges,
-/// and the fail-closed integrity check REFUSES the image (data-loss-on-close, NOT
-/// corruption). The sound fix splits pre-chain vs post-chain genesis-path mutations
-/// in the durable log; until then, treat `set_cell_program` etc. as genesis-SETUP
-/// only (before the cell's first turn). Guard test: `a_mid_session_set_cell_program_survives_reopen` (`#[ignore]`d, asserts the fixed behavior).)
+/// mutation AFTER a turn touched the cell would record the post-mutation cell as
+/// timeless "genesis", so recovery would re-execute that turn against the poisoned
+/// base, diverge, and the fail-closed integrity check would REFUSE the image. To
+/// prevent that data-loss-on-reopen, `World::set_cell_program` consults the FAIL-FAST
+/// guard `genesis_mutation_would_break_reopen` and REFUSES such a mutation on a
+/// durable image (an honest refusal). The sound full fix (which would let it succeed)
+/// splits pre-chain vs post-chain genesis-path mutations in the durable log — HORIZONLOG.
+/// Tests: `a_mid_session_set_cell_program_on_a_touched_cell_is_refused` (the guard) +
+/// `a_genesis_setup_set_cell_program_survives_reopen` (the safe boundary).)
 const GENESIS_KEY_PREFIX: &str = "sbv2_genesis:";
 /// The config key holding the ordered list of durable genesis cell ids (postcard
 /// `Vec<[u8;32]>`) — install order, so recovery reinstalls deterministically.
@@ -524,18 +527,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// REPRODUCES a real durability bug (found 2026-06-20; HORIZONLOG). A
-    /// genesis-path mutation (`set_cell_program` — reachable mid-session via the
-    /// interactive predicate composer + organ setup) on a cell that a COMMITTED
-    /// TURN already touched makes the durable image NON-REOPENABLE: `durable_regenesis`
-    /// records the post-mutation cell as timeless "genesis", so recovery re-executes
-    /// the earlier turn against the poisoned base, diverges from the recorded root,
-    /// and the fail-closed integrity check REFUSES the image (`Integrity("a durable
-    /// committed turn did NOT re-commit on recovery")`). Safe (fail-closed, never
-    /// serves corruption) but a real data-loss-on-close bug. This test asserts the
-    /// DESIRED (fixed) behavior — the program survives reopen — and is `#[ignore]`d
-    /// until the sound fix lands (distinguish pre-chain vs post-chain genesis-path
-    /// mutations in the durable log + apply post-chain ones AFTER turn re-execution).
     #[test]
     fn a_genesis_setup_set_cell_program_survives_reopen() {
         // THE SAFE BOUNDARY (the companion to the #[ignore]'d after-turn bug): a
@@ -576,50 +567,46 @@ mod tests {
         );
     }
 
+    /// THE FAIL-FAST GUARD for the genesis-mirror-after-turn durability bug (found
+    /// 2026-06-20; HORIZONLOG). A genesis-path mutation (`set_cell_program` —
+    /// reachable mid-session via the interactive predicate composer + organ setup) on
+    /// a cell that a COMMITTED TURN already touched would make the durable image
+    /// NON-REOPENABLE (the post-mutation cell, recorded as timeless "genesis", poisons
+    /// recovery's re-execution of that turn). The guard
+    /// (`World::genesis_mutation_would_break_reopen`) REFUSES it — an honest refusal
+    /// rather than silent data-loss-on-reopen; the image stays clean. (The sound full
+    /// fix — ordered pre/post-chain genesis events in the durable log — would instead
+    /// make it SUCCEED + survive; HORIZONLOG.)
     #[test]
-    #[ignore = "REPRODUCES the genesis-mirror-after-turn recovery bug — see HORIZONLOG (asserts the fixed behavior)"]
-    fn a_mid_session_set_cell_program_survives_reopen() {
-        // SEAM §2 durability: an in-place `set_cell_program` bypasses the executor
-        // and emits NO `CommitRecord`, so its post-state must ride the durable
-        // genesis-mirror (`durable_regenesis`) to survive close+reopen. The hard
-        // case: the program is set AFTER a committed turn, so recovery must NOT let
-        // the turn's (program-less) commit-log overlay revert the later mirror.
+    fn a_mid_session_set_cell_program_on_a_touched_cell_is_refused() {
         use dregg_cell::CellProgram;
         let path = scratch_path();
-        let cell_id;
         {
             let mut w = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
                 .expect("fresh open of an empty store");
             let treasury = w.genesis_cell(0x11, 1_000);
             let user = w.genesis_cell(0x33, 0);
-            // A real committed turn — the image is genuinely mid-session.
             let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
             let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
             assert!(w.commit_turn(t).is_committed(), "the mid-session turn commits");
-            // MID-SESSION genesis-path mutation (no CommitRecord) AFTER the turn.
+            // treasury was TOUCHED by the transfer → the guard refuses the program-set
+            // (it would otherwise make the durable image non-reopenable).
             assert!(
-                w.set_cell_program(&treasury, CellProgram::Predicate(vec![])),
-                "set_cell_program on an existing cell succeeds"
+                !w.set_cell_program(&treasury, CellProgram::Predicate(vec![])),
+                "a genesis-path mutation on a turn-touched cell is refused (durable image)"
             );
-            cell_id = treasury;
+            // The refusal did not partially apply — the program stays at the default.
+            assert_eq!(
+                w.ledger().get(&treasury).unwrap().program,
+                CellProgram::None,
+                "the refused mutation left the cell's program untouched"
+            );
             // w dropped — the redb file persists on disk.
         }
-        // Reopen: the mid-session program must survive (durable_regenesis +
-        // last-writer-wins, NOT reverted by the earlier turn's overlay).
+        // The image reopens CLEANLY — the guard prevented the corrupting mutation.
         let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
-            .expect("reopen must recover (convergence holds with the durable program)");
-        let prog = reopened
-            .ledger()
-            .get(&cell_id)
-            .expect("the cell is restored")
-            .program
-            .clone();
-        assert_eq!(
-            prog,
-            CellProgram::Predicate(vec![]),
-            "the mid-session set_cell_program survives close+reopen"
-        );
-        assert_ne!(prog, CellProgram::None, "not reverted to the genesis default");
+            .expect("reopen is clean — the guard prevented the non-reopenable image");
+        assert!(reopened.is_durable());
     }
 
     #[test]
