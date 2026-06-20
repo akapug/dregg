@@ -3028,3 +3028,18 @@ Of the 24 census Class-B slots (apex ranges over v3RegistryCapOpen, CapOpenEmit.
 NEXT WAVE: (a) fan the cellSeal recipe across the 13 other LAZY slots [non-VK, parallelizable]; (b) the 5 cap-write
 descriptor gaps [VK, mirror attenuate's keepWriteOp + _non_amp]; (c) revokeCapability force-lemma; (d) heapWrite
 registry entry. The "garbage" was 14 missing-joins + 5 genuine soundness holes — now mapped with fix shapes.
+
+## ⚑⚑ GOAL: "safely live within dregg" (2026-06-20) — the two floors that must hold
+The autonomous-harness-inside-deos goal decomposes into exactly two soundness floors:
+1. AUTHORITY FLOOR (guarantee A circuit-forced, no cap holes) — IN FLIGHT: the 4 Class-B agents, esp. the VK
+   cap-write agent closing the 5 real gaps (delegate/introduce/delegateAtten/revokeDelegation/refreshDelegation).
+   Load-bearing for "hand an agent caps + money safely" — the cap tree IS how authority delegates/revokes.
+2. HUMAN/RECOVERY FLOOR ("you cannot lose your own OS") — pieces exist (guardian_rotation, beacon_cell,
+   hints_onboarding, device_pairing, ResharingChain.lean, CrashRecovery.lean) but OWED:
+   (a) ⚠ node recovery FIRST-WRITER-WINS durability bug (state.rs:699/879 strict insert_cell silently DROPS a
+       post-checkpoint write to a cell the checkpoint holds; convergence root-mismatch only LOGS, doesn't fail
+       closed) — a real "lose/serve-divergent state" bug. FIX = upsert_cell (CrashRecovery.upd point-update =
+       remove-then-insert) at both sites + mismatch returns Err/refuses to serve. DRIVING NOW (node/, non-colliding).
+   (b) the recovery e2e seam (identity_social_recovery_e2e.rs — fresh cipherclerk, 3-of-5 HINTS guardians).
+   (c) circuit commitment for light-client-UNFOOLABLE recovery (currently host-TRUSTED — a guarantee gap: recovery
+       isn't yet in the verified surface). = a future weld (recovery effect → circuit rung).
