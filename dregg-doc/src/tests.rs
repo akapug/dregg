@@ -443,3 +443,304 @@ fn concurrent_resolutions_yield_a_state_still() {
     let _ = content(&both); // total even on a cyclic order
     assert_eq!(merge(&both, &both), both);
 }
+
+// ── conflict-as-state soundness: the commitment binds provenance ─────────────
+
+/// A title-clash document used by the commitment tests.
+fn title_clash() -> DocGraph {
+    let base = DocGraph::new();
+    let a = Patch::by(
+        Author(1),
+        [Op::SetField { name: "title".into(), value: "Cats".into(), superseding: false }],
+    )
+    .apply_to(&base);
+    let b = Patch::by(
+        Author(2),
+        [Op::SetField { name: "title".into(), value: "Dogs".into(), superseding: false }],
+    )
+    .apply_to(&base);
+    merge(&a, &b)
+}
+
+#[test]
+fn commit_is_canonical_construction_order_independent() {
+    // Building the SAME document two ways (merge order swapped) commits equal:
+    // the BTree canonical ordering makes the commitment construction-independent.
+    let base = DocGraph::new();
+    let a = Patch::by(Author(1), [Patch::add(1, "Hello ", AtomId::ROOT).1]).apply_to(&base);
+    let h = Patch::add(1, "Hello ", AtomId::ROOT).0;
+    let b = Patch::by(Author(2), [Patch::add(2, "world", h).1]).apply_to(&base);
+    let ab = merge(&a, &b);
+    let ba = merge(&b, &a);
+    assert_eq!(ab, ba, "fully equal (incl. provenance)");
+    assert_eq!(commit(&ab), commit(&ba), "equal docs commit equal");
+}
+
+#[test]
+fn commit_anti_forge_provenance() {
+    // THE ANTI-FORGE TOOTH: a conflict whose alternatives render IDENTICALLY but
+    // whose authorship is forged MUST change the commitment. A light client
+    // cannot be shown a conflict that lies about who authored an alternative.
+    let m = title_clash();
+    let c0 = commit(&m);
+
+    let mut forged = m.clone();
+    forged.forge_field_provenance("title", "Dogs", Author(7)); // was Author(2)
+
+    // The RENDER is byte-identical: same two values, same field.
+    let render_eq = {
+        let r0 = content(&m);
+        let rf = content(&forged);
+        let vals = |r: &Rendered| -> Vec<String> {
+            r.field_conflicts()
+                .flat_map(|c| c.alternatives.iter().map(|a| a.text.clone()))
+                .collect()
+        };
+        // values render the same even though the author differs
+        let mut a = vals(&r0);
+        let mut b = vals(&rf);
+        a.sort();
+        b.sort();
+        a == b
+    };
+    assert!(render_eq, "the forged conflict renders the same alternative values");
+
+    // ...but the commitment DIFFERS — the forge cannot hide under an equal render.
+    assert_ne!(commit(&forged), c0, "forging an alternative's author changes the commitment");
+}
+
+#[test]
+fn commit_anti_forge_dropped_alternative() {
+    // Hiding an alternative (dropping one side of the clash) also changes the
+    // commitment — you cannot show a light client a "resolved" doc that secretly
+    // dropped a co-author's value while claiming to be the same document.
+    let m = title_clash();
+    let c0 = commit(&m);
+
+    let mut hidden = m.clone();
+    hidden.drop_field_assignment("title", "Dogs");
+    assert_eq!(hidden.field("title").len(), 1, "one alternative hidden");
+
+    assert_ne!(commit(&hidden), c0, "dropping an alternative changes the commitment");
+}
+
+#[test]
+fn commit_binds_prose_alternative_provenance() {
+    // The prose-conflict analogue: two concurrent inserts by different authors.
+    // The commitment binds each atom's provenance, so swapping which author
+    // wrote an alternative changes the commitment even at equal rendered text.
+    let (m, _w, _a, _b) = conflicting_merge();
+    let c0 = commit(&m);
+    // Re-author the SAME document with the conflict alternatives' authors swapped
+    // by rebuilding from the other side: a structurally-equal doc with different
+    // provenance must NOT commit equal.
+    let (base, _h, w) = hello_world();
+    let a = Patch::by(Author(2), [Patch::add(30, " ALPHA", w).1]).apply_to(&base); // swapped author
+    let b = Patch::by(Author(1), [Patch::add(31, " BETA", w).1]).apply_to(&base);
+    let swapped = merge(&a, &b);
+    assert!(
+        swapped.structural_eq(&m),
+        "same content/edges (structural), only provenance differs"
+    );
+    assert_ne!(commit(&swapped), c0, "provenance is bound: swapped authors -> different commitment");
+}
+
+#[test]
+fn commit_stable_under_remerge() {
+    // The commitment of a conflicted doc is stable under idempotent re-merge
+    // (the conflict is a STATE with a fixed commitment, not a transient).
+    let m = title_clash();
+    assert_eq!(commit(&merge(&m, &m)), commit(&m));
+}
+
+// ── blame / annotate (authorship that survives moves + merges) ───────────────
+
+#[test]
+fn blame_attributes_each_atom_to_its_real_author() {
+    // Author(1) wrote "Hello ", Author(2) wrote "world".
+    let mut g = DocGraph::new();
+    let (h, op_h) = Patch::add(1, "Hello ", AtomId::ROOT);
+    let (_w, op_w) = Patch::add(2, "world", h);
+    Patch::by(Author(1), [op_h]).apply(&mut g);
+    Patch::by(Author(2), [op_w]).apply(&mut g);
+
+    let lines = blame(&g);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].content, "Hello ");
+    assert_eq!(lines[0].author, Author(1));
+    assert_eq!(lines[1].content, "world");
+    assert_eq!(lines[1].author, Author(2));
+    // Each line's patch is the real introducing patch (non-genesis).
+    assert_ne!(lines[0].patch, PatchId::GENESIS);
+    assert_ne!(lines[1].patch, PatchId::GENESIS);
+}
+
+#[test]
+fn blame_does_not_reassign_on_a_middle_insert() {
+    // THE CORRECTNESS PROPERTY. git-blame smears authorship when surrounding
+    // text shifts; here the atom id is content-addressed and stable, so a third
+    // author inserting in the MIDDLE leaves the original two atoms' blame exactly
+    // where it was.
+    let mut g = DocGraph::new();
+    let (h, op_h) = Patch::add(1, "Hello ", AtomId::ROOT);
+    let (w, op_w) = Patch::add(2, "world", h);
+    Patch::by(Author(1), [op_h]).apply(&mut g);
+    Patch::by(Author(2), [op_w]).apply(&mut g);
+
+    let before = blame(&g);
+
+    // Author(3) inserts "big " in the middle, threading the order
+    // (after "Hello ", connected before "world") so it lands cleanly.
+    let (big, op_big) = Patch::add(3, "big ", h);
+    let mut p = Patch::by(Author(3), [op_big]);
+    p.push(Op::Connect { from: big, to: w });
+    p.apply(&mut g);
+
+    let after = blame(&g);
+    // The doc now reads "Hello big world" (the insert landed in the middle).
+    assert_eq!(content(&g).to_marked_string(), "Hello big world");
+
+    // The ORIGINAL two atoms keep their ids, content, AND authors — unmoved.
+    let find = |b: &[BlameLine], a: AtomId| b.iter().find(|l| l.atom == a).cloned().unwrap();
+    assert_eq!(find(&before, h).author, Author(1));
+    assert_eq!(find(&after, h).author, Author(1), "middle insert did NOT reassign Hello");
+    assert_eq!(find(&before, w).author, Author(2));
+    assert_eq!(find(&after, w).author, Author(2), "middle insert did NOT reassign world");
+    // The inserted atom is correctly the only one attributed to Author(3).
+    assert!(after.iter().filter(|l| l.author == Author(3)).count() == 1);
+    assert_eq!(after.iter().find(|l| l.author == Author(3)).unwrap().content, " big");
+}
+
+#[test]
+fn blame_summary_tallies_contributions() {
+    let mut g = DocGraph::new();
+    let (h, op_h) = Patch::add(1, "Hello ", AtomId::ROOT);
+    let (w, op_w) = Patch::add(2, "world", h);
+    let (_b, op_b) = Patch::add(3, " big", h);
+    Patch::by(Author(1), [op_h]).apply(&mut g);
+    Patch::by(Author(2), [op_w]).apply(&mut g);
+    Patch::by(Author(1), [op_b]).apply(&mut g); // Author(1) again
+    let _ = w;
+
+    let tally = blame_summary(&g);
+    assert_eq!(tally.get(&Author(1)), Some(&2), "Hello + big");
+    assert_eq!(tally.get(&Author(2)), Some(&1), "world");
+    assert_eq!(tally.get(&Author::SYSTEM), None, "ROOT is not counted");
+}
+
+#[test]
+fn blame_attributes_both_conflict_alternatives() {
+    // In a merge conflict, blame still attributes EACH atom (both alternatives)
+    // to its real author — conflict is a state, not a blame-erasing event.
+    let (m, _w, alt_a, alt_b) = conflicting_merge();
+    let tally = blame_summary(&m);
+    // " ALPHA" by Author(1), " BETA" by Author(2), plus the two clean atoms
+    // (Hello / world) both by Author(1).
+    assert_eq!(tally.get(&Author(1)), Some(&3));
+    assert_eq!(tally.get(&Author(2)), Some(&1));
+    // The alternative atoms carry their real authors on the graph.
+    assert_eq!(m.atom(alt_a).unwrap().provenance.author, Author(1));
+    assert_eq!(m.atom(alt_b).unwrap().provenance.author, Author(2));
+}
+
+// ── three-way / diff3 conflict view (BASE + OURS + THEIRS) ───────────────────
+
+/// A common base "Hello world", forked into two branches that each replace the
+/// tail differently — a genuine 3-way conflict over the tail position.
+fn three_way_setup() -> (History, History, History) {
+    let mut base = History::new();
+    let (h, op_h) = Patch::add(1, "Hello ", AtomId::ROOT);
+    let (w, op_w) = Patch::add(2, "world", h);
+    base.commit(Patch::by(Author(1), [op_h]));
+    base.commit(Patch::by(Author(1), [op_w]));
+
+    // Both branches append concurrently after `w` (the ancestor's tail).
+    let mut ours = base.branch();
+    ours.commit(Patch::by(Author(1), [Patch::add(30, " ALPHA", w).1]));
+    let mut theirs = base.branch();
+    theirs.commit(Patch::by(Author(2), [Patch::add(31, " BETA", w).1]));
+    (base, ours, theirs)
+}
+
+#[test]
+fn merge_base_is_the_longest_common_prefix() {
+    let (base, ours, theirs) = three_way_setup();
+    let mb = merge_base(&ours, &theirs);
+    assert_eq!(mb.patches(), base.patches(), "the shared prefix is exactly base");
+    assert_eq!(mb.len(), 2);
+    // The merge base of identical histories is the whole history.
+    assert_eq!(merge_base(&ours, &ours).patches(), ours.patches());
+}
+
+#[test]
+fn render_three_way_shows_base_and_both_sides() {
+    let (base, ours, theirs) = three_way_setup();
+    let merged = three_way(&base, &ours, &theirs);
+    assert!(content(&merged).has_conflict());
+
+    let views = render_three_way(&merged, &base.replay());
+    assert_eq!(views.len(), 1, "one three-way conflict over the tail");
+    let v = &views[0];
+    // BASE: the ancestor carried nothing after the tail (a concurrent insert).
+    assert_eq!(v.base_text, "");
+    // Both sides present, with their real authors and diverging text.
+    assert_eq!(v.sides.len(), 2);
+    assert!(v.sides.iter().any(|s| s.author == Author(1) && s.text.contains("ALPHA")));
+    assert!(v.sides.iter().any(|s| s.author == Author(2) && s.text.contains("BETA")));
+}
+
+#[test]
+fn render_three_way_recovers_nonempty_ancestor_text() {
+    // A base whose tail atom is REPLACED on both branches (each tombstones the
+    // ancestor's tail and adds its own after the head) — the BASE column then
+    // recovers the ancestor's real content "world".
+    let mut base = History::new();
+    let (h, op_h) = Patch::add(1, "Hello ", AtomId::ROOT);
+    let (w, op_w) = Patch::add(2, "world", h);
+    base.commit(Patch::by(Author(1), [op_h]));
+    base.commit(Patch::by(Author(1), [op_w]));
+
+    let mut ours = base.branch();
+    ours.commit(Patch::by(
+        Author(1),
+        [Op::Delete { id: w }, Patch::add(40, "Mars", h).1],
+    ));
+    let mut theirs = base.branch();
+    theirs.commit(Patch::by(
+        Author(2),
+        [Op::Delete { id: w }, Patch::add(41, "Venus", h).1],
+    ));
+
+    let merged = three_way(&base, &ours, &theirs);
+    assert!(content(&merged).has_conflict());
+    let views = render_three_way(&merged, &base.replay());
+    assert_eq!(views.len(), 1);
+    // BASE recovers what the common ancestor had at the fork point after `h`.
+    assert_eq!(views[0].base_text, "world");
+    assert!(views[0].sides.iter().any(|s| s.text.contains("Mars")));
+    assert!(views[0].sides.iter().any(|s| s.text.contains("Venus")));
+}
+
+#[test]
+fn render_three_way_clean_merge_yields_no_conflicts() {
+    // Disjoint edits at DIFFERENT, linearly-ordered positions: one branch
+    // inserts between atom1 and atom2, the other between atom2 and atom3. The
+    // two inserts are ordered (not concurrent), so the union linearizes cleanly
+    // — NO three-way conflict entries.
+    let mut base = History::new();
+    let (a1, op1) = Patch::add(1, "one", AtomId::ROOT);
+    let (a2, op2) = Patch::add(2, "two", a1);
+    let (_a3, op3) = Patch::add(3, "three", a2);
+    base.commit(Patch::by(Author(1), [op1]));
+    base.commit(Patch::by(Author(1), [op2]));
+    base.commit(Patch::by(Author(1), [op3]));
+
+    let mut ours = base.branch();
+    ours.commit(Patch::by(Author(1), [Patch::add(50, "X", a1).1])); // after "one"
+    let mut theirs = base.branch();
+    theirs.commit(Patch::by(Author(2), [Patch::add(51, "Y", a2).1])); // after "two"
+
+    let merged = three_way(&base, &ours, &theirs);
+    assert!(!content(&merged).has_conflict(), "disjoint ordered edits merge clean");
+    assert!(render_three_way(&merged, &base.replay()).is_empty());
+}

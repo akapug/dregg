@@ -29,7 +29,54 @@ repository = "https://github.com/emberian/dregg"
 # `cargo build/test --workspace` without touching the root Cargo.toml.
 [workspace]
 
+[features]
+# OFF by default: the core stays STANDALONE and dependency-free (load-bearing —
+# pure data structures + algorithms, fast and `cargo test`-able in isolation).
+#
+# `substrate` welds the document onto the REAL dregg cell substrate: it pulls in
+# `dregg-cell` (a path dep into the parent workspace's `../cell`) and projects a
+# `DocGraph` into a real `(collection_id, key) -> 32-byte` cell heap, committing
+# it via the production `compute_heap_root` — the sorted-Poseidon2 binary Merkle
+# tree, the faithful commitment the light client actually trusts. This REPLACES
+# the in-crate `DefaultHasher` stand-in (`commit::commit`) with the real ride.
+#
+# `substrate` ALSO closes THE SEAM (DOCUMENT-LANGUAGE.md §4.1, §4.3 dregg-native):
+# a document IS a real `dregg_cell::Cell` ([`DocCell`]) and an edit IS a real
+# turn — `Op::{Add,Delete,Connect,SetField}` desugars to genuine
+# `dregg_turn::Effect::SetField` writes into that cell's heap, producing a real
+# `dregg_turn::TurnReceipt`. The receipt IS the provenance: no more stand-in
+# `PatchId` for who-wrote-what. That is why `dregg-turn` is pulled in here.
+substrate = ["dep:dregg-cell", "dep:dregg-turn", "dep:blake3"]
+
 [dependencies]
+# The REAL substrate (optional, behind `substrate`): a path dep into the parent
+# dregg workspace's `cell` crate. Cargo resolves `dregg-cell`'s workspace
+# inheritance (`version.workspace`, etc.) from ITS OWN workspace root (the parent
+# `../Cargo.toml`), so this cross-workspace path dep resolves cleanly even though
+# dregg-doc is its own (empty) workspace.
+dregg-cell = { path = "../cell", optional = true }
+# The REAL turn substrate (optional, behind `substrate`): the genuine `Effect`
+# (the kernel write grammar an edit desugars to) and `TurnReceipt` (the witnessed
+# proof of who-wrote-what that BECOMES the document's provenance). A patch IS a
+# turn (DOCUMENT-LANGUAGE.md §1.1). Same cross-workspace path-dep resolution as
+# `dregg-cell` (turn resolves its own workspace inheritance from `../Cargo.toml`).
+dregg-turn = { path = "../turn", optional = true }
+# The leaf-digest hash for the heap projection (32-byte leaf values that bind
+# provenance). `blake3` is ALREADY in the substrate dep tree via `dregg-cell`,
+# so gating it on `substrate` adds no new transitive dependency; with the
+# feature OFF the core pulls in nothing.
+blake3 = { version = "1", optional = true }
+
+# The parent dregg workspace patches `ark-serialize` to ember's fork (the
+# `serde_with` feature `dregg-hints` needs, transitively reachable through
+# `dregg-turn` under the `substrate` feature). Because dregg-doc is its OWN
+# (empty) workspace, it does not inherit the parent's `[patch]`, so it must
+# mirror it for `--features substrate` to resolve. The pure-git Plonky3 / p3
+# pins need no mirroring (the parent comment: "PURE git deps, no `[patch]` — a
+# fresh clone resolves identically"); only this `crates.io` patch does.
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
 
 [lints.rust]
 unsafe_code = "forbid"

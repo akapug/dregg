@@ -129,6 +129,58 @@ impl Rendered {
     }
 }
 
+/// Walk the *alive* atoms in document order, yielding `(id, content)` for each.
+///
+/// This is the per-atom companion to [`content`]: where `content` coalesces a
+/// clean run into one `String` (losing the atom boundaries), `walk_atoms`
+/// preserves the atom granularity so a caller can map "the token at position i"
+/// back to "the atom id holding it" — which is exactly what the ergonomic
+/// text-diff authoring path ([`crate::Doc`]) needs to MATCH kept tokens to their
+/// existing atoms instead of re-minting them.
+///
+/// It follows the same walk as [`content`]: start at [`AtomId::ROOT`], step
+/// through the single live successor, conducting order *through* tombstones. At
+/// a genuine antichain (a conflict) the linear order is not in the graph, so the
+/// walk stops at the fork (the clean prefix is what's authorable). For a clean
+/// linear document — the steady state of single-author text editing — this
+/// yields every alive atom in order.
+pub fn walk_atoms(g: &DocGraph) -> Vec<(AtomId, String)> {
+    let mut out = Vec::new();
+    let mut visited = BTreeSet::new();
+    let mut cursor = AtomId::ROOT;
+    loop {
+        let succ = live_successors(g, cursor);
+        // Mirror the [`content`] walk's order resolution: a single live successor
+        // advances; multiple successors that are actually *ordered* (one
+        // reachable from another — the insert-in-the-middle shape, where the
+        // anchor keeps its old edge to the successor the insert threads before)
+        // collapse to the minimal one; only a genuine antichain (>=2 mutually
+        // unreachable) is a conflict with no linear order, where we stop.
+        let next = match succ.as_slice() {
+            [] => return out,
+            [single] => *single,
+            many => {
+                let antichain: Vec<AtomId> = many
+                    .iter()
+                    .copied()
+                    .filter(|&a| !many.iter().any(|&b| b != a && reachable(g, b, a)))
+                    .collect();
+                if antichain.len() >= 2 {
+                    return out; // a genuine fork: stop at the clean prefix.
+                }
+                antichain.first().copied().unwrap_or(many[0])
+            }
+        };
+        if !visited.insert(next) {
+            return out;
+        }
+        if let Some(a) = g.atom(next) {
+            out.push((next, a.content.clone()));
+        }
+        cursor = next;
+    }
+}
+
 /// Linearize a document graph into rendered content, surfacing antichains and
 /// field clashes as first-class conflict regions.
 ///
