@@ -204,6 +204,14 @@ pub mod heap_root;
 pub mod native_signature;
 #[allow(deprecated)]
 pub mod non_membership;
+/// THE OPENABLE `fields_root` commitment + the in-circuit INSERTION gate (the
+/// REFUSAL ledgerless-authority close, #103): a sorted Poseidon2 binary Merkle
+/// map over a cell's overflow user-field entries `key → value`, whose
+/// post-insertion root is DERIVED in-circuit from the pre-root + the public
+/// `(key, value)`. Lets refusal's authority change be FORCED in-circuit (no
+/// trusted post-cell / `Anchor::RecordDigest`). The path-folding AIR is
+/// `dsl::openable_fields_insertion`.
+pub mod openable_fields_root;
 pub mod predicate_program;
 #[allow(deprecated)]
 pub mod quantified_absence;
@@ -281,19 +289,20 @@ pub mod bilateral_aggregation_air;
 /// `metatheory/Dregg2/Circuit/CrossCellConservation.lean`.
 pub mod cross_cell_conservation_air;
 
+/// BLOCK / BATCH-level cross-cell conservation COLLECTOR (the deeper half of gap #6): gathers every
+/// per-cell proof's published signed NET_DELTA, groups by asset (AssetId := issuer-cell), and runs
+/// the committed `cross_cell_conservation_air` per asset — ACCEPTS the block iff every asset's Σδ=0
+/// (incl. declared mint/burn), else REJECTS. The cross-cell light-client bite the per-cell-isolated
+/// path structurally cannot give. ADDITIVE: NOT wired into the live verifier (see module docs for
+/// the `verify_proof_carrying_turn_bundle` handoff seam).
+pub mod block_conservation;
+
 /// Effect-VM-shape bridge AIR for the `p3-recursion` path. See module
 /// docs — this is a *shape* mirror of `effect_vm::EffectVmAir` used to
 /// measure that the recursion library accepts the Effect VM's column and
 /// PI counts (Block 1/2 of the Golden Vision recursion lane).
 #[cfg(feature = "prover")]
 pub mod effect_vm_p3_air;
-
-/// Constraint-COMPLETE Plonky3 `Air` for the Effect VM (v1 hand-AIR): the v1
-/// commit-path EffectVM proof on the audited `p3-batch-stark` verifier. Retained
-/// under `#[cfg(not(feature = "prover"))]` for the v1 floor; the recursion tower
-/// proves through the rotated IR-v2 multi-table descriptor (`crate::descriptor_ir2`).
-#[cfg(not(feature = "prover"))]
-pub mod effect_vm_p3_full_air;
 
 /// Sorted-set neighbor-adjacency STARK: proves two leaves are *consecutive*
 /// under a committed binary Merkle root, closing the Silver non-membership

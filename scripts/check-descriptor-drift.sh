@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# check-descriptor-drift.sh — THE Lean<->JSON drift GATE (CI / pre-commit).
+# check-descriptor-drift.sh — THE Lean<->JSON cache-freshness GATE (CI / pre-commit).
 #
-# Regenerates the descriptors from the verified Lean emission and fails if the
-# result differs from what is checked in. This is the guard that catches the
-# class of drift the in-Rust round-trip test CANNOT: a stale committed JSON whose
-# self-consistent FP makes it pass the sha256 round-trip while the Lean emission
-# has moved underneath it.
+# The checked-in descriptors are a CACHE of the Lean emission (Lean is the source
+# of truth). This GENERATE-FRESH gate regenerates them from the verified Lean
+# emission and fails if the result differs from what is checked in. This is the
+# only honest Lean<->JSON guard: a `sha256(bytes) == committed-FP` rehash proves
+# only that a file matches the hash committed beside it (self-consistency) — it
+# CANNOT catch a committed JSON gone stale while the Lean emission moved underneath
+# it. Re-deriving from Lean is the whole point; this script re-derives.
 #
 # Usage:  scripts/check-descriptor-drift.sh
 # Exit:   0 = no drift; nonzero = the Lean emission and the checked-in artifacts

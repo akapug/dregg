@@ -1,21 +1,20 @@
-//! Integration drift-guard for the Lean-emitted EffectVM descriptor registry.
+//! Integration test for the Lean-emitted EffectVM descriptor registry.
 //!
-//! Binds the Rust registry (`effect_vm_descriptors`) to the verified Lean
-//! `emitVmJson` bytes: every registered descriptor must (a) parse through the
-//! running interpreter `parse_vm_descriptor` and (b) match its committed SHA-256
-//! fingerprint. This is the CI anti-drift tooth — a Lean re-emit that changes a
-//! descriptor (or a stale committed `circuit/descriptors/*.json`) fails here.
+//! Exercises the PUBLIC registry API the call-site cutover uses
+//! (`descriptor_for_selector`, `descriptor_for_name`, selector-table consistency):
+//! every registered descriptor must parse through the running interpreter
+//! `parse_vm_descriptor` into the structure the prover consumes.
 //!
-//! The byte-exact fingerprint check lives in the in-module unit test
-//! (`effect_vm_descriptors::tests::all_descriptors_parse_and_match_fingerprint`,
-//! which carries the self-contained SHA-256). This integration test exercises the
-//! PUBLIC registry API the call-site cutover will use: `descriptor_for_selector`,
-//! `descriptor_for_name`, and the selector-table consistency.
+//! The Lean↔JSON drift gate is GENERATE-FRESH: `scripts/check-descriptor-drift.sh`
+//! re-runs the Lean emitters and diffs against the checked-in artifacts. (A
+//! `sha256(bytes) == committed-FP` rehash proves only that a file matches the hash
+//! committed beside it — self-consistency, not that it still equals the Lean
+//! emission — so it is not exercised here.)
 
 use dregg_circuit::effect_vm::columns::sel;
 use dregg_circuit::effect_vm_descriptors::{
     ALL_DESCRIPTORS, NAME_ONLY_DESCRIPTORS, SELECTOR_DESCRIPTORS, descriptor_for_name,
-    descriptor_for_selector, descriptor_name_for_selector, fingerprint_for_name,
+    descriptor_for_selector, descriptor_name_for_selector,
 };
 use dregg_circuit::lean_descriptor_air::parse_vm_descriptor;
 
@@ -29,14 +28,9 @@ fn every_registered_descriptor_parses() {
     // the revokecapability-v1 cap-crown face. (The in-crate test
     // `effect_vm_descriptors::descriptor_registry_drift` pins the same 27.)
     assert_eq!(ALL_DESCRIPTORS.len(), 27, "expected 27 unique descriptors");
-    for (name, json, fp) in ALL_DESCRIPTORS {
+    for (name, json, _fp) in ALL_DESCRIPTORS {
         let by_name = descriptor_for_name(name).expect("name must resolve");
         assert_eq!(*json, by_name, "{name}: descriptor_for_name mismatch");
-        assert_eq!(
-            Some(*fp),
-            fingerprint_for_name(name),
-            "{name}: fingerprint_for_name mismatch"
-        );
         let desc = parse_vm_descriptor(json)
             .unwrap_or_else(|e| panic!("{name} failed to parse via interpreter: {e}"));
         assert_eq!(&desc.name, name, "{name}: parsed name != registry key");
