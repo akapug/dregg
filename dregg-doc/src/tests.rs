@@ -608,7 +608,7 @@ fn blame_does_not_reassign_on_a_middle_insert() {
     assert_eq!(find(&after, w).author, Author(2), "middle insert did NOT reassign world");
     // The inserted atom is correctly the only one attributed to Author(3).
     assert!(after.iter().filter(|l| l.author == Author(3)).count() == 1);
-    assert_eq!(after.iter().find(|l| l.author == Author(3)).unwrap().content, " big");
+    assert_eq!(after.iter().find(|l| l.author == Author(3)).unwrap().content, "big ");
 }
 
 #[test]
@@ -730,15 +730,20 @@ fn render_three_way_clean_merge_yields_no_conflicts() {
     let mut base = History::new();
     let (a1, op1) = Patch::add(1, "one", AtomId::ROOT);
     let (a2, op2) = Patch::add(2, "two", a1);
-    let (_a3, op3) = Patch::add(3, "three", a2);
+    let (a3, op3) = Patch::add(3, "three", a2);
     base.commit(Patch::by(Author(1), [op1]));
     base.commit(Patch::by(Author(1), [op2]));
     base.commit(Patch::by(Author(1), [op3]));
 
+    // Each insert threads the order (after the anchor, Connect-ed before the
+    // anchor's existing successor) so it lands as an ordered middle-insert, not a
+    // bare Add that leaves an antichain at the anchor.
+    let (x, xop) = Patch::add(50, "X", a1); // between "one" and "two"
     let mut ours = base.branch();
-    ours.commit(Patch::by(Author(1), [Patch::add(50, "X", a1).1])); // after "one"
+    ours.commit(Patch::by(Author(1), [xop, Op::Connect { from: x, to: a2 }]));
+    let (y, yop) = Patch::add(51, "Y", a2); // between "two" and "three"
     let mut theirs = base.branch();
-    theirs.commit(Patch::by(Author(2), [Patch::add(51, "Y", a2).1])); // after "two"
+    theirs.commit(Patch::by(Author(2), [yop, Op::Connect { from: y, to: a3 }]));
 
     let merged = three_way(&base, &ours, &theirs);
     assert!(!content(&merged).has_conflict(), "disjoint ordered edits merge clean");
