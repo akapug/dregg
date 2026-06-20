@@ -2720,3 +2720,26 @@ token_id through the prover entry signatures (`prove_and_verify_finalized_turn` 
 Until then the executor treats a ZERO PI class as "not-yet-populated" and falls back to its trusted ledger class
 (sound on the full node); the bundle path's pure-light-client partition is non-trivial for multi-asset turns
 ONLY once the prover populates the slot. The PI surface + circuit binding + both read-paths are done.
+
+## ⚑ OVERNIGHT ASSURANCE CAMPAIGN (2026-06-19→20) — the trust surface collapsed
+After the foundational reckoning (Satisfied2 didn't denote the deployed verifier), the climb-out + an overnight
+assurance push closed it. 15 commits, each its own green slice:
+SOUNDNESS: the LIVE conservation hole (scalar asset-blind sum -> cross-asset forgery, off-AIR fail-open) CLOSED
+  (per-asset in-AIR + PI[ASSET_CLASS] proof-bound + prover populates the real class); commitment width 4->8 felt
+  (62->124-bit collision, matches FRI). LIGHT-CLIENT OFF-AIR CENSUS: conservation was the LONE off-AIR fail-open
+  (nonce/chaining/height/authority/nullifier/disc all proof-bound, file:line evidence) — a systematic positive,
+  not just a patch.
+FAITHFULNESS: gate/transition (isLast) + chip-table (structural chipTableFaithful) + map-root (depth-16 Merkle)
+  all fixed; the 20-rung+apex collapse (no free lever survives). THE DIFFERENTIAL NOW RUNS REAL MACHINERY: row-
+  local arms via the actual Ir2Air::eval (96/216, no drift), bus arms via the actual prove/verify_vm_descriptor2
+  batch assembly + verify_global_sum (13 cases, no drift; model-found+fixed the map-absent Const(0) bug). The
+  'transcribed-by-inspection' trust is GONE.
+BRIDGE: decideSatisfied2_iff_Satisfied2 (kernel-proven exec-denotation <-> Satisfied2); the mapDec oracle
+  DISCHARGED (mapDecMerkle proven faithful) -> the Lean bridge half is assumption-free modulo the named CR floor.
+NON-VACUITY: every apex floor/carrier proven inhabited + separating (no laundered emptiness); the KEYSTONE made
+  whole = ONE active+faithful Satisfied2Faithful witness (real debit 100->90 nonce 0->1 AND genuine chip/range
+  tables, axiom-clean, not even the CR floor).
+HYGIENE: --features verifier (light-client build) un-broken; wide-descriptor width-skew (188-col) regen IN FLIGHT.
+NET: the v2 deployed apex went from 'ungrounded against a phantom' to faithful + kernel-bridged + real-machinery-
+  differential-guarded + non-vacuous + the lone soundness hole closed. Deploy parked (box lost); all green +
+  committed, push-to-origin/main when a box returns.
