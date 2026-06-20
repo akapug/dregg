@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
@@ -274,16 +274,54 @@ pub struct SovereignRegistration {
 /// Default TTL for sovereign cell registrations (in blocks).
 pub const DEFAULT_SOVEREIGN_TTL: u64 = 1000;
 
+/// The accumulated, NOT-YET-MATERIALIZED Merkle work. A mutation records into
+/// this and returns immediately — no hashing. The tree materializes lazily on the
+/// first `root()`/`membership_proof()` after the mutation batch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Pending {
+    /// The cached tree + root are current; `root()` is a free read.
+    Clean,
+    /// Only cell *values* changed (state mutations); the leaf *set* (positions)
+    /// is unchanged. Materialize with one O(log N) `update_leaf` per id — a batch
+    /// of O(k · log N), far cheaper than the O(N) full rebuild.
+    Values(BTreeSet<CellId>),
+    /// The leaf *set* changed (insert/remove → positions shift). Materialize with
+    /// a single full O(N) rebuild (the per-id batch can't fix shifted positions).
+    Structural,
+}
+
+impl Pending {
+    /// Record a VALUE mutation of `id` (state changed, position unchanged).
+    /// A pending structural rebuild already subsumes it.
+    fn touch_value(&mut self, id: CellId) {
+        match self {
+            Pending::Clean => {
+                let mut s = BTreeSet::new();
+                s.insert(id);
+                *self = Pending::Values(s);
+            }
+            Pending::Values(s) => {
+                s.insert(id);
+            }
+            Pending::Structural => {}
+        }
+    }
+
+    /// Record a STRUCTURAL mutation (insert/remove → a full rebuild is owed). It
+    /// subsumes any pending value updates.
+    fn touch_structural(&mut self) {
+        *self = Pending::Structural;
+    }
+}
+
 /// The world state: a collection of cells with a Merkle commitment.
 ///
-/// Uses an incremental binary Merkle tree. On cell state updates, only the
-/// O(log N) path from the affected leaf to the root is recomputed. Structural
-/// changes (inserts/removes) rebuild the tree since they shift leaf positions.
-///
-/// The tree uses lazy rebuilding: mutations via `get_mut()`, `create_cell()`,
-/// `insert_cell()`, and `remove()` mark the tree as dirty. The rebuild is
-/// deferred until `root()` or `membership_proof()` is called. This avoids
-/// O(N^2) costs when performing N sequential inserts or mutations.
+/// The Merkle tree is **truly lazy and batched**: a mutation does NO tree work —
+/// it only records what changed (a [`Pending`]). The tree (and root) materializes
+/// only when `root()`/`membership_proof()` is called (the network/publish
+/// boundary), and then with the MINIMAL recompute — a batch of O(log N) leaf
+/// updates when only values changed, a single O(N) rebuild when the leaf set
+/// changed. An internal/UI turn that never asks for a root pays ZERO hashing.
 #[derive(Clone, Debug)]
 pub struct Ledger {
     cells: HashMap<CellId, Cell>,
@@ -301,9 +339,14 @@ pub struct Ledger {
     /// Level N = root (single element).
     tree_levels: Vec<Vec<[u8; 32]>>,
     root: [u8; 32],
-    /// When true, the cached root and tree_levels are stale and must be
-    /// rebuilt before `root()` can return a valid value.
-    dirty: bool,
+    /// THE TRULY-LAZY MERKLE STATE. Mutations do NO tree work — they only record
+    /// WHAT changed here. The tree (and hence the root) materializes ONLY when
+    /// someone actually asks for it (`root()` / `membership_proof()` — the network
+    /// boundary), and even then with the MINIMAL recompute: a batch of O(log N)
+    /// leaf updates when only cell *values* changed, a single full rebuild when
+    /// the leaf *set* changed (insert/remove shift positions). An internal/UI turn
+    /// that never publishes a root therefore pays ZERO hashing.
+    pending: Pending,
     /// Witness freshness subscribers: cell_id -> senders.
     /// When the Merkle root changes, subscribers receive `WitnessDiff` updates
     /// containing the new path for their subscribed cell.
@@ -333,7 +376,7 @@ impl Ledger {
             leaf_positions: BTreeMap::new(),
             tree_levels: Vec::new(),
             root: Self::compute_empty_root(),
-            dirty: false,
+            pending: Pending::Clean,
             witness_subscribers: HashMap::new(),
             sovereign_witness_sequence: HashMap::new(),
             migration_locks: HashMap::new(),
@@ -357,7 +400,9 @@ impl Ledger {
     pub fn get_mut(&mut self, id: &CellId) -> Option<&mut Cell> {
         let result = self.cells.get_mut(id);
         if result.is_some() {
-            self.dirty = true;
+            // VALUE mutation: the leaf set is unchanged, so a batched O(log N)
+            // leaf update suffices when the root is next asked for.
+            self.pending.touch_value(*id);
         }
         result
     }
@@ -393,7 +438,9 @@ impl Ledger {
                 id
             )));
         }
-        self.dirty = true;
+        // VALUE mutation (the id is asserted unchanged by the integrity check
+        // above, so the leaf position is stable): a batched leaf update suffices.
+        self.pending.touch_value(*id);
         Ok(result)
     }
 
@@ -416,7 +463,7 @@ impl Ledger {
         let cell = Cell::new_hosted(public_key, token_id);
         let id = cell.id;
         self.cells.insert(id, cell);
-        self.dirty = true;
+        self.pending.touch_structural(); // a new leaf shifts positions
         id
     }
 
@@ -430,7 +477,7 @@ impl Ledger {
             return Err(LedgerError::CellAlreadyExists(id));
         }
         self.cells.insert(id, cell);
-        self.dirty = true;
+        self.pending.touch_structural(); // a new leaf shifts positions
         Ok(id)
     }
 
@@ -490,23 +537,19 @@ impl Ledger {
         // All succeeded — swap in the new state atomically.
         self.cells = new_cells;
 
-        // If the tree was already dirty or there are structural changes, do a
-        // full rebuild. Otherwise, incrementally update only the affected leaves.
-        if self.dirty || !delta.created.is_empty() {
-            self.rebuild_tree();
+        // TRULY LAZY: do NO tree work here — just record what changed. The tree
+        // materializes (minimally) on the next `root()`/`membership_proof()`.
+        // Creations shift leaf positions ⇒ a full rebuild is owed (structural);
+        // pure updates/transfers only change values ⇒ a batched leaf update.
+        if !delta.created.is_empty() {
+            self.pending.touch_structural();
         } else {
-            // Collect all cell IDs that were modified.
-            let mut modified_ids: Vec<CellId> = delta.updated.iter().map(|(id, _)| *id).collect();
-            for &(from_id, to_id, _) in &delta.computron_transfers {
-                modified_ids.push(from_id);
-                modified_ids.push(to_id);
+            for (id, _) in &delta.updated {
+                self.pending.touch_value(*id);
             }
-            modified_ids.sort_unstable_by_key(|a| a.0);
-            modified_ids.dedup();
-
-            // Update each modified leaf incrementally.
-            for cell_id in &modified_ids {
-                self.update_leaf(cell_id);
+            for &(from_id, to_id, _) in &delta.computron_transfers {
+                self.pending.touch_value(from_id);
+                self.pending.touch_value(to_id);
             }
         }
         Ok(())
@@ -676,15 +719,38 @@ impl Ledger {
         Ok(())
     }
 
+    /// Force the lazy Merkle state to materialize: collapse the accumulated
+    /// [`Pending`] into the cached tree + root with the MINIMAL recompute.
+    ///   * `Clean` → nothing.
+    ///   * `Values(set)` → a batch of O(log N) `update_leaf` (positions unchanged),
+    ///     unless the tree was never built (then a full rebuild).
+    ///   * `Structural` → a single O(N) full rebuild (positions shifted).
+    /// Idempotent; leaves `pending == Clean`.
+    fn materialize(&mut self) {
+        match std::mem::replace(&mut self.pending, Pending::Clean) {
+            Pending::Clean => {}
+            Pending::Structural => self.rebuild_tree(),
+            Pending::Values(ids) => {
+                if self.tree_levels.is_empty() {
+                    // No materialized tree to patch — full build (rare; e.g. a
+                    // value touch recorded before the first root()).
+                    self.rebuild_tree();
+                } else {
+                    for id in &ids {
+                        self.update_leaf(id);
+                    }
+                }
+            }
+        }
+    }
+
     /// Get the current Merkle root.
     ///
-    /// If the tree has been marked dirty (due to mutations via `get_mut()`,
-    /// `create_cell()`, or `insert_cell()`), this will rebuild the tree first.
-    /// The rebuild is O(N) but happens at most once per batch of mutations.
+    /// MATERIALIZES the lazy Merkle state (the only place, besides
+    /// `membership_proof`, that touches the tree). This is the network/publish
+    /// boundary: an internal turn that never calls `root()` paid no hashing.
     pub fn root(&mut self) -> [u8; 32] {
-        if self.dirty {
-            self.rebuild_tree();
-        }
+        self.materialize();
         self.root
     }
 
@@ -697,6 +763,12 @@ impl Ledger {
         self.root
     }
 
+    /// Whether the cached tree + root are current (no pending Merkle work). When
+    /// true, `root_cached()` / the stored paths are valid without materializing.
+    fn is_clean(&self) -> bool {
+        self.pending == Pending::Clean
+    }
+
     /// Generate a membership proof for a cell using the stored tree.
     ///
     /// Triggers a tree rebuild if the ledger is dirty.
@@ -705,9 +777,7 @@ impl Ledger {
             return None;
         }
 
-        if self.dirty {
-            self.rebuild_tree();
-        }
+        self.materialize();
 
         let cell = self.cells.get(id).unwrap();
         let leaf_hash = Self::hash_cell(cell);
@@ -794,9 +864,9 @@ impl Ledger {
 
     /// Full rebuild of the Merkle tree from scratch.
     /// Called on structural changes (insert/remove) that alter leaf positions.
-    /// Also clears the dirty flag.
+    /// Also clears the pending state (the tree is now current).
     fn rebuild_tree(&mut self) {
-        self.dirty = false;
+        self.pending = Pending::Clean;
 
         if self.cells.is_empty() {
             self.leaf_positions.clear();
@@ -954,7 +1024,7 @@ impl Ledger {
     pub fn remove(&mut self, id: &CellId) -> Option<Cell> {
         let cell = self.cells.remove(id);
         if cell.is_some() {
-            self.dirty = true;
+            self.pending.touch_structural(); // a removed leaf shifts positions
         }
         cell
     }
@@ -1030,7 +1100,7 @@ impl Ledger {
             .ok_or(LedgerError::CellNotFound(*id))?;
         let commitment = cell.state_commitment();
         self.sovereign_commitments.insert(*id, commitment);
-        self.dirty = true;
+        self.pending.touch_structural(); // the cell left the hosted leaf set
         Ok(cell)
     }
 
@@ -1252,7 +1322,7 @@ impl Ledger {
                 installed.mode = CellMode::Hosted;
                 installed.lifecycle = crate::lifecycle::CellLifecycle::Live;
                 self.cells.insert(id, installed);
-                self.dirty = true;
+                self.pending.touch_structural(); // a new leaf shifts positions
             }
             CellMode::Sovereign => {
                 // Sovereign target: register only the commitment.
@@ -1295,7 +1365,9 @@ impl Ledger {
             .ok_or(MigrationError::SourceNotFound(*id))?;
         cell.migrate_commit(&voucher, receipt)?;
         self.migration_locks.remove(id);
-        self.dirty = true;
+        // VALUE mutation (the cell stays at its leaf position; only its state /
+        // lifecycle changed): a batched leaf update suffices.
+        self.pending.touch_value(*id);
         Ok(())
     }
 
@@ -1324,25 +1396,23 @@ impl Ledger {
         // The old root should match the cached root before we rebuild.
         // If it doesn't, the caller's state is too stale for incremental update.
         let cached_root = self.root_cached();
-        if cached_root != old_root && !self.dirty {
-            // Root mismatch and tree is not dirty — caller's root is stale.
+        if cached_root != old_root && self.is_clean() {
+            // Root mismatch and tree is current — caller's root is stale.
             return None;
         }
 
-        // Get old path before any rebuild (if tree isn't dirty, this is valid).
-        let old_path = if !self.dirty {
+        // Get old path before any materialize (if tree is current, this is valid).
+        let old_path = if self.is_clean() {
             self.extract_path(cell_id)
         } else {
-            // Tree is dirty — old root was before modifications.
-            // We can't reconstruct the old path from the dirty tree.
+            // Pending mutations — the old root predates them and we can't
+            // reconstruct the old path from the pre-materialized tree.
             // Return empty old_path indicating the subscriber should do a full refresh.
             Vec::new()
         };
 
-        // Ensure tree is up to date.
-        if self.dirty {
-            self.rebuild_tree();
-        }
+        // Ensure tree is up to date (minimal recompute).
+        self.materialize();
 
         let new_path = self.extract_path(cell_id);
         let new_root = self.root;
@@ -1380,10 +1450,8 @@ impl Ledger {
             return;
         }
 
-        // Ensure tree is rebuilt so we have valid paths.
-        if self.dirty {
-            self.rebuild_tree();
-        }
+        // Ensure tree is materialized so we have valid paths.
+        self.materialize();
 
         let new_root = self.root;
 

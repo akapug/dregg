@@ -48,6 +48,14 @@ pub enum WorldEvent {
     CapabilityRevoked { cell: CellId, slot: u32 },
     /// A state field slot was written.
     FieldSet { cell: CellId, index: usize },
+    /// A cell's NON-field state was mutated without a more specific event — the
+    /// generic "this cell changed" tooth (nonce bump, sovereign flip, permissions
+    /// / verification-key write, capability reshape). It exists so the M2 delta
+    /// loop's invalidation is COMPLETE: every `commit_turn` effect that writes a
+    /// cell the inspector renders names that cell in the dynamics stream, so a
+    /// memoized projection of that cell is always invalidated. (Cache soundness =
+    /// dynamics completeness — `docs/deos/EFFICIENCY-WELD-PLAN.md` §4.1.)
+    CellMutated { cell: CellId },
     /// A cell was sealed (lifecycle → Sealed; rejects effects until unsealed).
     CellSealed { cell: CellId },
     /// A sealed cell was unsealed (lifecycle → Live).
@@ -117,6 +125,7 @@ impl WorldEvent {
             WorldEvent::CapabilityGranted { .. } => "capability granted".into(),
             WorldEvent::CapabilityRevoked { slot, .. } => format!("capability revoked (slot {slot})"),
             WorldEvent::FieldSet { index, .. } => format!("field[{index}] set"),
+            WorldEvent::CellMutated { .. } => "cell mutated".into(),
             WorldEvent::CellSealed { .. } => "cell sealed".into(),
             WorldEvent::CellUnsealed { .. } => "cell unsealed".into(),
             WorldEvent::CellDestroyed { .. } => "cell destroyed (terminal)".into(),
