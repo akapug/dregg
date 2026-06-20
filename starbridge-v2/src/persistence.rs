@@ -51,42 +51,20 @@ use dregg_turn::turn::{Turn, TurnReceipt};
 // receipts AND re-primes each agent's receipt-chain head for free — so we never
 // fabricate or carry a TurnReceipt across the durable boundary.
 
-/// The durable convergence root — the canonical, FLAT (no height/receipt fold)
-/// BLAKE3-over-sorted-postcard-cells commitment.
+/// The durable convergence root — re-exported from the SHARED
+/// [`dregg_persist::canonical_ledger_root`] (the M4 "shared pub fn lift" tail,
+/// LANDED). The byte-for-byte replica that used to live here is RETIRED: the
+/// single-image World now calls the SAME implementation as the node durability
+/// spine, so there is one source of truth. The construction (domain
+/// `"dregg-ledger-root-v2"`, sort-by-id, length-prefix, whole-cell postcard leaves)
+/// is unchanged, so the recovered root stays byte-identical to the node's
+/// `recovered_ledger_root()` — the fail-closed convergence check is preserved (and
+/// covered by `close_and_reopen_restores_the_exact_image`).
 ///
-/// SEAM §1 (NAMED, not laundered): this is a byte-for-byte replica of the node's
-/// `node/src/blocklace_sync.rs::canonical_ledger_root` (currently `pub(crate)`).
-/// The plan's task #1 lifts that one implementation to a SHARED `pub fn` (in
-/// `dregg-persist` or `dregg-cell`) so the node and the World call ONE function;
-/// that lift is a node+persist edit owned by another lane. Until it lands, the
-/// commitment is pinned here by its DERIVE-KEY DOMAIN `"dregg-ledger-root-v2"`
-/// and its exact construction (sorted by `CellId.0`, length-prefixed, whole-cell
-/// postcard leaves) — so this replica produces the IDENTICAL root the node's
-/// `recovered_ledger_root()` recorded, and the fail-closed convergence check is
-/// real. A divergence between this and the node's would surface immediately as a
-/// recovery convergence failure on any store the node wrote (and is covered by
-/// the convergence test). Do NOT "optimize" this without re-pinning it against
-/// the node's source.
-pub fn canonical_ledger_root(ledger: &Ledger) -> [u8; 32] {
-    let mut entries: Vec<([u8; 32], [u8; 32])> = ledger
-        .iter()
-        .map(|(id, cell)| {
-            // The WHOLE cell via canonical postcard (deterministic field order,
-            // fixed encoding) — a stable commitment over public_key/token_id/
-            // capabilities/lifecycle/state, not only the balance.
-            let bytes = postcard::to_stdvec(cell).unwrap_or_default();
-            (*id.as_bytes(), *blake3::hash(&bytes).as_bytes())
-        })
-        .collect();
-    entries.sort_by_key(|a| a.0);
-    let mut hasher = blake3::Hasher::new_derive_key("dregg-ledger-root-v2");
-    hasher.update(&(entries.len() as u64).to_le_bytes());
-    for (id, h) in &entries {
-        hasher.update(id);
-        hasher.update(h);
-    }
-    *hasher.finalize().as_bytes()
-}
+/// REMAINING (the node lane, not this workspace): node's own `pub(crate)` copy in
+/// `blocklace_sync.rs::canonical_ledger_root` is the last caller to migrate onto
+/// this shared fn — its edit, the byte-pin unchanged.
+pub use dregg_persist::canonical_ledger_root;
 
 /// The METADATA_BYTES config-key prefix for a durably-persisted input `Turn`,
 /// keyed by its commit ordinal (zero-padded so lexicographic == numeric order).
