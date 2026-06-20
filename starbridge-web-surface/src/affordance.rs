@@ -425,6 +425,50 @@ impl Viewer {
     pub fn membrane_shows(&self, aff: &CellAffordance) -> bool {
         aff.authorized_for(&self.held) && (self.permits)(&aff.name)
     }
+
+    /// **The read-cap weld** (`docs/deos/PRIVACY-CONFIDENTIALITY.md` §2c /
+    /// Milestone 0 step 4): build a viewer whose `permits` disclosure bit is
+    /// derived FROM read-cap possession, making the fog-of-war **cryptographic
+    /// rather than advisory**.
+    ///
+    /// Today `permits` is a trusted local closure — a malicious surface could
+    /// ignore it. Here the disclosure bit becomes "does the viewer hold a
+    /// [`dregg_cell::ReadCap`] that derives the key for this affordance's slot?":
+    /// `permits(name) = read_cap.derives(slot_of(name))`. The projection is then
+    /// enforced by *not being able to decrypt* the underlying slot, not by a
+    /// closure choosing to hide. This is the Lean `membraneShows` conjunct
+    /// `readCapDerives(viewer.readcap, aff.slots)`.
+    ///
+    /// `slot_of` maps an affordance name to the cell slot whose read-cap entitlement
+    /// gates its disclosure (the surface author declares this binding — e.g. a
+    /// "view-balance" affordance maps to the balance slot). An affordance with no
+    /// mapping is treated as **public** (no read-cap needed to see it), so this is
+    /// strictly additive: affordances not tied to a confidential slot are shown
+    /// exactly as before.
+    ///
+    /// The non-amplification proof extends for free: a reshared viewer cannot grant
+    /// disclosure of a slot the resharer could not read, because the read-cap it
+    /// hands cannot derive a key the resharer's `slots` did not entitle
+    /// ([`dregg_cell::ReadCap::attenuate`] = `granted ⊆ held`).
+    pub fn from_read_cap<F>(
+        held: SurfaceCapability,
+        read_cap: dregg_cell::ReadCap,
+        slot_of: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> Option<usize> + 'static,
+    {
+        let permits = Box::new(move |name: &str| -> bool {
+            match slot_of(name) {
+                // The affordance is tied to a confidential slot: it is disclosed
+                // IFF the held read-cap derives that slot's key (cryptographic).
+                Some(slot) => read_cap.derives(slot),
+                // No confidential slot: a public affordance, always disclosed.
+                None => true,
+            }
+        });
+        Viewer { held, permits }
+    }
 }
 
 /// A stable, comparable readout of a [`dregg_turn::Effect`] template — its variant
@@ -1892,6 +1936,89 @@ mod tests {
         assert_eq!(
             surface.membrane_names(&root_trustee),
             vec!["admin".to_string()]
+        );
+    }
+
+    /// THE READ-CAP MEMBRANE WELD (`docs/deos/PRIVACY-CONFIDENTIALITY.md` §2c):
+    /// the disclosure bit is derived FROM read-cap possession, so two viewers at
+    /// EQUAL write-authority but DIFFERENT read-caps see distinct surfaces — and
+    /// the divider is *cryptographic* (the narrow cap cannot derive the slot key),
+    /// not a trusted closure. The Rust face of the non-vacuity tooth at the
+    /// membrane layer.
+    #[test]
+    fn membrane_disclosure_is_welded_to_read_cap_possession() {
+        use dregg_cell::{FieldSet, ReadCap, ViewKey};
+
+        let doc = cid(50);
+        // Two confidential affordances, each tied to a cell slot whose read-cap
+        // entitlement gates its disclosure: "view-salary" → slot 5,
+        // "view-notes" → slot 3.
+        let salary = CellAffordance::new("view-salary", AuthRequired::Signature, emit_event(doc));
+        let notes = CellAffordance::new("view-notes", AuthRequired::Signature, emit_event(doc));
+        let surface = AffordanceSurface::new(doc)
+            .declare(CellAffordance::new(
+                "view-salary",
+                AuthRequired::Signature,
+                emit_event(doc),
+            ))
+            .declare(CellAffordance::new(
+                "view-notes",
+                AuthRequired::Signature,
+                emit_event(doc),
+            ));
+
+        // The surface author's name→slot binding.
+        let slot_of = |name: &str| -> Option<usize> {
+            match name {
+                "view-salary" => Some(5),
+                "view-notes" => Some(3),
+                _ => None,
+            }
+        };
+
+        let view_key = ViewKey::from_root([0x5A; 32]);
+        // A WIDE read-cap over slots {3,5}; a NARROW one (attenuated) over {3}.
+        let wide_cap = ReadCap::new(doc, FieldSet::from_slots(&[3, 5]), view_key);
+        let narrow_cap = wide_cap.attenuate(FieldSet::single(3)).expect("attenuation");
+
+        // Two viewers at EQUAL write-authority (both Signature), differing ONLY in
+        // their read-cap — the membrane permits-bit comes from the cap.
+        let wide_viewer = Viewer::from_read_cap(
+            SurfaceCapability::root(cid(60), AuthRequired::Signature),
+            wide_cap,
+            slot_of,
+        );
+        let narrow_viewer = Viewer::from_read_cap(
+            SurfaceCapability::root(cid(61), AuthRequired::Signature),
+            narrow_cap,
+            slot_of,
+        );
+
+        // EQUAL cap-authority: the cap-gate cannot tell them apart.
+        assert!(salary.authorized_for(&wide_viewer.held));
+        assert!(salary.authorized_for(&narrow_viewer.held));
+
+        // … yet the read-cap DIVIDES them cryptographically:
+        // BOTH see "view-notes" (slot 3, which both caps derive).
+        assert!(wide_viewer.membrane_shows(&notes));
+        assert!(narrow_viewer.membrane_shows(&notes));
+        // ONLY the wide viewer sees "view-salary" (slot 5 — the narrow cap cannot
+        // derive that slot's key, so the fog-of-war hides it).
+        assert!(wide_viewer.membrane_shows(&salary));
+        assert!(!narrow_viewer.membrane_shows(&salary));
+
+        // The projection bears it out — distinct surfaces over equal write-auth.
+        assert_eq!(
+            surface.membrane_names(&wide_viewer),
+            vec!["view-notes".to_string(), "view-salary".to_string()]
+        );
+        assert_eq!(
+            surface.membrane_names(&narrow_viewer),
+            vec!["view-notes".to_string()]
+        );
+        assert_ne!(
+            surface.membrane_names(&wide_viewer),
+            surface.membrane_names(&narrow_viewer)
         );
     }
 }

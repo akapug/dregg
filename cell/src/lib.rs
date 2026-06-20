@@ -53,6 +53,8 @@ pub mod permissions;
 pub mod preconditions;
 pub mod predicate;
 pub mod program;
+#[cfg(feature = "crypto")]
+pub mod read_cap;
 pub mod revocation_channel;
 pub mod ring_closure;
 #[cfg(feature = "crypto")]
@@ -153,6 +155,11 @@ pub use predicate::{
 pub use program::{
     CellProgram, HeapAtom, ProgramError, StateConstraint, count_ge_set_commitment, field_from_u64,
     field_from_u64_be,
+};
+#[cfg(feature = "crypto")]
+pub use read_cap::{
+    is_read_attenuation, EncryptedSlot, EncryptedState, FieldSet, ReadCap, ReadCapError,
+    SlotOpening, ViewKey,
 };
 pub use revocation_channel::{
     ChannelId, RevocationChannel, RevocationChannelError, RevocationChannelSet,
