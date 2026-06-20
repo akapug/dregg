@@ -104,10 +104,13 @@
 pub mod captp_client;
 #[cfg(feature = "captp")]
 pub mod channels;
+pub mod beacon_cell;
 pub mod cipherclerk;
 #[cfg(feature = "network")]
 pub mod client;
 pub mod committed_turn;
+pub mod device_pairing;
+pub mod guardian_rotation;
 #[cfg(feature = "network")]
 pub mod discharge;
 #[cfg(feature = "network")]
@@ -126,6 +129,8 @@ pub mod factories;
 pub mod flashwell;
 pub mod full_turn_proof;
 pub mod identity;
+// TEMP-DISABLED-FOR-DEVICE-PAIRING-VERIFY: sibling draft, Cargo deps not yet wired
+pub mod hints_onboarding;
 #[cfg(feature = "captp")]
 pub mod mailbox;
 pub mod mnemonic;

@@ -10,6 +10,7 @@ repository.workspace = true
 description = "Agent SDK and cipherclerk for the dregg federation — token management, turn execution, and proof generation"
 
 [dependencies]
+dregg-federation = { path = "../federation", default-features = false }
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
 dregg-turn = { path = "../turn" }
