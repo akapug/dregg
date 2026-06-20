@@ -2,22 +2,29 @@
 //!
 //! Coverage:
 //! - apply round-trips (build content from patches; deletes tombstone; order
-//!   follows the connect-edges);
+//!   follows the connect-edges; compose == sequential);
+//! - **patch invertibility** (RCCS reversibility: `invert` round-trips an edit);
+//! - **history as the content fold** (`replay` / `replay_to` time-travel;
+//!   `branch` / `stitch` = the pushout into the shared document);
 //! - **merge is total + commutative + associative + idempotent** (the pushout
 //!   property), checked on disjoint, overlapping, and conflicting forks;
-//! - a genuine conflict (two concurrent inserts at one position) becomes a
-//!   first-class [`ConflictRegion`] — NOT a panic/failure;
-//! - a resolution patch collapses the antichain (both by ordering and by
-//!   choosing), and the model is closed under its own conflicts.
+//! - a genuine prose conflict (two concurrent inserts at one position) becomes a
+//!   first-class [`ConflictRegion`] with **provenance** — NOT a panic/failure;
+//! - **the two-regime split**: a single-valued field clash is a `Regime::Field`
+//!   conflict (needs consensus); a prose antichain is `Regime::Prose`;
+//! - resolution patches collapse the antichain / the field clash (by ordering,
+//!   by choosing, by settling a field), and the model is closed under its own
+//!   conflicts.
 
 use crate::*;
 
-/// A two-atom document "Hello world" built from an empty doc.
+/// A two-atom document "Hello world" built from an empty doc, authored.
 fn hello_world() -> (DocGraph, AtomId, AtomId) {
     let mut g = DocGraph::new();
     let (h, op_h) = Patch::add(1, "Hello ", AtomId::ROOT);
     let (w, op_w) = Patch::add(2, "world", h);
-    Patch::from_ops([op_h, op_w]).apply(&mut g);
+    Patch::by(Author(1), [op_h]).apply(&mut g);
+    Patch::by(Author(1), [op_w]).apply(&mut g);
     (g, h, w)
 }
 
@@ -42,10 +49,8 @@ fn delete_tombstones_not_removes() {
     let (mut g, h, w) = hello_world();
     let before = g.atom_count();
     Patch::from_ops([Op::Delete { id: w }]).apply(&mut g);
-    // The atom is still present (tombstoned), not physically gone.
-    assert_eq!(g.atom_count(), before);
+    assert_eq!(g.atom_count(), before, "tombstoned, not physically gone");
     assert_eq!(g.atom(w).unwrap().status, Status::Dead);
-    // Content drops the dead span; the rest stays clean.
     assert_eq!(content(&g).to_marked_string(), "Hello ");
     let _ = h;
 }
@@ -65,13 +70,18 @@ fn add_is_idempotent_same_id() {
     let (_id, op) = Patch::add(7, "x", AtomId::ROOT);
     let once = Patch::from_ops([op.clone()]).apply_to(&base);
     let twice = Patch::from_ops([op.clone(), op]).apply_to(&base);
-    assert_eq!(once, twice, "the same content-addressed add applied twice == once");
+    // Provenance differs (the 1-op and 2-op patches hash differently), but the
+    // content-addressed *document* is the same: idempotence lives in
+    // structural equality.
+    assert!(
+        once.structural_eq(&twice),
+        "the same content-addressed add applied twice == once"
+    );
 }
 
 #[test]
 fn insert_in_the_middle() {
     let (mut g, h, w) = hello_world();
-    // Insert "big " between "Hello " and "world": after h, before w.
     let (b, op) = Patch::add(3, "big ", h);
     let mut p = Patch::from_ops([op]);
     p.push(Op::Connect { from: b, to: w });
@@ -87,36 +97,133 @@ fn compose_equals_sequential_apply() {
     let p2 = Patch::from_ops([Patch::add(2, "b", aid).1]);
     let composed = p1.compose(&p2).apply_to(&base);
     let sequential = p2.apply_to(&p1.apply_to(&base));
-    assert_eq!(composed, sequential);
+    // The composite patch and the two-step application produce the same
+    // document (provenance differs since the composite is one patch).
+    assert!(composed.structural_eq(&sequential));
+}
+
+#[test]
+fn atoms_carry_provenance() {
+    let mut g = DocGraph::new();
+    let (h, op) = Patch::add(1, "hi", AtomId::ROOT);
+    let p = Patch::by(Author(42), [op]);
+    p.apply(&mut g);
+    let a = g.atom(h).unwrap();
+    assert_eq!(a.provenance.author, Author(42), "author recorded");
+    assert_eq!(a.provenance.patch, p.id(), "authoring patch recorded");
+}
+
+// ── invertibility (RCCS reversibility) ───────────────────────────────────────
+
+#[test]
+fn invert_round_trips_an_add() {
+    let base = hello_world().0;
+    let w = hello_world().2;
+    let p = Patch::by(Author(1), [Patch::add(9, " !", w).1]);
+    let edited = p.apply_to(&base);
+    assert_ne!(content(&edited).to_marked_string(), content(&base).to_marked_string());
+    let undone = p.invert().apply_to(&edited);
+    // The added atom is dropped from the walk; content matches the pre-edit doc.
+    assert_eq!(
+        content(&undone).to_marked_string(),
+        content(&base).to_marked_string(),
+        "invert undoes the add"
+    );
+}
+
+#[test]
+fn invert_round_trips_a_delete() {
+    let (base, _h, w) = hello_world();
+    let p = Patch::by(Author(1), [Op::Delete { id: w }]);
+    let deleted = p.apply_to(&base);
+    assert_eq!(content(&deleted).to_marked_string(), "Hello ");
+    let resurrected = p.invert().apply_to(&deleted);
+    assert_eq!(
+        content(&resurrected).to_marked_string(),
+        "Hello world",
+        "invert resurrects the tombstone"
+    );
+}
+
+#[test]
+fn invert_round_trips_a_field_set() {
+    let base = DocGraph::new();
+    let p = Patch::by(
+        Author(1),
+        [Op::SetField {
+            name: "title".into(),
+            value: "Draft".into(),
+            superseding: false,
+        }],
+    );
+    let set = p.apply_to(&base);
+    assert_eq!(set.field("title").len(), 1);
+    let undone = p.invert().apply_to(&set);
+    assert_eq!(undone.field("title").len(), 0, "invert retracts the field");
+}
+
+// ── history: content = the patch fold; branch/stitch = the pushout ───────────
+
+#[test]
+fn history_replay_is_the_content_fold() {
+    let mut h = History::new();
+    h.commit(Patch::by(Author(1), [Patch::add(1, "Hello ", AtomId::ROOT).1]));
+    let hello = Patch::add(1, "Hello ", AtomId::ROOT).0;
+    h.commit(Patch::by(Author(1), [Patch::add(2, "world", hello).1]));
+    assert_eq!(content(&h.replay()).to_marked_string(), "Hello world");
+    assert_eq!(h.len(), 2);
+}
+
+#[test]
+fn replay_to_is_time_travel() {
+    let mut h = History::new();
+    let p1 = Patch::by(Author(1), [Patch::add(1, "Hello ", AtomId::ROOT).1]);
+    let cursor1 = h.commit(p1);
+    let hello = Patch::add(1, "Hello ", AtomId::ROOT).0;
+    h.commit(Patch::by(Author(1), [Patch::add(2, "world", hello).1]));
+    // Replaying only to the first patch shows the earlier state.
+    assert_eq!(content(&h.replay_to(cursor1)).to_marked_string(), "Hello ");
+    assert_eq!(content(&h.replay()).to_marked_string(), "Hello world");
+}
+
+#[test]
+fn branch_then_stitch_is_the_pushout() {
+    // Shared base, two authors branch and edit disjoint regions, then publish.
+    let mut main = History::new();
+    main.commit(Patch::by(Author(1), [Patch::add(1, "base", AtomId::ROOT).1]));
+    let base_atom = Patch::add(1, "base", AtomId::ROOT).0;
+
+    let mut draft = main.branch();
+    draft.commit(Patch::by(Author(2), [Patch::add(2, " +ext", base_atom).1]));
+
+    // Stitch the draft into main = the merge of the two folds (the pushout).
+    let merged = main.stitch(&draft);
+    assert!(!content(&merged).has_conflict(), "disjoint stitch is clean");
+    assert_eq!(content(&merged).to_marked_string(), "base +ext");
+    // The shared history reproduces the published content.
+    assert_eq!(content(&main.replay()).to_marked_string(), "base +ext");
 }
 
 // ── merge: the pushout property (total / commutative / associative / idempotent)
 
-/// Three forks off a common base for the algebraic-law tests:
-/// `disjoint` inserts in non-overlapping places, `conflicting` collides.
 fn forks() -> (DocGraph, DocGraph, DocGraph) {
     let (base, h, w) = hello_world();
-    // Fork A: append "!" after world.
-    let a = Patch::from_ops([Patch::add(10, "!", w).1]).apply_to(&base);
-    // Fork B: insert "there " after Hello (before world) — disjoint region.
+    let a = Patch::by(Author(1), [Patch::add(10, "!", w).1]).apply_to(&base);
     let (b_atom, b_op) = Patch::add(11, "there ", h);
-    let mut bp = Patch::from_ops([b_op]);
+    let mut bp = Patch::by(Author(2), [b_op]);
     bp.push(Op::Connect { from: b_atom, to: w });
     let b = bp.apply_to(&base);
-    // Fork C: delete world.
-    let c = Patch::from_ops([Op::Delete { id: w }]).apply_to(&base);
+    let c = Patch::by(Author(3), [Op::Delete { id: w }]).apply_to(&base);
     (a, b, c)
 }
 
 #[test]
 fn merge_is_total_on_every_fork_pair() {
     let (a, b, c) = forks();
-    // No pairing panics; every merge produces a graph (totality).
     for (x, y) in [(&a, &b), (&a, &c), (&b, &c), (&a, &a)] {
         let m = merge(x, y);
         assert!(m.atom_count() >= 1);
-        // content() never panics on any merged graph, conflicted or not.
-        let _ = content(&m);
+        let _ = content(&m); // never panics, conflicted or not
     }
 }
 
@@ -140,7 +247,6 @@ fn merge_is_idempotent() {
     assert_eq!(merge(&a, &a), a);
     let m = merge(&a, &b);
     assert_eq!(merge(&m, &m), m);
-    // Re-merging a fork already absorbed adds nothing.
     assert_eq!(merge(&m, &a), m);
 }
 
@@ -157,134 +263,183 @@ fn merge_all_is_order_independent() {
 #[test]
 fn disjoint_edits_merge_clean() {
     let (base, h, w) = hello_world();
-    // Two edits in disjoint regions: prepend before h, append after w.
     let (p, pop) = Patch::add(20, "Oh, ", AtomId::ROOT);
-    let mut pp = Patch::from_ops([pop]);
+    let mut pp = Patch::by(Author(1), [pop]);
     pp.push(Op::Connect { from: p, to: h });
     let left = pp.apply_to(&base);
-    let right = Patch::from_ops([Patch::add(21, "!", w).1]).apply_to(&base);
+    let right = Patch::by(Author(2), [Patch::add(21, "!", w).1]).apply_to(&base);
     let m = merge(&left, &right);
     assert!(!content(&m).has_conflict(), "disjoint edits do not conflict");
     assert_eq!(content(&m).to_marked_string(), "Oh, Hello world!");
 }
 
-// ── conflict as a first-class STATE (not a panic/failure) ────────────────────
+// ── prose conflict as a first-class STATE (with provenance) ──────────────────
 
-/// Two concurrent inserts at the *same* position (the document tail, after `w`)
-/// with no edge between them — a genuine 2-way antichain. Inserting at the tail
-/// is the clean case where the position has no pre-existing successor, so the
-/// only successors of `w` are the two new, mutually-unordered atoms.
+/// Two authors append concurrently at the tail (after `w`) — a genuine 2-way
+/// antichain with no pre-existing successor.
 fn conflicting_merge() -> (DocGraph, AtomId, AtomId, AtomId) {
     let (base, _h, w) = hello_world();
-    let (alt_a, op_a) = Patch::add(30, " ALPHA", w);
-    let (alt_b, op_b) = Patch::add(31, " BETA", w);
-    let a = Patch::from_ops([op_a]).apply_to(&base);
-    let b = Patch::from_ops([op_b]).apply_to(&base);
+    let a = Patch::by(Author(1), [Patch::add(30, " ALPHA", w).1]).apply_to(&base);
+    let b = Patch::by(Author(2), [Patch::add(31, " BETA", w).1]).apply_to(&base);
+    let alt_a = Patch::add(30, " ALPHA", w).0;
+    let alt_b = Patch::add(31, " BETA", w).0;
     (merge(&a, &b), w, alt_a, alt_b)
 }
 
 #[test]
 fn concurrent_inserts_become_a_conflict_region_not_a_panic() {
-    let (m, _h, alt_a, alt_b) = conflicting_merge();
+    let (m, _w, alt_a, alt_b) = conflicting_merge();
     let r = content(&m); // does not panic
     assert!(r.has_conflict(), "the merge carries a first-class conflict");
-    let region = r.conflicts().next().expect("one conflict region");
+    let region = r.prose_conflicts().next().expect("one prose conflict");
+    assert_eq!(region.regime, Regime::Prose);
     assert_eq!(region.alternatives.len(), 2, "an antichain of two alternatives");
-    let heads: Vec<AtomId> = region.alternatives.iter().map(|(id, _)| *id).collect();
+    let heads = region.heads();
     assert!(heads.contains(&alt_a) && heads.contains(&alt_b));
-    // Both alternatives are present and legible.
-    let texts: Vec<&str> = region.alternatives.iter().map(|(_, t)| t.as_str()).collect();
-    assert!(texts.iter().any(|t| t.contains("ALPHA")));
-    assert!(texts.iter().any(|t| t.contains("BETA")));
+    assert!(region.alternatives.iter().any(|a| a.text.contains("ALPHA")));
+    assert!(region.alternatives.iter().any(|a| a.text.contains("BETA")));
+}
+
+#[test]
+fn conflict_alternatives_carry_provenance() {
+    // "who wrote which alternative" is a FACT (§3.5).
+    let (m, _w, _a, _b) = conflicting_merge();
+    let region = content(&m).prose_conflicts().next().unwrap().clone();
+    let authors: Vec<Author> = region.alternatives.iter().map(|a| a.provenance.author).collect();
+    assert!(authors.contains(&Author(1)), "ALPHA's author attributed");
+    assert!(authors.contains(&Author(2)), "BETA's author attributed");
 }
 
 #[test]
 fn conflicted_doc_is_still_usable_around_the_conflict() {
-    // The clean spans around the conflict still render: a contested paragraph
-    // does not block the rest of the document.
-    let (m, _h, _a, _b) = conflicting_merge();
+    let (m, _w, _a, _b) = conflicting_merge();
     let s = content(&m).to_marked_string();
-    assert!(s.starts_with("Hello "), "prefix is clean: {s}");
-    assert!(s.contains("world"), "suffix is clean: {s}");
-    assert!(s.contains("conflict"), "the contested region is marked: {s}");
+    assert!(s.starts_with("Hello world"), "clean prefix: {s}");
+    assert!(s.contains("prose"), "the contested region is marked: {s}");
 }
 
 #[test]
 fn conflict_state_is_stable_under_remerge() {
-    // Merging the conflicted graph with one of its parents again changes
-    // nothing (idempotence) — the conflict is a stable STATE, not a transient.
-    let (m, _h, _a, _b) = conflicting_merge();
+    let (m, _w, _a, _b) = conflicting_merge();
     assert_eq!(merge(&m, &m), m);
     assert!(content(&merge(&m, &m)).has_conflict());
 }
 
-// ── resolution collapses the antichain ───────────────────────────────────────
+// ── the two-regime split: field clash is a REAL conflict ─────────────────────
 
 #[test]
-fn resolve_by_ordering_collapses_the_conflict() {
-    let (mut m, _h, alt_a, alt_b) = conflicting_merge();
-    let region = content(&m).conflicts().next().unwrap().clone();
-    let heads: Vec<AtomId> = region.alternatives.iter().map(|(id, _)| *id).collect();
-    assert_eq!(heads.len(), 2);
-    // Resolution is JUST ANOTHER PATCH.
-    resolve_connect(&heads).apply(&mut m);
+fn concurrent_field_writes_are_a_field_conflict_needing_consensus() {
+    // Two authors set the canonical title differently => a non-monotone clash.
+    let base = DocGraph::new();
+    let a = Patch::by(
+        Author(1),
+        [Op::SetField { name: "title".into(), value: "Cats".into(), superseding: false }],
+    )
+    .apply_to(&base);
+    let b = Patch::by(
+        Author(2),
+        [Op::SetField { name: "title".into(), value: "Dogs".into(), superseding: false }],
+    )
+    .apply_to(&base);
+    let m = merge(&a, &b);
+    assert_eq!(m.field("title").len(), 2, "both assignments survive (a clash)");
     let r = content(&m);
-    assert!(!r.has_conflict(), "ordering the alternatives resolves the conflict");
-    // Both alternatives kept, now linearized; nothing lost.
+    let fc = r.field_conflicts().next().expect("a field conflict");
+    assert_eq!(fc.regime, Regime::Field);
+    assert!(fc.regime.needs_consensus(), "a field clash may need consensus");
+    assert_eq!(fc.field.as_deref(), Some("title"));
+    // Both clashing values are attributed.
+    let authors: Vec<Author> = fc.alternatives.iter().map(|a| a.provenance.author).collect();
+    assert!(authors.contains(&Author(1)) && authors.contains(&Author(2)));
+}
+
+#[test]
+fn same_field_value_does_not_conflict() {
+    // The I-confluent case: both authors set the SAME value => no clash.
+    let base = DocGraph::new();
+    let mk = |auth| {
+        Patch::by(
+            Author(auth),
+            [Op::SetField { name: "title".into(), value: "Same".into(), superseding: false }],
+        )
+        .apply_to(&base)
+    };
+    let m = merge(&mk(1), &mk(2));
+    assert_eq!(m.field("title").len(), 1, "identical value merges clean");
+    assert!(!content(&m).has_conflict());
+}
+
+// ── resolution collapses the conflict ────────────────────────────────────────
+
+#[test]
+fn resolve_by_ordering_collapses_a_prose_conflict() {
+    let (mut m, _w, _a, _b) = conflicting_merge();
+    let heads = content(&m).prose_conflicts().next().unwrap().heads();
+    assert_eq!(heads.len(), 2);
+    resolve_connect(&heads).apply(&mut m); // resolution is JUST ANOTHER PATCH
+    let r = content(&m);
+    assert!(!r.has_conflict(), "ordering resolves the conflict");
     let s = r.to_marked_string();
-    assert!(s.contains("ALPHA") && s.contains("BETA"), "got: {s}");
-    let _ = (alt_a, alt_b);
+    assert!(s.contains("ALPHA") && s.contains("BETA"), "both kept, linearized: {s}");
 }
 
 #[test]
 fn resolve_by_choosing_keeps_one_drops_the_other() {
-    let (mut m, _h, alt_a, alt_b) = conflicting_merge();
-    // Keep ALPHA's branch, drop BETA's.
-    let (keep, drop) = {
-        let region = content(&m).conflicts().next().unwrap().clone();
-        let a = region.alternatives.iter().find(|(_, t)| t.contains("ALPHA")).unwrap().0;
-        let b = region.alternatives.iter().find(|(_, t)| t.contains("BETA")).unwrap().0;
-        (a, b)
-    };
+    let (mut m, _w, _a, _b) = conflicting_merge();
+    let region = content(&m).prose_conflicts().next().unwrap().clone();
+    let keep = region.alternatives.iter().find(|a| a.text.contains("ALPHA")).unwrap().head;
+    let drop = region.alternatives.iter().find(|a| a.text.contains("BETA")).unwrap().head;
     resolve_keep(keep, &[drop]).apply(&mut m);
     let r = content(&m);
     assert!(!r.has_conflict());
     let s = r.to_marked_string();
-    assert!(s.contains("ALPHA"), "kept: {s}");
-    assert!(!s.contains("BETA"), "dropped: {s}");
-    let _ = (alt_a, alt_b);
+    assert!(s.contains("ALPHA") && !s.contains("BETA"), "kept ALPHA, dropped BETA: {s}");
 }
 
 #[test]
-fn resolution_is_a_patch_that_composes_and_is_witnessed_by_remerge() {
-    // The model is closed under resolution: the resolved graph re-merges with
-    // the original conflicted graph idempotently (the resolution patch's edges
-    // are additive over the conflict union).
-    let (m, _h, _a, _b) = conflicting_merge();
-    let region = content(&m).conflicts().next().unwrap().clone();
-    let heads: Vec<AtomId> = region.alternatives.iter().map(|(id, _)| *id).collect();
+fn resolve_field_settles_the_clash() {
+    let base = DocGraph::new();
+    let a = Patch::by(
+        Author(1),
+        [Op::SetField { name: "title".into(), value: "Cats".into(), superseding: false }],
+    )
+    .apply_to(&base);
+    let b = Patch::by(
+        Author(2),
+        [Op::SetField { name: "title".into(), value: "Dogs".into(), superseding: false }],
+    )
+    .apply_to(&base);
+    let mut m = merge(&a, &b);
+    assert!(content(&m).has_conflict());
+    // A settling authority chooses the canonical value.
+    resolve_field(Author(99), "title", "Pets").apply(&mut m);
+    assert_eq!(m.field("title").len(), 1, "the clash collapses to one value");
+    assert_eq!(m.field("title")[0].value, "Pets");
+    assert!(!content(&m).has_conflict());
+}
+
+#[test]
+fn resolution_is_witnessed_by_remerge() {
+    // The resolved graph re-merges with the conflicted one idempotently — the
+    // resolution patch's edges are additive over the conflict union.
+    let (m, _w, _a, _b) = conflicting_merge();
+    let heads = content(&m).prose_conflicts().next().unwrap().heads();
     let resolved = resolve_connect(&heads).apply_to(&m);
-    // Merging the resolution back over the conflicted state yields the resolved,
-    // conflict-free state (resolution is monotone over the union).
     let remerged = merge(&m, &resolved);
     assert_eq!(remerged, resolved);
     assert!(!content(&remerged).has_conflict());
 }
 
 #[test]
-fn concurrent_resolutions_yield_a_smaller_conflict_still_a_state() {
-    // Two parties propose DIFFERENT orderings of the same antichain. Their union
-    // is again a valid state (closed under its own conflicts) — it must not
-    // panic; whether it re-conflicts or settles, content() is total.
-    let (m, _h, _a, _b) = conflicting_merge();
-    let region = content(&m).conflicts().next().unwrap().clone();
-    let heads: Vec<AtomId> = region.alternatives.iter().map(|(id, _)| *id).collect();
+fn concurrent_resolutions_yield_a_state_still() {
+    // Two parties propose DIFFERENT orderings of the same antichain (a -> b AND
+    // b -> a, a cycle). The union is total: content() must not panic, and the
+    // result is still a first-class STATE (idempotent re-merge).
+    let (m, _w, _a, _b) = conflicting_merge();
+    let heads = content(&m).prose_conflicts().next().unwrap().heads();
     let res_ab = resolve_connect(&[heads[0], heads[1]]).apply_to(&m);
     let res_ba = resolve_connect(&[heads[1], heads[0]]).apply_to(&m);
-    let both = merge(&res_ab, &res_ba); // a -> b AND b -> a : a cycle
-    // The union is total and content() does not panic on it.
-    let _ = content(&both);
-    // It is still a first-class STATE (a graph we can store / re-merge), proven
-    // by idempotent re-merge.
+    let both = merge(&res_ab, &res_ba);
+    let _ = content(&both); // total even on a cyclic order
     assert_eq!(merge(&both, &both), both);
 }
