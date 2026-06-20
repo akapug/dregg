@@ -3043,3 +3043,18 @@ The autonomous-harness-inside-deos goal decomposes into exactly two soundness fl
    (b) the recovery e2e seam (identity_social_recovery_e2e.rs — fresh cipherclerk, 3-of-5 HINTS guardians).
    (c) circuit commitment for light-client-UNFOOLABLE recovery (currently host-TRUSTED — a guarantee gap: recovery
        isn't yet in the verified surface). = a future weld (recovery effect → circuit rung).
+
+## ⚑ LIFECYCLE LAZY-fan landed (a6ef3b7c) — 3 Class-A + a 6th REAL GAP found (receiptArchive spec↔descriptor divergence)
+3 CLEAN Class-A conversions (mutation-confirmed, axiom-clean, in RotatedKernelRefinementLifecycle.lean — NOT yet
+banked, tree red from parallel CapFamily/PermsVK mid-edit): cellUnseal_descriptorRefines_sat (disc gate
+forces lifecycle=lcLive), cellDestroy_descriptorRefines_sat (BOTH legs: lifecycle=lcDestroyed + deathCert via the
+record-pin folded in the disc gate), refusal_descriptorRefines_sat (record-pin forces fieldOf refusalField = 1).
++ teeth rejects_unrevived/resurrection/wrong_cert/unwritten. New lemma names for fanout wiring: the 3 *_sat.
+⚑ receiptArchive = a 6th REAL GAP (different kind: spec↔descriptor DIVERGENCE, not a missing write): deployed
+receiptArchiveV3 disc-gate forces lifecycle cell = lcArchived (a side-table write), but ReceiptArchiveSpec
+(Spec/cellstateaudit.lean) writes a RECORD SLOT (lifecycleField:=1) and FREEZES the lifecycle side-table
+(post.lifecycle = pre.lifecycle) — they CONTRADICT. Class-A unreachable from the deployed descriptor without a
+descriptor change (bind the audit record slot) OR reconciling the spec to the deployed Archived side-table
+semantics. = an EMBER/descriptor decision, not Lean wiring. Documented at RotatedKernelRefinementLifecycleDisc §6.
+So the Class-B frontier is now: ~13 LAZY (3 lifecycle done) + 5 cap-write VK gaps + receiptArchive (spec divergence)
++ heapWrite (registry) = the real gaps total 7. Agent correctly did NOT fake the receiptArchive seam.
