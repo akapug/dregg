@@ -1,44 +1,71 @@
 //! Linearization — folding the graph into rendered content, with conflicts
-//! surfaced as first-class regions.
+//! surfaced as first-class regions (carrying provenance).
 //!
 //! The visible document is a topological walk over the *alive* atoms following
 //! the order-edges (DOCUMENT-LANGUAGE.md §2.2-2.3). Where the walk reaches a
 //! position with **two or more live successors and no order-edge among them** —
 //! a genuine *antichain* in the order — it cannot linearize them, because the
-//! order genuinely is not in the graph. That fork is a [`ConflictRegion`]: a
-//! first-class STATE, surfaced (never a panic, never a failure), carried until a
-//! later resolution patch collapses the antichain.
+//! order genuinely is not in the graph. That fork is a [`ConflictRegion`] of
+//! [`Regime::Prose`]: a first-class STATE, surfaced (never a panic, never a
+//! failure), each alternative tagged with **who authored it** (§3.5), carried
+//! until a later resolution patch collapses the antichain.
+//!
+//! Single-valued **field** clashes (§2.4) surface as [`Regime::Field`] conflict
+//! regions too — the non-monotone boundary where consensus may be required.
 
-use crate::atom::AtomId;
+use crate::atom::{AtomId, Provenance};
 use crate::graph::DocGraph;
+use crate::regime::Regime;
 use std::collections::BTreeSet;
+
+/// One live alternative within a conflict: its addressable head/field handle,
+/// its rendered text, and its provenance (who wrote it — a *fact*, §3.5).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Alternative {
+    /// For a prose conflict: the fork-point atom id a resolution patch
+    /// `Connect`s or `Delete`s. For a field conflict: unused ([`AtomId::ROOT`]).
+    pub head: AtomId,
+    /// The rendered content / field value of this alternative.
+    pub text: String,
+    /// Who authored this alternative.
+    pub provenance: Provenance,
+}
 
 /// One unit of rendered output.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Segment {
     /// A clean run of content with a unique order — the common case.
     Clean(String),
-    /// A conflicted region: two-or-more live, mutually-unordered alternatives at
-    /// one position. A first-class state, resolved by a later patch — *not* an
-    /// error. Each alternative carries the id at which it forks so a resolution
-    /// patch can address it.
+    /// A conflicted region: two-or-more live, mutually-unordered (or
+    /// single-valued-clashing) alternatives at one position. A first-class
+    /// state, resolved by a later patch — *not* an error.
     Conflict(ConflictRegion),
 }
 
-/// A first-class conflict: an antichain of >=2 live alternatives reachable at the
-/// same position with no order-edge among them. The document carries this state
-/// (it is part of a valid rendered document) until a resolution patch adds the
-/// order-edges and/or tombstones that collapse the antichain to a single walk.
+/// A first-class conflict: an antichain of two-or-more live alternatives (prose)
+/// or a multi-valued field clash. The document carries this state (it is part of
+/// a valid rendered document) until a resolution patch collapses it. Each
+/// alternative carries its provenance, so the conflict view can attribute "who
+/// wrote which alternative" as a fact.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ConflictRegion {
-    /// The live alternatives, each a (head-atom-id, rendered-content) pair. The
-    /// head id is the addressable fork point a resolution patch `Connect`s or
-    /// `Delete`s. Sorted by id for a canonical form.
-    pub alternatives: Vec<(AtomId, String)>,
+    /// Which regime this conflict belongs to — the answer to "is this real?".
+    pub regime: Regime,
+    /// For a field clash, the field name; for a prose antichain, `None`.
+    pub field: Option<String>,
+    /// The live alternatives, sorted canonically.
+    pub alternatives: Vec<Alternative>,
+}
+
+impl ConflictRegion {
+    /// The fork-point heads (for a prose conflict, the addressable atom ids).
+    pub fn heads(&self) -> Vec<AtomId> {
+        self.alternatives.iter().map(|a| a.head).collect()
+    }
 }
 
 /// The full rendered content of a document: a sequence of clean runs and
-/// conflict regions, in document order.
+/// conflict regions, in document order, with field conflicts appended.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Rendered {
     /// The segments in order.
@@ -61,22 +88,40 @@ impl Rendered {
         })
     }
 
+    /// All prose conflicts.
+    pub fn prose_conflicts(&self) -> impl Iterator<Item = &ConflictRegion> {
+        self.conflicts().filter(|c| c.regime == Regime::Prose)
+    }
+
+    /// All field conflicts.
+    pub fn field_conflicts(&self) -> impl Iterator<Item = &ConflictRegion> {
+        self.conflicts().filter(|c| c.regime == Regime::Field)
+    }
+
     /// A flat textual rendering for inspection/tests. Clean runs render as their
-    /// content; a conflict renders its alternatives between markers, so a
-    /// conflict is *legible* (the AOL-wonder bar: "two people wrote this
-    /// differently — here's both") rather than swallowed.
+    /// content; a conflict renders its alternatives (with author) between
+    /// markers, so a conflict is *legible* (the AOL-wonder bar: "two people
+    /// wrote this differently — here's both") rather than swallowed.
     pub fn to_marked_string(&self) -> String {
         let mut out = String::new();
         for seg in &self.segments {
             match seg {
                 Segment::Clean(s) => out.push_str(s),
                 Segment::Conflict(c) => {
-                    out.push_str("<<<conflict");
-                    for (_, alt) in &c.alternatives {
-                        out.push_str("\n|| ");
-                        out.push_str(alt);
+                    out.push_str("<<<");
+                    out.push_str(c.regime.label());
+                    if let Some(f) = &c.field {
+                        out.push('(');
+                        out.push_str(f);
+                        out.push(')');
                     }
-                    out.push_str("\nconflict>>>");
+                    for alt in &c.alternatives {
+                        out.push_str("\n|| @");
+                        out.push_str(&alt.provenance.author.0.to_string());
+                        out.push_str(": ");
+                        out.push_str(&alt.text);
+                    }
+                    out.push_str("\n>>>");
                 }
             }
         }
@@ -84,24 +129,26 @@ impl Rendered {
     }
 }
 
-/// Linearize a document graph into rendered content, surfacing antichains as
-/// first-class conflict regions.
+/// Linearize a document graph into rendered content, surfacing antichains and
+/// field clashes as first-class conflict regions.
 ///
 /// The walk starts at [`AtomId::ROOT`] and follows order-edges through *alive*
 /// atoms. At each step we look at the alive successors reachable from the
 /// current frontier:
 /// - exactly one path forward => emit it as clean content;
-/// - two-or-more mutually-unordered alive successors => emit a
-///   [`ConflictRegion`] holding each alternative's linearization, then rejoin.
+/// - two-or-more mutually-unordered alive successors => emit a prose
+///   [`ConflictRegion`], then end the walk at the fork.
 ///
 /// Dead atoms are skipped for content but still conduct order (you can walk
 /// *through* a tombstone to its successors), which is what makes a delete
-/// monotone and order-preserving.
+/// monotone and order-preserving. Field clashes are appended after the prose
+/// walk.
 pub fn content(g: &DocGraph) -> Rendered {
     let mut out = Rendered::default();
     let mut visited = BTreeSet::new();
     walk(g, AtomId::ROOT, &mut visited, &mut out.segments);
     coalesce(&mut out.segments);
+    append_field_conflicts(g, &mut out.segments);
     out
 }
 
@@ -127,7 +174,7 @@ fn live_successors(g: &DocGraph, id: AtomId) -> Vec<AtomId> {
 }
 
 /// Recursive walk from `from`, appending segments. Detects antichains (>=2 live
-/// successors with no order between them) and emits them as conflicts.
+/// successors with no order between them) and emits them as prose conflicts.
 fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Vec<Segment>) {
     let mut cursor = from;
     loop {
@@ -145,26 +192,18 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                 cursor = id;
             }
             many => {
-                // Filter the genuine antichain: keep only successors that are
-                // not reachable-from another successor (those would be ordered,
-                // not concurrent). Two inserts "after X" with no edge between
-                // them are mutually unreachable => a real antichain.
+                // Keep only successors not reachable-from another successor
+                // (those would be ordered, not concurrent). Two inserts "after
+                // X" with no edge between them are mutually unreachable => a
+                // real antichain.
                 let antichain: Vec<AtomId> = many
                     .iter()
                     .copied()
-                    .filter(|&a| {
-                        !many
-                            .iter()
-                            .any(|&b| b != a && reachable(g, b, a))
-                    })
+                    .filter(|&a| !many.iter().any(|&b| b != a && reachable(g, b, a)))
                     .collect();
                 if antichain.len() < 2 {
                     // Successors were actually ordered: follow the minimal one.
-                    let next = many
-                        .iter()
-                        .copied()
-                        .find(|&a| !many.iter().any(|&b| b != a && reachable(g, b, a)))
-                        .unwrap_or(many[0]);
+                    let next = antichain.first().copied().unwrap_or(many[0]);
                     if !visited.insert(next) {
                         return;
                     }
@@ -174,12 +213,13 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                     cursor = next;
                     continue;
                 }
-                // A genuine conflict: each alternative is its own linearization
-                // from its head until the branches rejoin (or end).
+                // A genuine prose conflict: each alternative is its own
+                // linearization from its head until the branches rejoin (or end).
                 let mut alternatives = Vec::new();
                 for &head in &antichain {
                     let mut branch = Vec::new();
                     let mut bvisited = visited.clone();
+                    let prov = g.atom(head).map(|a| a.provenance).unwrap_or(Provenance::GENESIS);
                     if bvisited.insert(head) {
                         if let Some(a) = g.atom(head) {
                             branch.push(Segment::Clean(a.content.clone()));
@@ -194,13 +234,50 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                             Segment::Conflict(_) => String::new(),
                         })
                         .collect::<String>();
-                    alternatives.push((head, text));
+                    alternatives.push(Alternative {
+                        head,
+                        text,
+                        provenance: prov,
+                    });
                     visited.insert(head);
                 }
-                alternatives.sort_by_key(|(id, _)| *id);
-                out.push(Segment::Conflict(ConflictRegion { alternatives }));
+                alternatives.sort_by_key(|a| a.head);
+                out.push(Segment::Conflict(ConflictRegion {
+                    regime: Regime::Prose,
+                    field: None,
+                    alternatives,
+                }));
                 return;
             }
+        }
+    }
+}
+
+/// Surface single-valued field clashes (>=2 live assignments) as `Regime::Field`
+/// conflict regions, in field-name order.
+fn append_field_conflicts(g: &DocGraph, out: &mut Vec<Segment>) {
+    let names: Vec<String> = g.field_names().map(|s| s.to_string()).collect();
+    for name in names {
+        let assigns = g.field(&name);
+        if assigns.len() >= 2 {
+            let mut alternatives: Vec<Alternative> = assigns
+                .iter()
+                .map(|a| Alternative {
+                    head: AtomId::ROOT,
+                    text: a.value.clone(),
+                    provenance: a.provenance,
+                })
+                .collect();
+            alternatives.sort_by(|x, y| {
+                x.text
+                    .cmp(&y.text)
+                    .then(x.provenance.patch.cmp(&y.provenance.patch))
+            });
+            out.push(Segment::Conflict(ConflictRegion {
+                regime: Regime::Field,
+                field: Some(name),
+                alternatives,
+            }));
         }
     }
 }
