@@ -11,6 +11,44 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ✅ ENMESHMENT STRIKE — 72 orphans pulled into the root build graph (2026-06-20)
+84 `Dregg2/*` modules were unreachable from `Dregg2.lean` (their `#assert_axioms` hygiene
+pins never ran under the default `lake build Dregg2`). 72 now enmeshed CLEAN (an import
+block at the tail of `Dregg2.lean`); `lake build Dregg2` GREEN at 4095 jobs (was 4022),
+zero errors — and since `#assert_axioms` is a pure rejector (silent on pass, `throwError`
+on fail), the green build IS the proof every enmeshed pin is kernel-clean. NOTE:
+`Circuit.SettlementSoundness` was ALREADY enmeshed since the census commit `801b756c9`
+(line 636) — its settlement-soundness pins already run.
+
+4 modules excluded as structurally un-enmeshable (NOT findings): `Circuit.Argus` (the
+aggregator — imports 3 broken Effects below); `Claims` (imports `Dregg2` root ⇒ build
+cycle; it's a top-of-graph CI pin-net, separately buildable); `Circuit.Emit.EmitAllJson`
++ `EmitGraduate` (pure `def main` JSON emitters, zero theorems/pins, `main` collides with
+`Apps.AgentOrchestration.main`).
+
+### ⚠ THE 8 ROTTED ORPHANS — real findings (excluded; each fails to compile at HEAD):
+1. `Exec.ConcreteKernel` (Dregg2/Exec/ConcreteKernel.lean:110-114) — STALE STRUCT API:
+   fields `escrows`/`queues`/`swiss`/`sealedBoxes` no longer exist on `RecordKernelState`.
+   The hard kernel-bridge gate rotted against a refactored kernel state. Highest value.
+2. `Circuit.Argus.InterpGolden` (:244) — ROTTED GOLDEN PIN: the `#guard (corpus.map
+   GoldenCase.verdict) = [literal list]` no longer matches the computed verdict vector
+   (corpus drifted from the hard-coded expectation). A non-vacuity pin gone stale.
+3. `Circuit.Argus.Effects.BridgeMint` — `rewrite`/`decide` tactic failures ⇒ `sorryAx`
+   leaked into `bridgeMint_compile_sound` + 6 sibling keystones (pins FIRE on enmesh).
+4. `Circuit.Argus.Effects.CreateCellFromFactory` — `unsolved goals` (:165) ⇒ `sorryAx` in
+   `interp_…_eq_chainK` + 8 siblings (the factory-chain proofs rotted).
+5. `Deos.DocPatch` — multiple breaks: `Unknown constant Finset.Insert.comm` (:146),
+   `Unknown identifier i` (:303), unsolved goals ⇒ sorryAx in all 6 CRDT-comm lemmas.
+6. `Substrate.FpuProbe` (:857) — `rewrite` failure ⇒ sorryAx in `move_is_fpu`.
+7. `Authority.CredentialAttenuation` (:132,178,529-539) — COMPUTABILITY rot: 9 defs need
+   `noncomputable` (depend on `instConditionallyCompleteLinearOrder`/`Clearance.admits`).
+8. `Apps.ToolAccessDelegation` (:225 unsolved goals, :312) — sorryAx in
+   `tool_invocation_over_rate_rejected`.
+Closure lane: each is a self-contained drifted-proof / stale-API fix; fixing any one →
+re-add its import to the ENMESHMENT block in `Dregg2.lean`. The `Argus` aggregator + its
+Effects depend on #3/#4 fixes. These 8 are EXACTLY the value of the strike: theorems that
+read "PROVED, sorry-free" by token-grep but are silently broken / non-building at HEAD.
+
 ## ✅ M2 EFFICIENCY — VALIDATED AT SCALE (the #[ignore]'d microbench, run 2026-06-20)
 The headline livability claim — per-render projection is O(changed), not O(ledger) — is now
 EMPIRICALLY confirmed (CI never runs this; the `projection_cost_is_flat_in_cell_count` bench
