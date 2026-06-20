@@ -11,6 +11,17 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ◻ WINDOWS native-full — one-command reproducibility follow-up (2026-06-20)
+native-full x86_64 Windows is BUILT + RUNS with the REAL verified executor (the GNU lever, not MSVC —
+`dregg-lean-ffi/build.rs` windows-gnu splice + `WINDOWS-PORT.md`). The build still needs a small
+out-of-band GUEST scaffold not yet captured as a script: (1) the llvm-mingw header/import-lib backfill
+into the stripped `lean-4.30.0-windows` sysroot, (2) a global `C:\mingw-shim` dir (synthesised
+`libntdll.a` from live ntdll exports + gcc/gcc_eh/unwind shims) so SIBLING crates (redb-as-dll etc.)
+link — `build.rs` only synthesises its OWN shims into `OUT_DIR`, (3) cargo `rustflags` for the global
+`-L` paths, (4) `scripts/win-setpath.ps1` (adds `C:\LLVM\bin` to PATH — landed). Closure: fold (1)-(3)
+into `scripts/win-bootstrap` for one-command reproducibility. The `.exe` itself is self-contained
+(Lean runtime + UCRT statically linked); only the BUILD needs the scaffold.
+
 ## ◻ seL4 RENDER-PD — next lever after the __clone/TCB wall fell (2026-06-20, `5b91f5e79`)
 The submit-thread `__clone`/TCB wall is DOWN (real seL4 TCB #2 live; `vkCreateDevice`
 past the threading wall). The render now walls TWO layers deeper, MEASURED: LLVM JIT

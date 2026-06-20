@@ -18,28 +18,41 @@ server + `curl -C -` resumes to a hash-verified copy).
   absent `gpui_macos` on Windows and is inert (like x11/wayland on macOS); `gpui_windows` is pulled by its
   `cfg(target_os="windows")` target-dep. **No Cargo.toml change needed for gpui-ui on Windows.**
 
-## The ONE remaining wall — native-full's Lean archive (architectural, not build.rs)
+## ✅ native-full BUILT + RUNS via the `x86_64-pc-windows-gnu` lever (the real path)
 
-`dregg-lean-ffi/build.rs` early-returns on Windows → marshal-only stubs (`lean_available()==false`), so a
-native-full Windows build would be a hollow shell (no real verified executor). The deeper blocker measured:
-**there is no ARM64-Windows Lean toolchain.** elan ships only `x86_64-pc-windows-msvc`; Lean 4.31 ships only
-`x86_64-windows`. So even a perfect ar/nm→lib.exe/dumpbin splice can only produce **x86_64 COFF** objects,
-which cannot link into our **aarch64** Rust binary. (macOS has both arches; Windows does not.)
+A real native-full **`starbridge-v2.exe`** (93.7 MB, `coff-x86-64`) is built, links the **REAL verified Lean
+executor** (`lean_available()==true`), and RUNS under WoA x64 emulation: `--headless` drives the embedded
+verified executor through 5 committed turns (real receipts, computron metering) and the **dual fail-closed
+refusal citing the executor's own reasons** — the cap-gate (`granted ⊄ held`) and the Stingray conservation
+gate (draw would exceed the ceiling). Those verdicts can only come from the linked Lean executor; a
+marshal-only build cannot produce them. Packaged: `deos-native-full-windows-x86_64.zip` (git-ignored).
 
-## The lever — build native-full for `x86_64-pc-windows-msvc`
+**The architectural correction (overturns this doc's earlier premise):** the lever is **GNU, not MSVC.** The
+pinned Lean Windows toolchain (`lean-4.30.0-windows`) is an **LLVM-MinGW distribution**
+(`x86_64-w64-windows-gnu`) — its runtime/stdlib ship only as GNU `.a` archives of `coff-x86-64`. MSVC
+`link.exe` *cannot* consume them: `LNK1143: no symbol for COMDAT section` on every `libleanrt.a`/`libleancpp.a`
+member (GNU-vs-MSVC COMDAT divergence; no MSVC-ABI Lean runtime exists). So:
+1. **Toolchain (guest):** rust `x86_64-pc-windows-gnu` std (on the nightly starbridge-v2 pins), VS BuildTools
+   x64 cross, **`lean-4.30.0-windows`** (the MinGW Lean), LLVM tools, an llvm-mingw sysroot (for the Win32
+   import libs + clang headers the stripped Lean clang lacks).
+2. **The x86_64 Windows Lean `.lib`** (`libdregg_lean.a`, 517 MB / 8567 members): `lake update` (mathlib
+   olean+C cache) → `lake build Dregg2.Exec.FFI` + the 4 gate modules → `leanc -c` every emitted `.c` →
+   `llvm-ar rcs`.
+3. **The build.rs Windows-GNU splice** (`cfg(windows)`-gated, Mac/Linux byte-identical — `cargo check -p
+   dregg-lean-ffi` clean): `ar→llvm-ar`, `nm→llvm-nm`, `ranlib→llvm-ar s` (the `ar_tool`/`nm_tool` helpers
+   return the old names off-Windows); the `windows_msvc` gate still hard-skips to marshal-only, **windows-gnu
+   proceeds**; the link arm emits the exact `leanc -###` lib set + `windows_gnu_link_env()` (sysroot search
+   paths, a synthesised `libntdll.a` from the live ntdll exports, the gcc/gcc_eh/unwind shims);
+   `-dead_strip→--gc-sections`, no rpath.
+4. `cargo build --release --features native-full --target x86_64-pc-windows-gnu` → exit 0; `--headless` proves
+   the verified executor. A full *window* needs a display (the `gpui_windows` d3d11/dxgi/dcomp/dwrite backend
+   IS linked).
 
-The cleanest path to a *real* native-full Windows installer (the embedded verified executor + the gpui
-window):
-1. Provision the **x86_64** Windows toolchain (rustup `x86_64-pc-windows-msvc`, VS Build Tools x64, the
-   `x86_64-windows` Lean toolchain) — all of which exist for Windows x64; the binary runs under Windows-on-ARM
-   x64 emulation (and natively on real Intel/AMD Windows — *most of ember's friends*).
-2. Build the **x86_64 Windows Lean `.lib`** (`lake`/`leanc` + the x86_64 Lean toolchain).
-3. Write the **build.rs Windows-MSVC splice** (now finite + *testable*): `lib.exe`/`llvm-lib` (not `ar`),
-   `dumpbin`/`llvm-nm` symbol scan, `/OPT:REF` (not `-dead_strip`), no rpath, static-CRT `.lib` link; lift the
-   `gate_os=="windows"` early-return. `cfg(windows)`-gated so mac/linux are untouched.
-4. Build `--features native-full` for x86_64-windows in the guest; verify `lean_available()` is true + the gpui
-   window opens.
+**Honest scaffold note (HORIZONLOG):** the build needs a small out-of-band guest scaffold (the llvm-mingw
+header/import-lib backfill + a global `C:\mingw-shim` ntdll/EH shim dir + cargo `rustflags`). `build.rs`
+synthesises its OWN ntdll/gcc shims into `OUT_DIR`; the global shim dir is what lets sibling crates (redb-as-dll
+etc.) link. Follow-up: fold the backfill into a `scripts/win-bootstrap` for one-command reproducibility.
 
-Once x86_64 is chosen, the splice can be *exercised* — so it's real engineering, not the dead/unverifiable
-debt that writing an aarch64 splice (which can never link) would be. ARM64-Windows native-full waits on
-upstream ARM64-Windows Lean binaries (don't exist today) — Lever 2, not blocking.
+ARM64-Windows native-full still waits on upstream ARM64-Windows Lean binaries (don't exist) — Lever 2, not
+blocking; the x86_64 binary runs natively on Intel/AMD Windows and under WoA emulation (*most of ember's
+friends*).

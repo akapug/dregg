@@ -30,6 +30,41 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// ── ARCHIVE-TOOL NAMES (the binutils trio) ──────────────────────────────────────
+// The archive splice / closure-completion / reachability-GC below shell out to the
+// `ar` / `nm` / `ranlib` trio. On macOS / Linux these resolve to the host binutils
+// (or their llvm aliases) on PATH — UNCHANGED. On Windows the Lean toolchain is the
+// LLVM-MinGW distribution (`x86_64-w64-windows-gnu`): its archives are GNU `.a` of
+// `coff-x86-64` objects, read/written by `llvm-ar` and inspected by `llvm-nm` (plain
+// `ar`/`nm`/`ranlib` are not on a stock Windows PATH). These helpers centralise the
+// name so every `Command::new(ar_tool())` etc. picks the right binary per-OS. On
+// non-Windows they return exactly `"ar"`/`"nm"`/`"ranlib"`, so the unix paths are
+// byte-identical to before. See `windows_gnu_link_env` for the matching link arm.
+fn ar_tool() -> &'static str {
+    if cfg!(windows) {
+        "llvm-ar"
+    } else {
+        "ar"
+    }
+}
+fn nm_tool() -> &'static str {
+    if cfg!(windows) {
+        "llvm-nm"
+    } else {
+        "nm"
+    }
+}
+/// `ranlib` regenerates an archive's symbol index. `llvm-ar` writes the index on
+/// every `rcs`/`r` op (and `llvm-ranlib` may not be on PATH), so on Windows we run
+/// `llvm-ar s <archive>` — the explicit "regenerate symbol table" op — instead.
+fn run_ranlib(archive: &Path) -> std::io::Result<std::process::ExitStatus> {
+    if cfg!(windows) {
+        Command::new(ar_tool()).arg("s").arg(archive).status()
+    } else {
+        Command::new("ranlib").arg(archive).status()
+    }
+}
+
 /// Locate the project's `metatheory` Lean directory relative to this crate, so
 /// `lake env` runs against the project's pinned toolchain regardless of the host
 /// (no hardcoded absolute paths — works on macOS dev boxes and the Linux deploy
@@ -473,7 +508,7 @@ fn build_cfile_index(roots: &[PathBuf]) -> std::collections::HashMap<String, Pat
 /// and compute the U-minus-T set ourselves.) These are the genuine dangling dependency edges the
 /// final Rust link would fail on; closure-completion must supply each one's defining object.
 fn undefined_initializers(archive: &Path) -> Vec<String> {
-    let Ok(out) = Command::new("nm").arg(archive).output() else {
+    let Ok(out) = Command::new(nm_tool()).arg(archive).output() else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -648,7 +683,7 @@ fn complete_initializer_closure(meta: &Path, sysroot: &Path, archive: &Path, out
 /// set looks implausibly small (a parse failure), we SKIP the GC and keep the (correct, larger) archive
 /// — never risk a broken link to save bytes.
 fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
-    let Ok(out) = Command::new("nm").arg("-A").arg(archive).output() else {
+    let Ok(out) = Command::new(nm_tool()).arg("-A").arg(archive).output() else {
         return;
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -738,7 +773,7 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     if std::fs::create_dir_all(&work).is_err() {
         return;
     }
-    if !matches!(Command::new("ar").arg("x").arg(archive).current_dir(&work).status(), Ok(s) if s.success())
+    if !matches!(Command::new(ar_tool()).arg("x").arg(archive).current_dir(&work).status(), Ok(s) if s.success())
     {
         return;
     }
@@ -763,12 +798,12 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     let tmp = out_dir.join("libdregg_lean.a.gc");
     let _ = std::fs::remove_file(&tmp);
     if !matches!(
-        Command::new("ar").arg("rcs").arg(&tmp).args(&kept).current_dir(&work).status(),
+        Command::new(ar_tool()).arg("rcs").arg(&tmp).args(&kept).current_dir(&work).status(),
         Ok(s) if s.success()
     ) {
         return;
     }
-    let _ = Command::new("ranlib").arg(&tmp).status();
+    let _ = run_ranlib(&tmp);
     if std::fs::rename(&tmp, archive).is_err() {
         // Cross-device rename fallback: copy.
         if std::fs::copy(&tmp, archive).is_ok() {
@@ -805,7 +840,7 @@ fn add_objects_to_archive(
     }
     // `ar r <archive> *.o` inserts or replaces the named members in place (preserving the other
     // ~6100 members). We pass the absolute archive path and run in the stage dir for clean names.
-    let r = Command::new("ar")
+    let r = Command::new(ar_tool())
         .arg("r")
         .arg(archive)
         .args(&names)
@@ -814,7 +849,7 @@ fn add_objects_to_archive(
     if !r.success() {
         return Err(std::io::Error::other(format!("`ar r` exited {r}")));
     }
-    let _ = Command::new("ranlib").arg(archive).status();
+    let _ = run_ranlib(archive);
     let _ = std::fs::remove_dir_all(&stage);
     Ok(())
 }
@@ -822,7 +857,7 @@ fn add_objects_to_archive(
 /// Whether the archive already contains any `Dregg2_*.o` member (via `ar t`). Used to force a
 /// splice when the base archive is dependency-closure-only.
 fn archive_has_dregg2(archive: &Path) -> bool {
-    let Ok(out) = Command::new("ar").arg("t").arg(archive).output() else {
+    let Ok(out) = Command::new(ar_tool()).arg("t").arg(archive).output() else {
         return false;
     };
     String::from_utf8_lossy(&out.stdout)
@@ -840,13 +875,18 @@ fn archive_has_dregg2(archive: &Path) -> bool {
 /// purge stale project objects regardless of how they were named when the base archive was seeded.
 fn members_defining_project_initializers(archive: &Path) -> std::collections::HashSet<String> {
     let mut members = std::collections::HashSet::new();
-    let Ok(out) = Command::new("nm").arg("-A").arg(archive).output() else {
+    let Ok(out) = Command::new(nm_tool()).arg("-A").arg(archive).output() else {
         return members;
     };
     let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
         // Only DEFINING (`T`) lines for a project initializer; skip undefined (`U`) references.
-        if !(line.contains("T _initialize_Dregg2_") || line.contains("T _initialize_Metatheory_")) {
+        // The C symbol carries a leading `_` on Mach-O (macOS) but NOT on ELF/COFF (Linux,
+        // Windows-MinGW), so accept both `T _initialize_*` and `T initialize_*`.
+        let is_project_init = |stem: &str| {
+            line.contains(&format!("T _{stem}")) || line.contains(&format!("T {stem}"))
+        };
+        if !(is_project_init("initialize_Dregg2_") || is_project_init("initialize_Metatheory_")) {
             continue;
         }
         // The location prefix is everything up to the first `: ` (space-separated from the address).
@@ -874,7 +914,7 @@ fn splice_objects(archive: &Path, obj_dir: &Path, out_dir: &Path) -> std::io::Re
     std::fs::create_dir_all(&work)?;
 
     // Extract the existing archive (all ~6100 members) into the scratch dir.
-    let extract = Command::new("ar")
+    let extract = Command::new(ar_tool())
         .arg("x")
         .arg(archive)
         .current_dir(&work)
@@ -932,7 +972,7 @@ fn splice_objects(archive: &Path, obj_dir: &Path, out_dir: &Path) -> std::io::Re
         .iter()
         .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
-    let rcs = Command::new("ar")
+    let rcs = Command::new(ar_tool())
         .arg("rcs")
         .arg(&tmp_archive)
         .args(&rel_members)
@@ -941,7 +981,7 @@ fn splice_objects(archive: &Path, obj_dir: &Path, out_dir: &Path) -> std::io::Re
     if !rcs.success() {
         return Err(std::io::Error::other(format!("`ar rcs` exited {rcs}")));
     }
-    let ranlib = Command::new("ranlib").arg(&tmp_archive).status();
+    let ranlib = run_ranlib(&tmp_archive);
     // ranlib is advisory: `ar s`/`rcs` already wrote a symbol table on most toolchains. Only warn.
     if !matches!(ranlib, Ok(s) if s.success()) {
         println!(
@@ -965,7 +1005,7 @@ fn splice_objects(archive: &Path, obj_dir: &Path, out_dir: &Path) -> std::io::Re
 /// dangling reference that `-dead_strip` resolves by dropping the WHOLE shim object — taking
 /// the forest-auth + init bridges with it. We fail-closed: absent ⇒ the bridge is compiled out.
 fn archive_exports(archive: &std::path::Path, symbol: &str) -> bool {
-    let Ok(out) = Command::new("nm").arg(archive).output() else {
+    let Ok(out) = Command::new(nm_tool()).arg(archive).output() else {
         return false;
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -1028,21 +1068,32 @@ fn main() {
     // never attempt a native-archive link. No archive refresh, no shim, no link directives:
     // the crate builds marshal-only and `lean_available()` is false.
     //
-    // WHY WINDOWS HARD-SKIPS: `libdregg_lean.a` is a HOST-NATIVE (Mach-O / ELF) archive of
-    // objects the Lean compiler emits, and this build.rs splices/links it with the unix
-    // binutils trio (`nm` / `ar` / `leanc` + `-fPIC` + a libc++/gmp/uv link). None of those
-    // apply to an MSVC (COFF / link.exe) target: the archive members are the wrong object
-    // format and the toolchain commands are absent. So a Windows build degrades to the
-    // marshal-only path (the same fallback wasm32 uses), and the honest `lean_available() ==
-    // false` flows to every consumer's `*_available()` guard (finality/strand/coord gates),
-    // which then take their un-gated Rust paths. A future native Windows Lean archive (built
-    // by `lake` on a Windows runner against an MSVC Lean toolchain) would lift this skip; it
-    // does not exist today, and emitting unix link directives here would only hard-fail the
-    // link. See docs/FEATURE-HYGIENE.md §Lean (defense-in-depth) + the PACKAGING report.
+    // WINDOWS — TWO DISTINCT TARGETS, only ONE links (measured empirically, docs/desktop-os-
+    // research/WINDOWS-PORT.md §lever):
+    //
+    //   * `x86_64-pc-windows-MSVC` — HARD WALL, hard-skips. The Lean Windows toolchain is the
+    //     LLVM-MinGW distribution (`x86_64-w64-windows-gnu`); it ships its runtime+stdlib ONLY
+    //     as MinGW `.a` archives of GNU-flavoured `coff-x86-64` objects. MSVC `link.exe`
+    //     STRUCTURALLY cannot consume those — every precompiled runtime member (e.g.
+    //     `libleanrt.a(object.cpp.obj)`) triggers `LNK1143: no symbol for COMDAT section`
+    //     (the GNU-vs-MSVC COMDAT encoding divergence). No MSVC-ABI Lean runtime exists, so an
+    //     MSVC native-full build can only be the marshal-only shell. Skip ⇒ `lean_available()==false`.
+    //
+    //   * `x86_64-pc-windows-GNU` — THE LEVER, proceeds. The MinGW ABI matches the Lean toolchain
+    //     exactly: the spliced archive is a GNU `.a` of `coff-x86-64` objects, driven by the LLVM
+    //     `llvm-ar`/`llvm-nm`/`leanc` trio (see `ar_tool`/`nm_tool`), and the final link pulls the
+    //     Lean MinGW system-lib closure + an ntdll import-lib shim (see `windows_gnu_link_env`).
+    //     A trivial Rust-gnu binary statically linking the real Lean runtime LINKS AND RUNS the
+    //     embedded `lean_initialize_runtime_module()` under Windows-on-ARM x64 emulation.
+    //
+    // wasm32 and the SP1 zkvm guest always skip (no native archive at all). The `no-lean-link`
+    // platform feature is the explicit opt-out. See docs/FEATURE-HYGIENE.md §Lean.
     let no_lean_link = std::env::var_os("CARGO_FEATURE_NO_LEAN_LINK").is_some();
     let gate_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let gate_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if no_lean_link || gate_arch == "wasm32" || gate_os == "zkvm" || gate_os == "windows" {
+    let gate_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let windows_msvc = gate_os == "windows" && gate_env != "gnu";
+    if no_lean_link || gate_arch == "wasm32" || gate_os == "zkvm" || windows_msvc {
         return;
     }
 
@@ -1355,6 +1406,62 @@ fn main() {
             "cargo:rustc-link-arg=-Wl,-rpath,{}",
             sysroot.join("lib").display()
         );
+    } else if target_os == "windows" {
+        // ── WINDOWS-MinGW (`x86_64-pc-windows-gnu`) STATIC LINK ──────────────────────
+        // The Lean LLVM-MinGW toolchain ships its runtime+stdlib AND a near-complete MinGW
+        // system-lib sysroot under `$SYSROOT/lib` (sibling to `lib/lean`). The exact lib set
+        // below MIRRORS what `leanc -###` itself passes to the linker for a Windows link
+        // (lean modules + runtime + the `gmp/uv/icu/...` deps + the Win32 import libs + the
+        // clang_rt builtins). `windows_gnu_link_env` has already put both lib dirs + the
+        // `clang/19/lib/windows` builtins dir on the search path and generated the ntdll/gcc
+        // shim. Proven end-to-end: a Rust-gnu binary linking exactly this set statically links
+        // the real Lean runtime and runs `lean_initialize_runtime_module()` under x64 emulation.
+        windows_gnu_link_env(&sysroot);
+        // Lean modules + runtime core (leancpp before Lean/Std/Init before leanrt, matching
+        // leanc's order — the C++ elaborator core resolves against later-listed members).
+        for name in [
+            "leancpp",
+            "Lean",
+            "Std",
+            "Init",
+            "leanrt",
+            "Lake",
+            "leanmanifest",
+        ] {
+            println!("cargo:rustc-link-lib=static={name}");
+        }
+        // Lean's bundled LLVM libc++ (the `std::__1::` ABI the runtime is compiled against),
+        // its math/number deps, then the Win32 import libs the runtime + libuv reference.
+        for name in [
+            "c++",
+            "c++abi",
+            "gmp",
+            "uv",
+            "icu",
+            "m",
+            "unwind",
+            "psapi",
+            "user32",
+            "advapi32",
+            "iphlpapi",
+            "userenv",
+            "ws2_32",
+            "dbghelp",
+            "ole32",
+            "shell32",
+            "bcrypt",
+            "ucrtbase",
+            "moldname",
+            "mingwex",
+            "pthread",
+            // ntdll — Rust std's `Nt*` syscalls (NtCreateFile/NtWriteFile/...) resolve from the
+            // generated import lib; the MinGW sysroot omits it.
+            "ntdll",
+        ] {
+            println!("cargo:rustc-link-lib=static={name}");
+        }
+        // compiler-rt builtins (clang's libgcc equivalent) — note the lib stem carries the arch.
+        println!("cargo:rustc-link-lib=static=clang_rt.builtins-x86_64");
     } else {
         for name in [
             "leancpp", "Init", "Std", "Lean", "leanrt", "Lake", "gmp", "uv",
@@ -1372,6 +1479,99 @@ fn main() {
             // caught exactly that. Order matters: c++ before c++abi.
             println!("cargo:rustc-link-lib=static=c++");
             println!("cargo:rustc-link-lib=static=c++abi");
+        }
+    }
+}
+
+/// Emit the Windows-MinGW (`x86_64-pc-windows-gnu`) link SEARCH PATHS + generate the
+/// import-lib shim the Rust-gnu link needs beyond what the Lean LLVM-MinGW sysroot ships.
+///
+/// The Lean Windows toolchain bundles a near-complete MinGW sysroot in `$SYSROOT/lib`
+/// (kernel32/user32/ws2_32/advapi32/... import libs + libc++/gmp/uv/icu + the runtime),
+/// plus the compiler-rt builtins under `lib/clang/19/lib/windows`. Two libs Rust-gnu's
+/// `std` + the `crt2.o` startup reference are NOT in that sysroot:
+///   * `libntdll.a` — std's `Nt*` syscall imports. We synthesise a full import lib from the
+///     live `ntdll.dll` export table via `llvm-dlltool` (the 2500-symbol set).
+///   * `libgcc.a` / `libgcc_eh.a` — GCC's builtins/unwinder. LLVM-MinGW uses compiler-rt +
+///     libunwind instead, so empty stub archives satisfy the `-lgcc`/`-lgcc_eh` the Rust-gnu
+///     driver always emits (the real builtins come from `clang_rt.builtins`, the real EH from
+///     `libunwind`, both linked above).
+/// The generated shims live in `$OUT_DIR/mingw-shim`. Idempotent (regenerated each build is
+/// cheap). All paths use the sysroot discovered by `lean_sysroot()`; nothing is hardcoded.
+fn windows_gnu_link_env(sysroot: &Path) {
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
+    let lib = sysroot.join("lib");
+    let lean_lib = lib.join("lean");
+    let builtins = lib.join("clang").join("19").join("lib").join("windows");
+    for dir in [&lean_lib, &lib, &builtins] {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+    }
+
+    let shim = out_dir.join("mingw-shim");
+    let _ = std::fs::create_dir_all(&shim);
+    println!("cargo:rustc-link-search=native={}", shim.display());
+
+    // Empty libgcc / libgcc_eh stubs (LLVM-MinGW has no GCC builtins; satisfy the driver's
+    // unconditional `-lgcc -lgcc_eh`).
+    for stub in ["libgcc.a", "libgcc_eh.a"] {
+        let p = shim.join(stub);
+        if !p.exists() {
+            let _ = Command::new(ar_tool()).arg("rcs").arg(&p).status();
+        }
+    }
+
+    // libntdll.a — synthesise from the live ntdll.dll export table. We need `llvm-dlltool`;
+    // it ships in both the Lean toolchain `bin/` and a stock LLVM install. Skip (leave any
+    // prior shim) if it is absent — the link then surfaces the missing `Nt*` loudly.
+    let ntdll = shim.join("libntdll.a");
+    if !ntdll.exists() {
+        let sysntdll = PathBuf::from(r"C:\Windows\System32\ntdll.dll");
+        if let Ok(out) = Command::new("llvm-objdump").arg("-p").arg(&sysntdll).output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut names = Vec::new();
+            let mut in_table = false;
+            for line in text.lines() {
+                if line.contains("Ordinal") && line.contains("RVA") && line.contains("Name") {
+                    in_table = true;
+                    continue;
+                }
+                if in_table {
+                    let toks: Vec<&str> = line.split_whitespace().collect();
+                    if toks.len() >= 3
+                        && toks[2]
+                            .chars()
+                            .next()
+                            .map(|c| c.is_ascii_alphabetic() || c == '_')
+                            .unwrap_or(false)
+                    {
+                        names.push(toks[2].to_string());
+                    }
+                }
+            }
+            if !names.is_empty() {
+                let def = shim.join("ntdll.def");
+                let mut body = String::from("LIBRARY ntdll.dll\nEXPORTS\n");
+                for n in &names {
+                    body.push_str(n);
+                    body.push('\n');
+                }
+                if std::fs::write(&def, body).is_ok() {
+                    let _ = Command::new("llvm-dlltool")
+                        .args(["-d"])
+                        .arg(&def)
+                        .arg("-l")
+                        .arg(&ntdll)
+                        .args(["-m", "i386:x86-64"])
+                        .status();
+                }
+            }
+        }
+        if !ntdll.exists() {
+            println!(
+                "cargo:warning=dregg-lean-ffi: could not synthesise libntdll.a (llvm-dlltool / \
+                 llvm-objdump on PATH? ntdll.dll readable?) — the Windows-gnu link may fail on \
+                 std's Nt* imports."
+            );
         }
     }
 }
