@@ -205,6 +205,18 @@ pub struct EffectVmContext {
     /// PI v3: challenge-window caveat tag. Semantics are staged: today this is
     /// the zero sentinel; the dispute/slashing mode (#169) will populate it.
     pub challenge_window_tag: u32,
+
+    /// PI v3 (light-client conservation): the per-cell ASSET CLASS, a single
+    /// field element folding the cell's committed `token_id` (dregg3: AssetId :=
+    /// issuer-cell). Surfaced to `PI[v3::ASSET_CLASS]` and pinned to the row-0
+    /// `aux_off::ASSET_CLASS` aux column by a boundary constraint, so the proof
+    /// COMMITS to its asset class. The per-asset cross-cell conservation gate
+    /// groups each per-cell proof's NET_DELTA by this PI-bound class, enforcing
+    /// per-asset Σδ=0 WITHOUT a ledger lookup. Zero by default (the native /
+    /// computron asset, and back-compat for callers that do not yet thread the
+    /// asset class through — the executor reconstructs the expected value from
+    /// the trusted ledger token_id and the boundary holds trivially at zero).
+    pub asset_class: BabyBear,
 }
 
 /// A single entry in the slot-caveat manifest (Cav-Codex Block 3).
@@ -368,6 +380,7 @@ impl Default for EffectVmContext {
             committed_height: 0,
             rate_bound_tag: 0,
             challenge_window_tag: 0,
+            asset_class: BabyBear::ZERO,
         }
     }
 }
@@ -997,6 +1010,12 @@ pub fn generate_effect_vm_trace_ext(
         trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_1] = owner_id_4[1];
         trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_2] = owner_id_4[2];
         trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_3] = owner_id_4[3];
+
+        // Light-client conservation: bind the per-cell asset class into the
+        // row-0 aux column. The boundary constraint pins it to
+        // PI[v3::ASSET_CLASS], so the proof commits to its asset class and the
+        // per-asset conservation gate can partition by the PI-bound class.
+        trace[0][AUX_BASE + aux_off::ASSET_CLASS] = context.asset_class;
     }
     // Silence unused warnings on the legacy 2-felt return values.
     let _ = (effects_hash_lo, effects_hash_hi);
@@ -1405,6 +1424,16 @@ pub fn generate_effect_vm_trace_ext(
     public_inputs[pi::v3::RATE_BOUND_TAG] = BabyBear::new(context.rate_bound_tag);
     public_inputs[pi::v3::CHALLENGE_WINDOW_TAG] = BabyBear::new(context.challenge_window_tag);
 
+    // ---- Light-client conservation: ASSET_CLASS (PI v3) ----
+    //
+    // Surface the per-cell asset class (the folded committed token_id) into
+    // PI[v3::ASSET_CLASS]. The row-0 boundary constraint (air.rs) pins the
+    // in-trace `aux_off::ASSET_CLASS` aux column to this slot, so the proof
+    // commits to its asset class. The per-asset cross-cell conservation gate
+    // partitions each proof's NET_DELTA by this PI-bound class — enforcing
+    // per-asset Σδ=0 WITHOUT a ledger lookup. Zero sentinel = the native asset.
+    public_inputs[pi::v3::ASSET_CLASS] = context.asset_class;
+
     // ---- Custom proof entries (PI layout v3: 8 vk + 4 commit per entry) ----
     for (i, (vk_hash, proof_commit)) in custom_entries.iter().enumerate() {
         let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
@@ -1437,6 +1466,21 @@ pub fn extract_net_delta(public_inputs: &[BabyBear]) -> Option<i64> {
     } else {
         Some(magnitude)
     }
+}
+
+/// Extract the PI-bound ASSET CLASS (PI v3) from public inputs.
+///
+/// This is the per-cell asset / issuer-cell class the per-asset cross-cell
+/// conservation gate partitions on, surfaced as `PI[v3::ASSET_CLASS]` and
+/// pinned (row-0 boundary) to the trace's `aux_off::ASSET_CLASS` column. The
+/// executor and the light-client bundle path read it FROM HERE — not from a
+/// ledger lookup — so per-asset Σδ=0 is enforced WITHOUT a ledger. Returns
+/// `None` when the PI vector is too short to carry the active layout.
+pub fn extract_asset_class(public_inputs: &[BabyBear]) -> Option<BabyBear> {
+    if public_inputs.len() < pi::ACTIVE_BASE_COUNT {
+        return None;
+    }
+    Some(public_inputs[pi::v3::ASSET_CLASS])
 }
 
 /// Extract the custom proof commitments from public inputs.
