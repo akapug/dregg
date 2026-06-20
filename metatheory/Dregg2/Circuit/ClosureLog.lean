@@ -211,6 +211,48 @@ theorem cellSeal_descriptorRefines_closedLog
       exact Dregg2.Circuit.RotatedKernelRefinementCellSeal.cellSeal_descriptorRefines
         compressN hN pre post actor cell (logNeeds hadv))
 
+/-- **`cellSeal_descriptorRefines_closedLog_sat` — cellSeal CLOSED WITH LOG, CLASS A.** Identical to
+`cellSeal_descriptorRefines_closedLog` EXCEPT the seal write is forced from the DEPLOYED descriptor
+`cellSealV3` (`Satisfied2 hash cellSealV3` + the chip/range `RotTableSide` + the realizable
+`CellSealTraceReadout`) via `cellSeal_descriptorRefines_sat`, NOT the modelled `cellSealGenuineEncodes.gate`.
+Editing `cellSealV3`'s disc gate turns this RED — the seal rides the LIVE constraints. Floor:
+{Poseidon/Merkle CR (`S_live`), `logHashInjective LH`, the chip/range table side} + the circuit's
+`CellSealTraceReadout`-minus-log (the `WitnessDecodes`-class seam) + the published receipt-prepend. -/
+theorem cellSeal_descriptorRefines_closedLog_sat
+    {CH : CellId → Value → ℤ} {RH : RecordKernelState → ℤ}
+    {cmb compress : ℤ → ℤ → ℤ} {compressN0 : List ℤ → ℤ}
+    {hCmb : compressInjective cmb} {hCompress : compressInjective compress}
+    {hCompressN : compressNInjective compressN0} {hLeaf : cellLeafInjective CH}
+    {hRest : RestHashIffFrame RH}
+    {LH : List Turn → ℤ}
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog
+      (S_live CH RH cmb compress compressN0 hCmb hCompress hCompressN hLeaf hRest) LH
+      pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementCellSeal.CellSealTraceReadout
+        hash minit mfin maddrs t pre post actor cell) :
+    kstepAll 52 pre post :=
+  have hadv : post.log
+      = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log :=
+    logAdvance_forced _ hdec hpub
+  closedBridge_of_step (.cellSealA actor cell) hdec.toDecode (by rfl)
+    (by
+      show fullActionStep pre (.cellSealA actor cell) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementCellSeal.cellSeal_descriptorRefines_sat
+        hash hside hsat pre post actor cell (logNeeds hadv))
+
 /-! ### §3.3 — RUNG 3: revoke (tag 2) → full `RevokeSpec` with the log DERIVED.
 
 `fullActionStep pre (.revoke holder tt) post = RevokeSpec pre holder tt post`, whose `.log` conjunct is
@@ -267,6 +309,7 @@ The `.log` advance is now INSIDE the realizable `logHashInjective` carrier — t
 #assert_axioms logAdvance_forced
 #assert_axioms transfer_descriptorRefines_closedLog
 #assert_axioms cellSeal_descriptorRefines_closedLog
+#assert_axioms cellSeal_descriptorRefines_closedLog_sat
 #assert_axioms revoke_descriptorRefines_closedLog
 
 end Dregg2.Circuit.ClosureLog

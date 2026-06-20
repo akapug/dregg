@@ -356,22 +356,31 @@ These rungs (`cellSeal`/`cellUnseal`/`cellDestroy`/`refusal`/`receiptArchive`/`s
 their `*Encodes`. The discharger parameters are `compressN2`/`hN`; the readout extracts the row
 designation + the published receipt + the encode-minus-log. -/
 
-/-- **cellSeal (52).** -/
+/-- **cellSeal (52) — CLASS A.** The seal write is forced from the DEPLOYED descriptor `cellSealV3`
+(`= Rfix 52` by `rfl`): the readout extracts, from the `Satisfied2 hash cellSealV3` witness, the chip/range
+table side `RotTableSide` (the genuine deployed chip permutation faithfulness), the published receipt-prepend,
+and the `CellSealTraceReadout`-minus-log (the `WitnessDecodes`-class realizable seam — the committed disc
+limb decode + the whole-map/guard/frame residual). `cellSeal_closedLog_sat` then forces `CellSealSpec` via
+the LIVE disc gate (`cellSeal_descriptorRefines_sat`). Editing `cellSealV3`'s disc gate turns this RED. NO
+modelled `cellSealGenuineEncodes.gate`. -/
 theorem closedLogExtract_cellSeal_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementCellSeal.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementCellSeal.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 52) minit mfin maddrs t →
-      Σ' (actor cell : CellId),
+      Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementCellSeal.cellSealGenuineEncodes compressN2 pre post actor cell)) :
+          Dregg2.Circuit.RotatedKernelRefinementCellSeal.CellSealTraceReadout
+            hash minit mfin maddrs t pre post actor cell)) :
     ClosedLogExtract Slive LH hash Rfix 52 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact cellSeal_closedLog compressN2 hN pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  -- `Rfix 52 = cellSealV3` definitionally (the registry's cellSeal member).
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellSealV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact cellSeal_closedLog_sat hash hside hsat' pre post actor cell pc pubLogPre pubLogPost hdecLog
+    hpub.down logNeeds
 
 /-- **cellUnseal (53).** -/
 theorem closedLogExtract_cellUnseal_closed
@@ -724,10 +733,12 @@ structure ClosureReadouts
         Dregg2.Circuit.RotatedKernelRefinementCapFamily.RefreshDelegationCapsTreeEncodes Scap pre post actor child)
   rdCellSeal : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 52) minit mfin maddrs t →
-    Σ' (actor cell : CellId),
+    Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementCellSeal.cellSealGenuineEncodes cnCellSeal pre post actor cell)
+        Dregg2.Circuit.RotatedKernelRefinementCellSeal.CellSealTraceReadout
+          hash minit mfin maddrs t pre post actor cell)
   rdCellUnseal : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 53) minit mfin maddrs t →
     Σ' (actor cell : CellId),
@@ -865,7 +876,7 @@ theorem closedLogExtract_all_genuine
   | 39 => exact closedLogExtract_refusal_closed cnLife rds.hNLife rds.rdRefusal
   | 40 => exact closedLogExtract_receiptArchive_closed cnLife rds.hNLife rds.rdReceiptArchive
   | 47 => exact closedLogExtract_pipelinedSend_closed rds.rdPipelinedSend
-  | 52 => exact closedLogExtract_cellSeal_closed cnCellSeal rds.hNCellSeal rds.rdCellSeal
+  | 52 => exact closedLogExtract_cellSeal_closed rds.rdCellSeal
   | 53 => exact closedLogExtract_cellUnseal_closed cnLife rds.hNLife rds.rdCellUnseal
   | 54 => exact closedLogExtract_cellDestroy_closed cnLife rds.hNLife rds.rdCellDestroy
   | 55 => exact closedLogExtract_refreshDelegation_closed Scap rds.rdRefreshDelegation
