@@ -1,0 +1,45 @@
+# render-pd — the cockpit RE-FLOW PD: the lavapipe ICD + the gpui-offscreen render
+# path running INSIDE a seL4 protection domain, so the cockpit re-flows live
+# per-frame instead of blitting one baked `cockpit_frame.rgba`.
+#
+# This is the `root-task-with-std` PD profile — the EXACT executor-rootserver
+# class (`dregg-pd/executor-rootserver/Cargo.toml`), NOT the `#![no_std]`
+# microkit deos-image PD. lavapipe (the software-Vulkan ICD built by
+# `scripts/build-mesa-lavapipe-elf.sh` → `out/mesa-elf/libvulkan_lvp.so`) JITs
+# shaders through LLVM, so it needs the heavy OS surface a raw seL4 root task
+# with `sel4-musl` provides: mmap/mprotect/getenv/write/urandom — and the ONE
+# genuinely new demand the executor PD never had, the JIT's W→X executable
+# mapping (`src/main.rs::handle_by_number` MMAP/MPROTECT, serviced from a static
+# RWX arena in the root-task image — see WIRING.md).
+#
+# Standalone workspace (own target dir; swarm-safe; never edits the shared
+# dregg-pd members list — same rationale as executor-rootserver/Cargo.toml).
+[workspace]
+
+[package]
+name = "dregg-render-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-render-pd"
+path = "src/main.rs"
+
+[dependencies]
+# Path-depend on the VENDORED rust-sel4 checkout (the same crates + revs the
+# executor-rootserver PD pins). sel4-musl routes the in-PD musl syscall surface;
+# sel4-root-task-with-std pulls std (malloc/TLS/unwind) — the profile lavapipe's
+# LLVM JIT needs.
+sel4 = { path = "/Users/ember/sel4-sdk/rust-sel4/crates/sel4", default-features = false }
+sel4-musl = { path = "/Users/ember/sel4-sdk/rust-sel4/crates/experimental/sel4-musl" }
+sel4-linux-syscall-types = { path = "/Users/ember/sel4-sdk/rust-sel4/crates/experimental/sel4-linux-syscall-types" }
+sel4-root-task-with-std = { path = "/Users/ember/sel4-sdk/rust-sel4/crates/private/support/sel4-root-task-with-std" }
+sel4-dlmalloc = { path = "/Users/ember/sel4-sdk/rust-sel4/crates/sel4-dlmalloc" }
+one-shot-mutex = "0.2.1"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

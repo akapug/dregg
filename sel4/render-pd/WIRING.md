@@ -66,7 +66,91 @@ in the VM — static-blit becomes per-turn-repaint, no gpui/Scene change.
 ```
 scripts/build-llvm-elf.sh            # Gate 1 (banked): static LLVM 20.1.8 aarch64-musl
 scripts/build-mesa-lavapipe-elf.sh   # Gate 2: libvulkan_lvp.so against it
-# then: a root-task-with-std PD (clone executor-rootserver) linking wgpu+gpui_wgpu+lavapipe,
-#       driver = render_scene_to_image → RGBA → ramfb blit, env LP_NUM_THREADS=0,
-#       syscall handler extended for the JIT W→X mapping.
+make build                           # the render-PD root task ELF (links lavapipe + W→X handler)
+make image                           # assemble the bootable seL4 image
+make run                             # boot it headless in QEMU
 ```
+
+## The static link (measured)
+
+The render-PD target (`aarch64-sel4-roottask-musl`) is FULLY STATIC (no dynamic
+loader in-PD), so it cannot load the gate's `libvulkan_lvp.so`. The PD links the
+SAME inputs the `.so` was built from, as static archives, exactly as
+executor-rootserver links the Lean closure (`build.rs`):
+- the Mesa component archives (`liblavapipe_st.a`, `libllvmpipe.a`, `libgallium.a`,
+  `libvulkan_util.a`, `libnir.a`, `libvtn.a`, `libcompiler.a`, `libmesa_util*.a`,
+  `libloader.a`, `libz.a`, `libblake3.a`, …) `--whole-archive` (the ICD entry +
+  the gallium/llvmpipe driver self-register via ctors), PLUS the `lavapipe_target.c.o`
+  glue object meson compiles directly into the `.so` (in no `.a`; defines
+  `sw_screen_create_vk`);
+- the static LLVM 20.1.8 archive set (the JIT) under one `--start-group`;
+- a static `libdrm.a` (the headless link satisfier; never called offscreen);
+- the aarch64-linux-musl GCC `libstdc++`/`libsupc++`/`libgcc` group;
+- the seL4 musl `libc.a`.
+
+Two ordinary cross-link seams, both closed (`scripts/musl-compat.c`):
+1. `libmesa_util_c11.a` (Mesa's C11-threads shim) DUPLICATES the seL4 musl's
+   `thrd_*/mtx_*/cnd_*/call_once` — dropped (the seL4 musl provides them).
+2. The lean `aarch64_sel4` musl ARCH lacks a few libc symbols Mesa/LLVM reference
+   (`secure_getenv`, `qsort_r`, `c23_timespec_get`, `getrandom`, `memfd_create`,
+   `reallocarray`) + omits the pthread cancellation-point asm
+   (`__syscall_cp_asm`/`__cp_*`) — `musl-compat.c` supplies them (whole-archived so
+   `--gc-sections` keeps them). It also defines a tiny in-image `getenv`
+   (`LP_NUM_THREADS=0`, no `environ` touch — this minimal root task has a NULL
+   `__environ`, so `std::env::set_var` faults at address 0 before main).
+
+Result: a 75 MB `aarch64-sel4-roottask-musl` root-task ELF, fully static, with
+`vk_icdGetInstanceProcAddr` + `lvp_CreateInstance` + `lp_rast_create` + the JIT.
+
+## MEASURED RESULT (2026-06-19) — lavapipe RUNS in the seL4 PD; the wall is `thrd_create`
+
+`make run` boots the image headless. Serial:
+
+```
+[render-pd] seL4 root task booted; sel4-musl syscall handler installed
+[render-pd] JIT W->X arena: 16384 KiB static RWX (--no-rosegment image)
+[driver] ICD interface version = 0 (loader-less; lavapipe in-PD)
+[driver] vkCreateInstance OK — lavapipe VkInstance live in the PD
+[driver] VkPhysicalDevice[0] = "llvmpipe (LLVM 20.1.8, 128 bits)" (apiVersion 1.4.305)
+[driver] W->X so far: 0 executable mmap(s), 0 PROT_EXEC mprotect flip(s)
+[driver] STAGE 3: vkCreateDevice = -13 (VK_ERROR_UNKNOWN=-13).
+```
+
+What this proves and where it stops:
+- **lavapipe software-Vulkan RUNS inside the seL4 PD.** `vkCreateInstance`
+  succeeds; `vkEnumeratePhysicalDevices` returns the `llvmpipe (LLVM 20.1.8, 128
+  bits)` device — the EXACT renderer + LLVM version the persvati bake uses, now
+  enumerated in-VM on seL4, loader-less. The whole Mesa+LLVM blob links, loads,
+  and runs as a static root-task PD.
+- **The JIT W→X mapping is wired and ready** (the static RWX `JIT_ARENA` + the
+  `MMAP`/`MPROTECT` handler arms in `src/main.rs`). The W→X counters read `0` at
+  the wall because lavapipe JITs shaders LAZILY — at pipeline creation (driver
+  stage 4), which is gated behind device creation. The exercise never reaches the
+  JIT because device creation fails first.
+- **THE WALL = `thrd_create` (the Vulkan submit thread), NOT the JIT W→X.**
+  `lvp_queue_init` UNCONDITIONALLY calls `vk_queue_enable_submit_thread` →
+  `vk_queue_start_submit_thread` → `thrd_create` (Mesa `vk_queue.c:868`); it is
+  NOT gated by `LP_NUM_THREADS` (that only governs the rasterizer pool). The seL4
+  musl's `thrd_create`→`pthread_create`→`__clone` reaches the syscall handler,
+  which returns `-ENOSYS` (a single-thread root task cannot fork a TCB) →
+  `thrd_error` → `VK_ERROR_UNKNOWN` (-13). No fault, no unhandled-syscall — a
+  clean, characterized stop.
+
+## THE NEXT OS DEMAND (the precise lever) — a real seL4 TCB for `__clone`
+
+The render-PD reaches the JIT W→X *handler* but not yet the JIT *exercise*,
+because lavapipe's Vulkan device wants a real second thread (the submit thread).
+The lever is one rung deeper than the W→X mapping:
+
+- **Service `clone`/`__clone` by creating a real seL4 thread** — a second TCB in
+  the root task's CSpace/VSpace (a stack frame, a scheduling context, an IPC
+  buffer), scheduled by seL4. The sel4-musl `pthread_create` issues `__clone`;
+  the handler must materialize a seL4 thread for it instead of `-ENOSYS`. This is
+  the executor-PD-class follow-on (the executor turn was single-threaded so never
+  hit it). Once the submit thread runs, `vkCreateDevice` succeeds, a compute/
+  graphics pipeline JITs (driver stage 4 — the FIRST W→X counter increments), and
+  the gpui Scene → RGBA → ramfb blit is the Rust-side layer on top.
+- An alternative, lighter lever (a Mesa patch, heavier to maintain): make the
+  lavapipe submit-thread synchronous for the single-frame headless render. The
+  real-TCB route is preferred — it is the honest OS capability, and it generalizes
+  (every Vulkan device on this PD then works).
