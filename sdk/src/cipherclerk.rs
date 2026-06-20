@@ -5360,16 +5360,20 @@ impl AgentCipherclerk {
         let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
 
         // 5. Bridge the producer witnesses into the circuit generator's block witnesses.
+        //    Carry the per-cell asset class (the fold of the before-cell's token_id) so the
+        //    proof commits to its genuine asset class (PI[v3::ASSET_CLASS]).
         let before_bw = dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness::new(
             before_w.pre_limbs.clone(),
             before_w.iroot,
         )
-        .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?
+        .with_asset_class(before_w.asset_class);
         let after_bw = dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness::new(
             after_w.pre_limbs.clone(),
             after_w.iroot,
         )
-        .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?
+        .with_asset_class(after_w.asset_class);
 
         // The caveat manifest: transfer exercises both caveat domains (the validated
         // reference); every other effect proves with the empty manifest. The rotated

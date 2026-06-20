@@ -83,6 +83,18 @@ pub struct RotationWitness {
     pub iroot: BabyBear,
     /// The chained state commitment `wireCommitR(pre_limbs, iroot)`.
     pub state_commit: BabyBear,
+    /// Light-client conservation: the per-cell ASSET CLASS folded from this
+    /// cell's committed `token_id`
+    /// (`dregg_circuit::block_conservation::fold_token_id_to_asset`, dregg3:
+    /// AssetId := issuer-cell). This is the EXACT fold the executor's per-asset
+    /// collector keys on (`TurnExecutor::asset_class_for_cell`), so the
+    /// proof-bound class (surfaced as `PI[v3::ASSET_CLASS]` when the BEFORE
+    /// witness carries it) agrees with the ledger-derived class by construction.
+    /// The prover threads this into the rotated v1 sub-trace's
+    /// `EffectVmContext.asset_class` so the proof COMMITS to its genuine asset
+    /// class, making the light-client per-asset partition non-trivial for
+    /// multi-asset turns.
+    pub asset_class: BabyBear,
 }
 
 /// Felt-encode a cell's signed balance LOW limb — the `r0 ↔ balance_lo` weld value,
@@ -381,10 +393,16 @@ pub fn produce(
 
     let iroot_val = iroot(receipt_hashes);
     let state_commit = wire_commit(&pre_limbs, iroot_val);
+    // The per-cell asset class (the fold of the cell's committed token_id) the
+    // light-client conservation partition keys on — the SAME fold the executor's
+    // collector uses, so the proof-bound class agrees with the ledger class.
+    let asset_class =
+        dregg_circuit::block_conservation::fold_token_id_to_asset(cell.token_id());
     RotationWitness {
         pre_limbs,
         iroot: iroot_val,
         state_commit,
+        asset_class,
     }
 }
 
