@@ -156,6 +156,16 @@ pub mod terminal;
 pub mod token_inspector;
 #[cfg(feature = "embedded-executor")]
 pub mod world;
+// THE PARTIAL-TURN LIFT (docs/deos/PARTIAL-TURN-LIFT.md): the held-promise
+// continuation. `held_promise` is the standalone model (holes + guards +
+// EMPTY/HELD/READY lifecycle); `pipeline_continuation` is the LIFT — that
+// continuation carried by a real `dregg_turn::Pipeline` whose holes are real
+// `EventualRef`s on `Target::Eventual`/`PipelinedSend` targets (a hole IS a
+// nullifier; resolution IS a spend, once, fail-closed). gpui-free, test-able.
+#[cfg(feature = "embedded-executor")]
+pub mod held_promise;
+#[cfg(feature = "embedded-executor")]
+pub mod pipeline_continuation;
 // NATIVE WORLD PERSISTENCE (M4 — docs/deos/WORLD-PERSISTENCE-PLAN.md): the
 // durable-image weld onto the node's already-built `dregg-persist` spine (redb
 // commit log + checkpoint⊕overlay recovery). gpui-free, `cargo test`-able.
@@ -242,6 +252,13 @@ pub mod read_cap_lens;
 // tab's AUTHOR face, riding the green dregg-doc patch core. First-class ObjectKind.
 #[cfg(feature = "embedded-executor")]
 pub mod doc_lens;
+// THE DESKTOP IS A DOCUMENT — the reflexive projection of the live cockpit
+// workspace (its CompositorScene of surfaces + its WorkspaceCell tab selector) as a
+// dregg_doc document, so a desktop is shareable/rehydratable/branchable/diffable
+// through the SAME machinery a prose document is. gpui-free + cargo-testable; the
+// WELD between the scene graph and the patch core (docs/deos/DOC-CELL-COMPOSITION.md).
+#[cfg(feature = "embedded-executor")]
+pub mod desktop_doc;
 // THE HISTORY / UNDO lens — per-cell reversibility welded onto the landed
 // `dregg_turn::reversible` organ (M-REV-0): the reversibility map (each change-kind
 // classified by the real Effect::invert over the live ledger into clean/contextual/

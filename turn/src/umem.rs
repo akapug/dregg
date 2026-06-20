@@ -543,6 +543,10 @@ fn touches_of_entry(e: &JournalEntry) -> Vec<Touch> {
             UKey::VerificationKey(*cell),
             Some(old_vk.as_ref().map(json)),
         )],
+        JournalEntry::SetProgram { cell, old_program } => vec![Touch::At(
+            UKey::Program(*cell),
+            Some(Some(json(old_program))),
+        )],
         JournalEntry::SetDelegation {
             cell,
             old_delegation,

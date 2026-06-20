@@ -422,16 +422,18 @@ impl HeadlineDemo {
             .ok_or(DemoError::NoChildCell)?;
         self.token = token;
 
-        // Grant A an ORIGINAL cap reaching the token cell (A is the minter/owner —
-        // the genesis grant path, like the shell handing back a surface owner-grant).
-        // This is the authority A spends the budget under in frame 2.
-        let _ = self.world.genesis_grant_cap(&self.agent_a, token);
-        // Open the budget cell's permissions (the minter endowing its freshly-minted
-        // cell — a factory child carries the factory's default permissions, which
-        // require a signature to send FROM it; the minter opens its own cell the way a
-        // node seeds a genesis cell's authority). Without this, A's in-mandate spend
-        // FROM the budget cell in frame 2 would be PermissionDenied on Send.
-        let _ = self.world.genesis_open_permissions(&token);
+        // Grant A an ORIGINAL cap reaching the token cell + open the budget cell's
+        // permissions — as ORDERED TURNS, not timeless genesis facts. The token was
+        // JUST born by a `CreateCellFromFactory` turn (it is turn-touched), so the
+        // genesis-path mutation would file a post-turn write as a pre-turn fact and
+        // break reopen (the category error). A is the minter/owner, so it holds the
+        // authority these turns spend under (no-amplification gates them for real).
+        let grant = crate::world::grant_capability(self.agent_a, token, token, 0);
+        let grant_turn = self.world.turn(self.agent_a, vec![grant]);
+        let _ = self.world.commit_turn(grant_turn);
+        let open = crate::world::set_permissions(token, crate::world::open_permissions());
+        let open_turn = self.world.turn(self.agent_a, vec![open]);
+        let _ = self.world.commit_turn(open_turn);
 
         let height = self.world.height();
         self.frames.push(DemoFrame::committed(

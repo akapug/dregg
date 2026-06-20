@@ -18,6 +18,7 @@ impl TurnExecutor {
             Effect::IncrementNonce { .. } => 0,
             Effect::SetPermissions { .. } => self.costs.effect_base,
             Effect::SetVerificationKey { .. } => self.costs.effect_base,
+            Effect::SetProgram { .. } => self.costs.effect_base,
             Effect::NoteSpend { .. } => self.costs.proof_verify, // note spends carry a proof
             Effect::NoteCreate { .. } => self.costs.effect_base,
             Effect::BridgeMint { .. } => self.costs.proof_verify, // bridge mints verify a STARK proof
@@ -569,6 +570,12 @@ impl TurnExecutor {
                 JournalEntry::SetVerificationKey { .. } => {
                     // Verification key changes don't have a delta field currently;
                     // tracked via the cell's state.
+                }
+                JournalEntry::SetProgram { .. } => {
+                    // Program (caveat table) changes don't have a delta field
+                    // currently; tracked via the cell's state. (The in-circuit
+                    // witness — a descriptor rung binding the program write — is
+                    // the VK-affecting follow-up.)
                 }
                 JournalEntry::SetDelegation { .. }
                 | JournalEntry::SetDelegationEpoch { .. }

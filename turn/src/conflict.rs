@@ -230,6 +230,9 @@ fn extract_tree_access(
             Effect::SetVerificationKey { cell, .. } => {
                 write_set.push(*cell);
             }
+            Effect::SetProgram { cell, .. } => {
+                write_set.push(*cell);
+            }
             Effect::EmitEvent { cell, .. } => {
                 read_set.push(*cell);
             }

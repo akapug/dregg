@@ -872,12 +872,27 @@ impl PredicateComposer {
         Ok(ReflectedConstraint::new(c).with_sample(sample_new, sample_old, sample_ctx))
     }
 
-    /// Install the built caveat onto `target` as a `CellProgram::Predicate([c])`
-    /// (the genesis-path authority install) and return whether the cell existed.
-    /// Fails closed if the composition is unsafe (nothing is installed).
+    /// Install the built caveat onto `target` as a `CellProgram::Predicate([c])`,
+    /// as an ORDERED `SetProgram` turn (the in-protocol reprogram — replaces the
+    /// out-of-band genesis-path install so a durable image reproduces it on
+    /// replay). The turn is self-targeted on `target` (the cell re-programming
+    /// itself, gated by its own `set_verification_key` permission). Returns
+    /// whether the install committed (false if the cell does not exist or its
+    /// program authority refuses). Fails closed if the composition is unsafe
+    /// (nothing is installed).
     pub fn install(&self, world: &mut World) -> Result<bool, GadgetError> {
         let c = self.build()?;
-        Ok(world.set_cell_program(&self.target, CellProgram::Predicate(vec![c])))
+        if world.ledger().get(&self.target).is_none() {
+            return Ok(false);
+        }
+        let turn = world.turn(
+            self.target,
+            vec![crate::world::set_program(
+                self.target,
+                CellProgram::Predicate(vec![c]),
+            )],
+        );
+        Ok(world.commit_turn(turn).is_committed())
     }
 
     /// Build the `SetField` [`IntentDraft`] that writes `value` into `slot` of

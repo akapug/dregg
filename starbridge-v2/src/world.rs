@@ -1181,6 +1181,8 @@ fn collect_touched(action: &Action, ids: &mut Vec<CellId>) {
             Effect::SetField { cell, .. }
             | Effect::IncrementNonce { cell }
             | Effect::EmitEvent { cell, .. }
+            | Effect::SetProgram { cell, .. }
+            | Effect::SetPermissions { cell, .. }
             | Effect::RevokeCapability { cell, .. } => push(*cell, ids),
             Effect::GrantCapability { from, to, .. } => {
                 push(*from, ids);
@@ -1428,6 +1430,27 @@ pub fn create_cell(seed: u8) -> Effect {
 /// Convenience: write `value` into state slot `index` of `cell`.
 pub fn set_field(cell: CellId, index: usize, value: dregg_cell::FieldElement) -> Effect {
     Effect::SetField { cell, index, value }
+}
+
+/// Convenience: re-program `cell`'s [`CellProgram`] (its caveat table) as an
+/// ORDERED effect — the in-protocol home for the genuinely-dynamic reprogram
+/// (the per-present compositor re-bake, a live trustline/flash-well install).
+/// Replaces the timeless out-of-band `World::set_cell_program` genesis-path
+/// mutation: riding a turn lands a `CommitRecord`, so a durable image
+/// reproduces it on replay (the persist-durability category-error fix).
+pub fn set_program(cell: CellId, program: dregg_cell::CellProgram) -> Effect {
+    Effect::SetProgram { cell, program }
+}
+
+/// Convenience: replace `cell`'s [`Permissions`] as an ORDERED effect (the
+/// in-protocol home for an owner endowing a cell it owns — replaces the
+/// genesis-path `genesis_open_permissions` mutation when the cell has already
+/// been turn-touched).
+pub fn set_permissions(cell: CellId, new_permissions: Permissions) -> Effect {
+    Effect::SetPermissions {
+        cell,
+        new_permissions,
+    }
 }
 
 /// Convenience: an emit-event effect with a topic symbol (the topic string is

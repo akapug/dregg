@@ -228,8 +228,15 @@ impl OrganDriver {
         }
 
         // Install the REAL per-line program — from here the executor enforces the
-        // organ's invariant on every touching turn.
-        world.set_cell_program(&organ, program);
+        // organ's invariant on every touching turn. The organ was already touched
+        // by the funding Transfer above, so this is a MID-SESSION reprogram: it
+        // rides an ORDERED `SetProgram` turn (self-targeted on the organ cell, whose
+        // open permissions gate the program install), landing a `CommitRecord` so a
+        // durable image reproduces it on replay — NOT a timeless genesis mutation.
+        let install = world.turn(organ, vec![world::set_program(organ, program)]);
+        if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(install) {
+            return Err(OrganOpError::ExecutorRejected { op: OrganOp::Open, reason });
+        }
 
         // Write the terms + step UNINIT → OPEN in ONE program-gated turn. With the
         // new state == OPEN, each `pin_term` requires the literal (satisfied by
@@ -462,7 +469,14 @@ impl OrganDriver {
                 });
             }
         }
-        world.set_cell_program(&well, program);
+        // Install the well program as an ORDERED `SetProgram` turn (the well was
+        // already touched by the funding Transfer above — a MID-SESSION reprogram;
+        // self-targeted on the well cell, whose open permissions gate the install).
+        // Lands a `CommitRecord` so a durable image reproduces it on replay.
+        let install = world.turn(well, vec![world::set_program(well, program)]);
+        if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(install) {
+            return Err(OrganOpError::ExecutorRejected { op: OrganOp::Open, reason });
+        }
         // Write terms + prime the ratchet at rung 1 (the priming quantum = fee, the
         // schedule origin) + step UNINIT → OPEN. With state == OPEN, the term-pins
         // require the literals (satisfied here); the rung ladder
@@ -527,7 +541,16 @@ impl OrganDriver {
             .map(|c| c.capabilities.has_access(&well))
             .unwrap_or(false);
         if !already {
-            world.genesis_grant_cap(&borrower, well);
+            // The well SELF-GRANTS the adopt cap to the borrower as an ORDERED turn
+            // (the cap target IS the well, so the executor's self-grant arm
+            // authorizes it by the well's own consent). The grant touches only the
+            // well's c-list — its OPEN-state invariants are unchanged, so the
+            // flash-well program gate still admits it. Lands a `CommitRecord`
+            // (durable-replay safe) instead of a timeless genesis mutation.
+            let grant = world.turn(well, vec![world::grant_capability(well, borrower, well, 0)]);
+            if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(grant) {
+                return Err(OrganOpError::ExecutorRejected { op: OrganOp::Draw, reason });
+            }
         }
         let next_ratchet = r.ratchet.saturating_add(r.fee);
         // ONE turn the BORROWER signs carrying the whole ring: the draw out (well →

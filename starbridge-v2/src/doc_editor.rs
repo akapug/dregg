@@ -43,8 +43,9 @@
 
 use dregg_cell::CellId;
 use dregg_doc::{
-    Alternative, Author, ConflictRegion, ExecutorDrivenDoc, Op, Patch, Regime, Rendered, Segment,
-    content, resolve_connect_by, resolve_field, resolve_keep_by, walk_atoms, AtomId,
+    Alternative, Author, ConflictRegion, ExecutorDrivenDoc, Op, Patch, RegionResolutions, Regime,
+    Rendered, ResolutionChoice, Segment, content, resolutions, resolve_connect_by, resolve_field,
+    resolve_keep_by, walk_atoms, AtomId,
 };
 use dregg_turn::TurnError;
 
@@ -183,6 +184,27 @@ pub struct ConflictView {
     pub needs_consensus: bool,
     /// The live alternatives, each attributed to who wrote it.
     pub alternatives: Vec<AttributedAlternative>,
+}
+
+/// A first-class conflict rendered INLINE for editing: the attributed alternatives
+/// (both shown, each tagged with who wrote it — provenance IS the receipt) PLUS the
+/// one-click resolution choices a reader can take. This is the conflict-as-editor
+/// surface: "two people wrote this differently — here's both — click to keep one,
+/// order them, or settle the field", every click a single cap-gated turn.
+#[derive(Clone, Debug)]
+pub struct InlineConflict {
+    /// The attributed alternatives (the both-shown-with-provenance view).
+    pub view: ConflictView,
+    /// The ready resolution gestures, each a one-click patch.
+    pub choices: Vec<ResolutionChoice>,
+}
+
+impl InlineConflict {
+    /// The resolution that loses nothing (keeps every alternative, ordering them) —
+    /// the safe default a one-click "resolve, keep both" button arms.
+    pub fn keep_all_choice(&self) -> Option<&ResolutionChoice> {
+        self.choices.iter().find(|c| c.keeps_all())
+    }
 }
 
 /// THE DOCUMENT EDITOR — a document riding a real cell, edited through the genuine
@@ -437,6 +459,33 @@ impl DocEditor {
             .collect()
     }
 
+    /// **THE INLINE CONFLICT-VIEW WITH ONE-CLICK RESOLUTIONS.** For every open
+    /// conflict, the attributed alternatives (who wrote which) PLUS the set of
+    /// ready resolution gestures a reader can click — keep one, order all, or
+    /// settle a field. This is the editing UX the literate surface lacked: a
+    /// conflict renders as both alternatives inline, each gesture a single patch.
+    /// `resolver` authors any chosen resolution (its receipt is under that author).
+    pub fn conflict_views(&self, resolver: DocAuthor) -> Vec<InlineConflict> {
+        let rendered = self.rendered();
+        let menu: Vec<RegionResolutions> = resolutions(&rendered, resolver.author());
+        rendered
+            .conflicts()
+            .zip(menu.into_iter())
+            .map(|(region, region_res)| InlineConflict {
+                view: self.attribute(region),
+                choices: region_res.choices,
+            })
+            .collect()
+    }
+
+    /// **COMMIT A CHOSEN RESOLUTION** as a cap-gated turn. Takes the ready
+    /// [`ResolutionChoice::patch`] (from [`Self::conflict_views`]) and runs it
+    /// through the real executor, collapsing the conflict and leaving a receipt.
+    /// An unauthorized resolver is refused in-band (the same anti-ghost tooth).
+    pub fn resolve_choice(&mut self, choice: &ResolutionChoice, resolver: DocAuthor) -> EditOutcome {
+        self.commit_edit(choice.patch.clone(), resolver)
+    }
+
     // ── hypermedia faces (the built Nelson/Engelbart pieces, reused) ──────────
 
     /// THE TRANSCLUSION face: a verified cross-cell quote — the document quotes
@@ -669,6 +718,60 @@ mod tests {
             ed.conflicts().iter().all(|c| c.regime != Regime::Field),
             "the field clash collapsed to the chosen value"
         );
+    }
+
+    #[test]
+    fn the_inline_conflict_view_offers_clickable_resolutions_that_collapse_it() {
+        // A sown prose conflict surfaces inline as BOTH alternatives + one-click
+        // resolutions; committing any choice through the executor collapses it.
+        let mut ed = DocEditor::new();
+        ed.sow_prose_conflict("Cats. ", "Dogs. ");
+        assert!(ed.has_conflict());
+
+        let inline = ed.conflict_views(DocAuthor::ALICE);
+        assert_eq!(inline.len(), 1, "one inline conflict");
+        let c = &inline[0];
+        // both alternatives shown, attributed.
+        assert_eq!(c.view.alternatives.len(), 2);
+        let names: Vec<&str> = c.view.alternatives.iter().map(|a| a.author_name).collect();
+        assert!(names.contains(&"alice") && names.contains(&"bob"), "{names:?}");
+        // a keep-each + order menu is offered, and a keep-all default exists.
+        assert!(!c.choices.is_empty(), "resolution choices offered");
+        assert!(c.keep_all_choice().is_some(), "a keep-both default is armed");
+
+        // pick the keep-all (order) choice and commit it as a real cap-gated turn.
+        let choice = c.keep_all_choice().unwrap().clone();
+        let out = ed.resolve_choice(&choice, DocAuthor::ALICE);
+        assert!(out.committed(), "the one-click resolution committed: {}", out.banner());
+        assert!(!ed.has_conflict(), "the conflict collapsed");
+        assert!(ed.commitment_matches());
+    }
+
+    #[test]
+    fn an_inline_field_conflict_settles_by_clicking_a_value() {
+        let mut ed = DocEditor::new();
+        ed.sow_field_conflict("title", "On Cats", "On Dogs");
+        let inline = ed.conflict_views(DocAuthor::ALICE);
+        let field = inline
+            .iter()
+            .find(|c| c.view.regime == Regime::Field)
+            .expect("a field conflict inline");
+        // one choose per distinct value.
+        assert!(field.choices.len() >= 2, "a choose per value: {:?}", field.choices.len());
+        let choice = field.choices[0].clone();
+        let out = ed.resolve_choice(&choice, DocAuthor::ALICE);
+        assert!(out.committed(), "{}", out.banner());
+        assert!(
+            ed.conflicts().iter().all(|c| c.regime != Regime::Field),
+            "the field clash settled"
+        );
+    }
+
+    #[test]
+    fn a_clean_document_has_no_inline_conflicts() {
+        let ed = DocEditor::new();
+        assert!(!ed.has_conflict());
+        assert!(ed.conflict_views(DocAuthor::ALICE).is_empty(), "nothing to resolve");
     }
 
     #[test]

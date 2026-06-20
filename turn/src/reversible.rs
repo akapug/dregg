@@ -304,6 +304,18 @@ impl Effect {
                     new_vk: old,
                 })
             }
+            // SetProgram restores the pre-image program (Contextual, like the
+            // VK arm above — the cell's program is one program-identity surface).
+            Effect::SetProgram { cell, .. } => {
+                let old = pre
+                    .get(cell)
+                    .map(|c| c.program.clone())
+                    .unwrap_or(dregg_cell::CellProgram::None);
+                Inversion::Contextual(Effect::SetProgram {
+                    cell: *cell,
+                    program: old,
+                })
+            }
 
             // EmitEvent is an append to the receipt-local view; un-emit drops
             // the append. There is no state-mutating inverse effect, so the

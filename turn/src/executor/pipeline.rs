@@ -176,6 +176,11 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
                     *cell = *resolved;
                 }
             }
+            Effect::SetProgram { cell, .. } => {
+                if cell == placeholder {
+                    *cell = *resolved;
+                }
+            }
             Effect::Introduce {
                 introducer,
                 recipient,
