@@ -40,8 +40,8 @@ use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
 use starbridge_v2::world::{self, CommitOutcome, World};
 // The L1 PRESENTATION SPINE + the moldable inspector framework primitives.
 use starbridge_v2::presentable::{
-    FocusTarget, GaugeView, GraphView, Halo, LatticeView, MerkleTreeView, PresentationBody,
-    Registry, Spotter, SpotterHit, StateMachineView, TimelineView, TraceView,
+    FocusTarget, GaugeView, GraphView, Halo, LatticeView, MerkleTreeView, PresentMemo,
+    PresentationBody, Registry, Spotter, SpotterHit, StateMachineView, TimelineView, TraceView,
 };
 // The standalone moldable surfaces + the lane gadgets — each drives its real model
 // methods (validate→predict→commit), surfacing refusals as features.
@@ -238,6 +238,15 @@ pub struct Cockpit {
     /// Stable, sorted list of cell ids (so the rail order is deterministic and
     /// selection survives across commits).
     cells: Vec<CellId>,
+    /// M2 DELTA LOOP — the last dynamics cursor this view folded. Each render
+    /// folds `world.dynamics().since(self.dynamics_cursor)` into per-slice
+    /// invalidation, then advances to `world.dynamics().cursor()`. This is the
+    /// producer↔consumer JOIN: turning per-frame O(ledger) projection into
+    /// O(changed-cells) (`docs/deos/EFFICIENCY-WELD-PLAN.md` §2.1).
+    dynamics_cursor: usize,
+    /// The per-(focus,viewer) projection memo, wrapping the unchanged-pure
+    /// `Registry::present`, valid while the live head is unchanged (§2.3).
+    present_memo: PresentMemo,
     selection: Selection,
     /// The last action's outcome banner (committed hash / rejection reason).
     last_outcome: Option<String>,
@@ -653,9 +662,15 @@ impl Cockpit {
             .first()
             .map(AttenuationDial::over_held);
 
+        // Seed the dynamics cursor at the live head so the first render does not
+        // re-fold the genesis events whose cells `self.cells` already carries.
+        let dynamics_cursor = world.borrow().dynamics().cursor();
+
         Self {
             world,
             cells,
+            dynamics_cursor,
+            present_memo: PresentMemo::new(),
             selection: Selection::Image,
             last_outcome: None,
             anchors,
@@ -778,6 +793,83 @@ impl Cockpit {
 
     fn refresh_cells(&mut self) {
         self.cells = sorted_cells(&self.world.borrow());
+    }
+
+    /// M2 — THE DELTA FOLD. Pull every dynamics event since the last render and
+    /// route each into per-slice invalidation (the dirty-set), then advance the
+    /// cursor to the live head. This is the producer↔consumer join: the touched
+    /// cell, alone, re-lights its projection (`EFFICIENCY-WELD-PLAN.md` §2.1).
+    fn fold_dynamics(&mut self) {
+        let new = {
+            let w = self.world.borrow();
+            let from = self.dynamics_cursor;
+            // Clone the slice out so we drop the world borrow before mutating self.
+            let slice = w.dynamics().since(from).to_vec();
+            self.dynamics_cursor = w.dynamics().cursor();
+            slice
+        };
+        for ev in &new {
+            self.invalidate_for(ev);
+        }
+    }
+
+    /// The §2.2 variant→invalidation table: what each `WorldEvent` dirties.
+    fn invalidate_for(&mut self, ev: &dynamics::WorldEvent) {
+        use dynamics::WorldEvent as E;
+        match ev {
+            // A cell was born. ZERO is the `CreateCell`/`FromFactory` sentinel (the
+            // real id isn't known at emit): we don't know which cell appeared, so
+            // refresh `self.cells` from the ledger (the bounded full-rescan case,
+            // once per cell-creating turn) and drop the whole projection cache.
+            E::CellBorn { cell, .. } => {
+                if *cell == CellId::ZERO {
+                    self.refresh_cells();
+                    self.present_memo.invalidate_all();
+                } else {
+                    // A real-id birth (genesis seed): keep cells sorted-correct and
+                    // drop any (now-resolvable) cached projection for it.
+                    if !self.cells.contains(cell) {
+                        self.cells.push(*cell);
+                        self.cells.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+                    }
+                    self.present_memo.invalidate_cell(*cell);
+                }
+            }
+            E::CellDestroyed { cell } => {
+                self.cells.retain(|c| c != cell);
+                self.present_memo.invalidate_cell(*cell);
+            }
+            E::BalanceFlowed { cell, .. }
+            | E::FieldSet { cell, .. }
+            | E::CellMutated { cell }
+            | E::CellSealed { cell }
+            | E::CellUnsealed { cell }
+            | E::Burned { cell, .. }
+            | E::EventEmitted { cell, .. } => {
+                self.present_memo.invalidate_cell(*cell);
+            }
+            E::SurfaceDamaged { cell, owner, .. } => {
+                self.present_memo.invalidate_cell(*cell);
+                self.present_memo.invalidate_cell(*owner);
+            }
+            // Cap-edge deltas reach OTHER cells' affordance badges (viewer-non-
+            // local, §4.2): conservatively drop the whole affordance cache.
+            E::CapabilityGranted { from, to } => {
+                self.present_memo.invalidate_cell(*from);
+                self.present_memo.invalidate_cell(*to);
+                self.present_memo.invalidate_affordances_all();
+            }
+            E::CapabilityRevoked { cell, .. } => {
+                self.present_memo.invalidate_cell(*cell);
+                self.present_memo.invalidate_affordances_all();
+            }
+            // A height tick carries no cell-specific invalidation of its own; the
+            // per-cell events in the SAME commit batch carry the actual deltas, and
+            // `rail_header` re-reads the root via the M1 memo (height bumped).
+            E::TurnCommitted { .. } => {}
+            // Nothing moved — only the outcome banner (already a Rust field).
+            E::TurnRejected { .. } => {}
+        }
     }
 
     /// Whether there are demo seed turns still waiting to be committed (drives the
@@ -2807,7 +2899,10 @@ impl Cockpit {
         );
 
         // --- the presentation SET as a tab-strip + the rendered body ---
-        let Some(set) = reg.present(FocusTarget::Cell(focus), focus) else {
+        // M2: project through the memo (valid while the live head is unchanged;
+        // the delta fold drops touched cells). Same `Presentation` set as the pure
+        // `reg.present`, now cached (EFFICIENCY-WELD-PLAN §2.3).
+        let Some(set) = self.present_memo.present(&w, FocusTarget::Cell(focus), focus) else {
             return col
                 .child(div().text_xs().text_color(theme::bad()).child(
                     "(the focused object is absent from the live image — a dangling focus)",
@@ -6219,6 +6314,10 @@ impl Render for Cockpit {
         // LIVE: drain the node's receipt stream first so this frame reflects every
         // receipt that arrived (per-receipt `cx.notify()`, not a snapshot reload).
         self.drain_live_stream(cx);
+        // M2 DELTA LOOP: fold this frame's dynamics into per-slice invalidation so
+        // the projection memo reflects exactly the cells that changed (O(changed),
+        // not O(ledger)) — the producer↔consumer JOIN (EFFICIENCY-WELD-PLAN §2.1).
+        self.fold_dynamics();
         let palette_open = self.palette.is_open();
         div()
             .id("cockpit-root")

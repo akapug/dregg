@@ -420,6 +420,7 @@ fn event_touches(ev: &WorldEvent, id: &CellId) -> bool {
         WorldEvent::CellBorn { cell, .. } => cell == id,
         WorldEvent::BalanceFlowed { cell, .. } => cell == id,
         WorldEvent::FieldSet { cell, .. } => cell == id,
+        WorldEvent::CellMutated { cell } => cell == id,
         WorldEvent::CapabilityGranted { from, to } => from == id || to == id,
         WorldEvent::CapabilityRevoked { cell, .. } => cell == id,
         WorldEvent::CellSealed { cell } => cell == id,
