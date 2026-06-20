@@ -24,7 +24,8 @@
 //! gpui-free + fully tested; renders through the existing generic body widget.
 
 use dregg_doc::{
-    blame, commit, content, Author, ConflictRegion, History, PatchId, Regime, Rendered, Segment,
+    blame, commit, content, Author, ConflictRegion, DocGraph, ExecutorDrivenDoc, History, PatchId,
+    Regime, Rendered, Segment,
 };
 
 use crate::presentable::{
@@ -33,23 +34,50 @@ use crate::presentable::{
 };
 use crate::reflect::{Field, Inspectable, ObjectKind};
 
-/// The moldable inspection of one literate document, sourced from its authoritative
-/// [`History`] (replaying the patches yields the live graph — the same fold the
-/// substrate's `ExecutorDrivenDoc` drives through the real executor).
+/// The moldable inspection of one literate document. The folded `graph` is the
+/// content the rendered/conflict/commitment faces read; `history` is the patch
+/// trail (present when the doc is sourced from its full [`History`], absent when
+/// sourced from a LIVE document's graph — the substrate keeps the folded state,
+/// not the patch log, so a live-cell projection degrades the trail honestly).
 pub struct DocumentInspection {
     /// An operator-legible name for the document.
     pub title: String,
-    /// The authoritative patch history (genesis-first); `replay()` is the content.
-    pub history: History,
+    /// The folded document content (always present — the rendered/conflict/
+    /// commitment/blame faces read this).
+    graph: DocGraph,
+    /// The authoritative patch trail, when known (the `History` source). `None`
+    /// for a live-document projection (the trail lives in the receipt log, not the
+    /// folded cell state).
+    history: Option<History>,
 }
 
 impl DocumentInspection {
-    /// Inspect a document from its patch history.
+    /// Inspect a document from its full patch [`History`] — the complete face set
+    /// including the patch-history trail.
     pub fn new(title: impl Into<String>, history: History) -> Self {
         DocumentInspection {
             title: title.into(),
-            history,
+            graph: history.replay(),
+            history: Some(history),
         }
+    }
+
+    /// Inspect a document from a folded [`DocGraph`] (a live document's content).
+    /// The rendered/conflict/commitment/blame faces are full; the patch-history
+    /// trail is reported honestly as unavailable in this projection.
+    pub fn from_graph(title: impl Into<String>, graph: &DocGraph) -> Self {
+        DocumentInspection {
+            title: title.into(),
+            graph: graph.clone(),
+            history: None,
+        }
+    }
+
+    /// Inspect a LIVE [`ExecutorDrivenDoc`] (the DOCS tab's authoritative doc,
+    /// driven through the real executor) — the reachability path from the editor
+    /// surface to the moldable inspector. Sources the folded graph directly.
+    pub fn from_doc(title: impl Into<String>, doc: &ExecutorDrivenDoc) -> Self {
+        DocumentInspection::from_graph(title, doc.graph())
     }
 }
 
@@ -74,12 +102,12 @@ impl Presentable for DocumentInspection {
     }
 
     fn present(&self, _ctx: &PresentCtx) -> Vec<Presentation> {
-        let graph = self.history.replay();
-        let rendered: Rendered = content(&graph);
-        let lines = blame(&graph);
-        let commitment = commit(&graph);
+        let graph = &self.graph;
+        let rendered: Rendered = content(graph);
+        let lines = blame(graph);
+        let commitment = commit(graph);
         let conflict_count = rendered.conflicts().count();
-        let patch_count = self.history.len();
+        let patch_count = self.history.as_ref().map(History::len).unwrap_or(0);
 
         let mut out: Vec<Presentation> = Vec::new();
 
@@ -102,10 +130,13 @@ impl Presentable for DocumentInspection {
                 Field::text("commitment", format!("{:032x}", commitment.0)),
                 Field::text(
                     "tip",
-                    self.history
-                        .tip()
-                        .map(short_patch)
-                        .unwrap_or_else(|| "genesis".to_string()),
+                    match &self.history {
+                        Some(h) => h
+                            .tip()
+                            .map(short_patch)
+                            .unwrap_or_else(|| "genesis".to_string()),
+                        None => "live projection (trail not in folded state)".to_string(),
+                    },
                 ),
             ],
         };
@@ -129,7 +160,7 @@ impl Presentable for DocumentInspection {
             kind: PresentationKind::Provenance,
             label: "Patch History".to_string(),
             search_text: format!("patch history trail {patch_count} patches"),
-            body: PresentationBody::Timeline(patch_timeline(&self.history)),
+            body: PresentationBody::Timeline(patch_timeline(self.history.as_ref())),
         });
 
         // (4) Conflict-as-state — the first-class conflict regions (or honestly
@@ -188,8 +219,21 @@ fn rendered_prose(rendered: &Rendered) -> String {
 }
 
 /// The patch history as a provenance timeline — one event per recorded patch,
-/// oldest→newest, attributed to its author with its op count.
-fn patch_timeline(history: &History) -> TimelineView {
+/// oldest→newest, attributed to its author with its op count. A live-document
+/// projection (no `History`) reports the trail's absence as a single honest event
+/// rather than a fabricated history.
+fn patch_timeline(history: Option<&History>) -> TimelineView {
+    let Some(history) = history else {
+        return TimelineView {
+            events: vec![TimelineEvent {
+                at: 0,
+                label: "live projection — the patch trail lives in the receipt log, \
+                        not the folded cell state"
+                    .to_string(),
+                hash: None,
+            }],
+        };
+    };
     let events = history
         .patches()
         .iter()
@@ -350,7 +394,7 @@ mod tests {
     #[test]
     fn the_patch_history_timeline_is_the_real_trail() {
         let doc = DocumentInspection::new("notes", conflicted_history());
-        let tl = patch_timeline(&doc.history);
+        let tl = patch_timeline(doc.history.as_ref());
         // Four recorded patches, oldest→newest, monotone keys.
         assert_eq!(tl.events.len(), 4);
         assert_eq!(tl.events[0].at, 0);
@@ -362,8 +406,7 @@ mod tests {
     #[test]
     fn conflict_as_state_surfaces_attributed_alternatives() {
         let doc = DocumentInspection::new("notes", conflicted_history());
-        let rendered = doc.history.replay();
-        let rendered = content(&rendered);
+        let rendered = content(&doc.graph);
         assert!(rendered.has_conflict(), "the two forks conflict");
         let cf = conflict_fields(&rendered);
         // Not clean; the conflict carries ≥2 attributed alternatives.
@@ -377,7 +420,7 @@ mod tests {
     #[test]
     fn a_clean_document_reports_no_conflict_honestly() {
         let doc = DocumentInspection::new("notes", clean_history());
-        let rendered = content(&doc.history.replay());
+        let rendered = content(&doc.graph);
         assert!(!rendered.has_conflict());
         let cf = conflict_fields(&rendered);
         assert!(cf.subtitle.contains("clean"));
@@ -392,11 +435,47 @@ mod tests {
     #[test]
     fn the_commitment_prose_binds_and_names_the_regimes() {
         let doc = DocumentInspection::new("notes", conflicted_history());
-        let rendered = content(&doc.history.replay());
-        let prose = commitment_prose(commit(&doc.history.replay()), &rendered);
+        let rendered = content(&doc.graph);
+        let prose = commitment_prose(commit(&doc.graph), &rendered);
         assert!(prose.contains("COMMITMENT"));
         assert!(prose.contains("PROSE") && prose.contains("FIELDS"), "two regimes named");
         assert!(prose.contains("conflict"), "the conflict binding is described");
+    }
+
+    /// The REACHABILITY path: source the lens from a LIVE document (the DOCS tab's
+    /// `ExecutorDrivenDoc`, driven through the real executor). The folded faces are
+    /// full; the patch-history trail is reported honestly as a live projection.
+    #[test]
+    fn sources_from_a_live_executor_driven_doc() {
+        let mut doc = ExecutorDrivenDoc::new(11, 12, true);
+        let (a1, op1) = Patch::add(1, "live edit ", dregg_doc::AtomId::ROOT);
+        doc.edit(Patch::by(alice(), [op1])).expect("authorized edit commits");
+        let (_a2, op2) = Patch::add(2, "through the executor", a1);
+        doc.edit(Patch::by(alice(), [op2])).expect("authorized edit commits");
+
+        let inspection = DocumentInspection::from_doc("live notes", &doc);
+        let w = World::new();
+        let set = inspection.present(&PresentCtx::new(
+            &w,
+            dregg_cell::CellId::derive_raw(&[2u8; 32], &[0u8; 32]),
+        ));
+        // The full face set still renders from the folded graph.
+        assert_eq!(set.len(), 5);
+        // The rendered content reflects the live edits.
+        let rendered = set.iter().find(|p| p.label == "Rendered").unwrap();
+        if let PresentationBody::Prose(s) = &rendered.body {
+            assert!(s.contains("live edit"), "the live content is rendered");
+        } else {
+            panic!("Rendered is a Prose body");
+        }
+        // The patch-history degrades honestly (no trail in the folded projection).
+        let hist = set.iter().find(|p| p.label == "Patch History").unwrap();
+        if let PresentationBody::Timeline(t) = &hist.body {
+            assert_eq!(t.events.len(), 1);
+            assert!(t.events[0].label.contains("live projection"));
+        } else {
+            panic!("Patch History is a Timeline body");
+        }
     }
 
     /// Op is re-exported and usable (a compile-level guard that the grammar is in
