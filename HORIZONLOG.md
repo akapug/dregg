@@ -2862,3 +2862,27 @@ splits them:
 THE NEXT CAMPAIGN (precise): close the 24 Class-B slots — make each <e>Encodes a FUNCTION of Satisfied2(Rfix e)
 the way transfer's is (closedLogExtract_transfer_closed = the template), so a circuit-constraint bug in any effect
 propagates red. The spec<->proof weld is COMPLETE; the circuit<->proof weld is deep for 6, shallow for 24.
+
+## ⚑⚑ ENMESHMENT CENSUS layer 3/4: DISTRIBUTED/SETTLEMENT/BRIDGE/JOINT/PROMISES (a11c8d8a) — THE MISSING WELD found
+Circuit soundness propagates up EXACTLY ONE RUNG (into Settlement), then stops at a single named sibling axiom.
+- SETTLEMENT = PROVEN-AND-WELDED ✅. settlement_soundness (SettlementSoundness.lean:210) CALLS the apex
+  (lightclient_unfoolable_circuit_sound, ClosureFinal.lean:162) at :238 to discharge its genuine-transition leg;
+  lifts to authority-live-AT-SETTLEMENT (closes the branch-vs-settlement time-travel hole; non-vacuous both
+  polarities settlement_gap_real:324 + n=1 collapse :338). Real body, axiom-clean. The memory's promised
+  Settlement theorem is REAL + built ON circuit soundness.
+- ⚑ THE MISSING WELD (the single highest-leverage edit on the board): the multi-turn IVC / finalized-history /
+  joint / promise layers are ALL PROVEN but ride a SIBLING soundness floor EngineSound.leaf_sound
+  (RecursiveAggregation.lean:124) which ASSERTS the per-turn recCexec soundness that the apex ALREADY PROVES.
+  grep-confirmed the two are UNBRIDGED. Discharging EngineSound.leaf_sound BY lightclient_unfoolable_circuit_sound
+  is the ONE link that propagates circuit soundness through the WHOLE finalized-history/multi-turn/distributed
+  stack. Likely ~one bridging theorem (modulo the IVC recursion shape).
+- BRIDGE = WELDED at the per-cell rung ✅. bridgeMint is a genuine effect dispatched tag 20, Rfix 20 = the gated
+  mint descriptor, rides kstepAll. Argus/Effects/BridgeMint.lean clean (the memory's "breakage" flag is STALE).
+  Conservation genuine (BridgeCell lock/finalize/cancel = moves; TriDomain triConserved_of_execFull real per-kind
+  authority-measure body). ONE named seam: the foreign-finality CryptoPortal is an execFullA admission boundary
+  (BridgeMint.lean:45, "HONEST BOUNDARY — stated not hidden"), not in-circuit.
+- JOINT = PROVEN, welded to executor/spec/Argus-compiler, SEPARATE from the STARK apex (no whole-joint
+  aggregation AIR; Argus/Joint.lean:59 states this). PROMISES = PROVEN-BUT-SEPARATE (GuardedHole/ConditionalTurn/
+  CapTPPipeline/Await, ~real content, axiom-clean; the "promise-hole IS a nullifier" weld NOT yet realized).
+DISTRIBUTED protocols (consensus/finality/lace-merge/catchup) PROVEN + thread real kernel types, but their
+per-turn fact is the EngineSound sibling, not the apex — same missing weld.
