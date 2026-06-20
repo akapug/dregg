@@ -7,16 +7,23 @@
 //! (`lean_descriptor_air::parse_vm_descriptor` + `EffectVmDescriptorAir`) ingests
 //! the selected JSON to drive the verified circuit for that effect.
 //!
-//! ## Provenance (anti-drift)
+//! ## Provenance (the descriptor is a Lean-emitted cache)
 //!
-//! Each `*.json` under `circuit/descriptors/` is the **byte-exact** output of the
-//! Lean executable `Dregg2/Circuit/Emit/EmitAllJson.lean` (run via
+//! Each `*.json` under `circuit/descriptors/` is the output of the Lean
+//! executable `Dregg2/Circuit/Emit/EmitAllJson.lean` (run via
 //! `lake env lean --run`), which imports every `EffectVmEmit<Effect>.lean` module
-//! and prints `<def>\t<name>\t<emitVmJson desc>`. The JSON is NOT hand-written.
-//! The `*_FP` constants are the SHA-256 of those exact bytes; the drift test
-//! (`tests/effect_vm_descriptor_registry.rs` + the `#[test]` below) re-hashes the
-//! embedded bytes and re-parses each via `parse_vm_descriptor`, so any Lean→Rust
-//! drift (a re-emit that changes a gate / a stale committed JSON) fails CI.
+//! and prints `<def>\t<name>\t<emitVmJson desc>`. The JSON is NOT hand-written —
+//! Lean is the source of truth and the checked-in JSON is a CACHE of its emission.
+//!
+//! The actual Lean↔JSON drift gate is GENERATE-FRESH: `scripts/check-descriptor-drift.sh`
+//! re-runs the Lean emitters and diffs the result against the checked-in artifacts.
+//! That is the only check that can catch a re-emit changing a gate, because it
+//! re-derives from Lean. The `*_FP` SHA-256 constants are cache-freshness pins the
+//! emit script (re)writes alongside the JSON — `sha256(bytes) == FP` proves only
+//! that a file matches the hash committed next to it (self-consistency), NOT that
+//! the bytes still equal the current Lean emission. The tests below verify the real
+//! property — that each descriptor PARSES through `parse_vm_descriptor` into the
+//! structure the prover consumes — not the FP tautology.
 //!
 //! ## Coverage (HONEST)
 //!
@@ -64,24 +71,24 @@
 //!   scripts/emit-descriptors.sh
 //!
 //! It runs every Lean emitter, rewrites `circuit/descriptors/*.json`, and re-pins
-//! the `*_FP` SHA-256 constants — idempotent (a no-op on a clean tree). The CI
-//! gate `scripts/check-descriptor-drift.sh` (the `descriptor-drift` job) forbids
-//! Lean↔JSON drift; the in-Rust round-trip `#[test]` below additionally guards
-//! JSON↔FP self-consistency. See `docs/DESCRIPTOR-EMIT.md`.
+//! the `*_FP` cache-freshness SHA-256 constants — idempotent (a no-op on a clean
+//! tree). The CI gate `scripts/check-descriptor-drift.sh` (the `descriptor-drift`
+//! job) is the real Lean↔JSON guard: it regenerates from Lean and diffs. See
+//! `docs/DESCRIPTOR-EMIT.md`.
 
-// ==== include_str! consts + sha256 fingerprints (auto-generated; do not hand-edit) ====
+// ==== include_str! consts + sha256 cache-freshness pins (auto-generated; do not hand-edit) ====
 pub const DREGG_EFFECTVM_ATTENUATEA_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-attenuateA-v1.json");
 pub const DREGG_EFFECTVM_ATTENUATEA_V1_FP: &str =
-    "e5db2fb6fc62785fcfc8e8612858785c05901aa07254451eb7953227b83d8ab9";
+    "cb2c8357545bb3b76195f147016975866561e03b4dcc2da0d2c9b15feb4a66af";
 pub const DREGG_EFFECTVM_BRIDGEMINT_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-bridgemint-v1.json");
 pub const DREGG_EFFECTVM_BRIDGEMINT_V1_FP: &str =
-    "d456608b3478a3edfe15177ae9abe600cb89ab9205d68dbb319532b6d6e1bf4c";
+    "b41c97e568b38a6993bfa0c01a77007c9018bfbafeff84f715c4d0421e7631de";
 pub const DREGG_EFFECTVM_BURN_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-burn-v1.json");
 pub const DREGG_EFFECTVM_BURN_V1_FP: &str =
-    "cfeda498409319a70f3f8b03656a30bc08c6c8b04d0efa3c50338777f580be4d";
+    "f092974efaf54c92d1cd39feb4546ea68e9badabc5094dc99e40f099aa568c8b";
 // GRADUATED (cap-crown): RevokeCapability (sel 24) v1 FACE — the cap-root MOVE + frame freeze (the
 // SAME row shape as the attenuate template, only the AIR name differs). The in-circuit sorted-tree
 // slot DELETION is the v2 leg (`DREGG_EFFECTVM_REVOKE_CAP_IR2_*`). Lean source
@@ -89,7 +96,7 @@ pub const DREGG_EFFECTVM_BURN_V1_FP: &str =
 pub const DREGG_EFFECTVM_REVOKECAPABILITY_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-revokecapability-v1.json");
 pub const DREGG_EFFECTVM_REVOKECAPABILITY_V1_FP: &str =
-    "783c5aa326f37635d476e228b8ef50d95408dc053831ffbd7f5dd9f852398323";
+    "6cb694647364cace5a484496bc9418d2266b0cf109730e91cab5ccdf3b64177b";
 // GRADUATED (nonce-tick reconcile, v2): frozen-balance + ticked-nonce effect; the Lean descriptor
 // now ticks the runtime nonce (`gNonce`) AND carries the full last-row balance PI binding
 // (`boundaryLastPins`), so the descriptor decides IDENTICALLY to the hand-AIR on the real witness
@@ -98,11 +105,11 @@ pub const DREGG_EFFECTVM_REVOKECAPABILITY_V1_FP: &str =
 pub const DREGG_EFFECTVM_CELLDESTROY_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-celldestroy-v2.json");
 pub const DREGG_EFFECTVM_CELLDESTROY_V2_FP: &str =
-    "66fa76bc0388f30a3ac3b40add00b48981b78bb2b338fd19dcc147345912e850";
+    "be4c3a7895140ff0a4772fd435c3c65e1250a1f383a2402c8e7d48dd077e9a4e";
 pub const DREGG_EFFECTVM_CELLSEAL_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-cellseal-v2.json");
 pub const DREGG_EFFECTVM_CELLSEAL_V2_FP: &str =
-    "e77a322724bcabbb26db48f372524bab55ecefd52e722ad63f1d8cc9fcfa0048";
+    "254b4e3fb89e526cd9472b27060bd168bada704e78f6b8cc089568c0adce9ac1";
 // GRADUATED (lifecycle Sealed→Live, v2): the runtime row is the SAME frozen-frame + nonce-tick
 // passthrough as cellSeal (the trace arm ticks the nonce, freezes the economic block; the single
 // CELL_UNSEAL_TARGET param binds the cell). The lifecycle flip is the off-row face, verified in
@@ -111,7 +118,7 @@ pub const DREGG_EFFECTVM_CELLSEAL_V2_FP: &str =
 pub const DREGG_EFFECTVM_CELLUNSEAL_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-cellunseal-v2.json");
 pub const DREGG_EFFECTVM_CELLUNSEAL_V2_FP: &str =
-    "ec2046f48b52e85b84166c5a2a3836dbec5aedd808680bf456c81b9c3b3e980d";
+    "ad33ec29b0bf0c4acdacbcad195a45c384e9e78d903db34cc3da5cfa0cf74317";
 // GRADUATED (lifecycle/birth reconcile, v2): the WIRE descriptor is now the RUNTIME ACTOR row
 // (frozen-frame + nonce-tick + last-row PI pins, body structurally identical to the validated
 // `revokeDelegation-v2` template). The pre-v2 JSON pinned the BORN-EMPTY CHILD cell, which the
@@ -120,13 +127,13 @@ pub const DREGG_EFFECTVM_CELLUNSEAL_V2_FP: &str =
 pub const DREGG_EFFECTVM_CREATECELL_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-createcell-v2.json");
 pub const DREGG_EFFECTVM_CREATECELL_V2_FP: &str =
-    "0e6378560c3c19a89e92ef00aaf939d37d2c79b2b7193cf6589daf268ea2e4ff";
+    "638b0ad29e1262341b88289910e4775f89638ffce3c1675facfd76d10550c692";
 // GRADUATED (lifecycle/birth reconcile, v2): same actor-row reconcile as createcell-v2; the minted
 // cell's born-empty face stays in `EffectVmEmitCreateCellFromFactory`.
 pub const DREGG_EFFECTVM_CREATECELLFROMFACTORY_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-createcellfromfactory-v2.json");
 pub const DREGG_EFFECTVM_CREATECELLFROMFACTORY_V2_FP: &str =
-    "3a283af3388ecf674e7206ddb68cbd97ad364608465e22eb640f6124d2c4e23f";
+    "3fd1b92c84f2decee1fb43d4793f6c052423ecf106d67a0c920c32ee641278f6";
 // emitEvent GRADUATED into the cutover (passthrough+tick reconcile): the Lean emit module
 // `EffectVmEmitEmitEvent` now ticks the runtime nonce (`gNonce`), freezes the economic block (NOT the
 // commit), and carries the selector-binding gate (`selectorGates 25`). The prior JSON froze the nonce +
@@ -134,7 +141,7 @@ pub const DREGG_EFFECTVM_CREATECELLFROMFACTORY_V2_FP: &str =
 pub const DREGG_EFFECTVM_EMITEVENT_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-emitEvent-v1.json");
 pub const DREGG_EFFECTVM_EMITEVENT_V1_FP: &str =
-    "cf05cf463f56f972dbd67a3eec9595d4c234b555b0d6376b87f5d9e6cd361691";
+    "7792a02c175e990a33450889ae4c5c3239f9ab5e20570f689fa64463adafabc1";
 // GRADUATED (nonce-tick + last-row PI pins, v2): the Lean emit module was reconciled onto the runtime
 // Stage-3 passthrough batch (whole economic block frozen, nonce ticks via `gNonce`) AND grew the
 // `boundaryLastPins` last-row balance PI binding. Body STRUCTURALLY IDENTICAL to the validated
@@ -142,7 +149,7 @@ pub const DREGG_EFFECTVM_EMITEVENT_V1_FP: &str =
 pub const DREGG_EFFECTVM_EXERCISEA_HOLDLAYER_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-exerciseA-holdlayer-v2.json");
 pub const DREGG_EFFECTVM_EXERCISEA_HOLDLAYER_V2_FP: &str =
-    "f336554e85789f2dc86a69ca57c04ed4c8281c9b8ed974e692c93d114d8cc434";
+    "d18c51b0461fc45c8b301da79e95ea30580b5751087fc10906ad7486a8857e6c";
 // GRADUATED (nonce-tick + last-row PI pins, v2): the explicit nonce-only effect. The Lean module was
 // reconciled to the runtime TICK (`new_state.nonce += 1`) via `gNonce` and grew `boundaryLastPins`,
 // dropping the prior param-bound nonce gate; body STRUCTURALLY IDENTICAL to `createsealpair-v2`. The
@@ -150,7 +157,7 @@ pub const DREGG_EFFECTVM_EXERCISEA_HOLDLAYER_V2_FP: &str =
 pub const DREGG_EFFECTVM_INCREMENTNONCE_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-incrementNonce-v2.json");
 pub const DREGG_EFFECTVM_INCREMENTNONCE_V2_FP: &str =
-    "1a1d89593b551da00ee1d6b22e7fdacf0b2a1a0c723ab598063b7dbe07ed5632";
+    "b4063c560dbc60993c1b6c3c04c448d99d380b790da3aec485dac22026ac3c81";
 // GRADUATED (sovereign mode-bit reconcile, v2): the WIRE descriptor is the RUNTIME row — frame
 // freeze + `reserved += 256` (the packed mode_flag bit the hand-AIR enforces) + nonce tick + last-row
 // PI pins. The pre-v2 JSON pinned the executor's REBIND-TO-ZERO face (readable record dropped behind
@@ -160,25 +167,25 @@ pub const DREGG_EFFECTVM_INCREMENTNONCE_V2_FP: &str =
 pub const DREGG_EFFECTVM_MAKESOVEREIGN_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-makesovereign-v2.json");
 pub const DREGG_EFFECTVM_MAKESOVEREIGN_V2_FP: &str =
-    "a7853bfc036b52b2d7d63274e4fe8a5525775c085fafbcf90fed941d501ca389";
+    "e5ea4d1d742f98cb0375f0276daa601de848a2f5ffa2c5aae2d57bc219ad5ed7";
 pub const DREGG_EFFECTVM_MINT_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-mint-v1.json");
 pub const DREGG_EFFECTVM_MINT_V1_FP: &str =
-    "2ad92fa24a8eb03f0417ba491b162b7cfa54f88464fea020eef03421bfe5e344";
+    "5b7c4feef040f7c21c52e08d8fe6cebaeab015137c574a9d207f366c2a615898";
 pub const DREGG_EFFECTVM_NOTECREATE_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-notecreate-v1.json");
 pub const DREGG_EFFECTVM_NOTECREATE_V1_FP: &str =
-    "3718cfc17036c138f8411f0658c2531cb462e2a35ef77b28ac1ce6e48a4f85a5";
+    "31daffbe8fb8784f8f398df95d7cb1e334afa82c7917e32e7c40894bf9ec0710";
 pub const DREGG_EFFECTVM_NOTESPEND_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-notespend-v1.json");
 pub const DREGG_EFFECTVM_NOTESPEND_V1_FP: &str =
-    "27c0cdf4c5370e5681b3a60341d0114647e5feb29f0408f576859592bbda578a";
+    "e2a80d7eb89d1c8ab6f55e0a32cd1d351c1b74a540cfb89ba1769d787636ed94";
 // GRADUATED (nonce-tick + last-row PI pins, v2): see exercise note. Body STRUCTURALLY IDENTICAL to
 // `createsealpair-v2`. Name `-v1`→`-v2`; FP updated.
 pub const DREGG_EFFECTVM_PIPELINEDSENDA_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-pipelinedSendA-v2.json");
 pub const DREGG_EFFECTVM_PIPELINEDSENDA_V2_FP: &str =
-    "bf7c0ba9be2dec8cc54e96074840d93e59b3050692f06362becf15181c9c848d";
+    "4c9bdf38b22f122830cec40bb39b66134fca57688f0003f848533a8dc0ba9907";
 // GRADUATED (lifecycle-SET reconcile, v2): the WIRE descriptor is the RUNTIME row — pure
 // frozen-frame + nonce-tick (the hand-AIR freezes field[1] and ticks the nonce; the archive
 // lifecycle write lives off-row via effects_hash). The pre-v2 JSON SET field[1] := 1 and froze the
@@ -187,7 +194,7 @@ pub const DREGG_EFFECTVM_PIPELINEDSENDA_V2_FP: &str =
 pub const DREGG_EFFECTVM_RECEIPTARCHIVEA_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-receiptArchiveA-v2.json");
 pub const DREGG_EFFECTVM_RECEIPTARCHIVEA_V2_FP: &str =
-    "0c16773bcbb7887e467d3c39032e7dab382355294b65d89f83ab401e6b4e573e";
+    "11eee616e3db2466d0f1b6ccacd2f9ac3ddea041baebfc7d85f725adc6eb508a";
 // GRADUATED (nonce-tick + last-row PI pins, v2): refreshDelegation already ticked the runtime nonce
 // (`gNonce`) but the committed JSON carried only `boundaryFirstPins` (anti-ghost WEAK: the forged
 // last-row balance tooth did not bite). The Lean module grew `boundaryLastPins` + the 2 balance ranges.
@@ -195,7 +202,7 @@ pub const DREGG_EFFECTVM_RECEIPTARCHIVEA_V2_FP: &str =
 pub const DREGG_EFFECTVM_REFRESHDELEGATION_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-refreshDelegation-v2.json");
 pub const DREGG_EFFECTVM_REFRESHDELEGATION_V2_FP: &str =
-    "a43c7a0ae30fff45656b9bbe75bb3fc40746a5f74de78b10f83a1c7962a8aa9d";
+    "65bd871abe8dd8a9bf8a510b1a25c46060b3f1926aa804904df40039b22dd8c1";
 // GRADUATED (nonce-tick + last-row PI pins, v2): revokeDelegation was PRE-v2 pointed at the
 // `attenuateA` cap-root-MOVE descriptor, which the runtime hand-AIR does NOT enforce on a revoke row
 // (it FREEZES `cap_root`); it "passed" only by fixture accident (cap_root = param2 = 0). The v2 Lean
@@ -204,29 +211,29 @@ pub const DREGG_EFFECTVM_REFRESHDELEGATION_V2_FP: &str =
 pub const DREGG_EFFECTVM_REVOKEDELEGATION_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-revokeDelegation-v2.json");
 pub const DREGG_EFFECTVM_REVOKEDELEGATION_V2_FP: &str =
-    "db10b75183f20398122cb5f14e0c8199ce6746ecbee16489dd7ba710d8125132";
+    "1baa001b89e1bfedafc536fd022d5b760f5144a6ae19042eefa2574c1966e50d";
 // GRADUATED (nonce-tick + last-row PI pins, v2): introduce, same reconcile as revokeDelegation (was
 // PRE-v2 pointed at `attenuateA`). The cap-table grant is bound OFF-row via the universe-A connector.
 pub const DREGG_EFFECTVM_INTRODUCE_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-introduce-v2.json");
 pub const DREGG_EFFECTVM_INTRODUCE_V2_FP: &str =
-    "bad416b84242d1773d07d68db144f6837ff977601168acd707cee09bef8f490f";
+    "d73c03301c18529e1f89e05920d24bea4e13b4c69b27683d15debca404afeae9";
 // GRADUATED (nonce-tick reconcile, v2): see celldestroy/cellseal note. Body STRUCTURALLY IDENTICAL
 // to `createsealpair-v2`. Name bumped `-v1`→`-v2`; FP updated.
 pub const DREGG_EFFECTVM_REFUSAL_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-refusal-v2.json");
 pub const DREGG_EFFECTVM_REFUSAL_V2_FP: &str =
-    "76a9479f4bb8f061f8ea59e1582fe108fa9a48f7558020aa9a3c3c45dd8a4682";
+    "f856825f4c704ac0fb156a72b85c45f4a62d83bdb3d2887ba2689318ff6d69ed";
 // GRADUATED (nonce-tick + last-row PI pins, v2): see exercise note. Body STRUCTURALLY IDENTICAL to
 // `createsealpair-v2`. Name `-v1`→`-v2`; FP updated.
 pub const DREGG_EFFECTVM_SETPERMISSIONSA_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-setPermissionsA-v2.json");
 pub const DREGG_EFFECTVM_SETPERMISSIONSA_V2_FP: &str =
-    "95491342d3e4b9177668cf55669d1b0966353c2b6b54aceaa166e7b866dbd09d";
+    "aaa585e46d9db2a0dd39a0ca46f1970ee3f73afb6b5e38e0284fc49e9c3f45ba";
 pub const DREGG_EFFECTVM_SETVK_V2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-setVK-v2.json");
 pub const DREGG_EFFECTVM_SETVK_V2_FP: &str =
-    "dd03ce7848f5e2e1fce03adbcb80156d3bd7285c245f74547a9fac119c69ae73";
+    "2e54d1c628d822f54526ebfcdc0783af4cf9838903bbf71b264b91197ee7b4f2";
 // GRADUATED (lifecycle/birth reconcile, v3): the WIRE descriptor is the RUNTIME ACTOR (parent) row
 // (frozen-frame + nonce-tick). The pre-v3 `v2quint-childcell` JSON pinned the born-empty + cap-handoff
 // CHILD cell, which the runtime row cannot satisfy; the child face stays verified in
@@ -234,11 +241,11 @@ pub const DREGG_EFFECTVM_SETVK_V2_FP: &str =
 pub const DREGG_EFFECTVM_SPAWNA_V3_ACTORROW_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-spawnA-v3-actorrow.json");
 pub const DREGG_EFFECTVM_SPAWNA_V3_ACTORROW_FP: &str =
-    "af7028d4a38f89a00353ae420b3827c7231ed6f9f6c9d8589856649f96e11ff1";
+    "0332ad7465ff2481d374f6a9c094b9cb56bc7b8fd458fb15acfe8bea864a2899";
 pub const DREGG_EFFECTVM_TRANSFER_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-transfer-v1.json");
 pub const DREGG_EFFECTVM_TRANSFER_V1_FP: &str =
-    "6b122b3a1d7846a114027f644e3a0193a1178fc579b6488e17e74fe6683029aa";
+    "7ab75074a2ee2affae2b04f4cc07b860f9d1187194b4ef209a305223cc1e23fe";
 // RECORD-LAYER STAGE 2 (`_RECORD-LAYER-UPGRADE.md` §B.5/§E Stage 2): the transfer descriptor with
 // GROUP-4 site 3's previously-spare 4th input ({"t":"zero"}) replaced by the `fields_root` carrier
 // cell (col 89 = state_after.FIELDS_ROOT = the RESERVED slot), absorbing the user-field-map root into
@@ -252,7 +259,7 @@ pub const DREGG_EFFECTVM_RECORD_V1_JSON: &str =
 // transferVmDescriptor.constraints` holds by `rfl` in `EffectVmEmitRecordRoot`, but record-v1 was
 // never re-emitted — it was one gate short). Bytes match the `EmitAllJson` output again.
 pub const DREGG_EFFECTVM_RECORD_V1_FP: &str =
-    "9936d93f8871fd9d901bfcc8031967d39b5288f265e60951dc75af24fcef5bdc";
+    "41b3a1972f9b734ae823f85f7cf658c073be6f39417af750d3d3cad6b22c6bb8";
 
 // ==== IR-v2 descriptor consts (EPOCH flag-day; ADDITIVE — the v1 consts above stay LIVE) ====
 //
@@ -268,71 +275,71 @@ pub const DREGG_EFFECTVM_RECORD_V1_FP: &str =
 pub const DREGG_EFFECTVM_TRANSFER_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-transfer-ir2.json");
 pub const DREGG_EFFECTVM_TRANSFER_IR2_FP: &str =
-    "81e59315cf8adbd0bb933fa1c7ec4245b594da5dbc35a46de0da08a82c20f772";
+    "70c95d46e86cd4476b3dff0f5c8753e368dd89b9535d38491bc0dd4b6cd0e783";
 pub const DREGG_EFFECTVM_BURN_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-burn-ir2.json");
 pub const DREGG_EFFECTVM_BURN_IR2_FP: &str =
-    "23fcdf4367e5c2b31f2d5bc55dd2b3398ce5349f9a78dbf026dcc93abd8ecde8";
+    "fa1218f491e0a061f2135b57588d3975e6c4e83894a2265acf52521d8d8d3532";
 pub const DREGG_EFFECTVM_MINT_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-mint-ir2.json");
 pub const DREGG_EFFECTVM_MINT_IR2_FP: &str =
-    "9264f79c9473f19b5c2efbaee3ae5463157b6f9ccef7371bb4d8b72558ad9956";
+    "63c18595c7e0a21af1c3fce8f958137462b806ba72fae7ce6b3235efeace210b";
 pub const DREGG_EFFECTVM_NOTE_SPEND_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-note-spend-ir2.json");
 pub const DREGG_EFFECTVM_NOTE_SPEND_IR2_FP: &str =
-    "952a555f7f744bd4c63af62ce1efc70df24fb5d444a4e5c9c76b2d8e0cec3b2b";
+    "c3fd87b38ecd80c7616cfe21b76720c2b3d48d493e3749d3cb2007689825b1b5";
 pub const DREGG_EFFECTVM_NOTE_CREATE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-note-create-ir2.json");
 pub const DREGG_EFFECTVM_NOTE_CREATE_IR2_FP: &str =
-    "e204d70ad59dd213816d7f22469567f935376838ef57ce93fac5e8c1d1140fe8";
+    "08c6dc795f1b2360714295832e8b01739536a8e039d169d319d7803d491dbf5a";
 pub const DREGG_EFFECTVM_CELL_SEAL_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-cell-seal-ir2.json");
 pub const DREGG_EFFECTVM_CELL_SEAL_IR2_FP: &str =
-    "a3e2c6c04c115c686bea782a290889be199256977ab67761f008f5aab34be6ea";
+    "5c0b222b1748e384ef0560431dbbc8eda40b20a46c6be332b55115249ec2c432";
 pub const DREGG_EFFECTVM_CELL_DESTROY_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-cell-destroy-ir2.json");
 pub const DREGG_EFFECTVM_CELL_DESTROY_IR2_FP: &str =
-    "a7cd6632c6fc254233c8eca34c0e31b93c5b3ce674c98a1b0beb06652440be77";
+    "77a5527b6fc13b16890e1f1f2aec67179b2a2ca1f6abe2757c7533b13bf52019";
 pub const DREGG_EFFECTVM_REFUSAL_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-refusal-ir2.json");
 pub const DREGG_EFFECTVM_REFUSAL_IR2_FP: &str =
-    "4aef8a894f68055c4faa7a9c82f0914bf4009a31ac05622a8fe0e5fb4d8842f3";
+    "234ce33818f8500d843a3064216bc411cf5fa28729d104c1d02ccf152aa8ee88";
 pub const DREGG_EFFECTVM_SET_PERMS_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-perms-ir2.json");
 pub const DREGG_EFFECTVM_SET_PERMS_IR2_FP: &str =
-    "f6ea5f295d0f24dcb4b0fc1480f3517a6a111b5e07db936b7ecb8f2140793c40";
+    "2092f195d18fc44d28127ce5f5c2f9b66bb6c60b5cebfd551c23b2b7dfc76137";
 pub const DREGG_EFFECTVM_SET_VK_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-vk-ir2.json");
 pub const DREGG_EFFECTVM_SET_VK_IR2_FP: &str =
-    "47c4e4223eed737585cfd14afe23003010dfb0da5923287035a9a02a0dc2fffe";
+    "5f582fcaaf84a0beedb4bcf7aa03904a740000aed2618ca408e4821824399a65";
 pub const DREGG_EFFECTVM_EXERCISE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-exercise-ir2.json");
 pub const DREGG_EFFECTVM_EXERCISE_IR2_FP: &str =
-    "c3851f38325730b7eb124cf4e07056f7b4771129e270e20c1ee806e6d2efc688";
+    "8d820230cd622c52f00e036dcd3dd90693730795c8f0b63900157ecad3717638";
 pub const DREGG_EFFECTVM_PIPELINED_SEND_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-pipelined-send-ir2.json");
 pub const DREGG_EFFECTVM_PIPELINED_SEND_IR2_FP: &str =
-    "d1e362d4ac5eefdd5c35e05d5493cb1bd85d289bbb8f68a5362b34bb68850d27";
+    "2bd79f744bd131a18cbf839a344156bec55bd58d90776537cd09f56ca7da12d9";
 pub const DREGG_EFFECTVM_REFRESH_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-refresh-ir2.json");
 pub const DREGG_EFFECTVM_REFRESH_IR2_FP: &str =
-    "8de62a022441d7a012e197a9898211ffd7b3844fe800adcceba078178c74150c";
+    "c683f60636736fd13f851d963554c9ff39ee470aecdd6f433629fb721b4d9d9f";
 pub const DREGG_EFFECTVM_INCREMENT_NONCE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-increment-nonce-ir2.json");
 pub const DREGG_EFFECTVM_INCREMENT_NONCE_IR2_FP: &str =
-    "02c914b02238dd2ee3beede71eafdb004a34da460cd88720b500cb8882486ed8";
+    "cd66417a422495287c4ea6f08f79d7db77b1f6312edfd86b01c9d0b947a99ee1";
 pub const DREGG_EFFECTVM_REVOKE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-revoke-ir2.json");
 pub const DREGG_EFFECTVM_REVOKE_IR2_FP: &str =
-    "7873c17e8bcc5c12d46b0be12cf4477213c2063ab1e3860f1c57a8981d222afb";
+    "4d2c5316d455426f8e2f62f66f1d1df30db7db4da9c33874f0e471adec402c32";
 pub const DREGG_EFFECTVM_INTRODUCE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-introduce-ir2.json");
 pub const DREGG_EFFECTVM_INTRODUCE_IR2_FP: &str =
-    "cd8e2e456bd0736677a9605f241f94ec4e2702b7834fda9447140361fda3228f";
+    "e3d4017917f1d23e680486a4cba6e329cc74c72ea4c1e6d821a6a2fbcaf9f84a";
 pub const DREGG_EFFECTVM_ATTENUATE_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-attenuate-ir2.json");
 pub const DREGG_EFFECTVM_ATTENUATE_IR2_FP: &str =
-    "0d34b4cac94ed67cfe8de257c356a68c440ef7311a6255f845131ba57679dee4";
+    "0a832a05242f2a4115dead11d4c00c632093b8ee10ca25240baa9ab58a9d06b8";
 // GRADUATED (cap-crown): RevokeCapability (sel 24). The v2 leg of the cap-REMOVAL effect — a
 // held-membership map-read authenticated against the before cap_root + a ZERO-value remove-write
 // (the slot's rights deleted), NO submask (revoke deletes a slot, it does not narrow rights). Lean
@@ -341,7 +348,7 @@ pub const DREGG_EFFECTVM_ATTENUATE_IR2_FP: &str =
 pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-revoke-cap-ir2.json");
 pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_FP: &str =
-    "cd6000e0ca01e1d1390a1c9e04f840e3caa39348de7b2c96075881dc666f2bbe";
+    "bc9782f79af882c880b909b8cd6dd5055be8826385000d6e8b04645ecf2239b0";
 // GRADUATED (Custom recursive-proof binding, sel 8): the runtime passthrough face graduated onto
 // IR-v2 PLUS the `proof_bind` op (`customProofBind`) that ties the row's `custom_proof_commitment`
 // to a VERIFYING external sub-proof of the recursion engine — the accumulator constraint the
@@ -350,7 +357,7 @@ pub const DREGG_EFFECTVM_REVOKE_CAP_IR2_FP: &str =
 pub const DREGG_EFFECTVM_CUSTOM_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-custom-ir2.json");
 pub const DREGG_EFFECTVM_CUSTOM_IR2_FP: &str =
-    "34911722065e542fbd60015df6d64c8ff1cec1290c6261e3e3d5e15811e209ce";
+    "d5e56d07e02776c01a566802875e2da0d7bf41abf912f900a7fb8636c4d337c0";
 pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-set-field-dyn-ir2.json");
 pub const DREGG_EFFECTVM_SET_FIELD_DYN_IR2_FP: &str =
@@ -723,7 +730,7 @@ pub const V2_DESCRIPTORS: &[(&str, &str, &str)] = &[
 pub const ROTATION_LAYOUT_V3_STAGED_JSON: &str =
     include_str!("../descriptors/rotation-layout-v3-staged.json");
 pub const ROTATION_LAYOUT_V3_STAGED_FP: &str =
-    "518b290c2cc9aabd04a113611480059762d6720b04b2d6667e49aec49bfde3da";
+    "17d4d1097a020bc389fb8e3b584e44ffc4eb5a7438d47b810db1e7ad1954a7b4";
 
 /// The staged rotation-state probe descriptor (`rotationProbeVmDescriptor2` =
 /// `graduateV1` of the 8-site chained absorption + the two PI pins; Lean keystones
@@ -806,15 +813,14 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 /// the cap-crown `revokeCapability`) PLUS the 8 LIVE-path effects the STEP 1 widening
 /// added (grantCap · makeSovereign ·
 /// createCell · factory · spawn · receiptArchive · cellUnseal · emitEvent). The TSV is
-/// `key\tname\tjson` per line, sha-256 pinned by
-/// `v3_staged_registry_parses_matches_fingerprint_and_covers`.
+/// `key\tname\tjson` per line, structurally covered by `v3_staged_registry_parses_and_covers`.
 /// STAGED: a new constant, no VK bump, the live wire untouched. Each descriptor's
 /// `trace_width = EFFECT_VM_WIDTH (186) + APPENDIX_SPAN (141) = 327`; the rotated
 /// commitments ride four appended PI slots (rotated OLD/NEW commit · height · caveat commit).
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "e4f1dbdb53ef680cd3c1039f74d365bb1523d787310384a64c5a45233a17c189";
+    "4cfdd02ab73e8abe72eec85ce0a2db4bcaca4ada48e685c521d1fdee03c19e56";
 
 /// **THE FAITHFUL 8-FELT WIDE TRANSFER descriptor (STAGED-ADDITIVE slice).** The
 /// `v3RegistryWide` transfer member (`wideAppend transferV3 bb (bb+51)`, width 816 / PI 54) —
@@ -841,7 +847,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "19bff21f5db07dfb0e599d829eefc38c35ec56ff8499ef7721446dcf9eb459aa";
+    "499ef65b22fa35cd29839ce26402fe6f859d7d1a327ae623401ba76f746c0695";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1166,22 +1172,14 @@ mod tests {
         );
     }
 
-    /// THE DRIFT GUARD: every registered descriptor (a) re-hashes to its committed
-    /// fingerprint and (b) re-parses via `parse_vm_descriptor` without error, with
-    /// the parsed `name` matching the registry key. Binds the Rust registry to the
-    /// Lean `emitVmJson` bytes — any Lean re-emit that changes a descriptor, or a
-    /// stale committed JSON, fails here.
+    /// Every registered descriptor re-parses via `parse_vm_descriptor` into the
+    /// structure the prover consumes, with the parsed `name` matching the registry
+    /// key and a positive trace width. (The Lean↔JSON drift gate is generate-fresh
+    /// `scripts/check-descriptor-drift.sh`, not a self-consistent FP rehash.)
     #[test]
-    fn all_descriptors_parse_and_match_fingerprint() {
+    fn all_descriptors_parse() {
         assert_eq!(ALL_DESCRIPTORS.len(), 27, "expected 27 unique descriptors");
-        for (name, json, fp) in ALL_DESCRIPTORS {
-            // (a) fingerprint binding
-            let got = sha256_hex(json.as_bytes());
-            assert_eq!(
-                &got, fp,
-                "descriptor {name}: SHA-256 drift — committed {fp}, embedded bytes hash {got}"
-            );
-            // (b) parses + name round-trips
+        for (name, json, _fp) in ALL_DESCRIPTORS {
             let desc = parse_vm_descriptor(json)
                 .unwrap_or_else(|e| panic!("descriptor {name} failed to parse: {e}"));
             assert_eq!(
@@ -1194,21 +1192,16 @@ mod tests {
     }
 
     /// The selector table is consistent with the name registry: each selector's
-    /// JSON+fingerprint is identical to the `ALL_DESCRIPTORS` entry of the same
-    /// name, and every selector descriptor parses.
+    /// JSON is identical to the `ALL_DESCRIPTORS` entry of the same name, and every
+    /// selector descriptor parses.
     #[test]
     fn selector_table_consistent() {
-        for (sel, name, json, fp) in SELECTOR_DESCRIPTORS {
+        for (sel, name, json, _fp) in SELECTOR_DESCRIPTORS {
             let by_name = descriptor_for_name(name)
                 .unwrap_or_else(|| panic!("selector {sel} name {name} not in ALL_DESCRIPTORS"));
             assert_eq!(
                 *json, by_name,
                 "selector {sel}: JSON differs from name registry"
-            );
-            assert_eq!(
-                Some(*fp),
-                fingerprint_for_name(name),
-                "selector {sel}: fingerprint differs from name registry"
             );
             assert_eq!(descriptor_for_selector(*sel), Some(*json));
             assert_eq!(descriptor_name_for_selector(*sel), Some(*name));
@@ -1238,9 +1231,8 @@ mod tests {
     #[test]
     fn name_only_descriptors_present() {
         assert_eq!(NAME_ONLY_DESCRIPTORS.len(), 1);
-        for (name, json, fp) in NAME_ONLY_DESCRIPTORS {
+        for (name, json, _fp) in NAME_ONLY_DESCRIPTORS {
             assert_eq!(descriptor_for_name(name), Some(*json));
-            assert_eq!(fingerprint_for_name(name), Some(*fp));
             // not bound to any selector
             assert!(
                 SELECTOR_DESCRIPTORS.iter().all(|(_, n, _, _)| n != name),
@@ -1249,22 +1241,16 @@ mod tests {
         }
     }
 
-    /// THE IR-v2 DRIFT GUARD + ROUND-TRIP: every `V2_DESCRIPTORS` entry (a) re-hashes to its
-    /// committed fingerprint (Lean→Rust byte binding) and (b) round-trips through the v2 decoder
+    /// THE IR-v2 ROUND-TRIP: every `V2_DESCRIPTORS` entry round-trips through the v2 decoder
     /// `descriptor_ir2::parse_vm_descriptor2` — a `"ir":2` wire with the five EPOCH tables and the
-    /// lookup/mem_op/map_op grammar, NOT the v1 wire. Any re-emit of `EmitAllJsonV2.lean` that
-    /// changes a descriptor (or a stale committed JSON) fails here.
+    /// lookup/mem_op/map_op grammar, NOT the v1 wire — into the structure the prover consumes
+    /// (five tables, positive width, empty v1 carriers). The Lean↔JSON drift gate is generate-fresh
+    /// `scripts/check-descriptor-drift.sh`, not a self-consistent FP rehash.
     #[test]
-    fn v2_descriptors_parse_and_match_fingerprint() {
+    fn v2_descriptors_parse() {
         assert_eq!(V2_DESCRIPTORS.len(), 28, "expected 28 IR-v2 descriptors");
-        for (key, json, fp) in V2_DESCRIPTORS {
-            // (a) fingerprint binding
-            let got = sha256_hex(json.as_bytes());
-            assert_eq!(
-                &got, fp,
-                "v2 descriptor {key}: SHA-256 drift — committed {fp}, embedded bytes hash {got}"
-            );
-            // (b) round-trips through the v2 multi-table decoder
+        for (key, json, _fp) in V2_DESCRIPTORS {
+            // round-trips through the v2 multi-table decoder
             let d = parse_vm_descriptor2(json)
                 .unwrap_or_else(|e| panic!("v2 descriptor {key} failed parse_vm_descriptor2: {e}"));
             assert_eq!(
@@ -1335,23 +1321,17 @@ mod tests {
             "rotation layout drift: columns::rotation / pi::v3 no longer match the \
              Lean-emitted manifest (re-emit EmitRotationV3.lean and re-anchor)"
         );
-        // The manifest file itself is fingerprint-pinned (stale-file tooth).
-        assert_eq!(
-            sha256_hex(ROTATION_LAYOUT_V3_STAGED_JSON.as_bytes()),
-            ROTATION_LAYOUT_V3_STAGED_FP,
-            "rotation layout manifest: SHA-256 drift"
-        );
     }
 
-    /// The v3-staged probe registry: fingerprint binding + round-trip through the
-    /// IR-v2 decoder + PRESENCE at EVERY register count — each probe's chip-lookup
-    /// chain must absorb EVERY rotated limb column exactly once, in the absorption
-    /// order, with the final digest on `STATE_COMMIT` (a re-emit that drops a limb —
-    /// e.g. the heap_root, or a widened register — fails HERE, before any prover
-    /// runs). The presence-refusal tooth scales with the block: a wider block with
-    /// untested columns would be worse than a narrow one.
+    /// The v3-staged probe registry: round-trip through the IR-v2 decoder + PRESENCE
+    /// at EVERY register count — each probe's chip-lookup chain must absorb EVERY
+    /// rotated limb column exactly once, in the absorption order, with the final
+    /// digest on `STATE_COMMIT` (a re-emit that drops a limb — e.g. the heap_root, or
+    /// a widened register — fails HERE, before any prover runs). The presence-refusal
+    /// tooth scales with the block: a wider block with untested columns would be
+    /// worse than a narrow one.
     #[test]
-    fn v3_staged_descriptors_parse_match_fingerprint_and_cover_all_limbs() {
+    fn v3_staged_descriptors_parse_and_cover_all_limbs() {
         use crate::descriptor_ir2::VmConstraint2;
         use crate::effect_vm::columns::rotation as rot;
         use crate::lean_descriptor_air::LeanExpr;
@@ -1375,7 +1355,7 @@ mod tests {
         assert_eq!(rotation_layout_for(24).num_chain, 10);
         assert_eq!(rotation_layout_for(32).probe_width, 55);
         assert_eq!(rotation_layout_for(32).num_chain, 14);
-        for (key, json, fp) in V3_STAGED_DESCRIPTORS {
+        for (key, json, _fp) in V3_STAGED_DESCRIPTORS {
             let r = match *key {
                 "rotationProbeVmDescriptor2" => 16,
                 "rotationProbeVmDescriptorR24" => 24,
@@ -1383,11 +1363,6 @@ mod tests {
                 other => panic!("unknown v3-staged key {other}"),
             };
             let lay = rotation_layout_for(r);
-            assert_eq!(
-                &sha256_hex(json.as_bytes()),
-                fp,
-                "v3 staged {key}: SHA-256 drift"
-            );
             let d = parse_vm_descriptor2(json)
                 .unwrap_or_else(|e| panic!("v3 staged {key} failed parse_vm_descriptor2: {e}"));
             // Phase B-GATE: graduated width = probe width + 7·n_sites lane cols
@@ -1497,28 +1472,22 @@ mod tests {
             "caveat-operand layout drift: columns::rotation::caveat no longer matches \
              the Lean-emitted manifest (re-emit EmitRotationV3.lean and re-anchor)"
         );
-        assert_eq!(
-            sha256_hex(ROTATION_CAVEAT_LAYOUT_V3_STAGED_JSON.as_bytes()),
-            ROTATION_CAVEAT_LAYOUT_V3_STAGED_FP,
-            "caveat-operand layout manifest: SHA-256 drift"
-        );
     }
 
-    /// The staged caveat probe: fingerprint binding + round-trip through the IR-v2
-    /// decoder + PRESENCE — the chip-lookup chain must absorb the WHOLE R=24 rotated
-    /// block (cells root … iroot) AND the WHOLE 29-felt caveat manifest block (count +
-    /// every entry's type tag, DOMAIN TAG, KEY, params) exactly once, in order, with
-    /// the rotation digest landing on `state_commit` and the caveat digest on
-    /// `CAVEAT_COMMIT`. A re-emit that drops a manifest column (e.g. a domain tag)
-    /// fails HERE, before any prover runs.
+    /// The staged caveat probe: round-trip through the IR-v2 decoder + PRESENCE — the
+    /// chip-lookup chain must absorb the WHOLE R=24 rotated block (cells root … iroot)
+    /// AND the WHOLE 29-felt caveat manifest block (count + every entry's type tag,
+    /// DOMAIN TAG, KEY, params) exactly once, in order, with the rotation digest
+    /// landing on `state_commit` and the caveat digest on `CAVEAT_COMMIT`. A re-emit
+    /// that drops a manifest column (e.g. a domain tag) fails HERE, before any prover
+    /// runs.
     #[test]
-    fn v3_staged_caveat_descriptor_parses_matches_fingerprint_and_covers_manifest() {
+    fn v3_staged_caveat_descriptor_parses_and_covers_manifest() {
         use crate::descriptor_ir2::VmConstraint2;
         use crate::effect_vm::columns::rotation::caveat as cav;
         use crate::lean_descriptor_air::LeanExpr;
         assert_eq!(V3_STAGED_CAVEAT_DESCRIPTORS.len(), 1);
-        let (key, json, fp) = V3_STAGED_CAVEAT_DESCRIPTORS[0];
-        assert_eq!(&sha256_hex(json.as_bytes()), fp, "{key}: SHA-256 drift");
+        let (key, json, _fp) = V3_STAGED_CAVEAT_DESCRIPTORS[0];
         let d = parse_vm_descriptor2(json)
             .unwrap_or_else(|e| panic!("{key} failed parse_vm_descriptor2: {e}"));
         // Phase B-GATE: graduated width = caveat probe width + 7·n_sites chip lane cols (the
@@ -1592,27 +1561,20 @@ mod tests {
         );
     }
 
-    /// THE FULL-COHORT REGEN drift guard (`ROTATION-CUTOVER.md` §5 item 1): the staged
-    /// 26-descriptor registry is sha-pinned (whole TSV), every line round-trips through the
-    /// IR-v2 decoder, and each descriptor carries the rotated appendix EXACTLY — two rotated
-    /// state blocks (each absorbing cells-root … iroot in order onto its own state-commit
-    /// carrier) + the widened-caveat region (the 29-felt manifest onto CAVEAT_COMMIT), with
-    /// the four appended PI pins (rotated OLD/NEW commit · height · caveat commit) at the
+    /// THE FULL-COHORT REGEN guard (`ROTATION-CUTOVER.md` §5 item 1): every line of the
+    /// staged 26-descriptor registry round-trips through the IR-v2 decoder, and each
+    /// descriptor carries the rotated appendix EXACTLY — two rotated state blocks (each
+    /// absorbing cells-root … iroot in order onto its own state-commit carrier) + the
+    /// widened-caveat region (the 29-felt manifest onto CAVEAT_COMMIT), with the four
+    /// appended PI pins (rotated OLD/NEW commit · height · caveat commit) at the
     /// descriptor's own `piCount..piCount+3`. A re-emit that drops a limb, a manifest felt,
     /// or a PI pin fails HERE, before any prover runs. STAGED: nothing on the live wire.
     #[test]
-    fn v3_staged_registry_parses_matches_fingerprint_and_covers() {
+    fn v3_staged_registry_parses_and_covers() {
         use crate::descriptor_ir2::VmConstraint2;
         use crate::effect_vm::columns::EFFECT_VM_WIDTH;
         use crate::effect_vm::columns::rotation::caveat as cav;
         use crate::lean_descriptor_air::{LeanExpr, VmConstraint};
-
-        // Whole-TSV fingerprint (the Lean driver `EmitRotationV3.lean` is the byte source).
-        assert_eq!(
-            sha256_hex(V3_STAGED_REGISTRY_TSV.as_bytes()),
-            V3_STAGED_REGISTRY_FP,
-            "v3 full-cohort registry TSV: SHA-256 drift (re-run EmitRotationV3.lean)"
-        );
 
         // The DEPLOYED rotated geometry (R=24 PLUS the `commitments_root` flag-day limb 27, so 32
         // pre-iroot limbs — NOT the bare R=24 register probe `rotation_layout_for(24)`). Mirrors the
@@ -2003,15 +1965,8 @@ mod tests {
     /// single-line `WIDE_TRANSFER_STAGED_TSV`. ADDITIVE: pins the wide path WITHOUT touching the live
     /// `V3_STAGED_REGISTRY_*`.
     #[test]
-    fn wide_registry_parses_matches_fingerprint_and_is_name_stable() {
+    fn wide_registry_parses_and_is_name_stable() {
         use crate::descriptor_ir2::parse_vm_descriptor2;
-
-        // Whole-TSV fingerprint (the Lean driver `EmitWideRegistryProbe.lean` is the byte source).
-        assert_eq!(
-            sha256_hex(WIDE_REGISTRY_STAGED_TSV.as_bytes()),
-            WIDE_REGISTRY_STAGED_FP,
-            "wide registry TSV: SHA-256 drift (re-run EmitWideRegistryProbe.lean)"
-        );
 
         // Every wide member parses; the wide geometry is `host + 208` carrier columns + 16 PIs. The
         // keys are NAME-STABLE against the live 1-felt registry, member-for-member (the flip repoint

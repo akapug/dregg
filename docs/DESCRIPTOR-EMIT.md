@@ -29,11 +29,15 @@ ones), runs `emit-descriptors.sh`, then `git diff --exit-code`s the descriptors 
 the `*_FP` constants. It exits nonzero with a clear message if the Lean emission and
 the checked-in artifacts disagree. This is the **Lean↔JSON guard**.
 
-It runs in CI as the `descriptor-drift` job (`.github/workflows/ci.yml`). It is
-complementary to the in-Rust `#[test]` in `effect_vm_descriptors.rs`, which guards
-JSON↔FP *self-consistency* (it re-hashes the embedded bytes) but cannot see
-Lean↔JSON drift: a stale JSON whose self-consistent FP passes the round-trip while
-the Lean emission has moved underneath it. The drift gate closes exactly that gap.
+It runs in CI as the `descriptor-drift` job (`.github/workflows/ci.yml`). This
+GENERATE-FRESH regen is the **only** honest Lean↔JSON guard. A `sha256(bytes) ==
+committed-FP` rehash proves only that a file matches the hash committed beside it
+(self-consistency); it cannot see Lean↔JSON drift, because a stale JSON whose
+self-consistent FP passes the rehash while the Lean emission has moved underneath it
+is precisely what re-deriving from Lean catches. The `*_FP` constants are therefore
+cache-freshness pins the emit script re-writes — not a faithfulness check. The
+in-Rust `#[test]`s in `effect_vm_descriptors.rs` verify the real property instead:
+each descriptor PARSES through the interpreter into the structure the prover consumes.
 
 ## What is covered
 
