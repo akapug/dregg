@@ -177,7 +177,7 @@ The authority leg (owner OR cap) now reads `pc.turn` — the turn the light clie
 free-existential smuggle. -/
 theorem transfer_descriptorRefines_facetTB (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (pc : PublishedCommit) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)
@@ -201,7 +201,7 @@ theorem transfer_descriptorRefines_facetTB (hash : List ℤ → ℤ)
 dispatcher arm over the published turn. -/
 theorem transfer_descriptorRefinesTB_dispatchArm (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (pc : PublishedCommit) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)
@@ -400,7 +400,7 @@ authority leg SHRINKS: the cap-open `src` column is forced to the PUBLISHED sour
 authorizes the committed src, not a free column. -/
 theorem transfer_descriptorRefines_facetTB_realized (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (pc : PublishedCommit) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a)

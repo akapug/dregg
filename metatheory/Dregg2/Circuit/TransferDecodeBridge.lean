@@ -265,7 +265,7 @@ movement/availability come FROM THE CIRCUIT (`transfer_descriptorRefines`). This
 `EffectDecodeBridge` floor demonstrated REALIZABLE for transfer's ledger-committed part. -/
 theorem transfer_descriptorRefines_fromStateDecode (hash : List ℤ → ℤ) (S : CommitSurface)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId) (pc : PublishedCommit)
     (hdec : StateDecode S pc pre post)
@@ -282,7 +282,7 @@ the witness + the named surface seam + the residual, the transfer witness forces
 ledger decode discharged from `StateDecode`. -/
 theorem transfer_fullActionStep_fromStateDecode (hash : List ℤ → ℤ) (S : CommitSurface)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId) (pc : PublishedCommit)
     (hdec : StateDecode S pc pre post)
@@ -308,7 +308,7 @@ satisfying witness realizes the assembled decode: the circuit forces the debit l
 seam. The discharged ledger field is pinned by the witness, not freely asserted. -/
 theorem decodeBridge_rejects_wrong_readout (hash : List ℤ → ℤ) (S : CommitSurface)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash transferV3 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId) (pc : PublishedCommit)
     (hdec : StateDecode S pc pre post)

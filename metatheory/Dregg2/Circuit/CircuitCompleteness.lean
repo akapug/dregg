@@ -227,8 +227,10 @@ structure TransferTraceProver (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (srcPre srcPost dstPre dstPost : CellState)
     (srcParams dstParams : TransferParams) : Type where
-  /-- the chip/range table side condition the rotated denotation requires. -/
-  hside : RotTableSide hash t
+  /-- the genuine deployed chip permutation the faithful table side rides. -/
+  permOut : List ℤ → List ℤ
+  /-- the chip/range table FAITHFULNESS the rotated denotation requires (bound to `permOut`). -/
+  hside : RotTableSide permOut hash t
   /-- the two designated rows + their bounds. -/
   di : Nat
   ci : Nat

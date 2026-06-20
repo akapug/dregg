@@ -94,14 +94,14 @@ faithful obligation that the designated effect row is a genuine transition row, 
 any real ≥2-row trace carries it.) -/
 theorem rotated_row_gates_burn (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ EffectVmEmitBurn.burnRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitBurn.burnVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
-      hside.chip hside.range burn_graduable hsat i hi
+    rotV3Frozen_sound_v1 permOut hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
+      burn_graduable (hside.toFaithful hsat) i hi
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
@@ -120,7 +120,7 @@ theorem rotated_row_gates_burn (hash : List ℤ → ℤ)
 /-- **`rotated_row_cellSpec_burn` — rotated witness ⟹ per-cell burn spec on row `i`.** -/
 theorem rotated_row_cellSpec_burn (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState) (amt : ℤ)
@@ -195,7 +195,7 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
 amt`. The circuit FORCES it (the burn gate `bal_lo' = bal_lo − param1`). -/
 theorem burn_debit_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
@@ -211,7 +211,7 @@ holderPost.balLo`; with the debit gate `holderPost.balLo = holderPre.balLo − a
 `amt ≤ pre.bal cell a` — the `BurnGuard` availability leg, enforced by the running circuit. -/
 theorem burn_availability_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
@@ -219,8 +219,8 @@ theorem burn_availability_forced (hash : List ℤ → ℤ)
   -- the v1 denotation on the holder row (i-dependent flags).
   have hv1 : satisfiedVm hash EffectVmEmitBurn.burnVmDescriptor
       (envAt t henc.di) (henc.di == 0) (henc.di + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
-      hside.chip hside.range burn_graduable hsat henc.di henc.hdi
+    rotV3Frozen_sound_v1 permOut hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
+      burn_graduable (hside.toFaithful hsat) henc.di henc.hdi
   -- the balance-debit gate (flag-independent) and the live range tooth (`hv1.2.2`).
   have hbal := rotated_row_gates_burn hash hside hsat henc.di henc.hdi henc.hdiNotLast
     (.gate EffectVmEmitBurn.gBalLoDebit)
@@ -250,7 +250,7 @@ kernel-side residual (authority / liveness / distinctness / the 16-field frame /
 frame / the log) comes from the decode. -/
 theorem burn_descriptorRefines (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
@@ -283,7 +283,7 @@ a holder post-balance NOT the genuine debit `pre.bal cell a − amt` rides NO sa
 circuit pins the burn limb, so a wrong-amount burn is UNSAT. -/
 theorem burn_descriptorRefines_rejects_wrong_debit (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt)
@@ -305,14 +305,14 @@ on a TRANSITION row (`i + 1 ≠ t.rows.length`, `isLast` flag `false`) their bod
 is a genuine transition row, not the wrap/pad row.) -/
 theorem rotated_row_gates_mint (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
     ∀ c ∈ EffectVmEmitMint.mintRowGates, c.holdsVm (envAt t i) false false := by
   have hv1 : satisfiedVm hash EffectVmEmitMint.mintVmDescriptor
       (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 hash EffectVmEmitMint.mintVmDescriptor minit mfin maddrs t
-      hside.chip hside.range mint_graduable hsat i hi
+    rotV3Frozen_sound_v1 permOut hash EffectVmEmitMint.mintVmDescriptor minit mfin maddrs t
+      mint_graduable (hside.toFaithful hsat) i hi
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
   intro c hc
@@ -331,7 +331,7 @@ theorem rotated_row_gates_mint (hash : List ℤ → ℤ)
 /-- **`rotated_row_cellSpec_mint` — rotated witness ⟹ per-cell mint spec on row `i`.** -/
 theorem rotated_row_cellSpec_mint (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (pre post : CellState) (amt : ℤ)
@@ -401,7 +401,7 @@ structure rotatedEncodesMint (hash : List ℤ → ℤ)
 amt`. The circuit FORCES it (the mint credit gate `bal_lo' = bal_lo + param1`). -/
 theorem mint_credit_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
@@ -421,7 +421,7 @@ the 16-field frame, the log) comes from the decode. (Note: a mint has NO availab
 is negative-capable — so the guard has no circuit-availability leg, unlike burn/transfer.) -/
 theorem mint_descriptorRefines (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
@@ -453,7 +453,7 @@ a recipient post-balance NOT the genuine credit `pre.bal cell a + amt` rides NO 
 circuit pins the mint limb, so a wrong-amount mint is UNSAT. -/
 theorem mint_descriptorRefines_rejects_wrong_credit (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt)
@@ -474,7 +474,7 @@ the LIVE rotated `mintV3` descriptor (BridgeMint's registry leg) with `rotatedEn
 (`execBridgeMintA_iff_spec`). Re-exported, not re-proved. -/
 theorem bridgeMint_descriptorRefines (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hside : RotTableSide hash t)
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
