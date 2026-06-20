@@ -39,6 +39,7 @@ the named `Poseidon2SpongeCR` hypothesis; memory consistency is the PROVED
 import Dregg2.Circuit.Emit.EffectVmEmit
 import Dregg2.Circuit.Lookup
 import Dregg2.Substrate.Heap
+import Dregg2.Circuit.MapMerkleRoot
 import Dregg2.Crypto.MemoryChecking
 import Dregg2.Crypto.UniversalMemory
 import Mathlib.Data.Multiset.Basic
@@ -428,57 +429,64 @@ the Rust assembly runs proves exactly this multiset-supported membership for eve
 def Lookup.holdsAt (tf : TraceFamily) (env : VmRowEnv) (l : Lookup) : Prop :=
   l.tuple.map (·.eval env.loc) ∈ tf l.table
 
-/-! ## §4 — Map-op semantics: openings of the PROVEN sorted-Poseidon2 map.
+/-! ## §4 — Map-op semantics: openings of the PROVEN sorted-Poseidon2 map, committed by the
+DEPLOYED depth-16 BINARY MERKLE root (`MapMerkleRoot.mapRoot` — `heap_root.rs::CanonicalHeapTree`).
 
-The denotation is an EXISTENTIAL opening of `Dregg2.Substrate.Heap`'s sorted map — the prover
-witnesses a sorted heap behind the root. Under the one named CR floor the opening is FUNCTIONAL
-(`root_injective` pins the heap), so the root + key determine the value/new-root: the map-op row
-cannot lie. Non-membership reuses the gap bracketing (`get_none_of_gap`). -/
+The denotation is an EXISTENTIAL opening of `Dregg2.Substrate.Heap`'s sorted map — the prover witnesses
+a sorted heap behind the root. The COMMITMENT is the deployed depth-`HEAP_TREE_DEPTH` BINARY MERKLE fold
+(`MapMerkleRoot.mapRoot`: arity-2 `leafOf` leaves, arity-2 `mapNode` nodes), NOT the flat sponge — the
+fixed-depth tree the `Ir2Air::MapOps` AIR (`descriptor_ir2.rs:2213`) recomposes by its `mix` closure. The
+deployment pins every heap as the `2^HEAP_TREE_DEPTH`-leaf padded vector; the opening carries that
+`length = 2^HEAP_TREE_DEPTH` discipline. Under the one named CR floor the opening is FUNCTIONAL
+(`MapMerkleRoot.mapRoot_injective` — the binary fold pins the heap via `perfectRoot_injective` /
+`mapNode_injective`, NOT the sponge `root_injective`), so the root + key determine the value / new-root:
+the map-op row cannot lie. Non-membership reuses the gap bracketing (`get_none_of_gap`). -/
 
-/-- `opensTo hash r k o` — some sorted heap behind root `r` reads `o` at `k`. -/
+/-- The deployed map-tree depth (`heap_root.rs::HEAP_TREE_DEPTH = 16`). -/
+abbrev MAP_TREE_DEPTH : Nat := MapMerkleRoot.HEAP_TREE_DEPTH
+
+/-- `opensTo hash r k o` — some sorted, depth-`MAP_TREE_DEPTH` `2^d`-leaf heap behind the DEPLOYED
+BINARY-MERKLE root `r` reads `o` at `k`. The denotation of the deployed `Ir2Air::MapOps` opening. -/
 def opensTo (hash : List ℤ → ℤ) (r k : ℤ) (o : Option ℤ) : Prop :=
-  ∃ h : Heap.FeltHeap, Heap.SortedKeys h ∧ Heap.root hash h = r ∧ Heap.get h k = o
+  MapMerkleRoot.opensToMerkle hash MAP_TREE_DEPTH r k o
 
-/-- `writesTo hash r k v r'` — some sorted heap behind root `r` produces root `r'` under the
-sorted insert-or-update of `(k, v)`. -/
+/-- `writesTo hash r k v r'` — some sorted, depth-`MAP_TREE_DEPTH` `2^d`-leaf heap behind binary root
+`r` produces root `r'` under the sorted insert-or-update of `(k, v)` (the post-heap still `2^d`-leaf). -/
 def writesTo (hash : List ℤ → ℤ) (r k v r' : ℤ) : Prop :=
-  ∃ h : Heap.FeltHeap, Heap.SortedKeys h ∧ Heap.root hash h = r ∧
-    r' = Heap.root hash (Heap.set h k v)
+  MapMerkleRoot.writesToMerkle hash MAP_TREE_DEPTH r k v r'
 
-/-- **Openings are FUNCTIONAL (the anti-ghost).** Under CR, the root + key determine the read:
-two openings of the same root at the same key agree. A map-op row cannot claim a tampered value. -/
+/-- **Openings are FUNCTIONAL (the anti-ghost).** Under CR, the BINARY-MERKLE root + key determine the
+read: two openings of the same root at the same key agree. Re-proved against the deployed binary fold
+(`MapMerkleRoot.opensToMerkle_functional` → `mapRoot_injective` → `perfectRoot_injective` /
+`mapNode_injective`), NOT the flat-sponge `root_injective`. A map-op row cannot claim a tampered value. -/
 theorem opensTo_functional (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     {r k : ℤ} {o₁ o₂ : Option ℤ}
-    (h₁ : opensTo hash r k o₁) (h₂ : opensTo hash r k o₂) : o₁ = o₂ := by
-  obtain ⟨m₁, _, hr₁, hg₁⟩ := h₁
-  obtain ⟨m₂, _, hr₂, hg₂⟩ := h₂
-  have hm : m₁ = m₂ := Heap.root_injective hash hCR (hr₁.trans hr₂.symm)
-  rw [← hg₁, ← hg₂, hm]
+    (h₁ : opensTo hash r k o₁) (h₂ : opensTo hash r k o₂) : o₁ = o₂ :=
+  MapMerkleRoot.opensToMerkle_functional hash hCR MAP_TREE_DEPTH h₁ h₂
 
 /-- Membership and non-membership at the same root/key EXCLUDE each other (the tooth the
 nullifier/cap non-membership argument needs from the map-ops table). -/
 theorem opensTo_some_excludes_none (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
-    {r k v : ℤ} (h₁ : opensTo hash r k (some v)) (h₂ : opensTo hash r k none) : False := by
-  have := opensTo_functional hash hCR h₁ h₂
-  simp at this
+    {r k v : ℤ} (h₁ : opensTo hash r k (some v)) (h₂ : opensTo hash r k none) : False :=
+  MapMerkleRoot.opensToMerkle_some_excludes_none hash hCR MAP_TREE_DEPTH h₁ h₂
 
-/-- **Writes are FUNCTIONAL.** Under CR, root + key + value determine the new root: the map-op
-row's `new_root` column cannot be forged. -/
+/-- **Writes are FUNCTIONAL.** Under CR, the BINARY-MERKLE root + key + value determine the new root:
+the map-op row's `new_root` column cannot be forged. Re-proved against the deployed binary fold
+(`MapMerkleRoot.writesToMerkle_functional` → `mapRoot_injective`), NOT the flat-sponge `root_injective`. -/
 theorem writesTo_functional (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     {r k v r₁ r₂ : ℤ}
-    (h₁ : writesTo hash r k v r₁) (h₂ : writesTo hash r k v r₂) : r₁ = r₂ := by
-  obtain ⟨m₁, _, hr₁, he₁⟩ := h₁
-  obtain ⟨m₂, _, hr₂, he₂⟩ := h₂
-  have hm : m₁ = m₂ := Heap.root_injective hash hCR (hr₁.trans hr₂.symm)
-  rw [he₁, he₂, hm]
+    (h₁ : writesTo hash r k v r₁) (h₂ : writesTo hash r k v r₂) : r₁ = r₂ :=
+  MapMerkleRoot.writesToMerkle_functional hash hCR MAP_TREE_DEPTH h₁ h₂
 
-/-- Non-membership openings are CONSTRUCTIBLE from the proven gap bracketing — completeness of
-the `absent` kind (the `sorted_gap_excludes` machinery, via `Heap.get_none_of_gap`). -/
+/-- Non-membership openings are CONSTRUCTIBLE from the proven gap bracketing — completeness of the
+`absent` kind (the `sorted_gap_excludes` machinery, via `Heap.get_none_of_gap`), over a depth-`d`
+`2^d`-leaf heap (the deployed fixed-depth tree). -/
 theorem opensTo_none_of_gap (hash : List ℤ → ℤ) {h : Heap.FeltHeap} {r lo hi k : ℤ}
-    (hs : Heap.SortedKeys h) (hr : Heap.root hash h = r)
+    (hs : Heap.SortedKeys h) (hlen : h.length = 2 ^ MAP_TREE_DEPTH)
+    (hr : MapMerkleRoot.mapRoot hash MAP_TREE_DEPTH h = r)
     (hadj : Dregg2.Crypto.NonMembership.Adjacent (Heap.keys h) lo hi)
     (hlo : lo < k) (hhi : k < hi) : opensTo hash r k none :=
-  ⟨h, hs, hr, Heap.get_none_of_gap h lo hi k hs hadj hlo hhi⟩
+  ⟨h, hs, hlen, hr, Heap.get_none_of_gap h lo hi k hs hadj hlo hhi⟩
 
 /-- The map-op's per-row denotation: when the guard fires, the evaluated `(root, key, value,
 new_root)` columns are a genuine opening per the op kind. -/
