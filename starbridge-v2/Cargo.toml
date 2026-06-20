@@ -131,7 +131,7 @@ live-node = ["dep:reqwest"]
 # async) deps out of this headless, `cargo test`-able build: the cipherclerk +
 # token surface we surface (identities, mint/attenuate/delegate, cell_id) is in
 # the SDK's un-gated core.
-embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist"]
+embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist", "dep:dregg-doc"]
 
 # OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
 # rasterizer + the cap-gated `render_dregg_page` content-tile entry) so the
@@ -263,6 +263,19 @@ dregg-coord = { path = "../coord", optional = true }
 # The macaroon token vocabulary (`Attenuation` etc.) the clerk speaks — re-exported
 # by dregg-sdk, but we name it directly for the panel's caveat projection.
 dregg-token = { path = "../token", optional = true }
+# THE DREGGVERSE DOCUMENT LANGUAGE patch-core (`dregg-doc`, `docs/deos/DOCUMENT-LANGUAGE.md`)
+# pulled with its `substrate` feature — so a document IS a real `dregg_cell::Cell`
+# and an edit IS a cap-gated turn through the genuine `dregg_turn::TurnExecutor`
+# (`ExecutorDrivenDoc`), with conflicts-as-`ConflictRegion`-states and provenance =
+# the real `TurnReceipt`. `dregg-doc` is its OWN (empty) workspace and path-deps the
+# SAME `../cell`/`../turn` this crate already pulls under `embedded-executor`, so
+# cargo resolves IDENTICAL `Cell`/`Effect`/`TurnReceipt` instances (its document
+# cell IS our cell). The DOCS-tab editor (`src/doc_editor.rs`) reuses its
+# `ExecutorDrivenDoc`/`Doc`/`content`/`merge`/`resolve` patch algebra — never a
+# parallel re-expression. Gated on `embedded-executor` (the gpui-free, test-able
+# surface). The plonky3-recursion `[patch]` above is replicated here so the
+# transitive `dregg-circuit` (via `dregg-turn`'s `substrate`) resolves identically.
+dregg-doc = { path = "../dregg-doc", features = ["substrate"], optional = true }
 # The static, userspace, pre-submission assurance toolkit (`analyze`) — the
 # REAL `check_conservation`/`check_no_amplification`/`check_wellformed` the live
 # editor's validate() rail delegates to (never a parallel re-expression).
