@@ -854,6 +854,316 @@ theorem exercise_closedLog
       exact Dregg2.Circuit.RotatedKernelRefinementExercise.exercise_descriptorRefines
         pre post actor target inner henc)
 
+/-! ### §B-sat — the CLASS-A (`Satisfied2`-forced) per-effect closed-with-log rungs.
+
+Each mirrors its non-`_sat` sibling EXACTLY but routes the `fullActionStep` arm through the per-effect
+`<e>_descriptorRefines_sat` — the Spec write is FORCED from a satisfying DEPLOYED `<e>V3` witness (plus
+the chip/range `RotTableSide` where the family uses one) and the realizable `<E>TraceReadout` (the
+`WitnessDecodes`-class seam), NOT the modelled-gate `<e>Encodes`. Editing the effect's `<e>V3` constraints
+turns the rung — and the apex resting on it — RED. The `logNeeds` now yields the readout struct (whose
+`logAdv` field is the derived advance), so the receipt-prepend rides `logAdvance_forced` exactly as before.
+These are the rungs the genuine fanout (`ClosureFanoutGenuine`) consumes for guarantee A at the apex. -/
+
+/-- revoke (tag 2), CLASS A — forced from `revokeCapabilityV3`. -/
+theorem revoke_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.revokeCapabilityV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (holder target : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost = LH (Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log))
+    (logNeeds : post.log = Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapabilityTraceReadout
+        hash minit mfin maddrs t pre post holder target) :
+    kstepAll 2 pre post :=
+  closedLog_of_encode (.revoke holder target)
+    (Dregg2.Exec.TurnExecutorFull.authReceipt holder) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.revoke holder target) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeCapability_descriptorRefines_sat
+        hash hsat pre post holder target (logNeeds hadv))
+
+/-- setPermissions (tag 8), CLASS A — forced from `setPermsV3`. -/
+theorem setPermissions_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setPermsV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (p : Int)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log))
+    (logNeeds : post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetPermsTraceReadout
+        hash minit mfin maddrs t pre post actor cell p) :
+    kstepAll 8 pre post :=
+  closedLog_of_encode (.setPermissionsA actor cell p)
+    { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.setPermissionsA actor cell p) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementPermsVK.setPermissions_descriptorRefines_sat
+        hash hside hsat pre post actor cell p (logNeeds hadv))
+
+/-- setVK (tag 9), CLASS A — forced from `setVKV3`. -/
+theorem setVK_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setVKV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (vk : Int)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log))
+    (logNeeds : post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetVKTraceReadout
+        hash minit mfin maddrs t pre post actor cell vk) :
+    kstepAll 9 pre post :=
+  closedLog_of_encode (.setVKA actor cell vk)
+    { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.setVKA actor cell vk) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementPermsVK.setVK_descriptorRefines_sat
+        hash hside hsat pre post actor cell vk (logNeeds hadv))
+
+/-- createCell (tag 17), CLASS A — forced from `createCellV3` (grow-gate, no `RotTableSide`). -/
+theorem createCell_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementBirth.CreateCellTraceReadout
+        hash minit mfin maddrs t pre post actor newCell) :
+    kstepAll 17 pre post :=
+  closedLog_of_encode (.createCellA actor newCell)
+    (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.createCellA actor newCell) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementBirth.createCell_descriptorRefines_sat
+        hash hsat pre post actor newCell (logNeeds hadv))
+
+/-- createCellFromFactory (tag 18), CLASS A — forced from `factoryV3`. -/
+theorem createCellFromFactory_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.factoryV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId) (vk : Int)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementBirth.CreateFromFactoryTraceReadout
+        hash minit mfin maddrs t pre post actor newCell vk) :
+    kstepAll 18 pre post :=
+  closedLog_of_encode (.createCellFromFactoryA actor newCell vk)
+    (Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.createCellFromFactoryA actor newCell vk) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementBirth.createCellFromFactory_descriptorRefines_sat
+        hash hsat pre post actor newCell vk (logNeeds hadv))
+
+/-- spawn (tag 19), CLASS A — forced from `spawnV3`. -/
+theorem spawn_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.spawnV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor child target : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout
+        hash minit mfin maddrs t pre post actor child target) :
+    kstepAll 19 pre post :=
+  closedLog_of_encode (.spawnA actor child target)
+    (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.spawnA actor child target) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementBirth.spawn_descriptorRefines_sat
+        hash hsat pre post actor child target (logNeeds hadv))
+
+/-- noteSpend (tag 27), CLASS A — forced from `noteSpendV3`. -/
+theorem noteSpend_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (nf : Nat) (actor : CellId) (spendProof : Bool)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementNotes.NoteSpendTraceReadout
+        hash minit mfin maddrs t pre post nf actor spendProof) :
+    kstepAll 27 pre post :=
+  closedLog_of_encode (.noteSpendA nf actor spendProof)
+    (Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.noteSpendA nf actor spendProof) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementNotes.noteSpend_descriptorRefines_sat
+        hash hsat pre post nf actor spendProof (logNeeds hadv))
+
+/-- noteCreate (tag 28), CLASS A — forced from `noteCreateV3`. -/
+theorem noteCreate_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (cm : Nat) (actor : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementNotes.NoteCreateTraceReadout
+        hash minit mfin maddrs t pre post cm actor) :
+    kstepAll 28 pre post :=
+  closedLog_of_encode (.noteCreateA cm actor)
+    (Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.noteCreateA cm actor) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementNotes.noteCreate_descriptorRefines_sat
+        hash hsat pre post cm actor (logNeeds hadv))
+
+/-- makeSovereign (tag 38), CLASS A — forced from `makeSovereignV3`. -/
+theorem makeSovereign_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.makeSovereignV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log))
+    (logNeeds : post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementMisc.MakeSovereignTraceReadout
+        hash minit mfin maddrs t pre post actor cell) :
+    kstepAll 38 pre post :=
+  closedLog_of_encode (.makeSovereignA actor cell)
+    { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.makeSovereignA actor cell) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementMisc.makeSovereign_descriptorRefines_sat
+        hash hside hsat pre post actor cell (logNeeds hadv))
+
+/-- refusal (tag 39), CLASS A — forced from `refusalV3`. -/
+theorem refusal_closedLog_sat
+    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementLifecycle.FieldElem
+      → Dregg2.Circuit.RotatedKernelRefinementLifecycle.FieldElem)
+    (hN : Dregg2.Circuit.StateCommit.compressNInjective compressN2)
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log))
+    (logNeeds : post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementLifecycle.RefusalTraceReadout
+        compressN2 hash t pre post actor cell) :
+    kstepAll 39 pre post :=
+  closedLog_of_encode (.refusalA actor cell)
+    { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.refusalA actor cell) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementLifecycle.refusal_descriptorRefines_sat
+        compressN2 hN hash hside hsat pre post actor cell (logNeeds hadv))
+
+/-- cellUnseal (tag 53), CLASS A — forced from `cellUnsealV3`. -/
+theorem cellUnseal_closedLog_sat
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellUnsealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementLifecycle.CellUnsealTraceReadout
+        hash t pre post actor cell) :
+    kstepAll 53 pre post :=
+  closedLog_of_encode (.cellUnsealA actor cell)
+    (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.cellUnsealA actor cell) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementLifecycle.cellUnseal_descriptorRefines_sat
+        hash hside hsat pre post actor cell (logNeeds hadv))
+
+/-- cellDestroy (tag 54), CLASS A — forced from `cellDestroyV3` (both the lifecycle + death-cert legs). -/
+theorem cellDestroy_closedLog_sat
+    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementLifecycle.FieldElem
+      → Dregg2.Circuit.RotatedKernelRefinementLifecycle.FieldElem)
+    (hN : Dregg2.Circuit.StateCommit.compressNInjective compressN2)
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellDestroyV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log))
+    (logNeeds : post.log
+        = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementLifecycle.CellDestroyTraceReadout
+        compressN2 hash t pre post actor cell certHash) :
+    kstepAll 54 pre post :=
+  closedLog_of_encode (.cellDestroyA actor cell certHash)
+    (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell) hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.cellDestroyA actor cell certHash) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementLifecycle.cellDestroy_descriptorRefines_sat
+        compressN2 hN hash hside hsat pre post actor cell certHash (logNeeds hadv))
+
 end PerEffect
 
 /-! ## §C — the assembled closed apex.

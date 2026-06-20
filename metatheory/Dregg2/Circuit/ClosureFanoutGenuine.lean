@@ -384,20 +384,21 @@ theorem closedLogExtract_cellSeal_closed
 
 /-- **cellUnseal (53).** -/
 theorem closedLogExtract_cellUnseal_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementLifecycle.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementLifecycle.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 53) minit mfin maddrs t →
-      Σ' (actor cell : CellId),
+      Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementLifecycle.cellUnsealEncodes compressN2 pre post actor cell)) :
+          Dregg2.Circuit.RotatedKernelRefinementLifecycle.CellUnsealTraceReadout
+            hash t pre post actor cell)) :
     ClosedLogExtract Slive LH hash Rfix 53 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact cellUnseal_closedLog compressN2 hN pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellUnsealV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact cellUnseal_closedLog_sat hash hside hsat' pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **cellDestroy (54).** -/
 theorem closedLogExtract_cellDestroy_closed
@@ -407,14 +408,18 @@ theorem closedLogExtract_cellDestroy_closed
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 54) minit mfin maddrs t →
-      Σ' (actor cell : CellId) (certHash : Nat),
+      Σ' (actor cell : CellId) (certHash : Nat) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementLifecycle.cellDestroyEncodes compressN2 pre post actor cell certHash)) :
+          Dregg2.Circuit.RotatedKernelRefinementLifecycle.CellDestroyTraceReadout
+            compressN2 hash t pre post actor cell certHash)) :
     ClosedLogExtract Slive LH hash Rfix 54 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, certHash, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact cellDestroy_closedLog compressN2 hN pre post actor cell certHash pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellDestroyV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, certHash, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact cellDestroy_closedLog_sat compressN2 hN hash hside hsat' pre post actor cell certHash pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **refusal (39).** Receipt is `{ actor, src:=cell, dst:=cell, amt:=0 }`. -/
 theorem closedLogExtract_refusal_closed
@@ -424,15 +429,18 @@ theorem closedLogExtract_refusal_closed
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 39) minit mfin maddrs t →
-      Σ' (actor cell : CellId),
+      Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
         (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementLifecycle.auditEncodes
-            compressN2 pre post actor cell Dregg2.Exec.TurnExecutorFull.refusalField)) :
+          Dregg2.Circuit.RotatedKernelRefinementLifecycle.RefusalTraceReadout
+            compressN2 hash t pre post actor cell)) :
     ClosedLogExtract Slive LH hash Rfix 39 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact refusal_closedLog compressN2 hN pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact refusal_closedLog_sat compressN2 hN hash hside hsat' pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **receiptArchive (40).** Receipt is `{ actor, src:=cell, dst:=cell, amt:=0 }`. -/
 theorem closedLogExtract_receiptArchive_closed
@@ -452,141 +460,149 @@ theorem closedLogExtract_receiptArchive_closed
   obtain ⟨actor, cell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact receiptArchive_closedLog compressN2 hN pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
-/-- **setPermissions (8).** -/
+/-- **setPermissions (8) — CLASS A.** The perms write is forced from the DEPLOYED `setPermsV3`
+(`= Rfix 8` by `rfl`) via `setPermissions_descriptorRefines_sat`: the readout extracts the chip/range
+`RotTableSide`, the published receipt-prepend, and the `SetPermsTraceReadout`-minus-log. Editing
+`setPermsV3`'s perms-weld gate turns this — and the apex — RED. -/
 theorem closedLogExtract_setPermissions_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementPermsVK.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementPermsVK.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 8) minit mfin maddrs t →
-      Σ' (actor cell : CellId) (p : ℤ),
+      Σ' (actor cell : CellId) (p : ℤ) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
         (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementPermsVK.setPermissionsEncodes compressN2 pre post actor cell p)) :
+          Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetPermsTraceReadout
+            hash minit mfin maddrs t pre post actor cell p)) :
     ClosedLogExtract Slive LH hash Rfix 8 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, p, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact setPermissions_closedLog compressN2 hN pre post actor cell p pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setPermsV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, p, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact setPermissions_closedLog_sat hash hside hsat' pre post actor cell p pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
-/-- **setVK (9).** -/
+/-- **setVK (9) — CLASS A.** Forced from the DEPLOYED `setVKV3` (`= Rfix 9` by `rfl`) via
+`setVK_descriptorRefines_sat`. Editing `setVKV3`'s vk-weld gate turns this — and the apex — RED. -/
 theorem closedLogExtract_setVK_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementPermsVK.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementPermsVK.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 9) minit mfin maddrs t →
-      Σ' (actor cell : CellId) (vk : ℤ),
+      Σ' (actor cell : CellId) (vk : ℤ) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
         (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementPermsVK.setVKEncodes compressN2 pre post actor cell vk)) :
+          Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetVKTraceReadout
+            hash minit mfin maddrs t pre post actor cell vk)) :
     ClosedLogExtract Slive LH hash Rfix 9 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, vk, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact setVK_closedLog compressN2 hN pre post actor cell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setVKV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, vk, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact setVK_closedLog_sat hash hside hsat' pre post actor cell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **makeSovereign (38).** Receipt is the self-row. NOTE: `makeSovereign_closedLog` takes `compressN2`
 but NO `hN`. -/
 theorem closedLogExtract_makeSovereign_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementMisc.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementMisc.FieldElem)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 38) minit mfin maddrs t →
-      Σ' (actor cell : CellId),
+      Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
         PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
         (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementMisc.makeSovereignEncodes compressN2 pre post actor cell)) :
+          Dregg2.Circuit.RotatedKernelRefinementMisc.MakeSovereignTraceReadout
+            hash minit mfin maddrs t pre post actor cell)) :
     ClosedLogExtract Slive LH hash Rfix 38 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, cell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact makeSovereign_closedLog compressN2 pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.makeSovereignV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact makeSovereign_closedLog_sat hash hside hsat' pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **createCell (17).** Receipt is `createReceipt actor newCell`. -/
 theorem closedLogExtract_createCell_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementBirth.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementBirth.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 17) minit mfin maddrs t →
       Σ' (actor newCell : CellId),
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementBirth.createCellGenuineEncodes compressN2 pre post actor newCell)) :
+          Dregg2.Circuit.RotatedKernelRefinementBirth.CreateCellTraceReadout
+            hash minit mfin maddrs t pre post actor newCell)) :
     ClosedLogExtract Slive LH hash Rfix 17 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
+      minit mfin maddrs t := hsat
   obtain ⟨actor, newCell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact createCell_closedLog compressN2 hN pre post actor newCell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  exact createCell_closedLog_sat hash hsat' pre post actor newCell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **createCellFromFactory (18).** Receipt is `factoryReceipt actor newCell`. -/
 theorem closedLogExtract_createCellFromFactory_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementBirth.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementBirth.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 18) minit mfin maddrs t →
       Σ' (actor newCell : CellId) (vk : ℤ),
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementBirth.createFromFactoryGenuineEncodes compressN2 pre post actor newCell vk)) :
+          Dregg2.Circuit.RotatedKernelRefinementBirth.CreateFromFactoryTraceReadout
+            hash minit mfin maddrs t pre post actor newCell vk)) :
     ClosedLogExtract Slive LH hash Rfix 18 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.factoryV3
+      minit mfin maddrs t := hsat
   obtain ⟨actor, newCell, vk, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact createCellFromFactory_closedLog compressN2 hN pre post actor newCell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  exact createCellFromFactory_closedLog_sat hash hsat' pre post actor newCell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **spawn (19).** Receipt is `createReceipt actor child`. -/
 theorem closedLogExtract_spawn_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementBirth.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementBirth.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 19) minit mfin maddrs t →
       Σ' (actor child target : CellId),
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementBirth.spawnGenuineEncodes compressN2 pre post actor child target)) :
+          Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout
+            hash minit mfin maddrs t pre post actor child target)) :
     ClosedLogExtract Slive LH hash Rfix 19 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.spawnV3
+      minit mfin maddrs t := hsat
   obtain ⟨actor, child, target, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact spawn_closedLog compressN2 hN pre post actor child target pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  exact spawn_closedLog_sat hash hsat' pre post actor child target pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **noteSpend (27).** Receipt is `noteSpendReceipt actor`. -/
 theorem closedLogExtract_noteSpend_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementNotes.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementNotes.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 27) minit mfin maddrs t →
       Σ' (nf : Nat) (actor : CellId) (spendProof : Bool),
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementNotes.noteSpendGenuineEncodes compressN2 pre post nf actor spendProof)) :
+          Dregg2.Circuit.RotatedKernelRefinementNotes.NoteSpendTraceReadout
+            hash minit mfin maddrs t pre post nf actor spendProof)) :
     ClosedLogExtract Slive LH hash Rfix 27 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
+      minit mfin maddrs t := hsat
   obtain ⟨nf, actor, spendProof, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact noteSpend_closedLog compressN2 hN pre post nf actor spendProof pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  exact noteSpend_closedLog_sat hash hsat' pre post nf actor spendProof pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **noteCreate (28).** Receipt is `noteCreateReceipt actor`. -/
 theorem closedLogExtract_noteCreate_closed
-    (compressN2 : List Dregg2.Circuit.RotatedKernelRefinementNotes.FieldElem
-      → Dregg2.Circuit.RotatedKernelRefinementNotes.FieldElem)
-    (hN : compressNInjective compressN2)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 28) minit mfin maddrs t →
       Σ' (cm : Nat) (actor : CellId),
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementNotes.noteCreateGenuineEncodes compressN2 pre post cm actor)) :
+          Dregg2.Circuit.RotatedKernelRefinementNotes.NoteCreateTraceReadout
+            hash minit mfin maddrs t pre post cm actor)) :
     ClosedLogExtract Slive LH hash Rfix 28 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
+      minit mfin maddrs t := hsat
   obtain ⟨cm, actor, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact noteCreate_closedLog compressN2 hN pre post cm actor pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  exact noteCreate_closedLog_sat hash hsat' pre post cm actor pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-! ## §4 — value-forced (no compressN/Scap) — emitEvent (6) / pipelinedSend (47). -/
 
@@ -741,23 +757,25 @@ structure ClosureReadouts
           hash minit mfin maddrs t pre post actor cell)
   rdCellUnseal : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 53) minit mfin maddrs t →
-    Σ' (actor cell : CellId),
+    Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementLifecycle.cellUnsealEncodes cnLife pre post actor cell)
+        Dregg2.Circuit.RotatedKernelRefinementLifecycle.CellUnsealTraceReadout hash t pre post actor cell)
   rdCellDestroy : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 54) minit mfin maddrs t →
-    Σ' (actor cell : CellId) (certHash : Nat),
+    Σ' (actor cell : CellId) (certHash : Nat) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.CellLifecycle.cellLifecycleReceipt actor cell :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementLifecycle.cellDestroyEncodes cnLife pre post actor cell certHash)
+        Dregg2.Circuit.RotatedKernelRefinementLifecycle.CellDestroyTraceReadout cnLife hash t pre post actor cell certHash)
   rdRefusal : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 39) minit mfin maddrs t →
-    Σ' (actor cell : CellId),
+    Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
       (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementLifecycle.auditEncodes
-          cnLife pre post actor cell Dregg2.Exec.TurnExecutorFull.refusalField)
+        Dregg2.Circuit.RotatedKernelRefinementLifecycle.RefusalTraceReadout cnLife hash t pre post actor cell)
   rdReceiptArchive : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 40) minit mfin maddrs t →
     Σ' (actor cell : CellId),
@@ -767,52 +785,55 @@ structure ClosureReadouts
           cnLife pre post actor cell Dregg2.Exec.TurnExecutorFull.lifecycleField)
   rdSetPermissions : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 8) minit mfin maddrs t →
-    Σ' (actor cell : CellId) (p : ℤ),
+    Σ' (actor cell : CellId) (p : ℤ) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
       (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementPermsVK.setPermissionsEncodes cnPermsVK pre post actor cell p)
+        Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetPermsTraceReadout hash minit mfin maddrs t pre post actor cell p)
   rdSetVK : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 9) minit mfin maddrs t →
-    Σ' (actor cell : CellId) (vk : ℤ),
+    Σ' (actor cell : CellId) (vk : ℤ) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
       (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementPermsVK.setVKEncodes cnPermsVK pre post actor cell vk)
+        Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetVKTraceReadout hash minit mfin maddrs t pre post actor cell vk)
   rdMakeSovereign : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 38) minit mfin maddrs t →
-    Σ' (actor cell : CellId),
+    Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
       PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
       (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementMisc.makeSovereignEncodes cnMisc pre post actor cell)
+        Dregg2.Circuit.RotatedKernelRefinementMisc.MakeSovereignTraceReadout hash minit mfin maddrs t pre post actor cell)
   rdCreateCell : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 17) minit mfin maddrs t →
     Σ' (actor newCell : CellId),
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor newCell :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementBirth.createCellGenuineEncodes cnBirth pre post actor newCell)
+        Dregg2.Circuit.RotatedKernelRefinementBirth.CreateCellTraceReadout hash minit mfin maddrs t pre post actor newCell)
   rdCreateCellFromFactory : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 18) minit mfin maddrs t →
     Σ' (actor newCell : CellId) (vk : ℤ),
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.FactoryCreation.factoryReceipt actor newCell :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementBirth.createFromFactoryGenuineEncodes cnBirth pre post actor newCell vk)
+        Dregg2.Circuit.RotatedKernelRefinementBirth.CreateFromFactoryTraceReadout hash minit mfin maddrs t pre post actor newCell vk)
   rdSpawn : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 19) minit mfin maddrs t →
     Σ' (actor child target : CellId),
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementBirth.spawnGenuineEncodes cnBirth pre post actor child target)
+        Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout hash minit mfin maddrs t pre post actor child target)
   rdNoteSpend : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 27) minit mfin maddrs t →
     Σ' (nf : Nat) (actor : CellId) (spendProof : Bool),
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.NoteNullifier.noteSpendReceipt actor :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementNotes.noteSpendGenuineEncodes cnNotes pre post nf actor spendProof)
+        Dregg2.Circuit.RotatedKernelRefinementNotes.NoteSpendTraceReadout hash minit mfin maddrs t pre post nf actor spendProof)
   rdNoteCreate : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 28) minit mfin maddrs t →
     Σ' (cm : Nat) (actor : CellId),
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.NoteCommitment.noteCreateReceipt actor :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementNotes.noteCreateGenuineEncodes cnNotes pre post cm actor)
+        Dregg2.Circuit.RotatedKernelRefinementNotes.NoteCreateTraceReadout hash minit mfin maddrs t pre post cm actor)
   rdEmitEvent : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 6) minit mfin maddrs t →
     Σ' (actor cell : CellId) (topic data : ℤ),
@@ -859,25 +880,25 @@ theorem closedLogExtract_all_genuine
   | 5 => exact closedLogExtract_setField_closed 0 (rds.rdSetField 0)
   | 6 => exact closedLogExtract_emitEvent_closed rds.rdEmitEvent
   | 7 => exact closedLogExtract_incrementNonce_closed rds.rdIncNonce
-  | 8 => exact closedLogExtract_setPermissions_closed cnPermsVK rds.hNPermsVK rds.rdSetPermissions
-  | 9 => exact closedLogExtract_setVK_closed cnPermsVK rds.hNPermsVK rds.rdSetVK
+  | 8 => exact closedLogExtract_setPermissions_closed rds.rdSetPermissions
+  | 9 => exact closedLogExtract_setVK_closed rds.rdSetVK
   | 10 => exact closedLogExtract_introduce_closed Scap rds.rdIntroduce
   | 11 => exact closedLogExtract_delegateAtten_closed Scap rds.rdDelegateAtten
   | 12 => exact closedLogExtract_attenuate_closed Scap rds.rdAttenuate
   | 14 => exact closedLogExtract_revokeDelegation_closed Scap rds.rdRevokeDelegation
   | 16 => exact closedLogExtract_exercise_closed rds.rdExercise
-  | 17 => exact closedLogExtract_createCell_closed cnBirth rds.hNBirth rds.rdCreateCell
-  | 18 => exact closedLogExtract_createCellFromFactory_closed cnBirth rds.hNBirth rds.rdCreateCellFromFactory
-  | 19 => exact closedLogExtract_spawn_closed cnBirth rds.hNBirth rds.rdSpawn
+  | 17 => exact closedLogExtract_createCell_closed rds.rdCreateCell
+  | 18 => exact closedLogExtract_createCellFromFactory_closed rds.rdCreateCellFromFactory
+  | 19 => exact closedLogExtract_spawn_closed rds.rdSpawn
   | 20 => exact closedLogExtract_bridgeMint_closed rds.rdBridgeMint
-  | 27 => exact closedLogExtract_noteSpend_closed cnNotes rds.hNNotes rds.rdNoteSpend
-  | 28 => exact closedLogExtract_noteCreate_closed cnNotes rds.hNNotes rds.rdNoteCreate
-  | 38 => exact closedLogExtract_makeSovereign_closed cnMisc rds.rdMakeSovereign
+  | 27 => exact closedLogExtract_noteSpend_closed rds.rdNoteSpend
+  | 28 => exact closedLogExtract_noteCreate_closed rds.rdNoteCreate
+  | 38 => exact closedLogExtract_makeSovereign_closed rds.rdMakeSovereign
   | 39 => exact closedLogExtract_refusal_closed cnLife rds.hNLife rds.rdRefusal
   | 40 => exact closedLogExtract_receiptArchive_closed cnLife rds.hNLife rds.rdReceiptArchive
   | 47 => exact closedLogExtract_pipelinedSend_closed rds.rdPipelinedSend
   | 52 => exact closedLogExtract_cellSeal_closed rds.rdCellSeal
-  | 53 => exact closedLogExtract_cellUnseal_closed cnLife rds.hNLife rds.rdCellUnseal
+  | 53 => exact closedLogExtract_cellUnseal_closed rds.rdCellUnseal
   | 54 => exact closedLogExtract_cellDestroy_closed cnLife rds.hNLife rds.rdCellDestroy
   | 55 => exact closedLogExtract_refreshDelegation_closed Scap rds.rdRefreshDelegation
   | 56 => exact closedLogExtract_heapWrite_closed rds.rdHeapWrite
@@ -932,6 +953,18 @@ theorem lightclient_unfoolable_closed_final_genuine
 #assert_axioms closedLogExtract_delegate_closed
 #assert_axioms closedLogExtract_cellSeal_closed
 #assert_axioms closedLogExtract_exercise_closed
+-- the rewired CLASS-A (Satisfied2-forced) slots — guarantee A now circuit-forced at the apex.
+#assert_axioms closedLogExtract_setPermissions_closed
+#assert_axioms closedLogExtract_setVK_closed
+#assert_axioms closedLogExtract_makeSovereign_closed
+#assert_axioms closedLogExtract_refusal_closed
+#assert_axioms closedLogExtract_createCell_closed
+#assert_axioms closedLogExtract_createCellFromFactory_closed
+#assert_axioms closedLogExtract_spawn_closed
+#assert_axioms closedLogExtract_noteSpend_closed
+#assert_axioms closedLogExtract_noteCreate_closed
+#assert_axioms closedLogExtract_cellUnseal_closed
+#assert_axioms closedLogExtract_cellDestroy_closed
 #assert_axioms closedLogExtract_all_genuine
 #assert_axioms lightclient_unfoolable_closed_final_genuine
 
