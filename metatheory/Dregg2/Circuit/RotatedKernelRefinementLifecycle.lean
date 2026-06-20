@@ -58,6 +58,17 @@ open Dregg2.Circuit.Spec.CellLifecycle
    cellLifecycleReceipt)
 open Dregg2.Circuit.Spec.CellStateAudit
   (RefusalSpec ReceiptArchiveSpec auditGuard auditCellMap)
+open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt)
+open Dregg2.Circuit.Emit.EffectVmEmit (satisfiedVm VmRowEnv VmConstraint)
+open Dregg2.Circuit.Emit.EffectVmEmitV2 (graduateV1 graduateV1_sound graduable)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (cellUnsealV3 cellDestroyV3 refusalV3
+   afterDiscCol discLive discSealed discDestroyed AFTER_BLOCK_OFF B_RECORD_DIGEST
+   rotateV3WithDiscGate rotateV3WithRecordPin rotateV3
+   rotateV3WithDiscGate_forces_after rotateV3WithRecordPin_pins
+   rotateV3WithRecordPin_constraints
+   graduable_rotateV3WithDiscGate graduable_rotateV3WithRecordPin)
+open Dregg2.Circuit.RotatedKernelRefinement (RotTableSide)
 open Dregg2.Exec
 open Dregg2.Exec.EffectsState
 open Dregg2.Exec.TurnExecutorFull
@@ -505,6 +516,468 @@ theorem audit_descriptorRefines_rejects_unwritten (compressN : List FieldElem �
     False :=
   hwrong (audit_slot_forced compressN hN pre post actor cell f henc)
 
+/-! ## §3.5 — CLASS A: the lifecycle/audit writes are FORCED by the DEPLOYED descriptors
+  (`cellUnsealV3` / `cellDestroyV3` / `refusalV3`), not the modelled `g*` gates of §1–§3.
+
+§1–§3 force each write from a MODELLED gate the decode ASSERTS (`gLifecycleSet` / `gDeathCertSet` /
+`gAuditSlotOne`); editing the LIVE descriptor constraints does NOT break those. This section closes that
+gap, EXACTLY as `RotatedKernelRefinementCellSeal.§6.5` does for cellSeal:
+
+  * **cellUnseal** — `cellUnsealV3 = graduateV1 (rotateV3WithDiscGate SEL_CELLUNSEAL (some discSealed)
+    discLive cellUnsealVmDescriptor)`. The DEPLOYED disc gate FORCES the committed AFTER disc limb
+    (`afterDiscCol`, B_DISC = 32) to `discLive (= 0)` on the active transition row
+    (`rotateV3WithDiscGate_forces_after`). The realizable `discLimbDecodes` seam ties that limb to the
+    post lifecycle discriminant (`= (post.lifecycle cell : ℤ)`), so `post.lifecycle cell = lcLive`.
+  * **cellDestroy** — `cellDestroyV3 = graduateV1 (rotateV3WithDiscGate SEL_CELLDESTROY none discDestroyed
+    cellDestroyVmDescriptor)`. The disc gate forces AFTER disc `= discDestroyed (= 3)`, so
+    `post.lifecycle cell = lcDestroyed` (the lifecycle leg). The death-cert leg is forced by the SAME
+    record-pin route the §3 audit slot uses (`rotateV3WithRecordPin` on B_LIFECYCLE, folding the death-cert
+    into `lifecycle_felt` — the `deathCertLimbDecodes`/`deathCertPiAnchored` seam).
+  * **refusal** — `refusalV3 = graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST refusalVmDescriptor)`. A
+    pure record-pin (NO disc gate): `rotateV3WithRecordPin_pins` FORCES the committed AFTER record-digest
+    limb (`B_RECORD_DIGEST = 24`) EQUAL to the published rotated PI. The realizable seam ties that limb to
+    the post audit-slot root (`recordLimbDecodes`) AND the verifier-anchored PI to the digest of slot
+    value `1` (`piAnchored`, the `lifecycle_felt_cell`/`compute_authority_digest_felt`-anchor floor the
+    deployed verifier supplies — the SAME `StarkSound`/`WitnessDecodes`-class carrier transfer/cellSeal
+    use), so `fieldOf refusalField (post.cell cell) = 1`.
+
+Editing the respective deployed descriptor's gate breaks its `*_forced` lemma, hence the
+`*_descriptorRefines_sat`, hence the rung — Class A. Each seam is a NAMED realizable structure field
+(`#assert_axioms`-clean), never a `sorry`/assumed-decode. -/
+
+/-! ### cellUnseal — Class A from the DEPLOYED disc gate (`cellUnsealV3`). -/
+
+/-- **`CellUnsealTraceReadout`** — the realizable circuit-witness extraction for cellUnseal, the
+`WitnessDecodes` class of cellSeal's `CellSealTraceReadout`: the designated ACTIVE cellUnseal row + its
+selector fact + the realizable disc-limb decode (the committed AFTER disc limb IS the post lifecycle
+discriminant felt) + the whole-map / guard / log / 16-field residual. The disc GATE is NOT a field — it is
+FORCED from `Satisfied2 hash cellUnsealV3` (`cellUnseal_forced`). -/
+structure CellUnsealTraceReadout (hash : List ℤ → ℤ)
+    (t : VmTrace) (pre post : RecChainedState) (actor cell : CellId) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hrowNotLast : row + 1 ≠ t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.SEL_CELLUNSEAL = 1
+  -- the realizable seam: the committed AFTER disc TRACE limb IS the post lifecycle discriminant cast to ℤ.
+  discLimbDecodes :
+    (envAt t row).loc
+      (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.cellUnsealVmDescriptor.traceWidth)
+      = ((post.kernel.lifecycle cell : Nat) : ℤ)
+  frameOther : ∀ c, c ≠ cell → post.kernel.lifecycle c = pre.kernel.lifecycle c
+  guard : CellUnsealGuard pre actor cell
+  logAdv : post.log = cellLifecycleReceipt actor cell :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCell : post.kernel.cell = pre.kernel.cell
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- `cellUnsealV3`'s underlying disc-gated descriptor is graduable (the cellSeal `_disc_graduable`
+analog). -/
+theorem cellUnseal_disc_graduable :
+    graduable (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.SEL_CELLUNSEAL
+      (some discSealed) discLive
+      Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.cellUnsealVmDescriptor) = true := by decide
+
+/-- **`cellUnseal_forced` — the revive (`lifecycle := Live`) is FORCED by the DEPLOYED `cellUnsealV3`.**
+The committed AFTER disc limb is pinned to `discLive (= 0)` by the LIVE disc gate, and the readout's
+`discLimbDecodes` identifies that limb with the post lifecycle discriminant — so the discriminant is
+`0 = lcLive`. Editing `cellUnsealV3`'s disc gate turns this RED. -/
+theorem cellUnseal_forced (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellUnsealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellUnsealTraceReadout hash t pre post actor cell) :
+    post.kernel.lifecycle cell = lcLive := by
+  have hv1 : satisfiedVm hash
+      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.SEL_CELLUNSEAL (some discSealed)
+        discLive Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.cellUnsealVmDescriptor)
+      (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellUnseal_disc_graduable
+      hsat rd.row rd.hrow
+  have hlastf : (rd.row + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
+  rw [hlastf] at hv1
+  have hlimb : (envAt t rd.row).loc
+      (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellUnseal.cellUnsealVmDescriptor.traceWidth)
+        = discLive :=
+    rotateV3WithDiscGate_forces_after _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+  have hcast : ((post.kernel.lifecycle cell : Nat) : ℤ) = ((lcLive : Nat) : ℤ) := by
+    rw [← rd.discLimbDecodes, hlimb]; rfl
+  exact_mod_cast hcast
+
+/-- **`cellUnseal_forced_map` — the post lifecycle MAP is `unsealLifecycleMap` (Class A, whole map).** -/
+theorem cellUnseal_forced_map (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellUnsealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellUnsealTraceReadout hash t pre post actor cell) :
+    post.kernel.lifecycle = unsealLifecycleMap pre.kernel cell := by
+  have hcell : post.kernel.lifecycle cell = lcLive :=
+    cellUnseal_forced hash hside hsat pre post actor cell rd
+  funext c
+  show post.kernel.lifecycle c = (setLifecycle pre.kernel cell lcLive).lifecycle c
+  show post.kernel.lifecycle c = (if c = cell then lcLive else pre.kernel.lifecycle c)
+  by_cases hc : c = cell
+  · subst hc; rw [if_pos rfl]; exact hcell
+  · rw [if_neg hc]; exact rd.frameOther c hc
+
+/-- **`cellUnseal_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for cellUnseal.** A
+satisfying DEPLOYED `cellUnsealV3` witness + the realizable `CellUnsealTraceReadout` forces
+`CellUnsealSpec`. The `lifecycle := Live` write is forced from the DEPLOYED disc gate's `Satisfied2`
+(`cellUnseal_forced_map`) — editing `cellUnsealV3` turns this RED. -/
+theorem cellUnseal_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellUnsealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellUnsealTraceReadout hash t pre post actor cell) :
+    CellUnsealSpec pre actor cell post := by
+  refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+  exact cellUnseal_forced_map hash hside hsat pre post actor cell rd
+
+/-- **CLASS-A TOOTH — a forged un-revived cellUnseal witness is UNSAT.** A readout whose post `cell`
+lifecycle is NOT `lcLive` cannot ride a satisfying `cellUnsealV3` witness — the DEPLOYED disc gate pins
+the revive. -/
+theorem cellUnseal_sat_rejects_unrevived (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellUnsealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellUnsealTraceReadout hash t pre post actor cell)
+    (hwrong : post.kernel.lifecycle cell ≠ lcLive) :
+    False :=
+  hwrong (cellUnseal_forced hash hside hsat pre post actor cell rd)
+
+/-! ### cellDestroy — Class A: the lifecycle leg from the DEPLOYED disc gate (`cellDestroyV3`),
+the death-cert leg from the DEPLOYED record pin (B_LIFECYCLE, the `lifecycle_felt` fold). -/
+
+/-- **`CellDestroyTraceReadout`** — the realizable circuit-witness extraction for cellDestroy. TWO
+deployed-forced legs:
+  * the disc-limb decode (AFTER disc IS the post lifecycle discriminant) — the lifecycle leg;
+  * the record-limb decode + PI anchor on B_LIFECYCLE — the death-cert leg (the deployed `lifecycle_felt`
+    folds the death-cert; the verifier anchors the pinned PI to the post death-cert root).
+Plus the whole-map freezes for BOTH side-tables + guard + log + 15-field residual. The gates are NOT
+fields — both legs are FORCED from `Satisfied2 hash cellDestroyV3`. -/
+structure CellDestroyTraceReadout (compressN : List FieldElem → FieldElem) (hash : List ℤ → ℤ)
+    (t : VmTrace) (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hrowNotLast : row + 1 ≠ t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY = 1
+  -- LIFECYCLE leg: the committed AFTER disc limb IS the post lifecycle discriminant.
+  discLimbDecodes :
+    (envAt t row).loc
+      (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth)
+      = ((post.kernel.lifecycle cell : Nat) : ℤ)
+  lcFrameOther : ∀ c, c ≠ cell → post.kernel.lifecycle c = pre.kernel.lifecycle c
+  -- DEATH-CERT leg: the LAST row pins the committed AFTER record limb (B_LIFECYCLE) to the published PI,
+  -- the realizable seam ties that limb to the post death-cert root and the anchored PI to `certHash`'s root.
+  lastRow : Nat
+  hlastRow : lastRow < t.rows.length
+  hlastRowIsLast : lastRow + 1 = t.rows.length
+  recordLimbDecodes :
+    (envAt t lastRow).loc (Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth
+      + AFTER_BLOCK_OFF + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_LIFECYCLE)
+      = deathCertRoot compressN post.kernel cell
+  piAnchored :
+    (envAt t lastRow).pub
+      (rotateV3 Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).piCount
+      = deathCertRoot compressN
+          { pre.kernel with deathCert := fun c => if c = cell then certHash else pre.kernel.deathCert c }
+          cell
+  dcFrameOther : ∀ c, c ≠ cell → post.kernel.deathCert c = pre.kernel.deathCert c
+  guard : CellDestroyGuard pre actor cell
+  logAdv : post.log = cellLifecycleReceipt actor cell :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCell : post.kernel.cell = pre.kernel.cell
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+theorem cellDestroy_disc_graduable :
+    graduable (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
+      none discDestroyed
+      Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor) = true := by decide
+
+/-- **`cellDestroy_lc_forced` — the destroy (`lifecycle := Destroyed`) is FORCED by `cellDestroyV3`.** -/
+theorem cellDestroy_lc_forced (compressN : List FieldElem → FieldElem) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellDestroyV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
+    (rd : CellDestroyTraceReadout compressN hash t pre post actor cell certHash) :
+    post.kernel.lifecycle cell = lcDestroyed := by
+  have hv1 : satisfiedVm hash
+      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none
+        discDestroyed Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
+      (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellDestroy_disc_graduable
+      hsat rd.row rd.hrow
+  have hlastf : (rd.row + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
+  rw [hlastf] at hv1
+  have hlimb : (envAt t rd.row).loc
+      (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth)
+        = discDestroyed :=
+    rotateV3WithDiscGate_forces_after _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+  have hcast : ((post.kernel.lifecycle cell : Nat) : ℤ) = ((lcDestroyed : Nat) : ℤ) := by
+    rw [← rd.discLimbDecodes, hlimb]; rfl
+  exact_mod_cast hcast
+
+/-- **The record pin survives inside the DISC gate.** `cellDestroyV3`'s underlying descriptor is
+`rotateV3WithDiscGate … (rotateV3WithRecordPin B_LIFECYCLE …)` — the record pin's `.piBinding .last`
+constraint is preserved (the disc gates only APPEND), so a satisfying LAST row carries the committed
+AFTER record limb (B_LIFECYCLE) EQUAL to the published rotated PI. The disc-gate analog of
+`rotateV3WithRecordPin_pins`. -/
+theorem cellDestroyDiscGate_pins_record (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst : Bool)
+    (h : satisfiedVm hash (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
+      none discDestroyed Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
+      env isFirst true) :
+    env.loc (Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth
+        + AFTER_BLOCK_OFF + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_LIFECYCLE)
+      = env.pub (rotateV3 Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).piCount := by
+  have hmem : (VmConstraint.piBinding .last
+      (Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth + AFTER_BLOCK_OFF
+        + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_LIFECYCLE)
+      (rotateV3 Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).piCount)
+      ∈ (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
+          Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints := by
+    show _ ∈ ((rotateV3WithRecordPin Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_LIFECYCLE
+        Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints ++ _ ++ _)
+    rw [rotateV3WithRecordPin_constraints]
+    simp only [List.mem_append, List.mem_cons]
+    tauto
+  have hpin := h.1 _ hmem
+  simpa only [VmConstraint.holdsVm] using hpin rfl
+
+/-- **`cellDestroy_dc_forced` — the death-cert bind (`deathCert := certHash`) is FORCED by the DEPLOYED
+record pin (B_LIFECYCLE), riding inside `cellDestroyV3`'s disc gate.** The LAST-row pin forces the
+committed AFTER record limb EQUAL to the published PI (`cellDestroyDiscGate_pins_record`); the readout's
+`recordLimbDecodes` ties that limb to the post death-cert root and `piAnchored` ties the verifier PI to the
+digest of the kernel with `deathCert[cell] := certHash`. Digest injectivity (`deathCertRoot_binds`) then
+pins the death-cert entry. Editing `cellDestroyV3`'s record pin turns this RED. -/
+theorem cellDestroy_dc_forced (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellDestroyV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
+    (rd : CellDestroyTraceReadout compressN hash t pre post actor cell certHash) :
+    post.kernel.deathCert cell = certHash := by
+  -- lift to the v1 per-row `satisfiedVm` of the FULL disc-gated descriptor on the LAST row.
+  have hv1 : satisfiedVm hash
+      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none
+        discDestroyed Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
+      (envAt t rd.lastRow) (rd.lastRow == 0) (rd.lastRow + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellDestroy_disc_graduable
+      hsat rd.lastRow rd.hlastRow
+  have hlastt : (rd.lastRow + 1 == t.rows.length) = true := by
+    simp only [beq_iff_eq]; exact rd.hlastRowIsLast
+  rw [hlastt] at hv1
+  -- the deployed record pin (inside the disc gate) forces the committed AFTER record limb = the PI.
+  have hpin := cellDestroyDiscGate_pins_record hash (envAt t rd.lastRow) (rd.lastRow == 0) hv1
+  -- chain the two realizable decodes: post death-cert root = PI = `certHash`-bind root ⟹ entry pinned.
+  rw [rd.recordLimbDecodes, rd.piAnchored] at hpin
+  have hval := deathCertRoot_binds compressN hN post.kernel
+    { pre.kernel with deathCert := fun c => if c = cell then certHash else pre.kernel.deathCert c }
+    cell hpin
+  rw [hval]
+  show (if cell = cell then certHash else pre.kernel.deathCert cell) = certHash
+  rw [if_pos rfl]
+
+/-- **`cellDestroy_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for cellDestroy.** BOTH
+legs forced from the DEPLOYED `cellDestroyV3`: the lifecycle write (→Destroyed) from the disc gate, the
+death-cert bind (→certHash) from the record pin. Editing `cellDestroyV3` turns this RED. -/
+theorem cellDestroy_descriptorRefines_sat (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellDestroyV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
+    (rd : CellDestroyTraceReadout compressN hash t pre post actor cell certHash) :
+    CellDestroySpec pre actor cell certHash post := by
+  refine ⟨rd.guard, ?_, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frDelegate, rd.frDelegations,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+  · -- the lifecycle MAP is `(destroyKernelMap …).lifecycle`.
+    have hcell : post.kernel.lifecycle cell = lcDestroyed :=
+      cellDestroy_lc_forced compressN hash hside hsat pre post actor cell certHash rd
+    funext c
+    show post.kernel.lifecycle c = (setLifecycle pre.kernel cell lcDestroyed).lifecycle c
+    show post.kernel.lifecycle c = (if c = cell then lcDestroyed else pre.kernel.lifecycle c)
+    by_cases hc : c = cell
+    · subst hc; rw [if_pos rfl]; exact hcell
+    · rw [if_neg hc]; exact rd.lcFrameOther c hc
+  · -- the death-cert MAP is `(destroyKernelMap …).deathCert`.
+    have hcell : post.kernel.deathCert cell = certHash :=
+      cellDestroy_dc_forced compressN hN hash hside hsat pre post actor cell certHash rd
+    funext c
+    show post.kernel.deathCert c = destroyDeathCertMap pre.kernel cell certHash c
+    show post.kernel.deathCert c = (if c = cell then certHash else pre.kernel.deathCert c)
+    by_cases hc : c = cell
+    · subst hc; rw [if_pos rfl]; exact hcell
+    · rw [if_neg hc]; exact rd.dcFrameOther c hc
+
+/-- **CLASS-A TOOTH — a Destroyed→Live resurrection forgery is UNSAT.** A readout whose post `cell`
+lifecycle is NOT `lcDestroyed` cannot ride a satisfying `cellDestroyV3` witness. -/
+theorem cellDestroy_sat_rejects_resurrection (compressN : List FieldElem → FieldElem) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellDestroyV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
+    (rd : CellDestroyTraceReadout compressN hash t pre post actor cell certHash)
+    (hwrong : post.kernel.lifecycle cell ≠ lcDestroyed) :
+    False :=
+  hwrong (cellDestroy_lc_forced compressN hash hside hsat pre post actor cell certHash rd)
+
+/-- **CLASS-A TOOTH — a wrong-death-cert forgery is UNSAT.** A readout whose post `cell` death-cert is
+NOT `certHash` cannot ride a satisfying `cellDestroyV3` witness (the record-pin bite). -/
+theorem cellDestroy_sat_rejects_wrong_cert (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellDestroyV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
+    (rd : CellDestroyTraceReadout compressN hash t pre post actor cell certHash)
+    (hwrong : post.kernel.deathCert cell ≠ certHash) :
+    False :=
+  hwrong (cellDestroy_dc_forced compressN hN hash hside hsat pre post actor cell certHash rd)
+
+/-! ### refusal — Class A from the DEPLOYED record pin (`refusalV3`, B_RECORD_DIGEST). -/
+
+/-- **`RefusalTraceReadout`** — the realizable circuit-witness extraction for refusal. The deployed
+`refusalV3` is a pure record-pin (NO disc gate): the LAST row pins the committed AFTER record-digest limb
+(B_RECORD_DIGEST = 24) to the published PI. The realizable seams: `recordLimbDecodes` (that limb IS the
+post audit-slot root over `refusalField`) and `piAnchored` (the verifier-anchored PI IS the digest of slot
+value `1`). The audit slot GATE is NOT a field — it is FORCED from `Satisfied2 hash refusalV3`. -/
+structure RefusalTraceReadout (compressN : List FieldElem → FieldElem) (hash : List ℤ → ℤ)
+    (t : VmTrace) (pre post : RecChainedState) (actor cell : CellId) : Type where
+  lastRow : Nat
+  hlastRow : lastRow < t.rows.length
+  hlastRowIsLast : lastRow + 1 = t.rows.length
+  -- the committed AFTER record-digest limb IS the post audit-slot root over `refusalField`.
+  recordLimbDecodes :
+    (envAt t lastRow).loc (Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
+      + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
+      = auditSlotRoot compressN post.kernel cell refusalField
+  -- the verifier-anchored PI IS the digest of slot value `1` (the one-shot audit flag).
+  piAnchored :
+    (envAt t lastRow).pub
+      (rotateV3 Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor).piCount
+      = listDigest auditLeaf compressN [(1 : Int)]
+  -- the WHOLE `cell`-map move (the residual the per-slot committed root cannot certify).
+  cellMapMove : post.kernel.cell = auditCellMap pre.kernel cell refusalField
+  guard : auditGuard pre actor cell
+  logAdv : post.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: pre.log
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+theorem refusal_rcp_graduable :
+    graduable (rotateV3WithRecordPin B_RECORD_DIGEST
+      Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor) = true := by decide
+
+/-- **`refusal_forced` — the audit write (`refusalField := 1`) is FORCED by the DEPLOYED `refusalV3`.**
+The LAST-row record pin forces the committed AFTER record-digest limb EQUAL to the published PI
+(`rotateV3WithRecordPin_pins`); the readout's `recordLimbDecodes` ties that limb to the post audit-slot
+root and `piAnchored` ties the verifier PI to the digest of slot value `1`. Digest injectivity then pins
+the slot value. Editing `refusalV3`'s record pin turns this RED. -/
+theorem refusal_forced (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash refusalV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : RefusalTraceReadout compressN hash t pre post actor cell) :
+    fieldOf refusalField (post.kernel.cell cell) = 1 := by
+  have hv1 : satisfiedVm hash
+      (rotateV3WithRecordPin B_RECORD_DIGEST Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor)
+      (envAt t rd.lastRow) (rd.lastRow == 0) (rd.lastRow + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range refusal_rcp_graduable
+      hsat rd.lastRow rd.hlastRow
+  have hlastt : (rd.lastRow + 1 == t.rows.length) = true := by
+    simp only [beq_iff_eq]; exact rd.hlastRowIsLast
+  rw [hlastt] at hv1
+  have hpin := rotateV3WithRecordPin_pins B_RECORD_DIGEST hash
+    Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor (envAt t rd.lastRow)
+    (rd.lastRow == 0) hv1
+  rw [rd.recordLimbDecodes, rd.piAnchored] at hpin
+  -- post audit-slot root = digest of `[1]` ⟹ (binds) the slot value is `1`.
+  unfold auditSlotRoot at hpin
+  have hlist : ([fieldOf refusalField (post.kernel.cell cell)] : List Int) = [(1 : Int)] :=
+    ListDigestBindsList auditLeaf compressN hN auditLeaf_injective _ _ hpin
+  exact List.head_eq_of_cons_eq hlist
+
+/-- **`refusal_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for refusal.** A satisfying
+DEPLOYED `refusalV3` witness + the realizable `RefusalTraceReadout` forces `RefusalSpec`. The
+`refusalField := 1` write is forced from the DEPLOYED record pin's `Satisfied2` (`refusal_forced`); the
+whole `cell`-map move, guard, log, and 16-field frame are the named residual. Editing `refusalV3` turns
+this RED. -/
+theorem refusal_descriptorRefines_sat (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash refusalV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : RefusalTraceReadout compressN hash t pre post actor cell) :
+    RefusalSpec pre actor cell post :=
+  ⟨rd.guard, rd.cellMapMove, rd.logAdv, rd.frAccounts, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+
+/-- **CLASS-A TOOTH — a frozen-audit-slot refusal forgery is UNSAT.** A readout whose post `cell` refusal
+slot is NOT `1` cannot ride a satisfying `refusalV3` witness — the deployed record pin bites. -/
+theorem refusal_sat_rejects_unwritten (compressN : List FieldElem → FieldElem)
+    (hN : compressNInjective compressN) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash refusalV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : RefusalTraceReadout compressN hash t pre post actor cell)
+    (hwrong : fieldOf refusalField (post.kernel.cell cell) ≠ 1) :
+    False :=
+  hwrong (refusal_forced compressN hN hash hside hsat pre post actor cell rd)
+
 /-! ## §4 — NON-VACUITY: the new roots + gates are load-bearing (no carrier secretly `True`). -/
 
 private def cNC : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 1000003 + x) (xs.length : ℤ)
@@ -559,5 +1032,22 @@ private def cell0 : CellId := 0
 #assert_axioms receiptArchive_descriptorRefines
 #assert_axioms receiptArchive_descriptorRefines_execFullA
 #assert_axioms audit_descriptorRefines_rejects_unwritten
+-- CLASS-A (DEPLOYED-descriptor-forced) tripwires.
+#assert_axioms cellUnseal_disc_graduable
+#assert_axioms cellUnseal_forced
+#assert_axioms cellUnseal_forced_map
+#assert_axioms cellUnseal_descriptorRefines_sat
+#assert_axioms cellUnseal_sat_rejects_unrevived
+#assert_axioms cellDestroy_disc_graduable
+#assert_axioms cellDestroy_lc_forced
+#assert_axioms cellDestroyDiscGate_pins_record
+#assert_axioms cellDestroy_dc_forced
+#assert_axioms cellDestroy_descriptorRefines_sat
+#assert_axioms cellDestroy_sat_rejects_resurrection
+#assert_axioms cellDestroy_sat_rejects_wrong_cert
+#assert_axioms refusal_rcp_graduable
+#assert_axioms refusal_forced
+#assert_axioms refusal_descriptorRefines_sat
+#assert_axioms refusal_sat_rejects_unwritten
 
 end Dregg2.Circuit.RotatedKernelRefinementLifecycle

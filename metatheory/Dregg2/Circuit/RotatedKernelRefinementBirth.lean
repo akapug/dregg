@@ -69,6 +69,13 @@ open Dregg2.Circuit.Spec.AccountGrowth
 open Dregg2.Circuit.Spec.FactoryCreation
   (CreateFromFactorySpec factoryAdmit factoryReceipt factoryPostCell factoryPostCaveats
    factoryBornCell factoryBornCaveats)
+open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt writesTo)
+open Dregg2.Circuit.Emit.EffectVmEmit (EFFECT_VM_WIDTH)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (createCellV3 factoryV3 spawnV3
+   createCellV3_grow_gate_forces_set_insert factoryV3_grow_gate_forces_set_insert
+   spawnV3_grow_gate_forces_set_insert
+   beforeCellsRootCol afterCellsRootCol NEW_CELL_KEY_PARAM_COL FACTORY_CHILD_KEY_PARAM_COL)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 
@@ -448,6 +455,250 @@ private def newId : CellId := 9
 -- The accounts leaf encoder is injective on the toy domain (the carrier is committing the ids):
 #guard decide (accountsLeaf 1 = accountsLeaf 2) == false
 
+/-! ## §6.A — CLASS A: the accounts growth is FORCED by the DEPLOYED descriptors (`createCellV3` /
+`factoryV3` / `spawnV3`), not a modelled gate.
+
+§2–§4 force the growth from `*GenuineEncodes.gate`, the MODELLED `gAccountsGrow` the decode ASSERTS —
+editing the LIVE `*V3` constraints does NOT break it. This section closes that gap exactly as
+`RotatedKernelRefinementCellSeal` §6.5 / `RotatedKernelRefinementMisc` §2.A do: each `*_forced_sat`
+derives `post.kernel.accounts = insert newCell pre.kernel.accounts` from a `Satisfied2 hash *V3`
+witness DIRECTLY, by
+
+  * `createCellV3_grow_gate_forces_set_insert` (and the factory/spawn siblings) — the DEPLOYED in-circuit
+    `cellsInsertOp` (`.insert`) map-op FORCES the live wire's `writesTo before_cells_root key key
+    after_cells_root` (the committed BEFORE/AFTER `cells_root` limbs 0, openable sorted-Poseidon2 roots
+    chaining into `state_commit`) on the active row whose runtime selector fires;
+  * `*TraceReadout.growthDecodes` — the realizable `WitnessDecodes`-class seam: the deployed binary-Merkle
+    forced write of the new-cell key into the BEFORE accounts root IS the kernel Finset set-insert
+    `post.accounts = insert newCell pre.accounts` (the deployed trace-fill emits the genuine grown accounts
+    root as `after_cells_root`, so the felt-level write and the kernel insert are the SAME growth by
+    construction — the limb-level decode the COMMITMENT cannot certify, supplied by `StarkSound`, exactly as
+    cellSeal's `discLimbDecodes` / makeSovereign's `modeLimbDecodes`).
+
+Editing `*V3`'s grow-gate breaks `*V3_grow_gate_forces_set_insert`, hence the forced `writesTo`, hence
+`growthDecodes`'s antecedent, hence `*_forced_sat`, hence `*_descriptorRefines_sat` — Class A. The seam is a
+NAMED realizable carrier (a structure field), never a `sorry`: `#assert_axioms`-clean. -/
+
+/-- **`CreateCellTraceReadout` — the realizable circuit-witness extraction for createCell (NAMED).**
+The trace-determined part a satisfying `createCellV3` witness supplies, the `WitnessDecodes` class of
+cellSeal's `CellSealTraceReadout`: the prover's designated ACTIVE createCell row + its selector fact + the
+realizable accounts-growth seam (the deployed-forced `writesTo` IS the kernel set-insert) + the born-empty /
+guard / log / 7-field residual the per-cell limb cannot witness. The grow GATE is NOT a field — the forced
+`writesTo` is derived from `Satisfied2 hash createCellV3` (`createCell_forced_sat`), unlike §2's modelled
+`gate`. -/
+structure CreateCellTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor newCell : CellId) : Type where
+  -- the designated ACTIVE createCell row (the one whose `SEL_CREATE_CELL_RT = 1`).
+  row : Nat
+  hrow : row < t.rows.length
+  -- the runtime selector is hot on the designated row (the prover's row designation).
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitCreateCell.SEL_CREATE_CELL_RT = 1
+  -- the realizable `WitnessDecodes`-class seam: the deployed binary-Merkle forced write of the new-cell key
+  -- into the BEFORE accounts root IS the kernel Finset set-insert. The deployed trace-fill emits the genuine
+  -- grown accounts root as `after_cells_root`, so the felt-level write and the kernel insert are the SAME
+  -- growth by construction — the limb-level decode the COMMITMENT cannot certify, supplied by `StarkSound`.
+  growthDecodes :
+    writesTo hash ((envAt t row).loc (beforeCellsRootCol EFFECT_VM_WIDTH))
+        ((envAt t row).loc NEW_CELL_KEY_PARAM_COL)
+        ((envAt t row).loc NEW_CELL_KEY_PARAM_COL)
+        ((envAt t row).loc (afterCellsRootCol EFFECT_VM_WIDTH))
+      → post.kernel.accounts = insert newCell pre.kernel.accounts
+  -- the admissibility guard (privileged creation authority ∧ freshness).
+  guard : createCellAdmit pre.kernel actor newCell
+  -- the new cell's BORN-EMPTY per-cell records (per-cell, off the accounts column).
+  born : bornEmptyAt pre.kernel newCell post.kernel
+  -- the creation receipt advance.
+  logAdv : post.log = createReceipt actor newCell :: pre.log
+  -- the global side-table frame (the `CreateCellSpec` frame residual).
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`createCell_forced_sat` — the accounts growth is FORCED by the DEPLOYED `createCellV3` (Class A).**
+A `Satisfied2 hash createCellV3` witness plus the realizable `CreateCellTraceReadout` forces
+`post.kernel.accounts = insert newCell pre.kernel.accounts`. The DEPLOYED `cellsInsertOp` forces the live
+wire's `writesTo` of the new-cell key into the BEFORE accounts root
+(`createCellV3_grow_gate_forces_set_insert` on the active row); the readout's `growthDecodes` lifts that
+forced write to the kernel set-insert. Editing `createCellV3`'s grow-gate turns this RED. -/
+theorem createCell_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash createCellV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId)
+    (rd : CreateCellTraceReadout hash minit mfin maddrs t pre post actor newCell) :
+    post.kernel.accounts = insert newCell pre.kernel.accounts :=
+  rd.growthDecodes
+    (createCellV3_grow_gate_forces_set_insert hash hsat rd.row rd.hrow rd.hsel).2
+
+/-- **`createCell_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for createCell.** A
+satisfying DEPLOYED `createCellV3` witness plus the realizable `CreateCellTraceReadout` forces
+`CreateCellSpec pre actor newCell post`. Unlike §2's `createCell_descriptorRefines` (which consumes a
+modelled `gate`), the `accounts := insert newCell` growth here is forced from the DEPLOYED grow-gate's
+`Satisfied2` (`createCell_forced_sat`) — editing `createCellV3`'s constraints turns this RED. The guard, the
+born-empty records, the receipt, and the frame are the named decode residual. -/
+theorem createCell_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash createCellV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId)
+    (rd : CreateCellTraceReadout hash minit mfin maddrs t pre post actor newCell) :
+    CreateCellSpec pre actor newCell post := by
+  refine ⟨rd.guard, ?_, rd.born, rd.logAdv, rd.frNullifiers, rd.frRevoked,
+    rd.frCommitments, rd.frFactories, rd.frDelegationEpoch, rd.frDelegationEpochAt,
+    rd.frHeaps⟩
+  exact createCell_forced_sat hash hsat pre post actor newCell rd
+
+/-- **CLASS-A TOOTH — a forged wrong-accounts createCell witness is UNSAT.** A `CreateCellTraceReadout`
+whose post accounts are NOT `insert newCell pre.accounts` cannot ride a satisfying `createCellV3` witness:
+the DEPLOYED grow-gate pins the insert. -/
+theorem createCell_sat_rejects_wrong_accounts (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash createCellV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId)
+    (rd : CreateCellTraceReadout hash minit mfin maddrs t pre post actor newCell)
+    (hwrong : post.kernel.accounts ≠ insert newCell pre.kernel.accounts) :
+    False :=
+  hwrong (createCell_forced_sat hash hsat pre post actor newCell rd)
+
+/-- **`CreateFromFactoryTraceReadout`** — `CreateCellTraceReadout`'s accounts-growth seam for the factory
+descriptor (selector `13`, new-cell key column `param1`) plus the factory-install / born-empty residual. -/
+structure CreateFromFactoryTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor newCell : CellId) (vk : Int) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory.SEL_FACTORY_RT = 1
+  growthDecodes :
+    writesTo hash ((envAt t row).loc (beforeCellsRootCol EFFECT_VM_WIDTH))
+        ((envAt t row).loc FACTORY_CHILD_KEY_PARAM_COL)
+        ((envAt t row).loc FACTORY_CHILD_KEY_PARAM_COL)
+        ((envAt t row).loc (afterCellsRootCol EFFECT_VM_WIDTH))
+      → post.kernel.accounts = insert newCell pre.kernel.accounts
+  e : FactoryEntry
+  guard : factoryAdmit pre.kernel actor newCell vk e
+  frCell : post.kernel.cell = factoryPostCell (factoryBornCell pre.kernel newCell) newCell e
+  frSlotCaveats : post.kernel.slotCaveats = factoryPostCaveats (factoryBornCaveats pre.kernel newCell) newCell e
+  frBal : post.kernel.bal = (fun c a => if c = newCell then 0 else pre.kernel.bal c a)
+  frCaps : post.kernel.caps = fun l => if l = newCell then [] else pre.kernel.caps l
+  frLifecycle : post.kernel.lifecycle = fun c => if c = newCell then 0 else pre.kernel.lifecycle c
+  frDeathCert : post.kernel.deathCert = fun c => if c = newCell then 0 else pre.kernel.deathCert c
+  frDelegate : post.kernel.delegate = fun c => if c = newCell then none else pre.kernel.delegate c
+  frDelegations : post.kernel.delegations = fun c => if c = newCell then [] else pre.kernel.delegations c
+  logAdv : post.log = factoryReceipt actor newCell :: pre.log
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`createFromFactory_forced_sat`** — the accounts growth FORCED by the DEPLOYED `factoryV3` (Class A). -/
+theorem createFromFactory_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash factoryV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId) (vk : Int)
+    (rd : CreateFromFactoryTraceReadout hash minit mfin maddrs t pre post actor newCell vk) :
+    post.kernel.accounts = insert newCell pre.kernel.accounts :=
+  rd.growthDecodes
+    (factoryV3_grow_gate_forces_set_insert hash hsat rd.row rd.hrow rd.hsel).2
+
+/-- **`createCellFromFactory_descriptorRefines_sat` — THE CLASS-A REFINEMENT for createCellFromFactory.** -/
+theorem createCellFromFactory_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash factoryV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId) (vk : Int)
+    (rd : CreateFromFactoryTraceReadout hash minit mfin maddrs t pre post actor newCell vk) :
+    CreateFromFactorySpec pre actor newCell vk post := by
+  refine ⟨rd.e, rd.guard, ?_, rd.frBal, rd.frCell, rd.frSlotCaveats, rd.logAdv,
+    rd.frCaps, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+  exact createFromFactory_forced_sat hash hsat pre post actor newCell vk rd
+
+/-- **CLASS-A TOOTH** — a forged wrong-accounts factory witness is UNSAT. -/
+theorem createCellFromFactory_sat_rejects_wrong_accounts (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash factoryV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor newCell : CellId) (vk : Int)
+    (rd : CreateFromFactoryTraceReadout hash minit mfin maddrs t pre post actor newCell vk)
+    (hwrong : post.kernel.accounts ≠ insert newCell pre.kernel.accounts) :
+    False :=
+  hwrong (createFromFactory_forced_sat hash hsat pre post actor newCell vk rd)
+
+/-- **`SpawnTraceReadout`** — `CreateCellTraceReadout`'s accounts-growth seam for the spawn descriptor
+(selector `32`) plus the born-empty residual AND the PHASE-D cap-handoff residual (the live frozen
+`cap_root` cannot force it — carried, named, exactly as §4's `spawnGenuineEncodes`). -/
+structure SpawnTraceReadout (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor child target : CellId) : Type where
+  row : Nat
+  hrow : row < t.rows.length
+  hsel : (envAt t row).loc Dregg2.Circuit.Emit.EffectVmEmitSpawn.SEL_SPAWN_RT = 1
+  growthDecodes :
+    writesTo hash ((envAt t row).loc (beforeCellsRootCol EFFECT_VM_WIDTH))
+        ((envAt t row).loc NEW_CELL_KEY_PARAM_COL)
+        ((envAt t row).loc NEW_CELL_KEY_PARAM_COL)
+        ((envAt t row).loc (afterCellsRootCol EFFECT_VM_WIDTH))
+      → post.kernel.accounts = insert child pre.kernel.accounts
+  guard : spawnAdmit pre.kernel actor child target
+  frCell : post.kernel.cell = fun c => if c = child then default else pre.kernel.cell c
+  frSlotCaveats : post.kernel.slotCaveats = fun c => if c = child then [] else pre.kernel.slotCaveats c
+  frLifecycle : post.kernel.lifecycle = fun c => if c = child then 0 else pre.kernel.lifecycle c
+  frDeathCert : post.kernel.deathCert = fun c => if c = child then 0 else pre.kernel.deathCert c
+  frBal : post.kernel.bal = fun c a => if c = child then 0 else pre.kernel.bal c a
+  -- ⚑ THE PHASE-D RESIDUAL: the parent→child capability handoff (the live `cap_root` is FROZEN).
+  capHandoff : post.kernel.caps = spawnCapsMap pre.kernel actor child target
+  delegateHandoff : post.kernel.delegate = spawnDelegateMap pre.kernel actor child
+  delegationsHandoff : post.kernel.delegations = spawnDelegationsMap pre.kernel actor child
+  logAdv : post.log = createReceipt actor child :: pre.log
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+
+/-- **`spawn_forced_sat`** — the accounts growth FORCED by the DEPLOYED `spawnV3` (Class A). The child IS
+inserted; the cap-handoff remains the named PHASE-D residual (frozen `cap_root`). -/
+theorem spawn_forced_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash spawnV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor child target : CellId)
+    (rd : SpawnTraceReadout hash minit mfin maddrs t pre post actor child target) :
+    post.kernel.accounts = insert child pre.kernel.accounts :=
+  rd.growthDecodes
+    (spawnV3_grow_gate_forces_set_insert hash hsat rd.row rd.hrow rd.hsel).2
+
+/-- **`spawn_descriptorRefines_sat` — THE CLASS-A REFINEMENT for spawn (VALUE_PARTIAL).** The accounts
+insert is forced from the DEPLOYED grow-gate's `Satisfied2` (`spawn_forced_sat`); the parent→child cap
+handoff is the named PHASE-D residual (the frozen `cap_root` cannot force it). -/
+theorem spawn_descriptorRefines_sat (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash spawnV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor child target : CellId)
+    (rd : SpawnTraceReadout hash minit mfin maddrs t pre post actor child target) :
+    SpawnSpec pre actor child target post := by
+  refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
+    rd.frBal, rd.capHandoff, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+  exact spawn_forced_sat hash hsat pre post actor child target rd
+
+/-- **CLASS-A TOOTH** — a spawn whose post accounts drop the child is UNSAT (the grow-gate bites). -/
+theorem spawn_sat_rejects_wrong_accounts (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash spawnV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor child target : CellId)
+    (rd : SpawnTraceReadout hash minit mfin maddrs t pre post actor child target)
+    (hwrong : post.kernel.accounts ≠ insert child pre.kernel.accounts) :
+    False :=
+  hwrong (spawn_forced_sat hash hsat pre post actor child target rd)
+
 /-! ## §6 — axiom-hygiene tripwires. -/
 
 #assert_axioms accountsLeaf_injective
@@ -465,5 +716,14 @@ private def newId : CellId := 9
 #assert_axioms spawn_descriptorRefines
 #assert_axioms spawn_descriptorRefines_execFullA
 #assert_axioms spawn_descriptorRefines_rejects_wrong_accounts
+#assert_axioms createCell_forced_sat
+#assert_axioms createCell_descriptorRefines_sat
+#assert_axioms createCell_sat_rejects_wrong_accounts
+#assert_axioms createFromFactory_forced_sat
+#assert_axioms createCellFromFactory_descriptorRefines_sat
+#assert_axioms createCellFromFactory_sat_rejects_wrong_accounts
+#assert_axioms spawn_forced_sat
+#assert_axioms spawn_descriptorRefines_sat
+#assert_axioms spawn_sat_rejects_wrong_accounts
 
 end Dregg2.Circuit.RotatedKernelRefinementBirth
