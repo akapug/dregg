@@ -3176,3 +3176,14 @@ After the soundness waves: (1) wire the new _descriptorRefines_sat + capOpenSat 
 the 5 cap slots) into the apex fanout ClosureFanoutGenuine (13 wired, ~7-9 to add); (2) the JSON descriptor regen
 for the new/changed descriptors (introduceWriteV3/CapOpen wrappers/heapWriteV3) + drift re-pin; (3) compact
 HORIZONLOG (~half is closed-but-logged, sweepable per the af232dd sweep); (4) the SetProgram circuit witness.
+
+## ⚑ JSON-EMIT FOLLOW-UP (2026-06-20) — the new apex descriptors aren't in emit_descriptors.py's list yet
+Round-2 apex wiring (ae14e524e) registry-deployed the write-bearing cap wrappers (delegate/introduce/delegateAtten/
+revokeDelegationWriteCapOpenV3) + heapWriteV3 — the apex now PROVES about them. But scripts/emit_descriptors.py
+emits from a FIXED descriptor-name list that does NOT include them (verified: grep -c WriteCapOpen|heapWrite in
+emit_descriptors.py = 0), so the checked-in deployed JSON doesn't yet carry these descriptors (drift gate PASSES
+only because they're absent from both Lean-emit-list and JSON). So: the WRITE-forcing is proven-in-Lean +
+apex-wired, but the deployed Rust wire still runs the OLD authority-READ-only cap-open wrappers — not yet on the
+wire. FOLLOW-UP (the deploy step of the cap-write soundness fix; non-VK-blocked, just a script + Lean-emit-list
+edit): add the new descriptor names to the emitter so the deployed JSON carries exactly what the apex proves about,
+then re-pin the drift gate. Real, named, driveable next (VK-freedom era).
