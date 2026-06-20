@@ -671,6 +671,25 @@ impl World {
         }
     }
 
+    /// Would an in-place genesis-path mutation of `cell` corrupt the DURABLE image's
+    /// reopen? TRUE iff this is a durable image AND a committed turn already touched
+    /// `cell` — the genesis-mirror-after-turn bug (HORIZONLOG): the post-mutation
+    /// cell, recorded as timeless "genesis" by [`Self::durable_regenesis`], poisons
+    /// recovery's re-execution of that turn (it re-executes against the wrong base,
+    /// diverges, and the fail-closed integrity check REFUSES the image). Genesis-SETUP
+    /// mutations (before the cell's first turn) and ephemeral (non-durable) worlds
+    /// return false — they are sound. The genesis-path mutators consult this to
+    /// REFUSE fail-fast rather than silently corrupt the image on reopen.
+    fn genesis_mutation_would_break_reopen(&self, cell: &CellId) -> bool {
+        self.is_durable()
+            && self.history.steps().iter().any(|s| match s {
+                crate::replay::RecordedStep::Committed { turn, .. } => {
+                    touched_cells(turn).iter().any(|c| c == cell)
+                }
+                crate::replay::RecordedStep::Genesis { .. } => false,
+            })
+    }
+
     /// Install the genesis cell for an identity at its REAL derived id.
     ///
     /// `public_key` + `token_id` are the exact pair `Cell::with_balance` (and
@@ -729,6 +748,16 @@ impl World {
     /// `genesis_install` seeds a cell's initial program. Returns `true` if the
     /// cell existed (in the live engine ledger) and was re-programmed.
     pub fn set_cell_program(&mut self, cell: &CellId, program: dregg_cell::CellProgram) -> bool {
+        // FAIL-FAST guard (HORIZONLOG persist bug): a genesis-path mutation on a cell
+        // a committed turn already touched would make the DURABLE image non-reopenable
+        // (the genesis-mirror-after-turn bug — the post-mutation cell, recorded as
+        // timeless "genesis", poisons recovery's re-execution of that turn). REFUSE
+        // it here rather than silently corrupt the image on reopen. Genesis-SETUP
+        // mutations (before the cell's first turn) and ephemeral worlds pass through.
+        // (The sound full fix — ordered pre/post-chain genesis events — is HORIZONLOG'd.)
+        if self.genesis_mutation_would_break_reopen(cell) {
+            return false;
+        }
         let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
             c.program = program.clone();
             true
@@ -765,6 +794,12 @@ impl World {
     /// not the cap — is the load-bearing admission gate (faithful to the Lean §10:
     /// even an authorized-to-present cell cannot overpaint/spoof/steal-focus).
     pub fn genesis_grant_cap(&mut self, holder: &CellId, target: CellId) -> Option<u32> {
+        // FAIL-FAST guard (HORIZONLOG persist bug): refuse a genesis-path c-list
+        // mutation that would make the durable image non-reopenable (the holder was
+        // already touched by a committed turn). Same class as `set_cell_program`.
+        if self.genesis_mutation_would_break_reopen(holder) {
+            return None;
+        }
         let slot = self
             .engine
             .ledger_mut()
@@ -801,6 +836,12 @@ impl World {
     /// cell, NOT a bypass of the executor (a later spend FROM the cell still runs
     /// through the real executor; this only sets what that executor gates against).
     pub fn genesis_open_permissions(&mut self, cell: &CellId) -> bool {
+        // FAIL-FAST guard (HORIZONLOG persist bug): refuse a genesis-path permissions
+        // mutation that would make the durable image non-reopenable (the cell was
+        // already touched by a committed turn). Same class as `set_cell_program`.
+        if self.genesis_mutation_would_break_reopen(cell) {
+            return false;
+        }
         let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
             c.permissions = open_permissions();
             true
