@@ -239,7 +239,7 @@ theorem emitEventWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard emitEventVmDescriptorWide.traceWidth == 189
+#guard emitEventVmDescriptorWide.traceWidth == 190
 #guard emitEventVmDescriptorWide.hashSites.length == 4
 #guard emitEventVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

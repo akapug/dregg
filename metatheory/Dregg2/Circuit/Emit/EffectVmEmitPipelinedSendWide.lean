@@ -277,7 +277,7 @@ theorem pipelinedSendWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard pipelinedSendVmDescriptorWide.traceWidth == 189
+#guard pipelinedSendVmDescriptorWide.traceWidth == 190
 #guard pipelinedSendVmDescriptorWide.hashSites.length == 4
 #guard pipelinedSendVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

@@ -200,7 +200,7 @@ theorem factory_clause_rejects_root_drop :
 
 /-! ## §8 — layout + axiom-hygiene tripwires. -/
 
-#guard factoryVmDescriptorWide.traceWidth == 189
+#guard factoryVmDescriptorWide.traceWidth == 190
 #guard factoryVmDescriptorWide.hashSites.length == 4
 #guard factoryVmDescriptorWide.constraints.length == factoryVmDescriptor.constraints.length
 

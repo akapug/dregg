@@ -468,7 +468,7 @@ theorem bridgeMintDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (
 
 #guard bridgeMintVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard bridgeMintVmDescriptor.hashSites.length == 4
-#guard bridgeMintVmDescriptor.traceWidth == 187
+#guard bridgeMintVmDescriptor.traceWidth == 188
 
 #assert_axioms bridgeMintVm_faithful
 #assert_axioms bridgeMintVm_rejects_wrong_balance
@@ -659,7 +659,7 @@ theorem bridgeMint_wide_roots_clause_refutable :
   simp only [emptySystemRoots, wideRefRoots, if_pos rfl] at hesc
   norm_num at hesc
 
-#guard bridgeMintVmDescriptorWide.traceWidth == 189
+#guard bridgeMintVmDescriptorWide.traceWidth == 190
 #guard bridgeMintVmDescriptorWide.hashSites.length == 4
 #guard bridgeMintVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

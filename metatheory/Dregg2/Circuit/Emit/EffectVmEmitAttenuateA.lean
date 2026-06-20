@@ -792,7 +792,7 @@ theorem attenuateGenuineNonAmp_rejects_amplify (env : VmRowEnv)
 -- (3·8+2 = 26), same 6 hash sites, same base width. Additive + width-neutral.
 #guard attenuateVmDescriptorGenuineNonAmp.constraints.length == (12 + 14 + 4) + (3 * 8 + 2)
 #guard attenuateVmDescriptorGenuineNonAmp.hashSites.length == 6
-#guard attenuateVmDescriptorGenuineNonAmp.traceWidth == 187
+#guard attenuateVmDescriptorGenuineNonAmp.traceWidth == 188
 
 #assert_axioms attenuateGenuineNonAmp_keeps_recompute
 #assert_axioms attenuateGenuineNonAmp_in_circuit
@@ -802,11 +802,11 @@ theorem attenuateGenuineNonAmp_rejects_amplify (env : VmRowEnv)
 
 #guard attenuateVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
 #guard attenuateVmDescriptor.hashSites.length == 4
-#guard attenuateVmDescriptor.traceWidth == 187
+#guard attenuateVmDescriptor.traceWidth == 188
 -- The genuine descriptor: 12 frame gates (no opaque cap-move), 6 hash sites (2 recompute + 4 GROUP-4).
 #guard attenuateVmDescriptorGenuine.constraints.length == 12 + 14 + 4
 #guard attenuateVmDescriptorGenuine.hashSites.length == 6
-#guard attenuateVmDescriptorGenuine.traceWidth == 187
+#guard attenuateVmDescriptorGenuine.traceWidth == 188
 
 #assert_axioms attenuateGenuineRowGates_holds_iff
 #assert_axioms attenuateGenuine_sound
@@ -1063,7 +1063,7 @@ theorem capWide_roots_clause_not_trivial :
 #assert_axioms capWide_clause_not_trivial
 #assert_axioms capWide_roots_clause_not_trivial
 
-#guard attenuateVmDescriptorWide.traceWidth == 189
+#guard attenuateVmDescriptorWide.traceWidth == 190
 #guard attenuateVmDescriptorWide.hashSites.length == 4
 -- the wide constraint list is byte-identical to the base (13 gates + 14 transitions + 4 boundary):
 #guard attenuateVmDescriptorWide.constraints.length == 13 + 14 + 4

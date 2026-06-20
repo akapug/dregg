@@ -423,7 +423,7 @@ theorem staleNonceSendRow_rejected :
 
 #guard pipelinedSendVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard pipelinedSendVmDescriptor.hashSites.length == 4
-#guard pipelinedSendVmDescriptor.traceWidth == 187
+#guard pipelinedSendVmDescriptor.traceWidth == 188
 
 #assert_axioms pipelinedSendVm_faithful
 #assert_axioms pipelinedSendVm_rejects_wrong_output

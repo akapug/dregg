@@ -166,7 +166,7 @@ theorem cellDestroy_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard cellDestroyVmDescriptorWide.traceWidth == 189
+#guard cellDestroyVmDescriptorWide.traceWidth == 190
 #guard cellDestroyVmDescriptorWide.hashSites.length == 4
 #guard cellDestroyVmDescriptorWide.constraints.length == cellDestroyVmDescriptor.constraints.length
 

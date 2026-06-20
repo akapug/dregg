@@ -353,7 +353,7 @@ theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false
 
 #guard createCellVmDescriptor.constraints.length == 13
 #guard createCellVmDescriptor.hashSites.length == 4
-#guard createCellVmDescriptor.traceWidth == 187
+#guard createCellVmDescriptor.traceWidth == 188
 
 #assert_axioms createCellVm_faithful
 #assert_axioms createCellVm_rejects_nonzero
@@ -460,7 +460,7 @@ theorem createCellActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
 
 #guard createCellActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard createCellActorVmDescriptor.hashSites.length == 4
-#guard createCellActorVmDescriptor.traceWidth == 187
+#guard createCellActorVmDescriptor.traceWidth == 188
 
 #assert_axioms createCellActor_faithful
 #assert_axioms createCellActor_full_sound

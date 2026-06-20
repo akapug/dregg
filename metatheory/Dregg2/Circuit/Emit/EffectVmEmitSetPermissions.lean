@@ -436,7 +436,7 @@ theorem staleNoncePermRow_rejected :
 
 #guard setPermsVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard setPermsVmDescriptor.hashSites.length == 4
-#guard setPermsVmDescriptor.traceWidth == 187
+#guard setPermsVmDescriptor.traceWidth == 188
 
 #assert_axioms setPermsVm_faithful
 #assert_axioms setPermsVm_rejects_wrong_output

@@ -440,7 +440,7 @@ theorem spawnBadBalRow_rejected : ¬ (VmConstraint.gate gBalLoZero).holdsVm spaw
 
 #guard spawnVmDescriptor.constraints.length == 13 + 14 + 4  -- 13 gates + 14 transitions + 4 first
 #guard spawnVmDescriptor.hashSites.length == 4
-#guard spawnVmDescriptor.traceWidth == 187
+#guard spawnVmDescriptor.traceWidth == 188
 
 #assert_axioms spawnRowGates_holds_iff
 #assert_axioms spawnVm_faithful
@@ -549,7 +549,7 @@ theorem spawnActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
 
 #guard spawnActorVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard spawnActorVmDescriptor.hashSites.length == 4
-#guard spawnActorVmDescriptor.traceWidth == 187
+#guard spawnActorVmDescriptor.traceWidth == 188
 
 #assert_axioms spawnActor_faithful
 #assert_axioms spawnActor_full_sound

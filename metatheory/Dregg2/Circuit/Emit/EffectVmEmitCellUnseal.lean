@@ -390,8 +390,8 @@ theorem cellUnseal_clause_rejects_root_drop :
 
 #guard cellUnsealVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard cellUnsealVmDescriptor.hashSites.length == 4
-#guard cellUnsealVmDescriptor.traceWidth == 187
-#guard cellUnsealVmDescriptorWide.traceWidth == 189
+#guard cellUnsealVmDescriptor.traceWidth == 188
+#guard cellUnsealVmDescriptorWide.traceWidth == 190
 #guard cellUnsealVmDescriptorWide.constraints.length == cellUnsealVmDescriptor.constraints.length
 
 #assert_axioms cellUnsealVm_faithful

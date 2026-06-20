@@ -254,7 +254,7 @@ theorem archiveWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard archiveVmDescriptorWide.traceWidth == 189
+#guard archiveVmDescriptorWide.traceWidth == 190
 #guard archiveVmDescriptorWide.hashSites.length == 4
 #guard archiveVmDescriptorWide.constraints.length == 13 + 14 + 4
 

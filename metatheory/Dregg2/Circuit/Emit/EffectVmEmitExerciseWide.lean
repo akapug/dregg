@@ -243,7 +243,7 @@ theorem exerciseWide_is_genuine :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard exerciseVmDescriptorWide.traceWidth == 189
+#guard exerciseVmDescriptorWide.traceWidth == 190
 #guard exerciseVmDescriptorWide.hashSites.length == 4
 #guard exerciseVmDescriptorWide.constraints.length == 13 + 14 + 4 + 3 + 1
 

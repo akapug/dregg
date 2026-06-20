@@ -589,7 +589,7 @@ theorem badSFRow_rejected : ¬ (VmConstraint.gate (gFieldWrite 0)).holdsVm badSF
 
 #guard (setFieldVmDescriptor 0).constraints.length == 6 + 7
 #guard (setFieldVmDescriptor 0).hashSites.length == 4
-#guard (setFieldVmDescriptor 0).traceWidth == 187
+#guard (setFieldVmDescriptor 0).traceWidth == 188
 -- The value rides `param1` (the runtime NEW_VALUE), not `param0` (= `param.AMOUNT`, the FIELD_INDEX).
 #guard VALUE == 1
 #guard VALUE ≠ param.AMOUNT

@@ -255,7 +255,7 @@ theorem noopWide_is_genuine_nonempty :
 
 /-! ## §6 — axiom-hygiene tripwires. -/
 
-#guard noopVmDescriptorWide.traceWidth == 189
+#guard noopVmDescriptorWide.traceWidth == 190
 #guard noopVmDescriptorWide.hashSites.length == 4
 #guard noopVmDescriptorWide.constraints.length == 14 + 14 + 4 + 3
 #guard noopVmDescriptorWide.ranges.length == 0

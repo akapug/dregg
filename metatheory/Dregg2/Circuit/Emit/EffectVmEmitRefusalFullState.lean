@@ -164,7 +164,7 @@ theorem refusal_clause_rejects_root_drop :
 
 /-! ## §7 — layout + axiom-hygiene tripwires. -/
 
-#guard refusalVmDescriptorWide.traceWidth == 189
+#guard refusalVmDescriptorWide.traceWidth == 190
 #guard refusalVmDescriptorWide.hashSites.length == 4
 #guard refusalVmDescriptorWide.constraints.length == refusalVmDescriptor.constraints.length
 
