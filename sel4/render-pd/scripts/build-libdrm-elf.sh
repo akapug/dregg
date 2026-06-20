@@ -6,7 +6,11 @@
 # is TRUE, so the vk-runtime/gallium build pulls `libdrm` even for a headless lavapipe.
 # The macOS rerun-io/lavapipe-build never hits this (darwin ⇒ system_has_kms_drm false).
 # lavapipe never CALLS into libdrm on the offscreen path; this just satisfies the link.
-# All vendor drivers disabled — only the core libdrm.so + libdrm.pc.
+# All vendor drivers disabled — only the core libdrm + libdrm.pc.
+#
+# `default_library=both` produces BOTH libdrm.so (Mesa's gate `.so` link) AND
+# libdrm.a (the render-PD's FULLY-STATIC link — the root task has no dynamic
+# loader, so it needs the archive). The PD's build.rs picks up `<sysroot>/lib/libdrm.a`.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MESON="${MESON:-/tmp/mesa-build-venv/bin/meson}"
@@ -24,7 +28,7 @@ fi
 rm -rf /tmp/libdrm-build
 "$MESON" setup /tmp/libdrm-build "$LIBDRM_SRC" \
   --cross-file "$CF" --native-file "$HERE/native.txt" \
-  -Dbuildtype=release -Ddefault_library=shared \
+  -Dbuildtype=release -Ddefault_library=both \
   -Dintel=disabled -Dradeon=disabled -Damdgpu=disabled -Dnouveau=disabled \
   -Dvmwgfx=disabled -Domap=disabled -Dexynos=disabled -Dfreedreno=disabled \
   -Dtegra=disabled -Dvc4=disabled -Detnaviv=disabled -Dcairo-tests=disabled \
@@ -33,4 +37,4 @@ rm -rf /tmp/libdrm-build
 "$MESON" compile -C /tmp/libdrm-build
 "$MESON" install -C /tmp/libdrm-build
 echo "[libdrm] installed:"
-ls -la "$SYSROOT/lib/libdrm.so"* "$SYSROOT/lib/pkgconfig/libdrm.pc"
+ls -la "$SYSROOT/lib/libdrm.so"* "$SYSROOT/lib/libdrm.a" "$SYSROOT/lib/pkgconfig/libdrm.pc" 2>/dev/null

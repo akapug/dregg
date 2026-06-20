@@ -289,15 +289,77 @@ syscall/symbol/runtime at the musl layer.
   W→X JIT mapping to the syscall handler — the first thing that would put a JIT'd
   lavapipe triangle, then the cockpit Scene, on the seL4 framebuffer live.
 
+---
+
+## THE RENDER-PD RAN (2026-06-19) — lavapipe is live IN the seL4 VM; the wall is `thrd_create`
+
+The "NEXT CONCRETE RUNG" above was DRIVEN. The render-PD (`sel4/render-pd/`) now
+links and BOOTS, and **lavapipe software-Vulkan runs inside the seL4 PD**.
+
+### What was built (`make build && make image && make run`)
+A std-on-sel4-musl root-task PD (the executor-rootserver class) that links the
+WHOLE lavapipe ICD statically — the Mesa component archives (`liblavapipe_st.a`,
+`libllvmpipe.a`, `libgallium.a`, `libvulkan_util.a`, `libnir.a`, `libvtn.a`,
+`libcompiler.a`, `libmesa_util*.a`, …) `--whole-archive` + the lavapipe target glue
+object + the static **LLVM 20.1.8** archive group (the JIT) under one
+`--start-group` + a static `libdrm.a` + the C++ runtime + the seL4 musl libc. (The
+fully-static PD target can't load the `.so`, so it relinks the same inputs — exactly
+how executor-rootserver links the Lean closure.) Two ordinary cross-link seams
+closed (`scripts/musl-compat.c`): drop Mesa's duplicate C11-threads shim; supply the
+few libc symbols the lean `aarch64_sel4` musl lacks (`secure_getenv`/`qsort_r`/
+`c23_timespec_get`/`getrandom`/`memfd_create`/`reallocarray`) + the pthread
+cancellation-point asm + an `environ`-free `getenv` (`LP_NUM_THREADS=0`). **Result:
+a 75 MB fully-static `aarch64-sel4-roottask-musl` ELF carrying
+`vk_icdGetInstanceProcAddr` + `lvp_CreateInstance` + `lp_rast_create` + the JIT.**
+
+### The genuine new OS demand IS implemented: the JIT's W→X executable mapping
+`src/main.rs` services the LLVM JIT's W→X out of a static RWX `JIT_ARENA`, with NO
+new seL4 capability: the `aarch64-sel4-roottask-musl` target links `--no-rosegment`,
+so the seL4 kernel maps the whole root-task image (the static arena included) with
+execute permission — the same property that runs the task's own `.text`. The
+handler serves `mmap(PROT_EXEC)`/`mmap(…RWX)` from that arena and treats
+`mprotect(→PROT_EXEC)` as a faithful no-op (the page is already X), counting both
+flips for observability.
+
+### MEASURED boot serial
+```
+[render-pd] JIT W->X arena: 16384 KiB static RWX (--no-rosegment image)
+[driver] vkCreateInstance OK — lavapipe VkInstance live in the PD
+[driver] VkPhysicalDevice[0] = "llvmpipe (LLVM 20.1.8, 128 bits)" (apiVersion 1.4.305)
+[driver] STAGE 3: vkCreateDevice = -13 (VK_ERROR_UNKNOWN)
+```
+- **lavapipe RUNS in-PD**: instance created, the `llvmpipe (LLVM 20.1.8)` physical
+  device — the EXACT renderer the persvati bake uses — enumerated in-VM, loader-less.
+- **The wall is `thrd_create`, NOT the W→X JIT.** lavapipe's `lvp_queue_init`
+  UNCONDITIONALLY calls `vk_queue_enable_submit_thread` → `vk_queue_start_submit_thread`
+  → `thrd_create` (Mesa `vk_queue.c:868`); it is *not* gated by `LP_NUM_THREADS`. The
+  seL4 musl's `pthread_create` issues `__clone`, which the single-thread root task's
+  handler answers `-ENOSYS` → `thrd_error` → `VK_ERROR_UNKNOWN`. A clean, characterized
+  stop (no fault, no unhandled-syscall). The JIT W→X path is wired and ready but lies
+  one stage PAST device creation (lavapipe JITs lazily at pipeline build), so the W→X
+  counters read 0 at the wall.
+
+### THE NEXT OS DEMAND (the precise lever) — a real seL4 TCB for `__clone`
+Service `clone`/`__clone` by materializing a real seL4 thread (a 2nd TCB in the root
+task's CSpace/VSpace + stack + scheduling context + IPC buffer). The sel4-musl
+`pthread_create` already issues `__clone`; the handler must create a seL4 thread for
+it rather than `-ENOSYS`. This is the executor-PD-class follow-on (the executor turn
+was single-threaded, so never hit it). Once the submit thread runs, `vkCreateDevice`
+succeeds → a pipeline JITs (the first W→X counter increments — the JIT exercise) →
+the gpui Scene → RGBA → ramfb blit is the Rust-side layer on top, and the
+byte-compare against the persvati bake proves parity. See `sel4/render-pd/WIRING.md`.
+
 ### Reproduce
 ```
 cd sel4/render-pd
 scripts/build-llvm-elf.sh           # Gate 1: static LLVM 20.1.8 for aarch64-musl
 scripts/build-mesa-lavapipe-elf.sh  # Gate 2: libvulkan_lvp.so against it
+make build && make image && make run  # the render-PD: link, assemble, boot lavapipe in-VM
 ```
 (Host prereqs: brew `aarch64-unknown-linux-musl` GCC, `llvm@20`, cmake+ninja; a
 python venv with meson+mako; brew `glslang`/`bison`/`flex`. The LLVM + Mesa + libdrm
-sources fetch into `/tmp`.)
+sources fetch into `/tmp`; `make image` reuses the executor-rootserver lane's
+provisioned seL4 substrate + loader.)
 
 ---
 
