@@ -189,6 +189,7 @@ def REFRESH_DELEGATION   : Nat := 29  -- columns::sel::REFRESH_DELEGATION
 def REVOKE_DELEGATION    : Nat := 30  -- columns::sel::REVOKE_DELEGATION
 def INTRODUCE            : Nat := 35  -- columns::sel::INTRODUCE
 def ATTENUATE_CAPABILITY : Nat := 48  -- columns::sel::ATTENUATE_CAPABILITY
+def EXERCISE             : Nat := 34  -- columns::sel::EXERCISE_VIA_CAPABILITY
 end sel
 
 /-! Transfer parameter offsets (`param::AMOUNT` / `param::DIRECTION`). -/

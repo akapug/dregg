@@ -820,7 +820,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "fd90c59bf798289cf487d8895e067481940059d39914bb360ea6943ac5093ab9";
+    "eef50da1c64b56abff66dd74e6a6c119384ea98b15f34c05c2a96e81458e8e10";
 
 /// **THE FAITHFUL 8-FELT WIDE TRANSFER descriptor (STAGED-ADDITIVE slice).** The
 /// `v3RegistryWide` transfer member (`wideAppend transferV3 bb (bb+51)`, width 816 / PI 54) —
@@ -1974,7 +1974,7 @@ mod tests {
             }
         }
         assert_eq!(
-            n, 55,
+            n, 56,
             "expected the 36-member rotated cohort (28 v2-graduated + 8 widened) + the 6 fan-out \
              cap-open members (delegate/introduce/grantCap/revoke/refreshDelegation/revokeCapability \
              — each *CapOpenVmDescriptor2R24) + the 2 LIVE effect-general legs \
@@ -1991,7 +1991,11 @@ mod tests {
              authority-only spawnCapOpenVmDescriptor2R24 + the WRITE-forcing \
              spawnWriteCapOpenVmDescriptor2R24, `Rfix 19` re-pointed — the parent→child CAPABILITY \
              HANDOFF cap-tree INSERT forced ALONGSIDE the accounts grow-gate; both carry spawn's \
-             extra birth new-cell-key PI so 47 PIs). \
+             extra birth new-cell-key PI so 47 PIs) + the EXERCISE cap-open close (the \
+             exerciseCapOpenVmDescriptor2R24 — `Rfix 16` re-pointed; the FROZEN exercise base + the \
+             EFF_EXERCISE depth-16 cap-membership crown forcing the exercise hold-gate \
+             `exerciseGuard`'s `confersEdgeTo target` membership in-circuit — the LAST named cap-open \
+             residual CLOSED). \
              The Signature-pinned capOpenAttenuateV3/transferCapOpenV3 were DELETED (Stage D)."
         );
     }

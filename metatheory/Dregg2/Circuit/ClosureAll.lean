@@ -79,6 +79,7 @@ import Dregg2.Circuit.RotatedKernelRefinementMisc
 import Dregg2.Circuit.RotatedKernelRefinementNotes
 import Dregg2.Circuit.RotatedKernelRefinementNotesFresh
 import Dregg2.Circuit.RotatedKernelRefinementExercise
+import Dregg2.Circuit.RotatedKernelRefinementExerciseAuth
 import Dregg2.Circuit.RotatedKernelRefinementLifecycle
 import Dregg2.Circuit.RotatedKernelRefinementPermsVK
 import Dregg2.Circuit.RotatedKernelRefinementProgram
@@ -889,6 +890,29 @@ theorem exercise_closedLog
       show fullActionStep pre (.exerciseA actor target inner) post
       simp only [fullActionStep]
       exact Dregg2.Circuit.RotatedKernelRefinementExercise.exercise_descriptorRefines
+        pre post actor target inner henc)
+
+/-- exercise (tag 16), CLASS A — the HOLD-GATE FORCED in-circuit from the DEDICATED cap-open descriptor
+`exerciseCapOpenV3` (`= Rfix 16`, the SDK route `exerciseViaCapabilityCapOpenVmDescriptor2R24`). The
+`Satisfied2 exerciseCapOpenV3` the light client verifies carries the depth-16 cap-membership crown
+(`leaf.target = src ∧ the EFF_EXERCISE facet bit`), which FORCES the exercise hold-gate
+(`exerciseGuard`'s `confersEdgeTo target` membership) in-circuit — no longer a carried `Prop`. The facet
++ inner legs ride the `exerciseEncodesAuthV3` bundle (`holdSource` carrying the dedicated `Satisfied2`).
+This is the LAST named cap-open residual CLOSED: editing/removing the crown from `exerciseCapOpenV3`
+turns the `exercise_descriptorRefines_capOpenSat` rung — and THIS apex rung — RED. Like `exercise_closedLog`
+it routes WITHOUT an outer receipt (`ExerciseSpec` has none); the log advances in the inner fold. -/
+theorem exercise_closedLog_capOpenSat
+    (pre post : RecChainedState) (actor target : CellId) (inner : List FullActionA)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (henc : Dregg2.Circuit.RotatedKernelRefinementExerciseAuth.exerciseEncodesAuthV3
+      pre post actor target inner) :
+    kstepAll 16 pre post :=
+  closedBridge_of_step (.exerciseA actor target inner) hdec.toDecode rfl
+    (by
+      show fullActionStep pre (.exerciseA actor target inner) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementExerciseAuth.exercise_descriptorRefines_capOpenSat
         pre post actor target inner henc)
 
 /-! ### §B-sat — the CLASS-A (`Satisfied2`-forced) per-effect closed-with-log rungs.

@@ -62,7 +62,8 @@ open Dregg2.Circuit.ActionDispatch
 open Dregg2.Circuit.DeployedCapTree (CapLeaf CapHashScheme)
 open Dregg2.Circuit.DeployedCapTree.CapHashScheme (MembersAt confersTransferLeaf)
 open Dregg2.Circuit.DeployedCapOpen (CapOpenCols leafOf)
-open Dregg2.Circuit.Emit.CapOpenEmit (attenuateCapOpenEffV3 capOpenCols)
+open Dregg2.Circuit.Emit.CapOpenEmit (attenuateCapOpenEffV3 exerciseCapOpenV3 exerciseV3 capOpenCols
+  capOpen_satisfied2_strips_to_base)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (attenuateV3)
 open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 ChipTableSound envAt)
 open Dregg2.Circuit.RotatedKernelRefinementExercise (exerciseEncodes)
@@ -246,7 +247,100 @@ theorem exercise_descriptorRefines_auth_rejects_unheld (pre post : RecChainedSta
     (hbad : ¬ exerciseGuard pre actor target) : False :=
   exercise_holdSource_rejects_unheld pre actor target henc.holdSource hbad
 
+/-! ## §6 — THE DEDICATED EXERCISE CAP-OPEN DESCRIPTOR (`exerciseCapOpenV3`) — the last named cap-open
+residual CLOSED on its OWN descriptor (not the attenuate stand-in).
+
+§1–§4 rode `attenuateCapOpenEffV3` as a generic membership carrier. This section repoints the exercise
+hold-gate onto the DEDICATED `Emit.CapOpenEmit.exerciseCapOpenV3` (the frozen exercise base + the
+authority appendix at `EFF_EXERCISE`, the LIVE descriptor the SDK route
+`exerciseViaCapabilityCapOpenVmDescriptor2R24` proves through). The `Satisfied2 exerciseCapOpenV3` is what
+the light client verifies; the apex (`exercise_closedLog_capOpenSat`, ClosureAll) wires THIS — so
+editing/removing the crown from `exerciseCapOpenV3` REDS the apex. -/
+
+/-- **`ExerciseHoldSourceV3 pre actor target` — the DEDICATED-descriptor exercise hold-gate source.** As
+`ExerciseHoldSource`, but the cap-open `Satisfied2` witness is of the LIVE dedicated `exerciseCapOpenV3`
+descriptor (column layout at `exerciseV3.traceWidth`), NOT the attenuate stand-in. The in-circuit
+depth-16 open forces `leaf.target = target ∧ confersTransferLeaf leaf`; the faithful encoding
+(`ExerciseHoldFaithful`) lifts it to the toy `exerciseGuard`. DATA-bearing (`Type`). -/
+structure ExerciseHoldSourceV3 (pre : RecChainedState) (actor target : CellId) : Type 1 where
+  State : Type
+  S : CapHashScheme State
+  vkOfTag : ℤ → Nat
+  minit : ℤ → ℤ
+  mfin : ℤ → ℤ × Nat
+  maddrs : List ℤ
+  t : VmTrace
+  hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2)
+  /-- the cap-open appendix of the DEDICATED `exerciseCapOpenV3` is satisfied (the depth-16 Merkle open
+  + the genuine `EFF_EXERCISE` submask facet). -/
+  hsat : Satisfied2 S.chipAbsorb exerciseCapOpenV3 minit mfin maddrs t
+  i : Nat
+  hi : i < t.rows.length
+  /-- the opened leaf's target-column IS the exercise `target` (the held edge is the `target` edge). -/
+  htarget : (leafOf (capOpenCols exerciseV3.traceWidth) (envAt t i)).target = (target : ℤ)
+  /-- the toy↔deployed faithful encoding for the opened leaf (the named cap-tree residual). -/
+  hfaith : ExerciseHoldFaithful pre actor target (leafOf (capOpenCols exerciseV3.traceWidth) (envAt t i))
+
+/-- **`exerciseHoldSourceV3_to_holdSource` — the dedicated source IS an `ExerciseHoldSource`.** The
+dedicated `exerciseCapOpenV3` strips (via `capOpen_satisfied2_strips_to_base`) to the bare `exerciseV3`
+base; the attenuate-stand-in `ExerciseHoldSource` opened at `attenuateV3.traceWidth`, but the dedicated
+source opens at the SAME-shaped `exerciseV3.traceWidth` — so we re-bundle directly, carrying the
+dedicated `Satisfied2`'s membership. The hold-gate FORCE goes through `exercise_holdGate_forced` on the
+re-bundled source. -/
+theorem exerciseHoldSourceV3_holdGate_forced (pre : RecChainedState) (actor target : CellId)
+    (src0 : ExerciseHoldSourceV3 pre actor target) :
+    exerciseGuard pre actor target :=
+  src0.hfaith.backed src0.htarget
+
+/-- **`exerciseEncodesAuthV3` — the exercise decode forced by the DEDICATED `exerciseCapOpenV3`.** As
+`exerciseEncodesAuth`, but the hold source is `ExerciseHoldSourceV3` (the dedicated descriptor). -/
+structure exerciseEncodesAuthV3 (pre post : RecChainedState) (actor target : CellId)
+    (inner : List FullActionA) : Type 1 where
+  facetMask : innerFacetsAdmittedA pre actor target inner = true
+  holdSource : ExerciseHoldSourceV3 pre actor target
+  innerFold : turnSpec (exerciseHoldState pre actor) inner post
+
+/-- **`exercise_descriptorRefines_capOpenSat` — THE APEX-WIRABLE EXERCISE RUNG (tag 16).** A satisfying
+exercise row over the DEDICATED `exerciseCapOpenV3` (carried in `holdSource`) forces `ExerciseSpec pre
+actor target inner post`: the hold-gate membership is FORCED by the in-circuit cap-open
+(`exerciseHoldSourceV3_holdGate_forced` — the depth-16 open of `exerciseCapOpenV3`), the facet-mask +
+inner fold are the other two legs. The apex (`exercise_closedLog_capOpenSat`, `Rfix 16 =
+exerciseCapOpenV3`) wires this — editing/removing the crown from `exerciseCapOpenV3` turns this rung (and
+the apex resting on it) RED. -/
+theorem exercise_descriptorRefines_capOpenSat (pre post : RecChainedState) (actor target : CellId)
+    (inner : List FullActionA) (henc : exerciseEncodesAuthV3 pre post actor target inner) :
+    ExerciseSpec pre actor target inner post :=
+  Dregg2.Circuit.RotatedKernelRefinementExercise.exercise_descriptorRefines
+    pre post actor target inner
+    { facetMask := henc.facetMask
+    , holdGate := exerciseHoldSourceV3_holdGate_forced pre actor target henc.holdSource
+    , innerFold := henc.innerFold }
+
+/-- **`exercise_descriptorRefines_capOpenSat_execFullA` — the dedicated rung against the executor.** -/
+theorem exercise_descriptorRefines_capOpenSat_execFullA (pre post : RecChainedState)
+    (actor target : CellId) (inner : List FullActionA)
+    (henc : exerciseEncodesAuthV3 pre post actor target inner) :
+    execFullA pre (.exerciseA actor target inner) = some post :=
+  Dregg2.Circuit.RotatedKernelRefinementExercise.exercise_descriptorRefines_execFullA
+    pre post actor target inner
+    { facetMask := henc.facetMask
+    , holdGate := exerciseHoldSourceV3_holdGate_forced pre actor target henc.holdSource
+    , innerFold := henc.innerFold }
+
+/-- **`exercise_holdSourceV3_rejects_unheld` (the DEDICATED-descriptor tooth).** An actor lacking the
+conferring cap (`¬ exerciseGuard`) cannot ride a dedicated `exerciseCapOpenV3` authority source: the
+source would FORCE the hold-gate, contradiction. The in-circuit `exerciseCapOpenV3` open refuses it. -/
+theorem exercise_holdSourceV3_rejects_unheld (pre : RecChainedState) (actor target : CellId)
+    (src0 : ExerciseHoldSourceV3 pre actor target)
+    (hbad : ¬ exerciseGuard pre actor target) : False :=
+  hbad (exerciseHoldSourceV3_holdGate_forced pre actor target src0)
+
 /-! ## §5 — Axiom hygiene. -/
+
+#assert_axioms exerciseHoldSourceV3_holdGate_forced
+#assert_axioms exercise_descriptorRefines_capOpenSat
+#assert_axioms exercise_descriptorRefines_capOpenSat_execFullA
+#assert_axioms exercise_holdSourceV3_rejects_unheld
 
 #assert_axioms exercise_holdGate_forced
 #assert_axioms exerciseEncodesAuth_to_exerciseEncodes

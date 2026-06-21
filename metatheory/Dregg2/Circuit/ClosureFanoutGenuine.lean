@@ -747,16 +747,23 @@ receipt), still the realizable `WitnessDecodes`-class extraction. The discharger
 `exercise_closedLog` directly on the extracted encode (the `StateDecodeLog.toDecode` pins the endpoints).
 Genuinely connected; only the receipt-prepend SHAPE is absent, faithfully. -/
 
+/-- exercise (tag 16) — CLOSED through the DEDICATED cap-open crown (`Rfix 16 = exerciseCapOpenV3`). The
+readout now extracts `exerciseEncodesAuthV3` (the hold-gate AUTHORITY SOURCE — the in-circuit cap-open
+membership of `exerciseCapOpenV3`, carrying the `Satisfied2 (Rfix 16)`), and the discharger routes
+through `exercise_closedLog_capOpenSat`: the hold-gate is FORCED by the depth-16 crown, no longer carried.
+Editing/removing the crown from `exerciseCapOpenV3` REDS this slot — the LAST named cap-open residual
+CLOSED. (`Rfix 16 = exerciseCapOpenV3` by `Rfix_exercise_capOpen`.) -/
 theorem closedLogExtract_exercise_closed
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pre post : RecChainedState),
       Satisfied2 hash (Rfix 16) minit mfin maddrs t →
       Σ' (actor target : CellId) (inner : List Dregg2.Exec.TurnExecutorFull.FullActionA),
-        Dregg2.Circuit.RotatedKernelRefinementExercise.exerciseEncodes pre post actor target inner) :
+        Dregg2.Circuit.RotatedKernelRefinementExerciseAuth.exerciseEncodesAuthV3
+          pre post actor target inner) :
     ClosedLogExtract Slive LH hash Rfix 16 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
   obtain ⟨actor, target, inner, henc⟩ := readout minit mfin maddrs t pre post hsat
-  exact exercise_closedLog pre post actor target inner pc pubLogPre pubLogPost hdecLog henc
+  exact exercise_closedLog_capOpenSat pre post actor target inner pc pubLogPre pubLogPost hdecLog henc
 
 end PerEffect
 
@@ -987,7 +994,8 @@ structure ClosureReadouts
   rdExercise : ∀ minit mfin maddrs t pre post,
     Satisfied2 hash (Rfix 16) minit mfin maddrs t →
     Σ' (actor target : CellId) (inner : List Dregg2.Exec.TurnExecutorFull.FullActionA),
-      Dregg2.Circuit.RotatedKernelRefinementExercise.exerciseEncodes pre post actor target inner
+      Dregg2.Circuit.RotatedKernelRefinementExerciseAuth.exerciseEncodesAuthV3
+        pre post actor target inner
 
 /-! ## §7 — `closedLogExtract_all_genuine`: `∀ e, ClosedLogExtract` from the readout bundle.
 

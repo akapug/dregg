@@ -92,3 +92,7 @@ def main : IO Unit := do
   -- The AUTHORITY-ONLY spawn cap-open (the frozen `spawnV3` base + authority appendix): the named,
   -- light-client-REJECTED fallback (the verifier tooth forces the write route).
   IO.println s!"v3rot\tspawnCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.spawnCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.spawnCapOpenV3}"
+  -- The EXERCISE cap-open (`v3RegistryHeap` position 53, `Rfix 16` re-pointed): the FROZEN exercise base +
+  -- the EFF_EXERCISE authority appendix (the depth-16 cap-membership crown forcing the exercise hold-gate
+  -- `exerciseGuard`'s `confersEdgeTo target` membership in-circuit). The LAST named cap-open residual CLOSED.
+  IO.println s!"v3rot\texerciseCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.exerciseCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.exerciseCapOpenV3}"
