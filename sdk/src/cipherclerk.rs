@@ -5614,6 +5614,25 @@ impl AgentCipherclerk {
                     SdkError::InvalidWitness(format!("wide set-field-dyn trace generation: {e}"))
                 })?;
             (t, d)
+        } else if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::Custom { .. })
+        ) {
+            // custom routes through the 789-wide `customVmDescriptor2R24` member (host 581 + 208
+            // carriers — a Custom row, no Blum/grow-gate leg). This precompute MUST route Custom
+            // identically to step 7 (`prove_effect_vm_rotated_wide`'s Custom arm), or the bound 16 wide
+            // PIs would not match `public_inputs[n_pi-16..]`. The Custom row's `(vk, commit)` columns
+            // (68 / 72) carry the bound sub-proof's binding the descriptor's `proof_bind` op pins; the
+            // program-correctness recursion is the SDK-reachable `custom_proof_bind` engine threaded via
+            // `Turn.custom_program_proofs`, NOT a row-local poly here.
+            dregg_circuit::effect_vm::trace_rotated::generate_rotated_custom_wide(
+                &initial_vm_state,
+                &vm_effects,
+                &before_bw,
+                &after_bw,
+                &caveat,
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide custom trace generation: {e}")))?
         } else {
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_transfer_shape_wide(
                 &initial_vm_state,

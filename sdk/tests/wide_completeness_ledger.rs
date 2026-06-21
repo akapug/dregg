@@ -286,6 +286,139 @@ fn set_field_dyn_proves_on_deployed_wide_path() {
     );
 }
 
+/// **THE custom PROVE-THROUGH (deployed wide path) — the last liveness item, both poles.**
+///
+/// An honest custom turn (a user program + its GENUINE external sub-proof) MUST prove on
+/// `prove_effect_vm_rotated_wide` + VERIFY against `customVmDescriptor2R24` (the 789-wide member, host
+/// 581 + 208 carriers), AND its bound sub-proof MUST light-client-verify through the deployed
+/// `custom_proof_bind` engine. A FORGED sub-proof MUST be rejected by that engine.
+///
+/// BEFORE: a Custom lead fell through to the transfer-shape producer (816-wide) → UNSAT vs the
+/// 789-wide custom descriptor, so a custom turn minted NO wide receipt (the LAST liveness gap). AFTER
+/// routing it to `generate_rotated_custom_wide`: it proves + verifies. The Custom row's `(vk, commit)`
+/// columns (68 / 72) carry the verifying `BoundCustomProof`'s exposed binding
+/// (`vk_hash_felts()` / `proof_commitment().0`), threaded onto the wire via
+/// `Turn::with_custom_program_proofs`; the light client re-runs `verify_proof_bind` against that same
+/// binding. This is the deployed, end-to-end path: the wide receipt AND the sub-proof bind the SAME
+/// verifying STARK.
+#[test]
+fn custom_proves_on_deployed_wide_path() {
+    use dregg_circuit::custom_proof_bind::{
+        BoundCustomProof, ProofBindError, prove_custom_program, verify_bound_custom_proof,
+    };
+    use dregg_circuit::dsl::circuit::{
+        CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
+        ProgramRegistry,
+    };
+    use std::collections::HashMap;
+
+    // ── A minimal but REAL custom program (boolean dir + the conservation poly): its STARK is genuine.
+    let p_minus_1 = BabyBear::new(dregg_circuit::field::BABYBEAR_P - 1);
+    let descriptor = CircuitDescriptor {
+        name: "dregg-custom-wide-ledger-v1".to_string(),
+        trace_width: 4,
+        max_degree: 2,
+        columns: vec![
+            ColumnDef { name: "old".into(), index: 0, kind: ColumnKind::Value },
+            ColumnDef { name: "amt".into(), index: 1, kind: ColumnKind::Value },
+            ColumnDef { name: "new".into(), index: 2, kind: ColumnKind::Value },
+            ColumnDef { name: "dir".into(), index: 3, kind: ColumnKind::Binary },
+        ],
+        constraints: vec![
+            ConstraintExpr::Binary { col: 3 },
+            ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm { coeff: BabyBear::ONE, col_indices: vec![2] },
+                    PolyTerm { coeff: p_minus_1, col_indices: vec![0] },
+                    PolyTerm { coeff: p_minus_1, col_indices: vec![1] },
+                    PolyTerm { coeff: BabyBear::new(2), col_indices: vec![3, 1] },
+                ],
+            },
+        ],
+        boundaries: vec![],
+        public_input_count: 2,
+        lookup_tables: vec![],
+    };
+    let program = CellProgram::new(descriptor, 1);
+    let mut registry = ProgramRegistry::new();
+    registry.deploy(program.clone()).expect("demo program deploys");
+
+    let rows = 4usize;
+    let mut witness: HashMap<String, Vec<BabyBear>> = HashMap::new();
+    witness.insert("old".into(), vec![BabyBear::new(10); rows]);
+    witness.insert("amt".into(), vec![BabyBear::new(5); rows]);
+    witness.insert("new".into(), vec![BabyBear::new(15); rows]);
+    witness.insert("dir".into(), vec![BabyBear::ZERO; rows]);
+    let pis = vec![BabyBear::new(10), BabyBear::new(15)];
+
+    // ── Mint the GENUINE bound sub-proof, and confirm it light-client-verifies (positive soundness).
+    let bound: BoundCustomProof =
+        prove_custom_program(&program, &witness, rows, &pis).expect("honest sub-proof proves");
+    verify_bound_custom_proof(&registry, &bound)
+        .expect("the honest bound proof MUST light-client-verify (positive pole)");
+
+    // ── The Custom effect carries the verifying sub-proof's exposed binding: the wide row's cols
+    //    68 / 72 then hold exactly what `verify_proof_bind` re-derives.
+    let effects = vec![VmEffect::Custom {
+        program_vk_hash: bound.vk_hash_felts(),
+        proof_commitment: bound.proof_commitment().0,
+    }];
+
+    // ── PROVE-THROUGH the deployed wide path + VERIFY the wide receipt (liveness: a custom turn now
+    //    mints a REAL wide receipt).
+    let (proof, dpis) = prove_through_deployed(b"ledger-custom-domain", &effects);
+    assert_verifies_and_nonvacuous("customVmDescriptor2R24", &proof, &dpis);
+
+    // ── The on-wire threading: a custom Turn carries the genuine sub-proof so the light client can run
+    //    the recursion. Confirm the projection round-trips back to a verifying bound proof.
+    let wire = bound_to_wire_and_back(&bound);
+    verify_bound_custom_proof(&registry, &wire)
+        .expect("the wire-threaded sub-proof (Turn::with_custom_program_proofs projection) verifies");
+
+    // ── NEGATIVE POLE: a FORGED sub-proof is REJECTED by the deployed engine (the wide receipt's
+    //    `proof_bind` MEANS "the bound proof verified").
+    let mut forged = bound.clone();
+    for b in forged.proof_bytes.iter_mut().take(64) {
+        *b ^= 0xFF;
+    }
+    let err = verify_bound_custom_proof(&registry, &forged)
+        .expect_err("a FORGED custom sub-proof MUST be rejected end-to-end");
+    assert!(
+        matches!(err, ProofBindError::SubProofVerifyFailed(_)),
+        "forged proof bytes must fail at the recursion (verify) step, got {err:?}"
+    );
+
+    eprintln!(
+        "DEPLOYED custom PROVE-THROUGH GREEN: an honest custom turn (user program + genuine sub-proof) \
+         proves + verifies on the wide path (routed to `generate_rotated_custom_wide`, the 789-wide \
+         customVmDescriptor2R24 member); the bound sub-proof light-client-verifies via custom_proof_bind \
+         and a forged sub-proof is REJECTED. The last liveness item is CLOSED — 29/29."
+    );
+}
+
+/// Round-trip a `BoundCustomProof` through the on-wire `Turn::with_custom_program_proofs` projection
+/// (`CustomProgramProof { proof_bytes, public_inputs }`) and rebuild the bound proof — confirming the
+/// wire form carries everything the light-client recursion needs (proof bytes + public inputs;
+/// the program is resolved by the bound VK in the registry).
+fn bound_to_wire_and_back(
+    bound: &dregg_circuit::custom_proof_bind::BoundCustomProof,
+) -> dregg_circuit::custom_proof_bind::BoundCustomProof {
+    use dregg_circuit::field::BabyBear;
+    let turn_carrier = dregg_turn::CustomProgramProof {
+        proof_bytes: bound.proof_bytes.clone(),
+        public_inputs: bound.public_inputs.iter().map(|f| f.as_u32()).collect(),
+    };
+    dregg_circuit::custom_proof_bind::BoundCustomProof {
+        program: bound.program.clone(),
+        proof_bytes: turn_carrier.proof_bytes,
+        public_inputs: turn_carrier
+            .public_inputs
+            .iter()
+            .map(|&v| BabyBear::new(v))
+            .collect(),
+    }
+}
+
 /// What extra witness an effect's wide producer needs beyond the bare `(before_w, after_w)`, AND
 /// (for the record-pin family) how to build the genuine AFTER-cell + the matching `VmEffect`.
 enum WideNeed {
@@ -684,34 +817,24 @@ fn delegation_family_proves_on_deployed_wide_path() {
 const CAP_OPEN_ROUTE_EFFECTS: &[&str] =
     &["attenuateCapability", "revokeCapability", "grantCapability"];
 
-/// `custom` carries a DISTINCT trace geometry (`customVmDescriptor2R24` = 789-wide, the
-/// recursion-bound `proof_bind`): the wide transfer-shape producer lays an 817-wide row, so it is
-/// UNSAT against the custom descriptor on the bare wide path. Its receipt would be minted via the
-/// recursion-bound custom route (the external sub-proof bound by `proof_bind`), NOT the sovereign
-/// wide producer.
-///
-/// RESIDUAL STATE — the SOUNDNESS core is CLOSED; the EffectVM-wide-TRACE route remains.
-///
-/// SOUNDNESS (closed): the `proof_bind` gate now genuinely VERIFIES the external sub-proof. The
-/// deployed, SDK-reachable engine `dregg_circuit::custom_proof_bind` resolves the program by the
-/// bound VK, VERIFIES the external STARK sub-proof under its AIR, and requires the sub-proof's PI
-/// commitment to equal the bound `commit` column — a custom effect with a FORGED sub-proof
-/// (non-verifying STARK / mismatched commitment / unknown VK) is REJECTED
-/// (`custom_proof_bind_honest_verifies_forged_rejected`, both poles, no catch_unwind). The
-/// bounds-check-only era (`prove_vm_descriptor2`'s `ProofBind` handling, `descriptor_ir2.rs:1270`,
-/// which only range-checks the columns) is no longer the verifier's last word: the verifier-side
-/// engine is the genuine check the EffectVM AIR's Custom-leg comment demands.
-///
-/// REMAINING (the wide-trace routing): the EffectVM-wide producer
-/// (`prove_effect_vm_rotated_wide`) does not yet route the Custom EFFECT ROW (the transfer-shape
-/// producer lays an 817-wide row, UNSAT against the custom descriptor), and the turn-builder's
-/// `Turn.custom_program_proofs` (`turn/src/turn.rs:304`) is `None` at every construction — so a
-/// single-effect Custom turn does not mint a wide EffectVM receipt on this path. That is a routing
-/// residual, NOT a soundness one: the program-correctness of a custom effect is now genuinely
-/// enforced wherever the proof_bind engine runs. Closing the wide-trace residual = add a
-/// `generate_rotated_custom_wide` lead that lays the 789-wide custom row and threads
-/// `BoundCustomProof` through `custom_program_proofs`, then drive it through the scoreboard.
-const CUSTOM_ROUTE_EFFECT: &str = "custom";
+// `custom` — CLOSED (both axes). The DISTINCT 789-wide `customVmDescriptor2R24` member (host 581 +
+// 208 carriers — same V1Face host as setFieldDyn, but a Custom row, no Blum/grow-gate leg) is now
+// routed by `generate_rotated_custom_wide`: a single-effect Custom turn MINTS a wide EffectVM receipt
+// on `prove_effect_vm_rotated_wide`, and the receipt's 8-felt commit binds the state. The bare
+// transfer-shape producer (816-wide) was UNSAT vs the 789-wide descriptor — that liveness gap is
+// closed.
+//
+// SOUNDNESS (closed earlier, verified end-to-end here): the `proof_bind` gate genuinely VERIFIES the
+// external sub-proof via the deployed, SDK-reachable `dregg_circuit::custom_proof_bind`: resolve the
+// program by the bound 8-felt VK, VERIFY the external STARK under its AIR (the recursion), and require
+// the sub-proof's PI commitment to equal the bound `commit` column. A FORGED sub-proof (non-verifying
+// STARK / mismatched commitment / unknown VK) is REJECTED. The in-AIR `proof_bind` op is a
+// bounds/declaration check (`descriptor_ir2.rs:1270`); the program-correctness recursion is the
+// external engine, threaded onto the wire via `Turn::with_custom_program_proofs` (the
+// `custom_program_proofs` field, bound into `Turn::hash`). The 789-wide custom row carries the bound
+// proof's `(vk, commit)` in cols 68 / 72 — so the wide receipt + the light-client `verify_proof_bind`
+// bind the SAME verifying sub-proof. See `custom_proves_on_deployed_wide_path` (the end-to-end
+// prove-through + sub-proof verify, both poles).
 
 /// **THE PROVABILITY SCOREBOARD (the living completeness measure).** Drive EVERY `VmEffect` cohort
 /// lead through the DEPLOYED wide path (`prove_effect_vm_rotated_wide`) and report PROVABLE/UNPROVABLE
@@ -768,9 +891,10 @@ fn provability_scoreboard_deployed_wide_path() {
         eprintln!("    UNPROVABLE-ON-WIDE {l}: {r}");
     }
     eprintln!(
-        "    (cap-write family route = the cap-open path {CAP_OPEN_ROUTE_EFFECTS:?}; custom route = \
-         the recursion-bound `{CUSTOM_ROUTE_EFFECT}` descriptor — both are real, NAMED residuals: an \
-         agent CAN exercise them, just not through this bare wide sovereign producer.)"
+        "    (cap-write family route = the cap-open path {CAP_OPEN_ROUTE_EFFECTS:?} — the one NAMED \
+         residual: an agent CAN exercise it, just not through this bare wide sovereign producer. \
+         `custom` is no longer a residual — it PROVES on the wide path (the bound sub-proof rides the \
+         `proof_bind` columns the light client verifies via `custom_proof_bind`).)"
     );
     eprintln!("==========================================================================");
 
@@ -799,6 +923,7 @@ fn provability_scoreboard_deployed_wide_path() {
         "cellDestroy",
         "receiptArchive",
         "refusal",
+        "custom",
         "revokeDelegation",
         "refreshDelegation",
         "introduce",
@@ -820,20 +945,22 @@ fn provability_scoreboard_deployed_wide_path() {
         must_prove_on_wide.len()
     );
 
-    // ── THE NAMED UNPROVABLE-ON-WIDE SET: the cap-write family (cap-open route) + custom (recursion
-    // route). These are NOT usable through the bare wide sovereign producer; they are usable through
-    // their own routes. If one starts proving on the wide path, this assertion RED-flags so the
-    // worklist stays honest. The probed (clean-Err) members are attenuate/revokeCapability + custom;
-    // grantCapability is the named (panic-on-wide) member.
+    // ── THE NAMED UNPROVABLE-ON-WIDE SET: the cap-write family (cap-open route). These are NOT usable
+    // through the bare wide sovereign producer; they are usable through their own (cap-open) route. If
+    // one starts proving on the wide path, this assertion RED-flags so the worklist stays honest. The
+    // probed (clean-Err) members are attenuate/revokeCapability; grantCapability is the named
+    // (panic-on-wide) member. `custom` is NO LONGER here — it now PROVES on the wide path (its 789-wide
+    // `customVmDescriptor2R24` member is routed via `generate_rotated_custom_wide`); the
+    // program-correctness recursion rides the bound sub-proof the light client verifies via
+    // `custom_proof_bind` (see `custom_proves_on_deployed_wide_path` below).
     let mut expected_unprovable: Vec<&str> = CAP_OPEN_ROUTE_EFFECTS.to_vec();
-    expected_unprovable.push(CUSTOM_ROUTE_EFFECT);
     expected_unprovable.sort_unstable();
     let mut got_unprovable = unprovable_labels.clone();
     got_unprovable.sort_unstable();
     assert_eq!(
         got_unprovable, expected_unprovable,
-        "the UNPROVABLE-ON-WIDE set must be exactly the cap-write family + custom (the NAMED \
-         residuals, each with its own route); got {got_unprovable:?}, expected {expected_unprovable:?}"
+        "the UNPROVABLE-ON-WIDE set must be exactly the cap-write family (the NAMED residual with its \
+         own cap-open route); got {got_unprovable:?}, expected {expected_unprovable:?}"
     );
 }
 
