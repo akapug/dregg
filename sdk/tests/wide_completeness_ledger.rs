@@ -690,20 +690,27 @@ const CAP_OPEN_ROUTE_EFFECTS: &[&str] =
 /// recursion-bound custom route (the external sub-proof bound by `proof_bind`), NOT the sovereign
 /// wide producer.
 ///
-/// HONEST RESIDUAL STATE (the recursion-bound prove-through route is NOT YET BUILT). The descriptor
-/// + the `proof_bind` IR constraint EXIST and are deployed (`custom_descriptor_carries_proof_bind`
-/// pins them non-vacuously), and the proof-bind DENOTATION is proven at the descriptor-semantic level
-/// (`circuit/src/descriptor_ir2.rs`: `proof_bind_honest_commitment_verifies` /
-/// `proof_bind_forged_commitment_refuses`, against a toy recursion engine). But NO deployed,
-/// SDK-reachable prover wires an ACTUAL external sub-proof into the recursion argument: `prove_vm_
-/// descriptor2`'s `ProofBind` handling only bounds-checks its columns (`descriptor_ir2.rs:1270`) — it
-/// does not verify a real bound STARK; the turn-builder `Turn.custom_program_proofs` field
-/// (`turn/src/turn.rs:304`) is `None` at every construction; and there is no `prove_effect_vm_custom`
-/// that consumes a `CustomProgramProof` and emits a light-client-verifiable receipt. So `custom` is a
-/// genuine UNPROVABLE-on-any-deployed-path residual: closing it needs the recursion-bound prover built
-/// (thread the external sub-proof through `joint_turn_recursive.rs` / `ivc_turn_chain.rs`, verify it,
-/// and bind its PI commitment + program VK to the row's `commit`/`vk` columns), then a genuine
-/// prove-through test — NOT faked here.
+/// RESIDUAL STATE — the SOUNDNESS core is CLOSED; the EffectVM-wide-TRACE route remains.
+///
+/// SOUNDNESS (closed): the `proof_bind` gate now genuinely VERIFIES the external sub-proof. The
+/// deployed, SDK-reachable engine `dregg_circuit::custom_proof_bind` resolves the program by the
+/// bound VK, VERIFIES the external STARK sub-proof under its AIR, and requires the sub-proof's PI
+/// commitment to equal the bound `commit` column — a custom effect with a FORGED sub-proof
+/// (non-verifying STARK / mismatched commitment / unknown VK) is REJECTED
+/// (`custom_proof_bind_honest_verifies_forged_rejected`, both poles, no catch_unwind). The
+/// bounds-check-only era (`prove_vm_descriptor2`'s `ProofBind` handling, `descriptor_ir2.rs:1270`,
+/// which only range-checks the columns) is no longer the verifier's last word: the verifier-side
+/// engine is the genuine check the EffectVM AIR's Custom-leg comment demands.
+///
+/// REMAINING (the wide-trace routing): the EffectVM-wide producer
+/// (`prove_effect_vm_rotated_wide`) does not yet route the Custom EFFECT ROW (the transfer-shape
+/// producer lays an 817-wide row, UNSAT against the custom descriptor), and the turn-builder's
+/// `Turn.custom_program_proofs` (`turn/src/turn.rs:304`) is `None` at every construction — so a
+/// single-effect Custom turn does not mint a wide EffectVM receipt on this path. That is a routing
+/// residual, NOT a soundness one: the program-correctness of a custom effect is now genuinely
+/// enforced wherever the proof_bind engine runs. Closing the wide-trace residual = add a
+/// `generate_rotated_custom_wide` lead that lays the 789-wide custom row and threads
+/// `BoundCustomProof` through `custom_program_proofs`, then drive it through the scoreboard.
 const CUSTOM_ROUTE_EFFECT: &str = "custom";
 
 /// **THE PROVABILITY SCOREBOARD (the living completeness measure).** Drive EVERY `VmEffect` cohort
@@ -830,26 +837,23 @@ fn provability_scoreboard_deployed_wide_path() {
     );
 }
 
-/// **THE custom RESIDUAL, NAMED NON-VACUOUSLY (the recursion-bound prove-through route is NOT built).**
-/// `custom` is the one effect with NO deployed prove-through path: its receipt would be minted by a
-/// recursion-bound prover that VERIFIES an external sub-proof and binds it via the descriptor's
-/// `proof_bind` op, but no such SDK-reachable prover exists yet (see the `CUSTOM_ROUTE_EFFECT` note).
-///
-/// What DOES exist, and what this test PINS so the residual is named non-vacuously (a regression
-/// dropping the proof-bind or its column binding FAILS here):
+/// **THE custom proof_bind DESCRIPTOR PIN (the columns the genuine engine binds).**
+/// `custom` is the effect whose receipt rides an EXTERNAL program sub-proof, bound via the
+/// descriptor's `proof_bind` op. The genuine engine that VERIFIES that sub-proof (not a bounds
+/// check) is `dregg_circuit::custom_proof_bind` — exercised end-to-end in
+/// `custom_proof_bind_honest_verifies_forged_rejected` below. This test pins the descriptor columns
+/// that engine binds, so a regression dropping the `proof_bind` op or its column binding FAILS here:
 ///   * the deployed `customVmDescriptor2R24` carries EXACTLY ONE `proof_bind` IR constraint;
 ///   * it is GUARDED on the Custom selector (`sel::CUSTOM` = var 8) — so it fires only on a custom row;
 ///   * it binds the `custom_proof_commitment` column (var 72) and the `custom_program_vk_hash` column
-///     (var 68) — the two columns a recursion verifier would pin to a verifying sub-proof's PI
+///     (var 68) — the two columns the recursion verifier pins to the verifying sub-proof's PI
 ///     commitment + program VK.
 ///
-/// The proof-bind DENOTATION (an honest commitment verifies, a forged one is UNSAT) is proven at the
-/// descriptor-semantic level in `circuit/src/descriptor_ir2.rs`
-/// (`proof_bind_honest_commitment_verifies` / `proof_bind_forged_commitment_refuses`, against a toy
-/// recursion engine). The remaining work to make `custom` PROVE-THROUGH on a deployed path: wire an
-/// actual external STARK sub-proof into the recursion argument (`joint_turn_recursive.rs` /
-/// `ivc_turn_chain.rs`), verify it, and bind its PI commitment + VK to these columns — then a genuine
-/// prove + light-client-verify + forged-sub-proof-reject test. NOT faked here.
+/// The proof_bind GATE now MEANS "the bound proof verified": `custom_proof_bind::verify_proof_bind`
+/// resolves the program by the bound VK, VERIFIES the external STARK sub-proof under its AIR, and
+/// requires the sub-proof's PI commitment to equal the bound `commit` column. A custom effect with a
+/// FORGED sub-proof (non-verifying STARK / mismatched commitment / unknown VK) is REJECTED — the
+/// bounds-check-only era is closed (see the genuine test below).
 #[test]
 fn custom_descriptor_carries_proof_bind_residual_named() {
     use dregg_circuit::descriptor_ir2::VmConstraint2;
@@ -913,5 +917,118 @@ fn custom_descriptor_carries_proof_bind_residual_named() {
         "the proof_bind MUST bind the custom_program_vk_hash column (var {CUSTOM_PROGRAM_VK_HASH_COL}); \
          got vk {:?}",
         bind.vk
+    );
+}
+
+/// **THE GENUINE custom proof_bind — BOTH POLES (forged sub-proof REJECTED).**
+///
+/// Closes the last unprovable/unsound effect: `custom`. The descriptor's `proof_bind` op binds the
+/// Custom row's `custom_proof_commitment` (var 72) + `custom_program_vk_hash` (var 68) columns to an
+/// EXTERNAL program sub-proof. Before this, the deployed handling only BOUNDS-CHECKED those columns —
+/// a prover could supply any commitment/VK without a verifying sub-proof, so `custom`'s
+/// program-correctness was NOT enforced on the wire (its `descriptorRefines` was vacuous).
+///
+/// `dregg_circuit::custom_proof_bind` makes the gate MEAN "the bound proof verified":
+///   1. resolve the program by the bound 8-felt VK hash (unknown ⇒ fail closed);
+///   2. confirm the program's self-computed VK equals the bound column (tampered registry ⇒ reject);
+///   3. VERIFY the external STARK sub-proof under the program's AIR (THE recursion — forged ⇒ reject);
+///   4. require the verified sub-proof's PI commitment to equal the bound `commit` column.
+///
+/// BEFORE → AFTER: a custom effect with a forged/invalid sub-proof was ACCEPTED (bounds-check only);
+/// it is now REJECTED. This is the deployed, light-client-runnable engine — exercised here through
+/// the SDK's dependency on `dregg-circuit`, both poles, NO catch_unwind.
+#[test]
+fn custom_proof_bind_honest_verifies_forged_rejected() {
+    use dregg_circuit::custom_proof_bind::{
+        ClaimedProofBind, ProofBindError, custom_proof_pi_commitment, prove_custom_program,
+        verify_bound_custom_proof, verify_proof_bind,
+    };
+    use dregg_circuit::dsl::circuit::{
+        CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
+        ProgramRegistry,
+    };
+    use std::collections::HashMap;
+
+    // A minimal but REAL custom program: boolean dir + the conservation poly
+    // (new - old - amt + 2*dir*amt == 0). Its STARK is genuine.
+    let p_minus_1 = BabyBear::new(dregg_circuit::field::BABYBEAR_P - 1);
+    let descriptor = CircuitDescriptor {
+        name: "dregg-custom-ledger-demo-v1".to_string(),
+        trace_width: 4,
+        max_degree: 2,
+        columns: vec![
+            ColumnDef { name: "old".into(), index: 0, kind: ColumnKind::Value },
+            ColumnDef { name: "amt".into(), index: 1, kind: ColumnKind::Value },
+            ColumnDef { name: "new".into(), index: 2, kind: ColumnKind::Value },
+            ColumnDef { name: "dir".into(), index: 3, kind: ColumnKind::Binary },
+        ],
+        constraints: vec![
+            ConstraintExpr::Binary { col: 3 },
+            ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm { coeff: BabyBear::ONE, col_indices: vec![2] },
+                    PolyTerm { coeff: p_minus_1, col_indices: vec![0] },
+                    PolyTerm { coeff: p_minus_1, col_indices: vec![1] },
+                    PolyTerm { coeff: BabyBear::new(2), col_indices: vec![3, 1] },
+                ],
+            },
+        ],
+        boundaries: vec![],
+        public_input_count: 2,
+        lookup_tables: vec![],
+    };
+    let program = CellProgram::new(descriptor, 1);
+    let mut registry = ProgramRegistry::new();
+    registry.deploy(program.clone()).expect("demo program deploys");
+
+    let rows = 4usize;
+    let mut witness: HashMap<String, Vec<BabyBear>> = HashMap::new();
+    witness.insert("old".into(), vec![BabyBear::new(10); rows]);
+    witness.insert("amt".into(), vec![BabyBear::new(5); rows]);
+    witness.insert("new".into(), vec![BabyBear::new(15); rows]);
+    witness.insert("dir".into(), vec![BabyBear::ZERO; rows]);
+    let pis = vec![BabyBear::new(10), BabyBear::new(15)];
+
+    // POSITIVE POLE: honest custom effect with a VALID external sub-proof verifies.
+    let bound =
+        prove_custom_program(&program, &witness, rows, &pis).expect("honest sub-proof proves");
+    verify_bound_custom_proof(&registry, &bound)
+        .expect("the honest custom proof_bind MUST light-client-verify");
+
+    // NEGATIVE POLE 1 — FORGED sub-proof bytes: the genuine engine rejects (BEFORE: accepted).
+    let mut forged = bound.clone();
+    for b in forged.proof_bytes.iter_mut().take(64) {
+        *b ^= 0xFF;
+    }
+    let err = verify_bound_custom_proof(&registry, &forged)
+        .expect_err("a FORGED custom sub-proof MUST be rejected (proof_bind now verifies)");
+    assert!(
+        matches!(err, ProofBindError::SubProofVerifyFailed(_)),
+        "forged proof bytes must fail at the recursion (verify) step, got {err:?}"
+    );
+
+    // NEGATIVE POLE 2 — MISMATCHED commitment: swapped `commit` column is rejected
+    // even though the STARK itself verifies.
+    let claimed_bad_commit = ClaimedProofBind {
+        vk_hash: bound.vk_hash_felts(),
+        commitment: custom_proof_pi_commitment(&[BabyBear::new(99), BabyBear::new(99)]),
+    };
+    let err = verify_proof_bind(&registry, &bound.proof_bytes, &bound.public_inputs, &claimed_bad_commit)
+        .expect_err("a MISMATCHED commitment MUST be rejected");
+    assert!(
+        matches!(err, ProofBindError::CommitmentMismatch { .. }),
+        "swapped commitment must fail the commit-binding step, got {err:?}"
+    );
+
+    // NEGATIVE POLE 3 — UNKNOWN VK: a bound VK naming no registered program fails closed.
+    let claimed_bad_vk = ClaimedProofBind {
+        vk_hash: [BabyBear::new(0xDEAD); 8],
+        commitment: bound.proof_commitment(),
+    };
+    let err = verify_proof_bind(&registry, &bound.proof_bytes, &bound.public_inputs, &claimed_bad_vk)
+        .expect_err("an UNKNOWN VK MUST be rejected");
+    assert!(
+        matches!(err, ProofBindError::UnknownProgram { .. }),
+        "unknown VK must fail closed, got {err:?}"
     );
 }

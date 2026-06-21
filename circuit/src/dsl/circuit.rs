@@ -1345,6 +1345,13 @@ impl ProgramRegistry {
         self.programs.is_empty()
     }
 
+    /// Iterate the deployed `(vk_hash, program)` pairs. Used by the genuine
+    /// `proof_bind` engine (`crate::custom_proof_bind`) to resolve a program by
+    /// the lossy 8-felt PI projection of its VK hash.
+    pub fn iter(&self) -> impl Iterator<Item = (&[u8; 32], &CellProgram)> {
+        self.programs.iter()
+    }
+
     /// Verify a proof-carrying transition against a deployed program.
     ///
     /// This is the primary entry point for the executor: given a VK hash from a
