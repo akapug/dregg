@@ -480,18 +480,9 @@ mod tests {
 
         let body_fact_hash = hash_fact(has_role_pred, &[alice, app, BabyBear::ZERO]);
 
-        // Build a tree that does NOT contain body_fact_hash
         let tree_depth = 2;
-        let leaves = vec![
-            BabyBear::new(111),
-            BabyBear::new(222),
-            BabyBear::new(333), // different from body_fact_hash!
-            BabyBear::new(444),
-        ];
-        let (state_root, _merkle_proofs) = build_test_tree(&leaves, tree_depth);
 
-        // Also build a tree that DOES contain it, to get a valid Merkle proof
-        // for a DIFFERENT root
+        // The REAL tree DOES contain body_fact_hash; the witness commits to its root.
         let real_leaves = vec![
             BabyBear::new(111),
             BabyBear::new(222),
@@ -500,35 +491,82 @@ mod tests {
         ];
         let (real_root, real_proofs) = build_test_tree(&real_leaves, tree_depth);
 
-        // The real_root != state_root because they have different leaves
-        assert_ne!(real_root, state_root);
-
-        // The derivation uses state_root, but the Merkle proof leads to real_root
+        // The witness commits to real_root (the tree that genuinely contains the fact).
         let step = make_step(
             1,
-            state_root,
+            real_root,
             allow_pred,
             [alice, app, BabyBear::ZERO],
             has_role_pred,
             [alice, app, BabyBear::ZERO],
             vec![alice, app],
         );
-        let witness = build_multi_step_witness(state_root, BabyBear::new(42), vec![step]);
+        let witness = build_multi_step_witness(real_root, BabyBear::new(42), vec![step]);
 
-        // This should panic because the Merkle proof computes to real_root, not state_root
-        let body_proofs = vec![BodyFactMerkleProof {
+        // HONEST-ACCEPT FIRST, OUTSIDE any catch: the CORRECT membership proof
+        // (leading to real_root, the witness's state_root) proves AND verifies.
+        // This is what makes the reject below provably caused by the wrong proof.
+        let honest_proofs = vec![BodyFactMerkleProof {
             fact_hash: body_fact_hash,
             siblings: real_proofs[2].siblings.clone(),
             positions: real_proofs[2].positions.clone(),
         }];
-
-        let result = std::panic::catch_unwind(|| {
-            prove_authorization_with_membership(&witness, &body_proofs)
-        });
+        let honest_proof = prove_authorization_with_membership(&witness, &honest_proofs);
+        let conclusion = witness.conclusion();
+        let acc_hash = witness.final_accumulated_hash();
+        let expected_body_hashes = collect_body_fact_hashes(&witness);
         assert!(
-            result.is_err(),
-            "Should panic when Merkle proof root mismatches state_root"
+            verify_authorization_with_membership(
+                &honest_proof,
+                conclusion,
+                acc_hash,
+                &expected_body_hashes,
+            )
+            .is_ok(),
+            "the correct membership proof must prove + verify"
         );
+
+        // TAMPER: supply the Merkle proof for the WRONG leaf position (index 0's
+        // siblings/positions). Hashing body_fact_hash up through index-0's
+        // authentication path yields a root that is NOT real_root, so the proof
+        // does not authenticate the fact under the committed state_root.
+        let (_t, wrong_pi) = generate_merkle_poseidon2_trace(
+            body_fact_hash,
+            &real_proofs[0].siblings,
+            &real_proofs[0].positions,
+        );
+        assert_ne!(
+            wrong_pi[1], real_root,
+            "the wrong-position path must reconstruct a root != real_root"
+        );
+        let wrong_proofs = vec![BodyFactMerkleProof {
+            fact_hash: body_fact_hash,
+            siblings: real_proofs[0].siblings.clone(),
+            positions: real_proofs[0].positions.clone(),
+        }];
+
+        // A reject may surface as a panic (crash = rejection) OR as a proof that
+        // FAILS to verify. Either is acceptable; a proof that VERIFIES would be a
+        // soundness break (a membership proof for the wrong path accepted against
+        // the committed state_root).
+        let verdict = std::panic::catch_unwind(|| {
+            let tampered = prove_authorization_with_membership(&witness, &wrong_proofs);
+            verify_authorization_with_membership(
+                &tampered,
+                conclusion,
+                acc_hash,
+                &expected_body_hashes,
+            )
+            .is_ok()
+        });
+        match verdict {
+            Err(_) => {}            // panic = rejection = fine
+            Ok(false) => {}         // produced a proof that does NOT verify = rejection = fine
+            Ok(true) => panic!(
+                "FORGE: a membership proof for the wrong leaf path verified against a witness \
+                 committed to real_root — a soundness break"
+            ),
+        }
     }
 
     // ========================================================================

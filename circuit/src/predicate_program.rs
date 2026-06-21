@@ -2487,6 +2487,25 @@ mod tests {
 
         let compiled = compile_predicate(&program).unwrap();
 
+        // HONEST-ACCEPT FIRST: the SAME GreaterThan predicate over a SATISFIABLE
+        // assignment (my_value 5000 > their_value 3000) proves — so the reject
+        // below is provably caused by the unsatisfiable assignment (1000 > 3000),
+        // not a compile/setup error.
+        {
+            let mut sat_state = PrivateState::default();
+            sat_state.values.insert("bid".to_string(), 5000u64);
+            sat_state.relational_context.insert(
+                "bid".to_string(),
+                RelationalContext {
+                    my_blinding,
+                    their_value,
+                    their_blinding,
+                },
+            );
+            prove_program(&compiled, &sat_state, state_root)
+                .expect("a satisfiable GreaterThan predicate must prove");
+        }
+
         let mut private_state = PrivateState::default();
         private_state.values.insert("bid".to_string(), my_value);
         private_state.relational_context.insert(
@@ -2760,6 +2779,14 @@ mod tests {
         });
 
         let compiled = compile_predicate(&program).unwrap();
+
+        // HONEST-ACCEPT FIRST: the SAME Neq(status, 5) predicate over a SATISFYING
+        // state (status = 7 != 5) proves — so the reject below is provably caused
+        // by status == 5 (the equality that makes Neq unsatisfiable), not a
+        // compile/setup error.
+        prove_program(&compiled, &make_state(&[("status", 7)]), state_root)
+            .expect("Neq(status, 5) must prove when status != 5");
+
         let private_state = make_state(&[("status", 5)]);
         let result =
             std::panic::catch_unwind(|| prove_program(&compiled, &private_state, state_root));

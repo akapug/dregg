@@ -826,14 +826,23 @@ mod tests {
         input[2] = BabyBear::new(30);
         input[3] = BabyBear::new(40);
         input[4] = BabyBear::new(4);
-        let (mut trace, _) = Poseidon2Air::generate_trace(&input);
+        let (trace, honest_pi) = Poseidon2Air::generate_trace(&input);
+        let air = Poseidon2Air;
+
+        // HONEST-ACCEPT FIRST: the un-tampered trace proves + verifies — so the
+        // reject below is provably caused by the wrong output, not a setup error.
+        let honest_proof = stark::prove(&air, &trace, &honest_pi);
+        assert!(
+            stark::verify(&air, &honest_proof, &honest_pi).is_ok(),
+            "Baseline: the correct-output trace must verify"
+        );
 
         // Tamper with output
+        let mut trace = trace;
         trace[0][WIDTH] = BabyBear::new(999999);
         trace[1][WIDTH] = BabyBear::new(999999);
 
         let pi: Vec<BabyBear> = trace[0].clone();
-        let air = Poseidon2Air;
         let result = std::panic::catch_unwind(|| {
             let proof = stark::prove(&air, &trace, &pi);
             stark::verify(&air, &proof, &pi)
