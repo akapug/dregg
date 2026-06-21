@@ -26,6 +26,28 @@ anchor families (Refusal record-digest via fields_root; lifecycle-PAYLOAD reason
 the SAME `proof_verify.rs` block + the SAME conversion shape (weld the dedicated committed sub-limb to
 the declared/forced value, then the anchor becomes redundant).
 
+## ⚑ CAP-WRITE SILENT-FORGE GUARD — CLOSED (the map_op fired on the WRONG selector; re-pointed) (2026-06-21)
+THE FORGE (banked RED at `bd7ba0bf9`): the cap-WRITE map_ops (`insertWriteOpRot`/`removeWriteOpRot`/
+`heldReadOpRot`/`anchorReadOpRot`, `EffectVmEmitRotationV3`) were guarded on `selA.ATTENUATE = 2` (the SET_FIELD
+column) — NEVER 1 on a cap-write row — so the map_op NEVER FIRED, leaving the AFTER cap-root (rotated var 264)
+UNBOUND (a fabricated post-root was proved + light-client-accepted; 0xBADF00D witness). CLOSED: parameterized the
+4 rotated map_ops by selector `s`; each `<slot>WriteV3` passes its OWN runtime selector — delegate/grantCap/
+delegateAtten = `sel.GRANT_CAP = 3`, introduce = `sel.INTRODUCE = 35`, revokeDelegation = `sel.REVOKE_DELEGATION =
+30` — matching `effect_selector` (the column the trace sets to 1). The `_forces_write`/`_non_amp` keystones'
+`hactive` + the `*WriteAnchor` structs (`RotatedKernelRefinementCapFamily`) follow the same selector. Lean Dregg2
+GREEN + axiom-clean; descriptors regen + drift PASS (guards now read 30/3/3/35, was 2). FORGE-DETECTOR FLIPPED
+GREEN: `write_cap_open_wrapper_requires_cap_tree_write_witness_no_silent_forge` (a genuine 213≠264 change with
+empty map_heaps is now REJECTED — the map_op fires + fails to resolve the fabricated root);
+`cap_write_revoke_proves_and_verifies_light_client` STAYS GREEN (now GENUINE). NAMED RESIDUAL (deeper, not a guard
+re-point): attenuate (`keepWriteOp`) + revokeCapability (`removeWriteOp`) carry the SAME never-firing guard
+(`selA.ATTENUATE = 2` vs the live `sel.ATTENUATE_CAPABILITY = 48` / `sel.REVOKE_CAPABILITY = 24`) BUT write the
+V1-STATE cap-root (col 65/87), NOT a rotated-limb commitment input, AND have no `generate_rotated_cap_write_base`
+witness-heap bridge — so a guard re-point ALONE breaks the honest prove-through
+(`cap_open_attenuate_leg_proves_and_verifies_end_to_end`) without binding into the commitment. CLOSURE = the SAME
+rotated-limb rebase the cap-WRITE wrappers got (move `keepWriteOp`/`removeWriteOp` onto a rotated `…OpRot` limb-25
+write that folds into `wireCommitR` + thread the cap-tree witness heap on the attenuate/revokeCapability route).
+Left at the faithfulness name (documented FORGE NOTE in `EffectVmEmitV2.heldReadOp`) pending that rebase.
+
 ## ⚑ CAP-WRITE LOOP — cap-root COLLISION CLOSED (rotated-limb advance + trace-gen aligned); LONE residual = spurious NONCE-FREEZE gate (2026-06-20)
 TWO of the three layers are now CLOSED. (1) The col-87 over-determination is closed (commit 0c2b0704c — col 87 is
 `map_op` `new_root` ONLY, folded as a commitment INPUT, note-spend-shaped). (2) The v1-STATE cap-root CONTINUITY
@@ -3444,3 +3466,15 @@ CHECKLIST boxes now genuinely green: attenuate · resolvers · receiptArchive ·
 refreshDelegation · setPerms · setVK. STILL OPEN: cap-write Inserts (delegate/introduce/delegateAtten — descriptors
 forge-fixed but Rust CapTreeWriteOp::Insert unwired) · the verifier authority-only tooth (needs 3 tests reconciled) ·
 revoke(tag-2) frozen-face · SetProgram bank · VK-epoch families 2-N (Refusal/lifecycle-payload + STAGE F).
+
+## 🟥 FORGE PATTERN = a FAMILY (2026-06-21, adf2d407) — attenuate + revokeCapability ALSO mis-guarded
+The silent forge (map_op guarded on var2=SET_FIELD, never fires -> post-root unbound) is NOT unique to the cap-WRITE
+wrappers. attenuate (keepWriteOp, sel.ATTENUATE_CAPABILITY=48) + revokeCapability (removeWriteOp,
+sel.REVOKE_CAPABILITY=24) carry the SAME never-firing var2 guard. BUT a guard re-point ALONE is insufficient +
+broke cap_open_attenuate_leg_proves_and_verifies: these write the V1-STATE cap-root (col 65/87) which is NOT a
+rotated-limb commitment input (the rotated commit binds limb 264, not col 87) + has no witness-heap bridge. CLOSURE
+= the SAME rotated-limb rebase the cap-WRITE wrappers got (move the write onto rotated limb-25 folding into
+wireCommitR + thread the cap-tree witness heap on the attenuate/revokeCapability route). Agent reverted them to the
+faithfulness name (NOT half-fixed) + a FORGE NOTE in EffectVmEmitV2.heldReadOp. = 2 more cap-effects with the
+post-cap-root unbound (forgeable) until the rebase. ⚑ The forge-detector pattern should be EXTENDED to attenuate +
+revokeCapability (a non-vacuous assert that THEIR map_op fires / post-root is bound) so they can't silently ship.
