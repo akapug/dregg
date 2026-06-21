@@ -54,6 +54,11 @@
 //!   authority clash (a *real* conflict that may need consensus).
 //! - [`resolve_connect`] / [`resolve_keep`] / [`resolve_field`] — resolution
 //!   patches that collapse a conflict (order / choose / settle a field).
+//! - [`resolutions`] / [`resolutions_for`] — the conflict-view EDITING model: given
+//!   the live [`Rendered`] content, the set of one-click [`ResolutionChoice`]s a
+//!   reader can take on each conflict (keep-each / order-all / settle-a-field), each
+//!   a ready, authored [`Patch`]. This is the bridge that makes a rendered conflict
+//!   *resolvable from the surface* — the conflict view becomes an editor.
 //! - [`commit`] — the document [`Commitment`] that binds atoms, edges, and
 //!   field assignments *with their provenance*, so a light client cannot be
 //!   shown a conflict that hides or forges an alternative (§4.4 soundness).
@@ -104,22 +109,31 @@
 mod atom;
 mod blame;
 mod commit;
+// A document COMPOSED FROM cells — the embed algebra (`Op::Embed` + the two-arm
+// `ChildRef`: Cell(identity) | Name(namespace binding)). Standalone (no
+// substrate). See docs/deos/DOC-CELL-COMPOSITION.md.
+pub mod composition;
 mod content;
 mod depend;
 mod doc;
 mod graph;
 mod history;
+mod literate;
 mod merge;
 mod patch;
 mod regime;
 mod resolve;
+mod resolution;
 mod threeway;
 #[cfg(feature = "substrate")]
 mod substrate;
 #[cfg(feature = "substrate")]
-mod doccell;
-#[cfg(feature = "substrate")]
 mod executor_drive;
+// THE DESKTOP IS A DOCUMENT — project a cockpit workspace (ordered surfaces + a
+// tab/focus selector) as a document, committed by the REAL substrate heap root.
+// Substrate-gated (it uses `substrate_commit`). See docs/deos/DOC-CELL-COMPOSITION.md.
+#[cfg(feature = "substrate")]
+pub mod desktop;
 
 pub use atom::{Atom, AtomId, Author, PatchId, Provenance, Status};
 pub use blame::{BlameLine, blame, blame_summary};
@@ -130,18 +144,24 @@ pub use depend::{
 #[cfg(feature = "substrate")]
 pub use substrate::{COLL_ATOMS, COLL_EDGES, COLL_FIELDS, substrate_commit, to_heap_map};
 #[cfg(feature = "substrate")]
-pub use doccell::{DocCell, decode_index, desugar_op_kind, encode_index, project_graph};
-#[cfg(feature = "substrate")]
 pub use executor_drive::{ExecutorDrivenDoc, field_key};
 pub use content::{Alternative, ConflictRegion, Rendered, Segment, content, walk_atoms};
 pub use doc::{Doc, Granularity};
 pub use graph::{DocGraph, FieldAssign};
 pub use history::History;
+pub use literate::{
+    LiterateDoc, Parsed, ParsedAlternative, ParsedConflict, ParsedField, author_graph, parse,
+    parsed_conflicts_of, parsed_shape, render, render_with_fields,
+};
 pub use merge::{merge, merge_all};
 pub use patch::{Op, Patch};
 pub use regime::Regime;
 pub use resolve::{
     resolve_connect, resolve_connect_by, resolve_field, resolve_keep, resolve_keep_by,
+    resolve_keep_in,
+};
+pub use resolution::{
+    RegionResolutions, Resolution, ResolutionChoice, resolutions, resolutions_for,
 };
 pub use threeway::{
     ConflictSide, ThreeWayConflict, merge_base, render_three_way, three_way,

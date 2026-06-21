@@ -41,11 +41,12 @@ repository = "https://github.com/emberian/dregg"
 # the in-crate `DefaultHasher` stand-in (`commit::commit`) with the real ride.
 #
 # `substrate` ALSO closes THE SEAM (DOCUMENT-LANGUAGE.md §4.1, §4.3 dregg-native):
-# a document IS a real `dregg_cell::Cell` ([`DocCell`]) and an edit IS a real
-# turn — `Op::{Add,Delete,Connect,SetField}` desugars to genuine
-# `dregg_turn::Effect::SetField` writes into that cell's heap, producing a real
-# `dregg_turn::TurnReceipt`. The receipt IS the provenance: no more stand-in
-# `PatchId` for who-wrote-what. That is why `dregg-turn` is pulled in here.
+# a document IS a real `dregg_cell::Cell` (`ExecutorDrivenDoc`) and an edit IS a
+# real turn — `Op::{Add,Delete,Connect,SetField}` desugars to genuine
+# `dregg_turn::Effect::SetField` writes driven through the real `TurnExecutor`
+# (cap-gated, finalized, journaled), producing a real `dregg_turn::TurnReceipt`.
+# The receipt IS the provenance: no more stand-in `PatchId` for who-wrote-what.
+# That is why `dregg-turn` is pulled in here.
 substrate = ["dep:dregg-cell", "dep:dregg-turn", "dep:blake3"]
 
 [dependencies]

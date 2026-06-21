@@ -111,10 +111,11 @@ impl Leaf {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared leaf-builders — the SINGLE leaf scheme for the heap projection, used by
-// BOTH [`to_heap_map`] (the standalone projection/commitment) AND
-// [`crate::doccell::project_graph`] (the live `DocCell` heap). Sharing them means
-// the document's commitment and the cell it rides can never drift apart.
+// The SINGLE leaf scheme for the heap projection. [`to_heap_map`] is the ONE
+// canonical document→heap projection: the standalone commitment AND the
+// executor-driven ride ([`crate::executor_drive::ExecutorDrivenDoc`], which
+// imports it as `project_graph`) lay leaves the same way, so the document's
+// commitment and the cell it rides can never drift apart.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The leaf value binding one atom: `id ‖ content ‖ status ‖ provenance`.
