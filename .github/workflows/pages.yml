@@ -26,6 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Materialize the dregg-atlas's LFS-tracked images into the working
+          # tree so the real files land in the Pages artifact. (Pages-via-Actions
+          # serves the materialized files; legacy Pages-from-branch would serve
+          # LFS pointer stubs instead — broken images. This is why LFS is fine.)
+          lfs: true
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -109,6 +115,23 @@ jobs:
           cd site
           npm install
           npm run build
+
+      - name: Bundle THE DREGG ATLAS
+        # Ship the self-built interactive atlas (game tree + UI tree + ocap web +
+        # 28-surface UI atlas + protocol) at emberian.github.io/dregg/atlas/. The
+        # atlas uses only relative paths, so it works at any subpath unchanged.
+        # Copied BEFORE the site tests (with `atlas` registered as an app-surface
+        # in nav-coherence's COPY_DIRS) so the authored link to /atlas/ resolves.
+        run: |
+          set -euo pipefail
+          mkdir -p site/dist/atlas
+          cp -a dregg-atlas/site/. site/dist/atlas/
+          # sanity: the entrypoint + a sample LFS-materialized image exist
+          test -f site/dist/atlas/index.html
+          test -s site/dist/atlas/ui-states/HOME_.jpg
+          head -c 20 site/dist/atlas/ui-states/HOME_.jpg | grep -q '^version https://gi' \
+            && (echo "ERROR: atlas image is an unmaterialized LFS pointer — checkout needs lfs:true" && exit 1) || true
+          echo "atlas bundled at /dregg/atlas/ ($(find site/dist/atlas -type f | wc -l) files)"
 
       - name: Site tests (built output)
         # Static checks against dist/: nav coherence (every internal link

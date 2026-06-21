@@ -31,6 +31,9 @@ if (!fs.existsSync(path.join(DIST, 'index.html'))) {
 const COPY_DIRS = new Set([
   'playground', 'explorer', 'sandbox', 'extension', 'examples', 'demos',
   'pkg', 'old-site', 'starbridge-apps', '_includes', 'assets', 'paper',
+  // the self-built interactive atlas (bundled by pages.yml at /dregg/atlas/) —
+  // a self-contained app surface with its own structure, not authored pages.
+  'atlas',
 ]);
 
 // Detect BASE_PATH from the built nav brand link (href="{BASE}/").
