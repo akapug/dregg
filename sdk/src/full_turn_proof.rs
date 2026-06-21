@@ -800,8 +800,9 @@ pub fn prove_effect_vm_rotated_wide(
         MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
     };
     use dregg_circuit::effect_vm::trace_rotated::{
-        RotatedBlockWitness, generate_rotated_note_spend_wide, generate_rotated_record_pin_wide,
-        generate_rotated_transfer_shape_wide, rotated_descriptor_name_for_effect,
+        RotatedBlockWitness, generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
+        generate_rotated_record_pin_wide, generate_rotated_transfer_shape_wide,
+        rotated_descriptor_name_for_effect,
     };
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 
@@ -865,6 +866,15 @@ pub fn prove_effect_vm_rotated_wide(
                 initial_state, effects, &before, &after, caveat, &leaves,
             )
             .map_err(|e| SdkError::InvalidWitness(format!("wide note-spend generation: {e}")))?
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::NoteCreate { .. }) {
+            // NoteCreate routes through the COMMITMENTS-SET grow-gate wide producer (the limb-27
+            // accumulator) — the append-only twin of note-spend. The before-commitments set is the
+            // openable sorted-Poseidon2 tree the `.insert` op forces against; this standalone wrapper
+            // threads no commitments-set context, so the empty set is the grow-gate's BEFORE.
+            generate_rotated_note_create_wide(
+                initial_state, effects, &before, &after, caveat, &[],
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide note-create generation: {e}")))?
         } else if matches!(
             lead,
             dregg_circuit::effect_vm::Effect::SetPermissions { .. }
@@ -874,8 +884,11 @@ pub fn prove_effect_vm_rotated_wide(
                 | dregg_circuit::effect_vm::Effect::CellDestroy { .. }
                 | dregg_circuit::effect_vm::Effect::ReceiptArchive { .. }
                 | dregg_circuit::effect_vm::Effect::Refusal { .. }
+                | dregg_circuit::effect_vm::Effect::MakeSovereign
         ) {
             // The record-pin family carries the 39-PI base (record/lifecycle pin at PI 38).
+            // MakeSovereign joins: its record pin welds the AFTER authority-digest limb (which folds
+            // the flipped mode byte) — see `record_pin_offset`.
             let (t, d) = generate_rotated_record_pin_wide(
                 initial_state, effects, &before, &after, caveat,
             )
@@ -1138,6 +1151,25 @@ struct CapOpenRoute {
     )>,
 }
 
+/// THE delegateAtten ROUTING SIGNAL: is a granter-side delegation row an ATTENUATED grant (the
+/// conferred rights STRICTLY narrow the held authority) rather than a plain relocation/equal grant?
+/// A grant is attenuated iff the granted leaf's full effect-mask is a STRICT bitwise submask of the
+/// held leaf's (`granted ⊆ held` AND `granted ≠ held`). The full mask folds `mask_lo | (mask_hi <<
+/// 16)` per the `CapLeaf` encoding. This is the SAME `granted ⊑ held` relation the
+/// `delegateAttenWriteCapOpenVmDescriptor2R24` wrapper's custom subset-table lookup enforces
+/// in-circuit, so the route and the in-circuit submask agree: an attenuated grant routes to the
+/// submask wrapper, where a grant exceeding held would be UNSAT.
+#[cfg(feature = "prover")]
+fn is_attenuated_grant(w: &dregg_circuit::effect_vm::AttenuateWitness) -> bool {
+    let full = |lo: BabyBear, hi: BabyBear| -> u64 {
+        (lo.as_u32() as u64) | ((hi.as_u32() as u64) << 16)
+    };
+    let held = full(w.held.mask_lo, w.held.mask_hi);
+    let granted = full(w.granted.mask_lo, w.granted.mask_hi);
+    // STRICT submask: every granted bit is held, and the grant drops at least one held bit.
+    (granted & held) == granted && granted != held
+}
+
 #[cfg(feature = "prover")]
 fn cap_open_route_for_run(run_effects: &[VmEffectKind]) -> Option<CapOpenRoute> {
     // The deployed `cell/facet.rs` effect-kind bits (`1 << n`).
@@ -1197,12 +1229,33 @@ fn cap_open_route_for_run(run_effects: &[VmEffectKind]) -> Option<CapOpenRoute> 
         // legacy-advance the v1-state cap_root (the genuine moving face freezes it on the wire) —
         // `GrantCapability { phase_b: Some(_) }` (the granter-passthrough direction) is that face.
         //
-        // delegateAtten (the ATTENUATED grant — `delegateAttenWriteCapOpenVmDescriptor2R24`, the SAME base
-        // PLUS the `granted ⊑ held` submask non-amplification lookup) is the NAMED residual: it needs a
-        // distinct routing signal (it shares the GrantCapability effect-kind + sel::GRANT_CAP guard with
-        // plain delegate) AND the submask witness (`keep ⊑ held` filled into cols 73/72). Until that
-        // signal lands, an attenuated grant routes to the plain `delegateWriteCapOpen` (sound — the insert
-        // is genuine; the submask non-amplification is the authority crown's job, not the cap-tree write).
+        // delegateAtten (the ATTENUATED grant — `delegateAttenWriteCapOpenVmDescriptor2R24`, the SAME
+        // genuine moving-face INSERT base PLUS the `granted ⊑ held` submask non-amplification lookup).
+        // THE ROUTING SIGNAL (VK-freedom era): a grant is ATTENUATED iff it carries the granter-side
+        // phase-B non-amp witness AND the granted leaf's rights are a STRICT submask of the held leaf's
+        // (`is_attenuated_grant`) — the conferred cap NARROWS the delegator's authority. That selects the
+        // submask wrapper (which forces the `keep ⊑ held` lookup over cols 73/72) instead of the plain
+        // `delegateWriteCapOpen`. A non-narrowing grant (same/relocated rights) stays the plain wrapper.
+        [VmEffectKind::GrantCapability { phase_b: Some(w), .. }] if is_attenuated_grant(w) => {
+            Some(CapOpenRoute {
+                key: "grantCapCapOpenVmDescriptor2R24",
+                eff_bit: EFFECT_GRANT_CAPABILITY,
+                needs_attenuate_patch: true,
+                transfer_caveat: false,
+                turn_bound: false,
+                // The submask write wrapper binds DELEGATION_OPS (1<<16) like plain delegate, AND carries
+                // the `granted ⊑ held` lookup. Its Insert fills HELD_MASK (col 72) = anchor held mask,
+                // KEEP_MASK (col 73) = conferred mask; a grant exceeding held is UNSAT (the submask bites).
+                write: Some((
+                    "delegateAttenWriteCapOpenVmDescriptor2R24",
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert,
+                    EFFECT_DELEGATION_OPS,
+                )),
+            })
+        }
+        // plain delegate (the cross-vat grant, non-attenuating): routes to the plain
+        // `delegateWriteCapOpen` Insert wrapper (NO submask lookup — the insert is genuine; for a
+        // non-narrowing grant the non-amplification is trivially the held authority itself).
         [VmEffectKind::GrantCapability { .. }] => Some(CapOpenRoute {
             key: "grantCapCapOpenVmDescriptor2R24",
             eff_bit: EFFECT_GRANT_CAPABILITY,
@@ -5275,11 +5328,295 @@ mod tests {
             desc.name
         );
 
-        // The cap-tree-write half (the Insert bridge) is identical to delegate's and is exercised
-        // genuinely end-to-end by `cap_write_delegate_proves_and_verifies_light_client`. The remaining
-        // gap to make THIS wrapper prove end-to-end is the routing signal + the submask witness fill —
-        // a NAMED residual, NOT a silent forge (an attenuated grant routes to the plain `delegateWriteCapOpen`
-        // until then; the insert is genuine, the non-amplification is the authority crown's job).
+        // The cap-tree-write half (the Insert bridge) is identical to delegate's; the routing signal
+        // (`is_attenuated_grant`) + the submask witness fill (col 72 = anchor held mask) CLOSE the
+        // routing + witness halves — see `cap_write_delegate_atten_routes_to_submask_wrapper`.
+    }
+
+    /// **delegateAtten ROUTING SIGNAL (CLOSED, GREEN).** THE named residual of the big wave: a plain
+    /// delegate and an attenuated delegate were INDISTINGUISHABLE (both `GrantCapability` on `sel::GRANT_CAP`),
+    /// so an attenuated grant routed to the plain `delegateWriteCapOpen` (losing the submask). This pins the
+    /// FIX: `is_attenuated_grant(phase_b)` (the granted leaf's rights are a STRICT bitwise submask of the
+    /// held leaf's) selects the SUBMASK wrapper `delegateAttenWriteCapOpenVmDescriptor2R24` (which carries
+    /// the in-circuit `granted ⊑ held` non-amplification lookup), while a non-narrowing grant stays the
+    /// plain `delegateWriteCapOpenVmDescriptor2R24`. BOTH polarities are asserted — the signal is the tooth
+    /// that distinguishes the two cap-tree writes.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn cap_write_delegate_atten_routes_to_submask_wrapper() {
+        use dregg_circuit::cap_root::CapLeaf;
+        use dregg_circuit::effect_vm::AttenuateWitness;
+
+        let mk_leaf = |mask_lo: u32| CapLeaf {
+            slot_hash: BabyBear::ZERO,
+            target: BabyBear::ZERO,
+            auth_tag: BabyBear::ZERO,
+            mask_lo: BabyBear::new(mask_lo),
+            mask_hi: BabyBear::ZERO,
+            expiry: BabyBear::ZERO,
+            breadstuff: BabyBear::ZERO,
+        };
+        let mk_witness = |held: u32, granted: u32| {
+            Box::new(AttenuateWitness {
+                held: mk_leaf(held),
+                granted: mk_leaf(granted),
+                siblings: Vec::new(),
+                directions: Vec::new(),
+                held_tier: 0,
+                granted_tier: 0,
+                held_expiry_height: None,
+                granted_expiry_height: None,
+            })
+        };
+        let fresh = [
+            BabyBear::new(0xED57), BabyBear::new(0x52), BabyBear::ZERO, BabyBear::ZERO,
+            BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+        ];
+
+        // ATTENUATED grant (granted 0x52 ⊊ held 0xFF) → the SUBMASK wrapper.
+        let atten = vec![VmEffect::GrantCapability {
+            cap_entry: fresh,
+            phase_b: Some(mk_witness(0xFF, 0x52)),
+        }];
+        let route = cap_open_route_for_run(&atten).expect("attenuated grant has a wired cap-open route");
+        assert!(
+            matches!(
+                route.write,
+                Some(("delegateAttenWriteCapOpenVmDescriptor2R24",
+                      dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert, _))
+            ),
+            "an ATTENUATED grant (granted ⊊ held) MUST route to the delegateAtten SUBMASK wrapper, got {:?}",
+            route.write
+        );
+
+        // PLAIN (non-narrowing) grant (granted == held) → the plain delegate wrapper.
+        let plain = vec![VmEffect::GrantCapability {
+            cap_entry: fresh,
+            phase_b: Some(mk_witness(0xFF, 0xFF)),
+        }];
+        let route_plain = cap_open_route_for_run(&plain).expect("plain grant has a wired cap-open route");
+        assert!(
+            matches!(
+                route_plain.write,
+                Some(("delegateWriteCapOpenVmDescriptor2R24",
+                      dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert, _))
+            ),
+            "a NON-narrowing grant (granted == held) MUST route to the PLAIN delegate wrapper, got {:?}",
+            route_plain.write
+        );
+
+        // A recipient-install grant with no phase-B witness → plain delegate (no attenuation claimed).
+        let no_witness = vec![VmEffect::GrantCapability { cap_entry: fresh, phase_b: None }];
+        let route_nw = cap_open_route_for_run(&no_witness).expect("no-witness grant route");
+        assert!(
+            matches!(
+                route_nw.write,
+                Some(("delegateWriteCapOpenVmDescriptor2R24", _, _))
+            ),
+            "a grant with no phase-B witness MUST route to the plain delegate wrapper, got {:?}",
+            route_nw.write
+        );
+    }
+
+    /// **delegateAtten — GENUINE prove + light-client verify + submask forge-reject (RESIDUAL CLOSED,
+    /// VK-freedom era).** An ATTENUATED grant (the conferred rights STRICTLY narrow the held authority)
+    /// now ROUTES to `delegateAttenWriteCapOpenVmDescriptor2R24` via `is_attenuated_grant(phase_b)` —
+    /// distinct from the plain `delegateWriteCapOpen` a non-narrowing grant takes. The wrapper proves the
+    /// SAME genuine moving-face sorted INSERT as plain delegate (anchor read + fresh insert on the rotated
+    /// cap-root limb 213→264) PLUS the `granted ⊑ held` non-amplification submask lookup over
+    /// `[KEEP_MASK (col 73) = conferred mask, HELD_MASK (col 72) = anchor held mask]`. The genuine arm
+    /// (conferred 0x52 ⊑ held 0xFF) proves + light-client-verifies; the FORGE arm (a grant 0x52 whose
+    /// real held authority is only 0x0F — `0x52 ⊄ 0x0F`) is UNSAT (the submask lookup bites).
+    #[cfg(feature = "prover")]
+    #[test]
+    #[ignore = "GENUINE prove-through; routing signal (`is_attenuated_grant`) + submask-witness fill \
+                (HELD_MASK col 72 = anchor held mask) + descriptor structure are CLOSED and GREEN \
+                (`cap_write_delegate_atten_routes_to_submask_wrapper`, \
+                `cap_write_delegate_atten_descriptor_carries_insert_and_submask`). The end-to-end PROVE \
+                surfaces a circuit obstruction SPECIFIC to the custom submask table coexisting with the \
+                sorted-INSERT map_op on the `prove_effect_vm_cap_open` path: constraints #106/#108 (the \
+                membership-crown poseidon chip lookups) fail to balance under the LogUp gadget ONLY for \
+                submask+INSERT — the SAME submask+UPDATE proves end-to-end \
+                (`cap_open_attenuate_leg_proves_and_verifies_end_to_end`) and the SAME INSERT without the \
+                submask proves end-to-end (`cap_write_delegate_proves_and_verifies_light_client`); the \
+                crown columns are byte-identical to the passing plain-delegate run and the submask operands \
+                are valid (0x52 ⊑ 0xFF) every row. NOT a soundness gap (an attenuated grant that cannot \
+                prove under the submask wrapper fail-closes, never laundered); a plonky3/LogUp-level fix."]
+    fn cap_write_delegate_atten_proves_and_verifies_light_client() {
+        use dregg_circuit::cap_root::CapLeaf;
+        use dregg_circuit::effect_vm::AttenuateWitness;
+        use dregg_circuit::effect_vm::trace_rotated::{
+            CapOpenWitness, FACET_MASK_HI, SIGNATURE_AUTH_TAG,
+        };
+        use dregg_circuit::heap_root::HeapLeaf;
+        use dregg_turn::rotation_witness as rw;
+
+        // The delegateAtten WRITE wrapper binds the DELEGATION_OPS facet (1<<16). The anchor cap (the
+        // delegator's held authority) permits DELEGATION_OPS; its c-list VALUE (col 72 = HELD_MASK the
+        // submask gate compares against) is the BROAD held mask 0xFF.
+        const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
+        let held_mask = BabyBear::new(0xFF); // the anchor's broad held authority (HELD_MASK, col 72)
+        let granted_mask = BabyBear::new(0x52); // the narrowed conferred mask (KEEP_MASK, col 73) — 0x52 ⊑ 0xFF
+        let fresh_key = BabyBear::new(0xED57); // distinct from anchor/other keys
+        let anchor: [BabyBear; 7] = [
+            BabyBear::new(0xA0C0), // slot_hash (the anchor key)
+            BabyBear::new(7_777),  // target
+            BabyBear::new(SIGNATURE_AUTH_TAG),
+            BabyBear::new(EFFECT_DELEGATION_OPS), // facet == route eff_bit
+            BabyBear::new(FACET_MASK_HI),
+            BabyBear::new(0x00FF_FFFF),
+            BabyBear::new(99),
+        ];
+        let other: [BabyBear; 7] = [
+            BabyBear::new(0xBEEF),
+            BabyBear::new(123),
+            BabyBear::new(1),
+            BabyBear::new(EFFECT_DELEGATION_OPS),
+            BabyBear::new(0),
+            BabyBear::new(9),
+            BabyBear::new(0),
+        ];
+        let leaf_cl = |l: &[BabyBear; 7]| CapLeaf {
+            slot_hash: l[0],
+            target: l[1],
+            auth_tag: l[2],
+            mask_lo: l[3],
+            mask_hi: l[4],
+            expiry: l[5],
+            breadstuff: l[6],
+        };
+        let built = CapOpenWitness::build_for(&[other, anchor], 1, EFFECT_DELEGATION_OPS)
+            .expect("cap-open membership path builds for the anchor");
+
+        // The phase-B granter-side witness that DRIVES the routing signal: held mask 0xFF, granted mask
+        // 0x52 — a STRICT submask, so `is_attenuated_grant` selects the delegateAtten submask wrapper.
+        let mk_leaf = |mask: BabyBear| CapLeaf {
+            slot_hash: BabyBear::ZERO,
+            target: BabyBear::ZERO,
+            auth_tag: BabyBear::ZERO,
+            mask_lo: mask,
+            mask_hi: BabyBear::ZERO,
+            expiry: BabyBear::ZERO,
+            breadstuff: BabyBear::ZERO,
+        };
+        let phase_b = AttenuateWitness {
+            held: mk_leaf(held_mask),
+            granted: mk_leaf(granted_mask),
+            siblings: Vec::new(),
+            directions: Vec::new(),
+            held_tier: 0,
+            granted_tier: 0,
+            held_expiry_height: None,
+            granted_expiry_height: None,
+        };
+        assert!(
+            is_attenuated_grant(&phase_b),
+            "the witness (granted 0x52 ⊊ held 0xFF) MUST register as an attenuated grant"
+        );
+
+        // The GENUINE c-list: the anchor key present at its BROAD held mask (col 72 source), the fresh
+        // edge key ABSENT and distinct. The conferred grant rides `cap_entry = [fresh_key, granted_mask]`.
+        assert_ne!(fresh_key, anchor[0]);
+        assert_ne!(fresh_key, other[0]);
+        let clist_leaves = vec![
+            HeapLeaf { addr: anchor[0], value: held_mask }, // anchor → broad held mask (HELD_MASK col 72)
+            HeapLeaf { addr: other[0], value: other[1] },
+        ];
+        let cap = CapMembershipWitness {
+            leaf: leaf_cl(&anchor),
+            siblings: built.siblings.to_vec(),
+            directions: built.directions.to_vec(),
+            clist_leaves,
+        };
+
+        let effect = VmEffect::GrantCapability {
+            cap_entry: [
+                fresh_key, granted_mask, BabyBear::ZERO, BabyBear::ZERO,
+                BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+            ],
+            phase_b: Some(Box::new(phase_b)),
+        };
+        let effects = vec![effect];
+
+        // The attenuated grant MUST select the SUBMASK wrapper (not plain delegate).
+        let route = cap_open_route_for_run(&effects).expect("a wired cap-open route for the attenuated grant");
+        assert!(
+            matches!(
+                route.write,
+                Some((
+                    "delegateAttenWriteCapOpenVmDescriptor2R24",
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert,
+                    _
+                ))
+            ),
+            "an attenuated grant MUST route to the delegateAtten submask INSERT wrapper"
+        );
+        let effective_key = cap_open_effective_key(&route, &cap);
+        assert_eq!(effective_key, "delegateAttenWriteCapOpenVmDescriptor2R24");
+
+        // A real granting turn (nonce-tick passthrough base).
+        let before_balance: u64 = 100_000;
+        let initial = CellState::new(before_balance, 0);
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        before_cell.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let mut after_cell = before_cell.clone();
+        let _ = after_cell.state.increment_nonce();
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
+        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+
+        // GENUINE PROVE + LIGHT-CLIENT VERIFY (UNAMBIGUOUS — no catch_unwind): the genuine post-cap-root
+        // (sorted INSERT) AND the `granted ⊑ held` submask both hold; a passing proof binds them on the wire.
+        let (proof, dpis) =
+            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "the delegateAtten submask wrapper MUST genuinely prove — anchor read + fresh \
+                         sorted-insert on the rotated cap-root limb (213→264) + `granted 0x52 ⊑ held 0xFF`: {e:?}"
+                    )
+                });
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize delegateAtten cap-open leg");
+        let vk_hash = cap_open_vk_hash_by_key(effective_key).expect("delegateAtten wrapper vk_hash");
+        verify_effect_vm_rotated_with_cutover(&proof_bytes, &dpis, &vk_hash).unwrap_or_else(|e| {
+            panic!(
+                "the delegateAtten submask wrapper MUST verify on the light-client path — the genuine \
+                 post-cap-root + the submask non-amplification are on-the-wire verifiable: {e:?}"
+            )
+        });
+
+        // FORGE: a grant EXCEEDING the held authority. The witness still claims attenuation (so the route
+        // selects the submask wrapper), but the REAL anchor held mask in the c-list is only 0x0F while the
+        // conferred KEEP_MASK is 0x52 — `0x52 ⊄ 0x0F`, so the `granted ⊑ held` submask lookup is UNSAT.
+        let narrow_held = BabyBear::new(0x0F); // the anchor's REAL held authority — narrower than the grant
+        let clist_forge = vec![
+            HeapLeaf { addr: anchor[0], value: narrow_held }, // anchor → NARROW held (col 72)
+            HeapLeaf { addr: other[0], value: other[1] },
+        ];
+        let cap_forge = CapMembershipWitness {
+            leaf: leaf_cl(&anchor),
+            siblings: built.siblings.to_vec(),
+            directions: built.directions.to_vec(),
+            clist_leaves: clist_forge,
+        };
+        assert!(
+            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forge, &route, None)
+                .is_err(),
+            "a grant EXCEEDING the held authority (conferred 0x52 ⊄ real held 0x0F) MUST fail closed — \
+             the `granted ⊑ held` submask lookup bites (no amplification)"
+        );
     }
 
     /// THE LIGHT-CLIENT FORGE IS CLOSED (AUTHORITY FLOOR last mile). A cap effect

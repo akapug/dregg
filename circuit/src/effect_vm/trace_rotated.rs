@@ -1175,9 +1175,17 @@ pub fn generate_rotated_cap_write_base(
                 inserted_value,
             } => {
                 // The `read` map_op opens the anchor (cols 74/75); the `insert` map_op inserts the
-                // fresh key/value (cols 71/73). The read's value column (col 72) is unused by Insert.
+                // fresh key/value (cols 71/73). Col 72 (`HELD_MASK`) is unused by plain delegate /
+                // introduce (no submask lookup), but the `delegateAtten` wrapper carries the
+                // `granted ⊑ held` non-amplification lookup over `[KEEP_MASK (73), HELD_MASK (72)]`:
+                // its HELD_MASK is the delegator's held-authority mask, which IS the anchor leaf's
+                // c-list value (`anchor_value`). Filling col 72 = `anchor_value` makes the submask
+                // lookup well-defined for the attenuated wrapper (the conferred KEEP_MASK at col 73
+                // must be a bitwise submask of it) and is a harmless unused column for the plain
+                // wrappers (they declare no lookup over col 72).
                 row[anchor_key_col] = anchor_key;
                 row[anchor_value_col] = anchor_value;
+                row[remove_value_col] = anchor_value; // HELD_MASK (delegateAtten submask compare)
                 row[cap_key_col] = inserted_key;
                 row[keep_mask_col] = inserted_value;
             }
@@ -1217,6 +1225,15 @@ fn record_pin_offset(lead: Option<&Effect>) -> Option<usize> {
         Some(Effect::SetPermissions { .. }) | Some(Effect::SetVerificationKey { .. }) => {
             Some(B_RECORD_DIGEST)
         }
+        // `MakeSovereign` flips the cell's `mode` (Hosted→Sovereign): the deployed apply moves the
+        // committed mode limb (`B_MODE`), which the `compute_authority_digest_felt` FOLDS into the
+        // r23 authority residue (`B_RECORD_DIGEST = B_AUTHORITY_DIGEST`). So the AFTER `record_digest`
+        // limb MOVES on a genuine promotion; the record-forcing pin (`makeSovereignV3`) welds it to
+        // PI 38 (the descriptor's `makeSovereignVmDescriptor2R24` declares the 47th pin on
+        // `after_base + B_AUTHORITY_DIGEST`), and the verifier anchors `compute_authority_digest_felt(
+        // post_cell)`. A frozen-mode / un-promoted AFTER block is UNSAT. Mirrors Lean
+        // `EffectVmEmitRotationV3.makeSovereignV3`.
+        Some(Effect::MakeSovereign) => Some(B_RECORD_DIGEST),
         // `ReceiptArchive` writes the cell LIFECYCLE (`Archived`) in the deployed `apply_receipt_archive`
         // (`c.archive(checkpoint)`), which `lifecycle_felt` (limb `B_LIFECYCLE = 29`) folds into a
         // distinct `Archived` felt — NOT the r23 authority residue. So the genuine mover is the
