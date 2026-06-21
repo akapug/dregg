@@ -97,6 +97,16 @@ impl CellAffordance {
     /// The SAME predicate the shell runs to admit a window op and the cap crown
     /// proves — NOT a parallel role check.
     pub fn authorized_for(&self, held: &SurfaceCapability) -> bool {
+        // A `None` requirement is "always allowed, no authorization needed"
+        // (`cell/src/permissions.rs`): EVERY holder clears it. The `is_attenuation`
+        // lattice models `None` as the TOP (widest), so `is_attenuation(held, None)`
+        // would WRONGLY reject any holder whose rights are not exactly `None` — the
+        // cap-badge inversion (HORIZONLOG). Special-case the always-satisfiable
+        // requirement: a `None`-gated message is sendable by anyone; the real
+        // guarantee (e.g. grant's non-amplification) fires in the EXECUTOR, not here.
+        if matches!(self.required_rights, dregg_cell::permissions::AuthRequired::None) {
+            return true;
+        }
         is_attenuation(held.rights(), &self.required_rights)
     }
 
