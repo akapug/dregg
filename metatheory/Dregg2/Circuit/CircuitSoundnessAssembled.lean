@@ -149,9 +149,18 @@ def v3RegistryHeap : List (String × EffectVmDescriptor2) :=
         -- 19` re-keys HERE so `Rfix 19 = spawnWriteCapOpenV3`; the authority-only spawn descriptor stays
         -- for the live prover route, light-client-REJECTED.
         ("spawnWriteCapOpenVmDescriptor2R24",
-         Dregg2.Circuit.Emit.CapOpenEmit.spawnWriteCapOpenV3)]
+         Dregg2.Circuit.Emit.CapOpenEmit.spawnWriteCapOpenV3),
+        -- The exercise cap-open descriptor (position 53): the FROZEN exercise base + the EFF_EXERCISE
+        -- authority appendix (the depth-16 cap-membership crown forcing the exercise hold-gate
+        -- `exerciseGuard`'s `confersEdgeTo target` membership in-circuit — `leaf.target = src` + the
+        -- facet bit). `actionTagToPos 16` re-keys HERE so `Rfix 16 = exerciseCapOpenV3`: the LAST named
+        -- cap-open residual CLOSED. The authority-only `exerciseVmDescriptor2R24` (position 10) stays for
+        -- the bare registry slot; the apex's `StarkSound hash Rfix` now quantifies over the crown-bearing
+        -- descriptor the SDK route `exerciseViaCapabilityCapOpenVmDescriptor2R24` proves through.
+        ("exerciseCapOpenVmDescriptor2R24",
+         Dregg2.Circuit.Emit.CapOpenEmit.exerciseCapOpenV3)]
 
-theorem v3RegistryHeap_length : v3RegistryHeap.length = 53 := by
+theorem v3RegistryHeap_length : v3RegistryHeap.length = 54 := by
   simp [v3RegistryHeap, Dregg2.Circuit.Emit.CapOpenEmit.v3RegistryCapOpen_length]
 
 /-- The heapWrite member lands at tail position 45 — `Rfix 56` resolves THERE. -/
@@ -194,7 +203,12 @@ def actionTagToPos : EffectIdx → Nat
   | 14 => 49   -- revokeDelegation→ revokeDelegationWriteCapOpenVmDescriptor2R24 (FAN-OUT WRITE:
                --                   `revokeDelegationWriteV3` remove base + EFF_DELEGATION_OPS appendix;
                --                   the cap-tree REMOVE FORCED on the moving genuine face — guarantee A)
-  | 16 => 10   -- exercise        → exerciseVmDescriptor2R24
+  | 16 => 53   -- exercise        → exerciseCapOpenVmDescriptor2R24 (the FROZEN exercise base + the
+               --                   EFF_EXERCISE authority appendix; the depth-16 cap-membership crown
+               --                   FORCES the exercise hold-gate `exerciseGuard`'s `confersEdgeTo target`
+               --                   membership in-circuit — the LAST named cap-open residual CLOSED. The
+               --                   authority-only `exerciseVmDescriptor2R24` [pos 10] stays for the live
+               --                   prover route + the bare slot.)
   | 17 => 22   -- createCell      → createCellVmDescriptor2R24
   | 18 => 23   -- factory         → factoryVmDescriptor2R24
   | 19 => 52   -- spawn           → spawnWriteCapOpenVmDescriptor2R24 (FAN-OUT WRITE: the spawn actor
@@ -273,6 +287,16 @@ over the SAME descriptor the deployed prover routes AND the apex authority leg r
 (`transferCapOpenEffV3_authorizes`): the one in-circuit authority gadget is INSIDE the registry the
 light-client apex commits, not beside it — and it is the LIVE one, not a pinned twin. -/
 theorem Rfix_capOpen : Rfix 12 = Dregg2.Circuit.Emit.CapOpenEmit.attenuateCapOpenEffV3 := rfl
+
+/-- **`Rfix_exercise_capOpen` — exercise (tag 16) RANGES OVER its LIVE cap-open authority descriptor.**
+`actionTagToPos 16 = 53` and `v3RegistryHeap`'s position-53 entry is `exerciseCapOpenV3` (the frozen
+exercise base + the EFF_EXERCISE depth-16 cap-membership crown). So `Rfix 16` is no longer the bare
+authority-free `exerciseV3`: `vkOfRegistry Rfix` / the apex's `StarkSound hash Rfix` now quantify over the
+crown-bearing descriptor the SDK route proves through AND the apex hold-gate rung forces
+(`RotatedKernelRefinementExerciseAuth.exercise_descriptorRefines_capOpenSat`). The exercise hold-gate is
+FORCED in-circuit — the LAST named cap-open residual CLOSED. -/
+theorem Rfix_exercise_capOpen :
+    Rfix 16 = Dregg2.Circuit.Emit.CapOpenEmit.exerciseCapOpenV3 := rfl
 
 /-! ### The 6 FAN-OUT cap-effect tags route to their LIVE cap-open authority descriptors.
 

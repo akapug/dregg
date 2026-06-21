@@ -398,6 +398,12 @@ def EFF_GRANT_CAPABILITY   : Nat := 2   -- grantCap, attenuate (EFFECT_GRANT_CAP
 def EFF_REVOKE_CAPABILITY  : Nat := 3   -- revokeCapability (EFFECT_REVOKE_CAPABILITY)
 def EFF_INTRODUCE          : Nat := 13  -- introduce (EFFECT_INTRODUCE)
 def EFF_DELEGATION_OPS     : Nat := 16  -- delegate, delegateAtten, revoke(Delegation), refreshDelegation (EFFECT_DELEGATION_OPS)
+/-- exercise-via-capability binds `EFF_TRANSFER` (bit 1): the held cap's `target` IS the exercise
+`target` (the hold-gate's `confersEdgeTo` edge), and the inner effects move value against that target,
+so the membership crown opens at the leaf permitting `EFFECT_TRANSFER` — the SAME bit the existing
+`RotatedKernelRefinementExerciseAuth.ExerciseHoldSource` rode through `attenuateCapOpenEffV3`. The
+load-bearing in-circuit content is `leaf.target = src` (the edge), forced by the same depth-16 open. -/
+def EFF_EXERCISE           : Nat := 1   -- exercise-via-capability (the held cap's transfer facet)
 
 /-- The rotated INTRODUCE base (`v3Of` of the introduce v1 face). -/
 def introduceV3 : EffectVmDescriptor2 :=
@@ -416,6 +422,12 @@ def refreshDelegationV3 : EffectVmDescriptor2 :=
 /-- The rotated REVOKE-CAPABILITY base. -/
 def revokeCapabilityBaseV3 : EffectVmDescriptor2 :=
   v3Of Dregg2.Circuit.Emit.EffectVmEmitRevokeCapability.revokeCapabilityVmDescriptor
+/-- The rotated EXERCISE-VIA-CAPABILITY base (`v3Of` of the exercise hold-layer v1 face — a FROZEN-FRAME
++ nonce-TICK passthrough, `gCapPass` freezes cap_root). Same `EFFECT_VM_WIDTH + APPENDIX_SPAN` width as
+the frozen fan-out bases (`introduceV3`/`spawnV3`), so the cap-open appendix at `CAP_OPEN_BASE` composes
+verbatim. It is `v3Registry` position for tag 16 (`exerciseVmDescriptor2R24`). -/
+def exerciseV3 : EffectVmDescriptor2 :=
+  v3Of Dregg2.Circuit.Emit.EffectVmEmitExercise.exerciseVmDescriptor
 
 /-- **`delegateCapOpenV3`** — delegate-via-cap (the delegateAtten/attenuate base + the
 `EFFECT_DELEGATION_OPS` appendix). The cross-vat delegate routes the in-circuit cap-membership open; the
@@ -454,6 +466,26 @@ is the live route; THIS is the named, light-client-rejected fallback. Mirrors `r
 def spawnCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmitSpawn.SEL_SPAWN_RT
     (effCapOpenV3 EffectVmEmitRotationV3.spawnV3 "dregg-effectvm-spawn-v1-rot24-v3-capopen" EFF_DELEGATION_OPS)
+
+/-- **`exerciseCapOpenV3`** (THE LAST NAMED CAP-OPEN RESIDUAL — CLOSED) — exercise-via-capability on the
+FROZEN exercise base + the effect-GENERAL authority appendix at `EFF_EXERCISE` (bit 1). The exercise
+hold-gate (`ActionDispatch.exerciseGuard pre actor target = (caps actor).any (confersEdgeTo target)`)
+is a cap MEMBERSHIP, and THIS descriptor FORCES it in-circuit: the depth-16 Merkle open binds
+`leaf.target = src` (the conferred edge to the exercise target) and the genuine SUBMASK facet gate
+(`EFFECT_TRANSFER` bit permitted). No `EFFECT_EXERCISE` facet bit exists — exercise wraps inner effects
+that act against the cap's target, so the held cap permits the inner effects' value facet
+(`EFFECT_TRANSFER`), exactly as `RotatedKernelRefinementExerciseAuth.ExerciseHoldSource` rode through
+`attenuateCapOpenEffV3`. The exercise base FREEZES cap_root (`gCapPass`), so this is an AUTHORITY-READ
+appendix (no cap-tree write — exercise confers no new edge); the frame freeze + nonce-tick + the
+in-window `effects_hash` pin carry the rest. The SDK route `exerciseViaCapabilityCapOpenVmDescriptor2R24`
+proves through THIS descriptor; an actor WITHOUT the conferring cap (`leaf.target ≠ src`, or a leaf
+lacking the facet bit) is UNSAT (`exerciseCapOpenV3_rejects_wrong_facet`). -/
+def exerciseCapOpenV3 : EffectVmDescriptor2 :=
+  withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.EXERCISE
+    (effCapOpenV3 exerciseV3 "dregg-effectvm-exercise-v1-rot24-v3-capopen" EFF_EXERCISE)
+
+#guard exerciseCapOpenV3.constraints.length == exerciseV3.constraints.length + 71
+#guard exerciseCapOpenV3.traceWidth == exerciseV3.traceWidth + CAP_OPEN_SPAN
 
 /-! ### The WRITE-FORCING fan-out cap-open wrappers (the frozen-face close — guarantee A circuit-forced).
 
@@ -707,6 +739,57 @@ theorem attenuateCapOpenEffV3_rejects_wrong_facet (hash : List ℤ → ℤ)
     (effCapOpenV3_satisfiedEff attenuateV3 "dregg-effectvm-attenuateA-v1-rot24-v3-capopen-eff" EFF_TRANSFER
       hash minit mfin maddrs t
       (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.ATTENUATE_CAPABILITY
+        _ minit mfin maddrs t hsat) i hi hnotlast)
+
+/-- **`exerciseCapOpenV3_authorizes` — THE LIVE EXERCISE AUTHORITY KEYSTONE (the last named cap-open
+residual, CLOSED).** A `Satisfied2` witness of the LIVE `exerciseCapOpenV3` descriptor (the frozen
+exercise base + the genuine submask facet at `EFF_EXERCISE = EFF_TRANSFER` + decoded tier) whose opened
+leaf IS the effect-faithful `(actor ⇒ src)` edge discharges the kernel's `authorizedFacetB caps provided
+turn` AND `leaf.target = src` — the in-circuit realization of the exercise hold-gate
+(`exerciseGuard`'s membership). Forced by the depth-16 open, NOT carried; the tier is the committed
+decode. `EFF_EXERCISE = 1 <<< 1 = EFFECT_TRANSFER`, so it collapses to `authorizedFacetB` exactly as
+the transfer/attenuate keystones. -/
+theorem exerciseCapOpenV3_authorizes {State : Type} (S : CapHashScheme State) (vkOfTag : ℤ → Nat)
+    (provided : AuthProvided) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hChip : ChipTableSound S.chipAbsorb (t.tf .poseidon2))
+    (hsat : Satisfied2 S.chipAbsorb exerciseCapOpenV3 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (caps : FacetCaps) (leafAt : Label → Label → CapLeaf)
+    (hfaith : DeployedFaithfulEff S vkOfTag provided (1 <<< EFF_EXERCISE) caps
+      ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols exerciseV3.traceWidth).capRoot) leafAt)
+    (actor src dst : Label) (amt : ℤ)
+    (hsrc : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc (capOpenCols exerciseV3.traceWidth).src = (src : ℤ))
+    (hedge : leafOf (capOpenCols exerciseV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) = leafAt actor src)
+    (htier : (tierOfTag vkOfTag (leafAt actor src).auth_tag).isSatisfiedBy provided = true) :
+    authorizedFacetB caps provided
+      { actor := actor, src := src, dst := dst, amt := amt } = true
+    ∧ (leafAt actor src).target = (src : ℤ) := by
+  have hsat := withSelectorGate_satisfied2 S.chipAbsorb Dregg2.Circuit.Emit.EffectVmEmit.sel.EXERCISE
+    _ minit mfin maddrs t hsat
+  have h := effCapOpenV3_authorizes (State := State) exerciseV3
+    "dregg-effectvm-exercise-v1-rot24-v3-capopen" EFF_EXERCISE (by decide)
+    S vkOfTag provided minit mfin maddrs t hChip hsat i hi hnotlast caps leafAt hfaith
+    actor src dst amt hsrc hedge htier
+  refine ⟨?_, h.2⟩
+  rw [authorizedFacetB_eq_eff]
+  exact h.1
+
+/-- **`exerciseCapOpenV3_rejects_wrong_facet` (the LIVE exercise authority tooth).** A row of an
+`exerciseCapOpenV3` witness whose leaf's `EFF_EXERCISE` mask bit is CLEAR (the cap does NOT carry the
+facet) CANNOT satisfy the appendix — the SELECTED-bit submask gate bites in-circuit. The negative half
+of the live keystone (a wrong-facet / unheld cap ⟹ UNSAT). -/
+theorem exerciseCapOpenV3_rejects_wrong_facet (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace) (i : Nat) (hi : i < t.rows.length)
+    (hnotlast : i + 1 ≠ t.rows.length)
+    (hclear : (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols exerciseV3.traceWidth).bit EFF_EXERCISE) = 0) :
+    ¬ Satisfied2 hash exerciseCapOpenV3 minit mfin maddrs t := fun hsat =>
+  satisfiedEff_rejects_wrong_facet hash t.tf (capOpenCols exerciseV3.traceWidth)
+    (Dregg2.Circuit.DescriptorIR2.envAt t i) EFF_EXERCISE hclear
+    (effCapOpenV3_satisfiedEff exerciseV3 "dregg-effectvm-exercise-v1-rot24-v3-capopen" EFF_EXERCISE
+      hash minit mfin maddrs t
+      (withSelectorGate_satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmit.sel.EXERCISE
         _ minit mfin maddrs t hsat) i hi hnotlast)
 
 /-! ## §5.F — THE FAN-OUT AUTHORITY KEYSTONES (`…CapOpenV3_authorizes`): the 6 cap-effects' apex
