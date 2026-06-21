@@ -96,3 +96,32 @@ surface screenshots. Delivered:
   edges, ZERO render panics.
 - Finding: 4 live tabs (Wonder/Swarm/Agent/Time) stall headless stepping (logged).
 Commit: 6e64cdcd5.
+
+## (2026-06-22) — THE WAVE: web cockpit + macro + oracle + None fix + IE6 floor
+
+A full wave of the discussed work, landed in waves/workflows:
+- **WEB COCKPIT (Path C, realized):** the gpui-free model compiles to wasm32 (port
+  agent, `a0b6284e0`); `starbridge-v2/web/` (cdylib) exposes it over wasm-bindgen
+  (`23324b470`); `web/cockpit.html` is a live interactive cockpit in the browser
+  (`410a7379b`) + an ocap-web view (`657d4d2cf`). The verified executor runs in a
+  browser tab, no server. `now_unix` uses js_sys on wasm. Build: `wasm-pack build web
+  --target web --out-dir pkg` (pkg gitignored). One model, native + web + seL4.
+- **MACRO (the lean form, no RunScript effect):** `turn/src/script.rs` — a `Script`
+  over the proven Pipeline carrier, content-addressed, replayed via execute_pipeline
+  (`e957ffb52`, 4 tests); the cockpit ⏺⏹▶ surface records turns → a Script → replays
+  on a fork (`06a6e28c4`); atlas explainer + the Custom-VK design (`docs/deos/
+  MACRO-AS-CUSTOM-VK.md`).
+- **ORACLE:** `dregg-atlas/verify.py` — conservation proven across all 700 states
+  (Σ=5000), no unbacked overspend, edge well-formedness; green-or-bust (`...verify.py`).
+- **None cap-badge fix:** `affordance.rs::authorized_for` special-cases None-required →
+  always-authorized; verified native (dregg-mcp + 7 inspect_act tests, `750d0d07c`) AND
+  in the live web cockpit (grant now ▶send). Finding closed.
+- **IE6 FLOOR (Path B):** `dregg-atlas/ie6.py` — a pure-HTML-4.01, server-less,
+  script-less view (img + <map>/<area> image-maps) for any user-agent back to 1996
+  (`c20e9e969`); wired into build.py, linked from the atlas About.
+- **DECLINED (with reason):** headless-mode full UI-tree coverage. The 4 live tabs
+  (Wonder/Swarm/Agent/Time) stall the persistent stepping loop via DIFFUSE perpetual
+  work (animations/demo-boots, not a few gateable cx.spawn). They are already in the UI
+  atlas (one-shot bake) and have minimal internal nav, so the gain is the 4 base nodes
+  only — poor cost/value. Left as the logged HORIZONLOG finding for a future bounded-
+  run-until-parked approach.
