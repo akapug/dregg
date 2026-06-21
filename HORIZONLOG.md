@@ -11,6 +11,48 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ⚑⚑ WEB COCKPIT — Presentable/NavAction in the browser (the keystone; ember 2026-06-22)
+THE GOAL: starbridge-v2 as an in-browser experience. THREE skins of ONE model (the gpui-free
+`Presentable`/`Presentation`/`NavAction`/`InspectAct`/`reflect` substance in `starbridge-v2/src/`):
+native gpui (the desktop), WEB, seL4 framebuffer. The swarm census (2026-06-22) found: (1) `gpui_web`
+ALREADY exists as a working WebPlatform over `<canvas>` (WebGPU/WebGL2) IN the pinned `emberian/zed` fork
+(+ a `cfg(target_family="wasm")` arm in `gpui_platform`) — so the real-cockpit-on-wasm path is weeks-scale
+integration, not a port; (2) `wasm/` already exposes the executor in-browser (create/commit/read/PROVE —
+`DreggRuntime`), the REAL `TurnExecutor` under `no-lean-link`; (3) THE SINGLE GAP (both technical agents
+converged independently): the `Presentable` model is native-only (`grep Presentable wasm/src/` = empty) —
+it must be made wasm-compilable + exposed. THE PLAN ember set: **C (real cockpit, Presentable+NavAction in
+the browser) is primary; B (frame-stream from `node`) is the IE6/timetraveler GRACEFUL-DEGRADATION floor
+for ancient user-agents, NOT the main path.** FIRST SLICE (de-risk via a measured spike, per
+measure-before-believing-a-lever): try to compile the gpui-free model to wasm32 — the surgery is contained
+(~7 files: mirror wasm/'s `no-lean-link` split into starbridge-v2 · feature-stub `WorldPersist`/redb
+[confined to `persistence.rs`+`world.rs`, `None` on every non-durable path] · gate the 5 native-std files).
+ARCH DECISION (open): extract a shared gpui-free model crate (`dregg-image`, clean, big refactor) VS
+feature-gate starbridge-v2 to wasm (the ~7-file surgery, model stays in place). Then expose
+`Registry::present`/`available_nav`/`apply_nav`/`InspectAct::send` over wasm-bindgen (mirroring dregg-mcp
+in wasm) and drive the dregg-atlas's `app.js` LIVE off it (the atlas grown up — it already renders
+Presentation data). The web Studio/Explorer/Playground then converge onto the SAME presentation layer
+(kills the per-surface hand-rolled-inspector drift). Web-surface census verdict: NOTHING stale to retire
+(Studio = the only WEB authoring IDE, generated-from-Lean w/ a CI drift-gate; Explorer/Playground = distinct
+viewports; `starbridge-web-surface` = the load-bearing web-of-cells LIB; `deos-leptos` = a parked SSR demo).
+
+## ⚑ MACRO / SCRIPT AS A CUSTOM-VK OBJECT — verify a recorded turn-sequence without a general zkVM (ember 2026-06-22)
+A macro = a reusable, attenuable, proof-carrying RECORDED TURN-SEQUENCE. The census (2026-06-22) confirmed
+the substrate is built four times over: carrier = `Pipeline`/`TurnBatch` (`turn/src/eventual.rs:282`, already
+Serialize + replays through `execute_pipeline`); template pattern = factories (`cell/src/factory.rs`,
+content-addressed by VK); parameterization = guarded holes (`held_promise.rs`, Lean `holeFill_binds_in_circuit`);
+verified replay = History root-tooth (`replay.rs`). THE KEY DESIGN (ember): don't build a general zkVM —
+**compile each (bounded) script to its OWN Custom VK** (the composition of its turns' per-effect rungs along
+the dependency DAG + the hole constraints), identified content-addressed, RUN via `Authorization::Custom
+{ vk_hash = script_vk }` (the existing app-defined-verification seam) with the holes as public inputs. The
+macro becomes its own proof system ("the token became the proof system", one level up). Full design:
+`docs/deos/MACRO-AS-CUSTOM-VK.md`. TIERS: Tier-1 = a `Script` value = serialized `Pipeline` replayed via the
+EXISTING `execute_pipeline` (no new circuit; buildable now; rides proven parts) → surfaces as the cockpit
+⏺▶ macro + an inspectable atlas object. Tier-2 (VK-affecting, ember-gated, formal): the composed-script
+circuit + either the lean non-effect form (Pipeline + Custom-predicate attestation, NO new kernel verb —
+recommended first) OR a first-class `RunScript` effect (factory pattern, formally). HONEST EDGE: bounded
+scripts only (a macro is a fixed sequence; unbounded loops would need a real zkVM, out of scope); circuit
+composition is real (but composition of existing emitted-from-Lean rungs, not a new prover).
+
 ## ⚑⚑ VK-EPOCH REFRAMED (2026-06-22, devnet TORN DOWN ⇒ genuine VK-freedom, no redeploy gate)
 The "VK epoch keystone" (checklist C: "compute_commitment absorbs the roots") is STALE FRAMING of an
 ALREADY-MOSTLY-CLOSED gap — verified EMPIRICALLY at HEAD (the verify-before-believing discipline; a read-only
