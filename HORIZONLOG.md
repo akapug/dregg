@@ -3540,6 +3540,32 @@ THE NAMED RESIDUAL WELDS (the next wave): (1) noteCreate routing branch in proof
   (4) effects_hash into the rotated PI window (emitEvent/pipelinedSend/exercise); (5) delegateAtten routing signal;
   (6) SetProgram FullActionA ~30-file weld; (7) revoke(tag-2) frozen-face. STAGE F (retire PI-46) last.
 
+## ⚑ DECLARED-PAYLOAD-COLUMN PRIMITIVE — LANDED (2026-06-21, agent a3acc831)
+THE PRIMITIVE: `EffectVmEmitRotationV3.§5.PC` — `rotateV3WithPayloadColumn off d` (= `rotateV3WithRecordPin`
+definitionally, NO VK change) + the `PayloadAnchored env d anchor` predicate + the two-pole forcing theorems
+(`rotateV3WithPayloadColumn_forces_anchor` / `_rejects_forged` / `_satisfiedVm_v1`, all axiom-clean, kernel-proved).
+The light-client FORCE = the verifier ANCHORS PI[46] (the declared-payload slot) to the value it recomputes from
+light-client-known inputs, instead of taking it producer-free. Refusal anchors `compute_authority_digest_felt`
+(effect-param-derivable via effects_hash); cellSeal/Unseal/Destroy/receiptArchive anchor `lifecycle_felt_cell`
+(reason_hash param + turn-header block_height). `refusalPayloadV3_eq_refusalV3 := rfl` proves the deployed descriptor
+already carries the weld (byte-identical wire JSON, registry/drift unchanged). `cellSealV3_payload_rejects_forged`
+specializes the tooth. effects_hash sub-case (§5.PC.EH): emitEvent/pipelinedSend/exercise declare a HASH not a state
+payload; it IS the in-window `effects_hash` PI[16..20] (< V1_PI_COUNT 42) — ALREADY light-client-bound via the perms/VK
+chain, NO new primitive needed (the raw operand slots 174+ past the window are redundant pre-fold operands).
+DISCRIMINATOR FLIPPED: `circuit/tests/vk_epoch_refusal_lifecycle_light_client_binding.rs` now asserts FORCED-ON-WIRE
+(forged refusal-audit / sealing-payload REJECTED through `verify_vm_descriptor2` ALONE under the anchored PI[46];
+honest ACCEPTED; sanity: forged verifies vs its OWN producer-free PI → the force is the anchor bite). Both tests GREEN.
+Lake `Dregg2.Circuit.Emit.EffectVmEmitRotationV3` GREEN + axiom-clean (no sorry/native_decide/:=True).
+→ THE HAND-OFF (the parallel agent owns `proof_verify.rs`; this is the SDK LIGHT-CLIENT half): `sdk/src/full_turn_proof.rs`
+  `verify_effect_vm_rotated_with_cutover` line ~2150 takes `dpis = &public_inputs[..public_input_count]` VERBATIM. To
+  make refusal/lifecycle light-client-forced ON THE DEPLOYED PATH, it must — for the record-pin family (public_input_count
+  == 47) — OVERRIDE `dpis[ROT_PI_COUNT]` (=46) with the recomputed anchor BEFORE `verify_vm_descriptor2`: refusal →
+  `compute_authority_digest_felt(apply Refusal to cross-checked before-cell)`; lifecycle → `lifecycle_felt_cell(apply
+  lifecycle to before)` with the turn-header `block_height` threaded in (NOT present in `full_turn_proof.rs` today — the
+  ONE new input the SDK verifier needs; full-node `proof_verify.rs` step 6b already has it). The discriminator's
+  `anchor_payload_slot` helper IS the reference implementation of this override. Until that SDK override lands, the
+  light-client FORCE is proven (Lean + discriminator) but the DEPLOYED `verify_full_turn` still passes PI[46] producer-free.
+
 ## ⚑ BOARD CORRECTION (2026-06-21) — stale lines the hook flagged
 - resolvers_cover_exactly_the_rotated_registry is GREEN (fixed fb27a30b4, 51->52 documented) — the "RED 37 vs 36"
   in the 4c27858b9 entry was already superseded; verified `cargo test` ok.
@@ -3552,3 +3578,22 @@ THE RESIDUAL-WELD WAVE is DRIVING (not named-and-parked) — 4 agents in flight:
 GOAL STANCE: every named weld is UNDER A RUNNING AGENT with a green-check bar (genuine prove + forge-reject /
 mutation-confirmed apex red / axiom-clean lake), per Law #6 — named = a burn-down with its closure lane running,
 never a parking lot.
+
+## ⚑ PAYLOAD-COLUMN PRIMITIVE (a3acc831) — Lean DONE, Rust verifier-anchor = the queued WIRE-weld
+The declared-payload-column primitive is BUILT + axiom-clean (rotateV3WithPayloadColumn + PayloadAnchored +
+_forces_anchor/_rejects_forged, EffectVmEmitRotationV3.lean §5.PC). NO VK change (refusalPayloadV3 = refusalV3 by
+rfl, descriptors byte-identical, drift unchanged). The discriminator (vk_epoch_refusal_lifecycle) FLIPPED to
+FORCED (forged payload REJECTED under the anchored PI[46]). Per-effect: refusal (anchor =
+compute_authority_digest_felt), lifecycle-payload (anchor = lifecycle_felt_cell folding reason_hash + sealed_at=
+block_height from the turn-header), effects_hash (already in-window at PI[16..20], no new primitive). All 3 families
+light-client-forced IN LEAN.
+⚑ THE WIRE GAP (per the goal: proven-in-Lean-NOT-on-wire — NOT satisfied yet): the deployed
+verify_effect_vm_rotated_with_cutover (full_turn_proof.rs ~2150) passes dpis verbatim — for the record-pin family
+(count==47) it must OVERRIDE dpis[ROT_PI_COUNT=46] with the RECOMPUTED anchor before verify_vm_descriptor2
+(refusal->compute_authority_digest_felt; lifecycle->lifecycle_felt_cell with block_height threaded = the ONE new
+SDK input, full-node step 6b already has it). The test's anchor_payload_slot helper is the reference impl. QUEUED:
+drive this Rust verifier-anchor the moment full_turn_proof.rs frees (the delegateAtten agent is in it). Until then
+the payload force is proven-in-Lean but verify_full_turn is still producer-free on the wire.
+INTEGRATION DISCIPLINE (6 agents on shared ActionDispatch/full_turn_proof/EffectVmEmitRotationV3): HOLD banking until
+the swarm settles, then ONE clean integrated verify + coherent banks. Do NOT surgically extract slices mid-edit
+(provenance-leak risk). lake green 4109 at this snapshot.
