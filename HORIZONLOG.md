@@ -45,10 +45,12 @@ through `refusal_descriptorRefines_sat → closedLogExtract_refusal_closed → l
 audit slot is RESERVED position-stable so a refusal is a value WRITE. FORGE-DETECTOR FLIPPED:
 `vk_epoch_refusal_lifecycle_light_client_binding.rs::refusal_light_client_forge_rejected_by_fields_write_gate` —
 honest accept + forged-after-root REJECTED anchor-disabled (no full-node anchor) + non-vacuity. Descriptors re-emitted,
-FP re-pinned, drift-check GREEN. NAMED FOLLOW-UP (SDK routing): `sdk/src/full_turn_proof.rs` routes
-noteSpend/noteCreate/cap-write through their tree generators but NOT yet refusal — the DEPLOYED prover path must call
-`generate_rotated_refusal_trace_with_fields_tree` + thread `map_heaps` for a refusal lead effect (a wire, not a build;
-the gate + generator + cell realization are done). Lifecycle-payload twin (STILL OPEN): the DISC (safety-critical) IS in-circuit-forced
+FP re-pinned, drift-check GREEN. ✅ DEPLOYED PROVER WIRED (4b45fa33e): `generate_rotated_refusal_wide` +
+the `full_turn_proof.rs` Refusal routing split + the LIVE `cipherclerk::prove_sovereign_turn_rotated` thread the
+BEFORE fields-tree as `map_heaps`. Deployed poles GREEN at HEAD: `wide_sovereign_refusal_proves_and_anchored_verify_accepts`
+(RED→GREEN, honest refusal proves on the live entry) + `sovereign_rotated_c1` honest-proves-and-verifies / forged-rejected;
+cap suite 313/0/1 no-regress. ⇒ REFUSAL FORGE FULLY CLOSED gate→apex→DEPLOYED PROVER, every pole tested on the living
+protocol path. (Also closes setFieldDyn at the same openable-fields_root foundation.) Lifecycle-payload twin (STILL OPEN, the next floor target): the DISC (safety-critical) IS in-circuit-forced
 (`rotateV3WithDiscGate`, cellSeal = 108 constraints); only the opaque `lifecycle_felt(reason_hash, sealed_at)`
 payload felt rides the record pin (needs an in-circuit hash gate over the light-client-known (reason_hash,
 block_height) — STAGE C). DISCRIMINATOR (BEFORE/AFTER, both poles, non-vacuous):
