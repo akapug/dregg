@@ -552,7 +552,7 @@ fn effect_variant_tag(effect: &Effect) -> &'static str {
         Effect::NoteSpend { .. } => "NoteSpend",
         Effect::NoteCreate { .. } => "NoteCreate",
         Effect::SpawnWithDelegation { .. } => "SpawnWithDelegation",
-        Effect::RefreshDelegation => "RefreshDelegation",
+        Effect::RefreshDelegation { .. } => "RefreshDelegation",
         Effect::RevokeDelegation { .. } => "RevokeDelegation",
         Effect::BridgeMint { .. } => "BridgeMint",
         Effect::Introduce { .. } => "Introduce",

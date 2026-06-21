@@ -780,6 +780,7 @@ dependencies = [
  "sha2 0.9.9",
  "thiserror 1.0.69",
  "time",
+ "wasm-bindgen",
  "zeroize",
 ]
 
@@ -1968,6 +1969,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
+ "curve25519-dalek",
  "dregg-bridge",
  "dregg-cell",
  "dregg-dsl",
@@ -2636,6 +2638,10 @@ dependencies = [
 name = "dregg-sdk"
 version = "0.1.0"
 dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "ark-std",
  "async-trait",
  "base64 0.22.1",
  "blake3",
@@ -3446,11 +3452,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4247,6 +4255,7 @@ version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3afd548cf105bb701ee7fa9da25f01ec3a6dca158b832b1019429c87213bbc4a"
 dependencies = [
+ "aes 0.8.4",
  "hmac 0.13.0-pre.5",
  "sha2 0.11.0-pre.5",
  "subtle",
@@ -7196,6 +7205,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbridge-first-room"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "starbridge-compartment-workflow-mandate",
+ "starbridge-escrow-market",
+]
+
+[[package]]
 name = "starbridge-gallery"
 version = "0.1.0"
 dependencies = [
@@ -7412,8 +7433,11 @@ name = "starbridge-v2"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "biscuit-auth",
  "blake3",
+ "clear_on_drop",
  "deos-web-cells",
+ "dregg-captp",
  "dregg-cell",
  "dregg-coord",
  "dregg-doc",
@@ -7424,7 +7448,12 @@ dependencies = [
  "dregg-turn",
  "dregg-types",
  "dregg-userspace-verify",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "hex",
+ "js-sys",
+ "lockstitch",
  "postcard",
  "serde",
  "serde_json",

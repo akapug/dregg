@@ -801,9 +801,11 @@ pub fn prove_effect_vm_rotated_wide(
         MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
     };
     use dregg_circuit::effect_vm::trace_rotated::{
-        RotatedBlockWitness, generate_rotated_create_cell_wide, generate_rotated_note_create_wide,
+        RotatedBlockWitness, generate_rotated_create_cell_wide,
+        generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
         generate_rotated_note_spend_wide, generate_rotated_record_pin_wide,
-        generate_rotated_refusal_wide, generate_rotated_transfer_shape_wide,
+        generate_rotated_refusal_wide, generate_rotated_set_field_dyn_wide,
+        generate_rotated_spawn_wide, generate_rotated_transfer_shape_wide,
         rotated_descriptor_name_for_effect,
     };
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
@@ -856,7 +858,7 @@ pub fn prove_effect_vm_rotated_wide(
     // cohort lead routes through the transfer-shape wide producer (the bare-38-PI carrier). (The other
     // grow-gate families — noteCreate/createCell/factory/spawn — extend identically when the sovereign
     // producer routes them; transfer + noteSpend are the live sovereign leads.)
-    let (trace, dpis, map_heaps) =
+    let (mut trace, mut dpis, mut map_heaps) =
         if matches!(lead, dregg_circuit::effect_vm::Effect::NoteSpend { .. }) {
             use dregg_circuit::heap_root::HeapLeaf;
             let leaves: Vec<HeapLeaf> = before_nullifiers
@@ -930,6 +932,37 @@ pub fn prove_effect_vm_rotated_wide(
                 initial_state, effects, &before, &after, caveat, &[],
             )
             .map_err(|e| SdkError::InvalidWitness(format!("wide create-cell generation: {e}")))?
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::CreateCellFromFactory { .. }) {
+            // createCellFromFactory routes through the FACTORY accounts-set grow-gate wide producer
+            // (`factoryVmDescriptor2R24`, root limb 0) — the same accounts birth-insert createCell
+            // carries, only the new-cell key column differs (param1 = child_vk_derived for factory).
+            // Without this route createCellFromFactory fell through to the transfer-shape producer
+            // (bare-38-PI) and was UNSAT vs the factory wide descriptor's extra grow-gate PI. The
+            // standalone wrapper threads no accounts-set context, so the empty set is the grow-gate's
+            // BEFORE (mirrors createCell); the live sovereign producer threads the real accounts set.
+            generate_rotated_create_from_factory_wide(
+                initial_state, effects, &before, &after, caveat, &[],
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide create-from-factory generation: {e}")))?
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::SpawnWithDelegation { .. }) {
+            // spawn's BIRTH/accounts-grow leg routes through the spawn accounts-set grow-gate wide
+            // producer (`spawnVmDescriptor2R24`, root limb 0 — the born child id grown into the cells
+            // set). The wide spawn descriptor carries ONLY the accounts birth grow-gate (NO cap-tree
+            // map_op — the parent→child cap-handoff is the SEPARATE cap-open path's job, already
+            // wired). Without this route spawn fell through to the transfer-shape producer and was
+            // UNSAT vs the spawn wide descriptor's grow-gate PI. Empty BEFORE accounts = the standalone
+            // grow-gate BEFORE (mirrors createCell); the live sovereign producer threads the real set.
+            generate_rotated_spawn_wide(
+                initial_state, effects, &before, &after, caveat, &[],
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide spawn generation: {e}")))?
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::SetField { field_idx, .. } if *field_idx >= 8) {
+            // setFieldDyn (the overflow `SetField { field_idx >= 8 }`) is the ONE effect whose witness
+            // is a `MemBoundaryWitness`, NOT a `map_heaps`, AND whose trace is the DISTINCT 581-wide
+            // V1Face geometry the transfer-shape generator cannot lay. Produce empty placeholders here;
+            // the dedicated block below generates the real trace/PIs + the mem-boundary and overrides
+            // these. (Routing it through the transfer-shape fallthrough would be UNSAT and wasteful.)
+            (Vec::new(), Vec::new(), Vec::new())
         } else {
             let (t, d) = generate_rotated_transfer_shape_wide(
                 initial_state, effects, &before, &after, caveat,
@@ -938,7 +971,36 @@ pub fn prove_effect_vm_rotated_wide(
             (t, d, vec![])
         };
 
-    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &map_heaps)
+    // setFieldDyn carries a DISTINCT geometry (the 581-wide V1Face / 789-wide member): the overflow
+    // `SetField { field_idx >= 8 }` routes to `setFieldDynVmDescriptor2R24` and its Blum linear-memory
+    // gate is witnessed by a `MemBoundaryWitness`, NOT a `map_heaps`. Resolve it here (the dispatch
+    // above is the grow-gate/record-pin/transfer-shape family whose witness IS `map_heaps`; setFieldDyn
+    // is the one effect whose witness is the mem-boundary), then thread it into the final
+    // `prove_vm_descriptor2` mem_boundary param. The slot is the in-circuit overflow-memory address
+    // (`field_idx % 8`, 0..7 — the 8-cell Blum memory), and the standalone wrapper threads no prior
+    // field state, so `prev_value = 0` is the BEFORE (mirrors createCell's empty BEFORE accounts).
+    let mem_boundary = if let dregg_circuit::effect_vm::Effect::SetField { field_idx, .. } = lead {
+        if *field_idx >= 8 {
+            let slot = field_idx % 8;
+            let (t, d, mb) = generate_rotated_set_field_dyn_wide(
+                initial_state, &before, &after, caveat, slot, BabyBear::new(0),
+            )
+            .map_err(|e| SdkError::InvalidWitness(format!("wide set-field-dyn generation: {e}")))?;
+            // setFieldDyn's witness is the mem-boundary, NOT map_heaps; override the trace/PIs the
+            // family dispatch above produced (it routed SetField{field_idx>=8} to the transfer-shape
+            // fallthrough, which is UNSAT against `setFieldDynVmDescriptor2R24`).
+            trace = t;
+            dpis = d;
+            map_heaps = vec![];
+            mb
+        } else {
+            MemBoundaryWitness::default()
+        }
+    } else {
+        MemBoundaryWitness::default()
+    };
+
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
         .map_err(|e| SdkError::InvalidWitness(format!("wide rotated IR-v2 proof: {e}")))?;
     Ok((proof, dpis))
 }

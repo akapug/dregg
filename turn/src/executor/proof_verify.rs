@@ -464,7 +464,8 @@ impl TurnExecutor {
         use dregg_circuit::descriptor_ir2::{parse_vm_descriptor2, verify_vm_descriptor2};
         use dregg_circuit::effect_vm::trace_rotated::{
             RotatedBlockWitness, ROT_PI_COUNT, V1_PI_COUNT, empty_caveat_manifest,
-            generate_rotated_note_spend_wide, generate_rotated_record_pin_wide,
+            generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
+            generate_rotated_record_pin_wide,
             generate_rotated_transfer_shape_wide, generate_rotated_transfer_shape_with_fee_wide,
             rotated_descriptor_name_for_effect, rotated_descriptor_name_for_effect_fee,
             transfer_caveat_manifest,
@@ -569,6 +570,21 @@ impl TurnExecutor {
                 &[],
             )
             .map(|(t, d, _heaps)| (t, d))
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::NoteCreate { .. }) {
+            // NoteCreate carries the 47-PI base (the commitments-root grow-gate pin at PI
+            // ROT_PI_COUNT = 46). The witness-INDEPENDENT PIs reconstruct from the PLACEHOLDER
+            // witnesses; the 16 wide commit PIs are OVERRIDDEN from the trusted before/after commits
+            // below — the verifier never re-derives the grown commitments set, it anchors the
+            // published 8-felt commit and the in-circuit `.insert` op forces it.
+            generate_rotated_note_create_wide(
+                &initial_vm_state,
+                &vm_effects,
+                &placeholder,
+                &placeholder,
+                &caveat,
+                &[],
+            )
+            .map(|(t, d, _heaps)| (t, d))
         } else if matches!(
             lead,
             dregg_circuit::effect_vm::Effect::SetPermissions { .. }
@@ -578,8 +594,11 @@ impl TurnExecutor {
                 | dregg_circuit::effect_vm::Effect::CellDestroy { .. }
                 | dregg_circuit::effect_vm::Effect::ReceiptArchive { .. }
                 | dregg_circuit::effect_vm::Effect::Refusal { .. }
+                | dregg_circuit::effect_vm::Effect::MakeSovereign
         ) {
             // The record-pin family carries the (ROT_PI_COUNT + 1 = 47)-PI base (record/lifecycle pin at PI ROT_PI_COUNT = 46).
+            // MakeSovereign joins: its record pin welds the AFTER authority-digest limb (folding the
+            // flipped mode byte) — see `trace_rotated::record_pin_offset`.
             generate_rotated_record_pin_wide(
                 &initial_vm_state,
                 &vm_effects,
@@ -712,9 +731,21 @@ impl TurnExecutor {
         // that FORCES the committed disc limb to the effect's mandated discriminant (cellSeal→Sealed,
         // cellDestroy→Destroyed, …) as a CONSTANT in-circuit, NO trusted post-cell. A ledgerless light
         // client's `verify_vm_descriptor2` ALONE rejects a frozen seal / Destroyed→Live resurrection /
-        // wrong-disc archive. The PI-38 lifecycle anchor below remains as BELT-AND-SUSPENDERS for the
-        // OPAQUE payload felt (`reason_hash`/`deathCert`/`sealed_at`) that `lifecycle_felt` folds at
-        // limb 29 — full-node-only; the disc itself needs no anchor.
+        // wrong-disc archive.
+        //
+        // LIFECYCLE-PAYLOAD NOW IN-CIRCUIT (STAGE C, the lifecycle-payload hash gate,
+        // `EffectVmEmitRotationV3.lifecyclePayloadHashGate`): the OPAQUE payload felt
+        // (`reason_hash`/`deathCert`/`sealed_at` folded into limb 29) is no longer FULL-NODE-ONLY for
+        // cellSeal/cellDestroy/receiptArchive. `lifecycle_felt` is now a FELT-DOMAIN Poseidon2 hash
+        // (`dregg_circuit::poseidon2::lifecycle_payload_felt`) recomputable from the LIGHT-CLIENT-KNOWN
+        // inputs (the disc + the PI-bound `reason_hash` + the turn-header `block_height`), and the deployed
+        // descriptor WELDS the committed AFTER lifecycle limb to the declared payload-hash column
+        // (`prmCol 3`). A forged payload (committed limb 29 ≠ the recomputed payload hash) is UNSAT for a
+        // ledgerless client (`circuit/tests/vk_epoch_refusal_lifecycle_light_client_binding.rs`:
+        // `lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled`). The PI-46 lifecycle anchor
+        // below now recomputes the SAME felt from the trusted post-cell (`lifecycle_felt_cell`) — kept as
+        // BELT-AND-SUSPENDERS for the full-node leg; the in-circuit gate is the light-client force, so the
+        // anchor is no longer the SOLE binding (the residual the disc gate named is CLOSED).
         //
         // A forged after-limb (a value the effect did NOT produce) makes the anchored PI ROT_PI_COUNT (46) disagree
         // with the proof's bound forced column ⇒ `verify_vm_descriptor2` UNSAT. The whole record-pin
