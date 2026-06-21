@@ -76,6 +76,17 @@ pub const EFFECT_BURN: EffectMask = 1 << 22;
 /// because no new slot is allocated and no existing slot is removed.
 pub const EFFECT_ATTENUATE_CAPABILITY: EffectMask = 1 << 23;
 
+/// Install a cell's program (caveat table) — the ordered mid-session
+/// program-install effect (`SetProgram`). A DISTINCT authority surface from
+/// `EFFECT_SET_VERIFICATION_KEY`: a program install rewrites the cell's
+/// per-slot caveat program, not its upgrade key, so a cap that grants VK
+/// rotation must NOT implicitly grant a program install. Its in-circuit witness
+/// is the record-pin `setProgramV3` descriptor + the `setProgram_descriptorRefines_sat`
+/// rung (`Dregg2.Circuit.RotatedKernelRefinementProgram`): the program folds
+/// into `compute_authority_digest_felt` (r23), so a genuine install moves the
+/// committed AFTER record-digest limb.
+pub const EFFECT_SET_PROGRAM: EffectMask = 1 << 24;
+
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;
 
@@ -157,6 +168,9 @@ pub fn describe_mask(mask: EffectMask) -> Vec<&'static str> {
     }
     if mask & EFFECT_SET_VERIFICATION_KEY != 0 {
         names.push("SetVerificationKey");
+    }
+    if mask & EFFECT_SET_PROGRAM != 0 {
+        names.push("SetProgram");
     }
     if mask & EFFECT_NOTE_SPEND != 0 {
         names.push("NoteSpend");
