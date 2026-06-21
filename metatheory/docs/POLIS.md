@@ -45,23 +45,30 @@ Zero `sorry`, zero `:= True` load-bearing.
 | **observation ↛ resolution** (one resolver, many observers) | pins of `Await.{one_shot_is_static, commit_resumes_once, rollback_discards_continuation, runtime_guard_is_double_spend, four_faces_unify}` |
 | executor-coupled `gateOK` authority floor | pin of `Exec.AuthModes.captp_granted_le_held` (+ camera `Fpu`) |
 | real KERI human floor (cannot lose identity) | pins of `PreRotation.rotChain_pinned_by_commitments`, `ResharingChain.{reshare_forward_jump, secret_value_survives}` |
-| **Politician lives in traces** — first concrete anti-capture bar | `CaptureBar`, `rExitForeclosureBar`, `dreggReal_envelope_no_foreclosure` |
+| **Politician — exit foreclosure** | `CaptureBar`, `rExitForeclosureBar`, `dreggReal_envelope_no_foreclosure` |
+| **Politician — flow/policy capture** (decidable Büchi game) | `flowCaptureBar` over `≤ᶠ`, sound+complete by `FlowRefine.decideRefines_iff` (`PolisFlowRefine`) |
+| **Politician — disclosure ratchet** | `DiscloseAt.{accepts_invariant_under_dial, accepts_preserved_down, leak_mono}` |
+| **Politician — grade laundering** | `Finality.{no_downgrade, Tier.rank_injective, conservation_tier_independent}`, `World.world_no_downgrade` |
+| **Politician — clerk monopoly** | `FullForestAuthPortal.{proof_arm_sound, custom_arm_sound, unchecked_arm_rejects}` (validity depends on the proof, not the prover) |
+| **Politician — hole rent** | `ConditionalTurn.condTurn_atomic` + `Await` one-shot (`PolisPolitician`) |
 
 † `noteSpendFresh_rejects_double` lives in the `PolisNonConfusionCircuit` sidecar (pulls the
 circuit-emit tree); builds when that tree is green.
 
 ## Not proven / frontier (named, not faked)
 
-The census (`wihlga2r4`) found the four local non-confusion / floor legs were already DEPLOYED
-and pinnable — they are now closed (above). What genuinely remains is **one** thing, the next
-research phase, not a cleanup task:
+Both censuses (`wihlga2r4`, `w9p6ffrrn`) found the local non-confusion / floor legs AND the
+politician capture-shape catalog already DEPLOYED and pinnable — all now closed (above), and the
+flow/policy capture is governed by the deployed sound+complete Büchi decision procedure. What
+genuinely remains is **one** deep object, the next research phase, not a cleanup task:
 
-- **multi-trace politician hyperproperties** — clerk monopoly, hole rent, grade laundering,
-  appeal exhaustion, disclosure ratchet, interleaved multi-agent trace capture. The first
-  concrete single-trajectory bar (`rExitForeclosureBar`) is landed; the temporal/hyperproperty
-  family over interleaved multi-agent traces (→ Büchi game / `FlowRefine.decideRefines`) is the
-  open object. (The deeper executor-camera refinement of the `held ⊆ bound` floor is a tightening,
-  not a hole: the shadow *is* the real `fits` by `USet.fits_iff`, and the camera `Fpu` is pinned.)
+- **the interleaved-multi-agent hyperproperty** — composing the per-shape bars into a *single*
+  floor over one multi-agent trace lattice (the politician who interleaves several lawful
+  strategies across subjects). Each shape is pinned/decidable in isolation; unifying them needs
+  a `Trace DreggState DreggAction` lattice and the hyperproperty (set-of-traces) semantics over
+  it. The single-trajectory bars (`rExitForeclosureBar`, `flowCaptureBar`) are the landed seeds.
+  (The deeper executor-camera refinement of the `held ⊆ bound` floor is a tightening, not a hole:
+  the shadow *is* the real `fits` by `USet.fits_iff`, and the camera `Fpu` is pinned.)
 
 ## The grounding insight (`~/dev/svenvs`)
 
