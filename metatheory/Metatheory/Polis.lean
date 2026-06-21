@@ -395,6 +395,19 @@ def CaptureBar.or {v₁ v₂ : Trace → Prop}
   loadBearing := fun τ h => h.imp (b₁.loadBearing τ) (b₂.loadBearing τ)
   leastRestrictive := fun τ h => h.imp (b₁.leastRestrictive τ) (b₂.leastRestrictive τ)
 
+/-- **`CaptureBar.pullback` — heterogeneous bars unify by PREIMAGE.** Given a public projection
+`π : Trace → Obs` (interior-free) and a bar over `Obs`, the preimage is a bar over `Trace`:
+decidability, load-bearing, and least-restrictive all transport. This is gpt5.5's "first move" —
+it turns the per-shape catalog (today over `RState` / `Proc` / `Dial` / `Tier` / …) into bars over
+ONE unified trace, ready to `or`-fold into a single politician floor, before the relational
+hyperproperty is even touched. -/
+def CaptureBar.pullback {Obs : Type} {v : Obs → Prop} (π : Trace → Obs)
+    (b : CaptureBar Obs v) : CaptureBar Trace (fun τ => v (π τ)) where
+  badShape := fun τ => b.badShape (π τ)
+  publicDecidable := fun τ => b.publicDecidable (π τ)
+  loadBearing := fun τ h => b.loadBearing (π τ) h
+  leastRestrictive := fun τ h => b.leastRestrictive (π τ) h
+
 /-! ## §G. The dregg candidate model — making Polis real (non-vacuity on the substrate).
 
 Per the metatheory's candidate-model discipline (`Production.lean`'s `dreggSubstances`): a
