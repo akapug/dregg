@@ -47,14 +47,27 @@ lake build Metatheory.PolisSandboxObservatory   # (builds the whole sandbox; #ev
   liveness of resolution (e.g. that a stalled obligation eventually completes).
 - The crypto/identity primitives remain the irreducible terminal seams (as everywhere in dregg).
 
-## Next milestones (toward the Minecraft-scale north star)
+## The deepened verified tower (24 files)
 
-1. **Combined world** — one world with several leverage dimensions (distance + tier + obligation +
-   gates) so multiple textures coexist and an agent can mix strategies; one governor, one observatory.
-2. **Liveness floors** — bounded-progress guarantees (the obligation *completes*, not just "no
-   over-rent"), via the `viableWithinB` bounded game.
-3. **LLM agents** — replace scripted policies with real agents (the genuine "emergent politics");
-   this is the substrate swap toward Minecraft, and the honest hard part the in-Lean phase defers.
+The core is no longer a single-trap demo. What is *proven*, kernel-clean:
+
+| layer | file(s) | guarantee |
+|---|---|---|
+| **general governor theory** | `PolisGovernorTheory` | `genGovStep` over any State/step/decidable-floor; `genGov_safe` (∀ controller); **`combine_monotone`** (adding a governance axis only grows the refusal set); `genGovStep_eq_envStep` (it *is* `Polis.envAct`) |
+| **the politician zoo** | `PolisSandbox{,N,Launder,Lockin,Compete,Combined,Unified}` | foreclosure · coalition (collective, single-erasure-insufficient) · laundering · lock-in/hole-rent · resource-competition · mixed-leverage — each emergent ungoverned, prevented governed |
+| **smart adversaries** | `PolisSandbox{Agent,Learn,Deceiver,Adaptive,UnifiedAttack,NAttack}` | a searcher *discovers* domination; a learner *converges* yet `can_never_strand`; a deceiver's long con is caught; **withstands ALL attacks of any depth** (induction) over the gate, unified, and `Fin n` worlds |
+| **liveness** | `PolisSandboxLiveness`, `…NAttack` | the victim *reaches* home (not just "can"); `all_agents_reach_home` for every `n` |
+| **graded** | `PolisGrade{,Product,Tier}`, `…GradedGov`, `…GradedComposed` | cumulative harm via the max-plus quantale; the composed governor catches the big jump **and** death-by-a-thousand-cuts |
+| **grand** | `PolisGrandGovernor` | **`grand_no_adversary_captures`** — one governor, the named adversaries (forecloser/launderer/hoarder) all refused via `combine_monotone`, ∀ controller |
+| **grounding** | `PolisSandboxConstitution` | sandbox safety is a literal *instance* of `Polis.polis_safety`; `govTraj_eq_constitution_traj` (the runnable governor IS the verified envelope) |
+| **the bridge** | `PolisGovernor.lean` (`lean_exe`), `harness/` | the verified `govStep` as a callable binary (general `pairs` ≤-floor); the harness drives it end-to-end (`GOVERNOR_BACKEND=lean node src/dryrun.js`) |
+
+## The one remaining leap (handed off to infra)
+
+**Real LLM agents in real Minecraft.** Everything above is scripted/bounded Lean optimizers — a
+verified governor + runnable arena that provably tames *every* adversarial policy, not yet emergent
+LLM politics. The seam (`harness/`, the `pairs` protocol) is proven to carry the verified decision;
+flipping to real agents needs `ANTHROPIC_API_KEY` + Docker + a Minecraft server (the infra handoff).
 
 The grounding stays the constitution (`docs/POLIS.md`): the sandbox's governance is the same
 envelope, its detectors the same `CaptureBar`/`Dominated`, its floor the same ∀-opaque shape.
