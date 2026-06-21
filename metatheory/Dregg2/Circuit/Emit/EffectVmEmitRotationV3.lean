@@ -1002,20 +1002,20 @@ IS the attenuate-A moving face (`delegateVmDescriptor := attenuateVmDescriptor`)
 lookup — an unattenuated delegate confers the held edge as-is (the recipient's authority is bounded by
 the delegator's held cap, authenticated by the membership read). -/
 def delegateV3 : EffectVmDescriptor2 :=
-  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptor
+  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute
     [.mapOp heldReadOp, .mapOp insertWriteOp]
 
 /-- The rotated DELEGATE-ATTEN (the attenuated grant) WITH the cap-crown circuit leg: held-membership
 read + the conferred (attenuated) INSERT-write + the submask lookup (`granted ⊑ held` — the
 non-amplification tooth, REUSED from attenuate). Shares the moving attenuate-A face. -/
 def delegateAttenV3 : EffectVmDescriptor2 :=
-  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptor
+  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute
     [.mapOp heldReadOp, .mapOp insertWriteOp, .lookup submaskLookup]
 
 /-- The rotated GRANT-CAP (the bare cap grant) WITH the cap-crown circuit leg: held-membership read +
 the conferred INSERT-write. Shares the moving attenuate-A face (the deployed grantCap base). -/
 def grantCapWriteV3 : EffectVmDescriptor2 :=
-  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptor
+  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute
     [.mapOp heldReadOp, .mapOp insertWriteOp]
 
 /-! ### The FROZEN-FACE cap-family WRITE rebase (introduce / revokeDelegation) — guarantee A closed.
@@ -1045,7 +1045,7 @@ recompute frees `cap_root` to carry the move; `insertWriteOp` FORCES it to be th
 the conferred rights (`param[KEEP_MASK]`) at the new edge key (`param[CAP_KEY]`). NO submask lookup — an
 introduce grants the held edge as-is (the recipient is bounded by the introducer's membership-read cap). -/
 def introduceWriteV3 : EffectVmDescriptor2 :=
-  v3OfWith EffectVmEmitIntroduce.introduceVmDescriptorGenuine
+  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute
     [.mapOp heldReadOp, .mapOp insertWriteOp]
 
 /-- The rotated REVOKE-DELEGATION on the MOVING `revokeVmDescriptorGenuine` face (no `gCapPass` freeze) WITH
@@ -1054,7 +1054,7 @@ the cap-crown circuit leg: held-membership read + the ZERO-value REMOVE-write (`
 `removeWriteOp` FORCES the post root to the genuine sorted REMOVE (the ZERO sentinel write) at the revoked
 edge key against the membership-opened before root. -/
 def revokeDelegationWriteV3 : EffectVmDescriptor2 :=
-  v3OfWith EffectVmEmitRevokeDelegation.revokeVmDescriptorGenuine
+  v3OfWith EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute
     [.mapOp heldReadOp, .mapOp removeWriteOp]
 
 /-- The rotated dynamic setField WITH its memory ops (the Blum write→read transport). -/
@@ -3075,11 +3075,11 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 -- delegateAtten ALSO the submask lookup (+1 constraint, 2 map ops). The post-cap-root WRITE is
 -- now FORCED on the live wire (guarantee A — Authority — circuit-forced for these slots).
 #guard delegateV3.constraints.length
-        == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptor).constraints.length + 2
+        == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute).constraints.length + 2
 #guard grantCapWriteV3.constraints.length
-        == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptor).constraints.length + 2
+        == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute).constraints.length + 2
 #guard delegateAttenV3.constraints.length
-        == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptor).constraints.length + 3
+        == (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecompute).constraints.length + 3
 #guard (mapOpsOf delegateV3).length == 2
 #guard (mapOpsOf grantCapWriteV3).length == 2
 #guard (mapOpsOf delegateAttenV3).length == 2

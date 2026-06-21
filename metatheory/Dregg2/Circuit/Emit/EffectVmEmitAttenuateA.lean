@@ -582,6 +582,39 @@ def attenuateVmDescriptorGenuine : EffectVmDescriptor :=
   , hashSites := attenuateGenuineHashSites
   , ranges := [] }
 
+/-- **`attenuateVmDescriptorGenuineNoRecompute`** — the GENUINE `attenuateA` circuit WITHOUT the cap-root
+RECOMPUTE hash-site (the `capRecomputeSites` `siteCapRootAdvance` that pins `saCol CAP_ROOT` (col 87) as a
+poseidon OUTPUT `hash[edge_leaf, before_root]`). The genuine frame-freeze row gates are kept (no `gCapMove`
+parameter equality, no `gCapPass` freeze — `saCol CAP_ROOT` is free to MOVE), and the bare GROUP-4
+commitment chain (`attenuateHashSites`) is kept — so `site2` still folds the post `cap_root` (col 87) into
+`state_commit` AS AN INPUT (`.col (saCol state.CAP_ROOT)`), the note-spend-shaped commitment fold.
+
+This is the face the cap-tree WRITE descriptors (`…WriteV3`) ride: the post cap-root must be bound by the
+genuine sorted-tree `MapOp` write (`insertWriteOp`/`removeWriteOp`'s `newRoot := saCol CAP_ROOT`) AND folded
+into the commitment — NOT bound a SECOND, incompatible way by the prepend-accumulator `siteCapRootAdvance`.
+The `capRecomputeSites` advance is a DIFFERENT function from the sorted depth-16 CanonicalHeapTree write, so
+the two disagree for any honest c-list (matching them inverts Poseidon) ⇒ the wrapper was UNPROVABLE. Mirror
+of `noteSpendV3`: the nullifier root is `MapOp`-defined-ONLY and only ABSORBED into the commitment as an
+input — never a hash OUTPUT. Here `cap_root` gets the same treatment. -/
+def attenuateVmDescriptorGenuineNoRecompute : EffectVmDescriptor :=
+  { name := attenuateVmAirName ++ "-genuine-norecompute"
+  , traceWidth := EFFECT_VM_WIDTH
+  , piCount := 42
+  , constraints := attenuateGenuineRowGates ++ transitionAll ++ boundaryFirstPins
+  , hashSites := attenuateHashSites
+  , ranges := [] }
+
+/-- The no-recompute genuine face DROPS exactly the two `capRecomputeSites` hash-sites (the edge-leaf +
+the col-87 advance) from the genuine face — `site2` still absorbs `saCol CAP_ROOT` into the commitment, so
+the cap-root remains COMMITTED, just not OUTPUT-pinned. Same width, same constraints. -/
+theorem attenuateGenuineNoRecompute_drops_recompute :
+    attenuateVmDescriptorGenuineNoRecompute.hashSites = attenuateHashSites
+    ∧ attenuateVmDescriptorGenuine.hashSites
+        = capRecomputeSites ++ attenuateVmDescriptorGenuineNoRecompute.hashSites
+    ∧ attenuateVmDescriptorGenuineNoRecompute.constraints = attenuateVmDescriptorGenuine.constraints
+    ∧ attenuateVmDescriptorGenuineNoRecompute.traceWidth = EFFECT_VM_WIDTH :=
+  ⟨rfl, rfl, rfl, rfl⟩
+
 /-- **`CapCellSpecGenuine hash pre post`** — the GENUINE per-cell cap-graph spec: `post.capRoot` is the
 RECOMPUTED advance `hash[ hash[holder,target,rights,op], pre.capRoot ]` (a function of the bound edge +
 old root — NOT an opaque parameter), the balance limbs / nonce / 8 fields / reserved frozen. The edge
