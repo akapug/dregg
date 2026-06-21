@@ -3820,6 +3820,180 @@ mod tests {
         );
     }
 
+    /// THE CAP-WRITE WRAPPER GENUINELY REQUIRES THE CAP-TREE WRITE WITNESS — it FAIL-CLOSES, it does
+    /// not silently accept a fabricated post-cap-root. This pins the precise obstruction blocking the
+    /// cap-WRITE light-client axis (the post-cap-root being on-the-wire-verifiable, not just
+    /// proven-in-Lean): the write-bearing wrappers (`delegate/introduce/delegateAtten/
+    /// revokeDelegationWriteCapOpenVmDescriptor2R24`) carry a `map_op` `read`+`insert`/`write` that
+    /// binds the BEFORE cap-root (col 65) → AFTER cap-root (col 87) via a genuine sorted-Poseidon2
+    /// cap-tree write. The IR-v2 prover realizes that `map_op` against a witness HEAP whose root
+    /// equals the BEFORE cap-root (`map_heaps`, exactly as `note_spend` threads its nullifier tree),
+    /// and CHECKS the genuine post-write root equals the claimed AFTER cap-root — a wrong post-root is
+    /// UNSAT.
+    ///
+    /// `prove_effect_vm_cap_open` threads NO `map_heaps` (it passes `&[]`), and the data needed to
+    /// build one — the cell's FULL sorted c-list leaf-set — is NOT carried by `CapMembershipWitness`
+    /// (which carries only ONE opened leaf + its path). So the write wrapper is NOT producer-provable
+    /// today. This test proves the wrapper REJECTS the empty-witness route (it does not launder a
+    /// fabricated post-cap-root into a passing proof): the failure is the HONEST signal that the
+    /// write witness is genuinely required, NOT a silent forge. The closure is a data-availability
+    /// change (carry the full c-list leaf-set to the prove site + a cap-tree→`map_heaps` bridge
+    /// generator), NOT a producer re-point — see the HORIZONLOG cap-WRITE entry.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn write_cap_open_wrapper_requires_cap_tree_write_witness_no_silent_forge() {
+        use dregg_circuit::cap_root::CapLeaf;
+        use dregg_circuit::descriptor_ir2::{
+            MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
+        };
+        use dregg_circuit::effect_vm::trace_rotated::{
+            CapOpenWitness, FACET_MASK_HI, RotatedBlockWitness, SIGNATURE_AUTH_TAG,
+            empty_caveat_manifest, generate_rotated_effect_vm_trace, widen_to_cap_open,
+        };
+        use dregg_turn::rotation_witness as rw;
+
+        const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
+
+        // First: confirm the write wrapper IS resolvable from the registry the producer/verifier use
+        // (`V3_STAGED_REGISTRY_TSV`). The registry-availability concern is RESOLVED FAVORABLY — the
+        // blocker is the write-witness, NOT a registry gap.
+        let json = cap_open_descriptor_json_by_key("revokeDelegationWriteCapOpenVmDescriptor2R24")
+            .expect("the write-bearing wrapper IS in V3_STAGED_REGISTRY_TSV (the registry the SDK \
+                     cap-open route + the light-client verifier both resolve against)");
+        let desc = parse_vm_descriptor2(json).expect("write wrapper descriptor parses");
+        // It genuinely carries the cap-tree write op (so it genuinely needs the witness heap).
+        assert!(
+            json.contains("\"map_op\""),
+            "the write-bearing wrapper must carry a map_op (the BEFORE→AFTER cap-root write) — that \
+             is the whole point of the WRITE wrapper vs the authority-only CapOpen"
+        );
+
+        // A delegation-conferring leaf (target == src), exactly as the honest revoke fan-out test.
+        let chosen: [BabyBear; 7] = [
+            BabyBear::new(0xDE16A),
+            BabyBear::new(7_777),
+            BabyBear::new(SIGNATURE_AUTH_TAG),
+            BabyBear::new(EFFECT_DELEGATION_OPS),
+            BabyBear::new(FACET_MASK_HI),
+            BabyBear::new(0x00FF_FFFF),
+            BabyBear::new(42),
+        ];
+        let other: [BabyBear; 7] = [
+            BabyBear::new(0xBEEF),
+            BabyBear::new(123),
+            BabyBear::new(1),
+            BabyBear::new(EFFECT_DELEGATION_OPS),
+            BabyBear::new(0),
+            BabyBear::new(9),
+            BabyBear::new(0),
+        ];
+        let built = CapOpenWitness::build_for(&[other, chosen], 1, EFFECT_DELEGATION_OPS)
+            .expect("cap-open path builds");
+
+        let before_balance: u64 = 100_000;
+        let initial = CellState::new(before_balance, 0);
+        let effects = vec![VmEffect::RevokeDelegation {
+            child_hash: [BabyBear::new(0x5C); 8],
+        }];
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut before_cell =
+            dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        before_cell.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let mut after_cell = before_cell.clone();
+        let _ = after_cell.state.increment_nonce();
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let commitments_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
+        let before_w =
+            rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let after_w =
+            rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+
+        let cap_w = CapOpenWitness {
+            leaf: chosen,
+            siblings: {
+                let mut s = [BabyBear::ZERO; 16];
+                s.copy_from_slice(&built.siblings);
+                s
+            },
+            directions: {
+                let mut d = [0u8; 16];
+                d.copy_from_slice(&built.directions);
+                d
+            },
+            cap_root: built.cap_root,
+            src: chosen[1],
+            eff_bit: EFFECT_DELEGATION_OPS,
+        };
+        let _ = leaf_of(&chosen); // keep the CapLeaf import live for symmetry with the honest test
+        fn leaf_of(l: &[BabyBear; 7]) -> CapLeaf {
+            CapLeaf {
+                slot_hash: l[0],
+                target: l[1],
+                auth_tag: l[2],
+                mask_lo: l[3],
+                mask_hi: l[4],
+                expiry: l[5],
+                breadstuff: l[6],
+            }
+        }
+
+        let before =
+            RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap();
+        let after = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot).unwrap();
+        let caveat = empty_caveat_manifest();
+        let (mut trace, dpis) =
+            generate_rotated_effect_vm_trace(&initial, &effects, &before, &after, &caveat).unwrap();
+        widen_to_cap_open(&mut trace, &cap_w).unwrap();
+
+        // THE WRITE WRAPPER WITH EMPTY map_heaps FAIL-CLOSES (it cannot resolve the cap-tree write
+        // op's witness heap), it does NOT silently accept a fabricated post-cap-root. This is the
+        // load-bearing assertion: the gap is a data-availability gap, and there is NO silent forge.
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(|| {
+            prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &[])
+                .err()
+                .map(|e| format!("{e:?}"))
+        });
+        std::panic::set_hook(prev_hook);
+        // The rejection is specifically the MISSING WITNESS HEAP — the map_op cannot find a heap
+        // whose root == the BEFORE cap-root, because `prove_effect_vm_cap_open` threads no map_heaps.
+        // (A panic also counts as fail-closed; either way the proof did NOT silently succeed.)
+        let rejected = match &outcome {
+            Ok(Some(msg)) => {
+                assert!(
+                    msg.contains("witness heap") || msg.contains("map op"),
+                    "the write wrapper's rejection must be the missing cap-tree write witness \
+                     (the map_op witness heap), got: {msg}"
+                );
+                true
+            }
+            Ok(None) => false, // proof succeeded — that WOULD be a silent forge
+            Err(_) => true,    // panicked = fail-closed
+        };
+        assert!(
+            rejected,
+            "the WRITE-bearing cap-open wrapper MUST fail-closed without the cap-tree write witness \
+             (an empty map_heaps cannot resolve the BEFORE→AFTER cap-root map_op) — it must NOT \
+             launder a fabricated post-cap-root into a passing proof. The closure is a \
+             data-availability change (carry the full c-list leaf-set + a cap-tree→map_heaps bridge), \
+             NOT a producer re-point."
+        );
+    }
+
     /// THE LIGHT-CLIENT FORGE IS CLOSED (AUTHORITY FLOOR last mile). A cap effect
     /// (`RevokeDelegation`, `EFFECT_DELEGATION_OPS`) proven under the PLAIN cohort descriptor
     /// (`revokeVmDescriptor2R24`, which carries NO in-circuit cap-membership check) is REJECTED by

@@ -17,14 +17,40 @@ re-point + the VK epoch that absorbs the record-digest + sorted roots into `comp
 - MODELLED-FLOOR (not yet `_sat`): receiptArchive, attenuate(2-arm), revoke(tag-2), refreshDelegation.
 - cap-AUTHORITY light-client forge: **CLOSED** (verify rejects plain cap descriptors, e26fe42df).
 
-## (A) WIRE — producer-selection re-point (VK-FREE-driveable NOW, the highest leverage)
-- [ ] `rotated_descriptor_name` selects the apex-consumed write-bearing descriptor for the cap-write
-      family — GRANT_CAP/DELEGATE→delegateWriteCapOpen, INTRODUCE→introduceWriteCapOpen,
-      REVOKE_DELEGATION→revokeDelegationWriteCapOpen, +delegateAtten arm.
-      **green:** a producer-selection test asserting each `rotated_descriptor_name(sel::X) == "…WriteCapOpenVmDescriptor2R24"` + `scripts/check-descriptor-drift.sh` PASS.
-- [ ] the cap-WRITE light-client axis — `verify_full_turn` rejects the authority-ONLY CapOpen
-      (no write) for write-bearing cap effects (extend `is_forbidden_plain_cap_descriptor`).
-      **green:** a forge test — RevokeDelegation under `revokeCapOpen` (authority, no write) REJECTED.
+## (A) WIRE — producer-selection re-point — BLOCKED BY A DATA-AVAILABILITY GAP (audit 2026-06-20)
+The re-point CANNOT go green as written: the blocker is NOT the producer wiring or a WIDE-registry
+gap — it is the cap-tree WRITE WITNESS (`map_heaps`) data availability. Findings:
+- The write-bearing wrappers (`delegate/introduce/delegateAtten/revokeDelegationWriteCapOpenVmDescriptor2R24`)
+  ARE in `V3_STAGED_REGISTRY_TSV` — the registry the SDK cap-open route (`cap_open_descriptor_json_by_key`)
+  AND the light-client verifier (`verify_effect_vm_rotated_with_cutover`) both resolve against. So the
+  registry-availability concern is RESOLVED FAVORABLY (the WIDE registry is a separate 8-felt-commit path,
+  not this seam).
+- Each write wrapper carries a genuine `map_op` `read`+`insert`/`write` (guard = the selector marker, NOT
+  vacuous) binding the BEFORE cap-root (col 65) → AFTER cap-root (col 87) via a sorted-Poseidon2 cap-tree
+  write. The IR-v2 prover realizes that `map_op` against a witness HEAP whose root == the BEFORE cap-root
+  (`prove_vm_descriptor2`'s `map_heaps`, exactly as `note_spend` threads its nullifier tree) and CHECKS the
+  genuine post-write root == the claimed AFTER cap-root (a wrong post-root is UNSAT — NOT fakeable).
+- `prove_effect_vm_cap_open` threads NO `map_heaps` (passes `&[]`), and the data needed to build one — the
+  cell's FULL sorted c-list leaf-set — is NOT carried by `CapMembershipWitness` (only one opened leaf + its
+  path) NOR available at the node prove site (`node/src/turn_proving.rs` has the consumed cap, not the
+  cell's whole c-list). So routing to the write wrapper produces an UNPROVABLE proof.
+- PROVEN (no silent forge): the write wrapper FAIL-CLOSES with empty map_heaps ("no witness heap with
+  root …"), it does NOT launder a fabricated post-cap-root. Test:
+  `write_cap_open_wrapper_requires_cap_tree_write_witness_no_silent_forge` (sdk/src/full_turn_proof.rs, GREEN).
+- NOTE: the task's "re-point `rotated_descriptor_name`" target is the WRONG seam — that resolver is the
+  non-cap BASE cohort (36 members, EXCLUDES all `…CapOpen…` by `resolvers_cover_exactly`). The cap-effect
+  selection seam is `cap_open_route_for_run` (`route.key`). Re-pointing EITHER to a write wrapper is
+  unprovable until the write witness is threaded.
+- [ ] CLOSURE (data-availability, NOT a re-point): (1) extend `ConsumedCapWitness`/`CapMembershipWitness`
+      to carry the target cell's full sorted c-list leaf-set; (2) plumb it from `node/src/turn_proving.rs`;
+      (3) add a cap-tree→`map_heaps` bridge generator (mirror `generate_rotated_note_spend_trace_with_nullifier_tree`);
+      (4) thread it through `prove_effect_vm_cap_open` → `prove_vm_descriptor2`; (5) re-point
+      `cap_open_route_for_run` to the write wrappers. THEN the cap-WRITE post-root becomes light-client-verifiable.
+- [ ] the cap-WRITE light-client verifier tooth — extend `is_forbidden_plain_cap_descriptor` to ALSO reject
+      the authority-ONLY CapOpen (introduceCapOpen/revokeCapOpen/grantCapCapOpen) for write-bearing cap
+      effects. BLOCKED ON THE ABOVE: adding it now would reject the honest authority-only cap-open route
+      (`cap_open_fanout_revoke_*` GREEN today) with NO provable write-bearing route to migrate to. Land it in
+      the SAME breath as the producer re-point, not before.
 
 ## (B) GREEN-BOARD (VK-FREE-driveable NOW)
 - [ ] `resolvers_cover_exactly_the_rotated_registry` RED (37 vs 36) — heapWriteVmDescriptor2R24 is a
