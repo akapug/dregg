@@ -12,6 +12,7 @@ import Dregg2.Circuit.Inst.emitEventA
 import Dregg2.Circuit.Inst.incrementNonceA
 import Dregg2.Circuit.Inst.setPermissionsA
 import Dregg2.Circuit.Inst.setVKA
+import Dregg2.Circuit.Inst.setProgramA
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Inst.attenuateA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
@@ -136,6 +137,20 @@ theorem setVK_circuit_refines_spec (CS : CommitSurface)
     (h : setVKCircuitStep CS s args s') :
     SetVKSpec s args.actor args.cell args.vk s' :=
   setVKA_full_sound CS hN hL hRest hLog s args s' hwf hwf' h
+
+def setProgramCircuitStep (CS : CommitSurface) (s : RecChainedState)
+    (args : Dregg2.Circuit.Inst.SetProgramA.SetProgramArgs) (s' : RecChainedState) : Prop :=
+  satisfiedE CS Dregg2.Circuit.Inst.SetProgramA.setProgramE
+    (encodeE CS Dregg2.Circuit.Inst.SetProgramA.setProgramE s args s')
+
+theorem setProgram_circuit_refines_spec (CS : CommitSurface)
+    (hN : compressNInjective CS.compressN) (hL : cellLeafInjective CS.CH)
+    (hRest : RestHashIffFrame CS.RH) (hLog : logHashInjective CS.LH)
+    (s : RecChainedState) (args : Dregg2.Circuit.Inst.SetProgramA.SetProgramArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : setProgramCircuitStep CS s args s') :
+    Dregg2.Circuit.Spec.CellStateProgram.SetProgramSpec s args.actor args.cell args.prog s' :=
+  Dregg2.Circuit.Inst.SetProgramA.setProgramA_full_sound CS hN hL hRest hLog s args s' hwf hwf' h
 
 def makeSovereignCircuitStep (CS : CommitSurface) (s : RecChainedState) (args : MakeSovereignArgs)
     (s' : RecChainedState) : Prop :=

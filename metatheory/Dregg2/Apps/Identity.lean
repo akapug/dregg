@@ -121,6 +121,9 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   | setVKA actor cell vk =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+  | setProgramA actor cell prog =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
   -- §authority — introduce/validateHandoff route to recKDelegate; delegateAtten to recKDelegateAtten;
   -- attenuate is always-commit (caps-only); dropRef/revokeDelegation to recCRevoke (caps-only);
   -- exercise factors (kernel UNCHANGED). NONE touches the credential-revocation registry.

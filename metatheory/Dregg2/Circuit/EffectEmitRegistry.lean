@@ -98,6 +98,9 @@ def actionAirName : FullActionA → String
   | .incrementNonceA _ _ _ => Dregg2.Circuit.Inst.IncrementNonceA.incrementNonceAAirName
   | .setPermissionsA _ _ _ => Dregg2.Circuit.Inst.SetPermissionsA.setPermissionsAAirName
   | .setVKA _ _ _ => Dregg2.Circuit.Inst.SetVKA.setVKAAirName
+  -- SetProgram rides the setVK runtime row (the deployed `sel::SET_VERIFICATION_KEY` selector;
+  -- `EffectVmEmitRotationV3.setProgramV3`'s v1 face is the setVK descriptor), so its Air is setVK's.
+  | .setProgramA _ _ _ => Dregg2.Circuit.Inst.SetVKA.setVKAAirName
   | .introduceA _ _ _ => Dregg2.Circuit.Inst.IntroduceA.introduceAAirName
   | .delegateAttenA _ _ _ _ => Dregg2.Circuit.Inst.DelegateAttenA.delegateAttenAAirName
   | .attenuateA _ _ _ => Dregg2.Circuit.Inst.AttenuateA.attenuateAAirName

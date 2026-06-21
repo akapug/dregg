@@ -81,6 +81,7 @@ import Dregg2.Circuit.RotatedKernelRefinementNotesFresh
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 import Dregg2.Circuit.RotatedKernelRefinementLifecycle
 import Dregg2.Circuit.RotatedKernelRefinementPermsVK
+import Dregg2.Circuit.RotatedKernelRefinementProgram
 import Dregg2.Circuit.RotatedKernelRefinementIncNonce
 import Dregg2.Circuit.RotatedKernelRefinementSetField
 import Dregg2.Circuit.RotatedKernelRefinementAttenuate
@@ -1038,6 +1039,36 @@ theorem revokeDelegation_closedLog_sat
       exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeDelegation_descriptorRefines_capOpenSat
         Scap pre post holder tt hash minit mfin maddrs t hsat henc anc).1)
 
+/-- revoke (tag 2), CLASS A — forced from `revokeDelegationWriteCapOpenV3` (`= Rfix 2`, the SAME
+write-bearing descriptor tag 14 rides). `.revoke holder tt` lowers to the SHARED `RevokeSpec`/`removeEdgeCaps`
+kernel step (`execFullA_revoke_iff_spec`), so the cap-tree REMOVE FORCED by `revokeDelegationWriteV3` (the
+wrapper strips to it via `capOpen_satisfied2_strips_to_base`) discharges THIS arm exactly as it discharges
+tag 14's. Editing `revokeDelegationWriteV3`'s `removeWriteOpRot` turns this — and the tag-2 apex — RED. -/
+theorem revoke_closedLog_capOpenSat
+    {State : Type} (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.CapOpenEmit.revokeDelegationWriteCapOpenV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (holder tt : CellId)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost = LH (Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log))
+    (logNeeds : post.log = Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log →
+      Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+            Scap pre post holder tt),
+        Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationWriteAnchor
+          Scap pre post holder tt hash minit mfin maddrs t henc) :
+    kstepAll 2 pre post :=
+  closedLog_of_encode (.revoke holder tt)
+    (Dregg2.Exec.TurnExecutorFull.authReceipt holder) hdec hpub rfl
+    (fun hadv => by
+      obtain ⟨henc, anc⟩ := logNeeds hadv
+      show fullActionStep pre (.revoke holder tt) post
+      simp only [fullActionStep]
+      exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeDelegation_descriptorRefines_capOpenSat
+        Scap pre post holder tt hash minit mfin maddrs t hsat henc anc).1)
+
 /-- refreshDelegation (tag 55), CLASS A — forced from `refreshDelegationWriteCapOpenV3` (`= Rfix 55`);
 the DELEGATIONS-tree UPDATE-write is FORCED in-circuit (the `delegRoot_runtime_column_pending` supplied
 digest is GONE). The cap-open wrapper strips to `refreshDelegationWriteV3` and applies
@@ -1153,6 +1184,33 @@ theorem setVK_closedLog_sat
       simp only [fullActionStep]
       exact Dregg2.Circuit.RotatedKernelRefinementPermsVK.setVK_descriptorRefines_sat
         hash hside hsat pre post actor cell vk (logNeeds hadv))
+
+/-- setProgram (tag 13), CLASS A — forced from `setProgramV3` (the program record-pin, the program-digest
+analog of setVK; carries `compressN`/`hN`/`RotTableSide` for the record-slot-root audit). -/
+theorem setProgram_closedLog_sat
+    (compressN : List ℤ → ℤ) (hN : compressNInjective compressN)
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    {permOut : List ℤ → List ℤ}
+    (hside : Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setProgramV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId) (prog : Int)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost
+      = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log))
+    (logNeeds : post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+      Dregg2.Circuit.RotatedKernelRefinementProgram.SetProgramTraceReadout
+        compressN hash t pre post actor cell prog) :
+    kstepAll 13 pre post :=
+  closedLog_of_encode (.setProgramA actor cell prog)
+    { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } hdec hpub rfl
+    (fun hadv => by
+      show fullActionStep pre (.setProgramA actor cell prog) post
+      simp only [fullActionStep]
+      exact Dregg2.Circuit.RotatedKernelRefinementProgram.setProgram_descriptorRefines_sat
+        compressN hN hash hside hsat pre post actor cell prog (logNeeds hadv))
 
 /-- createCell (tag 17), CLASS A — forced from `createCellV3` (grow-gate, no `RotTableSide`). -/
 theorem createCell_closedLog_sat

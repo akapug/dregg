@@ -156,6 +156,7 @@ def toClosedEffect : FullActionA → ClosedEffect
   | .incrementNonceA actor cell n     => incrementNonceEffect actor cell n
   | .setPermissionsA actor cell p     => setPermissionsEffect actor cell p
   | .setVKA actor cell vk             => setVKEffect actor cell vk
+  | .setProgramA actor cell prog      => setProgramEffect actor cell prog
   -- §authority (6 distinct) — introduce/validateHandoff alias the attenuated delegation (keep := allAuths)
   | .introduceA intro rec t          => introduceEffect intro rec t
   | .delegateAttenA del rec t keep   => delegateAttenEffect del rec t keep
@@ -653,6 +654,31 @@ theorem handler_refines_execFullA_setVK (s s' : RecChainedState) (actor cell : C
     · rw [← hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
+theorem handler_refines_execFullA_setProgram (s s' : RecChainedState) (actor cell : CellId) (prog : Int)
+    (hmem : cell ∈ s.kernel.accounts)
+    (h : execHandlerOne (.setProgramA actor cell prog) s = some s') :
+    ∃ s'', execFullA s (.setProgramA actor cell prog) = some s'' ∧ s''.kernel = s'.kernel := by
+  have hstep := execHandlerOne_kernel (.setProgramA actor cell prog) s s' h
+  rw [toClosedEffect] at hstep
+  change stateWriteStep s.kernel
+    { actor := actor, target := cell, field := Dregg2.Exec.Handlers.StateSupply.programField, value := prog }
+    = some s'.kernel at hstep
+  unfold stateWriteStep at hstep
+  by_cases hg : acceptsEffects s.kernel cell
+      && authorizedB s.kernel.caps { actor := actor, src := cell, dst := cell, amt := 0 }
+  · rw [if_pos hg] at hstep
+    simp only [Bool.and_eq_true] at hg
+    simp only [Option.some.injEq] at hstep
+    have hlive : cellLive s.kernel cell = true := hg.1
+    have hfield : Dregg2.Exec.Handlers.StateSupply.programField = Dregg2.Exec.TurnExecutorFull.programField := rfl
+    refine ⟨{ kernel := writeField s.kernel Dregg2.Exec.Handlers.StateSupply.programField cell (.int prog),
+              log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, ?_⟩
+    · show Dregg2.Exec.EffectsState.stateStep s Dregg2.Exec.TurnExecutorFull.programField actor cell (.int prog) = _
+      unfold Dregg2.Exec.EffectsState.stateStep Dregg2.Exec.EffectsState.stateAuthB
+      rw [if_pos ⟨hg.2, hmem, hlive⟩, hfield]
+    · rw [← hstep]
+  · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
+
 theorem handler_refines_execFullA_refusal (s s' : RecChainedState) (actor cell : CellId)
     (hmem : cell ∈ s.kernel.accounts)
     (h : execHandlerOne (.refusalA actor cell) s = some s') :
@@ -1112,6 +1138,7 @@ seven batches the registry packs — would FAIL these pins (and the build). -/
 #assert_axioms handler_refines_execFullA_incrementNonce
 #assert_axioms handler_refines_execFullA_setPermissions
 #assert_axioms handler_refines_execFullA_setVK
+#assert_axioms handler_refines_execFullA_setProgram
 #assert_axioms handler_refines_execFullA_refusal
 #assert_axioms handler_refines_execFullA_setField
 #assert_axioms handler_refines_execFullA_cellSeal

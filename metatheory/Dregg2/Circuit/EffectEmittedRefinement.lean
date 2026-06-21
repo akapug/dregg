@@ -32,6 +32,7 @@ import Dregg2.Circuit.Inst.emitEventA
 import Dregg2.Circuit.Inst.incrementNonceA
 import Dregg2.Circuit.Inst.setPermissionsA
 import Dregg2.Circuit.Inst.setVKA
+import Dregg2.Circuit.Inst.setProgramA
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Inst.introduceA
 import Dregg2.Circuit.Inst.revokeDelegationA
@@ -542,6 +543,7 @@ open Dregg2.Circuit.Inst.IncrementNonceA
 open Dregg2.Circuit.Inst.SetPermissionsA
   (setPermissionsE setPermissionsAAirName SetPermissionsArgs setPermissionsA_full_sound)
 open Dregg2.Circuit.Inst.SetVKA (setVKE setVKAAirName SetVKArgs setVKA_full_sound)
+open Dregg2.Circuit.Inst.SetProgramA (setProgramE setProgramAAirName SetProgramArgs setProgramA_full_sound)
 open Dregg2.Circuit.Inst.DelegateAttenA
   (delegateAttenE delegateAttenAAirName DelegateAttenArgs delegateAttenA_full_sound)
 open Dregg2.Circuit.Inst.IntroduceA
@@ -667,6 +669,20 @@ theorem setVKA_emitted_refines_spec (S : CommitSurface)
     SetVKSpec s args.actor args.cell args.vk s' :=
   setVKA_full_sound S hN hL hRest hLog s args s' hwf hwf'
     ((effect1_emitted_equiv_circuit_local S setVKE setVKAAirName s args s').mp h)
+
+def setProgramAEmittedStep (S : CommitSurface) (s : RecChainedState) (args : SetProgramArgs)
+    (s' : RecChainedState) : Prop :=
+  effect1EmittedStepLocal S setProgramE setProgramAAirName s args s'
+
+theorem setProgramA_emitted_refines_spec (S : CommitSurface)
+    (hN : compressNInjective S.compressN) (hL : cellLeafInjective S.CH)
+    (hRest : RestHashIffFrame S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SetProgramArgs) (s' : RecChainedState)
+    (hwf : AccountsWF s.kernel) (hwf' : AccountsWF s'.kernel)
+    (h : setProgramAEmittedStep S s args s') :
+    Dregg2.Circuit.Spec.CellStateProgram.SetProgramSpec s args.actor args.cell args.prog s' :=
+  setProgramA_full_sound S hN hL hRest hLog s args s' hwf hwf'
+    ((effect1_emitted_equiv_circuit_local S setProgramE setProgramAAirName s args s').mp h)
 
 def delegateAttenAEmittedStep (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
     (s : RecChainedState) (args : DelegateAttenArgs) (s' : RecChainedState) : Prop :=

@@ -1401,6 +1401,7 @@ named-field model of dregg1's `state.fields[index]` slot / `permissions` / `veri
 def nonceField : FieldName := "nonce"
 def permsField : FieldName := "permissions"
 def vkField    : FieldName := "verification_key"
+def programField : FieldName := "program"
 
 /-! ### §MA-seal — the 6 SIMPLE bal-neutral effects (Wave 6) on the per-asset dispatch.
 
@@ -2055,6 +2056,12 @@ inductive FullActionA where
   `verification_key` field to `vk`; `actor` holds authority over `cell` (the VK hash-integrity check
   is the §8 Prop-carrier portal, off this executable layer). -/
   | setVKA          (actor cell : CellId) (vk : Int)
+  /-- `SetProgram { cell, program }` (dregg1 `apply_set_program`): write the `program` field (the
+  cell's `CellProgram` / caveat-table slot) to `prog`; `actor` holds authority over `cell`. SAME kernel
+  SHAPE as `setVKA` — a single PROTOCOL-managed record-slot write through the bare authority-gated
+  `stateStep` — but it pins the cell's caveat table, the program-digest analog of setVK's vk-digest.
+  Both fold into `compute_authority_digest_felt` (the `B_RECORD_DIGEST` record-pin residue). -/
+  | setProgramA     (actor cell : CellId) (prog : Int)
   -- §MA-auth: the 6 DISTINCT AUTHORITY effects — they EDIT (or CHECK) the `caps` cap-graph, NEVER
   -- the `bal` ledger, so `ledgerDeltaAsset = 0` for EVERY asset (balance-NEUTRAL). The HEADLINE
   -- obligation is NON-AMPLIFICATION (genuine `capAuthConferred ⊆` / `removeEdge ⊆` / `addEdge`).
@@ -2217,6 +2224,7 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .incrementNonceA _ _ _, _ => 0
   | .setPermissionsA _ _ _, _ => 0
   | .setVKA _ _ _,        _ => 0
+  | .setProgramA _ _ _,   _ => 0
   -- §MA-auth: the 6 authority effects EDIT/CHECK `caps`, NEVER `bal` — so `0` for EVERY asset.
   | .introduceA _ _ _,    _ => 0
   | .delegateAttenA _ _ _ _, _ => 0
@@ -2270,6 +2278,7 @@ theorem ledgerDeltaAsset_eq_zero : ∀ (fa : FullActionA) (b : AssetId), ledgerD
   | .incrementNonceA _ _ _, _ => by simp only [ledgerDeltaAsset]
   | .setPermissionsA _ _ _, _ => by simp only [ledgerDeltaAsset]
   | .setVKA _ _ _,        _ => by simp only [ledgerDeltaAsset]
+  | .setProgramA _ _ _,   _ => by simp only [ledgerDeltaAsset]
   | .introduceA _ _ _,    _ => by simp only [ledgerDeltaAsset]
   | .delegateAttenA _ _ _ _, _ => by simp only [ledgerDeltaAsset]
   | .attenuateA _ _ _,    _ => by simp only [ledgerDeltaAsset]
@@ -2329,6 +2338,7 @@ def requiredFacetA : FullActionA → Authority.Auth
   | .incrementNonceA _ _ _   => Authority.Auth.write
   | .setPermissionsA _ _ _   => Authority.Auth.write
   | .setVKA _ _ _            => Authority.Auth.write
+  | .setProgramA _ _ _       => Authority.Auth.write
   | .createCellA _ _         => Authority.Auth.write
   | .createCellFromFactoryA _ _ _ => Authority.Auth.write
   | .spawnA _ _ _            => Authority.Auth.write
@@ -2403,6 +2413,7 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .incrementNonceA actor cell n     => stateStep s nonceField actor cell (.int n)
   | .setPermissionsA actor cell p     => stateStep s permsField actor cell (.int p)
   | .setVKA actor cell vk             => stateStep s vkField actor cell (.int vk)
+  | .setProgramA actor cell prog      => stateStep s programField actor cell (.int prog)
   -- §MA-auth: the 6 authority effects route to the (reused/re-founded) chained authority steps.
   | .introduceA intro rec t          => recCDelegate s intro rec t
   | .delegateAttenA del rec t keep   => recCDelegateAtten s del rec t keep
@@ -2556,6 +2567,11 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
       show recTotalAsset (writeField s.kernel vkField cell (.int vk)) b = recTotalAsset s.kernel b + 0
       rw [writeField_recTotalAsset s.kernel vkField cell (.int vk) b]; ring
+  | setProgramA actor cell prog =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      show recTotalAsset (writeField s.kernel programField cell (.int prog)) b = recTotalAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel programField cell (.int prog) b]; ring
   | introduceA intro rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -2840,6 +2856,7 @@ def fullReceiptA (s : RecChainedState) : FullActionA → Turn
   | .incrementNonceA actor cell _ => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .setPermissionsA actor cell _ => { actor := actor, src := cell, dst := cell, amt := 0 }
   | .setVKA actor cell _        => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .setProgramA actor cell _   => { actor := actor, src := cell, dst := cell, amt := 0 }
   -- §MA-auth: each authority effect appends exactly its `authReceipt` (a self-`Turn`, amount `0`).
   | .introduceA intro _ _       => authReceipt intro
   | .delegateAttenA del _ _ _   => authReceipt del
@@ -2933,6 +2950,9 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA, fullReceiptA] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
   | setVKA actor cell vk =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+  | setProgramA actor cell prog =>
       simp only [execFullA, fullReceiptA] at h ⊢
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
   -- §MA-auth: each authority effect appends exactly its `authReceipt` (the metadata clock row).
@@ -3341,6 +3361,13 @@ theorem execFullA_setVKA_authorized (s s' : RecChainedState) (actor cell : CellI
     stateAuthB s.kernel.caps actor cell = true :=
   state_authorized (by simpa only [execFullA] using h)
 
+/-- **`setProgramA` authorized.** Implies the actor held authority over `cell` (the
+`SetProgram` gate). -/
+theorem execFullA_setProgramA_authorized (s s' : RecChainedState) (actor cell : CellId) (prog : Int)
+    (h : execFullA s (.setProgramA actor cell prog) = some s') :
+    stateAuthB s.kernel.caps actor cell = true :=
+  state_authorized (by simpa only [execFullA] using h)
+
 /-! ### §MA-seal authority obligations — the 6 simple bal-neutral effects carry their REAL `stateAuthB`
 authority gate (the faithful model of dregg1's sealer-cap / self-sovereign / `SetState` / archive
 gate). NON-VACUOUS: an actor without authority over the written cell cannot commit (see the fail-closed
@@ -3662,6 +3689,9 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .setVKA actor cell _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .setVerificationKey = LinearityClass.Neutral
+   | .setProgramA actor cell _ =>
+       stateAuthB s.kernel.caps actor cell = true ∧
+       effectLinearity .setVerificationKey = LinearityClass.Neutral
    -- §MA-auth: the 6 authority effects carry their REAL, NON-VACUOUS obligation. The HEADLINE is
    -- NON-AMPLIFICATION — the GENUINE `capAuthConferred ⊆` over the real `List Auth` lattice
    -- (`IsNonAmplifyingF`, witnessed against a HELD cap), NOT a `()≤()` collapse — and the `addEdge`/
@@ -3811,6 +3841,7 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | incrementNonceA actor cell n => exact ⟨execFullA_incrementNonceA_authorized s s' actor cell n h, rfl⟩
   | setPermissionsA actor cell p => exact ⟨execFullA_setPermissionsA_authorized s s' actor cell p h, rfl⟩
   | setVKA actor cell vk => exact ⟨execFullA_setVKA_authorized s s' actor cell vk h, rfl⟩
+  | setProgramA actor cell prog => exact ⟨execFullA_setProgramA_authorized s s' actor cell prog h, rfl⟩
   -- §MA-auth: discharge the 6 authority effects' REAL obligation (grounding/addEdge/removeEdge/
   -- graph-unchanged ∧ the GENUINE `capAuthConferred ⊆` non-amplification).
   | introduceA intro rec t =>

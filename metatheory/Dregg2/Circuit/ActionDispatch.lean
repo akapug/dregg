@@ -60,6 +60,7 @@ import Dregg2.Circuit.Spec.cellstatelog
 import Dregg2.Circuit.Spec.cellstatemonotone
 import Dregg2.Circuit.Spec.cellstatepermissions
 import Dregg2.Circuit.Spec.cellstatevk
+import Dregg2.Circuit.Spec.cellstateprogram
 import Dregg2.Circuit.Spec.factorycreation
 import Dregg2.Circuit.Spec.notecommitment
 import Dregg2.Circuit.Spec.notenullifier
@@ -84,6 +85,7 @@ open Dregg2.Circuit.Spec.CellStateLog
 open Dregg2.Circuit.Spec.CellStateMonotone
 open Dregg2.Circuit.Spec.CellStatePermissions
 open Dregg2.Circuit.Spec.CellStateVK
+open Dregg2.Circuit.Spec.CellStateProgram
 open Dregg2.Circuit.Spec.AuthorityUnattenuated
 open Dregg2.Circuit.Spec.AuthorityAttenuation
 open Dregg2.Circuit.Spec.AuthorityRevocation
@@ -113,6 +115,7 @@ def actionTag : FullActionA → Nat
   | .incrementNonceA _ _ _ => 7
   | .setPermissionsA _ _ _ => 8
   | .setVKA _ _ _ => 9
+  | .setProgramA _ _ _ => 13
   | .introduceA _ _ _ => 10
   | .delegateAttenA _ _ _ _ => 11
   | .attenuateA _ _ _ => 12
@@ -137,7 +140,7 @@ def actionTag : FullActionA → Nat
 
 /-- Coverage count: every `FullActionA` constructor has a dispatch arm (57/57 with the rotation's
 `heapWriteA`). -/
-def actionDispatchCoverage : Nat := 57
+def actionDispatchCoverage : Nat := 58
 
 /-! ## §2 — the hold-gate (for the `exerciseA` arm only; R4 facet-mask DEFERRED). -/
 
@@ -187,6 +190,8 @@ mutual
         SetPermissionsSpec st actor cell p st'
     | .setVKA actor cell vk =>
         SetVKSpec st actor cell vk st'
+    | .setProgramA actor cell prog =>
+        SetProgramSpec st actor cell prog st'
     | .introduceA intro rec t =>
         DelegateSpec st intro rec t st'
     | .delegateAttenA del rec t keep =>
@@ -357,6 +362,9 @@ mutual
     | .setVKA actor cell vk => by
       simp only [fullActionStep, execFullA]
       exact execFullA_setVK_iff_spec st actor cell vk st'
+    | .setProgramA actor cell prog => by
+      simp only [fullActionStep, execFullA]
+      exact execFullA_setProgram_iff_spec st actor cell prog st'
     | .introduceA intro rec t => by
       simp only [fullActionStep, execFullA]
       exact execFullA_introduceA_iff_spec st intro rec t st'

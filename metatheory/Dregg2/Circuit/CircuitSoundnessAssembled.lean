@@ -134,9 +134,15 @@ def v3RegistryHeap : List (String × EffectVmDescriptor2) :=
         -- `actionTagToPos 55` re-keys here; the authority-only `refreshDelegationCapOpenV3` (pos 40) stays
         -- for the live prover route.
         ("refreshDelegationWriteCapOpenVmDescriptor2R24",
-         Dregg2.Circuit.Emit.CapOpenEmit.refreshDelegationWriteCapOpenV3)]
+         Dregg2.Circuit.Emit.CapOpenEmit.refreshDelegationWriteCapOpenV3),
+        -- The SetProgram record-pin descriptor (position 51): the LIVE Class-A program-install
+        -- (`setProgramV3 = graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST setVKVmDescriptor)`).
+        -- SetProgram rides the setVK runtime row but pins the cell `program` slot into the authority
+        -- residue (B_RECORD_DIGEST). `actionTagToPos 13` re-keys HERE so `Rfix 13 = setProgramV3`.
+        ("setProgramVmDescriptor2R24",
+         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setProgramV3)]
 
-theorem v3RegistryHeap_length : v3RegistryHeap.length = 51 := by
+theorem v3RegistryHeap_length : v3RegistryHeap.length = 52 := by
   simp [v3RegistryHeap, Dregg2.Circuit.Emit.CapOpenEmit.v3RegistryCapOpen_length]
 
 /-- The heapWrite member lands at tail position 45 — `Rfix 56` resolves THERE. -/
@@ -154,8 +160,12 @@ def actionTagToPos : EffectIdx → Nat
                --                   authority appendix over the MOVING `grantCapWriteV3` base, so the
                --                   DEPLOYED descriptor FORCES the cap-tree insert write — guarantee A —
                --                   AND the authority leg forces authorizedFacetEffB … (1 <<< EFF_DELEGATION_OPS))
-  | 2  => 39   -- revoke          → revokeCapOpenVmDescriptor2R24 (FAN-OUT: revokeDelegation base +
-               --                   EFF_DELEGATION_OPS appendix)
+  | 2  => 49   -- revoke          → revokeDelegationWriteCapOpenVmDescriptor2R24 (FAN-OUT WRITE: the
+               --                   SHARED `revokeDelegationWriteV3` remove base + EFF_DELEGATION_OPS
+               --                   appendix; the cap-tree REMOVE FORCED on the moving genuine face —
+               --                   guarantee A circuit-bound. `.revoke holder t` and `.revokeDelegationA
+               --                   holder t` lower to the SAME `RevokeSpec`/`removeEdgeCaps` kernel step,
+               --                   so tag 2 rides the identical write-bearing descriptor as tag 14.)
   | 3  => 2    -- mint            → mintVmDescriptor2R24
   | 4  => 1    -- burn            → burnVmDescriptor2R24
   | 5  => 28   -- setField        → setFieldVmDescriptor2-0R24
@@ -200,6 +210,8 @@ def actionTagToPos : EffectIdx → Nat
                --                   the `delegRoot_runtime_column_pending` close)
   | 56 => 45   -- heapWrite        → heapWriteVmDescriptor2R24 (the LIVE Class-A heap-root recompute
                --                   descriptor, `v3RegistryHeap` tail; `Rfix 56 = heapWriteV3`)
+  | 13 => 51   -- setProgram       → setProgramVmDescriptor2R24 (the LIVE Class-A program-install
+               --                   record-pin descriptor, `v3RegistryHeap` tail; `Rfix 13 = setProgramV3`)
   | _  => 1000 -- off-range: past the registry → transfer fallback
 
 /-- **`Rfix` — the live registry as a total, `actionTag`-keyed lookup.** `Rfix e` is the rotated
@@ -232,6 +244,14 @@ deployed heapWrite descriptor, and the heapWrite rung discharges its refinement 
 theorem Rfix_heapWrite :
     Rfix 56 = Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3 := rfl
 
+/-- **`Rfix_setProgram` — SetProgram (tag 13) ranges over its OWN LIVE descriptor.** `actionTagToPos
+13 = 51` and `v3RegistryHeap`'s position-51 entry is the genuine Class-A `setProgramV3` (the program
+record-pin, `RotatedKernelRefinementProgram.setProgram_descriptorRefines_sat`). So `Rfix 13` is no
+longer the transfer fallback: the SetProgram rung discharges its refinement about the RIGHT descriptor,
+and `vkOfRegistry Rfix` now quantifies over the deployed SetProgram descriptor. -/
+theorem Rfix_setProgram :
+    Rfix 13 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setProgramV3 := rfl
+
 /-- **`Rfix_capOpen` — F5: the apex's registry RANGES OVER the LIVE in-circuit authority descriptor.**
 The attenuate tag (`12`) re-keys to `v3RegistryCapOpen` position `43` — the LIVE cap-open authority
 member `attenuateCapOpenEffV3` (the genuine-submask + decoded-tier descriptor carrying the depth-16
@@ -259,8 +279,12 @@ reads are unchanged; the trace merely carries the extra appendix columns). -/
 /-- delegate (tag 1) routes to the WRITE-FORCING delegate fan-out cap-open (`delegateWriteCapOpenV3`,
 position 46) — the cap-tree insert FORCED, guarantee A circuit-bound. -/
 theorem Rfix_delegate_capOpen : Rfix 1 = Dregg2.Circuit.Emit.CapOpenEmit.delegateWriteCapOpenV3 := rfl
-/-- revoke (tag 2) routes to the LIVE revoke fan-out cap-open (`revokeCapOpenV3`, position 39). -/
-theorem Rfix_revoke_capOpen : Rfix 2 = Dregg2.Circuit.Emit.CapOpenEmit.revokeCapOpenV3 := rfl
+/-- revoke (tag 2) routes to the WRITE-FORCING revoke fan-out cap-open (`revokeDelegationWriteCapOpenV3`,
+position 49 — the SAME write-bearing descriptor tag 14 rides). `.revoke holder t` lowers to the SAME shared
+`RevokeSpec`/`removeEdgeCaps` kernel step as `.revokeDelegationA holder t`, so the cap-tree REMOVE is FORCED
+on the moving genuine face — guarantee A circuit-bound, no longer the frozen `revokeCapOpenV3`. -/
+theorem Rfix_revoke_capOpen :
+    Rfix 2 = Dregg2.Circuit.Emit.CapOpenEmit.revokeDelegationWriteCapOpenV3 := rfl
 /-- introduce (tag 10) routes to the WRITE-FORCING introduce fan-out cap-open (`introduceWriteCapOpenV3`,
 position 47); the cap-tree insert FORCED on the moving genuine face. -/
 theorem Rfix_introduce_capOpen : Rfix 10 = Dregg2.Circuit.Emit.CapOpenEmit.introduceWriteCapOpenV3 := rfl

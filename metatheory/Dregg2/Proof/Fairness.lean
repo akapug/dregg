@@ -139,6 +139,7 @@ def affectedOf : FullActionA → List CellId
   | .incrementNonceA _ cell _  => [cell]
   | .setPermissionsA _ cell _  => [cell]
   | .setVKA _ cell _           => [cell]
+  | .setProgramA _ cell _      => [cell]
   -- cell lifecycle / creation.
   | .createCellA actor newCell => [actor, newCell]
   | .createCellFromFactoryA actor newCell _ => [actor, newCell]

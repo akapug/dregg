@@ -370,7 +370,11 @@ theorem closedLogExtract_revokeDelegation_closed {State : Type}
   exact revokeDelegation_closedLog_sat Scap hash hsat' pre post holder tt
     pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
-/-- **revoke (2).** -/
+/-- **revoke (2) — CLASS A.** `Rfix 2 = revokeDelegationWriteCapOpenV3` (position 49 — the SAME
+write-bearing descriptor tag 14 rides): the cap-tree REMOVE on the moving genuine face is FORCED via
+`revokeDelegation_descriptorRefines_capOpenSat`. `.revoke holder t` lowers to the SHARED `RevokeSpec`/
+`removeEdgeCaps` kernel step, so the `RevokeCapsTreeEncodes` + `RevokeDelegationWriteAnchor` readout that
+discharges tag 14 discharges tag 2 verbatim — `hsat` is now CONSUMED (the modelled floor is gone). -/
 theorem closedLogExtract_revoke_closed {State : Type}
     (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
@@ -379,11 +383,17 @@ theorem closedLogExtract_revoke_closed {State : Type}
       Σ' (holder tt : CellId),
         PLift (pubLogPost = LH (authReceipt holder :: pre.log)) ×'
         (post.log = authReceipt holder :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes Scap pre post holder tt)) :
+          Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+                Scap pre post holder tt),
+            Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationWriteAnchor
+              Scap pre post holder tt hash minit mfin maddrs t henc)) :
     ClosedLogExtract Slive LH hash Rfix 2 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.revokeDelegationWriteCapOpenV3
+      minit mfin maddrs t := hsat
   obtain ⟨holder, tt, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact revoke_closedLog Scap pre post holder tt pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  exact revoke_closedLog_capOpenSat Scap hash hsat' pre post holder tt
+    pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **refreshDelegation (55) — CLASS A.** The DELEGATIONS-tree UPDATE-write is forced from the DEPLOYED
 descriptor `refreshDelegationWriteCapOpenV3` (`= Rfix 55` by `rfl`): the readout extracts the actor/child,
@@ -569,6 +579,28 @@ theorem closedLogExtract_setVK_closed
       minit mfin maddrs t := hsat
   obtain ⟨actor, cell, vk, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact setVK_closedLog_sat hash hside hsat' pre post actor cell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+
+/-- **setProgram (13) — CLASS A.** Forced from the DEPLOYED `setProgramV3` (`= Rfix 13` by `rfl`) via
+`setProgram_descriptorRefines_sat` (the program record-pin, the program-digest analog of setVK; carries
+`compressN`/`hN` for the record-slot-root audit). Editing `setProgramV3`'s record pin turns this — and
+the apex — RED. -/
+theorem closedLogExtract_setProgram_closed
+    (compressN : List ℤ → ℤ) (hN : compressNInjective compressN)
+    (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+      (pubLogPost : ℤ) (pre post : RecChainedState),
+      Satisfied2 hash (Rfix 13) minit mfin maddrs t →
+      Σ' (actor cell : CellId) (prog : ℤ) (permOut : List ℤ → List ℤ),
+        Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
+        PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
+        (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+          Dregg2.Circuit.RotatedKernelRefinementProgram.SetProgramTraceReadout
+            compressN hash t pre post actor cell prog)) :
+    ClosedLogExtract Slive LH hash Rfix 13 := by
+  intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.setProgramV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, cell, prog, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact setProgram_closedLog_sat compressN hN hash hside hsat' pre post actor cell prog pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **makeSovereign (38).** Receipt is the self-row. NOTE: `makeSovereign_closedLog` takes `compressN2`
 but NO `hN`. -/
@@ -829,7 +861,10 @@ structure ClosureReadouts
     Satisfied2 hash (Rfix 2) minit mfin maddrs t →
     Σ' (holder tt : CellId), PLift (pubLogPost = LH (authReceipt holder :: pre.log)) ×'
       (post.log = authReceipt holder :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes Scap pre post holder tt)
+        Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+              Scap pre post holder tt),
+          Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationWriteAnchor
+            Scap pre post holder tt hash minit mfin maddrs t henc)
   rdRefreshDelegation : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 55) minit mfin maddrs t →
     Σ' (actor child : CellId),
@@ -890,6 +925,13 @@ structure ClosureReadouts
       PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
       (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
         Dregg2.Circuit.RotatedKernelRefinementPermsVK.SetVKTraceReadout hash minit mfin maddrs t pre post actor cell vk)
+  rdSetProgram : ∀ minit mfin maddrs t pubLogPost pre post,
+    Satisfied2 hash (Rfix 13) minit mfin maddrs t →
+    Σ' (actor cell : CellId) (prog : ℤ) (permOut : List ℤ → List ℤ),
+      Dregg2.Circuit.RotatedKernelRefinement.RotTableSide permOut hash t ×'
+      PLift (pubLogPost = LH ({ actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log)) ×'
+      (post.log = { actor := actor, src := cell, dst := cell, amt := (0 : ℤ) } :: pre.log →
+        Dregg2.Circuit.RotatedKernelRefinementProgram.SetProgramTraceReadout compressN hash t pre post actor cell prog)
   rdMakeSovereign : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 38) minit mfin maddrs t →
     Σ' (actor cell : CellId) (permOut : List ℤ → List ℤ),
@@ -975,6 +1017,7 @@ theorem closedLogExtract_all_genuine
   | 7 => exact closedLogExtract_incrementNonce_closed rds.rdIncNonce
   | 8 => exact closedLogExtract_setPermissions_closed rds.rdSetPermissions
   | 9 => exact closedLogExtract_setVK_closed rds.rdSetVK
+  | 13 => exact closedLogExtract_setProgram_closed compressN hCompressN rds.rdSetProgram
   | 10 => exact closedLogExtract_introduce_closed Scap rds.rdIntroduce
   | 11 => exact closedLogExtract_delegateAtten_closed Scap rds.rdDelegateAtten
   | 12 => exact closedLogExtract_attenuate_closed Scap rds.rdAttenuate
@@ -1049,6 +1092,7 @@ theorem lightclient_unfoolable_closed_final_genuine
 -- the rewired CLASS-A (Satisfied2-forced) slots — guarantee A now circuit-forced at the apex.
 #assert_axioms closedLogExtract_setPermissions_closed
 #assert_axioms closedLogExtract_setVK_closed
+#assert_axioms closedLogExtract_setProgram_closed
 #assert_axioms closedLogExtract_makeSovereign_closed
 #assert_axioms closedLogExtract_refusal_closed
 #assert_axioms closedLogExtract_createCell_closed
