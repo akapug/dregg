@@ -2662,6 +2662,71 @@ pub fn generate_rotated_create_cell_wide(
     Ok((trace, dpis, map_heaps))
 }
 
+/// **THE WIDE CREATECELLFROMFACTORY trace generator (grow-gate cohort).** The factory twin of
+/// [`generate_rotated_create_cell_wide`]: createCellFromFactory shares the SAME accounts-set insert
+/// (the born child's id is grown into the cells set, limb 0) — only the new-cell key column differs
+/// (`param1 = CHILD_VK_DERIVED` for factory vs `param0` for createCell, resolved by
+/// `new_cell_key_param_col`). So this delegates to the shared accounts-tree wide generator; the factory
+/// params (factory VK at `param0`, derived child VK at `param1`) ride the rotated base, and the
+/// `factoryVmDescriptor2R24` wide descriptor's `.absent`+`.insert` accounts grow-gate (root limb 0)
+/// opens against the threaded BEFORE accounts leaf set. A NON-factory lead is REFUSED (the accounts-tree
+/// generator's own `new_cell_key_param_col` guard). Returns `(trace, dpis, map_heaps)` ready for
+/// `prove_vm_descriptor2` against the wide `factoryVmDescriptor2R24`.
+#[cfg(feature = "prover")]
+pub fn generate_rotated_create_from_factory_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_accounts: &[crate::heap_root::HeapLeaf],
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+    if !matches!(effects.first(), Some(Effect::CreateCellFromFactory { .. })) {
+        return Err(
+            "factory wide generator: lead effect is not a CreateCellFromFactory (route createCell / \
+             spawn through their OWN wide wrapper — the accounts grow-gate is shared but the new-cell \
+             key column differs)"
+                .into(),
+        );
+    }
+    generate_rotated_create_cell_wide(initial_state, effects, before_w, after_w, caveat, before_accounts)
+}
+
+/// **THE WIDE SPAWN trace generator — the BIRTH/ACCOUNTS-GROW leg ONLY (grow-gate cohort).** Spawn's
+/// wide descriptor (`spawnVmDescriptor2R24` in `rotation-wide-registry-staged.tsv`, width 817) carries
+/// the SAME accounts-set `.absent`+`.insert` grow-gate (root limb 0 — the born child id grown into the
+/// cells set) the createCell/factory wide descriptors carry, and NOTHING ELSE: the wide spawn descriptor
+/// has NO cap-tree `map_op` (its only map ops are the accounts absent+insert on the cells root). So this
+/// wrapper closes spawn's accounts-birth leg by delegating to the shared accounts-tree wide generator
+/// (new-cell key = `param0`, resolved by `new_cell_key_param_col`).
+///
+/// THE CAP-HANDOFF IS A SEPARATE PATH (NOT here): the parent→child capability handoff (the cap-tree
+/// INSERT at limb 25) is bound by the deployed `spawnWriteCapOpenVmDescriptor2R24` on the CAP-OPEN path
+/// (`sdk/src/full_turn_proof.rs::prove_effect_vm_cap_open`, the `spawn_dual_tree` arm), which threads
+/// BOTH the accounts heap (limb 0) and the c-list heap (limb 25) into one proof. The WIDE rotated
+/// descriptor does not carry the cap-handoff — so a spawn routed through the wide path proves its
+/// accounts-birth column only, and the cap-handoff is the cap-open path's job (already wired). A NON-spawn
+/// lead is REFUSED. Returns `(trace, dpis, map_heaps)` ready for `prove_vm_descriptor2` against the wide
+/// `spawnVmDescriptor2R24`.
+#[cfg(feature = "prover")]
+pub fn generate_rotated_spawn_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_accounts: &[crate::heap_root::HeapLeaf],
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+    if !matches!(effects.first(), Some(Effect::SpawnWithDelegation { .. })) {
+        return Err(
+            "spawn wide generator: lead effect is not a SpawnWithDelegation (route createCell / factory \
+             through their OWN wide wrapper)"
+                .into(),
+        );
+    }
+    generate_rotated_create_cell_wide(initial_state, effects, before_w, after_w, caveat, before_accounts)
+}
+
 /// **THE WIDE REFUSAL trace generator (record-pin cohort + the `fields_root` WRITE gate).** Wraps the
 /// deployment-real fields-tree generator ([`generate_rotated_refusal_trace_with_fields_tree`], which
 /// overrides limb 36 = `B_FIELDS_ROOT` with the openable accumulator roots + recomputes the block

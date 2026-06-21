@@ -34,8 +34,10 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::trace_rotated::{
     GRAD_ROT_WIDTH, RotatedBlockWitness, WIDE_BEFORE_CBASE, WIDE_COMMIT_CARRIER,
-    empty_caveat_manifest, generate_rotated_create_cell_wide, generate_rotated_note_create_wide,
-    generate_rotated_note_spend_wide, generate_rotated_transfer_shape_wide,
+    empty_caveat_manifest, generate_rotated_create_cell_wide,
+    generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
+    generate_rotated_note_spend_wide, generate_rotated_spawn_wide,
+    generate_rotated_transfer_shape_wide,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
@@ -370,4 +372,93 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
     .expect("wide createCell producer");
     assert_roundtrip(name, &desc, &trace, &dpis, &map_heaps, 47);
     assert_executor_anchor_grow_gate(name, &trace);
+}
+
+/// The shared birth-leg producer witnesses (a non-empty BEFORE accounts set distinct from the new-cell
+/// key, so the `.absent` no-collision precondition has a bracketing witness). Mirrors the createCell
+/// wide setup; the only per-effect difference is the lead effect + its new-cell key column.
+fn birth_witnesses() -> (CellState, Ledger, rw::RotationWitness, rw::RotationWitness, Vec<HeapLeaf>) {
+    let before_balance: i64 = 40_000;
+    let st = CellState::new(before_balance as u64, 0);
+    let mut ledger = Ledger::new();
+    let before_cell = producer_cell(before_balance, 0);
+    let after_cell = producer_cell(before_balance, 1);
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32]];
+    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_accounts = vec![
+        HeapLeaf { addr: BabyBear::new(0xAA01), value: BabyBear::new(0xAA01) },
+        HeapLeaf { addr: BabyBear::new(0xAA02), value: BabyBear::new(0xAA02) },
+    ];
+    (st, ledger, before_w, after_w, before_accounts)
+}
+
+/// **CREATECELLFROMFACTORY grow-gate wide roundtrip.** The factory twin of the createCell birth leg:
+/// the born child's key rides `param1` (CHILD_VK_DERIVED), and the SAME accounts-set grow-gate (limb 0)
+/// forces the genuine sorted insert against the threaded BEFORE accounts leaf set. The honest trace
+/// PROVES + VERIFIES against the deployed wide `factoryVmDescriptor2R24`; the grow-gate executor anchor
+/// holds.
+#[test]
+fn wide_factory_grow_gate_proves_verifies_and_executor_anchors() {
+    let name = "factoryVmDescriptor2R24";
+    let desc = wide_desc(name);
+    let (st, _ledger, before_w, after_w, before_accounts) = birth_witnesses();
+    let effects = vec![Effect::CreateCellFromFactory {
+        factory_vk: BabyBear::new(0xFAC0),
+        child_vk_derived: BabyBear::new(0xC417),
+    }];
+    let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
+        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &before_accounts,
+    )
+    .expect("wide factory producer");
+    assert_roundtrip(name, &desc, &trace, &dpis, &map_heaps, 47);
+    assert_executor_anchor_grow_gate(name, &trace);
+}
+
+/// **SPAWN (birth/accounts-grow leg) grow-gate wide roundtrip.** Spawn's wide descriptor
+/// (`spawnVmDescriptor2R24`) carries the accounts-set `.absent`+`.insert` grow-gate (limb 0 — the born
+/// child id grown into the cells set) and NO cap-tree map_op (the parent→child cap handoff is bound by
+/// the cap-open `spawnWriteCapOpenVmDescriptor2R24`, a SEPARATE path). The honest trace PROVES + VERIFIES
+/// against the deployed wide `spawnVmDescriptor2R24` for the accounts-birth column.
+#[test]
+fn wide_spawn_grow_gate_proves_verifies_and_executor_anchors() {
+    let name = "spawnVmDescriptor2R24";
+    let desc = wide_desc(name);
+    let (st, _ledger, before_w, after_w, before_accounts) = birth_witnesses();
+    let spawn_id = BabyBear::new(0x5BA1);
+    let effects = vec![Effect::SpawnWithDelegation { spawn_hash: [spawn_id; 8] }];
+    let (trace, dpis, map_heaps) = generate_rotated_spawn_wide(
+        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &before_accounts,
+    )
+    .expect("wide spawn (accounts birth leg) producer");
+    assert_roundtrip(name, &desc, &trace, &dpis, &map_heaps, 47);
+    assert_executor_anchor_grow_gate(name, &trace);
+}
+
+/// **The named wide wrappers REFUSE a mismatched lead effect** (fail-closed routing): the factory wide
+/// wrapper rejects a createCell lead and vice-versa, so the dispatch lane cannot silently route the wrong
+/// new-cell key column through the wrong descriptor.
+#[test]
+fn wide_birth_wrappers_refuse_mismatched_lead() {
+    let (st, _ledger, before_w, after_w, before_accounts) = birth_witnesses();
+    let cc = vec![Effect::CreateCell { create_hash: [BabyBear::new(0xCE11); 8] }];
+    assert!(
+        generate_rotated_create_from_factory_wide(
+            &st, &cc, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(), &before_accounts,
+        )
+        .is_err(),
+        "factory wide wrapper must refuse a createCell lead"
+    );
+    assert!(
+        generate_rotated_spawn_wide(
+            &st, &cc, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(), &before_accounts,
+        )
+        .is_err(),
+        "spawn wide wrapper must refuse a createCell lead"
+    );
 }
