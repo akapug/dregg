@@ -1,7 +1,7 @@
 [
   {
-    "title": "AuthRequired::None cap-badge inversion",
-    "body": "The affordances panel shows the `grant` message with required=None yet authorized=false, and firing it is refused with 'does not satisfy None'. The cap badge is is_attenuation(held, req) = req.is_narrower_or_equal(held); the lattice models None as the TOP (widest), so a None-required affordance (documented 'always allowed') reports unauthorized for every holder whose rights are not exactly None. Correct for the middle tiers, inverted for None.",
+    "title": "AuthRequired::None cap-badge inversion (RESOLVED 750d0d07c)",
+    "body": "[FIXED] The affordances panel shows the `grant` message with required=None yet authorized=false, and firing it is refused with 'does not satisfy None'. The cap badge is is_attenuation(held, req) = req.is_narrower_or_equal(held); the lattice models None as the TOP (widest), so a None-required affordance (documented 'always allowed') reports unauthorized for every holder whose rights are not exactly None. Correct for the middle tiers, inverted for None. \u2014 FIX: affordance.rs::authorized_for now special-cases a None requirement as always-authorized (None = 'always allowed' per permissions.rs); grant's real guarantee (non-amplification) fires in the executor, not the cap-gate badge. Verified via dregg-mcp + 7 inspect_act tests.",
     "repro": "affordances user \u2192 grant shows required=None/authorized=false; act user grant \u2192 refused by the cap-gate"
   },
   {
