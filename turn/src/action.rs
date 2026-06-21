@@ -2185,10 +2185,13 @@ impl Effect {
             Effect::CreateCell { .. } => dregg_cell::EFFECT_CREATE_CELL,
             Effect::SetPermissions { .. } => dregg_cell::EFFECT_SET_PERMISSIONS,
             Effect::SetVerificationKey { .. } => dregg_cell::EFFECT_SET_VERIFICATION_KEY,
-            // A program install is the cell's program-identity authority surface,
-            // the same facet as its VK (no new mask bit — a new bit is
-            // circuit-affecting; the in-circuit witness is the VK follow-up).
-            Effect::SetProgram { .. } => dregg_cell::EFFECT_SET_VERIFICATION_KEY,
+            // A program install (rewriting the cell's caveat program) is its OWN
+            // authority surface — DISTINCT from VK rotation: a cap that grants VK
+            // rotation must not implicitly grant a program install. Its in-circuit
+            // witness is the record-pin `setProgramV3` descriptor + the
+            // `setProgram_descriptorRefines_sat` rung (the program folds into
+            // `compute_authority_digest_felt`, r23 / B_RECORD_DIGEST).
+            Effect::SetProgram { .. } => dregg_cell::EFFECT_SET_PROGRAM,
             Effect::NoteSpend { .. } => dregg_cell::EFFECT_NOTE_SPEND,
             Effect::NoteCreate { .. } => dregg_cell::EFFECT_NOTE_CREATE,
 
