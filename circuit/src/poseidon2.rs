@@ -560,6 +560,36 @@ pub fn hash_bytes(data: &[u8]) -> BabyBear {
     hash_many(&elements)
 }
 
+/// **THE canonical felt-domain LIFECYCLE-PAYLOAD hash** — the single composition both the producer
+/// (`dregg_turn::rotation_witness::lifecycle_felt`) and the per-cell commitment
+/// (`dregg_cell::commitment::v9_lifecycle_felt`) fold into the committed lifecycle limb
+/// (`B_LIFECYCLE = 29`), AND the one the in-circuit lifecycle-payload hash gate
+/// (`EffectVmEmitRotationV3.lifecyclePayloadHashGate`) recomputes from the LIGHT-CLIENT-KNOWN inputs.
+///
+/// `Poseidon2(disc ‖ payload_8limbs ‖ at)` over the FELT domain:
+///   * `disc`     — the lifecycle discriminant (`u8 0..4`), a single felt (the disc gate also pins it);
+///   * `payload_8limbs` — the 32-byte payload hash (`reason_hash` / `death_certificate_hash` /
+///     `checkpoint_hash`) split into the SAME 8 felts the light client holds as
+///     `bytes32_to_8_limbs(h)` (= the effect's `h8(reason)` view, PI-bound via `effects_hash`);
+///   * `at`       — the `sealed_at` / `destroyed_at` / `archived_through` height, a single felt (the
+///     turn-header `block_height`, committed at `B_COMMITTED_HEIGHT`, light-client-known).
+///
+/// REPLACES the prior `hash_bytes(disc ‖ payload_bytes ‖ at_le_bytes)` byte-packed sponge, whose 4-byte
+/// packing did NOT match any light-client felt view — so the circuit could not recompute it from known
+/// inputs (the SNARK-hostile divergence the refusal `fields_root` openable fix hit). This felt-domain
+/// composition is recomputable by a Poseidon2 chip-lookup chain over `[disc] ++ payload_8 ++ [at]`, so
+/// the committed limb-29 binding is verifiable WITHOUT re-deriving the cell. `Live` carries no payload
+/// (the bare `disc` felt). The `Migrated` arm keeps its richer payload (the migration `to`/attestation
+/// fields fold via `bytes32_to_8_limbs` of `to.as_bytes()` and the attestation), distinct from the
+/// light-client movers (cellSeal/cellDestroy/receiptArchive) this gate forces.
+pub fn lifecycle_payload_felt(disc: u8, payload_hash: &[u8; 32], at: u64) -> BabyBear {
+    let mut inputs: Vec<BabyBear> = Vec::with_capacity(10);
+    inputs.push(BabyBear::new(disc as u32));
+    inputs.extend_from_slice(&crate::effect_vm::bytes32_to_8_limbs(payload_hash));
+    inputs.push(BabyBear::new((at & 0x7FFF_FFFF) as u32));
+    hash_many(&inputs)
+}
+
 /// Hash a leaf fact (predicate + up to 4 terms encoded as field elements) into a single digest.
 /// Each fact is up to 5 field elements; we hash them using the Poseidon2 permutation with leaf domain sep.
 /// Terms beyond the provided slice are treated as zero.

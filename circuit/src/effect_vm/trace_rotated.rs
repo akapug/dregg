@@ -323,6 +323,26 @@ pub fn generate_rotated_effect_vm_trace(
         fill_caveat(row, CAVEAT_BASE, caveat);
     }
 
+    // THE LIFECYCLE-PAYLOAD HASH GATE declared column (cellSeal / cellDestroy / receiptArchive — the
+    // STAGE-C light-client close, `EffectVmEmitRotationV3.lifecyclePayloadHashGate`). The deployed
+    // descriptor for these three movers carries a SELECTOR-GATED WELD of the AFTER lifecycle limb
+    // (`B_LIFECYCLE = 29`) to the declared payload-hash column `prmCol 3` (= `PARAM_BASE + 3`). The
+    // producer fills that column with the FELT-DOMAIN `lifecycle_felt` of the after-cell lifecycle —
+    // BYTE-IDENTICAL to the AFTER lifecycle limb (`after_w.pre_limbs[B_LIFECYCLE]`), so the honest
+    // trace satisfies the weld. The LIGHT-CLIENT force is that the verifier INDEPENDENTLY recomputes
+    // this column from `lifecycle_payload_felt(disc, reason_hash, block_height)` — the PI-bound effect
+    // `reason_hash` + the turn-header height it holds — NO trusted post-cell. So a forged
+    // after-lifecycle limb (a different reason_hash / sealed_at) DIVERGES from the recomputed payload
+    // hash and the weld is UNSAT for a ledgerless client. (PARAM cols are off the commitment chain —
+    // declared params bound via the gate, not folded into the state-block commit.)
+    if lifecycle_payload_gated(effects.first()) {
+        use super::columns::PARAM_BASE;
+        let lc_felt = after_w.pre_limbs[B_LIFECYCLE];
+        for row in trace.iter_mut() {
+            row[PARAM_BASE + 3] = lc_felt;
+        }
+    }
+
     // The four appended PIs, read from the trace carriers the descriptor's pin constraints
     // bind. (The pins are `pi_binding` constraints, so these reads must agree with the
     // committed columns 218 / 261 / 259 / 310.)
@@ -1375,6 +1395,24 @@ fn record_pin_offset(lead: Option<&Effect>) -> Option<usize> {
         Some(Effect::Refusal { .. }) => Some(B_RECORD_DIGEST),
         _ => None,
     }
+}
+
+/// `true` iff the lead effect is a lifecycle mover whose deployed descriptor carries the in-circuit
+/// lifecycle-payload HASH gate (`EffectVmEmitRotationV3.lifecyclePayloadHashGate`): cellSeal,
+/// cellDestroy, receiptArchive. These move the cell lifecycle to a state with a PAYLOAD
+/// (`reason_hash` / `death_certificate_hash` / `checkpoint_hash` + the `at` height) folded into the
+/// felt-domain `lifecycle_felt` (limb `B_LIFECYCLE`); the gate welds that limb to the declared
+/// payload-hash column `prmCol 3`, so a forged payload is UNSAT for a ledgerless client. cellUnseal is
+/// EXCLUDED (its target lifecycle is `Live`, which carries no payload — the disc gate is the whole
+/// close). Mirrors the Lean `rotateV3WithLifecyclePayloadGate` movers (`cellSealV3` / `cellDestroyV3` /
+/// `receiptArchiveV3`).
+fn lifecycle_payload_gated(lead: Option<&Effect>) -> bool {
+    matches!(
+        lead,
+        Some(Effect::CellSeal { .. })
+            | Some(Effect::CellDestroy { .. })
+            | Some(Effect::ReceiptArchive { .. })
+    )
 }
 
 /// The param column carrying the new-cell key for the accounts-set grow-gate family

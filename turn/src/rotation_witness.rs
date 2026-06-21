@@ -121,53 +121,52 @@ pub fn nonce_felt(nonce: u64) -> BabyBear {
 /// distinct limbs — the in-circuit twin of `cell::commitment::hash_lifecycle_into`'s
 /// anti-omission tooth (a malicious executor must not present a Destroyed cell as Live).
 pub fn lifecycle_felt(lc: &CellLifecycle) -> BabyBear {
-    // The variant discriminant (a distinct base value per state) folded with payload
-    // bytes. `CellLifecycle::discriminant` is `pub(crate)` to `dregg-cell`; the producer
-    // re-derives the same per-variant ordering locally (the absolute value is opaque — the
-    // tooth is only that distinct lifecycle states yield distinct felts).
-    let disc: u8 = match lc {
-        CellLifecycle::Live => 0,
-        CellLifecycle::Sealed { .. } => 1,
-        CellLifecycle::Migrated { .. } => 2,
-        CellLifecycle::Destroyed { .. } => 3,
-        CellLifecycle::Archived { .. } => 4,
-    };
-    let mut bytes = Vec::with_capacity(40);
-    bytes.push(disc);
+    // The variant discriminant (a distinct base value per state) folded with payload, now in the
+    // FELT domain (`dregg_circuit::poseidon2::lifecycle_payload_felt`) so the in-circuit
+    // lifecycle-payload hash gate (`EffectVmEmitRotationV3.lifecyclePayloadHashGate`) can RECOMPUTE
+    // it from the LIGHT-CLIENT-KNOWN inputs — the disc (gate-pinned), the 32-byte payload hash split
+    // into the SAME 8 felts the light client holds as `h8(reason)`, and the `at` height (turn-header
+    // `block_height`). The prior byte-packed `hash_bytes` had a 4-byte packing no felt view matched —
+    // the SNARK-hostile divergence the refusal `fields_root` openable fix hit. MUST agree byte-for-byte
+    // with `dregg_cell::commitment::v9_lifecycle_felt` (the limb-29 the per-cell commitment binds).
+    use dregg_circuit::poseidon2::lifecycle_payload_felt;
     match lc {
-        CellLifecycle::Live => {}
+        // `Live` carries no payload — a bare disc felt (the all-zero payload + at fold).
+        CellLifecycle::Live => lifecycle_payload_felt(0, &[0u8; 32], 0),
         CellLifecycle::Sealed {
             reason_hash,
             sealed_at,
-        } => {
-            bytes.extend_from_slice(reason_hash);
-            bytes.extend_from_slice(&sealed_at.to_le_bytes());
-        }
+        } => lifecycle_payload_felt(1, reason_hash, *sealed_at),
         CellLifecycle::Migrated {
             to,
             attestation,
             migrated_at,
         } => {
-            bytes.extend_from_slice(to.as_bytes());
-            bytes.extend_from_slice(attestation);
-            bytes.extend_from_slice(&migrated_at.to_le_bytes());
+            // Migrated keeps a richer payload (to + attestation) — fold its two 32-byte hashes via
+            // the same felt-domain sponge, distinct from the light-client movers this gate forces.
+            let mut inputs: Vec<BabyBear> = Vec::with_capacity(18);
+            inputs.push(BabyBear::new(2));
+            inputs.extend_from_slice(&fold_bytes32_to_bb_limbs(to.as_bytes()));
+            inputs.extend_from_slice(&dregg_circuit::effect_vm::bytes32_to_8_limbs(attestation));
+            inputs.push(BabyBear::new((*migrated_at & 0x7FFF_FFFF) as u32));
+            dregg_circuit::poseidon2::hash_many(&inputs)
         }
         CellLifecycle::Destroyed {
             death_certificate_hash,
             destroyed_at,
-        } => {
-            bytes.extend_from_slice(death_certificate_hash);
-            bytes.extend_from_slice(&destroyed_at.to_le_bytes());
-        }
+        } => lifecycle_payload_felt(3, death_certificate_hash, *destroyed_at),
         CellLifecycle::Archived {
             checkpoint_hash,
             archived_through,
-        } => {
-            bytes.extend_from_slice(checkpoint_hash);
-            bytes.extend_from_slice(&archived_through.to_le_bytes());
-        }
+        } => lifecycle_payload_felt(4, checkpoint_hash, *archived_through),
     }
-    hash_bytes(&bytes)
+}
+
+/// Split a 32-byte hash into 8 felts (the `bytes32_to_8_limbs` shape) — the migration `to` cell-id
+/// fold, keeping the migrated arm felt-domain too.
+#[inline]
+fn fold_bytes32_to_bb_limbs(b: &[u8; 32]) -> [BabyBear; 8] {
+    dregg_circuit::effect_vm::bytes32_to_8_limbs(b)
 }
 
 /// The committed lifecycle DISCRIMINANT limb (the `u8 0..4` — Live=0, Sealed=1, Migrated=2,

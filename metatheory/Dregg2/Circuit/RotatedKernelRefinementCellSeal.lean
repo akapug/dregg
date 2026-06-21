@@ -80,7 +80,9 @@ open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt)
 open Dregg2.Circuit.Emit.EffectVmEmit (satisfiedVm)
 open Dregg2.Circuit.Emit.EffectVmEmitV2 (graduateV1 graduateV1_sound graduable)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
-  (cellSealV3 afterDiscCol discSealed discLive rotateV3WithDiscGate cellSealV3_disc_forces_sealed)
+  (cellSealV3 afterDiscCol discSealed discLive rotateV3WithDiscGate cellSealV3_disc_forces_sealed
+   rotateV3WithLifecyclePayloadGate rotateV3WithLifecyclePayloadGate_forces_disc
+   afterLifecycleCol declaredLifecyclePayloadCol rotateV3WithLifecyclePayloadGate_forces)
 open Dregg2.Circuit.RotatedKernelRefinement (RotTableSide)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
@@ -407,11 +409,11 @@ structure CellSealTraceReadout (hash : List ℤ → ℤ)
   frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
   frHeaps : post.kernel.heaps = pre.kernel.heaps
 
-/-- `rotateV3WithDiscGate SEL_CELLSEAL (some discLive) discSealed cellSealVmDescriptor` is graduable
-(the appended disc gates are CONSTRAINTS; graduation reads only sites/ranges). The decidable side
-condition `graduateV1_sound` requires. (The `#guard` in `EffectVmEmitRotationV3`.) -/
+/-- `rotateV3WithLifecyclePayloadGate SEL_CELLSEAL (some discLive) discSealed cellSealVmDescriptor` is
+graduable (the appended disc + payload gates are CONSTRAINTS; graduation reads only sites/ranges). The
+decidable side condition `graduateV1_sound` requires. (The `#guard` in `EffectVmEmitRotationV3`.) -/
 theorem cellSeal_disc_graduable :
-    graduable (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL
+    graduable (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL
       (some discLive) discSealed Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor) = true := by
   decide
 
@@ -433,7 +435,7 @@ theorem cellSeal_forced (hash : List ℤ → ℤ)
   -- lift the v2 `Satisfied2` of `cellSealV3 = graduateV1 (rotateV3WithDiscGate …)` to the v1 per-row
   -- `satisfiedVm` of the disc-gated descriptor (chip/range from `RotTableSide`, graduability by `decide`).
   have hv1 : satisfiedVm hash
-      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
+      (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
         discSealed Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor)
       (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
     graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellSeal_disc_graduable
@@ -442,10 +444,12 @@ theorem cellSeal_forced (hash : List ℤ → ℤ)
   have hlastf : (rd.row + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
   rw [hlastf] at hv1
-  -- the DEPLOYED disc gate FORCES the committed AFTER disc limb to `discSealed`.
+  -- the DEPLOYED disc gate (survives the payload-gate layer) FORCES the committed AFTER disc limb to
+  -- `discSealed` (`rotateV3WithLifecyclePayloadGate_forces_disc`).
   have hlimb : (envAt t rd.row).loc
       (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) = discSealed :=
-    cellSealV3_disc_forces_sealed hash (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+    rotateV3WithLifecyclePayloadGate_forces_disc _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl
+      rd.hsel hv1
   -- the limb IS the post discriminant (the realizable seam): `(post.lifecycle cell : ℤ) = discSealed = 1`.
   have hcast : ((post.kernel.lifecycle cell : Nat) : ℤ) = ((lcSealed : Nat) : ℤ) := by
     rw [← rd.discLimbDecodes, hlimb]; rfl
@@ -502,6 +506,37 @@ theorem cellSeal_sat_rejects_unsealed (hash : List ℤ → ℤ)
     False :=
   hwrong (cellSeal_forced hash hside hsat pre post actor cell rd)
 
+/-- **`cellSeal_payload_limb_forced` — THE STAGE-C PAYLOAD CLOSE consumed at the apex.** A satisfying
+DEPLOYED `cellSealV3` witness FORCES the committed AFTER lifecycle limb (`B_LIFECYCLE = 29`) EQUAL to the
+in-circuit declared payload-hash column (`declaredLifecyclePayloadCol = prmCol 3`), which the deployed
+trace fills with — and the light client recomputes as — the FELT-DOMAIN `lifecycle_felt(disc, reason_hash,
+sealed_at)`. So the opaque sealing PAYLOAD is no longer producer-free for a ledgerless client: a cellSeal
+forged to a committed limb ≠ the recomputed payload hash is UNSAT (see the deployed tooth
+`EffectVmEmitRotationV3.cellSealV3_payload_rejects_forged_lightclient` and the discriminator
+`vk_epoch_refusal_lifecycle_light_client_binding::lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled`).
+This rung CONSUMES the in-circuit payload gate — editing/removing `cellSealV3`'s
+`lifecyclePayloadHashGate` turns it RED. -/
+theorem cellSeal_payload_limb_forced (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
+    (hsat : Satisfied2 hash cellSealV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor cell : CellId)
+    (rd : CellSealTraceReadout hash minit mfin maddrs t pre post actor cell) :
+    (envAt t rd.row).loc
+        (afterLifecycleCol Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
+      = (envAt t rd.row).loc declaredLifecyclePayloadCol := by
+  have hv1 : satisfiedVm hash
+      (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
+        discSealed Dregg2.Circuit.Emit.EffectVmEmitCellSeal.cellSealVmDescriptor)
+      (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
+    graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellSeal_disc_graduable
+      hsat rd.row rd.hrow
+  have hlastf : (rd.row + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact rd.hrowNotLast
+  rw [hlastf] at hv1
+  exact rotateV3WithLifecyclePayloadGate_forces
+    _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+
 /-! ## §7 — NON-VACUITY: the lifecycle root + the gate are load-bearing (no carrier secretly `True`).
 
 A concrete injective `compressN` (a positional Horner sponge, NOT `List.sum`). The lifecycle root of a
@@ -552,5 +587,6 @@ private def cell0 : CellId := 0
 #assert_axioms cellSeal_forced_map
 #assert_axioms cellSeal_descriptorRefines_sat
 #assert_axioms cellSeal_sat_rejects_unsealed
+#assert_axioms cellSeal_payload_limb_forced
 
 end Dregg2.Circuit.RotatedKernelRefinementCellSeal
