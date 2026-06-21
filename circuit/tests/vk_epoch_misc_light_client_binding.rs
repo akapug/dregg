@@ -60,6 +60,7 @@ use dregg_circuit::descriptor_ir2::{
     EffectVmDescriptor2, MemBoundaryWitness, VmConstraint2, parse_vm_descriptor2,
     prove_vm_descriptor2, verify_vm_descriptor2,
 };
+// (verify_vm_descriptor2 is used by the makeSovereign FORCED-ON-WIRE positive tooth.)
 use dregg_circuit::lean_descriptor_air::VmConstraint;
 use dregg_circuit::effect_vm::columns::PARAM_BASE;
 use dregg_circuit::effect_vm::trace_rotated::{
@@ -338,21 +339,20 @@ fn exercise_state_binds_hash_is_residual_anchor_disabled() {
 }
 
 // ============================================================================
-// makeSovereign — VALUE_PARTIAL with a BROKEN LIVE SEAM (missing record-pin weld).
+// makeSovereign — FORCED ON-WIRE (the record-pin weld is WIRED).
 // ============================================================================
 
-/// **makeSovereign — the committed mode MOVES into the commit, but the live record pin is NOT
-/// WIRED (a missing weld in shared `trace_rotated.rs::record_pin_offset`).**
-///
-/// The registry descriptor declares 47 PIs (the record-forcing fifth pin), but the live generator
-/// emits only 46 dpis (no `MakeSovereign` arm in `record_pin_offset`). So an honest makeSovereign
-/// turn CANNOT prove through the live path. We assert: (a) the mode genuinely moves the committed
-/// mode (`B_MODE`) and authority-digest (`B_AUTHORITY_DIGEST`) limbs and the published commit
-/// (anti-vacuity); (b) the live generator/descriptor are MISMATCHED — the 47th PI the descriptor
-/// declares is unfed → the rotated makeSovereign path is presently UN-PROVABLE (the precise
-/// residual a shared-code fix must close).
+/// **makeSovereign FORCED ON-WIRE (light-client-verifiable).** The Hosted→Sovereign promotion
+/// moves the committed mode limb (`B_MODE`), which `compute_authority_digest_felt` FOLDS into the
+/// r23 authority-digest limb (`B_AUTHORITY_DIGEST`); the live `record_pin_offset(MakeSovereign) =
+/// Some(B_AUTHORITY_DIGEST)` arm now feeds the 47th PI the descriptor declares, welding
+/// `last[AFTER + B_AUTHORITY_DIGEST] == PI[46]`. An honest makeSovereign turn proves + verifies
+/// through the live generator; a post-cell forged to differ in its committed authority residue
+/// (while the published record pin PI[46] stays the honest value) FAILS the weld → UNSAT through
+/// `prove`/`verify` ALONE (the anchor-disabled light-client discriminator), with NO off-cell
+/// `apply_effect_to_cell` re-derivation.
 #[test]
-fn makesovereign_record_pin_is_unwired_missing_weld() {
+fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled() {
     let balance: i64 = 50_000;
     let effect = Effect::MakeSovereign;
     let name = rotated_descriptor_name_for_effect(&effect)
@@ -377,8 +377,8 @@ fn makesovereign_record_pin_is_unwired_missing_weld() {
     let before_w = rw::produce(&before_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
     let after_w = rw::produce(&after_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
 
-    // (a) ANTI-VACUITY: the mode genuinely moves the committed mode + authority-digest limbs and
-    // the published commit — the data the (declared but unfed) record pin would bind DOES move.
+    // ANTI-VACUITY: the mode genuinely moves the committed mode + authority-digest limbs and the
+    // published commit — the data the record pin binds DOES move.
     assert_eq!(after_w.pre_limbs[B_MODE], BabyBear::ONE, "post mode limb = Sovereign(1)");
     assert_eq!(before_w.pre_limbs[B_MODE], BabyBear::ZERO, "pre mode limb = Hosted(0)");
     assert_ne!(
@@ -405,49 +405,113 @@ fn makesovereign_record_pin_is_unwired_missing_weld() {
         "the AFTER block's committed mode limb is Sovereign(1)"
     );
 
-    // (b) THE MISSING WELD: the generator emits 46 dpis, not the 47 the descriptor declares — so
-    // `record_pin_offset(MakeSovereign)` is `None` and the 47th (record-forcing) PI is unfed.
+    // THE WELD IS WIRED: the live generator now emits the 47 dpis the descriptor declares (the
+    // record-forcing pin rides PI[46]), and the pin welds the AFTER authority-digest limb.
     assert_eq!(
         dpis.len(),
-        46,
-        "MISSING WELD: the live generator emits 46 dpis (record_pin_offset has no MakeSovereign arm)"
-    );
-    assert_ne!(
-        dpis.len(),
         desc.public_input_count,
-        "MISSING WELD: 46 generated dpis != 47 descriptor PIs — the makeSovereign record pin is \
-         declared but UNWIRED"
+        "WIRED: the live generator emits 47 dpis (record_pin_offset(MakeSovereign) = \
+         Some(B_AUTHORITY_DIGEST))"
+    );
+    assert_eq!(
+        dpis[46],
+        last[AFTER_BASE + B_AUTHORITY_DIGEST],
+        "PI[46] is the AFTER block's committed authority-digest limb (the record pin)"
     );
 
-    // The honest turn therefore CANNOT prove through the live path (the PI-count mismatch is fatal).
     let mem_boundary = MemBoundaryWitness::default();
     let map_heaps: Vec<Vec<HeapLeaf>> = vec![];
-    let r = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps);
+
+    // POSITIVE TOOTH (no downgrade): the honest makeSovereign turn proves + verifies — light-client
+    // path, no trusted post-cell.
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("NO DOWNGRADE: the honest makeSovereign turn must prove end-to-end");
+    verify_vm_descriptor2(&desc, &proof, &dpis)
+        .expect("NO DOWNGRADE: the honest makeSovereign proof must verify independently");
+
+    // NEGATIVE TOOTH (the bite): forge a post-cell differing in its committed authority residue (a
+    // DISTINCT permissions struct folds into a distinct authority-digest limb), regenerate the
+    // trace over the forged AFTER witness — so the committed AFTER authority-digest carries the
+    // forged residue — but OVERRIDE PI[46] back to the HONEST value (the light client is shown the
+    // honest record pin). The weld `last[AFTER + B_AUTHORITY_DIGEST] == PI[46]` now FAILS → UNSAT.
+    let mut forged_after = producer_cell(balance, 1);
+    forged_after.mode = CellMode::Sovereign;
+    forged_after.permissions = Permissions::zkapp(); // a DISTINCT committed authority residue
+    let mut forged_ledger = Ledger::new();
+    forged_ledger.insert_cell(forged_after.clone()).unwrap();
+    let forged_after_w =
+        rw::produce(&forged_after, &forged_ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
+    assert_ne!(
+        forged_after_w.pre_limbs[B_AUTHORITY_DIGEST], after_w.pre_limbs[B_AUTHORITY_DIGEST],
+        "the forged post-cell carries a DISTINCT authority-digest limb (anti-vacuity)"
+    );
+
+    let (forged_trace, mut forged_dpis) = generate_rotated_effect_vm_trace(
+        &st,
+        &effects, // SAME effect (MakeSovereign)
+        &bridge(&before_w),
+        &bridge(&forged_after_w),
+        &caveat,
+    )
+    .expect("generator builds the forged-residue trace");
+    // The light client is shown the HONEST record pin (PI[46]); the committed AFTER limb is forged.
+    forged_dpis[46] = dpis[46];
+
+    assert_eq!(
+        forged_trace[forged_trace.len() - 1][AFTER_BASE + B_AUTHORITY_DIGEST],
+        forged_after_w.pre_limbs[B_AUTHORITY_DIGEST],
+        "the forged AFTER authority-digest limb carries the forged residue"
+    );
+    assert_ne!(
+        forged_trace[forged_trace.len() - 1][AFTER_BASE + B_AUTHORITY_DIGEST],
+        forged_dpis[46],
+        "the committed AFTER authority-digest != the published record pin — the weld's UNSAT precondition"
+    );
+
     assert!(
-        r.is_err(),
-        "the makeSovereign rotated path is presently UN-PROVABLE (46 dpis vs 47 declared PIs); the \
-         residual is a shared-code weld: add the MakeSovereign arm to record_pin_offset"
+        refused(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
+        "SOUNDNESS (light-client unfoolable, anchor-disabled): a post-cell forged to differ in its \
+         committed authority residue — committed AFTER authority-digest != the published record \
+         pin — MUST be UNSAT through prove/verify ALONE; the in-circuit makeSovereign record pin \
+         bites with NO off-cell apply_effect_to_cell re-derivation"
     );
 
     eprintln!(
-        "VK-EPOCH makeSovereign: the committed mode MOVES into the commit (B_MODE 0→1, \
-         authority-digest moves), but the live record pin is UNWIRED — 46 generated dpis vs 47 \
-         declared PIs → the rotated path is UN-PROVABLE. NAMED RESIDUAL: add MakeSovereign to \
-         trace_rotated.rs::record_pin_offset."
+        "VK-EPOCH makeSovereign FORCED ON-WIRE: the committed mode MOVES into the commit (B_MODE \
+         0→1, authority-digest folds it); the honest promotion proves+verifies; a forged-residue \
+         post-cell is UNSAT through verify_vm_descriptor2 ALONE (no off-cell anchor) — the record \
+         pin binds the post authority residue into the light-client commitment."
     );
 }
 
 // ============================================================================
-// setFieldDyn — UNREACHABLE via the live generator (missing weld).
+// setFieldDyn — UNREACHABLE via the live generator (a DEEPER obstruction than a missing routing
+// branch: a whole missing GENERATOR for the 263-wide V1Face geometry).
 // ============================================================================
 
-/// **setFieldDyn — the dynamic overflow `SetField` is UNREACHABLE via the live generator.**
+/// **setFieldDyn — the dynamic overflow `SetField` is UNREACHABLE via the live generator (the
+/// deeper residual: no generator builds its 581-wide V1Face geometry).**
 ///
-/// `Effect::SetField { field_idx > 7 }` routes to `setFieldDynVmDescriptor2R24`, but the V1 trace
-/// generator hard-asserts `field_idx < 8`, so `generate_rotated_effect_vm_trace` PANICS before
-/// producing a trace. The fields-root weld the descriptor declares is exercised by NO live path.
-/// We assert the panic (the precise broken seam), and confirm the descriptor itself DOES declare
-/// the 47th fields-root pin (so the residual is a generator gap, not a descriptor gap).
+/// `Effect::SetField { field_idx > 7 }` routes to `setFieldDynVmDescriptor2R24`. The proximate
+/// symptom is a panic: the V1 trace generator hard-asserts `field_idx < 8`
+/// (`trace.rs::generate_effect_vm_trace`), so `generate_rotated_effect_vm_trace` PANICS before
+/// producing a trace.
+///
+/// BUT the residual is DEEPER than lifting that assert — it is a whole missing generator. The
+/// `setFieldDynVmDescriptor2R24` descriptor is a DISTINCT, WIDER geometry: it is built on the
+/// `setFieldDynV1Face` (traceWidth 263) — which folds the in-circuit `fields_root` insertion
+/// sub-circuit (`dsl::openable_fields_insertion`: `post_root = insert(pre_root, key→value)`) into a
+/// 263-column V1 base — and rotates to **581** columns. The standard `generate_rotated_effect_vm_trace`
+/// produces the **188-base → 328-wide** rotated geometry (and its wide twin 608/816); it can NEVER
+/// satisfy the 581-wide setFieldDyn descriptor. Lifting the `field_idx < 8` assert would (a) silently
+/// clamp `fields[idx.min(7)]` (a WRONG-field correctness bug) and (b) still produce a 328/608-wide
+/// trace the 581-wide descriptor rejects on geometry. So the close is NOT a routing branch (as
+/// noteCreate/makeSovereign were) — it is a from-scratch generator for the 263-wide V1Face that runs
+/// the openable fields_root insertion in-circuit and feeds the fields-root pin (col 263 → PI[46]).
+///
+/// We assert: the descriptor DECLARES the fields-root pin (47 PIs); its rotated width is 581 (a
+/// DIFFERENT geometry from the 328 standard rotated trace — the structural source of the deeper
+/// residual); and the live generator PANICS on the overflow index (the proximate symptom).
 #[test]
 fn setfielddyn_unreachable_via_live_generator_missing_weld() {
     let name = "setFieldDynVmDescriptor2R24";
@@ -456,6 +520,21 @@ fn setfielddyn_unreachable_via_live_generator_missing_weld() {
     assert_eq!(
         desc.public_input_count, 47,
         "setFieldDyn descriptor DECLARES the fields-root weld pin (47 PIs)"
+    );
+    // THE DEEPER OBSTRUCTION (the structural source): the setFieldDyn descriptor is a DISTINCT,
+    // WIDER geometry (581 cols, built on the 263-wide `setFieldDynV1Face`) — NOT the 328-wide
+    // standard rotated trace the live `generate_rotated_effect_vm_trace` produces. No live generator
+    // builds the 581-wide V1Face, so the close is a whole missing generator, not a routing branch.
+    assert_eq!(
+        desc.trace_width, 581,
+        "setFieldDyn is a DISTINCT 581-wide V1Face geometry (263-base + fields_root insertion + \
+         rotation), NOT the 328-wide standard rotated trace — the deeper residual is a missing \
+         generator for this geometry, not merely the field_idx < 8 assert"
+    );
+    assert_ne!(
+        desc.trace_width, ROT_WIDTH,
+        "setFieldDyn's width (581) != the standard rotated width (328) — the standard generator \
+         cannot produce its trace"
     );
 
     // The dynamic SetField routes to the dyn descriptor by name...
@@ -493,15 +572,20 @@ fn setfielddyn_unreachable_via_live_generator_missing_weld() {
     .is_err();
     assert!(
         panicked,
-        "MISSING WELD: the live generator hard-asserts field_idx < 8, so the dynamic overflow \
-         SetField (setFieldDyn) is UNREACHABLE — the declared fields-root weld is exercised by no \
-         live path. NAMED RESIDUAL: give the dynamic overflow SetField a generator path (write the \
-         fields_root map + feed the fields-root pin)."
+        "MISSING GENERATOR (deeper than the assert): the live generator hard-asserts field_idx < 8 \
+         AND — even were the assert lifted — produces only the 328-wide standard rotated geometry, \
+         which the 581-wide setFieldDyn V1Face descriptor rejects. The dynamic overflow SetField is \
+         UNREACHABLE; the declared fields-root weld is exercised by no live path. NAMED RESIDUAL: a \
+         from-scratch generator for the 263-wide V1Face that runs the openable fields_root insertion \
+         in-circuit (post_root = insert(pre_root, key→value)) and feeds the fields-root pin (col 263 \
+         → PI[46]) — NOT merely lifting the field_idx < 8 assert."
     );
 
     eprintln!(
-        "VK-EPOCH setFieldDyn: the descriptor DECLARES the fields-root weld (47 PIs), but the live \
-         generator hard-asserts field_idx < 8 → the dyn overflow write is UNREACHABLE. NAMED \
-         RESIDUAL: a generator path for the dynamic fields_root SetField."
+        "VK-EPOCH setFieldDyn: the descriptor DECLARES the fields-root weld (47 PIs) at a DISTINCT \
+         581-wide V1Face geometry; the live generator produces only the 328-wide standard rotated \
+         trace (and panics on field_idx >= 8). DEEPER RESIDUAL (reported, not faked green): a whole \
+         missing generator for the 263-wide setFieldDyn V1Face — the close is from-scratch, not a \
+         routing branch like noteCreate/makeSovereign."
     );
 }
