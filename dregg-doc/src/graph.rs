@@ -112,6 +112,71 @@ impl DocGraph {
         self.fields.get(name).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
+    /// The set of atoms that belong *exclusively* to the branch starting at
+    /// `head` — every atom reachable from `head` whose every path from
+    /// [`AtomId::ROOT`] passes through `head` (the atoms `head` *dominates*).
+    ///
+    /// This is exactly the content a prose conflict's alternative carries: the
+    /// head and the tail atoms `content`'s walk attributes to that side, up to
+    /// (but not including) the rejoin point where the branches converge — those
+    /// rejoin/shared atoms are reachable without `head` and so are NOT dominated.
+    ///
+    /// Tombstoning this whole set is what makes a *keep-one* resolution sound: it
+    /// drops the entire dropped alternative (head AND its tail), not just the head
+    /// — so the dropped content cannot leak through the tombstone and re-form a
+    /// fresh antichain. A single-atom branch yields just `{head}`.
+    pub(crate) fn branch_atoms(&self, head: AtomId) -> BTreeSet<AtomId> {
+        // 1. Everything reachable from `head` (the branch's forward cone),
+        //    including `head` itself.
+        let cone = self.forward_cone(head);
+        // 2. Everything reachable from ROOT WITHOUT ever stepping onto `head`
+        //    (the rest of the document — the shared prefix, the sibling
+        //    alternatives, and the common tail past the rejoin point).
+        let without_head = self.reachable_avoiding(AtomId::ROOT, head);
+        // 3. The dominated set: in the cone, but not reachable around `head`.
+        //    `head` itself is dominated by construction (it is the cut vertex).
+        cone.into_iter()
+            .filter(|a| *a == head || !without_head.contains(a))
+            .collect()
+    }
+
+    /// All atoms reachable from `start` by following order-edges (inclusive of
+    /// `start`), through atoms alive or dead.
+    fn forward_cone(&self, start: AtomId) -> BTreeSet<AtomId> {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![start];
+        while let Some(s) = stack.pop() {
+            if seen.insert(s) {
+                stack.extend(self.successors(s));
+            }
+        }
+        seen
+    }
+
+    /// All atoms reachable from `start` by following order-edges WITHOUT ever
+    /// stepping onto `avoid` (and not through it). `start` is included unless it
+    /// equals `avoid`. Used to find the document reachable *around* a branch head,
+    /// so the head's dominated (branch-exclusive) atoms can be told apart from the
+    /// shared/rejoin atoms.
+    fn reachable_avoiding(&self, start: AtomId, avoid: AtomId) -> BTreeSet<AtomId> {
+        let mut seen = BTreeSet::new();
+        if start == avoid {
+            return seen;
+        }
+        let mut stack = vec![start];
+        while let Some(s) = stack.pop() {
+            if !seen.insert(s) {
+                continue;
+            }
+            for t in self.successors(s) {
+                if t != avoid {
+                    stack.push(t);
+                }
+            }
+        }
+        seen
+    }
+
     /// Structural equality *ignoring provenance*: two graphs agree iff they have
     /// the same atoms (by id, content, status), the same order-edges, and the
     /// same field *values* (regardless of which patch/author wrote them).

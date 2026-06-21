@@ -50,8 +50,8 @@
 //! genuine finalized single-node receipt; the cross-node quorum is the remaining
 //! tail.
 
-use crate::doccell::project_graph;
 use crate::patch::Patch;
+use crate::substrate::to_heap_map as project_graph;
 use dregg_cell::{
     AuthRequired, Cell, CellId, Ledger, Permissions, STATE_SLOTS, compute_canonical_state_commitment,
 };
