@@ -32,10 +32,28 @@
 // The contract both backends honor is identical, so the agent loop never changes
 // when you swap the mirror for the proof.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 
-const execFileP = promisify(execFile);
+// Run the governor binary on one request line, return its trimmed stdout.
+// (We use spawn + explicit stdin.end() — async `execFile` ignores the `input`
+// option, so the binary would never see EOF and would hang.)
+function runGovernor(exe, line) {
+  return new Promise((resolve, reject) => {
+    const c = spawn(exe, [], { timeout: 5000 });
+    let out = "";
+    let err = "";
+    c.stdout.on("data", (d) => (out += d));
+    c.stderr.on("data", (d) => (err += d));
+    c.on("error", reject);
+    c.on("close", (code) =>
+      code === 0 || out
+        ? resolve(out.trim())
+        : reject(new Error(`governor exited ${code}: ${err}`)),
+    );
+    c.stdin.write(line.endsWith("\n") ? line : line + "\n");
+    c.stdin.end();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // The world model the governor reasons over.
@@ -109,23 +127,27 @@ function decideViaStub({ world, nextWorld }) {
 // Its admit logic is `govStep` — the SAME definition the theorems are about — so
 // the verdict here is backed by `sandbox_governed_safe`, not by this file.
 
+// Default to the binary built by `lake build polis_governor` in the sibling
+// metatheory/ checkout, so `GOVERNOR_BACKEND=lean` works with no extra config.
+const DEFAULT_LEAN_EXE = new URL(
+  "../../../metatheory/.lake/build/bin/polis_governor",
+  import.meta.url,
+).pathname;
+
 async function decideViaLean(ctx) {
-  const exe = process.env.GOVERNOR_LEAN_EXE; // e.g. .lake/build/bin/polis_governor
-  if (!exe) {
-    throw new Error(
-      "GOVERNOR_BACKEND=lean but GOVERNOR_LEAN_EXE is unset. See governor-lean/README.md.",
-    );
-  }
-  const input = JSON.stringify({
-    world: ctx.world,
-    nextWorld: ctx.nextWorld,
-    budget: BUDGET,
-  });
-  const { stdout } = await execFileP(exe, [], { input, timeout: 5000 });
-  const verdict = JSON.parse(stdout.trim());
+  const exe = process.env.GOVERNOR_LEAN_EXE ?? DEFAULT_LEAN_EXE;
+  // Wire protocol (PolisGovernor.lean floor-check mode): one line = the projected
+  // next-world distances, space-separated. The binary applies the VERIFIED floor
+  // (admit iff every dist ≤ budget) and prints "ADMIT" / "REFUSE ...". We send the
+  // post-action projection; the verified Lean decision decides.
+  const input = Object.values(ctx.nextWorld).join(" ");
+  const out = await runGovernor(exe, input);
+  const admit = out.startsWith("ADMIT");
   return {
-    admit: Boolean(verdict.admit),
-    reason: verdict.reason ?? "(lean)",
+    admit,
+    reason: admit
+      ? "post-state preserves the verified floor (govStep_admits_benign)"
+      : `verified floor refused: ${out}`,
     backend: "lean",
   };
 }

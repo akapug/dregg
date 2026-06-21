@@ -9,6 +9,9 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "selftest": "node src/governor/selftest.js",
+    "dryrun": "node src/dryrun.js",
+    "dryrun:lean": "GOVERNOR_BACKEND=lean node src/dryrun.js",
     "governor:stub": "node src/governor/server.js"
   },
   "dependencies": {
