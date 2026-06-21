@@ -1568,8 +1568,14 @@ fn cap_insert_payload_for(
 /// run's effect-kind? Maps the run to its `<effect>CapOpenVmDescriptor2R24` via `cap_open_route_for_run`.
 /// Transfer + attenuate + the 7 fan-out effects (grantCap, introduce, revoke(Delegation),
 /// refreshDelegation, revokeCapability, spawn) are WIRED — each binds the cap to its OWN effect-kind bit.
-/// Any other cap-authorized effect-kind (notably `ExerciseViaCapability` — its inner-fold base does not
-/// take the appendix cleanly) fails CLOSED here with a precise error (the remaining NAMED residual).
+/// `ExerciseViaCapability` now HAS its cap-open descriptor emitted
+/// (`exerciseCapOpenVmDescriptor2R24`, the FROZEN exercise base + the EFF_EXERCISE depth-16
+/// cap-membership crown; `Rfix 16`, threaded into `lightclient_unfoolable_closed_final_genuine` with
+/// mutation-confirmation). The Lean apex + the descriptor column-genuineness + witness-forge-rejection
+/// are CLOSED (`circuit/tests/cap_open_exercise_self_verify.rs`). The remaining residual for exercise
+/// is the SHARED non-TB cap-open prove-THROUGH plumbing (the IR-v2 cap-node lookup-balance gap that
+/// `cap_open_attenuate_self_verifies` also carries — only the TURN-BOUND transfer path self-verifies);
+/// the SDK route for exercise is a follow-on, gated behind that shared prove path landing.
 #[cfg(feature = "prover")]
 fn cap_open_supported_for_run(run_effects: &[VmEffectKind]) -> Result<(), SdkError> {
     if run_effects.len() != 1 {
@@ -1581,11 +1587,12 @@ fn cap_open_supported_for_run(run_effects: &[VmEffectKind]) -> Result<(), SdkErr
         Ok(())
     } else {
         Err(SdkError::InvalidWitness(format!(
-            "cap-open routing: a cap witness was threaded for a {:?} run, but no cap-open \
-             descriptor is emitted for that effect-kind (transfer/attenuate + the 7 fan-out \
-             grantCap/introduce/revoke/refreshDelegation/revokeCapability/spawn are wired; \
-             ExerciseViaCapability is the NAMED residual — its inner-fold base does not take the \
-             appendix). Drop the cap witness to prove the base cohort descriptor.",
+            "cap-open routing: a cap witness was threaded for a {:?} run, but the SDK does not yet \
+             ROUTE that effect-kind's cap-open descriptor (transfer/attenuate + the 7 fan-out \
+             grantCap/introduce/revoke/refreshDelegation/revokeCapability/spawn are wired). \
+             ExerciseViaCapability's cap-open descriptor (exerciseCapOpenVmDescriptor2R24, Rfix 16) \
+             IS emitted + apex-threaded; its SDK route is a follow-on behind the shared non-TB \
+             cap-open prove-through plumbing. Drop the cap witness to prove the base cohort descriptor.",
             run_effects[0]
         )))
     }
