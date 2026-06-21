@@ -3243,3 +3243,16 @@ under the plain base (require the cap-open binding). = a producer-behavior + VK 
 live" authority item: an autonomous agent's caps must be LIGHT-CLIENT-verifiable, not host-trusted. Matches the
 memory's "we do NOT have a proven-secure circuit for ~17 effects whose gate must bind into the commitment."
 HONEST RESTATEMENT: authority floor = FULL-NODE sound, LIGHT-CLIENT named (the in-circuit crown un-selected).
+
+## ⚑ RED TEST (pre-existing, named not quick-fixed) — resolvers_cover_exactly_the_rotated_registry (37 vs 36)
+trace_rotated.rs:2232 `resolvers_cover_exactly_the_rotated_registry` asserts the effect→descriptor resolvers cover
+EXACTLY the 36 non-cap-open rotated cohort members (cap-open members are excluded as "cap-presence-routed, not
+reached by the resolvers"). It fails 37 vs 36 at base HEAD (an earlier commit added a write-bearing descriptor to
+V3_STAGED_REGISTRY_TSV without updating the exclusion filter). NOT a trivial count bump + NOT mine (dregg-circuit,
+not the sdk file the cap-authority fix touched): the test's PREMISE ("cap-open members aren't reached by the effect
+resolvers") is exactly the property the cap-authority light-client fix (e26fe42df) is shifting — cap effects now
+MUST bind a cap-open descriptor on the verify side. So the right fix is to reconcile this census WITH the new
+cap-open-routing semantics (which write-bearing/cap-open descriptors are now resolver-reached vs presence-routed),
+not to bump 36→37 blindly (which could mask a real coverage gap). Follow-up, careful, in the dregg-circuit
+registry-census owner's lane. The authority-floor soundness (the light-client forge closure) does NOT depend on
+this — it's a registry-completeness census assertion, currently stale vs the new routing.
