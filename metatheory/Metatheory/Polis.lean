@@ -380,6 +380,21 @@ theorem captureBar_exactly_floor_violation {violatesFloor : Trace → Prop}
     bar.badShape τ ↔ violatesFloor τ :=
   ⟨bar.loadBearing τ, bar.leastRestrictive τ⟩
 
+/-- **`CaptureBar.or` — capture bars COMPOSE.** Over a common trace type, a trace is captured by
+the combined floor iff EITHER bar captures it: decidability, load-bearing, and least-restrictive
+all lift. The politician floor is the union (`or`-fold) of its per-shape bars (exit-foreclosure ∨
+flow-refinement ∨ …). This is the composition primitive of the interleaved-multi-agent
+hyperproperty; the remaining research is the *unified* `Trace DreggState DreggAction` lattice that
+lets the per-shape bars (today over `Dial` / `Tier` / `Proc` / `RState`) share ONE trace. -/
+def CaptureBar.or {v₁ v₂ : Trace → Prop}
+    (b₁ : CaptureBar Trace v₁) (b₂ : CaptureBar Trace v₂) :
+    CaptureBar Trace (fun τ => v₁ τ ∨ v₂ τ) where
+  badShape := fun τ => b₁.badShape τ ∨ b₂.badShape τ
+  publicDecidable := fun τ =>
+    have := b₁.publicDecidable τ; have := b₂.publicDecidable τ; inferInstance
+  loadBearing := fun τ h => h.imp (b₁.loadBearing τ) (b₂.loadBearing τ)
+  leastRestrictive := fun τ h => h.imp (b₁.leastRestrictive τ) (b₂.leastRestrictive τ)
+
 /-! ## §G. The dregg candidate model — making Polis real (non-vacuity on the substrate).
 
 Per the metatheory's candidate-model discipline (`Production.lean`'s `dreggSubstances`): a
