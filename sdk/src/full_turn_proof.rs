@@ -1751,6 +1751,34 @@ fn prove_cohort_run_chain(
 // The live verify is `verify_effect_vm_rotated_with_cutover` below: the rotated
 // `Ir2BatchProof` verified SELECTOR-BOUND against the rotated cohort descriptors.)
 
+/// The PLAIN cohort descriptors for CAP effects — the descriptors whose acceptance the AUTHORITY
+/// FLOOR forbids on the light-client path (`verify_effect_vm_rotated_with_cutover`). Each of these
+/// effects exercises capability authority (the actor must hold a cap reaching the target), but the
+/// plain descriptor carries NO in-circuit cap-membership check (the 70-constraint
+/// `capOpenConstraintsEff` depth-16 crown lives ONLY in the `…CapOpen…VmDescriptor2R24` variants).
+/// A cap effect proven under one of these plain descriptors is light-client-UNVERIFIABLE — the
+/// verifier cannot distinguish "the agent held the cap" from "the host asserted it" — so the
+/// light-client verifier rejects it and demands the cap-open route (where the membership appendix
+/// is verified in-circuit). The producer-side resolver (`rotated_descriptor_name`) routes cap
+/// effects to the cap-open descriptors, so an honest producer never lands here; a malicious
+/// producer that strips the cap-open route to forge authority is REFUSED.
+///
+/// `refreshVmDescriptor2R24` (RefreshDelegation) is NOT forbidden: its deleg-tree write column is a
+/// separately-named obstruction (the cap-open variant is unwired on the producer side), so it stays
+/// on the plain route for now — a NAMED residual, not a silent forge (refresh re-arms an existing
+/// delegation rather than conferring new authority).
+#[cfg(feature = "prover")]
+fn is_forbidden_plain_cap_descriptor(name: &str) -> bool {
+    matches!(
+        name,
+        "introduceVmDescriptor2R24"        // Introduce         (EFFECT_INTRODUCE)
+            | "revokeVmDescriptor2R24"     // RevokeDelegation   (EFFECT_DELEGATION_OPS)
+            | "attenuateVmDescriptor2R24"  // AttenuateCapability(EFFECT_ATTENUATE/Transfer-facet)
+            | "grantCapVmDescriptor2R24"   // GrantCapability    (EFFECT_GRANT_CAPABILITY)
+            | "revokeCapabilityVmDescriptor2R24" // RevokeCapability (EFFECT_REVOKE_CAPABILITY)
+    )
+}
+
 /// Verify a ROTATED effect-vm sub-proof (the C4 `"effect-vm-rotated"` leg): deserialize the
 /// `Ir2BatchProof` and verify it SELECTOR-BOUND against the rotated cohort descriptors. A sound
 /// rotated proof binds its own descriptor (each carries the Lean selector tooth), so exactly one
@@ -1794,7 +1822,27 @@ fn verify_effect_vm_rotated_with_cutover(
         }
     }
     match bound.as_slice() {
-        [(_name, json)] => {
+        [(name, json)] => {
+            // AUTHORITY FLOOR (light-client unfoolability): a CAP effect MUST be proven under its
+            // cap-open descriptor (the depth-16 cap-membership authority crown is IN that descriptor,
+            // and ONLY that descriptor). The PLAIN cohort descriptor for a cap effect
+            // (`introduceVmDescriptor2R24`, `revokeVmDescriptor2R24`, …) carries NO in-circuit
+            // cap-membership check — accepting it would let a malicious producer prove a cap effect
+            // WITHOUT proving it held a cap reaching the target (the host-trusted c-list check is
+            // off-AIR / light-client-blind). So if the uniquely-accepting descriptor is a plain
+            // cap-effect descriptor, REJECT here: the producer must re-prove under the cap-open
+            // descriptor, where the membership appendix is verified in-circuit. This is the
+            // verifier half of the FORCED routing (the producer half re-points the resolver to the
+            // cap-open name), and it makes cap authority light-client-verifiable, not host-trusted.
+            if is_forbidden_plain_cap_descriptor(name) {
+                return Err(format!(
+                    "rotated effect-vm proof bound the PLAIN cap-effect descriptor {name} — a cap \
+                     effect MUST be proven under its cap-open descriptor (the in-circuit depth-16 \
+                     cap-membership authority crown); the plain descriptor carries NO membership \
+                     check, so accepting it would launder host-trusted authority into a \
+                     light-client proof. Rejecting (re-prove via the cap-open route)."
+                ));
+            }
             // Re-derive the rotated vk_hash from the uniquely-accepting cohort descriptor's
             // committed JSON and pin it to the attached vk_hash. A tampered vk_hash is rejected
             // even though the proof itself is selector-bound (defends the descriptor-identity
@@ -3769,6 +3817,85 @@ mod tests {
             "the GENERAL facet gate (facetEffGate: mask_lo == effBit, effBit pinned EFFECT_DELEGATION_OPS) \
              MUST reject a wrong-facet leaf IN-CIRCUIT for the revoke fan-out — the cap-open authorizes \
              the turn's ACTUAL effect-kind only"
+        );
+    }
+
+    /// THE LIGHT-CLIENT FORGE IS CLOSED (AUTHORITY FLOOR last mile). A cap effect
+    /// (`RevokeDelegation`, `EFFECT_DELEGATION_OPS`) proven under the PLAIN cohort descriptor
+    /// (`revokeVmDescriptor2R24`, which carries NO in-circuit cap-membership check) is REJECTED by
+    /// the light-client verifier (`verify_effect_vm_rotated_with_cutover`) — a malicious producer
+    /// cannot strip the cap-open route to launder host-trusted authority into a passing proof. The
+    /// honest route (the cap-open descriptor, where the depth-16 membership crown is verified
+    /// in-circuit) still VERIFIES (the `cap_open_fanout_revoke_*` test proves that leg end-to-end),
+    /// so the forcing is a clean ONE-WAY tooth: plain cap-effect descriptor ⇒ reject, cap-open ⇒ accept.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn light_client_rejects_cap_effect_under_plain_descriptor() {
+        use dregg_turn::rotation_witness as rw;
+
+        // A real RevokeDelegation turn (a CAP effect — exercises delegation authority).
+        let before_balance: u64 = 100_000;
+        let initial = CellState::new(before_balance, 0);
+        let effects = vec![VmEffect::RevokeDelegation {
+            child_hash: [BabyBear::new(0x5C); 8],
+        }];
+
+        let mut pk = [0u8; 32];
+        pk[0] = 9;
+        let before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        let mut after_cell = before_cell.clone();
+        let _ = after_cell.state.increment_nonce();
+
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nullifier_root = [0u8; 32];
+        let commitments_root = [0u8; 32];
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
+        let before_w =
+            rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let after_w =
+            rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+
+        // THE FORGE: prove the cap effect under the PLAIN base descriptor (no cap witness threaded,
+        // no membership appendix). This is exactly what a malicious producer does to skip the
+        // authority crown — the resulting proof is internally sound for the plain (authority-blind)
+        // descriptor.
+        let caveat = dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest();
+        let plain_proof = prove_effect_vm_rotated_ir2_with_caveat(
+            &initial, &effects, &before_w, &after_w, &caveat, None,
+        )
+        .expect("the plain revoke base leg proves (it is sound for the authority-BLIND descriptor)");
+        let plain_bytes = postcard::to_allocvec(&plain_proof).expect("serialize plain revoke leg");
+        // The plain leg's PI vector (the same 38-PI vector the base descriptor declares).
+        let run_rot = RotationTurnWitness {
+            before: before_w.clone(),
+            after: after_w.clone(),
+            caveat: caveat.clone(),
+        };
+        let plain_pi = rotated_effect_pi_for(&initial, &effects, &run_rot, None)
+            .expect("plain revoke PI re-derives");
+        let plain_vk = rotated_effect_vm_vk_hash(&effects).expect("plain revoke vk_hash");
+
+        // CONTROL: the plain proof IS a sound proof of the plain descriptor — it binds it
+        // selector-bound. (We confirm the descriptor it would bind is the forbidden plain one.)
+        assert_eq!(
+            dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(&effects[0]),
+            Some("revokeVmDescriptor2R24"),
+            "the base resolver routes RevokeDelegation to its plain descriptor (the forge's target)"
+        );
+
+        // THE TOOTH: the light-client verifier REJECTS the cap effect proven under the plain
+        // descriptor — the forge is closed.
+        let verdict = verify_effect_vm_rotated_with_cutover(&plain_bytes, &plain_pi, &plain_vk);
+        assert!(
+            verdict.is_err(),
+            "LIGHT-CLIENT FORGE: a cap effect proven under the PLAIN (authority-blind) descriptor \
+             MUST be rejected — the cap-open membership crown is mandatory. Got Ok(())."
+        );
+        let msg = format!("{}", verdict.unwrap_err());
+        assert!(
+            msg.contains("PLAIN cap-effect descriptor") && msg.contains("cap-open"),
+            "the rejection must name the AUTHORITY FLOOR reason (cap effect needs cap-open), got: {msg}"
         );
     }
 
