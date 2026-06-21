@@ -63,6 +63,13 @@ use hints::{F, G1, G2};
 /// audit of every other domain tag in this crate.
 pub const BEACON_DOMAIN: &[u8] = b"dregg-randomness-beacon-v1";
 
+/// Domain tag for GENERIC-message threshold-BLS partials (the council-seal /
+/// threshold-decryption surface, distinct from the `(epoch, height)` beacon).
+/// A partial signed under this tag can NEVER be replayed as a beacon partial
+/// (the hash-to-G2 input is domain-separated), so the two surfaces share the
+/// pairing math but never the message space.
+pub const LABEL_DOMAIN: &[u8] = b"dregg-threshold-bls-label-v1";
+
 /// blake3 derive_key context for hashing the group signature into the
 /// 32-byte beacon output.
 const OUTPUT_CONTEXT: &str = "dregg-beacon-output-v1";
@@ -124,6 +131,18 @@ pub fn beacon_message(epoch: u64, height: u64) -> Vec<u8> {
     msg
 }
 
+/// The byte string the committee threshold-signs for a GENERIC `label`:
+/// `LABEL_DOMAIN ‖ len_be ‖ label`. Length-prefixed so two labels can never
+/// frame-collide, and domain-separated from [`beacon_message`] so a label
+/// partial is never a beacon partial.
+pub fn label_message(label: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(LABEL_DOMAIN.len() + 8 + label.len());
+    msg.extend_from_slice(LABEL_DOMAIN);
+    msg.extend_from_slice(&(label.len() as u64).to_be_bytes());
+    msg.extend_from_slice(label);
+    msg
+}
+
 /// `blake3_derive(OUTPUT_CONTEXT, BEACON_DOMAIN ‖ σ_compressed)` — the public
 /// randomness derived from the unique group signature.
 fn beacon_randomness(signature: &G2) -> [u8; 32] {
@@ -168,6 +187,16 @@ pub struct BeaconPartial {
     /// The signing member's 1-based share index.
     pub index: usize,
     point: G2,
+}
+
+impl BeaconPartial {
+    /// The partial signature point `H(msg)^{f(index)} ∈ G2`. Public so the
+    /// council-seal layer can carry it as a decryption share; the point is
+    /// always validated against the share public key before use (subgroup +
+    /// pairing), so exposing it leaks nothing about `f(index)`.
+    pub fn point(&self) -> &G2 {
+        &self.point
+    }
 }
 
 /// A finished beacon: the unique group signature over
@@ -340,6 +369,84 @@ impl BeaconCommittee {
         Ok(out)
     }
 
+    /// Verify one member's partial over a GENERIC `label` against its share
+    /// public key. Fail-closed: unknown index, identity/out-of-subgroup point,
+    /// or pairing mismatch all reject. The pairing check is
+    /// `e(g₁, partial) == e(share_pubᵢ, H(label))`, certifying the partial is
+    /// `H(label)^{f(index)}` for the committed share `gᵢ = g₁^{f(index)}`.
+    pub fn verify_partial_label(&self, partial: &BeaconPartial, label: &[u8]) -> bool {
+        if partial.index == 0 || partial.index > self.share_publics.len() {
+            return false;
+        }
+        if partial.point.is_zero() || !partial.point.is_in_correct_subgroup_assuming_on_curve() {
+            return false;
+        }
+        let share_pub = self.share_publics[partial.index - 1];
+        let h_m = hash_to_g2(&label_message(label));
+        Curve::pairing(G1::generator(), partial.point) == Curve::pairing(share_pub, h_m)
+    }
+
+    /// Combine `≥ t` valid partials over `label` into the UNIQUE group
+    /// signature `σ = H(label)^{f(0)} ∈ G2` — the council-seal decryption
+    /// element. Fail-closed exactly like [`BeaconCommittee::aggregate`]: each
+    /// partial is verified against its share public key (invalid / duplicate
+    /// indices dropped); fewer than `t` valid partials is
+    /// [`BeaconError::InsufficientPartials`]; the recombined `σ` is checked
+    /// against the group key (`e(g₁, σ) == e(Y, H(label))`) before return.
+    ///
+    /// BLS uniqueness ⇒ ANY `t`-subset yields the SAME `σ`: the quorum choice
+    /// cannot steer the opened value (the cliff's operational face — below `t`
+    /// this returns an error and the mask is information-theoretically out of
+    /// reach, `metatheory/Metatheory/CommonSecret.lean::subThreshold_secret_blind`).
+    pub fn combine_label(
+        &self,
+        partials: &[BeaconPartial],
+        label: &[u8],
+    ) -> Result<G2, BeaconError> {
+        let mut seen = vec![false; self.share_publics.len()];
+        let mut valid: Vec<&BeaconPartial> = Vec::new();
+        for p in partials {
+            if p.index == 0 || p.index > seen.len() || seen[p.index - 1] {
+                continue;
+            }
+            if !self.verify_partial_label(p, label) {
+                continue;
+            }
+            seen[p.index - 1] = true;
+            valid.push(p);
+        }
+        if valid.len() < self.threshold {
+            return Err(BeaconError::InsufficientPartials {
+                got: valid.len(),
+                need: self.threshold,
+            });
+        }
+        let chosen = &valid[..self.threshold];
+        let xs: Vec<F> = chosen.iter().map(|p| F::from(p.index as u64)).collect();
+
+        let mut sigma = <Curve as Pairing>::G2::zero();
+        for (k, p) in chosen.iter().enumerate() {
+            let mut lambda = F::from(1u64);
+            for (j, xj) in xs.iter().enumerate() {
+                if j == k {
+                    continue;
+                }
+                let denom = (*xj - xs[k])
+                    .inverse()
+                    .expect("distinct 1-based indices, nonzero denominator");
+                lambda *= *xj * denom;
+            }
+            sigma += p.point * lambda;
+        }
+        let sigma = sigma.into_affine();
+        // Final group-key check: σ must be H(label)^{f(0)} under Y = g₁^{f(0)}.
+        let h_m = hash_to_g2(&label_message(label));
+        if Curve::pairing(G1::generator(), sigma) != Curve::pairing(self.group_public, h_m) {
+            return Err(BeaconError::AggregationFailed);
+        }
+        Ok(sigma)
+    }
+
     /// Verify a finished beacon against this committee's group key.
     pub fn verify_beacon(&self, out: &BeaconOutput) -> bool {
         verify_beacon(&self.group_public, out)
@@ -389,6 +496,19 @@ impl BeaconShare {
     /// per-signature randomness exists to grind.
     pub fn sign(&self, epoch: u64, height: u64) -> BeaconPartial {
         let h_m = hash_to_g2(&beacon_message(epoch, height));
+        BeaconPartial {
+            index: self.index,
+            point: (h_m * self.secret).into_affine(),
+        }
+    }
+
+    /// Produce this member's partial threshold-BLS signature for a GENERIC
+    /// `label`: `H(LABEL_DOMAIN ‖ len ‖ label)^{f(index)}`. This is the
+    /// decryption-share primitive of the council seal — each guardian's
+    /// contribution toward `H(label)^{f(0)}`. Deterministic (no per-signature
+    /// randomness to grind), domain-separated from [`BeaconShare::sign`].
+    pub fn sign_label(&self, label: &[u8]) -> BeaconPartial {
+        let h_m = hash_to_g2(&label_message(label));
         BeaconPartial {
             index: self.index,
             point: (h_m * self.secret).into_affine(),

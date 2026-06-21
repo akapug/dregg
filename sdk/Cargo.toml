@@ -11,6 +11,9 @@ description = "Agent SDK and cipherclerk for the dregg federation — token mana
 
 [dependencies]
 dregg-federation = { path = "../federation", default-features = false }
+# hints_onboarding (a lib module) uses the HINTS threshold-BLS crate directly, so it
+# must be a real dep (not only a dev-dep, which only covers the test targets).
+hints = { path = "../hints", package = "dregg-hints" }
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
 dregg-turn = { path = "../turn" }
@@ -47,6 +50,16 @@ dregg-intent = { path = "../intent" }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
 dregg-trace = { path = "../trace" }
+
+# council_seal (the threshold-seal organ sealed_governance welds) drives the
+# HINTS BLS pairing directly (G1/G2/G_T over BLS12-381), so the arkworks traits
+# it calls (AffineRepr/CurveGroup/Pairing/UniformRand/CanonicalSerialize) must be
+# direct deps — they are already transitively present via `hints`/`dregg-federation`;
+# pinned to the same 0.5.0 the federation organ uses (no version skew).
+ark-ec = "0.5.0"
+ark-ff = "0.5.0"
+ark-std = "0.5.0"
+ark-serialize = { version = "0.5.0", features = ["serde_with"] }
 
 async-trait = "0.1"
 base64 = { workspace = true }
@@ -133,6 +146,10 @@ path = "examples/agent_demo.rs"
 [[example]]
 name = "hello_receipt_chain"
 path = "examples/hello_receipt_chain.rs"
+
+[[example]]
+name = "polis_sealed_vote"
+path = "examples/polis_sealed_vote.rs"
 
 [lints]
 workspace = true

@@ -371,7 +371,12 @@ fn lost_all_keys_recovered_by_guardian_quorum() {
     .expect("a 3-of-5 quorum must aggregate");
     action.witness_blobs[1] = WitnessBlob::proof(qc);
 
-    let turn = single_action_turn(relay, nonce, action);
+    let mut turn = single_action_turn(relay, nonce, action);
+    // The identity cell authored its setup turn(s), so the recovery turn must chain
+    // to its current head. The relay reads the PUBLIC receipt tip (chain integrity =
+    // the author knows the head) — the recovering user needs no old key, only the
+    // public head.
+    turn.previous_receipt_hash = runtime.agent_receipt_head(&relay);
     runtime
         .execute_turn(&turn)
         .expect("a 3-of-5 guardian quorum MUST recover the identity through the executor");
@@ -481,7 +486,12 @@ fn wrong_committee_quorum_refused() {
     .expect("the attacker can aggregate over their own committee");
     action.witness_blobs[1] = WitnessBlob::proof(qc);
 
-    let turn = single_action_turn(relay, nonce, action);
+    let mut turn = single_action_turn(relay, nonce, action);
+    // The identity cell authored its setup turn(s), so the recovery turn must chain
+    // to its current head. The relay reads the PUBLIC receipt tip (chain integrity =
+    // the author knows the head) — the recovering user needs no old key, only the
+    // public head.
+    turn.previous_receipt_hash = runtime.agent_receipt_head(&relay);
     let err = runtime
         .execute_turn(&turn)
         .expect_err("a QC from a committee other than the host-trusted guardians must be refused");

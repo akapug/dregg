@@ -61,7 +61,7 @@ use dregg_cell::state::FieldElement;
 use dregg_cell::{CellId, predicate::InputRef};
 use dregg_turn::action::{Action, Authorization, WitnessBlob};
 
-use crate::identity::{key_set_commitment, rotate_effects};
+use crate::identity::{CURRENT_KEYS_COMMIT_SLOT, key_set_commitment, rotate_effects};
 
 use std::sync::Arc;
 
@@ -207,14 +207,35 @@ impl WitnessedPredicateVerifier for DevicePairingVerifier {
         input: &PredicateInput<'_>,
         proof_bytes: &[u8],
     ) -> Result<(), WitnessedPredicateError> {
-        // The only input shape an authorization discharge supplies.
-        let signing_message: &[u8] = match input {
-            PredicateInput::SigningMessage(m) => m,
-            PredicateInput::Bytes(b) => b,
+        // An authorization discharge supplies either the bare signing message
+        // (legacy / out-of-executor surfaces) or the richer `AuthContext` (the
+        // executor's custom-auth seam), which ALSO carries the target cell's
+        // authoritative pre-state slots. The cell pre-state is what makes the
+        // commitment unforgeable: without it the predicate's `commitment` is
+        // prover-supplied and a forged pairing exhibits its own set hashing to
+        // its own commitment (every check below would pass vacuously).
+        let signing_message: &[u8];
+        let cell_pre_state: Option<&[[u8; 32]]>;
+        match input {
+            PredicateInput::AuthContext {
+                signing_message: m,
+                cell_pre_state: fields,
+            } => {
+                signing_message = m;
+                cell_pre_state = Some(fields);
+            }
+            PredicateInput::SigningMessage(m) => {
+                signing_message = m;
+                cell_pre_state = None;
+            }
+            PredicateInput::Bytes(b) => {
+                signing_message = b;
+                cell_pre_state = None;
+            }
             other => {
                 return Err(WitnessedPredicateError::InputShapeMismatch {
                     kind_name: "DevicePairing",
-                    expected: "SigningMessage (canonical custom-auth message bytes)",
+                    expected: "AuthContext / SigningMessage (canonical custom-auth message bytes)",
                     actual: match other {
                         PredicateInput::Slot(_) => "Slot",
                         PredicateInput::PublicInput(_) => "PublicInput",
@@ -223,7 +244,37 @@ impl WitnessedPredicateVerifier for DevicePairingVerifier {
                     },
                 });
             }
-        };
+        }
+
+        // (0) BIND the host-trusted `commitment` to the cell's GENUINE current
+        // key-set commitment (`CURRENT_KEYS_COMMIT_SLOT`). The predicate's
+        // `commitment` travels in the action and is therefore prover-supplied;
+        // a forger sets it to the hash of a set containing their own key. Pin it
+        // to the cell's authoritative pre-state so only the identity's REAL
+        // current set is ever the authorizing audience. When dispatched through
+        // the executor (the only authorization path) the pre-state is always
+        // present; a missing pre-state (an out-of-executor caller that cannot
+        // exhibit cell state) fails closed.
+        let fields = cell_pre_state.ok_or(WitnessedPredicateError::Rejected {
+            kind_name: "DevicePairing",
+            reason: "pairing authorization requires the target cell's pre-state \
+                     (no authoritative current-keys commitment to pin against)"
+                .into(),
+        })?;
+        let on_chain_current = fields
+            .get(CURRENT_KEYS_COMMIT_SLOT as usize)
+            .ok_or(WitnessedPredicateError::Rejected {
+                kind_name: "DevicePairing",
+                reason: "cell pre-state has no current-keys commitment slot".into(),
+            })?;
+        if on_chain_current != commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "DevicePairing",
+                reason: "predicate commitment is not the cell's genuine current-keys \
+                         commitment (a forged/unbound commitment was presented)"
+                    .into(),
+            });
+        }
 
         let att = PairingAttestation::decode(proof_bytes).ok_or(
             WitnessedPredicateError::Rejected {
@@ -385,6 +436,15 @@ mod tests {
         sk.verifying_key().to_bytes()
     }
 
+    /// A 16-slot cell pre-state whose `CURRENT_KEYS_COMMIT_SLOT` carries
+    /// `commitment` — what the executor exposes to the verifier at the
+    /// custom-auth seam. The verifier pins the predicate commitment to this.
+    fn cell_state_with_current(commitment: [u8; 32]) -> [[u8; 32]; 16] {
+        let mut fields = [[0u8; 32]; 16];
+        fields[CURRENT_KEYS_COMMIT_SLOT as usize] = commitment;
+        fields
+    }
+
     #[test]
     fn attestation_roundtrips() {
         let att = PairingAttestation {
@@ -428,9 +488,86 @@ mod tests {
             signature: sig,
         };
 
+        let fields = cell_state_with_current(commitment);
         DevicePairingVerifier
-            .verify(&commitment, &PredicateInput::SigningMessage(&msg), &att.encode())
+            .verify(
+                &commitment,
+                &PredicateInput::AuthContext {
+                    signing_message: &msg,
+                    cell_pre_state: &fields,
+                },
+                &att.encode(),
+            )
             .expect("a current-device attestation over the right message admits");
+    }
+
+    /// THE TOOTH (verifier unit, false): the FORGED/UNBOUND-COMMITMENT attack.
+    /// The predicate's `commitment` (prover-supplied) is the hash of an
+    /// attacker-chosen set; the attacker exhibits that very set and signs
+    /// correctly over it — every WHO check against the prover commitment would
+    /// pass. It is REFUSED because the cell's GENUINE current-keys slot does not
+    /// equal the prover's self-chosen commitment.
+    #[test]
+    fn verifier_refuses_unbound_commitment() {
+        let genuine_phone = sk(0x01);
+        let genuine_current = vec![pk(&genuine_phone)];
+        let genuine_commitment = key_set_commitment(&genuine_current);
+
+        // The attacker's self-consistent attestation over their OWN set.
+        let attacker = sk(0xAB);
+        let attacker_set = vec![pk(&attacker)];
+        let forged_commitment = key_set_commitment(&attacker_set);
+        let new_device = sk(0xB2);
+        let msg = b"canonical-custom-signing-message".to_vec();
+        let signed = PairingAttestation::signed_bytes(&msg, &pk(&new_device));
+        let sig = attacker.sign(&signed).to_bytes();
+        let att = PairingAttestation {
+            attestor_pubkey: pk(&attacker),
+            current_key_set: attacker_set,
+            new_device_pubkey: pk(&new_device),
+            signature: sig,
+        };
+
+        // The cell's authoritative pre-state holds the GENUINE commitment.
+        let fields = cell_state_with_current(genuine_commitment);
+        let err = DevicePairingVerifier
+            .verify(
+                // The host-trusted `commitment` IS the prover's forged value
+                // here (it travels in the predicate); the binding to cell
+                // pre-state is what refuses it.
+                &forged_commitment,
+                &PredicateInput::AuthContext {
+                    signing_message: &msg,
+                    cell_pre_state: &fields,
+                },
+                &att.encode(),
+            )
+            .expect_err("a commitment unbound to the cell's genuine current keys must be refused");
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    /// THE TOOTH (verifier unit, false): a custom-auth discharge with NO cell
+    /// pre-state (bare `SigningMessage`) cannot pin the commitment, so it fails
+    /// closed — no authoritative current-keys value to verify against.
+    #[test]
+    fn verifier_fails_closed_without_cell_state() {
+        let device_a = sk(0xA1);
+        let device_b = sk(0xB2);
+        let current = vec![pk(&device_a), [0x22; 32]];
+        let commitment = key_set_commitment(&current);
+        let msg = b"canonical-custom-signing-message".to_vec();
+        let signed = PairingAttestation::signed_bytes(&msg, &pk(&device_b));
+        let sig = device_a.sign(&signed).to_bytes();
+        let att = PairingAttestation {
+            attestor_pubkey: pk(&device_a),
+            current_key_set: current,
+            new_device_pubkey: pk(&device_b),
+            signature: sig,
+        };
+        let err = DevicePairingVerifier
+            .verify(&commitment, &PredicateInput::SigningMessage(&msg), &att.encode())
+            .expect_err("without cell pre-state the verifier cannot pin the commitment — fail closed");
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
 
     /// THE TOOTH (verifier unit, false): a signer who is NOT in the current set
@@ -452,8 +589,16 @@ mod tests {
             signature: sig,
         };
 
+        let fields = cell_state_with_current(commitment);
         let err = DevicePairingVerifier
-            .verify(&commitment, &PredicateInput::SigningMessage(&msg), &att.encode())
+            .verify(
+                &commitment,
+                &PredicateInput::AuthContext {
+                    signing_message: &msg,
+                    cell_pre_state: &fields,
+                },
+                &att.encode(),
+            )
             .expect_err("a non-member attestor must be refused");
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
@@ -482,8 +627,19 @@ mod tests {
             signature: sig,
         };
 
+        // The cell's authoritative current keys ARE the host commitment, so the
+        // commitment binding passes; the attacker's exhibited set still fails
+        // step (1) against the host-pinned value.
+        let fields = cell_state_with_current(host_commitment);
         let err = DevicePairingVerifier
-            .verify(&host_commitment, &PredicateInput::SigningMessage(&msg), &att.encode())
+            .verify(
+                &host_commitment,
+                &PredicateInput::AuthContext {
+                    signing_message: &msg,
+                    cell_pre_state: &fields,
+                },
+                &att.encode(),
+            )
             .expect_err("an exhibited set that does not match the host commitment must be refused");
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
@@ -511,8 +667,16 @@ mod tests {
             signature: sig,
         };
 
+        let fields = cell_state_with_current(commitment);
         let err = DevicePairingVerifier
-            .verify(&commitment, &PredicateInput::SigningMessage(&msg), &att.encode())
+            .verify(
+                &commitment,
+                &PredicateInput::AuthContext {
+                    signing_message: &msg,
+                    cell_pre_state: &fields,
+                },
+                &att.encode(),
+            )
             .expect_err("a signature over a different new device must be refused");
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }

@@ -379,3 +379,65 @@ fn forged_new_device_refused() {
         "no pairing occurred — the current key set is untouched"
     );
 }
+
+/// THE TOOTH (false) — the FORGED/UNBOUND-COMMITMENT attack (bug-hunt
+/// confirmed). An outsider who holds NO genuine current device key builds a
+/// FULLY self-consistent attestation over a key set OF THEIR OWN CHOOSING: they
+/// set the predicate's `commitment` to the hash of `[attacker_key]`, exhibit
+/// exactly that set (so it reproduces the prover-supplied commitment), make the
+/// attacker a member of that set, and sign with the attacker key. Every WHO
+/// check the verifier runs against the *prover-supplied* commitment passes
+/// vacuously.
+///
+/// The attack admits IFF the predicate's `commitment` is trusted as-is. It must
+/// be REFUSED: the host-trusted commitment is the cell's GENUINE on-chain
+/// current-keys slot, and the attacker's self-chosen commitment does not equal
+/// it. After the fix the executor pins the predicate commitment to the cell's
+/// pre-state and this forged pairing is rejected at the auth boundary.
+#[test]
+fn forged_unbound_commitment_refused() {
+    let phone = device(0x01); // the genuine, on-chain current device
+    let laptop = device(0x02); // the pre-committed new device
+    let genuine_current = vec![pubkey(&phone)];
+    let (mut runtime, cell, _current) =
+        paired_ready_identity("pairing-forged-commitment", &genuine_current, pubkey(&laptop));
+    wire_pairing_verifier(&mut runtime);
+
+    let after_next = vec![pubkey(&phone), pubkey(&laptop), [0x03; 32]];
+    let fresh_next = next_keys_digest(&key_set_commitment(&after_next));
+    let height = runtime.block_height();
+    let nonce = cell_nonce(&runtime, cell).max(1);
+
+    // The attacker substitutes their OWN key set — `pairing_action` writes
+    // `predicate.commitment = key_set_commitment([attacker])`, which is NOT the
+    // cell's genuine current-keys commitment. The attestation is internally
+    // perfect (the attacker is a member of their own exhibited set and signs
+    // correctly), but the commitment is unbound to the real identity.
+    let attacker = device(0xAB);
+    let attacker_set = vec![pubkey(&attacker)];
+    let prev = runtime.agent_receipt_head(&cell);
+    let turn = build_pairing_turn(
+        cell,
+        &attacker_set, // <-- a self-chosen set, NOT the cell's genuine current set
+        pubkey(&laptop),
+        fresh_next,
+        height,
+        nonce,
+        prev,
+        &attacker, // member of the self-chosen set; signs correctly over it
+    );
+    let err = runtime
+        .execute_turn(&turn)
+        .expect_err("a forged/unbound-commitment pairing must be refused");
+    assert!(
+        matches!(err, dregg_sdk::SdkError::Turn(_)),
+        "rejection must be at the auth boundary, got: {err:?}"
+    );
+
+    // Untouched: still the genuine phone-only current set — no key was admitted.
+    assert_eq!(
+        slot_of(&runtime, cell, CURRENT_KEYS_COMMIT_SLOT),
+        key_set_commitment(&genuine_current),
+        "no pairing occurred — the forged commitment could not admit a key"
+    );
+}
