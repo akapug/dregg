@@ -203,6 +203,9 @@ def fullActionCircuitStep
   | .setVKA actor cell vk =>
       AccountsWF st.kernel ∧ AccountsWF st'.kernel ∧
       setVKCircuitStep CS st ⟨actor, cell, vk⟩ st'
+  | .setProgramA actor cell prog =>
+      AccountsWF st.kernel ∧ AccountsWF st'.kernel ∧
+      setProgramCircuitStep CS st ⟨actor, cell, prog⟩ st'
   | .delegateAttenA del rec t keep =>
       delegateAttenCircuitStep S D_caps hD_caps st ⟨del, rec, t, keep⟩ st'
   | .attenuateA actor idx keep =>
@@ -386,6 +389,10 @@ theorem fullAction_circuit_refines_spec
       simp only [fullActionStep]
       rcases h with ⟨hwf, hwf', hc⟩
       exact setVK_circuit_refines_spec CS hCSN hCSL hRestFrame hLogCS st _ st' hwf hwf' hc
+  | .setProgramA actor cell prog =>
+      simp only [fullActionStep]
+      rcases h with ⟨hwf, hwf', hc⟩
+      exact setProgram_circuit_refines_spec CS hCSN hCSL hRestFrame hLogCS st _ st' hwf hwf' hc
   | .delegateAttenA del rec t keep =>
       simp only [fullActionStep]
       exact delegateAtten_circuit_refines_spec S D_caps hD_caps

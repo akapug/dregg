@@ -1683,6 +1683,8 @@ def encodeActionW : FullActionA → String
                                             ++ "," ++ toString perms ++ "]}"
   | .setVKA actor cell vk => "{\"setvk\":[" ++ toString actor ++ "," ++ toString cell ++ ","
                                ++ toString vk ++ "]}"
+  | .setProgramA actor cell prog => "{\"setprogram\":[" ++ toString actor ++ "," ++ toString cell ++ ","
+                               ++ toString prog ++ "]}"
   | .introduceA i r t => "{\"introduce\":[" ++ toString i ++ "," ++ toString r ++ "," ++ toString t ++ "]}"
   | .delegateAttenA del rec t keep => "{\"delatten\":[" ++ toString del ++ "," ++ toString rec ++ ","
                                         ++ toString t ++ "," ++ encodeAuthsW keep ++ "]}"
@@ -1831,6 +1833,11 @@ def parseActionWFuel (fuel : Nat) (cs : PState) : Option (FullActionA × PState)
   | some r0 => do
       let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let (vk, r3) ← cI r2; let r4 ← lit "]}" r3
       some (.setVKA actor cell vk, r4)
+  | none =>
+  match lit "{\"setprogram\":[" cs with
+  | some r0 => do
+      let (actor, r1) ← parseNat r0; let (cell, r2) ← cN r1; let (prog, r3) ← cI r2; let r4 ← lit "]}" r3
+      some (.setProgramA actor cell prog, r4)
   | none =>
   match lit "{\"introduce\":[" cs with
   | some r0 => do

@@ -46,8 +46,10 @@ set_option linter.unusedVariables false
 set_option autoImplicit false
 
 /-- The protocol-managed `program` field name (the cell's `CellProgram` / caveat-table slot). DISTINCT
-from `permsField`/`vkField`/`nonceField` — a SetProgram write touches its OWN slot. -/
-def programField : FieldName := "program"
+from `permsField`/`vkField`/`nonceField` — a SetProgram write touches its OWN slot. This is the SAME
+`TurnExecutorFull.programField` the executor's `.setProgramA` arm writes (`= "program"`), re-exported
+here so the spec module's clauses and the executor's arm name the identical slot. -/
+abbrev programField : FieldName := Dregg2.Exec.TurnExecutorFull.programField
 
 /-! ## §1 — the admissibility guard, as a `Prop`. -/
 
@@ -203,6 +205,23 @@ theorem stateStep_program_admits_guard {s s' : RecChainedState} {actor cell : Ce
     setProgramGuard s actor cell :=
   ((stateStep_program_iff_spec s actor cell prog s').mp h).1
 
+/-! ## §4.5 — the executor⟺spec corner: lift `stateStep` onto `execFullA`'s `.setProgramA` arm. -/
+
+/-- The `.setProgramA` arm of `execFullA` is DEFINITIONALLY the bare authority-gated `program`-field
+write (`TurnExecutorFull.programField = "program" = programField` here). -/
+theorem execFullA_setProgram_eq (s : RecChainedState) (actor cell : CellId) (prog : Int) :
+    execFullA s (.setProgramA actor cell prog) = stateStep s programField actor cell (.int prog) := rfl
+
+/-- **`execFullA_setProgram_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The live
+executor's `.setProgramA` arm commits a `program` write into `s'` IFF `s'` is EXACTLY the spec'd full
+post-state. The `→` VALIDATES the executor against the independent `SetProgramSpec` — all 17 kernel
+components + the `log` are checked; the `←` reconstructs the committed state. This is the executor
+corner of the spec⟺executor⟺circuit triangle for the SetProgram (cell-state-program) family. -/
+theorem execFullA_setProgram_iff_spec (s : RecChainedState) (actor cell : CellId) (prog : Int)
+    (s' : RecChainedState) :
+    execFullA s (.setProgramA actor cell prog) = some s' ↔ SetProgramSpec s actor cell prog s' := by
+  rw [execFullA_setProgram_eq, stateStep_program_iff_spec]
+
 /-! ## §5 — NON-VACUITY: the guard REJECTS bad inputs. -/
 
 /-- **`setProgram_rejects_unauthorized`.** Unauthorized actor ⟹ fail closed. -/
@@ -244,6 +263,8 @@ theorem setProgram_rejects_nonlive (s : RecChainedState) (actor cell : CellId) (
 #assert_axioms stateStep_program_capFrame
 #assert_axioms stateStep_program_otherCellsFrame
 #assert_axioms stateStep_program_admits_guard
+#assert_axioms execFullA_setProgram_eq
+#assert_axioms execFullA_setProgram_iff_spec
 #assert_axioms setProgram_rejects_unauthorized
 #assert_axioms setProgram_rejects_nonaccount
 #assert_axioms setProgram_rejects_nonlive

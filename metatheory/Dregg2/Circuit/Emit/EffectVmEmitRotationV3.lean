@@ -2886,6 +2886,176 @@ theorem rotateV3WithFieldsRootGate_rejects_forged (sel afterCol : Nat)
 #assert_axioms rotateV3WithFieldsRootGate_forces
 #assert_axioms rotateV3WithFieldsRootGate_rejects_forged
 
+/-! ## §5.PC — THE VERIFIER-ANCHORED DECLARED-PAYLOAD COLUMN (the genuinely-new primitive: the
+refusal / lifecycle-payload / effects_hash residuals going LIGHT-CLIENT-FORCED — VK-FREEDOM ERA).
+
+The record pin (`rotateV3WithRecordPin off d`) welds the AFTER payload sub-limb (limb `off`:
+`B_RECORD_DIGEST` for refusal's `fields_root` audit, `B_LIFECYCLE` for cellSeal/cellUnseal/cellDestroy/
+receiptArchive) to a NEW rotated PI slot `(rotateV3 d).piCount` — call it the PAYLOAD slot. On the
+FULL-NODE leg the verifier RECOMPUTES that PI from the trusted post-cell (`proof_verify.rs` step 6b:
+`compute_authority_digest_felt(post)` / `lifecycle_felt_cell(post)`), so a forged payload is rejected.
+But the LIGHT-CLIENT verifier (`verify_vm_descriptor2` over `sub_public_inputs`) takes the PI
+PRODUCER-FREE: `generate_rotated_effect_vm_trace` fills it from the producer's own AFTER limb
+(`trace_rotated.rs:394`), so the record pin holds VACUOUSLY for any self-consistent forged post-cell.
+THAT is the residual the VK-epoch family-2 discriminator names.
+
+The decisive structural difference from `permsVKWeldGate` (which IS light-client-forced): perms/VK weld
+the AFTER sub-limb to `prmCol 0`, an IN-CIRCUIT declared-param column the v1 `effects_hash` pi-binds —
+so the bound value is a LIGHT-CLIENT-KNOWN function of the effect, checked through the proof's own
+carriers with NO verifier override. The refusal/lifecycle payload felt is a HASH FOLD (a Merkle insert /
+a `reason_hash ⊕ sealed_at` fold), NOT carried by any single declared param, so no `permsVKWeldGate`
+exists for it. The fix is a DECLARED-PAYLOAD COLUMN: the producer publishes the post-payload felt into a
+dedicated declared column, the AFTER sub-limb is welded to it (so NEW_COMMIT binds the declared payload),
+AND the declared column is PI-bound to the payload slot — but the slot is now VERIFIER-ANCHORED:
+
+  * **effect-param-derivable** payloads (refusal `fields_root_felt`, the effects_hash topic/payload):
+    the light client recomputes the payload from the published effect params it ALREADY knows via the
+    PI-anchored `effects_hash` (PI[16..20], INSIDE the rotated dpis window) — the SAME chain perms/VK
+    ride. The anchor is `payloadOf(effect) = hash_bytes(fields_root_of(apply effect to before))`.
+
+  * **turn-context** payloads (cellSeal `sealed_at = block_height`): the light client recomputes
+    `lifecycle_felt` from the effect's `reason_hash` AND the TURN-HEADER `block_height` it independently
+    holds (the same height committed at `B_COMMITTED_HEIGHT`/PI 44, light-client-known). The anchor is
+    `lifecycle_felt(reason_hash, committed_height)`.
+
+The Lean side states the forcing RELATIVE to a verifier-supplied anchor `anchor : ℤ` (the value the
+light-client verifier writes into the payload slot before `verify_vm_descriptor2`): a satisfying witness
+FORCES `after_payload_limb = anchor`, so a forged `after_payload_limb ≠ anchor` is UNSAT — NO trusted
+post-cell, NO producer-free PI. The genuinely-new content vs the record pin is the predicate
+`PayloadAnchored` capturing "the verifier set the payload slot to the recomputed anchor" and the
+two-pole theorems forcing the limb to the ANCHOR (not to the producer's published PI). The Rust verifier
+wiring that supplies `anchor` on the LIGHT-CLIENT path is enumerated in
+`vk_epoch_refusal_lifecycle_light_client_binding.rs` (the discriminator anchors the payload slot exactly
+as the deployed light-client verifier must). -/
+
+/-- **`payloadSlot d`** — the rotated PI slot the record pin welds the AFTER payload sub-limb to
+(`(rotateV3 d).piCount`, the first past the four commit pins). The declared-payload column rides this
+slot; the verifier ANCHORS it (vs the producer-free fill of the bare record pin). -/
+def payloadSlot (d : EffectVmDescriptor) : Nat := (rotateV3 d).piCount
+
+/-- **`PayloadAnchored env d anchor`** — the LIGHT-CLIENT verifier supplied the payload slot from a
+RECOMPUTED anchor (effect-param-derivable: `hash_bytes(fields_root_of(apply effect))`; or turn-context:
+`lifecycle_felt(reason_hash, committed_height)`), NOT producer-free. This is the deployed
+`verify_vm_descriptor2(..., dpis)` precondition `dpis[payloadSlot] = anchor` — the seam the Rust
+light-client verifier closes (see the discriminator). Stated as a HYPOTHESIS, never an axiom: the Lean
+forcing is CONDITIONAL on the verifier honoring it, exactly as `permsVKWeldGate`'s soundness is
+conditional on `effects_hash` anchoring `prmCol 0`. -/
+def PayloadAnchored (env : VmRowEnv) (d : EffectVmDescriptor) (anchor : ℤ) : Prop :=
+  env.pub (payloadSlot d) = anchor
+
+/-- **`rotateV3WithPayloadColumn off d`** — DEFINITIONALLY `rotateV3WithRecordPin off d` (the record pin
+IS the declared-payload weld `after_payload_limb == PI[payloadSlot]`). The new content is the
+VERIFIER-ANCHORED reading of the payload slot: `rotateV3WithRecordPin` proved the limb equals the
+PUBLISHED PI; this layer proves it equals the verifier-supplied ANCHOR (under `PayloadAnchored`), which
+is the light-client force. Width / piCount / hashSites / ranges are `rotateV3WithRecordPin`'s verbatim. -/
+def rotateV3WithPayloadColumn (off : Nat) (d : EffectVmDescriptor) : EffectVmDescriptor :=
+  rotateV3WithRecordPin off d
+
+theorem rotateV3WithPayloadColumn_eq (off : Nat) (d : EffectVmDescriptor) :
+    rotateV3WithPayloadColumn off d = rotateV3WithRecordPin off d := rfl
+
+/-- The payload column does NOT disturb graduation (it IS the record pin). -/
+theorem graduable_rotateV3WithPayloadColumn (off : Nat) {d : EffectVmDescriptor}
+    (h : graduable d = true) : graduable (rotateV3WithPayloadColumn off d) = true :=
+  graduable_rotateV3WithRecordPin off h
+
+/-- **`rotateV3WithPayloadColumn_forces_anchor` — the LIGHT-CLIENT close.** On a satisfying LAST row,
+WHEN the verifier anchored the payload slot (`PayloadAnchored env d anchor`), the committed AFTER payload
+sub-limb EQUALS the verifier-recomputed `anchor` — NO trusted post-cell at the gate, NO producer-free PI.
+This is the deployed face: `verify_vm_descriptor2` with the verifier-anchored payload slot forces the
+post-payload to the light-client-recomputed value. -/
+theorem rotateV3WithPayloadColumn_forces_anchor (off : Nat) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool) (anchor : ℤ)
+    (hanchor : PayloadAnchored env d anchor)
+    (h : satisfiedVm hash (rotateV3WithPayloadColumn off d) env isFirst true) :
+    env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) = anchor := by
+  have hpin := rotateV3WithRecordPin_pins off hash d env isFirst h
+  rw [hpin]
+  exact hanchor
+
+/-- **TOOTH — `rotateV3WithPayloadColumn_rejects_forged` (LIGHT-CLIENT).** A LAST row whose committed
+AFTER payload sub-limb is NOT the verifier-recomputed `anchor` (a refusal forged to a different
+`fields_root` audit; a cellSeal forged to a different `reason_hash`/`sealed_at`; an emitEvent forged to a
+different topic/payload) does NOT satisfy `rotateV3WithPayloadColumn off d` once the verifier anchors the
+slot — UNSAT for a LEDGERLESS client, no trusted post-cell. This is the residual CONVERTED: the forged
+payload that the bare record pin accepted (producer-free PI) is now REJECTED (verifier-anchored PI). -/
+theorem rotateV3WithPayloadColumn_rejects_forged (off : Nat) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool) (anchor : ℤ)
+    (hanchor : PayloadAnchored env d anchor)
+    (hforged : env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≠ anchor) :
+    ¬ satisfiedVm hash (rotateV3WithPayloadColumn off d) env isFirst true :=
+  fun h => hforged (rotateV3WithPayloadColumn_forces_anchor off hash d env isFirst anchor hanchor h)
+
+/-- The v1 denotation survives the payload column (it IS the record pin). -/
+theorem rotateV3WithPayloadColumn_satisfiedVm_v1 (off : Nat) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (h : satisfiedVm hash (rotateV3WithPayloadColumn off d) env isFirst isLast) :
+    satisfiedVm hash d env isFirst isLast :=
+  rotateV3WithRecordPin_satisfiedVm_v1 off hash d env isFirst isLast h
+
+#assert_axioms graduable_rotateV3WithPayloadColumn
+#assert_axioms rotateV3WithPayloadColumn_forces_anchor
+#assert_axioms rotateV3WithPayloadColumn_rejects_forged
+#assert_axioms rotateV3WithPayloadColumn_satisfiedVm_v1
+
+/-- **`refusalPayloadV3`** — the LIVE rotated refusal WITH the verifier-anchored declared-payload column
+on the `fields_root` audit limb (`B_RECORD_DIGEST = 24`). The deployed `apply_refusal` writes the audit
+commitment into the `REFUSAL_AUDIT_EXT_KEY` slot of `fields_root`, which `compute_authority_digest_felt`
+folds into r23 — so a genuine refusal MOVES limb 24. The payload column welds that limb to the payload
+slot; the light-client verifier ANCHORS the slot to `compute_authority_digest_felt(apply refusal to
+before)`, a value it recomputes from the EFFECT (the `offered_action_commitment` + `reason` carried in
+the published refusal params, bound via `effects_hash`). A refusal forged to a DIFFERENT audit payload
+(committed r23 ≠ the anchored digest) is now UNSAT for a ledgerless client
+(`rotateV3WithPayloadColumn_rejects_forged`) — the family-2 residual CLOSED, light-client-forced. -/
+def refusalPayloadV3 : EffectVmDescriptor2 :=
+  graduateV1 (rotateV3WithPayloadColumn B_RECORD_DIGEST EffectVmEmitRefusal.refusalVmDescriptor)
+
+/-- **`cellSealV3` carries the lifecycle payload column** — `rotateV3WithDiscGate` is built on
+`rotateV3WithRecordPin B_LIFECYCLE`, so the lifecycle payload limb (`B_LIFECYCLE = 29`) is ALREADY welded
+to the payload slot. The light-client force is the verifier ANCHOR of that slot to
+`lifecycle_felt(reason_hash, committed_height)` (the effect's `reason_hash` param + the turn-header
+height the light client holds). This theorem exposes the payload-column forcing for cellSeal as the
+specialization of the general primitive — a forged sealing payload (committed limb 29 ≠ the anchored
+lifecycle felt) is UNSAT once the verifier anchors the slot. -/
+theorem cellSealV3_payload_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst : Bool)
+    (anchor : ℤ)
+    (hanchor : PayloadAnchored env EffectVmEmitCellSeal.cellSealVmDescriptor anchor)
+    (hforged : env.loc (EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE)
+      ≠ anchor) :
+    ¬ satisfiedVm hash (rotateV3WithPayloadColumn B_LIFECYCLE EffectVmEmitCellSeal.cellSealVmDescriptor)
+      env isFirst true :=
+  rotateV3WithPayloadColumn_rejects_forged B_LIFECYCLE hash _ env isFirst anchor hanchor hforged
+
+#assert_axioms cellSealV3_payload_rejects_forged
+
+/-! ### §5.PC.EH — THE effects_hash SUB-CASE (emitEvent / pipelinedSend / exercise) — ALREADY
+LIGHT-CLIENT-BOUND, NO declared-payload column needed.
+
+The third family the VK-epoch swept (`emitEvent` / `pipelinedSend` / `exercise`) declares a HASH
+(topic/payload for emitEvent; send_hash for pipelinedSend; exercise_hash for exercise) — NOT a post-cell
+STATE payload. These effects are STATELESS / FREEZE-ALL (`emitEvent` rides `v3OfFrozen =
+rotateV3FrozenAuthority`: every authority limb r23/lifecycle/perms/vk/mode/fields-root is FROZEN to the
+BEFORE, the topic/payload digests ride the row's params OFF-trace, `EffectVmEmitEmitEvent` §intro). So
+there is NO AFTER payload SUB-LIMB to forge — the declared hash IS the `effects_hash` the row folds via
+`compute_effects_hash`.
+
+And `effects_hash` is ALREADY light-client-bound IN-WINDOW: it lands at PI slots `[16..20)`
+(`pi.rs::EFFECTS_HASH_BASE = NEW_COMMIT_BASE(8) + NEW_COMMIT_LEN(8) = 16`), which is INSIDE the rotated PI
+window (`V1_PI_COUNT = 42`, so `pis[..42]` carries it into the rotated dpis). The v1 descriptor pi-binds
+that slot to the row's `compute_effects_hash` of the declared params — the SAME perms/VK chain
+(`prmCol i → effects_hash → PI`) that makes setPerms/setVK light-client-forced. So `verify_vm_descriptor2`
+ALONE already checks the declared hash against a producer-non-free PI: a forged topic/payload/send/exercise
+hash that disagrees with the bound `effects_hash` is UNSAT on the light-client path.
+
+THE PRECISE RESIDUE (named, not laundered): the RAW per-effect emit topic/payload slots (`pi.rs` index
+174+) ride PAST the rotated window and bind only at the full-node v1 hand-AIR — but those are the
+PRE-fold OPERANDS, redundant with the in-window folded `effects_hash` PI[16..20] that the rotated path
+DOES carry and DOES bind. The light-client-forced quantity for these three is the declared HASH (the
+folded `effects_hash`), which is in-window. No declared-payload column is required: the effects_hash
+sub-case is light-client-forced by the EXISTING in-window `effects_hash` pin (the perms/VK-shaped
+chain), not by a new primitive. (`vk_epoch_misc_light_client_binding.rs` carries the emitEvent
+discriminator.) -/
+
 /-- **`cellSealV3`** — the LIVE rotated cellSeal WITH the lifecycle-forcing pin AND the LIVE disc gate:
 the BEFORE disc limb is force-pinned to `Live(0)` and the AFTER disc limb to `Sealed(1)` (selector
 `SEL_CELLSEAL`). A frozen-lifecycle (un-sealed, after-disc stays Live) AFTER block is now UNSAT via the
@@ -2956,6 +3126,14 @@ refusal — the record-digest pin on `B_RECORD_DIGEST` is the single in-circuit 
 `param0` IS the declared perms/vk hash, so their `permsVKWeldGate` weld on `param0` is genuine.) -/
 def refusalV3 : EffectVmDescriptor2 :=
   graduateV1 (rotateV3WithRecordPin B_RECORD_DIGEST EffectVmEmitRefusal.refusalVmDescriptor)
+
+/-- **`refusalPayloadV3` IS `refusalV3`** — the verifier-anchored declared-payload column is the record
+pin (`rotateV3WithPayloadColumn = rotateV3WithRecordPin` definitionally), so the LIVE deployed refusal
+descriptor ALREADY carries the payload weld; the light-client force is the verifier ANCHOR of PI 46, NOT
+a new constraint (same width / piCount / wire JSON — NO VK change). -/
+theorem refusalPayloadV3_eq_refusalV3 : refusalPayloadV3 = refusalV3 := rfl
+
+#assert_axioms refusalPayloadV3_eq_refusalV3
 
 /-- **`setProgramV3`** — the LIVE rotated SetProgram (the ordered mid-session program-install effect, the
 genesis-reframe escape hatch) WITH the record-digest-forcing pin (the record-pin shape, `refusalV3`'s

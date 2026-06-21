@@ -126,6 +126,9 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
   | setVKA actor cell vk =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
+  | setProgramA actor cell prog =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
   -- §authority — introduce/validateHandoff route to recKDelegate; delegateAtten to recKDelegateAtten;
   -- attenuate is always-commit (`some (attenuateStepA …)`, a caps-only update); dropRef/revokeDelegation
   -- to recCRevoke; exercise factors (kernel UNCHANGED).

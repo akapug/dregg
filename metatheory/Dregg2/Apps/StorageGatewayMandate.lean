@@ -289,6 +289,9 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
   | setVKA actor cell vk =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact ⟨hlive, hprog⟩
+  | setProgramA actor cell prog =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact ⟨hlive, hprog⟩
   | introduceA intro rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel intro rec t with
@@ -654,6 +657,11 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
       exact fieldOf_of_field_eq
         (writeField_field_ne s.kernel vkField commitmentAnchorSlot cell c (.int vk) (by decide))
+  | setProgramA actor cell prog =>
+      simp only [execFullA] at h
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact fieldOf_of_field_eq
+        (writeField_field_ne s.kernel programField commitmentAnchorSlot cell c (.int prog) (by decide))
   | introduceA intro rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel intro rec t with

@@ -181,6 +181,9 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
   | setVKA actor cell vk =>
       simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
       exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
+  | setProgramA actor cell prog =>
+      simp only [execFullA] at h; obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      exact subset_of_commitments_eq (writeField_commitments _ _ _ _)
   | introduceA intro rec t =>
       simp only [execFullA, recCDelegate] at h
       cases hk : recKDelegate s.kernel intro rec t with

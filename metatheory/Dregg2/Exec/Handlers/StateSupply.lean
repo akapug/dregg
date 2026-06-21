@@ -330,6 +330,7 @@ proves the obligation ONCE; adding an effect is fixing one field name. -/
 def nonceField        : FieldName := "nonce"
 def permissionsField  : FieldName := "permissions"
 def vkField           : FieldName := "verification_key"
+def programField      : FieldName := "program"
 def sovereignField    : FieldName := "sovereign"
 def refusalField      : FieldName := "refusal"
 /-- The receipt-archive write targets the `"lifecycle"` RECORD slot — ALIGNED to `execFullA`'s
@@ -473,6 +474,9 @@ def setPermissionsEffect (actor target : CellId) (p : Int) : ClosedEffect :=
 /-- `SetVerificationKey` — a write to the `verification_key` field. -/
 def setVKEffect (actor target : CellId) (vk : Int) : ClosedEffect :=
   stateWriteEffect actor target vkField vk
+/-- `SetProgram` — a write to the `program` field (the cell's caveat-table slot). -/
+def setProgramEffect (actor target : CellId) (prog : Int) : ClosedEffect :=
+  stateWriteEffect actor target programField prog
 /-! ### §3.1 — `MakeSovereign` is a COMMITMENT-REBIND handler, not a flag write.
 
 ALIGNED to `execFullA`'s `makeSovereignA` arm (`TurnExecutorFull.makeSovereignStep`): making a cell

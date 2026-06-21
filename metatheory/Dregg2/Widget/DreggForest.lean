@@ -97,6 +97,7 @@ def ctorName : FullActionA → String
   | .incrementNonceA _ _ _     => "incrementNonceA"
   | .setPermissionsA _ _ _     => "setPermissionsA"
   | .setVKA _ _ _              => "setVKA"
+  | .setProgramA _ _ _         => "setProgramA"
   | .introduceA _ _ _          => "introduceA"
   | .delegateAttenA _ _ _ _    => "delegateAttenA"
   | .attenuateA _ _ _          => "attenuateA"

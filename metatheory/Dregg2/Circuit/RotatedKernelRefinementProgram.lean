@@ -38,7 +38,7 @@ open Dregg2.Circuit.StateCommit (compressNInjective)
 open Dregg2.Circuit.RotatedKernelRefinementLifecycle
   (auditLeaf auditLeaf_injective auditSlotRoot)
 open Dregg2.Circuit.Spec.CellStateProgram
-  (SetProgramSpec setProgramGuard setProgramCellMap programField)
+  (SetProgramSpec setProgramGuard setProgramCellMap)
 open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt)
 open Dregg2.Circuit.Emit.EffectVmEmit (satisfiedVm VmRowEnv VmConstraint)
 open Dregg2.Circuit.Emit.EffectVmEmitV2 (graduateV1 graduateV1_sound graduable)

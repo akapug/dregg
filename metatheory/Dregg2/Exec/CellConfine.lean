@@ -253,6 +253,8 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
       exact CapsConfined.of_caps_eq (state_caps_unchanged (by simpa only [execFullA] using h)) hpre
   | setVKA actor cell vk =>
       exact CapsConfined.of_caps_eq (state_caps_unchanged (by simpa only [execFullA] using h)) hpre
+  | setProgramA actor cell prog =>
+      exact CapsConfined.of_caps_eq (state_caps_unchanged (by simpa only [execFullA] using h)) hpre
   -- ===== AUTHORITY effects: the cap-writing arms. =====
   | introduceA intro rec t =>
       -- grants the held witness cap; confinement follows because that cap was already confined.

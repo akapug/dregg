@@ -805,9 +805,49 @@ theorem introduce_sat_forces_postroot {State : Type} (S : CapHashScheme State)
       henc.newRoot :=
   (introduce_descriptorRefines_sat S pre post del rec t hash mi mf ma tr hsat henc anc).2
 
+/-- **CLASS-A TOOTH (revoke / revokeDelegation, tag 2 + tag 14) — the cap-tree REMOVE post-root is
+FORCED.** From `Satisfied2 hash revokeDelegationWriteV3` the genuine REMOVE write (the ZERO sentinel at the
+revoked edge key) PINS `henc.newRoot`: `writesTo hash henc.oldRoot key 0 henc.newRoot` holds. Mutation:
+perturbing/dropping `removeWriteOpRot sel.REVOKE_DELEGATION` from `revokeDelegationWriteV3` removes the
+forced `writesTo`, so this conclusion can no longer be drawn — the tag-2 (and tag-14) apex rung reds. -/
+theorem revokeDelegation_sat_forces_postroot {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (holder t : CellId)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsat : Satisfied2 hash revokeDelegationWriteV3 mi mf ma tr)
+    (henc : RevokeCapsTreeEncodes S pre post holder t)
+    (anc : RevokeDelegationWriteAnchor S pre post holder t hash mi mf ma tr henc) :
+    writesTo hash henc.oldRoot
+      ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0
+      henc.newRoot :=
+  (revokeDelegation_descriptorRefines_sat S pre post holder t hash mi mf ma tr hsat henc anc).2
+
+/-- **FORGE-DETECTOR (revoke, tag 2) — a fabricated post-cap-root is UNSAT.** The genuine REMOVE write
+FORCES the post-cap-root (`revokeDelegation_sat_forces_postroot`); `writesTo` is FUNCTIONAL under CR
+(`writesTo_functional`). So ANY forged `forgedRoot` claiming to be the same `(oldRoot, key, 0)`-write but
+differing from the genuine `henc.newRoot` is excluded — the forged-root branch is `False`. NON-vacuous: the
+forced `writesTo henc.oldRoot key 0 henc.newRoot` is the live witness (drop `removeWriteOpRot` and the
+hypothesis it consumes vanishes), and `forgedRoot ≠ henc.newRoot` is satisfiable, so the elimination bites
+genuinely. The tag-2 and tag-14 revoke share `revokeDelegationWriteV3`, so this one detector guards both. -/
+theorem revoke_sat_rejects_forged_postroot {State : Type} (S : CapHashScheme State)
+    (hash : List ℤ → ℤ) (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
+    (pre post : RecChainedState) (holder t : CellId)
+    (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsat : Satisfied2 hash revokeDelegationWriteV3 mi mf ma tr)
+    (henc : RevokeCapsTreeEncodes S pre post holder t)
+    (anc : RevokeDelegationWriteAnchor S pre post holder t hash mi mf ma tr henc)
+    (forgedRoot : ℤ)
+    (hforged : writesTo hash henc.oldRoot
+      ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0 forgedRoot)
+    (hne : forgedRoot ≠ henc.newRoot) :
+    False :=
+  hne (Dregg2.Circuit.DescriptorIR2.writesTo_functional hash hCR hforged
+    (revokeDelegation_sat_forces_postroot S pre post holder t hash mi mf ma tr hsat henc anc))
+
 #assert_axioms introduce_descriptorRefines_sat
 #assert_axioms revokeDelegation_descriptorRefines_sat
 #assert_axioms introduce_sat_forces_postroot
+#assert_axioms revokeDelegation_sat_forces_postroot
+#assert_axioms revoke_sat_rejects_forged_postroot
 
 /-! ## §3.5B — THE APEX-WIRING BRIDGE rungs (`…_descriptorRefines_capOpenSat`): the cap-open WRAPPER strips
 to the base, so the apex fan-out (`Rfix tag = capOpenWrapper base`) consumes the base CLASS-A rung.

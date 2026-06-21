@@ -47,6 +47,7 @@ def actionWriteSet : FullActionA → List CellId
   | .incrementNonceA _ cell _ => [cell]
   | .setPermissionsA _ cell _ => [cell]
   | .setVKA _ cell _     => [cell]
+  | .setProgramA _ cell _ => [cell]
   | .introduceA _ rec _  => [rec]
   | .delegateAttenA _ rec _ _ => [rec]
   | .attenuateA actor _ _ => [actor]

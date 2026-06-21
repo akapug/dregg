@@ -23,6 +23,7 @@ import Dregg2.Circuit.Inst.emitEventA
 import Dregg2.Circuit.Inst.incrementNonceA
 import Dregg2.Circuit.Inst.setPermissionsA
 import Dregg2.Circuit.Inst.setVKA
+import Dregg2.Circuit.Inst.setProgramA
 import Dregg2.Circuit.Inst.delegateAttenA
 import Dregg2.Circuit.Inst.createCellFromFactoryA
 import Dregg2.Circuit.Inst.makeSovereignA
@@ -98,6 +99,7 @@ open Dregg2.Circuit.Inst.EmitEventA (emitEventE EmitEventArgs)
 open Dregg2.Circuit.Inst.IncrementNonceA (incrementNonceE incrementNonceAAirName IncrementNonceArgs)
 open Dregg2.Circuit.Inst.SetPermissionsA (setPermissionsE setPermissionsAAirName SetPermissionsArgs)
 open Dregg2.Circuit.Inst.SetVKA (setVKE setVKAAirName SetVKArgs)
+open Dregg2.Circuit.Inst.SetProgramA (setProgramE setProgramAAirName SetProgramArgs)
 open Dregg2.Circuit.Inst.DelegateAttenA (delegateAttenE DelegateAttenArgs)
 open Dregg2.Circuit.Inst.CreateCellFromFactoryA
   (createFromFactoryE createCellFromFactoryAAirName CreateFromFactoryArgs RestIffNoFactoryTouched)
@@ -330,6 +332,8 @@ def stepEmittedEncodeAgrees
       assignmentOf sw.assignment = encodeE CS setPermissionsE st ⟨actor, cell, p⟩ st'
   | .setVKA actor cell vk =>
       assignmentOf sw.assignment = encodeE CS setVKE st ⟨actor, cell, vk⟩ st'
+  | .setProgramA actor cell prog =>
+      assignmentOf sw.assignment = encodeE CS setProgramE st ⟨actor, cell, prog⟩ st'
   | .delegateAttenA del rec t keep =>
       assignmentOf sw.assignment =
         encodeE2 S (delegateAttenE D_caps hD_caps) st ⟨del, rec, t, keep⟩ st'
@@ -508,6 +512,11 @@ theorem step_emitted_refines_fullActionStep
       rcases hcircuit with ⟨hwf, hwf', hc⟩
       exact setVKA_emitted_refines_spec CS hCSN hCSL hRestFrame hLogCS st ⟨actor, cell, vk⟩ st' hwf hwf'
         ((effect1_emitted_equiv_circuit_local CS setVKE setVKAAirName st ⟨actor, cell, vk⟩ st').mpr hc)
+  | .setProgramA actor cell prog =>
+      simp only [fullActionStep]
+      rcases hcircuit with ⟨hwf, hwf', hc⟩
+      exact setProgramA_emitted_refines_spec CS hCSN hCSL hRestFrame hLogCS st ⟨actor, cell, prog⟩ st' hwf hwf'
+        ((effect1_emitted_equiv_circuit_local CS setProgramE setProgramAAirName st ⟨actor, cell, prog⟩ st').mpr hc)
   | .delegateAttenA del rec t keep =>
       simp only [fullActionStep]
       exact delegateAttenA_emitted_refines_spec S D_caps hD_caps
