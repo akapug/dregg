@@ -412,6 +412,30 @@ pub enum PredicateInput<'a> {
     /// Canonical action signing message bytes (from
     /// `InputRef::SigningMessage`). Used by `Authorization::Custom`.
     SigningMessage(&'a [u8]),
+    /// The canonical signing message PLUS the target cell's authoritative
+    /// pre-state field slots, supplied by the executor for an
+    /// `Authorization::Custom` discharge.
+    ///
+    /// Why this exists: a `WitnessedPredicate`'s `commitment` is
+    /// *prover-supplied* (it travels in the action). A verifier whose
+    /// authority depends on that `commitment` being the cell's genuine
+    /// on-chain state (e.g. the device-pairing "an already-authorized
+    /// device attested" check, whose `commitment` is meant to be the
+    /// identity's CURRENT key-set commitment) cannot trust the prover's
+    /// copy — it must pin it to the cell's pre-state. The executor holds
+    /// the pre-state cell at the authorization seam and exposes ALL slots
+    /// here (it stays app-agnostic; the verifier reads the slot it owns).
+    ///
+    /// `signing_message` is byte-identical to what
+    /// [`PredicateInput::SigningMessage`] would carry — verifiers that do
+    /// not need the cell state can treat the two variants identically.
+    AuthContext {
+        signing_message: &'a [u8],
+        /// The target cell's authoritative pre-state field slots
+        /// (`CellState::fields`), resolved by the executor at the
+        /// authorization seam (before the turn's effects apply).
+        cell_pre_state: &'a [[u8; 32]],
+    },
 }
 
 /// Errors a witnessed-predicate verifier can produce.
@@ -1739,6 +1763,13 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
                     actual: "SigningMessage",
                 });
             }
+            PredicateInput::AuthContext { .. } => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "NonMembership",
+                    expected: "Slot/Sender/Bytes (32-byte candidate)",
+                    actual: "AuthContext",
+                });
+            }
         };
         // Enforce the per-(commitment, lower, upper) adjacency tag. This is
         // the first (cheap) gate: a prover who doesn't know the set's
@@ -2198,6 +2229,13 @@ impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
                     kind_name: "BlindedSet",
                     expected: "Sender/Slot/Bytes (32-byte holder)",
                     actual: "SigningMessage",
+                });
+            }
+            PredicateInput::AuthContext { .. } => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "BlindedSet",
+                    expected: "Sender/Slot/Bytes (32-byte holder)",
+                    actual: "AuthContext",
                 });
             }
         };
