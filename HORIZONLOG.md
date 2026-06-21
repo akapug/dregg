@@ -53,6 +53,17 @@ C lifecycle-payload in-circuit force · D note-create grow-gate (commitmentsRoot
 flag-day, LAST, touches the shared PI prefix). KEY DE-SCOPE: the cell-side commitment bytes DON'T change ⇒ **NO ledger
 migration** (confirm via a one-cell round-trip before F). Green-check per family (§6): light-client REJECTS a forged post
 differing ONLY in the column WITH the off-cell anchor block DISABLED (the discriminator) + both poles + non-vacuous.
+REFUSAL §A STRUCTURAL FINDING (2026-06-22, agent did NOT fake a gate — model-grounded): refusal's audit write lands in
+`fields_root` (cell/src/state.rs:291), which is a **BLAKE3 SPONGE, not a Poseidon2 `CanonicalHeapTree`** — so the
+noteSpend map-op gate CANNOT be mirrored (an insert produces a Poseidon2-Merkle root; committed limb 36 =
+`hash_bytes(blake3-sponge)` — different schemes over the same map; a gate would float on a limb nothing commits =
+phantom/laundered). This is the same systemic blake3-where-Poseidon2-is-needed issue ember flagged on the vault hashlock.
+TWO genuine VK-affecting flag-day paths: **A** re-architect `compute_fields_root` as a `CanonicalHeapTree` (+ thread a
+fields_map leaf-set into RotationWitness, clone the note-spend tree generator, swap the v3Registry entry); **B (preferred,
+smaller)** redirect the refusal audit into `heap_root` (limb 28, ALREADY a Poseidon2 `CanonicalHeapTree`) via a heap write
++ update the Lean RefusalSpec, then mirror noteSpend on `B_HEAP_ROOT`. Shares the missing-live-heap_root-map-op cohort with
+the `heapWrite`-not-in-v3Registry gap. The lifecycle PAYLOAD (cellSeal limb 29 opaque felt) is the Stage-C twin (in-circuit
+hash gate over the light-client-known reason_hash+block_height; the safety-critical DISC is already in-circuit-forced).
 
 ## ⚑ delegateAtten SUBMASK+INSERT PROVE-THROUGH — the LogUp obstruction, 2026-06-21
 WELD closed the delegateAtten ROUTING SIGNAL (`is_attenuated_grant`: granted ⊊ held selects the submask
