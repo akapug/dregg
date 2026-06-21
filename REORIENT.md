@@ -1,6 +1,12 @@
 # REORIENT — read this first after any context loss
 
-*(maintained for session continuity; update at every major landing. Last: 2026-06-20 — THE ASSURANCE EPOCH: soundness ground-truthed, goal = "safely live within dregg", VK-freedom era)*
+*(maintained for session continuity; update at every major landing. Last: 2026-06-21 — THE TWO-TRACK EPOCH: floor (soundness, ~14/30 light-client-forced + the rest closeable/irreducible) + house (capacity: reactive effect SHIPPED, 4 more building). Goal = "safely live within dregg" on two tracks.)*
+
+> ⚑ POST-COMPACT: read `HORIZONLOG.md` → the "POST-COMPACT ORIENTATION (2026-06-21)" entry FIRST — it carries the
+> live 8-agent swarm roster, the held-welds-to-bank, the Track-1 queue (the revokeCapability #1 route-FORGE is the
+> top soundness pickup), the 3 irreducible floors, and the Track-2 capacity status. `docs/SAFELY-LIVE-CHECKLIST.md`
+> is the goal's mechanical audit. Two tracks, SAME bar: VERIFIED-working (passing forge-rejection / mutation-red apex
+> / end-to-end test), never named-or-designed. A green only counts if it reds when the thing it guards breaks.
 
 ## What this project is, in one breath
 
