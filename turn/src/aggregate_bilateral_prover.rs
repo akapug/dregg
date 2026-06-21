@@ -1332,6 +1332,16 @@ mod tests {
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
 
+        // HONEST-ACCEPT FIRST: alice's WR carrying its HONEST native schedule
+        // block (equal to its PI projection) aggregates and verifies, so the
+        // reject below is provably caused by the forged COUNTS felt.
+        let mut alice_honest = fabricate_wr(&turn, &alice);
+        alice_honest.bilateral_schedule = Some(honest_schedule_block(&alice_honest).to_vec());
+        let honest = vec![(alice, alice_honest), (bob, fabricate_wr(&turn, &bob))];
+        let honest_bundle =
+            prove_aggregated_bundle(&turn, &honest).expect("honest native schedule must aggregate");
+        verify_aggregated_bundle(&honest_bundle).expect("honest native schedule must verify");
+
         let mut alice_wr = fabricate_wr(&turn, &alice);
         let bob_wr = fabricate_wr(&turn, &bob);
 
@@ -1457,6 +1467,13 @@ mod tests {
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
 
+        // HONEST-ACCEPT FIRST: the un-tampered rotated WRs pass the cross-check,
+        // so the reject below is provably caused by the forged COUNTS felt.
+        let a_honest = fabricate_rotated_wr(&turn, &alice);
+        let b_honest = fabricate_rotated_wr(&turn, &bob);
+        WitnessedReceipt::verify_bilateral_chain(&vec![(alice, &a_honest), (bob, &b_honest)], &turn)
+            .expect("honest rotated WRs must pass the cross-check before tamper");
+
         let mut a_rot = fabricate_rotated_wr(&turn, &alice);
         let b_rot = fabricate_rotated_wr(&turn, &bob);
         // Forge the outbound-transfer count in alice's native block.
@@ -1479,6 +1496,14 @@ mod tests {
         let alice = cid(0xA1);
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        // HONEST-ACCEPT FIRST: with the native schedule PRESENT the same rotated
+        // WRs pass the cross-check, so the reject below is provably caused by
+        // stripping the only schedule source (not a setup error).
+        let a_honest = fabricate_rotated_wr(&turn, &alice);
+        let b_honest = fabricate_rotated_wr(&turn, &bob);
+        WitnessedReceipt::verify_bilateral_chain(&vec![(alice, &a_honest), (bob, &b_honest)], &turn)
+            .expect("rotated WRs WITH native schedule must pass before stripping it");
 
         let mut a_rot = fabricate_rotated_wr(&turn, &alice);
         a_rot.bilateral_schedule = None; // strip the only schedule source
@@ -1547,6 +1572,17 @@ mod tests {
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
 
+        // HONEST-ACCEPT FIRST: the un-tampered bundle for this exact setup must
+        // aggregate and verify, so the rejection below is provably caused by the
+        // tamper — not by a setup error that makes aggregation fail anyway.
+        let honest = vec![
+            (alice, fabricate_wr(&turn, &alice)),
+            (bob, fabricate_wr(&turn, &bob)),
+        ];
+        let honest_bundle =
+            prove_aggregated_bundle(&turn, &honest).expect("honest bundle must aggregate");
+        verify_aggregated_bundle(&honest_bundle).expect("honest bundle must verify");
+
         let mut wr_alice = fabricate_wr(&turn, &alice);
         let wr_bob = fabricate_wr(&turn, &bob);
         // Tamper: zap one felt of Alice's OUTGOING_TRANSFER_ROOT.
@@ -1571,6 +1607,17 @@ mod tests {
         let real_turn = make_transfer_turn(alice, bob, 100, 1);
         let lie_turn = make_transfer_turn(alice, bob, 50, 1);
 
+        // HONEST-ACCEPT FIRST: both WRs fabricated against the SAME real turn
+        // aggregate and verify. This proves the disagreement below is what the
+        // verifier catches — not a setup error in `fabricate_wr`.
+        let honest = vec![
+            (alice, fabricate_wr(&real_turn, &alice)),
+            (bob, fabricate_wr(&real_turn, &bob)),
+        ];
+        let honest_bundle =
+            prove_aggregated_bundle(&real_turn, &honest).expect("agreeing bundle must aggregate");
+        verify_aggregated_bundle(&honest_bundle).expect("agreeing bundle must verify");
+
         let wr_alice = fabricate_wr(&real_turn, &alice);
         // Bob's PI was fabricated against a *different* canonical turn.
         let wr_bob = fabricate_wr(&lie_turn, &bob);
@@ -1592,6 +1639,15 @@ mod tests {
         let alice = cid(0xA1);
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        // HONEST-ACCEPT FIRST: the un-tampered bundle aggregates and verifies.
+        let honest = vec![
+            (alice, fabricate_wr(&turn, &alice)),
+            (bob, fabricate_wr(&turn, &bob)),
+        ];
+        let honest_bundle =
+            prove_aggregated_bundle(&turn, &honest).expect("honest bundle must aggregate");
+        verify_aggregated_bundle(&honest_bundle).expect("honest bundle must verify");
 
         let wr_alice = fabricate_wr(&turn, &alice);
         let mut wr_bob = fabricate_wr(&turn, &bob);
@@ -1617,6 +1673,17 @@ mod tests {
         let alice = cid(0xA1);
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        // HONEST-ACCEPT FIRST: with BOTH declared participants present the
+        // bundle aggregates and verifies; dropping Bob is the sole change that
+        // flips it to a reject.
+        let honest = vec![
+            (alice, fabricate_wr(&turn, &alice)),
+            (bob, fabricate_wr(&turn, &bob)),
+        ];
+        let honest_bundle =
+            prove_aggregated_bundle(&turn, &honest).expect("complete bundle must aggregate");
+        verify_aggregated_bundle(&honest_bundle).expect("complete bundle must verify");
 
         let wr_alice = fabricate_wr(&turn, &alice);
         // Missing Bob.
@@ -1646,6 +1713,10 @@ mod tests {
         ];
         let mut bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
 
+        // HONEST-ACCEPT FIRST: the un-tampered bundle verifies, so the reject
+        // below is provably caused by the single-felt tamper.
+        verify_aggregated_bundle(&bundle).expect("honest bundle must verify before tamper");
+
         // Tamper.
         bundle.outer_pi[outer_pi_v2::BILATERAL_CONSISTENT] = 0;
 
@@ -1668,6 +1739,10 @@ mod tests {
             (bob, fabricate_wr(&turn, &bob)),
         ];
         let mut bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
+
+        // HONEST-ACCEPT FIRST: the un-mangled shipped trace verifies against the
+        // proof's trace_commitment, so the reject below is caused by the flip.
+        verify_aggregated_bundle(&bundle).expect("honest shipped trace must verify before tamper");
 
         // Flip the first row's IS_AGENT_CELL slot in the shipped trace (the decoupled
         // schedule block's agent flag).
@@ -1780,6 +1855,11 @@ mod tests {
         let alice = cid(0xA1);
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
+        // HONEST-ACCEPT FIRST: the COMPLETE covered set (both transfer peers)
+        // balances and proves, so the reject below is provably caused by the
+        // missing peer — not by a setup error that fails the proof anyway.
+        prove_cross_side_existence(&turn, &[alice, bob])
+            .expect("complete covered set must balance and prove");
         // Only alice covered; bob (the transfer peer) is missing.
         let res = prove_cross_side_existence(&turn, &[alice]);
         assert!(
@@ -1904,6 +1984,9 @@ mod tests {
         .expect("bundle2");
 
         let mut tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
+        // HONEST-ACCEPT FIRST: the un-tampered fold verifies, so the reject
+        // below is provably caused by the single-felt child tamper.
+        verify_aggregated_tree(&tree).expect("honest tree must verify before tamper");
         // Tamper a child's outer PI after folding. The child re-verification
         // (step 1) and the digest recomputation (step 2) both reject.
         tree.children[0].outer_pi[outer_pi_v2::BILATERAL_CONSISTENT] = 0;
@@ -1936,6 +2019,8 @@ mod tests {
         )
         .expect("bundle2");
         let mut tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
+        // HONEST-ACCEPT FIRST: the un-tampered fold verifies before the digest lie.
+        verify_aggregated_tree(&tree).expect("honest tree must verify before tamper");
         // Lie about the first child's digest.
         tree.child_digests[0] = tree.child_digests[0].wrapping_add(1) & 0x7FFF_FFFF;
         let res = verify_aggregated_tree(&tree);
