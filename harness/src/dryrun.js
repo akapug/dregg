@@ -70,3 +70,12 @@ export async function runDryRun() {
     "[dry-run] the harmful move (jump_into_lava) was refused; honest play passed.",
   );
 }
+
+// Run when invoked directly (`node src/dryrun.js`). Set GOVERNOR_BACKEND=lean to
+// drive the VERIFIED binary; default (stub) is a faithful JS mirror.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runDryRun().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

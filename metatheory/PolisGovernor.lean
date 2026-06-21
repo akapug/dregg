@@ -91,11 +91,25 @@ def handle (w : World) (m : Move) : String :=
   else
     s!"REFUSE {showWorld result}"
 
-/-- Process one input line to one output line. -/
+/-- Process one input line to one output line.
+
+Two accepted forms:
+  * a MOVE request (`d0 d1 actor action [victim]`) — apply the verified `govStep`;
+  * a FLOOR-CHECK (a line of distances, e.g. the harness's projected next-world)
+    — admit iff the VERIFIED floor holds (`every dist ≤ budget`, the exact
+    condition `worldFloor`/`govStep` tests). This is the seam the harness drives:
+    it projects a next-world, the verified floor decides. -/
 def respond (line : String) : String :=
   match parseRequest line with
   | some (w, m) => handle w m
-  | none        => s!"ERROR  unparseable request: {line}"
+  | none =>
+      let toks := (line.splitOn " ").filter (· ≠ "")
+      match toks.mapM parseNat with
+      | some ds =>
+          if ds.isEmpty then s!"ERROR  unparseable request: {line}"
+          else if ds.all (fun d => decide (d ≤ budget)) then "ADMIT"
+          else "REFUSE floor breached"
+      | none => s!"ERROR  unparseable request: {line}"
 
 end PolisGovernor
 
