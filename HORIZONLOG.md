@@ -3625,3 +3625,36 @@ parked obligations, each a burn-down item. 3 honest residual-asserting tests (vk
 QUEUED (drive when the swarm settles, all 3 are real non-vacuity/no-laundered-green obligations the goal requires):
 (a) harden the ~65 blind-reject tests to the membership_verifier honest-accept-then-tamper model; (b) prove the
 ~17 TraceReadout carriers inhabited; (c) extend FloorsNonVacuous to the new-wave floors.
+
+## ⚑⚑⚑ COMPLETE SIN-MAP (a5343839, read-only) — the full light-client-blindness inventory + a DROPPED FORGE
+The complete map of every place a light client could be lied to, across 30 effects. Bounded: every blind value is
+CLOSEABLE (a named weld) or one of 3 by-design IRREDUCIBLE floors.
+🟥🟥 THE DROPPED FORGE (#1 PICKUP — a LIVE light-client forge under NO in-flight agent): revokeCapability — the
+  cap-tree REMOVE rides UNBOUND. Route write:None (full_turn_proof.rs:1329) -> revokeCapabilityCapOpenVmDescriptor2R24
+  (NO map_op) which is NOT in the forbidden authority-only list (:2096-2099); the BASE (which HAS the remove map_op)
+  IS forbidden (:2111). So a light client ACCEPTS a forged post-cap-root REMOVE. ⚠ THE FORGE-DETECTOR IS A LAUNDERED
+  GREEN: cap_write_revoke_cap_no_silent_forge (full_turn_proof.rs:4542) tests the BASE descriptor, not the deployed
+  ROUTE -> green while the wire is forgeable. FIX: add write:Some(("revokeCapabilityWriteCapOpen…", Remove)) + emit
+  that wrapper + forbid revokeCapabilityCapOpen authority-only + a ROUTE-level forge-detector that exercises
+  verify_full_turn (goes RED today). The Remove machinery EXISTS (revokeDelegation uses it). CONTENDED with ae15d66a
+  (full_turn_proof.rs + EffectVmEmitRotationV3) -> DRIVE the moment ae15d66a settles (can't bank mid-edit).
+HEADLINE TALLY (30 effects):
+- FORCED-ON-WIRE (light-client-verifiable, no gap): 14 — transfer/burn/mint/bridgeMint/setField/incNonce/setPerms/
+  setVK/createCell/attenuate/introduce(cap-move)/revokeDelegation(cap-move)/grantCap+delegate(cap-move)/delegateAtten.
+- disc/mode forced + payload residual (CLOSEABLE, under payload agent a3acc831): cellSeal/Unseal/Destroy/receiptArchive
+  + makeSovereign(mode forced, residue redundant).
+- PRODUCED-HASH-UNBOUND (forge, CLOSEABLE by ONE effects_hash weld — PI[16..19] published-but-unpinned on the
+  rotated path; payload agent a3acc831 covers it): emitEvent/pipelinedSend/exercise + intro_hash/child_hash/factory_vk.
+- DROPPED CLOSEABLES (no in-flight agent): revokeCapability (FORGE, #1), refresh (deleg-tree write variant unrouted,
+  lower sev — re-arms existing authority), spawn (child cap-handoff supplied-digest, CLOSEABLE-but-heavy),
+  attenuate-honest-prove-route (#[ignore]'d pending CapTreeWriteOp UPDATE — prover-completeness, NOT a forge).
+- BROKEN-LIVE-SEAM (fail-closed, NOT forge): setFieldDyn (panics field_idx<8, under a72bf75a); makeSovereign FIXED.
+- 3 IRREDUCIBLE FLOORS (no light-client-knowable anchor by design — the goal accepts WITH non-vacuity proof):
+  (1) noteSpend/noteCreate canonical set-root anchor — the in-circuit set-move IS forced; WHICH set is a client-input
+      binding (federation receipt), caught at verify_full_turn_bound 8a/8b. Non-vacuity: the .absent tooth rejects a
+      self-inconsistent double-spend. (2) exercise actor->target causal link — target proves its own turn; needs
+      cross-turn composition. (3) refusal fields_root — IRREDUCIBLE under current params BUT closeable once the
+      payload-column primitive lands (so a named-floor-with-closure-lane, not permanent).
+NEXT-WAVE PICKUPS (driveable, the dropped set + the proof-level audit items): revokeCapability route-forge (#1) +
+its honest route-detector · refresh/spawn write-routing · the ~65 blind-is_err() test hardening · the ~17
+TraceReadout carrier-inhabitation non-vacuity · FloorsNonVacuous extension. All under the goal; none parked.
