@@ -11,6 +11,23 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ✅✅ emberian.github.io/dregg IS LIVE — atlas + the real wasm cockpit (2026-06-22, green-or-bust)
+The Pages deploy is GREEN and serving (verified from the public URL):
+- /dregg/ + /dregg/atlas/ (interactive atlas; LFS images materialize via Actions — the lfs:true path works)
+- /dregg/cockpit/ — THE LIVE WASM COCKPIT: starbridge_web_bg.wasm = 6.96 MB of the REAL verified executor,
+  boots in-browser ("● live · wasm executor"), 7 faces, click-to-act, the None fix live. NO placeholder
+  (green-or-bust per ember — a degraded wasm /cockpit/ must fail the build, not ship).
+- /dregg/atlas/ie6/ — the static HTML-4.01 floor.
+Getting the deploy green required clearing 5 PRE-EXISTING breakages masked behind the first WASM failure:
+(1) swarm's PredicateInput::AuthContext producer uncommitted (committed cell/predicate.rs); (2) swarm's
+Effect::RefreshDelegation consumers uncommitted (committed web-surface/sdk/turn); (3) Mac-pinned
+lightningcss-darwin-arm64 breaking linux CI (removed from site/package.json + CI re-resolves); (4) stale
+ontology-catalog.generated.json (regenerated); (5) the plonky3-recursion fork absent in CI for the
+separate starbridge-v2 workspace (pages.yml now fetches the public fork @ rev 72ffc5646, hard-required).
+The native `starbridge-v2 --serve-ie6 <port>` LIVE frame-streaming server (the real Path B for ancient
+browsers) is verified locally; deploying it to a host is a follow-up (it needs a running server + gpui
+offscreen, unlike the static Pages artifacts).
+
 ## ✅ CUSTOM proof_bind — THE SOUNDNESS CORE CLOSED (2026-06-21, the genuine recursive verify)
 The last unprovable effect's SOUNDNESS gap is closed: `proof_bind` no longer bounds-checks — it
 VERIFIES the bound external STARK sub-proof. New `circuit/src/custom_proof_bind.rs`
