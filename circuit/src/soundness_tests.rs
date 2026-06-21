@@ -124,6 +124,23 @@ mod poseidon2_soundness {
 
         let air = Poseidon2Air;
 
+        // HONEST-ACCEPT BASELINE: the CORRECT (full-permutation) output proves +
+        // verifies at the STARK level — so the reject below is provably caused by
+        // the incomplete-round output, not a setup error.
+        let mut good_row = Vec::with_capacity(16);
+        good_row.extend_from_slice(&input);
+        good_row.extend_from_slice(correct_output);
+        let good_trace = vec![good_row.clone(), good_row.clone()];
+        let good_pi = good_row.clone();
+        {
+            let air = Poseidon2Air;
+            let good_proof = stark::prove(&air, &good_trace, &good_pi);
+            assert!(
+                stark::verify(&air, &good_proof, &good_pi).is_ok(),
+                "Baseline: the full-permutation output must prove + verify"
+            );
+        }
+
         // Direct constraint check: should be non-zero
         let alpha = BabyBear::new(13);
         let c = air.eval_constraints(&bad_row, &bad_row, &bad_pi, alpha);

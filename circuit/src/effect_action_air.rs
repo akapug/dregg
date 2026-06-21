@@ -1639,6 +1639,17 @@ mod tests {
         // we can't even construct a passing trace because the constraint
         // is violated.
         let target = [0x55u8; 32];
+        // HONEST-ACCEPT FIRST: the SAME burn with the constrained `was_burn=1`
+        // flag proves + verifies — so the reject below is provably caused by
+        // flipping the flag to 0, not a setup error.
+        let honest = burn_witness(target, 1000, 900, 100, 1);
+        let honest_proof = prove_effect_action(&honest);
+        assert!(
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 1], &honest_proof)
+                .is_ok(),
+            "an honest burn (was_burn=1) must verify"
+        );
+
         let w = burn_witness(target, 1000, 900, 100, 0);
         // Constructing the prover trace would (under honest prover) fail.
         // We invoke prove + verify and assert the verify rejects.
@@ -1656,6 +1667,17 @@ mod tests {
     fn burn_adversarial_wrong_decrement_rejected() {
         // new_balance disagrees with old - amount. AIR rejects.
         let target = [0x66u8; 32];
+        // HONEST-ACCEPT FIRST: the correct decrement (new = old - amt = 900)
+        // proves + verifies, so the reject below is provably caused by the
+        // off-by-one new balance (901).
+        let honest = burn_witness(target, 1000, 900, 100, 1);
+        let honest_proof = prove_effect_action(&honest);
+        assert!(
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 1], &honest_proof)
+                .is_ok(),
+            "the correct-decrement burn must verify"
+        );
+
         // Honest old/amount, but new is wrong (off by 1).
         let w = burn_witness(target, 1000, 901, 100, 1);
         let result = std::panic::catch_unwind(|| {
@@ -1676,6 +1698,16 @@ mod tests {
         // hi-limb arithmetic that has no consistent solution against
         // canonical-encoded u32 limbs.
         let target = [0x77u8; 32];
+        // HONEST-ACCEPT FIRST: a within-balance burn (old=200, amt=100, new=100)
+        // proves + verifies — so the rejects below are provably caused by burning
+        // MORE than the balance, not a setup error.
+        let honest = burn_witness(target, 200, 100, 100, 1);
+        let honest_proof = prove_effect_action(&honest);
+        assert!(
+            verify_effect_action(SCHEMA_BURN, &[target], &[200, 100, 100, 1], &honest_proof)
+                .is_ok(),
+            "a within-balance burn must verify"
+        );
         // Two adversarial constructions:
         // (a) new = wrap(50 - 100) as u64: AIR sees old_lo=50, amt_lo=100,
         //     borrow=1, new_lo = 50 + 2^32 - 100. The hi-limb constraint:
