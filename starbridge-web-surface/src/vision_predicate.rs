@@ -245,11 +245,12 @@ impl WitnessedPredicateVerifier for FogVisionVerifier {
         // shape the executor binds for Authorization::Custom). Any other shape is a
         // surface misuse — reject as a shape mismatch (NOT a silent accept).
         let message: &[u8] = match input {
+            PredicateInput::AuthContext { signing_message, .. } => signing_message,
             PredicateInput::SigningMessage(msg) => msg,
             other => {
                 return Err(WitnessedPredicateError::InputShapeMismatch {
                     kind_name: "fogwar-vision-ed25519",
-                    expected: "SigningMessage",
+                    expected: "AuthContext / SigningMessage",
                     actual: predicate_input_tag(other),
                 });
             }
@@ -406,6 +407,7 @@ fn predicate_input_tag(input: &PredicateInput<'_>) -> &'static str {
         PredicateInput::PublicInput(_) => "PublicInput",
         PredicateInput::Sender(_) => "Sender",
         PredicateInput::SigningMessage(_) => "SigningMessage",
+        PredicateInput::AuthContext { .. } => "AuthContext",
     }
 }
 

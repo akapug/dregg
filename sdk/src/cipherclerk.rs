@@ -5525,6 +5525,95 @@ impl AgentCipherclerk {
                 &caveat,
             )
             .map_err(|e| SdkError::InvalidWitness(format!("wide record-pin trace generation: {e}")))?
+        } else if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::CreateCell { .. })
+        ) {
+            // createCell routes through the ACCOUNTS-SET grow-gate wide producer (limb-0 accumulator).
+            // This precompute MUST route createCell identically to `prove_effect_vm_rotated_wide`
+            // (step 7), or the bound 16 wide PIs would not match `public_inputs[n_pi-16..]`. This
+            // sovereign path threads no accounts-set context, so the empty set is the grow-gate's
+            // BEFORE (the grow-gate insert forces the AFTER cells root, so before8 != after8).
+            let (t, d, _heaps) =
+                dregg_circuit::effect_vm::trace_rotated::generate_rotated_create_cell_wide(
+                    &initial_vm_state,
+                    &vm_effects,
+                    &before_bw,
+                    &after_bw,
+                    &caveat,
+                    &[],
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide create-cell trace generation: {e}"))
+                })?;
+            (t, d)
+        } else if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::CreateCellFromFactory { .. })
+        ) {
+            // createCellFromFactory routes through the FACTORY accounts-set grow-gate wide producer
+            // (`factoryVmDescriptor2R24`, limb 0 — the same accounts birth-insert createCell carries,
+            // only the new-cell key column differs). Must route identically to step 7.
+            let (t, d, _heaps) =
+                dregg_circuit::effect_vm::trace_rotated::generate_rotated_create_from_factory_wide(
+                    &initial_vm_state,
+                    &vm_effects,
+                    &before_bw,
+                    &after_bw,
+                    &caveat,
+                    &[],
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide create-from-factory trace generation: {e}"))
+                })?;
+            (t, d)
+        } else if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::SpawnWithDelegation { .. })
+        ) {
+            // spawn's BIRTH/accounts-grow leg routes through the spawn accounts-set grow-gate wide
+            // producer (`spawnVmDescriptor2R24`, limb 0). The parent→child cap-handoff is the SEPARATE
+            // cap-open path's job; the wide path proves the accounts-birth column only. Must route
+            // identically to step 7.
+            let (t, d, _heaps) =
+                dregg_circuit::effect_vm::trace_rotated::generate_rotated_spawn_wide(
+                    &initial_vm_state,
+                    &vm_effects,
+                    &before_bw,
+                    &after_bw,
+                    &caveat,
+                    &[],
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide spawn trace generation: {e}"))
+                })?;
+            (t, d)
+        } else if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::SetField { field_idx, .. }) if *field_idx >= 8
+        ) {
+            // setFieldDyn (the overflow `SetField { field_idx >= 8 }`) routes through the 581-wide
+            // V1Face / 789-wide producer. Its witness is a `MemBoundaryWitness`, not a `map_heaps`; the
+            // trace/PIs here must match step 7's (which re-derives the SAME trace + the mem-boundary).
+            // The slot is the overflow-memory address (`field_idx % 8`, 0..7); this standalone sovereign
+            // path threads no prior field state, so `prev_value = 0` is the Blum boundary init.
+            let field_idx = match vm_effects.first() {
+                Some(dregg_circuit::effect_vm::Effect::SetField { field_idx, .. }) => *field_idx,
+                _ => unreachable!("matched SetField above"),
+            };
+            let (t, d, _mb) =
+                dregg_circuit::effect_vm::trace_rotated::generate_rotated_set_field_dyn_wide(
+                    &initial_vm_state,
+                    &before_bw,
+                    &after_bw,
+                    &caveat,
+                    field_idx % 8,
+                    BabyBear::new(0),
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide set-field-dyn trace generation: {e}"))
+                })?;
+            (t, d)
         } else {
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_transfer_shape_wide(
                 &initial_vm_state,
