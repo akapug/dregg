@@ -670,43 +670,38 @@ pub struct V9RotationContext {
 /// `rotation_witness::lifecycle_felt` and the v8 `hash_lifecycle_into` anti-omission tooth.
 fn v9_lifecycle_felt(lc: &crate::lifecycle::CellLifecycle) -> dregg_circuit::field::BabyBear {
     use crate::lifecycle::CellLifecycle;
-    use dregg_circuit::poseidon2::hash_bytes;
-    let mut bytes = Vec::with_capacity(40);
-    bytes.push(lc.discriminant());
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::poseidon2::lifecycle_payload_felt;
+    // FELT-DOMAIN composition (see `dregg_circuit::poseidon2::lifecycle_payload_felt`): the
+    // in-circuit lifecycle-payload hash gate recomputes this from the light-client-known inputs.
+    // MUST agree byte-for-byte with `dregg_turn::rotation_witness::lifecycle_felt`.
     match lc {
-        CellLifecycle::Live => {}
+        CellLifecycle::Live => lifecycle_payload_felt(0, &[0u8; 32], 0),
         CellLifecycle::Sealed {
             reason_hash,
             sealed_at,
-        } => {
-            bytes.extend_from_slice(reason_hash);
-            bytes.extend_from_slice(&sealed_at.to_le_bytes());
-        }
+        } => lifecycle_payload_felt(1, reason_hash, *sealed_at),
         CellLifecycle::Migrated {
             to,
             attestation,
             migrated_at,
         } => {
-            bytes.extend_from_slice(to.as_bytes());
-            bytes.extend_from_slice(attestation);
-            bytes.extend_from_slice(&migrated_at.to_le_bytes());
+            let mut inputs: Vec<BabyBear> = Vec::with_capacity(18);
+            inputs.push(BabyBear::new(2));
+            inputs.extend_from_slice(&dregg_circuit::effect_vm::bytes32_to_8_limbs(to.as_bytes()));
+            inputs.extend_from_slice(&dregg_circuit::effect_vm::bytes32_to_8_limbs(attestation));
+            inputs.push(BabyBear::new((*migrated_at & 0x7FFF_FFFF) as u32));
+            dregg_circuit::poseidon2::hash_many(&inputs)
         }
         CellLifecycle::Destroyed {
             death_certificate_hash,
             destroyed_at,
-        } => {
-            bytes.extend_from_slice(death_certificate_hash);
-            bytes.extend_from_slice(&destroyed_at.to_le_bytes());
-        }
+        } => lifecycle_payload_felt(3, death_certificate_hash, *destroyed_at),
         CellLifecycle::Archived {
             checkpoint_hash,
             archived_through,
-        } => {
-            bytes.extend_from_slice(checkpoint_hash);
-            bytes.extend_from_slice(&archived_through.to_le_bytes());
-        }
+        } => lifecycle_payload_felt(4, checkpoint_hash, *archived_through),
     }
-    hash_bytes(&bytes)
 }
 
 /// **THE v9 AUTHORITY DIGEST** — the single Poseidon2 felt that folds ALL authority-bearing

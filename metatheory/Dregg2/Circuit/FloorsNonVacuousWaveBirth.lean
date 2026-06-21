@@ -218,6 +218,7 @@ def spawn_readout :
   frLifecycle := rfl
   frDeathCert := rfl
   frBal := rfl
+  capsMoveDecodes := fun _ => rfl
   capHandoff := rfl
   delegateHandoff := rfl
   delegationsHandoff := rfl

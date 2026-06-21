@@ -394,10 +394,10 @@ section FanoutDescriptors
 
 /-- The effect-kind bit exponents (`facet.rs` `1 <<< n`) for the cap-authorized fan-out effects. -/
 def EFF_TRANSFER           : Nat := 1   -- transfer, attenuate-via-transfer-cap (EFFECT_TRANSFER)
-def EFF_GRANT_CAPABILITY   : Nat := 2   -- grantCap, delegateAtten, attenuate (EFFECT_GRANT_CAPABILITY)
+def EFF_GRANT_CAPABILITY   : Nat := 2   -- grantCap, attenuate (EFFECT_GRANT_CAPABILITY)
 def EFF_REVOKE_CAPABILITY  : Nat := 3   -- revokeCapability (EFFECT_REVOKE_CAPABILITY)
 def EFF_INTRODUCE          : Nat := 13  -- introduce (EFFECT_INTRODUCE)
-def EFF_DELEGATION_OPS     : Nat := 16  -- delegate, revoke(Delegation), refreshDelegation (EFFECT_DELEGATION_OPS)
+def EFF_DELEGATION_OPS     : Nat := 16  -- delegate, delegateAtten, revoke(Delegation), refreshDelegation (EFFECT_DELEGATION_OPS)
 
 /-- The rotated INTRODUCE base (`v3Of` of the introduce v1 face). -/
 def introduceV3 : EffectVmDescriptor2 :=
@@ -534,11 +534,16 @@ def grantCapWriteCapOpenV3 : EffectVmDescriptor2 :=
 
 /-- **`delegateAttenWriteCapOpenV3`** — delegateAtten-via-cap on the WRITE-FORCING base (`delegateAttenV3` =
 the moving attenuate-A face + `[heldReadOp, insertWriteOp, submaskLookup]`): authority appendix + the deployed
-`insertWriteOp` + the `granted ⊑ held` submask (non-amplification). The apex (`Rfix 11` re-pointed) wires it. -/
+`insertWriteOp` + the `granted ⊑ held` submask (non-amplification). The apex (`Rfix 11` re-pointed) wires it.
+
+The membership crown binds `EFF_DELEGATION_OPS` (`1 <<< 16`), EXACTLY like plain `delegateWriteCapOpenV3` —
+an attenuated grant is a delegation, so the delegator's HELD anchor cap must permit `EFFECT_DELEGATION_OPS`
+(the broad held authority the conferred mask narrows), NOT `EFFECT_GRANT_CAPABILITY`. The submask lookup over
+`[KEEP_MASK, HELD_MASK]` then enforces `granted ⊑ held` on top of that membership. -/
 def delegateAttenWriteCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
     (effCapOpenV3 EffectVmEmitRotationV3.delegateAttenV3
-      "dregg-effectvm-delegateAtten-v1-rot24-v3-write-capopen" EFF_GRANT_CAPABILITY)
+      "dregg-effectvm-delegateAtten-v1-rot24-v3-write-capopen" EFF_DELEGATION_OPS)
 
 -- The write-forcing wrappers add the SAME +71 constraints (70 appendix + selector tooth) over their
 -- write base + `CAP_OPEN_SPAN` cols; the write base adds 2 map-ops over the frozen/genuine base.

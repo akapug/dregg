@@ -85,3 +85,10 @@ def main : IO Unit := do
   IO.println s!"v3rot\trevokeDelegationWriteCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.revokeDelegationWriteCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.revokeDelegationWriteCapOpenV3}"
   IO.println s!"v3rot\trevokeCapabilityWriteCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.revokeCapabilityWriteCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.revokeCapabilityWriteCapOpenV3}"
   IO.println s!"v3rot\trefreshDelegationWriteCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.refreshDelegationWriteCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.refreshDelegationWriteCapOpenV3}"
+  -- The spawn WRITE-FORCING cap-open wrapper (`v3RegistryHeap` position 52, `Rfix 19` re-pointed): the
+  -- parent→child CAPABILITY HANDOFF cap-tree INSERT FORCED (limb 25) ALONGSIDE the accounts grow-gate
+  -- INSERT (limb 0) — the spawn cap-handoff close, guarantee A circuit-forced.
+  IO.println s!"v3rot\tspawnWriteCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.spawnWriteCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.spawnWriteCapOpenV3}"
+  -- The AUTHORITY-ONLY spawn cap-open (the frozen `spawnV3` base + authority appendix): the named,
+  -- light-client-REJECTED fallback (the verifier tooth forces the write route).
+  IO.println s!"v3rot\tspawnCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.spawnCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.spawnCapOpenV3}"

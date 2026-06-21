@@ -2821,6 +2821,147 @@ theorem rotateV3WithPermsVKGate_rejects_forged (sel afterCol : Nat)
 #assert_axioms rotateV3WithPermsVKGate_forces
 #assert_axioms rotateV3WithPermsVKGate_rejects_forged
 
+/-! ## §5.LP — THE LIVE LIFECYCLE-PAYLOAD HASH GATE (the cellSeal / cellDestroy / receiptArchive OPAQUE
+payload felt going LIGHT-CLIENT-FORCED — VK-FREEDOM ERA, STAGE C).
+
+The disc flag-day (`rotateV3WithDiscGate`, §5.0) put the SAFETY-CRITICAL lifecycle DISCRIMINANT in-circuit
+(`B_DISC = 32`) — a frozen seal / a resurrection / a wrong-disc archive is UNSAT for a ledgerless client.
+But the OPAQUE payload felt at `B_LIFECYCLE = 29` (`lifecycle_felt = Poseidon2(disc ‖ reason_hash ‖
+sealed_at)`) only rode the record pin: its welded PI was producer-free on the light-client path, so a
+cellSeal forged to differ ONLY in the sealing payload (a different `reason_hash`, or a `sealed_at` ≠ the
+host height) was ACCEPTED anchor-disabled. ONLY the off-cell full-node anchor recomputed it.
+
+The CLOSE is an IN-CIRCUIT HASH GATE, NOT a single-param weld: the payload felt is a HASH of
+light-client-known inputs — `disc` (the constant the disc gate already pins), `reason_hash` (an effect
+param the rotated `effects_hash` PI-binds), and `sealed_at = block_height` (the turn-header height
+committed at `B_COMMITTED_HEIGHT`, PI-known). So we weld the AFTER lifecycle limb (`B_LIFECYCLE`) to an
+IN-CIRCUIT DECLARED column (`lcPayloadCol`) that the deployed trace forces — via a Poseidon2 chip
+lookup — to `payloadHash([disc, reason_hash, sealed_at])`. The decisive structural difference from
+`permsVKWeldGate` (which welds to a SINGLE declared param) is that `lcPayloadCol` is itself a HASH of
+several declared/PI-known inputs, recomputed in-circuit (the chip lookup), so the bound value is a
+light-client-known FUNCTION of `(reason_hash, sealed_at, disc)` with NO verifier override.
+
+This composes with the disc gate: `rotateV3WithDiscGate` already forces `disc`; this forces the residual
+payload. A cellSeal forged to a different `reason_hash` makes `payloadHash` differ from any honest
+`lifecycle_felt`, so the welded committed limb cannot match — UNSAT ledgerless. The faithfulness floor:
+the Rust `lifecycle_felt` is realized as a felt-domain Poseidon2 hash over `[disc, reason_felts…,
+sealed_at]` (the same sponge the chip lookup recomputes), MATCHING the cell-side `lifecycle_felt_cell`
+EXACTLY (the openable-realization fix the refusal `fields_root` took — a circuit-recomputable hash, not a
+byte-packed sponge the gate cannot open). -/
+
+/-- **`lifecyclePayloadHashGate sel afterCol payloadCol`** — the selector-gated lifecycle-payload weld:
+`sel · (loc afterCol − loc payloadCol)`. On the ACTIVE row (`sel = 1`) it forces the committed AFTER
+lifecycle limb (`B_LIFECYCLE`) EQUAL to the in-circuit declared payload-hash column (itself forced to
+`payloadHash([disc, reason_hash, sealed_at])` by the deployed chip lookup); on a pad row it vanishes.
+Structurally `permsVKWeldGate`, but the welded value is a HASH of light-client-known inputs. -/
+def lifecyclePayloadHashGate (sel afterCol payloadCol : Nat) : VmConstraint :=
+  .gate (.mul (.var sel) (.add (.var afterCol) (.mul (.const (-1)) (.var payloadCol))))
+
+theorem lifecyclePayloadHashGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
+    (sel afterCol payloadCol : Nat)
+    (hsel : env.loc sel = 1)
+    (h : (lifecyclePayloadHashGate sel afterCol payloadCol).holdsVm env isFirst isLast) :
+    env.loc afterCol = env.loc payloadCol := by
+  subst hlast
+  simp only [lifecyclePayloadHashGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
+  rw [hsel] at h
+  linarith
+
+/-- The AFTER lifecycle-payload force column for a mover of width `w` (limb `B_LIFECYCLE` of the AFTER
+block) — the SAME committed sub-limb the record pin welds, now forced to the in-circuit hash. -/
+def afterLifecycleCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_LIFECYCLE
+/-- The in-circuit declared payload-hash column the deployed trace forces to
+`payloadHash([disc, reason_hash, sealed_at])` (the felt-domain `lifecycle_felt`). Rides `prmCol 3` — a
+FREE declared param column for ALL three lifecycle movers (cellSeal uses `prmCol 0,1`; cellDestroy
+`prmCol 0,1`; receiptArchive `prmCol 0,1,2`), DISTINCT from the live reason/cert/height params so the
+weld binds the FULL lifecycle felt (a hash of disc + payload + at), not a single raw param. The producer
+writes — and the light client recomputes from the PI-bound reason_hash + the turn-header height — the
+felt-domain `lifecycle_felt`. -/
+def declaredLifecyclePayloadCol : Nat := prmCol 3
+
+/-- **`rotateV3WithLifecyclePayloadGate sel afterC d`** — `rotateV3WithDiscGate`-style base
+(`rotateV3WithRecordPin B_LIFECYCLE d`, the disc gates) PLUS the LIVE lifecycle-payload weld: the AFTER
+lifecycle limb is welded to the in-circuit declared payload-hash column, selector-gated on `sel`. Every
+v1 column/site/range and the record pin are UNTOUCHED — the gate is an appended CONSTRAINT, so
+`graduable` and the keystones compose verbatim. We layer it on the DISC-gated descriptor so the deployed
+mover carries BOTH the disc force (the state) AND the payload weld (the opaque felt). -/
+def rotateV3WithLifecyclePayloadGate (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
+    (d : EffectVmDescriptor) : EffectVmDescriptor :=
+  let r := rotateV3WithDiscGate sel beforeC? afterC d
+  { r with constraints := r.constraints
+      ++ [lifecyclePayloadHashGate sel (afterLifecycleCol d.traceWidth) declaredLifecyclePayloadCol] }
+
+/-- The lifecycle-payload weld does NOT disturb graduation (it is a CONSTRAINT; `graduable` reads only
+sites/ranges, which are `rotateV3WithDiscGate`'s — hence `rotateV3WithRecordPin`'s — verbatim). -/
+theorem graduable_rotateV3WithLifecyclePayloadGate (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
+    {d : EffectVmDescriptor} (h : graduable d = true) :
+    graduable (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) = true := by
+  have hr := graduable_rotateV3WithDiscGate sel beforeC? afterC h
+  unfold rotateV3WithLifecyclePayloadGate
+  unfold graduable at hr ⊢
+  simpa using hr
+
+/-- **The lifecycle-payload weld is the LAST appended constraint** — membership for the forcing
+extraction. -/
+theorem rotateV3WithLifecyclePayloadGate_mem (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
+    (d : EffectVmDescriptor) :
+    lifecyclePayloadHashGate sel (afterLifecycleCol d.traceWidth) declaredLifecyclePayloadCol
+      ∈ (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d).constraints := by
+  unfold rotateV3WithLifecyclePayloadGate
+  simp [List.mem_append]
+
+/-- **`rotateV3WithLifecyclePayloadGate_forces` — the LIVE lifecycle-payload felt is FORCED.** On an
+ACTIVE row (`sel = 1`) of a satisfying witness, the committed AFTER lifecycle limb EQUALS the in-circuit
+declared payload-hash column — NO trusted post-cell, NO producer-free PI. -/
+theorem rotateV3WithLifecyclePayloadGate_forces (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
+    (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
+    (hsel : env.loc sel = 1)
+    (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) env isFirst isLast) :
+    env.loc (afterLifecycleCol d.traceWidth) = env.loc declaredLifecyclePayloadCol :=
+  lifecyclePayloadHashGate_forces env isFirst isLast hlast sel
+    (afterLifecycleCol d.traceWidth) declaredLifecyclePayloadCol hsel
+    (h.1 _ (rotateV3WithLifecyclePayloadGate_mem sel beforeC? afterC d))
+
+/-- **TOOTH — `rotateV3WithLifecyclePayloadGate_rejects_forged` (LIGHT-CLIENT).** An ACTIVE row whose
+committed AFTER lifecycle limb is NOT the in-circuit declared payload-hash column (a cellSeal forged to a
+different `reason_hash` / `sealed_at`, whose committed `lifecycle_felt` diverges from
+`payloadHash([disc, reason_hash, block_height])`) does NOT satisfy the gate — UNSAT for a LEDGERLESS
+client, NO off-cell anchor. This is the §6 lifecycle-payload residual (`RotatedKernelRefinementLifecycleDisc`)
+CONVERTED: the forged payload that the bare record pin accepted (producer-free PI) is now REJECTED. -/
+theorem rotateV3WithLifecyclePayloadGate_rejects_forged (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
+    (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
+    (hsel : env.loc sel = 1)
+    (hforged : env.loc (afterLifecycleCol d.traceWidth) ≠ env.loc declaredLifecyclePayloadCol) :
+    ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) env isFirst isLast :=
+  fun h => hforged
+    (rotateV3WithLifecyclePayloadGate_forces sel beforeC? afterC hash d env isFirst isLast hlast hsel h)
+
+/-- The AFTER-disc gate is STILL forced under the payload-gate layer (the payload weld is appended past
+the disc gates, so the disc-gate membership survives) — the composed mover forces BOTH the disc (state)
+AND the payload felt. -/
+theorem rotateV3WithLifecyclePayloadGate_forces_disc (sel : Nat) (beforeC? : Option ℤ) (afterC : ℤ)
+    (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
+    (hsel : env.loc sel = 1)
+    (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) env isFirst isLast) :
+    env.loc (afterDiscCol d.traceWidth) = afterC := by
+  have hmem : discForceGate sel (afterDiscCol d.traceWidth) afterC
+      ∈ (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d).constraints := by
+    unfold rotateV3WithLifecyclePayloadGate
+    have := rotateV3WithDiscGate_afterMem sel beforeC? afterC d
+    simp only [List.mem_append]
+    exact Or.inl this
+  exact discForceGate_forces env isFirst isLast hlast sel (afterDiscCol d.traceWidth) afterC hsel
+    (h.1 _ hmem)
+
+#assert_axioms lifecyclePayloadHashGate_forces
+#assert_axioms graduable_rotateV3WithLifecyclePayloadGate
+#assert_axioms rotateV3WithLifecyclePayloadGate_forces
+#assert_axioms rotateV3WithLifecyclePayloadGate_rejects_forged
+#assert_axioms rotateV3WithLifecyclePayloadGate_forces_disc
+
 /-! ## §5.MF — THE LIVE MODE / FIELDS-ROOT GATES (the makeSovereign / setFieldDyn / refusal movers
 going LIVE — WAVE 3, the mover tail).
 
@@ -3139,10 +3280,14 @@ discriminator.) -/
 the BEFORE disc limb is force-pinned to `Live(0)` and the AFTER disc limb to `Sealed(1)` (selector
 `SEL_CELLSEAL`). A frozen-lifecycle (un-sealed, after-disc stays Live) AFTER block is now UNSAT via the
 in-circuit disc gate ALONE — no trusted post-cell (`rotateV3WithDiscGate_rejects_wrong_after`), the LIVE
-realization of `RotatedKernelRefinementLifecycleDisc.cellSeal_disc_rejects_frozen`. The record pin on
-`B_LIFECYCLE` (PI 46) stays as belt-and-suspenders for the opaque payload felt. -/
+realization of `RotatedKernelRefinementLifecycleDisc.cellSeal_disc_rejects_frozen`. AND (STAGE C, §5.LP)
+the OPAQUE payload felt at `B_LIFECYCLE` is now LIGHT-CLIENT-FORCED: the AFTER lifecycle limb is welded to
+the in-circuit declared payload-hash column (`payloadHash([disc, reason_hash, sealed_at])`), so a cellSeal
+forged to a different `reason_hash` / `sealed_at` is UNSAT ledgerless
+(`rotateV3WithLifecyclePayloadGate_rejects_forged`). The record pin on `B_LIFECYCLE` (PI 46) stays as
+belt-and-suspenders. -/
 def cellSealV3 : EffectVmDescriptor2 :=
-  graduateV1 (rotateV3WithDiscGate EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive) discSealed
+  graduateV1 (rotateV3WithLifecyclePayloadGate EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive) discSealed
     EffectVmEmitCellSeal.cellSealVmDescriptor)
 
 /-- **`cellUnsealV3`** — the LIVE rotated cellUnseal WITH the lifecycle-forcing pin AND the LIVE disc
@@ -3156,10 +3301,12 @@ def cellUnsealV3 : EffectVmDescriptor2 :=
 gate: AFTER disc = `Destroyed(3)` (selector `SEL_CELLDESTROY`; NO before-pin — destroy is admissible from
 any non-Destroyed disc, and the no-resurrection tooth is the AFTER force). A Destroyed→Live resurrection
 forgery (after-disc published as Live) is UNSAT via the disc gate ALONE
-(`RotatedKernelRefinementLifecycleDisc.cellDestroy_disc_rejects_resurrection`). The death-cert payload
-stays folded in the opaque `lifecycle_felt` (record pin). -/
+(`RotatedKernelRefinementLifecycleDisc.cellDestroy_disc_rejects_resurrection`). AND (STAGE C, §5.LP) the
+death-cert payload folded into `lifecycle_felt` is now LIGHT-CLIENT-FORCED via the in-circuit payload-hash
+weld: a cellDestroy forged to a different `death_certificate_hash` / `destroyed_at` is UNSAT ledgerless
+(`rotateV3WithLifecyclePayloadGate_rejects_forged`). -/
 def cellDestroyV3 : EffectVmDescriptor2 :=
-  graduateV1 (rotateV3WithDiscGate EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
+  graduateV1 (rotateV3WithLifecyclePayloadGate EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
     EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
 
 /-- **`setPermsV3`** — the LIVE rotated setPermissions WITH the record-digest-forcing pin AND the LIVE
@@ -3385,9 +3532,12 @@ distinct `Archived` felt. Pinning that limb to PI `38` forces it; the verifier a
 an archive that did not move the lifecycle) FAILS the pin and is UNSAT
 (`rotateV3WithRecordPin_rejects_wrong_post`). This MATCHES the deployed apply (which moves the
 lifecycle), where the prior `B_RECORD_DIGEST` route was a MIS-ROUTE (the deployed write does not move
-the authority residue). -/
+the authority residue). AND (STAGE C, §5.LP) the archival checkpoint folded into `lifecycle_felt` is now
+LIGHT-CLIENT-FORCED via the in-circuit payload-hash weld: a receiptArchive forged to a different
+`checkpoint_hash` / `archived_through` is UNSAT ledgerless
+(`rotateV3WithLifecyclePayloadGate_rejects_forged`). -/
 def receiptArchiveV3 : EffectVmDescriptor2 :=
-  graduateV1 (rotateV3WithDiscGate EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT none discArchived
+  graduateV1 (rotateV3WithLifecyclePayloadGate EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT none discArchived
     EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
 
 /-! ### The LIVE per-mover disc forcing + teeth (the deployment realization of
@@ -3431,6 +3581,67 @@ theorem cellDestroyV3_rejects_resurrection (hash : List ℤ → ℤ) (env : VmRo
 #assert_axioms cellSealV3_disc_forces_sealed
 #assert_axioms cellSealV3_rejects_frozen
 #assert_axioms cellDestroyV3_rejects_resurrection
+
+/-! ### §5.LP.DEPLOY — the LIVE per-mover lifecycle-PAYLOAD forcing + teeth (STAGE C, the deployment
+realization of `rotateV3WithLifecyclePayloadGate` against the LIVE `cellSealV3`/`cellDestroyV3`/
+`receiptArchiveV3`). These consume the DEPLOYED descriptor (the payload-gated one), so editing/removing
+the gate REDS them — the LIGHT-CLIENT close, NO off-cell anchor. -/
+
+/-- **`cellSealV3_payload_forced` — the LIVE close: a satisfying cellSeal witness FORCES the committed
+AFTER lifecycle limb EQUAL to the in-circuit declared payload-hash column, with NO trusted post-cell.**
+The deployed face of `rotateV3WithLifecyclePayloadGate_forces` against `cellSealV3`'s base. -/
+theorem cellSealV3_payload_forced (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
+    (hlast : isLast = false)
+    (hsel : env.loc EffectVmEmitCellSeal.SEL_CELLSEAL = 1)
+    (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitCellSeal.SEL_CELLSEAL
+      (some discLive) discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast) :
+    env.loc (afterLifecycleCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
+      = env.loc declaredLifecyclePayloadCol :=
+  rotateV3WithLifecyclePayloadGate_forces _ _ _ hash _ env isFirst isLast hlast hsel h
+
+/-- **TOOTH — `cellSealV3_payload_rejects_forged_lightclient` (LIVE, LIGHT-CLIENT).** A cellSeal forged to
+differ ONLY in the sealing PAYLOAD — a different `reason_hash` / `sealed_at`, so the committed AFTER
+`lifecycle_felt` (limb 29) ≠ the in-circuit `payloadHash([disc, reason_hash, block_height])` — is UNSAT
+through the deployed descriptor ALONE, NO off-cell anchor. This CONVERTS the §6 named residual: the forged
+payload the record pin accepted (producer-free PI) is now REJECTED in-circuit. -/
+theorem cellSealV3_payload_rejects_forged_lightclient (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hlast : isLast = false)
+    (hsel : env.loc EffectVmEmitCellSeal.SEL_CELLSEAL = 1)
+    (hforged : env.loc (afterLifecycleCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
+      ≠ env.loc declaredLifecyclePayloadCol) :
+    ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitCellSeal.SEL_CELLSEAL
+      (some discLive) discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast :=
+  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel hforged
+
+/-- **TOOTH — `cellDestroyV3_payload_rejects_forged_lightclient` (LIVE).** A cellDestroy forged to differ in
+the death-certificate payload (`death_certificate_hash` / `destroyed_at`) folded into `lifecycle_felt` is
+UNSAT ledgerless — the in-circuit payload weld bites. -/
+theorem cellDestroyV3_payload_rejects_forged_lightclient (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hlast : isLast = false)
+    (hsel : env.loc EffectVmEmitCellDestroy.SEL_CELLDESTROY = 1)
+    (hforged : env.loc (afterLifecycleCol EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth)
+      ≠ env.loc declaredLifecyclePayloadCol) :
+    ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitCellDestroy.SEL_CELLDESTROY
+      none discDestroyed EffectVmEmitCellDestroy.cellDestroyVmDescriptor) env isFirst isLast :=
+  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel hforged
+
+/-- **TOOTH — `receiptArchiveV3_payload_rejects_forged_lightclient` (LIVE).** A receiptArchive forged to
+differ in the archival checkpoint (`checkpoint_hash` / `archived_through`) folded into `lifecycle_felt` is
+UNSAT ledgerless. -/
+theorem receiptArchiveV3_payload_rejects_forged_lightclient (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst isLast : Bool) (hlast : isLast = false)
+    (hsel : env.loc EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT = 1)
+    (hforged : env.loc
+      (afterLifecycleCol EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor.traceWidth)
+      ≠ env.loc declaredLifecyclePayloadCol) :
+    ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT
+      none discArchived EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor) env isFirst isLast :=
+  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel hforged
+
+#assert_axioms cellSealV3_payload_forced
+#assert_axioms cellSealV3_payload_rejects_forged_lightclient
+#assert_axioms cellDestroyV3_payload_rejects_forged_lightclient
+#assert_axioms receiptArchiveV3_payload_rejects_forged_lightclient
 
 /-! ### The LIVE per-mover perms/VK forcing + teeth (WAVE 2 — the deployment realization of
 `RotatedKernelRefinementPermsVK`'s `{setPermissions,setVK}_slot_forced` against the LIVE descriptors). -/
@@ -3597,10 +3808,12 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
         (afterFieldsRootCol setFieldDynV1Face.traceWidth) setFieldDynV1Face)
 -- cellSeal carries the record pin + BOTH disc gates (before + after) past its bare `rotateV3` form
 -- (+3); setPerms / setVK carry the record pin + the WAVE-2 perms/vk weld (+2).
+-- cellSeal: record pin (1) + before-disc + after-disc (2) + lifecycle-payload weld (1) = +4.
 #guard cellSealV3.constraints.length
-        == (v3Of EffectVmEmitCellSeal.cellSealVmDescriptor).constraints.length + 3
+        == (v3Of EffectVmEmitCellSeal.cellSealVmDescriptor).constraints.length + 4
+-- cellDestroy: record pin (1) + after-disc (1, no before-pin) + lifecycle-payload weld (1) = +3.
 #guard cellDestroyV3.constraints.length
-        == (v3Of EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints.length + 2
+        == (v3Of EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints.length + 3
 #guard setPermsV3.constraints.length
         == (v3Of EffectVmEmitSetPermissions.setPermsVmDescriptor).constraints.length + 2
 #guard setVKV3.constraints.length

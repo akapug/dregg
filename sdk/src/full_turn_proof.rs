@@ -5968,19 +5968,6 @@ mod tests {
     /// real held authority is only 0x0F — `0x52 ⊄ 0x0F`) is UNSAT (the submask lookup bites).
     #[cfg(feature = "prover")]
     #[test]
-    #[ignore = "GENUINE prove-through; routing signal (`is_attenuated_grant`) + submask-witness fill \
-                (HELD_MASK col 72 = anchor held mask) + descriptor structure are CLOSED and GREEN \
-                (`cap_write_delegate_atten_routes_to_submask_wrapper`, \
-                `cap_write_delegate_atten_descriptor_carries_insert_and_submask`). The end-to-end PROVE \
-                surfaces a circuit obstruction SPECIFIC to the custom submask table coexisting with the \
-                sorted-INSERT map_op on the `prove_effect_vm_cap_open` path: constraints #106/#108 (the \
-                membership-crown poseidon chip lookups) fail to balance under the LogUp gadget ONLY for \
-                submask+INSERT — the SAME submask+UPDATE proves end-to-end \
-                (`cap_open_attenuate_leg_proves_and_verifies_end_to_end`) and the SAME INSERT without the \
-                submask proves end-to-end (`cap_write_delegate_proves_and_verifies_light_client`); the \
-                crown columns are byte-identical to the passing plain-delegate run and the submask operands \
-                are valid (0x52 ⊑ 0xFF) every row. NOT a soundness gap (an attenuated grant that cannot \
-                prove under the submask wrapper fail-closes, never laundered); a plonky3/LogUp-level fix."]
     fn cap_write_delegate_atten_proves_and_verifies_light_client() {
         use dregg_circuit::cap_root::CapLeaf;
         use dregg_circuit::effect_vm::AttenuateWitness;

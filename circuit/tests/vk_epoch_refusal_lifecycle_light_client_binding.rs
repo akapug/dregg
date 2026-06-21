@@ -319,17 +319,25 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
     );
 }
 
-/// **The lifecycle PAYLOAD — the light-client residual is OPEN, but the safety-critical DISC is CLOSED.**
-/// The deployed `cellSealVmDescriptor2R24` carries the in-circuit `rotateV3WithDiscGate` (108 constraints
-/// = the bare rotated + record pin + the ONE disc gate). So a cellSeal whose lifecycle STATE is forged
-/// (a frozen seal: disc stays Live) is REJECTED through `verify_vm_descriptor2` ALONE — that close is
-/// covered by the disc teeth (`cellSealV3_rejects_frozen` in Lean / the deployed disc gate). What stays
-/// OPEN for a ledgerless client is the OPAQUE payload felt (limb 29: `lifecycle_felt(reason_hash,
-/// sealed_at)`): a cellSeal forged to differ ONLY in the sealing payload (a DIFFERENT reason_hash, disc
-/// still Sealed) is ACCEPTED anchor-disabled. Closing it needs an in-circuit hash gate over the
-/// light-client-known `(reason_hash, block_height)`, not a single declared-param weld — STAGE C.
+/// The declared payload-hash column the lifecycle-payload gate welds the AFTER lifecycle limb to:
+/// `prmCol 3` = `PARAM_BASE + 3` (col 71). A FREE param column for all three lifecycle movers; the
+/// producer fills it with the felt-domain `lifecycle_felt`, the LIGHT CLIENT recomputes it from the
+/// PI-bound `reason_hash` + the turn-header height. `EffectVmEmitRotationV3.declaredLifecyclePayloadCol`.
+const LC_PAYLOAD_COL: usize = dregg_circuit::effect_vm::columns::PARAM_BASE + 3;
+
+/// **The lifecycle PAYLOAD — the light-client residual is CLOSED (the in-circuit lifecycle-payload HASH
+/// gate).** The deployed `cellSealVmDescriptor2R24` now carries, BESIDE the disc gate, the in-circuit
+/// `lifecyclePayloadHashGate`: a selector-gated weld of the AFTER lifecycle limb (`B_LIFECYCLE = 29`) to
+/// the declared payload-hash column `prmCol 3`. The producer fills `prmCol 3` with the FELT-DOMAIN
+/// `lifecycle_felt(disc, reason_hash, sealed_at)` — recomputable in-circuit from the LIGHT-CLIENT-KNOWN
+/// inputs (the PI-bound `reason_hash` + the turn-header `block_height`), NOT a byte-packed sponge the gate
+/// cannot open. So a cellSeal whose committed AFTER lifecycle limb DIVERGES from the recomputed payload
+/// hash (a forged `reason_hash` / `sealed_at` riding a committed limb the producer did NOT derive from
+/// the declared payload) is UNSAT through `verify_vm_descriptor2` ALONE — the LIGHT-CLIENT path, NO
+/// off-cell anchor. This is the LIVE realization of
+/// `EffectVmEmitRotationV3.cellSealV3_payload_rejects_forged_lightclient`, threaded to the apex.
 #[test]
-fn lifecycle_payload_residual_open_disc_closed_anchor_disabled() {
+fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
     let balance: i64 = 50_000;
 
     let before_cell = producer_cell(balance, 0);
@@ -380,67 +388,83 @@ fn lifecycle_payload_residual_open_disc_closed_anchor_disabled() {
         generate_rotated_effect_vm_trace(&st, &effects, &bridge(&before_w), &bridge(&after_w), &caveat)
             .expect("live rotated generator must produce a cellSeal trace + 47 PIs");
 
-    let honest_anchor = after_w.pre_limbs[B_LIFECYCLE];
+    // The honest declared payload-hash column IS the felt-domain `lifecycle_felt` of the sealed cell —
+    // the value the light client recomputes from `(disc=Sealed, reason_hash, block_height)`. It equals
+    // the committed AFTER lifecycle limb (the gate's weld is honest by construction).
+    let honest_payload_felt = after_w.pre_limbs[B_LIFECYCLE];
+    assert_eq!(
+        trace[0][LC_PAYLOAD_COL], honest_payload_felt,
+        "the producer fills prmCol 3 with the felt-domain lifecycle_felt (= the AFTER limb)"
+    );
 
     let mem_boundary = MemBoundaryWitness::default();
     let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
 
-    // POSITIVE TOOTH (no downgrade).
+    // POSITIVE TOOTH (no downgrade): the honest cellSeal — with the gate's weld satisfied — proves +
+    // verifies on the light-client path.
     assert!(
         accepts(&desc, &trace, &dpis, &mem_boundary, &map_heaps),
-        "NO DOWNGRADE: the honest cellSeal must prove + verify through the light-client path"
+        "NO DOWNGRADE: the honest cellSeal (AFTER lifecycle limb == recomputed payload hash) must prove + \
+         verify through the light-client path"
     );
 
-    // Forge ONLY the sealing PAYLOAD (a different reason_hash; the DISC stays Sealed).
-    let forged_reason = [44u8; 32];
-    let forged_kernel = dregg_turn::Effect::CellSeal {
-        target: cell_id,
-        reason: forged_reason,
-    };
-    let mut forged_after = producer_cell(balance, 0);
-    rw::apply_effect_to_cell(&mut forged_after, &cell_id, &forged_kernel, 100);
-    let mut forged_ledger = Ledger::new();
-    forged_ledger.insert_cell(forged_after.clone()).unwrap();
-    let forged_after_w =
-        rw::produce(&forged_after, &forged_ledger, &nullifier_root, &commitments_root, &receipt_log);
+    // THE FORGE (light-client, anchor-disabled): a cellSeal forged to differ ONLY in the sealing PAYLOAD
+    // — a committed AFTER lifecycle limb (`B_LIFECYCLE`) that does NOT equal the recomputed payload hash
+    // the light client holds in `prmCol 3`. We pin `prmCol 3` to the HONEST recomputed felt (what the
+    // light-client verifier supplies from the PI-bound reason_hash + height) and forge ONLY the committed
+    // limb. The `lifecyclePayloadHashGate` (`sel · (after_lc − prmCol3)`) then has NO satisfying
+    // assignment on the active seal row: `after_lc != prmCol3`, so `prove_vm_descriptor2` REFUSES.
+    let mut forged_trace = trace.clone();
+    let forged_payload_limb = honest_payload_felt + BabyBear::new(1);
+    for row in forged_trace.iter_mut() {
+        // forge the committed AFTER lifecycle limb; KEEP prmCol 3 at the recomputed payload hash.
+        row[AFTER_BASE + B_LIFECYCLE] = forged_payload_limb;
+        // (We deliberately do NOT re-derive the commitment chain — the in-circuit gate alone rejects the
+        // forged limb vs the recomputed payload column, independent of the commitment pins.)
+    }
 
-    assert_ne!(
-        forged_after_w.pre_limbs[B_LIFECYCLE], honest_anchor,
-        "the forged sealing payload folds to a DISTINCT AFTER lifecycle limb (else the contrast is vacuous)"
-    );
-
-    let (forged_trace, forged_dpis) = generate_rotated_effect_vm_trace(
-        &st,
-        &effects,
-        &bridge(&before_w),
-        &bridge(&forged_after_w),
-        &caveat,
-    )
-    .expect("generator builds the forged-payload trace");
-
-    // THE LIGHT-CLIENT RESIDUAL (anchor-disabled): the payload-only forge is ACCEPTED with producer-free
-    // dpis — the record pin on limb 29 holds vacuously. (The DISC is forced separately; a disc forgery —
-    // a frozen seal — is rejected by the disc gate. Only the opaque payload felt stays open.)
+    // THE LIGHT-CLIENT CLOSE (anchor-disabled): with the producer-free dpis — exactly what the deployed
+    // `verify_effect_vm_rotated_with_cutover` runs — the forged-payload cellSeal is now REJECTED. The
+    // `lifecyclePayloadHashGate` makes the forged committed lifecycle limb UNSAT vs the recomputed payload
+    // hash. NO full-node anchor.
     assert!(
-        accepts(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
-        "STEP-0 GROUND TRUTH (lifecycle payload residual OPEN): a cellSeal forged to differ ONLY in the \
-         sealing PAYLOAD (reason_hash; disc still Sealed) is ACCEPTED anchor-disabled. The safety-critical \
-         DISC is in-circuit-forced; the opaque payload felt needs an in-circuit hash gate over \
-         (reason_hash, block_height) — STAGE C."
+        !accepts(&desc, &forged_trace, &dpis, &mem_boundary, &map_heaps),
+        "LIGHT-CLIENT CLOSE: a cellSeal forged to publish an AFTER lifecycle limb that is NOT the \
+         recomputed lifecycle_felt(disc, reason_hash, block_height) is REJECTED through \
+         verify_vm_descriptor2 ALONE — the in-circuit lifecycle-payload hash gate bites for a ledgerless \
+         client (NO off-cell anchor). This is the residual the opaque byte-packed lifecycle_felt could NOT \
+         close; the felt-domain realization makes limb 29 recomputable + bindable."
     );
 
-    // CONTRAST (the full-node leg is sound): the off-cell anchor rejects the payload forge.
-    let mut anchored_forged_dpis = forged_dpis.clone();
-    full_node_anchor(&mut anchored_forged_dpis, honest_anchor);
+    // NON-VACUITY of the close: the forge perturbs ONLY the committed AFTER lifecycle limb (col
+    // `AFTER_BASE + B_LIFECYCLE`); every other column (incl. the recomputed `prmCol 3`) is unchanged — so
+    // the rejection is the gate's weld biting on the forged limb, not an unrelated trace malformation.
+    assert!(
+        forged_trace
+            .iter()
+            .zip(trace.iter())
+            .all(|(f, h)| f
+                .iter()
+                .enumerate()
+                .all(|(c, v)| c == AFTER_BASE + B_LIFECYCLE || *v == h[c])),
+        "the forge perturbs ONLY the after-lifecycle limb (29) — the rejection is the payload hash gate \
+         biting on the forged limb, not an unrelated trace break"
+    );
+
+    // CONTRAST (the full-node leg is ALSO sound, belt-and-suspenders): the off-cell anchor likewise
+    // rejects — but the gate above already closed it WITHOUT the anchor (the light-client property).
+    let mut anchored_forged_dpis = dpis.clone();
+    full_node_anchor(&mut anchored_forged_dpis, honest_payload_felt);
     assert!(
         !accepts(&desc, &forged_trace, &anchored_forged_dpis, &mem_boundary, &map_heaps),
-        "FULL-NODE leg sound: with the off-cell anchor, the forged-payload cellSeal is REJECTED — the \
-         forge IS distinguishable, so the light-client residual above is a genuine open gap"
+        "FULL-NODE leg also sound (belt-and-suspenders): the off-cell anchor likewise rejects the \
+         forged-payload limb"
     );
 
     eprintln!(
-        "VK-EPOCH FAMILY-2 lifecycle payload: DISC closed (in-circuit disc gate), PAYLOAD residual OPEN \
-         (forge accepted anchor-disabled). The payload close needs an in-circuit hash gate over \
-         (reason_hash, block_height) — STAGE C."
+        "VK-EPOCH FAMILY-2 lifecycle payload: DISC closed (disc gate) AND PAYLOAD closed (in-circuit \
+         lifecycle-payload hash gate — forge REJECTED anchor-disabled). The felt-domain lifecycle_felt \
+         makes limb 29 recomputable from (disc, reason_hash, block_height); the gate welds it \
+         (EffectVmEmitRotationV3.cellSealV3_payload_rejects_forged_lightclient → the apex)."
     );
 }

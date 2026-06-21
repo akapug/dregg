@@ -68,6 +68,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
    rotateV3WithDiscGate rotateV3WithRecordPin rotateV3
    rotateV3WithDiscGate_forces_after rotateV3WithRecordPin_pins
    rotateV3WithRecordPin_constraints
+   rotateV3WithLifecyclePayloadGate rotateV3WithLifecyclePayloadGate_forces_disc
    graduable_rotateV3WithDiscGate graduable_rotateV3WithRecordPin)
 open Dregg2.Circuit.RotatedKernelRefinement (RotTableSide)
 open Dregg2.Exec
@@ -723,7 +724,7 @@ structure CellDestroyTraceReadout (compressN : List FieldElem → FieldElem) (ha
   frHeaps : post.kernel.heaps = pre.kernel.heaps
 
 theorem cellDestroy_disc_graduable :
-    graduable (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
+    graduable (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
       none discDestroyed
       Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor) = true := by decide
 
@@ -736,7 +737,7 @@ theorem cellDestroy_lc_forced (compressN : List FieldElem → FieldElem) (hash :
     (rd : CellDestroyTraceReadout compressN hash t pre post actor cell certHash) :
     post.kernel.lifecycle cell = lcDestroyed := by
   have hv1 : satisfiedVm hash
-      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none
+      (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none
         discDestroyed Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
       (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
     graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellDestroy_disc_graduable
@@ -747,7 +748,8 @@ theorem cellDestroy_lc_forced (compressN : List FieldElem → FieldElem) (hash :
   have hlimb : (envAt t rd.row).loc
       (afterDiscCol Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth)
         = discDestroyed :=
-    rotateV3WithDiscGate_forces_after _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+    rotateV3WithLifecyclePayloadGate_forces_disc _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl
+      rd.hsel hv1
   have hcast : ((post.kernel.lifecycle cell : Nat) : ℤ) = ((lcDestroyed : Nat) : ℤ) := by
     rw [← rd.discLimbDecodes, hlimb]; rfl
   exact_mod_cast hcast
@@ -759,7 +761,7 @@ AFTER record limb (B_LIFECYCLE) EQUAL to the published rotated PI. The disc-gate
 `rotateV3WithRecordPin_pins`. -/
 theorem cellDestroyDiscGate_pins_record (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst : Bool)
-    (h : satisfiedVm hash (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
+    (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
       none discDestroyed Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
       env isFirst true) :
     env.loc (Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth
@@ -769,10 +771,12 @@ theorem cellDestroyDiscGate_pins_record (hash : List ℤ → ℤ) (env : VmRowEn
       (Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth + AFTER_BLOCK_OFF
         + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_LIFECYCLE)
       (rotateV3 Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).piCount)
-      ∈ (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
+      ∈ (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
           Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints := by
+    -- the payload gate appends ONE constraint past the disc gate (which appends past the record pin),
+    -- so the record pin's `.piBinding .last` is still a member.
     show _ ∈ ((rotateV3WithRecordPin Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_LIFECYCLE
-        Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints ++ _ ++ _)
+        Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor).constraints ++ _ ++ _ ++ _)
     rw [rotateV3WithRecordPin_constraints]
     simp only [List.mem_append, List.mem_cons]
     tauto
@@ -795,7 +799,7 @@ theorem cellDestroy_dc_forced (compressN : List FieldElem → FieldElem)
     post.kernel.deathCert cell = certHash := by
   -- lift to the v1 per-row `satisfiedVm` of the FULL disc-gated descriptor on the LAST row.
   have hv1 : satisfiedVm hash
-      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none
+      (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY none
         discDestroyed Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.cellDestroyVmDescriptor)
       (envAt t rd.lastRow) (rd.lastRow == 0) (rd.lastRow + 1 == t.rows.length) :=
     graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range cellDestroy_disc_graduable
@@ -1069,9 +1073,9 @@ structure ReceiptArchiveTraceReadout (hash : List ℤ → ℤ)
   frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
   frHeaps : post.kernel.heaps = pre.kernel.heaps
 
-/-- `receiptArchiveV3`'s underlying disc-gated descriptor is graduable. -/
+/-- `receiptArchiveV3`'s underlying payload-gated descriptor is graduable. -/
 theorem receiptArchive_disc_graduable :
-    graduable (rotateV3WithDiscGate
+    graduable (rotateV3WithLifecyclePayloadGate
       Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT none discArchived
       Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor) = true := by decide
 
@@ -1087,7 +1091,7 @@ theorem receiptArchive_forced (hash : List ℤ → ℤ)
     (rd : ReceiptArchiveTraceReadout hash t pre post actor cell) :
     post.kernel.lifecycle cell = lcArchived := by
   have hv1 : satisfiedVm hash
-      (rotateV3WithDiscGate Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT none
+      (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT none
         discArchived Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
       (envAt t rd.row) (rd.row == 0) (rd.row + 1 == t.rows.length) :=
     graduateV1_sound hash _ minit mfin maddrs t hside.chip hside.range receiptArchive_disc_graduable
@@ -1099,7 +1103,8 @@ theorem receiptArchive_forced (hash : List ℤ → ℤ)
       (afterDiscCol
         Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor.traceWidth)
         = discArchived :=
-    rotateV3WithDiscGate_forces_after _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl rd.hsel hv1
+    rotateV3WithLifecyclePayloadGate_forces_disc _ _ _ hash _ (envAt t rd.row) (rd.row == 0) false rfl
+      rd.hsel hv1
   have hcast : ((post.kernel.lifecycle cell : Nat) : ℤ) = ((lcArchived : Nat) : ℤ) := by
     rw [← rd.discLimbDecodes, hlimb]; rfl
   exact_mod_cast hcast
