@@ -488,15 +488,16 @@ mod tests {
         assert_eq!(msg(&ia, "write").effect, "SetField(slot 1)");
         assert_eq!(msg(&ia, "grant").effect, "GrantCapability");
 
-        // THE CAP BADGE: the EDITOR (Either) may send peek/touch/write (Signature ⊆
-        // Either, Either ⊆ Either) but NOT grant (None ⊄ Either — the root tier).
+        // THE CAP BADGE: the EDITOR (Either) may send all four — peek/touch/write
+        // (Signature/Either ⊆ Either) and grant (None = ALWAYS allowed: the cap-gate
+        // permits it, and the EXECUTOR's no-amplification rule gates the real grant).
         assert!(msg(&ia, "peek").authorized, "Signature ⊆ Either");
         assert!(msg(&ia, "touch").authorized);
         assert!(msg(&ia, "write").authorized, "Either ⊆ Either");
-        assert!(!msg(&ia, "grant").authorized, "None ⊄ Either — grant needs the root tier");
+        assert!(msg(&ia, "grant").authorized, "None = always allowed (gated in the executor, not the cap-gate)");
 
         // The authorized subset is exactly the cleared messages, sorted.
-        assert_eq!(ia.authorized_messages(), vec!["peek", "touch", "write"]);
+        assert_eq!(ia.authorized_messages(), vec!["grant", "peek", "touch", "write"]);
 
         // The rendered text is non-empty + names the messages (a non-empty gpui tree).
         assert!(ia.all_text().iter().any(|l| l.contains("messages understood")));
@@ -508,13 +509,13 @@ mod tests {
         let mut w = World::new();
         let cell = w.genesis_cell(0x11, 500);
 
-        // A reader (Signature) clears only the tier-1 messages (peek/touch); write +
-        // grant are shown-but-refused.
+        // A reader (Signature) clears the tier-1 messages (peek/touch) AND grant
+        // (None = always allowed for any viewer); only write (Either) is shown-but-refused.
         let ia = InspectAct::build(&w, InspectFocus::Cell(cell), cell, AuthRequired::Signature);
-        assert_eq!(ia.authorized_messages(), vec!["peek", "touch"]);
+        assert_eq!(ia.authorized_messages(), vec!["grant", "peek", "touch"]);
         assert!(!msg(&ia, "write").authorized, "Either ⊄ Signature");
-        assert!(!msg(&ia, "grant").authorized, "None ⊄ Signature");
-        // The full vocabulary is still shown — the refused messages are visible.
+        assert!(msg(&ia, "grant").authorized, "None = always allowed, even for a Signature viewer");
+        // The full vocabulary is still shown — the refused message is visible.
         assert_eq!(ia.messages.len(), 4);
     }
 
@@ -578,23 +579,25 @@ mod tests {
 
     #[test]
     fn firing_an_unauthorized_message_is_refused_in_band_by_the_cap_gate() {
-        // THE ANTI-GHOST TOOTH: a viewer lacking the rights for `grant` (the root tier)
-        // is REFUSED in-band by the real is_attenuation — BEFORE any executor turn, and
-        // the refusal is surfaced, not swallowed. No turn is appended.
+        // THE ANTI-GHOST TOOTH: a viewer lacking the rights for a message is REFUSED
+        // in-band by the real is_attenuation — BEFORE any executor turn, surfaced not
+        // swallowed. A Signature viewer cannot send `write` (Either ⊄ Signature). (We
+        // use write, not grant: grant is None-gated = always allowed at the cap-gate,
+        // its real guarantee being the executor's non-amplification rule.)
         let mut w = World::new();
         let cell = w.genesis_cell(0x30, 1_000);
 
-        let ia = InspectAct::build(&w, InspectFocus::Cell(cell), cell, editor_rights());
-        // The badge already says refused.
-        assert!(!msg(&ia, "grant").authorized);
+        let ia = InspectAct::build(&w, InspectFocus::Cell(cell), cell, AuthRequired::Signature);
+        // The badge already says refused (write needs Either; the viewer holds Signature).
+        assert!(!msg(&ia, "write").authorized);
 
-        let result = ia.send(&mut w, "grant", editor_rights());
+        let result = ia.send(&mut w, "write", AuthRequired::Signature);
         match result {
             SendResult::Refused { reason, by_executor } => {
                 assert!(!by_executor, "the CAP-GATE refused it (not the executor) — before any turn");
-                assert!(reason.contains("grant"), "the refusal names the message + is surfaced");
+                assert!(reason.contains("write"), "the refusal names the message + is surfaced");
             }
-            SendResult::Committed { .. } => panic!("an unauthorized grant must NOT commit"),
+            SendResult::Committed { .. } => panic!("an unauthorized write must NOT commit"),
         }
         // Nothing ran: no receipt was appended (the refusal was before the executor).
         assert_eq!(w.receipts().len(), 0, "an in-band cap refusal runs no turn");
