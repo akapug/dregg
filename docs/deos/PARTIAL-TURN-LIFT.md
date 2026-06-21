@@ -148,3 +148,50 @@ a `VecDeque<Turn>`) is the follow-on: replace the flat queue with a continuation
 a held promise, fill at resume, drain only when READY. That edit touches shared `world.rs` and
 is left to the main loop to sequence (the receipt-chain regression on the commit path is being
 cleared in parallel; the held-promise model is independent of it).
+
+## 9. The lift, wired onto a real `Pipeline` (`pipeline_continuation.rs`)
+
+`starbridge-v2/src/pipeline_continuation.rs` — the §1/§7 model carried by a REAL
+`dregg_turn::Pipeline`. Where `held_promise.rs` mirrors the shapes standalone (no executor),
+this file IS the §2 surface-(1) lift: the suspend continuation able to hold a **Pipeline-with-
+holes** instead of only a flat `VecDeque<Turn>`. gpui-free, both-polarity tested, gated on
+`embedded-executor` (where `dregg-turn`/`dregg-cell` are linked).
+
+- `HeldPipeline` — a continuation that stages real `dregg_turn::turn::Turn`s (the concrete body,
+  with `dependencies` + the `atomic` flag carried verbatim) AND `PipelineHole`s (the promises).
+  Same EMPTY / HELD / READY lifecycle; `is_ready()` is the structural fail-closed.
+- `PipelineHole { eref, field, actor, target, guard, value }` — the eager `GuardedHole` over a
+  REAL `dregg_turn::eventual::EventualRef`. The hole's identity IS the `(source_turn, output_slot)`
+  the pipeline executor resolves; the partial turn it rides carries the matching
+  `Target::Eventual(eref)` / `Effect::PipelinedSend { target: eref, .. }`. A hole IS a nullifier.
+- `resolve(eref, value)` — binds IFF `guard.admits(value)`; fail-closed otherwise (hole stays
+  OPEN, no state changes — `holeFill_rejects_guard_violation`). The bind sets only `value`
+  (`None → Some`), never the shape (`holeFill_binds_in_circuit` — δ AND guard). Resolution IS a
+  spend: a second resolve of a bound hole finds no OPEN hole (one-shot linearity, no overwrite).
+- `resolve_at_tick(eref, tick_value)` — the §4 beacon connection: a beacon value is a promise
+  resolved at the tick (a hole whose `AtLeast { threshold }` guard the quorum-after-t must reach).
+- `drain() -> Result<Pipeline, DrainError>` — the READY→commit edge. Returns a runnable concrete
+  `dregg_turn::Pipeline` (validatable, executable via `execute_pipeline` / `World::resume`) IFF
+  READY; `StillHeld { open_holes }` while any hole is open (a held promise can NEVER drain);
+  `Empty` when nothing is staged. `bound_values()` exposes the `EventualRef → i64` resolution
+  table for a caller that rewrites the `Eventual` targets into concretes before drain.
+
+Both-polarity teeth (the eleven tests): an all-concrete continuation drains to a real `Pipeline`
+(`validate().is_ok()`); a staged partial turn HOLDS the promise and `drain()` is `StillHeld`; a
+guard-admitted value resolves and drains; a guard-violating value is rejected, stays HELD, leaks
+no δ into `bound_values()`; a double-resolve is a no-op (value not overwritten); a beacon below
+threshold is fail-closed and above it resolves; a mixed concrete+partial atomic pipeline drains
+only once the hole fills (deps + atomic flag preserved); the eager shape is never mutated.
+
+### Wiring (report only)
+
+- `starbridge-v2/src/lib.rs`: `pub mod held_promise;` and `pub mod pipeline_continuation;`, both
+  `#[cfg(feature = "embedded-executor")]` (alongside `pub mod world;` — `pipeline_continuation`
+  needs `dregg-turn`/`dregg-cell`, which are gated on that feature).
+- No new `Cargo.toml` dependencies: `dregg-turn`/`dregg-cell` are already pulled under
+  `embedded-executor`; `pipeline_continuation` re-exports `Guard` from `held_promise`.
+
+The cockpit/`World::pending` cutover (replacing `VecDeque<Turn>` with a `HeldPipeline`, filling at
+resume / quorum-after-t, draining only when READY) is the remaining shared-`world.rs` edit — left
+to the main loop. `HeldPipeline::drain()` is the exact seam it plugs into: the suspended world's
+`resume(Drain)` hands the drained `Pipeline` to the executor instead of re-submitting a flat queue.
