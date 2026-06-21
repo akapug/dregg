@@ -91,25 +91,39 @@ def handle (w : World) (m : Move) : String :=
   else
     s!"REFUSE {showWorld result}"
 
+/-- The GENERAL ≤-floor: a flat list of `(value, limit)` pairs; the floor holds iff every value is
+within its limit. This generalizes the single-budget floor to ANY conjunction of ≤-constraints —
+distance ≤ budget, claimed-tier ≤ earned, holding ≤ cap, obligation-age ≤ budget — one pair per
+Minecraft-meaningful floor axis. (`worldFloor` is the two-pairs-against-budget special case.) -/
+def floorPairs : List Nat → Bool
+  | v :: l :: rest => decide (v ≤ l) && floorPairs rest
+  | _ => true
+
 /-- Process one input line to one output line.
 
-Two accepted forms:
+Accepted forms:
   * a MOVE request (`d0 d1 actor action [victim]`) — apply the verified `govStep`;
-  * a FLOOR-CHECK (a line of distances, e.g. the harness's projected next-world)
-    — admit iff the VERIFIED floor holds (`every dist ≤ budget`, the exact
-    condition `worldFloor`/`govStep` tests). This is the seam the harness drives:
-    it projects a next-world, the verified floor decides. -/
+  * `pairs v1 l1 v2 l2 …` — the GENERAL ≤-floor: admit iff every `vᵢ ≤ lᵢ` (multi-axis);
+  * a bare line of distances — the single-budget floor (`every dist ≤ budget`).
+The seam the harness drives: it projects a next-world to floor-axis values, the verified floor
+decides. -/
 def respond (line : String) : String :=
   match parseRequest line with
   | some (w, m) => handle w m
   | none =>
       let toks := (line.splitOn " ").filter (· ≠ "")
-      match toks.mapM parseNat with
-      | some ds =>
-          if ds.isEmpty then s!"ERROR  unparseable request: {line}"
-          else if ds.all (fun d => decide (d ≤ budget)) then "ADMIT"
-          else "REFUSE floor breached"
-      | none => s!"ERROR  unparseable request: {line}"
+      match toks with
+      | "pairs" :: rest =>
+          match rest.mapM parseNat with
+          | some ds => if floorPairs ds then "ADMIT" else "REFUSE floor breached"
+          | none    => s!"ERROR  unparseable request: {line}"
+      | _ =>
+          match toks.mapM parseNat with
+          | some ds =>
+              if ds.isEmpty then s!"ERROR  unparseable request: {line}"
+              else if ds.all (fun d => decide (d ≤ budget)) then "ADMIT"
+              else "REFUSE floor breached"
+          | none => s!"ERROR  unparseable request: {line}"
 
 end PolisGovernor
 
