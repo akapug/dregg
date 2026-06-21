@@ -39,24 +39,29 @@ Zero `sorry`, zero `:= True` load-bearing.
 | Disclosure law = a real deployed theorem ("proves the same while reveals less") | `minimalBoundary_carries_real_theorem` (← `EpistemicDial.accepts_invariant_under_dial`) |
 | Authority floor on the deployed l4v `Auth` enum | `dreggReal_polis_safety` |
 | Authority = the real `Auth`-camera substance discipline | pins of `production_step_fpu`, `unauthorized_amplification_not_production` |
-| Non-confusion family (shadow ≠ resource), deployed | pins of `transclusion_no_amplify`, `execFullForestG_no_amplify`, `noteSpendFresh_rejects_double` |
+| Non-confusion family (shadow ≠ resource), deployed | pins of `transclusion_no_amplify`, `execFullForestG_no_amplify`, `noteSpendFresh_rejects_double`† |
 | Foundational anti-Mythos floor (no forged history) | pin of `unfoolability_guarantee` |
+| **certificate ↛ capability** (dereliction guard) | pins of `transclusion_grants_no_unheld_authority`, `transclusion_is_observed_finalized_read` |
+| **observation ↛ resolution** (one resolver, many observers) | pins of `Await.{one_shot_is_static, commit_resumes_once, rollback_discards_continuation, runtime_guard_is_double_spend, four_faces_unify}` |
+| executor-coupled `gateOK` authority floor | pin of `Exec.AuthModes.captp_granted_le_held` (+ camera `Fpu`) |
+| real KERI human floor (cannot lose identity) | pins of `PreRotation.rotChain_pinned_by_commitments`, `ResharingChain.{reshare_forward_jump, secret_value_survives}` |
 | **Politician lives in traces** — first concrete anti-capture bar | `CaptureBar`, `rExitForeclosureBar`, `dreggReal_envelope_no_foreclosure` |
+
+† `noteSpendFresh_rejects_double` lives in the `PolisNonConfusionCircuit` sidecar (pulls the
+circuit-emit tree); builds when that tree is green.
 
 ## Not proven / frontier (named, not faked)
 
-The first concrete bar is meaningful; the **full politician remains the next research phase**,
-not a cleanup task:
+The census (`wihlga2r4`) found the four local non-confusion / floor legs were already DEPLOYED
+and pinnable — they are now closed (above). What genuinely remains is **one** thing, the next
+research phase, not a cleanup task:
 
-- multi-trace politician hyperproperties — clerk monopoly, hole rent, grade laundering, appeal
-  exhaustion, disclosure ratchet, interleaved multi-agent trace capture (→ Büchi game /
-  `FlowRefine.decideRefines`);
-- executor-coupled `gateOK` floor (the `held ⊆ bound` shadow *is* the real `fits` by
-  `USet.fits_iff`; the camera `Fpu` is pinned);
-- the real KERI human floor (`PreRotation.rotChain_pinned_by_commitments` vs the `dist ≤ B`
-  recovery shadow);
-- the two open non-confusion legs: **certificate ↛ capability** (the dereliction guard) and
-  **observation ↛ resolution** (the one-shot promise resolver).
+- **multi-trace politician hyperproperties** — clerk monopoly, hole rent, grade laundering,
+  appeal exhaustion, disclosure ratchet, interleaved multi-agent trace capture. The first
+  concrete single-trajectory bar (`rExitForeclosureBar`) is landed; the temporal/hyperproperty
+  family over interleaved multi-agent traces (→ Büchi game / `FlowRefine.decideRefines`) is the
+  open object. (The deeper executor-camera refinement of the `held ⊆ bound` floor is a tightening,
+  not a hole: the shadow *is* the real `fits` by `USet.fits_iff`, and the camera `Fpu` is pinned.)
 
 ## The grounding insight (`~/dev/svenvs`)
 
