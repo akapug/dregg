@@ -895,20 +895,26 @@ pub enum CapTreeWriteOp {
 
 /// **THE DEPLOYMENT-REAL cap-tree WRITE wiring (the cap-WRITE light-client axis's witness).** The
 /// clone of [`generate_rotated_note_spend_trace_with_nullifier_tree`] for the openable cap-tree
-/// accumulator the write-bearing cap-open wrappers carry as a `map_op` binding BEFORE cap-root (col
-/// 65 = `STATE_BEFORE_BASE + state::CAP_ROOT`) → AFTER cap-root (col 87). The c-list leaf-set
-/// `clist_leaves` is the cell's FULL sorted-Poseidon2 `CanonicalHeapTree` over its capability
-/// slots; the BEFORE cap-root IS that tree's root, the AFTER cap-root is the genuine post-WRITE
-/// root (a wrong post-root is UNSAT — the `map_op` checks `after = op(before, key)`).
+/// accumulator the write-bearing cap-open wrappers carry as a `map_op` binding the BEFORE cap-root
+/// (rotated-block limb 25 = `BEFORE_BASE + B_CAP_ROOT`, descriptor col 213) → AFTER cap-root
+/// (`AFTER_BASE + B_CAP_ROOT`, descriptor col 264). The c-list leaf-set `clist_leaves` is the
+/// cell's FULL sorted-Poseidon2 `CanonicalHeapTree` over its capability slots; the BEFORE cap-root
+/// IS that tree's root, the AFTER cap-root is the genuine post-WRITE root (a wrong post-root is
+/// UNSAT — the `map_op` checks `after = op(before, key)`).
 ///
-/// This OVERRIDES the v1 STATE cap-root column (col 65 BEFORE, col 87 AFTER) AND the rotated block
-/// cap-root weld (`BEFORE_BASE + B_CAP_ROOT`, welded `== col 65` by the descriptor's `213 == 65`
-/// gate; the AFTER mirror `== col 87`) on EVERY row with the openable tree roots, fills the
-/// `map_op` key/value param columns (col 71 = `PARAM_BASE + 3`, col 72 = `PARAM_BASE + 4`), and
-/// recomputes the rotated block commitments + re-derives the rotated OLD/NEW commit PIs so the
-/// published commitment binds the WRITTEN cap-tree. (The cap-open leg's published commitment is the
-/// ROTATED commit, PIs `V1_PI_COUNT..+2`; this descriptor carries NO v1-state-commit chain over the
-/// cap-root limb, so the v1 8-felt commit is untouched.)
+/// This advances the cap-root on the ROTATED-BLOCK limb (`BEFORE_BASE + B_CAP_ROOT` →
+/// `AFTER_BASE + B_CAP_ROOT`), exactly as note-spend advances its nullifier accumulator on the
+/// rotated nullifier limb (`B_NULLIFIER_ROOT`) — so the advance dodges the v1-STATE continuity
+/// transitions (the cap-root limb is no longer welded `213 == 65`). The v1-STATE cap-root columns
+/// (col 65 BEFORE, col 87 AFTER) are LEFT FROZEN (pass-through, `after.65 == before.65`): the
+/// descriptor's `213 == 65` / `264 == 87` welds are GONE, so the v1-state cap-root continuity weld
+/// (hi=11,lo=11) holds trivially on a frozen column. We override the rotated cap-root limbs on
+/// EVERY row with the openable tree roots, fill the `map_op` key/value param columns (col 71 =
+/// `PARAM_BASE + 3`, col 72 = `PARAM_BASE + 4`), and recompute the rotated block commitments +
+/// re-derive the rotated OLD/NEW commit PIs so the published commitment binds the WRITTEN cap-tree.
+/// (The cap-open leg's published commitment is the ROTATED commit, PIs `V1_PI_COUNT..+2`; this
+/// descriptor carries NO v1-state-commit chain over the cap-root limb, so the v1 8-felt commit is
+/// untouched.)
 ///
 /// The base trace MUST already be the `ROT_WIDTH`-wide rotated base for the write wrapper's effect
 /// (e.g. a `RevokeDelegation` turn from [`generate_rotated_effect_vm_trace`]). The cap-open
@@ -926,7 +932,7 @@ pub fn generate_rotated_cap_write_base(
     clist_leaves: &[crate::heap_root::HeapLeaf],
     revoked_key: BabyBear,
 ) -> Result<Vec<Vec<crate::heap_root::HeapLeaf>>, String> {
-    use super::columns::{PARAM_BASE, state};
+    use super::columns::PARAM_BASE;
     use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
 
     if trace.is_empty() {
@@ -939,8 +945,13 @@ pub fn generate_rotated_cap_write_base(
         ));
     }
 
-    let before_cap_root_col = STATE_BEFORE_BASE + state::CAP_ROOT; // 65
-    let after_cap_root_col = STATE_AFTER_BASE + state::CAP_ROOT; // 87
+    // The cap-root advances on the ROTATED-BLOCK limb (descriptor cols 213/264), NOT the v1-state
+    // cap-root columns (65/87) — exactly as note-spend advances its nullifier accumulator on a
+    // rotated limb. The v1-state cap-root columns are LEFT FROZEN (pass-through, the base trace's
+    // `fill_block` already set them; the descriptor's `213 == 65` / `264 == 87` welds are GONE, so
+    // freezing the v1-state cap-root satisfies the v1-state continuity weld hi=11,lo=11 trivially).
+    let before_cap_root_limb = BEFORE_BASE + B_CAP_ROOT; // 213 (descriptor var 213)
+    let after_cap_root_limb = AFTER_BASE + B_CAP_ROOT; // 264 (descriptor var 264)
     let key_col = PARAM_BASE + 3; // 71 (the map_op key)
     let value_col = PARAM_BASE + 4; // 72 (the map_op read value)
 
@@ -981,15 +992,14 @@ pub fn generate_rotated_cap_write_base(
         }
     };
 
-    // Override the cap-root columns (v1 STATE block + the rotated block weld) on EVERY row, fill
-    // the map_op key/value params, then recompute the rotated block commitments. The descriptor's
-    // `213 == 65` / `264 == 87` welds keep the rotated cap-root limb == the v1 state cap-root, so
-    // we set BOTH; `recompute_block_commit` re-chains the rotated commit over the written limbs.
+    // Override the ROTATED-BLOCK cap-root limbs (descriptor cols 213/264) on EVERY row with the
+    // openable accumulator roots, fill the map_op key/value params, then recompute the rotated
+    // block commitments so the published rotated commit binds the written cap-tree. The v1-state
+    // cap-root columns (65/87) are LEFT UNTOUCHED — they stay frozen pass-through (the welds are
+    // gone), and `recompute_block_commit` re-chains the rotated commit over the written rotated limb.
     for row in trace.iter_mut() {
-        row[before_cap_root_col] = before_root;
-        row[after_cap_root_col] = after_root;
-        row[BEFORE_BASE + B_CAP_ROOT] = before_root;
-        row[AFTER_BASE + B_CAP_ROOT] = after_root;
+        row[before_cap_root_limb] = before_root;
+        row[after_cap_root_limb] = after_root;
         row[key_col] = revoked_key;
         row[value_col] = read_value;
         recompute_block_commit(row, BEFORE_BASE);

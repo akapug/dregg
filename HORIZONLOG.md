@@ -11,33 +11,35 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
-## ⚑ CAP-WRITE LOOP — re-point FLIPPED ON; over-determination CLOSED; NEW block = v1-STATE cap-root CONTINUITY collision + spurious nonce-freeze (2026-06-20)
-The col-87 over-determination is CLOSED (commit 0c2b0704c — col 87 is now `map_op` `new_root` ONLY, folded into
-the commitment as an INPUT, note-spend-shaped). The producer re-point is now FLIPPED ON:
-`cap_open_route_for_run` RevokeDelegation carries `write: Some(("revokeDelegationWriteCapOpenVmDescriptor2R24",
-Remove))`; `cap_open_effective_key` selects the WRITE wrapper when the node supplies the c-list
-(`cap.clist_leaves` non-empty). The data-availability + map_op-witness + forge-reject halves are GREEN
-(`sdk/.../full_turn_proof.rs`): `cap_write_revoke_forge_rejected` proves a c-list MISSING the revoked key
-FAILS CLOSED (no fabricated post-root), and `cap_write_revoke_descriptor_after_root_is_map_op_defined_only`
-pins col 87 = EXACTLY ONE `map_op new_root` (non-vacuous structure guard, replaces the stale over-determination pin).
-NEW OBSTRUCTION (surfaced by flipping the re-point ON — diagnosed precisely, fail-closed, NOT a silent forge):
-the deployed `revokeDelegationWriteCapOpenVmDescriptor2R24` advances the cap-root at the V1-STATE cap-root COLUMN
-(col 65 → col 87, which IS state col `CAP_ROOT = 11`), so its `map_op` write COLLIDES with the v1-state CONTINUITY
-transition `Transition { hi: 11, lo: 11 }` (`next.before.cap_root == local.after.cap_root`): a genuine REMOVE
-advances before_root (887984798) ≠ after_root (1054833182) on every uniform row, so the per-row continuity weld can
-NEVER hold (verified live: a 64-row revoke trace fails this transition). The descriptor ALSO carries a SPURIOUS
-nonce-FREEZE gate (`after.nonce == before.nonce`, col 78 == col 56) that contradicts revoke's nonce-TICK base
-(after.nonce=1, before.nonce=0). Contrast note-spend (the model): its accumulator (`nullifier_root`) lives on a
-ROTATED-BLOCK limb (col 214 → 265), NOT a v1-state col — so its advance DODGES the v1-state continuity transitions.
-CLOSURE (metatheory descriptor-EMIT, VK-affecting): emit the 4 `…WriteCapOpenVmDescriptor2R24` wrappers to advance
-the cap-root as a ROTATED-BLOCK limb (note-spend-shaped) — escaping the v1-state continuity transition (hi=11) —
-AND drop the spurious nonce-freeze (revoke is a nonce-tick passthrough). PIN:
-`cap_write_revoke_proves_and_verifies_light_client` (GREEN, forward-compatible: fail-closed arm TODAY, flips to the
-prove+verify Ok arm when the descriptor re-emit lands). The verifier-half tooth
-(`is_forbidden_authority_only_cap_write_descriptor`) is GATED OFF (`false`) — forbidding the authority-only revoke
-cap-open NOW (with no provable alternative) would BREAK the honest revoke path; flip it on WITH the descriptor
-re-emit. STATE: the cap-WRITE post-root is NOT YET light-client-verifiable end-to-end — the precise remaining
-obstruction is the v1-state-col continuity + nonce-freeze, a metatheory descriptor shape, NOT a producer gap.
+## ⚑ CAP-WRITE LOOP — cap-root COLLISION CLOSED (rotated-limb advance + trace-gen aligned); LONE residual = spurious NONCE-FREEZE gate (2026-06-20)
+TWO of the three layers are now CLOSED. (1) The col-87 over-determination is closed (commit 0c2b0704c — col 87 is
+`map_op` `new_root` ONLY, folded as a commitment INPUT, note-spend-shaped). (2) The v1-STATE cap-root CONTINUITY
+collision is FIXED + the Rust trace-gen is ALIGNED (commit 8275b3711 + this Rust work): the descriptor now advances
+the cap-root on the ROTATED-BLOCK limb (descriptor vars 213→264 = `BEFORE_BASE/AFTER_BASE + B_CAP_ROOT`), the
+`213 == 65` / `264 == 87` welds are GONE, and `generate_rotated_cap_write_base`
+(`circuit/.../trace_rotated.rs`) writes the genuine before/after roots to limbs 213/264 and FREEZES the v1-state
+cap-root cols 65/87 (pass-through) — exactly mirroring note-spend's nullifier-root-on-a-rotated-limb. MEASURED
+LIVE: cap-root rot before(213)=887984798 ≠ after(264)=1054833182 (genuine advance), v1-state cap-root 65==87
+(frozen, continuity holds trivially). The producer re-point is FLIPPED ON (`cap_open_route_for_run` RevokeDelegation
+carries `write: Some(("revokeDelegationWriteCapOpenVmDescriptor2R24", Remove))`). forge-reject + descriptor-structure
+guards GREEN (`cap_write_revoke_forge_rejected`; `cap_write_revoke_descriptor_after_root_is_map_op_defined_only` now
+pins var264 = EXACTLY ONE `map_op new_root` AND var87 NOT a map_op new_root — the frozen-v1-state guard).
+LONE RESIDUAL (descriptor-EMIT, metatheory/VK-affecting — NOT a producer gap, NOT a trace-gen gap): the deployed
+`revokeDelegationWriteCapOpenVmDescriptor2R24` STILL carries a SPURIOUS NONCE-FREEZE gate (`var78 == var56`,
+after.nonce == before.nonce) inherited from the attenuate-family shape. Revoke is a nonce-TICK passthrough
+(after.nonce = before.nonce + 1), so the gate is VIOLATED on every honest revoke — the IR-v2 prover SELF-VERIFY
+fails on this gate (`check_constraints` constraint #10; MEASURED col56=0, col78=1). CLOSURE (metatheory): DROP the
+nonce-freeze gate from the 4 `…WriteCapOpenVmDescriptor2R24` wrappers (revoke must tick, not freeze, the nonce).
+PIN: `cap_write_revoke_proves_and_verifies_light_client` (GREEN, forward-compatible: fail-closed arm TODAY on the
+nonce-freeze, flips to the prove+verify Ok arm when the gate is dropped). The verifier-half tooth
+(`is_forbidden_authority_only_cap_write_descriptor`) STAYS GATED OFF (`false`) — forbidding the authority-only
+revoke cap-open NOW (no provable alternative) would break the honest revoke path; flip it on WITH the nonce-freeze
+drop. The OTHER 3 wrappers (delegate/introduce/delegateAtten = Inserts) have a SECOND descriptor bug: their `read`
+and `insert` map_ops use the SAME key column (var 71) — but a sorted `read` requires the key PRESENT while `insert`
+requires it ABSENT, so the pair is ALWAYS UNSAT (the read should bind a DISTINCT already-present anchor-key column).
+revokeDelegation (a Remove: read+write the SAME present key — consistent) is the proven TEMPLATE. STATE: the
+cap-WRITE post-root is NOT YET light-client-verifiable end-to-end; the cap-root half is DONE + measured-correct,
+the lone gate to drop is the nonce-freeze (revoke), plus the anchor-read-key fix for the 3 Inserts.
 
 ## ⚑ CAP-WRITE WIRE GAP — REFINED: data-availability CLOSED; the REAL block is a DESCRIPTOR over-determination (2026-06-20)
 The data-availability half is now CLOSED end-to-end (was the previously-suspected blocker): the witness type
@@ -105,21 +107,25 @@ removeWriteOp]` and HAS `revokeDelegationWriteV3_forces_write`), then wire a `re
 (mirroring `revokeDelegation_closedLog_sat`). VK-AFFECTING (registry re-point) + crosses the producer seam
 (`rotated_descriptor_name`/`cap_open_route_for_run`) — coordinate with the cap-write lane above.
 
-## ⚑ receiptArchive(40) GAP-1 — dispatch arm vs deployed disc unreconciled (2026-06-20)
-The Class-A machinery EXISTS (`ReceiptArchiveLifecycleSpec`, `receiptArchive_descriptorRefines_sat`,
-`receiptArchive_forced` — RotatedKernelRefinementLifecycle.lean:1003-1130; disc gate forces
-`lifecycle := Archived`). But the apex slot (`closedLogExtract_receiptArchive_closed`,
-ClosureFanoutGenuine.lean:486) still rides the MODELLED `receiptArchive_closedLog` because the dispatch arm
-`fullActionStep (.receiptArchiveA) post` reduces to `ReceiptArchiveSpec` (the toy RECORD-slot write,
-`stateStep lifecycleField (.int 1)`, executor TurnExecutorFull.lean:2409) while `receiptArchiveV3` forces
-the lifecycle SIDE-TABLE move (`ReceiptArchiveLifecycleSpec`). These are DIFFERENT state components — the
-executor and the deployed circuit genuinely disagree on what receiptArchive writes. Reconciling the arm to
-the lifecycle semantics requires ALSO changing the executor arm + re-welding `execFullA_receiptArchiveA_iff_spec`
-+ ~50 load-bearing `ReceiptArchiveSpec` refs across 8+ files (CircuitCompletenessLifecycle, EffectEmitted-
-Refinement, EffectRefinementBatch2, Argus/Effects/ReceiptArchive, Witness/ReceiptArchiveWitness, …) — a deep
-consumer chain (>3 files), NOT a local arm swap. CLOSURE: a careful GAP-1 executor-reconciliation pass
-(executor side-table move + weld + consumer re-prove), then wire `receiptArchive_closedLog_sat` via the
-existing `receiptArchive_descriptorRefines_sat` disc gate (like cellSeal/cellUnseal/cellDestroy).
+## ✅ receiptArchive(40) GAP-1 — CLOSED: now genuinely Class-A (deployed lifecycle-move reconciled, 2026-06-20)
+The executor↔circuit divergence is RECONCILED to the DEPLOYED semantics (ember's decision: the wire
+`receiptArchiveV3` disc gate moves the `lifecycle` SIDE-TABLE to `Archived` — `c.archive(checkpoint)` — is
+correct; the record-slot `ReceiptArchiveSpec` was the drifted toy model). Done: (1) new executor arm
+`receiptArchiveChainA` = `setLifecycle … lcArchived (=4)` gated on `auditGuard` (TurnExecutorFull.lean), arm
+re-pointed; (2) `ReceiptArchiveLifecycleSpec` + `execFullA_receiptArchiveA_iff_lifecycleSpec` in
+cellstateaudit.lean (the deployed weld); the record-slot `ReceiptArchiveSpec` KEPT as the superseded
+modelled fact, re-keyed off a new `receiptArchiveRecordStep` (NOT `execFullA`) so the whole `receiptArchiveE`
+arithmetization universe (Argus/Witness/Emit) stays green honestly; (3) `fullActionStep (.receiptArchiveA)`
++ `fullActionStep_exec_iff` re-pointed to the lifecycle spec; (4) apex slot
+`closedLogExtract_receiptArchive_closed` → `receiptArchive_closedLog_sat` → `receiptArchive_descriptorRefines_sat`
+(the disc gate, like cellSeal/cellUnseal/cellDestroy). MUTATION-CONFIRMED: a frozen-disc (Live) archive forgery
+is UNSAT (`receiptArchive_forced` pins `lcArchived` from `Satisfied2 receiptArchiveV3`) — editing the disc gate
+reds the apex. Consumer cascade resolved across ~12 files (executor frame proofs CellCommit/CellNullifier/
+CellConfine/Identity/StorageGatewayMandate via `receiptArchiveChainA_factors`; the handler shadow via a new
+deployed `cellArchiveEffect`/`cellArchiveH`; the v2 Surface2 layer via a NEW
+`Inst/receiptArchiveLifecycleA.lean` archive circuit — the `cellSealE` analog — wired through
+EffectRefinementBatch2/TurnEffectRefinement/EffectEmittedRefinement/TurnEmit/CircuitCompletenessAssembled).
+`lake build Dregg2` GREEN (4106 jobs); the reconciliation theorems axiom-clean (no sorryAx). NOT committed.
 
 ## ✅ ENMESHMENT STRIKE — 72 orphans pulled into the root build graph (2026-06-20)
 84 `Dregg2/*` modules were unreachable from `Dregg2.lean` (their `#assert_axioms` hygiene
