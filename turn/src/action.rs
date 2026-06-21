@@ -1300,6 +1300,68 @@ pub enum Effect {
         /// `prefix_end_height`.
         checkpoint: ArchivalAttestation,
     },
+
+    // ─── Reactive effects (Track 2): the first-class async-coordination
+    //     vocabulary — Promise / Notify / React. The kernel weld lives in
+    //     [`crate::reactive`]; these are the turn-level Effect faces the
+    //     executor dispatches. (`docs/deos/REACTIVE-EFFECTS.md`.)
+    //
+    // The keystone (the soundness gift): a promise-hole IS a nullifier. To
+    // `React` is to SPEND the hole. One-shot linearity — react exactly once —
+    // is the SAME double-spend non-membership the circuit already enforces on
+    // `NoteSpend`. The executor spends `pending_id` into the very same
+    // `note_nullifiers` set, so a second react (or a replayed `pending_id`) is
+    // rejected by the identical nullifier gate.
+    /// A STANDING COMMITMENT: `cell` commits to run a turn once
+    /// `resolution_condition` holds — the promise-hole. The executor records
+    /// the commitment in the cell's reactive registry; the hole is later
+    /// discharged by a [`Effect::React`]. (Generative: it creates a hole.)
+    Promise {
+        /// The cell whose pending registry holds this commitment.
+        cell: CellId,
+        /// The condition under which the held turn fires.
+        resolution_condition: crate::pending::ResolutionCondition,
+        /// The turn the cell commits to run when it reacts.
+        wake: Box<crate::turn::Turn>,
+        /// Block height past which the hole expires (un-reactable).
+        timeout_height: u64,
+    },
+    /// A WAKE from `from` to `to`: deposit a promise-hole (the kernel-backed
+    /// `NotifyEdge`) in `to`'s registry that `to` may later react to. The
+    /// recipient commits to run `wake` when it discharges `resolution_condition`.
+    /// (Generative: it creates a hole in the recipient.)
+    Notify {
+        /// The waking cell (the sender / provenance).
+        from: CellId,
+        /// The woken cell (the recipient; holds the hole in its registry).
+        to: CellId,
+        /// The turn the recipient commits to run when it reacts.
+        wake: Box<crate::turn::Turn>,
+        /// The condition the recipient must discharge to react.
+        resolution_condition: crate::pending::ResolutionCondition,
+        /// Block height past which the hole expires (un-reactable).
+        timeout_height: u64,
+    },
+    /// REACT to a deposited hole: discharge `pending_id` by presenting a proof
+    /// of `condition`. THE ONE-SHOT SPEND — `pending_id` is consumed into the
+    /// production nullifier set exactly as a [`Effect::NoteSpend`] nullifier is,
+    /// so a second react (or a replay of the same `pending_id`) is rejected by
+    /// the double-spend gate. (Terminal: one-way consume of the hole, no inverse.)
+    React {
+        /// The hole being discharged, AS A NULLIFIER. The 32-byte hole id
+        /// (the deposited `wake` turn hash) IS the nullifier spent into the
+        /// production `note_nullifiers` set — the promise-hole-as-nullifier.
+        pending_id: Nullifier,
+        /// The condition the proof must satisfy (the spend is gated on it).
+        condition: crate::conditional::ProofCondition,
+        /// The proof discharging the condition (the witness for the spend).
+        resolution_proof: crate::conditional::ConditionProof,
+        /// The turn whose genuine receipt the resolution produces (the `wake`
+        /// the matching `Notify`/`Promise` committed to). Its hash MUST equal
+        /// `pending_id` — the executor binds the spent nullifier to the resolved
+        /// turn so a react cannot spend one hole while resolving another.
+        wake: Box<crate::turn::Turn>,
+    },
 }
 
 /// Why a [`Effect::Refusal`] was issued. Refusals are *evidence of
@@ -1630,8 +1692,23 @@ impl Effect {
             Effect::GrantCapability { .. } => LinearityClass::Generative,
             Effect::Introduce { .. } => LinearityClass::Generative,
 
+            // Promise / Notify mint a fresh promise-hole (a standing
+            // commitment) in a cell's reactive registry — a resource created
+            // without a paired consumer in the same turn. The dual is the
+            // later React (Terminal) in a separate turn.
+            Effect::Promise { .. } => LinearityClass::Generative,
+            Effect::Notify { .. } => LinearityClass::Generative,
+
             // -- Annihilative: destroys a resource, operator-disclosed. --
             Effect::Burn { .. } => LinearityClass::Annihilative,
+
+            // React consumes (spends) a promise-hole exactly once: a one-way
+            // structural transition with no inverse — the hole is gone. The
+            // resource destroyed is the hole-nullifier, spent into the
+            // production nullifier set (no monetary delta, so not disclosed
+            // non-conservation; the consume is the dual of the Promise/Notify
+            // that created it in a prior turn).
+            Effect::React { .. } => LinearityClass::Terminal,
 
             // -- Neutral: no resource delta; state-local accounting. --
             Effect::SetField { .. } => LinearityClass::Neutral,
@@ -2058,6 +2135,55 @@ impl Effect {
                 }
                 hasher.update(&proof_witness_index.to_le_bytes());
             }
+            Effect::Promise {
+                cell,
+                resolution_condition,
+                wake,
+                timeout_height,
+            } => {
+                hasher.update(&[60u8]);
+                hasher.update(cell.as_bytes());
+                // Canonical postcard encoding of the resolution condition.
+                let rc = postcard::to_allocvec(resolution_condition).unwrap_or_default();
+                hasher.update(&(rc.len() as u64).to_le_bytes());
+                hasher.update(&rc);
+                hasher.update(&wake.hash());
+                hasher.update(&timeout_height.to_le_bytes());
+            }
+            Effect::Notify {
+                from,
+                to,
+                wake,
+                resolution_condition,
+                timeout_height,
+            } => {
+                hasher.update(&[61u8]);
+                hasher.update(from.as_bytes());
+                hasher.update(to.as_bytes());
+                hasher.update(&wake.hash());
+                let rc = postcard::to_allocvec(resolution_condition).unwrap_or_default();
+                hasher.update(&(rc.len() as u64).to_le_bytes());
+                hasher.update(&rc);
+                hasher.update(&timeout_height.to_le_bytes());
+            }
+            Effect::React {
+                pending_id,
+                condition,
+                resolution_proof,
+                wake,
+            } => {
+                hasher.update(&[62u8]);
+                // The hole-as-nullifier — the same shape NoteSpend folds (the
+                // 32-byte nullifier directly into the effect hash).
+                hasher.update(&pending_id.0);
+                let c = postcard::to_allocvec(condition).unwrap_or_default();
+                hasher.update(&(c.len() as u64).to_le_bytes());
+                hasher.update(&c);
+                let p = postcard::to_allocvec(resolution_proof).unwrap_or_default();
+                hasher.update(&(p.len() as u64).to_le_bytes());
+                hasher.update(&p);
+                hasher.update(&wake.hash());
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -2152,6 +2278,27 @@ impl Effect {
             Effect::SetProgram { program, .. } => {
                 32 + postcard::to_allocvec(program).map(|b| b.len()).unwrap_or(0)
             }
+            // Reactive effects: cell ids + wake-turn hash + canonical condition/
+            // proof encodings (the carried turn dominates; charge its hash size).
+            Effect::Promise {
+                resolution_condition,
+                ..
+            } => 32 + 32 + 8 + postcard::to_allocvec(resolution_condition).map_or(0, |b| b.len()),
+            Effect::Notify {
+                resolution_condition,
+                ..
+            } => {
+                32 + 32 + 32 + 8 + postcard::to_allocvec(resolution_condition).map_or(0, |b| b.len())
+            }
+            Effect::React {
+                condition,
+                resolution_proof,
+                ..
+            } => {
+                32 + 32
+                    + postcard::to_allocvec(condition).map_or(0, |b| b.len())
+                    + postcard::to_allocvec(resolution_proof).map_or(0, |b| b.len())
+            }
         }
     }
 
@@ -2211,6 +2358,9 @@ impl Effect {
             | Effect::ReceiptArchive { .. } => dregg_cell::EFFECT_LIFECYCLE_OPS,
             Effect::Burn { .. } => dregg_cell::EFFECT_BURN,
             Effect::AttenuateCapability { .. } => dregg_cell::EFFECT_ATTENUATE_CAPABILITY,
+            Effect::Promise { .. } | Effect::Notify { .. } | Effect::React { .. } => {
+                dregg_cell::EFFECT_REACTIVE_OPS
+            }
         }
     }
 }

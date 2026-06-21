@@ -273,6 +273,40 @@ impl TurnExecutor {
                 *prefix_end_height,
                 checkpoint,
             ),
+            Effect::Promise {
+                cell,
+                resolution_condition,
+                wake,
+                timeout_height,
+            } => self.apply_promise(
+                path,
+                actor,
+                cell,
+                resolution_condition,
+                wake,
+                *timeout_height,
+            ),
+            Effect::Notify {
+                from,
+                to,
+                wake,
+                resolution_condition,
+                timeout_height,
+            } => self.apply_notify(
+                path,
+                actor,
+                from,
+                to,
+                wake,
+                resolution_condition,
+                *timeout_height,
+            ),
+            Effect::React {
+                pending_id,
+                condition,
+                resolution_proof,
+                wake,
+            } => self.apply_react(path, journal, pending_id, condition, resolution_proof, wake),
         }
     }
 
@@ -877,6 +911,248 @@ impl TurnExecutor {
                     },
                     path.to_vec(),
                 ));
+            }
+        }
+
+        Ok(())
+    }
+
+    // ─── Reactive effects (Track 2): Promise / Notify / React ────────────────
+    //
+    // The keystone (REACTIVE-EFFECTS.md §6): a promise-hole IS a nullifier. To
+    // `React` is to SPEND the hole. The executor enforces one-shotness with the
+    // SAME production `note_nullifiers` set that gates `NoteSpend`: the hole's
+    // 32-byte id is the nullifier, so a second react (or a replayed hole-id) is
+    // rejected by the identical double-spend gate. The in-circuit witness (the
+    // React descriptor mirroring `noteSpendV3`'s grow-gate) reads exactly this
+    // nullifier — see the report.
+
+    /// Deposit a STANDING COMMITMENT (a promise-hole) in the reactive registry.
+    /// `cell` commits to run `wake` once `resolution_condition` holds. The hole's
+    /// id is the wake-turn hash — the key a later [`Effect::React`] spends.
+    fn apply_promise(
+        &self,
+        path: &[usize],
+        actor: &CellId,
+        cell: &CellId,
+        resolution_condition: &crate::pending::ResolutionCondition,
+        wake: &Turn,
+        timeout_height: u64,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        // The committing cell must be the actor (a cell makes its OWN standing
+        // commitments — no cross-cell promise injection).
+        if cell != actor {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "Promise: the committing cell must be the actor".into(),
+                },
+                path.to_vec(),
+            ));
+        }
+        let mut reg = self.reactive_registry.lock().unwrap();
+        reg.submit_pending_at(
+            wake.clone(),
+            resolution_condition.clone(),
+            timeout_height,
+            self.block_height,
+        );
+        Ok(())
+    }
+
+    /// Deposit a WAKE (a promise-hole) in the recipient's reactive registry — the
+    /// kernel-backed `NotifyEdge`. `to` commits to run `wake` once it discharges
+    /// `resolution_condition`. The hole id (the wake-turn hash) is what a later
+    /// [`Effect::React`] from `to` spends.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_notify(
+        &self,
+        path: &[usize],
+        actor: &CellId,
+        from: &CellId,
+        to: &CellId,
+        wake: &Turn,
+        resolution_condition: &crate::pending::ResolutionCondition,
+        timeout_height: u64,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        // The sender must be the actor (a cell wakes peers under its OWN
+        // provenance — no spoofed `from`).
+        if from != actor {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "Notify: the sender (from) must be the actor".into(),
+                },
+                path.to_vec(),
+            ));
+        }
+        // The deposited wake is the turn the RECIPIENT runs on react — its agent
+        // must be the recipient (the hole is the recipient's to discharge).
+        if &wake.agent != to {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "Notify: the wake turn's agent must be the recipient (to)".into(),
+                },
+                path.to_vec(),
+            ));
+        }
+        let mut reg = self.reactive_registry.lock().unwrap();
+        reg.submit_pending_at(
+            wake.clone(),
+            resolution_condition.clone(),
+            timeout_height,
+            self.block_height,
+        );
+        Ok(())
+    }
+
+    /// REACT: discharge a promise-hole by presenting a proof of `condition`. THE
+    /// ONE-SHOT SPEND. The hole `pending_id` is spent into the production
+    /// `note_nullifiers` set EXACTLY as a [`Effect::NoteSpend`] nullifier:
+    ///
+    ///  1. Bind the spent nullifier to the resolved turn: `wake.hash()` MUST
+    ///     equal `pending_id` (a react cannot spend one hole while resolving
+    ///     another — the nullifier-to-turn binding the circuit witnesses).
+    ///  2. Verify the proof discharges the condition (the genuine resolution
+    ///     gate — wrong/expired proofs are refused and spend nothing).
+    ///  3. SPEND `pending_id` into `note_nullifiers` with double-spend
+    ///     rejection (journaled). A second react — or a replay of the same
+    ///     `pending_id` — hits the identical gate `NoteSpend` rides and is
+    ///     REJECTED. THIS is the one-shot tooth the light client witnesses.
+    ///  4. If a matching hole is live in the reactive registry, RESOLVE it with
+    ///     a genuine receipt over the resolved turn (the registry-removal is a
+    ///     redundant second tooth; the nullifier gate is load-bearing).
+    fn apply_react(
+        &self,
+        path: &[usize],
+        journal: &mut LedgerJournal,
+        pending_id: &Nullifier,
+        condition: &crate::conditional::ProofCondition,
+        resolution_proof: &crate::conditional::ConditionProof,
+        wake: &Turn,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        // The hole id must be well-formed (non-zero) — the same guard NoteSpend
+        // applies to its nullifier.
+        if pending_id.0.iter().all(|&b| b == 0) {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "null pending_id in React".into(),
+                },
+                path.to_vec(),
+            ));
+        }
+
+        // (1) NULLIFIER↔TURN BINDING: the spent hole id IS the resolved turn's
+        // hash. Without this, a react could spend an arbitrary nullifier while
+        // claiming to resolve an unrelated wake.
+        let wake_hash = wake.hash();
+        if wake_hash != pending_id.0 {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "React: wake turn hash does not equal pending_id (nullifier↔turn \
+                             binding violated)"
+                        .into(),
+                },
+                path.to_vec(),
+            ));
+        }
+
+        // (2) GENUINE RESOLUTION GATE: the proof must discharge the condition.
+        // `resolve_condition` enforces the temporal bound (timeout) and proof
+        // validity. We use a transient proof-hash ledger because the PERMANENT
+        // one-shot gate is the nullifier set below (the hole id), which is
+        // stronger: it rejects the spend even if the same hole were re-presented
+        // with a fresh proof.
+        let mut transient_proof_ledger = std::collections::HashSet::new();
+        // The hole's timeout is carried by the registry entry when known;
+        // otherwise the condition is evaluated at the current height with no
+        // separate expiry (the timeout tooth lives in the registry/notify path).
+        let timeout_height = {
+            let reg = self.reactive_registry.lock().unwrap();
+            reg.get_pending(&pending_id.0)
+                .map(|e| e.timeout_height)
+                .unwrap_or(u64::MAX)
+        };
+        let verdict = crate::conditional::resolve_condition(
+            condition,
+            resolution_proof,
+            self.block_height,
+            timeout_height,
+            &[],
+            crate::conditional::DEFAULT_MAX_ROOT_AGE,
+            &mut transient_proof_ledger,
+            &[],
+        );
+        match verdict {
+            crate::conditional::ConditionalResult::Resolved => {}
+            crate::conditional::ConditionalResult::Pending => {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: "React: condition not yet satisfied".into(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            crate::conditional::ConditionalResult::Expired => {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: "React: hole expired (past its timeout height)".into(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            crate::conditional::ConditionalResult::InvalidProof(reason) => {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!("React: proof rejected: {reason}"),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
+
+        // (3) THE ONE-SHOT SPEND — insert the hole id into the production
+        // nullifier set with double-spend rejection. This is the SAME gate
+        // `apply_note_spend` uses; react-twice (or a replayed pending_id) is a
+        // double-spend and is rejected here. Journaled so a turn that fails
+        // AFTER this point unwinds the insert (no permanent hole-burn on a
+        // deliberate-failure attack).
+        {
+            let mut set = self.note_nullifiers.lock().unwrap();
+            if set.contains(pending_id) {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: "React: double-spend — pending_id already reacted (one-shot)"
+                            .into(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            set.insert(*pending_id).map_err(|e| {
+                let reason = match e {
+                    NoteError::DoubleSpend { .. } => {
+                        "React: double-spend — race on pending_id insert".to_string()
+                    }
+                    other => format!("React: pending_id insert failed: {other:?}"),
+                };
+                (TurnError::InvalidEffect { reason }, path.to_vec())
+            })?;
+        }
+        journal.record_note_nullifier_inserted(*pending_id);
+        journal.record_note_spend(*pending_id);
+
+        // (4) RESOLVE the hole with a GENUINE receipt over the resolved turn.
+        // The receipt is content-addressed to the wake turn we just verified
+        // (its hash == pending_id), so the registry cascade has a real, bound
+        // provenance link. If no live hole exists (a bare react against a hole
+        // notified out-of-band), the nullifier spend above already enforced
+        // one-shotness — the registry removal is a redundant tooth, not a gate.
+        {
+            let mut reg = self.reactive_registry.lock().unwrap();
+            if reg.get_pending(&pending_id.0).is_some() {
+                let receipt = genuine_resolution_receipt(wake);
+                let _events = reg.resolve(
+                    pending_id.0,
+                    crate::pending::ResolutionOutcome::Resolved(receipt),
+                );
             }
         }
 
@@ -2413,5 +2689,317 @@ impl TurnExecutor {
         }
 
         Ok(())
+    }
+}
+
+// ─── End-to-end React-through-the-executor forge-detector ────────────────────
+//
+// The Track-2 bar: a `React` effect driven through the executor's `apply_effect`
+// dispatch resolves ONCE and SPENDS `pending_id` into the production
+// `note_nullifiers` set; a SECOND react on the same hole id — or a replay of the
+// same `pending_id` — is REJECTED by that identical nullifier gate (the same gate
+// `NoteSpend` rides). Not a stub: the rejection is the genuine double-spend
+// refusal from `NullifierSet::insert`, observed at the executor entry point.
+#[cfg(test)]
+mod react_executor_tests {
+    use super::*;
+    use crate::action::{
+        Action, Authorization, CommitmentMode, DelegationMode, Effect,
+    };
+    use crate::conditional::{ConditionProof, ProofCondition};
+    use crate::forest::CallForest;
+    use crate::pending::ResolutionCondition;
+    use crate::turn::Turn;
+    use dregg_cell::{CellId, Nullifier, Preconditions};
+
+    /// A minimal wake turn for `cell` (the turn the recipient runs on react).
+    /// Its hash is the promise-hole id == the React nullifier.
+    fn wake_turn(cell: CellId, nonce: u64) -> Turn {
+        let action = Action {
+            target: cell,
+            method: [0u8; 32],
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: Preconditions::default(),
+            effects: vec![],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut forest = CallForest::new();
+        forest.add_root(action);
+        Turn {
+            agent: cell,
+            nonce,
+            call_forest: forest,
+            fee: 1000,
+            memo: None,
+            valid_until: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            previous_receipt_hash: None,
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        }
+    }
+
+    /// A hash-preimage condition + its discharging proof — the simplest genuine
+    /// wake/react pair (the reactor reveals the preimage the notify committed to).
+    fn preimage_pair() -> (ProofCondition, ConditionProof) {
+        let preimage = [0x5Au8; 32];
+        let hash = *blake3::hash(&preimage).as_bytes();
+        (
+            ProofCondition::HashPreimage { hash },
+            ConditionProof::Preimage(preimage),
+        )
+    }
+
+    /// Build a React effect whose `pending_id` is bound to `wake` (its hash).
+    fn react_effect(wake: &Turn, condition: ProofCondition, proof: ConditionProof) -> Effect {
+        Effect::React {
+            pending_id: Nullifier(wake.hash()),
+            condition,
+            resolution_proof: proof,
+            wake: Box::new(wake.clone()),
+        }
+    }
+
+    fn react_cell() -> CellId {
+        CellId::from_bytes([0xB0; 32])
+    }
+
+    // ── THE END-TO-END FORGE-DETECTOR: react once spends the nullifier; a
+    //    SECOND react on the SAME hole id is REJECTED by the executor's
+    //    note_nullifiers gate (the same double-spend gate NoteSpend rides). ──
+    #[test]
+    fn react_through_executor_spends_once_and_rejects_react_twice() {
+        let executor = crate::executor::TurnExecutor::new(
+            crate::executor::ComputronCosts::zero(),
+        );
+        let cell = react_cell();
+        let wake = wake_turn(cell, 0);
+        let pending_id = Nullifier(wake.hash());
+        let (condition, proof) = preimage_pair();
+
+        // First, NOTIFY: deposit the hole in the executor's reactive registry
+        // (the recipient's wake). This is the genuine standing commitment.
+        let notify = Effect::Notify {
+            from: cell,
+            to: cell,
+            wake: Box::new(wake.clone()),
+            resolution_condition: ResolutionCondition::AwaitCondition(condition.clone()),
+            timeout_height: 100,
+        };
+        let mut ledger = Ledger::new();
+        let mut journal = LedgerJournal::new();
+        executor
+            .apply_effect(&notify, &mut ledger, &[0], &cell, &cell, &mut journal)
+            .expect("notify deposits the hole");
+        assert_eq!(
+            executor.reactive_registry.lock().unwrap().len(),
+            1,
+            "one live hole after notify"
+        );
+        assert!(
+            !executor.note_nullifiers.lock().unwrap().contains(&pending_id),
+            "hole id not yet spent"
+        );
+
+        // FIRST REACT: resolves and SPENDS the pending_id nullifier.
+        let react = react_effect(&wake, condition.clone(), proof.clone());
+        let mut journal1 = LedgerJournal::new();
+        executor
+            .apply_effect(&react, &mut ledger, &[1], &cell, &cell, &mut journal1)
+            .expect("a genuine react resolves once");
+        assert!(
+            executor.note_nullifiers.lock().unwrap().contains(&pending_id),
+            "the hole id is now SPENT in the production nullifier set (the grow-gate step)"
+        );
+        assert_eq!(
+            executor.reactive_registry.lock().unwrap().len(),
+            0,
+            "the hole is consumed (registry removal — the redundant second tooth)"
+        );
+
+        // SECOND REACT on the SAME hole id: REJECTED by the nullifier gate.
+        // This is the genuine double-spend refusal — NOT an unconditional Err:
+        // the executor finds pending_id already in note_nullifiers and refuses.
+        let mut journal2 = LedgerJournal::new();
+        let twice =
+            executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut journal2);
+        let (err, _) = twice.expect_err("react-twice MUST be rejected by the nullifier gate");
+        match err {
+            TurnError::InvalidEffect { reason } => assert!(
+                reason.contains("double-spend") && reason.contains("one-shot"),
+                "rejection must be the double-spend one-shot refusal, got: {reason}"
+            ),
+            other => panic!("expected InvalidEffect double-spend, got {other:?}"),
+        }
+        // The nullifier set still holds exactly the one spend.
+        assert!(executor.note_nullifiers.lock().unwrap().contains(&pending_id));
+    }
+
+    // ── A REPLAYED pending_id (a fresh React carrying the SAME hole id, even
+    //    re-notified) is refused by the SAME gate — the one-shot is enforced at
+    //    the nullifier layer, not merely by registry removal. ──
+    #[test]
+    fn replayed_pending_id_refused_by_nullifier_gate() {
+        let executor = crate::executor::TurnExecutor::new(
+            crate::executor::ComputronCosts::zero(),
+        );
+        let cell = react_cell();
+        let wake = wake_turn(cell, 0);
+        let pending_id = Nullifier(wake.hash());
+        let (condition, proof) = preimage_pair();
+        let mut ledger = Ledger::new();
+
+        // React #1 — spends pending_id.
+        let react = react_effect(&wake, condition.clone(), proof.clone());
+        let mut j1 = LedgerJournal::new();
+        executor
+            .apply_effect(&react, &mut ledger, &[0], &cell, &cell, &mut j1)
+            .expect("first react spends the hole id");
+        assert!(executor.note_nullifiers.lock().unwrap().contains(&pending_id));
+
+        // RE-NOTIFY the same hole (a fresh live registry entry with the same id),
+        // then REACT again. The registry-removal tooth is bypassed (the hole is
+        // live again), but the nullifier gate still refuses: the hole id was
+        // already spent.
+        let notify = Effect::Notify {
+            from: cell,
+            to: cell,
+            wake: Box::new(wake.clone()),
+            resolution_condition: ResolutionCondition::AwaitCondition(condition.clone()),
+            timeout_height: 100,
+        };
+        let mut jn = LedgerJournal::new();
+        executor
+            .apply_effect(&notify, &mut ledger, &[1], &cell, &cell, &mut jn)
+            .expect("re-notify deposits a fresh live hole");
+        assert_eq!(executor.reactive_registry.lock().unwrap().len(), 1);
+
+        let mut j2 = LedgerJournal::new();
+        let replay =
+            executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut j2);
+        let (err, _) = replay.expect_err("a replayed pending_id MUST be refused");
+        assert!(
+            matches!(err, TurnError::InvalidEffect { reason } if reason.contains("double-spend")),
+            "the replay is refused by the production nullifier gate (the hole id is spent)"
+        );
+    }
+
+    // ── The nullifier↔turn binding is genuine: a React whose `wake` does NOT
+    //    hash to `pending_id` is refused (it cannot spend one hole while
+    //    claiming to resolve another). ──
+    #[test]
+    fn react_with_mismatched_wake_refused() {
+        let executor = crate::executor::TurnExecutor::new(
+            crate::executor::ComputronCosts::zero(),
+        );
+        let cell = react_cell();
+        let wake = wake_turn(cell, 0);
+        let other = wake_turn(cell, 999); // a DIFFERENT turn (different nonce)
+        let (condition, proof) = preimage_pair();
+
+        // pending_id claims `wake`, but the carried resolved turn is `other`.
+        let forged = Effect::React {
+            pending_id: Nullifier(wake.hash()),
+            condition,
+            resolution_proof: proof,
+            wake: Box::new(other),
+        };
+        let mut ledger = Ledger::new();
+        let mut journal = LedgerJournal::new();
+        let r = executor.apply_effect(&forged, &mut ledger, &[0], &cell, &cell, &mut journal);
+        let (err, _) = r.expect_err("a mismatched wake/pending_id MUST be refused");
+        assert!(
+            matches!(err, TurnError::InvalidEffect { reason } if reason.contains("binding")),
+            "refusal must cite the nullifier↔turn binding violation"
+        );
+        // Nothing was spent — a refused react burns no hole.
+        assert!(
+            !executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&Nullifier(wake.hash())),
+            "a refused react spends no nullifier"
+        );
+    }
+
+    // ── A WRONG proof is refused and spends nothing (fail-closed): the hole id
+    //    is NOT inserted into the nullifier set on a failed react. ──
+    #[test]
+    fn wrong_proof_refused_spends_nothing() {
+        let executor = crate::executor::TurnExecutor::new(
+            crate::executor::ComputronCosts::zero(),
+        );
+        let cell = react_cell();
+        let wake = wake_turn(cell, 0);
+        let pending_id = Nullifier(wake.hash());
+        let (condition, _good) = preimage_pair();
+        let wrong = ConditionProof::Preimage([0xFFu8; 32]); // not the preimage
+
+        let react = react_effect(&wake, condition.clone(), wrong);
+        let mut ledger = Ledger::new();
+        let mut journal = LedgerJournal::new();
+        let r = executor.apply_effect(&react, &mut ledger, &[0], &cell, &cell, &mut journal);
+        assert!(
+            matches!(r, Err((TurnError::InvalidEffect { .. }, _))),
+            "a wrong proof is refused"
+        );
+        assert!(
+            !executor.note_nullifiers.lock().unwrap().contains(&pending_id),
+            "fail-closed: a refused react inserts no nullifier"
+        );
+
+        // The GENUINE proof can still discharge it afterwards (the bad attempt
+        // did not poison the nullifier gate).
+        let (cond2, good) = preimage_pair();
+        let good_react = react_effect(&wake, cond2, good);
+        let mut journal2 = LedgerJournal::new();
+        executor
+            .apply_effect(&good_react, &mut ledger, &[1], &cell, &cell, &mut journal2)
+            .expect("the genuine proof discharges the hole");
+        assert!(executor.note_nullifiers.lock().unwrap().contains(&pending_id));
+    }
+}
+
+/// A GENUINE resolution receipt for a discharged promise-hole: content-addressed
+/// to the resolved `wake` turn (whose hash the React effect verified equals the
+/// spent `pending_id`). Unlike a fabricated receipt, every field is derived from
+/// the real resolved turn — `forest_hash` from its call forest, `post_state_hash`
+/// bound to the turn hash — so the registry's cascade carries a real provenance
+/// link to the turn that was actually proven-resolved.
+fn genuine_resolution_receipt(wake: &Turn) -> TurnReceipt {
+    let turn_hash = wake.hash();
+    TurnReceipt {
+        turn_hash,
+        forest_hash: wake.call_forest.compute_hash(),
+        pre_state_hash: [0u8; 32],
+        post_state_hash: turn_hash,
+        timestamp: 0i64,
+        effects_hash: [0u8; 32],
+        computrons_used: 0,
+        action_count: wake.call_forest.roots.len(),
+        previous_receipt_hash: None,
+        agent: wake.agent,
+        federation_id: [0u8; 32],
+        routing_directives: vec![],
+        introduction_exports: vec![],
+        derivation_records: vec![],
+        emitted_events: vec![],
+        executor_signature: None,
+        finality: Default::default(),
+        was_encrypted: false,
+        was_burn: false,
+        consumed_capabilities: vec![],
     }
 }

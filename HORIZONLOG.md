@@ -11,6 +11,28 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ⚑ REACT CIRCUIT WITNESS — the `reactSpendA` descriptor (the in-circuit grow-gate for `Effect::React`), 2026-06-21
+The first-class reactive effect landed at the EXECUTOR layer (Track 2): `Effect::Promise/Notify/React`
+(`turn/src/action.rs`) dispatch through `TurnExecutor::apply_react` (`turn/src/executor/apply.rs`), which
+spends `pending_id` into the SAME production `note_nullifiers` set `NoteSpend` rides — so react-twice /
+replayed-pending_id is rejected by the identical double-spend gate (genuine end-to-end +
+forge-detector tests green in `react_executor_tests`). NAMED follow-up = the in-circuit witness:
+a light client verifying a batch bearing a `React` must SEE the promise-hole nullifier grow exactly as
+`noteSpendA` does. The descriptor to add: **`dregg-effectvm-react-spend-ir2.json`** (a sibling of
+`dregg-effectvm-note-spend-ir2.json`), with the matching Lean **`Inst.ReactA` + `Witness.ReactWitness`**
+(mirror `Dregg2.Circuit.Inst.noteSpendA` + `Dregg2.Circuit.Witness.NoteSpendWitness`): touched component =
+the `nullifiers` LIST; guard = anti-replay `pending_id ∉ nullifiers`; the log GROWS by the react receipt;
+the concrete digest reads the nullifier list positionally (the `refP2` Poseidon2 sponge), so a forged
+nullifier-set rewrite is visible to the BIND gate. The refinement rung: `reactSpend_descriptorRefines_sat`
+(mirror `noteSpend`'s rung). The ONE difference from noteSpend: React's spend carries no monetary value
+delta (no paired NoteCreate / conservation leg) — the `value` column is fixed `0`, so the descriptor is
+the value-erased noteSpend grow-gate. SHORTCUT TO EVALUATE FIRST: because the spend is byte-identical at
+the nullifier-set level, the `effect_vm_bridge` MAY be able to project `React` to `VmEffect::NoteSpend {
+nullifier: pending_id, value: 0 }` and ride the EXISTING `noteSpendA` rung unchanged — confirm whether the
+existing descriptor's `value=0` path is sound for a no-paired-create spend before building a new descriptor.
+Closure: land the descriptor (or the VmEffect::NoteSpend projection) + the rung, VK-affecting → ember-gated
+redeploy. (`docs/deos/REACTIVE-EFFECTS.md` §6.)
+
 ## ✅ CELL CENSUS 4-vs-8 — RESOLVED: NOT a bug (cockpit installs reflexive UI cells), 2026-06-21
 The cockpit shows 8 cells, the raw `demo_world` ledger has 4. RESOLVED: `Cockpit::with_node`
 (`cockpit.rs:~860-911`) installs extra UI-scaffolding cells via `genesis_cell` on top of demo_world's 4 —

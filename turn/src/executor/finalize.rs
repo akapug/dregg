@@ -63,6 +63,12 @@ impl TurnExecutor {
             // AttenuateCapability: an in-place c-list mutation, like
             // GrantCapability.
             Effect::AttenuateCapability { .. } => self.costs.effect_base,
+            // Promise / Notify deposit a promise-hole (a registry insert): one
+            // effect_base. React discharges a hole by verifying a resolution
+            // proof and spending the hole-id nullifier — proof_verify, like
+            // NoteSpend.
+            Effect::Promise { .. } | Effect::Notify { .. } => self.costs.effect_base,
+            Effect::React { .. } => self.costs.proof_verify,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))
