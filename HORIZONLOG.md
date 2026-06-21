@@ -11,6 +11,22 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ✅✅ WEB COCKPIT — THE EXECUTOR RUNS LIVE IN THE BROWSER (2026-06-22, the keystone REALIZED)
+Path C landed end-to-end. ONE MODEL, native + browser: the gpui-free Presentable/World substance compiles to
+wasm32 + drives the REAL verified executor in a browser tab, no server.
+- WASM-PORT (commit a0b6284e0, by the port agent): starbridge-v2 model → wasm32 (target-gated no-lean-link
+  executor deps · persist/redb stubbed `persistence_wasm.rs` · getrandom js). Native stays green.
+- BINDGEN SURFACE (commit 23324b470): NEW crate `starbridge-v2/web/` (cdylib) — `WebImage { survey, inspect
+  [7 faces], affordances, act [REAL cap-gated turn], ocap }` = dregg-mcp's core tools, in-browser. + the
+  runtime time wall fixed (world::now_unix uses js_sys::Date::now on wasm32).
+- LIVE COCKPIT (commit 410a7379b): `starbridge-v2/web/cockpit.html` — interactive cockpit (clickable cells →
+  7 faces → click-to-act → live re-render), all driven by WebImage. VERIFIED in headless Chrome: act touch
+  COMMITS, act grant REFUSED by cap-gate, all in wasm.
+- BUILD/RUN: `cd starbridge-v2 && wasm-pack build web --target web --out-dir pkg --dev` then serve
+  `web/` over http + open `cockpit.html` (or `test.html`). pkg/ is gitignored (40MB dev; use --release for
+  size). The atlas's app.js can drive WebImage live (the next polish: nav/back-forward in the web cockpit).
+- ✅ CLOSED (750d0d07c): the AuthRequired::None cap-badge inversion. affordance.rs::authorized_for special-cases None-required → always-authorized; the real grant guarantee fires in the executor. 7 inspect_act tests green.
+
 ## ⚑⚑ WEB COCKPIT — Presentable/NavAction in the browser (the keystone; ember 2026-06-22)
 THE GOAL: starbridge-v2 as an in-browser experience. THREE skins of ONE model (the gpui-free
 `Presentable`/`Presentation`/`NavAction`/`InspectAct`/`reflect` substance in `starbridge-v2/src/`):
@@ -245,40 +261,6 @@ balance even for value-neutral verbs. CLOSURE (decide): if wells are meant to be
 fine (document it); if a well should be able to emit/tick, the fee path needs a zero-fee or
 well-exempt branch. Repro: dregg-mcp `effect from=<well> kind=transfer` → refused. Not a soundness issue.
 
-## ⚑ AFFORDANCE CAP-BADGE — `AuthRequired::None` reports UNAUTHORIZED for non-None holders (found by dregg-mcp, 2026-06-21)
-The new dregg-mcp driving harness (`starbridge-v2/src/bin/dregg_mcp.rs`) surfaced this on its first
-drive. `affordances user` shows the `grant` message with `required: None` yet `authorized: false`, and
-`act user grant` is refused `by_executor:false` ("does not satisfy None"). MECHANISM: the cap badge is
-`InspectAct::build` → `Affordance::authorized_for(&held) = is_attenuation(held.rights, required_rights)`
-(`starbridge-v2/src/affordance.rs:100`), and `is_attenuation(held, req) = req.is_narrower_or_equal(held)`
-(`cell/src/capability.rs:604`). The lattice (`cell/src/permissions.rs:52`) models `None` as the TOP
-(widest): `(None, _) => false`, `(_, None) => true`. So a `None`-REQUIRED affordance — documented as
-"Always allowed, no authorization needed" (`permissions.rs:6`) — yields `None.is_narrower_or_equal(held)
-= false` for any `held ≠ None`, i.e. it reports UNAUTHORIZED for everyone. The formula is correct for the
-middle tiers (a `Signature` requirement clears under an `Either` holder) but INVERTS for `None`: an
-always-allowed action shows refused. TWO-WAY CLOSURE (needs ember's intent): (a) if `grant`'s
-`required_rights` was set to `None` MEANING "always allowed", the badge formula must special-case the
-always-satisfiable bottom — an action requiring `None` is authorized for ALL holders (today it is the
-opposite); OR (b) if `grant` is meant to require the OWNER/root tier, its `required_rights` is mis-set to
-`None` (the apex-vs-open overload of `None`) and should be a real strong tier, and the `None` doc-comment
-("always allowed") then disagrees with its lattice-top role — pick one meaning for `None`. REPRO is the
-harness itself: `act user grant` on the demo image. This is a candidate authorization-display/logic bug,
-not yet a confirmed kernel hole (the executor was never reached — the cap-gate refused first).
-
-VK-EPOCH STAGE B (setPermissions/setVK) — LANDED on-wire light-client-verifiable. The in-circuit
-perms/VK weld (`permsVKWeldGate`, descriptor constraint #64, limbs B_PERMS=33/B_VK=34) FORCES the
-committed AFTER perms/vk-digest sub-limb == the declared param (PI-anchored via effects_hash) and is
-absorbed into the published B_STATE_COMMIT → wide-v9 NEW_COMMIT. Witness:
-`circuit/tests/vk_epoch_perms_vk_light_client_binding.rs` (perms-/vk-only forged post-cell UNSAT with
-`failed constraints=[#64]`, anchor-disabled; honest accepts). The SDK light-client verify
-(`full_turn_proof::verify_effect_vm_rotated_with_cutover`) never calls `apply_effect_to_cell`, so these
-2 are FORCED-ON-WIRE. NAMED RESIDUAL (STAGE F, VK-affecting, deferred to the anchor-cutover flag-day):
-the full-node `proof_verify.rs` off-cell PI-46 authority-digest pin (limb 24) is now REDUNDANT
-belt-and-suspenders for setPerms/setVK but cannot be dropped without retiring the descriptor's PI-46
-pin (would red honest full-node placeholder-reconstruction proofs). FAN-OUT: the remaining off-cell-
-anchor families (Refusal record-digest via fields_root; lifecycle-PAYLOAD reason_hash/deathCert) ride
-the SAME `proof_verify.rs` block + the SAME conversion shape (weld the dedicated committed sub-limb to
-the declared/forced value, then the anchor becomes redundant).
 
 ## ⚑ VK-EPOCH ROUTING WELDS — noteCreate + makeSovereign FORCED-ON-WIRE; setFieldDyn = deeper residual (2026-06-21)
 Two of the three big-wave residual welds CLOSED on-wire (VK-FREEDOM ERA — generator-side, NO descriptor/VK
