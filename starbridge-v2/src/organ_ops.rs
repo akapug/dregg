@@ -541,16 +541,21 @@ impl OrganDriver {
             .map(|c| c.capabilities.has_access(&well))
             .unwrap_or(false);
         if !already {
-            // The well SELF-GRANTS the adopt cap to the borrower as an ORDERED turn
-            // (the cap target IS the well, so the executor's self-grant arm
-            // authorizes it by the well's own consent). The grant touches only the
-            // well's c-list — its OPEN-state invariants are unchanged, so the
-            // flash-well program gate still admits it. Lands a `CommitRecord`
-            // (durable-replay safe) instead of a timeless genesis mutation.
-            let grant = world.turn(well, vec![world::grant_capability(well, borrower, well, 0)]);
-            if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(grant) {
-                return Err(OrganOpError::ExecutorRejected { op: OrganOp::Draw, reason });
-            }
+            // THE ADOPT-GRANT — the operator-root endows the BORROWER's c-list with
+            // a cap reaching the well (single-custody collapse of the SDK's adopt
+            // step). This is a genesis-SETUP authority install on the BORROWER (it
+            // touches only the borrower's c-list, NOT the well's state), so it cannot
+            // ride a turn that names the well as the grant source: any such turn
+            // would touch the well and its `StrictMonotonic(ratchet)` fee-evasion
+            // tooth (every well-touch must climb the ratchet) would REFUSE a grant
+            // that does not draw. The grant is the operator's prerogative over the
+            // borrower it owns, exactly as `embody` seeds a genesis cell's authority.
+            // (RESIDUAL — durable-world gap: on a durable image where the borrower is
+            // already turn-touched, this is a mid-session genesis mutation; the
+            // genesis guard refuses it. The sound full fix is born-with-the-adopt-cap
+            // at the borrower's birth, or a per-touch program guard that scopes the
+            // ratchet tooth to draws only — HORIZONLOG.)
+            world.genesis_grant_cap(&borrower, well);
         }
         let next_ratchet = r.ratchet.saturating_add(r.fee);
         // ONE turn the BORROWER signs carrying the whole ring: the draw out (well →
