@@ -3188,6 +3188,39 @@ wire. FOLLOW-UP (the deploy step of the cap-write soundness fix; non-VK-blocked,
 edit): add the new descriptor names to the emitter so the deployed JSON carries exactly what the apex proves about,
 then re-pin the drift gate. Real, named, driveable next (VK-freedom era).
 
+## ⚑⚑⚑ AUTHORITY FLOOR — LAST MILE, the light-client forge CLOSED via the verifier tooth (2026-06-20, base 99cf43412, UNCOMMITTED)
+The verdict-(b) light-client gap (a40fea04, below) is CLOSED on the load-bearing axis: the SDK light-client
+verifier `verify_effect_vm_rotated_with_cutover` (sdk/src/full_turn_proof.rs) now REJECTS a cap effect proven
+under its PLAIN cohort descriptor. New `is_forbidden_plain_cap_descriptor` forbids the 5 plain cap-effect
+descriptors (introduce/revoke/attenuate/grantCap/revokeCapability VmDescriptor2R24) as the uniquely-accepting
+descriptor — a cap effect MUST bind a `…CapOpen…VmDescriptor2R24` (the depth-16 capOpenConstraintsEff membership
+crown is IN that descriptor and ONLY there). So a malicious producer that strips the cap-open route to launder
+host-trusted authority into a passing light-client proof is now REFUSED.
+- WHY the verifier tooth (not a blind producer resolver re-point): the deployed wire shares NO single resolver
+  the way the verdict assumed. (1) The SDK light-client verifier iterates ALL cohort descriptors and binds the
+  unique acceptor (it does NOT call `rotated_descriptor_name`) — so the FORCING had to be a forbidden-name tooth
+  there. (2) The executor `verify_one_cohort_run` REGENERATES the WIDE trace by name from PLACEHOLDER witnesses —
+  it has NO cap-membership witness, so it CANNOT regenerate a cap-open trace; re-pointing its resolver would
+  break it. (3) The honest producer ALREADY routes cap-open (`cap_open_route_for_run`, cap-presence-driven,
+  full_turn_proof.rs:1096/1687) — the verifier tooth makes that route MANDATORY (a producer can't get a cap
+  effect accepted via plain), which is the forcing the verdict named, achieved soundly.
+- NEW forge-rejection test `light_client_rejects_cap_effect_under_plain_descriptor`: proves a RevokeDelegation
+  (cap effect) under the PLAIN revokeVmDescriptor2R24 (the exact forge) → the light-client verifier REJECTS with
+  the AUTHORITY-FLOOR reason; the honest cap-open route (cap_open_fanout_revoke test) still VERIFIES. ONE-WAY
+  tooth: plain cap-effect ⇒ reject, cap-open ⇒ accept.
+- NO VK/descriptor drift (verifier-behavior change only; no .tsv/.json touched — the cap-open descriptors forced
+  onto already exist in V3_STAGED_REGISTRY_TSV). Green: dregg-sdk lib 257, dregg-turn lib 512, dregg-node
+  capability 8, cap_open suite 4. Build green across circuit(prover)+turn+sdk+node.
+- RESIDUE (named, NOT in scope of this fix): (a) refreshDelegation stays on its plain descriptor — its deleg-tree
+  WRITE column's cap-open variant is producer-unwired (refresh re-arms an existing delegation, confers no new
+  authority — named, not a silent forge). (b) The …WriteCapOpen descriptors (introduceWrite/delegateWrite/
+  delegateAttenWrite/revokeDelegationWrite) are in the STAGED registry but NOT the WIDE registry — the executor
+  sovereign verify path can't reach them yet; the SDK light-client path uses the authority-bearing CapOpen family
+  (already wired). The write-op binding into the commitment (the ~17-effect descriptor-fix terrain in
+  docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md) is the next layer. (c) The executor sovereign-witness verify path is
+  FULL-NODE (host check_breadstuff + the SDK cap-membership leg on the cap-gated path) — the verdict confirms
+  full-node safety, so the light-client `verify_full_turn` path was the load-bearing axis and is now closed.
+
 ## ⚑⚑⚑ AUTHORITY FLOOR — CORRECTION (2026-06-20, a40fea04) — the cap-open authority crown is proven-in-Lean, NOT-on-the-wire (light-client gap)
 Investigating the producer-selection layer surfaced a real gap (verdict (b): light-client gap, NOT a full-node
 hole). The earlier "guarantee A apex-forced ~28/30" was about the LEAN apex; the DEPLOYED WIRE is weaker:
