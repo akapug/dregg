@@ -270,6 +270,13 @@ pub mod lean_lookup_air;
 #[cfg(any(feature = "prover", feature = "verifier"))]
 pub mod descriptor_ir2;
 
+/// The genuine `proof_bind` engine for the `custom` effect: a REAL external
+/// STARK sub-proof verification (not a bounds check). Makes the deployed
+/// `customVmDescriptor2R24` `proof_bind` op MEAN "the bound proof verified" —
+/// a custom effect carrying a forged sub-proof is rejected. See module docs.
+// The module's own inner `#![cfg(feature = "prover")]` provides the gate.
+pub mod custom_proof_bind;
+
 /// Recursive (Golden Vision) compression bridge for `dregg_turn::WitnessedReceipt`
 /// scope-2 replay. See the module docs for the Silver→Golden mapping and
 /// the VK v2 layered encoding of the recursive VK hash.
