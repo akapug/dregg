@@ -422,18 +422,28 @@ impl HeadlineDemo {
             .ok_or(DemoError::NoChildCell)?;
         self.token = token;
 
-        // Grant A an ORIGINAL cap reaching the token cell + open the budget cell's
-        // permissions — as ORDERED TURNS, not timeless genesis facts. The token was
-        // JUST born by a `CreateCellFromFactory` turn (it is turn-touched), so the
-        // genesis-path mutation would file a post-turn write as a pre-turn fact and
-        // break reopen (the category error). A is the minter/owner, so it holds the
-        // authority these turns spend under (no-amplification gates them for real).
-        let grant = crate::world::grant_capability(self.agent_a, token, token, 0);
-        let grant_turn = self.world.turn(self.agent_a, vec![grant]);
-        let _ = self.world.commit_turn(grant_turn);
-        let open = crate::world::set_permissions(token, crate::world::open_permissions());
-        let open_turn = self.world.turn(self.agent_a, vec![open]);
-        let _ = self.world.commit_turn(open_turn);
+        // Endow the freshly-minted token cell: A receives an ORIGINAL cap reaching
+        // it, and its permissions open so A's in-mandate spend FROM it (frame 2)
+        // commits. A is the minter/owner — this is the minter endowing its own
+        // just-born cell.
+        //
+        // RESIDUAL — THE BORN-WITH-OPEN-PERMISSIONS GAP (cannot ride an ordered turn
+        // here): the token is factory-born carrying the factory's default
+        // permissions (`send`/`set_permissions`/`delegate == Signature`), and the
+        // single-custody embedded world authors only `Unchecked` turns. So NEITHER
+        // can be a turn: a `GrantCapability` reaching the token needs a granter that
+        // already holds the cap (a token self-grant is blocked by its
+        // `delegate == Signature`), and a `SetPermissions`/self-`SetPermissions` on
+        // the token is blocked by its `set_permissions == Signature` — an `Unchecked`
+        // turn cannot satisfy a `Signature` requirement. The sound full fix is to
+        // birth the child OPEN (an `initial_permissions` threaded through the factory
+        // descriptor / `FactoryCreationParams` — `cell/factory` territory), so no
+        // post-birth mutation is needed at all. Until then this stays on the
+        // genesis-SETUP path: sound here (the headline demo runs on an EPHEMERAL
+        // world — `World::with_costs`, `persist: None` — so the durability guard
+        // never engages and no image is corrupted). HORIZONLOG'd.
+        let _ = self.world.genesis_grant_cap(&self.agent_a, token);
+        let _ = self.world.genesis_open_permissions(&token);
 
         let height = self.world.height();
         self.frames.push(DemoFrame::committed(

@@ -660,8 +660,16 @@ impl World {
 
     /// Re-record a cell's current post-state into the durable genesis table (the
     /// in-place genesis-path mutators call this when the image is durable, so a
-    /// `set_cell_program`/`genesis_grant_cap`/`genesis_open_permissions` survives
-    /// a reopen). No-op on an ephemeral world.
+    /// genesis-SETUP `set_cell_program`/`genesis_grant_cap`/`genesis_open_permissions`
+    /// survives a reopen). No-op on an ephemeral world.
+    ///
+    /// This is now load-bearing ONLY for genesis-SETUP (a mutation BEFORE the cell's
+    /// first turn — the genesis-mirror snapshot IS the pre-turn base, so recovery's
+    /// turn re-execution sees the right cell). Runtime customization no longer routes
+    /// here: a mid-session reprogram/grant/permission-change rides an ORDERED turn
+    /// (`Effect::SetProgram` / `GrantCapability` / `SetPermissions`), landing a
+    /// `CommitRecord` so recovery replays it in order — the persist-durability
+    /// category error dissolved at its root.
     fn durable_regenesis(&self, id: &CellId) {
         if let Some(p) = self.persist.as_ref() {
             if let Some(cell) = self.engine.ledger().get(id) {
