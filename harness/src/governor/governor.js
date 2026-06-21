@@ -136,11 +136,15 @@ const DEFAULT_LEAN_EXE = new URL(
 
 async function decideViaLean(ctx) {
   const exe = process.env.GOVERNOR_LEAN_EXE ?? DEFAULT_LEAN_EXE;
-  // Wire protocol (PolisGovernor.lean floor-check mode): one line = the projected
-  // next-world distances, space-separated. The binary applies the VERIFIED floor
-  // (admit iff every dist ≤ budget) and prints "ADMIT" / "REFUSE ...". We send the
-  // post-action projection; the verified Lean decision decides.
-  const input = Object.values(ctx.nextWorld).join(" ");
+  // Wire protocol (PolisGovernor.lean): the GENERAL ≤-floor as `pairs v1 l1 v2 l2 …`
+  // — each projected floor-axis value paired with its limit. The binary applies the
+  // VERIFIED floor (admit iff every vᵢ ≤ lᵢ) and prints "ADMIT" / "REFUSE ...".
+  // Single-axis worlds pair each value with BUDGET; a richer world can carry per-axis
+  // limits as `<axis>_limit` keys in nextWorld (e.g. {dist:6, dist_limit:5}).
+  const pairs = Object.entries(ctx.nextWorld).flatMap(([k, v]) =>
+    k.endsWith("_limit") ? [] : [v, ctx.nextWorld[`${k}_limit`] ?? BUDGET],
+  );
+  const input = "pairs " + pairs.join(" ");
   const out = await runGovernor(exe, input);
   const admit = out.startsWith("ADMIT");
   return {
