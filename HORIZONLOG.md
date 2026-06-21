@@ -3539,3 +3539,16 @@ THE NAMED RESIDUAL WELDS (the next wave): (1) noteCreate routing branch in proof
   forge); (3) the declared-payload-column primitive for refusal/lifecycle-payload (the deleg-tree-column shape, VK);
   (4) effects_hash into the rotated PI window (emitEvent/pipelinedSend/exercise); (5) delegateAtten routing signal;
   (6) SetProgram FullActionA ~30-file weld; (7) revoke(tag-2) frozen-face. STAGE F (retire PI-46) last.
+
+## ⚑ BOARD CORRECTION (2026-06-21) — stale lines the hook flagged
+- resolvers_cover_exactly_the_rotated_registry is GREEN (fixed fb27a30b4, 51->52 documented) — the "RED 37 vs 36"
+  in the 4c27858b9 entry was already superseded; verified `cargo test` ok.
+- receiptArchive(40) is CLOSED (Class-A, banked 56178b050) — not open.
+THE RESIDUAL-WELD WAVE is DRIVING (not named-and-parked) — 4 agents in flight:
+- a72bf75a: noteCreate routing + makeSovereign record-pin + setFieldDyn generator (the 3 broken live seams).
+- a3acc831: the declared-payload-column primitive (refusal + lifecycle-payload + effects_hash light-client binding).
+- aef70ac7: SetProgram FullActionA constructor weld (apex membership, ~30 files).
+- ae15d66a: delegateAtten routing signal + revoke(tag-2) frozen-face rebase (the last 2 cap slots).
+GOAL STANCE: every named weld is UNDER A RUNNING AGENT with a green-check bar (genuine prove + forge-reject /
+mutation-confirmed apex red / axiom-clean lake), per Law #6 — named = a burn-down with its closure lane running,
+never a parking lot.
