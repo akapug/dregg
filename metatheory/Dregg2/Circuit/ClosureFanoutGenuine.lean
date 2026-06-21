@@ -294,20 +294,33 @@ theorem closedLogExtract_introduce_closed {State : Type}
   exact introduce_closedLog_sat Scap hash hsat' pre post intro rec tt
     pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
-/-- **attenuate (12).** -/
+/-- **attenuate (12) — CLASS A.** `Rfix 12 = attenuateCapOpenEffV3` (position 43): the LIVE cap-open
+authority descriptor whose base `attenuateV3` is the MOVING write face (no `gCapPass` freeze). The cap-tree
+UPDATE-AT-KEY (the in-place slot narrow) is FORCED via `attenuate_descriptorRefines_capOpenSat` (strip the
+authority appendix + selector tooth → `Satisfied2 attenuateV3` → `attenuateV3_non_amp`'s `keepWriteOp`).
+The readout supplies the realizable submask table-fill `hsub` alongside the anchor. Editing `attenuateV3`'s
+write op reds this rung — and the apex. Refines `AttenuateSpec`. -/
 theorem closedLogExtract_attenuate_closed {State : Type}
     (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 12) minit mfin maddrs t →
       Σ' (actor : CellId) (idx : Nat) (keep : List Dregg2.Authority.Auth),
+        PLift (t.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
+          = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS) ×'
         PLift (pubLogPost = LH (authReceipt actor :: pre.log)) ×'
         (post.log = authReceipt actor :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateCapsTreeEncodes Scap pre post actor idx keep)) :
+          Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateCapsTreeEncodes
+                Scap pre post actor idx keep),
+            Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateWriteAnchor
+              Scap pre post actor idx keep hash minit mfin maddrs t henc)) :
     ClosedLogExtract Slive LH hash Rfix 12 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  obtain ⟨actor, idx, keep, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact attenuate_closedLog Scap pre post actor idx keep pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.attenuateCapOpenEffV3
+      minit mfin maddrs t := hsat
+  obtain ⟨actor, idx, keep, hsub, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact attenuate_closedLog_sat Scap hash hsub.down hsat' pre post actor idx keep
+    pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **delegateAtten (11) — CLASS A.** `Rfix 11 = delegateAttenWriteCapOpenV3` (position 48): the cap-tree
 insert + the `granted ⊑ held` non-amplification are FORCED via `delegateAtten_descriptorRefines_capOpenSat`.
@@ -768,9 +781,14 @@ structure ClosureReadouts
   rdAttenuate : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 12) minit mfin maddrs t →
     Σ' (actor : CellId) (idx : Nat) (keep : List Dregg2.Authority.Auth),
+      PLift (t.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
+        = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS) ×'
       PLift (pubLogPost = LH (authReceipt actor :: pre.log)) ×'
       (post.log = authReceipt actor :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateCapsTreeEncodes Scap pre post actor idx keep)
+        Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateCapsTreeEncodes
+              Scap pre post actor idx keep),
+          Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateWriteAnchor
+            Scap pre post actor idx keep hash minit mfin maddrs t henc)
   rdDelegateAtten : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 11) minit mfin maddrs t →
     Σ' (del rec tt : CellId) (keep : List Dregg2.Authority.Auth),
