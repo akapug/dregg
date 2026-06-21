@@ -38,15 +38,28 @@ delegateAtten = `sel.GRANT_CAP = 3`, introduce = `sel.INTRODUCE = 35`, revokeDel
 GREEN + axiom-clean; descriptors regen + drift PASS (guards now read 30/3/3/35, was 2). FORGE-DETECTOR FLIPPED
 GREEN: `write_cap_open_wrapper_requires_cap_tree_write_witness_no_silent_forge` (a genuine 213≠264 change with
 empty map_heaps is now REJECTED — the map_op fires + fails to resolve the fabricated root);
-`cap_write_revoke_proves_and_verifies_light_client` STAYS GREEN (now GENUINE). NAMED RESIDUAL (deeper, not a guard
-re-point): attenuate (`keepWriteOp`) + revokeCapability (`removeWriteOp`) carry the SAME never-firing guard
-(`selA.ATTENUATE = 2` vs the live `sel.ATTENUATE_CAPABILITY = 48` / `sel.REVOKE_CAPABILITY = 24`) BUT write the
-V1-STATE cap-root (col 65/87), NOT a rotated-limb commitment input, AND have no `generate_rotated_cap_write_base`
-witness-heap bridge — so a guard re-point ALONE breaks the honest prove-through
-(`cap_open_attenuate_leg_proves_and_verifies_end_to_end`) without binding into the commitment. CLOSURE = the SAME
-rotated-limb rebase the cap-WRITE wrappers got (move `keepWriteOp`/`removeWriteOp` onto a rotated `…OpRot` limb-25
-write that folds into `wireCommitR` + thread the cap-tree witness heap on the attenuate/revokeCapability route).
-Left at the faithfulness name (documented FORGE NOTE in `EffectVmEmitV2.heldReadOp`) pending that rebase.
+`cap_write_revoke_proves_and_verifies_light_client` STAYS GREEN (now GENUINE).
+
+### attenuate + revokeCapability — DESCRIPTOR + FORGE-DETECTOR CLOSED; Rust honest-route HANDED OFF (2026-06-21)
+The SAME forge (the var2/SET_FIELD never-firing guard + V1-STATE col-65/87 write) was present in attenuate
+(`keepWriteOp`) + revokeCapability (`removeWriteOp`). CLOSED in Lean: `attenuateV3` / `revokeCapabilityV3` rebased
+onto `v3OfWithCapWrite` over the tick face (`attenuateVmDescriptorGenuineNoRecomputeTick`) with the ROTATED-limb
+ops (new `keepWriteOpRot` + reused `heldReadOpRot`/`removeWriteOpRot`, var 213→264) FIRING-guarded on
+`sel.ATTENUATE_CAPABILITY = 48` / `sel.REVOKE_CAPABILITY = 24`; the v1-state cap-root cols 65/87 FREEZE. Apex rungs
+re-proved + axiom-clean (`attenuateV3_non_amp`, `revokeCapabilityV3_non_amp`, `attenuate_descriptorRefines_sat`,
+`revokeCapability_descriptorRefines_sat`; `AttenuateWriteAnchor`/`RevokeCapabilityTraceReadout` re-anchored to the
+rotated limbs). lake green, full Dregg2 no-sorry. Descriptors REGEN (`emit_descriptors.py`) — on the wire the
+attenuate/revokeCapability map_op now `op=write guard=var48/24 root=var213 new_root=var264` (var 264 GENUINELY
+BOUND, verified). FORGE-DETECTORS GREEN (`sdk/.../full_turn_proof.rs`): `cap_write_attenuate_no_silent_forge` +
+`cap_write_revoke_cap_no_silent_forge` (a genuine 213≠264 change proves-with-empty-map_heaps → REJECTED).
+**RUST HANDOFF (cap-write-Inserts agent's `trace_rotated.rs` region):** the honest prove-through now needs the
+cap-tree witness heap for the firing map_op — attenuate is an UPDATE-AT-KEY (read held key, write KEEP_MASK at the
+SAME key), which needs a new `CapTreeWriteOp::Update` arm in `generate_rotated_cap_write_base` + routing
+`write: Some(...)` for `attenuateCapOpenEffVmDescriptor2R24` / `revokeCapabilityVmDescriptor2R24` + c-list threading.
+Pending that: 3 honest prove-through tests `#[ignore]`'d with the precise reason (`cap_open_attenuate_self_verifies`,
+`cap_open_attenuate_foreign_selector_row_is_unsat`, `cap_open_wide_proves_verifies_and_executor_anchors` in
+`circuit/tests/cap_open_self_verify.rs`; `cap_open_attenuate_leg_proves_and_verifies_end_to_end` in the SDK). The
+descriptor (on-wire) + the forge floor are CLOSED; only the honest prove-route witness wiring remains.
 
 ## ⚑ CAP-WRITE LOOP — cap-root COLLISION CLOSED (rotated-limb advance + trace-gen aligned); LONE residual = spurious NONCE-FREEZE gate (2026-06-20)
 TWO of the three layers are now CLOSED. (1) The col-87 over-determination is closed (commit 0c2b0704c — col 87 is
@@ -3458,6 +3471,21 @@ The 4-strand wave converged green together (lake 4108 axiom-clean, forge-detecto
   proof_verify.rs off-cell block serves 7 effects; conversion = weld the dedicated sub-limb; remaining riders =
   Refusal (fields_root weld) + lifecycle payload (reason_hash/deathCert; DISC limb 32 already in-circuit). STAGE F
   = retire the PI-46 pin (the anchor-cutover flag-day), last.
+- VK EPOCH family 2 (Refusal + lifecycle PAYLOAD): MEASURED as a REAL RESIDUAL, not closeable by the family-1 weld
+  template. Both are FULL-NODE-FORCED (the proof_verify.rs off-cell anchor bites) but NOT LIGHT-CLIENT-FORCED: the
+  record-pin welds AFTER-limb == PI[46], but PI[46] is producer-free on the light-client path
+  (verify_effect_vm_rotated_with_cutover / verify_vm_descriptor2 alone) — the generator fills it from the producer's
+  OWN after-limb (trace_rotated.rs:394), so it holds vacuously for any self-consistent forged post-cell. Refusal can't
+  get a perms-style weld (post-value = fields_root_felt(fields_root'), a Merkle-map root depending on pre-fields_root;
+  params are target/reason_hash, NEITHER is the post-root). Lifecycle DISC (limb 32) IS in-circuit (frozen-seal /
+  resurrection rejected); only the OPAQUE payload felt (limb 29: reason_hash/deathCert/sealed_at) rides the anchor —
+  and sealed_at=block_height is HOST context, not an effect param. CLOSING them = a NEW primitive (verifier-anchored
+  declared-PAYLOAD column, the deleg-tree shape — STAGE B/C), VK-affecting. Witness: NEW discriminator
+  circuit/tests/vk_epoch_refusal_lifecycle_light_client_binding.rs (2/2 green) — honest accepts AND forged-payload
+  ACCEPTED through verify_vm_descriptor2 alone (the residual poles). Off-cell anchor annotation updated
+  (proof_verify.rs). No Lean/descriptor/VK change (refusalV3 doc already correctly describes the residual; drift PASS).
+  FORCED-ON-WIRE count after families 1+2: setPerms + setVK + lifecycle DISC (cellSeal/Unseal/Destroy/receiptArchive
+  disc) — the disc is light-client-forced; the payloads + refusal are NOT. STAGE F (retire PI-46) still gated on B/C/D/E.
 - SetProgram (a0b89245): setProgram_descriptorRefines_sat present (RotatedKernelRefinementProgram.lean:143), in the
   green build, but files untracked + action.rs modified + agent report pending -> HOLD bank for the report.
 SOUNDNESS WIN: the new-goal discipline caught a real silent forge ONE CHECKMARK before it shipped (the green
@@ -3466,6 +3494,18 @@ CHECKLIST boxes now genuinely green: attenuate · resolvers · receiptArchive ·
 refreshDelegation · setPerms · setVK. STILL OPEN: cap-write Inserts (delegate/introduce/delegateAtten — descriptors
 forge-fixed but Rust CapTreeWriteOp::Insert unwired) · the verifier authority-only tooth (needs 3 tests reconciled) ·
 revoke(tag-2) frozen-face · SetProgram bank · VK-epoch families 2-N (Refusal/lifecycle-payload + STAGE F).
+
+## 🟩 FIRST ROOM stood up (2026-06-21) — the runnable weld + the one remaining wire
+The first room of the living world is RUNNABLE + cargo-testable: `starbridge-apps/first-room` welds the
+colonist-job organ (compartment-workflow-mandate::colonist_job) + the escrow economy (escrow-market) onto ONE real
+EmbeddedExecutor/ledger. `cargo run -p starbridge-first-room --example first_room` shows the honest earn+spend cycle
+(3 receipted job steps → paid 800 conserving) AND the 5-cheat battery each REFUSED in-band on its named tooth.
+4 lib tests green (incl. every_cheat_is_provably_refused asserting tooth-citation = non-vacuity).
+- ONE REMAINING WIRE: David's-door is a SEAM NOTE (scenario::davids_door), not yet executable. The job cell is born
+  via `birth_job_cell` (a raw insert + seed) owned by the room operator's key. The real door = birth the inhabitant's
+  job cell via the GATEWAY factory (`starbridge-apps/storage-gateway-mandate` init_mandate) owned by the BUILDR
+  agent's cipherclerk, so entry is scoped by the world's physics (not operator-seeded). Closure = swap birth_job_cell
+  for a gateway-mandate factory birth + a second cipherclerk; the advance/pay path is unchanged (same three legs bite).
 
 ## 🟥 FORGE PATTERN = a FAMILY (2026-06-21, adf2d407) — attenuate + revokeCapability ALSO mis-guarded
 The silent forge (map_op guarded on var2=SET_FIELD, never fires -> post-root unbound) is NOT unique to the cap-WRITE
@@ -3478,3 +3518,24 @@ wireCommitR + thread the cap-tree witness heap on the attenuate/revokeCapability
 faithfulness name (NOT half-fixed) + a FORGE NOTE in EffectVmEmitV2.heldReadOp. = 2 more cap-effects with the
 post-cap-root unbound (forgeable) until the rebase. ⚑ The forge-detector pattern should be EXTENDED to attenuate +
 revokeCapability (a non-vacuous assert that THEIR map_op fires / post-root is bound) so they can't silently ship.
+
+## ⚑⚑⚑ THE BIG WAVE LANDED (2026-06-21) — forge sin-class BOUNDED + VK-epoch swept + cap-write CLOSED
+8 agents integrated green (lake 4108, cap suite 38/0, 19 VK-epoch binding tests, drift PASS). Banked 511781ca7 + 04dad369d.
+🟩 THE FORGE SIN-CLASS IS CLOSED BY CENSUS (forge-sweep ac5553da, read-only over all 67 descriptors): EXACTLY 4
+  dormant-guard instances, ALL the cap_root cases (cap-write + attenuate + revokeCapability — all now FIXED), ZERO
+  others. Every other written column binds via a firing-correct gate. The sin we found by accident is proven bounded.
+  + forge-detectors now guard revoke/attenuate/revokeCapability permanently.
+🟩 CAP-WRITE CLOSED END-TO-END: Insert (delegate/introduce) + Update (attenuate) + Remove (revoke) wired, genuine
+  prove+light-client-verify+forge-reject; verifier authority-only tooth FLIPPED ON. delegateAtten = named residual
+  (shares GrantCapability route, needs distinct routing signal).
+VK-EPOCH SWEPT (anchor-disabled discriminators, ~11-13/18 confirmed FORCED-ON-WIRE, rest NAMED not faked):
+  CONFIRMED: value 6 (transfer/burn/mint/bridgeMint/setField/incNonce, strong forge), birth 3 (createCell/factory/
+  spawn), noteSpend, perms/vk, lifecycle DISC. RESIDUALS (honest): noteCreate (routing weld — the noteCreate-flag-day),
+  refusal+lifecycle-PAYLOAD (need a verifier-anchored declared-payload column primitive; PI[46] producer-free),
+  emitEvent/pipelinedSend/exercise (effects_hash past the rotated PI window), makeSovereign+setFieldDyn (BROKEN LIVE
+  SEAMS: record-pin unwired 47!=46 / field_idx<8 panic).
+THE NAMED RESIDUAL WELDS (the next wave): (1) noteCreate routing branch in proof_verify.rs + the 2 prover sites;
+  (2) makeSovereign record_pin_offset arm + setFieldDyn dynamic generator branch (broken live seams, fail-closed not
+  forge); (3) the declared-payload-column primitive for refusal/lifecycle-payload (the deleg-tree-column shape, VK);
+  (4) effects_hash into the rotated PI window (emitEvent/pipelinedSend/exercise); (5) delegateAtten routing signal;
+  (6) SetProgram FullActionA ~30-file weld; (7) revoke(tag-2) frozen-face. STAGE F (retire PI-46) last.
