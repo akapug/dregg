@@ -41,6 +41,7 @@ td.k{color:var(--muted);width:38%}
   <header>
     <h1>dregg <small>· the verified ocap cockpit, live in your browser</small></h1>
     <span class=live id=live>● booting wasm…</span>
+    <span id=modebar style="margin-left:14px"></span>
     <span class=stat id=stat></span>
   </header>
   <div class=main>
@@ -55,7 +56,7 @@ td.k{color:var(--muted);width:38%}
 import init, { WebImage } from './pkg/starbridge_web.js';
 const $ = s => document.querySelector(s);
 const esc = s => String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-let img, sel = 'user', log = [];
+let img, sel = 'user', log = [], mode = (new URLSearchParams(location.search).get('mode') || 'inspect');
 
 async function boot() {
   await init();
@@ -73,17 +74,32 @@ function render() {
        <span class=bal>${c.balance==null?'':c.balance}</span>
        <span class=id>${esc(c.short)}</span><div class=muted>${esc(c.kind)} · ${c.cap_edges} caps</div></div>`).join('');
   $('#cells').querySelectorAll('.cell').forEach(el => el.onclick = () => { sel = el.dataset.id; render(); });
+  // view toggle: the focused-cell inspector vs the whole-image ocap web
+  $('#modebar').innerHTML = ['inspect','ocap web'].map(m =>
+    `<span class="msg ${mode===(m==='ocap web'?'ocap':'inspect')?'ok':'no'}" data-mode="${m==='ocap web'?'ocap':'inspect'}" style="display:inline-block;padding:2px 8px;margin-right:4px;cursor:pointer">${m}</span>`).join('');
+  $('#modebar').querySelectorAll('[data-mode]').forEach(el => el.onclick = () => { mode = el.dataset.mode; render(); });
   renderCenter(); renderActs();
 }
 function resolveShort(c){ return c.id; }
 
 function renderCenter() {
+  if (mode === 'ocap') return renderOcap();
   const r = JSON.parse(img.inspect(sel));
   if (r.error) { $('#center').innerHTML = `<h2>inspector</h2><p class=muted>${esc(r.error)}</p>`; return; }
   let h = `<h2>inspector · <span class=id>${esc(r.short)}</span></h2>`;
   for (const f of r.faces) {
     h += `<h3>${esc(f.kind)} · ${esc(f.label)}</h3>` + faceHtml(f.body);
   }
+  $('#center').innerHTML = h;
+}
+
+function renderOcap() {
+  const g = JSON.parse(img.ocap());
+  let h = `<h2>ocap web <span class=muted>· the whole-image capability graph</span></h2>`;
+  h += `<h3>cells (${g.nodes.length})</h3><table>` + g.nodes.map(n =>
+    `<tr><td class=id>${esc(n.id)}</td><td><span class=bal>${n.balance==null?'':n.balance}</span> ${esc(n.lifecycle||'')} · out ${n.out} · in ${n.in}</td></tr>`).join('') + '</table>';
+  h += `<h3>capability edges (${g.edges.length})</h3><table>` + (g.edges.length ? g.edges.map(e =>
+    `<tr><td class=id>${esc(e.from)}</td><td>→ <span class=id>${esc(e.to)}</span> · slot ${e.slot} · ${esc(e.rights)}</td></tr>`).join('') : '<tr><td class=muted>(no edges)</td></tr>') + '</table>';
   $('#center').innerHTML = h;
 }
 function faceHtml(b) {
