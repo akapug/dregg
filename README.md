@@ -168,7 +168,9 @@ story you can drive end-to-end. See [docs/ORGANS.md](docs/ORGANS.md).
   bolt-on, so a shielded value is still conserved and a shielded spend still can't
   double-spend.
 
-## Why it's not a toy
+## What "verified" means here
+
+Four things make the proofs load-bearing rather than decorative:
 
 - **The verified executor *is* the executor.** The node's state producer is the
   Lean function `execFullForestG` — credential- and caveat-gated, proven sound —
