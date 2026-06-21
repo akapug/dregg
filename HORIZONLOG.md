@@ -11,6 +11,24 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ✅ CUSTOM proof_bind — THE SOUNDNESS CORE CLOSED (2026-06-21, the genuine recursive verify)
+The last unprovable effect's SOUNDNESS gap is closed: `proof_bind` no longer bounds-checks — it
+VERIFIES the bound external STARK sub-proof. New `circuit/src/custom_proof_bind.rs`
+(`verify_proof_bind`): resolves the program by the bound 8-felt VK, verifies the external
+`CellProgram` STARK under its AIR, requires the verified sub-proof's PI commitment == the bound
+`commit` column. A custom effect with a FORGED sub-proof (non-verifying STARK / mismatched commitment
+/ unknown VK) is REJECTED. BEFORE→AFTER: forged accepted → forged rejected. Tests: 5 in-module +
+`custom_proof_bind_honest_verifies_forged_rejected` in `sdk/tests/wide_completeness_ledger.rs` (both
+poles, no catch_unwind). The toy `ToyEngine` (descriptor_ir2) is now backed by a real engine; the
+Lean apex's `EngineSound.recursive_sound` (the named FRI-verifier obligation) is the abstraction this
+realizes — no descriptor/VK/Lean change (verifier-side soundness).
+- RESIDUAL (routing, NOT soundness): the EffectVM-wide-TRACE producer (`prove_effect_vm_rotated_wide`)
+  still doesn't route the Custom EFFECT ROW (transfer-shape producer lays 817-wide, UNSAT vs the
+  789-wide custom descriptor) and `Turn.custom_program_proofs` is `None` at every construction. Close
+  with a `generate_rotated_custom_wide` lead (lay the 789-wide row + thread `BoundCustomProof`), then
+  drive through the scoreboard. `custom` stays in the scoreboard's UNPROVABLE-on-wide set until then —
+  named in `sdk/tests/wide_completeness_ledger.rs::CUSTOM_ROUTE_EFFECT`.
+
 ## ✅✅ WEB COCKPIT — THE EXECUTOR RUNS LIVE IN THE BROWSER (2026-06-22, the keystone REALIZED)
 Path C landed end-to-end. ONE MODEL, native + browser: the gpui-free Presentable/World substance compiles to
 wasm32 + drives the REAL verified executor in a browser tab, no server.
