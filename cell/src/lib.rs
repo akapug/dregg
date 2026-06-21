@@ -48,6 +48,7 @@ pub mod note_bridge;
 #[cfg(feature = "crypto")]
 pub mod note_encryption;
 pub mod nullifier_set;
+pub mod obligation_standing;
 #[cfg(feature = "crypto")]
 pub mod oblivious_transfer;
 #[cfg(feature = "crypto")]
@@ -113,6 +114,10 @@ pub use derived::{
 pub use escrow_sealed::{
     Claim, EscrowError, EscrowState, EscrowTerms as SealedEscrowTerms, Leg, LegRequirement,
     LegStatus, Side as EscrowSide, deposit_leg, is_escrow, open_escrow, reclaim_leg, settle,
+};
+pub use obligation_standing::{
+    Discharge, ObligationError as StandingObligationError, ObligationState as StandingObligationState,
+    ObligationTerms as StandingObligationTerms, discharge, is_obligation, open_obligation,
 };
 pub use facet::{
     EFFECT_ALL, EFFECT_ATTENUATE_CAPABILITY, EFFECT_BRIDGE_OPS, EFFECT_BURN, EFFECT_CAPTP_OPS,
