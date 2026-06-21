@@ -802,11 +802,11 @@ pub fn prove_effect_vm_rotated_wide(
     };
     use dregg_circuit::effect_vm::trace_rotated::{
         RotatedBlockWitness, generate_rotated_create_cell_wide,
-        generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
-        generate_rotated_note_spend_wide, generate_rotated_record_pin_wide,
-        generate_rotated_refusal_wide, generate_rotated_set_field_dyn_wide,
-        generate_rotated_spawn_wide, generate_rotated_transfer_shape_wide,
-        rotated_descriptor_name_for_effect,
+        generate_rotated_create_from_factory_wide, generate_rotated_custom_wide,
+        generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
+        generate_rotated_record_pin_wide, generate_rotated_refusal_wide,
+        generate_rotated_set_field_dyn_wide, generate_rotated_spawn_wide,
+        generate_rotated_transfer_shape_wide, rotated_descriptor_name_for_effect,
     };
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 
@@ -963,6 +963,22 @@ pub fn prove_effect_vm_rotated_wide(
             // the dedicated block below generates the real trace/PIs + the mem-boundary and overrides
             // these. (Routing it through the transfer-shape fallthrough would be UNSAT and wasteful.)
             (Vec::new(), Vec::new(), Vec::new())
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::Custom { .. }) {
+            // custom routes through the DISTINCT 789-wide `customVmDescriptor2R24` member (host 581 +
+            // 208 carriers — the same V1Face host width as setFieldDyn, but a Custom row, NO Blum
+            // memory / grow-gate leg). BEFORE: Custom fell through to the transfer-shape producer
+            // (816-wide), UNSAT vs the 789-wide custom descriptor — so a custom turn minted NO wide
+            // receipt (the last liveness gap). AFTER routing it to `generate_rotated_custom_wide`: the
+            // Custom row's `(vk, commit)` columns (68 / 72) carry the genuine bound sub-proof's binding
+            // the descriptor's `proof_bind` op pins, and the row proves + light-client-verifies. The
+            // program-correctness recursion is the SDK-reachable `custom_proof_bind` engine (threaded
+            // via `Turn.custom_program_proofs`), NOT a row-local poly. The `Effect::Custom`'s
+            // `(program_vk_hash, proof_commitment)` MUST be a verifying `BoundCustomProof`'s exposed
+            // binding (`bound.vk_hash_felts()` / `bound.proof_commitment().0`) for the wide receipt to
+            // bind the genuine sub-proof.
+            generate_rotated_custom_wide(initial_state, effects, &before, &after, caveat)
+                .map(|(t, d)| (t, d, vec![]))
+                .map_err(|e| SdkError::InvalidWitness(format!("wide custom generation: {e}")))?
         } else {
             let (t, d) = generate_rotated_transfer_shape_wide(
                 initial_state, effects, &before, &after, caveat,

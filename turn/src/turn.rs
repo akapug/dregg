@@ -516,6 +516,36 @@ impl Turn {
     pub fn action_count(&self) -> usize {
         self.call_forest.action_count()
     }
+
+    /// Thread the GENUINE custom sub-proofs into `custom_program_proofs` — the
+    /// wire field a custom turn carries so the light client can run the deployed
+    /// `proof_bind` recursion (`dregg_circuit::custom_proof_bind::verify_proof_bind`)
+    /// against each effect's bound `(commit, vk)` columns.
+    ///
+    /// Each [`dregg_circuit::custom_proof_bind::BoundCustomProof`] (minted by
+    /// `prove_custom_program`, the genuine STARK + its public inputs) is projected
+    /// to the on-wire [`CustomProgramProof`] (proof bytes + raw-u32 public inputs),
+    /// in effect order. Both are bound into [`Turn::hash`] so the sub-proof bytes /
+    /// PI cannot be swapped after the fact without changing the turn identity. The
+    /// `BoundCustomProof`'s exposed `vk_hash_felts()` / `proof_commitment()` are the
+    /// values the Custom effect's `(program_vk_hash, proof_commitment)` carry into
+    /// the wide producer (cols 68 / 72 the descriptor's `proof_bind` op pins), so
+    /// the wide receipt binds exactly this verifying sub-proof.
+    #[cfg(feature = "prover")]
+    pub fn with_custom_program_proofs(
+        mut self,
+        bound: &[dregg_circuit::custom_proof_bind::BoundCustomProof],
+    ) -> Self {
+        let proofs: Vec<CustomProgramProof> = bound
+            .iter()
+            .map(|b| CustomProgramProof {
+                proof_bytes: b.proof_bytes.clone(),
+                public_inputs: b.public_inputs.iter().map(|f| f.as_u32()).collect(),
+            })
+            .collect();
+        self.custom_program_proofs = if proofs.is_empty() { None } else { Some(proofs) };
+        self
+    }
 }
 
 /// The result of applying a turn to a ledger.

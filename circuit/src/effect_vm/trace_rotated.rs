@@ -2933,6 +2933,73 @@ pub fn generate_rotated_set_field_dyn_wide(
     Ok((trace, dpis, mem_boundary))
 }
 
+// ============================================================================
+// custom — the user-defined program effect bound to an EXTERNAL sub-proof (the
+// `customVmDescriptor2R24` 789-wide member = host 581 + 208 carriers).
+// ============================================================================
+
+/// The host width of the wide `customVmDescriptor2R24` member: the deployed
+/// descriptor is 789-wide (`trace_width`), and its wide commit carriers land at
+/// cols 677 / 781 — i.e. `host + 96` / `host + 200`, pinning `host = 581`. Same
+/// V1Face host as setFieldDyn (the carriers ride the identical 8-felt blocks);
+/// the trace SHAPE differs (a Custom row, no Blum-memory boundary), but the wide
+/// geometry is `append_wide_carriers` at 581.
+pub const CUSTOM_HOST_WIDTH: usize = 581;
+
+/// **THE WIDE custom trace generator (`customVmDescriptor2R24`, 789-wide / 62 PI).**
+///
+/// Lay the 789-wide custom row for a [`Effect::Custom`] lead. The descriptor's
+/// `proof_bind` op pins two row columns:
+///   * col 68 (`PARAM_BASE + CUSTOM_VK_HASH_BASE`) ← the program VK handle (the
+///     v1 builder writes `program_vk_hash[0..4]` into cols 68..72; the full 8-felt
+///     VK binds through the PI/turn-hash layer, NOT this row column — the column
+///     is the row-local handle the `proof_bind` op reads);
+///   * col 72 (`PARAM_BASE + CUSTOM_PROOF_COMMIT_BASE`) ← the sub-proof's PI
+///     commitment (the four `proof_commitment` limbs land in cols 72..76).
+///
+/// The `Effect::Custom`'s `(program_vk_hash, proof_commitment)` MUST be the
+/// genuine values a verifying [`crate::custom_proof_bind::BoundCustomProof`]
+/// exposes — `bound.vk_hash_felts()` / `bound.proof_commitment().0` — so the row
+/// the deployed prover mints carries exactly the binding the SDK-reachable
+/// `verify_proof_bind` engine (the light client's recursion) re-derives from the
+/// verified STARK. The `proof_bind` in-AIR op is a bounds/declaration check; the
+/// program-correctness recursion is the external engine. This generator's job is
+/// to lay a SAT trace whose bound columns hold that binding, so a custom turn
+/// mints a REAL wide receipt.
+///
+/// Returns `(trace, dpis)` ready for `prove_vm_descriptor2` against the wide
+/// custom descriptor (the witness is `map_heaps = []` and `mem_boundary =
+/// default` — custom carries no grow-gate / Blum-memory leg).
+#[cfg(feature = "prover")]
+pub fn generate_rotated_custom_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    if !matches!(effects.first(), Some(Effect::Custom { .. })) {
+        return Err(
+            "custom wide generator: the lead effect must be Effect::Custom (the bound (vk, commit) \
+             ride cols 68 / 72 the proof_bind op reads)"
+                .into(),
+        );
+    }
+    let (mut trace, base_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if base_pis.len() != ROT_PI_COUNT {
+        return Err(format!(
+            "custom wide generator: base PI vector {} != {ROT_PI_COUNT} (a Custom lead carries the \
+             bare 46-PI rotated vector — no record-pin / grow-gate offset)",
+            base_pis.len()
+        ));
+    }
+    let dpis = append_wide_carriers(&mut trace, base_pis, CUSTOM_HOST_WIDTH);
+    debug_assert_eq!(trace[0].len(), CUSTOM_HOST_WIDTH + 208); // 789
+    debug_assert_eq!(dpis.len(), ROT_PI_COUNT + 16); // 46 base + 16 wide = 62
+    Ok((trace, dpis))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
