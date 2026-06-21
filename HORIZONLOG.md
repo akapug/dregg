@@ -4050,3 +4050,24 @@ refused).
 ###   a plonky3 LogUp submask+INSERT permutation-column interaction (see the delegateAtten note at the top of this log).
 ### NOT-MINE-TONIGHT (other-session work in the shared tree, left untouched): cell/predicate.rs AuthContext · dregg-atlas/ ·
 ###   Cargo.{lock,toml} · sdk/cipherclerk.rs · turn/executor/{authorize,membership_verifier,proof_verify}.rs · wasm/runtime.rs.
+### ✅ EXERCISE CAP-OPEN CLOSED (the LAST named cap-open residual): exerciseViaCapability's hold-gate is now
+###   FORCED in-circuit via a DEDICATED cap-open descriptor. Diagnosis: the "inner-fold base does not take the
+###   appendix" framing was STALE — the exercise base (v3Of exerciseVmDescriptor, frozen-frame+nonce-tick, gCapPass
+###   freezes cap_root) is geometrically identical to the frozen fan-out bases (introduceV3/spawnV3); the generic
+###   effCapOpenV3 combinator composes verbatim. Built: CapOpenEmit.exerciseCapOpenV3 (EFF_EXERCISE = bit 1 =
+###   EFFECT_TRANSFER, the held cap's value facet — there is NO EFFECT_EXERCISE facet bit; the load-bearing content
+###   is leaf.target = src, the confersEdgeTo edge) + exerciseCapOpenV3_authorizes + _rejects_wrong_facet keystones ·
+###   ExerciseAuth.exerciseEncodesAuthV3 + exercise_descriptorRefines_capOpenSat (hold-gate forced from the dedicated
+###   Satisfied2) · APEX: Rfix 16 re-pointed 10->53 (exerciseCapOpenVmDescriptor2R24, v3RegistryHeap pos 53) +
+###   Rfix_exercise_capOpen rfl + closedLogExtract_exercise_closed now consumes exerciseEncodesAuthV3 -> threaded
+###   load-bearing into lightclient_unfoolable_closed_final_genuine. MUTATION-CONFIRMED ×2: stripping the crown reds
+###   CapOpenEmit (#guards + keystones); re-pointing actionTagToPos 16 away reds Rfix_exercise_capOpen rfl + the apex.
+### VERIFIED GREEN at HEAD: lake Dregg2 4115 green, apex axiom-clean {propext,Classical.choice,Quot.sound} · circuit
+###   lib 942/0 · sdk prover lib 316/0 · v3_staged_registry_parses (n==56) + wide_registry GREEN · descriptor-drift PASS
+###   (FP re-pinned eef50da1) · cap_open_exercise_self_verify 2/0/1 (genuine columns + authority-forge-rejected-at-witness
+###   GREEN; end-to-end prove #[ignore]'d on the SHARED non-TB cap-open IR-v2 cap-node lookup-balance handoff — the SAME
+###   gap cap_open_attenuate_self_verifies carries; only the TURN-BOUND transfer path self-verifies).
+### NAMED FOLLOW-ON (the one residual, fail-closed, NOT a soundness gap): the SDK route for exercise (full_turn_proof.rs
+###   cap_open_route_for_run arm) is gated behind the shared non-TB cap-open prove-THROUGH plumbing landing (another
+###   session owns that dispatch); cap_open_supported_for_run's error message updated to name it precisely. The exercise
+###   descriptor + the Lean apex (Rfix 16) are CLOSED; only the end-to-end prover lookup-balance is the residual.
