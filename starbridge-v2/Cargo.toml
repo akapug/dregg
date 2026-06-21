@@ -43,7 +43,7 @@
 #   master interface can ALSO connect to remote nodes/federations.
 
 [workspace]
-members = ["."]
+members = [".", "web"]
 resolver = "2"
 
 # gpui is consumed FROM GIT (it is not on crates.io), and the zed monorepo it
@@ -424,6 +424,8 @@ dregg-captp = { path = "../captp", optional = true, default-features = false, fe
 getrandom = { version = "0.3", features = ["wasm_js"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# The browser clock for `world::now_unix` (wasm32 has no `SystemTime::now()`).
+js-sys = "0.3"
 # THE THREE WASM-UNIFICATION FORCINGS (mirrors wasm/Cargo.toml lines 119-131) —
 # indirect deps the executor tree pulls that need a wasm32-specific feature flip,
 # forced here so cargo feature-unification applies it to the transitive copy:

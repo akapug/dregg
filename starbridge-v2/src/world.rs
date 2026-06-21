@@ -1157,10 +1157,19 @@ impl World {
 
 /// Best-effort unix timestamp (seconds).
 fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    // wasm32 has no system clock — `SystemTime::now()` is `unreachable!`. Use the
+    // browser's `Date.now()` (ms → s) so the live web cockpit gets real time.
+    #[cfg(target_arch = "wasm32")]
+    {
+        (js_sys::Date::now() / 1000.0) as i64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
 }
 
 fn push_unique(ids: &mut Vec<CellId>, id: CellId) {
