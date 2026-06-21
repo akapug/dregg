@@ -1032,6 +1032,40 @@ theorem revokeDelegation_closedLog_sat
       exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeDelegation_descriptorRefines_capOpenSat
         Scap pre post holder tt hash minit mfin maddrs t hsat henc anc).1)
 
+/-- attenuate (tag 12), CLASS A — forced from the DEPLOYED `attenuateCapOpenEffV3` (`= Rfix 12`, base
+`attenuateV3` — the MOVING write face, no `gCapPass` freeze). The cap-tree UPDATE-AT-KEY (the in-place
+slot-narrow recompute of `cap_root`) is FORCED from `attenuateV3`'s `keepWriteOp` via
+`attenuate_descriptorRefines_capOpenSat` (which strips the cap-open authority appendix + selector tooth to
+`Satisfied2 attenuateV3` and applies `attenuateV3_non_amp`). The `hsub` carries the realizable submask
+table the non-amp leg reads. The `logNeeds` yields the `AttenuateCapsTreeEncodes` decode + the realizable
+`AttenuateWriteAnchor` trace seam. Editing `attenuateV3`'s write op turns this — and the apex — RED. -/
+theorem attenuate_closedLog_sat
+    {State : Type} (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)
+    (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : Dregg2.Circuit.DescriptorIR2.VmTrace}
+    (hsub : t.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
+      = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
+    (hsat : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
+      Dregg2.Circuit.Emit.CapOpenEmit.attenuateCapOpenEffV3 minit mfin maddrs t)
+    (pre post : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
+    (pc : PublishedCommit) (pubLogPre pubLogPost : ℤ)
+    (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
+    (hpub : pubLogPost = LH (Dregg2.Exec.TurnExecutorFull.authReceipt actor :: pre.log))
+    (logNeeds : post.log = Dregg2.Exec.TurnExecutorFull.authReceipt actor :: pre.log →
+      Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateCapsTreeEncodes
+            Scap pre post actor idx keep),
+        Dregg2.Circuit.RotatedKernelRefinementCapFamily.AttenuateWriteAnchor
+          Scap pre post actor idx keep hash minit mfin maddrs t henc) :
+    kstepAll 12 pre post :=
+  closedLog_of_encode (.attenuateA actor idx keep)
+    (Dregg2.Exec.TurnExecutorFull.authReceipt actor) hdec hpub rfl
+    (fun hadv => by
+      obtain ⟨henc, anc⟩ := logNeeds hadv
+      show fullActionStep pre (.attenuateA actor idx keep) post
+      simp only [fullActionStep]
+      exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.attenuate_descriptorRefines_capOpenSat
+        Scap pre post actor idx keep hash minit mfin maddrs t hsub hsat henc anc).1)
+
 /-- setPermissions (tag 8), CLASS A — forced from `setPermsV3`. -/
 theorem setPermissions_closedLog_sat
     (hash : List ℤ → ℤ)

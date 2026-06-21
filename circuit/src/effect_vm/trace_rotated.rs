@@ -2260,12 +2260,22 @@ mod tests {
                     // effect→descriptor resolvers. Like the cap-open members it is a separately-routed
                     // member, excluded from the unfee'd-resolver cohort completeness audit.
                     && s != &"transferFeeVmDescriptor2R24"
+                    // the HEAP-WRITE descriptor (`heapWriteVmDescriptor2R24`, the write-bearing
+                    // `v3RegistryHeap` tail member, Lean `Rfix 56`) is REGISTRY-PRESENT but
+                    // RESOLVER-UNREACHED: there is no live `Effect::HeapWrite` variant / selector
+                    // (`turn/src/action.rs` carries no HeapWrite constructor), so no
+                    // `rotated_descriptor_name` arm routes to it today. The descriptor is deployed
+                    // (the Class-A heap-root recompute the apex commits) but it is reached by the
+                    // exercise-inner heap-write path, NOT the top-level effect→descriptor resolvers.
+                    // Like the cap-open members it is a separately-routed registry member, excluded
+                    // from the resolver-cohort completeness audit (registry-present, resolver-unreached).
+                    && s != &"heapWriteVmDescriptor2R24"
             })
             .collect();
         assert_eq!(
             registry.len(),
             36,
-            "the rotated resolver cohort has 36 members (cap-open + fee-in-proof are separately routed)"
+            "the rotated resolver cohort has 36 members (cap-open + fee-in-proof + heap-write are separately routed)"
         );
         // The fee-path resolver reaches the fee descriptor (and falls back to the unfee'd resolver
         // for non-Transfer leads), so the fee-in-proof member is covered by ITS resolver.
