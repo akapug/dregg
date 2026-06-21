@@ -66,15 +66,24 @@ The deep object is no longer "open research" — its full construction is built,
 | option-space (`∀`-opaque) | `PolisViability` | `viableWithinB` = B's bounded **public winning game** (∃-move/∀-response), decidable; `viabilityBar` |
 | relational domination (2-safety) | `PolisSelfCompose` | `Dominated` = viable-without ∧ ¬viable-with on the counterfactual product; `dominationBar`, decidable |
 | monotone composition | `PolisHyperBars` | `NoWeaken.or_mono` + `amendment_stream_nonregression_hyper` — the floor is monotone-amendable |
+| graded composition (quantale) | `PolisGrade` + `PolisGradeProduct` | max-plus/tropical quantale + the product `tier×rent×burden`; `graded_amendment_nonregression` |
 | shared carrier | `PolisCrossCell` | `Monitorable` + `violation_has_finite_witness`; polis-floor ∥ circuit-soundness kept **separate** |
+| causal counterfactual | `PolisErase` | `eraseAgent` = the maximal A-independent subconfig (causally closed); `_subset`/`_no_A`/`_maximal` |
 
-What remains is **deployment wiring**, not new theory: a concrete `projConfig : UTrace → Config`
-over the blocklace lattice; the causally-closed A-erasure (`CounterfactualWithout`); instantiating
-the two `StreamProp`s (polis-floor from `dominationBar` lifted to streams; circuit-soundness from
-the deployed `CoinductiveAdversary` confluence — possibly the same carrier). The framework is
-decidable and `∀`-opaque throughout; binding it to the deployed multi-agent substrate is the step.
-(The executor-camera refinement of `held ⊆ bound` is a tightening, not a hole: the shadow *is* the
-real `fits` by `USet.fits_iff`, camera `Fpu` pinned.)
+**The deployment wiring is now DONE** (gpt5.5's architecture call + scout `w6meqdgol` + bind-wave
+`w35gr3opx`) — the framework runs on the **deployed** substrate, not toys:
+
+| deployed binding | file | bound to |
+|---|---|---|
+| causal counterfactual on the blocklace | `PolisEraseBlocklace` | `eraseAuthor` on `Blocklace.{Block.creator, precedes}` (axiom-free; non-vacuity on the deployed `demoLace`) |
+| recovery floor as a real bounded game | `PolisRecoveryFloor` | `recoverableNow`/`recoveryArena` on the live `PreRotation.rotateStep` (a `#guard` caught a real bug) |
+| shared adversary-stream carrier | `PolisStreamCarrier` | `CoinductiveAdversary.obsStream`; `circuitSoundnessProp` ∥ `polisFloorProp` with `not_identified` **proving** they differ |
+
+The **one** genuine frontier left: a `Monitorable` witness for the real *temporal* polis floor over the
+deployed `Obs` (the safety/bounded-liveness bad-prefix predicate — connect to `FlowRefine.decideRefines`
+/ the Büchi game). Per gpt5.5's headline, we claim **bounded/public/decidable** domination, never "full
+unbounded politics" — *decidable gentleness is bounded gentleness*. (The executor-camera refinement of
+`held ⊆ bound` is a tightening, not a hole: the shadow *is* the real `fits`, camera `Fpu` pinned.)
 
 ## The grounding insight (`~/dev/svenvs`)
 
