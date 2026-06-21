@@ -135,6 +135,7 @@ pub mod events;
 pub mod explain;
 pub mod factories;
 pub mod flashwell;
+pub mod hatchery_mint;
 pub mod full_turn_proof;
 pub mod identity;
 pub mod job_escrow;
