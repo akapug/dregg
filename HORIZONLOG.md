@@ -11,6 +11,21 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+VK-EPOCH STAGE B (setPermissions/setVK) — LANDED on-wire light-client-verifiable. The in-circuit
+perms/VK weld (`permsVKWeldGate`, descriptor constraint #64, limbs B_PERMS=33/B_VK=34) FORCES the
+committed AFTER perms/vk-digest sub-limb == the declared param (PI-anchored via effects_hash) and is
+absorbed into the published B_STATE_COMMIT → wide-v9 NEW_COMMIT. Witness:
+`circuit/tests/vk_epoch_perms_vk_light_client_binding.rs` (perms-/vk-only forged post-cell UNSAT with
+`failed constraints=[#64]`, anchor-disabled; honest accepts). The SDK light-client verify
+(`full_turn_proof::verify_effect_vm_rotated_with_cutover`) never calls `apply_effect_to_cell`, so these
+2 are FORCED-ON-WIRE. NAMED RESIDUAL (STAGE F, VK-affecting, deferred to the anchor-cutover flag-day):
+the full-node `proof_verify.rs` off-cell PI-46 authority-digest pin (limb 24) is now REDUNDANT
+belt-and-suspenders for setPerms/setVK but cannot be dropped without retiring the descriptor's PI-46
+pin (would red honest full-node placeholder-reconstruction proofs). FAN-OUT: the remaining off-cell-
+anchor families (Refusal record-digest via fields_root; lifecycle-PAYLOAD reason_hash/deathCert) ride
+the SAME `proof_verify.rs` block + the SAME conversion shape (weld the dedicated committed sub-limb to
+the declared/forced value, then the anchor becomes redundant).
+
 ## ⚑ CAP-WRITE LOOP — cap-root COLLISION CLOSED (rotated-limb advance + trace-gen aligned); LONE residual = spurious NONCE-FREEZE gate (2026-06-20)
 TWO of the three layers are now CLOSED. (1) The col-87 over-determination is closed (commit 0c2b0704c — col 87 is
 `map_op` `new_root` ONLY, folded as a commitment INPUT, note-spend-shaped). (2) The v1-STATE cap-root CONTINUITY
@@ -3391,3 +3406,20 @@ SILENT FORGE diagnostic — banked deliberately as the honest signal; it MUST st
 THE FIX (VK-affecting Lean re-emit): re-point the cap-write map_op guard from var 2 (SET_FIELD) to var 30
 (REVOKE_DELEGATION) — and analogously delegate/introduce/delegateAtten on THEIR selectors. Until then the cap-write
 box is NOT closed; the prior 'genuine prove-through' green is illusory (passes because the binding is dead).
+
+## ⚑ PARALLEL-FAMILY WAVE in flight (2026-06-21) — 4 strands on the goal's parked families + the forge
+Moving on the parked families IN PARALLEL with the forge fix (ember: the families are more important than one
+effect's forge consequence). LIVE:
+- adf2d407 🟥 SILENT-FORGE FIX — re-point the cap-write map_op guard var2(SET_FIELD)->the firing effect selector;
+  the forge-detector must FLIP GREEN (the load-bearing check). HIGHEST PRIORITY.
+- aba9985a VK EPOCH family 1 — setPerms/setVK off-cell-anchor -> in-circuit force gate (the 18-effect unlock's
+  first family; the off-cell-anchor->gate conversion is the template for the rest).
+- ac7dbddd ✅ refreshDelegation Class-A (DONE, verified-in-isolation, NOT yet banked — integrated tree red from a
+  sibling): deleg-tree WRITE column on the rotated limb (reuses cap-root limb 25, freed by rotateV3CapWrite, since
+  refresh freezes caps), selector-guarded on REFRESH_DELEGATION (independently learned the forge lesson),
+  refreshDelegation_descriptorRefines_sat consumes Satisfied2, mutation-confirmed. delegRoot_runtime_column_pending
+  CLOSED.
+- a0b89245 SetProgram own circuit witness (new RotatedKernelRefinementProgram.lean module + own effect-tag).
+INTEGRATION HAZARD: all 4 touch the shared EffectVmEmitRotationV3.lean + Dregg2.lean; tree transiently RED while
+SetProgram's new module compiles. HOLD for settle, then ONE clean integrated verify; bank cap-family work ONLY
+after the forge-detector flips GREEN (no banking onto the dead-binding state).
