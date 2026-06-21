@@ -106,6 +106,14 @@ pub mod captp_client;
 pub mod channels;
 pub mod beacon_cell;
 pub mod cipherclerk;
+// The threshold-seal organ (DKG group-key hashed-ElGamal) and the
+// sealed-bid/sealed-ballot orchestration that welds it with the beacon. These
+// carry the UNLINKABLE sealed-ballot governance app (`council_seal` is the
+// seal; `sealed_governance` is the auction/ballot ceremony over it). Wired here
+// so they ship in the built image (the `_sealed_governance_typecheck` `#[path]`
+// fixture is RETIRED by this real declaration).
+pub mod council_seal;
+pub mod sealed_governance;
 #[cfg(feature = "network")]
 pub mod client;
 pub mod committed_turn;
@@ -247,6 +255,19 @@ pub use flashwell::{FlashRing, FlashWell, FlashWellPlan, FlashWellStatus, plan_f
 
 // Mnemonic generation for identity backup.
 pub use mnemonic::generate_mnemonic;
+
+// The sealed-governance surface: the threshold council seal (`council_seal`)
+// and the sealed-bid auction / unlinkable sealed-ballot ceremonies built over
+// it (`sealed_governance`). An eligible voter proves eligibility via an
+// anonymous nullifier (no link to the vote), seals a ballot to a council that
+// no sub-quorum can peek, and the quorum tallies at close — double-votes,
+// early peeks, and ballot substitutions all fail-closed.
+pub use council_seal::{Council, CouncilSealError, SealedPayload};
+pub use sealed_governance::{
+    AuctionOutcome, Ballot, BallotOutcome, Bid, GovernanceError, Phase, PolisElection,
+    SealedAuction, SealedBallot, Submission, UnlinkableSubmission, eligibility_nullifier,
+    seal_ballot, seal_bid, seal_unlinkable_ballot,
+};
 
 // The no-IO embed layer for service integration.
 #[cfg(feature = "network")]

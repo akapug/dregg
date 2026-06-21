@@ -783,12 +783,27 @@ impl AgentRuntime {
             TurnResult::Committed { receipt, .. } => {
                 // Release ledger lock before taking cipherclerk write lock.
                 drop(ledger);
-                // Append the receipt to the cipherclerk's chain (write lock).
-                // Strict mode: surface fork detection as an SdkError.
-                self.cipherclerk
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .append_receipt(receipt.clone())?;
+                // The cipherclerk holds THIS runtime agent's (`self.cell_id`)
+                // receipt chain — a single linear history. A turn whose agent IS
+                // this runtime's agent extends that chain. A turn that DRIVES a
+                // DIFFERENT cell (e.g. a governed identity cell rotated by a
+                // custom-auth attestation, `turn.agent != self.cell_id`) belongs
+                // to THAT cell's own per-agent history; the executor already
+                // tracks it under its own authority head (`last_receipt_hash`),
+                // and the turn's `previous_receipt_hash` links to THAT head, not
+                // this agent's. Appending it here would splice a foreign-agent
+                // receipt onto this agent's linear chain (its `prev` points at the
+                // driven cell's head, never this chain's head) — a spurious
+                // `ReceiptChainMismatch`. This mirrors `submit_signed_action_as_cell`,
+                // which deliberately does NOT append a cell-agent turn to this
+                // identity's chain.
+                if receipt.agent == self.cell_id {
+                    // Strict mode: surface fork detection as an SdkError.
+                    self.cipherclerk
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .append_receipt(receipt.clone())?;
+                }
                 Ok(receipt)
             }
             TurnResult::Rejected { reason, .. } => Err(SdkError::Turn(reason)),

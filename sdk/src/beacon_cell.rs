@@ -148,9 +148,53 @@ impl BeaconTick {
     /// re-derive the message from the claimed `(epoch, height)` and check the
     /// unique-BLS pairing + randomness recomputation. A tick that verifies is a
     /// genuine descendant of genesis `f(0)` (the group key is `f(0)`-preserved
-    /// across every reshare), so this one check certifies the WHOLE lineage.
+    /// across every reshare), so this one check certifies the lineage of the
+    /// REVEALED VALUE.
+    ///
+    /// The threshold signature binds `(epoch, height, randomness)` — and the
+    /// tick schedule pins `height == index` ([`tick_coords`]). So the verifier
+    /// MUST also bind `index` to the signed `height`: otherwise an attacker
+    /// rides a genuine `output` (which the anchor accepts) under a FORGED
+    /// `index`, claiming a genuine value at a position it was never produced
+    /// for. Re-deriving the message from the claimed height does not save us —
+    /// the attacker leaves `output.height` untouched and only forges the
+    /// adjacent `index` field — so the index is checked against the signed
+    /// height HERE, fail-closed.
     pub fn verify(&self, genesis_group_public: &BeaconCommittee) -> bool {
+        // Bind the tick index to the threshold-signed height (height == index
+        // is the cell's schedule; the signature attests the height, so this
+        // pins the forge-prone `index` field to the signed value).
+        if self.index != self.output.height {
+            return false;
+        }
         genesis_group_public.verify_beacon(&self.output)
+    }
+
+    /// **Chained verify**: [`BeaconTick::verify`] (value lineage + index↔height
+    /// binding) PLUS the chain-lineage anchors `prev_tick` and `committee_root`.
+    ///
+    /// The genesis BLS key attests the revealed VALUE and its `(epoch, height)`
+    /// — it cannot attest the per-tick chain metadata (`prev_tick`,
+    /// `committee_root`), because those are not in the signed message. They are
+    /// instead pinned by the chain context: `prev_tick` MUST equal the
+    /// predecessor's [`BeaconTick::tick_hash`] (the all-zero root at the genesis
+    /// tick), and `committee_root` MUST equal the fingerprint the verifier
+    /// expects for this committee. A forged `prev_tick`/`committee_root` (a
+    /// genuine value re-anchored onto a fabricated lineage) is REJECTED here,
+    /// fail-closed — it would otherwise slip past the value-only check.
+    pub fn verify_chained(
+        &self,
+        genesis_group_public: &BeaconCommittee,
+        expected_prev_tick: &[u8; 32],
+        expected_committee_root: &[u8; 32],
+    ) -> bool {
+        if &self.prev_tick != expected_prev_tick {
+            return false;
+        }
+        if &self.committee_root != expected_committee_root {
+            return false;
+        }
+        self.verify(genesis_group_public)
     }
 }
 
@@ -534,6 +578,91 @@ mod tests {
         assert!(
             !cell.verify_tick(&tick),
             "a tampered randomness must fail the light-client recomputation"
+        );
+    }
+
+    /// FORGED TICK (both polarity): a genuine tick verifies and chains; a tick
+    /// that rides a GENUINE beacon `output` under a FORGED `index` is REJECTED.
+    ///
+    /// The threshold signature attests `(epoch, height, randomness)` only. Before
+    /// the fix, [`BeaconTick::verify`] checked the value alone, so an attacker
+    /// could take tick #2's genuine output (which the anchor accepts) and present
+    /// it as `index = 5` — a genuine value at a position it was never produced
+    /// for. Binding `index == output.height` makes that forge fail-closed.
+    #[test]
+    fn forged_index_tick_is_rejected() {
+        let mut cell = BeaconCell::genesis(5, 3, 7, [13u8; 32]).unwrap();
+        let anchor = cell.anchor().clone();
+
+        // Drive a few genuine ticks; keep the genuine #2.
+        let _t0 = cell.tick().unwrap();
+        let _t1 = cell.tick().unwrap();
+        let genuine = cell.tick().unwrap();
+        assert_eq!(genuine.index, 2);
+
+        // TRUE: the genuine tick verifies against the anchor.
+        assert!(
+            genuine.verify(&anchor),
+            "a genuine tick must verify against the genesis anchor"
+        );
+
+        // FORGE: substitute index = 5 while keeping the genuine output (height 2).
+        let mut forged = genuine.clone();
+        forged.index = 5;
+        // The forged value still carries a genuine threshold signature...
+        assert!(
+            anchor.verify_beacon(&forged.output),
+            "the substituted output is itself a genuine beacon (the forge premise)"
+        );
+        // ...but the tick verify now binds index to the signed height, so REJECT.
+        assert!(
+            !forged.verify(&anchor),
+            "a forged index over a genuine output must be REJECTED"
+        );
+        assert!(
+            !cell.verify_tick(&forged),
+            "the cell's verify_tick path rejects the forged index too"
+        );
+    }
+
+    /// FORGED LINEAGE (both polarity): a genuine tick chained-verifies against its
+    /// true `prev_tick`/`committee_root`; a tick with a SUBSTITUTED `prev_tick` or
+    /// `committee_root` (a genuine value re-anchored onto a fabricated lineage) is
+    /// REJECTED by [`BeaconTick::verify_chained`].
+    #[test]
+    fn forged_lineage_tick_is_rejected() {
+        let mut cell = BeaconCell::genesis(5, 3, 4, [29u8; 32]).unwrap();
+        let anchor = cell.anchor().clone();
+
+        let t0 = cell.tick().unwrap();
+        let t1 = cell.tick().unwrap();
+
+        // TRUE: t1 chained-verifies against its genuine predecessor + committee.
+        assert!(
+            t1.verify_chained(&anchor, &t0.tick_hash(), &t1.committee_root),
+            "a genuine tick must chained-verify against its true lineage anchors"
+        );
+        // The genesis tick chains from the zero root.
+        assert!(t0.verify_chained(&anchor, &[0u8; 32], &t0.committee_root));
+
+        // FORGE prev_tick: re-anchor t1's genuine value onto a fabricated parent.
+        let mut forged_prev = t1.clone();
+        forged_prev.prev_tick = [0xABu8; 32];
+        assert!(
+            anchor.verify_beacon(&forged_prev.output),
+            "the value is genuine (the forge premise)"
+        );
+        assert!(
+            !forged_prev.verify_chained(&anchor, &t0.tick_hash(), &t1.committee_root),
+            "a forged prev_tick must be REJECTED by the chained verify"
+        );
+
+        // FORGE committee_root: claim a different committee fingerprint.
+        let mut forged_root = t1.clone();
+        forged_root.committee_root = [0xCDu8; 32];
+        assert!(
+            !forged_root.verify_chained(&anchor, &t0.tick_hash(), &t1.committee_root),
+            "a forged committee_root must be REJECTED by the chained verify"
         );
     }
 
