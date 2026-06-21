@@ -533,6 +533,17 @@ pub struct TurnExecutor {
     /// *local* spends. Together they form the permanent ledger gate that
     /// `Checkpoint::nullifier_set_root` commits to.
     pub note_nullifiers: Mutex<NullifierSet>,
+    /// REACTIVE registry (Track 2): the executor's promise-hole store. An
+    /// `Effect::Promise`/`Effect::Notify` deposits a kernel-backed pending entry
+    /// (the standing commitment / wake) here; an `Effect::React` discharges it.
+    ///
+    /// The ONE-SHOT spend of a hole is NOT enforced here — it is enforced by the
+    /// production `note_nullifiers` set: the hole's id IS the nullifier React
+    /// spends, so react-twice (or a replayed hole-id) is rejected by the same
+    /// double-spend gate `NoteSpend` rides. This registry holds the wake turn so
+    /// the resolution produces a GENUINE receipt over the resolved turn (the
+    /// registry's own removal is a second, redundant tooth).
+    pub reactive_registry: Mutex<crate::pending::PendingTurnRegistry>,
     /// Trusted Ed25519 public keys for destination federation receipt verification.
     /// Used during BridgeFinalize to validate that the receipt was signed by a
     /// legitimate destination federation.
@@ -744,6 +755,7 @@ impl TurnExecutor {
             local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
             note_nullifiers: Mutex::new(NullifierSet::new()),
+            reactive_registry: Mutex::new(crate::pending::PendingTurnRegistry::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
             fee_well_cell: None,
@@ -786,6 +798,7 @@ impl TurnExecutor {
             local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
             note_nullifiers: Mutex::new(NullifierSet::new()),
+            reactive_registry: Mutex::new(crate::pending::PendingTurnRegistry::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
             fee_well_cell: None,
@@ -824,6 +837,7 @@ impl TurnExecutor {
             local_federation_id: [0u8; 32],
             bridged_nullifiers: Mutex::new(BridgedNullifierSet::new()),
             note_nullifiers: Mutex::new(NullifierSet::new()),
+            reactive_registry: Mutex::new(crate::pending::PendingTurnRegistry::new()),
             trusted_destination_keys: Vec::new(),
             proposer_cell: None,
             fee_well_cell: None,

@@ -238,6 +238,26 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             // attestation's hash. Submitters must construct the
             // attestation with the resolved CellId already in place.
             Effect::ReceiptArchive { .. } => {}
+            // Promise: rewrite the holding cell. (The committed `wake` turn's
+            // agent is fixed at construction — a placeholder would corrupt the
+            // hole-id hash, so we do not rewrite into it.)
+            Effect::Promise { cell, .. } => {
+                if cell == placeholder {
+                    *cell = *resolved;
+                }
+            }
+            // Notify: rewrite sender/recipient.
+            Effect::Notify { from, to, .. } => {
+                if from == placeholder {
+                    *from = *resolved;
+                }
+                if to == placeholder {
+                    *to = *resolved;
+                }
+            }
+            // React's `pending_id` is a NULLIFIER (a hole-id), not a CellId, and
+            // the carried `wake`/proof are content-addressed — nothing to rewrite.
+            Effect::React { .. } => {}
             // No CellId fields to rewrite (or birth effects whose ids are derived).
             Effect::CreateCell { .. }
             | Effect::NoteSpend { .. }

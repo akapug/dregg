@@ -411,6 +411,10 @@ fn assert_variant_coverage(e: &Effect) -> &'static str {
         Effect::Burn { .. } => "Burn",
         Effect::AttenuateCapability { .. } => "AttenuateCapability",
         Effect::ReceiptArchive { .. } => "ReceiptArchive",
+        Effect::SetProgram { .. } => "SetProgram",
+        Effect::Promise { .. } => "Promise",
+        Effect::Notify { .. } => "Notify",
+        Effect::React { .. } => "React",
     }
 }
 

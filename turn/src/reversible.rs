@@ -393,6 +393,15 @@ impl Effect {
             Effect::ExerciseViaCapability { .. } => {
                 Inversion::Committed(CommittedReason::NonLocalEffect)
             }
+            // Promise / Notify mint a standing promise-hole in a registry — a
+            // generative move whose honest inverse is a committed retraction
+            // (a never-reacted hole is timeout-swept, not un-created).
+            Effect::Promise { .. } | Effect::Notify { .. } => {
+                Inversion::Committed(CommittedReason::GenerativeOrProofCarrying)
+            }
+            // React SPENDS the promise-hole nullifier — exactly NoteSpend's
+            // one-shot consume: un-reacting would re-admit the spent hole-id.
+            Effect::React { .. } => Inversion::Committed(CommittedReason::NullifierConsumed),
         }
     }
 }

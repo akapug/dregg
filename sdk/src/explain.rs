@@ -130,6 +130,10 @@ fn effect_body(effect: &Effect) -> String {
             hx32(cell.as_bytes()),
             if new_vk.is_some() { "a key" } else { "none" }
         ),
+        Effect::SetProgram { cell, .. } => format!(
+            "set the program (caveat table) of cell {} (applied last in the action)",
+            hx32(cell.as_bytes())
+        ),
         Effect::NoteSpend {
             value, asset_type, ..
         } => format!("spend a private note (value {value}, asset {asset_type})"),
@@ -235,6 +239,20 @@ fn effect_body(effect: &Effect) -> String {
         Effect::ReceiptArchive {
             prefix_end_height, ..
         } => format!("archive this cell's receipt-chain prefix up to height {prefix_end_height}"),
+
+        Effect::Promise { cell, .. } => format!(
+            "make a standing commitment (a promise-hole) on cell {} to run a turn once its condition holds",
+            hx32(cell.as_bytes())
+        ),
+        Effect::Notify { from, to, .. } => format!(
+            "wake cell {} from cell {} (deposit a promise-hole it may later react to)",
+            hx32(to.as_bytes()),
+            hx32(from.as_bytes())
+        ),
+        Effect::React { pending_id, .. } => format!(
+            "react to (one-shot SPEND) the promise-hole 0x{} — its hole id is spent into the nullifier set, so a second react is rejected as a double-spend",
+            hx32(&pending_id.0)
+        ),
     }
 }
 
