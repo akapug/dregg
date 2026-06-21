@@ -24,6 +24,7 @@
 //! - An optional verification key for ZK proof validation
 //! - Token domain membership and delegation hierarchy
 
+pub mod allowance;
 pub mod blueprint;
 pub mod capability;
 #[cfg(feature = "crypto")]
@@ -80,6 +81,10 @@ pub mod vk_v2;
 mod tests;
 
 // Re-exports for convenience.
+pub use allowance::{
+    AllowanceError, AllowanceState, AllowanceTerms, Spend as AllowanceSpend, SpendOutcome,
+    is_allowance, open_allowance, remaining_at as allowance_remaining_at, spend as spend_allowance,
+};
 pub use blueprint::{
     BlueprintError, BridgeTerms, EscrowTerms, ObligationTerms, bridge_cell_program,
     bridge_factory_descriptor, escrow_cell_program, escrow_factory_descriptor,
