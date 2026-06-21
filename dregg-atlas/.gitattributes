@@ -1,0 +1,8 @@
+# The atlas's generated image assets live in Git LFS (lean history for the
+# regenerated screenshots). GitHub Pages serves these correctly because the
+# repo deploys Pages via GitHub Actions (which materializes real LFS content
+# into the artifact) — NOT the legacy "Pages from a branch", which would serve
+# LFS pointer stubs. The pages.yml checkout uses `lfs: true`.
+site/ui-states/*.jpg filter=lfs diff=lfs merge=lfs -text
+site/screenshots/*.png filter=lfs diff=lfs merge=lfs -text
+site/*.png filter=lfs diff=lfs merge=lfs -text
