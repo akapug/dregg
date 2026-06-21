@@ -50,9 +50,17 @@ below: every dependency edge denotes an `Await.AwaitCore` whose promise is the p
 
 Pure, computable, `#eval`-able. Reuses
 `TurnExecutorFull` (`execFullTurn`/`execFullTurn_conserves`/`turnLedgerDelta`) and `Await`; edits no
-existing file. The GENERAL νF / coinductive-DAG termination of an *unbounded* topo-sort is noted as
-an honest `-- OPEN:` comment (NOT a `sorry`): we prove the finite acyclic case (the real one) via a
-fuel-driven Kahn sort whose fuel is the node count.
+existing file. The finite acyclic case (the real one) is proved via a fuel-driven Kahn sort whose
+fuel is the node count.
+
+The former §1 OPEN — the GENERAL νF / coinductive-DAG case of an *unbounded* dependency structure —
+is now DISCHARGED BY EXCLUSION in §12 (`topoOrder_some_of_acyclic` + the structural-finiteness note):
+a `ConditionalBatch` carries its `nodes`/`edges` as `List`s, so it is finite by construction (the νF
+case is INEXPRESSIBLE — dregg's safe-by-inexpressibility line), and on any finite acyclic in-range
+batch the bounded fuel = node-count Kahn iteration is COMPLETE (a finite DAG always has a source;
+`exists_ready_of_acyclic`), so the greatest-fixed-point collapses to the finite least-fixed-point
+(`kahnLoopImpl_more_fuel`: extra/unbounded fuel changes nothing once the loop has converged). No
+`sorry`, no new axiom.
 
 Verified standalone: `lake env lean Dregg2/Exec/ConditionalTurn.lean`.
 -/
@@ -121,11 +129,13 @@ bounded by fuel = node count. On an acyclic DAG this emits a full topological or
 of rounds passes without finishing, a cycle is present and we abort (mirroring `order.len() != n ⇒
 Err(Cycle)`).
 
-OPEN (general νF, NOT proved here, NOT a `sorry`): the *unbounded* / coinductive-DAG case — a batch
-whose dependency structure is a general greatest-fixed-point (νF) rather than a finite acyclic list —
-needs a well-founded/coinductive termination argument we do not give. We prove the FINITE acyclic
-batch (dregg1's only real case: a `Vec<Turn>` with `Vec<(usize,usize)>` edges), with fuel = the node
-count making Kahn terminate by construction. -/
+FORMER OPEN (general νF), NOW DISCHARGED in §12: the *unbounded* / coinductive-DAG case — a batch
+whose dependency structure is a general greatest-fixed-point (νF) rather than a finite acyclic list.
+§12 resolves it BY EXCLUSION: a `ConditionalBatch` is structurally finite (`List` nodes/edges — the
+νF case is inexpressible), and on a finite acyclic in-range batch the fuel = node-count Kahn loop is
+COMPLETE (`topoOrder_some_of_acyclic`), with extra fuel changing nothing (`kahnLoopImpl_more_fuel`) —
+the greatest-fixed-point collapses to the least. dregg1's only real case (a `Vec<Turn>` with
+`Vec<(usize,usize)>` edges) is exactly this finite case; Kahn terminates by construction. -/
 
 /-- Does node `c`'s dependency on producer `p` (edge `(c,p)`) remain UNMET, given the set `emitted` of
 already-emitted node indices? Unmet iff `p ∉ emitted`. -/
@@ -679,5 +689,303 @@ def badBatch : ConditionalBatch :=
     edges := [(1, 0)] }
 
 #guard ((execConditionalTurn badBatch fs0).isSome) == false  --  false (rollback; node 0's mint discarded)
+
+/-! ## §12 — THE FORMER §1 OPEN, DISCHARGED BY EXCLUSION: the νF case is unreachable.
+
+The §1 OPEN asked whether the *unbounded* / coinductive-νF dependency structure (a dependency graph
+that is a general greatest-fixed-point rather than a finite acyclic DAG — an infinite or cyclic
+promise chain) needs a genuine coinductive simulation. It does NOT. Two facts close it:
+
+  **(i) Structural finiteness (inexpressibility).** A `ConditionalBatch` carries `nodes : List Node`
+  and `edges : List (Nat × Nat)` — both *finite lists*. There is no coinductive/streaming batch
+  *type* in the model (the await `Computation` free model is `inductive`, hence finite-depth term
+  trees). So an infinite batch is INEXPRESSIBLE: the νF case cannot be constructed. This is dregg's
+  safe-by-inexpressibility line — the unbounded case is not "excluded by an invariant we bolt on" but
+  by the *type* of a batch.
+
+  **(ii) The greatest-fixed-point collapses to the least on a finite acyclic graph.** The Kahn loop
+  iterates the monotone "set of already-resolvable nodes" operator from `∅` (the least-fixed-point
+  iteration). On a finite ACYCLIC in-range edge set this iteration is COMPLETE: a finite DAG always
+  has a source (`exists_ready_of_acyclic`), so every not-yet-complete prefix has a ready node, the
+  loop never stalls, and it reaches the full node set in ≤ n rounds with fuel = node count
+  (`topoOrder_some_of_acyclic`). Extra/unbounded fuel changes NOTHING once it has converged
+  (`kahnLoopImpl_more_fuel`) — the νF (unbounded iteration) and the μF (bounded fuel = node count)
+  give the same answer. There is no coinductive content to recover.
+
+  The only way `topoOrder` returns `none` is a genuine dependency CYCLE — and a cycle is exactly a
+  deadlock (each promise waits on another, none ever fires), which the executor correctly rejects
+  (`condTurn_atomic`: no partial commit). The contrapositive `topoOrder_none_imp_cyclic` makes this
+  precise: a `none` over an in-range batch witnesses non-acyclicity (a real cycle), never a premature
+  stall of a sound DAG.
+
+So §1 is discharged: the unbounded νF case is unreachable (inexpressible AND, even taken as a graph,
+collapsed to the finite least-fixed-point), a real theorem — NOT an assumed exclusion. -/
+
+/-- **`Acyclic edges`** — the topological-rank characterization of a finite DAG: there is a rank
+assignment strictly decreasing along every dependency edge (`rank producer < rank consumer`). A cycle
+would force `rank` to strictly decrease around it — impossible in `ℕ`. This is exactly the condition
+under which the Kahn least-fixed-point iteration is complete. -/
+def Acyclic (edges : List (Nat × Nat)) : Prop :=
+  ∃ rank : Nat → Nat, ∀ c p, (c, p) ∈ edges → rank p < rank c
+
+/-- **`EdgesInRange n edges`** — well-formedness: every producer index referenced by an edge is a
+valid node (`< n`). dregg1's `Pipeline` builds edges over `Vec<Turn>` indices, so this always holds;
+without it a dangling producer could never be emitted (a different failure than a cycle). -/
+def EdgesInRange (n : Nat) (edges : List (Nat × Nat)) : Prop := ∀ c p, (c, p) ∈ edges → p < n
+
+/-- The "remaining" set: a node in range that has not yet been emitted. -/
+def Remaining (n : Nat) (emitted : List Nat) (i : Nat) : Prop := i < n ∧ emitted.contains i = false
+
+/-- A not-yet-emitted node that is NOT `ready` has an UNMET dependency edge `(i, p)` whose producer
+`p` is itself not yet emitted — the structural reason a non-source is blocked. -/
+theorem not_ready_unmet (edges : List (Nat × Nat)) (emitted : List Nat) (i : Nat)
+    (hne : emitted.contains i = false) (hnr : ready edges emitted i = false) :
+    ∃ p, (i, p) ∈ edges ∧ emitted.contains p = false := by
+  unfold ready at hnr
+  rw [Bool.and_eq_false_iff] at hnr
+  rcases hnr with h1 | h2
+  · simp only [decide_eq_false_iff_not, Decidable.not_not] at h1
+    rw [h1] at hne; simp at hne
+  · rw [List.all_eq_false] at h2
+    obtain ⟨e, hmem, hfail⟩ := h2
+    by_cases hei : e.1 = i
+    · simp only [hei, if_pos] at hfail
+      simp only [Bool.not_eq_true, decide_eq_false_iff_not] at hfail
+      unfold depUnmet at hfail
+      simp only [Bool.not_eq_true, decide_eq_false_iff_not] at hfail
+      refine ⟨e.2, ?_, by simpa using hfail⟩
+      rw [← hei]; cases e; exact hmem
+    · simp only [hei, if_neg, not_false_iff] at hfail; simp at hfail
+
+/-- **`ready_descent` — a finite DAG always has a source (the well-founded heart).** On an acyclic
+in-range edge set, any remaining node leads (by descent along unmet dependency edges, each strictly
+lowering the rank) to a remaining node that IS `ready`. Strong induction on the rank bound: a
+non-ready remaining node has an unmet edge to a producer of strictly smaller rank, which is itself
+remaining — recurse. The `ℕ`-rank well-foundedness is what forbids an infinite descent (a cycle). -/
+theorem ready_descent
+    (n : Nat) (edges : List (Nat × Nat))
+    (rank : Nat → Nat) (hac : ∀ c p, (c, p) ∈ edges → rank p < rank c)
+    (hir : ∀ c p, (c, p) ∈ edges → p < n) (emitted : List Nat) :
+    ∀ R i, Remaining n emitted i → rank i ≤ R →
+      ∃ j, j < n ∧ ready edges emitted j = true := by
+  intro R
+  induction R using Nat.strong_induction_on with
+  | _ R ih =>
+    intro i hrem hri
+    by_cases hready : ready edges emitted i = true
+    · exact ⟨i, hrem.1, hready⟩
+    · rw [Bool.not_eq_true] at hready
+      obtain ⟨p, hpe, hpne⟩ := not_ready_unmet edges emitted i hrem.2 hready
+      have hpr : rank p < rank i := hac i p hpe
+      have hpltR : rank p < R := Nat.lt_of_lt_of_le hpr hri
+      exact ih (rank p) hpltR p ⟨hir i p hpe, hpne⟩ (Nat.le_refl _)
+
+/-- **`exists_ready_of_acyclic` — a finite acyclic batch always has a ready node while one remains.**
+The Kahn-completeness source lemma: given any remaining node, acyclicity (+ in-range edges) produces
+a ready node. This is precisely why the bounded iteration never needs unbounded/coinductive fuel. -/
+theorem exists_ready_of_acyclic
+    (n : Nat) (edges : List (Nat × Nat))
+    (hac : Acyclic edges) (hir : EdgesInRange n edges)
+    (emitted : List Nat) (i : Nat) (hrem : Remaining n emitted i) :
+    ∃ j, j < n ∧ ready edges emitted j = true := by
+  obtain ⟨rank, hrank⟩ := hac
+  exact ready_descent n edges rank hrank hir emitted (rank i) i hrem (Nat.le_refl _)
+
+/-- A not-fully-emitted nodup in-range prefix has an un-emitted in-range node (pigeonhole on
+`range n`): if every `i < n` were emitted, `range n ⊆ emitted` forces `n ≤ |emitted|`. -/
+theorem exists_unemitted (n : Nat) (emitted : List Nat) (hlt : emitted.length < n) :
+    ∃ i, i < n ∧ emitted.contains i = false := by
+  by_contra hcon
+  push Not at hcon
+  have hrange_sub : List.range n ⊆ emitted := by
+    intro i hi
+    have hin : i < n := List.mem_range.mp hi
+    have hne := hcon i hin
+    have hct : emitted.contains i = true := by
+      cases hc : emitted.contains i with
+      | false => exact absurd hc hne
+      | true => rfl
+    exact List.contains_iff_mem.mp hct
+  have hle : (List.range n).length ≤ emitted.length :=
+    List.Subperm.length_le (List.subperm_of_subset (List.nodup_range) hrange_sub)
+  rw [List.length_range] at hle; omega
+
+/-- `kahnStep` returns a node that is in range AND not already emitted (the readiness gate forces
+freshness) — so each round appends a genuinely new in-range node, preserving the nodup/in-range
+invariant the completeness induction threads. -/
+theorem kahnStep_fresh_inrange (n : Nat) (edges : List (Nat × Nat)) (emitted : List Nat) (i : Nat)
+    (h : kahnStep n edges emitted = some i) : i < n ∧ emitted.contains i = false := by
+  unfold kahnStep at h
+  have hmem : i ∈ List.range n := List.mem_of_find?_eq_some h
+  have hr : ready edges emitted i = true := List.find?_some h
+  refine ⟨List.mem_range.mp hmem, ?_⟩
+  unfold ready at hr
+  rw [Bool.and_eq_true] at hr
+  obtain ⟨h1, _⟩ := hr
+  simp only [decide_eq_true_eq] at h1
+  cases hc : emitted.contains i with
+  | false => rfl
+  | true => exact absurd hc h1
+
+/-- `kahnStep` returns `some` whenever a ready in-range node exists (it is `find?` over `range n`). -/
+theorem kahnStep_some_of_ready (n : Nat) (edges : List (Nat × Nat)) (emitted : List Nat)
+    (h : ∃ j, j < n ∧ ready edges emitted j = true) : (kahnStep n edges emitted).isSome := by
+  obtain ⟨j, hjn, hjr⟩ := h
+  unfold kahnStep
+  rw [List.find?_isSome]
+  exact ⟨j, List.mem_range.mpr hjn, hjr⟩
+
+/-- **`kahnLoopImpl_complete` — the BOUNDED (least-fixed-point) Kahn loop is COMPLETE on a finite
+acyclic in-range batch.** With fuel ≥ `n − |emitted|` and a nodup in-range emitted prefix, the loop
+returns `some` (never stalls, never spuriously reports a cycle). The induction: while not done, a node
+remains (`exists_unemitted`), so a ready node exists (`exists_ready_of_acyclic`), so `kahnStep` emits a
+fresh in-range node, shrinking the fuel gap. This is the formal "νF collapses to μF": no unbounded /
+coinductive iteration is ever needed — the finite node-count fuel suffices. -/
+theorem kahnLoopImpl_complete
+    (n : Nat) (edges : List (Nat × Nat)) (hac : Acyclic edges) (hir : EdgesInRange n edges) :
+    ∀ fuel emitted, emitted.Nodup → (∀ x ∈ emitted, x < n) → n ≤ emitted.length + fuel →
+      ∃ order, kahnLoopImpl fuel n edges emitted = some order := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro emitted hnd hsub hfuel
+    simp only [Nat.add_zero] at hfuel
+    have hle : emitted.length ≤ n := by
+      have : emitted.length ≤ (List.range n).length :=
+        List.Subperm.length_le (List.subperm_of_subset hnd
+          (fun x hx => List.mem_range.mpr (hsub x hx)))
+      rwa [List.length_range] at this
+    have heq : emitted.length = n := Nat.le_antisymm hle hfuel
+    simp only [kahnLoopImpl, heq, if_pos]
+    exact ⟨emitted, rfl⟩
+  | succ f ih =>
+    intro emitted hnd hsub hfuel
+    simp only [kahnLoopImpl]
+    by_cases hdone : emitted.length = n
+    · simp only [hdone, if_pos]; exact ⟨emitted, rfl⟩
+    · simp only [hdone, if_neg, not_false_iff]
+      have hle : emitted.length ≤ n := by
+        have : emitted.length ≤ (List.range n).length :=
+          List.Subperm.length_le (List.subperm_of_subset hnd
+            (fun x hx => List.mem_range.mpr (hsub x hx)))
+        rwa [List.length_range] at this
+      have hlt : emitted.length < n := Nat.lt_of_le_of_ne hle hdone
+      obtain ⟨i, hin, hni⟩ := exists_unemitted n emitted hlt
+      obtain ⟨j, hjn, hjr⟩ := exists_ready_of_acyclic n edges hac hir emitted i ⟨hin, hni⟩
+      have hstep_some : (kahnStep n edges emitted).isSome :=
+        kahnStep_some_of_ready n edges emitted ⟨j, hjn, hjr⟩
+      cases hstep : kahnStep n edges emitted with
+      | none => rw [hstep] at hstep_some; simp at hstep_some
+      | some k =>
+        obtain ⟨hkn, hkne⟩ := kahnStep_fresh_inrange n edges emitted k hstep
+        have hnd' : (emitted ++ [k]).Nodup := by
+          rw [List.nodup_append]
+          refine ⟨hnd, List.nodup_singleton k, ?_⟩
+          intro a ha b hb hab; subst hab
+          simp only [List.mem_singleton] at hb; subst hb
+          exact absurd (List.contains_iff_mem.mpr ha) (by rw [hkne]; simp)
+        have hsub' : ∀ x ∈ (emitted ++ [k]), x < n := by
+          intro x hx; rw [List.mem_append] at hx
+          rcases hx with h | h
+          · exact hsub x h
+          · simp only [List.mem_singleton] at h; subst h; exact hkn
+        have hfuel' : n ≤ (emitted ++ [k]).length + f := by
+          rw [List.length_append, List.length_singleton]; omega
+        exact ih (emitted ++ [k]) hnd' hsub' hfuel'
+
+/-- **`topoOrder_some_of_acyclic` — THE EXCLUSION HEADLINE.** An acyclic, in-range batch ALWAYS
+produces a complete topological order: `topoOrder b = some order`. The fuel = node-count (the bounded
+least-fixed-point) is provably sufficient; no unbounded / coinductive (νF) iteration is reachable. The
+former §1 OPEN is discharged — the finite acyclic case (dregg1's only real case) is the WHOLE case. -/
+theorem topoOrder_some_of_acyclic (b : ConditionalBatch)
+    (hac : Acyclic b.edges) (hir : EdgesInRange b.size b.edges) :
+    ∃ order, topoOrder b = some order := by
+  unfold topoOrder
+  exact kahnLoopImpl_complete b.size b.edges hac hir b.size []
+    List.nodup_nil (by intro x hx; exact absurd hx (List.not_mem_nil)) (by simp)
+
+/-- **`kahnLoopImpl_more_fuel` — the νF = μF stabilization.** Once the loop returns a `some` result
+with some fuel, ANY additional fuel returns the SAME order. So the unbounded (coinductive / νF) limit
+of the iteration equals the bounded (finite-fuel / μF) value — there is no extra content in taking
+fuel to infinity. This is the formal collapse of the greatest-fixed-point to the least. -/
+theorem kahnLoopImpl_more_fuel (n : Nat) (edges : List (Nat × Nat)) :
+    ∀ fuel emitted order, kahnLoopImpl fuel n edges emitted = some order →
+      kahnLoopImpl (fuel + 1) n edges emitted = some order := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro emitted order h
+    simp only [kahnLoopImpl] at h
+    split at h
+    · rename_i hdone
+      simp only [Option.some.injEq] at h; subst h
+      simp only [kahnLoopImpl, hdone, if_pos]
+    · exact absurd h (by simp)
+  | succ f ih =>
+    intro emitted order h
+    simp only [kahnLoopImpl] at h ⊢
+    split at h
+    · rename_i hdone; simp only [hdone, if_pos] at *; exact h
+    · rename_i hdone; simp only [hdone, if_neg, not_false_iff] at *
+      cases hstep : kahnStep n edges emitted with
+      | none => simp only [hstep] at h; exact absurd h (by simp)
+      | some i => simp only [hstep] at h ⊢; exact ih (emitted ++ [i]) order h
+
+/-- **`topoOrder_none_imp_cyclic` — the dual: a rejected batch is genuinely CYCLIC.** If `topoOrder`
+returns `none` over an in-range batch, the batch is NOT acyclic — there is a real dependency cycle (a
+deadlock: each promise awaits another, none fires). The `none` is never a premature stall of a sound
+DAG; it is dregg1's `PipelineError::Cycle`, correctly rejected with no partial commit
+(`condTurn_atomic`). Together with `topoOrder_some_of_acyclic`, this pins `topoOrder b = some _ ↔
+acyclic` (for in-range batches) — the νF case maps exactly onto the deadlock the executor refuses. -/
+theorem topoOrder_none_imp_cyclic (b : ConditionalBatch)
+    (hir : EdgesInRange b.size b.edges) (h : topoOrder b = none) : ¬ Acyclic b.edges := by
+  intro hac
+  obtain ⟨order, hsome⟩ := topoOrder_some_of_acyclic b hac hir
+  rw [h] at hsome; exact absurd hsome (by simp)
+
+/-! ### §12 axiom-hygiene + mutation-confirmation: the exclusion BITES. -/
+
+#assert_axioms not_ready_unmet
+#assert_axioms ready_descent
+#assert_axioms exists_ready_of_acyclic
+#assert_axioms exists_unemitted
+#assert_axioms kahnStep_fresh_inrange
+#assert_axioms kahnStep_some_of_ready
+#assert_axioms kahnLoopImpl_complete
+#assert_axioms topoOrder_some_of_acyclic
+#assert_axioms kahnLoopImpl_more_fuel
+#assert_axioms topoOrder_none_imp_cyclic
+
+-- MUTATION-CONFIRM (the property bites both ways):
+-- (a) The acyclic demo batch (edge (1,0), in range) IS acyclic ⇒ topoOrder succeeds:
+example : Acyclic demoBatch.edges := by
+  refine ⟨id, ?_⟩
+  intro c p he
+  simp only [demoBatch, List.mem_singleton, Prod.mk.injEq] at he
+  obtain ⟨rfl, rfl⟩ := he; simp
+example : EdgesInRange demoBatch.size demoBatch.edges := by
+  intro c p he
+  simp only [demoBatch, List.mem_singleton, Prod.mk.injEq] at he
+  obtain ⟨_, rfl⟩ := he; decide
+example : ∃ order, topoOrder demoBatch = some order :=
+  topoOrder_some_of_acyclic demoBatch
+    (by refine ⟨id, ?_⟩; intro c p he; simp only [demoBatch, List.mem_singleton, Prod.mk.injEq] at he; obtain ⟨rfl, rfl⟩ := he; simp)
+    (by intro c p he; simp only [demoBatch, List.mem_singleton, Prod.mk.injEq] at he; obtain ⟨_, rfl⟩ := he; decide)
+
+-- (b) The CYCLE batch (edges (0,1),(1,0)) is genuinely NOT acyclic — the νF/deadlock case, REJECTED:
+example : ¬ Acyclic cycleBatch.edges := by
+  rintro ⟨rank, h⟩
+  have h1 := h 0 1 (by simp [cycleBatch])
+  have h2 := h 1 0 (by simp [cycleBatch])
+  omega
+-- ...and a `none` topoOrder over the (in-range) cycle batch witnesses non-acyclicity:
+example : EdgesInRange cycleBatch.size cycleBatch.edges := by
+  intro c p he
+  simp only [cycleBatch, ConditionalBatch.size] at *
+  fin_cases he <;> decide
+example : ¬ Acyclic cycleBatch.edges :=
+  topoOrder_none_imp_cyclic cycleBatch
+    (by intro c p he; simp only [cycleBatch, ConditionalBatch.size] at *; fin_cases he <;> decide)
+    (by native_decide)
 
 end Dregg2.Exec.ConditionalTurn

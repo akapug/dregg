@@ -301,15 +301,17 @@ theorem refine_async_bites (a a' : ℤ) (h : a' ≠ a) : ¬ CondAbsStep a a' :=
 /-! ## 9. THE NAMED RESIDUALS (precise, NOT `sorry`, NOT vacuous hypotheses).
 
 The per-STEP forward-simulation square is now CLOSED on all three axes (intra-vat `refine_step`,
-cross-vat `refine_cross_vat_step`, async `refine_async_run`), each with teeth. The genuinely
-remaining obligations are RUN-LEVEL / coinductive properties, ORTHOGONAL to the per-step square,
-each isolated as a NAMED predicate in its home module (NOT a `sorry`, NOT a carried-conclusion
-hypothesis):
+cross-vat `refine_cross_vat_step`, async `refine_async_run`), each with teeth. The whole-history
+connectivity closure — once a named run-level residual — is now likewise PROVED
+(`ExecRefinementFull.onlyConnectivityCloses`). The genuinely remaining obligations are the two
+contended/coinductive properties, ORTHOGONAL to the per-step square, each isolated as a NAMED
+predicate in its home module (NOT a `sorry`, NOT a carried-conclusion hypothesis):
 
   * **Whole-history connectivity closure** — `Spec.ExecRefinementFull.OnlyConnectivityCloses`:
     across an entire run, no reachable authority edge appears that some authorized op did not
-    generate. A property of the `AbsRun` CLOSURE, not the single step. The per-step
-    non-amplification IS proved (`ExecRefinementFull.delegate_step_grounded`).
+    generate. A property of the `AbsRun` CLOSURE, not the single step. NOW PROVED by induction on
+    the run (`ExecRefinementFull.onlyConnectivityCloses`, depends only on `propext`), lifting the
+    per-step non-amplification (`ExecRefinementFull.delegate_step_grounded`).
 
   * **Contended adversary scheduler** — `ForestLTS §11 OPEN`: concurrent OVERLAPPING forests (a
     cell incident to two forests at once) under an adversarial interleaver — the coinductive
@@ -323,10 +325,19 @@ hypothesis):
 These three are the precise residual; each needs a run-level / coinductive argument, not a fix to
 the per-step diagram assembled above. -/
 
-/-- The named whole-history connectivity-closure obligation, re-exported as the residual at this
-assembly point (the SAME `def`-level prop its home module names — a hypothesis over runs, not an
-axiom). -/
+/-- The whole-history connectivity-closure property, re-exported at this assembly point (the SAME
+`def`-level prop its home module names). No longer a residual hypothesis — it is PROVED by
+`onlyConnectivityCloses` (re-exported just below). -/
 abbrev OnlyConnectivityCloses : Prop := Dregg2.Spec.ExecRefinementFull.OnlyConnectivityCloses
+
+/-- **The whole-history connectivity closure, PROVED** — re-exported from its home module. Along any
+`AbsRun`, every edge in the final authority graph either was initial or was added by an authorized
+`conserveAddEdge` step (no reachability ex nihilo). Discharged by induction on the run; depends only
+on `propext`. This retires the connectivity entry from the residual list above. -/
+theorem onlyConnectivityCloses : OnlyConnectivityCloses :=
+  Dregg2.Spec.ExecRefinementFull.onlyConnectivityCloses
+
+#assert_axioms onlyConnectivityCloses
 
 /-! ## 10. Axiom-hygiene tripwires (the honesty pins over the diagram's keystones). -/
 

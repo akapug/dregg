@@ -274,10 +274,24 @@ Non-vacuity (the relation BITES): `refine_step_bites` (a balance-moved pair is n
 step), `refine_cross_vat_bites` (an unauthorized leg is no `forestAbsStep`), `refine_async_bites`
 (`CondAbsStep a a' ↔ a' = a`).
 
-RESIDUAL (precise, NAMED — run-level/coinductive, orthogonal to the per-step square): the
-whole-history connectivity closure (`ExecRefinementFull.OnlyConnectivityCloses`, a `def`-prop over
-runs); the contended adversary-scheduler interleaving (`ForestLTS §11`); the unbounded
-coinductive-νF batch (`ConditionalTurn §1`). The finite/non-contended/per-step cases are all closed. -/
+RESIDUAL — now DISCHARGED (the three run-level/coinductive residuals are CLOSED):
+  * whole-history connectivity closure: PROVED — `ExecRefinementFull.onlyConnectivityCloses`
+    (structural induction on the run; every edge in a reachable state is an initial edge or was added
+    by an authorized `conserveAddEdge` step; deps `[propext]` only). Mutation-confirmed (an ex-nihilo
+    edge is refuted, the add-edge clause is live).
+  * contended adversary-scheduler interleaving: PROVED — `Proof.ContendedForest.contended_forest_commutes`
+    (the forest half is GATE-FREE: the fire-decision reads only frame-stable caps/accounts and the
+    writes are additive under the CG-5 Σ=0 binding, so ANY two overlapping forests — even on the SAME
+    cell — commute UNCONDITIONALLY, no disjointness; no scheduler can use one forest to abort another).
+    The bilateral coupled-overdraw impossibility is the separate availability-GATED-pot regime, NOT the
+    dregg Σ=0 model. Mutation-confirmed (a same-cell overdraw commits order-independently; the gated
+    half disagrees).
+  * unbounded coinductive-νF batch: DISCHARGED BY EXCLUSION — `ConditionalTurn` §12: a `ConditionalBatch`
+    carries finite `List`s, so the νF/streaming case is INEXPRESSIBLE; and `topoOrder_some_of_acyclic`
+    / `kahnLoopImpl_more_fuel` collapse the greatest- to the least-fixed-point (fuel = node-count
+    suffices; a cyclic batch is a genuine deadlock, correctly refused with no partial commit).
+The deeper unbounded coinductive-ADVERSARY forest interleaving is carried in `Proof.CoinductiveAdversary`.
+The per-step square + all finite/non-contended/acyclic cases are closed. -/
 #assert_axioms Dregg2.Proof.refine_conservation
 #assert_axioms Dregg2.Proof.refine_conservation_measure
 #assert_axioms Dregg2.Proof.refine_run_conservation
@@ -291,6 +305,9 @@ coinductive-νF batch (`ConditionalTurn §1`). The finite/non-contended/per-step
 #assert_axioms Dregg2.Proof.refine_step_bites
 #assert_axioms Dregg2.Proof.refine_cross_vat_bites
 #assert_axioms Dregg2.Proof.refine_async_bites
+#assert_axioms Dregg2.Spec.ExecRefinementFull.onlyConnectivityCloses
+#assert_axioms Dregg2.Proof.ContendedForest.contended_forest_commutes
+#assert_axioms Dregg2.Exec.ConditionalTurn.topoOrder_some_of_acyclic
 
 /-! ## §18 — VCG/WP program logic, operational LTS, Pedersen §8 discharge, first-app Spec.
 

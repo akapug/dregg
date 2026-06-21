@@ -414,9 +414,19 @@ forest step with the N-ary abstract LTS edge; `forestAbsRun_forward` lifts to wh
 Non-vacuous (`forestAbsStep_not_vacuous`, `forestAbsStep_needs_binding`), axiom-clean.
 The bilateral square is the `ι = Fin 2` slice (`forestAbsStep_two_refines_crossAbs`).
 
--- OPEN: the CONTENDED / adversary-scheduler case — concurrent overlapping forests (a cell
---   incident to two forests at once), the coinductive `Boundary` over interleaved forests —
---   remains out of scope.
+-- CLOSED (`Proof.ContendedForest`): the CONTENDED / adversary-scheduler case — concurrent
+--   overlapping forests (a cell incident to two forests at once) under a hostile interleaver —
+--   is discharged by SERIALIZATION, UNCONDITIONALLY. `contended_forest_commutes`: ANY two
+--   committing forests over ANY shared family yield the SAME final family + commit flags under
+--   both adversary orders (no disjointness needed), because the forest half `applyForestHalf` is
+--   gate-free and additive (`half_fires_frame`: balance-independent fire-decision;
+--   `half_commute`: two debits commute even on the SAME cell). The abstract LTS survives the
+--   interleaving (`contended_forest_simulates`). This does NOT contradict the bilateral coupled
+--   impossibility (`ContendedCrossCell.coupled_no_schedule_agnostic_commit`): that lives entirely
+--   in the availability gate `amt ≤ bal`, which the Σ=0-bound forest half deliberately omits
+--   (`forest_unconditional_vs_gated_boundary` states the dichotomy as one theorem).
+-- OPEN (named, beyond this layer): the COINDUCTIVE `Boundary` over UNBOUNDED interleaved forests
+--   (an infinite adversary stream) — `Proof.CoinductiveAdversary`.
 -/
 
 end Dregg2.Proof.ForestLTS
