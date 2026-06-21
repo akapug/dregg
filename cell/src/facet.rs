@@ -87,6 +87,14 @@ pub const EFFECT_ATTENUATE_CAPABILITY: EffectMask = 1 << 23;
 /// committed AFTER record-digest limb.
 pub const EFFECT_SET_PROGRAM: EffectMask = 1 << 24;
 
+/// Reactive async-coordination effects: `Promise` / `Notify` / `React` (the
+/// Track-2 standing-commitment vocabulary). A cap bearing this bit may deposit
+/// promise-holes (wake peers) and react to them. The one-shot spend of a
+/// promise-hole is enforced by the production nullifier set, exactly as a
+/// `NoteSpend`: to `React` is to spend the hole-id nullifier, so a second
+/// react (or a replayed hole-id) is rejected by the double-spend gate.
+pub const EFFECT_REACTIVE_OPS: EffectMask = 1 << 25;
+
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;
 

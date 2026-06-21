@@ -33,11 +33,13 @@ pub mod commitment;
 pub mod custom_effect;
 pub mod delegation;
 pub mod derivation;
+pub mod derived;
 pub mod facet;
 pub mod factory;
 pub mod id;
 pub mod ledger;
 pub mod lifecycle;
+pub mod membrane;
 pub mod migration;
 pub mod note;
 #[cfg(feature = "crypto")]
@@ -103,11 +105,16 @@ pub use delegation::DelegatedRef;
 pub use derivation::{
     DerivationEdge, DerivationNode, DerivationRecord, DerivationTree, DerivationType,
 };
+pub use derived::{
+    Aggregate, DerivationError, DerivationSpec, bind_derivation, bound_claimed_value,
+    bound_spec_digest, is_derived, verify_derivation,
+};
 pub use facet::{
     EFFECT_ALL, EFFECT_ATTENUATE_CAPABILITY, EFFECT_BRIDGE_OPS, EFFECT_BURN, EFFECT_CAPTP_OPS,
     EFFECT_CREATE_CELL, EFFECT_DELEGATION_OPS, EFFECT_EMIT_EVENT, EFFECT_ESCROW_OPS,
     EFFECT_GRANT_CAPABILITY, EFFECT_INCREMENT_NONCE, EFFECT_INTRODUCE, EFFECT_LIFECYCLE_OPS,
-    EFFECT_NOTE_CREATE, EFFECT_NOTE_SPEND, EFFECT_OBLIGATION_OPS, EFFECT_QUEUE_OPS, EFFECT_REFUSAL,
+    EFFECT_NOTE_CREATE, EFFECT_NOTE_SPEND, EFFECT_OBLIGATION_OPS, EFFECT_QUEUE_OPS, EFFECT_REACTIVE_OPS,
+    EFFECT_REFUSAL,
     EFFECT_REVOKE_CAPABILITY, EFFECT_SEAL_OPS, EFFECT_SET_FIELD, EFFECT_SET_PERMISSIONS,
     EFFECT_SET_PROGRAM, EFFECT_SET_VERIFICATION_KEY, EFFECT_SOVEREIGN_OPS, EFFECT_TRANSFER,
     EffectContext, EffectMask,
@@ -126,6 +133,10 @@ pub use ledger::{
 };
 pub use lifecycle::{
     ArchivalAttestation, CellLifecycle, DeathCertificate, DeathReason, LifecycleTransitionError,
+};
+pub use membrane::{
+    compose_both, CompositionPolicy, HeldFacet, Membrane, MembraneCap, MembraneError, Presentation,
+    SealedMembrane,
 };
 pub use note::{Note, NoteBatcher, NoteCommitment, NoteError, Nullifier, PositionedNote};
 #[cfg(feature = "crypto")]
