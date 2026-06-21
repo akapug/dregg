@@ -311,6 +311,11 @@ def main():
         src = os.path.join(ROOT, "tmpl", fn)
         if os.path.exists(src):
             shutil.copy(src, os.path.join(SITE, fn))
+    # the IE6 floor (pure HTML 4.01, for any user-agent back to 1996)
+    try:
+        import ie6 as _ie6; _ie6.build()
+    except Exception as _e:
+        print(f"  (ie6 floor skipped: {_e})")
     gt = data["gametree"]["meta"]
     print(f"atlas built → {SITE}/index.html")
     print(f"  game tree: {gt.get('node_count','?')} states / {gt.get('edge_count','?')} transitions")

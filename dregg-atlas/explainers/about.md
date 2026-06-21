@@ -43,3 +43,7 @@ python3 shoot.py    # screenshot the 28 cockpit surfaces
 python3 build.py    # assemble the site
 open site/index.html
 ```
+
+## Compatibility view (for timetravelers)
+
+The live atlas needs a modern browser. A pure-HTML-4.01 graceful-degradation floor — no script, no canvas, just images and `<map>` image-maps, working in any user-agent back to the dawn of the web — lives at [ie6/index.html](ie6/index.html). The live cockpit degrades the same way: where a browser cannot run the wasm model, it can be driven as a server-rendered frame via image-maps.
