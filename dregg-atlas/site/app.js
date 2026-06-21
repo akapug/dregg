@@ -291,7 +291,7 @@
     h += "<h3>Refusal taxonomy</h3><ul>" + Object.entries(p.refusal_taxonomy || {}).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${esc(v)}</li>`).join("") + "</ul>";
     // the deep, code-grounded explainers (rendered inline, from explainers/protocol.md)
     const sec = A.sections || {};
-    ["thesis", "verbs", "substances", "auth-lattice", "refusal", "receipts"].forEach(slug => {
+    ["thesis", "verbs", "substances", "auth-lattice", "refusal", "receipts", "scripts", "macros-as-custom-vk"].forEach(slug => {
       if (sec[slug]) { h += `<h3 id="${slug}">${slug}</h3>` + sec[slug]; }
     });
     h += `<hr style="border-color:#21262d;margin:20px 0">`;
