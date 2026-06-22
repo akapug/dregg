@@ -989,7 +989,6 @@ dependencies = [
  "bs58",
  "chacha20poly1305",
  "dregg-cell",
- "dregg-lean-ffi",
  "dregg-types",
  "getrandom 0.3.4",
  "hkdf",
@@ -1005,9 +1004,22 @@ name = "dregg-cell"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-circuit",
+ "dregg-types",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-cell-crypto"
+version = "0.1.0"
+dependencies = [
+ "blake3",
  "bulletproofs",
  "chacha20poly1305",
  "curve25519-dalek",
+ "dregg-cell",
  "dregg-circuit",
  "dregg-types",
  "ed25519-dalek",
@@ -1067,6 +1079,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-coord"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-blocklace",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "serde",
+]
+
+[[package]]
 name = "dregg-dfa"
 version = "0.1.0"
 dependencies = [
@@ -1118,6 +1143,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-exec-lean"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-cell-crypto",
+ "dregg-coord",
+ "dregg-federation",
+ "dregg-intent",
+ "dregg-lean-ffi",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "postcard",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "dregg-federation"
 version = "0.1.0"
 dependencies = [
@@ -1131,9 +1176,9 @@ dependencies = [
  "dregg-blocklace",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-commit",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
@@ -1176,11 +1221,11 @@ dependencies = [
  "chacha20poly1305",
  "curve25519-dalek",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dfa",
  "dregg-federation",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-trace",
  "dregg-turn",
@@ -1260,10 +1305,12 @@ dependencies = [
  "dregg-bridge",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-dsl-tests",
+ "dregg-exec-lean",
  "dregg-federation",
  "dregg-hints",
  "dregg-intent",
@@ -1346,11 +1393,11 @@ dependencies = [
  "curve25519-dalek",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-types",
  "ed25519-dalek",

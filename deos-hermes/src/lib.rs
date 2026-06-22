@@ -26,20 +26,51 @@
 //! executor-side `mandate_program` backstop); this crate is the ACP↔gate seam,
 //! nothing more.
 //!
-//! ## What is a first-slice STUB vs REAL
+//! ## Beyond the seam — the live loop, riding effects, per-tool grants
+//!
+//! 4. [`acp_client`] — the REAL ndjson JSON-RPC ACP CLIENT. It drives
+//!    `initialize` → `session/new` → `session/prompt`, consumes streamed
+//!    `session/update`s, and answers each `session/request_permission` by
+//!    running [`HermesGateway::admit_call`] and replying with the mapped ACP
+//!    outcome. It is transport-agnostic ([`acp_client::AcpPeer`]): it can spawn a
+//!    live `hermes-acp` subprocess ([`acp_client::AcpTransport`]) OR run against
+//!    the [`mock_peer::MockHermesPeer`] that replays the real `acp_adapter`
+//!    message shapes. The end-to-end loop runs over the mock (the live install
+//!    in this env is broken — its venv lacks the `acp` module); the SAME driver
+//!    runs over the subprocess once that is fixed.
+//! 5. [`tool_effects`] — a tool-call's actual payload becomes a `Vec<Effect>`
+//!    witness that rides the SAME metered turn as the counter advance, so the
+//!    receipt witnesses WHAT the call did (the path, the URL), not just the meter.
+//! 6. [`grant_registry`] now supports per-TOOL grants over the per-kind floor
+//!    (tightest-wins), each its own cap-gated, independently-metered worker.
+//! 7. [`mandate`] — the mandate inspector: an agent's live confinement (grants,
+//!    budgets spent, receipts, refusals) made legible — ADOS made visible.
+//! 8. [`surface`] — a documented, ready-to-mount `CockpitSurface` sketch for the
+//!    confined-Hermes agent dock (does NOT depend on starbridge-v2).
+//!
+//! ## What is REAL vs. MOCK (honest)
 //!
 //! REAL: the [`ToolGateway`](dregg_sdk::ToolGateway) path — `admit` + `invoke`
-//! run on the verified executor and yield a genuine [`dregg_turn::TurnReceipt`].
-//! STUB (first slice): the ACP TRANSPORT — connecting to a live `hermes acp`
-//! subprocess and parsing real JSON-RPC frames is roadmap (see crate docs /
-//! the report). Here a [`acp::ToolCallRequest`] is fed in directly (a mocked
-//! ACP source), so the slice proves the load-bearing seam — tool-call → gated
-//! receipted turn — grounded in the real gateway.
+//! run on the verified executor and yield a genuine [`dregg_turn::TurnReceipt`];
+//! the ACP TRANSPORT — real ndjson JSON-RPC framing + a live-capable subprocess
+//! spawner; the riding effects; the per-tool grants; the inspector.
+//! MOCK: the Hermes PEER in the tested end-to-end loop — a faithful replay of
+//! `acp_adapter`'s message shapes, because the live `hermes-acp` install in this
+//! environment is broken and a working one needs model credentials. The seam is
+//! exercised identically over either peer.
 
 pub mod acp;
+pub mod acp_client;
 pub mod bridge;
 pub mod grant_registry;
+pub mod mandate;
+pub mod mock_peer;
+pub mod surface;
+pub mod tool_effects;
 
 pub use acp::{PermissionOutcome, ToolCallRequest, ToolKind};
+pub use acp_client::{AcpClient, AcpError, AcpPeer, AcpTransport, PromptRun};
 pub use bridge::HermesGateway;
-pub use grant_registry::GrantRegistry;
+pub use grant_registry::{GrantRegistry, MandateKey};
+pub use mandate::{Mandate, MandateRow};
+pub use mock_peer::{MockHermesPeer, ScriptedCall};
