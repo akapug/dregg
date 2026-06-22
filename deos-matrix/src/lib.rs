@@ -24,11 +24,20 @@
 //! confined comms-PD will use.
 
 pub mod client;
+pub mod membrane;
 pub mod session;
+pub mod source;
 pub mod worker;
+
+#[cfg(feature = "gui")]
+pub mod chat;
+
+#[cfg(feature = "cockpit-surface")]
+pub mod cockpit_surface;
 
 pub use client::{MatrixClient, RoomSummary, TimelineMessage};
 pub use session::StoredSession;
+pub use source::{ChatSource, MockSource};
 
 /// Crate-wide error type.
 #[derive(Debug, thiserror::Error)]
