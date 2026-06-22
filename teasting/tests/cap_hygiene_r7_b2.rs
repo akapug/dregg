@@ -126,7 +126,7 @@ fn seal_attack_setup() -> (
     CellId,
     CellId,
     CellId,
-    dregg_cell::SealedBox,
+    dregg_cell_crypto::SealedBox,
 ) {
     let parent = make_cell(1, 1_000);
     let p_id = parent.id();

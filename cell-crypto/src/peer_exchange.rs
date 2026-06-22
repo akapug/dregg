@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 
-use crate::CellId;
+use dregg_cell::CellId;
 
 /// Serde helper for `[u8; 64]` (Ed25519 signatures).
 mod sig_serde {
@@ -80,7 +80,7 @@ pub struct PeerStateTransition {
     /// the sender's `cell_id`: a forged sender produces a different
     /// canonical hash because `cell_id` is folded into the preimage.
     #[serde(default)]
-    pub unilateral_attestation: Option<crate::unilateral::UnilateralAttestation>,
+    pub unilateral_attestation: Option<dregg_cell::unilateral::UnilateralAttestation>,
 }
 
 /// A peer's view of another cell's state.

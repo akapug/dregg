@@ -18,11 +18,11 @@
 //!
 //! The value commitments are carried here as opaque 32-byte blobs
 //! (`ShieldedValueLeg`), exactly the compressed-Ristretto encoding
-//! `dregg_cell::value_commitment::ValueCommitment::to_bytes` produces. This
+//! `dregg_cell_crypto::value_commitment::ValueCommitment::to_bytes` produces. This
 //! lets the circuit-side transfer *bind* the value transcript (so the two halves
 //! cannot be mixed-and-matched across actions) without `circuit` depending on
 //! the curve crate. The conservation/range verification over those bytes is the
-//! Pedersen half (`dregg_cell::value_commitment::verify_full_conservation_bytes`),
+//! Pedersen half (`dregg_cell_crypto::value_commitment::verify_full_conservation_bytes`),
 //! composed downstream.
 
 use crate::dsl::dsl_p3_air::{DslZkProof, prove_dsl_zk, verify_dsl_zk};
@@ -63,7 +63,7 @@ pub struct ShieldedInputProof {
     /// reveals nothing about the value (value+randomness hidden behind the hash)
     /// but ties the STARK-witnessed leaf value to the published Pedersen value-
     /// commitment leg: the downstream
-    /// [`dregg_cell::value_commitment::verify_value_link`] re-derives this from the
+    /// [`dregg_cell_crypto::value_commitment::verify_value_link`] re-derives this from the
     /// leg's `(value, randomness)` opening and rejects a leg whose value differs.
     /// Bound into [`ShieldedTransfer::transfer_message`] so the two halves cannot
     /// be spliced.
@@ -116,7 +116,7 @@ pub struct ShieldedTransfer {
     /// scalar-field-wrapped "negative" amount). Without these, an attacker mints
     /// unbounded value from a balanced-looking transcript. The complete shielded
     /// acceptance is `verify_stark_side()` AND
-    /// `dregg_cell::value_commitment::verify_full_conservation_bytes` over these
+    /// `dregg_cell_crypto::value_commitment::verify_full_conservation_bytes` over these
     /// legs+range proofs (composed downstream — `circuit` is upstream of the curve
     /// crate, so the range proofs ride as opaque bytes here and are verified at the
     /// `cell`/test layer). Carried in the [`transfer_message`] so the STARK side,
@@ -215,7 +215,7 @@ impl ShieldedTransfer {
     /// some output escapes the `[0, 2^64)` bound is rejected here — closing the
     /// "no range proof ⇒ negative/wrapped output value ⇒ hidden inflation" hole at
     /// the structural level. The cryptographic check of each proof is
-    /// `dregg_cell::value_commitment::verify_full_conservation_bytes`.
+    /// `dregg_cell_crypto::value_commitment::verify_full_conservation_bytes`.
     pub fn check_range_proof_shape(&self) -> Result<(), ShieldedError> {
         if self.output_range_proofs.len() != self.output_legs.len() {
             return Err(ShieldedError::RangeProofCountMismatch {

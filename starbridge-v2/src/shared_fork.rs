@@ -11,9 +11,9 @@
 //!   fork c-list (via a genuine [`Effect::GrantCapability`], attenuated by the real
 //!   [`dregg_cell::is_attenuation`]). The guest exercises it LOCALLY, any number of
 //!   times, with NO consent. These are *the various things they do locally*.
-//! * **STUDYREF** — a read/STUDY-only [`dregg_cell::ReadCap`] (a read-lattice
-//!   [`dregg_cell::FieldSet`] + a [`dregg_cell::ViewKey`], attenuated by
-//!   [`dregg_cell::is_read_attenuation`]). The guest can INSPECT the referenced
+//! * **STUDYREF** — a read/STUDY-only [`dregg_cell_crypto::ReadCap`] (a read-lattice
+//!   [`dregg_cell_crypto::FieldSet`] + a [`dregg_cell_crypto::ViewKey`], attenuated by
+//!   [`dregg_cell_crypto::is_read_attenuation`]). The guest can INSPECT the referenced
 //!   cell's exposed slots but holds NO write cap; *exercising* it requires an
 //!   upgrade REQUEST. A sturdyref you can look at but not pull on without asking.
 //! * **NETWORKBOUNDARY** — a cap whose exercise "elaborates elsewhere" (the
@@ -24,7 +24,7 @@
 //!
 //! This module is the AUTHORITY / CONSENT typing of the membrane. It reinvents
 //! NONE of the machinery — it is a thin partitioning + flow over
-//! [`crate::powerbox`] (the grant-ceremony), [`dregg_cell::ReadCap`] (the
+//! [`crate::powerbox`] (the grant-ceremony), [`dregg_cell_crypto::ReadCap`] (the
 //! studyref), [`dregg_turn::ConditionalTurn`] (the consent hole-fill), and
 //! [`crate::branch_stitch`] (the merge-back). The deos-chat lane owns the
 //! TRANSPORT (delivery of the fork bytes, the chat membrane); the seam between us
@@ -39,7 +39,8 @@
 //! condition resolves under the owner's signed receipt — so the tests prove the
 //! three-tier flow without a GPU.
 
-use dregg_cell::{AuthRequired, CapabilityRef, CellId, ReadCap};
+use dregg_cell::{AuthRequired, CapabilityRef, CellId};
+use dregg_cell_crypto::ReadCap;
 use dregg_turn::conditional::{
     ConditionProof, ConditionalResult, ConditionalTurn, ProofCondition, resolve_condition,
     DEFAULT_MAX_ROOT_AGE,
@@ -451,8 +452,8 @@ mod tests {
         // A STUDYREF is a ReadCap: the guest can inspect, but to EXERCISE it must
         // raise an upgrade request for WRITE authority (routed to the owner).
         let (_w, _owner, guest, docs, _peer) = fork_world();
-        let view_key = dregg_cell::ViewKey::from_root([7u8; 32]);
-        let read_cap = ReadCap::new(docs, dregg_cell::FieldSet::single(0), view_key);
+        let view_key = dregg_cell_crypto::ViewKey::from_root([7u8; 32]);
+        let read_cap = ReadCap::new(docs, dregg_cell_crypto::FieldSet::single(0), view_key);
         let study = StudyRef { target: docs, read_cap };
 
         // The studyref derives the key for its exposed slot (it can inspect) …

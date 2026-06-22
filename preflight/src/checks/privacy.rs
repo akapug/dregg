@@ -1,7 +1,7 @@
 //! Privacy stack checks: stealth addresses, Pedersen commitments, range proofs, SSE.
 
-use dregg_cell::stealth::StealthKeys;
-use dregg_cell::value_commitment::{
+use dregg_cell_crypto::stealth::StealthKeys;
+use dregg_cell_crypto::value_commitment::{
     BulletproofRangeProof, ValueCommitment, prove_conservation, verify_conservation,
 };
 use dregg_intent::sse::EncryptedIntent;

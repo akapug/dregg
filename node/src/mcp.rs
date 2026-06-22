@@ -3849,7 +3849,7 @@ async fn tool_peer_exchange(params: &Value, state: &NodeState) -> McpToolResult 
 
     // Create a peer exchange instance and generate a state transition.
     let signing_key = s.cclerk.gossip_signing_key().to_bytes();
-    let mut exchange = dregg_cell::PeerExchange::new(cell_id, signing_key);
+    let mut exchange = dregg_cell_crypto::PeerExchange::new(cell_id, signing_key);
     exchange.register_peer(peer_cell_id, [0u8; 32]); // Initial peer commitment.
 
     // Use a zero old_commitment (first exchange) and a zero effects_hash.

@@ -176,7 +176,7 @@ impl TurnExecutor {
             }
         })?;
 
-        let proof: dregg_cell::ConservationProof =
+        let proof: dregg_cell_crypto::ConservationProof =
             postcard::from_bytes(proof_bytes).map_err(|e| {
                 TurnError::CommittedConservationFailed {
                     reason: format!("failed to deserialize conservation_proof: {e}"),
@@ -192,7 +192,7 @@ impl TurnExecutor {
         )?;
 
         let turn_hash = turn.hash();
-        dregg_cell::verify_conservation(
+        dregg_cell_crypto::verify_conservation(
             &input_commitments,
             &output_commitments,
             &proof,

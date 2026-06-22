@@ -288,7 +288,7 @@ pub fn create_value_commitment(amount: u64, blinding: &[u8]) -> Result<JsValue, 
     blinding_arr.copy_from_slice(blinding);
 
     // Real Pedersen commitment (curve25519-dalek work stays in `cell`).
-    let commitment = dregg_cell::value_commitment::commit_bytes(amount, &blinding_arr);
+    let commitment = dregg_cell_crypto::value_commitment::commit_bytes(amount, &blinding_arr);
 
     #[derive(Serialize)]
     struct CommitmentResult {
@@ -308,7 +308,7 @@ pub fn create_value_commitment(amount: u64, blinding: &[u8]) -> Result<JsValue, 
 /// Given inputs and outputs (each `{ value, blinding_hex }`) plus a `message_hex`
 /// binding context, this builds the real Ristretto `ValueCommitment`s, computes
 /// the excess blinding `Σ input_blindings − Σ output_blindings` internally, and
-/// produces the canonical `dregg_cell::ConservationProof` (Schnorr excess
+/// produces the canonical `dregg_cell_crypto::ConservationProof` (Schnorr excess
 /// signature). All the curve25519-dalek work happens inside `dregg_cell`
 /// (`prove_conservation_bytes`); this binding only marshals bytes.
 ///
@@ -372,7 +372,7 @@ pub fn prove_conservation(
     };
 
     // Full proof: Schnorr excess + per-output Bulletproof range proofs.
-    let out = dregg_cell::value_commitment::prove_conservation_with_range_bytes(
+    let out = dregg_cell_crypto::value_commitment::prove_conservation_with_range_bytes(
         &inputs, &outputs, &message,
     );
 
@@ -422,7 +422,7 @@ pub fn prove_conservation(
 
 /// Verify a conservation proof (sum of inputs == sum of outputs) using the
 /// canonical Pedersen/Ristretto homomorphic check from
-/// `dregg_cell::value_commitment`.
+/// `dregg_cell_crypto::value_commitment`.
 ///
 /// This is the SAME primitive the executor uses for committed-value turns
 /// (`verify_conservation` — a Schnorr signature proving the excess
@@ -437,7 +437,7 @@ pub fn prove_conservation(
 /// - `output_commitments_json`: same format, for the created notes.
 /// - `proof_json`: JSON object `{ excess_commitment, nonce_commitment,
 ///   response }`, each a hex-encoded 32 bytes — the canonical
-///   `dregg_cell::ConservationProof` (Schnorr excess signature). This is the
+///   `dregg_cell_crypto::ConservationProof` (Schnorr excess signature). This is the
 ///   `conservation` field of the SDK's `FullConservationProof`.
 /// - `message_hex`: hex-encoded binding context (e.g. the turn hash). Pass an
 ///   empty string for an unbound proof. MUST match the message the prover
@@ -456,7 +456,7 @@ pub fn prove_conservation(
 /// When `output_range_proofs_json` is provided, this binding verifies the FULL
 /// conservation proof: the Schnorr excess relation (value balance) AND a real
 /// per-output Bulletproof range proof (`[0, 2^64)`), via
-/// `dregg_cell::value_commitment::verify_full_conservation_bytes`. A `valid:
+/// `dregg_cell_crypto::value_commitment::verify_full_conservation_bytes`. A `valid:
 /// true` with `range_proofs_checked: true` therefore rules out the
 /// negative-value (mod-order wrap) inflation attack. The Bulletproofs verifier
 /// runs natively on wasm32 (bulletproofs v5 over curve25519-dalek).
@@ -479,7 +479,7 @@ pub fn verify_conservation_proof(
     message_hex: &str,
     output_range_proofs_json: Option<String>,
 ) -> Result<JsValue, JsError> {
-    use dregg_cell::value_commitment::{
+    use dregg_cell_crypto::value_commitment::{
         ConservationProof, ValueCommitment, ValueCommitmentBytes, verify_conservation,
         verify_full_conservation_bytes,
     };
@@ -695,7 +695,7 @@ pub fn generate_range_proof(
     blinding_arr.copy_from_slice(blinding);
 
     let (commitment, range_proof) =
-        dregg_cell::value_commitment::prove_range_bytes(amount, &blinding_arr);
+        dregg_cell_crypto::value_commitment::prove_range_bytes(amount, &blinding_arr);
 
     #[derive(Serialize)]
     struct RangeProofResult {
@@ -743,7 +743,7 @@ pub fn verify_range_proof(commitment: &[u8], range_proof: &[u8]) -> Result<JsVal
     let mut commit_arr = [0u8; 32];
     commit_arr.copy_from_slice(commitment);
 
-    let result = match dregg_cell::value_commitment::verify_range_bytes(&commit_arr, range_proof) {
+    let result = match dregg_cell_crypto::value_commitment::verify_range_bytes(&commit_arr, range_proof) {
         Ok(()) => VerifyRangeResult {
             valid: true,
             error: None,
@@ -1580,7 +1580,7 @@ pub fn compose_proofs(proofs_json: &str, mode: &str) -> Result<JsValue, JsError>
 /// ```
 #[wasm_bindgen]
 pub fn compose_and_verify_proofs(proofs_json: &str, mode: &str) -> Result<JsValue, JsError> {
-    use dregg_cell::value_commitment::{
+    use dregg_cell_crypto::value_commitment::{
         ConservationProof, ValueCommitment, ValueCommitmentBytes, verify_conservation,
         verify_full_conservation_bytes,
     };
@@ -1672,7 +1672,7 @@ pub fn compose_and_verify_proofs(proofs_json: &str, mode: &str) -> Result<JsValu
                     .ok_or("range requires 'range_proof_hex'")?;
                 let commit = decode_hex_32(ch).map_err(|e| format!("commitment_hex: {e}"))?;
                 let range_proof = decode_hex_vec(rp).map_err(|e| format!("range_proof_hex: {e}"))?;
-                dregg_cell::value_commitment::verify_range_bytes(&commit, &range_proof)
+                dregg_cell_crypto::value_commitment::verify_range_bytes(&commit, &range_proof)
                     .map_err(|e| e.to_string())
             }
             "conservation" => {

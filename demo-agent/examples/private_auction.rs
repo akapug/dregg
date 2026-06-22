@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
-use dregg_cell::seal::SealPair;
+use dregg_cell_crypto::seal::SealPair;
 use dregg_circuit::{
     BabyBear, PredicateProof, PredicateType, PredicateWitness,
     committed_threshold::{

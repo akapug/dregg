@@ -10,6 +10,7 @@ edition.workspace = true
 dregg-blocklace = { path = "../blocklace" }
 dregg-captp = { path = "../captp" }
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-commit = { path = "../commit" }
 dregg-turn = { path = "../turn" }
 dregg-types = { path = "../types" }

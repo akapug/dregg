@@ -78,9 +78,10 @@ use std::collections::BTreeMap;
 
 use dregg_cell::{
     Cell, CellId, FactoryRegistry, Ledger, lifecycle::CellLifecycle,
-    note_bridge::BridgedNullifierSet, nullifier_set::NullifierSet, state::STATE_SLOTS,
+    nullifier_set::NullifierSet, state::STATE_SLOTS,
 };
 
+use dregg_cell_crypto::note_bridge::BridgedNullifierSet;
 use crate::journal::JournalEntry;
 
 /// The five state domains — wire codes IDENTICAL to the Lean

@@ -2,7 +2,7 @@
 //!
 //! The moldable inspector's `MoldableLens::ReadCap` surface. It WAS an honest
 //! `weld_pending_presentation` placeholder ("not yet available in this image");
-//! the privacy weld landed (`dregg_cell::read_cap`, `cell/src/read_cap.rs` /
+//! the privacy weld landed (`dregg_cell_crypto::read_cap`, `cell/src/read_cap.rs` /
 //! `docs/deos/PRIVACY-CONFIDENTIALITY.md` Milestone 0), so this lights it up.
 //!
 //! A read is the exercise of an attenuable VIEWING authority over committed state
@@ -12,8 +12,8 @@
 //!   `SelectivelyDisclosable` (the slots a read-cap gates; `Public` slots are in
 //!   the clear and need no cap), read off the LIVE `CellState::field_visibility`;
 //! - **the read-lattice** — the `granted ⊆ held` attenuation order over those
-//!   slots, demonstrated by exercising the REAL [`dregg_cell::ReadCap::attenuate`]
-//!   / [`dregg_cell::is_read_attenuation`] (a wide cap over the whole frustum, a
+//!   slots, demonstrated by exercising the REAL [`dregg_cell_crypto::ReadCap::attenuate`]
+//!   / [`dregg_cell_crypto::is_read_attenuation`] (a wide cap over the whole frustum, a
 //!   narrowed child, and a refused amplification — the same partial order the
 //!   write side's facet attenuation uses);
 //! - **the load-bearing invariant** — adding a read-cap changes NO commitment the
@@ -27,7 +27,7 @@
 //! would gate those slots once sealed). gpui-free + fully tested — the cockpit's
 //! generic renderer draws the `Presentation`s with no new widget code.
 
-use dregg_cell::read_cap::{is_read_attenuation, EncryptedState, FieldSet, ReadCap, ViewKey};
+use dregg_cell_crypto::read_cap::{is_read_attenuation, EncryptedState, FieldSet, ReadCap, ViewKey};
 use dregg_cell::state::{FieldVisibility, STATE_SLOTS};
 use dregg_cell::{Cell, CellId};
 

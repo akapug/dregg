@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::note::{NoteCommitment, Nullifier};
+use dregg_cell::note::{NoteCommitment, Nullifier};
 use dregg_types::AttestedRoot;
 
 // ============================================================================

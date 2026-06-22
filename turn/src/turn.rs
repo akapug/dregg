@@ -71,7 +71,7 @@ mod sw_sig_serde {
 /// for the executor to (1) reconstruct the cell so per-cell execution can
 /// proceed and (2) authenticate the transition as coming from the cell's
 /// owning key. The shape mirrors
-/// [`dregg_cell::peer_exchange::PeerStateTransition`] one-shot: the cell key
+/// [`dregg_cell_crypto::peer_exchange::PeerStateTransition`] one-shot: the cell key
 /// signs over `(cell_id, old_commitment, new_commitment, effects_hash,
 /// timestamp, sequence)` and an optional STARK proof carries the same
 /// transition through `EffectVmAir`.

@@ -11,6 +11,7 @@
 
 use super::*;
 use dregg_cell::*;
+use dregg_cell_crypto::PortableNoteProof;
 
 impl TurnExecutor {
     /// Apply a single effect to the ledger, recording undo entries in the journal.
@@ -1390,7 +1391,7 @@ impl TurnExecutor {
             .map_err(|e| format!("STARK spending proof verification failed: {e}"))
         };
 
-        dregg_cell::note_bridge::verify_portable_note(
+        dregg_cell_crypto::note_bridge::verify_portable_note(
             portable_proof,
             &self.local_federation_id,
             &self.trusted_federation_roots,

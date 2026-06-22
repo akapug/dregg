@@ -15,7 +15,7 @@ use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_fact;
 
 use curve25519_dalek::scalar::Scalar;
-use dregg_cell::value_commitment::{
+use dregg_cell_crypto::value_commitment::{
     ConservationError, ValueCommitment, prove_conservation, verify_conservation,
 };
 

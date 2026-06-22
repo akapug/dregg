@@ -1,0 +1,33 @@
+[package]
+name = "dregg-cell-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Cryptographic capability/note/value machinery over dregg-cell types"
+
+[dependencies]
+blake3 = "1"
+bulletproofs = { version = "5" }
+chacha20poly1305 = { workspace = true }
+curve25519-dalek = { version = "4", features = ["alloc"] }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+getrandom = { workspace = true }
+merlin = { version = "3" }
+postcard = { version = "1", features = ["alloc"] }
+x25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+dregg-cell = { path = "../cell" }
+dregg-circuit = { path = "../circuit" }
+dregg-types = { path = "../types" }
+serde = { version = "1", features = ["derive", "std"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

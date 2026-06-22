@@ -38,7 +38,7 @@ use dregg_cell::predicate::{
     IssuerRootAuthority, NeighborAdjacencyVerifier, PredicateInput, WitnessedPredicateError,
     WitnessedPredicateKind, WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
-use dregg_cell::value_commitment::verify_range_bytes;
+use dregg_cell_crypto::value_commitment::verify_range_bytes;
 use dregg_circuit::BabyBear;
 use dregg_circuit::dsl::circuit::ProgramRegistry;
 use dregg_circuit::dsl::membership::{
@@ -557,14 +557,14 @@ impl WitnessedPredicateVerifier for TemporalPredicateStarkVerifier {
 
 // ─────────────────────────────────────────────────────────────────────────
 // PedersenEquality — real Bulletproof opening verifier
-// (dregg_cell::value_commitment).
+// (dregg_cell_crypto::value_commitment).
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Real Bulletproof-backed verifier for [`WitnessedPredicateKind::PedersenEquality`].
 ///
 /// The predicate `commitment` is a 32-byte compressed Ristretto Pedersen
 /// commitment; the proof bytes are a Bulletproof range proof. Verification
-/// (`dregg_cell::value_commitment::verify_range_bytes`) accepts iff the prover
+/// (`dregg_cell_crypto::value_commitment::verify_range_bytes`) accepts iff the prover
 /// knows a valid opening of `commitment` to a 64-bit value — a genuine
 /// zero-knowledge proof of a valid Pedersen opening bound to the commitment. A
 /// non-point commitment or malformed / wrong-commitment proof fails closed.
@@ -621,7 +621,7 @@ impl WitnessedPredicateVerifier for PedersenBulletproofVerifier {
 ///   [`registry_with_real_verifiers_full`] to install the authority and make
 ///   BlindedSet acceptable.
 /// - `PedersenEquality` → [`PedersenBulletproofVerifier`] (real Bulletproof
-///   opening proof over `dregg_cell::value_commitment`; needs no host context).
+///   opening proof over `dregg_cell_crypto::value_commitment`; needs no host context).
 ///
 /// Kinds that need host-trusted context remain fail-closed here and are wired by
 /// [`registry_with_real_verifiers_full`]: `Dfa` (needs a [`ProgramRegistry`]),
@@ -1653,7 +1653,7 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
 
     use dregg_cell::predicate::StaticIssuerRootAuthority;
-    use dregg_cell::value_commitment::prove_range_bytes;
+    use dregg_cell_crypto::value_commitment::prove_range_bytes;
     use dregg_circuit::PredicateType;
     use dregg_circuit::dsl::circuit::{
         CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,

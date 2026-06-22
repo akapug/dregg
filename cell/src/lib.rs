@@ -27,8 +27,6 @@
 pub mod allowance;
 pub mod blueprint;
 pub mod capability;
-#[cfg(feature = "crypto")]
-pub mod capability_proof;
 pub mod cell;
 pub mod commitment;
 pub mod custom_effect;
@@ -44,38 +42,20 @@ pub mod lifecycle;
 pub mod membrane;
 pub mod migration;
 pub mod note;
-#[cfg(feature = "crypto")]
-pub mod note_bridge;
-#[cfg(feature = "crypto")]
-pub mod note_encryption;
 pub mod nullifier_set;
 pub mod obligation_standing;
-#[cfg(feature = "crypto")]
-pub mod oblivious_transfer;
-#[cfg(feature = "crypto")]
-pub mod peer_exchange;
 pub mod permissions;
 pub mod preconditions;
 pub mod predicate;
 pub mod program;
-#[cfg(feature = "crypto")]
-pub mod read_cap;
 pub mod revocation_channel;
 pub mod ring_closure;
-#[cfg(feature = "crypto")]
-pub mod seal;
 pub mod state;
-#[cfg(feature = "crypto")]
-pub mod stealth;
 /// γ.2 unilateral binding (1-arity sibling) — plain data type used by
 /// `peer_exchange` to ship per-cell self-attestations. PI / accumulator
 /// logic lives in `dregg_turn::bilateral_schedule`.
 pub mod unilateral;
 pub mod vault;
-#[cfg(feature = "crypto")]
-pub mod value_commitment;
-#[cfg(feature = "crypto")]
-pub mod value_link_zk;
 pub mod vk_v2;
 
 #[cfg(test)]
@@ -93,11 +73,6 @@ pub use blueprint::{
 };
 pub use capability::{
     AttenuatedCap, CapabilityCaveat, CapabilityRef, CapabilitySet, is_attenuation,
-};
-#[cfg(feature = "crypto")]
-pub use capability_proof::{
-    CapabilityExerciseRequest, CapabilityExerciseResponse, CapabilityProof, CapabilityProofData,
-    CapabilityProofError, PeerEffect, VerificationContext, sign_capability_proof,
 };
 pub use cell::{Cell, CellConfig, CellMode, VerificationKey, VerificationKeyIntegrityError};
 pub use commitment::{
@@ -155,21 +130,7 @@ pub use membrane::{
     SealedMembrane,
 };
 pub use note::{Note, NoteBatcher, NoteCommitment, NoteError, Nullifier, PositionedNote};
-#[cfg(feature = "crypto")]
-pub use note_bridge::{
-    BridgeDestination, BridgeError, BridgeReceipt, BridgeState, BridgedNullifierSet, PendingBridge,
-    PendingBridgeSet, PortableNoteProof, cancel_bridge, create_portable_note, finalize_bridge,
-    initiate_bridge, verify_bridge_receipt, verify_portable_note,
-};
-#[cfg(feature = "crypto")]
-pub use note_encryption::{NoteDecryptError, NotePlaintext, decrypt_note, encrypt_note_to};
 pub use nullifier_set::{MerkleMembershipProof, NonMembershipProof, NullifierSet};
-#[cfg(feature = "crypto")]
-pub use oblivious_transfer::{
-    OtError, OtReceiver, OtReceiverResponse, OtSender, OtSenderPayload, OtSenderSetup, ot_1_of_n,
-};
-#[cfg(feature = "crypto")]
-pub use peer_exchange::{PeerCellView, PeerExchange, PeerExchangeError, PeerStateTransition};
 pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
 #[allow(deprecated)]
 pub use preconditions::PreconditionClause;
@@ -186,11 +147,6 @@ pub use program::{
     CellProgram, HeapAtom, ProgramError, StateConstraint, count_ge_set_commitment, field_from_u64,
     field_from_u64_be,
 };
-#[cfg(feature = "crypto")]
-pub use read_cap::{
-    is_read_attenuation, EncryptedSlot, EncryptedState, FieldSet, ReadCap, ReadCapError,
-    SlotOpening, ViewKey,
-};
 pub use revocation_channel::{
     ChannelId, RevocationChannel, RevocationChannelError, RevocationChannelSet,
 };
@@ -198,34 +154,14 @@ pub use ring_closure::{
     ClosureProofKind, RingClosureAttestation, RingClosureError, RingLegPi,
     canonical_silver_commitment,
 };
-#[cfg(feature = "crypto")]
-pub use seal::{SealError, SealPair, SealedBox, SealerPublic, test_seal_pair};
 pub use state::{
     CellState, FIELD_ZERO, FIELDS_ROOT_CONTEXT, FieldElement, FieldVisibility, PublicFieldView,
     STATE_SLOTS, compute_fields_root, compute_heap_root, empty_fields_root, empty_heap_root,
 };
-#[cfg(feature = "crypto")]
-pub use stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
 pub use unilateral::{UnilateralAttestation, UnilateralAttestationKind};
 pub use vault::{
     Claim as VaultClaim, ClaimOutcome as VaultClaimOutcome, Condition as VaultCondition,
     VaultError, VaultState, VaultTerms, claim as claim_vault, is_claimable_at as vault_claimable_at,
     is_vault, open_vault,
-};
-#[cfg(feature = "crypto")]
-pub use value_commitment::{
-    AssetEqualityError, AssetEqualityProof, BulletproofRangeProof, CommittedNote,
-    CommittedNoteOpening, ConservationError, ConservationProof, FullConservationError,
-    FullConservationProof, ValueCommitment, ValueCommitmentBytes, asset_tag_generator,
-    prove_asset_conservation, prove_asset_equality, prove_asset_equality_with_message,
-    prove_conservation, prove_conservation_with_range, verify_asset_conservation,
-    verify_asset_equality, verify_asset_equality_with_message, verify_conservation,
-    verify_conservation_with_range,
-};
-#[cfg(feature = "crypto")]
-pub use value_link_zk::{
-    LinkLegBindingProof, VALUE_BITS, ZkLeafLegLink, ZkValueLinkError, ZkValueLinkProof,
-    prove_link_leg_binding, prove_zk_leaf_leg_link, prove_zk_value_link, value_binding_pi_bytes,
-    verify_link_leg_binding, verify_zk_leaf_leg_link, verify_zk_value_link,
 };
 pub use vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};

@@ -141,33 +141,6 @@ fn u64_to_limbs(v: u64) -> [dregg_circuit::field::BabyBear; 2] {
 }
 
 impl Note {
-    /// Create a new note with cryptographically random blinding and a unique creation nonce.
-    ///
-    /// The randomness field is filled with OS randomness via `getrandom` to ensure
-    /// the blinding factor is cryptographically unpredictable. The creation_nonce is
-    /// derived from the randomness for domain separation. Two calls at the same
-    /// nanosecond will produce distinct notes.
-    #[cfg(feature = "crypto")]
-    pub fn new(owner: [u8; 32], fields: [u64; 8]) -> Self {
-        // Use OS randomness for the blinding factor — MUST be cryptographically random.
-        let mut randomness = [0u8; 32];
-        getrandom::fill(&mut randomness).expect("getrandom failed");
-
-        // Derive creation_nonce from randomness (independent domain separation).
-        let mut nonce_hasher = blake3::Hasher::new_derive_key("dregg-note creation-nonce v1");
-        nonce_hasher.update(&owner);
-        nonce_hasher.update(&randomness);
-        let mut creation_nonce = [0u8; 32];
-        creation_nonce.copy_from_slice(nonce_hasher.finalize().as_bytes());
-
-        Self {
-            owner,
-            fields,
-            randomness,
-            creation_nonce,
-        }
-    }
-
     /// Create a note with explicit randomness and creation nonce (for deterministic tests).
     pub fn with_randomness(owner: [u8; 32], fields: [u64; 8], randomness: [u8; 32]) -> Self {
         // Derive a deterministic creation_nonce from the randomness.

@@ -222,7 +222,7 @@ pub struct StealthAnnouncement {
     /// The ephemeral public key R for this transaction.
     pub ephemeral_pubkey: [u8; 32],
     /// The note commitment this announcement corresponds to.
-    pub note_commitment: crate::note::NoteCommitment,
+    pub note_commitment: dregg_cell::note::NoteCommitment,
     /// Optional: a view tag (first byte of shared secret) for fast filtering.
     /// Recipients can skip the full DH + point arithmetic if the view tag doesn't match.
     pub view_tag: u8,
@@ -232,7 +232,7 @@ impl StealthAnnouncement {
     /// Create an announcement from a stealth address generation result.
     pub fn new(
         stealth_addr: &StealthAddress,
-        note_commitment: crate::note::NoteCommitment,
+        note_commitment: dregg_cell::note::NoteCommitment,
         shared_secret: &[u8; 32],
     ) -> Self {
         StealthAnnouncement {
@@ -442,7 +442,7 @@ mod tests {
     /// Integration with Note: create a note owned by a stealth address.
     #[test]
     fn note_with_stealth_owner() {
-        use crate::note::Note;
+        use dregg_cell::note::Note;
 
         let keys = StealthKeys::from_keys([14u8; 32], [15u8; 32]);
         let meta = keys.meta_address();
@@ -543,5 +543,5 @@ mod tests {
         point.compress().to_bytes()
     }
 
-    use crate::note::Note;
+    use dregg_cell::note::Note;
 }

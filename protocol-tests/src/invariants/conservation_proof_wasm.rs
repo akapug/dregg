@@ -4,7 +4,7 @@
 //! always returned `{ valid: false, not_implemented: true }`. The
 //! effect-vm-hash-truncation lane (2026-05-28) replaced it with a REAL check
 //! that decodes the hex commitments + Schnorr excess proof and calls the
-//! canonical `dregg_cell::value_commitment::verify_conservation`.
+//! canonical `dregg_cell_crypto::value_commitment::verify_conservation`.
 //!
 //! The WASM fn returns a `JsValue` (needs a JS runtime), so these host tests
 //! exercise the EXACT decode→verify flow the binding wraps: hex-encode the
@@ -30,7 +30,7 @@ impl Invariant for ConservationProofWasm {
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::scalar::Scalar;
-    use dregg_cell::value_commitment::{
+    use dregg_cell_crypto::value_commitment::{
         ConservationProof, ValueCommitment, ValueCommitmentBytes, prove_conservation,
         verify_conservation,
     };

@@ -322,7 +322,7 @@ impl GrantEntry {
 // ---------------------------------------------------------------------------
 //
 // The plain data type lives in `dregg_cell::unilateral` so it can be
-// embedded in `dregg_cell::peer_exchange::PeerStateTransition`. This module
+// embedded in `dregg_cell_crypto::peer_exchange::PeerStateTransition`. This module
 // owns the *accumulator-side* logic: the kind→PI tag projection, the
 // kind→salt mapping, and the per-cell Poseidon2 fold.
 

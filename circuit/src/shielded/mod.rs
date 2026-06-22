@@ -28,7 +28,7 @@
 //!
 //! 2. **Value balance — the hidden Pedersen side.**
 //!    Per-asset value conservation rides the homomorphic Pedersen value
-//!    commitments ([`dregg_cell::value_commitment`]): each note carries
+//!    commitments ([`dregg_cell_crypto::value_commitment`]): each note carries
 //!    `commit(v, r) = v·V + r·R`, and a single Schnorr **conservation proof**
 //!    certifies `Σ C_in − Σ C_out = r_excess·R`, i.e. `Σ v_in = Σ v_out`,
 //!    without revealing any `v`. Per-output Bulletproof **range proofs** close

@@ -21,7 +21,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use dregg_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
 use dregg_cell::note::NoteCommitment;
-use dregg_cell::stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
+use dregg_cell_crypto::stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
 use dregg_cell::{Cell, CellId};
 use dregg_circuit::BabyBear;
 use dregg_circuit::IvcProof;
@@ -6666,12 +6666,12 @@ impl AgentCipherclerk {
 
     /// Get a peer exchange session for direct sovereign interactions.
     ///
-    /// Returns a [`PeerExchange`](dregg_cell::PeerExchange) initialized with
+    /// Returns a [`PeerExchange`](dregg_cell_crypto::PeerExchange) initialized with
     /// this cipherclerk's cell ID and signing key, suitable for direct peer-to-peer
     /// state exchange between sovereign cell owners.
     ///
     /// This is a convenience alias for [`peer_exchange`](Self::peer_exchange).
-    pub fn peer_exchange_session(&self, domain: &str) -> dregg_cell::PeerExchange {
+    pub fn peer_exchange_session(&self, domain: &str) -> dregg_cell_crypto::PeerExchange {
         self.peer_exchange(domain)
     }
 
@@ -6819,10 +6819,10 @@ impl AgentCipherclerk {
     ///
     /// The exchange session is keyed to a specific domain (cell identity) and uses
     /// this cipherclerk's Ed25519 signing key for transition signatures.
-    pub fn peer_exchange(&self, domain: &str) -> dregg_cell::PeerExchange {
+    pub fn peer_exchange(&self, domain: &str) -> dregg_cell_crypto::PeerExchange {
         let cell_id = self.cell_id(domain);
         let signing_key_bytes = self.signing_key.to_bytes();
-        dregg_cell::PeerExchange::new(cell_id, signing_key_bytes)
+        dregg_cell_crypto::PeerExchange::new(cell_id, signing_key_bytes)
     }
 
     /// Send a sovereign state transition to a peer (sign + package).
@@ -6837,11 +6837,11 @@ impl AgentCipherclerk {
     /// * `effects` - The effects that produced the state change.
     pub fn send_peer_transition(
         &self,
-        exchange: &mut dregg_cell::PeerExchange,
+        exchange: &mut dregg_cell_crypto::PeerExchange,
         old_commitment: [u8; 32],
         new_commitment: [u8; 32],
         effects: &[dregg_turn::Effect],
-    ) -> dregg_cell::PeerStateTransition {
+    ) -> dregg_cell_crypto::PeerStateTransition {
         let effects_bytes = postcard::to_stdvec(effects).unwrap_or_default();
         let effects_hash = *blake3::hash(&effects_bytes).as_bytes();
         exchange.create_transition(old_commitment, new_commitment, effects_hash)

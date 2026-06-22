@@ -15,6 +15,7 @@ description = "Protocol-invariant property tests for dregg — generators + prop
 
 [dependencies]
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-circuit = { path = "../circuit" }
 dregg-turn = { path = "../turn" }
 dregg-types = { path = "../types" }
