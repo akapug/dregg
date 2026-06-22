@@ -72,6 +72,18 @@ ROADMAP (felt-wins-first): Phase-0 scroll + the async tab/act decoupling (immedi
 (the foundation, careful: touches executor+storage, ember-gated soundness) → dockable workspace (vendor Zed
 pane_group/dock) → Zed-in-deos (FirmamentFs) + terminal + Hermes (the desktop buildout).
 
+
+### DESKTOP EPOCH — deferred cleanups (ember 2026-06-22, "not yet"):
+- MIGRATE existing cockpit UI → gpui-component widgets. The hand-rolled bits (the ⌘K palette char-accumulator
+  cockpit.rs ~3071, ad-hoc buttons/lists/the inspect-act fields) move to gpui_component::{input::{InputState,
+  TextInput,InputEvent}, button::Button, list/table}. DO IT INCREMENTALLY as we touch each surface (the web-shell
+  URL bar + login fields are the natural FIRST adopters — real focus/cursor/IME/Enter-to-submit), NOT a big-bang
+  rewrite. The widget substrate is in (lane A, emberian/gpui-component) — adoption is now just per-surface work.
+- SPLIT the large starbridge files (cockpit.rs is ~9500 lines; also world.rs, main.rs). Into per-surface modules
+  + the nav/dock/inspect-act/palette layers. DEFERRED ON PURPOSE: cockpit.rs is under HEAVY concurrent churn right
+  now (the dock integration F + the dev-loop surfaces + the widget migration), so splitting now = conflict-hell.
+  Do it AFTER the desktop-epoch cockpit churn SETTLES (one clean pass when the surfaces are stable), so the split
+  is mechanical-and-safe, not a moving target.
 ### DESKTOP EPOCH — apps + component substrate (ember 2026-06-22):
 - gpui-component (longbridge/gpui-component): FORK+VENDOR — a rich gpui UI kit (Input/TextInput [fills the
   NO-text-input gap the servo report found], Button/List/Table/Tree/Tabs/Dropdown/Modal/DatePicker/rich-text +
