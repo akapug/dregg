@@ -149,7 +149,13 @@ timeline/composer-as-real-Input); design the membrane+merge seam. The chat is th
   error type; the enclosing `?` then can't infer its residual source under the foreign From-impl. FIX = fork
   `emberian/stylo@ember-nightly-fix` (off v0.15.0, commit abc53ac61): pin the two `?`-consumed `Ok(())` sites
   in `style_derive/to_css.rs` to `Ok::<(), core::fmt::Error>(())` (no semantic change — same success value,
-  explicit error type). Wired as `[patch.crates-io] stylo_derive = { path = "../../stylo/style_derive" }`
+  explicit error type). NOTE the full native-full cockpit BIN currently can't LINK due to an UNRELATED
+  concurrent-lane break: the working-tree (uncommitted) `circuit/src/binding.rs` widened `WideHash` 4→8 felts
+  (the FAITHFUL-STATE-COMMITMENT work) but `sdk/src/verify.rs:316` still builds a 4-felt `WideHash` → E0308 in
+  dregg-sdk. That is NOT stylo and NOT this change (HEAD's WideHash is `[BabyBear; 4]`, self-consistent); it
+  self-heals when that lane propagates the arity. PROOF stylo is fixed: stylo compiles with 0 errors in the
+  cockpit graph AND servo-render `--features libservo` builds FULLY GREEN end-to-end. Wired as
+  `[patch.crates-io] stylo_derive = { path = "../../stylo/style_derive" }`
   in BOTH servo-render/Cargo.toml and starbridge-v2/Cargo.toml (each is its own workspace; stylo_derive is the
   only stylo-family crate the macro lives in, so one patch suffices — same 0.15.0 version unifies with servo's
   pin). CLOSURE = drop the `[patch]` lines + the fork when upstream stylo carries the fix (or the toolchain
