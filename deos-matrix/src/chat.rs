@@ -1,43 +1,58 @@
-//! The **deos-chat** gpui UI: a room-list sidebar, a timeline, and a real
-//! composer, driven off a [`ChatSource`](crate::source::ChatSource).
+//! The **deos-chat** gpui UI: a polished, dregg-pilled Matrix client — a room-list
+//! sidebar with trust/encryption badges, a sender-grouped timeline with day
+//! separators, reactions, replies, edit/redaction STATES, and the star feature
+//! (membrane-bearing messages rendered as a "rehydrate a fork of the deos world"
+//! card), plus typing + read-receipt indicators and a real `gpui-component`
+//! composer (Enter=send, Shift-Enter=newline, ↑-to-edit-last).
 //!
-//! This is the social/multiplayer layer over the dregg world. The view is pure
-//! presentation over the [`ChatSource`] seam — it does NOT know whether the
-//! backend is the live `matrix-rust-sdk` worker or the offline [`MockSource`], so
-//! the same UI renders against a recorded sync with no homeserver.
+//! The view is pure presentation over the [`ChatSource`] seam — it does NOT know
+//! whether the backend is the live `matrix-rust-sdk` worker or the offline
+//! [`MockSource`](crate::source::MockSource), so the same UI renders against a
+//! recorded sync with no homeserver.
+//!
+//! ## The dregg-pilling (the chat IS the dregg world, not a silo)
+//!
+//!   * **room = a cell** — the header shows the room's `RoomCell` (cell id +
+//!     turn-count), so the conversation reads as the room cell's *history*
+//!     (`docs/deos/APPS-AS-CELLS.md` §3).
+//!   * **identity = a cell** — each sender carries an `IdentityCell` trust badge
+//!     ("verify the person, not the device" — nheko). A CHANGED identity is
+//!     surfaced loudly.
+//!   * **send = a turn** — the composer's send returns a `SendReceipt`, shown in
+//!     the status line ("turn N · cell:… · root …").
+//!   * **a message carries a membrane** — the STAR feature: a message can embed a
+//!     rehydratable cap-bounded fork of the deos world. The composer's "⬡ attach
+//!     membrane" mints one (via the source's offline `MockMembraneHost`) and sends
+//!     it; a membrane-bearing message renders as a card with a **rehydrate**
+//!     affordance.
 //!
 //! ## Patterns adopted from nheko (the "solves problems correctly" reference)
 //!
-//!   * **Composer keymap is the de-facto standard**: Enter = send, Shift-Enter =
-//!     newline. Wired via `gpui_component::input::InputEvent::PressEnter { shift }`
-//!     — send only when `!shift`. (nheko's exact contract; users have muscle
-//!     memory for it.)
-//!   * **Timeline is a presentation pass over the event stream**: sender-grouping
-//!     and day separators are *computed* from the message list each frame, not
-//!     stored state. Edits/redactions would be states of an event, not deletions.
-//!   * **Room list is keyboard-navigable + unread-badged**, sorted for display by
-//!     the source. Encryption state is a per-row, visible indicator (legible trust
-//!     — nheko's correctness principle).
-//!   * **Own-vs-other alignment + sender color** so a glance reads the conversation.
-//!
-//! The membrane affordance (a message can carry a rehydratable cap-bounded fork of
-//! the deos world — see [`crate::membrane`]) is surfaced as a composer action; the
-//! actual mint/rehydrate lives in the confined comms-PD (`MembraneHost`).
+//!   * Composer keymap: Enter = send, Shift-Enter = newline (the de-facto
+//!     standard); ↑ on an empty composer loads your last message to edit.
+//!   * Timeline is a *presentation pass* over the event stream: sender-grouping,
+//!     day separators, and trust badges are computed each frame, not stored.
+//!     Edits/redactions are STATES of an event (an edited message shows "(edited)",
+//!     a redacted one shows a tombstone) — never destructive deletions.
+//!   * Legible trust: encryption is a per-room badge; person-trust is a per-sender
+//!     badge.
 
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     div, px, rgb, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window,
 };
-use gpui::prelude::FluentBuilder as _;
 use gpui_component::{
     input::{Input, InputEvent, InputState},
     h_flex, v_flex, ActiveTheme as _,
 };
 
-use crate::client::{RoomSummary, TimelineMessage};
+use crate::cell::PersonTrust;
+use crate::client::{EventState, MessageKind, RoomSummary, TimelineMessage};
+use crate::membrane::MockMembraneHost;
 use crate::source::ChatSource;
 
 /// How many recent messages to pull per room.
@@ -55,6 +70,9 @@ pub struct ChatView {
     /// The composer's rope-backed input (a real `gpui-component` `Input`).
     composer: Entity<InputState>,
     status: SharedString,
+    /// If set, the composer is editing the event with this id (↑-to-edit), shown
+    /// as an "editing…" banner over the composer.
+    editing: Option<String>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -66,7 +84,7 @@ impl ChatView {
         let composer = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
-                .placeholder("Message — Enter to send, Shift-Enter for newline")
+                .placeholder("Message — Enter to send, Shift-Enter for newline, ↑ to edit last")
         });
 
         // The load-bearing seam: Enter (without shift) submits; Shift-Enter is a
@@ -93,6 +111,7 @@ impl ChatView {
             timeline: Vec::new(),
             composer,
             status: SharedString::from(format!("connected — {label}")),
+            editing: None,
             focus: cx.focus_handle(),
             _subs: subs,
         };
@@ -118,6 +137,7 @@ impl ChatView {
             return;
         }
         self.selected = Some(idx);
+        self.editing = None;
         self.refresh_timeline(cx);
     }
 
@@ -133,26 +153,68 @@ impl ChatView {
     }
 
     /// Send the composer's contents to the selected room, then clear + refresh.
+    /// **send = a turn**: shows the resulting `SendReceipt` digest in the status.
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(idx) = self.selected else { return };
         let body = self.composer.read(cx).value().to_string();
-        let body = body.trim();
+        let body = body.trim().to_string();
         if body.is_empty() {
             return;
         }
         let room_id = self.rooms[idx].room_id.to_string();
-        match self.source.send(&room_id, body) {
-            Ok(_id) => {
-                self.composer.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                });
-                self.status = SharedString::from("sent");
+        match self.source.send_turn(&room_id, &body) {
+            Ok(receipt) => {
+                self.composer.update(cx, |state, cx| state.set_value("", window, cx));
+                self.editing = None;
+                self.status = SharedString::from(format!("sent · {}", receipt.digest()));
                 self.refresh_timeline(cx);
             }
             Err(e) => {
                 self.status = SharedString::from(format!("send failed: {e}"));
                 cx.notify();
             }
+        }
+    }
+
+    /// Attach + send a membrane — the STAR feature. Mints a cap-bounded fork of the
+    /// deos world (offline via `MockMembraneHost`) and sends it as a
+    /// membrane-bearing message.
+    fn attach_membrane(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(idx) = self.selected else { return };
+        let room_id = self.rooms[idx].room_id.to_string();
+        let env = MockMembraneHost::sample_envelope();
+        let summary = env.text_fallback();
+        match self.source.send_membrane(&room_id, "", env) {
+            Ok(_id) => {
+                self.status = SharedString::from(format!("⬡ membrane sent — {summary}"));
+                self.refresh_timeline(cx);
+            }
+            Err(e) => {
+                self.status = SharedString::from(format!("membrane send failed: {e}"));
+                cx.notify();
+            }
+        }
+    }
+
+    /// ↑-to-edit-last: if the composer is empty, load the local user's most recent
+    /// (live, text) message into it for editing. nheko's composer affordance.
+    fn edit_last(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.composer.read(cx).value().is_empty() {
+            return; // only when empty — don't clobber a draft
+        }
+        let me = self.me.clone();
+        let last = self.timeline.iter().rev().find(|m| {
+            Some(m.sender.as_str()) == me.as_deref()
+                && m.state != EventState::Redacted
+                && m.kind == MessageKind::Text
+        });
+        if let Some(m) = last {
+            let body = m.body.clone();
+            let id = m.event_id.clone();
+            self.composer.update(cx, |state, cx| state.set_value(&body, window, cx));
+            self.editing = Some(id);
+            self.status = SharedString::from("editing your last message — Enter to resubmit");
+            cx.notify();
         }
     }
 
@@ -165,32 +227,33 @@ impl ChatView {
             let name = room.display_name.clone();
             let unread = room.unread_notifications;
             let enc = room.is_encrypted;
+            let direct = room.is_direct;
+            let members = room.joined_members;
             v_flex()
                 .id(("room", i))
                 .px_3()
                 .py_2()
                 .gap_1()
                 .cursor_pointer()
-                .when(is_sel, |d| d.bg(cx.theme().accent))
+                .when(is_sel, |d| d.bg(cx.theme().sidebar_accent))
                 .hover(|d| d.bg(cx.theme().muted))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _ev, _win, cx| {
-                        this.select_room(i, cx);
-                    }),
+                    cx.listener(move |this, _ev, _win, cx| this.select_room(i, cx)),
                 )
                 .child(
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(
-                            // Encryption indicator — a legible, per-row trust badge
-                            // (nheko's correctness principle).
-                            div()
-                                .text_xs()
-                                .child(if enc { "🔒" } else { "  " }),
-                        )
-                        .child(div().flex_1().font_weight(gpui::FontWeight::MEDIUM).child(name))
+                        // The room glyph: 🔒 encrypted, 👤 a DM, # a room.
+                        .child(div().text_xs().child(if enc {
+                            "🔒"
+                        } else if direct {
+                            "👤"
+                        } else {
+                            "#"
+                        }))
+                        .child(div().flex_1().font_weight(gpui::FontWeight::MEDIUM).truncate().child(name))
                         .when(unread > 0, |d| {
                             d.child(
                                 div()
@@ -212,21 +275,37 @@ impl ChatView {
                             .child(topic),
                     )
                 })
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{members} members")),
+                )
         });
 
         v_flex()
-            .w(px(248.))
+            .w(px(256.))
             .h_full()
+            .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().border)
             .child(
-                div()
+                h_flex()
                     .px_3()
                     .py_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child("rooms"),
+                    .items_center()
+                    .justify_between()
+                    .child(div().font_weight(gpui::FontWeight::BOLD).child("rooms"))
+                    .when_some(self.me.clone(), |d, me| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(short_sender(&me)),
+                        )
+                    }),
             )
             .child(
                 v_flex()
@@ -242,13 +321,23 @@ impl ChatView {
         let me = self.me.clone();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let foreground = theme.foreground;
+        let card_bg = theme.secondary;
+        let border = theme.border;
+        let accent = theme.accent;
+        let success = theme.success;
+        let danger = theme.danger;
+        let warning = theme.warning;
 
         // Presentation pass: group consecutive messages by the same sender and
         // insert day separators (computed, not stored). nheko's timeline shape.
         let mut prev_sender: Option<String> = None;
         let mut prev_day: Option<i64> = None;
+        let source = self.source.clone();
         let rows = self.timeline.iter().enumerate().map(move |(i, m)| {
-            let same_sender = prev_sender.as_deref() == Some(m.sender.as_str());
+            let same_sender = prev_sender.as_deref() == Some(m.sender.as_str())
+                && m.reply_to.is_none()
+                && m.kind != MessageKind::Membrane;
             prev_sender = Some(m.sender.clone());
 
             let day = (m.timestamp_ms / 86_400_000) as i64;
@@ -263,46 +352,114 @@ impl ChatView {
             let sender_short = short_sender(&m.sender);
             let time = time_label(m.timestamp_ms);
             let color = sender_color(&m.sender);
+            let trust = source.identity(&m.sender).trust;
 
             let mut block = v_flex().id(("msg", i)).px_3();
             if let Some(label) = day_sep {
                 block = block.child(
-                    div()
-                        .my_2()
-                        .text_center()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(label),
+                    h_flex().my_2().items_center().gap_2().justify_center().child(
+                        div()
+                            .px_2()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(label),
+                    ),
                 );
             }
-            // Sender header only on the first message of a run (grouping).
+
+            // Sender header (with avatar + trust badge) only on the first of a run.
             if !same_sender {
                 block = block.child(
                     h_flex()
                         .mt_2()
                         .gap_2()
-                        .items_baseline()
+                        .items_center()
+                        .child(avatar_chip(&sender_short, color))
                         .child(
                             div()
                                 .font_weight(gpui::FontWeight::BOLD)
-                                // own messages in a steady blue; others by stable
-                                // per-sender hue. Both `Hsla` so the branches unify.
-                                .text_color(if is_me {
-                                    gpui::hsla(217.0 / 360.0, 1.0, 0.65, 1.0)
-                                } else {
-                                    color
-                                })
-                                .child(sender_short),
+                                .text_color(if is_me { accent } else { color })
+                                .child(sender_short.clone()),
                         )
+                        .child(trust_badge(trust, success, warning, danger))
                         .child(div().text_xs().text_color(muted).child(time)),
                 );
             }
-            block.child(
-                div()
-                    .pl(px(if same_sender { 0. } else { 0. }))
-                    .text_color(theme.foreground)
-                    .child(m.body.clone()),
-            )
+
+            // The reply context (quoted preview), if any.
+            if let Some(reply) = &m.reply_to {
+                block = block.child(
+                    h_flex()
+                        .ml(px(36.))
+                        .my_1()
+                        .gap_2()
+                        .child(div().w(px(2.)).bg(accent).rounded_full())
+                        .child(
+                            v_flex()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(sender_color(&reply.sender))
+                                        .child(short_sender(&reply.sender)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .truncate()
+                                        .child(reply.preview.clone()),
+                                ),
+                        ),
+                );
+            }
+
+            // The message body — by STATE: redacted = tombstone, edited = body +
+            // "(edited)", membrane = the star card, otherwise the body.
+            let body_el: gpui::AnyElement = match (m.state, &m.kind) {
+                (EventState::Redacted, _) => div()
+                    .ml(px(36.))
+                    .italic()
+                    .text_color(muted)
+                    .child("⌫ message removed")
+                    .into_any_element(),
+                (_, MessageKind::Membrane) => {
+                    membrane_card(m, card_bg, border, accent, foreground, muted).into_any_element()
+                }
+                (state, kind) => {
+                    let mut row = h_flex().ml(px(36.)).items_baseline().gap_1().child(
+                        div()
+                            .text_color(if *kind == MessageKind::Notice { muted } else { foreground })
+                            .when(*kind == MessageKind::Emote, |d| d.italic())
+                            .child(m.body.clone()),
+                    );
+                    if state == EventState::Edited {
+                        row = row.child(div().text_xs().text_color(muted).child("(edited)"));
+                    }
+                    row.into_any_element()
+                }
+            };
+            block = block.child(body_el);
+
+            // Reactions (the aggregate pills).
+            if !m.reactions.is_empty() {
+                let me2 = me.clone();
+                let pills = m.reactions.iter().enumerate().map(move |(ri, r)| {
+                    let mine = r.mine(me2.as_deref());
+                    div()
+                        .id(("react", i * 100 + ri))
+                        .px_1p5()
+                        .py(px(1.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(if mine { accent } else { border })
+                        .when(mine, |d| d.bg(accent.opacity(0.18)))
+                        .text_xs()
+                        .child(format!("{} {}", r.key, r.count()))
+                });
+                block = block.child(h_flex().ml(px(36.)).mt_1().gap_1().children(pills));
+            }
+
+            block
         });
 
         v_flex()
@@ -314,18 +471,65 @@ impl ChatView {
             .children(rows)
     }
 
+    /// The typing + read-receipt strip below the timeline (ephemeral view-state).
+    fn render_presence(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let (typing, read_by) = match self.selected.and_then(|i| self.rooms.get(i)) {
+            Some(r) => {
+                let id = r.room_id.to_string();
+                (self.source.typing(&id), self.source.read_by(&id))
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        let typing_txt = if typing.is_empty() {
+            String::new()
+        } else {
+            let names: Vec<String> = typing.iter().map(|u| short_sender(u)).collect();
+            format!("✍ {} typing…", names.join(", "))
+        };
+        let read_txt = if read_by.is_empty() {
+            String::new()
+        } else {
+            format!("✓ read by {}", read_by.len())
+        };
+        h_flex()
+            .px_3()
+            .py(px(2.))
+            .h(px(18.))
+            .gap_3()
+            .text_xs()
+            .text_color(muted)
+            .when(!typing_txt.is_empty(), |d| d.child(div().child(typing_txt)))
+            .when(!read_txt.is_empty(), |d| d.child(div().child(read_txt)))
+    }
+
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let disabled = self.selected.is_none();
+        let editing = self.editing.is_some();
         v_flex()
             .border_t_1()
             .border_color(cx.theme().border)
             .p_2()
             .gap_1()
-            .child(
-                div()
-                    .h(px(64.))
-                    .child(Input::new(&self.composer).h_full()),
-            )
+            .when(editing, |d| {
+                d.child(
+                    h_flex()
+                        .px_1()
+                        .gap_2()
+                        .items_center()
+                        .text_xs()
+                        .text_color(cx.theme().accent)
+                        .child("✎ editing your last message")
+                        .child(
+                            div()
+                                .id("cancel-edit")
+                                .cursor_pointer()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("(esc/clear to cancel)"),
+                        ),
+                )
+            })
+            .child(div().h(px(64.)).child(Input::new(&self.composer).h_full()))
             .child(
                 h_flex()
                     .justify_between()
@@ -341,26 +545,22 @@ impl ChatView {
                             }),
                     )
                     .child(
-                        // The membrane affordance: attach a rehydratable cap-bounded
-                        // fork of the deos world (minted by the comms-PD's
-                        // MembraneHost). Inert in the pure-mock demo; live in deos.
+                        // The STAR feature: attach a rehydratable cap-bounded fork
+                        // of the deos world. Mints a real (mock) membrane offline.
                         div()
                             .id("attach-membrane")
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .bg(cx.theme().secondary)
+                            .bg(cx.theme().accent)
+                            .text_color(cx.theme().accent_foreground)
                             .cursor_pointer()
                             .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
                             .child("⬡ attach membrane")
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _ev, _win, cx| {
-                                    this.status = SharedString::from(
-                                        "membrane: mint via comms-PD MembraneHost (see docs/deos/MEMBRANE-MERGE-SEAM.md)",
-                                    );
-                                    cx.notify();
-                                }),
+                                cx.listener(|this, _ev, win, cx| this.attach_membrane(win, cx)),
                             ),
                     ),
             )
@@ -375,18 +575,22 @@ impl Focusable for ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = self
-            .selected
-            .and_then(|i| self.rooms.get(i))
+        let selected_room = self.selected.and_then(|i| self.rooms.get(i)).cloned();
+        let header = selected_room
+            .as_ref()
             .map(|r| r.display_name.clone())
             .unwrap_or_else(|| "deos-chat".to_string());
-        let topic = self
-            .selected
-            .and_then(|i| self.rooms.get(i))
-            .and_then(|r| r.topic.clone());
+        let topic = selected_room.as_ref().and_then(|r| r.topic.clone());
+        // room = a cell: show the room cell id + turn-count in the header.
+        let cell_line = selected_room.as_ref().map(|r| {
+            let rc = self.source.room_cell(&r.room_id.to_string());
+            format!("cell:{} · {} turns · {}", rc.cell_id.short(), rc.turn_count,
+                if r.is_encrypted { "🔒 e2e" } else { "plaintext" })
+        });
 
         let sidebar = self.render_sidebar(cx);
         let timeline = self.render_timeline(cx);
+        let presence = self.render_presence(cx);
         let composer = self.render_composer(cx);
 
         h_flex()
@@ -395,6 +599,12 @@ impl Render for ChatView {
             .key_context("ChatView")
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            // ↑-to-edit-last (nheko's composer affordance).
+            .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, win, cx| {
+                if ev.keystroke.key == "up" {
+                    this.edit_last(win, cx);
+                }
+            }))
             .child(sidebar)
             .child(
                 v_flex()
@@ -415,15 +625,144 @@ impl Render for ChatView {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(t),
                                 )
+                            })
+                            .when_some(cell_line, |d, c| {
+                                d.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().accent)
+                                        .child(c),
+                                )
                             }),
                     )
                     .child(timeline)
+                    .child(presence)
                     .child(composer),
             )
     }
 }
 
 // --- presentation helpers (the computed timeline pass) ----------------------
+
+/// A small round avatar chip with the sender's initial on their stable hue.
+fn avatar_chip(name: &str, color: Hsla) -> impl IntoElement {
+    let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+    div()
+        .size(px(22.))
+        .rounded_full()
+        .bg(color.opacity(0.85))
+        .text_color(gpui::white())
+        .text_xs()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(initial)
+}
+
+/// The per-sender person-trust badge ("verify the person, not the device").
+fn trust_badge(trust: PersonTrust, success: Hsla, warning: Hsla, danger: Hsla) -> impl IntoElement {
+    let (color, glyph) = match trust {
+        PersonTrust::Verified => (success, trust.glyph()),
+        PersonTrust::Unverified => (warning, trust.glyph()),
+        PersonTrust::Changed => (danger, trust.glyph()),
+    };
+    div()
+        .px_1()
+        .rounded_sm()
+        .bg(color.opacity(0.18))
+        .text_color(color)
+        .text_xs()
+        .child(glyph)
+}
+
+/// The STAR feature card: a membrane-bearing message rendered as a rehydratable
+/// fork of the deos world, with the cut/cursor/root and a "rehydrate" affordance.
+fn membrane_card(
+    m: &TimelineMessage,
+    bg: Hsla,
+    border: Hsla,
+    accent: Hsla,
+    fg: Hsla,
+    muted: Hsla,
+) -> impl IntoElement {
+    let env = m.membrane.clone();
+    let (cells, depth, h, root, rehydratable) = match &env {
+        Some(e) => (
+            e.cut.cell_count,
+            e.cut.max_depth,
+            e.cursor.height,
+            hex8(&e.frustum_root),
+            e.is_rehydratable(),
+        ),
+        None => (0, 0, 0, String::new(), false),
+    };
+    v_flex()
+        .ml(px(36.))
+        .my_1()
+        .p_2()
+        .gap_1()
+        .rounded_lg()
+        .bg(bg)
+        .border_1()
+        .border_color(accent.opacity(0.5))
+        .max_w(px(420.))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().text_color(accent).child("⬡"))
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(fg)
+                        .child("deos membrane"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("a cap-bounded fork of the world"),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(format!(
+                    "{cells} cells · depth {depth} · cut@h{h} · root {root}…"
+                )),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .id("rehydrate")
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(border)
+                        .text_xs()
+                        .when(rehydratable, |d| {
+                            d.bg(accent)
+                                .text_color(gpui::white())
+                                .cursor_pointer()
+                                .child("▶ rehydrate & drive")
+                        })
+                        .when(!rehydratable, |d| {
+                            d.text_color(muted).child("⨯ newer membrane — update deos")
+                        }),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("drives real turns · stitches back fail-closed"),
+                ),
+        )
+}
 
 /// `@ember:deos.local` → `ember`.
 fn short_sender(s: &str) -> String {
@@ -458,6 +797,14 @@ fn day_label(ms: u64) -> String {
     format!("· day {day} ·")
 }
 
+fn hex8(b: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(8);
+    for byte in &b[..4] {
+        s.push_str(&format!("{byte:02x}"));
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +824,11 @@ mod tests {
     fn time_label_formats_hh_mm() {
         // 1h 1m past midnight = 3660s = 3_660_000 ms.
         assert_eq!(time_label(3_660_000), "01:01");
+    }
+
+    #[test]
+    fn hex8_is_eight_chars() {
+        assert_eq!(hex8(&[0xab; 32]).len(), 8);
+        assert_eq!(hex8(&[0xab; 32]), "abababab");
     }
 }

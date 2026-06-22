@@ -23,6 +23,7 @@
 //! caller, including the CLI); [`worker`] sketches the sync-facing bridge that the
 //! confined comms-PD will use.
 
+pub mod cell;
 pub mod client;
 pub mod membrane;
 pub mod session;
@@ -35,7 +36,11 @@ pub mod chat;
 #[cfg(feature = "cockpit-surface")]
 pub mod cockpit_surface;
 
-pub use client::{MatrixClient, RoomSummary, TimelineMessage};
+pub use cell::{CellId, IdentityCell, PersonTrust, RoomCell, SendReceipt};
+pub use client::{
+    EventState, MatrixClient, MessageKind, Reaction, ReplyTo, RoomSummary, TimelineMessage,
+};
+pub use membrane::{MembraneEnvelope, MembraneHost, MockMembraneHost};
 pub use session::StoredSession;
 pub use source::{ChatSource, MockSource};
 

@@ -16,23 +16,56 @@ drive real turns on, and stitch back.
 
 ## The deos-chat gpui UI (built, behind the `gui` feature)
 
-- `ChatView` (`src/chat.rs`) — a **room-list sidebar** (encryption badges, unread
-  pills, topics), a **timeline** (sender-grouped, day separators, per-sender color,
-  own-vs-other), and a **composer** built on `gpui_component::input::Input`/
-  `InputState` with the nheko keymap (**Enter sends, Shift-Enter newlines** via
-  `InputEvent::PressEnter`). Renders against the `ChatSource` seam.
+A polished, **dregg-pilled** Matrix client — the chat IS the dregg world, not a
+silo that happens to render inside deos.
+
+- `ChatView` (`src/chat.rs`) — the kickass UI:
+  - **Room-list sidebar**: encryption/DM glyphs, unread pills, topics, member
+    counts, the logged-in user.
+  - **Sender-grouped timeline**: day separators, avatar chips on a stable
+    per-sender hue, **per-sender person-trust badges** ("verify the person, not
+    the device"), **reactions** (aggregate pills, "mine" highlighted), **replies**
+    (quoted-preview context), and **edit/redaction STATES** (an edited message
+    shows "(edited)"; a redacted one shows a tombstone — never a destructive
+    deletion).
+  - **The STAR feature — membrane-bearing messages**: a message can embed a
+    rehydratable cap-bounded fork of the deos world, rendered as a card with a
+    **"▶ rehydrate & drive"** affordance (and a fail-closed "newer membrane" state).
+  - **Composer**: `gpui_component::input::Input`/`InputState`, nheko keymap
+    (**Enter sends, Shift-Enter newlines**, **↑ edits your last message**), a
+    "⬡ attach membrane" action, and a **send-receipt** status line ("turn N ·
+    cell:… · root …").
+  - **Presence**: typing + read-receipt indicators (ephemeral view-state).
 - `ChatSource` + `MockSource` (`src/source.rs`) — the synchronous data seam the UI
   renders against. `MatrixHandle` is a real `ChatSource` (live backend);
   `MockSource::seeded()` is a recorded sync so the UI is **real and exercisable
-  offline** (no homeserver). The composer actually appends.
+  offline** (no homeserver) — seeded with reactions, a reply, an edit, a
+  redaction, and a real (mock) membrane-bearing message. The composer actually
+  appends and the room cell's turn-count advances.
 - `deos-chat` (`src/bin/chat.rs`) — the windowed demo (`cargo run --features gui
   --bin deos-chat`), or `--headless` for the CI-runnable data-path proof.
 - `ChatSurface` (`src/cockpit_surface.rs`, feature `cockpit-surface`) — mounts the
   chat as a dock `CockpitSurface` in starbridge-v2 (forwarder ready-to-drop at
   `starbridge-v2/src/dock/chat_surface.rs`).
-- `MembraneEnvelope` + `MembraneHost` (`src/membrane.rs`) — the wire shape + the
-  comms-PD trait for the rehydratable-membrane seam (design:
-  `docs/deos/MEMBRANE-MERGE-SEAM.md`).
+
+## The dregg-pilling — the chat IS the dregg world (`docs/deos/APPS-AS-CELLS.md` §3)
+
+- **ROOM = a CELL** (`src/cell.rs::RoomCell`) — a room's durable core (membership,
+  post-cap, history) is a `Cell`; its messages are the cell's *turn history*. The
+  UI header shows the room cell id + turn-count.
+- **IDENTITY = a CELL** (`src/cell.rs::IdentityCell`) — a Matrix user ties to a
+  `CellId`; device keys are caps the identity cell holds. Person-trust
+  (`Verified`/`Unverified`/`Changed`) is the identity *cell's* verdict, surfaced as
+  a per-sender badge (a CHANGED identity shows loudly).
+- **SEND = a TURN** (`src/cell.rs::SendReceipt`) — every send conceptually commits
+  a turn against the room cell, leaving a verifiable receipt (sketch offline,
+  byte-identical `TurnReceipt` on the deos side).
+- **A MESSAGE CARRIES A MEMBRANE** (`src/membrane.rs`) — `MembraneEnvelope` rides
+  in the `TimelineMessage` model; `MembraneHost` is the comms-PD trait (mint /
+  rehydrate / drive / stitch). `MockMembraneHost` is an offline impl so the whole
+  round-trip — **mint → serialize → rehydrate (fail-closed on root substitution &
+  future version) → drive turns → stitch back** — is exercised in tests with NO
+  deos executor. The design grounds in `docs/deos/MEMBRANE-MERGE-SEAM.md`.
 
 ## What is here today (the headless foundation, proven to build)
 
