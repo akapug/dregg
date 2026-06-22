@@ -36,6 +36,7 @@ dregg-turn = { path = "../turn" }
 # fail-closed `StubVerifier` accept path via `test-stubs` for its plumbing
 # tests. Production crates never enable this feature.
 dregg-cell = { path = "../cell", features = ["test-stubs"] }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-sdk = { path = "../sdk" }
 dregg-types = { path = "../types" }
 dregg-verifier = { path = "../verifier" }

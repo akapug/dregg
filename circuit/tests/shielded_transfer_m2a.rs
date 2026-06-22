@@ -5,7 +5,7 @@
 //!   1. the **hidden STARK side** (`ShieldedTransfer::verify_stark_side`):
 //!      per-input membership in the commitment tree + nullifier derivation,
 //!      proved through `HidingFriPcs` so the owner/key/path are blind;
-//!   2. the **hidden Pedersen side** (`dregg_cell::value_commitment`):
+//!   2. the **hidden Pedersen side** (`dregg_cell_crypto::value_commitment`):
 //!      homomorphic value-commitment conservation, so `Σ v_in = Σ v_out` is
 //!      certified without revealing any amount.
 //!
@@ -29,7 +29,7 @@ use dregg_circuit::shielded::{
     ShieldedValueLeg,
 };
 
-use dregg_cell::value_commitment::{
+use dregg_cell_crypto::value_commitment::{
     BulletproofRangeProof, FullConservationError, ValueCommitment, ValueLinkError,
     prove_conservation, scalar_from_blinding_bytes, verify_conservation,
     verify_full_conservation_bytes, verify_value_link,
@@ -253,9 +253,9 @@ fn negative_output_value_wraps_and_is_caught_by_range_proof() {
     let neg_scalar = -Scalar::from(steal); // = (l - steal) mod l, a huge scalar
     let out_big = ValueCommitment::commit(amount + steal, &scalar_from_blinding_bytes(&bo_big));
     let out_neg = ValueCommitment {
-        point: neg_scalar * dregg_cell::value_commitment::value_generator()
+        point: neg_scalar * dregg_cell_crypto::value_commitment::value_generator()
             + scalar_from_blinding_bytes(&bo_neg)
-                * dregg_cell::value_commitment::randomness_generator(),
+                * dregg_cell_crypto::value_commitment::randomness_generator(),
     };
 
     let output_legs = vec![

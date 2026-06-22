@@ -10,8 +10,7 @@ repository.workspace = true
 description = "Agent cell model — capability-secure isolated execution contexts"
 
 [features]
-default = ["crypto"]
-crypto = ["dep:bulletproofs", "dep:chacha20poly1305", "dep:curve25519-dalek", "dep:ed25519-dalek", "dep:getrandom", "dep:merlin", "dep:x25519-dalek", "dep:zeroize"]
+default = []
 # `dregg-circuit` is now an always-present dependency (the canonical
 # capability-root scheme `dregg_circuit::cap_root` is load-bearing in the
 # always-on `compute_canonical_state_commitment`, so it must not be
@@ -39,12 +38,6 @@ test-stubs = []
 
 [dependencies]
 blake3 = "1"
-bulletproofs = { version = "5", optional = true }
-chacha20poly1305 = { workspace = true, optional = true }
-curve25519-dalek = { version = "4", features = ["alloc"], optional = true }
-ed25519-dalek = { version = "2", features = ["hazmat"], optional = true }
-getrandom = { workspace = true, optional = true }
-merlin = { version = "3", optional = true }
 postcard = { version = "1", features = ["alloc"] }
 # Required (always present) for the canonical capability-root scheme in
 # `compute_canonical_capability_root` (`dregg_circuit::cap_root`). Default
@@ -59,8 +52,6 @@ dregg-dsl-runtime = { path = "../dregg-dsl-runtime", optional = true }
 dregg-types = { path = "../types" }
 serde = { version = "1", features = ["derive", "std"] }
 serde_json = { workspace = true }
-x25519-dalek = { workspace = true, optional = true }
-zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

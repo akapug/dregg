@@ -16,6 +16,7 @@ dregg-federation = { path = "../federation", default-features = false }
 hints = { path = "../hints", package = "dregg-hints" }
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-turn = { path = "../turn" }
 starbridge-polis = { path = "../starbridge-apps/polis" }
 dregg-bridge = { path = "../bridge" }

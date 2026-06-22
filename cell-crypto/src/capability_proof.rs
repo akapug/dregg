@@ -21,9 +21,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::CellId;
-use crate::permissions::AuthRequired;
-use crate::state::FieldElement;
+use dregg_cell::id::CellId;
+use dregg_cell::permissions::AuthRequired;
+use dregg_cell::state::FieldElement;
 
 /// Serde helper for `[u8; 64]` (Ed25519 signatures).
 mod sig_serde {
@@ -109,12 +109,12 @@ pub enum PeerEffect {
 
 impl PeerEffect {
     /// What action type does this effect require on the target cell?
-    pub fn required_action(&self) -> crate::permissions::Action {
+    pub fn required_action(&self) -> dregg_cell::permissions::Action {
         match self {
-            PeerEffect::SetField { .. } => crate::permissions::Action::SetState,
-            PeerEffect::Transfer { .. } => crate::permissions::Action::Send,
-            PeerEffect::IncrementNonce => crate::permissions::Action::IncrementNonce,
-            PeerEffect::EmitEvent { .. } => crate::permissions::Action::Access,
+            PeerEffect::SetField { .. } => dregg_cell::permissions::Action::SetState,
+            PeerEffect::Transfer { .. } => dregg_cell::permissions::Action::Send,
+            PeerEffect::IncrementNonce => dregg_cell::permissions::Action::IncrementNonce,
+            PeerEffect::EmitEvent { .. } => dregg_cell::permissions::Action::Access,
         }
     }
 }
@@ -340,7 +340,7 @@ impl CapabilityProof {
     pub fn check_permissions_for_effects(
         &self,
         effects: &[PeerEffect],
-        target_permissions: &crate::permissions::Permissions,
+        target_permissions: &dregg_cell::permissions::Permissions,
     ) -> Result<(), CapabilityProofError> {
         for effect in effects {
             let action = effect.required_action();
@@ -417,7 +417,6 @@ fn auth_required_discriminant(auth: &AuthRequired) -> u8 {
 }
 
 /// Ed25519 signature verification (using ed25519-dalek).
-#[cfg(feature = "crypto")]
 fn verify_ed25519(pubkey_bytes: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
     use ed25519_dalek::{Signature, VerifyingKey};
     let Ok(vk) = VerifyingKey::from_bytes(pubkey_bytes) else {
@@ -427,12 +426,6 @@ fn verify_ed25519(pubkey_bytes: &[u8; 32], message: &[u8], signature: &[u8; 64])
     vk.verify_strict(message, &sig).is_ok()
 }
 
-/// Stub verification when crypto feature is disabled (always fails).
-#[cfg(not(feature = "crypto"))]
-fn verify_ed25519(_pubkey_bytes: &[u8; 32], _message: &[u8], _signature: &[u8; 64]) -> bool {
-    false
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Signing helper (for the holder/Alice side)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -440,7 +433,6 @@ fn verify_ed25519(_pubkey_bytes: &[u8; 32], _message: &[u8], _signature: &[u8; 6
 /// Sign a capability proof with the holder's signing key.
 ///
 /// Constructs the signing message from the proof fields and produces an Ed25519 signature.
-#[cfg(feature = "crypto")]
 pub fn sign_capability_proof(proof: &mut CapabilityProof, signing_key: &ed25519_dalek::SigningKey) {
     use ed25519_dalek::Signer;
     let msg = proof.signing_message();
@@ -456,7 +448,6 @@ pub fn sign_capability_proof(proof: &mut CapabilityProof, signing_key: &ed25519_
 mod tests {
     use super::*;
 
-    #[cfg(feature = "crypto")]
     use ed25519_dalek::SigningKey;
 
     /// Helper: create a deterministic CellId from a byte.
@@ -467,7 +458,6 @@ mod tests {
     }
 
     /// Helper: create a signed proof for testing.
-    #[cfg(feature = "crypto")]
     fn make_signed_proof(
         holder_key: &SigningKey,
         holder_cell: CellId,
@@ -511,7 +501,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_valid_exercise_accepted() {
         let holder_key = SigningKey::from_bytes(&[1u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
@@ -538,7 +527,7 @@ mod tests {
             index: 0,
             value: [0u8; 32],
         }];
-        let target_perms = crate::permissions::Permissions::default_user();
+        let target_perms = dregg_cell::permissions::Permissions::default_user();
         assert!(
             proof
                 .check_permissions_for_effects(&effects, &target_perms)
@@ -547,7 +536,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_wrong_permissions_rejected() {
         let holder_key = SigningKey::from_bytes(&[2u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
@@ -576,7 +564,7 @@ mod tests {
             index: 0,
             value: [0u8; 32],
         }];
-        let target_perms = crate::permissions::Permissions::default_user();
+        let target_perms = dregg_cell::permissions::Permissions::default_user();
         let result = proof.check_permissions_for_effects(&effects, &target_perms);
         assert!(matches!(
             result,
@@ -585,7 +573,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_expired_cap_rejected() {
         let holder_key = SigningKey::from_bytes(&[3u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
@@ -617,7 +604,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_commitment_mismatch_rejected() {
         let holder_key = SigningKey::from_bytes(&[4u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
@@ -647,7 +633,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_stale_timestamp_rejected() {
         let holder_key = SigningKey::from_bytes(&[5u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
@@ -676,7 +661,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_invalid_signature_rejected() {
         let holder_key = SigningKey::from_bytes(&[6u8; 32]);
         let holder_cell = test_cell_id(11);
@@ -707,7 +691,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_wrong_target_rejected() {
         let holder_key = SigningKey::from_bytes(&[7u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
@@ -737,7 +720,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "crypto")]
     fn test_proof_permissions_satisfy_transfer() {
         let holder_key = SigningKey::from_bytes(&[8u8; 32]);
         let holder_cell = test_cell_id(16);
@@ -757,7 +739,7 @@ mod tests {
         );
 
         let effects = vec![PeerEffect::Transfer { amount: 100 }];
-        let target_perms = crate::permissions::Permissions::default_user();
+        let target_perms = dregg_cell::permissions::Permissions::default_user();
         assert!(
             proof
                 .check_permissions_for_effects(&effects, &target_perms)

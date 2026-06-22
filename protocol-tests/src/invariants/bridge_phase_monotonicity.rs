@@ -17,7 +17,7 @@
 //! is a prefix of one of the two legal sequences.
 
 use crate::Invariant;
-use dregg_cell::note_bridge::{
+use dregg_cell_crypto::note_bridge::{
     BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, compute_bridge_id,
 };
 use proptest::prelude::*;

@@ -12,6 +12,7 @@ description = "Call-forest transaction model for atomic agent execution turns"
 [dependencies]
 dregg-captp = { path = "../captp" }
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }

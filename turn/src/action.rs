@@ -5,13 +5,13 @@
 //! preconditions, and produces effects.
 
 use dregg_cell::lifecycle::{ArchivalAttestation, DeathCertificate};
-use dregg_cell::note_bridge::PortableNoteProof;
+use dregg_cell_crypto::note_bridge::PortableNoteProof;
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::predicate::WitnessedPredicate;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions};
 #[allow(unused_imports)]
-use dregg_cell::{ValueCommitment, ValueCommitmentBytes};
+use dregg_cell_crypto::{ValueCommitment, ValueCommitmentBytes};
 use serde::{Deserialize, Serialize};
 
 /// Serde helper for `[u8; 64]` (Ed25519 signatures — serde doesn't support arrays > 32).
@@ -359,7 +359,7 @@ pub enum Authorization {
     /// derived per-call from their persistent *spend* key `S` (the
     /// target cell's `public_key`, treated as a stealth spend pubkey)
     /// plus a fresh ephemeral secret `r`, using the
-    /// [`dregg_cell::stealth`] machinery. The on-chain turn carries only
+    /// [`dregg_cell_crypto::stealth`] machinery. The on-chain turn carries only
     /// the one-time public key `P`, the ephemeral public key `R = r·G`,
     /// the derived blinding scalar `c`, and a signature by the one-time
     /// private key `k = c + s` (`s` = spend scalar). The **persistent

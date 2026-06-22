@@ -137,24 +137,6 @@ impl DelegatedRef {
         *hasher.finalize().as_bytes()
     }
 
-    /// Verify the parent's signature over this delegation.
-    ///
-    /// Returns `true` if the signature is valid for the given parent public key.
-    #[cfg(feature = "crypto")]
-    pub fn verify_parent_signature(&self, parent_pubkey: &[u8; 32]) -> bool {
-        use ed25519_dalek::{Signature, VerifyingKey};
-
-        let message =
-            Self::signing_message(&self.clist_commitment, self.delegation_epoch, &self.child);
-        let signature = Signature::from_bytes(&self.parent_signature);
-
-        if let Ok(vk) = VerifyingKey::from_bytes(parent_pubkey) {
-            vk.verify_strict(&message, &signature).is_ok()
-        } else {
-            false
-        }
-    }
-
     /// Check if this delegation is stale relative to the given timestamp.
     ///
     /// A staleness of zero means "always stale" (always refresh before use).

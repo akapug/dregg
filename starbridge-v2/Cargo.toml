@@ -154,7 +154,7 @@ live-node = ["dep:reqwest"]
 # async) deps out of this headless, `cargo test`-able build: the cipherclerk +
 # token surface we surface (identities, mint/attenuate/delegate, cell_id) is in
 # the SDK's un-gated core.
-embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist", "dep:dregg-doc", "dep:dregg-captp"]
+embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-cell-crypto", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist", "dep:dregg-doc", "dep:dregg-captp"]
 
 # OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
 # rasterizer + the cap-gated `render_dregg_page` content-tile entry) so the
@@ -325,6 +325,7 @@ gpui-component = { path = "../../gpui-component/crates/ui", default-features = f
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dregg-turn = { path = "../turn", optional = true }
 dregg-cell = { path = "../cell", optional = true }
+dregg-cell-crypto = { path = "../cell-crypto", optional = true }
 dregg-types = { path = "../types", optional = true }
 # The wallet-grade clerk itself (`dregg_sdk::AgentCipherclerk`) + the REAL
 # embedded engine (`dregg_sdk::embed::DreggEngine`, the executor+ledger+token
@@ -466,6 +467,7 @@ servo-render = { path = "../servo-render", optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dregg-turn = { path = "../turn", optional = true, default-features = false, features = ["no-lean-link"] }
 dregg-cell = { path = "../cell", optional = true, default-features = false }
+dregg-cell-crypto = { path = "../cell-crypto", optional = true }
 dregg-types = { path = "../types", optional = true }
 dregg-sdk = { path = "../sdk", optional = true, default-features = false, features = ["no-lean-link", "embed-core", "prover"] }
 dregg-coord = { path = "../coord", optional = true, default-features = false, features = ["no-lean-link"] }

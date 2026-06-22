@@ -3,7 +3,7 @@
 //! Wraps `dregg_circuit::bridge_action_air` with bridge-side ergonomics: a
 //! `PortableActionBinding` type that bundles a serialized STARK proof with
 //! its typed parameters, plus prove/verify helpers tied to
-//! `dregg_cell::note_bridge`'s shapes.
+//! `dregg_cell_crypto::note_bridge`'s shapes.
 //!
 //! # Why this exists
 //!
@@ -67,7 +67,7 @@ pub struct PortableActionBinding {
 /// Produce a `PortableActionBinding` from typed parameters.
 ///
 /// The returned object is suitable for inclusion in a wire-format bridge
-/// presentation alongside `dregg_cell::note_bridge::PortableNoteProof`.
+/// presentation alongside `dregg_cell_crypto::note_bridge::PortableNoteProof`.
 pub fn create_action_binding(
     nullifier: [u8; 32],
     recipient: [u8; 32],

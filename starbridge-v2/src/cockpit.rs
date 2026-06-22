@@ -137,7 +137,7 @@ pub enum MoldableLens {
     /// cv is absent from PATH — never a fabricated provenance edge.
     Blame,
     /// 🔒 READ-CAP / PRIVACY — the focused cell's read-confidentiality membrane,
-    /// welded onto the `dregg_cell::read_cap` organ ([`starbridge_v2::read_cap_lens`]): the
+    /// welded onto the `dregg_cell_crypto::read_cap` organ ([`starbridge_v2::read_cap_lens`]): the
     /// encrypted-field set off the live field-visibility, the `granted ⊆ held`
     /// read-lattice, and the byte-identical-commitment invariant demonstrated live.
     ReadCap,
@@ -3941,7 +3941,7 @@ impl Cockpit {
             }
 
             // 🔒 READ-CAP / PRIVACY — the read-confidentiality membrane, WELDED onto
-            // the landed `dregg_cell::read_cap` organ (the privacy M0 weld commit):
+            // the landed `dregg_cell_crypto::read_cap` organ (the privacy M0 weld commit):
             // the encrypted-field set read off the live field-visibility, the
             // `granted ⊆ held` read-lattice (the real `ReadCap::attenuate`), and the
             // byte-identical-commitment invariant demonstrated live. The lens is real

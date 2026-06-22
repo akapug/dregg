@@ -1939,7 +1939,7 @@ pub fn trip_revocation_channel(
 // ============================================================================
 // Peer Exchange (sovereign-cell P2P)
 //
-// Direct facade over `dregg_cell::PeerExchange` (canonical sovereign-cell
+// Direct facade over `dregg_cell_crypto::PeerExchange` (canonical sovereign-cell
 // peer protocol). Each agent owns one `PeerExchange` constructed with the
 // cipherclerk's real Ed25519 signing key. These bindings carry no cryptographic
 // logic — they just marshal arguments into / out of the canonical type.
@@ -2118,7 +2118,7 @@ struct PeerCellViewSerializable {
     last_updated: i64,
 }
 
-fn peer_cell_view_to_serializable(view: &dregg_cell::PeerCellView) -> PeerCellViewSerializable {
+fn peer_cell_view_to_serializable(view: &dregg_cell_crypto::PeerCellView) -> PeerCellViewSerializable {
     PeerCellViewSerializable {
         cell_id: hex_encode(&view.cell_id.0),
         last_known_commitment: hex_encode(&view.last_known_commitment),
@@ -2396,7 +2396,7 @@ pub fn prove_bilateral_aggregate(handle: usize) -> Result<JsValue, JsError> {
 /// attached.
 #[wasm_bindgen]
 pub fn decode_peer_transition(bytes: &[u8]) -> Result<JsValue, JsError> {
-    use dregg_cell::PeerStateTransition;
+    use dregg_cell_crypto::PeerStateTransition;
 
     let transition: PeerStateTransition =
         postcard::from_bytes(bytes).map_err(|e| JsError::new(&format!("decode error: {e}")))?;

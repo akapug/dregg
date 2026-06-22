@@ -40,7 +40,7 @@
 //!     32-byte destination federation binding.
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
-use dregg_cell::note_bridge::{
+use dregg_cell_crypto::note_bridge::{
     BridgeError, BridgePhase, BridgePhaseError, BridgePhaseLog, BridgeReceiptEnvelope,
     BridgedNullifierSet, PendingBridgeSet, compute_bridge_id, create_portable_note,
     initiate_bridge, verify_portable_note,

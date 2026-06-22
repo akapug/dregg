@@ -68,6 +68,7 @@ dregg-firmament = { path = "../sel4/dregg-firmament" }
 # The REAL cell types: `AuthRequired`/`is_attenuation` (the rights lattice),
 # `CapabilityRef`/`CapabilitySet` (the c-list), `Cell`/`Ledger`/`Permissions`.
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 
 # The REAL attestation primitives: `AttestedRoot` (the quorum-signed,
 # blocklace-bound root) + `merkle_root_of_receipt_hashes` (the receipt-stream

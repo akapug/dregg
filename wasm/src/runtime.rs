@@ -1591,7 +1591,7 @@ impl DreggRuntime {
     // =========================================================================
     // PeerExchange (canonical sovereign-cell peer protocol)
     //
-    // These methods are thin facades over `dregg_cell::PeerExchange` stored on
+    // These methods are thin facades over `dregg_cell_crypto::PeerExchange` stored on
     // each `SimAgent`. The bindings layer doesn't reach into the agent's
     // `peer_exchange` field directly — it goes through these. All cryptography
     // and protocol logic lives inside the canonical `PeerExchange` type, no
@@ -1660,14 +1660,14 @@ impl DreggRuntime {
         agent_idx: usize,
         transition_bytes: &[u8],
         peer_pubkey: [u8; 32],
-    ) -> Result<dregg_cell::PeerCellView, (String, String)> {
+    ) -> Result<dregg_cell_crypto::PeerCellView, (String, String)> {
         let agent = self.agents.get_mut(agent_idx).ok_or_else(|| {
             (
                 "InvalidAgent".to_string(),
                 format!("invalid agent index: {agent_idx}"),
             )
         })?;
-        let transition: dregg_cell::PeerStateTransition = postcard::from_bytes(transition_bytes)
+        let transition: dregg_cell_crypto::PeerStateTransition = postcard::from_bytes(transition_bytes)
             .map_err(|e| {
                 (
                     "DecodeError".to_string(),
@@ -1692,7 +1692,7 @@ impl DreggRuntime {
         &self,
         agent_idx: usize,
         peer_cell_id: CellId,
-    ) -> Result<Option<dregg_cell::PeerCellView>, String> {
+    ) -> Result<Option<dregg_cell_crypto::PeerCellView>, String> {
         let agent = self
             .agents
             .get(agent_idx)
@@ -2730,8 +2730,8 @@ impl dregg_cell::WitnessedPredicateVerifier for EdThresholdVerifier {
 /// Map a `PeerExchangeError` to its variant name (without payload), used by
 /// the bindings to surface a typed error code to JS alongside the
 /// human-readable message.
-fn peer_exchange_error_variant(e: &dregg_cell::PeerExchangeError) -> String {
-    use dregg_cell::PeerExchangeError as E;
+fn peer_exchange_error_variant(e: &dregg_cell_crypto::PeerExchangeError) -> String {
+    use dregg_cell_crypto::PeerExchangeError as E;
     match e {
         E::InvalidSignature => "InvalidSignature",
         E::CommitmentMismatch { .. } => "CommitmentMismatch",

@@ -250,7 +250,7 @@ impl AgentCipherclerk {
         let mut fields = [0u64; 8];
         fields[0] = asset_type;
         fields[1] = value;
-        let note = Note::new(owner, fields);
+        let note = dregg_cell_crypto::note::new_note(owner, fields);
 
         // Compute the commitment (this is what gets published to the note tree).
         let commitment = note.commitment();
@@ -316,7 +316,7 @@ impl AgentCipherclerk {
         let mut output_fields = [0u64; 8];
         output_fields[0] = note.asset_type();
         output_fields[1] = note.value();
-        let output_note = Note::new(*recipient_key, output_fields);
+        let output_note = dregg_cell_crypto::note::new_note(*recipient_key, output_fields);
         let output_commitment = output_note.commitment();
 
         // Derive a recipient spending key (the recipient will use their own; we just

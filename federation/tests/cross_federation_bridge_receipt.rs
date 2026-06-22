@@ -35,7 +35,7 @@
 //!   `body_hash()`. The `BridgePhaseLog` enforces this on admission and
 //!   rejects any replay or non-monotone advancement.
 
-use dregg_cell::note_bridge::{
+use dregg_cell_crypto::note_bridge::{
     BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, compute_bridge_id,
 };
 use dregg_federation::threshold::{
@@ -252,7 +252,7 @@ fn cross_federation_replay_rejected_after_finalize() {
     let err = log_b
         .admit(&late_refund)
         .expect_err("late refund must be rejected after finalize");
-    use dregg_cell::note_bridge::BridgePhaseError;
+    use dregg_cell_crypto::note_bridge::BridgePhaseError;
     assert!(
         matches!(
             err,

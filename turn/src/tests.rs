@@ -6666,7 +6666,7 @@ fn test_fee_distribution() {
 #[test]
 fn test_committed_conservation_valid_proof_passes() {
     use curve25519_dalek::scalar::Scalar;
-    use dregg_cell::{BulletproofRangeProof, ValueCommitment, prove_conservation};
+    use dregg_cell_crypto::{BulletproofRangeProof, ValueCommitment, prove_conservation};
 
     // Setup: single agent cell with open permissions and a proof verifier.
     let (mut ledger, agent_id, _target_id) = setup_two_open_cells(100000, 0);
@@ -6767,7 +6767,7 @@ fn test_committed_conservation_valid_proof_passes() {
 #[test]
 fn test_committed_conservation_inflated_output_fails() {
     use curve25519_dalek::scalar::Scalar;
-    use dregg_cell::{ValueCommitment, prove_conservation};
+    use dregg_cell_crypto::{ValueCommitment, prove_conservation};
 
     // Setup: single agent cell with open permissions and a proof verifier.
     let (mut ledger, agent_id, _target_id) = setup_two_open_cells(100000, 0);
@@ -11950,7 +11950,7 @@ fn test_exercise_via_cap_transfer_foreign_from_with_cap_succeeds() {
 #[test]
 fn test_note_create_invalid_range_proof_rejected() {
     use curve25519_dalek::scalar::Scalar;
-    use dregg_cell::ValueCommitment;
+    use dregg_cell_crypto::ValueCommitment;
 
     let (mut ledger, agent_id, _) = setup_two_open_cells(100000, 0);
     let mut executor = zero_cost_executor();

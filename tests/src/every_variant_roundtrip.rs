@@ -42,7 +42,7 @@
 
 use std::collections::HashMap;
 
-use dregg_cell::note_bridge::PortableNoteProof;
+use dregg_cell_crypto::note_bridge::PortableNoteProof;
 use dregg_cell::{
     AuthRequired, CapabilityRef, Cell, CellId, CellMode, Ledger, NoteCommitment, Nullifier,
     Permissions, Preconditions, factory::FactoryCreationParams,

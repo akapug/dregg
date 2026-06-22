@@ -16,6 +16,7 @@ curve25519-dalek = { version = "4", features = ["alloc"] }
 getrandom = { workspace = true }
 postcard = { version = "1", features = ["alloc"] }
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-dfa = { path = "../dfa" }

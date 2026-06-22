@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
-use dregg_cell::note_bridge::{
+use dregg_cell_crypto::note_bridge::{
     BridgedNullifierSet, PendingBridgeSet, create_portable_note, initiate_bridge,
     verify_portable_note,
 };

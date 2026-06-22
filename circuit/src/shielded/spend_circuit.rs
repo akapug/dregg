@@ -41,7 +41,7 @@
 //! computed from the SAME value/randomness cells the membership leaf is built
 //! from, so the STARK leaf value cannot float free of the value the transfer
 //! actually balances. The downstream
-//! `dregg_cell::value_commitment::verify_value_link` ties this binding to the
+//! `dregg_cell_crypto::value_commitment::verify_value_link` ties this binding to the
 //! Pedersen leg (closing the leaf↔leg VALUE LINK residual).
 
 use crate::dsl::circuit::{
@@ -117,7 +117,7 @@ pub mod col {
     // leaf commitment already constrains, the published `value_binding` is provably
     // a commitment to the very value this spend's membership leaf encodes — it
     // cannot float free of the leaf value. The downstream value-link check
-    // (`dregg_cell::value_commitment::verify_value_link`) re-derives `value_binding`
+    // (`dregg_cell_crypto::value_commitment::verify_value_link`) re-derives `value_binding`
     // from the Pedersen leg's opening and rejects any leg whose value differs.
     /// Value-binding commitment `hash_fact(value, [randomness, 0, 0])`, recomputed
     /// every row (C7a) from the leaf's own value/randomness cells and pinned to
@@ -139,7 +139,7 @@ pub mod pi {
     /// Hiding Poseidon2 commitment to the input note's value (with the note
     /// randomness as blinding): `hash_fact(value, [randomness, 0, 0])`. Ties the
     /// STARK-witnessed leaf value to the published Pedersen value-commitment leg
-    /// (see `dregg_cell::value_commitment::verify_value_link`).
+    /// (see `dregg_cell_crypto::value_commitment::verify_value_link`).
     pub const VALUE_BINDING: usize = 2;
 }
 
@@ -374,7 +374,7 @@ impl ShieldedSpendWitness {
     /// `hash_fact(value, [randomness, 0, 0])`. It is computed from the SAME value/
     /// randomness cells the membership leaf (C6) is built from, so the published
     /// binding cannot float free of the leaf value. The downstream
-    /// `dregg_cell::value_commitment::value_link_binding` re-derives exactly this
+    /// `dregg_cell_crypto::value_commitment::value_link_binding` re-derives exactly this
     /// from the Pedersen leg's `(value, randomness)` opening to tie the two halves.
     pub fn value_binding(&self) -> BabyBear {
         hash_fact(self.value, &[self.randomness, BabyBear::ZERO, BabyBear::ZERO])

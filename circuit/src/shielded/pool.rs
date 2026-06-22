@@ -24,7 +24,7 @@
 //! 1. **The leg becomes asset-hiding.** A [`HiddenAssetLeg`] carries ONLY the
 //!    opaque 32-byte `commit_hidden_asset(value, asset_type, blinding)` =
 //!    `value·V + asset_type·H_asset + blinding·R` encoding
-//!    ([`dregg_cell::value_commitment::ValueCommitment::commit_hidden_asset`]).
+//!    ([`dregg_cell_crypto::value_commitment::ValueCommitment::commit_hidden_asset`]).
 //!    There is no public `asset_type` field to leak: the asset type is a blinded
 //!    scalar on the FIXED `H_asset` generator, indistinguishable across asset
 //!    types under DDH.
@@ -32,7 +32,7 @@
 //! 2. **Per-asset value conservation is carried by the same homomorphic sum.**
 //!    The asset-hiding commitment is binding on `(value, asset_type)` jointly. A
 //!    single Schnorr excess proof on `R`
-//!    ([`dregg_cell::value_commitment::prove_asset_conservation`]) certifies the
+//!    ([`dregg_cell_crypto::value_commitment::prove_asset_conservation`]) certifies the
 //!    excess is purely `r_excess·R`, i.e. BOTH the `V`-component (Σ value) AND
 //!    the `H_asset`-component (Σ asset-tag) of `Σ C_in − Σ C_out` are zero. With
 //!    equal leg counts this *is* per-asset value conservation: a cross-asset
@@ -43,7 +43,7 @@
 //! 3. **Split / merge (unequal leg counts) folds in the asset-equality argument.**
 //!    A `1→2` split of one asset changes the asset-tag SUM (`at` vs `2·at`), so
 //!    the bare excess proof rejects it. The
-//!    [`dregg_cell::value_commitment::AssetEqualityProof`] (a Chaum-Pedersen
+//!    [`dregg_cell_crypto::value_commitment::AssetEqualityProof`] (a Chaum-Pedersen
 //!    equal-discrete-log proof on `H_asset` with a SHARED response across legs)
 //!    upgrades the asset-tag-SUM check to a per-leg asset-EQUALITY check, so a
 //!    legitimate same-asset split/merge is provable while a mixed-asset split is
@@ -94,7 +94,7 @@ impl HiddenAssetLeg {
 /// How the pool transfer's asset side is balanced — the [`AssetEqualityProof`]
 /// dial.
 ///
-/// [`dregg_cell::value_commitment::AssetEqualityProof`]: the per-leg equal-DLog
+/// [`dregg_cell_crypto::value_commitment::AssetEqualityProof`]: the per-leg equal-DLog
 /// argument is only NEEDED when leg counts are unequal (split/merge).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolBalanceMode {

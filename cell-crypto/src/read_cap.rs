@@ -1,7 +1,7 @@
 //! # Read-capability — the dual of the write-cap, gating READ confidentiality.
 //!
 //! `docs/deos/PRIVACY-CONFIDENTIALITY.md` Milestone 0. dregg's [`Permissions`]
-//! ([`crate::permissions`]) are cold on **write**: the 8 [`AuthRequired`] slots
+//! ([`dregg_cell::permissions`]) are cold on **write**: the 8 [`AuthRequired`] slots
 //! say who may *change* a cell, attenuably. The dual question — who may *read* a
 //! cell's hidden state — had no first-class capability, even though every
 //! confidentiality organ already existed disconnected. This module welds them.
@@ -16,7 +16,7 @@
 //!
 //! - **[`FieldSet`]** — a 16-bit mask over the cell's 16 state slots. This is the
 //!   read-lattice: `granted ⊆ held` is [`FieldSet::is_subset_of`], the SAME
-//!   subset partial-order the write side uses ([`crate::facet::is_facet_attenuation`],
+//!   subset partial-order the write side uses ([`dregg_cell::facet::is_facet_attenuation`],
 //!   `child & parent == child`). There is no amplification: you cannot grant read
 //!   of a slot you cannot read.
 //! - **[`ViewKey`]** — a 32-byte HKDF-tree root. The per-slot decryption key is
@@ -41,7 +41,7 @@
 //! ## What this is NOT (honest seams, named with their lanes)
 //!
 //! - **Cryptographic revocation ≠ cap revocation.** The cap-object revokes via
-//!   the existing [`crate::revocation_channel`]; only key-rotation stops a revoked
+//!   the existing [`dregg_cell::revocation_channel`]; only key-rotation stops a revoked
 //!   holder reading *new* content, and nothing un-reveals a past read. Inherent to
 //!   encryption (`PRIVACY-CONFIDENTIALITY.md` §5).
 //! - **No metadata privacy.** This hides slot *contents*, never *that a read
@@ -50,7 +50,7 @@
 //!   transition proof — are the deeper, VK-affecting rung. NOT here.
 
 use crate::note_encryption::{decrypt_note, encrypt_note_to, NoteDecryptError, NotePlaintext};
-use crate::state::{CellState, FieldVisibility, STATE_SLOTS};
+use dregg_cell::state::{CellState, FieldVisibility, STATE_SLOTS};
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
@@ -64,7 +64,7 @@ const VIEW_SLOT_CONTEXT: &str = "dregg-read-slot v1";
 /// `i` set ⇒ slot `i` is in the set.
 ///
 /// `granted ⊆ held` ([`Self::is_subset_of`]) is the read-cap attenuation order,
-/// mirroring the write side's [`crate::facet::is_facet_attenuation`]
+/// mirroring the write side's [`dregg_cell::facet::is_facet_attenuation`]
 /// (`child & parent == child`). The same partial order, a different carrier
 /// (*which slots* may be opened, vs *which effects* may be issued).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -103,7 +103,7 @@ impl FieldSet {
     }
 
     /// Is `self` a subset of `other` (`self ⊆ other`)? The read-cap attenuation
-    /// order — the exact bit-discipline of [`crate::facet::is_facet_attenuation`].
+    /// order — the exact bit-discipline of [`dregg_cell::facet::is_facet_attenuation`].
     pub fn is_subset_of(&self, other: &FieldSet) -> bool {
         self.0 & other.0 == self.0
     }
@@ -126,7 +126,7 @@ impl FieldSet {
 
 /// **`is_read_attenuation`** — the read-cap attenuation gate: `granted ⊆ held`.
 ///
-/// The read-side twin of [`crate::is_attenuation`] / [`crate::facet::is_facet_attenuation`]:
+/// The read-side twin of [`dregg_cell::is_attenuation`] / [`dregg_cell::facet::is_facet_attenuation`]:
 /// a read-cap may be reshared only into one whose slot-set is a subset. There is
 /// no amplification — you cannot grant read of a slot you cannot read.
 pub fn is_read_attenuation(held: &FieldSet, granted: &FieldSet) -> bool {
@@ -298,11 +298,11 @@ impl std::error::Error for ReadCapError {}
 /// Attenuation ([`Self::attenuate`]) narrows `slots` via [`is_read_attenuation`]
 /// (`granted ⊆ held`); the ViewKey root rides along (the cap gates which slot
 /// keys the holder is entitled to derive). Revocation rides the existing
-/// [`crate::revocation_channel`] for the cap-object (§2a).
+/// [`dregg_cell::revocation_channel`] for the cap-object (§2a).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadCap {
     /// Which cell this opens.
-    pub target: crate::id::CellId,
+    pub target: dregg_cell::id::CellId,
     /// The read-lattice: which of the 16 slots this cap opens.
     pub slots: FieldSet,
     /// The decryption authority for those slots.
@@ -315,7 +315,7 @@ pub struct ReadCap {
 impl ReadCap {
     /// Mint a fresh read-cap over `target` opening `slots`, with viewing key
     /// `view_key`.
-    pub fn new(target: crate::id::CellId, slots: FieldSet, view_key: ViewKey) -> ReadCap {
+    pub fn new(target: dregg_cell::id::CellId, slots: FieldSet, view_key: ViewKey) -> ReadCap {
         ReadCap {
             target,
             slots,
@@ -461,7 +461,7 @@ impl EncryptedState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::id::CellId;
+    use dregg_cell::id::CellId;
 
     fn cid(b: u8) -> CellId {
         let mut k = [0u8; 32];

@@ -7,7 +7,7 @@
 //!      per-input membership + nullifier derivation through `HidingFriPcs`
 //!      (owner/key/path blind). Identical to M2-a, and asset-agnostic — there is
 //!      ONE nullifier set across all assets.
-//!   2. the **hidden asset+value side** (`dregg_cell::value_commitment`):
+//!   2. the **hidden asset+value side** (`dregg_cell_crypto::value_commitment`):
 //!      `commit_hidden_asset(value, asset, blinding) = v·V + at·H_asset + r·R`
 //!      legs, with `prove/verify_asset_conservation` (a single Schnorr-on-R proof
 //!      that forces BOTH the value component Σv and the asset-tag component Σat of
@@ -34,7 +34,7 @@ use dregg_circuit::shielded::{
     prove_pool_transfer,
 };
 
-use dregg_cell::value_commitment::{
+use dregg_cell_crypto::value_commitment::{
     AssetEqualityError, BulletproofRangeProof, FullConservationError, ValueCommitment,
     prove_asset_conservation, prove_asset_equality_with_message, prove_conservation,
     scalar_from_blinding_bytes, verify_asset_conservation, verify_asset_equality_with_message,
@@ -453,9 +453,9 @@ fn pool_negative_output_value_caught_by_range_proof() {
     // vc_neg = (-steal)·V + bo_neg·R — the wrapped-negative value commitment.
     let neg_scalar = -Scalar::from(steal);
     let vc_neg = ValueCommitment {
-        point: neg_scalar * dregg_cell::value_commitment::value_generator()
+        point: neg_scalar * dregg_cell_crypto::value_commitment::value_generator()
             + scalar_from_blinding_bytes(&bo_neg)
-                * dregg_cell::value_commitment::randomness_generator(),
+                * dregg_cell_crypto::value_commitment::randomness_generator(),
     };
 
     let msg = b"pool-wrapped-negative";

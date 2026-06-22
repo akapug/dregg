@@ -8,6 +8,7 @@ description = "Integration test simulation suite for dregg — end-to-end flows 
 [dependencies]
 dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-turn = { path = "../turn" }
 dregg-circuit = { path = "../circuit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }

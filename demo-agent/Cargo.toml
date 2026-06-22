@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-turn = { path = "../turn" }
 dregg-coord = { path = "../coord" }
 dregg-types = { path = "../types" }

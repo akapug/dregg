@@ -2357,7 +2357,7 @@ pub fn cipherclerk_post_encrypted_intent(spec_json: &str) -> Result<JsValue, JsE
 /// `Turn` ready for `/turns/submit`.
 #[wasm_bindgen]
 pub fn cipherclerk_private_transfer(spec_json: &str) -> Result<JsValue, JsError> {
-    use dregg_cell::stealth::StealthMetaAddress;
+    use dregg_cell_crypto::stealth::StealthMetaAddress;
     use dregg_sdk::AgentCipherclerk;
     use zeroize::Zeroizing;
 

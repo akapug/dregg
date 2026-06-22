@@ -11,12 +11,12 @@ use dregg_cell::{
     CapabilityRef, CellId, CellProgram, DelegatedRef, Ledger, NoteCommitment, Nullifier,
     Permissions, VerificationKey,
     lifecycle::CellLifecycle,
-    note_bridge::BridgedNullifierSet,
     nullifier_set::NullifierSet,
     permissions::AuthRequired,
     state::{FieldElement, STATE_SLOTS},
 };
 
+use dregg_cell_crypto::note_bridge::BridgedNullifierSet;
 use crate::action::Symbol;
 
 /// A single undo entry in the journal.

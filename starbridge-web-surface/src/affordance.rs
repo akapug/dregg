@@ -433,7 +433,7 @@ impl Viewer {
     ///
     /// Today `permits` is a trusted local closure — a malicious surface could
     /// ignore it. Here the disclosure bit becomes "does the viewer hold a
-    /// [`dregg_cell::ReadCap`] that derives the key for this affordance's slot?":
+    /// [`dregg_cell_crypto::ReadCap`] that derives the key for this affordance's slot?":
     /// `permits(name) = read_cap.derives(slot_of(name))`. The projection is then
     /// enforced by *not being able to decrypt* the underlying slot, not by a
     /// closure choosing to hide. This is the Lean `membraneShows` conjunct
@@ -449,10 +449,10 @@ impl Viewer {
     /// The non-amplification proof extends for free: a reshared viewer cannot grant
     /// disclosure of a slot the resharer could not read, because the read-cap it
     /// hands cannot derive a key the resharer's `slots` did not entitle
-    /// ([`dregg_cell::ReadCap::attenuate`] = `granted ⊆ held`).
+    /// ([`dregg_cell_crypto::ReadCap::attenuate`] = `granted ⊆ held`).
     pub fn from_read_cap<F>(
         held: SurfaceCapability,
-        read_cap: dregg_cell::ReadCap,
+        read_cap: dregg_cell_crypto::ReadCap,
         slot_of: F,
     ) -> Self
     where
@@ -1947,7 +1947,7 @@ mod tests {
     /// membrane layer.
     #[test]
     fn membrane_disclosure_is_welded_to_read_cap_possession() {
-        use dregg_cell::{FieldSet, ReadCap, ViewKey};
+        use dregg_cell_crypto::{FieldSet, ReadCap, ViewKey};
 
         let doc = cid(50);
         // Two confidential affordances, each tied to a cell slot whose read-cap

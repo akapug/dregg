@@ -504,7 +504,7 @@ impl MemberKeyring {
     /// through the cell crate's seal-pair machinery — same curve, same
     /// clamping as the fan-out encryption).
     pub fn seal_pk(&self) -> [u8; 32] {
-        dregg_cell::SealPair::from_secret(self.seal_secret).sealer_public
+        dregg_cell_crypto::SealPair::from_secret(self.seal_secret).sealer_public
     }
 
     /// Accept one sealed epoch key addressed to this member. Refuses keys

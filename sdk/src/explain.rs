@@ -507,8 +507,8 @@ mod tests {
         }
     }
 
-    fn portable_proof() -> dregg_cell::note_bridge::PortableNoteProof {
-        dregg_cell::note_bridge::PortableNoteProof {
+    fn portable_proof() -> dregg_cell_crypto::note_bridge::PortableNoteProof {
+        dregg_cell_crypto::note_bridge::PortableNoteProof {
             nullifier: [5u8; 32],
             destination_federation: [8u8; 32],
             source_root: attested_root(),

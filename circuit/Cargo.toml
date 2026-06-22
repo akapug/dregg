@@ -81,6 +81,7 @@ prover = [
 criterion = { workspace = true }
 dregg-bridge = { path = "../bridge", features = ["test-utils"] }
 dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
 # Test-layer ONLY: the shielded both-polarity tests construct a wrapped-negative
 # value commitment to exercise the per-output range-proof inflation gate. The
 # circuit crate stays upstream of the curve stack (value commitments ride as

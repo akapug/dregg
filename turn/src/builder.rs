@@ -824,7 +824,7 @@ impl<S> ActionBuilder<S> {
 
     pub fn effect_bridge_mint(
         mut self,
-        portable_proof: dregg_cell::note_bridge::PortableNoteProof,
+        portable_proof: dregg_cell_crypto::note_bridge::PortableNoteProof,
     ) -> Self {
         self.effects.push(Effect::BridgeMint { portable_proof });
         self

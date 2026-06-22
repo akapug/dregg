@@ -17,7 +17,7 @@
 use dregg_cell::capability::CapabilityRef;
 use dregg_cell::id::CellId;
 use dregg_cell::permissions::AuthRequired;
-use dregg_cell::seal::{SealError, SealPair, SealedBox, test_seal_pair};
+use dregg_cell_crypto::seal::{SealError, SealPair, SealedBox, test_seal_pair};
 
 fn main() {
     println!("=== Dregg Sealer/Unsealer Partition-Tolerant Transfer Demo ===\n");

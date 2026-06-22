@@ -4,14 +4,14 @@
 //! per-nullifier exact-once consumption, multi-pair concurrency, and
 //! AttestedRoot tampering attacks against the portable-note verifier.
 //!
-//! Layered on the same `dregg_cell::note_bridge` primitives the
+//! Layered on the same `dregg_cell_crypto::note_bridge` primitives the
 //! original suite uses, exercising paths that audit AUDIT-federation.md
 //! §10 noted were missing: cross-fed replay across THREE federations,
 //! per-nullifier single-consumption with concurrent pending bridges,
 //! and tamper of source_root.merkle_root.
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
-use dregg_cell::note_bridge::{
+use dregg_cell_crypto::note_bridge::{
     BridgeError, BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, BridgedNullifierSet,
     PendingBridgeSet, cancel_bridge, compute_bridge_id, create_portable_note, initiate_bridge,
     verify_portable_note,

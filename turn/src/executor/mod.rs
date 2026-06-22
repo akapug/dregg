@@ -42,14 +42,17 @@ use std::sync::Mutex;
 use tracing::info;
 
 use dregg_cell::{
-    AuthRequired, BulletproofRangeProof, Cell, CellId, CellStateDelta, FIELD_ZERO, FieldElement,
-    Ledger, LedgerDelta, RevocationChannelSet, ValueCommitment, ValueCommitmentBytes,
+    AuthRequired, Cell, CellId, CellStateDelta, FIELD_ZERO, FieldElement,
+    Ledger, LedgerDelta, RevocationChannelSet,
     note::NoteError,
-    note_bridge::BridgedNullifierSet,
     nullifier_set::NullifierSet,
     preconditions::EvalContext,
     predicate::{InputRef, PredicateInput, WitnessedPredicateError, WitnessedPredicateKind},
     state::STATE_SLOTS,
+};
+use dregg_cell_crypto::{
+    BulletproofRangeProof, ValueCommitment, ValueCommitmentBytes,
+    note_bridge::BridgedNullifierSet,
 };
 use dregg_types::AttestedRoot;
 use ed25519_dalek::{Signature, VerifyingKey};

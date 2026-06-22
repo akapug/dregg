@@ -477,7 +477,7 @@ fn differential_bridge_mint() {
     let nonce = actor_cell.state.nonce();
 
     let value: u64 = 4321;
-    let portable_proof = dregg_cell::PortableNoteProof {
+    let portable_proof = dregg_cell_crypto::PortableNoteProof {
         nullifier: [3u8; 32],
         destination_commitment: dregg_cell::NoteCommitment([4u8; 32]),
         value,

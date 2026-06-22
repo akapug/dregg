@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
-use crate::capability::CapabilityRef;
-use crate::id::CellId;
+use dregg_cell::capability::CapabilityRef;
+use dregg_cell::id::CellId;
 
 /// The public half of a seal pair. Safe to serialize and share.
 /// Contains only the information needed to seal (encrypt) capabilities.
@@ -374,18 +374,18 @@ impl SealPair {
         buf.extend_from_slice(cap.target.as_bytes());
         buf.extend_from_slice(&cap.slot.to_le_bytes());
         let perm_byte = match &cap.permissions {
-            crate::permissions::AuthRequired::None => 0u8,
-            crate::permissions::AuthRequired::Signature => 1u8,
-            crate::permissions::AuthRequired::Proof => 2u8,
-            crate::permissions::AuthRequired::Either => 3u8,
-            crate::permissions::AuthRequired::Impossible => 4u8,
-            crate::permissions::AuthRequired::Custom { .. } => 5u8,
+            dregg_cell::permissions::AuthRequired::None => 0u8,
+            dregg_cell::permissions::AuthRequired::Signature => 1u8,
+            dregg_cell::permissions::AuthRequired::Proof => 2u8,
+            dregg_cell::permissions::AuthRequired::Either => 3u8,
+            dregg_cell::permissions::AuthRequired::Impossible => 4u8,
+            dregg_cell::permissions::AuthRequired::Custom { .. } => 5u8,
         };
         buf.push(perm_byte);
         // Custom variant carries its vk_hash inline (32 bytes) immediately
         // after the tier byte so the deserializer can reconstruct the full
         // AuthRequired value without a registry round-trip.
-        if let crate::permissions::AuthRequired::Custom { vk_hash } = &cap.permissions {
+        if let dregg_cell::permissions::AuthRequired::Custom { vk_hash } = &cap.permissions {
             buf.extend_from_slice(vk_hash);
         }
         match &cap.breadstuff {
@@ -452,15 +452,15 @@ impl SealPair {
         }
         let mut target_bytes = [0u8; 32];
         target_bytes.copy_from_slice(&payload[0..32]);
-        let target = crate::id::CellId::from_bytes(target_bytes);
+        let target = dregg_cell::id::CellId::from_bytes(target_bytes);
         let slot = u32::from_le_bytes([payload[32], payload[33], payload[34], payload[35]]);
         let mut offset = 37;
         let permissions = match payload[36] {
-            0 => crate::permissions::AuthRequired::None,
-            1 => crate::permissions::AuthRequired::Signature,
-            2 => crate::permissions::AuthRequired::Proof,
-            3 => crate::permissions::AuthRequired::Either,
-            4 => crate::permissions::AuthRequired::Impossible,
+            0 => dregg_cell::permissions::AuthRequired::None,
+            1 => dregg_cell::permissions::AuthRequired::Signature,
+            2 => dregg_cell::permissions::AuthRequired::Proof,
+            3 => dregg_cell::permissions::AuthRequired::Either,
+            4 => dregg_cell::permissions::AuthRequired::Impossible,
             5 if version >= 4 => {
                 // Custom auth: the next 32 bytes are the vk_hash.
                 if payload.len() < offset + 32 {
@@ -474,7 +474,7 @@ impl SealPair {
                 let mut vk_hash = [0u8; 32];
                 vk_hash.copy_from_slice(&payload[offset..offset + 32]);
                 offset += 32;
-                crate::permissions::AuthRequired::Custom { vk_hash }
+                dregg_cell::permissions::AuthRequired::Custom { vk_hash }
             }
             5 => {
                 return Err(SealError::DeserializationFailed {
@@ -687,8 +687,8 @@ pub fn test_seal_pair(seed: u8) -> SealPair {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::id::CellId;
-    use crate::permissions::AuthRequired;
+    use dregg_cell::id::CellId;
+    use dregg_cell::permissions::AuthRequired;
 
     fn make_test_cap(seed: u8) -> CapabilityRef {
         let mut t = [0u8; 32];
@@ -892,7 +892,7 @@ mod tests {
     /// `FACET_TRANSFER_ONLY` cap back to "all effects" on round-trip.
     #[test]
     fn allowed_effects_round_trips_through_seal_unseal() {
-        use crate::facet::{EFFECT_EMIT_EVENT, EFFECT_TRANSFER};
+        use dregg_cell::facet::{EFFECT_EMIT_EVENT, EFFECT_TRANSFER};
         let pair = test_seal_pair(20);
         let target_bytes = {
             let mut t = [0u8; 32];

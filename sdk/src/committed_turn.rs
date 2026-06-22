@@ -13,7 +13,7 @@ use curve25519_dalek::scalar::Scalar;
 
 use dregg_cell::CellId;
 use dregg_cell::note::{NoteCommitment, Nullifier};
-use dregg_cell::{BulletproofRangeProof, ValueCommitment, prove_conservation_with_range};
+use dregg_cell_crypto::{BulletproofRangeProof, ValueCommitment, prove_conservation_with_range};
 use dregg_turn::Turn;
 use dregg_turn::action::Effect;
 use dregg_turn::forest::CallForest;
@@ -57,9 +57,9 @@ pub struct CommittedNoteOutput {
     /// Recipient's X25519 stealth *view* public key.
     ///
     /// The note opening `(value, asset_type, blinding)` is ECIES-encrypted to
-    /// this key (see [`dregg_cell::encrypt_note_to`]); only its holder can
+    /// this key (see [`dregg_cell_crypto::encrypt_note_to`]); only its holder can
     /// recover the opening and spend the note. Obtain it from the recipient's
-    /// [`dregg_cell::StealthMetaAddress::view_pubkey`].
+    /// [`dregg_cell_crypto::StealthMetaAddress::view_pubkey`].
     pub recipient: [u8; 32],
 }
 
@@ -210,16 +210,16 @@ impl CommittedTurnBuilder {
 
                 // Encrypt the note opening to the recipient with the real ECIES
                 // box (X25519 ephemeral DH → BLAKE3 KDF → ChaCha20-Poly1305, the
-                // same construction as `dregg_cell::seal`). The recipient's
+                // same construction as `dregg_cell_crypto::seal`). The recipient's
                 // `recipient` field is their X25519 stealth *view* public key;
                 // only its holder can recover `(value, asset_type, blinding)` —
                 // exactly the opening they need to later spend the note.
-                let plaintext = dregg_cell::NotePlaintext {
+                let plaintext = dregg_cell_crypto::NotePlaintext {
                     value: out.value,
                     asset_type: out.asset_type,
                     blinding: blinding.to_bytes(),
                 };
-                let encrypted_note = dregg_cell::encrypt_note_to(&out.recipient, &plaintext);
+                let encrypted_note = dregg_cell_crypto::encrypt_note_to(&out.recipient, &plaintext);
 
                 let effect = Effect::NoteCreate {
                     commitment: NoteCommitment(note_commitment),
@@ -374,7 +374,7 @@ impl From<&OwnedNote> for CommittedNoteInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dregg_cell::{FullConservationProof, ValueCommitment, verify_conservation_with_range};
+    use dregg_cell_crypto::{FullConservationProof, ValueCommitment, verify_conservation_with_range};
 
     /// Deterministic scalar for testing.
     fn test_scalar(seed: u8) -> Scalar {
@@ -489,7 +489,7 @@ mod tests {
                     ..
                 } => {
                     let vc =
-                        ValueCommitment::from_bytes(&dregg_cell::ValueCommitmentBytes(*vc_bytes))
+                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
                             .unwrap();
                     input_vcs.push(vc);
                 }
@@ -498,7 +498,7 @@ mod tests {
                     ..
                 } => {
                     let vc =
-                        ValueCommitment::from_bytes(&dregg_cell::ValueCommitmentBytes(*vc_bytes))
+                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
                             .unwrap();
                     output_vcs.push(vc);
                 }
@@ -558,7 +558,7 @@ mod tests {
                     ..
                 } => {
                     let vc =
-                        ValueCommitment::from_bytes(&dregg_cell::ValueCommitmentBytes(*vc_bytes))
+                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
                             .unwrap();
                     input_vcs.push(vc);
                 }
@@ -567,7 +567,7 @@ mod tests {
                     ..
                 } => {
                     let vc =
-                        ValueCommitment::from_bytes(&dregg_cell::ValueCommitmentBytes(*vc_bytes))
+                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
                             .unwrap();
                     output_vcs.push(vc);
                 }
@@ -650,7 +650,7 @@ mod tests {
         );
 
         // Recipient decrypts and recovers the true opening.
-        let opening = dregg_cell::decrypt_note(&view_secret_bytes, &encrypted_note)
+        let opening = dregg_cell_crypto::decrypt_note(&view_secret_bytes, &encrypted_note)
             .expect("recipient decrypts");
         assert_eq!(opening.value, 4242);
         assert_eq!(opening.asset_type, 9);
@@ -684,7 +684,7 @@ mod tests {
         // TOOTH: a wrong view key cannot decrypt.
         let wrong_secret = [0x99u8; 32];
         assert!(
-            dregg_cell::decrypt_note(&wrong_secret, &encrypted_note).is_err(),
+            dregg_cell_crypto::decrypt_note(&wrong_secret, &encrypted_note).is_err(),
             "wrong key must fail to decrypt"
         );
     }
@@ -750,7 +750,7 @@ mod tests {
                     ..
                 } => {
                     let vc =
-                        ValueCommitment::from_bytes(&dregg_cell::ValueCommitmentBytes(*vc_bytes))
+                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
                             .unwrap();
                     input_vcs.push(vc);
                 }
@@ -759,7 +759,7 @@ mod tests {
                     ..
                 } => {
                     let vc =
-                        ValueCommitment::from_bytes(&dregg_cell::ValueCommitmentBytes(*vc_bytes))
+                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
                             .unwrap();
                     output_vcs.push(vc);
                 }
