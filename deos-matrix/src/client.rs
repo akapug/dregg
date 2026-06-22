@@ -40,14 +40,121 @@ pub struct RoomSummary {
     pub unread_notifications: u64,
 }
 
-/// A single rendered timeline message (text-only projection for the headless core).
-#[derive(Debug, Clone)]
+/// What kind of message-like event this is — the visible *content* type, distinct
+/// from its lifecycle [`state`](TimelineMessage::state). Mirrors ruma's
+/// `MessageType` for the kinds the UI renders specially; the catch-all keeps the
+/// projection total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageKind {
+    /// A plain text message (`m.text`).
+    Text,
+    /// An emote (`m.emote`) — "* ember waves".
+    Emote,
+    /// A notice (`m.notice`) — bot/automation, rendered muted.
+    Notice,
+    /// A non-text attachment (image/file/audio/video), with its kind word.
+    Attachment(String),
+    /// **The deos membrane** — this message carries a rehydratable cap-bounded fork
+    /// of the deos world (see [`crate::membrane`]). Rendered specially (the star
+    /// feature). The envelope rides in [`TimelineMessage::membrane`].
+    Membrane,
+}
+
+/// The lifecycle STATE of a timeline event. nheko's principle: edits/redactions
+/// are *states of an event*, not deletions — so a redacted message still occupies
+/// its slot (showing "message removed"), and an edited message shows its latest
+/// body with an "(edited)" marker. The timeline is a presentation pass over events
+/// in these states, never a destructive mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventState {
+    /// A normal, live event.
+    Live,
+    /// Edited — the body shown is the latest replacement; an "(edited)" marker is
+    /// rendered.
+    Edited,
+    /// Redacted — the content was removed; the slot remains, showing a tombstone.
+    Redacted,
+}
+
+/// A reaction aggregate on a message (`m.reaction`): an emoji key and who reacted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reaction {
+    /// The reaction key (usually an emoji, e.g. "🔥").
+    pub key: String,
+    /// The senders who reacted with this key (full user ids).
+    pub senders: Vec<String>,
+}
+
+impl Reaction {
+    /// The count to show on the pill.
+    pub fn count(&self) -> usize {
+        self.senders.len()
+    }
+    /// Whether `me` is among the reactors (so the pill renders "mine").
+    pub fn mine(&self, me: Option<&str>) -> bool {
+        me.is_some_and(|m| self.senders.iter().any(|s| s == m))
+    }
+}
+
+/// A reply pointer (`m.in_reply_to`): the event being replied to, with a short
+/// quoted preview so the UI can render the reply context inline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyTo {
+    /// The replied-to event id.
+    pub event_id: String,
+    /// The replied-to sender (for the quoted attribution).
+    pub sender: String,
+    /// A short preview of the replied-to body (first line, truncated).
+    pub preview: String,
+}
+
+/// A single rendered timeline message — the rich projection the UI renders.
+///
+/// Edits/redactions are STATES ([`EventState`]); reactions, replies, and an
+/// embedded deos membrane are first-class. The headless core fills the plain
+/// fields; the richer fields default empty (a real `matrix_sdk_ui::Timeline`
+/// upgrade folds them in — see [`MatrixClient::recent_timeline`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMessage {
     pub event_id: String,
     pub sender: String,
     pub body: String,
     /// Origin server timestamp, milliseconds since the Unix epoch.
     pub timestamp_ms: u64,
+    /// The content kind (text/emote/notice/attachment/membrane).
+    pub kind: MessageKind,
+    /// The lifecycle state (live/edited/redacted).
+    pub state: EventState,
+    /// Reaction aggregates on this message.
+    pub reactions: Vec<Reaction>,
+    /// If this message is a reply, the pointer + preview of what it replies to.
+    pub reply_to: Option<ReplyTo>,
+    /// If this message belongs to a thread, the thread-root event id.
+    pub thread_root: Option<String>,
+    /// **The deos membrane** carried by this message, if any. When present,
+    /// [`Self::kind`] is [`MessageKind::Membrane`] and the UI renders the
+    /// rehydrate affordance. The bytes are inert until a recipient's comms-PD
+    /// rehydrates them.
+    pub membrane: Option<crate::membrane::MembraneEnvelope>,
+}
+
+impl TimelineMessage {
+    /// A plain text message — the common case, with all rich fields empty. Keeps
+    /// the headless `recent_timeline` projection terse.
+    pub fn text(event_id: String, sender: String, body: String, timestamp_ms: u64) -> Self {
+        TimelineMessage {
+            event_id,
+            sender,
+            body,
+            timestamp_ms,
+            kind: MessageKind::Text,
+            state: EventState::Live,
+            reactions: Vec::new(),
+            reply_to: None,
+            thread_root: None,
+            membrane: None,
+        }
+    }
 }
 
 impl MatrixClient {
@@ -197,22 +304,41 @@ impl MatrixClient {
             ) = any
             {
                 if let Some(original) = msg.as_original() {
-                    let body = match &original.content.msgtype {
-                        MessageType::Text(t) => t.body.clone(),
-                        MessageType::Emote(t) => format!("* {}", t.body),
-                        MessageType::Notice(t) => t.body.clone(),
-                        MessageType::Image(i) => format!("[image] {}", i.body),
-                        MessageType::File(f) => format!("[file] {}", f.body),
-                        MessageType::Audio(a) => format!("[audio] {}", a.body),
-                        MessageType::Video(v) => format!("[video] {}", v.body),
-                        other => format!("[{}]", other.msgtype()),
+                    let (body, kind) = match &original.content.msgtype {
+                        MessageType::Text(t) => (t.body.clone(), MessageKind::Text),
+                        MessageType::Emote(t) => (format!("* {}", t.body), MessageKind::Emote),
+                        MessageType::Notice(t) => (t.body.clone(), MessageKind::Notice),
+                        MessageType::Image(i) => {
+                            (format!("[image] {}", i.body), MessageKind::Attachment("image".into()))
+                        }
+                        MessageType::File(f) => {
+                            (format!("[file] {}", f.body), MessageKind::Attachment("file".into()))
+                        }
+                        MessageType::Audio(a) => {
+                            (format!("[audio] {}", a.body), MessageKind::Attachment("audio".into()))
+                        }
+                        MessageType::Video(v) => {
+                            (format!("[video] {}", v.body), MessageKind::Attachment("video".into()))
+                        }
+                        other => (format!("[{}]", other.msgtype()), MessageKind::Text),
                     };
-                    out.push(TimelineMessage {
-                        event_id: original.event_id.to_string(),
-                        sender: original.sender.to_string(),
+                    // The deos-pilling: detect a membrane riding in the namespaced
+                    // event key. A deos message carries the envelope under
+                    // `MEMBRANE_EVENT_KEY` (custom content); non-deos clients see
+                    // only the text fallback. The full extraction (custom-content
+                    // deserialize off the raw event) is the live-backend upgrade;
+                    // the typed seam is here so the model carries it end to end.
+                    let membrane = None;
+                    let kind = if membrane.is_some() { MessageKind::Membrane } else { kind };
+                    let mut m = TimelineMessage::text(
+                        original.event_id.to_string(),
+                        original.sender.to_string(),
                         body,
-                        timestamp_ms: u64::from(original.origin_server_ts.0),
-                    });
+                        u64::from(original.origin_server_ts.0),
+                    );
+                    m.kind = kind;
+                    m.membrane = membrane;
+                    out.push(m);
                 }
             }
         }

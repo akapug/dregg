@@ -255,6 +255,13 @@ impl MembraneEnvelope {
     /// The current wire-format version this build emits.
     pub const VERSION: u16 = 1;
 
+    /// Whether a recipient of *this* build can rehydrate this envelope. Fail-closed
+    /// on a newer wire version (the load-bearing forward-compat tooth: an old
+    /// recipient must refuse, never guess).
+    pub fn is_rehydratable(&self) -> bool {
+        self.version <= Self::VERSION
+    }
+
     /// The graceful text fallback a non-deos Matrix client shows for a message
     /// carrying this membrane (so the conversation reads sensibly everywhere).
     pub fn text_fallback(&self) -> String {
@@ -273,6 +280,223 @@ fn hex8(b: &[u8; 32]) -> String {
         s.push_str(&format!("{byte:02x}"));
     }
     s
+}
+
+// ---------------------------------------------------------------------------
+// MockMembraneHost — an offline, in-memory MembraneHost so the round-trip
+// (mint → serialize → rehydrate-shape → drive → stitch) is exercisable with NO
+// deos executor. This is to MembraneHost what MockSource is to ChatSource: the
+// SAME typed contract, a synthetic world, so the star feature renders and tests
+// end-to-end offline. The real impl lives in the confined comms-PD.
+// ---------------------------------------------------------------------------
+
+use std::sync::Mutex;
+
+/// Errors the mock host raises (the fail-closed paths the real host shares).
+#[derive(Debug, thiserror::Error)]
+pub enum MockHostError {
+    /// The envelope's wire version is newer than this build understands — refuse
+    /// (the forward-compat tooth; a real recipient must never guess).
+    #[error("membrane wire version {0} is newer than this build (max {1})")]
+    UnsupportedVersion(u16, u16),
+    /// The rehydrated ledger did not reproduce the envelope's `frustum_root` — the
+    /// anti-substitution tooth fired (fail-closed before trusting one cell).
+    #[error("frustum root mismatch — refusing to rehydrate a substituted snapshot")]
+    RootMismatch,
+    /// No such live fork (driven/stitched after it was dropped).
+    #[error("no such fork: {0:?}")]
+    NoSuchFork(ForkHandle),
+}
+
+/// A synthetic in-memory deos world for exercising the membrane seam offline. It
+/// holds a tiny "ledger" (cells = key→value), a monotone fork counter, and a
+/// per-fork turn log, so [`mint`](MembraneHost::mint),
+/// [`rehydrate`](MembraneHost::rehydrate), [`drive`](MembraneHost::drive), and
+/// [`stitch`](MembraneHost::stitch) all do real (mock) work.
+pub struct MockMembraneHost {
+    /// The synthetic mainline cells (cell-id → value bytes). The frustum culls
+    /// from here.
+    cells: Vec<([u8; 32], Vec<u8>)>,
+    /// The mainline witness cursor.
+    tip: WitnessCursor,
+    /// Live forks: handle → (restored snapshot bytes, turns driven so far).
+    forks: Mutex<Vec<(ForkHandle, Vec<u8>, u64)>>,
+    /// Monotone fork-id source.
+    next_fork: Mutex<u64>,
+}
+
+impl MockMembraneHost {
+    /// A seeded synthetic world: a handful of cells reachable from a focus, at a
+    /// fixed cursor. Enough to mint a real (mock) frustum and round-trip it.
+    pub fn seeded() -> Self {
+        let cells = (0u8..6)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[0] = i;
+                (id, vec![i, i.wrapping_add(1), i.wrapping_add(2)])
+            })
+            .collect();
+        MockMembraneHost {
+            cells,
+            tip: WitnessCursor { height: 100, commit_index: 3 },
+            forks: Mutex::new(Vec::new()),
+            next_fork: Mutex::new(1),
+        }
+    }
+
+    /// The canonical root of a set of cells — the anti-substitution tooth, computed
+    /// the same way at mint and at rehydrate so they MUST agree (else fail-closed).
+    /// A real host uses the sorted-Poseidon2 ledger root; this is a stand-in that
+    /// has the same load-bearing property: it binds exactly the included cells.
+    fn root_of(cells: &[([u8; 32], Vec<u8>)]) -> [u8; 32] {
+        // FNV-1a over (id ‖ value) of every cell, in cell-id order (sorted, so the
+        // root is order-independent — mirrors the sorted-Poseidon2 discipline).
+        let mut sorted: Vec<&([u8; 32], Vec<u8>)> = cells.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out = [0u8; 32];
+        for (lane, chunk) in out.chunks_mut(4).enumerate() {
+            let mut h: u32 = 2166136261u32.wrapping_add((lane as u32).wrapping_mul(0x01000193));
+            for (id, val) in &sorted {
+                for b in id.iter().chain(val.iter()) {
+                    h = (h ^ *b as u32).wrapping_mul(16777619);
+                }
+            }
+            chunk.copy_from_slice(&h.to_be_bytes());
+        }
+        out
+    }
+
+    /// The cells the cut selects (frustum cull): the first `min(depth-bounded,
+    /// available)` cells from the focus. A stand-in for the `Ledger::iter()` walk
+    /// along capability edges to the depth/authority horizon.
+    fn cull(&self, cut: &FrustumCut) -> Vec<([u8; 32], Vec<u8>)> {
+        let n = (cut.max_depth as usize + 1).min(self.cells.len());
+        self.cells[..n].to_vec()
+    }
+}
+
+impl MembraneHost for MockMembraneHost {
+    type Error = MockHostError;
+
+    fn mint(&self, focus: [u8; 32], mut cut: FrustumCut) -> Result<MembraneEnvelope, Self::Error> {
+        cut.focus_cell = focus;
+        let culled = self.cull(&cut);
+        cut.cell_count = culled.len() as u32;
+        let frustum_root = Self::root_of(&culled);
+        // The snapshot is the serialized culled cell set (the "checkpoint ⊕
+        // overlay" stand-in). A recipient re-derives the root from THESE bytes.
+        let snapshot = serde_json::to_vec(&culled).expect("serialize culled cells");
+        Ok(MembraneEnvelope {
+            version: MembraneEnvelope::VERSION,
+            frustum_root,
+            sturdyref: format!("dregg://fork/{}", hex8(&frustum_root)),
+            // A mock lineage cap (the attenuated SurfaceCapability bytes the real
+            // host would emit). Non-empty so the meet has something to attenuate.
+            lineage: vec![0xca, 0x9a, 0xb1, 0xe],
+            snapshot,
+            cut,
+            cursor: self.tip,
+        })
+    }
+
+    fn rehydrate(&self, env: &MembraneEnvelope) -> Result<(ForkHandle, Liveness), Self::Error> {
+        // Forward-compat tooth: refuse a newer wire version.
+        if !env.is_rehydratable() {
+            return Err(MockHostError::UnsupportedVersion(
+                env.version,
+                MembraneEnvelope::VERSION,
+            ));
+        }
+        // Anti-substitution tooth: the snapshot MUST reproduce the claimed root.
+        let cells: Vec<([u8; 32], Vec<u8>)> =
+            serde_json::from_slice(&env.snapshot).map_err(|_| MockHostError::RootMismatch)?;
+        if Self::root_of(&cells) != env.frustum_root {
+            return Err(MockHostError::RootMismatch);
+        }
+        let handle = {
+            let mut n = self.next_fork.lock().unwrap();
+            let h = ForkHandle(*n);
+            *n += 1;
+            h
+        };
+        self.forks
+            .lock()
+            .unwrap()
+            .push((handle, env.snapshot.clone(), 0));
+        // Liveness is DERIVED: a verified deterministic replay of a frozen snapshot
+        // is `ReplayedDeterministic` (we have no live source reachability here).
+        Ok((handle, Liveness::ReplayedDeterministic))
+    }
+
+    fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8]) -> Result<TurnReceiptDigest, Self::Error> {
+        let mut forks = self.forks.lock().unwrap();
+        let entry = forks
+            .iter_mut()
+            .find(|(h, _, _)| h == fork)
+            .ok_or(MockHostError::NoSuchFork(*fork))?;
+        // A "turn": parse the fork's cells, fold the turn bytes into the focus
+        // cell's value (a real state mutation), re-serialize, bump the index.
+        let mut cells: Vec<([u8; 32], Vec<u8>)> =
+            serde_json::from_slice(&entry.1).unwrap_or_default();
+        if let Some((_, val)) = cells.first_mut() {
+            val.extend_from_slice(turn_bytes);
+        }
+        entry.1 = serde_json::to_vec(&cells).expect("re-serialize fork cells");
+        entry.2 += 1;
+        Ok(TurnReceiptDigest {
+            post_root: Self::root_of(&cells),
+            turn_index: entry.2,
+        })
+    }
+
+    fn stitch(&self, fork: &ForkHandle) -> Result<StitchOutcome, Self::Error> {
+        let forks = self.forks.lock().unwrap();
+        let entry = forks
+            .iter()
+            .find(|(h, _, _)| h == fork)
+            .ok_or(MockHostError::NoSuchFork(*fork))?;
+        // The clean (monotone) part merges; if the fork drove turns past the cut,
+        // surface a single conflict-object stand-in to exercise the typed algebra.
+        let merged: Vec<[u8; 32]> = (0..entry.2)
+            .map(|i| {
+                let mut h = [0u8; 32];
+                h[0] = i as u8;
+                h
+            })
+            .collect();
+        Ok(StitchOutcome {
+            settled_root: Some(self.tip_root()),
+            merged,
+            dropped: Vec::new(),
+        })
+    }
+}
+
+impl MockMembraneHost {
+    fn tip_root(&self) -> [u8; 32] {
+        Self::root_of(&self.cells)
+    }
+
+    /// Mint a sample membrane for the chat UI's seeded world — a convenience the
+    /// MockSource uses to attach a real (mock) membrane to a seeded message, so the
+    /// star feature renders offline.
+    pub fn sample_envelope() -> MembraneEnvelope {
+        let host = MockMembraneHost::seeded();
+        host.mint(
+            {
+                let mut f = [0u8; 32];
+                f[0] = 0;
+                f
+            },
+            FrustumCut {
+                focus_cell: [0u8; 32],
+                max_depth: 3,
+                authority_bounded: true,
+                cell_count: 0,
+            },
+        )
+        .expect("mint sample membrane")
+    }
 }
 
 #[cfg(test)]
@@ -327,5 +551,85 @@ mod tests {
         let back: StitchOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome, back);
         assert_eq!(back.dropped[0].reason, ConflictReason::NullifierCollision);
+    }
+
+    // --- the membrane round-trip: the STAR feature, exercised offline ----------
+
+    #[test]
+    fn mint_then_serialize_then_rehydrate_round_trips() {
+        let host = MockMembraneHost::seeded();
+        let cut = FrustumCut {
+            focus_cell: [0u8; 32],
+            max_depth: 3,
+            authority_bounded: true,
+            cell_count: 0, // filled by mint
+        };
+        let env = host.mint([0u8; 32], cut).unwrap();
+        // The cut's cell_count is reconciled to what was actually culled.
+        assert!(env.cut.cell_count >= 1);
+        assert_eq!(env.version, MembraneEnvelope::VERSION);
+
+        // It survives the wire (the Matrix custom-content field is JSON).
+        let json = serde_json::to_string(&env).unwrap();
+        let back: MembraneEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(env, back);
+
+        // And it rehydrates into a live fork with DERIVED liveness.
+        let (fork, liveness) = host.rehydrate(&back).unwrap();
+        assert_eq!(liveness, Liveness::ReplayedDeterministic);
+
+        // The fork is drivable (a real mock turn → a receipt digest).
+        let r1 = host.drive(&fork, b"SetField(x=1)").unwrap();
+        assert_eq!(r1.turn_index, 1);
+        let r2 = host.drive(&fork, b"SetField(y=2)").unwrap();
+        assert_eq!(r2.turn_index, 2);
+        assert_ne!(r1.post_root, r2.post_root, "each driven turn advances the root");
+
+        // And it stitches back (clean, in this no-conflict path).
+        let outcome = host.stitch(&fork).unwrap();
+        assert!(outcome.settled_root.is_some());
+        assert_eq!(outcome.merged.len(), 2, "two driven turns merged");
+        assert!(outcome.dropped.is_empty());
+    }
+
+    #[test]
+    fn rehydrate_fails_closed_on_root_substitution() {
+        let host = MockMembraneHost::seeded();
+        let mut env = host.mint([0u8; 32], FrustumCut {
+            focus_cell: [0u8; 32],
+            max_depth: 2,
+            authority_bounded: true,
+            cell_count: 0,
+        }).unwrap();
+        // Substitute the snapshot bytes WITHOUT updating the root — the
+        // anti-substitution tooth must fire (fail-closed).
+        env.snapshot.push(0xff);
+        let err = host.rehydrate(&env).unwrap_err();
+        assert!(matches!(err, MockHostError::RootMismatch));
+    }
+
+    #[test]
+    fn rehydrate_fails_closed_on_future_version() {
+        let host = MockMembraneHost::seeded();
+        let mut env = host.mint([0u8; 32], FrustumCut {
+            focus_cell: [0u8; 32],
+            max_depth: 1,
+            authority_bounded: true,
+            cell_count: 0,
+        }).unwrap();
+        env.version = MembraneEnvelope::VERSION + 1;
+        // Re-derive the root won't matter — version is checked first, fail-closed.
+        let err = host.rehydrate(&env).unwrap_err();
+        assert!(matches!(err, MockHostError::UnsupportedVersion(_, _)));
+        assert!(!env.is_rehydratable());
+    }
+
+    #[test]
+    fn sample_envelope_is_minted_and_rehydratable() {
+        let env = MockMembraneHost::sample_envelope();
+        assert!(env.is_rehydratable());
+        assert!(env.cut.cell_count >= 1);
+        let host = MockMembraneHost::seeded();
+        assert!(host.rehydrate(&env).is_ok());
     }
 }
