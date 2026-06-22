@@ -25,11 +25,19 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    div, prelude::*, px, Context, FocusHandle, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::*, px, AnyElement, App, Context, Entity, FocusHandle, Hsla, IntoElement,
+    KeyDownEvent, MouseButton, ParentElement, Render, SharedString, Styled, WeakEntity, Window,
 };
 
 use dregg_cell::CellId;
+
+// THE L6 PANED WORKSPACE — the vendored resizable-split/dock engine. The right
+// pane's flat 28-tab list is hosted as a `PaneGroup` of `Pane`s, each holding the
+// tabs as `TabSurface`s (the adapter below). Splitting a pane puts two surfaces
+// side-by-side behind the draggable `PaneAxisElement` divider.
+use starbridge_v2::dock::{
+    ActivePaneDecorator, CockpitSurface, Pane, PaneGroup, SplitDirection, SurfaceId as DockSurfaceId,
+};
 
 use crate::views::{pill, section_title, theme};
 use starbridge_v2::dynamics;
@@ -415,6 +423,73 @@ impl Tab {
     }
 }
 
+/// THE DOCK ADAPTER — one cockpit [`Tab`], wrapped as a dockable
+/// [`CockpitSurface`] so it can live inside a resizable/splittable
+/// [`Pane`]. It holds a weak handle onto the live cockpit and, on
+/// [`render_body`](CockpitSurface::render_body), re-enters it to call the single
+/// per-tab dispatch [`Cockpit::panel_for_tab`] — so a hosted surface renders the
+/// SAME body the flat tab list did.
+///
+/// WHY THE RE-ENTRY IS SOUND: a [`Pane`] is rendered by the [`PaneGroup`] through
+/// `AnyView::from(pane).cached(..)`. gpui's cached-view path renders the pane in a
+/// *later* layout pass — after `Cockpit::render` has returned and the cockpit
+/// entity is back in its slot — so `cockpit.update(..)` here never collides with
+/// the cockpit's own (already-finished) render lease. (Mirrors Zed's
+/// workspace↔item rendering, where an item re-reads workspace state from inside
+/// its own deferred render.)
+///
+/// Cheap to clone (a weak handle + an enum + a focus handle), so splitting a pane
+/// — which `boxed_clone`s the surface into the new pane — is free.
+struct TabSurface {
+    tab: Tab,
+    cockpit: WeakEntity<Cockpit>,
+    focus: FocusHandle,
+}
+
+impl TabSurface {
+    fn new(tab: Tab, cockpit: WeakEntity<Cockpit>, focus: FocusHandle) -> Self {
+        Self { tab, cockpit, focus }
+    }
+}
+
+impl CockpitSurface for TabSurface {
+    fn item_id(&self) -> DockSurfaceId {
+        DockSurfaceId(self.tab.index() as u64)
+    }
+
+    fn tab_label(&self) -> SharedString {
+        SharedString::from(self.tab.label())
+    }
+
+    fn render_body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        let tab = self.tab;
+        self.cockpit
+            .update(cx, |cockpit, cx| cockpit.panel_for_tab(tab, cx))
+            .unwrap_or_else(|_| {
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_full()
+                    .text_color(theme::muted())
+                    .child(SharedString::from(tab.label()))
+                    .into_any_element()
+            })
+    }
+
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn CockpitSurface> {
+        Box::new(TabSurface {
+            tab: self.tab,
+            cockpit: self.cockpit.clone(),
+            focus: self.focus.clone(),
+        })
+    }
+}
+
 /// The whole cockpit — owns the shared world + the current selection + a
 /// dynamics cursor for the activity feed, plus the four feature panels' UI
 /// state (the modules kept their renders gpui-free; the cockpit owns the state
@@ -789,7 +864,19 @@ pub struct Cockpit {
     /// The last SHARE action's outcome banner (a captured slice / a refused pare /
     /// a minted artifact / a revocation — REAL verdicts, surfaced).
     share_outcome: Option<String>,
-}
+
+    // --- THE L6 PANED WORKSPACE (the right pane) -----------------------------
+    /// The right pane's resizable-split tree. The flat 28-tab list is hosted as a
+    /// [`PaneGroup`]: the un-split base case is ONE [`Pane`] holding every tab as a
+    /// [`TabSurface`] (so it looks like today's tabbed right pane), and a split puts
+    /// two surfaces side-by-side behind the draggable divider. `None` until the
+    /// first render seeds it (it needs `window`/`cx` + the cockpit's own
+    /// [`WeakEntity`], not cleanly available in the constructor).
+    pane_group: Option<PaneGroup>,
+    /// The pane that currently has focus within [`Self::pane_group`] — the split
+    /// target + the active-pane border anchor. Kept in sync as panes are
+    /// activated/split. `None` until the group is seeded.
+    active_pane: Option<Entity<Pane>>,
 
 /// A navigation action over the cockpit's pure-navigation controls — the edge
 /// vocabulary of the atlas's UI-exploration tree.
@@ -1685,6 +1772,10 @@ impl Cockpit {
             share_artifacts: Vec::new(),
             share_preview_wide: true,
             share_outcome: None,
+            // LAZY: the pane group needs `window`/`cx`/`cx.entity()`, seeded on the
+            // first render (`ensure_pane_group`).
+            pane_group: None,
+            active_pane: None,
         }
     }
 
@@ -5352,7 +5443,12 @@ impl Cockpit {
 
     // --- the workspace tab bar + the four feature panels ---------------------
 
-    /// The tab strip that switches the right-pane workspace.
+    /// The flat tab strip that switched the right-pane workspace BEFORE the L6
+    /// paned migration. Retained as the canonical styling reference: each pane's
+    /// own tab strip ([`Self::install_pane_tab_bar`]) reproduces this look, themed
+    /// per-pane and driving the pane's surfaces. Kept so the flat strip is one
+    /// edit away should the un-split single-pane base want it back.
+    #[allow(dead_code)]
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div().flex().flex_wrap().gap_1().p_2().border_b_1().border_color(theme::border());
         // M3 WIDEN — the active-tab highlight reads the witnessed cell selector too.
@@ -5387,9 +5483,17 @@ impl Cockpit {
     /// The active right-pane workspace panel.
     fn workspace(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         // M3 WIDEN — the dispatch SELECTOR is the witnessed [`WorkspaceCell`] read
-        // (`render(workspace_subgraph)`, §3.4), not the Rust field. The per-tab match
-        // is unchanged; only its source moved to a cell read.
-        match self.active_tab() {
+        // (`render(workspace_subgraph)`, §3.4), not the Rust field.
+        self.panel_for_tab(self.active_tab(), cx)
+    }
+
+    /// Render the body for an EXPLICIT tab — the single per-tab dispatch, factored
+    /// out of [`Self::workspace`] so the dock's [`TabSurface`] can render any tab's
+    /// body (not just the witnessed-active one) when a pane shows a surface other
+    /// than the cockpit's `active_tab()`. The 28-arm match is unchanged; its source
+    /// moved from `active_tab()` to the passed `tab`.
+    pub(crate) fn panel_for_tab(&self, tab: Tab, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match tab {
             Tab::Home => self.home_panel().into_any_element(),
             Tab::Shell => self.shell_panel(cx).into_any_element(),
             Tab::Agent => self.agent_panel().into_any_element(),
@@ -5419,6 +5523,199 @@ impl Cockpit {
             Tab::Cipherclerk => self.cipherclerk_panel(cx).into_any_element(),
             Tab::Editor => self.editor_panel().into_any_element(),
         }
+    }
+
+    // === THE L6 PANED WORKSPACE ===========================================
+    // The right pane's flat 28-tab list, hosted as a resizable/splittable
+    // `PaneGroup`. The base case is ONE pane holding every tab as a `TabSurface`
+    // (so it looks like the old tabbed pane); a split puts two surfaces
+    // side-by-side behind the draggable divider.
+
+    /// Seed [`Self::pane_group`] on first render: ONE [`Pane`] holding every
+    /// [`Tab`] as a [`TabSurface`], its active surface synced to the cockpit's
+    /// `active_tab()`. Idempotent — a no-op once seeded.
+    fn ensure_pane_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pane_group.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let active = self.active_tab();
+        let pane = self.build_seed_pane(weak.clone(), active, window, cx);
+        self.active_pane = Some(pane.clone());
+        self.pane_group = Some(PaneGroup::new(pane));
+    }
+
+    /// Keep the UN-SPLIT base pane's active surface in step with the witnessed
+    /// [`active_tab`](Self::active_tab), so the flat navigation seams (⌘K, the
+    /// nav-history back/forward, `select_tab_named`) still drive the right pane.
+    /// A NO-OP once the group is split (more than one pane): split panes are
+    /// steered independently by their own tab strips, so a flat-tab change must
+    /// not stomp them. Costs a cheap `panes().len()` + one read per frame.
+    fn sync_base_pane_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let single = self
+            .pane_group
+            .as_ref()
+            .map(|g| g.panes().len() == 1)
+            .unwrap_or(false);
+        if !single {
+            return;
+        }
+        let want = DockSurfaceId(self.active_tab().index() as u64);
+        if let Some(pane) = self.active_pane.clone() {
+            pane.update(cx, |pane, cx| {
+                if pane.active_item().map(|s| s.item_id()) != Some(want) {
+                    pane.activate_item_by_id(want, window, cx);
+                }
+            });
+        }
+    }
+
+    /// Build a fresh pane populated with all 28 tabs as surfaces, themed tab bar
+    /// installed, with `active` activated. `which` lets a split seed a pane that
+    /// opens on a *different* tab than the source (so the two panes show two
+    /// different surfaces).
+    fn build_seed_pane(
+        &self,
+        weak: WeakEntity<Cockpit>,
+        active: Tab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Pane> {
+        cx.new(|cx| {
+            let items: Vec<Box<dyn CockpitSurface>> = Tab::ALL
+                .iter()
+                .map(|t| {
+                    Box::new(TabSurface::new(*t, weak.clone(), cx.focus_handle()))
+                        as Box<dyn CockpitSurface>
+                })
+                .collect();
+            let mut pane = Pane::with_items(items, window, cx);
+            pane.activate_item_by_id(DockSurfaceId(active.index() as u64), window, cx);
+            Self::install_pane_tab_bar(&mut pane, weak.clone());
+            pane
+        })
+    }
+
+    /// Install the cockpit-themed tab strip on `pane` (the swappable
+    /// `render_tab_bar`): one clickable tab per surface + a ⊞ split button, all
+    /// styled like the cockpit's flat tab bar. A tab click activates that surface
+    /// in the pane AND syncs the cockpit's witnessed active tab; ⊞ splits this
+    /// pane to the right.
+    fn install_pane_tab_bar(pane: &mut Pane, weak: WeakEntity<Cockpit>) {
+        pane.set_render_tab_bar(move |pane: &mut Pane, _window, cx| {
+            let active = pane.active_item_index();
+            let mut row = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .p_2()
+                .border_b_1()
+                .border_color(theme::border());
+
+            // The ⊞ SPLIT control — grafts a fresh pane (opening on the next
+            // surface) beside this one (the draggable divider appears between them).
+            {
+                let weak = weak.clone();
+                // WEAK self-handle (not a strong `cx.entity()`) so the closure the
+                // pane stores does not retain the pane in a reference cycle.
+                let this_pane = cx.entity().downgrade();
+                row = row.child(
+                    div()
+                        .id("pane-split")
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(theme::panel())
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::border()))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |_ev, window, app| {
+                                if let Some(src) = this_pane.upgrade() {
+                                    let _ = weak.update(app, |cockpit, cx| {
+                                        cockpit.split_pane(
+                                            &src,
+                                            SplitDirection::Right,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            },
+                        )
+                        .child("⊞ split"),
+                );
+            }
+
+            for (ix, item) in pane.items().iter().enumerate() {
+                let is_active = ix == active;
+                let label = item.tab_label();
+                let weak = weak.clone();
+                row = row.child(
+                    div()
+                        .id(("pane-tab", ix))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(if is_active { theme::panel_hi() } else { theme::panel() })
+                        .text_xs()
+                        .text_color(if is_active { theme::accent() } else { theme::muted() })
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::border()))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |pane: &mut Pane, _ev, window, cx| {
+                                pane.activate_item(ix, window, cx);
+                                // Sync the cockpit's witnessed active tab to the
+                                // surface this pane now shows (the single selector
+                                // seam — lazy-boots SWARM + commits the cell).
+                                if let Some(tab) = pane
+                                    .active_item()
+                                    .map(|s| Tab::from_index(s.item_id().as_u64() as usize))
+                                {
+                                    let _ = weak.update(cx, |cockpit, cx| {
+                                        cockpit.set_tab(tab, cx);
+                                    });
+                                }
+                            }),
+                        )
+                        .child(label),
+                );
+            }
+            row.into_any_element()
+        });
+    }
+
+    /// Split `src` in `direction`: mint a fresh pane (opening on the next tab so
+    /// the two panes show different surfaces) and graft it beside `src` in the
+    /// [`PaneGroup`], with the new pane active. The draggable [`PaneAxisElement`]
+    /// divider then sits between them, resizable.
+    fn split_pane(
+        &mut self,
+        src: &Entity<Pane>,
+        direction: SplitDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The new pane opens on a DIFFERENT surface than the source's active one
+        // (the next tab), so a split visibly yields two distinct surfaces.
+        let src_active = src
+            .read(cx)
+            .active_item()
+            .map(|s| Tab::from_index(s.item_id().as_u64() as usize))
+            .unwrap_or(Tab::Home);
+        let next = Tab::from_index((src_active.index() + 1) % Tab::ALL.len());
+        let weak = cx.entity().downgrade();
+
+        let new_pane = self.build_seed_pane(weak, next, window, cx);
+        if let Some(group) = self.pane_group.as_mut() {
+            group.split(src, &new_pane, direction);
+        }
+        self.active_pane = Some(new_pane);
+        cx.notify();
     }
 
     /// THE HOME panel — the warm LANDING portal (the boot view). Renders the
@@ -8048,7 +8345,7 @@ impl Cockpit {
 }
 
 impl Render for Cockpit {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // LIVE: drain the node's receipt stream first so this frame reflects every
         // receipt that arrived (per-receipt `cx.notify()`, not a snapshot reload).
         self.drain_live_stream(cx);
@@ -8068,6 +8365,28 @@ impl Render for Cockpit {
         // NAV HISTORY: record this frame's UI state so back/forward (← → / ⌘[ ⌘])
         // can step through wherever you've been (the nav API made navigable).
         self.record_nav();
+
+        // L6 PANED WORKSPACE: seed the right pane's `PaneGroup` on first render
+        // (ONE pane holding all tabs as surfaces — the un-split base case), then
+        // sync the un-split pane's active surface to the witnessed `active_tab()`
+        // so flat-tab navigation (⌘K / the nav API) keeps driving the base pane.
+        self.ensure_pane_group(window, cx);
+        self.sync_base_pane_active(window, cx);
+        // Build the right pane's element: the `PaneGroup` rendered with the
+        // active-pane decorator (a 2px accent border on the focused pane). Built
+        // before the root `div()` so the `&self.pane_group` + `&self.active_pane`
+        // borrows don't tangle with the rest of the tree.
+        let right_pane: gpui::AnyElement = match (self.pane_group.as_ref(), self.active_pane.as_ref())
+        {
+            (Some(group), Some(active)) => {
+                let decorator = ActivePaneDecorator::new(active, theme::accent());
+                group.render(&decorator, window, cx).into_any_element()
+            }
+            // Defensive fallback (never on the live path once seeded): the flat
+            // dispatch, so the right pane is never blank.
+            _ => self.workspace(cx),
+        };
+
         let palette_open = self.palette.is_open();
         div()
             .id("cockpit-root")
@@ -8129,8 +8448,10 @@ impl Render for Cockpit {
                             .child(self.blocklace(cx)),
                     ),
             )
-            // Right: the workspace — tab bar over the active feature panel
-            // (composer · debugger · replay · cipherclerk · editor).
+            // Right: THE L6 PANED WORKSPACE — the nav bar over the `PaneGroup` of
+            // splittable/resizable surfaces. The un-split base case is one pane
+            // tabbed over all 28 surfaces (so it reads like the old right pane); a
+            // ⊞ split puts two surfaces side-by-side behind a draggable divider.
             .child(
                 div()
                     .flex()
@@ -8138,8 +8459,7 @@ impl Render for Cockpit {
                     .flex_1()
                     .h_full()
                     .child(self.nav_bar(cx))
-                    .child(self.tab_bar(cx))
-                    .child(div().flex_1().overflow_hidden().child(self.workspace(cx))),
+                    .child(div().flex_1().overflow_hidden().child(right_pane)),
             )
             // THE ⌘K COMMAND PALETTE overlay (absolute, on top) when open.
             .when(palette_open, |root| root.child(self.palette_overlay(cx)))
