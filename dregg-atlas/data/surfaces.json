@@ -166,5 +166,23 @@
     "file": "share.png",
     "size": "1280x832",
     "explainer": "The sharing/membrane surface."
+  },
+  {
+    "tab": "deos-chat",
+    "file": "deos-chat.png",
+    "size": "1280x832",
+    "explainer": "The deos Matrix chat \u2014 the social layer over the dregg world. Rooms are cells; a message can CARRY A REHYDRATABLE MEMBRANE (a cap-bounded fork of the world the recipient drives live, then stitches back fail-closed via branch-and-stitch). Reactions, replies, edits/redactions-as-state, person-trust badges. Built on matrix-rust-sdk + gpui-component."
+  },
+  {
+    "tab": "deos-editor",
+    "file": "deos-editor.png",
+    "size": "1100x720",
+    "explainer": "The deos code editor (deos-zed) \u2014 a rope-backed, syntax-highlighting editor over the Fs trait (FirmamentFs seam: a file is a cell, a save is a receipted turn). The buffer IS a document-language document: editing accrues verifiable patches, so the durable form is the patch history, not flat bytes."
+  },
+  {
+    "tab": "deos-docviewer",
+    "file": "deos-docviewer.png",
+    "size": "900x680",
+    "explainer": "The document viewer \u2014 a merged document's blame timeline (per-author attribution) and CONFLICT OBJECTS as first-class cards: two pens at one tail show both alternatives + authorship, never a <<<<<< text wound. The branch-and-stitch pushout merge made legible."
   }
 ]
