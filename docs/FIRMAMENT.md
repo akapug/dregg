@@ -309,6 +309,20 @@ out of the cap fabric, not from app good behaviour.
    memory. Anything not granted is unreachable — seL4 enforces this in
    hardware (the MMU + the cap-derivation tree).
 
+   On a commodity host (mac/linux), "no ambient authority" is being extended
+   from the seL4-MMU guarantee + the soft host cap-discipline into
+   **OS-kernel-enforced** confinement: a sandboxed `spawn_pd` closes every
+   inherited fd but the one control-socket `Endpoint`, then applies the host's
+   own sandbox — macOS `sandbox_init` (a deny-default SBPL profile the child
+   self-applies), Linux `namespaces + seccomp-bpf + Landlock`. This realizes the
+   firmament's confinement on hosts without an seL4 MMU, and adds a **fourth
+   point on the distance axis** beside `Local` / `Distributed` / `Surface`: the
+   `HostPd` target (a sandboxed host child reached over the same router and the
+   same one inherited `Endpoint` fd). A cap maps to an OS primitive — a file-cap
+   to a Landlock rule, a net-cap to a passed socket (`SCM_RIGHTS` *is* an ocap),
+   a surface-cap to a shared region — so the dregg `is_attenuation` check and the
+   OS sandbox agree on the same grant.
+
 2. **No wall-clock, no RNG — except through caps.** There is no `gettimeofday`,
    no `getrandom`, no syscall surface in an app-PD (it is `#![no_std]`,
    `#![no_main]`, panic=abort, with only the Microkit IPC primitives). If an
