@@ -819,13 +819,14 @@ fn resolve_ordered_native(
 /// export) so the caller falls back to [`resolve_ordered_native`]. The wire is
 /// `"B=<balance>;D=<amt,amt,...>"`; the gate replies `"R=<v,v,...>;b=<remaining>;a=<accepted>"`
 /// (v: 1=accepted 0=rejected). Carries `resolveOrdered_accepted_le_balance` (Σ accepted ≤ balance) by
-/// construction. Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate.
-#[cfg(not(feature = "no-lean-link"))]
+/// construction. Routes through the [`crate::verified_gate`] seam; returns `None` when no verified
+/// gate is registered (every FFI-free target / archive lacks the export).
 fn verified_resolve_ordering(
     balance: ResourceAmount,
     amounts: &[ResourceAmount],
 ) -> Option<(Vec<bool>, ResourceAmount)> {
-    if !dregg_lean_ffi::distributed_exports_available() {
+    let gate = crate::verified_gate::gate()?;
+    if !gate.distributed_exports_available() {
         return None;
     }
     let amt_str = amounts
@@ -834,24 +835,13 @@ fn verified_resolve_ordering(
         .collect::<Vec<_>>()
         .join(",");
     let wire = format!("B={balance};D={amt_str}");
-    let out = dregg_lean_ffi::shadow_coord_shared_budget(&wire).ok()?;
+    let out = gate.shared_budget(&wire)?;
     parse_budget_reply(&out, amounts.len())
-}
-
-/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so
-/// [`resolve_ordered_native`] decides. Referenced unconditionally in `resolve_with_ordering`.
-#[cfg(feature = "no-lean-link")]
-fn verified_resolve_ordering(
-    _balance: ResourceAmount,
-    _amounts: &[ResourceAmount],
-) -> Option<(Vec<bool>, ResourceAmount)> {
-    None
 }
 
 /// Parse the `dregg_coord_shared_budget` reply `"R=<v,v,...>;b=<remaining>;a=<accepted>"` into
 /// `(per-debit accept verdicts, remaining balance)`. Returns `None` on the `"ERR"` sentinel or any
 /// malformed body / verdict-count mismatch (fail-closed — the caller then uses the native fold).
-#[cfg(not(feature = "no-lean-link"))]
 fn parse_budget_reply(out: &str, expected: usize) -> Option<(Vec<bool>, ResourceAmount)> {
     // Sections: "R=<verdicts>", "b=<remaining>", "a=<accepted>".
     let mut parts = out.split(';');

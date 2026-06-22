@@ -71,6 +71,7 @@ pub mod causal;
 pub mod error;
 pub mod serde_sig;
 pub mod shared_budget;
+pub mod verified_gate;
 
 #[cfg(test)]
 mod tests;
@@ -104,3 +105,4 @@ pub use budget::{
 };
 pub use causal::CausalDag;
 pub use error::CoordError;
+pub use verified_gate::{CoordVerifiedGate, Verdict2pc, register_coord_verified_gate};

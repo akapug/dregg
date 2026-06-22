@@ -357,6 +357,13 @@ async fn main() {
         .install_default()
         .expect("failed to install rustls CryptoProvider");
 
+    // Arm the verified-Lean distributed coordination gates (coord / captp / federation / intent).
+    // These crates are FFI-free and route their verified decisions through their `verified_gate`
+    // seams; this installs the Lean-backed impls from `dregg-exec-lean` (the single FFI boundary)
+    // once at startup. On an FFI-free target this crate isn't depended on at all and the native-Rust
+    // differential siblings decide.
+    dregg_exec_lean::register_distributed_gates();
+
     // Initialize tracing. Write to stderr so the MCP stdio subcommand (which
     // serves JSON-RPC on stdout) doesn't get corrupted by log lines.
     tracing_subscriber::fmt()

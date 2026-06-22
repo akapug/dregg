@@ -135,11 +135,13 @@ pub mod types;
 /// CURRENT-key-class members of the agent's identity cell, covered by
 /// KERI-shaped pre-rotation.
 pub mod vrf;
+pub mod verified_gate;
 
 // Re-export primary types.
 pub use admission::{
     AdmissionRegistry, Bond, EquivocationEvidence, StrandId as AdmissionStrandId, Vouch,
 };
+pub use verified_gate::{FederationVerifiedGate, register_federation_verified_gate};
 pub use checkpoint::{
     Checkpoint, CheckpointError, DEFAULT_CHECKPOINT_INTERVAL, create_checkpoint,
     finalize_checkpoint, is_checkpoint_height, verify_checkpoint,

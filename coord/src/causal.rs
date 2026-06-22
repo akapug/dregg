@@ -43,11 +43,10 @@ pub fn verified_happened_before(
     }
 }
 
-/// Query the verified Lean causal-order gate `dregg_coord_causal_order`. Returns `Some(verdict)` when
-/// the gate ran, or `None` when it is unavailable (feature off / archive lacks the export / either
+/// Query the verified Lean causal-order gate `dregg_coord_causal_order` through the
+/// [`crate::verified_gate`] seam. Returns `Some(verdict)` when the gate ran, or `None` when it is
+/// unavailable (no gate registered — every FFI-free target / archive lacks the export / either
 /// endpoint absent from the DAG) so [`verified_happened_before`] falls back to the native Rust.
-/// Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate.
-#[cfg(not(feature = "no-lean-link"))]
 fn lean_happened_before(
     dag: &CausalDag,
     ancestor: &[u8; 32],
@@ -55,7 +54,8 @@ fn lean_happened_before(
 ) -> Option<bool> {
     use std::collections::HashMap;
 
-    if !dregg_lean_ffi::distributed_exports_available() {
+    let gate = crate::verified_gate::gate()?;
+    if !gate.distributed_exports_available() {
         return None;
     }
     // Intern: id = topological position (a linear extension of happened-before, so deps always carry
@@ -83,18 +83,7 @@ fn lean_happened_before(
         })
         .collect();
     let wire = format!("G={};a={a_id};b={b_id}", entries.join("|"));
-    dregg_lean_ffi::verified_happened_before(&wire).ok()
-}
-
-/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native Rust
-/// `CausalDag::happened_before` decides. Referenced unconditionally in [`verified_happened_before`].
-#[cfg(feature = "no-lean-link")]
-fn lean_happened_before(
-    _dag: &CausalDag,
-    _ancestor: &[u8; 32],
-    _descendant: &[u8; 32],
-) -> Option<bool> {
-    None
+    gate.happened_before(&wire)
 }
 
 // ─── CoordError conversion ────────────────────────────────────────────────────

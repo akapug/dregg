@@ -21,6 +21,13 @@ dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-types = { path = "../types" }
+# The verified-Lean gate impls for the distributed coordination crates (their `verified_gate` seams).
+# This is the single FFI boundary: these crates are FFI-free and route through their seams; the
+# Lean-backed impls live here and a native node installs them via `register_distributed_gates`.
+dregg-coord = { path = "../coord" }
+dregg-captp = { path = "../captp" }
+dregg-federation = { path = "../federation", default-features = false }
+dregg-intent = { path = "../intent" }
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }

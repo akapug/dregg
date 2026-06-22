@@ -54,20 +54,17 @@ verifier = ["dregg-circuit/verifier"]
 prover = ["verifier", "dregg-circuit/prover"]
 default = ["prover"]
 
-# PLATFORM gate, OFF by default (same polarity as the rest of the tree, see
-# docs/FEATURE-HYGIENE.md §Lean and docs/SEL4-EMBEDDING.md §2). The verifier's
-# only transitive reach to `libdregg_lean.a` is via {federation, captp, turn};
-# turning their `no-lean-link` on suppresses every Lean link directive, leaving a
-# pure reads-bytes→verify→exit binary with NO Lean runtime, NO libuv, NO POSIX IO
-# loop — the seL4 protection-domain build. It pulls the verifier crate's own
-# `verifier` feature so the prover-free rotated VERIFY surface (`rotated_replay`)
-# is present on the floor — the standalone-verifier-PD invariant: a rotated chain
-# verifies with NO prover, NO Lean, NO ledger. (The verify path itself never calls
-# Lean — plonky3 STARK + crypto only — so this is link-suppression, not a downgrade.)
+# The seL4 protection-domain floor selector (see docs/FEATURE-HYGIENE.md §Lean and
+# docs/SEL4-EMBEDDING.md §2). After the lean-FFI boundary carve the verifier has NO
+# transitive reach to `libdregg_lean.a` at all — {federation, captp, turn} are FFI-free by
+# construction (they route their verified gates through `verified_gate` seams that only a
+# Lean-boundary crate, never depended on here, registers). So Lean-freedom is now STRUCTURAL,
+# not a flag. This feature's sole remaining job is to pull the verifier crate's own `verifier`
+# feature so the prover-free rotated VERIFY surface (`rotated_replay`) is present on the floor —
+# the standalone-verifier-PD invariant: a rotated chain verifies with NO prover, NO Lean, NO
+# ledger. (The verify path itself never calls Lean — plonky3 STARK + crypto only.)
 no-lean-link = [
     "verifier",
-    "dregg-federation/no-lean-link",
-    "dregg-captp/no-lean-link",
 ]
 
 [dev-dependencies]

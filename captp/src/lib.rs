@@ -91,6 +91,7 @@ pub mod session;
 pub mod store_forward;
 pub mod sturdy;
 pub mod uri;
+pub mod verified_gate;
 
 pub use gc::{DropMessage, DropResult, ExportGcManager, ImportGcManager, SessionId};
 pub use handoff::{
@@ -116,6 +117,7 @@ pub use store_forward::{
 };
 pub use sturdy::{EnlivenError, SwissEntry, SwissTable};
 pub use uri::{DreggUri, UriError};
+pub use verified_gate::{CaptpVerifiedGate, register_captp_verified_gate};
 
 // =============================================================================
 // Shared types

@@ -92,6 +92,8 @@ pub mod validation;
 /// default native build (Lean unconditional) additionally arms the REAL FFI ([`verified_settle::ffi`]) that
 /// routes each leg through the linked Lean archive.
 pub mod verified_settle;
+pub mod verified_gate;
+pub use verified_gate::{IntentVerifiedGate, register_intent_verified_gate};
 
 use serde::{Deserialize, Serialize};
 

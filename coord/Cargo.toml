@@ -18,19 +18,11 @@ blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 
-# UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the coordinator's 2PC /
-# causal-order / shared-budget decisions route through the VERIFIED Lean exports
-# (`Dregg2.Exec.DistributedExports`: `dregg_coord_2pc_decide` = `TwoPhaseCommit.evaluate`,
-# `dregg_coord_causal_order` = `CausalOrder.happenedBefore`, `dregg_coord_shared_budget` =
-# `SharedBudgetDynamics.resolveOrdered`) on every native build; the native Rust runs as the
-# DIFFERENTIAL sibling. The ONE opt-out is the `no-lean-link` platform feature (wasm32/zkvm).
-dregg-lean-ffi = { path = "../dregg-lean-ffi" }
-
-[features]
-# PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the native-Rust
-# fallback IN PLACE OF the verified Lean gates — a statement about the target's linker, never
-# about which guarantees this dregg has.
-no-lean-link = ["dregg-lean-ffi/no-lean-link"]
+# FFI-FREE BY CONSTRUCTION: the coordinator's 2PC / causal-order / shared-budget decisions route
+# through the `verified_gate` SEAM (`CoordVerifiedGate`), never `dregg-lean-ffi` directly. A native
+# node installs the Lean-backed gate (from `dregg-exec-lean`) once at startup; an FFI-free target
+# (wasm / verifier-PD / pg) simply never registers one and the native-Rust differential sibling
+# decides. The deleted `no-lean-link` feature is now a dependency choice, not a flag.
 
 [lints]
 workspace = true

@@ -51,8 +51,6 @@ dev = ["dregg-sdk/dev"]
 # set `no-lean-link`, which compiles the legacy Rust-producer path instead.
 no-lean-link = [
     "dregg-sdk/no-lean-link",
-    "dregg-intent/no-lean-link",
-    "dregg-captp/no-lean-link",
 ]
 
 [lints]

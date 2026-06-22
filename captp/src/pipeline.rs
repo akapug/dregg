@@ -49,18 +49,20 @@ use crate::FederationId;
 /// fulfill the verified drain is the queue unchanged (indices in order); on a break it is empty. We
 /// reassemble the messages in the gate's verified index order. When the gate is unavailable (feature
 /// off / archive lacks the export / a malformed reply), the native FIFO `drained` is returned as-is.
-#[cfg(not(feature = "no-lean-link"))]
 fn verified_drain_reorder(drained: Vec<PipelinedMessage>, fulfill: bool) -> Vec<PipelinedMessage> {
-    if !dregg_lean_ffi::distributed_exports_available() {
-        return drained;
-    }
+    let gate = match crate::verified_gate::gate() {
+        Some(g) if g.distributed_exports_available() => g,
+        // No verified gate registered (every FFI-free target) / archive lacks the export ⇒ keep
+        // the native FIFO drain.
+        _ => return drained,
+    };
     let n = drained.len();
     let labels = (0..n).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
     let event = if fulfill { "f" } else { "b" };
     let wire = format!("Q={labels};e={event}");
-    let out = match dregg_lean_ffi::shadow_captp_pipeline_resolve(&wire) {
-        Ok(o) => o,
-        Err(_) => return drained, // FFI error ⇒ keep the native FIFO drain.
+    let out = match gate.pipeline_resolve(&wire) {
+        Some(o) => o,
+        None => return drained, // FFI error ⇒ keep the native FIFO drain.
     };
     // Reply: "D=<idx,idx,...>;q=<post-count>". Parse the drained index order; fail-closed to native.
     let d_seg = match out.split(';').next().and_then(|s| s.strip_prefix("D=")) {
@@ -92,13 +94,6 @@ fn verified_drain_reorder(drained: Vec<PipelinedMessage>, fulfill: bool) -> Vec<
         }
     }
     reordered
-}
-
-/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native FIFO
-/// drain order is kept. Referenced unconditionally in `resolve_promise`.
-#[cfg(feature = "no-lean-link")]
-fn verified_drain_reorder(drained: Vec<PipelinedMessage>, _fulfill: bool) -> Vec<PipelinedMessage> {
-    drained
 }
 
 // =============================================================================

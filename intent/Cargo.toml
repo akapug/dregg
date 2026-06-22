@@ -28,20 +28,15 @@ serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 globset = { workspace = true }
 x25519-dalek = { workspace = true }
-# UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): LIVE ring settlement
-# routes through the VERIFIED Lean executor FFI (`dregg_record_kernel_step` over the PROVED
-# `Exec.recKExec`) on every native build — `verified_settle` folds each lowered ring leg
-# through the real verified executor (NOT a Rust mirror), so a fulfilled intent IS a
-# verified, conserving, authorized executor turn. The ONE opt-out is the `no-lean-link`
-# platform feature (wasm32/zkvm — targets that cannot link libdregg_lean.a).
-dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# FFI-FREE BY CONSTRUCTION: LIVE ring settlement routes the per-leg verified-executor cross-check
+# through the `verified_gate` SEAM (`IntentVerifiedGate`), never `dregg-lean-ffi` directly. A native
+# node installs the Lean-backed gate (from `dregg-exec-lean`) once at startup; an FFI-free target
+# (wasm / verifier-PD / pg) never registers one and the cross-check is skipped (the in-process
+# verified transition stands). The LIVE-FFI fulfillment test lives in `dregg-exec-lean/tests`. The
+# deleted `no-lean-link` feature is now a dependency choice, not a flag.
 
 [features]
 default = []
-# PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the Rust-mirror
-# settlement IN PLACE OF the per-leg verified-executor cross-check — a statement about the
-# target's linker, never about which guarantees this dregg has.
-no-lean-link = ["dregg-lean-ffi/no-lean-link", "dregg-federation/no-lean-link"]
 
 [dev-dependencies]
 # Arm the `StubVerifier` accept path for plumbing tests only. The feature is
