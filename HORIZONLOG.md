@@ -11,7 +11,23 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
-## ⚑⚑⚑ THE DEOS DESKTOP EPOCH (2026-06-22) — deos becomes a real desktop OS
+
+### ⚑⚑⚑ DESKTOP EPOCH — THE COMPLETION GOAL (2026-06-22, autonomous): finish ALL of it.
+GOAL (ember, stop-hook): hermes/ados/zed integration · atlas refreshed w/ new screenshots · cockpit overhauled
+with gpui-component · document language+editor+viewer built out · matrix chat kickass+dregg-pilled · rehydratable
+screenshots/membrane tested+worked · everything tested. 6-lane swarm + integration + atlas (file-partitioned):
+  A ✅ terminal+editor LIVE dock panes (⌘K "Open Terminal/Editor pane" → real PTY/editor in a split; on-demand,
+     never in the headless bake; ids base 1000+; committed). palette/dispatch/panels_workspace + dock adapters.
+  B 🔨 editor-as-document + doc viewer (dregg-doc RopeDoc → deos-zed buffer; save=patch; conflict-objects viewer).
+  C 🔨 matrix chat kickass+dregg-pilled (membrane=the star: a message carries a cap-bounded world-fork; room=cell).
+  D 🔨 membrane/rehydration tested (mint→rehydrate→drive→stitch; graduated rights; consent-signing-domain fix).
+  E 🔨 hermes/ados live (ACP↔ToolGateway loop; effects ride the metered turn; per-tool grants + mandate inspector).
+  F 🔨 cockpit gpui-component overhaul (buttons/lists→real widgets across panels).
+  →7 integration build · →8 atlas refresh (sequential, last).
+⚠ no-lean-link WATCH: the FFI lane (separate, "doesn't concern us") is mid-refactoring coord/captp's no-lean-link
+  feature (working-tree-modified). starbridge-v2:488-496 consume `features=["no-lean-link"]` on dregg-{sdk,coord,
+  captp}. cargo metadata RESOLVES now; if the FFI lane fully removes no-lean-link, update those consumer lines
+  (my territory) at integration. Don't thrash the 10-min starbridge build against the churning Cargo.toml.## ⚑⚑⚑ THE DEOS DESKTOP EPOCH (2026-06-22) — deos becomes a real desktop OS
 THE THROUGH-LINE: every action — file I/O, tool call, agent step, UI nav — is ONE cap-gated receipted
 dregg turn (ToolGateway + firmament); made INTERACTIVE by symbolic execution + async UI + a dockable
 workspace. Six threads, each grounded by a 2026-06-22 explore-agent report (read whole before building):
