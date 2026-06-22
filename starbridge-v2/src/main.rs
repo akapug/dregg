@@ -327,6 +327,14 @@ fn run_window(
                 eprintln!("warning: failed to register embedded UI fonts: {e}");
             }
         }
+        // Initialize gpui-component — the real widget library (text `Input`,
+        // `Button`, the shadcn-style set). This installs its theme + the global
+        // state every widget reads (focus trap, input registry, color/date
+        // pickers, dock, popovers, …); without it any gpui-component widget the
+        // cockpit constructs would panic on a missing global. One call at boot,
+        // alongside the font registration. (See docs comment on the
+        // `gpui-component` dep in Cargo.toml for the byte-identical-gpui rationale.)
+        gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1280.), px(820.)), cx);
         // Move the seed into the window builder (it is installed onto the cockpit,
         // which drives it after first paint). `Option` so it is consumed exactly once.

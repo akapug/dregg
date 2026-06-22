@@ -117,7 +117,7 @@ default = ["native-full"]
 # native-full pulls the embedded executor (`embedded-executor`) AND the gpui
 # renderer (`gpui-ui`) AND the LIVE-NODE connection (`live-node`, so the master
 # interface can ALSO connect to a remote node/federation). This is the headline build.
-native-full = ["embedded-executor", "gpui-ui", "live-node", "render-capture"]
+native-full = ["embedded-executor", "gpui-ui", "live-node", "render-capture", "web-shell"]
 
 # The LIVE-NODE connection — the real HTTP+SSE link to a running dregg node
 # (`NodeClient::Http` + the `/api/events/stream` reader). Pulls `reqwest` (its
@@ -157,6 +157,20 @@ embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-types", "dep
 # `image` is still pulled only when `servo` or `headless-render` is on).
 servo = ["embedded-executor", "dep:servo-render", "dep:image"]
 
+# THE WEB SHELL — real libservo (the full `WebView` HTML-layout engine) as the deos
+# app's web-content render path, ALWAYS-ON in the windowed build. `web-shell`
+# enables `servo-render/libservo` (the real `ServoBuilder → WebViewBuilder → SWGL
+# context → read_to_image` flow in `servo-render/src/webview.rs`) ON TOP OF the
+# `servo` content-tile wiring, so a web-shell surface calls `render_url_to_frame`
+# into the SAME cap-gated `RgbaFrame → present_frame` path the `dregg://` tile
+# already uses. It is pulled by `native-full` so the DEOS app gets the real engine
+# by default; it is NOT on `embedded-executor` (the gpui-free `cargo test --lib`
+# headless lane), which stays on `servo-render`'s default `swgl-standalone` — so the
+# verification economy (the root workspace + dregg-doc + the lean/headless test
+# lanes) never grinds mozjs. The de-risk path is preserved automatically:
+# `libservo` INCLUDES `swgl-standalone`, so the standalone RGBA8 proof still builds.
+web-shell = ["servo", "servo-render/libservo"]
+
 # The gpui renderer. `runtime_shaders` is LOAD-BEARING on macOS: it makes gpui
 # compile its Metal shaders AT RUNTIME (via `MTLDevice::newLibraryWithSource`,
 # using the system Metal framework) instead of at BUILD time (via `xcrun metal`,
@@ -176,7 +190,7 @@ servo = ["embedded-executor", "dep:servo-render", "dep:image"]
 # dependency of `gpui_platform`, so on macOS it is not in the graph and the
 # features activate nothing — while on Linux they enable x11+wayland exactly as the
 # old target block did.
-gpui-ui = ["dep:gpui", "dep:gpui_platform", "gpui_platform/runtime_shaders", "gpui_platform/x11", "gpui_platform/wayland"]
+gpui-ui = ["dep:gpui", "dep:gpui_platform", "dep:gpui-component", "gpui_platform/runtime_shaders", "gpui_platform/x11", "gpui_platform/wayland"]
 
 # The Lean-free thin-client / verifier path for the seL4 component end-state.
 # Mutually exclusive with native-full at the linker level (no executor, no
@@ -253,6 +267,23 @@ gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82
 # `headless-render`; absent from the windowed build. Same fork rev as gpui above
 # so cargo resolves ONE gpui instance across the graph.
 gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+
+# --- gpui-component: the real widget library (gated on `gpui-ui`) ------------
+# VENDORED fork `emberian/gpui-component@dregg-repoint` (upstream
+# longbridge/gpui-component, Apache-2.0). Upstream pins zed-industries/zed@1d217ee
+# whose gpui/src is BYTE-IDENTICAL to our fork emberian/zed@407a6ff (our fork only
+# patches gpui_linux/platform/wgpu — the offscreen renderer — not the gpui API); the
+# fork re-points every zed-derived dep at the SAME rev pinned above, so cargo
+# resolves ONE gpui instance across the cockpit + widget graph. This crate is the
+# `crates/ui` member (gpui-component); it gives the cockpit a real text `Input`
+# (which dregg had NONE of), Button, and the full shadcn-style widget set.
+#
+# Default features OFF: the `ui` crate has no `default`, and its heavy bits
+# (tree-sitter syntax grammars for the CodeEditor/Markdown) are all opt-IN — none
+# are enabled here, keeping the cockpit lean. Add a `tree-sitter-*` feature later
+# only if the CodeEditor is wanted. Provenance + license: LICENSE-APACHE +
+# NOTICE-gpui-component at the repo root (AGPL hygiene for vendored Apache-2.0).
+gpui-component = { path = "../../gpui-component/crates/ui", default-features = false, optional = true }
 
 # --- LINUX display backend for gpui ------------------------------------------
 # The x11/wayland windowing backends gpui needs on Linux are enabled via the
