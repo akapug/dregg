@@ -1924,7 +1924,7 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     // The DEFAULT-ON producer INSTALLS verified state only for the swap-safe (root-agreeing) set;
     // report that, not the wider "merely mappable" surface, so the status is honest about what the
     // verified executor actually commits.
-    let producer_covered_effects = dregg_turn::lean_shadow::producer_root_agreeing_effects().len();
+    let producer_covered_effects = dregg_exec_lean::lean_shadow::producer_root_agreeing_effects().len();
 
     Json(StatusResponse {
         healthy,
@@ -1951,23 +1951,23 @@ async fn get_producer_status(State(state): State<NodeState>) -> Json<ProducerSta
     let full_turn_proving = s.full_turn_proving_enabled;
     drop(s);
 
-    let covered: Vec<String> = dregg_turn::lean_shadow::producer_covered_effects()
+    let covered: Vec<String> = dregg_exec_lean::lean_shadow::producer_covered_effects()
         .iter()
         .map(|k| k.to_string())
         .collect();
-    let uncovered: Vec<String> = dregg_turn::lean_shadow::producer_uncovered_effects()
+    let uncovered: Vec<String> = dregg_exec_lean::lean_shadow::producer_uncovered_effects()
         .iter()
         .map(|k| k.to_string())
         .collect();
-    let root_agreeing: Vec<String> = dregg_turn::lean_shadow::producer_root_agreeing_effects()
+    let root_agreeing: Vec<String> = dregg_exec_lean::lean_shadow::producer_root_agreeing_effects()
         .iter()
         .map(|k| k.to_string())
         .collect();
-    let root_gaps: Vec<String> = dregg_turn::lean_shadow::producer_root_gap_effects()
+    let root_gaps: Vec<String> = dregg_exec_lean::lean_shadow::producer_root_gap_effects()
         .iter()
         .map(|k| k.to_string())
         .collect();
-    let total_effect_kinds = dregg_turn::lean_shadow::all_effect_kinds().len();
+    let total_effect_kinds = dregg_exec_lean::lean_shadow::all_effect_kinds().len();
 
     let state_producer = if lean_producer_enabled {
         "lean"

@@ -24,7 +24,6 @@
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
-#![cfg(feature = "lean-shadow")]
 
 use std::collections::HashMap;
 
@@ -32,8 +31,8 @@ use dregg_cell::permissions::AuthRequired;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{Cell, CellId, Ledger, NoteCommitment, Permissions, VerificationKey};
 use dregg_turn::action::{Event, RefusalReason};
-use dregg_turn::lean_apply::{self, execute_via_lean};
-use dregg_turn::lean_shadow::{
+use dregg_exec_lean::lean_apply::{self, execute_via_lean};
+use dregg_exec_lean::lean_shadow::{
     self, ShadowHostCtx, producer_mappable_effects, producer_root_agreeing_effects,
     producer_root_gap_effects,
 };
@@ -405,7 +404,7 @@ fn revoke_of_non_delegated_child_rejected_by_rust_surfaced_not_replayed() {
     // so the committed root is the pre-state root either way — but the COMMIT BIT and the surfaced
     // finding are now driven by Lean, not Rust. (This is exactly the inversion's tooth: a covered
     // disagreement resolves to Lean, never to the buggy Rust path.)
-    use dregg_turn::lean_apply::{ProducerOutcome, produce_via_lean};
+    use dregg_exec_lean::lean_apply::{ProducerOutcome, produce_via_lean};
 
     let mut a = make_open_cell(1, 100);
     let a_id = a.id();
@@ -814,37 +813,26 @@ fn cross_cell_make_sovereign_rejected_by_both() {
 }
 
 #[test]
-fn refusal_is_an_audit_field_swap_gap() {
+fn refusal_round_trips_audit_field_closed() {
     if skip_no_lean() {
         return;
     }
-    // Refusal bumps the target nonce AND writes a Poseidon2-ish commitment of
-    // `(offered_action_commitment, reason_discriminant)` into field[4] (the audit slot; apply.rs
-    // §3). The wire `refusal` arm routes to a stateStep that does not reproduce that exact field-4
-    // commitment, so the audit field (a cell commitment field) diverges → root diverges. Pinned as
-    // a gap (the audit-field commitment scheme is not carried on the wire).
+    // REFUSAL ROOT-GAP CLOSE (the audit-field / nonce-bump lever, same shape as the lifecycle pair).
+    // `apply_refusal` bumps the target cell's nonce AND writes a blake3 commitment of
+    // `(offered_action_commitment, reason_discriminant)` into the protocol-reserved EXT field
+    // (`REFUSAL_AUDIT_EXT_KEY`, folded into `fields_root`). The verified `refusalA` writes only the
+    // `"refusal"` record field — neither the nonce bump nor the EXT audit crosses the wire — so the
+    // reconstituted root USED TO diverge. Both the audit and the bump are pure TURN data, so the
+    // commit-gated replay (`lean_apply::apply_state_ops`' `StateOp::Refusal`) reproduces
+    // `apply_refusal`'s exact post-state (the identical `dregg-refusal-audit-v1` blake3 + the
+    // `increment_nonce`), so the reconstituted ledger AGREES on state + EXT audit + nonce + root. A
+    // committing refusal needs a present non-action witness (`single_refusal_turn` carries one).
     let (pre, a_id) = one_open_cell();
     let turn = single_refusal_turn(a_id, a_id, 0, [3u8; 32], RefusalReason::Declined);
-    match diff(pre, turn, &[a_id]) {
-        Ok(()) => {
-            // If Rust and Lean happen to agree on field[4] this is genuinely a round-trip; promote
-            // it. Until then it is pinned as a gap.
-            panic!(
-                "Refusal unexpectedly round-tripped — re-classify it into producer_root_agreeing_effects \
-                 (the audit-field commitment now matches across producers)"
-            )
-        }
-        Err(why) => assert!(
-            why.contains("field[")
-                || why.contains("ROOT divergence")
-                || why.contains("commit-bit")
-                || why.contains("nonce divergence"),
-            "Refusal swap-gap should be a field[4]/nonce/root/commit-bit divergence (Rust writes the \
-             audit-field commitment AND bumps the target nonce, which the wire `refusal` arm does \
-             not reproduce identically), got: {why}"
-        ),
-    }
-    assert!(lean_shadow::producer_root_gap_effects().contains(&"Refusal"));
+    diff(pre, turn, &[a_id])
+        .expect("Refusal must round-trip (the audit field + nonce bump now match across producers)");
+    assert!(lean_shadow::producer_root_agreeing_effects().contains(&"Refusal"));
+    assert!(!lean_shadow::producer_root_gap_effects().contains(&"Refusal"));
 }
 
 #[test]
@@ -921,9 +909,11 @@ fn attenuate_capability_round_trips_cap_fidelity_closed() {
 // =====================================================================================
 
 /// The covered-set predicate is purely a Rust decision (no Lean link needed): a Transfer turn is
-/// covered (root-agreeing), a SetPermissions turn is NOT (a characterized root-gap).
+/// covered (root-agreeing), and so now is a Refusal turn — the audit-field/nonce-bump ROOT-GAP is
+/// CLOSED (`StateOp::Refusal` replay), so the root-gap residual is EMPTY and `first_root_gap_kind`
+/// finds no offending kind on ANY mappable turn.
 #[test]
-fn forest_is_root_agreeing_covers_transfer_not_refusal() {
+fn forest_is_root_agreeing_covers_transfer_and_refusal() {
     let a = make_open_cell(1, 100);
     let a_id = a.id();
     let b = make_open_cell(2, 0);
@@ -945,19 +935,22 @@ fn forest_is_root_agreeing_covers_transfer_not_refusal() {
     );
     assert!(lean_shadow::first_root_gap_kind(&transfer).is_none());
 
-    // Refusal is one of the REMAINING characterized root-gaps (the audit-field commitment is not
-    // wire-carried and not turn-replayable — apply.rs derives field[4] from a hash scheme the
-    // reconstitution does not reproduce); SetPermissions/MakeSovereign/the lifecycle pair are now
-    // CLOSED (see their *_closed tests above), so the gap exemplar here must be a real one.
+    // Refusal's audit-field/nonce-bump root-gap is CLOSED (the commit-gated `StateOp::Refusal`
+    // replay), so a Refusal turn is now root-AGREEING (covered) and carries NO root-gap kind.
     let refusal = single_refusal_turn(a_id, a_id, 0, [3u8; 32], RefusalReason::Declined);
     assert!(
-        !lean_shadow::forest_is_root_agreeing(&refusal),
-        "a Refusal turn touches a root-gap effect — must NOT be covered"
+        lean_shadow::forest_is_root_agreeing(&refusal),
+        "a Refusal turn is now root-agreeing (the audit-field/nonce-bump gap is closed)"
     );
-    assert_eq!(
-        lean_shadow::first_root_gap_kind(&refusal),
-        Some("Refusal"),
-        "the fallback reason must name the offending root-gap kind"
+    assert!(
+        lean_shadow::first_root_gap_kind(&refusal).is_none(),
+        "the Refusal root-gap is closed — no offending kind"
+    );
+
+    // The root-gap residual is now EMPTY: no mappable effect is a characterized root-gap.
+    assert!(
+        lean_shadow::producer_root_gap_effects().is_empty(),
+        "the root-gap residual is empty — every mappable effect reconstitutes a byte-exact root"
     );
 }
 
@@ -969,7 +962,7 @@ fn produce_via_lean_installs_verified_state_on_covered_transfer() {
     if skip_no_lean() {
         return;
     }
-    use dregg_turn::lean_apply::{ProducerOutcome, produce_via_lean};
+    use dregg_exec_lean::lean_apply::{ProducerOutcome, produce_via_lean};
 
     let a = make_open_cell(1, 100);
     let a_id = a.id();
@@ -1033,16 +1026,17 @@ fn produce_via_lean_installs_verified_state_on_covered_transfer() {
     assert_eq!(ledger.get(&b_id).unwrap().state.balance(), 10);
 }
 
-/// On a ROOT-GAP turn (Refusal — a REMAINING gap; the former exemplar SetPermissions is now
-/// CLOSED), `produce_via_lean` falls back to the Rust producer for that turn: the outcome is
-/// `Fallback { RootGap }`, the committed ledger is the RUST post-state, and NO divergent Lean root
-/// is committed. This is the "no silent divergence" guarantee that makes the default-on flip safe.
+/// A Refusal turn — once a ROOT-GAP that fell back to Rust — is now COVERED: `produce_via_lean`
+/// makes the verified Lean executor AUTHORITATIVE (`LeanAuthoritative`, NOT a `Fallback`), the
+/// reconstituted post-state is installed, and it equals the Rust post-state (the audit-field/
+/// nonce-bump `StateOp::Refusal` replay closed the gap). The two producers AGREE, so `rust_agreed`
+/// is `true`. This is the closure of the last characterized root-gap exemplar.
 #[test]
-fn produce_via_lean_falls_back_on_root_gap_refusal() {
+fn produce_via_lean_installs_verified_state_on_covered_refusal() {
     if skip_no_lean() {
         return;
     }
-    use dregg_turn::lean_apply::{ExtractError, ProducerOutcome, produce_via_lean};
+    use dregg_exec_lean::lean_apply::{ProducerOutcome, produce_via_lean};
 
     let a = make_open_cell(1, 100);
     let a_id = a.id();
@@ -1051,35 +1045,49 @@ fn produce_via_lean_falls_back_on_root_gap_refusal() {
 
     let turn = single_refusal_turn(a_id, a_id, 0, [3u8; 32], RefusalReason::Declined);
 
-    // Expected Rust post-state.
+    // Expected Rust post-state (the reference the verified producer must reproduce).
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut rust_only = pre.clone();
-    let rust_committed = executor.execute(&turn, &mut rust_only).is_committed();
+    assert!(
+        executor.execute(&turn, &mut rust_only).is_committed(),
+        "a witnessed Refusal commits"
+    );
     let expected_root = rust_only.root();
 
     let executor2 = TurnExecutor::new(ComputronCosts::zero());
     let mut ledger = pre.clone();
     let (result, outcome) = produce_via_lean(&executor2, &turn, &mut ledger);
-    assert_eq!(
+    assert!(
         result.is_committed(),
-        rust_committed,
-        "producer-mode result matches Rust"
+        "the covered Refusal commits under the verified producer"
     );
 
     match outcome {
-        ProducerOutcome::Fallback {
-            reason: ExtractError::RootGap { kind },
+        ProducerOutcome::LeanAuthoritative {
+            committed,
+            rust_agreed,
+            lean_root,
+            rust_root,
+            ..
         } => {
-            assert_eq!(kind, "Refusal", "fallback must name the root-gap kind");
+            assert!(committed, "the verified Refusal verdict is COMMIT");
+            assert!(
+                rust_agreed,
+                "the closed Refusal root-gap makes both producers AGREE"
+            );
+            assert_eq!(
+                lean_root, rust_root,
+                "the reconstituted Refusal root equals the Rust root"
+            );
         }
-        other => panic!("a root-gap turn must fall back with RootGap, got {other:?}"),
+        other => panic!("a covered Refusal must be LeanAuthoritative, got {other:?}"),
     }
 
-    // The committed ledger is the RUST post-state (no divergent Lean root committed).
+    // The committed ledger is the verified post-state — and it equals the Rust post-state.
     assert_eq!(
         ledger.root(),
         expected_root,
-        "root-gap turn must commit the Rust post-state"
+        "the committed root is the verified-producer root, equal to Rust's"
     );
 }
 
@@ -1107,7 +1115,7 @@ fn covered_disagreement_resolves_to_lean_not_rust() {
     if skip_no_lean() {
         return;
     }
-    use dregg_turn::lean_apply::{ProducerOutcome, produce_via_lean};
+    use dregg_exec_lean::lean_apply::{ProducerOutcome, produce_via_lean};
 
     // A non-delegated child: Rust rejects the revoke, the verified kernel commits it (unconditional
     // revoke guard) — a genuine covered Lean↔Rust split.

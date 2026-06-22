@@ -749,6 +749,14 @@ pub struct TurnExecutor {
     /// (every legality gate runs identically in both modes). An `AtomicU8` so a
     /// `&self` execute path reads it cheaply and a `&self` caller can flip it.
     pub witness_mode: std::sync::atomic::AtomicU8,
+    /// THE VERIFIED-LEAN SHADOW SEAM (dependency inversion — `crate::shadow`). The
+    /// production execute path drives the differential observer + the strict-veto
+    /// rejection authority through this trait object so `dregg-turn` never links
+    /// `libdregg_lean.a` directly. A native node injects
+    /// `dregg_exec_lean::LeanShadowObserver` (via [`Self::with_shadow_observer`]); every
+    /// other construction defaults to [`crate::shadow::NoOpShadowObserver`] — no shadow,
+    /// no veto — which is the visible wasm / no-FFI platform fact.
+    pub shadow_observer: std::sync::Arc<dyn crate::shadow::ShadowObserver>,
 }
 
 impl TurnExecutor {
@@ -789,7 +797,22 @@ impl TurnExecutor {
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
+            shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
         }
+    }
+
+    /// Inject the verified-Lean shadow/gate observer (dependency inversion — `crate::shadow`).
+    ///
+    /// A native node calls this with `dregg_exec_lean::LeanShadowObserver` so the production
+    /// execute path runs the differential + the strict-veto rejection authority. Without it the
+    /// executor keeps the default [`crate::shadow::NoOpShadowObserver`] (no shadow, no veto) — the
+    /// visible wasm / no-FFI platform fact.
+    pub fn with_shadow_observer(
+        mut self,
+        observer: std::sync::Arc<dyn crate::shadow::ShadowObserver>,
+    ) -> Self {
+        self.shadow_observer = observer;
+        self
     }
 
     /// Create a new executor with a budget gate (Stingray bounded counter).
@@ -833,6 +856,7 @@ impl TurnExecutor {
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
+            shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
         }
     }
 
@@ -873,6 +897,7 @@ impl TurnExecutor {
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
+            shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
         }
     }
 

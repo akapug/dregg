@@ -481,7 +481,7 @@ servo-render = { path = "../servo-render", optional = true }
 #   * `servo-render` — the C++ SWGL rasterizer (non-wasm32).
 # The `getrandom` shims below are the wasm32 entropy backend (mirrors wasm/).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-dregg-turn = { path = "../turn", optional = true, default-features = false, features = ["no-lean-link"] }
+dregg-turn = { path = "../turn", optional = true, default-features = false }
 dregg-cell = { path = "../cell", optional = true, default-features = false }
 dregg-cell-crypto = { path = "../cell-crypto", optional = true }
 dregg-types = { path = "../types", optional = true }

@@ -14,14 +14,13 @@
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
-#![cfg(feature = "lean-shadow")]
 
 use std::collections::HashMap;
 
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger, Permissions};
-use dregg_turn::lean_apply::{self, execute_via_lean};
-use dregg_turn::lean_shadow::ShadowHostCtx;
+use dregg_exec_lean::lean_apply::{self, execute_via_lean};
+use dregg_exec_lean::lean_shadow::ShadowHostCtx;
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,

@@ -21,7 +21,6 @@
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
-#![cfg(feature = "lean-shadow")]
 
 use std::collections::HashMap;
 
@@ -31,8 +30,8 @@ use dregg_cell::permissions::AuthRequired;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{Cell, CellId, Ledger, NoteCommitment, Permissions, VerificationKey};
 use dregg_turn::action::Event;
-use dregg_turn::lean_apply::{self, execute_via_lean};
-use dregg_turn::lean_shadow::{self, ShadowHostCtx};
+use dregg_exec_lean::lean_apply::{self, execute_via_lean};
+use dregg_exec_lean::lean_shadow::{self, ShadowHostCtx};
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,
@@ -644,20 +643,21 @@ const CENSUS_COVERED: &[&str] = &[
     "RevokeDelegation",
     "RefreshDelegation",
     "RevokeCapability",
+    "Refusal",
+    "ReceiptArchive",
 ];
 
 /// Effect kinds NOT driven to a COMMITTED denotational-agreement census turn here, each with the
 /// PRECISE reason it cannot be a scalar-denotational agreement today. This list now ranges over the
 /// FULL `VmEffect` universe (the 29 variants of `dregg_circuit::effect_vm::Effect`), NOT just the
 /// mappable/root-agreeing subset — so EVERY on-chain effect is either COVERED above or NAMED here.
-/// Three residual classes appear:
+/// Two residual classes remain (the former ROOT-GAP class is now EMPTY — Refusal / ReceiptArchive
+/// were the last members, closed by the commit-gated `StateOp::Refusal` / `StateOp::ReceiptArchive`
+/// audit/lifecycle replays, so `lean_shadow::producer_root_gap_effects` is `&[]`):
 ///
 ///   * NOT-MAPPABLE — `lean_shadow::effect_is_mappable` returns `false` (no wire projection), so the
 ///     verified producer is INELIGIBLE; a census turn would be Lean-ineligible (the producer can't be
 ///     driven at all). Closing one needs a NEW wire leg + verified gate, not an in-test fixture.
-///   * ROOT-GAP — mappable (the producer RUNS) but the Lean-reconstituted `.root()`/commit-bit
-///     provably DIVERGES from Rust (`lean_shadow::producer_root_gap_effects`), pinned by a NEGATIVE
-///     tooth in `lean_state_producer_coverage`. A denotational AGREEMENT is impossible by construction.
 ///   * NO-CONSERVING-IMAGE / NEEDS-EXTERNAL-PROOF — the producer maps it, but a *committed* fixture
 ///     needs a real STARK sub-proof or a value-well the 1-cell numbering doesn't model.
 ///
@@ -699,11 +699,19 @@ const CENSUS_NAMED_RESIDUALS: &[(&str, &str)] = &[
     ),
     (
         "CreateCell",
-        "NOT-MAPPABLE (deliberate): the verified `createCellChainA` gate requires `mintAuthorizedB \
-         actor newCell` (cell creation is mint-privileged), which a fresh-id new cell can NEVER \
-         satisfy from the marshalled c-list — it would always diverge from apply.rs's unconditional \
-         insert. Closing it needs a creation-authority WIRE LEG + verified gate, not a marshaller \
-         shim (see effect_is_mappable's CreateCell note); out of scope for an in-test fixture.",
+        "NOT-MAPPABLE / CREATION-AUTHORITY WIRE LEG (a bigger design question, precise remaining \
+         work): the Lean codec DOES carry a `{\"createcell\":[actor,newCell]}` arm and \
+         `createCellChainA` is a faithful gate — `mintAuthorizedB actor newCell ∧ newCell ∉ accounts`, \
+         then a born-EMPTY insert (conservation-neutral). But Rust's `apply_create_cell` is \
+         UNCONDITIONAL (no authority), and the new cell's id is FRESH (`derive_raw(pk,token_id)`, above \
+         the snapshot id-map range), so a census fixture needs THREE pieces that do not exist yet: \
+         (1) a Rust→wire projection in `effect_to_wire`/`effect_is_mappable` for CreateCell; \
+         (2) the fresh cell registered with a `FRESH_ID_BASE`-offset Nat (as QueueAllocate does) so \
+         reconstitution can name it back AND a born-empty insert in `wire_state_to_ledger`; \
+         (3) the actor pre-granted a `node`/`control` cap over the (deterministic) new-cell id so \
+         `mintAuthorizedB` COMMITS in lockstep with Rust's unconditional insert. The marshaller/id-map \
+         + cap-mint design is a wire-codec change (golden regen + Refine theorems), out of scope for \
+         the StateOp-replay grind; named here with the precise leg so it is a burn-down, not a wall.",
     ),
     (
         "CreateCellFromFactory",
@@ -719,31 +727,25 @@ const CENSUS_NAMED_RESIDUALS: &[(&str, &str)] = &[
     ),
     (
         "PipelinedSend",
-        "NOT-MAPPABLE: the CapTP pipelined-send effect is not projected to a wire action \
-         (`effect_is_mappable` → false); its post-state is a promise/pipeline move the wire model does \
-         not carry, so the verified producer is ineligible and there is no denotational fixture.",
+        "NOT-MAPPABLE + RUST-UNCOMMITTABLE-BARE: the CapTP pipelined-send carries an UNRESOLVED \
+         `EventualRef` (a promise to a not-yet-produced cell). `apply_pipelined_send` UNCONDITIONALLY \
+         returns `PreconditionFailed` (\"turn must be executed within a pipeline\") — a bare \
+         single-effect PipelinedSend is REJECTED by Rust before any state moves; resolution happens in \
+         the pipeline executor's resolution pass that rewrites the `EventualRef` into a concrete \
+         target BEFORE apply. So there is no committed bare fixture to cross-validate, and \
+         `effect_is_mappable` → false (the wire carries no promise/pipeline move). Closing it needs \
+         the pipeline-resolution semantics modelled, not an in-test fixture.",
     ),
     (
         "ExerciseViaCapability",
-        "NOT-MAPPABLE: the cap-exercise effect whose authority rides the cap-OPEN inner-fold is not \
-         projected to the wire (`effect_is_mappable` → false); the opened inner action is not driven \
-         through the scalar census, so there is no committed scalar-denotational agreement.",
-    ),
-    // ── ROOT-GAP (mappable, the producer RUNS, but the reconstituted root/commit-bit DIVERGES) ──
-    (
-        "Refusal",
-        "ROOT-GAP (mappable but provably NON-agreeing): Rust writes an audit-field/nonce commitment \
-         (`field[4]` + nonce + Poseidon2 audit record) the wire `refusal` arm does not reproduce \
-         byte-for-byte, so the Lean-reconstituted `.root()` DIVERGES — pinned as a negative tooth in \
-         lean_state_producer_coverage (producer_root_gap_effects). A denotational AGREEMENT is \
-         impossible by construction; this is the named gap, not a silent drop.",
-    ),
-    (
-        "ReceiptArchive",
-        "ROOT-GAP (mappable but provably NON-agreeing): Rust writes a lifecycle-Archived commitment \
-         the wire `rarchive` arm does not reproduce byte-for-byte, so the reconstituted `.root()` \
-         DIVERGES (producer_root_gap_effects, pinned in lean_state_producer_coverage). No \
-         denotational agreement is constructible; named here to keep the 29-universe exhaustive.",
+        "NOT-MAPPABLE / CAP-OPEN INNER-FOLD: `apply_exercise_via_capability` opens the actor's `cap_slot`, \
+         resolves the cap TARGET, runs a deep authority gauntlet (expiry / revocation-channel / \
+         R7 stored-epoch staleness / the `AuthRequired` permission lattice / per-inner-effect target \
+         gating) and then folds `inner_effects` against the cap's target cell. The post-state is \
+         whatever the opened inner fold writes — authority rides the cap-OPEN path, not the scalar \
+         ledger — and `effect_is_mappable` → false (no wire projection of the cap-open inner-fold). \
+         A scalar-denotational census cannot drive it; closing it needs the kernel to model cap-open \
+         + inner-effect re-dispatch, a bigger design question than an in-test fixture.",
     ),
 ];
 
@@ -968,6 +970,71 @@ fn every_root_agreeing_effect_is_covered_or_named_residual() {
 // MakeSovereign genuinely drops the live-cell sum. If the conservation assertion were
 // vacuous (e.g. always comparing 0==0) these would not be distinguishable.
 // =====================================================================================
+
+/// Refusal (self-attestation) — NOW A CLOSED ROUND-TRIP (was a named ROOT-GAP residual). The
+/// verified `refusalA` writes only the `"refusal"` record field; the Rust `apply_refusal` BUMPS the
+/// cell's nonce AND writes a blake3 audit commitment into the protocol-reserved EXT field
+/// (`REFUSAL_AUDIT_EXT_KEY`, folded into `fields_root`) — neither crosses the wire, so the
+/// reconstituted `.root()` diverged. THE FIX replays `apply_refusal`'s exact post-state on the
+/// verified commit (`lean_apply::StateOp::Refusal`: nonce bump + the identical
+/// `dregg-refusal-audit-v1` blake3 over `offered_action_commitment` + `refusal_reason`), giving full
+/// denotational + `.root()` agreement. A committing refusal REQUIRES a present witness blob (Rust's
+/// `proof_witness_index` must resolve), so the fixture carries one; the proofless refusal both
+/// producers reject is the non-vacuous tooth elsewhere.
+#[test]
+fn census_refusal() {
+    if skip_no_lean() {
+        return;
+    }
+    let (pre, a) = one_open_cell();
+    let mut turn = single_effect_turn(
+        a,
+        a,
+        0,
+        Effect::Refusal {
+            cell: a,
+            offered_action_commitment: [13u8; 32],
+            refusal_reason: dregg_turn::action::RefusalReason::Declined,
+            proof_witness_index: 0,
+        },
+    );
+    // A committing refusal needs a PRESENT non-action witness (Rust's witness-binding pass rejects
+    // an out-of-range index before any effect applies); carry one so the turn commits on both.
+    turn.call_forest.roots[0].action.witness_blobs =
+        vec![dregg_turn::action::WitnessBlob::proof(vec![1u8, 2, 3])];
+    assert_denotational_and_conservation("Refusal", pre, turn, &[a], 0);
+}
+
+/// ReceiptArchive — NOW A CLOSED ROUND-TRIP (was a named ROOT-GAP residual). The verified
+/// `receiptArchiveA` writes only the `"lifecycle"` record field (the wire carries a bare
+/// discriminant); Rust's `apply_receipt_archive` transitions the cell to `Archived
+/// { checkpoint_hash, archived_through }` — a PAYLOAD the wire drops — so the reconstituted `.root()`
+/// diverged. THE FIX replays `Cell::archive(attestation)` on the verified commit
+/// (`lean_apply::StateOp::ReceiptArchive`, the same cell-side primitive `apply_receipt_archive`
+/// calls, binding the turn-supplied attestation's `checkpoint_hash()` + `archive_end_height`), giving
+/// full denotational + `.root()` agreement.
+#[test]
+fn census_receipt_archive() {
+    if skip_no_lean() {
+        return;
+    }
+    let (pre, a) = one_open_cell();
+    let att = dregg_cell::lifecycle::ArchivalAttestation {
+        cell_id: a,
+        archive_start_height: 0,
+        archive_end_height: 0,
+        archive_blob_hash: [4u8; 32],
+        archive_terminal_commitment: [5u8; 32],
+        archive_terminal_receipt_hash: [3u8; 32],
+    };
+    let turn = single_effect_turn(
+        a,
+        a,
+        0,
+        Effect::ReceiptArchive { prefix_end_height: 0, checkpoint: att },
+    );
+    assert_denotational_and_conservation("ReceiptArchive", pre, turn, &[a], 0);
+}
 
 #[test]
 fn conservation_check_is_non_vacuous() {

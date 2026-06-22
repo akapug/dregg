@@ -1,5 +1,5 @@
 //! Optional Lean FFI shadow execution — compares Rust commit decisions against the
-//! verified Lean kernel without affecting [`crate::turn::TurnResult`].
+//! verified Lean kernel without affecting [`dregg_turn::turn::TurnResult`].
 //!
 //! Enabled when `DREGG_LEAN_SHADOW=1` and `dregg_lean_ffi::lean_available()`.
 //!
@@ -25,15 +25,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-#[cfg(not(feature = "no-lean-link"))]
 use dregg_cell::state::FieldElement;
 use dregg_cell::{Cell, CellId, Ledger};
 
-use crate::action::Effect;
-#[cfg(not(feature = "no-lean-link"))]
-use crate::action::{Authorization, DelegationProofData};
-use crate::forest::CallTree;
-use crate::turn::{Turn, TurnResult};
+// `ShadowHostCtx` lives in `dregg-turn` (the seam); re-export it from this module so callers that
+// reach `dregg_exec_lean::lean_shadow::ShadowHostCtx` (the cluster's historical path) still resolve.
+pub use dregg_turn::ShadowHostCtx;
+use dregg_turn::action::Effect;
+use dregg_turn::action::{Authorization, DelegationProofData};
+use dregg_turn::forest::CallTree;
+use dregg_turn::turn::{Turn, TurnResult};
 
 /// Minimal pre-execution ledger snapshot for shadow marshalling.
 ///
@@ -41,86 +42,15 @@ use crate::turn::{Turn, TurnResult};
 /// `turn_to_wire_turn`); the non-feature build still captures the snapshot so eligibility
 /// is decided identically, hence the conditional `allow(dead_code)`.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "no-lean-link", allow(dead_code))]
 pub(crate) struct ShadowPreLedger {
     pub(crate) cells: HashMap<CellId, Cell>,
     pub(crate) id_map: HashMap<CellId, u64>,
 }
 
-/// The HOST/NODE-fed admission context (boundary-P1 bug-1). These come from the EXECUTOR's own
-/// state — NOT the turn — so the verified gate's clock / freeze-set / chain-head / budget legs are
-/// decided by the node, exactly as `admissible` reads `AdmCtx`. The production node (and the
-/// in-process executor) builds this from `self.block_height` / `self.cell_migrations` (frozen) /
-/// `self.get_last_receipt_hash(agent)` (stored head) / `self.budget_gate.remaining()` (budget).
-///
-/// Defaults (via [`ShadowHostCtx::diag`]) are the DIAGNOSTIC values that never spuriously reject
-/// (clock 0, no frozen cells, genesis head, large budget) — used by tests/round-trips. The
-/// security of bug-1 is that the EXECUTOR overrides every field from its own state.
-///
-/// # The host obligation (Lean: `Dregg2.Exec.HostCorrespondence`, AssuranceCase seam §2)
-///
-/// The verified gate's conditional soundness lemma `admissible_sound_of_reflects` proves: IF this
-/// context FAITHFULLY REFLECTS the node's true runtime facts (`HostFacts`: true clock / freeze-set /
-/// stored head / budget) THEN the gate decides EXACTLY as the node's own state would. The teeth
-/// (`{stored_head,budget,freeze,clock}_obligation_teeth`) show each field is load-bearing: an unsafe
-/// under-report (omit a truly-frozen referenced cell, advance the head to a forked turn's `prev`,
-/// inflate the budget, retard the clock) ADMITS a turn the true-facts gate REJECTS. So the production
-/// executor MUST override every field below from its own `self` state — never `diag()`. The only
-/// residual is producer-coverage: every cell the freeze gate reads (agent + write-set) must get a
-/// wire id; the `frozen` projection here (`run_shadow`'s `filter_map(id_map.get)`) is faithful on
-/// exactly those read cells (`marshalled_admission_sound`).
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "no-lean-link", allow(dead_code))]
-pub struct ShadowHostCtx {
-    /// The executor's current chain block height (`self.block_height`).
-    pub block_height: u64,
-    /// The migration freeze-set as raw `CellId`s (`self.cell_migrations` frozen cells). Only the
-    /// subset referenced by the turn (and thus in the wire id map) crosses; a frozen agent /
-    /// write-set cell then trips the verified `admissible` frozen leg, matching apply.rs.
-    pub frozen: Vec<CellId>,
-    /// The agent's stored receipt-chain head (`self.get_last_receipt_hash(agent)`), or `None` =
-    /// genesis. The verified `admissible` ChainHead leg requires the turn's claimed `prev` to
-    /// EQUAL this — a forked / replayed turn (`prev ≠ stored_head`) is rejected.
-    pub stored_head: Option<[u8; 32]>,
-    /// The Stingray silo budget slice the fee must fit (`self.budget_gate.remaining()`). The
-    /// verified `admissible` Budget leg rejects `fee > budget`.
-    pub budget: u64,
-    /// The executor's `max_introduction_lifetime` (`self.max_introduction_lifetime`). An
-    /// `Introduce` stamps the granted cap's `expires_at = block_height + max_introduction_lifetime`;
-    /// the cap-fidelity reconstitution (`lean_apply::collect_cap_ops`) needs the SAME value to
-    /// rebuild the introduced cap's leaf byte-exactly. Defaults to the executor default (1000).
-    pub intro_lifetime: u64,
-    /// The executor's wall-clock (`self.current_timestamp`, as `u64`). `apply_refresh_delegation`
-    /// stamps the re-armed delegation snapshot's `refreshed_at` with this value, and `refreshed_at`
-    /// FOLDS INTO the cell commitment (`hash_delegation_into`), so the refresh reconstitution
-    /// (`lean_apply::StateOp::RefreshDelegation`) must stamp the SAME value for the reconstituted
-    /// `.root()` to match Rust. Defaults to `0` (the test/round-trip clock).
-    pub current_timestamp: u64,
-    /// The executor's local federation id (`self.local_federation_id`). The `Authorization::Signature`
-    /// WHO leg binds the ed25519 signing message to THIS federation
-    /// (`compute_signing_message`/`compute_partial_signing_message`), so the producer marshaller must
-    /// recompute the SAME message the executor's `verify_ed25519_signature` checks. A genuine sig is
-    /// then folded into the wire as a self-echoing `(statement, proof)` pair (admits); a forged /
-    /// cross-federation / tampered one fails the recomputed `verify_strict` and the wire DOES NOT echo
-    /// (the gate's WHO leg fail-closes). Defaults to the all-zero id (the test/round-trip federation).
-    pub federation_id: [u8; 32],
-}
-
-impl ShadowHostCtx {
-    /// The DIAGNOSTIC host context — never spuriously rejects. The PRODUCTION executor MUST
-    /// override every field from its own state (that override is what makes bug-1 real).
-    pub fn diag() -> Self {
-        ShadowHostCtx {
-            block_height: 0,
-            frozen: vec![],
-            stored_head: None,
-            budget: 1_000_000_000,
-            intro_lifetime: 1000,
-            current_timestamp: 0,
-            federation_id: [0u8; 32],
-        }
-    }
-}
+// `ShadowHostCtx` (the pure-data HOST/NODE-fed admission context) lives in `dregg-turn`
+// (`dregg_turn::shadow`) so the `ShadowObserver` trait there can name it; it is imported above and
+// re-exported by this crate. The verified gate reads it to decide the clock / freeze-set /
+// chain-head / budget legs (boundary-P1 bug-1; `Dregg2.Exec.HostCorrespondence`).
 
 thread_local! {
     static SHADOW_PRE: RefCell<Option<ShadowPreLedger>> = const { RefCell::new(None) };
@@ -130,7 +60,7 @@ thread_local! {
 
 /// Capture a minimal pre-state snapshot when shadow mode may run later.
 ///
-/// Call at the start of [`crate::executor::TurnExecutor::execute`] before any ledger mutation so
+/// Call at the start of [`dregg_turn::executor::TurnExecutor::execute`] before any ledger mutation so
 /// the Lean oracle sees the same admission inputs as Rust. `host` carries the NODE-fed admission
 /// context (clock / freeze-set / stored head / budget) — the bug-1 seam.
 pub fn capture_pre_state_if_eligible(turn: &Turn, ledger: &Ledger, host: ShadowHostCtx) {
@@ -227,70 +157,59 @@ pub fn maybe_shadow_turn(
         return None;
     }
 
-    #[cfg(not(feature = "no-lean-link"))]
-    {
-        if !dregg_lean_ffi::lean_available() {
-            tracing::debug!("lean shadow: Lean lib unavailable, skipping");
-            SHADOW_PRE.with(|slot| slot.borrow_mut().take());
-            SHADOW_HOST.with(|slot| slot.borrow_mut().take());
-            return None;
-        }
-
-        let Some(pre) = SHADOW_PRE.with(|slot| slot.borrow_mut().take()) else {
-            return None;
-        };
-        // The NODE-fed admission context captured alongside the pre-state (bug-1 seam). Falls back
-        // to the diagnostic default only if the executor did not provide one (should not happen on
-        // the production path, which always passes a real `ShadowHostCtx`).
-        let host = SHADOW_HOST
-            .with(|slot| slot.borrow_mut().take())
-            .unwrap_or_else(ShadowHostCtx::diag);
-
-        if !forest_is_marshallable(turn) {
-            return None;
-        }
-
-        let kinds = turn_effect_kinds(turn).join("+");
-        let rust_committed = result.is_committed();
-        // The Rust post-state root the committed receipt attests (the full per-cell-state digest).
-        // `None` when Rust did not commit (no receipt root to compare against).
-        let rust_post_root = match result {
-            TurnResult::Committed { receipt, .. } => Some(receipt.post_state_hash),
-            _ => None,
-        };
-
-        match run_shadow_state(turn, &pre, &host) {
-            Ok(shadow_state) => {
-                let lean_committed = shadow_state.verdict.committed;
-                // DENOTATIONAL leg: when the turn is root-agreeing and BOTH committed, reconstitute
-                // the verified executor's FULL post-state and compare its `.root()` to Rust's — the
-                // genuine eval-agreement check (not a commit-bit coincidence). Otherwise the post-state
-                // root cannot byte-match by construction, so we honestly fall back to the commit bit.
-                let agreement = compare_post_state(
-                    turn, &pre, &host, &shadow_state, lean_committed, rust_committed, rust_post_root,
-                );
-                log_shadow_outcome(turn, &kinds, lean_committed, rust_committed, agreement);
-                Some(lean_committed)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "dregg::lean_shadow",
-                    agent = ?turn.agent,
-                    effects = %kinds,
-                    error = %e,
-                    "lean shadow: marshal/exec failed (turn NOT compared)"
-                );
-                None
-            }
-        }
-    }
-
-    #[cfg(feature = "no-lean-link")]
-    {
+    if !dregg_lean_ffi::lean_available() {
+        tracing::debug!("lean shadow: Lean lib unavailable, skipping");
         SHADOW_PRE.with(|slot| slot.borrow_mut().take());
         SHADOW_HOST.with(|slot| slot.borrow_mut().take());
-        let _ = (turn, result);
-        None
+        return None;
+    }
+
+    let Some(pre) = SHADOW_PRE.with(|slot| slot.borrow_mut().take()) else {
+        return None;
+    };
+    // The NODE-fed admission context captured alongside the pre-state (bug-1 seam). Falls back
+    // to the diagnostic default only if the executor did not provide one (should not happen on
+    // the production path, which always passes a real `ShadowHostCtx`).
+    let host = SHADOW_HOST
+        .with(|slot| slot.borrow_mut().take())
+        .unwrap_or_else(ShadowHostCtx::diag);
+
+    if !forest_is_marshallable(turn) {
+        return None;
+    }
+
+    let kinds = turn_effect_kinds(turn).join("+");
+    let rust_committed = result.is_committed();
+    // The Rust post-state root the committed receipt attests (the full per-cell-state digest).
+    // `None` when Rust did not commit (no receipt root to compare against).
+    let rust_post_root = match result {
+        TurnResult::Committed { receipt, .. } => Some(receipt.post_state_hash),
+        _ => None,
+    };
+
+    match run_shadow_state(turn, &pre, &host) {
+        Ok(shadow_state) => {
+            let lean_committed = shadow_state.verdict.committed;
+            // DENOTATIONAL leg: when the turn is root-agreeing and BOTH committed, reconstitute
+            // the verified executor's FULL post-state and compare its `.root()` to Rust's — the
+            // genuine eval-agreement check (not a commit-bit coincidence). Otherwise the post-state
+            // root cannot byte-match by construction, so we honestly fall back to the commit bit.
+            let agreement = compare_post_state(
+                turn, &pre, &host, &shadow_state, lean_committed, rust_committed, rust_post_root,
+            );
+            log_shadow_outcome(turn, &kinds, lean_committed, rust_committed, agreement);
+            Some(lean_committed)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "dregg::lean_shadow",
+                agent = ?turn.agent,
+                effects = %kinds,
+                error = %e,
+                "lean shadow: marshal/exec failed (turn NOT compared)"
+            );
+            None
+        }
     }
 }
 
@@ -298,7 +217,6 @@ pub fn maybe_shadow_turn(
 /// turn that both executors commit gets the genuine FULL post-state (denotational) comparison: the
 /// Lean executor's reconstituted `.root()` vs the Rust `post_state_hash`. Anything else is honestly a
 /// commit-bit comparison (the post-state root cannot byte-match by construction).
-#[cfg(not(feature = "no-lean-link"))]
 fn compare_post_state(
     turn: &Turn,
     pre: &ShadowPreLedger,
@@ -335,7 +253,6 @@ fn compare_post_state(
 /// Log the shadow outcome at the right strength — a FULL-STATE divergence (commit bits agree but the
 /// post-state roots differ) is a real finding the commit bit alone would miss, so it is logged as a
 /// divergence even though the commit bits matched.
-#[cfg(not(feature = "no-lean-link"))]
 fn log_shadow_outcome(
     turn: &Turn,
     kinds: &str,
@@ -615,6 +532,23 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
         // replay's edge gate leaves every field at its pre-state, so the authoritative post-state
         // still equals the pre-state — only the commit bit / finding is Lean-driven.
         "RevokeDelegation",
+        // REFUSAL/RECEIPT-ARCHIVE ROOT-GAP CLOSE (the SURVIVOR-effect lever, same shape as the
+        // lifecycle pair). The verified `refusalA` writes only the `"refusal"` record field and
+        // `receiptArchiveA` only the `"lifecycle"` field; Rust's `apply_refusal` ALSO bumps the
+        // cell nonce + writes a blake3 audit into the protocol-reserved EXT slot
+        // (`REFUSAL_AUDIT_EXT_KEY`, folded into `fields_root`), and `apply_receipt_archive`
+        // installs an `Archived { checkpoint_hash, archived_through }` PAYLOAD the wire's bare
+        // discriminant cannot carry. Both the audit and the Archived payload are pure TURN data
+        // (`offered_action_commitment` + `refusal_reason`; the full `ArchivalAttestation`), so
+        // `lean_apply::apply_state_ops` replays the EXACT Rust mutation on the verified commit
+        // (`StateOp::Refusal`'s nonce bump + identical `dregg-refusal-audit-v1` blake3;
+        // `StateOp::ReceiptArchive`'s `Cell::archive`, the SAME cell-side primitive
+        // `apply_receipt_archive` calls), so the reconstituted `.root()` is byte-exact. A committing
+        // refusal requires a present non-action witness (Rust's witness-binding pass); the proofless
+        // refusal both producers reject is the non-vacuous tooth. Pinned by `census_refusal` /
+        // `census_receipt_archive` in `lean_state_producer_denotational_census`.
+        "Refusal",
+        "ReceiptArchive",
         // §SIDE-TABLE holding-store families — the off-cell-merkle-root escrow/obligation effects.
         // `apply_create_escrow`/`apply_create_obligation` debit ONE cell's `balance` (which the `bal`
         // side-table carries → reconstitutes) and park the value in the off-root `escrows`/
@@ -632,27 +566,24 @@ pub fn producer_root_agreeing_effects() -> &'static [&'static str] {
 /// The CHARACTERIZED SWAP-GAPS: mappable effects (the producer RUNS) whose Lean-reconstituted
 /// `.root()` (or commit bit) DIVERGES from Rust. Each is pinned by a NEGATIVE-tooth differential
 /// (`lean_state_producer_widen` + `lean_state_producer_coverage`) that asserts the SPECIFIC
-/// divergence, so the gap is named, never a silent pass. The honest residual of THE SWAP:
-///   * `Refusal`/`ReceiptArchive` — Rust writes an audit-field / lifecycle-Archived commitment the
-///     wire `refusal`/`rarchive` arms do not reproduce byte-for-byte.
-///   * `ReleaseEscrow`/`RefundEscrow` — commit-bit gaps (condition-proof / past-timeout legs), see
-///     below. (Effect family slated for kernel deletion in the dregg3 reduction.)
+/// divergence, so the gap is named, never a silent pass.
 ///
 /// NO LONGER GAPS (each closed by the commit-gated turn/host-replay lever, the values the wire
 /// drops being turn/host data rather than kernel state — see `producer_root_agreeing_effects`):
 /// the cap-fidelity trio (GrantCapability/Introduce/AttenuateCapability via `apply_cap_ops`), the
 /// lifecycle pair (CellSeal/CellDestroy via `apply_state_ops`' `Cell::seal`/`Cell::destroy`
 /// replay), the struct pair (SetPermissions/SetVerificationKey — full turn-supplied structs), the
-/// structural MakeSovereign (`Ledger::make_sovereign` replay), and RevokeDelegation (the
-/// deterministic parent-epoch bump + child-snapshot clear).
+/// structural MakeSovereign (`Ledger::make_sovereign` replay), RevokeDelegation (the deterministic
+/// parent-epoch bump + child-snapshot clear), AND the audit/lifecycle pair Refusal/ReceiptArchive
+/// (the nonce-bump + `dregg-refusal-audit-v1` EXT write / the `Cell::archive` Archived-payload
+/// replay — both pure turn data, see `apply_state_ops`' `StateOp::Refusal`/`StateOp::ReceiptArchive`).
+///
+/// The root-gap residual is now EMPTY: every mappable effect that runs the producer reconstitutes a
+/// byte-exact `.root()`. (The escrow/obligation settle effects are FACTORY-DISSOLVED — out of the
+/// producer surface entirely; see `producer_mappable_effects`. Their condition/timeout gates are
+/// enforced by the factory cell programs now.)
 pub fn producer_root_gap_effects() -> &'static [&'static str] {
-    &[
-        "Refusal",
-        "ReceiptArchive",
-        // (The escrow/obligation settle effects are FACTORY-DISSOLVED — out of the producer
-        // surface entirely; see `producer_mappable_effects`. Their condition/timeout gates are
-        // enforced by the factory cell programs now.)
-    ]
+    &[]
 }
 
 /// Back-compat alias for [`producer_mappable_effects`] — the set of effect kinds for which the
@@ -744,7 +675,6 @@ fn turn_effect_kinds(turn: &Turn) -> Vec<&'static str> {
 /// corpus divergence-finder. Must be called with the SAME `ledger` and `block_height` as the
 /// `execute` call that produced `result`; it internally re-snapshots the pre-state from the
 /// post-state would be wrong, so callers should snapshot BEFORE executing (see the harness).
-#[cfg(not(feature = "no-lean-link"))]
 pub fn shadow_report(
     turn: &Turn,
     pre_ledger: &Ledger,
@@ -803,24 +733,6 @@ pub fn shadow_report(
             agree: None,
             error: Some(e),
         },
-    }
-}
-
-/// Non-FFI build: shadow report is always "ineligible to compare" (no Lean linked).
-#[cfg(feature = "no-lean-link")]
-pub fn shadow_report(
-    turn: &Turn,
-    _pre_ledger: &Ledger,
-    rust_committed: bool,
-    _block_height: u64,
-) -> ShadowReport {
-    ShadowReport {
-        effect_kinds: turn_effect_kinds(turn),
-        lean_eligible: forest_is_marshallable(turn),
-        rust_committed,
-        lean_committed: None,
-        agree: None,
-        error: Some("lean-shadow feature off".into()),
     }
 }
 
@@ -900,7 +812,7 @@ fn tree_is_marshallable(tree: &CallTree, id_map: &HashMap<CellId, u64>, any: &mu
         let cross_cell = child.action.target != tree.action.target;
         let is_bearer = matches!(
             &child.action.authorization,
-            crate::action::Authorization::Bearer(_)
+            dregg_turn::action::Authorization::Bearer(_)
         );
         if cross_cell && !is_bearer {
             return false;
@@ -1080,7 +992,6 @@ fn effect_cells(eff: &Effect) -> Vec<CellId> {
 /// offset created ids by `FRESH_ID_BASE + seq` where `seq` is the created-thing's index in the
 /// pre-order walk. Both executors then see a never-before-used id, so the insert always succeeds
 /// (no spurious duplicate-id rejection on either side).
-#[cfg(not(feature = "no-lean-link"))]
 const FRESH_ID_BASE: u64 = 1_000_000;
 
 // ===================================================================
@@ -1134,7 +1045,6 @@ pub(crate) fn build_pre_ledger(turn: &Turn, ledger: &Ledger) -> ShadowPreLedger 
 /// Project ONE Rust effect to ONE wire action. The supported subset is the algebraic core
 /// the Lean per-asset executor models faithfully; unsupported effects return `None` (the
 /// turn is then skipped rather than mis-encoded). MUST agree with `effect_is_mappable`.
-#[cfg(not(feature = "no-lean-link"))]
 fn effect_to_wire(
     actor: u64,
     eff: &Effect,
@@ -1422,15 +1332,12 @@ fn effect_to_wire(
 }
 
 /// The pre-state nonce of a cell in the snapshot (0 if absent — a fresh cell's nonce).
-#[cfg(not(feature = "no-lean-link"))]
 fn pre_nonce_of(pre: &ShadowPreLedger, cell: &CellId) -> u64 {
     pre.cells.get(cell).map(|c| c.state.nonce()).unwrap_or(0)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 use dregg_lean_ffi::marshal::WireAction;
 
-#[cfg(not(feature = "no-lean-link"))]
 fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, host: &ShadowHostCtx) -> Result<bool, String> {
     use dregg_lean_ffi::marshal::marshal_turn_hosted;
 
@@ -1483,7 +1390,6 @@ fn run_shadow(turn: &Turn, pre: &ShadowPreLedger, host: &ShadowHostCtx) -> Resul
 /// away — the verified executor's produced `WireState`, which `lean_apply` reconstitutes into the
 /// authoritative `Ledger`. The pre-snapshot id_map is returned alongside so the caller can invert
 /// the wire Nats back to real `CellId`s.
-#[cfg(not(feature = "no-lean-link"))]
 pub(crate) fn run_shadow_state(
     turn: &Turn,
     pre: &ShadowPreLedger,
@@ -1519,7 +1425,6 @@ pub(crate) fn run_shadow_state(
     dregg_lean_ffi::decode_shadow_state(&out)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn ledger_to_wire_state(
     pre: &ShadowPreLedger,
 ) -> Result<dregg_lean_ffi::marshal::WireState, String> {
@@ -1630,7 +1535,6 @@ fn ledger_to_wire_state(
 /// The kernel-model lifecycle discriminant for a Rust `CellLifecycle` (mirrors
 /// `CellLifecycle::discriminant`: 0=Live, 1=Sealed, 3=Destroyed; the kernel models only these three
 /// Wave-3 states, so Migrated(2)/Archived(4) fall back as their own discriminant).
-#[cfg(not(feature = "no-lean-link"))]
 fn lifecycle_discriminant(lc: &dregg_cell::lifecycle::CellLifecycle) -> u64 {
     use dregg_cell::lifecycle::CellLifecycle;
     match lc {
@@ -1645,18 +1549,15 @@ fn lifecycle_discriminant(lc: &dregg_cell::lifecycle::CellLifecycle) -> u64 {
 /// The low 64 bits (big-endian) of a 32-byte digest — the kernel models hashes as `Nat` and the wire
 /// carries the low `u64` for the death-cert table (the high 192 bits are the residual hash-fidelity
 /// gap the kernel's `Nat` payload model does not yet carry).
-#[cfg(not(feature = "no-lean-link"))]
 fn low_u64_be(h: &[u8; 32]) -> u64 {
     u64::from_be_bytes(h[24..32].try_into().unwrap())
 }
 
 /// Look up a `CellId`'s wire Nat in the snapshot's id map (for c-list edge projection).
-#[cfg(not(feature = "no-lean-link"))]
 fn id_map_lookup(pre: &ShadowPreLedger, c: &CellId) -> Option<u64> {
     pre.id_map.get(c).copied()
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn turn_to_wire_turn(
     turn: &Turn,
     pre: &ShadowPreLedger,
@@ -1782,7 +1683,6 @@ fn turn_to_wire_turn(
 ///     unsound veto direction), so the turn is INELIGIBLE for the shadow (returns `None`). True
 ///     cross-cell delegation FIDELITY is the cap-reshape lane's (`#103`); this weld closes the
 ///     STRUCTURAL flattening without overclaiming the cross-cell authority match.
-#[cfg(not(feature = "no-lean-link"))]
 fn tree_to_wforest(
     tree: &CallTree,
     pre: &ShadowPreLedger,
@@ -1881,9 +1781,8 @@ fn tree_to_wforest(
 /// concurrent turn can only RAISE the balance toward the floor, never invalidate a satisfied one
 /// mid-turn within the single-machine atomic snapshot). Preconditions with no `min_balance` yield
 /// no caveat (the wire stays minimal; the action is then gated by the WHO/WHAT legs alone).
-#[cfg(not(feature = "no-lean-link"))]
 fn action_caveats(
-    action: &crate::action::Action,
+    action: &dregg_turn::action::Action,
     actor: u64,
 ) -> Vec<dregg_lean_ffi::marshal::WireCaveat> {
     use dregg_lean_ffi::marshal::WireCaveat;
@@ -1911,7 +1810,6 @@ fn action_caveats(
 /// `TurnExecutor::verify_ed25519_signature` consumes beyond the action itself): the local federation
 /// id and the turn nonce. `position` (the per-root forest index) is threaded separately because it is
 /// per-node, not per-turn.
-#[cfg(not(feature = "no-lean-link"))]
 pub(crate) struct SigCtx {
     pub(crate) federation_id: [u8; 32],
     pub(crate) turn_nonce: u64,
@@ -1927,10 +1825,9 @@ pub(crate) struct SigCtx {
 /// `verify_ed25519_signature` reads). When it is absent (cell not in the pre-snapshot) the signature
 /// CANNOT be verified, so the wire fails closed (a non-echoing pair ⇒ the gate's WHO leg rejects) —
 /// never an admit-by-construction.
-#[cfg(not(feature = "no-lean-link"))]
 fn auth_to_wire_ctx(
     auth: &Authorization,
-    action: &crate::action::Action,
+    action: &dregg_turn::action::Action,
     target_cell: Option<&Cell>,
     sig_ctx: &SigCtx,
     position: usize,
@@ -1978,28 +1875,27 @@ fn auth_to_wire_ctx(
 /// `message` no longer matches what was signed, or `verify_strict` fails) ⇒ `stmt ≠ proof` ⇒ the gate
 /// fail-closes ⇒ whole-forest rollback. The verdict is the REAL ed25519 check over the FULL signature,
 /// not a truncated projection.
-#[cfg(not(feature = "no-lean-link"))]
 fn sig_echo_wire(
-    action: &crate::action::Action,
+    action: &dregg_turn::action::Action,
     target_cell: Option<&Cell>,
     r: &[u8; 32],
     s: &[u8; 32],
     sig_ctx: &SigCtx,
     position: usize,
 ) -> dregg_lean_ffi::marshal::WireAuth {
-    use crate::action::CommitmentMode;
+    use dregg_turn::action::CommitmentMode;
     use dregg_lean_ffi::marshal::{Digest, WireAuth};
 
     // Recompute the EXACT signing message the executor's `verify_ed25519_signature` checks.
     let message = match action.commitment_mode {
-        CommitmentMode::Partial => crate::executor::TurnExecutor::compute_partial_signing_message(
+        CommitmentMode::Partial => dregg_turn::executor::TurnExecutor::compute_partial_signing_message(
             action,
             position,
             &sig_ctx.federation_id,
             sig_ctx.turn_nonce,
         ),
         CommitmentMode::Full => {
-            crate::executor::TurnExecutor::compute_signing_message(action, &sig_ctx.federation_id)
+            dregg_turn::executor::TurnExecutor::compute_signing_message(action, &sig_ctx.federation_id)
         }
     };
 
@@ -2045,7 +1941,6 @@ fn sig_echo_wire(
     }
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
     use dregg_lean_ffi::marshal::{Digest, WireAuth};
     match auth {
@@ -2174,11 +2069,11 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
         } => {
             let chain_nat = bytes32_to_nat(&token_chain_hash(encoded, discharges));
             match key_ref {
-                crate::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => WireAuth::Token {
+                dregg_turn::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => WireAuth::Token {
                     issuer_key: Digest::from_bytes(*issuer_pubkey),
                     sig: chain_nat,
                 },
-                crate::action::TokenKeyRef::CellScopedMacaroon { cell } => WireAuth::Custom {
+                dregg_turn::action::TokenKeyRef::CellScopedMacaroon { cell } => WireAuth::Custom {
                     kind_stmt: Digest::from_bytes(cell.0),
                     proof: chain_nat,
                 },
@@ -2187,7 +2082,6 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
     }
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn predicate_commitment(p: &dregg_cell::predicate::WitnessedPredicate) -> [u8; 32] {
     // Hash the predicate's serialized form as a stable WHO-commitment. The exact preimage
     // need not match the kernel byte-for-byte (the kernel only reads the digest as an
@@ -2196,7 +2090,6 @@ fn predicate_commitment(p: &dregg_cell::predicate::WitnessedPredicate) -> [u8; 3
     blake3_of(&bytes)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn predicate_proof_nat(p: &dregg_cell::predicate::WitnessedPredicate) -> u64 {
     let bytes = postcard::to_allocvec(p).unwrap_or_default();
     bytes_to_nat(&bytes)
@@ -2204,7 +2097,6 @@ fn predicate_proof_nat(p: &dregg_cell::predicate::WitnessedPredicate) -> u64 {
 
 // ---- digest / nat helpers ----
 
-#[cfg(not(feature = "no-lean-link"))]
 fn blake3_of(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
@@ -2215,7 +2107,6 @@ fn blake3_of(bytes: &[u8]) -> [u8; 32] {
 /// discharges, or a different discharge, yields a different commitment), so the verified gate's
 /// WHO leg is sensitive to the FULL caveat chain the Rust verifier checks — not just the issuer
 /// key. An EMPTY credential with no discharges hashes the empty preimage (a stable non-secret).
-#[cfg(not(feature = "no-lean-link"))]
 fn token_chain_hash(encoded: &[u8], discharges: &[Vec<u8>]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("dregg-lean-shadow-token-chain-v1");
     hasher.update(&(encoded.len() as u64).to_le_bytes());
@@ -2228,7 +2119,6 @@ fn token_chain_hash(encoded: &[u8], discharges: &[Vec<u8>]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn field_index_to_name(index: usize) -> String {
     match index {
         2 => "name".into(),
@@ -2240,33 +2130,28 @@ fn field_index_to_name(index: usize) -> String {
     }
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn field_to_i128(field: &FieldElement) -> i128 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&field[24..32]);
     u64::from_be_bytes(bytes) as i128
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn field_is_zero(field: &FieldElement) -> bool {
     field.iter().all(|&b| b == 0)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn bytes32_to_nat(bytes: &[u8; 32]) -> u64 {
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&bytes[24..32]);
     u64::from_be_bytes(buf)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn sig64_to_nat(sig: &[u8; 64]) -> u64 {
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&sig[56..64]);
     u64::from_be_bytes(buf)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn bytes_to_nat(bytes: &[u8]) -> u64 {
     let mut buf = [0u8; 8];
     let n = bytes.len().min(8);
@@ -2274,12 +2159,10 @@ fn bytes_to_nat(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(buf)
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn str_to_nat(s: &str) -> u64 {
     bytes_to_nat(s.as_bytes())
 }
 
-#[cfg(not(feature = "no-lean-link"))]
 fn permissions_to_i128(_perms: &dregg_cell::Permissions) -> i128 {
     // Permissions are a structured value; the wire `setperms` arm carries a scalar. We
     // encode 0 as a neutral marker (the executor models perms abstractly). This is the one
@@ -2288,8 +2171,7 @@ fn permissions_to_i128(_perms: &dregg_cell::Permissions) -> i128 {
     0
 }
 
-#[cfg(not(feature = "no-lean-link"))]
-fn event_data_to_i128(_event: &crate::action::Event) -> i128 {
+fn event_data_to_i128(_event: &dregg_turn::action::Event) -> i128 {
     0
 }
 
@@ -2360,10 +2242,10 @@ mod producer_coverage_tests {
 /// each closure (the data crosses faithfully + is tamper-sensitive); the Lean HALF (the refusal
 /// teeth) is `FFI.lean`'s `caveat_teeth_same_wire` / `bearer_teeth_same_wire` /
 /// `discharge_teeth_same_wire`.
-#[cfg(all(test, not(feature = "no-lean-link")))]
+#[cfg(test)]
 mod auth_shape_marshal_tests {
     use super::*;
-    use crate::action::{Action, Authorization, DelegationProofData, TokenKeyRef};
+    use dregg_turn::action::{Action, Authorization, DelegationProofData, TokenKeyRef};
     use dregg_cell::preconditions::{CellStatePrecondition, Preconditions};
 
     fn bare_action(target: CellId, auth: Authorization, pre: Preconditions) -> Action {
@@ -2374,7 +2256,7 @@ mod auth_shape_marshal_tests {
             authorization: auth,
             preconditions: pre,
             effects: vec![],
-            may_delegate: crate::action::DelegationMode::None,
+            may_delegate: dregg_turn::action::DelegationMode::None,
             commitment_mode: Default::default(),
             balance_change: None,
             witness_blobs: vec![],
@@ -2478,7 +2360,7 @@ mod auth_shape_marshal_tests {
     /// could share.
     #[test]
     fn bearer_wire_is_full_sig_sensitive() {
-        use crate::action::BearerCapProof;
+        use dregg_turn::action::BearerCapProof;
         use dregg_cell::AuthRequired;
         use dregg_lean_ffi::marshal::WireAuth;
         let mk = |sig: [u8; 64]| {

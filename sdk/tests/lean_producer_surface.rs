@@ -37,7 +37,7 @@ use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 // credential.
 use dregg_sdk::raw::{self, CallForest, Turn};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, Effect};
-use dregg_turn::lean_apply::{self, ProducerOutcome};
+use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
 use dregg_turn::{ComputronCosts, TurnExecutor};
 
 /// All-`None` permissions so authority is by ownership (the sealed-raw
