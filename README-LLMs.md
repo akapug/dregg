@@ -83,6 +83,19 @@ These are restated in `REORIENT.md` (read it first after any context loss).
   effect provably equals the fold of its emitted memory trace. "The receipt binds
   the whole post-state" is constructive (the anti-ghost property): tampering a
   field the effect did not legitimately touch makes the turn unprovable.
+- **Witness modes (symbolic / full).** `turn/src/collapse.rs`. A turn applies its
+  state transition (the abstract semantics — balances, caps, nonces) independently
+  of materializing its witness (Merkle roots, commitments, proofs). `WitnessMode::
+  Symbolic` defers the witness layer, so a local UI/terminal turn pays effectively
+  zero hashing; `collapse` re-runs deferred turns through full execution to
+  materialize the exact witnesses on demand (determinism is discharged, so collapse
+  reproduces precisely what `Full` would have witnessed). The admission gates
+  (authority, conservation, freshness) are NEVER deferred — only the witness. A
+  symbolic turn is therefore structurally local and unpublishable (it produces no
+  `verifyBatch`-acceptable artifact); collapse is the only path to a publishable
+  receipt. Grounded in the `Exec ⊑ Abstract` refinement
+  (`metatheory/Dregg2/Spec/ExecRefinement.lean`): the abstract state is witness-free,
+  and the deferred layer is exactly what the refinement throws away.
 - **Circuits.** The live proof path is a single rotated multi-table circuit
   (IR-v2, R=24): a heterogeneous turn splits into maximal homogeneous cohort-runs,
   proven as a chain of rotated legs (`docs/PATH-PRESERVE.md`). STARKs: Plonky3,
@@ -104,11 +117,14 @@ These are restated in `REORIENT.md` (read it first after any context loss).
 | `dregg-lean-ffi/` | Compiles the Lean executor → `libdregg_lean.a`; exports the node entry. `build.rs` splices the closure into a per-`OUT_DIR` archive (swarm-safe). |
 | `node/` | The daemon: HTTP/MCP API, gossip + blocklace sync, block production driven by the Lean producer. |
 | `circuit/` | The STARK stack: the Lean-descriptor interpreter (the prover), Plonky3, recursive aggregation, the light-client verifier. NO hand-authored AIRs. |
-| `cell/`, `turn/`, `wire/` | Cell state, turn types + the executor (`turn/src/executor/`), the wire codec. The Rust data plane. |
+| `cell/`, `cell-crypto/`, `turn/`, `wire/` | `cell` is a ZERO-crypto types crate (the four substances + programs); `cell-crypto` holds the crypto (notes, value-commitments, seal/stealth, oblivious-transfer, read-caps). `turn` = turn types + the executor (`turn/src/executor/`) + witness-mode/collapse (`turn/src/collapse.rs`); `wire` = the codec. The Rust data plane. |
+| `dregg-doc/` | The document language: a Pijul-shaped patch core (changes as first-class objects; conflicts-as-OBJECTS, not text markers; the branch-and-stitch pushout merge) + a `ropey`↔patch bridge. An editor buffer becomes a mergeable document; a save becomes a patch; multi-author becomes a merge. Standalone workspace. Merge correctness proved: `metatheory/Dregg2/Deos/DocMerge.lean`. |
 | `blocklace/`, `federation/`, `captp/`, `coord/` | The signed equivocation-detecting DAG (BFT-final), committee machinery, capability transport (OCapN), coordination protocols. |
 | `sdk/`, `sdk-ts/`, `sdk-py/`, `cli/` | The three SDKs (`.turn().sign().submit()`) + the `dregg` CLI. sdk-py embeds the real Lean kernel via FFI. |
-| `app-framework/`, `starbridge-apps/` | The deos app framework (GatedAffordance, DeosApp) + 19 apps. |
-| `starbridge-v2/`, `starbridge-web-surface/`, `servo-render/` | deos: the native gpui cockpit (embeds the real executor), the web-surface/affordance/rehydration stack, the SWGL/servo render path. |
+| `app-framework/`, `starbridge-apps/` | The deos app framework (GatedAffordance, DeosApp) + 21 apps. |
+| `starbridge-v2/`, `starbridge-web-surface/`, `servo-render/` | deos: the native gpui cockpit (embeds the real executor; `src/dock/` = the resizable/splittable/dockable pane workspace, vendored+adapted from Zed's `workspace`; `src/session.rs` = login=root-cap; `src/powerbox.rs`, `src/shared_fork.rs`), the web-surface/affordance/rehydration stack, the SWGL/servo render path (libservo default via the `web-shell` feature). |
+| `deos-zed/`, `deos-terminal/`, `deos-matrix/`, `deos-hermes/` | The deos dev-loop apps (own workspaces, same gpui fork → one gpui resolves): a gpui code editor (`Fs` trait + the FirmamentFs seam), a real terminal (alacritty PTY + grid), a Matrix client (matrix-rust-sdk + the rehydratable-membrane seam), a ToolGateway-gated agent bridge (Hermes over ACP — every tool-call a cap-gated receipted turn). Mount as cockpit dock panes (the `dev-surfaces` feature). The system editing/building/operating itself. |
+| `~/dev/gpui-component` | Vendored fork (`emberian/gpui-component`, Apache-2.0, repointed at the gpui fork) — the cockpit's widget kit (text `Input`, lists, tables, the code editor). |
 | `pg-dregg/` | dregg caps + durable verified workflows as a PostgreSQL extension (RLS + the verified-write spine). Standalone workspace (excluded from root). |
 | `sel4/` | The Robigalia/seL4 embedding: protection-domain crates, the Microkit assembly, the booting executor PD, the crypto-floor. |
 | `site/` | The web Studio/Playground/Explorer + the wasm executor. |
@@ -164,6 +180,18 @@ bridge (Lean→C/.a link correspondence + wire-codec translation validation in
 `dregg-lean-ffi/src/marshal.rs`), stated as obligations. Named seams live in
 `docs/ASSURANCE.md` §3. NOT security-critical-ready; no independent audit.
 
+**Adversary / key leak.** A leaked private key = a compromised principal, i.e. an
+arbitrary opaque CONTROLLER — exactly what `polis_safety` already quantifies over
+("verify the cage, not the animal"). So the blast radius is bounded by the deployed
+proofs, not new machinery: the attacker reaches only the attenuation-closure of the
+leaked c-list (no amplification), conservation forbids minting, confinement +
+membrane-isolation bound the reach, and revocation kills it (topology-bounded;
+immediate at n=1). `metatheory/Metatheory/KeyLeak.lean` (kernel-clean). The one named
+open construction is **Settlement Soundness** — a revoke must bind into the finalized
+commitment before settlement (so a leaked-then-revoked cap cannot settle against a
+stale branch-time view); it is a composition of deployed pieces, and the same theorem
+the distributed-time-travel and membrane-merge frontiers converge on.
+
 ## 8. The deos userlayer
 
 deos adds ZERO new trust: every visual/interactive primitive reduces to a kernel
@@ -185,6 +213,58 @@ theorem. Key constructs (Lean models in `metatheory/Dregg2/Deos/`):
   (ocap), each step a verified turn (dregg), each step a fireable affordance (web).
   Four surfaces of one kernel. `Protocol/Workflow.lean`, `Deos/WorkflowBridge.lean`.
 
+### 8a. The desktop (L5–L8)
+
+deos is a desktop OS, not just a UI library. The layer stack
+(`docs/DREGG-DESKTOP-OS.md`; the running build realizes a growing subset of it):
+
+- **Compositor (L5) — the only new TCB.** Sole holder of the framebuffer + HID
+  caps; its scene is a verified cell; it admits a surface's pixels only through a
+  `present(region, contentDigest)` gate enforcing non-overlap, label-binding (the
+  compositor computes the label from cell lineage, never the app's word), and
+  focus/input-exclusivity. A window IS a `Capability{Surface(cell), rights}`.
+  `sel4/dregg-firmament/src/{compositor_pd,surface}.rs` (+ a gpui-free mirror
+  `starbridge-v2/src/compositor.rs`).
+- **Window manager + shell (L6, untrusted).** A resizable/splittable/dockable pane
+  workspace (`starbridge-v2/src/dock/`); surfaces are panes you split/dock/float.
+  The cockpit is ONE privileged shell client, not the WM root.
+- **Session / login = root capability.** Login = authenticate a key → derive the
+  root cell (`CellId::derive_raw`) → grant the per-user `CapTemplate`; a session IS
+  the resulting c-list; logout = `Effect::RevokeCapability` (synchronous + transitive
+  at n=1). An agent (e.g. Hermes) logging in is the IDENTICAL ceremony with a
+  narrower template — `polis_safety`'s controller-blindness makes human and agent
+  inhabitants the same case. `starbridge-v2/src/session.rs`, `docs/deos/SESSION-LOGIN.md`.
+- **The dev-loop apps as confined surfaces.** A code editor, a terminal, a Matrix
+  chat client, a Hermes agent — deos editing/building/operating itself. Apps are
+  not silos: an app's durable core is a CELL, its mutations are TURNS, its documents
+  speak the document language → apps are VIEWS over one cell graph (a terminal runs
+  `Symbolic` so it need not pay a witness per keystroke; collapses on demand).
+  `docs/deos/APPS-AS-CELLS.md`.
+- **Sandboxed firmament (the OS jail).** A confined host-PD: a subprocess whose ONLY
+  channel is the firmament Endpoint, with confinement OS-kernel-enforced (macOS
+  Seatbelt / Linux user+net+mount+pid namespaces + seccomp-bpf + Landlock; Windows
+  job-object/AppContainer) — "no ambient authority" enforced by the host kernel, not
+  merely by cap-discipline in one address space. `Target::HostPd`,
+  `sel4/dregg-firmament/src/{sandbox,host_pd}.rs`. The DUAL — host fs/net/devices and
+  OS containers GRANTED back as caps (a bridge = the sandbox read backwards) — is
+  `docs/deos/HOST-AND-CONTAINER-BRIDGES.md`. The host backings prefigure native-seL4
+  deos: same cap model, swappable backing.
+- **Shared forks + the membrane.** A rehydratable frustum-snapshot is a cap-bounded
+  FORK of the world that a message can carry; graduated rights — `embedded` (granted
+  in, exercised locally), `studyref` (read-only, exercise = an upgrade request),
+  `networkboundary` (exercise opens an owner-consent request, modeled as a
+  `ConditionalTurn` whose hole is the owner's signed grant) — let you invite another
+  principal into a confined fork of your computer. Merging diverged forks is the
+  branch-and-stitch PUSHOUT where dregg's linearity (conservation, nullifiers,
+  non-amplification) makes inconsistent events LOSSY-DROPPED. Matrix is the
+  multiplayer transport. `docs/deos/{SHARED-FORK-CONSENT,BRANCH-AND-STITCH-PROTOCOL,
+  DISTRIBUTED-TIMETRAVEL-SEMANTICS}.md`.
+- **A deos distribution** is one self-contained bundle (cockpit + editor + terminal
+  + chat + agent + web-shell + executor + firmament + compositor + a durable redb
+  image), two targets one codebase: a host app-bundle (apps as confined host-PDs) or
+  an seL4 `deos.img`. "The image IS your world" — portable; carry it between hosts.
+  `docs/deos/DEOS-DISTRIBUTION.md`.
+
 ## 9. The surfaces (all route authorization through the same kernel)
 
 - **SDKs:** `sdk/` (Rust, `AgentRuntime` embeds the executor), `@dregg/sdk` (TS,
@@ -198,15 +278,16 @@ theorem. Key constructs (Lean models in `metatheory/Dregg2/Deos/`):
 - **seL4/firmament:** `sel4/` + `docs/FIRMAMENT.md`. The Robigalia v0 demo boots
   Rust userspace PDs, a real on-device STARK verifier PD, AND the executor PD (the
   Lean kernel runs inside a real seL4 protection domain), under QEMU. A real gpui
-  render is on the seL4 framebuffer too (a TAB-switchable mode beside the live cell
-  browser): a cockpit-shaped gpui `Scene` driven through the actual gpui renderer
-  (`render_scene_to_image` on lavapipe, no GPU) and blitted onto ramfb — the render
-  path is proven; swapping in the live `cockpit::Cockpit` element tree is the one
-  named frontier (`docs/desktop-os-research/GPUI-OFFSCREEN-FORK.md`). The "one true
-  blocker" (libuv-free single-threaded Lean runtime) is
-  closed (`docs/EMBEDDABLE-LEAN-RUNTIME.md`). An seL4 capability and a dregg
-  capability are the same abstraction at two distances; at n=1 the distributed
-  bounds collapse to strong local properties.
+  browser): the gpui-offscreen render reaches the seL4 framebuffer — a real gpui
+  `Scene` driven through the actual renderer (`render_scene_to_image` on lavapipe, no
+  GPU) blitted onto ramfb (`docs/desktop-os-research/GPUI-OFFSCREEN-FORK.md`). The
+  frontier is making that hosted image INTERACTIVE (input boots; live-repaint-on-turn
+  is the next step — `docs/desktop-os-research/SEL4-INTERACTIVE-COCKPIT.md`). The "one
+  true blocker" (libuv-free single-threaded Lean runtime) is closed
+  (`docs/EMBEDDABLE-LEAN-RUNTIME.md`). An seL4 capability and a dregg capability are
+  the same abstraction at two distances (the firmament axis: Local / Distributed /
+  Surface / HostPd); at n=1 the distributed bounds collapse to strong local
+  properties (immediate revoke, consistent checkpoint, synchronous present).
 
 ## 10. Working conventions (for agents operating here)
 
