@@ -1,0 +1,68 @@
+[package]
+name = "deos-zed"
+version = "0.1.0"
+edition = "2021"
+description = "A real code editor as a deos surface — edit real files inside deos, with a FirmamentFs seam so file I/O can later route through firmament caps."
+publish = false
+license = "AGPL-3.0-or-later"
+
+# deos-zed is its OWN workspace (it is NOT a member of the breadstuffs root
+# workspace). That keeps the heavy gpui/tree-sitter dep tree out of the main
+# graph while still resolving to the SAME gpui instance as starbridge-v2 +
+# gpui-component: every zed-derived dep below is pinned at emberian/zed@407a6ff,
+# and gpui-component is the SAME vendored path the cockpit consumes. One gpui in
+# the graph = the editor's `Entity`/`Window` types are byte-identical to the
+# cockpit's, so the CockpitSurface adapter (src/cockpit_surface.rs) drops into
+# starbridge-v2's dock without a second gpui linkage.
+[workspace]
+members = ["."]
+resolver = "2"
+
+[lib]
+name = "deos_zed"
+
+[features]
+# By default the editor builds with rust/json/toml/markdown tree-sitter grammars
+# so a real source file highlights out of the box. The editor is fully usable
+# WITHOUT any grammar (just no colour) — highlighting is purely additive.
+default = ["highlight-common", "gui-demo", "cockpit-surface"]
+# json is a non-optional grammar in gpui-component (always compiled), so it
+# needs no feature here. rust/toml/markdown are opt-in.
+highlight-common = [
+    "gpui-component/tree-sitter-rust",
+    "gpui-component/tree-sitter-toml",
+    "gpui-component/tree-sitter-markdown",
+]
+# The full grammar set (33 languages) if a richer editor is wanted.
+highlight-all = ["gpui-component/tree-sitter-languages"]
+# The windowed demo (gpui window with file tree + editor). The headless
+# `--verify` proof needs none of this. On by default so `cargo run --bin demo`
+# opens the window; the lib itself is window-free.
+gui-demo = []
+# The CockpitSurface adapter (mounts the editor in starbridge-v2's dock). Pure
+# Rust, no extra deps — gated only so the lib's minimal surface stays clear.
+cockpit-surface = []
+
+[dependencies]
+anyhow = "1"
+
+# Same gpui fork rev as starbridge-v2/Cargo.toml and gpui-component/Cargo.toml so
+# the whole graph resolves to ONE gpui. See the workspace-comment above.
+gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+
+# The real widget library: rope-backed code `Input`, tree-sitter highlighter,
+# file `tree` widget, dock. Same vendored path the cockpit consumes.
+gpui-component = { path = "../../gpui-component/crates/ui", default-features = false }
+gpui-component-assets = { path = "../../gpui-component/crates/assets" }
+
+# The gpui dep tree carries `[patch.crates-io]` overrides its host workspace
+# must replicate (see starbridge-v2/Cargo.toml). deos-zed is its own workspace,
+# so we replicate the subset our graph actually pulls: the vendored
+# pathfinder_simd 0.5.6 (the nightly portable-SIMD intrinsics were removed from
+# current toolchains; the vendored build.rs selects the scalar path), and the
+# two zed-forked async-* crates gpui depends on.
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+pathfinder_simd = { path = "../starbridge-v2/vendor/pathfinder_simd" }
