@@ -86,59 +86,67 @@ verdict.
   A refused call is an in-band `Reject` naming the leg that bit (scope /
   deadline / rate), and submits NO turn — the anti-ghost tooth.
 
-## 3. The built first slice (this crate)
+## 3. What is built (this crate)
 
-`cd deos-hermes && cargo build && cargo test` (and `cargo run` for the demo).
+`cd deos-hermes && cargo build && cargo test` (and `cargo run` for the live-shaped loop).
 
 - `src/acp.rs` — the ACP wire subset: `ToolKind` (byte-faithful to Hermes's
   `TOOL_KIND_MAP`), `ToolCallRequest`, `PermissionOutcome`.
-- `src/grant_registry.rs` — `GrantRegistry`: deos's per-kind `ToolGrant`.
-- `src/bridge.rs` — `HermesGateway::admit_call`: the seam.
-- `tests/seam.rs` — both-polarity, on the **real verified executor**: a
-  Hermes-style tool-call commits with a real receipt; over-rate and
-  past-deadline calls are refused in-band.
-- `src/main.rs` — a CLI driving a mocked ACP source of representative Hermes
-  tool-calls through the gateway, printing the live verdicts.
+- `src/grant_registry.rs` — `GrantRegistry`: per-KIND floors **and** tighter
+  per-TOOL grants (`MandateKey`, tightest-wins), each its own cap-gated,
+  independently-metered worker.
+- `src/bridge.rs` — `HermesGateway::admit_call` (the seam) + `admit_with_work`
+  (explicit override). Routes a call to its `MandateKey`'s worker and rides the
+  tool's side-effect on the metered turn.
+- `src/tool_effects.rs` — translates a tool-call's payload into a `Vec<Effect>`
+  witness (the path written, the URL fetched, the command run) that rides the
+  SAME metered turn, so the receipt witnesses WHAT the call did, not just the meter.
+- `src/acp_client.rs` — the REAL ndjson JSON-RPC ACP **client**: drives
+  `initialize` → `session/new` → `session/prompt`, consumes `session/update`,
+  and answers each `session/request_permission` via the gateway. Transport-
+  agnostic (`AcpPeer`): a live `hermes-acp` subprocess (`AcpTransport`) OR the
+  mock peer.
+- `src/mock_peer.rs` — `MockHermesPeer`: replays the real `acp_adapter` message
+  shapes (initialize/new_session responses, `session/update` tool_call events,
+  `session/request_permission` requests with real `ToolCallUpdate` payloads,
+  `PromptResponse` with `stopReason`), scripted with a tool-call list.
+- `src/mandate.rs` — `Mandate`: the mandate inspector (grants, budgets spent,
+  receipts, refusals) — ADOS made legible.
+- `src/surface.rs` — `AgentDockModel`: the dock view-model + the ready-to-mount
+  `CockpitSurface` recipe (no gpui dep).
+- `tests/seam.rs` — both-polarity on the **real verified executor**.
+- `tests/acp_loop.rs` — the FULL client ↔ mock-peer ↔ gateway loop end-to-end,
+  over the wire shape: every permission gated, side-effects ride the turn,
+  per-tool grants meter independently, the inspector + dock model render.
+- `src/main.rs` — `cargo run` (mock loop) / `cargo run -- live` (subprocess).
 
-**REAL in the slice:** the entire `ToolGateway` path (`admit` + `invoke` on the
-verified Lean executor, genuine `TurnReceipt`s). **STUB in the slice:** the ACP
-*transport* — a `ToolCallRequest` is fed in directly rather than parsed from a
-live `hermes acp` subprocess. The point of the first slice is the load-bearing
-tool-call→gated-turn seam, grounded in the real gateway; the transport is
-roadmap (§4).
+**REAL:** the entire `ToolGateway` path (`admit` + `invoke` on the verified Lean
+executor, genuine `TurnReceipt`s); the ACP ndjson JSON-RPC transport + the live
+subprocess spawner; the riding effects; the per-tool grants; the inspector.
+**MOCK (honest):** the Hermes *peer* in the tested end-to-end loop. The live
+`hermes-acp` install in this environment is broken (its venv lacks the `acp`
+Python module — `python -m acp_adapter.entry` raises `ModuleNotFoundError: No
+module named 'acp'`), and a working one needs a model provider + credentials.
+So the tested loop drives the SAME client against `MockHermesPeer`, which
+replays the real `acp_adapter` shapes; the live path runs the identical driver.
 
-## 4. Roadmap — to a fully confined deos-hermes agent
+## 4. Roadmap — remaining to a fully confined deos-hermes agent
 
-1. **The ACP-client ↔ Hermes-process wiring.** Spawn `hermes acp` as a
-   subprocess (`uvx hermes-agent[acp]==… hermes-acp`, per
-   `acp_registry/agent.json`), speak JSON-RPC over its stdio, and implement the
-   ACP **client** half: drive `session/new` + `session/prompt`, consume
-   `session/update`, and — the seam — answer `session/request_permission` by
-   calling `HermesGateway::admit_call` and replying with the mapped
-   `AllowedOutcome`/deny. Adopt a Rust ACP crate (`agent-client-protocol`, the
-   one Zed/`acp_thread` uses) or model the minimal JSON-RPC by hand. Map the ACP
-   `tool_call` payload's `name`/`kind`/`raw_input` straight into
-   `ToolCallRequest`.
-2. **Tool work into the turn.** Today `admit_call` takes the tool's effects as
-   an explicit `work: Vec<Effect>` (empty in the slice = a pure metered
-   admission). Wire the real tool's side-effects (a file write, a shell spawn)
-   as effects/intents that ride the SAME metered turn, so the receipt witnesses
-   the actual work, not just the meter. (`granted_call_carries_tool_work_payload`
-   in the SDK e2e shows the shape.)
-3. **Richer per-tool grants.** Move from per-*kind* to per-*tool* grants where
-   it matters (e.g. allow `read_file` but pin `terminal` to an allowlist of
-   commands via the cell program), and surface a deos UI to set/inspect a
-   session's mandate (the "agent dock"). Tie the `deadline` to the dregg clock /
-   block height rather than a demo scalar.
-4. **The sandbox-PD confinement (firmament/seL4).** Run the Hermes process in a
-   confined sandbox protection-domain (the host-PD being built — see
-   `project-firmament-sel4-boots`): its filesystem via `FirmamentFs` (a
-   cap-scoped VFS), its network via an explicit net-cap. Then the `ToolGateway`
-   meters/authorizes the *intent* of each tool-call AND the PD physically can't
-   reach anything outside its caps — defense in depth: the gate is the
-   authority face, the PD is the ambient-authority face.
-5. **The chat/agent dock surface.** Surface the confined Hermes as a deos agent
-   dock (starbridge-v2 / the moldable inspector epoch): a chat pane streaming
-   Hermes's `session/update` output, a live view of each tool-call's
-   receipt/refusal, and the mandate inspector. Hermes assists deos development
-   from inside deos, every action receipted.
+1. **Fix / wire the live `hermes-acp` install.** The client + subprocess
+   spawner are real; once `hermes-acp`'s venv carries the `acp` module and a
+   provider is configured, `cargo run -- live` drives a real Hermes session
+   through the gate, no code change.
+2. **The sandbox-PD confinement (firmament/seL4).** Replace the bare `Command`
+   in `AcpTransport::spawn_hermes` with a `spawn_hermes_in_pd(host_pd, cwd_cap,
+   net_cap)` that launches Hermes into a confined protection-domain (the host-PD
+   the firmament work boots — see `project-firmament-sel4-boots`): its
+   filesystem a cap-scoped VFS (`FirmamentFs`), its network an explicit net-cap.
+   The gate is the *intent* authority; the PD is the *ambient* authority —
+   defense in depth. The `AcpClient` driver is unchanged (see `src/surface.rs`).
+3. **Mount the dock surface in starbridge-v2.** `src/surface.rs` carries the
+   `AgentDockModel` view-model + the mounting recipe; the lift is a gpui-gated
+   `HermesDockSurface : CockpitSurface` that renders the model and runs the
+   client on a background thread. Tie `deadline` to the live dregg block height.
+4. **Per-command allowlists.** Extend per-tool grants from a rate ceiling to a
+   cell-program command allowlist (e.g. `terminal` restricted to a verb set),
+   binding the allowed argument shape into the worker cell's program.

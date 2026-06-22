@@ -1,101 +1,101 @@
-//! `deos-hermes` — a CLI demonstration of the seam: a Hermes-style tool-call
-//! becomes a cap-gated, metered, receipted dregg turn (or an in-band refusal).
+//! `deos-hermes` — drive the confined Hermes agent loop, two ways.
 //!
-//! This drives a MOCKED ACP source (a handful of representative Hermes
-//! tool-calls) through the real [`HermesGateway`] over a live verified-executor
-//! runtime. It prints, per call, the deos verdict deos would send back to
-//! Hermes over ACP: ALLOW + the dregg receipt id (+ remaining budget) or
-//! REJECT + the leg that bit.
+//! 1. THE LIVE-SHAPED ACP LOOP (default, or `cargo run -- mock`): the real ACP
+//!    client drives a session against the faithful [`MockHermesPeer`] (replaying
+//!    `acp_adapter`'s message shapes), answering every `session/request_permission`
+//!    with the [`HermesGateway`] verdict — a cap-gated, metered, receipted dregg
+//!    turn (with the tool's side-effect riding it) or an in-band refusal. Then it
+//!    prints the agent dock view (chat + tool-call ledger + the mandate inspector).
 //!
-//! Run: `cd deos-hermes && cargo run`
+//! 2. THE LIVE SUBPROCESS (`cargo run -- live`): spawns `hermes-acp` and drives
+//!    the SAME client over its stdio. (In this environment the install is broken —
+//!    missing the `acp` Python module — so this exits early with the honest error;
+//!    the wiring is real for when the install is fixed.)
+//!
+//! Run: `cd deos-hermes && cargo run` (mock) or `cargo run -- live`.
 
 use std::sync::{Arc, RwLock};
 
-use deos_hermes::{GrantRegistry, HermesGateway, PermissionOutcome, ToolCallRequest, ToolKind};
+use deos_hermes::surface::AgentDockModel;
+use deos_hermes::{
+    AcpClient, AcpTransport, GrantRegistry, HermesGateway, MockHermesPeer, ScriptedCall,
+};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime};
 
 fn main() {
-    // The grantor: deos's runtime over the verified executor, holding a root
-    // token it delegates each tool-class worker's mandate from.
+    let mode = std::env::args().nth(1).unwrap_or_else(|| "mock".to_string());
+    match mode.as_str() {
+        "live" => run_live(),
+        _ => run_mock(),
+    }
+}
+
+/// Build the grantor runtime + root token + the standard confinement (per-kind
+/// floors + the curated per-tool tightenings, deadline/clock 1000).
+fn confinement() -> (AgentRuntime, dregg_sdk::HeldToken, GrantRegistry) {
     let mut cclerk = AgentCipherclerk::new();
-    let root_key = [7u8; 32];
-    let root_token = cclerk.mint_token(&root_key, "deos");
+    let root_token = cclerk.mint_token(&[7u8; 32], "deos");
     let runtime = AgentRuntime::new(Arc::new(RwLock::new(cclerk)), "deos");
+    // The per-tool grants tighten `terminal` (rate 5), `web_extract` (15), etc.
+    let registry = GrantRegistry::default_for_session(1000).with_standard_tool_grants(1000);
+    (runtime, root_token, registry)
+}
 
-    // deos's confinement: the standard per-kind mandate, deadline (clock) 1000.
-    // We tighten Execute to rate 2 to show a rate exhaustion live.
-    let registry = GrantRegistry::default_for_session(1000).with_grant(
-        ToolKind::Execute,
-        dregg_sdk::ToolGrant {
-            tool_id: 40,
-            rate_limit: 2,
-            deadline: 1000,
-            tool_method: "tool.execute".to_string(),
-        },
-    );
+/// The live-shaped ACP loop over the faithful mock peer.
+fn run_mock() {
+    println!("deos-hermes — the confined Hermes ACP loop (mock peer)\n");
+    let (runtime, root_token, registry) = confinement();
+    let gateway = HermesGateway::new(&runtime, root_token, registry);
 
-    let mut gw = HermesGateway::new(&runtime, root_token, registry);
-
-    println!("deos-hermes seam demo — every Hermes tool-call → a cap-gated receipted dregg turn\n");
-
-    // A mocked ACP source: representative Hermes tool-calls (the kind of
-    // `tool_call` payload `acp_adapter` emits on `session/request_permission`).
-    let session = "sess-demo";
-    let calls = vec![
-        ToolCallRequest::new(session, "tc-1", "web_search", json_args(r#"{"query":"dregg"}"#)),
-        ToolCallRequest::new(session, "tc-2", "read_file", json_args(r#"{"path":"src/lib.rs"}"#)),
-        ToolCallRequest::new(session, "tc-3", "terminal", json_args(r#"{"command":"cargo build"}"#)),
-        ToolCallRequest::new(session, "tc-4", "terminal", json_args(r#"{"command":"cargo test"}"#)),
-        // The 3rd Execute call: over the rate-2 Execute mandate -> refused.
-        ToolCallRequest::new(session, "tc-5", "terminal", json_args(r#"{"command":"rm -rf /"}"#)),
-        // A past-deadline call (now 2000 > mandate deadline 1000) -> refused.
-        ToolCallRequest::new(session, "tc-6", "read_file", json_args(r#"{"path":"late"}"#)),
+    // A scripted Hermes turn: a search, a file write, three terminal calls (the
+    // 3rd over a tightened rate, in a tighter demo registry below), a fetch.
+    let script = vec![
+        ScriptedCall::new("web_search", serde_json::json!({"query": "dregg ocap"})),
+        ScriptedCall::new(
+            "write_file",
+            serde_json::json!({"path": "notes/plan.md", "content": "the plan"}),
+        ),
+        ScriptedCall::new("terminal", serde_json::json!({"command": "cargo build"})),
+        ScriptedCall::new("terminal", serde_json::json!({"command": "cargo test"})),
+        ScriptedCall::new("read_file", serde_json::json!({"path": "src/lib.rs"})),
     ];
 
-    for call in &calls {
-        // `now` = the ACP request arrival clock; tc-6 arrives "late" (2000).
-        let now = if call.tool_call_id == "tc-6" { 2000 } else { 50 };
-        // No tool payload here (a pure metered admission): the metering IS the
-        // receipted proof the call was authorized.
-        let outcome = gw.admit_call(call, now, vec![]);
-        print_outcome(call, &outcome);
-    }
+    let peer = MockHermesPeer::new("sess-demo", script);
+    let mut client = AcpClient::new(peer, gateway, 10);
 
-    println!();
-    println!(
-        "Execute calls made: {} (mandate rate 2)",
-        gw.calls_made(ToolKind::Execute)
-    );
-    println!(
-        "Fetch calls made: {} | Read calls made: {}",
-        gw.calls_made(ToolKind::Fetch),
-        gw.calls_made(ToolKind::Read),
-    );
+    let run = client
+        .run_prompt("/Users/ember/dev/breadstuffs", "help me confine hermes")
+        .expect("the ACP loop runs end-to-end over the mock peer");
+
+    let model = AgentDockModel::from_run("sess-demo", &run, client.gateway());
+    print!("{}", model.render_text());
 }
 
-fn json_args(s: &str) -> serde_json::Value {
-    serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
-}
+/// The live subprocess path: spawn `hermes-acp` and drive the same client.
+fn run_live() {
+    println!("deos-hermes — the confined Hermes ACP loop (LIVE subprocess)\n");
+    let (runtime, root_token, registry) = confinement();
+    let gateway = HermesGateway::new(&runtime, root_token, registry);
 
-fn print_outcome(call: &ToolCallRequest, outcome: &PermissionOutcome) {
-    match outcome {
-        PermissionOutcome::Allow {
-            receipt, remaining, ..
-        } => {
-            println!(
-                "  ALLOW  {:<7} {:<12} ({:?})  -> receipt {}…  [{} left]",
-                call.tool_call_id,
-                call.name,
-                call.kind,
-                &receipt[..16.min(receipt.len())],
-                remaining,
-            );
+    match AcpTransport::spawn_hermes("hermes-acp", &[]) {
+        Ok(transport) => {
+            let mut client = AcpClient::new(transport, gateway, 10);
+            match client.run_prompt(
+                "/Users/ember/dev/breadstuffs",
+                "list the files in this directory",
+            ) {
+                Ok(run) => {
+                    let model = AgentDockModel::from_run("live", &run, client.gateway());
+                    print!("{}", model.render_text());
+                }
+                Err(e) => {
+                    eprintln!(
+                        "live hermes-acp loop ended: {e}\n(the install in this env is broken — \
+                         missing the `acp` python module; use `cargo run` for the mock loop)"
+                    );
+                }
+            }
         }
-        PermissionOutcome::Reject { reason, .. } => {
-            println!(
-                "  REJECT {:<7} {:<12} ({:?})  -> {}",
-                call.tool_call_id, call.name, call.kind, reason,
-            );
-        }
+        Err(e) => eprintln!("could not spawn hermes-acp: {e}"),
     }
 }

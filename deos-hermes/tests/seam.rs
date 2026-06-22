@@ -42,7 +42,7 @@ fn hermes_tool_call_becomes_a_cap_gated_receipted_turn() {
     let call = ToolCallRequest::new("s1", "tc-1", "web_search", args());
     assert_eq!(call.kind, ToolKind::Fetch, "web_search classifies as Fetch");
 
-    let outcome = gw.admit_call(&call, 50, vec![]);
+    let outcome = gw.admit_with_work(&call, 50, Some(vec![]));
     match outcome {
         PermissionOutcome::Allow {
             tool_call_id,
@@ -84,9 +84,9 @@ fn over_rate_tool_call_refused_in_band() {
     let c2 = ToolCallRequest::new("s1", "tc-2", "terminal", args());
     assert_eq!(c1.kind, ToolKind::Execute);
 
-    assert!(gw.admit_call(&c1, 50, vec![]).allowed(), "first call commits");
+    assert!(gw.admit_with_work(&c1, 50, Some(vec![])).allowed(), "first call commits");
 
-    let outcome = gw.admit_call(&c2, 50, vec![]);
+    let outcome = gw.admit_with_work(&c2, 50, Some(vec![]));
     match outcome {
         PermissionOutcome::Reject { tool_call_id, reason } => {
             assert_eq!(tool_call_id, "tc-2");
@@ -107,7 +107,7 @@ fn past_deadline_tool_call_refused_in_band() {
     let mut gw = HermesGateway::new(&runtime, root, registry);
 
     let call = ToolCallRequest::new("s1", "tc-1", "read_file", args());
-    let outcome = gw.admit_call(&call, 2000, vec![]);
+    let outcome = gw.admit_with_work(&call, 2000, Some(vec![]));
     match outcome {
         PermissionOutcome::Reject { reason, .. } => {
             assert!(reason.contains("past deadline"), "names the deadline leg: {reason}");
@@ -127,10 +127,10 @@ fn each_kind_gets_an_independent_metered_mandate() {
     let mut gw = HermesGateway::new(&runtime, root, registry);
 
     assert!(gw
-        .admit_call(&ToolCallRequest::new("s1", "f1", "web_search", args()), 50, vec![])
+        .admit_with_work(&ToolCallRequest::new("s1", "f1", "web_search", args()), 50, Some(vec![]))
         .allowed());
     assert!(gw
-        .admit_call(&ToolCallRequest::new("s1", "e1", "write_file", args()), 50, vec![])
+        .admit_with_work(&ToolCallRequest::new("s1", "e1", "write_file", args()), 50, Some(vec![]))
         .allowed());
 
     assert_eq!(gw.calls_made(ToolKind::Fetch), 1);

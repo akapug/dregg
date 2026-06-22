@@ -28,20 +28,23 @@ use dregg_sdk::{
 use dregg_turn::Effect;
 
 use crate::acp::{PermissionOutcome, ToolCallRequest, ToolKind};
-use crate::grant_registry::GrantRegistry;
+use crate::grant_registry::{GrantRegistry, MandateKey};
+use crate::tool_effects;
 
-/// The deos-side bridge: one [`ToolGateway`] per [`ToolKind`], lazily admitted,
+/// The deos-side bridge: one [`ToolGateway`] per [`MandateKey`] (a per-tool
+/// grant where deos pinned one, else the per-kind floor), lazily admitted,
 /// fronting every Hermes tool-call over ACP.
 pub struct HermesGateway<'rt> {
     /// The grantor: the runtime that admits workers and runs their turns.
     runtime: &'rt AgentRuntime,
     /// The root token the grantor delegates each worker's mandate from.
     root_token: HeldToken,
-    /// deos's per-kind mandate over this Hermes session.
+    /// deos's per-tool / per-kind mandate over this Hermes session.
     registry: GrantRegistry,
-    /// The cap-gated worker per kind, admitted on first use under that kind's
-    /// grant. (One `ToolGateway` = one delegated worker + one metered counter.)
-    gateways: HashMap<ToolKind, ToolGateway>,
+    /// The cap-gated worker per [`MandateKey`], admitted on first use under that
+    /// key's grant. (One `ToolGateway` = one delegated worker + one metered
+    /// counter.) A per-tool grant is its OWN worker, independent of its kind.
+    gateways: HashMap<MandateKey, ToolGateway>,
 }
 
 impl<'rt> HermesGateway<'rt> {
@@ -65,59 +68,77 @@ impl<'rt> HermesGateway<'rt> {
         self.registry.grant_for(kind)
     }
 
-    /// Lazily admit (or fetch) the cap-gated worker for a kind. The worker's
-    /// biscuit credential is scoped to EXACTLY the kind's `tool_method`, and its
-    /// cell carries the `mandate_program` rate/monotonic backstop — both
+    /// The registry deos confined this session under (for the mandate inspector).
+    pub fn registry(&self) -> &GrantRegistry {
+        &self.registry
+    }
+
+    /// Lazily admit (or fetch) the cap-gated worker for a [`MandateKey`]. The
+    /// worker's biscuit credential is scoped to EXACTLY the key's `tool_method`,
+    /// and its cell carries the `mandate_program` rate/monotonic backstop — both
     /// installed by the proven [`ToolGateway::admit`].
-    fn gateway_for(&mut self, kind: ToolKind) -> Result<&mut ToolGateway, ToolCallError> {
-        if !self.gateways.contains_key(&kind) {
-            let grant = self.registry.grant_for(kind).clone();
+    fn gateway_for(&mut self, key: &MandateKey) -> Result<&mut ToolGateway, ToolCallError> {
+        if !self.gateways.contains_key(key) {
+            let grant = self.registry.grant_for_key(key).clone();
             let gw = ToolGateway::admit(self.runtime, &self.root_token, grant)
                 .map_err(ToolCallError::Sdk)?;
-            self.gateways.insert(kind, gw);
+            self.gateways.insert(key.clone(), gw);
         }
         Ok(self
             .gateways
-            .get_mut(&kind)
-            .expect("just inserted the gateway for this kind"))
+            .get_mut(key)
+            .expect("just inserted the gateway for this key"))
     }
 
     /// THE SEAM — admit a Hermes ACP tool-call as a cap-gated, metered,
-    /// receipted dregg turn (or refuse it in-band).
+    /// receipted dregg turn (or refuse it in-band), with the tool's SIDE-EFFECT
+    /// riding the SAME metered turn.
     ///
-    /// `now` is the presentation clock/height (the ACP request arrival time);
-    /// `work` is the effects the tool's actual payload performs on the worker
-    /// cell (pass an empty `Vec` for a pure metered admission — the metering
-    /// alone IS the receipted proof the call was authorized).
+    /// `now` is the presentation clock/height (the ACP request arrival time).
+    /// The call's payload is translated by [`tool_effects::effects_for_call`]
+    /// into a witness `Vec<Effect>` that rides the metered turn, so the
+    /// committed receipt witnesses WHAT the call did (the path written, the URL
+    /// fetched), not just that it was authorized.
     ///
-    /// The call's [`ToolKind`] (from its name) selects the mandate; the
-    /// gate's `delegAdmit` then folds SCOPE ∧ DEADLINE ∧ RATE. The returned
-    /// [`PermissionOutcome`] is exactly what deos sends back to Hermes over the
-    /// ACP `session/request_permission`.
-    pub fn admit_call(
+    /// The call's name resolves a [`MandateKey`] (a tight per-tool grant if deos
+    /// pinned one, else the per-kind floor); the gate's `delegAdmit` then folds
+    /// SCOPE ∧ DEADLINE ∧ RATE. The returned [`PermissionOutcome`] is exactly
+    /// what deos sends back to Hermes over the ACP `session/request_permission`.
+    pub fn admit_call(&mut self, call: &ToolCallRequest, now: i64) -> PermissionOutcome {
+        self.admit_with_work(call, now, None)
+    }
+
+    /// As [`HermesGateway::admit_call`], but with EXPLICIT `work` overriding the
+    /// auto-derived tool witness. Pass `Some(vec![])` for a pure metered
+    /// admission (the metering alone IS the receipted proof the call was
+    /// authorized); pass `None` to let the bridge derive the witness from the
+    /// call payload (the default `admit_call` behavior).
+    pub fn admit_with_work(
         &mut self,
         call: &ToolCallRequest,
         now: i64,
-        work: Vec<Effect>,
+        work: Option<Vec<Effect>>,
     ) -> PermissionOutcome {
-        let kind = call.kind;
-        // The in-band tool id the gate checks scope against is synthesized from
-        // the call's kind — the ACP wire does not carry our scalar id, so the
-        // grantor's per-kind id IS the scope key. (A call whose name maps to a
-        // different kind lands on a different gateway and would be out-of-scope
-        // there; here we route to the matching one, so scope passes and the
-        // RATE + DEADLINE legs do the live confinement.)
-        let tool_id = self.registry.tool_id_for(kind);
+        // Tightest-wins routing: a per-tool grant if pinned, else the kind floor.
+        let key = self.registry.key_for_tool(&call.name);
+        // The in-band tool id the gate checks scope against is the grant's id —
+        // the ACP wire does not carry our scalar id, so the grantor's per-key id
+        // IS the scope key. A call routed to the right worker is in-scope there;
+        // the RATE + DEADLINE legs do the live confinement.
+        let tool_id = self.registry.tool_id_for_key(&key);
 
-        let gw = match self.gateway_for(kind) {
+        let gw = match self.gateway_for(&key) {
             Ok(gw) => gw,
             Err(e) => {
                 return PermissionOutcome::Reject {
                     tool_call_id: call.tool_call_id.clone(),
-                    reason: format!("could not admit worker for {kind:?}: {e}"),
+                    reason: format!("could not admit worker for {}: {e}", key.label()),
                 };
             }
         };
+
+        // The tool's side-effect rides the SAME metered turn (unless overridden).
+        let work = work.unwrap_or_else(|| tool_effects::effects_for_call(call, gw.worker_cell()));
 
         match gw.invoke(tool_id, now, work) {
             Ok(receipt) => PermissionOutcome::Allow {
@@ -136,9 +157,33 @@ impl<'rt> HermesGateway<'rt> {
         }
     }
 
-    /// Calls made so far on a kind's mandate (0 if never invoked).
+    /// Calls made so far on a kind's mandate (0 if never invoked). Counts only
+    /// the per-kind worker — tools with their own per-tool grant meter separately
+    /// (see [`HermesGateway::calls_made_for_tool`] /
+    /// [`HermesGateway::calls_made_for_key`]).
     pub fn calls_made(&self, kind: ToolKind) -> i64 {
-        self.gateways.get(&kind).map_or(0, |gw| gw.calls_made())
+        self.calls_made_for_key(&MandateKey::Kind(kind))
+    }
+
+    /// Calls made so far on the worker a given tool routes to (its per-tool
+    /// grant if pinned, else its kind floor).
+    pub fn calls_made_for_tool(&self, name: &str) -> i64 {
+        let key = self.registry.key_for_tool(name);
+        self.calls_made_for_key(&key)
+    }
+
+    /// Calls made so far on a specific [`MandateKey`]'s worker (0 if never
+    /// admitted).
+    pub fn calls_made_for_key(&self, key: &MandateKey) -> i64 {
+        self.gateways.get(key).map_or(0, |gw| gw.calls_made())
+    }
+
+    /// Every mandate key that has been admitted (a live worker exists), for the
+    /// inspector. Keys never touched this session are absent (calls_made 0).
+    pub fn admitted_keys(&self) -> Vec<MandateKey> {
+        let mut keys: Vec<MandateKey> = self.gateways.keys().cloned().collect();
+        keys.sort_by_key(|k| k.label());
+        keys
     }
 }
 
