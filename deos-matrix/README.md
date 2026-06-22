@@ -6,10 +6,33 @@ This crate stands on the official **[matrix-rust-sdk]** (`matrix-sdk 0.18`) — 
 pure-Rust SDK that provides the Matrix protocol (sync, room state, ruma events),
 end-to-end encryption (vodozemac), login flows, and media. It is the same
 foundation Element X, Fractal, and iamb build on. We do **not** re-implement the
-protocol. Our value-add is the **gpui UI** (deferred to the `gpui-component`
-vendoring) and the **deos confinement integration** (below).
+protocol. Our value-add is the **gpui UI** (the `deos-chat` demo, below) and the
+**deos confinement integration** — culminating in the **rehydratable membrane**
+seam (`docs/deos/MEMBRANE-MERGE-SEAM.md`): a chat message can carry a
+frustum-culled, cap-bounded fork of the deos world that recipients rehydrate,
+drive real turns on, and stitch back.
 
 [matrix-rust-sdk]: https://github.com/matrix-org/matrix-rust-sdk
+
+## The deos-chat gpui UI (built, behind the `gui` feature)
+
+- `ChatView` (`src/chat.rs`) — a **room-list sidebar** (encryption badges, unread
+  pills, topics), a **timeline** (sender-grouped, day separators, per-sender color,
+  own-vs-other), and a **composer** built on `gpui_component::input::Input`/
+  `InputState` with the nheko keymap (**Enter sends, Shift-Enter newlines** via
+  `InputEvent::PressEnter`). Renders against the `ChatSource` seam.
+- `ChatSource` + `MockSource` (`src/source.rs`) — the synchronous data seam the UI
+  renders against. `MatrixHandle` is a real `ChatSource` (live backend);
+  `MockSource::seeded()` is a recorded sync so the UI is **real and exercisable
+  offline** (no homeserver). The composer actually appends.
+- `deos-chat` (`src/bin/chat.rs`) — the windowed demo (`cargo run --features gui
+  --bin deos-chat`), or `--headless` for the CI-runnable data-path proof.
+- `ChatSurface` (`src/cockpit_surface.rs`, feature `cockpit-surface`) — mounts the
+  chat as a dock `CockpitSurface` in starbridge-v2 (forwarder ready-to-drop at
+  `starbridge-v2/src/dock/chat_surface.rs`).
+- `MembraneEnvelope` + `MembraneHost` (`src/membrane.rs`) — the wire shape + the
+  comms-PD trait for the rehydratable-membrane seam (design:
+  `docs/deos/MEMBRANE-MERGE-SEAM.md`).
 
 ## What is here today (the headless foundation, proven to build)
 

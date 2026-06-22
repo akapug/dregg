@@ -99,6 +99,15 @@ its blast-radius needs the cap-compromise-propagation + revocation-non-monotone-
 deos-chat LANE (a155821): study nheko (solves Matrix-client problems correctly — draw the UX/feature patterns
 even though it's C++/Qt) + brief rivet review; build the gpui chat UI on deos-matrix + gpui-component (room-list/
 timeline/composer-as-real-Input); design the membrane+merge seam. The chat is the SOCIAL layer over the dregg world.
+✅ BUILT: the gpui ChatView (room-list sidebar w/ enc-badges+unread-pills · sender-grouped timeline w/ day-separators ·
+real gpui-component Input composer, nheko keymap Enter-sends/Shift-Enter-newlines via InputEvent::PressEnter) over a
+ChatSource seam (MatrixHandle = live; MockSource = recorded sync so the UI is real OFFLINE). `deos-chat` demo window
+RENDERS (gui feature; --headless data-path proof passes); ChatSurface mounts as a dock CockpitSurface (forwarder
+ready-to-drop at starbridge-v2/src/dock/chat_surface.rs). Membrane seam = MembraneEnvelope (wire) + MembraneHost trait
+(comms-PD) + the design doc docs/deos/MEMBRANE-MERGE-SEAM.md (real-now-vs-roadmap, grounded in fork/snapshot/transclusion/
+branch-and-stitch). RESIDUALS (wire, not build): (1) a WorkerRequest::SendMessage variant — the only gap in the live
+send path (mock send works; the trait + UI are ready). (2) MembraneHost impl in the confined comms-PD (mint/rehydrate/
+drive buildable now; stitch-pushout + Settlement-Soundness theorem = the circuit-soundness frontier).
 ### DESKTOP EPOCH — deferred cleanups (ember 2026-06-22, "not yet"):
 - MIGRATE existing cockpit UI → gpui-component widgets. The hand-rolled bits (the ⌘K palette char-accumulator
   cockpit.rs ~3071, ad-hoc buttons/lists/the inspect-act fields) move to gpui_component::{input::{InputState,

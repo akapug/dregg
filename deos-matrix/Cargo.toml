@@ -46,8 +46,24 @@ path = "src/lib.rs"
 name = "deos-matrix-cli"
 path = "src/bin/cli.rs"
 
+# The deos-chat gpui demo: a window with a room-list sidebar, a timeline, and a
+# real gpui-component composer. Gated on `gui` so the headless library/CLI never
+# pulls the gpui graph. Falls back to a mock/recorded sync so the UI is real even
+# with no live homeserver.
+[[bin]]
+name = "deos-chat"
+path = "src/bin/chat.rs"
+required-features = ["gui"]
+
 [features]
 default = []
+# The gpui UI (deos-chat): pulls the SAME vendored gpui fork + gpui-component the
+# cockpit pins, so the chat surface drops into starbridge-v2's dock without a
+# second gpui linkage. Off by default — the protocol foundation + CLI stay lean.
+gui = ["dep:gpui", "dep:gpui_platform", "dep:gpui-component", "dep:gpui-component-assets"]
+# The CockpitSurface adapter (mounts the chat in starbridge-v2's dock). Inherent
+# methods here; the ~20-line forwarder ships ready-to-drop in starbridge-v2.
+cockpit-surface = ["gui"]
 
 [dependencies]
 # The official Matrix client-server SDK — protocol + E2E encryption (vodozemac).
@@ -72,3 +88,25 @@ url = "2"
 clap = { version = "4", features = ["derive", "env"] }
 rpassword = "7"
 directories = "5"
+
+# --- gpui UI deps (gated on `gui`) -----------------------------------------
+# Same emberian/zed fork rev as starbridge-v2/Cargo.toml, deos-zed/Cargo.toml,
+# and gpui-component/Cargo.toml so the WHOLE graph resolves to ONE gpui — the
+# chat `Entity`/`Window` types are byte-identical to the cockpit's, so the
+# CockpitSurface adapter drops into starbridge-v2's dock without a second gpui
+# linkage. (See deos-zed/Cargo.toml for the rationale this mirrors.)
+gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["font-kit", "x11", "wayland", "runtime_shaders"], optional = true }
+gpui-component = { path = "../../gpui-component/crates/ui", default-features = false, optional = true }
+gpui-component-assets = { path = "../../gpui-component/crates/assets", optional = true }
+
+# The gpui dep tree carries `[patch.crates-io]` overrides its host workspace must
+# replicate (see starbridge-v2/Cargo.toml + deos-zed/Cargo.toml). deos-matrix is
+# its own workspace, so we replicate the subset our graph pulls: the vendored
+# pathfinder_simd 0.5.6 (nightly portable-SIMD intrinsics removed from current
+# toolchains; the vendored build.rs selects the scalar path) and the two
+# zed-forked async-* crates gpui depends on.
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+pathfinder_simd = { path = "../starbridge-v2/vendor/pathfinder_simd" }
