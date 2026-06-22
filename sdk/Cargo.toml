@@ -27,6 +27,12 @@ dregg-bridge = { path = "../bridge" }
 # archive-gated by `lean_available()`). The ONE opt-out is the `no-lean-link` platform
 # feature (wasm32/zkvm — targets that cannot link libdregg_lean.a).
 dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# THE SWAP producer-mode cluster (`produce_via_lean` = the authoritative verified-Lean state
+# producer). Native-only crate (links libdregg_lean.a); pulled by the default-on `exec-lean`
+# feature. A `no-lean-link` (wasm/zkvm) build passes `default-features = false`, so `exec-lean` is
+# OFF and `run_turn` uses the legacy Rust-producer path — the platform boundary is now this dep, not
+# a flag carving the cluster out of `dregg-turn`.
+dregg-exec-lean = { path = "../exec-lean", optional = true }
 # `network` feature: tokio + dregg-wire — non-wasm32 (mio, quinn). Wasm
 # consumers set `default-features = false`; the modules that depend on
 # these (client, embed, discharge, discovery) are `#[cfg]`-gated.
@@ -95,8 +101,13 @@ zeroize = { workspace = true }
 # verifier builds pass `default-features = false`, so they get NEITHER the SDK
 # rotated wrappers NOR `dregg-circuit/prover` (the prover-free rotated VERIFY
 # surface they need is C2 of the cutover, ROTATION-CUTOVER §EXEC).
-default = ["federation-client", "network", "captp", "prover"]
+default = ["federation-client", "network", "captp", "prover", "exec-lean"]
 federation-client = ["dep:reqwest"]
+# THE SWAP producer cluster (native): pulls `dregg-exec-lean` so `AgentRuntime::run_turn` drives
+# the verified Lean executor as the authoritative state producer. ON by default; a
+# `default-features = false` (wasm / no-lean-link) build leaves it off and falls back to the Rust
+# producer. The platform boundary is this dep, not a core-gating flag.
+exec-lean = ["dep:dregg-exec-lean"]
 network = ["dep:dregg-wire", "dep:tokio", "dep:futures-core"]
 # `embed-core`: the wire-free `DreggEngine` (executor + ledger + token + proof
 # core) WITHOUT the `network` stack (no tokio/quinn/dregg-wire). For embedded,
@@ -112,7 +123,6 @@ captp = ["dep:dregg-captp", "dep:dregg-storage", "dep:chacha20poly1305"]
 # and an unlinked archive self-falls-back to the Rust producer.
 no-lean-link = [
     "dregg-lean-ffi/no-lean-link",
-    "dregg-turn/no-lean-link",
     "dregg-intent/no-lean-link",
     "dregg-captp?/no-lean-link",
 ]

@@ -2298,6 +2298,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-exec-lean"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-cell-crypto",
+ "dregg-circuit",
+ "dregg-lean-ffi",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "postcard",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "dregg-federation"
 version = "0.1.0"
 dependencies = [
@@ -2464,6 +2481,7 @@ dependencies = [
  "dregg-coord",
  "dregg-credentials",
  "dregg-dsl-runtime",
+ "dregg-exec-lean",
  "dregg-federation",
  "dregg-intent",
  "dregg-lean-ffi",
@@ -2676,6 +2694,7 @@ dependencies = [
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-dsl-tests",
+ "dregg-exec-lean",
  "dregg-federation",
  "dregg-hints",
  "dregg-intent",
@@ -2904,7 +2923,6 @@ dependencies = [
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-types",
  "ed25519-dalek",

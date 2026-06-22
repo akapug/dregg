@@ -15,11 +15,13 @@
 //! `metatheory/docs/rebuild/SUCCESSOR-ROADMAP.md` and
 //! `metatheory/Dregg2/Exec/FullForestAuth.lean`.
 //!
-//! While the swap is in flight, [`lean_shadow`] runs the verified Lean
-//! executor as a *shadow* (gated on `DREGG_LEAN_SHADOW=1`) and compares its
-//! commit decision against this Rust path — that comparison is the
-//! differential harness validating the eventual cutover. The Lean side is the
-//! oracle; this Rust side is the subject under test, never the reverse.
+//! While the swap is in flight, the `dregg-exec-lean` crate runs the verified
+//! Lean executor as a *shadow* (gated on `DREGG_LEAN_SHADOW=1`) and compares its
+//! commit decision against this Rust path — that comparison is the differential
+//! harness validating the eventual cutover. This crate is FFI-free: it reaches
+//! the shadow only through the [`shadow::ShadowObserver`] seam (a native node
+//! injects `dregg_exec_lean::LeanShadowObserver`). The Lean side is the oracle;
+//! this Rust side is the subject under test, never the reverse.
 //!
 //! Do NOT read this crate as "the dregg semantics". Read `metatheory/Dregg2/`.
 //! See `metatheory/docs/rebuild/DREGG1-TO-DREGG2.md`.
@@ -100,9 +102,6 @@ pub mod executor;
 pub mod fast_path;
 pub mod forest;
 pub(crate) mod journal;
-#[cfg(not(feature = "no-lean-link"))]
-pub mod lean_apply;
-pub mod lean_shadow;
 pub mod pending;
 pub mod presence_discharge;
 pub mod reactive;
@@ -110,6 +109,7 @@ pub mod reversible;
 pub mod rotation_witness;
 pub mod routing;
 pub mod script;
+pub mod shadow;
 pub mod turn;
 pub mod umem;
 pub mod verify;
@@ -182,6 +182,7 @@ pub use reversible::{
     ReversibleError, ReversibleHistory, ReversibleStep,
 };
 pub use routing::{IntroductionExport, RoutingDirective};
+pub use shadow::{NoOpShadowObserver, ShadowHostCtx, ShadowObserver};
 pub use turn::{
     ConsumedCapAuthPath, ConsumedCapWitness, CustomProgramProof, EmittedEvent, Finality,
     SovereignCellWitness, Turn, TurnReceipt, TurnResult,

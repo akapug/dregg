@@ -181,7 +181,7 @@ dregg-cell = { path = "../cell", default-features = false }
 # `cfg(not(prover))` block — the same unify the wasm light-client graph resolves
 # (`lightclient` forwards `dregg-turn/prover`). `no-lean-link` keeps the Lean
 # archive out; `threshold-sig` stays off (the rotated mint does not need arkworks).
-dregg-turn = { path = "../turn", default-features = false, features = ["no-lean-link", "prover"] }
+dregg-turn = { path = "../turn", default-features = false, features = ["prover"] }
 # postcard is already a normal dependency above; the test re-uses it to project a
 # `WholeChainProof` into the transport blobs (the documented S2 producer mapping).
 

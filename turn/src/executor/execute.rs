@@ -155,35 +155,35 @@ impl TurnExecutor {
         // receipt-chain head, and the Stingray budget slice. The verified Lean gate derives its
         // `AdmCtx` from THIS (`admCtxOfHost`), so the shadow's clock/frozen/chain-head/budget legs
         // are decided by the node exactly as the real `apply.rs` admission decides them.
-        let host = if crate::lean_shadow::shadow_enabled() {
+        let obs = self.shadow_observer.clone();
+        let host = if obs.enabled() {
             self.shadow_host_ctx(turn, ledger)
         } else {
             // Shadow off: skip the migration / budget mutex locks on the hot path. The diagnostic
             // ctx is never consumed (capture is a no-op when shadow is disabled).
-            crate::lean_shadow::ShadowHostCtx::diag()
+            crate::shadow::ShadowHostCtx::diag()
         };
-        crate::lean_shadow::capture_pre_state_if_eligible(turn, ledger, host);
+        obs.capture_pre_state(turn, ledger, host);
 
         // THE SWAP beachhead (part d): under strict mode the verified Lean executor is a binding
         // REJECTION authority. Snapshot the FULL pre-state ledger BEFORE the Rust commit so a Lean
         // VETO can restore it (a verified rejection = NO state edit). Off the strict path this is
         // never taken (clone avoided on the hot path).
-        let veto_snapshot: Option<Ledger> = if crate::lean_shadow::strict_veto_enabled() {
+        let veto_snapshot: Option<Ledger> = if obs.strict_veto_enabled() {
             Some(ledger.clone())
         } else {
             None
         };
 
         let result = self.execute_without_shadow(turn, ledger);
-        let lean_verdict =
-            crate::lean_shadow::maybe_shadow_turn(turn, ledger, &result, self.block_height);
+        let lean_verdict = obs.observe(turn, ledger, &result, self.block_height);
 
         // When the verified Lean executor REJECTED a turn the Rust executor COMMITTED, the Lean
         // verdict VETOES the commit — the verified kernel can only TIGHTEN the decision
         // (kernel-vs-NEW-Rust; never matching a buggy oracle, never laundering a Rust rejection to a
         // commit). Restoring the pre-state snapshot leaves the ledger EXACTLY as a verified
         // rejection would (no state edit).
-        if crate::lean_shadow::lean_vetoes(result.is_committed(), lean_verdict) {
+        if obs.lean_vetoes(result.is_committed(), lean_verdict) {
             if let Some(pre) = veto_snapshot {
                 tracing::warn!(
                     target: "dregg::lean_shadow::veto",
@@ -223,11 +223,11 @@ impl TurnExecutor {
         &self,
         turn: &Turn,
         ledger: &Ledger,
-    ) -> crate::lean_shadow::ShadowHostCtx {
+    ) -> crate::shadow::ShadowHostCtx {
         self.shadow_host_ctx(turn, ledger)
     }
 
-    fn shadow_host_ctx(&self, turn: &Turn, ledger: &Ledger) -> crate::lean_shadow::ShadowHostCtx {
+    fn shadow_host_ctx(&self, turn: &Turn, ledger: &Ledger) -> crate::shadow::ShadowHostCtx {
         use std::collections::BTreeSet;
 
         // Collect the cells this turn references (agent + every action target + effect cell), then
@@ -261,7 +261,7 @@ impl TurnExecutor {
             .map(|g| g.lock().unwrap().slice.remaining())
             .unwrap_or(1_000_000_000);
 
-        crate::lean_shadow::ShadowHostCtx {
+        crate::shadow::ShadowHostCtx {
             block_height: self.block_height,
             frozen,
             stored_head,

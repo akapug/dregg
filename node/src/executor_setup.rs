@@ -130,9 +130,9 @@ pub fn execute_via_producer(
     }
 
     let agent = turn.agent;
-    let (result, outcome) = dregg_turn::lean_apply::produce_via_lean(executor, turn, ledger);
+    let (result, outcome) = dregg_exec_lean::produce_via_lean(executor, turn, ledger);
     match &outcome {
-        dregg_turn::lean_apply::ProducerOutcome::LeanAuthoritative {
+        dregg_exec_lean::ProducerOutcome::LeanAuthoritative {
             committed,
             rust_agreed,
             lean_root,
@@ -166,7 +166,7 @@ pub fn execute_via_producer(
                 );
             }
         }
-        dregg_turn::lean_apply::ProducerOutcome::Fallback { reason } => {
+        dregg_exec_lean::ProducerOutcome::Fallback { reason } => {
             warn!(
                 target: "dregg::lean_shadow::producer",
                 agent = ?agent,
@@ -181,15 +181,23 @@ pub fn execute_via_producer(
 }
 
 /// Build a fresh executor configured for turn submission (height = attested + 1).
+///
+/// The verified-Lean shadow/gate observer (`dregg_exec_lean::LeanShadowObserver`) is injected
+/// UNCONDITIONALLY on the native node — the differential cross-check and the strict-veto rejection
+/// authority are live on every executor the node builds. (Only a wasm / no-FFI build, which does
+/// not depend on `dregg-exec-lean`, gets the no-op default.)
 pub fn new_submit_executor(s: &NodeStateInner) -> TurnExecutor {
-    let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default())
+        .with_shadow_observer(dregg_exec_lean::LeanShadowObserver::arc());
     configure_turn_executor(&mut executor, s, BlockHeightMode::Next);
     executor
 }
 
-/// Build a fresh executor at the current attested height (verify / read paths).
+/// Build a fresh executor at the current attested height (verify / read paths). Injects the
+/// verified-Lean shadow/gate observer like [`new_submit_executor`].
 pub fn new_verify_executor(s: &NodeStateInner) -> TurnExecutor {
-    let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = TurnExecutor::new(dregg_turn::ComputronCosts::default())
+        .with_shadow_observer(dregg_exec_lean::LeanShadowObserver::arc());
     configure_turn_executor(&mut executor, s, BlockHeightMode::Current);
     executor
 }

@@ -459,10 +459,10 @@ impl AgentRuntime {
     /// effect) — this is the legacy `self.executor.execute(turn, ledger)` path, explicitly FENCED
     /// (the uncovered partition is named + surfaced, not a silent Rust default).
     fn run_turn(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
-        #[cfg(not(feature = "no-lean-link"))]
+        #[cfg(feature = "exec-lean")]
         {
             if self.lean_producer_enabled {
-                use dregg_turn::lean_apply::{self, ProducerOutcome};
+                use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
                 let (result, outcome) = lean_apply::produce_via_lean(&self.executor, turn, ledger);
                 match &outcome {
                     ProducerOutcome::LeanAuthoritative {

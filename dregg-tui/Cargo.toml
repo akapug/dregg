@@ -50,7 +50,7 @@ anyhow = "1"
 # GMP) — link-suppression only; the verify path is plonky3 + crypto, never Lean.
 dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link"] }
 dregg-verifier = { path = "../verifier", features = ["no-lean-link"] }
-dregg-turn = { path = "../turn", default-features = false, features = ["no-lean-link"] }
+dregg-turn = { path = "../turn", default-features = false }
 # Used only by `--selfcheck`: prove a fresh HEAD-version Effect-VM turn so the
 # verify core can be shown reaching VERIFIED on a version-matched proof (the live
 # devnet runs an older PI layout). Same audited plonky3 prover the node uses.

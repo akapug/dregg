@@ -1,0 +1,125 @@
+//! The `Render for Cockpit` impl — the top-level frame: drain live, fold dynamics, witness the tab, lay out the rail + the hosted pane group.
+
+use super::*;
+
+impl Render for Cockpit {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // LIVE: drain the node's receipt stream first so this frame reflects every
+        // receipt that arrived (per-receipt `cx.notify()`, not a snapshot reload).
+        self.drain_live_stream(cx);
+        // M2 DELTA LOOP: fold this frame's dynamics into per-slice invalidation so
+        // the projection memo reflects exactly the cells that changed (O(changed),
+        // not O(ledger)) — the producer↔consumer JOIN (EFFICIENCY-WELD-PLAN §2.1).
+        self.fold_dynamics();
+        // M3 WIDEN + OPTIMISTIC NAV: witness the active tab into the workspace cell —
+        // but OFF the paint path. The scattered free `self.tab = …` draft writes (the
+        // §3.5 stream weight class) and the `set_tab` clicks both reconcile here, but
+        // the `SetField` commit (a real executor turn) is DEFERRED + coalesced onto the
+        // foreground async executor rather than run synchronously in this frame. While
+        // it is pending, `active_tab()` dispatches on the optimistic draft, so the panel
+        // is correct this very frame; the cell catches up a beat later. Clean ⟹ the
+        // guard inside makes this a cheap bool/compare (no task, no commit).
+        self.schedule_witness_tab(cx);
+        // NAV HISTORY: record this frame's UI state so back/forward (← → / ⌘[ ⌘])
+        // can step through wherever you've been (the nav API made navigable).
+        self.record_nav();
+
+        // L6 PANED WORKSPACE: seed the right pane's `PaneGroup` on first render
+        // (ONE pane holding all tabs as surfaces — the un-split base case), then
+        // sync the un-split pane's active surface to the witnessed `active_tab()`
+        // so flat-tab navigation (⌘K / the nav API) keeps driving the base pane.
+        self.ensure_pane_group(window, cx);
+        self.sync_base_pane_active(window, cx);
+        // Build the right pane's element: the `PaneGroup` rendered with the
+        // active-pane decorator (a 2px accent border on the focused pane). Built
+        // before the root `div()` so the `&self.pane_group` + `&self.active_pane`
+        // borrows don't tangle with the rest of the tree.
+        let right_pane: gpui::AnyElement = match (self.pane_group.as_ref(), self.active_pane.as_ref())
+        {
+            (Some(group), Some(active)) => {
+                let decorator = ActivePaneDecorator::new(active, theme::accent());
+                group.render(&decorator, window, cx).into_any_element()
+            }
+            // Defensive fallback (never on the live path once seeded): the flat
+            // dispatch, so the right pane is never blank.
+            _ => self.workspace(cx),
+        };
+
+        let palette_open = self.palette.is_open();
+        div()
+            .id("cockpit-root")
+            .track_focus(&self.focus)
+            .key_context("Cockpit")
+            // ⌘K + the palette's typing/selection all flow through one handler.
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
+                this.on_key(ev, cx);
+            }))
+            .relative()
+            .flex()
+            .size_full()
+            .bg(theme::bg())
+            .text_color(theme::text())
+            .font_family("Menlo")
+            // Left rail: image header + cell world + dynamics feed.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(320.))
+                    .h_full()
+                    .border_r_1()
+                    .border_color(theme::border())
+                    .bg(theme::panel())
+                    .child(self.rail_header())
+                    .child(div().flex_1().child(self.cell_world(cx)))
+                    .child(
+                        div()
+                            .border_t_1()
+                            .border_color(theme::border())
+                            .child(self.dynamics_feed()),
+                    ),
+            )
+            // Center: inspector over blocklace.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(460.))
+                    .h_full()
+                    .border_r_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .id("cockpit-scroll-inspector")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .child(self.inspector()),
+                    )
+                    .child(
+                        div()
+                            .id("cockpit-scroll-blocklace")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .border_t_1()
+                            .border_color(theme::border())
+                            .bg(theme::panel())
+                            .child(self.blocklace(cx)),
+                    ),
+            )
+            // Right: THE L6 PANED WORKSPACE — the nav bar over the `PaneGroup` of
+            // splittable/resizable surfaces. The un-split base case is one pane
+            // tabbed over all 28 surfaces (so it reads like the old right pane); a
+            // ⊞ split puts two surfaces side-by-side behind a draggable divider.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .h_full()
+                    .child(self.nav_bar(cx))
+                    .child(div().flex_1().overflow_hidden().child(right_pane)),
+            )
+            // THE ⌘K COMMAND PALETTE overlay (absolute, on top) when open.
+            .when(palette_open, |root| root.child(self.palette_overlay(cx)))
+    }
+}

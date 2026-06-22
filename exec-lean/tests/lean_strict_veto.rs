@@ -21,6 +21,14 @@ use dregg_turn::{
     turn::Turn,
 };
 
+/// Build an executor with the verified-Lean shadow/gate observer injected — the strict-veto
+/// rejection authority is in `dregg-exec-lean`, so it must be wired via `with_shadow_observer`
+/// (the no-op default never vetoes). This is exactly how the native node builds its executor.
+fn veto_executor() -> TurnExecutor {
+    TurnExecutor::new(ComputronCosts::zero())
+        .with_shadow_observer(dregg_exec_lean::LeanShadowObserver::arc())
+}
+
 fn open_permissions() -> Permissions {
     Permissions {
         send: AuthRequired::None,
@@ -114,7 +122,7 @@ fn strict_veto_rolls_back_lean_rejected_burn() {
     // through to the Rust commit (the burn commits, debiting 10). Both outcomes are SOUND — the
     // veto can only TIGHTEN, never spuriously reject without a verified rejection.
     let (mut ledger, agent) = one_cell_ledger(100);
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = veto_executor();
     let result = executor.execute(&burn_turn(agent), &mut ledger);
     let post_bal = ledger.get(&agent).map(|c| c.state.balance());
 
@@ -137,7 +145,7 @@ fn strict_veto_rolls_back_lean_rejected_burn() {
                 std::env::set_var("DREGG_LEAN_SHADOW_STRICT", "0");
             }
             let (mut ledger2, agent2) = one_cell_ledger(100);
-            let executor2 = TurnExecutor::new(ComputronCosts::zero());
+            let executor2 = veto_executor();
             let result2 = executor2.execute(&burn_turn(agent2), &mut ledger2);
             assert!(
                 result2.is_committed(),

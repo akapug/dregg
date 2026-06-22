@@ -3,7 +3,7 @@
 # kernel. Two legs, because serialization round-trip is NOT faithfulness:
 #   (1) T8/T9 marshaller round-trip   (`dregg-lean-ffi` marshal_roundtrip binary) —
 #       WireState serialization survives the Lean boundary.
-#   (2) DENOTATIONAL differential     (`dregg-turn --features lean-shadow`) — the
+#   (2) DENOTATIONAL differential     (`dregg-exec-lean` tests) — the
 #       verified Lean executor RUN as the state producer AGREES with the Rust
 #       executor on full post-state + root (eval agreement, not just bytes). This is
 #       the canonical check the byte-identity differential could not make; without it
@@ -42,7 +42,7 @@ echo "check-lean-marshal: running marshal_roundtrip gate (leg 1: serialization).
 echo "check-lean-marshal: running the DENOTATIONAL differential (leg 2: eval agreement)..."
 (
   cd "$ROOT"
-  cargo test -p dregg-turn --features lean-shadow \
+  cargo test -p dregg-exec-lean \
     --test lean_state_producer_differential \
     --test lean_state_producer_widen
 )

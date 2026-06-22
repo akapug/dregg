@@ -20,8 +20,9 @@ use dregg_cell::CellMode;
 use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor};
 use dregg_cell::{
     AuthRequired, Cell, CellId, Ledger, Note, NoteCommitment, Nullifier, NullifierSet,
-    PeerExchange, RevocationChannel, RevocationChannelSet,
+    RevocationChannel, RevocationChannelSet,
 };
+use dregg_cell_crypto::PeerExchange;
 use dregg_intent::matcher::{HeldCapability, MatchResult, Sensitivity, match_intent};
 use dregg_intent::{
     ActionPattern, CommitmentId, Constraint, Intent, IntentKind, MatchSpec, VerificationMode,

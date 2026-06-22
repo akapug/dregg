@@ -910,9 +910,22 @@ name = "dregg-cell"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-circuit",
+ "dregg-types",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-cell-crypto"
+version = "0.1.0"
+dependencies = [
+ "blake3",
  "bulletproofs",
  "chacha20poly1305",
  "curve25519-dalek",
+ "dregg-cell",
  "dregg-circuit",
  "dregg-types",
  "ed25519-dalek",
@@ -1065,6 +1078,7 @@ dependencies = [
  "dregg-blocklace",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-commit",
  "dregg-hints",
  "dregg-lean-ffi",
@@ -1118,6 +1132,7 @@ dependencies = [
  "chacha20poly1305",
  "curve25519-dalek",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dfa",
@@ -1210,6 +1225,7 @@ dependencies = [
  "dregg-bridge",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
@@ -1280,11 +1296,11 @@ dependencies = [
  "curve25519-dalek",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-types",
  "ed25519-dalek",
@@ -1331,6 +1347,7 @@ dependencies = [
  "clear_on_drop",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-coord",
@@ -3243,6 +3260,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-firmament",
  "dregg-query",
  "dregg-turn",

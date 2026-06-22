@@ -196,6 +196,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "alacritty_terminal"
+version = "0.26.1-dev"
+source = "git+https://github.com/zed-industries/alacritty?rev=fcf32feacb367b75ec84dd40f041e4fd411d3cc1#fcf32feacb367b75ec84dd40f041e4fd411d3cc1"
+dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.13.0",
+ "home",
+ "libc",
+ "log",
+ "miow",
+ "parking_lot",
+ "piper",
+ "polling",
+ "regex-automata 0.4.14",
+ "rustix 1.1.4",
+ "rustix-openpty",
+ "serde",
+ "signal-hook",
+ "unicode-width",
+ "vte",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2344,6 +2368,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cursor-icon"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
 name = "curve25519-dalek"
 version = "4.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2492,12 +2522,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "deos-terminal"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "bitflags 2.13.0",
+ "gpui",
+ "gpui_platform",
+ "libc",
+ "log",
+ "parking_lot",
+]
+
+[[package]]
 name = "deos-web-cells"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-types",
  "starbridge-web-surface",
+]
+
+[[package]]
+name = "deos-zed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
 ]
 
 [[package]]
@@ -2785,9 +2840,22 @@ name = "dregg-cell"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-circuit",
+ "dregg-types",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-cell-crypto"
+version = "0.1.0"
+dependencies = [
+ "blake3",
  "bulletproofs",
  "chacha20poly1305",
  "curve25519-dalek",
+ "dregg-cell",
  "dregg-circuit",
  "dregg-types",
  "ed25519-dalek",
@@ -2934,6 +3002,7 @@ dependencies = [
  "dregg-blocklace",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-commit",
  "dregg-hints",
  "dregg-lean-ffi",
@@ -2988,6 +3057,7 @@ dependencies = [
  "chacha20poly1305",
  "curve25519-dalek",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dfa",
@@ -3082,6 +3152,7 @@ dependencies = [
  "dregg-bridge",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
@@ -3152,11 +3223,11 @@ dependencies = [
  "curve25519-dalek",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-types",
  "ed25519-dalek",
@@ -4484,6 +4555,9 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-json",
+ "tree-sitter-md",
+ "tree-sitter-rust",
+ "tree-sitter-toml-ng",
  "unicode-segmentation",
  "uuid",
  "windows 0.58.0",
@@ -6840,6 +6914,15 @@ dependencies = [
  "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "miow"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
+dependencies = [
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9776,6 +9859,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustix-openpty"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1de16c7c59892b870a6336f185dc10943517f1327447096bbb7bb32cd85e2393"
+dependencies = [
+ "errno",
+ "libc",
+ "rustix 1.1.4",
+]
+
+[[package]]
 name = "rustls"
 version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11877,6 +11971,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12160,9 +12264,12 @@ dependencies = [
  "biscuit-auth",
  "blake3",
  "clear_on_drop",
+ "deos-terminal",
  "deos-web-cells",
+ "deos-zed",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-coord",
  "dregg-doc",
  "dregg-firmament",
@@ -12172,6 +12279,7 @@ dependencies = [
  "dregg-turn",
  "dregg-types",
  "dregg-userspace-verify",
+ "ed25519-dalek",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
@@ -12210,6 +12318,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-firmament",
  "dregg-query",
  "dregg-turn",
@@ -13400,6 +13509,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
 
 [[package]]
+name = "tree-sitter-md"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2efd398be546456c814598ee56c0f51769a77241511b4a58077815d120afa882"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-toml-ng"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9adc2c898ae49730e857d75be403da3f92bb81d8e37a2f918a08dd10de5ebb1"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "triomphe"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13891,6 +14030,20 @@ checksum = "fb067e4cbd1ff067d1df46c9194b5de0e98efd2810bbc95c5d5e5f25a3231150"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.13.0",
+ "cursor-icon",
+ "log",
+ "memchr",
+ "serde",
 ]
 
 [[package]]

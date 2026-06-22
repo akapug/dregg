@@ -68,7 +68,6 @@ no-lean-link = [
     "verifier",
     "dregg-federation/no-lean-link",
     "dregg-captp/no-lean-link",
-    "dregg-turn/no-lean-link",
 ]
 
 [dev-dependencies]

@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::action::Event;
-use dregg_turn::lean_shadow::{self, ShadowReport};
+use dregg_exec_lean::lean_shadow::{self, ShadowReport};
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,

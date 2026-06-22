@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use dregg_cell::state::FieldElement;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
-use dregg_turn::lean_apply::{self, ProducerOutcome};
+use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,

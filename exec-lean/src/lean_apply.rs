@@ -85,12 +85,14 @@ use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger, Permissions, VerificationKey};
 use dregg_lean_ffi::marshal::{Cap, WireState, WireValue};
 
-use crate::TurnResult;
-use crate::action::Effect;
-use crate::executor::TurnExecutor;
-use crate::forest::CallTree;
-use crate::lean_shadow::{self, ShadowHostCtx};
-use crate::turn::Turn;
+use dregg_turn::TurnResult;
+use dregg_turn::ShadowHostCtx;
+use dregg_turn::action::Effect;
+use dregg_turn::executor::TurnExecutor;
+use dregg_turn::forest::CallTree;
+use dregg_turn::turn::Turn;
+
+use crate::lean_shadow;
 
 /// A deterministic capability-set mutation a committed turn applies to ONE holder cell's c-list.
 ///
@@ -285,6 +287,35 @@ pub enum StateOp {
         /// The host wall-clock the snapshot's `refreshed_at` is stamped with (`self.current_timestamp`).
         now: u64,
     },
+    /// `Refusal { cell, offered_action_commitment, refusal_reason }` — the categorical non-action
+    /// attestation. `apply_refusal` BUMPS the cell's nonce (orders the refusal) and writes a blake3
+    /// audit commitment into the protocol-reserved EXT field (`REFUSAL_AUDIT_EXT_KEY`, folded into
+    /// `fields_root`). NEITHER crosses the wire — the verified `refusalA` only writes the `"refusal"`
+    /// record field (not the nonce, not the EXT audit) — so the reconstituted root DIVERGED from Rust
+    /// (this was the named ROOT-GAP). The nonce bump and the audit are fully deterministic from the
+    /// TURN (`offered_action_commitment` + `refusal_reason`), so the commit-gated replay reproduces
+    /// `apply_refusal`'s exact post-state byte-for-byte (the same lever as `RefreshDelegation`).
+    Refusal {
+        cell: CellId,
+        /// The 32-byte commitment to the offered (action, offerer, window) tuple, hashed into the
+        /// audit commitment exactly as `apply_refusal` does.
+        offered_action_commitment: [u8; 32],
+        /// The refusal reason; its discriminant (+ optional `reason_hash`) is folded into the audit.
+        refusal_reason: dregg_turn::action::RefusalReason,
+    },
+    /// `ReceiptArchive { prefix_end_height, checkpoint }` — declares the cell's receipt-prefix
+    /// archived. `apply_receipt_archive` transitions the cell's lifecycle to `Archived
+    /// { checkpoint_hash, archived_through }`, both derived from the FULL turn-supplied
+    /// `ArchivalAttestation`. The verified `receiptArchiveA` only writes the `"lifecycle"` RECORD
+    /// field (the wire carries a bare discriminant, and `Archived` has a PAYLOAD the wire drops), so
+    /// the reconstituted root DIVERGED from Rust (the named ROOT-GAP). The Archived payload is pure
+    /// turn data, so the commit-gated replay reproduces `Cell::archive`'s exact post-state.
+    ReceiptArchive {
+        cell: CellId,
+        /// The turn-supplied attestation; `Cell::archive` binds its `checkpoint_hash()` +
+        /// `archive_end_height` into the cell's `Archived` lifecycle, mirroring `apply_receipt_archive`.
+        attestation: dregg_cell::lifecycle::ArchivalAttestation,
+    },
 }
 
 impl StateOp {
@@ -300,6 +331,7 @@ impl StateOp {
             StateOp::RevokeDelegation { parent, child } => vec![*parent, *child],
             // Only the CHILD's `delegation` snapshot moves; the parent's c-list is READ, not written.
             StateOp::RefreshDelegation { child, .. } => vec![*child],
+            StateOp::Refusal { cell, .. } | StateOp::ReceiptArchive { cell, .. } => vec![*cell],
         }
     }
 }
@@ -370,6 +402,34 @@ fn collect_state_ops(turn: &Turn, seal_height: u64, refresh_now: u64) -> Vec<Sta
                         child: *child,
                         declared_snapshot: *snapshot,
                         now: refresh_now,
+                    });
+                }
+                // Refusal self-attestation (`cell == action target`). `apply_refusal` bumps the
+                // cell's nonce and writes the EXT audit; a cross-cell refusal carries an extra
+                // `check_cross_cell_permission` leg the verified gate decides, so only the
+                // self-refusal is replayed here (a cross-cell mismatch surfaces as a commit-bit
+                // divergence, never a fabricated replay).
+                Effect::Refusal {
+                    cell,
+                    offered_action_commitment,
+                    refusal_reason,
+                    ..
+                } if *cell == action_target => {
+                    out.push(StateOp::Refusal {
+                        cell: *cell,
+                        offered_action_commitment: *offered_action_commitment,
+                        refusal_reason: refusal_reason.clone(),
+                    });
+                }
+                // ReceiptArchive (`checkpoint.cell_id == action target`). `apply_receipt_archive`
+                // transitions the cell to `Archived` from the turn-supplied attestation.
+                Effect::ReceiptArchive {
+                    checkpoint,
+                    ..
+                } if checkpoint.cell_id == action_target => {
+                    out.push(StateOp::ReceiptArchive {
+                        cell: action_target,
+                        attestation: checkpoint.clone(),
                     });
                 }
                 _ => {}
@@ -811,6 +871,48 @@ fn apply_state_ops(
                     ));
                 }
             }
+            StateOp::Refusal {
+                cell,
+                offered_action_commitment,
+                refusal_reason,
+            } => {
+                // `apply_refusal`: bump the cell's nonce (the verified `refusalA` does NOT — it
+                // writes only the `"refusal"` record field — so the wire-installed nonce is the
+                // PROLOGUE tick alone; the bump here reproduces Rust's post-state) and write the
+                // blake3 audit commitment into the protocol-reserved EXT field
+                // (`REFUSAL_AUDIT_EXT_KEY`, folded into `fields_root`). A nonce overflow made Rust
+                // roll back (NonceOverflow) — skip rather than fabricate.
+                if let Some(c) = out_cells.get_mut(cell) {
+                    if !c.state.increment_nonce() {
+                        continue;
+                    }
+                    // EXACT mirror of `apply_refusal`'s audit derivation.
+                    let mut h = blake3::Hasher::new_derive_key("dregg-refusal-audit-v1");
+                    h.update(offered_action_commitment);
+                    match refusal_reason {
+                        dregg_turn::action::RefusalReason::Declined => h.update(&[0u8]),
+                        dregg_turn::action::RefusalReason::NoAuthority => h.update(&[1u8]),
+                        dregg_turn::action::RefusalReason::WindowExpired => h.update(&[2u8]),
+                        dregg_turn::action::RefusalReason::Custom { reason_hash } => {
+                            h.update(&[3u8]);
+                            h.update(reason_hash)
+                        }
+                    };
+                    let audit = *h.finalize().as_bytes();
+                    c.state
+                        .set_field_ext(dregg_cell::state::REFUSAL_AUDIT_EXT_KEY, audit);
+                }
+            }
+            StateOp::ReceiptArchive { cell, attestation } => {
+                // `apply_receipt_archive` → `Cell::archive(attestation)`: transition the cell's
+                // lifecycle to `Archived { checkpoint_hash, archived_through }`. The archive
+                // primitive itself checks `attestation.cell_id == self.id`, monotonicity, and
+                // terminal/sealed guards — the same code path Rust runs. A refused archive (sealed/
+                // terminal/non-monotone) made Rust roll back — skip rather than fabricate.
+                if let Some(c) = out_cells.get_mut(cell) {
+                    let _ = c.archive(attestation);
+                }
+            }
         }
     }
     Ok(())
@@ -1103,7 +1205,6 @@ pub fn execute_via_lean(
 /// template `Ledger` from the snapshotted pre-state cells, then runs the SAME reconstitution
 /// (`wire_state_to_ledger` with the turn's deterministic cap/state ops) that `execute_via_lean` and
 /// `produce_via_lean` use — so the root it returns is the genuine verified post-state root.
-#[cfg(not(feature = "no-lean-link"))]
 pub(crate) fn lean_post_state_root(
     turn: &Turn,
     pre: &lean_shadow::ShadowPreLedger,
@@ -1320,7 +1421,7 @@ pub fn produce_via_lean(
             // Rust ACCEPTED where the verified kernel REJECTED — the verified veto overrides the
             // buggy Rust accept (the kernel can only TIGHTEN; never launder a wrong accept).
             _ => TurnResult::Rejected {
-                reason: crate::error::TurnError::LeanShadowVeto,
+                reason: dregg_turn::error::TurnError::LeanShadowVeto,
                 at_action: vec![],
             },
         };

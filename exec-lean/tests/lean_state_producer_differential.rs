@@ -4,7 +4,7 @@
 //! The headline gap (`marshal.rs`: "the biggest gap") was the missing `WireState → cell::Ledger`
 //! extractor: the verified `dregg_exec_full_forest_auth` / `execFullForestG` produces a full
 //! post-state, but the node threw it away and committed the LEGACY Rust `TurnExecutor`'s ledger
-//! instead. `dregg_turn::lean_apply::wire_state_to_ledger` now reconstitutes a `cell::Ledger` from
+//! instead. `dregg_exec_lean::lean_apply::wire_state_to_ledger` now reconstitutes a `cell::Ledger` from
 //! the verified executor's produced `WireState`.
 //!
 //! This test runs a representative turn (a Transfer, then a SetField) through BOTH:
@@ -18,14 +18,13 @@
 //! by the assertion — never papered over. Requires the linked Lean archive (`lean-shadow` feature +
 //! `lean_available()`); when the archive is absent the test self-skips (it cannot compare).
 
-#![cfg(feature = "lean-shadow")]
 
 use std::collections::HashMap;
 
 use dregg_cell::state::FieldElement;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
-use dregg_turn::lean_apply::{self, execute_via_lean};
-use dregg_turn::lean_shadow::ShadowHostCtx;
+use dregg_exec_lean::lean_apply::{self, execute_via_lean};
+use dregg_exec_lean::lean_shadow::ShadowHostCtx;
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,
