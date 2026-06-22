@@ -325,13 +325,12 @@ pub fn settle_ring_verified(
             }
         };
 
-        // FEATURE-GATED: cross-check this leg against the REAL Lean FFI export over the leg's
-        // asset-projected column (`RingFFI.projAsset` + `dregg_record_kernel_step`). The export's
-        // commit bit and post-column must MATCH the verified transition; a drift fails closed.
-        #[cfg(not(feature = "no-lean-link"))]
-        {
-            ffi::cross_check_leg(&k, leg, &next, index)?;
-        }
+        // Cross-check this leg against the REAL Lean FFI export over the leg's asset-projected
+        // column (`RingFFI.projAsset` + `dregg_record_kernel_step`), routed through the
+        // `verified_gate` SEAM. The export's commit bit and post-column must MATCH the verified
+        // transition; a drift fails closed. When no verified gate is registered (every FFI-free
+        // target), the cross-check is skipped and the in-process verified transition stands.
+        ffi::cross_check_leg(&k, leg, &next, index)?;
 
         k = next;
     }
@@ -370,7 +369,6 @@ pub fn settle_fulfillment_verified(
 // The REAL Lean FFI path — route each leg through `dregg_record_kernel_step`.
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "no-lean-link"))]
 pub mod ffi {
     //! Settle one ring leg through the REAL verified Lean executor export
     //! `@[export] dregg_record_kernel_step` (the PROVED `Exec.recKExec`), over the leg's
@@ -506,15 +504,19 @@ pub mod ffi {
         Ok((cells, ok == 1))
     }
 
-    /// Settle one leg through the REAL verified export: marshal the asset projection, call
-    /// `dregg_record_kernel_step`, parse `(post-balances, ok)`. `Ok((cells, ok))` is the verified
-    /// export's verdict + post-column. `Err` only on FFI unavailability / wire errors.
+    /// Settle one leg through the REAL verified export (via the [`crate::verified_gate`] seam):
+    /// marshal the asset projection, call `dregg_record_kernel_step`, parse `(post-balances, ok)`.
+    /// `Ok((cells, ok))` is the verified export's verdict + post-column. `Err` only on FFI
+    /// unavailability (no gate registered / archive absent) / wire errors.
     pub fn settle_leg(
         k: &VerifiedLedger,
         leg: &VerifiedLeg,
     ) -> Result<(Vec<(u8, i128)>, bool), VerifiedSettleError> {
+        let gate = crate::verified_gate::gate()
+            .ok_or_else(|| VerifiedSettleError::FfiUnavailable("no verified gate registered".into()))?;
         let input = encode_leg_input(k, leg);
-        let out = dregg_lean_ffi::shadow_record_kernel_step(&input)
+        let out = gate
+            .record_kernel_step(&input)
             .map_err(VerifiedSettleError::FfiUnavailable)?;
         parse_leg_output(&out).map_err(|e| VerifiedSettleError::FfiUnavailable(e))
     }
@@ -530,6 +532,13 @@ pub mod ffi {
         expected: &VerifiedLedger,
         index: usize,
     ) -> Result<(), VerifiedSettleError> {
+        // No verified gate registered (every FFI-free target) ⇒ skip the cross-check; the
+        // in-process verified transition stands on its own. (When a native node registers a
+        // `dregg-exec-lean` gate, the leg is cross-checked against the REAL export and any drift
+        // fails closed below.)
+        if crate::verified_gate::gate().is_none() {
+            return Ok(());
+        }
         let (post_cells, ok) = settle_leg(k, leg)?;
         if !ok {
             return Err(VerifiedSettleError::FfiDivergence {

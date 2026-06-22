@@ -443,16 +443,17 @@ fn effect_mask_field(m: Option<EffectMask>) -> String {
 /// `dregg_captp_validate_handoff` (= `Dregg2.Exec.CapTPConcrete.handoffNonAmplifyingC`). Returns
 /// `Some(true)` (non-amplifying) / `Some(false)` (amplifies) when the gate ran, or `None` when the
 /// verified gate is unavailable (feature off / archive lacks the export) so the caller falls back to
-/// the Rust lattice. Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate so the crate has
+/// the Rust lattice. Routes through the [`crate::verified_gate`] seam; returns `None` when no
+/// verified gate is registered (every FFI-free target / archive lacks the export) so the crate has
 /// no hard dependency on the Lean archive.
-#[cfg(not(feature = "no-lean-link"))]
 fn verified_non_amplifying(
     granted_perm: &AuthRequired,
     held_perm: &AuthRequired,
     granted_eff: Option<EffectMask>,
     held_eff: Option<EffectMask>,
 ) -> Option<bool> {
-    if !dregg_lean_ffi::distributed_exports_available() {
+    let gate = crate::verified_gate::gate()?;
+    if !gate.distributed_exports_available() {
         return None;
     }
     let wire = format!(
@@ -463,19 +464,7 @@ fn verified_non_amplifying(
         effect_mask_field(granted_eff),
     );
     // FFI / wire error ⇒ fall back to the Rust lattice (never break the live handoff path).
-    dregg_lean_ffi::verified_handoff_non_amplifying(&wire).ok()
-}
-
-/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the Rust lattice
-/// decides (the helper is referenced unconditionally in `validate_handoff`, so it must exist).
-#[cfg(feature = "no-lean-link")]
-fn verified_non_amplifying(
-    _granted_perm: &AuthRequired,
-    _held_perm: &AuthRequired,
-    _granted_eff: Option<EffectMask>,
-    _held_eff: Option<EffectMask>,
-) -> Option<bool> {
-    None
+    gate.handoff_non_amplifying(&wire)
 }
 
 pub fn validate_handoff(

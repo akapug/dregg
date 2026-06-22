@@ -63,8 +63,11 @@ guarantee" becomes "which adapter."
 
 ✅ `dregg-cell-crypto` · ✅ `dregg-turn` FFI-free + `dregg-exec-lean` · ✅ chain mock fail-closed
 · ✅ cockpit/program god-modules (reviewability, off critical path)
+· ✅ the lean-impls FFI boundary for coord/captp/federation/intent — all four are FFI-free
+(each routes its verified gates through a `verified_gate` seam; the Lean impls live in
+`dregg-exec-lean::distributed_gates`, installed by the node via `register_distributed_gates`;
+their `no-lean-link` features are deleted). seL4 verifier-PD is Lean-free *structurally* now.
 ◻ `dregg-circuit-{verify,prove}` (prover cascade) · ◻ sdk core-gates → dep the real crates
-· ◻ the lean-impls FFI boundary for coord/captp/federation/intent · ◻ tail (zkvm, threshold-sig,
-starbridge embedded-executor)
+· ◻ tail (zkvm, threshold-sig, starbridge embedded-executor)
 
 ~4 cuts + a tail. Finishable. Then the FFI ladder (post-reorg).

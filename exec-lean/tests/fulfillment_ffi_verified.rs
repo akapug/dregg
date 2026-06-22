@@ -1,24 +1,19 @@
 //! The LIVE-FFI fulfillment test: a fulfilled intent IS settled through the REAL verified Lean
 //! executor — not a Rust mirror.
 //!
-//! # What this closes (over `fulfillment_verified_turn.rs`)
+//! # Why this lives in `dregg-exec-lean`
 //!
-//! `fulfillment_verified_turn.rs` drives the live engine to a `SettlementOutput` and folds the
-//! lowered legs through a *Rust re-implementation* of the Lean `settleRing` (a hand-mirror of
-//! `recKExecAsset`). That pins the SEMANTICS agree, but the executor it runs is still Rust.
+//! `dregg-intent` is FFI-free: it routes its verified ring-leg cross-check through the
+//! `dregg_intent::verified_gate` SEAM and does NOT depend on `dregg-lean-ffi`. The Lean-backed gate
+//! impl lives here in `dregg-exec-lean` (the single FFI boundary). So the genuine live-FFI test — the
+//! one that registers the gate and folds each lowered leg through the REAL Lean FFI
+//! (`@[export] dregg_record_kernel_step` over the PROVED `Exec.recKExec`, per the Lean keystone
+//! `Dregg2.Intent.RingFFI.ffi_export_realises_settleRing_leg`) — must live in this crate too. It
+//! cross-checks the in-process verified transition against the export's verdict + post-column,
+//! failing closed on any drift. (Moved verbatim from `dregg-intent/tests` during the lean-FFI
+//! boundary carve; the only addition is `register_distributed_gates()`.)
 //!
-//! This test routes the SAME live `finalize()` output through
-//! [`dregg_intent::trustless::TrustlessIntentEngine::finalize_verified`], which folds each lowered
-//! leg through the REAL Lean FFI (`@[export] dregg_record_kernel_step` over the PROVED
-//! `Exec.recKExec`, per the Lean keystone `Dregg2.Intent.RingFFI.ffi_export_realises_settleRing_leg`)
-//! over the leg's asset-projected column, AND cross-checks the in-process verified transition
-//! against the export's verdict + post-column — failing closed on any drift. So here "an intent
-//! fulfilled" literally executes through the linked verified kernel and conserves there.
-//!
-//! Compiled on every native build (Lean unconditional; gated OUT only by `no-lean-link`). Run with:
-//!   cargo test -p dregg-intent --test fulfillment_ffi_verified
-
-#![cfg(not(feature = "no-lean-link"))]
+//! Run with: `cargo test -p dregg-exec-lean --test fulfillment_ffi_verified`
 
 use dregg_federation::threshold_decrypt::{
     KeyShare, ThresholdEncryptionKey, generate_epoch_key, produce_decryption_share,
@@ -32,6 +27,12 @@ use dregg_intent::verified_settle::touched_assets;
 use dregg_intent::{CommitmentId, Intent, IntentId, IntentKind, MatchSpec};
 
 use dregg_cell::predicate::{InputRef, WitnessedPredicate, WitnessedPredicateKind};
+
+/// Install the verified-Lean gate into the intent (and sibling) seams. Idempotent across tests in
+/// this binary (the seam's `OnceLock` keeps the first registration).
+fn ensure_gates() {
+    dregg_exec_lean::register_distributed_gates();
+}
 
 fn make_keys(threshold: u8, n: u8) -> (ThresholdEncryptionKey, Vec<KeyShare>) {
     generate_epoch_key([0xBBu8; 32], threshold, n)
@@ -136,6 +137,7 @@ fn closed_ring_submission(solver_byte: u8, intents: &[Intent], amount: u64) -> S
 /// Drive a closed ring all the way to `finalize_verified`, asserting the verified Lean executor
 /// settles it AND conserves every asset (the post-ledger equals the funded pre-ledger per asset).
 fn run_ffi_verified(n: u8, amount: u64) {
+    ensure_gates();
     let (key, shares) = make_keys(2, 3);
     let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
     let intents: Vec<Intent> = (0..n).map(|b| make_intent(0x10 + b)).collect();

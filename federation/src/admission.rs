@@ -315,13 +315,11 @@ impl AdmissionRegistry {
     /// absent (marshal-only / wasm build) it FAILS BACK to the pure-Rust [`Self::admitted_rust`] — so
     /// the gate is never broken, only un-verified. The Rust path remains the differential sibling.
     pub fn admitted(&self, strand: &StrandId) -> bool {
-        #[cfg(not(feature = "no-lean-link"))]
-        {
-            if let Some(verdict) = self.lean_admitted(strand) {
-                return verdict;
-            }
-            // archive missing the export ⇒ fall through to the Rust gate (never break the live path).
+        if let Some(verdict) = self.lean_admitted(strand) {
+            return verdict;
         }
+        // No verified gate registered / archive missing the export ⇒ fall through to the Rust gate
+        // (never break the live path).
         self.admitted_rust(strand)
     }
 
@@ -330,10 +328,12 @@ impl AdmissionRegistry {
     /// finality gate applies), builds the wire `StrandAdmission.encodeAdmitWire` mirrors, calls the
     /// `dregg_strand_admit` export, and decodes the `"1"`/`"0"` verdict. Returns `None` when the
     /// archive lacks the export (so [`Self::admitted`] falls back to the Rust gate); a malformed wire
-    /// (`ERR`) decodes fail-closed to `Some(false)` — the verified rule's "not admitted".
-    #[cfg(not(feature = "no-lean-link"))]
+    /// (`ERR`) decodes fail-closed to `Some(false)` — the verified rule's "not admitted". Routes
+    /// through the [`crate::verified_gate`] seam; returns `None` when no verified gate is registered
+    /// (every FFI-free target).
     fn lean_admitted(&self, strand: &StrandId) -> Option<bool> {
-        if !dregg_lean_ffi::strand_admit_available() {
+        let gate = crate::verified_gate::gate()?;
+        if !gate.strand_admit_available() {
             return None;
         }
         // Intern every pubkey that appears (seeds, vouchers, candidates, bond owners, the query) to a
@@ -387,9 +387,9 @@ impl AdmissionRegistry {
             q = q,
         );
 
-        // Ok ⇒ the verified verdict (ERR ⇒ fail-closed false inside verified_admits).
-        // Err ⇒ archive lacks the export ⇒ fall back to the Rust gate.
-        dregg_lean_ffi::verified_admits(&wire).ok()
+        // Some ⇒ the verified verdict (ERR ⇒ fail-closed false inside the gate impl).
+        // None ⇒ archive lacks the export ⇒ fall back to the Rust gate.
+        gate.admits(&wire)
     }
 
     /// **SLASH** `strand`'s bond on a valid equivocation proof: remove all of its bonds (burning the
@@ -695,14 +695,13 @@ mod tests {
         assert!(!reg.admitted(&four)); // = Lean `admitted (slash fedDemo 4).1 4 == false`
     }
 
-    /// THE LIVE F-4 LEAN-BACKED GATE DIFFERENTIAL — when the verified Lean archive is linked
-    /// (every native build with the `dregg_strand_admit` export present), the Lean-backed
-    /// `admitted` AGREES with the pure-Rust `admitted_rust` on every strand role of the `fedDemo`
-    /// fixture. This is the runtime proof that routing the gate through the verified rule is
-    /// transparent for the modelled cases — `admitted` IS `admitted_rust` IS the verified Lean
-    /// `StrandAdmission.admitted`. Self-skips when the archive lacks the export (then `admitted`
-    /// already falls back to `admitted_rust`, so they are trivially equal).
-    #[cfg(not(feature = "no-lean-link"))]
+    /// THE F-4 GATE DIFFERENTIAL (FFI-free arm) — `admitted` AGREES with the pure-Rust
+    /// `admitted_rust` on every strand role of the `fedDemo` fixture, and the F-4 fixture verdicts
+    /// hold. `dregg-federation` is FFI-free: with no verified gate registered (this in-crate test),
+    /// `admitted()` falls back to `admitted_rust()`, so they are equal by construction. The LIVE
+    /// Lean-backed differential — where a `dregg-exec-lean` `FederationVerifiedGate` is registered
+    /// and the verdict comes from the verified `StrandAdmission.admitted` — lives in
+    /// `dregg-exec-lean/tests`.
     #[test]
     fn lean_backed_gate_agrees_with_rust_gate() {
         let (sk_s1, s1) = generate_keypair();
@@ -717,9 +716,6 @@ mod tests {
         reg.add_bond(Bond::post(&sk_four, 100));
         reg.add_bond(Bond::post(&sk_five, 50));
 
-        if !dregg_lean_ffi::strand_admit_available() {
-            eprintln!("SKIP: Lean strand-admit export not linked — admitted() == admitted_rust()");
-        }
         for s in [&s1, &s2, &three, &four, &five, &six] {
             assert_eq!(
                 reg.admitted(s),

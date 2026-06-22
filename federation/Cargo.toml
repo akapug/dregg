@@ -38,12 +38,11 @@ ark-std = "0.5.0"
 # is meaningful in the browser. Native consumers keep these via `default`.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "net", "sync", "time"], optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
-# UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): `AdmissionRegistry::admitted`
-# routes through the VERIFIED Lean `dregg_strand_admit` export on every native build (F-4 closed
-# by the verified rule, not a Rust mirror); the Rust gate stays as the differential sibling + the
-# runtime fallback when the archive lacks the export. The ONE opt-out is the `no-lean-link`
-# platform feature (wasm32/zkvm — targets that cannot link libdregg_lean.a).
-dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# FFI-FREE BY CONSTRUCTION: `AdmissionRegistry::admitted` routes the F-4 hybrid gate through the
+# `verified_gate` SEAM (`FederationVerifiedGate`), never `dregg-lean-ffi` directly. A native node
+# installs the Lean-backed gate (from `dregg-exec-lean`) once at startup; an FFI-free target (wasm /
+# verifier-PD / pg) never registers one and the Rust `admitted_rust` differential sibling decides.
+# The deleted `no-lean-link` feature is now a dependency choice, not a flag.
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -58,10 +57,6 @@ harness = false
 # consensus-orchestration types) pass `default-features = false`.
 default = ["runtime"]
 runtime = ["dep:tokio", "dep:crossbeam-channel"]
-# PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the Rust admission
-# gate IN PLACE OF the verified Lean F-4 gate — a statement about the target's linker, never
-# about which guarantees this dregg has.
-no-lean-link = ["dregg-lean-ffi/no-lean-link", "dregg-captp/no-lean-link"]
 
 [lints]
 workspace = true

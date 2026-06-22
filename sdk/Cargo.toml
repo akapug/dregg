@@ -123,8 +123,6 @@ captp = ["dep:dregg-captp", "dep:dregg-storage", "dep:chacha20poly1305"]
 # and an unlinked archive self-falls-back to the Rust producer.
 no-lean-link = [
     "dregg-lean-ffi/no-lean-link",
-    "dregg-intent/no-lean-link",
-    "dregg-captp?/no-lean-link",
 ]
 dev = []
 # STAGED-ADDITIVE (G1): compile the rotated IR-v2 (R=24) turn-proof route beside the live

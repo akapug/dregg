@@ -567,6 +567,10 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
+    // gpui-component init (the kit `Button`/widgets the cockpit now uses read the
+    // kit `Theme`/global at render; without it they panic). See the same weld in
+    // `render_cockpit_headless`.
+    cx.update(|cx| gpui_component::init(cx));
     let (world, anchors) = world::demo_world();
     let shared = Rc::new(RefCell::new(world));
     let window = cx.open_window(size(px(W), px(H)), |window, cx| {
@@ -770,6 +774,12 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
         gpui_platform::current_headless_renderer()
     });
 
+    // The cockpit's panels now use gpui-component kit widgets (`Button`, …) which
+    // read the kit's `Theme`/global state at render; init it in this headless app
+    // (the windowed path does so at boot) or any kit widget panics on the missing
+    // global. (See `render_cockpit_headless` for the same weld.)
+    cx.update(|cx| gpui_component::init(cx));
+
     let (world, anchors) = world::demo_world();
     let shared = Rc::new(RefCell::new(world));
     let window = cx.open_window(size(px(W), px(H)), |window, cx| {
@@ -933,6 +943,15 @@ fn render_cockpit_headless(
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
+
+    // 2b. Initialize gpui-component in the headless app too — the cockpit's panels
+    //     now use the real `Button` (and other kit widgets), which read the kit's
+    //     `Theme` + global state at render time. The WINDOWED path inits it at boot
+    //     (main.rs `gpui_component::init(cx)`); the headless renderer is a separate
+    //     `App` and must do the same, or any kit widget panics on the missing
+    //     `gpui_component::theme::Theme` global. This is what makes the seL4
+    //     framebuffer bake + the dregg-mcp screenshot render the migrated buttons.
+    cx.update(|cx| gpui_component::init(cx));
 
     // 3. The fully-seeded demo image — the same `World` the windowed cockpit runs,
     //    with every verified executor turn already committed (eager seeding).

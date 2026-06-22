@@ -30,14 +30,15 @@ use crate::{FederationId, StrandId};
 /// The cell's holder-table is interned to the gate's wire `"H=<fed:count:s=n+...|...>;f=<fed>;s=<s>"`,
 /// mapping each 32-byte `FederationId` to a small index and reusing each `SessionId` u64 directly
 /// (the Lean gate compares fed/session by identity, so any injective interning preserves the verdict).
-/// Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate.
-#[cfg(not(feature = "no-lean-link"))]
+/// Routes through the [`crate::verified_gate`] seam; returns `None` when no verified gate is
+/// registered (every FFI-free target / archive lacks the export).
 fn verified_drop_verdict(
     entry: Option<&ExportEntry>,
     from_federation: FederationId,
     session: SessionId,
 ) -> Option<DropResult> {
-    if !dregg_lean_ffi::distributed_exports_available() {
+    let gate = crate::verified_gate::gate()?;
+    if !gate.distributed_exports_available() {
         return None;
     }
     // No export entry for the cell ⇒ the gate would see an empty holder-table; the queried fed is
@@ -78,7 +79,7 @@ fn verified_drop_verdict(
         .collect();
     let wire = format!("H={};f={q_fed};s={session}", holders_wire.join("|"));
 
-    let out = dregg_lean_ffi::shadow_captp_process_drop(&wire).ok()?;
+    let out = gate.process_drop(&wire)?;
     // Reply: "S=<tag>;t=<postTotal>" — tag 0=stillHeld 1=canRevoke 2=invalid; "ERR" ⇒ fail-closed.
     let tag_seg = out.split(';').next()?.strip_prefix("S=")?;
     match tag_seg {
@@ -87,17 +88,6 @@ fn verified_drop_verdict(
         // tag 2 (invalid) or any unexpected reply ⇒ fail-closed Invalid.
         _ => Some(DropResult::Invalid),
     }
-}
-
-/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native Rust
-/// mutation's verdict decides. Referenced unconditionally in `process_drop_inner`.
-#[cfg(feature = "no-lean-link")]
-fn verified_drop_verdict(
-    _entry: Option<&ExportEntry>,
-    _from_federation: FederationId,
-    _session: SessionId,
-) -> Option<DropResult> {
-    None
 }
 
 // =============================================================================

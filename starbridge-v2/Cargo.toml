@@ -486,14 +486,14 @@ dregg-cell = { path = "../cell", optional = true, default-features = false }
 dregg-cell-crypto = { path = "../cell-crypto", optional = true }
 dregg-types = { path = "../types", optional = true }
 dregg-sdk = { path = "../sdk", optional = true, default-features = false, features = ["no-lean-link", "embed-core", "prover"] }
-dregg-coord = { path = "../coord", optional = true, default-features = false, features = ["no-lean-link"] }
+dregg-coord = { path = "../coord", optional = true, default-features = false }
 dregg-token = { path = "../token", optional = true, default-features = false, features = ["macaroon", "rand-deps"] }
 dregg-doc = { path = "../dregg-doc", optional = true, features = ["substrate"] }
 dregg-userspace-verify = { path = "../dregg-userspace-verify", optional = true }
 dregg-firmament = { path = "../sel4/dregg-firmament", optional = true }
 starbridge-web-surface = { path = "../starbridge-web-surface", optional = true, default-features = false }
 deos-web-cells = { path = "../deos-web-cells", optional = true }
-dregg-captp = { path = "../captp", optional = true, default-features = false, features = ["no-lean-link"] }
+dregg-captp = { path = "../captp", optional = true, default-features = false }
 # wasm32 entropy backend (mirrors wasm/Cargo.toml lines 18-20): the three
 # getrandom majors the dep tree pulls, each forced onto its js/wasm_js backend.
 getrandom = { version = "0.3", features = ["wasm_js"] }

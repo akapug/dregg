@@ -406,6 +406,36 @@ impl World {
         self
     }
 
+    /// Configure this world's embedded executor to SIGN every committed receipt
+    /// with the ed25519 key derived from `seed` (the executor's
+    /// [`dregg_turn::TurnExecutor::set_executor_signing_key`]). Without this, a
+    /// receipt carries `executor_signature: None`.
+    ///
+    /// This is what makes a committed receipt a real, verifiable CONSENT WITNESS:
+    /// the [`crate::shared_fork`] networkboundary resolves only against a receipt
+    /// whose signature verifies under this key (in the executor's own signing
+    /// domain, [`dregg_turn::turn::TurnReceipt::canonical_executor_signed_message`]).
+    /// Builder-style (returns `self`); pairs with [`World::executor_public_key`].
+    pub fn with_executor_signing_key(mut self, seed: [u8; 32]) -> Self {
+        self.set_executor_signing_key(seed);
+        self
+    }
+
+    /// Configure this world's embedded executor signing key in place (see
+    /// [`World::with_executor_signing_key`]).
+    pub fn set_executor_signing_key(&mut self, seed: [u8; 32]) {
+        self.engine.executor_mut().set_executor_signing_key(seed);
+    }
+
+    /// The ed25519 PUBLIC key (32 bytes) of this world's executor signing key, if
+    /// one is configured — the trusted key a consent witness ([`TurnReceipt`])
+    /// signature is verified against. `None` when the executor signs nothing.
+    pub fn executor_public_key(&self) -> Option<[u8; 32]> {
+        let seed = self.engine.executor().executor_signing_key.as_ref()?;
+        let sk = ed25519_dalek::SigningKey::from_bytes(seed);
+        Some(sk.verifying_key().to_bytes())
+    }
+
     // --- read surface (what the reflective object model + views consume) ----
 
     pub fn ledger(&self) -> &Ledger {
@@ -588,6 +618,13 @@ impl World {
         };
         // Deep-clone the live ledger into a fresh engine (the fork's substrate).
         let mut engine = DreggEngine::with_ledger(config, self.engine.ledger().clone());
+        // Carry the executor signing key so the fork's committed receipts are
+        // signed identically to the live world's — a guest's embedded turn on the
+        // fork therefore produces a receipt verifiable under the SAME executor key,
+        // and a consent resolved on the fork witnesses under the owner's key.
+        if let Some(seed) = self.engine.executor().executor_signing_key {
+            engine.executor_mut().set_executor_signing_key(seed);
+        }
         // Replay the deployed factories onto the fork's executor so a
         // CreateCellFromFactory simulates against the SAME registered factories.
         for descriptor in &self.deployed_factories {

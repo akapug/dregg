@@ -50,6 +50,17 @@ p3-circuit = { path = "../../plonky3-recursion/circuit" }
 p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
 p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
 
+# THE ark-serialize SEAM (replicated from the breadstuffs-root `Cargo.toml` §patch,
+# mirroring the starbridge-v2 block). `dregg-hints` (transitive via `dregg-turn`)
+# depends on `ark-serialize` with the `serde_with` feature, which the published
+# `ark-serialize 0.5.0` does NOT carry — only the `emberian/algebra`
+# `serde-integration` fork does. Because this crate is its OWN workspace root the
+# repo-root `[patch]` does not apply, so we replicate it here. Keep in sync with the
+# root/starbridge-v2 blocks; reverts to crates.io once the feature lands upstream.
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
 [package]
 name = "starbridge-web-surface"
 version = "0.1.0"

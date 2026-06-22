@@ -265,29 +265,23 @@ pub enum Decision {
 /// when the verified gate is unavailable (feature off / archive lacks the export) so the caller falls
 /// back to the native Rust `evaluate_votes_native`. The wire is
 /// `"y=<yes>;n=<no>;N=<participants>;t=<threshold>"`; the gate returns `Decision2pc` which we map onto
-/// this crate's `Decision`. Compiled on every native build (the inverted default); a stub returning `None` under the `no-lean-link` platform gate so the
-/// crate has no hard dependency on the Lean archive.
-#[cfg(not(feature = "no-lean-link"))]
+/// this crate's `Decision`. Routes through the [`crate::verified_gate`] seam; returns `None` when no
+/// verified gate is registered (every FFI-free target / archive lacks the export) so the crate has
+/// no hard dependency on the Lean archive.
 fn verified_decision(yes: usize, no: usize, n: usize, threshold: usize) -> Option<Decision> {
-    if !dregg_lean_ffi::distributed_exports_available() {
+    use crate::verified_gate::Verdict2pc;
+    let gate = crate::verified_gate::gate()?;
+    if !gate.distributed_exports_available() {
         return None;
     }
     let wire = format!("y={yes};n={no};N={n};t={threshold}");
-    match dregg_lean_ffi::verified_2pc_decide(&wire) {
-        Ok(dregg_lean_ffi::Decision2pc::Commit) => Some(Decision::Commit),
-        Ok(dregg_lean_ffi::Decision2pc::Abort) => Some(Decision::Abort),
-        Ok(dregg_lean_ffi::Decision2pc::Pending) => Some(Decision::Pending),
+    match gate.decide_2pc(&wire) {
+        Some(Verdict2pc::Commit) => Some(Decision::Commit),
+        Some(Verdict2pc::Abort) => Some(Decision::Abort),
+        Some(Verdict2pc::Pending) => Some(Decision::Pending),
         // FFI / wire error ⇒ fall back to the native Rust (never break the live coordinator path).
-        Err(_) => None,
+        None => None,
     }
-}
-
-/// Stub under the `no-lean-link` platform gate (wasm32/zkvm): the verified gate is unavailable, so the native Rust
-/// `evaluate_votes_native` decides. The helper is referenced unconditionally in `evaluate_votes`,
-/// so it must exist in both feature configurations.
-#[cfg(feature = "no-lean-link")]
-fn verified_decision(_yes: usize, _no: usize, _n: usize, _threshold: usize) -> Option<Decision> {
-    None
 }
 
 // ─── Messages ──────────────────────────────────────────────────────────────────

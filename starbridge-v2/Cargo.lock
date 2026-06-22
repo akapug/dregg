@@ -2549,10 +2549,12 @@ name = "deos-zed"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dregg-doc",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "ropey",
 ]
 
 [[package]]
@@ -2824,7 +2826,6 @@ dependencies = [
  "bs58",
  "chacha20poly1305",
  "dregg-cell",
- "dregg-lean-ffi",
  "dregg-types",
  "getrandom 0.3.4",
  "hkdf",
@@ -2921,7 +2922,6 @@ dependencies = [
  "blake3",
  "dregg-blocklace",
  "dregg-cell",
- "dregg-lean-ffi",
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
@@ -2944,6 +2944,7 @@ dependencies = [
  "blake3",
  "dregg-cell",
  "dregg-turn",
+ "ropey",
 ]
 
 [[package]]
@@ -3005,7 +3006,6 @@ dependencies = [
  "dregg-cell-crypto",
  "dregg-commit",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
@@ -3062,7 +3062,6 @@ dependencies = [
  "dregg-commit",
  "dregg-dfa",
  "dregg-federation",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-trace",
  "dregg-turn",
@@ -3150,7 +3149,6 @@ dependencies = [
  "blake3",
  "curve25519-dalek",
  "dregg-bridge",
- "dregg-captp",
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-circuit",
