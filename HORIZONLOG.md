@@ -11,6 +11,65 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+## ⚑⚑⚑ THE DEOS DESKTOP EPOCH (2026-06-22) — deos becomes a real desktop OS
+THE THROUGH-LINE: every action — file I/O, tool call, agent step, UI nav — is ONE cap-gated receipted
+dregg turn (ToolGateway + firmament); made INTERACTIVE by symbolic execution + async UI + a dockable
+workspace. Six threads, each grounded by a 2026-06-22 explore-agent report (read whole before building):
+
+1. SYMBOLIC/LAZY EXECUTION (the interactivity foundation). THESIS CONFIRMED in the Lean: AbstractState =
+   (balanceTotal, authGraph) is genuinely witness-free (metatheory/Dregg2/Spec/ExecRefinement.lean:398-408),
+   Exec ⊑ Abstract is proven (ExecRefinementFull.lean, Proof/Refine.lean). The Rust executor is ALREADY
+   proof-agnostic (execute.rs:1249) + the ledger is ALREADY truly-lazy (cell/src/ledger.rs:277-349 Pending,
+   "ZERO hashing" on a UI turn) + the eager/lazy split is Lean-proven (held_promise.rs) + the tape replays
+   deterministically (replay_to + the commit_turn double-exec). NEW WORK: a WitnessMode{Full,Symbolic} flag
+   (~2 write sites + engine) + a collapse() orchestrator (mostly reuse: wrap_witnessed + canonical_ledger_root
+   + rebuild_index_from_log) + Option-ify ~10 derived fields + unwind 2 eager-witness couplings (state.rs
+   heap/ext-field roots) + the light-client semantics of a deferred-witness turn (the known gap). SOUNDNESS:
+   symbolic = structurally local/unpublishable (no verifyBatch artifact) — safe by inexpressibility; collapse
+   is the ONLY witness path, and refinement guarantees it reproduces exactly what Full would witness.
+2. UI ASYNC DECOUPLING. TIME-tab hang FIXED (this commit): was O(N²) replay_to-per-step on the paint path
+   every frame → O(N) single-pass History::reversibility_classification. FOLLOW-UPS: cache TimeCockpitModel
+   by (history.len,cursor,meta-depth); make tab-switch optimistic (move self.tab+notify now, defer witness_tab
+   to a cx.spawn FOREGROUND task — gpui is !Send; coalesce/debounce so rapid tab-flips=1 turn); queue acts.
+   Reference pattern already in main.rs:371-415 (the seed task + pump_live). Every tab click is currently a
+   real SetField turn (cockpit.rs set_tab→witness_tab→workspace_cell.commit→commit_turn) — that's the slow.
+3. UI REDESIGN: fluid + DOCKABLE workspace. Current = rigid 3-pane + 28-flat-tab bar, 0 scrollers (19
+   overflow_hidden, content unreachable). PHASE 0 (zero-risk, hours): swap overflow_hidden→overflow_y_scroll
+   at 19 sites + flex_wrap the tab bar + uniform_list/list the truncated (.take(N)) lists. PHASES 1-3: VENDOR
+   Zed's gpui-native dock engine (~/.cargo/.../zed/.../crates/workspace): pane_group.rs (~90% reusable
+   resizable-split engine), dock.rs (Dock/DockPosition/Panel), a slim Pane + a ~8-method CockpitSurface trait;
+   each existing *_panel becomes a dockable/splittable/floatable surface; Tab::ALL → a surface registry (⌘K).
+   NOT add-a-dep (workspace drags project/collab) — vendor-and-adapt. (Witnessed-selector → layout-tree cell
+   to keep rewindable-UI.)
+4. ZED-IN-DEOS via ADOS/ToolGateway/firmament. FEASIBLE, weld-not-build. ToolGateway (sdk/src/tool_gateway.rs)
+   = REAL/proven (Lean-mirrored delegAdmit, metered receipted turns). Firmament (sel4/dregg-firmament) =
+   runnable (router/surface=window). ADOS = the frame (the ONE seam is real: swarm.rs). THE seams: (1) a new
+   FirmamentFs impl of Zed's Arc<dyn Fs> (crates/fs Fs trait, 35 methods; FakeFs proves a non-OS fs works) —
+   path→cap via rbg/src/directory.rs DirectoryCell, a file=a cell, a save=a receipted turn. THE one big new
+   build. (2) ToolGateway-gate the non-Fs tools (terminal/fetch/web_search/MCP) at Zed's tool_permissions.rs
+   decision point; Fs-bound tools gated by (1). (3) Zed as a confined powerbox app + a Surface cap (window).
+   Phases: read-only FirmamentFs → writes-as-turns → ToolGateway tools → confined-powerbox-app → snapshot+VCS.
+5. TERMINAL (ember ask): embed Zed's terminal/terminal_view (alacritty) as a deos surface/panel, ToolGateway-
+   gated (the terminal_tool is one of the non-Fs tools in #4).
+6. HERMES-AGENT (ember ask): ~/pug/hermes-agent = Nous Research's self-improving agent (Python, ACP adapter
+   acp_adapter/acp_registry, skills/learning-loop, multi-platform gateway). Integrate as a deos agent via ACP
+   (Zed speaks ACP — acp_thread) + ToolGateway: every Hermes tool call → a cap-gated receipted dregg turn.
+   THE ADOS realization with a REAL agent instead of a toy.
+ROADMAP (felt-wins-first): Phase-0 scroll + the async tab/act decoupling (immediate) → symbolic WitnessMode
+(the foundation, careful: touches executor+storage, ember-gated soundness) → dockable workspace (vendor Zed
+pane_group/dock) → Zed-in-deos (FirmamentFs) + terminal + Hermes (the desktop buildout).
+
+## ✅ ATLAS ANOMALIES ALL RESOLVED — tab removed (2026-06-22)
+The atlas's crawl-found anomalies are closed; the Anomalies tab is removed (the live finder is now
+`dregg-atlas/verify.py`, the oracle, which fails CI on any invariant break).
+- AuthRequired::None cap-badge inversion — REAL BUG, FIXED (`750d0d07c`, native + live-web).
+- cell census 4-vs-8 — not a bug (cockpit's reflexive UI cells); explained.
+- issuer well can't initiate turns — BY DESIGN: the well carries −supply (asset sink), mints flow through
+  the issuer's turns, fees require funds; by conservation only the well is ever negative. Not a bug.
+- 4 live tabs stall headless stepping (Wonder/Swarm/Agent/Time) — crawler-TOOLING limitation, not a
+  protocol/cockpit bug (the tabs work in the app). Kept as a follow-up here: a bounded run_until_parked /
+  a `headless` cockpit flag would let the UI-tree + --serve-ie6 cover all 28 tabs.
+
 ## ✅✅ emberian.github.io/dregg IS LIVE — atlas + the real wasm cockpit (2026-06-22, green-or-bust)
 The Pages deploy is GREEN and serving (verified from the public URL):
 - /dregg/ + /dregg/atlas/ (interactive atlas; LFS images materialize via Actions — the lfs:true path works)
