@@ -263,6 +263,34 @@ impl History {
         Ok(ledger)
     }
 
+    /// Classify EVERY step's reversibility in a SINGLE forward pass — O(N) total
+    /// instead of `replay_to(step-1)` per step (O(N²), the TIME-panel hang). Returns
+    /// one entry per step: `Some(reversible)` for a committed turn (classified
+    /// against the running pre-state ledger), `None` for a genesis step. The pre-
+    /// state for step `i` is the running ledger BEFORE step `i` is applied — exactly
+    /// what `replay_to(i)` would reconstruct, but reusing one running ledger.
+    pub fn reversibility_classification(&self) -> Vec<Option<bool>> {
+        let executor = self.fresh_executor();
+        let mut ledger = Ledger::new();
+        let mut out = Vec::with_capacity(self.steps.len());
+        for step in &self.steps {
+            match step {
+                RecordedStep::Committed { turn, .. } => {
+                    // `ledger` here == replay_to(i): the pre-state for this turn.
+                    out.push(Some(turn.is_reversible(&ledger)));
+                }
+                RecordedStep::Genesis { .. } => out.push(None),
+            }
+            if apply_step(&executor, &mut ledger, step).is_err() {
+                while out.len() < self.steps.len() {
+                    out.push(None);
+                }
+                break;
+            }
+        }
+        out
+    }
+
     /// `recover = checkpoint ⊕ overlay`: reconstruct step `k` starting NOT from
     /// genesis but from the NEAREST recorded checkpoint at-or-below `k`, then
     /// overlaying (re-executing) only the post-checkpoint turns. This mirrors

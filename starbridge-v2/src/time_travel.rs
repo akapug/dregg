@@ -136,6 +136,10 @@ impl TimeCockpitModel {
         let cursor = cursor.min(head);
 
         // The scrubber ticks — every landing (the empty root + each genesis/turn).
+        // Reversibility is classified for ALL steps in ONE forward pass (O(N)); the
+        // old per-tick `replay_to(step-1)` was O(N²) and — rebuilt every frame on the
+        // paint path — is what hung the TIME tab as the history grew.
+        let revs = history.reversibility_classification();
         let mut ticks: Vec<ScrubTick> = Vec::with_capacity(head + 1);
         for cp in history.checkpoints() {
             let (label, is_turn, reversible) = if cp.step == 0 {
@@ -143,18 +147,8 @@ impl TimeCockpitModel {
             } else {
                 let step = &history.steps()[cp.step - 1];
                 match step {
-                    // A committed turn — classify whether it can be un-turned, off
-                    // the REAL `Turn::is_reversible` over the pre-state (the ledger
-                    // before this turn = `replay_to(step-1)`). A reversible step
-                    // rewinds cleanly; a committed boundary (spend/burn/revoke/
-                    // terminal) cannot be un-turned past. (Replay-per-tick is O(step);
-                    // the cockpit history is short, so the total is fine.)
-                    crate::replay::RecordedStep::Committed { turn, .. } => {
-                        let rev = history
-                            .replay_to(cp.step - 1)
-                            .ok()
-                            .map(|pre| turn.is_reversible(&pre));
-                        (step.label(), true, rev)
+                    crate::replay::RecordedStep::Committed { .. } => {
+                        (step.label(), true, revs.get(cp.step - 1).copied().flatten())
                     }
                     crate::replay::RecordedStep::Genesis { .. } => (step.label(), false, None),
                 }
