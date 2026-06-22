@@ -89,9 +89,9 @@ lib.** Real — but it is a *platform boundary*, so it belongs at a **crate** bo
   buildable on wasm.
 - Crates depend on whichever their target supports; the wasm build composes
   `dregg-exec`, the native build composes `dregg-exec-lean`. The `no-lean-link` flag and
-  its 9-crate cascade die. (Note: this one is closest to *defensible-as-platform*; if a
-  full crate split proves too invasive, it is the **one** acceptable place to keep a
-  single, clearly-named `target_arch = "wasm32"` cfg — never a hand-flippable feature.)
+  its 9-crate cascade die. **DECISION (ember): full crate split — the feature is deleted
+  everywhere; no `target_arch` cfg escape hatch.** It is a platform boundary, so it
+  belongs at a crate boundary like everything else.
 
 ### 4. The per-crate core-gates
 
@@ -112,6 +112,11 @@ lib.** Real — but it is a *platform boundary*, so it belongs at a **crate** bo
   per-backend crates where the gpui-vs-servo-vs-seL4 code diverges (this is also where the
   `gpui-ui`-shipped-broken-×4 bug lived — a crate boundary makes the untested combo a
   compile error, not a silent skip).
+- **`token` `biscuit`/`macaroon`**: two genuinely-distinct auth backends (biscuit-auth vs
+  the dregg-native dregg-macaroon). **DECISION (ember): keep both — as clean optional
+  *dependency* backends** (the single legitimate use of a feature: selecting a real
+  third-party backend), never as core-gates. (token's `crypto`/`zkvm` are still POISON →
+  split.)
 - **`cell`/`token`/`macaroon` `zkvm`**: gates the sp1-guest no_std build. → a
   `dregg-cell-zkvm` (or the sp1-guest depends on the types crate + a zkvm shim), not a
   feature on the host crate.
@@ -165,10 +170,12 @@ batches, then delete the feature once nobody references it. **Green at every ste
 
 ## Risk / coexistence
 
-- These crates (cell, turn, sdk, circuit) are under active parallel work. The split must
-  be staged + re-export-shimmed precisely so it does **not** break in-flight lanes;
-  schedule the carve when a lane quiesces, or do it on the least-churned crate first
-  (the cell-types extraction touches mostly Cargo.tomls + adds a crate, low collision).
+- **DECISION (ember): do not carve while the tree is busy.** These crates (cell, turn,
+  sdk, circuit) are under active parallel work; the carve waits until `git status`
+  quiesces, then proceeds in the staged order below. Keep reviewing other areas meanwhile.
+- The split must be staged + re-export-shimmed precisely so it does **not** break in-flight
+  lanes; even once quiet, do the least-churned crate first (the cell-types extraction
+  touches mostly Cargo.tomls + adds a crate, low collision).
 - `lean-shadow` (test) stays a cfg-gate: it gates FFI-dependent *tests*, which genuinely
   need the native lib present; that is a test-execution boundary, not a guarantee strip.
 - The pgrx `pg13`–`pg18` family is the one irreducible feature set — pgrx's ABI selection
