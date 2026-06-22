@@ -80,6 +80,25 @@ ROADMAP (felt-wins-first): Phase-0 scroll + the async tab/act decoupling (immedi
 pane_group/dock) → Zed-in-deos (FirmamentFs) + terminal + Hermes (the desktop buildout).
 
 
+
+### DESKTOP EPOCH — deos-chat: the rehydratable-membrane multiplayer layer (ember 2026-06-22):
+THE VISION (ember→spwashi): a screenshot/message embeds a "frustum-culled rehydratable MEMBRANE" = a cap-bounded
+FORK of the deos world at the capture moment; recipients rehydrate it + drive real turns (live MULTIPLAYER);
+Matrix is the transport that makes it real; a MERGE stitches divergent forks back; time-travel throughout.
+GROUNDING (not hand-wavy — every piece has machinery): membrane = World::fork + snapshot/restore (replay.rs, MCP
+snapshot/restore) CULLED to the in-view cap-bounded cell/cap subgraph, wrapped as a firmament surface-cap +
+transclusion (starbridge-web-surface/{rehydrate,transclusion}.rs) + the partial-turn/promise machinery. MERGE =
+a PUSHOUT in the event-structure config lattice (the turn-layer IS already an event structure); conflicts-as-
+OBJECTS (patch theory / Pijul); SOUND because dregg's LINEARITY (nullifiers · conservation Σδ=0 · cap non-
+amplification) makes inconsistent events LOSSY-DROPPED — the branch-and-stitch linear-drop (docs/deos/
+BRANCH-AND-STITCH-PROTOCOL.md, DISTRIBUTED-TIMETRAVEL-SEMANTICS.md). So "the merge is consistent w/ patch theory +
+dregg semantics" = the dregg algebra AUTO-rejects the inconsistent merge events; the stitch is lossy exactly where
+conservation/caps require. KEY-LEAK modeling (ember's adversary q) = DEFERRED: a leaked key = a compromised cap;
+its blast-radius needs the cap-compromise-propagation + revocation-non-monotone-at-settlement proof machinery
+(firmament confinement + membrane fork-isolation bound it) — a deliberate adversary-harness build, not a bolt-on.
+deos-chat LANE (a155821): study nheko (solves Matrix-client problems correctly — draw the UX/feature patterns
+even though it's C++/Qt) + brief rivet review; build the gpui chat UI on deos-matrix + gpui-component (room-list/
+timeline/composer-as-real-Input); design the membrane+merge seam. The chat is the SOCIAL layer over the dregg world.
 ### DESKTOP EPOCH — deferred cleanups (ember 2026-06-22, "not yet"):
 - MIGRATE existing cockpit UI → gpui-component widgets. The hand-rolled bits (the ⌘K palette char-accumulator
   cockpit.rs ~3071, ad-hoc buttons/lists/the inspect-act fields) move to gpui_component::{input::{InputState,
@@ -120,6 +139,19 @@ pane_group/dock) → Zed-in-deos (FirmamentFs) + terminal + Hermes (the desktop 
   → RgbaFrame → present_frame → compositor content-digest gate); NEVER-executed step = rasterize a real page +
   a URL bar (gpui here has NO text input but the palette char-accumulator). Fetch/nav cap-gate REAL (allowlist +
   no-amp); the net SOCKET (captp Netlayer::dial) + fs/cache-cap = named gaps. webview.rs:133 glow_gl_api stub.
+- STYLO FORK PATCH (servo-always-default unblock, 2026-06-22): the cockpit graph pulls `serde_fmt` (via
+  value-bag-serde1 ← log/tracing), whose `impl From<serde_fmt::Error> for core::fmt::Error` makes stylo's
+  `ToCss`-derive `?`-residual source type ambiguous on rolling nightly (rustc 1.98, 2026-06-12) → ~30
+  E0282/E0283 across `#[derive(ToCss)]` generic types. NOTE servo-render's libservo build alone does NOT
+  trip it (no serde_fmt in its graph) — only the full native-full cockpit does; and it does NOT reproduce on
+  the root nightly-2026-01-01. FIX = fork `emberian/stylo@ember-nightly-fix` (off v0.15.0, commit 3f869dfb2):
+  wrap each generated `to_css` body in a closure with explicit `Result<(), core::fmt::Error>` so the residual
+  is pinned (no semantic change). Wired as `[patch.crates-io] stylo_derive = { path = "../../stylo/style_derive" }`
+  in BOTH servo-render/Cargo.toml and starbridge-v2/Cargo.toml (each is its own workspace; stylo_derive is the
+  only stylo-family crate the macro lives in, so one patch suffices — same 0.15.0 version unifies with servo's
+  pin). CLOSURE = drop the `[patch]` lines + the fork when upstream stylo carries the fix (or the toolchain
+  regression resolves); it's a local-path vendor, not a perpetual fork. Both servo-render libservo AND the
+  full cockpit bin build green with it.
 - SANDBOXING (the jail): the seam EXISTS + is HALF-BUILT. process_kernel.rs (process-pd feature) ALREADY forks
   MMU-isolated child PDs + a socketpair Endpoint + ShmRegion + a ValidityTable (cap-unforgeability). Honest gap
   (its own ISOLATION_FIDELITY:822): the fork gets memory isolation but NO ambient-authority confinement (inherits
