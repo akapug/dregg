@@ -60,7 +60,23 @@ default = []
 # The gpui UI (deos-chat): pulls the SAME vendored gpui fork + gpui-component the
 # cockpit pins, so the chat surface drops into starbridge-v2's dock without a
 # second gpui linkage. Off by default — the protocol foundation + CLI stay lean.
-gui = ["dep:gpui", "dep:gpui_platform", "dep:gpui-component", "dep:gpui-component-assets"]
+gui = [
+    "dep:gpui",
+    "dep:gpui_platform",
+    "dep:gpui-component",
+    "dep:gpui-component-assets",
+    # OFFSCREEN SCREENSHOT capture (`deos-chat --screenshot OUT.png`). Mirrors
+    # starbridge-v2's `render-capture` feature: gpui's `test-support` lights up
+    # `HeadlessAppContext` + the offscreen wgpu renderer (`current_headless_renderer`),
+    # `gpui_wgpu` supplies the `CosmicTextSystem` platform text system, and `image`
+    # re-encodes the captured RGBA frame to a PNG. Bundled INTO `gui` so the atlas
+    # can bake the chat UI headlessly with the same `--features gui` it already uses.
+    "gpui/test-support",
+    "gpui_platform/test-support",
+    "dep:gpui_wgpu",
+    "gpui_wgpu/test-support",
+    "dep:image",
+]
 # The CockpitSurface adapter (mounts the chat in starbridge-v2's dock). Inherent
 # methods here; the ~20-line forwarder ships ready-to-drop in starbridge-v2.
 cockpit-surface = ["gui"]
@@ -99,6 +115,15 @@ gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f
 gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["font-kit", "x11", "wayland", "runtime_shaders"], optional = true }
 gpui-component = { path = "../../gpui-component/crates/ui", default-features = false, optional = true }
 gpui-component-assets = { path = "../../gpui-component/crates/assets", optional = true }
+
+# The wgpu renderer leaf, pulled DIRECTLY only for the offscreen screenshot bake
+# (the `CosmicTextSystem` platform text system + the surfaceless renderer behind
+# `current_headless_renderer`). Same fork rev as gpui above so cargo resolves ONE
+# gpui instance across the graph. Gated on `gui`; absent from the lean CLI build.
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+# Re-encodes the captured RGBA frame to a PNG. 0.25 matches gpui_wgpu's `image`
+# (one resolved version), exactly as starbridge-v2 pins it for its cockpit bake.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 # The gpui dep tree carries `[patch.crates-io]` overrides its host workspace must
 # replicate (see starbridge-v2/Cargo.toml + deos-zed/Cargo.toml). deos-matrix is
