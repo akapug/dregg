@@ -407,7 +407,22 @@ impl TurnExecutor {
         };
 
         // Compute pre-state hash before any mutations.
-        let pre_state_hash = ledger.root();
+        //
+        // SYMBOLIC EXECUTION (`crate::collapse`): in WitnessMode::Symbolic the
+        // per-turn Merkle witness is DEFERRED — we skip `Ledger::root()` (the
+        // truly-lazy materialization point) and stamp the deferred sentinel
+        // instead. The state transition below still applies in full; only the
+        // witness is deferred (recovered on demand by `collapse`). EXCEPTION:
+        // the proof-carrying sovereign path (`turn.execution_proof.is_some()`)
+        // is itself an ADMISSION/witness gate — its STARK binds the committed
+        // state commitment — so it always materializes the real root (a witness
+        // gate is never deferred; only the classical-path witness is).
+        let symbolic_defer = self.is_symbolic() && turn.execution_proof.is_none();
+        let pre_state_hash = if symbolic_defer {
+            crate::collapse::DEFERRED_STATE_HASH
+        } else {
+            ledger.root()
+        };
 
         // =====================================================================
         // PHASE 1: Commit fee + nonce (NEVER rolled back).
@@ -1157,7 +1172,19 @@ impl TurnExecutor {
         self.record_state_constraint_counters(turn, ledger, &journal);
 
         // Phase 4: Compute receipt.
-        let post_state_hash = ledger.root();
+        //
+        // SYMBOLIC EXECUTION: in WitnessMode::Symbolic this classical forest
+        // path DEFERS the post-state Merkle witness — skip `Ledger::root()` and
+        // stamp the deferred sentinel. The state transition above already
+        // applied; `collapse` re-runs this turn under Full to materialize the
+        // real `post_state_hash`. (`symbolic_defer` was computed at the
+        // pre-state above; the forest path is never proof-carrying, so it is
+        // simply `self.is_symbolic()` here.)
+        let post_state_hash = if symbolic_defer {
+            crate::collapse::DEFERRED_STATE_HASH
+        } else {
+            ledger.root()
+        };
         let effects_hash = self.compute_effects_hash(&all_effects_hashes);
 
         // Compute turn hash.

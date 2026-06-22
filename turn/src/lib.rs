@@ -85,6 +85,7 @@ pub mod bilateral_schedule;
 pub mod binding_proof;
 pub mod budget_gate;
 pub mod builder;
+pub mod collapse;
 pub mod composer;
 pub mod conditional;
 pub mod conflict;
@@ -126,6 +127,9 @@ pub use budget_gate::{BudgetGate, BudgetSlice};
 pub use builder::{
     ActionBuilder, Authorized, Bearer, Breadstuff, NeedsAuth, Proved, Signed, TurnBuilder,
     UncheckedOptIn,
+};
+pub use collapse::{
+    collapse, collapse_with, is_deferred, CollapseResult, WitnessMode, DEFERRED_STATE_HASH,
 };
 pub use composer::{ComposeError, ComposedTurn, SignedFragment, TurnComposer};
 pub use conditional::{
