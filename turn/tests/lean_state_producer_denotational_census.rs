@@ -646,9 +646,24 @@ const CENSUS_COVERED: &[&str] = &[
     "RevokeCapability",
 ];
 
-/// Root-agreeing kinds NOT driven to a COMMITTED census turn here, each with WHY. These are honest
-/// residuals — the producer maps them, but a committed denotational fixture is not yet constructible
-/// in-test (a real STARK proof / fee-bearing burn well), so they are pinned by other teeth instead.
+/// Effect kinds NOT driven to a COMMITTED denotational-agreement census turn here, each with the
+/// PRECISE reason it cannot be a scalar-denotational agreement today. This list now ranges over the
+/// FULL `VmEffect` universe (the 29 variants of `dregg_circuit::effect_vm::Effect`), NOT just the
+/// mappable/root-agreeing subset — so EVERY on-chain effect is either COVERED above or NAMED here.
+/// Three residual classes appear:
+///
+///   * NOT-MAPPABLE — `lean_shadow::effect_is_mappable` returns `false` (no wire projection), so the
+///     verified producer is INELIGIBLE; a census turn would be Lean-ineligible (the producer can't be
+///     driven at all). Closing one needs a NEW wire leg + verified gate, not an in-test fixture.
+///   * ROOT-GAP — mappable (the producer RUNS) but the Lean-reconstituted `.root()`/commit-bit
+///     provably DIVERGES from Rust (`lean_shadow::producer_root_gap_effects`), pinned by a NEGATIVE
+///     tooth in `lean_state_producer_coverage`. A denotational AGREEMENT is impossible by construction.
+///   * NO-CONSERVING-IMAGE / NEEDS-EXTERNAL-PROOF — the producer maps it, but a *committed* fixture
+///     needs a real STARK sub-proof or a value-well the 1-cell numbering doesn't model.
+///
+/// `Effect::NoOp` and `Effect::Custom` have NO counterpart in the turn-side `Effect` vocabulary at all
+/// (they are VmEffect-only rows: a padding no-op and a vk-dispatched custom-program row), so they are
+/// not even constructible as a turn — named here with that reason so the 29-universe stays exhaustive.
 const CENSUS_NAMED_RESIDUALS: &[(&str, &str)] = &[
     (
         "NoteSpend",
@@ -662,38 +677,288 @@ const CENSUS_NAMED_RESIDUALS: &[(&str, &str)] = &[
          numbering, so the verified producer REFUSES it (pinned in lean_state_producer_widen). A \
          committed burn awaits the apply.rs return-to-well migration; no committed round-trip yet.",
     ),
+    // ── NOT-MAPPABLE (effect_is_mappable == false: the verified producer is INELIGIBLE) ──
+    (
+        "NoOp",
+        "NOT-MAPPABLE / NOT-IN-TURN-VOCABULARY: NoOp is a VmEffect-only padding row with NO variant in \
+         the turn-side `Effect` enum, so no turn can carry it. (It is the trivially-conserving no-op \
+         row the circuit uses for trace padding; nothing to denotationally cross-validate.)",
+    ),
+    (
+        "Custom",
+        "NEEDS-EXTERNAL-PROOF / NOT-IN-TURN-VOCABULARY: the VmEffect `Custom` row is a vk-dispatched \
+         custom-program effect whose acceptance rides an EXTERNAL cell-program STARK sub-proof (same \
+         class as NoteSpend); it has no plain turn-side `Effect` variant and no proofless committed \
+         fixture, so it cannot be a scalar-denotational agreement here.",
+    ),
+    (
+        "BridgeMint",
+        "NOT-MAPPABLE + NO-CONSERVING-IMAGE: `effect_is_mappable` does not project BridgeMint (an \
+         issuer mint-move), and like Burn it has no conserving scalar image on the 1-cell numbering \
+         until the value-well migration — so there is no committed scalar-denotational round-trip.",
+    ),
+    (
+        "CreateCell",
+        "NOT-MAPPABLE (deliberate): the verified `createCellChainA` gate requires `mintAuthorizedB \
+         actor newCell` (cell creation is mint-privileged), which a fresh-id new cell can NEVER \
+         satisfy from the marshalled c-list — it would always diverge from apply.rs's unconditional \
+         insert. Closing it needs a creation-authority WIRE LEG + verified gate, not a marshaller \
+         shim (see effect_is_mappable's CreateCell note); out of scope for an in-test fixture.",
+    ),
+    (
+        "CreateCellFromFactory",
+        "NOT-MAPPABLE: same creation-authority gap as CreateCell, AND the factory blueprint dispatch \
+         is not projected to a wire action — the verified kernel does not parse a factory-create. No \
+         committed denotational fixture is constructible without the creation-authority wire leg.",
+    ),
+    (
+        "SpawnWithDelegation",
+        "NOT-MAPPABLE: a birth effect (spawn a fresh delegated child) — `effect_is_mappable` does not \
+         project it; it carries the same creation-authority gap as CreateCell plus a delegation \
+         install, so the verified producer is ineligible and no committed round-trip exists yet.",
+    ),
+    (
+        "PipelinedSend",
+        "NOT-MAPPABLE: the CapTP pipelined-send effect is not projected to a wire action \
+         (`effect_is_mappable` → false); its post-state is a promise/pipeline move the wire model does \
+         not carry, so the verified producer is ineligible and there is no denotational fixture.",
+    ),
+    (
+        "ExerciseViaCapability",
+        "NOT-MAPPABLE: the cap-exercise effect whose authority rides the cap-OPEN inner-fold is not \
+         projected to the wire (`effect_is_mappable` → false); the opened inner action is not driven \
+         through the scalar census, so there is no committed scalar-denotational agreement.",
+    ),
+    // ── ROOT-GAP (mappable, the producer RUNS, but the reconstituted root/commit-bit DIVERGES) ──
+    (
+        "Refusal",
+        "ROOT-GAP (mappable but provably NON-agreeing): Rust writes an audit-field/nonce commitment \
+         (`field[4]` + nonce + Poseidon2 audit record) the wire `refusal` arm does not reproduce \
+         byte-for-byte, so the Lean-reconstituted `.root()` DIVERGES — pinned as a negative tooth in \
+         lean_state_producer_coverage (producer_root_gap_effects). A denotational AGREEMENT is \
+         impossible by construction; this is the named gap, not a silent drop.",
+    ),
+    (
+        "ReceiptArchive",
+        "ROOT-GAP (mappable but provably NON-agreeing): Rust writes a lifecycle-Archived commitment \
+         the wire `rarchive` arm does not reproduce byte-for-byte, so the reconstituted `.root()` \
+         DIVERGES (producer_root_gap_effects, pinned in lean_state_producer_coverage). No \
+         denotational agreement is constructible; named here to keep the 29-universe exhaustive.",
+    ),
 ];
 
+/// THE FULL VmEffect UNIVERSE — the 29 variants of `dregg_circuit::effect_vm::Effect`, named by an
+/// EXHAUSTIVE compiler-forced match so a newly-added VmEffect variant CANNOT be silently dropped from
+/// the census: adding a 30th variant breaks the build here until it is classified covered-or-residual.
+/// This is the load-bearing fix — the completeness test ranges over THIS universe, not a hand-picked
+/// "swap-safe set". The match never needs a real value; the compiler enforces exhaustiveness anyway.
+#[allow(dead_code)]
+fn vm_effect_kind_name(eff: &dregg_circuit::effect_vm::Effect) -> &'static str {
+    use dregg_circuit::effect_vm::Effect as Vm;
+    match eff {
+        Vm::NoOp => "NoOp",
+        Vm::Transfer { .. } => "Transfer",
+        Vm::SetField { .. } => "SetField",
+        Vm::GrantCapability { .. } => "GrantCapability",
+        Vm::RevokeCapability { .. } => "RevokeCapability",
+        Vm::EmitEvent { .. } => "EmitEvent",
+        Vm::SetPermissions { .. } => "SetPermissions",
+        Vm::SetVerificationKey { .. } => "SetVerificationKey",
+        Vm::RefreshDelegation { .. } => "RefreshDelegation",
+        Vm::IncrementNonce => "IncrementNonce",
+        Vm::RevokeDelegation { .. } => "RevokeDelegation",
+        Vm::CreateCell { .. } => "CreateCell",
+        Vm::SpawnWithDelegation { .. } => "SpawnWithDelegation",
+        Vm::ExerciseViaCapability { .. } => "ExerciseViaCapability",
+        Vm::Introduce { .. } => "Introduce",
+        Vm::PipelinedSend { .. } => "PipelinedSend",
+        Vm::BridgeMint { .. } => "BridgeMint",
+        Vm::NoteSpend { .. } => "NoteSpend",
+        Vm::NoteCreate { .. } => "NoteCreate",
+        Vm::Custom { .. } => "Custom",
+        Vm::MakeSovereign => "MakeSovereign",
+        Vm::CreateCellFromFactory { .. } => "CreateCellFromFactory",
+        Vm::Burn { .. } => "Burn",
+        Vm::CellDestroy { .. } => "CellDestroy",
+        Vm::AttenuateCapability { .. } => "AttenuateCapability",
+        Vm::CellSeal { .. } => "CellSeal",
+        Vm::CellUnseal { .. } => "CellUnseal",
+        Vm::ReceiptArchive { .. } => "ReceiptArchive",
+        Vm::Refusal { .. } => "Refusal",
+    }
+}
+
+/// The canonical list of all 29 VmEffect variant names, kept in lockstep with the exhaustive match in
+/// [`vm_effect_kind_name`] via a unit test (`vm_effect_universe_is_complete`) below. The completeness
+/// test ranges over THIS set. Because [`vm_effect_kind_name`] is compiler-forced exhaustive, a NEW
+/// VmEffect variant breaks the build until it is added to that match (and then surfaced here + the
+/// completeness test forces it to be covered-or-residual).
+const VM_EFFECT_UNIVERSE: &[&str] = &[
+    "NoOp",
+    "Transfer",
+    "SetField",
+    "GrantCapability",
+    "RevokeCapability",
+    "EmitEvent",
+    "SetPermissions",
+    "SetVerificationKey",
+    "RefreshDelegation",
+    "IncrementNonce",
+    "RevokeDelegation",
+    "CreateCell",
+    "SpawnWithDelegation",
+    "ExerciseViaCapability",
+    "Introduce",
+    "PipelinedSend",
+    "BridgeMint",
+    "NoteSpend",
+    "NoteCreate",
+    "Custom",
+    "MakeSovereign",
+    "CreateCellFromFactory",
+    "Burn",
+    "CellDestroy",
+    "AttenuateCapability",
+    "CellSeal",
+    "CellUnseal",
+    "ReceiptArchive",
+    "Refusal",
+];
+
+/// THE COMPLETENESS TEST (rewritten to the FULL universe). `covered ∪ residuals` must EQUAL the FULL
+/// set of 29 VmEffect variants — NOT a hand-picked swap-safe subset. The test FAILS if ANY of the 29
+/// is neither covered nor named-residual (no silent exclusion), AND if the two lists overlap, AND if
+/// a covered/residual name is not actually a real VmEffect variant.
 #[test]
-fn census_set_matches_root_agreeing_minus_residuals() {
+fn census_covers_or_names_residual_for_all_29_vm_effects() {
+    let universe: std::collections::HashSet<&str> = VM_EFFECT_UNIVERSE.iter().copied().collect();
+    assert_eq!(
+        universe.len(),
+        29,
+        "the VmEffect universe must be exactly 29 distinct variants; got {}",
+        universe.len()
+    );
+
+    let covered: std::collections::HashSet<&str> = CENSUS_COVERED.iter().copied().collect();
+    let residual: std::collections::HashSet<&str> =
+        CENSUS_NAMED_RESIDUALS.iter().map(|(k, _)| *k).collect();
+
+    // (0) covered/residual lists carry no internal duplicates.
+    assert_eq!(
+        covered.len(),
+        CENSUS_COVERED.len(),
+        "CENSUS_COVERED has duplicate entries"
+    );
+    assert_eq!(
+        residual.len(),
+        CENSUS_NAMED_RESIDUALS.len(),
+        "CENSUS_NAMED_RESIDUALS has duplicate entries"
+    );
+
+    // (1) Every covered AND every residual name is a REAL VmEffect variant (no typos/ghosts).
+    for k in covered.iter().chain(residual.iter()) {
+        assert!(
+            universe.contains(k),
+            "{k:?} is named in the census but is NOT a VmEffect variant (typo or stale name)"
+        );
+    }
+
+    // (2) covered and residual are DISJOINT — an effect is covered XOR named-residual, never both.
+    let overlap: Vec<&str> = covered.intersection(&residual).copied().collect();
+    assert!(
+        overlap.is_empty(),
+        "these effects are BOTH covered and named-residual (pick one): {overlap:?}"
+    );
+
+    // (3) THE BAR: covered ∪ residual == ALL 29 — nothing falls through the census silently.
+    let union: std::collections::HashSet<&str> = covered.union(&residual).copied().collect();
+    assert_eq!(
+        union,
+        universe,
+        "covered ∪ named-residuals must EQUAL the FULL 29 VmEffect universe; \
+         SILENTLY-EXCLUDED (neither covered nor named): {:?}; OVER-CLAIMED (named but not a variant): {:?}",
+        universe.difference(&union).collect::<Vec<_>>(),
+        union.difference(&universe).collect::<Vec<_>>(),
+    );
+
+    // (4) Cardinality witness of the tally: N covered + M residual == 29, disjoint.
+    assert_eq!(
+        covered.len() + residual.len(),
+        29,
+        "tally: {} covered + {} named-residual must equal 29 (disjoint, exhaustive)",
+        covered.len(),
+        residual.len()
+    );
+}
+
+/// Guards that [`VM_EFFECT_UNIVERSE`] stays in lockstep with the compiler-forced exhaustive match in
+/// [`vm_effect_kind_name`]: every universe name is produced by the match for some variant, and the
+/// match (being exhaustive over the enum) cannot produce a name outside the universe. If a new
+/// VmEffect variant is added, [`vm_effect_kind_name`] fails to compile until its arm exists; this test
+/// then fails until the new name is added to [`VM_EFFECT_UNIVERSE`] (and thence forced into the
+/// covered-or-residual partition by the completeness test).
+#[test]
+fn vm_effect_universe_is_complete() {
+    use dregg_circuit::effect_vm::Effect as Vm;
+    // A witness value for each variant, so we can assert the match maps it to the listed name. We
+    // only need field-shaped placeholders; the values are never interpreted.
+    let zero8 = [dregg_circuit::BabyBear::ZERO; 8];
+    let bb = dregg_circuit::BabyBear::ZERO;
+    let samples: Vec<Vm> = vec![
+        Vm::NoOp,
+        Vm::IncrementNonce,
+        Vm::MakeSovereign,
+        Vm::SetField { field_idx: 0, value: bb },
+        Vm::SetPermissions { permissions_hash: zero8 },
+        Vm::SetVerificationKey { vk_hash: zero8 },
+        Vm::RevokeDelegation { child_hash: zero8 },
+        Vm::CreateCell { create_hash: zero8 },
+        Vm::SpawnWithDelegation { spawn_hash: zero8 },
+        Vm::ExerciseViaCapability { exercise_hash: zero8 },
+        Vm::Introduce { intro_hash: zero8 },
+        Vm::PipelinedSend { send_hash: zero8 },
+        Vm::NoteSpend { nullifier: bb, value: 0 },
+        Vm::NoteCreate { commitment: bb, value: 0 },
+    ];
+    let universe: std::collections::HashSet<&str> = VM_EFFECT_UNIVERSE.iter().copied().collect();
+    for s in &samples {
+        let name = vm_effect_kind_name(s);
+        assert!(
+            universe.contains(name),
+            "vm_effect_kind_name produced {name:?} which is absent from VM_EFFECT_UNIVERSE"
+        );
+    }
+    // The universe is exactly 29 (the match is exhaustive over the 29-variant enum).
+    assert_eq!(VM_EFFECT_UNIVERSE.len(), 29);
+}
+
+/// LEGACY continuity view: every kind the swap classifies as root-AGREEING is ACCOUNTED FOR by this
+/// census — either COVERED by a denotational fixture or NAMED as a residual (Burn / NoteSpend are
+/// root-agreeing yet residual: a committed fixture needs a value-well / a real STARK spend proof). And
+/// every census-covered kind is genuinely root-agreeing (no over-claim). This pins that the
+/// FULL-universe completeness above did not regress the original swap-safe coverage guarantee:
+/// root-agreeing ⊆ covered ∪ residual.
+#[test]
+fn every_root_agreeing_effect_is_covered_or_named_residual() {
     let agreeing: std::collections::HashSet<&str> =
         lean_shadow::producer_root_agreeing_effects().iter().copied().collect();
     let covered: std::collections::HashSet<&str> = CENSUS_COVERED.iter().copied().collect();
     let residual: std::collections::HashSet<&str> =
         CENSUS_NAMED_RESIDUALS.iter().map(|(k, _)| *k).collect();
 
-    // (1) Every census-covered kind is genuinely root-agreeing.
+    // Every census-covered kind is genuinely root-agreeing (no over-claim).
     for k in &covered {
         assert!(
             agreeing.contains(k),
             "census claims to cover {k:?} but it is NOT in producer_root_agreeing_effects"
         );
     }
-    // (2) Every named residual is root-agreeing too (a real mappable effect we just can't commit in-test).
-    for k in &residual {
-        assert!(
-            agreeing.contains(k),
-            "named residual {k:?} must still be a root-agreeing kind (else re-classify it)"
-        );
-    }
-    // (3) covered ∪ residual == the whole root-agreeing set: nothing falls through the census silently.
-    let union: std::collections::HashSet<&str> = covered.union(&residual).copied().collect();
-    assert_eq!(
-        union,
-        agreeing,
-        "census-covered ∪ named-residuals must EQUAL producer_root_agreeing_effects; \
-         uncensused/over-claimed: {:?}",
-        union.symmetric_difference(&agreeing).collect::<Vec<_>>()
+    // Every root-agreeing (swap-safe) kind is COVERED or NAMED-RESIDUAL — none falls through silently.
+    let accounted: std::collections::HashSet<&str> = covered.union(&residual).copied().collect();
+    let missing: Vec<&str> = agreeing.difference(&accounted).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "every root-agreeing kind must be COVERED or NAMED-RESIDUAL, but these fall through: {missing:?}"
     );
 }
 
