@@ -52,3 +52,6 @@ sel4/dregg-pd/executor-microkit-pd/microkit-patch/microkit-2.2.0-patched
 *.rlib
 *.rmeta
 *.dylib
+
+# macOS finder junk
+.DS_Store
