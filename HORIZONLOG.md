@@ -4217,3 +4217,18 @@ refused).
 ###   cap_open_route_for_run arm) is gated behind the shared non-TB cap-open prove-THROUGH plumbing landing (another
 ###   session owns that dispatch); cap_open_supported_for_run's error message updated to name it precisely. The exercise
 ###   descriptor + the Lean apex (Rfix 16) are CLOSED; only the end-to-end prover lookup-balance is the residual.
+
+### gpui-component VENDORED — the cockpit gets real widgets (text Input it never had). Fork
+###   emberian/gpui-component@dregg-repoint (sibling ../../gpui-component, Apache-2.0): a CLEAN re-point of every
+###   zed-derived dep (gpui/gpui_platform/gpui_web/gpui_macros/reqwest_client) onto emberian/zed@407a6ff — the rev
+###   starbridge-v2 already pins; upstream's gpui/src @1d217ee is byte-identical to our fork's (fork only patches the
+###   offscreen renderer, not the API), so ONE gpui instance resolves across cockpit+widgets. Standalone
+###   `cargo build -p gpui-component` GREEN (after replicating the zed monorepo's [patch.crates-io]: async-process/
+###   async-task fork revs + vendored pathfinder_simd 0.5.6 scalar build). starbridge-v2 wiring: optional `gpui-component`
+###   path dep (default-features OFF → tree-sitter grammars opt-in, lean cockpit) under `gpui-ui`; one
+###   `gpui_component::init(cx)` at run_window boot. LICENSE-APACHE-gpui-component + NOTICE-gpui-component.md (AGPL
+###   hygiene). Commit 4d610343. The gpui-component graph compiled clean in the bin build; verification was BLOCKED only
+###   by a CONCURRENT SWARM WIP break in starbridge-v2/src/cap_inspector.rs:434 (another agent added a `HostPd` arm to
+###   dregg-firmament's Target enum; non-exhaustive match, E0004) — NOT my file-set, not caused by this change. The
+###   cockpit-integration agent owns cockpit.rs; Input API in the handoff: InputState (Entity model) .placeholder()/
+###   .masked(true) + TextInput::new(&state) element, InputEvent::{Change,PressEnter} for submit.
