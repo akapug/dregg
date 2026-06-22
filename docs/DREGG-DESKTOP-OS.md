@@ -95,6 +95,22 @@ rewrite, because **there was only ever one model — the bounds simply relax alo
 `n`.** "Web-forward desktop OS" and "distributed object-capability OS" become the
 *same statement about pixels.*
 
+### Realization status — documented vs. realized (L5–L8)
+
+The eight-layer separation above is the **intended design**, and it is accurate:
+L5 (compositor-PD) is the only-new-TCB, L6 (shell/WM) is untrusted, L7 is app
+cells, and L8 (cockpit) is the master-interface *client*, never the root. What
+runs in code today is a narrower realization: **the running build COLLAPSES
+L6/L7/L8 into the one `starbridge-v2` process** — the WM, the apps, and the
+cockpit are one program, not separate cells composited through L5. The L5
+compositor-PD exists and enforces its scene teeth (`compositor_pd.rs` +
+gpui-free `compositor.rs`), and the dock/`{pane,surface}.rs` layout engine is
+vendored but unwired. Realizing the documented separation — the WM arranging
+*foreign* surfaces, a session/login manager that holds the root cap, and the
+cockpit demoted to one shell app among many — is the active build, not a
+redesign. Read the layers below as the target shape; this note marks which of it
+is live.
+
 ---
 
 ## 3. The semihosted-seL4 KEYSTONE (the portability fulcrum)

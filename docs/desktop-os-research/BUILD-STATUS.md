@@ -95,15 +95,21 @@ A runnable demo of both facets:
 
 ## The LIBSERVO SEAM — exactly where the real engine plugs in
 
-The heavy libservo dependency (a multi-MB Rust codebase + a Metal/wgpu toolchain
-that does not build cleanly in this environment) is **deliberately not linked**.
-The seam is a single documented type, `MockSurface<D: WebSurfaceDelegate>`
-(`starbridge-web-surface/src/delegate.rs`), standing in for the libservo
-`WebView`, with a `// LIBSERVO SEAM` block giving the exact `WebViewDelegate`
-impl that forwards each callback to `CapGatedDelegate`. Everything the gate
-checks against — the cap model, `is_attenuation`, the no-amplification mint, the
-`AttestedRoot` chain — is the REAL dregg machinery and is unchanged when the seam
-closes. Only `MockSurface` is replaced.
+`libservo` **BUILDS and LINKS on this host** through the SWGL (no-GPU) render
+path (see [SERVO-ON-SEL4.md](SERVO-ON-SEL4.md) §0/§4): a 63 MB compiled
+`libservo` rlib + the SpiderMonkey static libraries are built artifacts. The SWGL
+`RenderingContext` removes the Metal/wgpu/GPU toolchain requirement entirely, so
+the "does not build cleanly in this environment" wall is **passed**. In
+`starbridge-web-surface` the seam is still drawn at a single documented type,
+`MockSurface<D: WebSurfaceDelegate>` (`starbridge-web-surface/src/delegate.rs`),
+standing in for the libservo `WebView`, with a `// LIBSERVO SEAM` block giving the
+exact `WebViewDelegate` impl that forwards each callback to `CapGatedDelegate`.
+Everything the gate checks against — the cap model, `is_attenuation`, the
+no-amplification mint, the `AttestedRoot` chain — is the REAL dregg machinery and
+is unchanged when the seam closes; only `MockSurface` is replaced. The live
+frontier is the libservo-default feature flip, the first real
+`render_url_to_frame` page render, the URL bar, and the net-cap (`captp`
+`Netlayer::dial`) + fs/cache-cap.
 
 ## What the full build will still need (reported, not worked around)
 
