@@ -39,6 +39,7 @@ use dregg_cell::{
 use dregg_sdk::embed::{DreggEngine, EmbedError, EngineConfig};
 use dregg_turn::{
     action::{Action, Authorization, DelegationMode, Effect, Event},
+    collapse::{is_deferred, WitnessMode},
     forest::CallForest,
     turn::{Turn, TurnReceipt},
     ComputronCosts, TurnExecutor,
@@ -187,6 +188,24 @@ pub struct World {
     /// single source of truth for the commit cursor (its torn-state guard
     /// re-checks it).
     persist: Option<WorldPersist>,
+    /// THE WITNESS MODE (SYMBOLIC EXECUTION — `dregg_turn::collapse`). `Full`
+    /// (the correct default): every commit materializes its Merkle witness and
+    /// records the post-root onto the replay tape, so each receipt is
+    /// publishable. `Symbolic`: a local fast path that DEFERS the witness — the
+    /// engine skips `Ledger::root()` (the receipt carries the deferred sentinel
+    /// state-hash) AND `commit_turn` skips the replay-tape double-execution,
+    /// buffering the turn in `symbolic_turns` instead. The state transition
+    /// still fully applies (the abstract progress). [`World::collapse`]
+    /// re-runs the buffered turns under Full to materialize the real witnesses
+    /// + the tape, reproducing exactly what a Full run would have. Admission is
+    /// mode-independent — only the witness is deferred, never the decision.
+    witness_mode: WitnessMode,
+    /// The buffer of turns committed under [`WitnessMode::Symbolic`] whose
+    /// witnesses are DEFERRED — recorded here (NOT on the replay tape) so
+    /// [`World::collapse`] can materialize them on demand. Empty in `Full` mode
+    /// and after a `collapse`. A symbolic turn's receipt (in `receipts`) carries
+    /// the deferred sentinel until collapse replaces it with the real one.
+    symbolic_turns: Vec<Turn>,
 }
 
 impl Default for World {
@@ -254,6 +273,8 @@ impl World {
             suspended: false,
             pending: VecDeque::new(),
             persist: None,
+            witness_mode: WitnessMode::Full,
+            symbolic_turns: Vec::new(),
         }
     }
 
@@ -619,6 +640,12 @@ impl World {
             // A fork is a what-if COPY: it MUST never persist (committing on the
             // fork would otherwise corrupt the live image's durable log).
             persist: None,
+            // A fork PREDICTS the next turn — it always wants a real witness for
+            // the predicted post-state, so it runs Full regardless of the live
+            // world's mode (and starts with an empty symbolic buffer). The
+            // fork's engine executor is fresh (default Full), so nothing to flip.
+            witness_mode: WitnessMode::Full,
+            symbolic_turns: Vec::new(),
         }
     }
 
@@ -933,9 +960,22 @@ impl World {
                 self.engine
                     .executor()
                     .set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
-                // Mirror the commit onto the replay tape (re-executes against the
-                // recorder's own ledger/executor, capturing the post-state root).
-                self.history.record_commit(&self.record_exec, &mut self.record_ledger, turn.clone());
+                // SYMBOLIC EXECUTION: in `Symbolic` mode the witness is DEFERRED.
+                // We skip the replay-tape double-execution (which would re-run a
+                // FULL `execute` + `Ledger::root()` on the recorder, defeating the
+                // cost saving) and instead BUFFER the turn in `symbolic_turns`.
+                // `World::collapse` re-runs the buffer under Full to materialize
+                // the tape + the real witnesses. In `Full` mode the tape records
+                // eagerly, exactly as before. (The engine executor's mode, set by
+                // `set_witness_mode`, already made the live receipt's state-hash
+                // the deferred sentinel under Symbolic.)
+                if self.witness_mode.is_symbolic() {
+                    self.symbolic_turns.push(turn.clone());
+                } else {
+                    // Mirror the commit onto the replay tape (re-executes against the
+                    // recorder's own ledger/executor, capturing the post-state root).
+                    self.history.record_commit(&self.record_exec, &mut self.record_ledger, turn.clone());
+                }
                 self.height += 1;
 
                 // THE DURABLE DUAL-WRITE (M4, A.2) — O(change). When the image is
@@ -947,7 +987,13 @@ impl World {
                 // and disk in lock-step (the node's discipline). The in-RAM engine
                 // already advanced, so on a durable failure we surface it as a hard
                 // rejection AND drop the store to ephemeral (loud, not silent).
-                if self.persist.is_some() {
+                // SYMBOLIC EXECUTION: a deferred-witness turn has NO real
+                // post-state root to durably record (its receipt carries the
+                // deferred sentinel), so it is NOT durably written here. It
+                // becomes durable only after `collapse` re-derives the real
+                // witness. (A durable world should stay in `Full` for the live
+                // commit path; symbolic is a local/ephemeral fast path.)
+                if self.persist.is_some() && !self.witness_mode.is_symbolic() {
                     let height = self.height;
                     // Split the borrows: take `persist` out, write through the
                     // disjoint `engine` borrow, then put it back (or drop it on a
@@ -1023,6 +1069,122 @@ impl World {
                 CommitOutcome::Rejected { reason, at_action: vec![] }
             }
         }
+    }
+
+    // --- SYMBOLIC EXECUTION (the deferred-witness fast path + collapse) ------
+
+    /// The current [`WitnessMode`] (Full by default).
+    pub fn witness_mode(&self) -> WitnessMode {
+        self.witness_mode
+    }
+
+    /// `true` iff the live commit path is currently deferring witnesses
+    /// ([`WitnessMode::Symbolic`]).
+    pub fn is_symbolic(&self) -> bool {
+        self.witness_mode.is_symbolic()
+    }
+
+    /// How many symbolic (deferred-witness) turns are buffered, awaiting
+    /// [`World::collapse`]. `0` in Full mode or after a collapse.
+    pub fn symbolic_pending(&self) -> usize {
+        self.symbolic_turns.len()
+    }
+
+    /// **Enter / leave SYMBOLIC mode** — the local deferred-witness fast path.
+    ///
+    /// In [`WitnessMode::Symbolic`] the engine applies each turn's FULL state
+    /// transition (balances / caps / nonces — the abstract progress) but DEFERS
+    /// the per-turn Merkle witness: the engine executor skips `Ledger::root()`
+    /// (the receipt carries the deferred sentinel state-hash), and `commit_turn`
+    /// skips the replay-tape double-execution, buffering the turn for later
+    /// [`World::collapse`]. This is the cost the mode saves: zero per-turn
+    /// hashing on the live path AND no second full execution on the recorder.
+    ///
+    /// SOUNDNESS: this selects ONLY whether witnesses materialize; it NEVER
+    /// changes which turns are admitted (every legality gate — authority,
+    /// conservation, the `NoteSpend` STARK, sovereign-witness, nonce/fee — runs
+    /// identically in both modes). A symbolic receipt is local/unpublishable
+    /// until collapsed; the witness is deferred, never the decision.
+    ///
+    /// Switching back to `Full` does NOT auto-collapse the already-buffered
+    /// symbolic turns (call [`World::collapse`] for that); it only makes
+    /// SUBSEQUENT turns witness eagerly again. The engine executor's mode is
+    /// flipped here so the live receipts reflect the new mode immediately.
+    pub fn set_witness_mode(&mut self, mode: WitnessMode) {
+        self.witness_mode = mode;
+        self.engine.executor().set_witness_mode(mode);
+    }
+
+    /// **COLLAPSE** — materialize the deferred witnesses of every buffered
+    /// symbolic turn by re-running them through FULL execution on the replay
+    /// recorder, reproducing EXACTLY what a Full run would have witnessed.
+    ///
+    /// For each buffered symbolic turn, this drives the SKIPPED replay-tape
+    /// commit (`History::record_commit` against the recorder's Full executor +
+    /// ledger), which re-executes the turn and captures the real post-state root
+    /// tooth — then replaces that turn's DEFERRED receipt in the provenance log
+    /// with the re-derived REAL one. Determinism is already discharged (the
+    /// pinned timestamp + cost model + the recorder's chain-head lock-step), so
+    /// each collapsed receipt is byte-identical to the Full-mode receipt.
+    ///
+    /// After collapse the live commit path returns to [`WitnessMode::Full`] and
+    /// the symbolic buffer is empty. FAIL-CLOSED: if a buffered turn does NOT
+    /// re-commit under Full, or the materialized recorder root diverges from the
+    /// live engine's post-state, this returns `Err` (an integrity event — a
+    /// symbolic run that admitted a turn Full execution refuses, which the
+    /// shared admission gate makes impossible barring corruption).
+    ///
+    /// Returns the count of turns collapsed.
+    pub fn collapse(&mut self) -> Result<usize, String> {
+        let buffered = std::mem::take(&mut self.symbolic_turns);
+        let n = buffered.len();
+
+        // The provenance index of the FIRST symbolic receipt: the symbolic turns
+        // are the LAST `n` entries in `receipts` (they were pushed in order,
+        // after any prior Full commits). Re-derive each and overwrite in place.
+        let first = self.receipts.len().checked_sub(n).ok_or_else(|| {
+            "collapse: fewer receipts than buffered symbolic turns (provenance desync)".to_string()
+        })?;
+
+        for (offset, turn) in buffered.into_iter().enumerate() {
+            // Drive the SKIPPED Full replay-tape commit — re-executes the turn
+            // against the recorder's Full executor + ledger and captures the real
+            // post-root tooth. The recorder's chain head advances in lock-step.
+            let receipt = self
+                .history
+                .record_commit(&self.record_exec, &mut self.record_ledger, turn.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "collapse: buffered symbolic turn (agent {}) did NOT re-commit under \
+                         Full execution — integrity event (symbolic admitted a Full-illegal turn)",
+                        short(&turn.agent)
+                    )
+                })?;
+            debug_assert!(
+                !is_deferred(&receipt),
+                "a collapsed receipt must carry a real (non-deferred) witness"
+            );
+            // Replace the deferred receipt in the provenance log with the real one.
+            self.receipts[first + offset] = receipt;
+        }
+
+        // FAIL-CLOSED convergence: the recorder ledger (Full-replayed) MUST now
+        // commit to the SAME canonical root as the live engine ledger (which
+        // applied the identical state transitions, just witness-deferred). A
+        // divergence means the deferred path drifted from Full — refuse.
+        let engine_root = crate::persistence::canonical_ledger_root(self.engine.ledger());
+        let record_root = crate::persistence::canonical_ledger_root(&self.record_ledger);
+        if engine_root != record_root {
+            return Err(format!(
+                "collapse: post-collapse ledger divergence — engine root {:?} != \
+                 collapsed recorder root {:?} (the symbolic state transition drifted from Full)",
+                engine_root, record_root
+            ));
+        }
+
+        // The live path returns to Full (subsequent turns witness eagerly).
+        self.set_witness_mode(WitnessMode::Full);
+        Ok(n)
     }
 
     // --- THE SUSPEND PRIMITIVE (halt-the-live-loop, meta-debug §3) -----------
@@ -2740,5 +2902,96 @@ mod tests {
             );
         }
         println!("  SOUNDNESS PASS: a touched-focus re-render recomputes (no stale memo hit)\n");
+    }
+
+    // --- SYMBOLIC EXECUTION (the World-level deferred-witness + collapse) ----
+
+    #[test]
+    fn symbolic_world_applies_transition_without_recording_the_tape() {
+        // Build a small Full image first (genesis only, no turns).
+        let mut w = World::new();
+        let a = w.genesis_cell(1, 1_000);
+        let b = w.genesis_cell(2, 0);
+        let tape_before = w.recorded_turns().len();
+
+        // Enter Symbolic and commit a transfer.
+        w.set_witness_mode(WitnessMode::Symbolic);
+        assert!(w.is_symbolic());
+        let t = w.turn(a, vec![transfer(a, b, 250)]);
+        let outcome = w.commit_turn(t);
+        assert!(outcome.is_committed(), "a symbolic turn still commits");
+
+        // The STATE TRANSITION applied (the abstract progress).
+        assert_eq!(w.ledger().get(&a).unwrap().state.balance(), 750);
+        assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 250);
+
+        // But the WITNESS was deferred: the replay tape did NOT grow (no
+        // double-execution), the turn is buffered, and the live receipt carries
+        // the deferred sentinel.
+        assert_eq!(w.recorded_turns().len(), tape_before, "tape not recorded in symbolic mode");
+        assert_eq!(w.symbolic_pending(), 1);
+        assert!(is_deferred(w.receipts().last().unwrap()), "symbolic receipt is deferred");
+    }
+
+    #[test]
+    fn world_collapse_reproduces_a_full_run() {
+        // A SYMBOLIC world: genesis + three deferred turns.
+        let mut sym = World::new();
+        let a = sym.genesis_cell(1, 1_000);
+        let b = sym.genesis_cell(2, 0);
+        let c = sym.genesis_cell(3, 0);
+        sym.set_witness_mode(WitnessMode::Symbolic);
+        assert!(sym.commit_turn(sym.turn(a, vec![transfer(a, b, 300)])).is_committed());
+        assert!(sym.commit_turn(sym.turn(b, vec![transfer(b, c, 100)])).is_committed());
+        assert!(sym.commit_turn(sym.turn(a, vec![transfer(a, c, 50)])).is_committed());
+        assert_eq!(sym.symbolic_pending(), 3);
+
+        // A FULL world: the SAME genesis + the SAME three turns (the ground truth).
+        let mut full = World::new();
+        let a2 = full.genesis_cell(1, 1_000);
+        let b2 = full.genesis_cell(2, 0);
+        let c2 = full.genesis_cell(3, 0);
+        assert_eq!((a, b, c), (a2, b2, c2), "deterministic genesis ids");
+        assert!(full.commit_turn(full.turn(a2, vec![transfer(a2, b2, 300)])).is_committed());
+        assert!(full.commit_turn(full.turn(b2, vec![transfer(b2, c2, 100)])).is_committed());
+        assert!(full.commit_turn(full.turn(a2, vec![transfer(a2, c2, 50)])).is_committed());
+
+        // COLLAPSE the symbolic world.
+        let n = sym.collapse().expect("collapse must succeed");
+        assert_eq!(n, 3);
+        assert_eq!(sym.symbolic_pending(), 0, "buffer drained");
+        assert!(!sym.is_symbolic(), "collapse returns to Full");
+
+        // The collapsed image equals the Full image: same canonical state root,
+        // and the replay tape now records every turn (with real roots).
+        assert_eq!(sym.state_root(), full.state_root(), "collapsed image root == Full image root");
+        assert_eq!(sym.recorded_turns().len(), full.recorded_turns().len());
+        assert_eq!(
+            sym.recorded_turns().root_at(sym.recorded_turns().len()),
+            full.recorded_turns().root_at(full.recorded_turns().len()),
+            "collapsed head root tooth == Full head root tooth"
+        );
+
+        // Every collapsed receipt is real (no longer deferred) and byte-identical.
+        for (cr, fr) in sym.receipts().iter().zip(full.receipts().iter()) {
+            assert!(!is_deferred(cr), "collapsed receipt is a real witness");
+            assert_eq!(cr.receipt_hash(), fr.receipt_hash(), "collapse == Full receipt");
+        }
+    }
+
+    #[test]
+    fn full_world_is_unchanged_no_regression() {
+        // A default Full world records the tape eagerly and witnesses every turn —
+        // exactly as before symbolic mode existed.
+        let mut w = World::new();
+        let a = w.genesis_cell(1, 1_000);
+        let b = w.genesis_cell(2, 0);
+        assert!(!w.is_symbolic(), "Full is the default");
+        let tape_before = w.recorded_turns().len();
+        assert!(w.commit_turn(w.turn(a, vec![transfer(a, b, 250)])).is_committed());
+        // The tape grew (eager record) and the receipt carries a REAL witness.
+        assert_eq!(w.recorded_turns().len(), tape_before + 1);
+        assert_eq!(w.symbolic_pending(), 0);
+        assert!(!is_deferred(w.receipts().last().unwrap()), "Full receipt is real");
     }
 }

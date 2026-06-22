@@ -737,6 +737,15 @@ pub struct TurnExecutor {
     /// Blum write trace whose fold connects them), or the emitter's refusal. `None`
     /// until a turn commits with [`Self::umem_witness_enabled`] set.
     pub last_umem_witness: Mutex<Option<Result<crate::umem::UmemTurnWitness, String>>>,
+    /// THE WITNESS MODE (SYMBOLIC EXECUTION — `crate::collapse`). `0` = Full
+    /// (the correct default: materialize every per-turn Merkle witness), `1` =
+    /// Symbolic (apply the full state transition but DEFER witness
+    /// materialization — skip `Ledger::root()`, stamp the receipt's state-hash
+    /// fields with the deferred sentinel). This selects ONLY whether witnesses
+    /// are materialized eagerly; it never changes which turns are admitted
+    /// (every legality gate runs identically in both modes). An `AtomicU8` so a
+    /// `&self` execute path reads it cheaply and a `&self` caller can flip it.
+    pub witness_mode: std::sync::atomic::AtomicU8,
 }
 
 impl TurnExecutor {
@@ -776,6 +785,7 @@ impl TurnExecutor {
             consumed_cap_witnesses: Mutex::new(Vec::new()),
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
+            witness_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -819,6 +829,7 @@ impl TurnExecutor {
             consumed_cap_witnesses: Mutex::new(Vec::new()),
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
+            witness_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -858,6 +869,7 @@ impl TurnExecutor {
             consumed_cap_witnesses: Mutex::new(Vec::new()),
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
+            witness_mode: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -1214,6 +1226,33 @@ impl TurnExecutor {
             self.current_timestamp = ts;
         }
         // else: silently ignore (do not allow time to go backwards).
+    }
+
+    /// The current [`crate::collapse::WitnessMode`] (Full by default).
+    pub fn witness_mode(&self) -> crate::collapse::WitnessMode {
+        crate::collapse::WitnessMode::from_u8(
+            self.witness_mode.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    /// Set the witness mode. `&self` (atomic) so a caller holding a shared ref
+    /// can flip it — e.g. enter [`WitnessMode::Symbolic`](crate::collapse::WitnessMode)
+    /// for a burst of local turns, then back to `Full`.
+    ///
+    /// This selects ONLY whether per-turn Merkle witnesses materialize; it never
+    /// changes which turns are admitted (every legality gate runs identically in
+    /// both modes). In `Symbolic`, a committed receipt carries the deferred
+    /// sentinel state-hash ([`crate::collapse::DEFERRED_STATE_HASH`]) and is
+    /// local-only until [`crate::collapse::collapse`] materializes its witness.
+    pub fn set_witness_mode(&self, mode: crate::collapse::WitnessMode) {
+        self.witness_mode
+            .store(mode.as_u8(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// `true` iff the executor is currently in
+    /// [`WitnessMode::Symbolic`](crate::collapse::WitnessMode).
+    pub fn is_symbolic(&self) -> bool {
+        self.witness_mode().is_symbolic()
     }
 
     /// Get the per-agent last-known receipt hash, if any (P0-3 fix).
