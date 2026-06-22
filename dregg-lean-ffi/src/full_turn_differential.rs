@@ -8,8 +8,11 @@
 //!   * Lean side: `@[export] dregg_exec_full_turn (input : String) : String` over the PROVED
 //!     `execFullTurn` (ledger/conservation/step-completeness all proved in
 //!     `Dregg2/Exec/TurnExecutorFull.lean`). Driven via the C bridge `dregg_exec_full_turn_str`.
-//!   * Rust side: a faithful reference reimplementation of `execFull`/`execFullTurn` over the same
-//!     content-addressed record world, plus a codec for the full-turn wire grammar.
+//!   * Rust side: a SCALAR reference reimplementation of `execFull`/`execFullTurn` over the same
+//!     content-addressed record world, plus a codec for the full-turn wire grammar. "Scalar" is
+//!     load-bearing: the reference models a SINGLE `balance` field per cell (`bal_of`/`set_balance`),
+//!     NOT per-asset balances, and it is NOT the deployed Rust executor (`dregg-turn`'s
+//!     `TurnExecutor` / the node) — it is a hand-written mirror of the Lean `execFullTurn` decision.
 //!
 //! Two regimes:
 //!   1. STRUCTURED differential — fixed-seed random multi-action turns (including a deliberately
@@ -21,11 +24,30 @@
 //!      caps) and asserts the Lean FFI and Rust reference AGREE on accept/reject + final state
 //!      across many minimized cases. This replaces the fixed-seed harness's blind spot.
 //!
-//! HONESTY: agreement CROSS-VALIDATES the codec (TCB) and the Rust reference against the proved
-//! Lean oracle on the SAMPLED domain. It does NOT certify the Rust reference (only the Lean term
-//! carries proofs) and it does NOT prove the codec — a codec bug that corrupts BOTH sides
-//! identically would pass. What it buys: every adversarial input where Lean and Rust disagree is
-//! surfaced and minimized, hardening the one piece of Path A that is TCB (the marshalling).
+//! HONESTY — what `compare()` ACTUALLY asserts and what it does NOT:
+//!   ASSERTS (per (state, actions) pair, Lean ≡ Rust on all four): the accept/reject commit bit,
+//!   the receipt-log LENGTH, the full post-state CELLS (id-ordered readout — the WHOLE post-state,
+//!   not just a label), and the post-state CAPS *at the OBSERVED-LABEL set* (input cap-holders ∪
+//!   input cell-ids ∪ every action label — the labels the Lean wire emits; caps at labels OUTSIDE
+//!   that set are not read on either side, so a divergence confined there would be invisible).
+//!   So this IS a post-state differential, not merely an accept/reject + loglen check.
+//!   It does NOT assert conservation (Σδ=0) as an independent predicate — conservation rides only
+//!   transitively through full-cell agreement against the (proved-conserving) Lean side.
+//!
+//!   It is SCALAR + a MIRROR, not a faithfulness certificate: the Rust side is a single-`balance`
+//!   reference (see above), so agreement CROSS-VALIDATES the codec (TCB) and that scalar mirror
+//!   against the proved Lean oracle on the SAMPLED domain. It does NOT certify the Rust reference
+//!   (only the Lean term carries proofs), does NOT certify the DEPLOYED Rust executor (the
+//!   circuit's `descriptorRefines` is what binds the deployed post-state), and does NOT prove the
+//!   codec — a codec bug corrupting BOTH sides identically would pass. What it buys: every
+//!   adversarial input where Lean and the scalar mirror disagree is surfaced and minimized,
+//!   hardening the one piece of Path A that is TCB (the marshalling).
+//!
+//!   For the canonical FULL-STATE eval-agreement check between the verified Lean executor and the
+//!   real `cell::Ledger` (balances + nonces + all state fields + Merkle `.root()`), see
+//!   `dregg-turn`'s `tests/lean_state_producer_differential.rs` — that is the denotational
+//!   ledger-`.root()` differential; this harness is the codec + decision-mirror cross-check over
+//!   the whole-turn (all-or-nothing) grammar.
 
 // Force an rlib edge so this bin inherits the propagated native-lib link directives.
 extern crate dregg_lean_ffi as _;
