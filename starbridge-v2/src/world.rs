@@ -2972,8 +2972,13 @@ mod tests {
 
     #[test]
     fn world_collapse_reproduces_a_full_run() {
+        // Both worlds MUST share one timestamp: it is folded into every receipt_hash
+        // (so it binds the canonical root). `World::new()` reads now_unix() per call,
+        // which would make the symbolic vs full roots differ for an unrelated reason.
+        // Pin the same (costs, timestamp) for both so the comparison is sound.
+        const TS: i64 = 1_700_000_000;
         // A SYMBOLIC world: genesis + three deferred turns.
-        let mut sym = World::new();
+        let mut sym = World::with_costs_and_timestamp(ComputronCosts::zero(), TS);
         let a = sym.genesis_cell(1, 1_000);
         let b = sym.genesis_cell(2, 0);
         let c = sym.genesis_cell(3, 0);
@@ -2984,7 +2989,7 @@ mod tests {
         assert_eq!(sym.symbolic_pending(), 3);
 
         // A FULL world: the SAME genesis + the SAME three turns (the ground truth).
-        let mut full = World::new();
+        let mut full = World::with_costs_and_timestamp(ComputronCosts::zero(), TS);
         let a2 = full.genesis_cell(1, 1_000);
         let b2 = full.genesis_cell(2, 0);
         let c2 = full.genesis_cell(3, 0);
