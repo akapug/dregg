@@ -82,6 +82,21 @@ pane_group/dock) → Zed-in-deos (FirmamentFs) + terminal + Hermes (the desktop 
 
 
 
+
+### DESKTOP EPOCH — KEY-LEAK fully caged + the lone open theorem (2026-06-22):
+"What happens if someone leaks a private key" — which I previously couldn't model ("too much proof machinery") —
+is ALREADY ANSWERED by the deployed proofs. metatheory/Metatheory/KeyLeak.lean (kernel-clean, no sorry, CI-glob'd)
++ docs/deos/ADVERSARY-KEY-LEAK.md prove it by INSTANTIATION: key_leak_contained = polis_safety (Polis.lean:102)
+with ctrl:=attacker — polis_safety already ∀-quantifies an OPAQUE controller ("verify the cage not the animal"),
+and a leaked-key attacker IS such a controller. Blast radius = the attenuation-closure of the leaked c-list (a
+read key can't reach admin/a new cell — leak_blast_no_amplify); key_leak_attacker_blind (possession buys held caps
+and NOTHING more); revocation kills it topology-bounded (n=1 ⇒ immediate). Containment = attenuation + conservation
+Σδ=0 + firmament confinement + membrane fork-isolation, ALL deployed machinery — no large new obligation.
+⚑ THE ONE OPEN CONSTRUCTION this names: SETTLEMENT SOUNDNESS — a revoke must bind into the finalized commitment
+BEFORE settlement (so a leaked-then-revoked cap can't settle against a stale branch-time view). It is a COMPOSITION
+of existing pieces (DISTRIBUTED-TIMETRAVEL-SEMANTICS.md §6.3 + circuit-soundness), narrow — compose, don't rederive.
+This is the SAME theorem the distributed-houyhnhnm frontier + the membrane-merge seam both land on → a convergence
+point worth a dedicated lane once the cell-crypto/cockpit churn settles.
 ### DESKTOP EPOCH — the FORWARD-DESIGN trilogy (2026-06-22, docs landed while the repo churns):
 Three design docs map "what's ahead", and ALL converge on one truth: THE HARD PARTS ALREADY EXIST — it's welds,
 not new foundations. deos is a DESIGNED system being realized, not invented.
