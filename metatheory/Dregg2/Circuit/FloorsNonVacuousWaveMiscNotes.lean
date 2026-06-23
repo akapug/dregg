@@ -88,7 +88,10 @@ def makeSov_readout :
     have hmove : makeSovPost.kernel.cell = sovereignRebind makeSovPre.kernel.cell 0 := rfl
     simp only [makeSovRow0, hcol, if_false, if_pos hmove]
     rfl
-  guard := by show Dregg2.Exec.EffectsState.stateAuthB _ 0 0 = true; decide
+  guard := by
+    show Dregg2.Exec.EffectsState.stateAuthB _ 0 0 = true
+      ∧ Dregg2.Exec.TurnExecutorFull.acceptsEffects _ 0 = true
+    exact ⟨by decide, by decide⟩
   logAdv := rfl
   frAccounts := rfl
   frCaps := rfl

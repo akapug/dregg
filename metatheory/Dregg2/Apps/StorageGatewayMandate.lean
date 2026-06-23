@@ -277,7 +277,7 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
       obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'; exact ⟨hlive, hprog⟩
   | emitEventA actor cell topic data =>
       simp only [execFullA] at h
-      by_cases hl : cell ∈ s.kernel.accounts
+      by_cases hl : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hl] at h; simp only [emitStep, Option.some.injEq] at h; subst h; exact ⟨hlive, hprog⟩
       · rw [if_neg hl] at h; exact absurd h (by simp)
   | incrementNonceA actor cell n =>
@@ -639,7 +639,7 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
         rw [writeField_cell_other s.kernel f cell c (.int v) hcell]
   | emitEventA actor cell topic data =>
       simp only [execFullA] at h
-      by_cases hl : cell ∈ s.kernel.accounts
+      by_cases hl : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hl] at h; simp only [emitStep, Option.some.injEq] at h; subst h; rfl
       · rw [if_neg hl] at h; exact absurd h (by simp)
   | incrementNonceA actor cell n =>

@@ -240,7 +240,7 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
   | emitEventA actor cell topic data =>
       refine CapsConfined.of_caps_eq ?_ hpre
       simp only [execFullA] at h
-      by_cases hlive : cell ∈ s.kernel.accounts
+      by_cases hlive : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hlive] at h
         simp only [Option.some.injEq] at h
         subst h

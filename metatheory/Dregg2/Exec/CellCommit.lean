@@ -167,7 +167,7 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       -- §EMIT-LIVE: `emitStep` is now live-cell guarded — peel the `cell ∈ accounts` gate, then the
       -- log-only post-state frames `commitments` (kernel unchanged).
       simp only [execFullA] at h
-      by_cases hlive : cell ∈ s.kernel.accounts
+      by_cases hlive : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hlive] at h
         simp only [emitStep, Option.some.injEq] at h; subst h
         exact List.Subset.refl _

@@ -101,7 +101,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitEmitEventWide
 namespace Dregg2.Circuit.Argus.Effects.EmitEvent
 
 open Dregg2.Exec
-open Dregg2.Exec.TurnExecutorFull (execFullA emitStep)
+open Dregg2.Exec.TurnExecutorFull (execFullA emitStep acceptsEffects)
 open Dregg2.Circuit.Argus (RecStmt interp)
 -- The independent full-state spec + executor⟺spec corner (the BalanceA-style executor side).
 open Dregg2.Circuit.Spec.CellStateLog
@@ -128,7 +128,7 @@ guard predicate is the single cell-liveness conjunct `cell ∈ accounts` as a `B
 cell-liveness conjunct `cell ∈ k.accounts`; authority-FREE — dregg1 `apply_emit_event` runs no cap
 check). Stated over the `Finset CellId` membership the kernel uses. -/
 def emitEventGuardB (cell : CellId) (k : RecordKernelState) : Bool :=
-  decide (cell ∈ k.accounts)
+  decide (cell ∈ k.accounts) && acceptsEffects k cell
 
 /-- **The emitEvent effect as an IR term: a LONE guard (the kernel is frozen).** Unlike
 transfer/balanceA (gate THEN move), emit has NO move — the kernel is literally unchanged, so the body is
@@ -142,8 +142,8 @@ def emitEventStmt (cell : CellId) : RecStmt :=
 /-- The emit-event `Bool` gate decodes to `emitEventStep`'s admissibility proposition (the single
 cell-liveness conjunct). The log-domain analog of `transferGuard_iff` / `balanceAGuard_iff`. -/
 theorem emitEventGuardB_iff (cell : CellId) (k : RecordKernelState) :
-    emitEventGuardB cell k = true ↔ cell ∈ k.accounts := by
-  simp only [emitEventGuardB, decide_eq_true_eq]
+    emitEventGuardB cell k = true ↔ (cell ∈ k.accounts ∧ acceptsEffects k cell = true) := by
+  simp only [emitEventGuardB, Bool.and_eq_true, decide_eq_true_eq]
 
 /-- **The cornerstone (observation log).** `interp` of the emitEvent term IS the verified kernel step
 `emitEventStep` — the same partial function, by construction, exactly as the transfer/balanceA
@@ -195,14 +195,15 @@ theorem interp_emitEventStmt_chained
   -- guard is `some st.kernel`; reading `hexec` extracts both the liveness fact and `k' = st.kernel`.
   rw [interp_emitEventStmt_eq_emitEventStep actor cell topic data] at hexec
   unfold Dregg2.Exec.Handlers.Lifecycle.emitEventStep at hexec
-  by_cases hg : cell ∈ st.kernel.accounts
+  by_cases hg : cell ∈ st.kernel.accounts ∧ acceptsEffects st.kernel cell = true
   · -- ADMIT: the kernel step is `some st.kernel`, so `hexec : some st.kernel = some k'`, giving
-    -- `k' = st.kernel`. The runtime arm `execFullA … (.emitEventA …)` opens on the SAME liveness to
-    -- `some (emitStep …)`, whose kernel is `st.kernel` and whose log is the receipt prepend.
+    -- `k' = st.kernel`. The runtime arm `execFullA … (.emitEventA …)` opens on the SAME membership ∧
+    -- liveness to `some (emitStep …)`, whose kernel is `st.kernel` and whose log is the receipt prepend.
     rw [if_pos hg] at hexec
     simp only [Option.some.injEq] at hexec
     subst hexec
-    show (if cell ∈ st.kernel.accounts then some (emitStep st actor cell topic data) else none)
+    show (if cell ∈ st.kernel.accounts ∧ acceptsEffects st.kernel cell = true
+            then some (emitStep st actor cell topic data) else none)
         = some { kernel := st.kernel, log := emitReceipt actor cell :: st.log }
     rw [if_pos hg]
     simp only [emitStep, emitReceipt]
@@ -322,7 +323,8 @@ theorem emitEventStmt_admits_frozen :
   -- so we route through `if_pos`, not `decide` on `= some kE`).
   rw [interp_emitEventStmt_eq_emitEventStep 0 1 0 0]
   unfold Dregg2.Exec.Handlers.Lifecycle.emitEventStep
-  rw [if_pos (show (1 : CellId) ∈ kE.accounts by decide)]
+  rw [if_pos (show (1 : CellId) ∈ kE.accounts ∧ acceptsEffects kE 1 = true by
+    exact ⟨by decide, by decide⟩)]
 
 /-- **NON-VACUITY (fail-closed: dead cell).** An emit whose target `cell` is NOT a live account (here
 cell `7 ∉ {0,1}`) does NOT commit — the term returns `none` (the cell-liveness leg of the guard fails).
@@ -333,7 +335,8 @@ theorem emitEventStmt_rejects_dead :
   -- non-membership `7 ∉ ({0,1} : Finset CellId)`, giving `none`.
   rw [interp_emitEventStmt_eq_emitEventStep 0 7 0 0]
   unfold Dregg2.Exec.Handlers.Lifecycle.emitEventStep
-  rw [if_neg (show (7 : CellId) ∉ kE.accounts by decide)]
+  rw [if_neg (show ¬ ((7 : CellId) ∈ kE.accounts ∧ acceptsEffects kE 7 = true) by
+    rintro ⟨hm, _⟩; exact (by decide : (7 : CellId) ∉ kE.accounts) hm)]
 
 /-- **NON-VACUITY (the runtime ticks the observation clock by exactly one row).** A committed runtime emit
 on the live cell `1` prepends EXACTLY the `emitReceipt 5 1` row onto the (empty) log — the kernel-vs-runtime
@@ -359,8 +362,21 @@ theorem emitEventStmt_payload_inert :
   rw [interp_emitEventStmt_chained stE 5 1 9 42 kE hk,
       interp_emitEventStmt_chained stE 5 1 0 0 kE hk]
 
+/-- **⚑ CLASS-1 LIVENESS GATE, ENFORCED (fail-closed: DESTROYED).** A member-but-DESTROYED cell
+(`acceptsEffects = false`) is REFUSED an emit even though it is still in `accounts` — "Destroyed is
+terminal". `kED` overrides cell 1's lifecycle to Destroyed (3); the term returns `none`. -/
+def kED : RecordKernelState := { kE with lifecycle := fun c => if c = 1 then 3 else 0 }
+
+theorem emitEventStmt_rejects_destroyed :
+    interp (emitEventStmt 1) kED = none := by
+  rw [interp_emitEventStmt_eq_emitEventStep 0 1 0 0]
+  unfold Dregg2.Exec.Handlers.Lifecycle.emitEventStep
+  rw [if_neg (show ¬ ((1 : CellId) ∈ kED.accounts ∧ acceptsEffects kED 1 = true) by
+    rintro ⟨_, hl⟩; exact (by decide : acceptsEffects kED 1 ≠ true) hl)]
+
 #assert_axioms emitEventStmt_admits_frozen
 #assert_axioms emitEventStmt_rejects_dead
+#assert_axioms emitEventStmt_rejects_destroyed
 #assert_axioms emitEventStmt_runtime_log_ticks
 #assert_axioms emitEventStmt_payload_inert
 

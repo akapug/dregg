@@ -75,7 +75,7 @@ def emitEventGuardProp (s : RecChainedState) (args : EmitEventArgs) : Prop :=
   emitGuard s args.cell
 
 instance (s : RecChainedState) (args : EmitEventArgs) : Decidable (emitEventGuardProp s args) := by
-  unfold emitEventGuardProp emitGuard; exact inferInstanceAs (Decidable (_ ∈ _))
+  unfold emitEventGuardProp emitGuard; exact inferInstanceAs (Decidable (_ ∈ _ ∧ _ = _))
 
 /-- The guard's witness generator: lay the single `propBit` column at wire `0`. -/
 def emitEventGuardEncode (s : RecChainedState) (args : EmitEventArgs) (_s' : RecChainedState) :

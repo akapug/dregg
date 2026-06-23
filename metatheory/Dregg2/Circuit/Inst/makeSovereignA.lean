@@ -66,7 +66,8 @@ def makeSovereignGuardProp (s : RecChainedState) (args : MakeSovereignArgs) : Pr
   MakeSovereignGuard s args.actor args.cell
 
 instance (s : RecChainedState) (args : MakeSovereignArgs) : Decidable (makeSovereignGuardProp s args) := by
-  unfold makeSovereignGuardProp MakeSovereignGuard; exact inferInstanceAs (Decidable (_ = _))
+  unfold makeSovereignGuardProp MakeSovereignGuard
+  exact inferInstanceAs (Decidable (_ = _ ∧ _ = _))
 
 /-- The guard's witness generator: lay the single `propBit` column at wire `0`. -/
 def makeSovereignGuardEncode (s : RecChainedState) (args : MakeSovereignArgs) (_s' : RecChainedState) :

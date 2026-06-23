@@ -13,21 +13,21 @@ Its executor arm (`TurnExecutorFull.execFullA`, `:3564`) is:
 host-readable record is GONE; only the commitment remains. It commits iff
 
     stateAuthB s.kernel.caps actor cell = true            -- (self-sovereign authority over `cell`)
+    ∧ acceptsEffects s.kernel cell = true                 -- (CLASS-1 liveness: the cell is still Live)
 
 and on commit produces the value-rebind post-state: `cell` is replaced by `sovereignRebind` (the
 target cell becomes the commitment-only record `[(commitmentField, .dig (stateCommitment (cell cell)))]`,
 every OTHER cell whole-preserved), the receipt chain grows by exactly the one self-targeted row, and
 EVERYTHING ELSE is literally unchanged.
 
-⚑ FRAME-GAP (executor vs the task's stated guard): the task brief listed the guard as
-`stateAuthB … ∧ cell ∈ accounts`. The LIVE executor (`makeSovereignStep`) checks ONLY `stateAuthB`;
-there is NO `cell ∈ accounts` membership conjunct and NO lifecycle (`cellLive`/R6) conjunct — unlike
-the generic `stateStep`/`stateStepGuarded` field-writing effects. So this module's `MakeSovereignGuard`
-is the SINGLE `stateAuthB` conjunct (the honest executor truth). The rebind can therefore make a
-NON-ACCOUNT cell sovereign, and a SEALED/DESTROYED cell sovereign — see §6's
-`makeSovereignSpec_no_membership_gate` / `_no_lifecycle_gate` teeth, which document this as a
-deliberately-recorded gap, NOT a silent one. The spec models the executor EXACTLY (a spec that added
-the phantom membership/liveness conjunct would FAIL the `←` direction).
+⚑ GUARD SHAPE (executor vs the generic field writes): the LIVE executor (`makeSovereignStep`) checks
+`stateAuthB ∧ acceptsEffects` — self-sovereign authority over `cell` AND the CLASS-1 liveness gate (a
+SEALED/DESTROYED cell is REFUSED, "Destroyed is terminal"). There is still NO `cell ∈ accounts`
+membership conjunct (unlike the generic `stateStep`/`stateStepGuarded` field-writing effects), so the
+rebind CAN make a NON-ACCOUNT cell sovereign — see §6's `makeSovereignSpec_no_membership_gate`
+(recorded, NOT silent). The liveness gap, by contrast, is now CLOSED: `makeSovereignSpec_rejects_destroyed`
+is a tooth, not a gap. The spec models the executor EXACTLY (a spec adding the phantom membership
+conjunct would FAIL the `←` direction; one dropping the liveness conjunct would FAIL `→`).
 
 Also note dregg1's real `make_sovereign` mutates THREE host structures (`cells`, `sovereign_commitments`,
 and removes the `bal` column); the Lean model collapses all three onto the single `cell` map — the
@@ -74,7 +74,7 @@ frame-gap; see the module header). -/
 dregg1's self-sovereign `cell == action_target` gate). THIS is the EXACT (and only) `if`-condition
 inside `makeSovereignStep`, peeled out so the spec⟺executor bridge is a clean re-assembly. -/
 def MakeSovereignGuard (s : RecChainedState) (actor cell : CellId) : Prop :=
-  stateAuthB s.kernel.caps actor cell = true
+  stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
 
 /-! ## §2 — The touched-cell post map, declaratively, and its validation.
 
@@ -152,7 +152,7 @@ theorem makeSovereignStep_iff_guard_and_post
           ∧ s' = { kernel := makeSovereignKernel s.kernel cell,
                    log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }) := by
   unfold makeSovereignStep MakeSovereignGuard
-  by_cases hg : stateAuthB s.kernel.caps actor cell = true
+  by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hg]
     constructor
     · intro h; simp only [Option.some.injEq] at h; exact ⟨hg, h.symm⟩
@@ -231,7 +231,15 @@ theorem makeSovereignSpec_cell_frame
 theorem makeSovereignSpec_authorized
     {s s' : RecChainedState} {actor cell : CellId}
     (h : MakeSovereignSpec s actor cell s') :
-    stateAuthB s.kernel.caps actor cell = true := h.1
+    stateAuthB s.kernel.caps actor cell = true := h.1.1
+
+/-- **Liveness obligation (CLASS-1).** Off the spec: a committed `makeSovereignA`'s target was LIVE
+(`acceptsEffects` — the lifecycle still admits effects). A Destroyed/Sealed cell cannot be made
+sovereign. The liveness twin of `makeSovereignSpec_authorized`. -/
+theorem makeSovereignSpec_live
+    {s s' : RecChainedState} {actor cell : CellId}
+    (h : MakeSovereignSpec s actor cell s') :
+    acceptsEffects s.kernel cell = true := h.1.2
 
 /-- **The `bal` ledger frame.** Off the spec: making a cell sovereign never touches the per-asset
 ledger — the value moves behind the commitment on the HOST, not the per-asset supply (the
@@ -279,30 +287,34 @@ theorem makeSovereignSpec_rejects_unauthorized
   rintro ⟨s', h⟩; rw [makeSovereignSpec_authorized h] at hbad; exact absurd hbad (by simp)
 
 /-- **⚑ FRAME-GAP, RECORDED — NO membership gate.** Unlike the generic `stateStep` field writes,
-`makeSovereignA` admits a target that is NOT a live account: whenever `stateAuthB` holds, the spec is
-inhabited EVEN IF `cell ∉ accounts`. This is the EXACT executor behaviour (`makeSovereignStep` has no
-`cell ∈ accounts` conjunct) — proved here so the gap vs the task's stated guard is documented, not
-hidden. (Whether dregg1's `Ledger::make_sovereign` SHOULD reject a non-existent cell — `cells.remove`
-returns `Err` — is a separate executor-fidelity question; this lemma just pins what the Lean model
-does.) -/
+`makeSovereignA` admits a target that is NOT a live account: whenever `stateAuthB` holds AND the cell
+is LIVE (the CLASS-1 liveness gate, now ENFORCED), the spec is inhabited EVEN IF `cell ∉ accounts`.
+This is the EXACT executor behaviour (`makeSovereignStep` has no `cell ∈ accounts` conjunct, but DOES
+carry `acceptsEffects`) — proved here so the membership gap vs the task's stated guard is documented,
+not hidden. (Whether dregg1's `Ledger::make_sovereign` SHOULD reject a non-existent cell —
+`cells.remove` returns `Err` — is a separate executor-fidelity question; this lemma just pins what the
+Lean model does.) -/
 theorem makeSovereignSpec_no_membership_gate
     (s : RecChainedState) (actor cell : CellId)
-    (hauth : stateAuthB s.kernel.caps actor cell = true) :
+    (hauth : stateAuthB s.kernel.caps actor cell = true)
+    (hlive : acceptsEffects s.kernel cell = true) :
     ∃ s', MakeSovereignSpec s actor cell s' := by
   refine ⟨{ kernel := makeSovereignKernel s.kernel cell,
             log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_⟩
   rw [← execFullA_makeSovereignA_iff_spec, execFullA_makeSovereignA_eq, makeSovereignStep,
-      if_pos hauth]
+      if_pos ⟨hauth, hlive⟩]
 
-/-- **⚑ FRAME-GAP, RECORDED — NO lifecycle (R6) gate.** Again unlike the generic state writes,
-`makeSovereignA` admits a cell whose lifecycle does NOT accept effects (sealed/destroyed): whenever
-`stateAuthB` holds the spec is inhabited regardless of `lifecycle`. Same `stateAuthB`-only witness as
-above; stated separately to make the missing-R6-conjunct explicit. -/
-theorem makeSovereignSpec_no_lifecycle_gate
+/-- **⚑ CLASS-1 LIVENESS GATE, ENFORCED — `makeSovereignSpec_rejects_destroyed`.** The lifecycle (R6)
+gap is now CLOSED: a cell whose lifecycle does NOT accept effects (sealed/DESTROYED —
+`acceptsEffects ≠ true`) is REFUSED a `makeSovereignA`, EVEN with full self-authority. Caps survive
+`destroy`, so an authority-only gate would let a Destroyed cell be made sovereign; the liveness
+conjunct (executor twin of the VERIFIER-ANCHOR, commitment-bindable since `lifecycle` ∈ record_digest)
+closes that. The "Destroyed is terminal" tooth, formerly the recorded `_no_lifecycle_gate` frame-gap. -/
+theorem makeSovereignSpec_rejects_destroyed
     (s : RecChainedState) (actor cell : CellId)
-    (hauth : stateAuthB s.kernel.caps actor cell = true) :
-    ∃ s', MakeSovereignSpec s actor cell s' :=
-  makeSovereignSpec_no_membership_gate s actor cell hauth
+    (hdead : acceptsEffects s.kernel cell ≠ true) :
+    ¬ ∃ s', MakeSovereignSpec s actor cell s' := by
+  rintro ⟨s', h⟩; exact hdead (makeSovereignSpec_live h)
 
 /-! ## §7 — Concrete #guard witnesses: a GOOD rebind commits to the spec'd state; BAD ones reject.
 
@@ -349,9 +361,17 @@ def sMS0 : RecChainedState :=
 -- an UNAUTHORIZED actor (9 owns nothing, no cap over cell 0) is REJECTED (fail-closed):
 #guard (execFullA sMS0 (.makeSovereignA 9 0)).isNone  -- true
 
--- ⚑ FRAME-GAP witness: a NON-ACCOUNT, self-authored target (cell 7 ∉ accounts) STILL commits —
---   `makeSovereignStep` has no membership gate (contrast `setFieldA`, which would reject):
+-- ⚑ FRAME-GAP witness: a NON-ACCOUNT, self-authored target (cell 7 ∉ accounts, Live by default)
+--   STILL commits — `makeSovereignStep` has no membership gate (contrast `setFieldA`, which rejects):
 #guard (execFullA sMS0 (.makeSovereignA 7 7)).isSome  -- true (no `cell ∈ accounts` gate)
+
+-- §LIVENESS-GATE mutation-confirm (CLASS-1): a DESTROYED, otherwise self-authored target is REFUSED —
+--   "Destroyed is terminal". Override cell 0's lifecycle to Destroyed (3); the rebind now rejects:
+def sMS0D : RecChainedState :=
+  { sMS0 with kernel := { sMS0.kernel with lifecycle := fun c => if c = 0 then 3 else 0 } }
+#guard (execFullA sMS0D (.makeSovereignA 0 0)).isNone  -- true (Destroyed cell 0 makeSovereign refused)
+-- ...and a still-LIVE self-authored cell commits normally (the live pole):
+#guard (execFullA sMS0 (.makeSovereignA 0 0)).isSome   -- true (Live cell 0 makeSovereign commits)
 
 /-! ## §8 — Axiom-hygiene tripwires.
 
@@ -366,12 +386,13 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 #assert_axioms makeSovereignSpec_balance_unreadable
 #assert_axioms makeSovereignSpec_cell_frame
 #assert_axioms makeSovereignSpec_authorized
+#assert_axioms makeSovereignSpec_live
 #assert_axioms makeSovereignSpec_bal_frame
 #assert_axioms makeSovereignSpec_caps_frame
 #assert_axioms makeSovereignSpec_accounts_frame
 #assert_axioms makeSovereignSpec_log
 #assert_axioms makeSovereignSpec_rejects_unauthorized
 #assert_axioms makeSovereignSpec_no_membership_gate
-#assert_axioms makeSovereignSpec_no_lifecycle_gate
+#assert_axioms makeSovereignSpec_rejects_destroyed
 
 end Dregg2.Circuit.Spec.SovereignCommitment

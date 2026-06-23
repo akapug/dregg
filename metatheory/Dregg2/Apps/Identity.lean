@@ -109,7 +109,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
   | emitEventA actor cell topic data =>
       -- Codex's emitStep is now live-cell guarded: peel the `if cell ∈ accounts`.
       simp only [execFullA] at h
-      by_cases hlive : cell ∈ s.kernel.accounts
+      by_cases hlive : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hlive] at h; simp only [emitStep, Option.some.injEq] at h; subst h; rfl
       · rw [if_neg hlive] at h; exact absurd h (by simp)
   | incrementNonceA actor cell n =>
