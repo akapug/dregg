@@ -416,7 +416,7 @@ pub fn verify_serialized_proof(
         // circuit, or a relabeled public is REFUSED here (fail-closed) — never a false
         // attest. The publics ride as `[u8;32]` (a BabyBear is one field element,
         // packed little-endian, high bytes zero), so the low 4 bytes are its `u32`.
-        let publics = dregg_circuit::ivc_turn_chain::verify_turn_chain_recursive_from_blobs(
+        let publics = dregg_circuit_prove::ivc_turn_chain::verify_turn_chain_recursive_from_blobs(
             &transport.root_proof,
             &transport.binding_proof,
             le32(&transport.genesis_root),
