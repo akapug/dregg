@@ -13,7 +13,48 @@ but not yet wired.
 
 ---
 
-## 0. What is BUILT + PROVEN (the foundation)
+## 0. What RUNS (proven by a passing headless test)
+
+Three things RUN today, each verified by a `#[gpui::test]` in this crate
+(`cargo test --features full-zed`):
+
+* **`tests/firmament_zed_fs.rs`** — `FirmamentZedFs` satisfies Zed's async
+  `fs::Fs` trait; a `save(path, &Rope, _)` is a receipted turn; `read_dir` /
+  `metadata` expose the namespace. (4 tests, green.)
+* **`tests/project_over_cells.rs`** — a real Zed `Project` mounts over the
+  cell-fs; a seeded cell opens as a `language::Buffer`; `project.save_buffer`
+  fires a verified turn. (Green.)
+* **`tests/full_workspace_over_cells.rs`** — the FULL-WORKSPACE proof: a REAL
+  `workspace::Workspace` instantiates over the cell-fs, and Zed's REAL
+  `project_panel` + `outline_panel` + `terminal_view` panels `Panel::load` +
+  `Workspace::add_panel` into the dock and resolve back out
+  (`workspace.panel::<T>()` is `Some`). The project panel's worktree lists the
+  cells-as-files (top-level files + a `src` directory). A buffer opened from the
+  project, edited, and `save_buffer`'d fires a verified turn — a save FROM THE
+  WORKSPACE is a turn on the ledger. (Green.)
+
+The boot path is `src/boot.rs`: `install_workspace_globals` (the deos subset of
+the standalone binary's init — settings/theme + `editor`/`project_panel`/
+`outline_panel`/`terminal_view`/`command_palette`/`search` `::init`) and
+`load_firmament_panels` (the exact `initialize_panels` dance: spawn each
+`Panel::load`, then `add_panel`). Nothing reimplements a Zed component.
+
+### The `Send + Sync` seam (`src/sync_cell_fs.rs`)
+
+Zed's `Fs` trait is `Send + Sync` (a real `Project`/`Worktree` shares its fs as
+`Arc<dyn Fs>` across the gpui executor's threads). deos-zed's `FirmamentFs` is
+deliberately single-threaded — it holds `Rc<dyn LedgerSpine>` + `RefCell` so it
+can share the cockpit's `Rc<RefCell<World>>` ledger. `SyncCellFs` keeps the SAME
+verified turn semantics (every save is a real cap-gated `SetField` turn through
+deos-zed's `OwnedSpine::commit_save`, leaving a `TurnReceipt`) but holds the
+spine behind `Arc<Mutex<OwnedSpine>>` and owns a `Mutex`-guarded path→cell
+namespace. `OwnedSpine` is `Send` (no `Rc`; just `RefCell` over the `Ledger` +
+`TurnExecutor`), so `Arc<Mutex<OwnedSpine>>` — and `SyncCellFs`, and
+`FirmamentZedFs` — is `Send + Sync`. The turn logic stays deos-zed's; this owns
+only the path namespace + content decode (the latter via deos-zed's exported
+`host_decode_content`).
+
+## 0b. What is BUILT + PROVEN (the foundation)
 
 The mechanics that the entire full-Zed embed depends on are proven here:
 
@@ -28,10 +69,11 @@ The mechanics that the entire full-Zed embed depends on are proven here:
    fought.**
 
 2. **`FirmamentZedFs` implements Zed's async `fs::Fs` trait over the cell-ledger**
-   (`src/firmament_zed_fs.rs`). It wraps deos-zed's gpui-free `FirmamentFs` (a
-   file IS a cell; a save IS a cap-gated `SetField` turn through a real in-process
-   `TurnExecutor`, leaving a `TurnReceipt`) and adapts the synchronous cell ops
-   to Zed's `async fn load/save/create_file/rename/read_dir/metadata/...`.
+   (`src/firmament_zed_fs.rs`). It wraps `SyncCellFs` (§0, the `Send + Sync`
+   cell-fs over deos-zed's verified `OwnedSpine`: a file IS a cell; a save IS a
+   cap-gated `SetField` turn through a real in-process `TurnExecutor`, leaving a
+   `TurnReceipt`) and adapts the synchronous cell ops to Zed's
+   `async fn load/save/create_file/rename/read_dir/metadata/...`.
    `tests/firmament_zed_fs.rs` drives it **through `Arc<dyn fs::Fs>`** — exactly
    the surface a Zed `Project` holds — and asserts: a save is a receipted turn,
    conservation holds (Σδ=0), `read_dir`/`metadata` expose the namespace.
@@ -177,14 +219,32 @@ mounts in the deos dock the same way deos-zed's thin editor does today.
 
 ## 4. Staging — the honest ladder
 
-1. **Editor over FirmamentZedFs** — *BUILT + PROVEN here.* Real Zed `editor`
-   crate compiles; a real Zed `Project`+`Buffer` loads a cell + saves a turn.
-2. **Editor + project panel + outline + search + command palette + title bar/dock**
-   — the "browse + edit the cell namespace" Workspace. Needs the `boot`
-   scaffolding (§3) + `watch`-off-the-receipt-log. No new shell-out deps.
-   *Designed; lowest-risk next slice.*
-3. **+ integrated terminal** — `terminal_view` over the native deos PTY (the
-   cockpit dock already drives one); confined PTY for seL4/browser.
+1. **Editor over FirmamentZedFs** — *RUNS (`project_over_cells.rs`).* Real Zed
+   `editor`/`project`/`Buffer` loads a cell + saves a turn.
+2. **Workspace shell + project panel + outline + terminal + command palette + search**
+   — *RUNS HEADLESSLY (`full_workspace_over_cells.rs`).* A real
+   `workspace::Workspace` instantiates over the cell-fs; `project_panel`,
+   `outline_panel`, and `terminal_view` `Panel::load` + `add_panel` into the
+   dock and resolve back out; the project panel's worktree lists the
+   cells-as-files; a save from the workspace is a verified turn. `command_palette`
+   + `search` register their actions/modals on the workspace via their `::init`
+   (they are a modal + a workspace item, not docked panels — so "present" means
+   their actions are registered, not a dock pane).
+   **The exact remaining seams at this stage** (each surfaced honestly by the
+   test, none blocking the proof above):
+   * **Nested-dir lazy scan.** Zed's worktree marks subdirectories
+     `UnloadedDir` (lazy) until expanded; with our empty `watch` stream the
+     initial scan lists a `src` directory but does not auto-recurse into it. The
+     test seeds top-level cells (listed eagerly) + a `src` dir (listed as a
+     directory). Full nested expansion = drive `project.expand_entry` or wire
+     `watch` off the receipt log (the `PathEvent`-from-receipts follow-on, §2).
+   * **Terminal PANEL loads; spawning a terminal needs a PTY.** `TerminalPanel`
+     instantiates + docks headlessly; opening an actual terminal calls
+     `Terminal::new` (a real OS PTY) — the native deos dock PTY, or
+     `Terminal::new_display_only` for a no-PTY display pane.
+3. **+ live cross-pane refresh** — drive `watch` `PathEvent`s off the
+   FirmamentFs receipt log so a save in the editor refreshes the project panel
+   (the natural extension of the provenance log), and recurse nested dirs.
 4. **+ git UI + agent panel** — git-over-cells (`open_repo`/`git_*` impl, the
    biggest new Fs work) and the agent panel routed to the confined Hermes/ACP
    tool gate (the deos MEMBRANE). LSP comes online here (a Node binary or a

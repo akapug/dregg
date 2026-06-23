@@ -22,7 +22,23 @@ name = "deos_zed_full"
 # `cargo build` stays light (the FirmamentZedFs adapter still compiles — it only
 # needs the `fs` crate, the seam).
 default = []
-full-zed = ["dep:editor", "dep:workspace", "dep:project", "dep:language"]
+full-zed = [
+    "dep:editor",
+    "dep:workspace",
+    "dep:project",
+    "dep:language",
+    # The Workspace shell + its real panels (stage 2/3 of the embed): the
+    # project panel, outline panel, integrated terminal panel, command palette,
+    # and project search — all of Zed's own crates, mounted over the cell-fs.
+    "dep:project_panel",
+    "dep:outline_panel",
+    "dep:terminal_view",
+    "dep:command_palette",
+    "dep:search",
+    "dep:theme",
+    "dep:theme_settings",
+    "dep:settings",
+]
 
 [dependencies]
 anyhow = "1"
@@ -34,6 +50,12 @@ async-trait = "0.1"
 # cell-ledger Fs core (no gpui graph). FirmamentZedFs (src/firmament_zed_fs.rs)
 # wraps this and adapts its synchronous cell ops to Zed's async `fs::Fs` trait.
 deos-zed = { path = "../deos-zed", default-features = false, features = ["firmament"] }
+
+# `SyncCellFs` (the `Send + Sync` cell-fs over deos-zed's verified `OwnedSpine`)
+# names `dregg_cell::CellId` — the same id type deos-zed's `LedgerSpine` trait
+# returns. ALWAYS pulled (the FirmamentZedFs adapter that rides every build holds
+# a SyncCellFs), matching deos-zed's own native `dregg-cell` (default features).
+dregg-cell = { path = "../cell" }
 
 # THE SEAM: Zed's `fs::Fs` trait — pulled at the SAME zed fork rev gpui comes
 # from. FirmamentZedFs implements this trait over the cell-ledger.
@@ -53,6 +75,20 @@ editor = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e39
 workspace = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
 project = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
 language = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+
+# THE WORKSPACE SHELL + ITS REAL PANELS (gated on full-zed). These sit on the
+# editor/workspace/project base already in the graph — little NEW transitive
+# weight. `boot.rs` loads project_panel/outline_panel/terminal_view into a real
+# Workspace; command_palette + search register their actions on it. `theme` is
+# pulled directly so `boot::install_workspace_globals` can run `theme::init`.
+project_panel = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+outline_panel = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+terminal_view = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+command_palette = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+search = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+theme = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+theme_settings = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+settings = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
 
 # Replicate the zed fork's [patch.crates-io] table (the subset our graph pulls),
 # same as deos-zed/Cargo.toml carries for gpui. Plus the proof-dep overrides the
@@ -75,12 +111,25 @@ settings = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e
 # feature-unification gap in the zed fork at this rev. Enabling `workspace`'s
 # test-support here turns the matching arm on, so the unified graph compiles.
 workspace = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
+# Same feature-unification gap one layer deeper, surfaced by the panel crates'
+# test-support: `project/test-support` turns on `remote/test-support` graph-wide
+# (so `RemoteConnectionOptions::Mock` appears), but `remote_connection`'s OWN
+# `Mock` match arm is gated on ITS test-support. The panel `*::load` paths pull
+# `remote_connection`, so enable its test-support here to turn the arm on.
+remote_connection = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
 
 # The `project_over_cells` test only compiles under `--features full-zed` (it
 # `cfg`s its body on it); declared here so cargo knows it exists.
 [[test]]
 name = "project_over_cells"
 path = "tests/project_over_cells.rs"
+
+# The full-Workspace proof — instantiates a real `workspace::Workspace` with its
+# real panels (project_panel / outline_panel / terminal_view) over the cell-fs,
+# and saves a cell from the workspace as a verified turn. `cfg`-gated on full-zed.
+[[test]]
+name = "full_workspace_over_cells"
+path = "tests/full_workspace_over_cells.rs"
 
 [patch.crates-io]
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }

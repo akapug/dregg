@@ -24,6 +24,9 @@
 //! panel, terminal, agent panel, git UI, command palette) is mapped in the
 //! design doc and staged on top of this foundation.
 
+pub mod sync_cell_fs;
+pub use sync_cell_fs::SyncCellFs;
+
 pub mod firmament_zed_fs;
 pub use firmament_zed_fs::FirmamentZedFs;
 
@@ -41,3 +44,10 @@ pub mod zed {
     pub use project;
     pub use workspace;
 }
+
+/// Boot a REAL Zed [`workspace::Workspace`] (with its real `project_panel` /
+/// `outline_panel` / `terminal_view` panels) over a [`FirmamentZedFs`]
+/// cell-ledger — the full-Workspace embed, headlessly instantiable. Built only
+/// under `--features full-zed`.
+#[cfg(feature = "full-zed")]
+pub mod boot;
