@@ -37,6 +37,34 @@ pub fn direct_available() -> bool {
     cfg!(dregg_direct_present) && crate::lean_available()
 }
 
+/// Env-gated sub-phase profile accumulator (seconds). `DREGG_FFI_PROFILE=1` makes `run_direct`
+/// add each call's (in_build, exec, out_read) into these; `prof_dump` prints the per-call averages
+/// and resets. Zero overhead when the env flag is off (the adds are skipped at the call site).
+use std::sync::atomic::{AtomicU64, Ordering};
+static PROF_IN: AtomicU64 = AtomicU64::new(0);
+static PROF_EXEC: AtomicU64 = AtomicU64::new(0);
+static PROF_READ: AtomicU64 = AtomicU64::new(0);
+static PROF_N: AtomicU64 = AtomicU64::new(0);
+
+fn prof_accum(in_s: f64, exec_s: f64, read_s: f64) {
+    PROF_IN.fetch_add((in_s * 1e9) as u64, Ordering::Relaxed);
+    PROF_EXEC.fetch_add((exec_s * 1e9) as u64, Ordering::Relaxed);
+    PROF_READ.fetch_add((read_s * 1e9) as u64, Ordering::Relaxed);
+    PROF_N.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Print the accumulated per-call sub-phase averages (µs) and reset. Call after a profiling run.
+pub fn prof_dump(label: &str) {
+    let n = PROF_N.swap(0, Ordering::Relaxed).max(1);
+    let in_us = PROF_IN.swap(0, Ordering::Relaxed) as f64 / 1e3 / n as f64;
+    let ex_us = PROF_EXEC.swap(0, Ordering::Relaxed) as f64 / 1e3 / n as f64;
+    let rd_us = PROF_READ.swap(0, Ordering::Relaxed) as f64 / 1e3 / n as f64;
+    eprintln!(
+        "DREGG_FFI_PROFILE[{label}] n={n} in_build={in_us:.3}us exec={ex_us:.3}us out_read={rd_us:.3}us total={:.3}us",
+        in_us + ex_us + rd_us
+    );
+}
+
 #[cfg(dregg_direct_present)]
 mod imp {
     use super::*;
@@ -687,6 +715,12 @@ mod imp {
         unsafe {
             let dbg = std::env::var("DREGG_DIRECT_DEBUG").as_deref() == Ok("1");
             macro_rules! step { ($s:expr) => { if dbg { eprintln!("[direct] {}", $s); } } }
+            // Env-gated sub-phase profiler: times (b) IN tree construction, (c) the execDirect call,
+            // (d)+(e) reading the OUT tree back into the WireState mirror. Off (zero cost) unless
+            // DREGG_FFI_PROFILE=1. Phase (a) "build the Rust mirror" is measured at the call site in
+            // exec-lean (`ledger_to_wire_state`), since this fn already receives the mirror.
+            let prof = std::env::var("DREGG_FFI_PROFILE").as_deref() == Ok("1");
+            let t_in0 = if prof { Some(std::time::Instant::now()) } else { None };
             step!("build host");
             // Build the three boundary values (owned).
             let host_o = dregg_d_mk_whostctx(
@@ -702,11 +736,13 @@ mod imp {
                 turn.agent, turn.nonce, mk_int(turn.fee), turn.valid_until, turn.block_height,
                 turn.prev_low, root_o,
             );
+            let t_exec0 = if prof { Some(std::time::Instant::now()) } else { None };
 
             step!("exec");
             // Run the IDENTICAL proved executor on the built values (consumes host_o/state_o/turn_o).
             let res = dregg_exec_full_forest_auth_direct(host_o, state_o, turn_o);
             step!("read result");
+            let t_read0 = if prof { Some(std::time::Instant::now()) } else { None };
 
             // Drain the WHOLE result while it is still alive (no escaping GC object).
             let status_code = { dregg_rt_inc(res); dregg_d_res_status(res) };
@@ -715,6 +751,16 @@ mod imp {
             let post = read_post_state(post_o);
             dregg_rt_dec(post_o);
             dregg_rt_dec(res);
+
+            if prof {
+                let (in0, ex0, rd0) = (t_in0.unwrap(), t_exec0.unwrap(), t_read0.unwrap());
+                let now = std::time::Instant::now();
+                super::prof_accum(
+                    (ex0 - in0).as_secs_f64(),
+                    (rd0 - ex0).as_secs_f64(),
+                    (now - rd0).as_secs_f64(),
+                );
+            }
 
             let status = match status_code {
                 2 => Some(TurnStatus::BodyCommitted),
