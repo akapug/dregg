@@ -11,6 +11,16 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### HERMES AGENT PANEL in the Zed Workspace — live + receipted, by running (2026-06-23).
+`2d319930` (`deos-zed-full/src/hermes_panel.rs` + tiny `deos-hermes` pub exposures). A real `workspace::Panel`
+wrapping deos-hermes's live `AgentDockView` docks via `add_panel` alongside project/outline/terminal. Test:
+`workspace.panel::<HermesPanel>()` is `Some`; a 3-turn session through the panel's persistent `HermesGateway`
+(embedded cipherclerk + verified Lean executor) — in-mandate calls ADMITTED w/ real receipts, rate-3 budget
+DEPLETES to ceiling, over-rate + out-of-mandate refused in-band. KEY: the standalone-workspace boundary does
+NOT block linking (both pin zed `407a6ff` → one `gpui`/`dregg-sdk`). The embedded IDE now has project +
+outline + terminal PTY + a working CONFINED AGENT over the cell-ledger. SEAM: agent brain = the faithful
+mock ACP peer (live model env-blocked — needs `acp` install + creds); gate/executor/receipts/ACP-wire real.
+
 ### FULL ZED WORKSPACE — nested dirs + real terminal PTY closed (2026-06-23).
 `c25ff6c8` (`deos-zed-full`). Both seams CLOSED: (a) nested-dir expansion — root cause was a real bug
 (every cell reported `inode:0` → Zed's worktree scanner treated nested cells as symlink cycles + stopped
