@@ -212,6 +212,60 @@ crate/app that owns its own tokio runtime, exactly like `servo-render` owns its
 own render path. The bridge to the deos/dregg side is a narrow request/response
 channel (`src/worker.rs`), NOT a shared runtime.
 
+## In the browser — wasm32 (`gpui_web`-rendered chat in a tab)
+
+The `gpui` `ChatView` already renders on `gpui_web`, and `matrix-rust-sdk`
+compiles to wasm. This crate builds to **`wasm32-unknown-unknown`** so the chat
+data path runs in a browser tab.
+
+**What runs on wasm32 today (built + tested):**
+
+- The whole **data path** — `RoomSummary`/`TimelineMessage`/`MessageKind`, the
+  `membrane`/`object`/`cell` wire types, `ChatSource`, and the offline
+  **`MockSource`** (rooms, timeline, send, the membrane round-trip, send-as-turn).
+  `cargo build --lib --target wasm32-unknown-unknown` is green, and
+  `src/source.rs::wasm_tests::mock_chatsource_runs_on_wasm` runs the full
+  `MockSource`-backed `ChatSource` under `wasm-pack test` (real wasm32 execution).
+  So the chat UI has live data in a tab **with no server**.
+- `MatrixClient::build`/`login_password`/`login_access_token`/`restore`/`sync`
+  **compile** on wasm32, backed by the browser **IndexedDB** store
+  (`indexeddb_store`) that replaces native SQLite, with reqwest-over-rustls and a
+  `wasm-bindgen-futures` async model.
+
+**The wasm async model (the worker question, on wasm).** The native sync→async
+bridge — `MatrixWorker` (an OS thread + a multi-thread tokio runtime) and the
+blocking `MatrixHandle` (`oneshot::blocking_recv`) — **cannot exist on
+single-threaded wasm**: no OS threads, and you may not block the browser event
+loop. So `worker.rs` is `cfg(not(target_family = "wasm"))`. On wasm the UI awaits
+`MatrixClient`'s async methods directly on `wasm-bindgen-futures::spawn_local`
+(the browser event loop is the runtime). Per-target deps make this clean: native
+keeps `tokio` `rt-multi-thread` + `matrix-sdk` default (`sqlite` + `sso-login`);
+wasm uses `tokio` `sync`+`macros` only and `matrix-sdk`
+`default-features = false` + `e2e-encryption` + `indexeddb` + `js` (see
+`Cargo.toml`'s `[target.…]` tables). `.cargo/config.toml` sets the
+`getrandom_backend="wasm_js"` rustflag the transitive getrandom-0.3 needs.
+
+**The live-in-browser-sync gap (honest).** The data path + mock **run** on wasm;
+a live `login`→`sync` against a real homeserver **compiles** but is not yet
+exercised end-to-end in a browser. What remains to wire:
+
+1. **CORS** — a browser `fetch` to the homeserver requires the homeserver to send
+   permissive CORS headers on `/_matrix/*` (Synapse/Conduit do for the
+   client-server API, but a custom deployment must be checked). This is a
+   homeserver-config matter, not a code change here.
+2. **The wasm async driver** — replace the `MatrixHandle` call sites the UI uses
+   with `spawn_local`-driven `MatrixClient` awaits (the data the UI reads is
+   identical; only the bridge differs).
+3. **Sliding-sync / sync loop on the event loop** — `sync_forever` is a native
+   loop; in the browser it becomes a `spawn_local` task feeding the UI.
+4. **SSO** — `login_sso` (the local-HTTP redirect catcher) is native-only; the
+   browser path is the in-tab OAuth/OIDC redirect via `sso_login_url` (which
+   compiles on wasm), still to be driven.
+
+So: **the `ChatSource` + `MockSource` run on wasm32 (proven); live in-browser
+sync is the next wire** (CORS check + the `spawn_local` driver over the
+already-compiling `MatrixClient`).
+
 ## The deos integration design (real-now vs roadmap)
 
 A Matrix client in deos is not merely "an app that talks to Matrix":

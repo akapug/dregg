@@ -30,6 +30,14 @@ pub mod object;
 pub mod session;
 pub mod source;
 pub mod verification;
+// The sync→async bridge owns an OS thread + a multi-thread tokio runtime and
+// blocks on `oneshot::blocking_recv`. None of that exists on single-threaded
+// wasm32 (no OS threads; you cannot block the browser event loop), so the worker
+// is NATIVE-only. The in-browser async model is `wasm-bindgen-futures::spawn_local`
+// driving the same `MatrixClient` async methods directly — the UI `await`s those
+// futures on the event loop instead of blocking on a `MatrixHandle`. See the
+// `worker` module docs and `client::wasm_indexeddb` for the wasm seam.
+#[cfg(not(target_family = "wasm"))]
 pub mod worker;
 
 #[cfg(feature = "gui")]

@@ -33,6 +33,11 @@
 //! This was the exact harness used to prove the live path during development
 //! (conduit in docker, two registered users, a created room) — the end-to-end run
 //! that a creds/network-less CI cannot reproduce, but any developer can.
+//!
+//! NATIVE-only: it drives a `#[tokio::main]`/multi-thread runtime against a real
+//! socket and persists a SQLite store — neither exists on wasm32. The wasm
+//! in-browser data-path proof is `source::wasm_tests` (run via `wasm-pack test`).
+#![cfg(not(target_family = "wasm"))]
 
 use std::path::PathBuf;
 

@@ -222,8 +222,21 @@ impl MatrixClient {
     /// A plain-HTTP URL (no TLS — e.g. a local conduit on `http://localhost`) is
     /// honored as-is; this is the only path that talks to a non-TLS server, and it
     /// is opt-in by typing an `http://` URL.
+    /// On wasm32, `store_path` names the **IndexedDB database** (its string form)
+    /// rather than a filesystem path — the browser has no filesystem, so the
+    /// SQLite state + crypto store is replaced by matrix-sdk's IndexedDB store
+    /// (`indexeddb_store`, under the `indexeddb` feature). Same passphrase
+    /// discipline; same encrypted state + olm crypto, persisted in the browser.
     pub async fn build(server: &str, store_path: &Path, passphrase: &str) -> Result<Self> {
+        // The store seam is the one genuinely per-target piece of `build`: native
+        // → SQLite on disk; wasm → IndexedDB in the browser. Everything else (the
+        // homeserver URL vs server-name discovery, the async `build`) is shared.
+        #[cfg(not(target_family = "wasm"))]
         let builder = Client::builder().sqlite_store(store_path, Some(passphrase));
+        #[cfg(target_family = "wasm")]
+        let builder = Client::builder()
+            .indexeddb_store(&store_path.to_string_lossy(), Some(passphrase));
+
         // A URL (has a scheme) → use it directly; a bare name → discover.
         let builder = if server.starts_with("http://") || server.starts_with("https://") {
             builder.homeserver_url(server)
@@ -323,6 +336,13 @@ impl MatrixClient {
     /// to the OS browser; a test can capture it). Returns a persistable session,
     /// identical in shape to the password/token paths so the rest of the stack is
     /// unchanged.
+    ///
+    /// NATIVE-only: `MatrixAuth::login_sso` runs a transient local-HTTP server to
+    /// catch the OIDC redirect (matrix-sdk's `sso-login`/`local-server` feature,
+    /// which binds a native TCP socket — unavailable in a browser). The wasm SSO
+    /// path is the OAuth/OIDC redirect-in-tab flow via [`Self::sso_login_url`]
+    /// (which DOES compile on wasm), not the local-server catcher. Next wire.
+    #[cfg(not(target_family = "wasm"))]
     pub async fn login_sso(
         homeserver: &str,
         store_path: &Path,
