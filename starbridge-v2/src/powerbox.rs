@@ -444,6 +444,83 @@ impl AppLauncher {
     }
 }
 
+/// **THE PRE-BUILT APP LAUNCHER — a row per wired starbridge-app.**
+///
+/// [`AppLauncher`] births a *bare* confined cell (the powerbox's missing first half).
+/// This is the OTHER launcher: it opens a *pre-built* deos app (gallery / tussle /
+/// sealed-auction / bounty-board) from the [`crate::app_registry::AppRegistry`] into a
+/// live app-substrate, where its affordances fire REAL verified turns. The cockpit's
+/// POWERBOX/launcher surface renders exactly these rows (one per registry entry);
+/// selecting one launches it.
+///
+/// The launch runs on the app framework's own substrate ledger (NOT `World`'s engine
+/// ledger — see `app_registry` module docs), so this launcher is registry-driven and
+/// does not touch `World`; it is the minimal UI hook over the registry. gpui-free +
+/// `cargo test`-able: the cockpit maps these rows onto buttons.
+#[cfg(feature = "app-registry")]
+pub struct RegistryLauncher {
+    registry: crate::app_registry::AppRegistry,
+    federation: [u8; 32],
+}
+
+/// One **launch row** in the pre-built app launcher — the trusted-UI label the cockpit
+/// renders as a "launch <app>" button.
+#[cfg(feature = "app-registry")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppLaunchRow {
+    /// The registry id (the launch key the button dispatches).
+    pub id: String,
+    /// The display name.
+    pub name: String,
+    /// One line of what the app does (shown beneath the name).
+    pub description: String,
+}
+
+#[cfg(feature = "app-registry")]
+impl RegistryLauncher {
+    /// A launcher over the standard registry, launching apps into `federation`.
+    pub fn standard(federation: [u8; 32]) -> Self {
+        RegistryLauncher {
+            registry: crate::app_registry::AppRegistry::standard(),
+            federation,
+        }
+    }
+
+    /// The launch rows the cockpit renders — one per wired app.
+    pub fn rows(&self) -> Vec<AppLaunchRow> {
+        self.registry
+            .entries()
+            .iter()
+            .map(|e| AppLaunchRow {
+                id: e.id.to_string(),
+                name: e.name.to_string(),
+                description: e.description.to_string(),
+            })
+            .collect()
+    }
+
+    /// **Launch the app named `id`** — instantiate it over a fresh live substrate,
+    /// seeded so its program bites. The returned [`crate::app_registry::LaunchedRegistryApp`]'s
+    /// affordances fire REAL verified turns ([`crate::app_registry::LaunchedRegistryApp::drive`]);
+    /// `None` if no row has that id.
+    pub fn launch(&self, id: &str) -> Option<crate::app_registry::LaunchedRegistryApp> {
+        self.registry.launch(id, self.federation)
+    }
+
+    /// Every line of text the launcher renders (the rows), flattened — used by tests
+    /// + the cockpit to assert the launcher speaks real text about each wired app.
+    pub fn all_text(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "LAUNCH A PRE-BUILT APP — {} wired starbridge-app(s):",
+            self.rows().len()
+        )];
+        for r in self.rows() {
+            out.push(format!("· launch {} ({}) — {}", r.name, r.id, r.description));
+        }
+        out
+    }
+}
+
 /// Choose a cell seed not already occupied in the live ledger, so a fresh app's genesis
 /// insert lands in a free slot. `make_open_cell` derives the id from the seed byte
 /// (`pk[0]=seed`, `pk[31]=seed*37`), so scanning seeds = scanning candidate ids. App
@@ -797,6 +874,22 @@ mod tests {
             world.ledger().get(&launched.app_cell).unwrap().capabilities.has_access(&docs),
             "the launched app now reaches docs — the runtime launch + powerbox grant closed the loop"
         );
+    }
+
+    #[cfg(feature = "app-registry")]
+    #[test]
+    fn the_registry_launcher_lists_and_launches_a_real_prebuilt_app() {
+        // The pre-built app launcher renders one row per wired starbridge-app, and
+        // launching one opens a real deos app whose affordance fires a REAL verified
+        // turn on its live substrate (the integration the census asked for).
+        let launcher = RegistryLauncher::standard([0x42u8; 32]);
+        let rows = launcher.rows();
+        assert!(rows.iter().any(|r| r.id == "gallery"), "gallery is a launch row");
+        assert!(launcher.all_text().iter().any(|l| l.contains("launch")));
+
+        let launched = launcher.launch("gallery").expect("gallery launches");
+        let receipt = launched.drive().expect("the launched app fires a real verified turn");
+        assert!(receipt.action_count >= 1, "a real turn landed from the launched app");
     }
 
     #[test]

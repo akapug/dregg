@@ -128,6 +128,17 @@ pub mod powerbox;
 #[cfg(feature = "embedded-executor")]
 pub mod mud;
 
+// THE APP REGISTRY — pre-built starbridge-apps (gallery / tussle / sealed-auction /
+// bounty-board) wired into the live cockpit. An `AppRegistry` lists each app with
+// its real `*_app(cipherclerk, executor) -> DeosApp` ctor; launching one
+// instantiates it over a live app-substrate (an `AppCipherclerk` + `EmbeddedExecutor`
+// from `dregg-app-framework`), seeds its backing cell, and its affordances fire REAL
+// verified turns on that substrate's ledger — visible to a second reader (the
+// inspector seam). Gated on `app-registry` (pulled by `embedded-executor`);
+// gpui-free + `cargo test`-able. See `docs/deos/APP-AND-FEDERATION-CENSUS-2026-06-23.md`.
+#[cfg(feature = "app-registry")]
+pub mod app_registry;
+
 // SHARED CONFINED FORK WITH GRADUATED CONSENT — "invite someone to my computer":
 // a `World::fork` handed to another principal, confined (firmament sandbox) so they
 // cannot escape it, whose culled cap-subgraph is graduated into three tiers —
