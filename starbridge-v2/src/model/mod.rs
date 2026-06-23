@@ -268,3 +268,38 @@ pub struct SubmitTurnResponse {
     #[serde(default)]
     pub error: Option<String>,
 }
+
+/// `POST /turns/submit` response. Mirrors `api::SubmitSignedTurnResponse`.
+///
+/// This is the CLIENT-SIGNED ingest path: the cockpit posts a postcard-encoded
+/// `dregg_sdk::SignedTurn` (signed under its OWN ed25519 key — the node never
+/// holds it, unlike the operator `/turn/submit` path) and the node verifies the
+/// signature, runs the turn through the same `gateOK`/conservation/authority
+/// gates, and commits it under the CLIENT'S authority. `accepted` is the truth of
+/// whether the node committed it; `signer` echoes the recovered signer cell so the
+/// cockpit can confirm whose authority bound the turn. A refusal carries the reason
+/// in `error` (the handler reports refusals in-band with a 200 body), so the cockpit
+/// surfaces an honest "the node refused this turn: …" instead of a silent drop.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SubmitSignedTurnResponse {
+    pub accepted: bool,
+    #[serde(default)]
+    pub turn_hash: Option<String>,
+    /// The recovered signer cell (hex), echoed back so the cockpit can confirm
+    /// whose authority the node bound the turn to.
+    #[serde(default)]
+    pub signer: Option<String>,
+    #[serde(default)]
+    pub action_count: usize,
+    /// The proof lane verdict as a snake_case string (e.g. `"proof_pending"`,
+    /// `"not_required"`, `"not_committed"`) — kept as a free `String` so a new
+    /// variant on the node doesn't break the parse.
+    #[serde(default)]
+    pub proof_status: Option<String>,
+    #[serde(default)]
+    pub has_witness: bool,
+    #[serde(default)]
+    pub witness_count: usize,
+    #[serde(default)]
+    pub error: Option<String>,
+}

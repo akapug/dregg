@@ -281,6 +281,152 @@ impl UnifiedBootView {
         Ok((before, after))
     }
 
+    /// ROUTE AN EDITOR SAVE TO THE NODE AS A *CLIENT-SIGNED* TURN — the "corporate
+    /// account" model: the agent of the committed turn is the LOGGED-IN USER's OWN
+    /// cell, signed under the user's OWN ed25519 key, NOT the node operator.
+    ///
+    /// The node (`POST /turns/submit`) VERIFIES the user's signature, derives the
+    /// agent as `derive_raw(user_pubkey, blake3("default"))`, requires the turn's
+    /// agent to equal that (so the signer IS the agent — a non-operator client
+    /// cell), then runs the SAME `gateOK`/conservation/authority gates and commits
+    /// under the CLIENT's authority. One node thus hosts many sovereign identities,
+    /// each signing their own turns; the node orders + validates but never
+    /// impersonates.
+    ///
+    /// Steps (proven by running):
+    ///   1. Faucet-materialize the user's default cell at balance 0 (a turn cannot
+    ///      conjure its own agent cell; the node rejects an unknown agent).
+    ///   2. Build a `SetField` turn, signed over the node's executor federation id
+    ///      (`blake3(node_pubkey)` on an unconfigured solo node — the same domain the
+    ///      executor verifies each action signature against), stamp `valid_until`
+    ///      (so it stays on the verified Lean producer's wire marshal), and submit it.
+    ///   3. Assert the node `/api/receipts` grew AND the new receipt's agent is the
+    ///      USER's cell, not the operator's.
+    ///
+    /// `clerk` is the logged-in user's `AgentCipherclerk` (held by the session, dev
+    /// seed for now). Returns the proof on success, an error on refusal. `None` if
+    /// no node attached.
+    #[cfg(feature = "embedded-executor")]
+    pub fn save_to_node_client_signed(
+        &self,
+        clerk: &dregg_sdk::AgentCipherclerk,
+        index: usize,
+        value: &str,
+    ) -> Option<anyhow::Result<ClientSignedProof>> {
+        let ln = self.live_node.as_ref()?;
+        Some(self.client_signed_inner(ln, clerk, index, value))
+    }
+
+    #[cfg(feature = "embedded-executor")]
+    fn client_signed_inner(
+        &self,
+        ln: &LiveNode,
+        clerk: &dregg_sdk::AgentCipherclerk,
+        index: usize,
+        value: &str,
+    ) -> anyhow::Result<ClientSignedProof> {
+        let client = ln.client();
+        if client.bearer().is_none() {
+            anyhow::bail!(
+                "node has no operator write credential (unlock failed at attach); /turns/submit \
+                 is bearer-gated even for a client-signed turn"
+            );
+        }
+
+        // The node's executor federation id: for an unconfigured solo node this is
+        // `blake3(node_pubkey)`. The client MUST sign each action over THIS domain
+        // or the executor rejects the Ed25519 signature. Read the node pubkey off
+        // the live `/status` snapshot.
+        let node_pubkey_hex = self
+            .snapshot
+            .as_ref()
+            .map(|s| s.status.public_key.clone())
+            .ok_or_else(|| anyhow::anyhow!("no node snapshot — cannot derive the federation id"))?;
+        let node_pubkey = decode_hex32(&node_pubkey_hex)
+            .ok_or_else(|| anyhow::anyhow!("node /status public_key is not 32-byte hex"))?;
+        let federation_id = *blake3::hash(&node_pubkey).as_bytes();
+
+        // The user's OWN cell (the agent the node will derive + require). The
+        // operator's own agent cell (for the "agent != operator" proof) is the node
+        // pubkey's default cell — derived identically.
+        let user_cell = clerk.cell_id("default");
+        let user_pubkey = clerk.public_key().0;
+        let user_cell_hex = hex::encode(user_cell.0);
+        let user_pubkey_hex = hex::encode(user_pubkey);
+        let operator_cell = dregg_cell::CellId::derive_raw(&node_pubkey, blake3::hash(b"default").as_bytes());
+        let operator_cell_hex = hex::encode(operator_cell.0);
+
+        // (1) Materialize the user cell so its first turn has an existing agent.
+        if !client.faucet_materialize(&user_cell_hex, &user_pubkey_hex)? {
+            anyhow::bail!(
+                "faucet could not materialize the user cell {user_cell_hex} (is the node \
+                 started with --enable-faucet?)"
+            );
+        }
+
+        let before = client.receipts_count()?;
+
+        // The node's executor requires the turn's `previous_receipt_hash` to equal
+        // the node's CURRENT receipt-chain head (the node seeds the executor with
+        // `s.cclerk.receipt_chain().last()`). A client cannot know that locally — its
+        // own clerk chain is empty — so read the head off `/api/receipts` (newest
+        // first) and stamp it. `None` head (a fresh node) leaves it unstamped.
+        let prev_head = client
+            .receipts_raw()
+            .ok()
+            .and_then(|rs| rs.into_iter().next())
+            .and_then(|raw| raw.get("receipt_hash").and_then(|v| v.as_str()).map(String::from))
+            .and_then(|h| decode_hex32(&h));
+
+        // (2) Build + sign the SetField turn AS THE USER, over the node's federation id.
+        let effect = dregg_turn::Effect::SetField {
+            cell: user_cell,
+            index,
+            value: field_element_from(value),
+        };
+        let action = clerk.make_action(user_cell, "save", vec![effect], &federation_id);
+        let mut turn = clerk.make_turn(action);
+        // Thread the node's chain head so the executor's receipt-chain check passes.
+        turn.previous_receipt_hash = prev_head;
+        // Stamp `valid_until` so the turn stays on the verified Lean producer's wire
+        // marshal (an unstamped turn falls back to the Rust path; it still commits,
+        // but we keep it on the covered producer to match the operator path).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        turn.valid_until = Some(now + 3600);
+        let signed = clerk.sign_turn(&turn);
+
+        // (3) Submit + assert.
+        let resp = client.submit_signed_turn(&signed)?;
+        if !resp.accepted {
+            anyhow::bail!(
+                "the node REFUSED the client-signed turn: {}",
+                resp.error.unwrap_or_else(|| "no reason given".into())
+            );
+        }
+        let after = client.receipts_count()?;
+
+        // The new receipt's agent, read off the chain head — must be the USER's cell.
+        let receipt_agent = client
+            .receipts_raw()
+            .ok()
+            .and_then(|rs| rs.into_iter().next())
+            .and_then(|raw| raw.get("agent").and_then(|v| v.as_str()).map(String::from))
+            .unwrap_or_default();
+
+        Ok(ClientSignedProof {
+            before,
+            after,
+            user_cell: user_cell_hex,
+            operator_cell: operator_cell_hex,
+            receipt_agent,
+            signer: resp.signer.unwrap_or_default(),
+            turn_hash: resp.turn_hash.unwrap_or_default(),
+        })
+    }
+
     /// RE-SYNC the attached node over the wire (status + cells + chain-head
     /// receipt) so the live-node pane reflects the post-write-back state — e.g.
     /// the new receipt the editor save just committed shows up in the screenshot.
@@ -536,6 +682,73 @@ fn raw_receipt_inspectable(raw: &serde_json::Value) -> Inspectable {
         ),
         fields,
     }
+}
+
+/// The proof a client-signed editor save produced on the node: the receipt count
+/// grew AND the committed turn's agent is the USER's own cell (not the operator's).
+#[cfg(feature = "embedded-executor")]
+#[derive(Debug, Clone)]
+pub struct ClientSignedProof {
+    /// Node `/api/receipts` count before the submit.
+    pub before: usize,
+    /// Node `/api/receipts` count after (must be `before + 1`).
+    pub after: usize,
+    /// The logged-in user's own default cell (hex) — the turn's agent.
+    pub user_cell: String,
+    /// The node OPERATOR's own default cell (hex) — what the agent must NOT be.
+    pub operator_cell: String,
+    /// The agent of the just-committed receipt, read off the chain head (hex). For
+    /// the proof to hold this must equal `user_cell` and differ from `operator_cell`.
+    pub receipt_agent: String,
+    /// The signer the node reported (hex pubkey) — the user's key, not the node's.
+    pub signer: String,
+    /// The committed turn hash.
+    pub turn_hash: String,
+}
+
+#[cfg(feature = "embedded-executor")]
+impl ClientSignedProof {
+    /// The load-bearing check: the receipt grew by one AND its agent is the user's
+    /// own cell, NOT the operator's. This is "a sovereign client signed a turn the
+    /// node committed under the client's authority".
+    pub fn proves_user_authority(&self) -> bool {
+        self.after == self.before + 1
+            && self.receipt_agent == self.user_cell
+            && self.receipt_agent != self.operator_cell
+    }
+}
+
+/// Decode a 64-char hex string into a 32-byte array, or `None` if malformed.
+#[cfg(feature = "embedded-executor")]
+fn decode_hex32(s: &str) -> Option<[u8; 32]> {
+    let bytes = hex::decode(s.trim()).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Some(out)
+}
+
+/// Encode a save's content fingerprint into a 32-byte field element (a short
+/// hex/decimal scalar little-endian into the low 8 bytes; a full 64-char hex used
+/// verbatim) — the SAME convention the node's `parse_field_element` decodes.
+#[cfg(feature = "embedded-executor")]
+fn field_element_from(s: &str) -> [u8; 32] {
+    let t = s.trim();
+    if t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if let Some(b) = decode_hex32(t) {
+            return b;
+        }
+    }
+    let scalar: u64 = t
+        .strip_prefix("0x")
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+        .or_else(|| t.parse::<u64>().ok())
+        .unwrap_or(0);
+    let mut out = [0u8; 32];
+    out[..8].copy_from_slice(&scalar.to_le_bytes());
+    out
 }
 
 /// First 8 + last 4 hex chars of a long id, for compact display.
