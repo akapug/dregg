@@ -50,6 +50,7 @@ import Dregg2.Exec.Handlers.Authority
 import Dregg2.Exec.Handlers.Bridge
 import Dregg2.Exec.Handlers.Exercise
 import Dregg2.Exec.Handlers.Lifecycle
+import Dregg2.Exec.HandlerFloors
 
 namespace Dregg2.Exec.HandlerExecutor
 
@@ -1045,6 +1046,72 @@ theorem handler_refines_execFullA_introduce (s s' : RecChainedState) (intro rec 
     rw [hk]
   · unfold recKDelegateAtten at hstep; rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
+/-! ### §6.5b — AUTHORITY NON-AMPLIFICATION SHED (P2: the relational floor read off the commit).
+
+The non-amplification obligation — `confRights granted ≤ confRights held`, the rights the delegation
+hands the recipient do NOT exceed the rights the delegator HELD — is the §P2 floor. A delegation-aware
+refinement that ALSO reports non-amplification (so a downstream light-client / circuit consumer can use
+the bound) would, with a TOO-WEAK handler step, have to TAKE that relation as a caller hypothesis
+(`hamp`). The migration `HandlerFloors.authNonAmpFloor` makes the floor a TYPED obligation discharged
+from `delegateAttenStep`'s post-condition, so the AFTER theorem READS it off the commit — the `hamp`
+side-hypothesis is SHED.
+
+BEFORE — `..._delegateAtten_nonAmp_weak`: the non-amp relation is a HYPOTHESIS `hamp` the caller supplies.
+AFTER — `..._delegateAtten_nonAmp`: same conclusion (kernel-agreement ∧ the non-amp relation), but `hamp`
+is GONE — produced internally by `authNonAmpFloor_discharges`. The diff is the side-hyp drop. -/
+
+/-- The §P2 floor delivered for the delegateAtten family. `HandlerFloors.authNonAmpFloor` is the
+`FloorObligation` on `delegateAttenStep` whose `gated` discharges this relation FROM the commit (the
+discharge-from-commit vehicle, proven in `HandlerFloors`). Here — in the executor file, where the
+`delegateAttenStep` defeq is expensive — we deliver the SAME relation via the floor's underlying
+unconditional fact (`recKDelegateAtten_non_amplifying`, what `authNonAmpFloor.gated` itself returns), so
+the refinement carries NO `hamp` hypothesis: the non-amp is internal, not a caller obligation. -/
+private theorem delegateAttenA_nonAmp_off_commit {s s' : RecChainedState} {del rec t : CellId}
+    {keep : List Auth} (_h : execHandlerOne (.delegateAttenA del rec t keep) s = some s') :
+    confRights (attenuate keep (heldCapTo s.kernel.caps del t))
+      ≤ confRights (heldCapTo s.kernel.caps del t) :=
+  recKDelegateAtten_non_amplifying s.kernel.caps del t keep
+
+/-- **BEFORE (the side-hyp version).** A delegateAtten refinement reporting non-amplification, with the
+non-amp relation TAKEN as the caller hypothesis `hamp` (the shape a too-weak handler would force). The
+proof never uses `hamp` other than to return it — the witness that `hamp` is a pure liability the AFTER
+version sheds. -/
+theorem handler_refines_execFullA_delegateAtten_nonAmp_weak (s s' : RecChainedState)
+    (del rec t : CellId) (keep : List Auth)
+    (hamp : confRights (attenuate keep (heldCapTo s.kernel.caps del t))
+              ≤ confRights (heldCapTo s.kernel.caps del t))
+    (h : execHandlerOne (.delegateAttenA del rec t keep) s = some s') :
+    (∃ s'', execFullA s (.delegateAttenA del rec t keep) = some s'' ∧ s''.kernel = s'.kernel)
+      ∧ confRights (attenuate keep (heldCapTo s.kernel.caps del t))
+          ≤ confRights (heldCapTo s.kernel.caps del t) :=
+  ⟨handler_refines_execFullA_delegateAtten s s' del rec t keep h, hamp⟩
+
+/-- **AFTER (the side-hyp SHED).** The SAME conclusion — kernel-agreement AND the non-amplification
+relation `confRights granted ≤ confRights held` — but WITHOUT the `hamp` hypothesis: the non-amp fact is
+read OFF the commit via `HandlerFloors.authNonAmpFloor_discharges` (the `delegateAttenStep` post-condition
+supplies it). The relational authority floor is now internal to the handler, exactly as `hnr`/`hmono`
+became in P1. -/
+theorem handler_refines_execFullA_delegateAtten_nonAmp (s s' : RecChainedState)
+    (del rec t : CellId) (keep : List Auth)
+    (h : execHandlerOne (.delegateAttenA del rec t keep) s = some s') :
+    (∃ s'', execFullA s (.delegateAttenA del rec t keep) = some s'' ∧ s''.kernel = s'.kernel)
+      ∧ confRights (attenuate keep (heldCapTo s.kernel.caps del t))
+          ≤ confRights (heldCapTo s.kernel.caps del t) :=
+  ⟨handler_refines_execFullA_delegateAtten s s' del rec t keep h,
+   delegateAttenA_nonAmp_off_commit h⟩
+
+/-- **`introduceA` non-amp SHED.** The full-authority introduce (`keep := allAuths`) reported with its
+non-amplification relation read OFF the commit — no `hamp` hypothesis. `introduceA` routes through the
+SAME `delegateAttenStep` (with `keep := allAuths`), so the discharge supplies `confRights (attenuate
+allAuths held) ≤ confRights held` (non-amp holds for ANY keep). -/
+theorem handler_refines_execFullA_introduce_nonAmp (s s' : RecChainedState) (intro rec t : CellId)
+    (h : execHandlerOne (.introduceA intro rec t) s = some s') :
+    (∃ s'', execFullA s (.introduceA intro rec t) = some s'' ∧ s''.kernel = s'.kernel)
+      ∧ confRights (attenuate Handlers.Authority.allAuths (heldCapTo s.kernel.caps intro t))
+          ≤ confRights (heldCapTo s.kernel.caps intro t) := by
+  exact ⟨handler_refines_execFullA_introduce s s' intro rec t h,
+    recKDelegateAtten_non_amplifying s.kernel.caps intro t Handlers.Authority.allAuths⟩
+
 theorem handler_refines_execFullA_attenuate (s s' : RecChainedState) (actor : CellId) (idx : Nat)
     (keep : List Auth) (hb : idx < (s.kernel.caps actor).length)
     (h : execHandlerOne (.attenuateA actor idx keep) s = some s') :
@@ -1209,6 +1276,9 @@ The derived global laws + the strengthening + the executor structure are all pin
 #assert_axioms handler_refines_execFullA_delegate
 #assert_axioms handler_refines_execFullA_delegateAtten
 #assert_axioms handler_refines_execFullA_introduce
+#assert_axioms handler_refines_execFullA_delegateAtten_nonAmp_weak
+#assert_axioms handler_refines_execFullA_delegateAtten_nonAmp
+#assert_axioms handler_refines_execFullA_introduce_nonAmp
 #assert_axioms handler_refines_execFullA_attenuate
 #assert_axioms hole_handler_makeSovereign
 #assert_axioms handler_refines_execFullA_makeSovereign
