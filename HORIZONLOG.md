@@ -11,6 +11,19 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### WEB-SHELL REAL-PAGE RENDER — blocked on a servo-paint surfman ceiling (2026-06-23).
+Named in `384d1f68` (servo net-cap lane). The net-cap socket gate is DONE+proven (cap-denied
+origin → `RefusedByCap`, `Netlayer::dial` never called — `servo-render/src/netcap_connector.rs`
++ the real libservo `CapGate` test). But driving servo's HTML layout into the SWGL frame is
+REFUTED against published `servo-paint 0.1.0`: `Painter::new` is hardwired to surfman
+(`rendering_context.connection().expect(...)`, paint.rs:238), `ServoSwglContext::connection()`
+returns `None` → panic before any page paints (confirmed by building+running `--features
+libservo`; render test `#[ignore]`d with that reason). CLOSURE = a surfman software `Connection`
+OR a `servo-paint` SWGL fork (the multi-day pole). `dregg://` cell fetches ride the connector
+end-to-end TODAY with no such ceiling; http(s) bytes still ride servo's internal hyper (its
+`FORBIDDEN_SCHEMES` blocks an embedder http(s) ProtocolHandler — replacing the byte socket needs
+a servo `net` fork). SWGL pixel path itself is real+green (`tests/swgl_render_to_png.rs`).
+
 ### DIRECTIONS RECONSTRUCTION (2026-06-23): the 06-21→06-23 far-seeing arc, recovered.
 `docs/deos/RECONSTRUCTED-DIRECTIONS-2026-06-23.md` — mined the session corpus via `cv` after a
 compaction kept the mechanics but lost the far-seeing. The stake (an agent living in dregg with
