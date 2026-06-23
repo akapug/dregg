@@ -22,7 +22,14 @@
 //!    no tool-call (hence no permission request) is produced — the handshake +
 //!    session still complete. `run_live` reports exactly how far it got.
 //!
-//! Run: `cd deos-hermes && cargo run` (mock) or `cargo run -- live`.
+//! 3. THE LIVE REFUSAL (`cargo run -- live-refuse`): identical to `live`, but the
+//!    `terminal` tool is pinned to rate 0, so the real model's `rm -rf`
+//!    tool-call is REFUSED IN-BAND by the gateway (the over-mandate leg bites
+//!    before any spend) — proving the refusal half of the seam against a live
+//!    agent loop, not just the allow half.
+//!
+//! Run: `cd deos-hermes && cargo run` (mock), `cargo run -- live`, or
+//! `cargo run -- live-refuse`.
 
 use std::sync::{Arc, RwLock};
 
@@ -35,19 +42,49 @@ use dregg_sdk::{AgentCipherclerk, AgentRuntime};
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "mock".to_string());
     match mode.as_str() {
-        "live" => run_live(),
+        // The live brain → gateway seam over the standard confinement: the
+        // `terminal` tool-call the model emits is ADMITTED (a cap-gated,
+        // receipted dregg turn on the verified executor).
+        "live" => run_live(Confine::Standard),
+        // The same live brain, but `terminal` pinned to rate 0 — the model's
+        // `rm -rf` tool-call is REFUSED IN-BAND (the over-mandate leg bites
+        // before any spend), proving the refusal half of the seam live.
+        "live-refuse" => run_live(Confine::DenyTerminal),
         _ => run_mock(),
     }
+}
+
+/// Which confinement the live loop runs under — the standard floors (the
+/// `terminal` call is allowed + receipted) or a `terminal`-denied registry (the
+/// `terminal` call is refused in-band).
+#[derive(Clone, Copy)]
+enum Confine {
+    Standard,
+    DenyTerminal,
 }
 
 /// Build the grantor runtime + root token + the standard confinement (per-kind
 /// floors + the curated per-tool tightenings, deadline/clock 1000).
 fn confinement() -> (AgentRuntime, dregg_sdk::HeldToken, GrantRegistry) {
+    confinement_with(Confine::Standard)
+}
+
+/// As [`confinement`], but choosing whether `terminal` is allowed (the standard
+/// per-tool tightenings) or denied (pinned to rate 0 so the live `rm -rf`
+/// tool-call is refused in-band).
+fn confinement_with(confine: Confine) -> (AgentRuntime, dregg_sdk::HeldToken, GrantRegistry) {
     let mut cclerk = AgentCipherclerk::new();
     let root_token = cclerk.mint_token(&[7u8; 32], "deos");
     let runtime = AgentRuntime::new(Arc::new(RwLock::new(cclerk)), "deos");
     // The per-tool grants tighten `terminal` (rate 5), `web_extract` (15), etc.
     let registry = GrantRegistry::default_for_session(1000).with_standard_tool_grants(1000);
+    let registry = match confine {
+        Confine::Standard => registry,
+        // Pin `terminal` to rate 0 — `delegAdmit`'s rate conjunct `new(=1) <= 0`
+        // is false, so the live agent's `rm -rf` terminal call is refused in-band
+        // (no turn, no spend), naming the leg that bit.
+        Confine::DenyTerminal => registry.with_grant_for_tool_deny("terminal"),
+    };
     (runtime, root_token, registry)
 }
 
@@ -103,13 +140,17 @@ fn hermes_acp_model() -> String {
 /// Reports exactly how far the live env let it get (handshake / session / a real
 /// permission round-trip / a full provider-backed turn), so the live ceiling is
 /// honest from the output alone.
-fn run_live() {
-    println!("deos-hermes — the confined Hermes ACP loop (LIVE subprocess)\n");
+fn run_live(confine: Confine) {
+    let banner = match confine {
+        Confine::Standard => "LIVE subprocess",
+        Confine::DenyTerminal => "LIVE subprocess — terminal DENIED (refusal demo)",
+    };
+    println!("deos-hermes — the confined Hermes ACP loop ({banner})\n");
     let program = hermes_acp_program();
     let model = hermes_acp_model();
     println!("spawning `{program}` (model `{model}`)…\n");
 
-    let (runtime, root_token, registry) = confinement();
+    let (runtime, root_token, registry) = confinement_with(confine);
     let gateway = HermesGateway::new(&runtime, root_token, registry);
 
     let transport = match AcpTransport::spawn_hermes(&program, &[]) {
@@ -146,11 +187,33 @@ fn run_live() {
                      is emitted. The handshake/session above is fully LIVE.)"
                 );
             } else {
+                use deos_hermes::PermissionOutcome;
+                let allowed = run
+                    .verdicts
+                    .iter()
+                    .filter(|(_, o)| matches!(o, PermissionOutcome::Allow { .. }))
+                    .count();
+                let refused = run.verdicts.len() - allowed;
                 println!(
-                    "permission round-trip: REACHED — {} tool-call(s) were gated through the \
-                     HermesGateway LIVE (a cap-gated, receipted dregg turn per allow).",
+                    "permission round-trip: REACHED — {} tool-call(s) gated through the \
+                     HermesGateway LIVE ({allowed} allowed = receipted dregg turn(s), \
+                     {refused} refused in-band).",
                     run.verdicts.len()
                 );
+                for (call, outcome) in &run.verdicts {
+                    match outcome {
+                        PermissionOutcome::Allow {
+                            receipt, remaining, ..
+                        } => println!(
+                            "  ✓ {} ALLOWED — receipt {}… ({remaining} left)",
+                            call.name,
+                            &receipt[..receipt.len().min(16)]
+                        ),
+                        PermissionOutcome::Reject { reason, .. } => {
+                            println!("  ✗ {} REFUSED — {reason}", call.name)
+                        }
+                    }
+                }
             }
         }
         Err(e) => {
