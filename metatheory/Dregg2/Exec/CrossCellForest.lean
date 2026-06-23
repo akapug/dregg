@@ -184,13 +184,68 @@ def crossForestCells (f : CrossCellForest) (cellOf : CellId → KernelState) :
     Fin (halvesOf f).length → KernelState :=
   fun i => cellOf ((halvesOf f).get i).cell
 
+/-- **`distinctCells` — the one-cell-per-node well-formedness gate (NoDup over flattened `CellId`s
+).** This cross-cell lift flattens the tree to a `Fin n` family with one cell PER NODE, and reads
+post-states PER INDEX (`crossForestCells`). For the family transition and its Σ-conservation to
+range over REAL distinct cells — rather than independent per-index COPIES of one cell that could
+hold mutually incompatible post-states (e.g. two nodes on cell A with `δ = +10` / `−10` reading the
+same pre-state, summed over copies to a phantom net-0) — the flattened cell list must have NO
+duplicate `CellId`. A forest with two nodes on the SAME cell is NOT a cross-cell family for THIS
+construction: it is the OVERLAPPING/contended forest, named OPEN at §11 (the shared-mutable-family
+residue). So a duplicate-cell forest is malformed here and is REJECTED (fail-closed). -/
+def distinctCells (f : CrossCellForest) : Prop :=
+  ((halvesOf f).map (·.cell)).Nodup
+
+instance (f : CrossCellForest) : Decidable (distinctCells f) := by
+  unfold distinctCells; infer_instance
+
+/-- With `distinctCells f`, the index → `CellId` map of the flattened family is INJECTIVE: distinct
+flattened nodes name distinct cells. This is exactly what makes `∑ i, total (cellOf (cell i))` a sum
+over REAL distinct cells (each appearing once), not over per-index copies — the soundness the NoDup
+gate buys. -/
+theorem distinctCells_injective (f : CrossCellForest) (h : distinctCells f) :
+    Function.Injective (fun i : Fin (halvesOf f).length => ((halvesOf f).get i).cell) := by
+  intro i j hij
+  -- `distinctCells f` is `Nodup` over the mapped cell list; lift it back to the `halvesOf` indices.
+  have hnodup : ((halvesOf f).map (·.cell)).Nodup := h
+  have hlen : ((halvesOf f).map (·.cell)).length = (halvesOf f).length := List.length_map _
+  -- Reindex into the mapped list and read off the cells at `i`, `j`.
+  set i' : Fin ((halvesOf f).map (·.cell)).length := ⟨i.val, by rw [hlen]; exact i.isLt⟩ with hi'
+  set j' : Fin ((halvesOf f).map (·.cell)).length := ⟨j.val, by rw [hlen]; exact j.isLt⟩ with hj'
+  have hgi : ((halvesOf f).map (·.cell)).get i' = ((halvesOf f).get i).cell := by
+    simp [hi', List.get_eq_getElem, List.getElem_map]
+  have hgj : ((halvesOf f).map (·.cell)).get j' = ((halvesOf f).get j).cell := by
+    simp [hj', List.get_eq_getElem, List.getElem_map]
+  have heq : ((halvesOf f).map (·.cell)).get i' = ((halvesOf f).map (·.cell)).get j' := by
+    rw [hgi, hgj]; exact hij
+  have hij' : i' = j' := (List.Nodup.get_inj_iff hnodup).mp heq
+  exact Fin.ext (by simpa [hi', hj'] using congrArg Fin.val hij')
+
 /-- **`execCrossForest`** — run the cross-cell forest as an ALL-OR-NOTHING family transition: the
 flattened `Fin n` family of cross-cell half-edges committed atomically (`ForestLTS.forestApply`).
-Returns the post-family (one post-state per node) or `none` if ANY node's half is rejected (the
-journal/rollback discipline — no partial cross-cell commit). -/
+FAIL-CLOSED on the `distinctCells` gate FIRST: a forest with two nodes on the SAME cell (the
+overlapping/contended case, OPEN at §11) is REJECTED (`none`), so the family — and its conservation
+— ranges over REAL distinct cells, never per-index copies of one cell. Otherwise returns the
+post-family (one post-state per node) or `none` if ANY node's half is rejected (the journal/rollback
+discipline — no partial cross-cell commit). -/
 def execCrossForest (f : CrossCellForest) (cellOf : CellId → KernelState) (sid : SharedId) :
     Option (Fin (halvesOf f).length → KernelState) :=
-  forestApply (crossForestCells f cellOf) (crossForestTurn f sid)
+  if distinctCells f then
+    forestApply (crossForestCells f cellOf) (crossForestTurn f sid)
+  else
+    none
+
+/-- If `execCrossForest` commits, the forest passed the `distinctCells` gate (its flattened cells
+are distinct) AND the underlying family transition committed. The fail-closed split, extracted. -/
+theorem execCrossForest_distinct {f : CrossCellForest} {cellOf : CellId → KernelState}
+    {sid : SharedId} {cells' : Fin (halvesOf f).length → KernelState}
+    (h : execCrossForest f cellOf sid = some cells') :
+    distinctCells f
+      ∧ forestApply (crossForestCells f cellOf) (crossForestTurn f sid) = some cells' := by
+  unfold execCrossForest at h
+  by_cases hd : distinctCells f
+  · rw [if_pos hd] at h; exact ⟨hd, h⟩
+  · rw [if_neg hd] at h; exact absurd h (by simp)
 
 /-! ## §4 — `crossForest_no_amplify`: delegated caps NEVER amplify (Granovetter across cells).
 
@@ -242,7 +297,7 @@ theorem crossForest_conserves (f : CrossCellForest) (cellOf : CellId → KernelS
     (hbind : ∑ i, (crossForestTurn f sid).δ i = 0)
     (h : execCrossForest f cellOf sid = some cells') :
     ∑ i, total (cells' i) = ∑ i, total (crossForestCells f cellOf i) :=
-  forestApply_cg5_conserves hbind h
+  forestApply_cg5_conserves hbind (execCrossForest_distinct h).2
 
 /-! ## §6 — `crossForest_attests`: the four `StepInv` conjuncts over the whole cross-cell tree.
 
@@ -279,7 +334,8 @@ theorem crossForest_attests (f : CrossCellForest) (cellOf : CellId → KernelSta
     (hbind : ∑ i, (crossForestTurn f sid).δ i = 0)
     (h : execCrossForest f cellOf sid = some cells') :
     fullCrossForestInv f cellOf sid cells' :=
-  forestAbsStep_forward (crossForestCells f cellOf) cells' (crossForestTurn f sid) hbind h
+  forestAbsStep_forward (crossForestCells f cellOf) cells' (crossForestTurn f sid) hbind
+    (execCrossForest_distinct h).2
 
 /-- **Conservation conjunct, projected.** A committed cross-cell forest (under the binding)
 preserves the JOINT family total at the abstract level (`forestJointBalance`). The cross-cell CG-5
@@ -367,6 +423,8 @@ theorem crossForest_bilateral_refines_crossAbs (bt : BiTurn) (p p' : Fin 2 → A
 
 #assert_axioms edge_no_amplify
 #assert_axioms crossForest_no_amplify
+#assert_axioms distinctCells_injective
+#assert_axioms execCrossForest_distinct
 #assert_axioms crossForest_conserves
 #assert_axioms crossForest_attests
 #assert_axioms crossForest_attests_conserves
@@ -412,6 +470,8 @@ def goodCrossForest : CrossCellForest :=
 -- The flattening: two cross-cell half-edges, on cells 0 and 7.
 #guard ((forestHalves goodCrossForest).length) == 2  --  2
 #guard ((forestHalves goodCrossForest).map (fun hh => (hh.cell, hh.δ))) == [(0, 30), (7, -30)]  --  [(0, 30), (7, -30)]
+-- The good forest's cells are DISTINCT (0 ≠ 7): the `distinctCells` well-formedness gate HOLDS.
+#guard (decide (distinctCells goodCrossForest)) == true  --  true (distinct cells 0, 7)
 -- The cross-cell CG-5 Σ=0 binding HOLDS for the good forest: 30 + (-30) = 0.
 #guard ((forestHalves goodCrossForest).foldl (fun acc hh => acc + hh.δ) 0) == 0  --  0 (balanced)
 -- The whole cross-cell forest commits (both halves authorized by ownership):
@@ -439,6 +499,27 @@ def unbalancedCrossForest : CrossCellForest :=
 #guard ((forestHalves unbalancedCrossForest).foldl (fun acc hh => acc + hh.δ) 0) == 20  --  20 (UNBALANCED)
 #guard ((execCrossForest unbalancedCrossForest cellOf 42).map
         (fun cs => ∑ i, total (cs i))) == some 105  --  some 105 ≠ 125 (binding VIOLATED ⇒ NOT conserved)
+
+/-- **THE COPY-LAUNDERING WITNESS (codex P2) — a DUPLICATE-CELL forest, now REJECTED.** Both the
+root AND its child run on the SAME cell `0` (cellA): the root debits account 0 by `δ = +10`, the
+child by `δ = −10`. The two δ's sum to zero, so this forest would have PASSED the old
+`crossForest_conserves` — which summed `total` over the per-INDEX post-state COPIES `[A−10, A+10]`
+to a phantom net-0, while the REAL cell 0 cannot simultaneously be `A+10` and `A−10`. The
+`distinctCells` gate now REJECTS it (the flattened cell list `[0, 0]` is NOT `Nodup`): a same-cell
+forest is the OVERLAPPING/contended case (OPEN §11), not a cross-cell family. -/
+def dupCellCrossForest : CrossCellForest :=
+  ⟨ 0, 0, 0, 10
+  , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
+      , sub := ⟨ 0, 0, 0, -10, [] ⟩ } ] ⟩
+
+-- Both halves run on cell `0` — the flattened cell list has a DUPLICATE, so `distinctCells` FAILS.
+#guard ((forestHalves dupCellCrossForest).map (·.cell)) == [0, 0]  --  [0, 0] (duplicate cell)
+#guard (decide (distinctCells dupCellCrossForest)) == false  --  false (NOT Nodup)
+-- The δ's sum to zero (it would have passed the OLD copy-summing conservation)…
+#guard ((forestHalves dupCellCrossForest).foldl (fun acc hh => acc + hh.δ) 0) == 0  --  0 (Σδ=0)
+-- …but the dup-cell forest is now REJECTED (fail-closed on the distinctCells gate), NOT
+-- silently summed over per-index copies into a phantom-conserved post.
+#guard ((execCrossForest dupCellCrossForest cellOf 42).isSome) == false  --  false (REJECTED — copy-laundering closed)
 
 /-- An UNAUTHORIZED cross-cell forest: the child's actor (9) owns nothing on cell 7 and holds no cap
 — it acts BEYOND any delegated authority. `applyForestHalf`'s authority gate rejects it, and
