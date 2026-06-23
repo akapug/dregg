@@ -118,7 +118,23 @@ pub fn boot_cockpit() {
                 let editor = cx.new(|cx| WebEditorPane::new(window, cx));
                 let chat = cx.new(|cx| WebChatPane::new(window, cx));
 
-                cx.new(|cx| WebCockpitRoot::new(cockpit, editor, chat, cx))
+                // The cockpit + panes element tree.
+                let web_root = cx.new(|cx| WebCockpitRoot::new(cockpit, editor, chat, cx));
+
+                // WRAP THE WINDOW ROOT IN `gpui_component::Root`. The cockpit + both
+                // panes use `gpui_component::input::InputState` (the URL bar, the
+                // editor buffer, the chat composer); its element calls
+                // `Root::read`/`Root::update`, which `.unwrap()` the window's first
+                // layer as a `gpui_component::Root` (root.rs:148). Without a `Root`
+                // at the window root those unwraps panic — under wasm `panic=abort`
+                // that poisons the App `RefCell` and aborts the whole run-loop. The
+                // `Root` view hosts the cockpit tree and supplies the dialog /
+                // notification / focused-input state every kit widget reads.
+                //
+                // `bordered(false)`: the web canvas fills the page — no Linux CSD
+                // window border / drop-shadow wrapper (that is for native decorated
+                // windows).
+                cx.new(|cx| gpui_component::Root::new(web_root, window, cx).bordered(false))
             },
         )
         .expect("failed to open web window");
