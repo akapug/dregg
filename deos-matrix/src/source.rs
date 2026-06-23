@@ -135,8 +135,14 @@ pub trait ChatSource: Send + Sync + 'static {
 
 // ---------------------------------------------------------------------------
 // MatrixHandle is a real ChatSource (the live backend).
+//
+// NATIVE-only: `MatrixHandle` is the synchronous blocking facade over the
+// OS-thread worker, which does not exist on wasm32 (see `crate::worker`). The
+// in-browser live backend is a separate `spawn_local`-driven shape (the next
+// wire); `MockSource` below is the wasm-ready `ChatSource`.
 // ---------------------------------------------------------------------------
 
+#[cfg(not(target_family = "wasm"))]
 impl ChatSource for crate::worker::MatrixHandle {
     fn whoami(&self) -> Option<String> {
         // Ask the worker for the live client's user id (the SDK holds it after
@@ -736,5 +742,62 @@ mod tests {
         let room = src.rooms().unwrap()[0].room_id.to_string();
         assert!(src.typing(&room).contains(&"@grok:deos.local".to_string()));
         assert!(src.read_by(&room).len() >= 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The IN-BROWSER proof: the SAME `MockSource`-backed `ChatSource` data path,
+// exercised under `wasm-bindgen-test` on wasm32. This is the wasm analogue of
+// the native suite above — it proves rooms / timeline / send / the membrane
+// round-trip all run in a browser tab WITHOUT a server (and without the native
+// OS-thread worker, which is `cfg(not(wasm32))` out). Run with
+// `wasm-pack test --node` (or `--headless --chrome`) in `deos-matrix/`.
+// ---------------------------------------------------------------------------
+#[cfg(all(test, target_family = "wasm"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // No `run_in_browser` configure: the `MockSource` data path is pure compute
+    // (no DOM/web-sys), so it runs under `wasm-pack test --node` (real wasm32
+    // execution, in CI without a browser driver) AND, unchanged, in a browser via
+    // `--headless --chrome`. The `gpui_web`-rendered `ChatView` is what binds this
+    // same data to a browser tab; this test proves the data underneath runs on the
+    // wasm32 single-threaded model with no native worker.
+
+    #[wasm_bindgen_test]
+    fn mock_chatsource_runs_on_wasm() {
+        // Drive the ChatSource trait object exactly as the gpui ChatView does, on
+        // the wasm32 single-threaded event loop. No tokio runtime, no worker.
+        let src: Box<dyn ChatSource> = Box::new(MockSource::seeded());
+
+        // whoami / rooms / timeline.
+        assert!(src.whoami().is_some());
+        let rooms = src.rooms().unwrap();
+        assert!(rooms.len() >= 3, "seeded rooms present in-browser");
+        let room = rooms[0].room_id.to_string();
+        let tl = src.timeline(&room, 100).unwrap();
+        assert!(!tl.is_empty(), "the timeline has data with no server");
+
+        // send appends + echoes a local event id.
+        let before = src.timeline(&room, 200).unwrap().len();
+        let id = src.send(&room, "hello from wasm").unwrap();
+        assert!(id.starts_with("$local"));
+        let after = src.timeline(&room, 200).unwrap();
+        assert_eq!(after.len(), before + 1);
+        assert_eq!(after.last().unwrap().body, "hello from wasm");
+
+        // The membrane round-trip: mint → send → it rides as a Membrane message.
+        let env = crate::membrane::MockMembraneHost::sample_envelope();
+        let mid = src.send_membrane(&room, "", env.clone()).unwrap();
+        assert!(mid.starts_with("$local"));
+        let last = src.timeline(&room, 200).unwrap().pop().unwrap();
+        assert_eq!(last.kind, MessageKind::Membrane);
+        assert_eq!(last.membrane.as_ref().unwrap(), &env);
+
+        // send = a turn with a receipt (the dregg-pilled surface, in-browser).
+        let r = src.send_turn(&room, "a receipted turn").unwrap();
+        assert_eq!(r.room_cell, src.room_cell(&room).cell_id);
+        assert!(r.digest().starts_with("turn "));
     }
 }

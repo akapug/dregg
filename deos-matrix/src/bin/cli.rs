@@ -9,7 +9,23 @@
 //!
 //! The session (and the SQLite state + E2E crypto store) persist under the OS
 //! data dir, so `rooms`/`timeline` restore without re-login.
+//!
+//! NATIVE-only: this is a terminal harness (clap, an OS data dir, a multi-thread
+//! `#[tokio::main]`, SQLite persistence) — none of which exists on wasm32. The
+//! native body lives in `mod native` (cfg'd out on wasm); a no-op wasm `main`
+//! keeps the `[[bin]]` target valid so `cargo build --tests --target
+//! wasm32-unknown-unknown` (and `wasm-pack test`) never drag clap/tokio-rt in.
 
+// A wasm `main` is needed only because a `[[bin]]` target must have one; the CLI
+// is meaningless in a browser, so it is empty there.
+#[cfg(target_family = "wasm")]
+fn main() {}
+
+#[cfg(not(target_family = "wasm"))]
+use native::main;
+
+#[cfg(not(target_family = "wasm"))]
+mod native {
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -143,7 +159,7 @@ fn store_path(dir: &std::path::Path) -> PathBuf {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -407,3 +423,4 @@ fn rand_u64() -> u64 {
         .build_hasher()
         .finish()
 }
+} // mod native
