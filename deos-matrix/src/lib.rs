@@ -26,8 +26,10 @@
 pub mod cell;
 pub mod client;
 pub mod membrane;
+pub mod object;
 pub mod session;
 pub mod source;
+pub mod verification;
 pub mod worker;
 
 #[cfg(feature = "gui")]
@@ -38,11 +40,17 @@ pub mod cockpit_surface;
 
 pub use cell::{CellId, IdentityCell, PersonTrust, RoomCell, SendReceipt};
 pub use client::{
-    EventState, MatrixClient, MessageKind, Reaction, ReplyTo, RoomSummary, TimelineMessage,
+    EventState, MatrixClient, MessageKind, PublicRoom, Reaction, ReplyTo, RoomPower, RoomSummary,
+    SpaceSummary, TimelineMessage,
 };
 pub use membrane::{MembraneEnvelope, MembraneHost, MockMembraneHost};
+pub use object::{
+    Affordance, CapabilityGrant, CellRef, DreggObject, ReceiptObject, Transclusion,
+    DREGG_OBJECT_KEY, OBJECT_VERSION,
+};
 pub use session::StoredSession;
 pub use source::{ChatSource, MockSource};
+pub use verification::{SasEmoji, SasProgress, VerificationFlow, VerificationPhase};
 
 /// Crate-wide error type.
 #[derive(Debug, thiserror::Error)]

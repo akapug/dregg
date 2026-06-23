@@ -337,7 +337,8 @@ impl ChatView {
         let rows = self.timeline.iter().enumerate().map(move |(i, m)| {
             let same_sender = prev_sender.as_deref() == Some(m.sender.as_str())
                 && m.reply_to.is_none()
-                && m.kind != MessageKind::Membrane;
+                && m.kind != MessageKind::Membrane
+                && !matches!(m.kind, MessageKind::Object(_));
             prev_sender = Some(m.sender.clone());
 
             let day = (m.timestamp_ms / 86_400_000) as i64;
@@ -424,6 +425,9 @@ impl ChatView {
                     .into_any_element(),
                 (_, MessageKind::Membrane) => {
                     membrane_card(m, card_bg, border, accent, foreground, muted).into_any_element()
+                }
+                (_, MessageKind::Object(_)) => {
+                    object_card(m, card_bg, border, accent, foreground, muted).into_any_element()
                 }
                 (state, kind) => {
                     let mut row = h_flex().ml(px(36.)).items_baseline().gap_1().child(
@@ -762,6 +766,102 @@ fn membrane_card(
                         .child("drives real turns · stitches back fail-closed"),
                 ),
         )
+}
+
+/// Render a **dregg semantic object** card — the generalized membrane. Each kind
+/// gets its own glyph, summary line, and affordance:
+///   * cell → "open this cell"
+///   * capability → "accept into your powerbox"
+///   * transclusion → the live quoted value
+///   * affordance → a fireable (cap-gated) button
+///   * receipt → the receipt summary
+/// Unknown/absent objects render their text fallback (fail-closed — the extraction
+/// already refused unknown kinds, so we only reach here for known ones).
+fn object_card(
+    m: &TimelineMessage,
+    bg: Hsla,
+    border: Hsla,
+    accent: Hsla,
+    fg: Hsla,
+    muted: Hsla,
+) -> impl IntoElement {
+    use crate::object::DreggObject;
+    // The per-kind (glyph, title, summary, action-label, action-fireable).
+    let (glyph, title, summary, action, fireable): (&str, &str, String, &str, bool) =
+        match &m.object {
+            Some(DreggObject::Cell(c)) => (
+                "▢",
+                "deos cell",
+                format!("{} · {}:{}", c.label, c.cell_kind.as_deref().unwrap_or("cell"), c.cell_id.short()),
+                "open cell",
+                true,
+            ),
+            Some(DreggObject::Capability(c)) => (
+                "🔑",
+                "deos capability",
+                format!("{} · {}", c.label, c.sturdyref),
+                "accept into powerbox",
+                true,
+            ),
+            Some(DreggObject::Transclusion(t)) => (
+                "❝",
+                "deos transclusion",
+                format!("{}.{} = {} · bound {}…", t.source_cell.short(), t.field, t.value, hex8(&t.bound_root)),
+                "re-resolve live",
+                true,
+            ),
+            Some(DreggObject::Affordance(a)) => (
+                "▶",
+                "deos affordance",
+                format!("{} · {} on {}", a.label, a.action, a.target_cell.short()),
+                "fire (cap-gated)",
+                true,
+            ),
+            Some(DreggObject::Receipt(r)) => (
+                "✔",
+                "deos receipt",
+                format!("turn {} · {} · root {}…", r.turn_index, r.cell_id.short(), hex8(&r.post_root)),
+                "verify",
+                false,
+            ),
+            // A membrane object reaches the membrane_card path, not here; any other
+            // shape renders just the body fallback.
+            _ => ("◇", "deos object", m.body.clone(), "", false),
+        };
+    v_flex()
+        .ml(px(36.))
+        .my_1()
+        .p_2()
+        .gap_1()
+        .rounded_lg()
+        .bg(bg)
+        .border_1()
+        .border_color(accent.opacity(0.5))
+        .max_w(px(420.))
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().text_color(accent).child(glyph))
+                .child(div().font_weight(gpui::FontWeight::BOLD).text_color(fg).child(title)),
+        )
+        .child(div().text_xs().text_color(muted).child(summary))
+        .when(!action.is_empty(), |d| {
+            d.child(
+                div()
+                    .id("object-action")
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border)
+                    .text_xs()
+                    .when(fireable, |d| {
+                        d.bg(accent).text_color(gpui::white()).cursor_pointer().child(action.to_string())
+                    })
+                    .when(!fireable, |d| d.text_color(muted).child(action.to_string())),
+            )
+        })
 }
 
 /// `@ember:deos.local` → `ember`.

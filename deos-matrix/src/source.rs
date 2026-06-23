@@ -22,6 +22,7 @@ use crate::client::{
     EventState, MessageKind, Reaction, ReplyTo, RoomSummary, TimelineMessage,
 };
 use crate::membrane::MembraneEnvelope;
+use crate::object::DreggObject;
 use crate::Result;
 
 /// The synchronous surface the chat UI renders against. Object-safe so the UI can
@@ -106,6 +107,21 @@ pub trait ChatSource: Send + Sync + 'static {
         self.send(room_id, body)
     }
 
+    /// **Send a dregg semantic object** — the generalized membrane. Attach ANY
+    /// [`DreggObject`] kind (cell/capability/transclusion/affordance/receipt/
+    /// membrane) to a chat message. The default appends an object-bearing message
+    /// locally; the deos side POSTs it under `software.ember.deos.object`.
+    fn send_object(&self, room_id: &str, body: &str, object: DreggObject) -> Result<String> {
+        // Default: a plain text send of the object's human fallback (a backend
+        // without object support still shows the conversation sensibly).
+        let fallback = if body.trim().is_empty() {
+            object.text_fallback()
+        } else {
+            body.to_string()
+        };
+        self.send(room_id, &fallback)
+    }
+
     /// Pull one sync round-trip (real backend) or refresh the mock's clock. The
     /// UI calls this on a timer so new messages appear.
     fn sync(&self) -> Result<()> {
@@ -150,6 +166,12 @@ impl ChatSource for crate::worker::MatrixHandle {
         // real m.room.message (see MatrixClient::send_membrane). The SAME wire shape
         // the mock describes locally, now POSTed to a real homeserver.
         crate::worker::MatrixHandle::send_membrane(self, room_id.to_string(), body.to_string(), membrane)
+    }
+
+    fn send_object(&self, room_id: &str, body: &str, object: DreggObject) -> Result<String> {
+        // The live object send: the object rides under DREGG_OBJECT_KEY in a real
+        // m.room.message (see MatrixClient::send_object). The generalized membrane.
+        crate::worker::MatrixHandle::send_object(self, room_id.to_string(), body.to_string(), object)
     }
 
     fn sync(&self) -> Result<()> {
@@ -296,10 +318,49 @@ impl MockSource {
         let mut m0_redacted = msg("@pug:deos.local", "oops wrong room", step());
         m0_redacted.state = EventState::Redacted;
 
+        // The generalized dregg objects on display: a transclusion (a live quoted
+        // value), a shareable capability, and a fireable cap-gated affordance — so
+        // the timeline reads as a dregg object-exchange channel, not just a chat.
+        use crate::object::{Affordance, CapabilityGrant, DreggObject, Transclusion};
+        let mut m0_trans = msg("@grok:deos.local", "", step());
+        let trans = DreggObject::Transclusion(Transclusion {
+            source_cell: crate::cell::CellId::derive("!deoslab:deos.local"),
+            field: "BALANCE_SUM".into(),
+            value: "0".into(),
+            bound_root: [0xe3; 32],
+        });
+        m0_trans.body = trans.text_fallback();
+        m0_trans.kind = MessageKind::Object("transclusion".into());
+        m0_trans.object = Some(trans);
+
+        let mut m0_cap = msg("@ember:deos.local", "", step());
+        let cap = DreggObject::Capability(CapabilityGrant {
+            sturdyref: "dregg://cap/post/deoslab".into(),
+            label: "post to deos-lab".into(),
+            lineage: vec![0xca, 0x9a, 0xb1, 0xe],
+        });
+        m0_cap.body = cap.text_fallback();
+        m0_cap.kind = MessageKind::Object("capability".into());
+        m0_cap.object = Some(cap);
+
+        let mut m0_aff = msg("@pug:deos.local", "", step());
+        let aff = DreggObject::Affordance(Affordance {
+            target_cell: crate::cell::CellId::derive("!deoslab:deos.local"),
+            action: "approve".into(),
+            label: "Approve the stitch".into(),
+            required_cap: "dregg://cap/approve".into(),
+        });
+        m0_aff.body = aff.text_fallback();
+        m0_aff.kind = MessageKind::Object("affordance".into());
+        m0_aff.object = Some(aff);
+
         let timelines = vec![
             (
                 rooms[0].room_id.to_string(),
-                vec![m0_grok, m0_emb, m0_mem, m0_reply, m0_edited, m0_redacted],
+                vec![
+                    m0_grok, m0_emb, m0_mem, m0_reply, m0_edited, m0_redacted, m0_trans, m0_cap,
+                    m0_aff,
+                ],
             ),
             (
                 rooms[1].room_id.to_string(),
@@ -467,6 +528,28 @@ impl ChatSource for MockSource {
         })
     }
 
+    fn send_object(&self, room_id: &str, body: &str, object: DreggObject) -> Result<String> {
+        let fallback = if body.trim().is_empty() {
+            object.text_fallback()
+        } else {
+            body.to_string()
+        };
+        // The kind: a membrane object surfaces as Membrane (so the rehydrate card
+        // renders); every other kind as Object(kind). A membrane also fills the
+        // typed `membrane` field for the existing card path.
+        let (kind, membrane) = match &object {
+            DreggObject::Membrane(env) => (MessageKind::Membrane, Some(env.clone())),
+            other => (MessageKind::Object(other.kind().to_string()), None),
+        };
+        self.append(room_id, move |event_id, ts, me| {
+            let mut m = TimelineMessage::text(event_id, me, fallback.clone(), ts);
+            m.kind = kind.clone();
+            m.membrane = membrane.clone();
+            m.object = Some(object.clone());
+            m
+        })
+    }
+
     fn backend_label(&self) -> &'static str {
         "mock"
     }
@@ -597,6 +680,54 @@ mod tests {
         assert_eq!(last.membrane.as_ref().unwrap(), &env);
         // Empty body falls back to the human-readable membrane summary.
         assert!(last.body.starts_with("[deos membrane"));
+    }
+
+    #[test]
+    fn send_object_appends_each_kind() {
+        use crate::object::{CapabilityGrant, CellRef, DreggObject, Transclusion};
+        let src = MockSource::seeded();
+        let room = src.rooms().unwrap()[0].room_id.to_string();
+
+        let cell = DreggObject::Cell(CellRef {
+            cell_id: crate::cell::CellId::derive("!deoslab:deos.local"),
+            label: "deos-lab room cell".into(),
+            cell_kind: Some("room".into()),
+        });
+        let id = src.send_object(&room, "", cell.clone()).unwrap();
+        assert!(id.starts_with("$local"));
+        let last = src.timeline(&room, 200).unwrap().pop().unwrap();
+        assert_eq!(last.kind, MessageKind::Object("cell".into()));
+        assert_eq!(last.object.unwrap(), cell);
+
+        // A capability kind renders the "accept into powerbox" affordance.
+        let cap = DreggObject::Capability(CapabilityGrant {
+            sturdyref: "dregg://cap/post".into(),
+            label: "post to deos-lab".into(),
+            lineage: vec![1, 2, 3],
+        });
+        src.send_object(&room, "", cap.clone()).unwrap();
+        let last = src.timeline(&room, 200).unwrap().pop().unwrap();
+        assert_eq!(last.kind, MessageKind::Object("capability".into()));
+
+        // A transclusion carries the live quoted value.
+        let tr = DreggObject::Transclusion(Transclusion {
+            source_cell: crate::cell::CellId::derive("!deoslab:deos.local"),
+            field: "members.count".into(),
+            value: "7".into(),
+            bound_root: [0xab; 32],
+        });
+        src.send_object(&room, "", tr.clone()).unwrap();
+        let last = src.timeline(&room, 200).unwrap().pop().unwrap();
+        assert_eq!(last.kind, MessageKind::Object("transclusion".into()));
+        assert_eq!(last.object.unwrap(), tr);
+
+        // A membrane object surfaces as Membrane (so the existing card renders) AND
+        // fills the typed membrane field.
+        let mem = DreggObject::Membrane(crate::membrane::MockMembraneHost::sample_envelope());
+        src.send_object(&room, "", mem.clone()).unwrap();
+        let last = src.timeline(&room, 200).unwrap().pop().unwrap();
+        assert_eq!(last.kind, MessageKind::Membrane);
+        assert!(last.membrane.is_some(), "membrane object fills the typed field");
     }
 
     #[test]

@@ -36,7 +36,9 @@
 
 use std::path::PathBuf;
 
-use deos_matrix::{MatrixClient, MessageKind, MockMembraneHost};
+use deos_matrix::{
+    Affordance, CellId, CellRef, DreggObject, MatrixClient, MessageKind, MockMembraneHost,
+};
 
 /// The gating env triple. Absent → the test is a no-op (CI-green without creds).
 fn live_config() -> Option<(String, String, String)> {
@@ -130,5 +132,87 @@ async fn live_login_sync_send_membrane_roundtrip() {
         .expect("membrane envelope extracted from the wire");
     assert_eq!(back, &env, "the membrane round-tripped through the real server");
 
-    eprintln!("LIVE OK: login+restore+sync+send(text)+send(membrane)+extract all proven against {homeserver}");
+    // 6. SEND a generalized DREGG OBJECT (a non-membrane kind) and read it back as
+    //    a typed object — the generalized envelope over real Matrix (the new
+    //    `software.ember.deos.object` key with a `kind` tag).
+    let obj = DreggObject::Cell(CellRef {
+        cell_id: CellId::derive("!deoslab:deos.local"),
+        label: "the deos-lab room cell".into(),
+        cell_kind: Some("room".into()),
+    });
+    let obj_id = client
+        .send_object(&room_id, "", &obj)
+        .await
+        .expect("send object");
+    client.sync_once().await.expect("sync after object");
+    let tl = client.recent_timeline(&room_id, 50).await.expect("timeline");
+    let received = tl
+        .iter()
+        .find(|m| m.event_id == obj_id)
+        .expect("object message read back");
+    assert_eq!(
+        received.kind,
+        MessageKind::Object("cell".into()),
+        "kind is Object(cell)"
+    );
+    assert_eq!(
+        received.object.as_ref().expect("object extracted from the wire"),
+        &obj,
+        "the dregg object round-tripped through the real server"
+    );
+
+    // 7. A fireable AFFORDANCE object — the cap-gated-button kind — also round-trips.
+    let aff = DreggObject::Affordance(Affordance {
+        target_cell: CellId::derive("!deoslab:deos.local"),
+        action: "approve".into(),
+        label: "Approve the merge".into(),
+        required_cap: "dregg://cap/approve".into(),
+    });
+    let aff_id = client.send_object(&room_id, "", &aff).await.expect("send affordance");
+    client.sync_once().await.expect("sync after affordance");
+    let tl = client.recent_timeline(&room_id, 50).await.expect("timeline");
+    let r = tl.iter().find(|m| m.event_id == aff_id).expect("affordance read back");
+    assert_eq!(r.kind, MessageKind::Object("affordance".into()));
+    assert_eq!(r.object.as_ref().unwrap(), &aff);
+
+    eprintln!(
+        "LIVE OK: login+restore+sync+send(text)+send(membrane)+send(object×2)+extract all proven against {homeserver}"
+    );
+}
+
+/// **Server-name `.well-known` discovery** — the bare-server-name login path a real
+/// user types ("deos.local", not "https://…"). Creds-gated by a separate env triple
+/// so it can target a server whose `.well-known` is set up (a full homeserver URL
+/// still works via the main test). Absent → no-op.
+#[tokio::test]
+async fn live_servername_discovery_login() {
+    let Ok(server_name) = std::env::var("DEOS_MATRIX_TEST_SERVERNAME") else {
+        eprintln!(
+            "DEOS_MATRIX_TEST_SERVERNAME not set — skipping bare-server-name discovery login test"
+        );
+        return;
+    };
+    let (Ok(user), Ok(pass)) = (
+        std::env::var("DEOS_MATRIX_TEST_USER"),
+        std::env::var("DEOS_MATRIX_TEST_PASS"),
+    ) else {
+        eprintln!("DEOS_MATRIX_TEST_USER/_PASS not set — skipping discovery login test");
+        return;
+    };
+
+    let store = tmp_store();
+    // Build from a BARE server name — exercises `.well-known`/versions discovery
+    // (`server_name_or_homeserver_url`), the login-form "homeserver" field path.
+    let (client, _stored) = MatrixClient::login_password(
+        &server_name,
+        &store,
+        "discovery-test-passphrase",
+        &user,
+        &pass,
+        "deos-matrix-discovery",
+    )
+    .await
+    .expect("discovery login from a bare server name");
+    assert!(client.user_id().is_some(), "discovery login resolved a session");
+    eprintln!("LIVE OK: bare-server-name `.well-known` discovery login proven against {server_name}");
 }

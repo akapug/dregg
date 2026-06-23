@@ -43,6 +43,42 @@ pub struct RoomSummary {
     pub unread_notifications: u64,
 }
 
+/// A joined **space** (a room of type `m.space`) and its joined child rooms — the
+/// room hierarchy a heavy user navigates by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpaceSummary {
+    pub room_id: OwnedRoomId,
+    pub display_name: String,
+    /// The child room ids declared by the space's `m.space.child` state events.
+    pub child_room_ids: Vec<String>,
+}
+
+/// A flat description of a room in the homeserver's **public directory** — what a
+/// directory search returns, enough to join by id/alias.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicRoom {
+    pub room_id: String,
+    pub name: Option<String>,
+    pub topic: Option<String>,
+    pub alias: Option<String>,
+    pub joined_members: u64,
+    /// Whether the room's history is world-readable (a preview is possible).
+    pub world_readable: bool,
+}
+
+/// A room's basic **power levels** + the local user's level — the room settings a
+/// heavy user inspects ("can I invite? am I an admin here?").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomPower {
+    pub users_default: i64,
+    pub invite: i64,
+    pub kick: i64,
+    pub ban: i64,
+    pub redact: i64,
+    /// The local user's effective power level in this room.
+    pub my_level: i64,
+}
+
 /// What kind of message-like event this is — the visible *content* type, distinct
 /// from its lifecycle [`state`](TimelineMessage::state). Mirrors ruma's
 /// `MessageType` for the kinds the UI renders specially; the catch-all keeps the
@@ -61,6 +97,11 @@ pub enum MessageKind {
     /// of the deos world (see [`crate::membrane`]). Rendered specially (the star
     /// feature). The envelope rides in [`TimelineMessage::membrane`].
     Membrane,
+    /// **A deos semantic object** of the named kind (cell/capability/transclusion/
+    /// affordance/receipt — see [`crate::object`]). The object rides in
+    /// [`TimelineMessage::object`]; the UI renders each kind specially. The carried
+    /// string is the object's `kind` tag (for a label without re-matching).
+    Object(String),
 }
 
 /// The lifecycle STATE of a timeline event. nheko's principle: edits/redactions
@@ -139,6 +180,12 @@ pub struct TimelineMessage {
     /// rehydrate affordance. The bytes are inert until a recipient's comms-PD
     /// rehydrates them.
     pub membrane: Option<crate::membrane::MembraneEnvelope>,
+    /// **A deos semantic object** carried by this message, if any (the generalized
+    /// envelope — cell/capability/transclusion/affordance/receipt, and also a
+    /// membrane carried under the new key). When present, [`Self::kind`] is
+    /// [`MessageKind::Object`] (or `Membrane` for the membrane kind) and the UI
+    /// renders the kind-specific affordance. Inert until acted on.
+    pub object: Option<crate::object::DreggObject>,
 }
 
 impl TimelineMessage {
@@ -156,6 +203,7 @@ impl TimelineMessage {
             reply_to: None,
             thread_root: None,
             membrane: None,
+            object: None,
         }
     }
 }
@@ -263,6 +311,68 @@ impl MatrixClient {
             store_passphrase: passphrase.to_string(),
         };
         Ok((me, stored))
+    }
+
+    /// Log in via **SSO/OIDC** against an arbitrary homeserver. The homeserver's
+    /// login page is opened in the user's browser (`open_url`, given the SSO URL);
+    /// the SDK runs a transient local-HTTP server to catch the redirect and finish
+    /// the flow. This is the path a heavy user expects when their homeserver
+    /// federates auth (Google/GitHub/Keycloak/…) instead of holding a password.
+    ///
+    /// `open_url` is the caller's "open this URL" action (a real client shells out
+    /// to the OS browser; a test can capture it). Returns a persistable session,
+    /// identical in shape to the password/token paths so the rest of the stack is
+    /// unchanged.
+    pub async fn login_sso(
+        homeserver: &str,
+        store_path: &Path,
+        passphrase: &str,
+        device_display_name: &str,
+        open_url: impl FnOnce(String) + Send + 'static,
+    ) -> Result<(Self, StoredSession)> {
+        let me = Self::build(homeserver, store_path, passphrase).await?;
+        // Capture the actual homeserver the SDK resolved (a bare server-name gets
+        // rewritten to the discovered base URL), so the stored session restores
+        // against the right URL.
+        let resolved = me.inner.homeserver().to_string();
+        me.inner
+            .matrix_auth()
+            .login_sso(|sso_url| async move {
+                open_url(sso_url);
+                Ok(())
+            })
+            .initial_device_display_name(device_display_name)
+            .await?;
+        let session = me
+            .inner
+            .matrix_auth()
+            .session()
+            .ok_or_else(|| Error::Other("SSO login finished but no session present".into()))?;
+        let stored = StoredSession {
+            homeserver: resolved,
+            session,
+            store_path: store_path.to_path_buf(),
+            store_passphrase: passphrase.to_string(),
+        };
+        Ok((me, stored))
+    }
+
+    /// The SSO login URL for a homeserver (a bare server-name is `.well-known`
+    /// discovered first), for clients that drive the browser/redirect themselves
+    /// rather than via [`Self::login_sso`]. `redirect_url` is where the homeserver
+    /// returns the `loginToken` after the user authenticates.
+    pub async fn sso_login_url(
+        homeserver: &str,
+        store_path: &Path,
+        passphrase: &str,
+        redirect_url: &str,
+    ) -> Result<String> {
+        let me = Self::build(homeserver, store_path, passphrase).await?;
+        Ok(me
+            .inner
+            .matrix_auth()
+            .get_sso_login_url(redirect_url, None)
+            .await?)
     }
 
     /// Rebuild an authenticated client from a previously persisted session.
@@ -387,8 +497,29 @@ impl MatrixClient {
                     // or future-version envelope is treated as absent (the message
                     // still renders as its text fallback — fail-open on render,
                     // fail-closed on rehydrate, which `is_rehydratable` enforces).
-                    let membrane = extract_membrane(ev.raw().json().get());
-                    let kind = if membrane.is_some() { MessageKind::Membrane } else { kind };
+                    let raw_json = ev.raw().json().get();
+                    let membrane = extract_membrane(raw_json);
+                    // The generalized dregg object (any kind, under the new key).
+                    // Fail-closed: an unknown/future object parses to None and the
+                    // message renders as its text fallback.
+                    let object = crate::object::DreggObject::extract(raw_json);
+                    // The kind, in precedence: a membrane (either carrier) → Membrane;
+                    // any other dregg object → Object(kind); else the m.room.message
+                    // content kind.
+                    let kind = match (&membrane, &object) {
+                        (Some(_), _) => MessageKind::Membrane,
+                        (None, Some(crate::object::DreggObject::Membrane(_))) => {
+                            MessageKind::Membrane
+                        }
+                        (None, Some(obj)) => MessageKind::Object(obj.kind().to_string()),
+                        (None, None) => kind,
+                    };
+                    // A membrane carried under the NEW object key surfaces in both the
+                    // typed `membrane` field (back-compat) and `object`.
+                    let membrane = membrane.or_else(|| match &object {
+                        Some(crate::object::DreggObject::Membrane(env)) => Some(env.clone()),
+                        _ => None,
+                    });
                     let mut m = TimelineMessage::text(
                         original.event_id.to_string(),
                         original.sender.to_string(),
@@ -397,6 +528,12 @@ impl MatrixClient {
                     );
                     m.kind = kind;
                     m.membrane = membrane;
+                    m.object = object;
+                    // Thread aggregation: an m.thread relation pins this message to its
+                    // thread root (the timeline already models replies; threads are a
+                    // relation read off the same raw event).
+                    m.thread_root = extract_thread_root(raw_json);
+                    m.reply_to = m.reply_to.or_else(|| extract_reply_to(raw_json));
                     out.push(m);
                 }
             }
@@ -471,6 +608,296 @@ impl MatrixClient {
         Ok(resp.response.event_id.to_string())
     }
 
+    // -- the nheko-comfort feature surface ------------------------------------
+    // Spaces, media, room directory, invites, power levels — built on the live
+    // SDK so a heavy user is at home on his own homeserver.
+
+    /// Send a **dregg semantic object** (any [`crate::object::DreggObject`] kind) to
+    /// `room_id`. The object rides under `software.ember.deos.object` inside a normal
+    /// `m.room.message` with a human `body` fallback (so non-deos clients read it),
+    /// exactly like [`Self::send_membrane`] but generalized to all kinds. Returns
+    /// the event id.
+    pub async fn send_object(
+        &self,
+        room_id: &str,
+        body: &str,
+        object: &crate::object::DreggObject,
+    ) -> Result<String> {
+        let room = self.joined_room(room_id).await?;
+        let content = object.to_message_content(body);
+        let resp = room.send_raw("m.room.message", content).await?;
+        Ok(resp.response.event_id.to_string())
+    }
+
+    /// Send a **media attachment** (image/file/audio/video) to `room_id`. The
+    /// content type is guessed from `filename` if not given; the SDK uploads the
+    /// bytes (encrypting them transparently in an encrypted room) and posts the
+    /// matching `m.image`/`m.file`/`m.audio`/`m.video` event. Returns the event id.
+    pub async fn send_attachment(
+        &self,
+        room_id: &str,
+        filename: &str,
+        content_type: Option<&str>,
+        data: Vec<u8>,
+    ) -> Result<String> {
+        use matrix_sdk::attachment::AttachmentConfig;
+        let room = self.joined_room(room_id).await?;
+        let mime: mime::Mime = match content_type {
+            Some(ct) => ct
+                .parse()
+                .map_err(|_| Error::Other(format!("invalid content type: {ct}")))?,
+            None => mime_guess::from_path(filename).first_or_octet_stream(),
+        };
+        let resp = room
+            .send_attachment(filename, &mime, data, AttachmentConfig::new())
+            .await?;
+        Ok(resp.event_id.to_string())
+    }
+
+    /// Fetch the bytes of a media event (`m.image`/`m.file`/…) by its `mxc://` URI.
+    /// Decrypts transparently for encrypted rooms. The UI hands these to its
+    /// existing RGBA/image path (an image) or an attachment row (a file).
+    pub async fn fetch_media(&self, mxc_uri: &str) -> Result<Vec<u8>> {
+        use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
+        use matrix_sdk::ruma::events::room::MediaSource;
+        let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
+        let request = MediaRequestParameters {
+            source: MediaSource::Plain(uri),
+            format: MediaFormat::File,
+        };
+        Ok(self
+            .inner
+            .media()
+            .get_media_content(&request, true)
+            .await?)
+    }
+
+    /// List the joined **spaces** (rooms with `m.room.type = m.space`) as
+    /// [`SpaceSummary`], each with the room ids of its joined children (read from
+    /// the space's `m.space.child` state events). This is the room hierarchy a heavy
+    /// user navigates by.
+    pub async fn spaces(&self) -> Result<Vec<SpaceSummary>> {
+        use matrix_sdk::ruma::events::space::child::SpaceChildEventContent;
+        let mut out = Vec::new();
+        for room in self.inner.joined_rooms() {
+            if !room.is_space() {
+                continue;
+            }
+            let name = room
+                .display_name()
+                .await
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| room.room_id().to_string());
+            // The space's children: each m.space.child state event keys a child room.
+            let mut children = Vec::new();
+            if let Ok(events) = room.get_state_events_static::<SpaceChildEventContent>().await {
+                for raw in events {
+                    if let Ok(state) = raw.deserialize() {
+                        // The state_key of an m.space.child IS the child room id.
+                        children.push(state.state_key().to_string());
+                    }
+                }
+            }
+            out.push(SpaceSummary {
+                room_id: room.room_id().to_owned(),
+                display_name: name,
+                child_room_ids: children,
+            });
+        }
+        out.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        Ok(out)
+    }
+
+    /// Search the homeserver's **public room directory** for up to `limit` rooms
+    /// matching `query` (an empty query lists popular rooms). Returns flat
+    /// [`PublicRoom`] descriptions a user can join by id/alias.
+    pub async fn search_public_rooms(
+        &self,
+        query: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<PublicRoom>> {
+        use matrix_sdk::room_directory_search::RoomDirectorySearch;
+        let mut search = RoomDirectorySearch::new(self.inner.clone());
+        search
+            .search(query.map(|q| q.to_string()), limit as u32, None)
+            .await?;
+        // `results()` yields the current snapshot vector (plus an update stream we
+        // don't need for a one-shot search).
+        let (results, _stream) = search.results();
+        Ok(results
+            .into_iter()
+            .map(|d| PublicRoom {
+                room_id: d.room_id.to_string(),
+                name: d.name,
+                topic: d.topic,
+                alias: d.alias.map(|a| a.to_string()),
+                joined_members: d.joined_members,
+                world_readable: d.is_world_readable,
+            })
+            .collect())
+    }
+
+    /// Join a room by its id or alias (`!abc:server` or `#room:server`). Returns the
+    /// joined room's id.
+    pub async fn join(&self, id_or_alias: &str) -> Result<String> {
+        let room = if id_or_alias.starts_with('#') {
+            let alias = matrix_sdk::ruma::RoomOrAliasId::parse(id_or_alias)?;
+            self.inner.join_room_by_id_or_alias(&alias, &[]).await?
+        } else {
+            let id = matrix_sdk::ruma::RoomId::parse(id_or_alias)?;
+            self.inner.join_room_by_id(&id).await?
+        };
+        Ok(room.room_id().to_string())
+    }
+
+    /// List rooms we've been **invited** to (each a pending accept/reject decision).
+    pub async fn invited_rooms(&self) -> Result<Vec<RoomSummary>> {
+        let mut out = Vec::new();
+        for room in self.inner.invited_rooms() {
+            let display_name = room
+                .display_name()
+                .await
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| room.room_id().to_string());
+            out.push(RoomSummary {
+                room_id: room.room_id().to_owned(),
+                display_name,
+                topic: room.topic(),
+                is_encrypted: room.encryption_state().is_encrypted(),
+                is_space: room.is_space(),
+                is_direct: room.is_direct().await.unwrap_or(false),
+                joined_members: room.joined_members_count(),
+                unread_notifications: 0,
+            });
+        }
+        out.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        Ok(out)
+    }
+
+    /// **Accept** a room invite (join it). Returns the joined room id.
+    pub async fn accept_invite(&self, room_id: &str) -> Result<String> {
+        let id = matrix_sdk::ruma::RoomId::parse(room_id)?;
+        let room = self
+            .inner
+            .get_room(&id)
+            .ok_or_else(|| Error::Other(format!("no invite for room: {room_id}")))?;
+        room.join().await?;
+        Ok(room.room_id().to_string())
+    }
+
+    /// **Reject** a room invite (leave the invited room).
+    pub async fn reject_invite(&self, room_id: &str) -> Result<()> {
+        let id = matrix_sdk::ruma::RoomId::parse(room_id)?;
+        let room = self
+            .inner
+            .get_room(&id)
+            .ok_or_else(|| Error::Other(format!("no invite for room: {room_id}")))?;
+        room.leave().await?;
+        Ok(())
+    }
+
+    /// Invite a user (`@them:server`) into a joined room.
+    pub async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<()> {
+        let room = self.joined_room(room_id).await?;
+        let uid = UserId::parse(user_id)?;
+        room.invite_user_by_id(&uid).await?;
+        Ok(())
+    }
+
+    /// Read a room's **power levels** as a flat [`RoomPower`] (the basic room
+    /// settings a heavy user inspects: who can post/invite/kick, default levels).
+    pub async fn power_levels(&self, room_id: &str) -> Result<RoomPower> {
+        let room = self.joined_room(room_id).await?;
+        let pl = room
+            .power_levels()
+            .await
+            .map_err(|e| Error::Other(format!("power levels: {e}")))?;
+        let me = self.inner.user_id().map(|u| u.to_owned());
+        // `for_user` yields a `UserPowerLevel` (Int | Infinite); a room admin can be
+        // Infinite (room creator) — represent that as i64::MAX for display.
+        let my_level = match me.as_ref().map(|u| pl.for_user(u)) {
+            Some(matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Int(i)) => i.into(),
+            Some(matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Infinite) => i64::MAX,
+            Some(_) => i64::from(pl.users_default),
+            None => i64::from(pl.users_default),
+        };
+        Ok(RoomPower {
+            users_default: pl.users_default.into(),
+            invite: pl.invite.into(),
+            kick: pl.kick.into(),
+            ban: pl.ban.into(),
+            redact: pl.redact.into(),
+            my_level,
+        })
+    }
+
+    /// Set a user's power level in a room (basic room admin). Requires us to hold
+    /// enough authority; fails closed on the server otherwise.
+    pub async fn set_power_level(&self, room_id: &str, user_id: &str, level: i64) -> Result<()> {
+        let room = self.joined_room(room_id).await?;
+        let uid = UserId::parse(user_id)?;
+        room.update_power_levels(vec![(&uid, matrix_sdk::ruma::Int::new_saturating(level))])
+            .await?;
+        Ok(())
+    }
+
+    /// The logged-in user's **device id** (what other devices verify against).
+    pub fn device_id(&self) -> Option<String> {
+        self.inner.device_id().map(|d| d.to_string())
+    }
+
+    /// Whether key **backup** is currently enabled (so a heavy user knows their
+    /// keys survive a device loss).
+    pub async fn backup_enabled(&self) -> bool {
+        self.inner.encryption().backups().are_enabled().await
+    }
+
+    /// Enable **key recovery** (cross-signing + secret-storage + server-side key
+    /// backup), returning the recovery key the user must store. This is what makes
+    /// "I logged in on a new device and got all my history back" work.
+    pub async fn enable_recovery(&self) -> Result<String> {
+        let recovery = self.inner.encryption().recovery();
+        let key = recovery
+            .enable()
+            .await
+            .map_err(|e| Error::Other(format!("enable recovery: {e}")))?;
+        Ok(key)
+    }
+
+    /// **Recover** keys on a new device from a previously-issued recovery key.
+    pub async fn recover(&self, recovery_key: &str) -> Result<()> {
+        self.inner
+            .encryption()
+            .recovery()
+            .recover(recovery_key)
+            .await
+            .map_err(|e| Error::Other(format!("recover: {e}")))
+    }
+
+    /// The person-level trust ([`crate::cell::PersonTrust`]) of a user, READ from
+    /// the crypto store's cross-signing state ("verify the person, not the device").
+    /// This is the live counterpart to the mock's seeded trust.
+    pub async fn person_trust(&self, user_id: &str) -> crate::cell::PersonTrust {
+        use crate::cell::PersonTrust;
+        let Ok(uid) = UserId::parse(user_id) else {
+            return PersonTrust::Unverified;
+        };
+        match self.inner.encryption().get_user_identity(&uid).await {
+            Ok(Some(identity)) => {
+                if identity.is_verified() {
+                    PersonTrust::Verified
+                } else if identity.was_previously_verified() {
+                    // We verified this identity before and the master key CHANGED —
+                    // the loud, must-surface case (a possible MITM).
+                    PersonTrust::Changed
+                } else {
+                    PersonTrust::Unverified
+                }
+            }
+            _ => PersonTrust::Unverified,
+        }
+    }
+
     /// The logged-in user's full id, if any.
     pub fn user_id(&self) -> Option<&UserId> {
         self.inner.user_id()
@@ -500,6 +927,37 @@ pub(crate) fn extract_membrane(raw_json: &str) -> Option<MembraneEnvelope> {
     let field = value.get("content")?.get(MEMBRANE_EVENT_KEY)?;
     let env: MembraneEnvelope = serde_json::from_value(field.clone()).ok()?;
     env.is_rehydratable().then_some(env)
+}
+
+/// Extract the thread-root event id from a message's `m.relates_to` `m.thread`
+/// relation (`content.m.relates_to.event_id` when `rel_type == "m.thread"`). The
+/// timeline already models replies; this folds in thread aggregation off the same
+/// raw event JSON. Returns `None` for a non-threaded message.
+pub(crate) fn extract_thread_root(raw_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw_json).ok()?;
+    let relates = value.get("content")?.get("m.relates_to")?;
+    if relates.get("rel_type")?.as_str()? != "m.thread" {
+        return None;
+    }
+    Some(relates.get("event_id")?.as_str()?.to_string())
+}
+
+/// Extract the reply pointer from a message's `m.relates_to.m.in_reply_to`
+/// relation, off the raw event JSON (the headless projection has no member/event
+/// lookup, so the preview is left empty — the SDK-UI Timeline fills it; this at
+/// least surfaces the reply pointer so threads/replies render).
+pub(crate) fn extract_reply_to(raw_json: &str) -> Option<ReplyTo> {
+    let value: serde_json::Value = serde_json::from_str(raw_json).ok()?;
+    let in_reply = value
+        .get("content")?
+        .get("m.relates_to")?
+        .get("m.in_reply_to")?;
+    let event_id = in_reply.get("event_id")?.as_str()?.to_string();
+    Some(ReplyTo {
+        event_id,
+        sender: String::new(),
+        preview: String::new(),
+    })
 }
 
 #[cfg(test)]
