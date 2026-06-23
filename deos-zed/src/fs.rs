@@ -54,9 +54,16 @@ impl DirEntry {
 /// change. `RealFs` (std::fs) ships today; `FirmamentFs` (cell = file, save =
 /// receipted turn) is the documented next step in [`firmament`].
 ///
-/// Object-safe (`dyn Fs`) and `Send + Sync` so the editor can hold an
-/// `Arc<dyn Fs>` and move it onto background tasks.
-pub trait Fs: Send + Sync + 'static {
+/// Object-safe (`dyn Fs`) and `'static` so the editor can hold an `Arc<dyn Fs>`.
+/// It is NOT `Send + Sync`: the editor + file-tree run entirely on gpui's
+/// single foreground thread (gpui's `cx.spawn` runs futures on the main thread
+/// and requires only `'static`, never `Send`), and the cockpit-shared
+/// [`FirmamentFs::over`](firmament::FirmamentFs) variant mounts onto the live
+/// `Rc<RefCell<World>>` ledger spine — itself single-threaded — so a save lands
+/// on the SAME ledger the cockpit inspector reads. A `Send + Sync` bound here
+/// would force a second (`Arc<Mutex<…>>`) ownership model disjoint from the live
+/// World; we keep one spine.
+pub trait Fs: 'static {
     /// Read a path's full contents as a UTF-8 string. The editor calls this on
     /// open. (Binary files are out of scope for a text editor.)
     fn load(&self, path: &Path) -> Result<String>;
@@ -150,3 +157,14 @@ impl Fs for RealFs {
 
 pub mod firmament;
 pub use firmament::FirmamentFs;
+
+/// The verified-spine seam types — the [`LedgerSpine`](firmament::LedgerSpine)
+/// trait a host implements over its live ledger (e.g. the cockpit's `World`) so
+/// [`FirmamentFs::over`](firmament::FirmamentFs::over) mounts file-cells onto it,
+/// and the self-contained [`OwnedSpine`](firmament::OwnedSpine) the headless
+/// path uses. Only present with `--features firmament`.
+#[cfg(feature = "firmament")]
+pub use firmament::{
+    host_content_write_effects, host_decode_content, host_make_editor_cell, host_make_file_cell,
+    LedgerSpine, OwnedSpine,
+};

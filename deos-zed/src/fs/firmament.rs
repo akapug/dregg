@@ -95,9 +95,10 @@ pub use stub::FirmamentFs;
 
 #[cfg(feature = "firmament")]
 mod live {
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
+    use std::rc::Rc;
 
     use anyhow::{anyhow, bail, Context as _, Result};
 
@@ -245,20 +246,119 @@ mod live {
         cell
     }
 
-    // --- the namespace --------------------------------------------------------
+    // --- the host wire API ----------------------------------------------------
+    //
+    // A host (e.g. starbridge-v2's cockpit `World`) implements [`LedgerSpine`]
+    // over its OWN ledger; to do so it must build file cells + content effects in
+    // EXACTLY the layout `decode_content` reads back. These public wrappers hand
+    // it that one encoding so the host and the editor agree on the wire (a file
+    // cell the host installs is decodable by the editor's `load`, and a save the
+    // host commits is the same `SetField` shape `seed_file` lays at genesis).
 
-    /// A path → file-cell entry in the in-memory namespace (the first-slice
-    /// directory: a flat path map, the simpler alternative the seam doc names to
-    /// `rbg`'s richer `DirectoryCell`). Each entry is a leaf file cell whose
-    /// content substance is the editable text.
-    struct Entry {
-        cell: CellId,
+    /// Build the editor (author) cell a host installs on its ledger as the agent
+    /// of every save turn — the same domain-tagged open cell the owned spine uses.
+    /// The host installs this once and grants it each file's edit cap.
+    pub fn host_make_editor_cell() -> Cell {
+        make_editor_cell()
     }
 
-    /// The mutable inner state, behind one `Mutex` so `FirmamentFs` is `Send +
-    /// Sync` (the [`Fs`](crate::fs::Fs) trait bound) while exposing `&self`
-    /// methods that mutate the ledger on save.
-    struct Inner {
+    /// Build a file cell carrying `content` as genesis state, identified by
+    /// `seed` (a host-monotonic counter, domain-tagged so it can't collide with
+    /// the editor cell). The host installs this; a later [`Fs::load`] decodes its
+    /// committed map back to `content`.
+    pub fn host_make_file_cell(seed: u32, content: &str) -> Cell {
+        let mut file_cell = make_file_cell(seed);
+        let file = file_cell.id();
+        for e in content_write_effects(&file_cell, file, content) {
+            if let Effect::SetField { index, value, .. } = e {
+                file_cell.state.set_field_ext(index as u64, value);
+            }
+        }
+        file_cell
+    }
+
+    /// The `SetField` effects that write `content` into the file `cell` (length +
+    /// chunks, vacating any stale tail). A host's `commit_save` builds a turn
+    /// targeting `cell` with EXACTLY these effects so the save lands the same
+    /// committed-map projection the editor decodes. `cell` is the file cell's
+    /// CURRENT state (so the stale-tail vacate is computed against it).
+    pub fn host_content_write_effects(cell: &Cell, content: &str) -> Vec<Effect> {
+        let file = cell.id();
+        content_write_effects(cell, file, content)
+    }
+
+    /// Decode a file cell's committed map back to its content String — the same
+    /// decode the editor's `load` uses, exposed so a host can read a file cell it
+    /// installed.
+    pub fn host_decode_content(cell: &Cell) -> Result<String> {
+        decode_content(cell)
+    }
+
+    // --- the shared verified spine -------------------------------------------
+
+    /// The verified-spine seam: the `Ledger` + `TurnExecutor` a [`FirmamentFs`]
+    /// mounts file-cells onto. ONE trait, two realizations — that is the whole
+    /// point of this seam:
+    ///
+    ///   * [`OwnedSpine`] — a FRESH in-process `Ledger` + `TurnExecutor` (the
+    ///     headless / per-editor / test path). Self-contained: it owns the editor
+    ///     cell, the nonce, the chain head, the receipt log.
+    ///   * a host's LIVE spine — e.g. starbridge-v2's cockpit implements this over
+    ///     its `Rc<RefCell<World>>`, so [`FirmamentFs::over`] mounts file-cells
+    ///     onto the SAME ledger the cockpit's cell inspector reads. A save is then
+    ///     a real turn committed through the live `World`, visible to a second
+    ///     reader of that World as a new cell + receipt. No second ledger.
+    ///
+    /// The trait is expressed only in `dregg_cell`/`dregg_turn` terms (deos-zed
+    /// does not depend on starbridge-v2), so the host's `World` stays on its side
+    /// of the dependency edge while sharing ITS spine, not a copy.
+    ///
+    /// Single-threaded by design (`Rc`, no `Send`): the editor + the cockpit run
+    /// on gpui's one foreground thread, so this matches the live World's own
+    /// `Rc<RefCell<World>>` ownership rather than forcing a disjoint
+    /// `Arc<Mutex<…>>` model.
+    pub trait LedgerSpine {
+        /// The editor (author) cell id — the agent of every save turn. The host
+        /// installs (or reuses) this cell on its ledger; it holds the file caps.
+        fn editor_id(&self) -> CellId;
+
+        /// Snapshot the cell `id` off the spine's ledger (a clone, so the borrow
+        /// does not escape). `None` if it is not present.
+        fn cell(&self, id: &CellId) -> Option<Cell>;
+
+        /// Install a fresh file cell carrying `content` as genesis state and grant
+        /// the editor its per-file edit cap. Returns the new file cell's id. This
+        /// is the GENESIS path (the directory owner seeding a file), not a turn.
+        fn install_file(&self, content: &str) -> Result<CellId>;
+
+        /// Commit a save as a real cap-gated turn over `file` through the live
+        /// executor, returning the genuine receipt. The spine threads the agent
+        /// nonce + receipt chain head and records the receipt. A refused save is
+        /// an `Err` carrying the in-band reason (the anti-ghost tooth).
+        fn commit_save(&self, file: CellId, content: &str) -> Result<TurnReceipt>;
+
+        /// The number of save-turn receipts recorded on this spine (the on-ledger
+        /// save count). For [`OwnedSpine`] this is its own log; for a host it is
+        /// the host's receipt count.
+        fn receipt_count(&self) -> usize;
+
+        /// The most recent save's receipt, if any save has run.
+        fn last_receipt(&self) -> Option<TurnReceipt>;
+
+        /// The total balance across all cells on the spine's ledger — the
+        /// conservation observable (Σ balance). A content `SetField` save leaves
+        /// this INVARIANT (Σδ=0).
+        fn total_balance(&self) -> i128;
+    }
+
+    /// The self-contained spine: a FRESH `Ledger` + `TurnExecutor` seeded with the
+    /// editor (author) cell. Backs [`FirmamentFs::new`] — the headless / per-editor
+    /// / test path, with no host World in the loop.
+    pub struct OwnedSpine {
+        inner: RefCell<OwnedInner>,
+    }
+
+    struct OwnedInner {
         /// The REAL embedded verified spine: the executor + the ledger it mutates.
         executor: TurnExecutor,
         ledger: Ledger,
@@ -269,98 +369,72 @@ mod live {
         nonce: u64,
         /// The editor's receipt-chain head (chained per save).
         chain_head: Option<[u8; 32]>,
-        /// path → file cell.
-        entries: BTreeMap<PathBuf, Entry>,
         /// A monotonic seed for new file cells.
         next_seed: u32,
         /// Every save's receipt, in commit order — the provenance log (the same
-        /// shape `World::receipts`): a save is now an attestable, navigable event.
+        /// shape `World::receipts`): a save is an attestable, navigable event.
         receipts: Vec<TurnReceipt>,
     }
 
-    /// The firmament-backed filesystem: file = cell, save = receipted turn.
-    ///
-    /// Owns an in-process [`Ledger`] + [`TurnExecutor`] — the SAME verified spine
-    /// starbridge-v2's `World` wraps. Construct empty with [`FirmamentFs::new`],
-    /// then seed files with [`FirmamentFs::seed_file`]; or a host hands one
-    /// pre-mounted. Every [`Fs::save`](crate::fs::Fs::save) runs a cap-gated
-    /// `SetField` turn through the executor and records the genuine
-    /// [`TurnReceipt`].
-    pub struct FirmamentFs {
-        inner: Mutex<Inner>,
-    }
-
-    impl FirmamentFs {
-        /// A fresh firmament fs with an empty ledger seeded with the editor
-        /// (author) cell. No files yet — seed them with
-        /// [`FirmamentFs::seed_file`].
+    impl OwnedSpine {
+        /// A fresh spine: an empty ledger seeded with the editor (author) cell.
         pub fn new() -> Self {
             let mut ledger = Ledger::new();
             let editor_cell = make_editor_cell();
             let editor = editor_cell.id();
             ledger.insert_cell(editor_cell).expect("editor insert");
-            FirmamentFs {
-                inner: Mutex::new(Inner {
+            OwnedSpine {
+                inner: RefCell::new(OwnedInner {
                     executor: TurnExecutor::new(ComputronCosts::zero()),
                     ledger,
                     editor,
                     nonce: 0,
                     chain_head: None,
-                    entries: BTreeMap::new(),
                     next_seed: 1,
                     receipts: Vec::new(),
                 }),
             }
         }
+    }
 
-        /// The editor (author) cell id — the agent of every save turn.
-        pub fn editor_id(&self) -> CellId {
-            self.inner.lock().unwrap().editor
+    impl Default for OwnedSpine {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    #[cfg(test)]
+    impl OwnedSpine {
+        /// TEST-ONLY: install a file cell holding `content` as genesis WITHOUT
+        /// granting the editor its edit cap — so a later save is refused in-band
+        /// by the cross-cell cap gate (the anti-ghost tooth). Returns the cell id.
+        fn install_uncapped_file(&self, content: &str) -> CellId {
+            let mut inner = self.inner.borrow_mut();
+            let seed = inner.next_seed;
+            inner.next_seed += 1;
+            let mut cell = make_file_cell(seed);
+            let file = cell.id();
+            for e in content_write_effects(&cell, file, content) {
+                if let Effect::SetField { index, value, .. } = e {
+                    cell.state.set_field_ext(index as u64, value);
+                }
+            }
+            inner.ledger.insert_cell(cell).unwrap();
+            file
+        }
+    }
+
+    impl LedgerSpine for OwnedSpine {
+        fn editor_id(&self) -> CellId {
+            self.inner.borrow().editor
         }
 
-        /// How many save-turn receipts have been recorded (the on-ledger save
-        /// count). Each is a genuine finalized `TurnReceipt`.
-        pub fn receipt_count(&self) -> usize {
-            self.inner.lock().unwrap().receipts.len()
+        fn cell(&self, id: &CellId) -> Option<Cell> {
+            self.inner.borrow().ledger.get(id).cloned()
         }
 
-        /// The most recent save's receipt (the proof-carrying token that the last
-        /// save happened under the editor's authority), if any save has run.
-        pub fn last_receipt(&self) -> Option<TurnReceipt> {
-            self.inner.lock().unwrap().receipts.last().cloned()
-        }
-
-        /// The file cell backing `path`, if it exists in the namespace.
-        pub fn cell_for(&self, path: &Path) -> Option<CellId> {
-            self.inner.lock().unwrap().entries.get(path).map(|e| e.cell)
-        }
-
-        /// The total balance across all cells in the in-tab ledger — the
-        /// conservation observable (Σ balance). A content `SetField` save touches
-        /// the file cell's committed `fields_map`, not any balance substance, so a
-        /// genuine save leaves this INVARIANT: the editor's edit conserves value.
-        /// A test asserts `total_balance` before == after a save (Σδ=0).
-        pub fn total_balance(&self) -> i128 {
-            self.inner
-                .lock()
-                .unwrap()
-                .ledger
-                .iter()
-                .map(|(_, c)| c.state.balance() as i128)
-                .sum()
-        }
-
-        /// **Seed a file into the namespace** with initial `content`, as GENESIS
-        /// (the directory-owner installing a file, like a node seeds a genesis
-        /// cell): mint a file cell holding the content projection, grant the
-        /// editor the file's edit cap, and register the path. Returns the file's
-        /// [`CellId`]. This is the read-side fixture a test/host uses to put a
-        /// file on the ledger so a later [`Fs::load`](crate::fs::Fs::load) reads
-        /// it from the cell, not disk.
-        pub fn seed_file(&self, path: impl Into<PathBuf>, content: &str) -> Result<CellId> {
-            let path = path.into();
-            let mut inner = self.inner.lock().unwrap();
-
+        fn install_file(&self, content: &str) -> Result<CellId> {
+            let mut inner = self.inner.borrow_mut();
             let seed = inner.next_seed;
             inner.next_seed += 1;
 
@@ -379,7 +453,6 @@ mod live {
                 .insert_cell(file_cell)
                 .map_err(|e| anyhow!("file cell insert: {e:?}"))?;
 
-            // Grant the editor the per-file edit cap (so a later save commits).
             let editor = inner.editor;
             inner
                 .ledger
@@ -388,26 +461,13 @@ mod live {
                 .capabilities
                 .grant(file, AuthRequired::None)
                 .ok_or_else(|| anyhow!("editor c-list full"))?;
-
-            inner.entries.insert(path, Entry { cell: file });
             Ok(file)
         }
-    }
 
-    impl Default for FirmamentFs {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl Inner {
-        /// Run a save as a real cap-gated turn through the executor. Returns the
-        /// genuine receipt on commit, or an error carrying the executor's
-        /// in-band refusal reason (the anti-ghost tooth: a refused save is an
-        /// `Err`, never a silent partial write).
-        fn save_turn(&mut self, file: CellId, content: &str) -> Result<TurnReceipt> {
+        fn commit_save(&self, file: CellId, content: &str) -> Result<TurnReceipt> {
+            let mut inner = self.inner.borrow_mut();
             let effects = {
-                let cell = self
+                let cell = inner
                     .ledger
                     .get(&file)
                     .ok_or_else(|| anyhow!("file cell vanished from ledger"))?;
@@ -419,28 +479,36 @@ mod live {
             // passes turn-level auth; the per-file CAP gate (cross-cell
             // `check_cross_cell_permission`) is the real enforcement — an editor
             // without the file's cap is refused in-band.
-            let mut action = ActionBuilder::new_unchecked_for_tests(file, "save", self.editor);
+            let editor = inner.editor;
+            let nonce = inner.nonce;
+            let mut action = ActionBuilder::new_unchecked_for_tests(file, "save", editor);
             for e in &effects {
                 action = action.effect(e.clone());
             }
             let action = action.build();
 
-            let mut builder = TurnBuilder::new(self.editor, self.nonce);
+            let mut builder = TurnBuilder::new(editor, nonce);
             builder.add_action(action);
             let mut turn = builder.fee(0).build();
-            turn.previous_receipt_hash = self.chain_head;
+            turn.previous_receipt_hash = inner.chain_head;
 
-            match self.executor.execute(&turn, &mut self.ledger) {
+            // Split the disjoint executor/ledger borrows for the call, then drop
+            // them before touching the rest of `inner` again.
+            let result = {
+                let OwnedInner { executor, ledger, .. } = &mut *inner;
+                executor.execute(&turn, ledger)
+            };
+            match result {
                 TurnResult::Committed { receipt, .. } => {
                     // The executor advanced the editor's nonce + receipt-chain
                     // head; mirror them so the next save chains.
-                    self.nonce = self
+                    inner.nonce = inner
                         .ledger
-                        .get(&self.editor)
+                        .get(&editor)
                         .map(|c| c.state.nonce())
-                        .unwrap_or(self.nonce + 1);
-                    self.chain_head = Some(receipt.receipt_hash());
-                    self.receipts.push(receipt.clone());
+                        .unwrap_or(nonce + 1);
+                    inner.chain_head = Some(receipt.receipt_hash());
+                    inner.receipts.push(receipt.clone());
                     Ok(receipt)
                 }
                 TurnResult::Rejected { reason, .. } => {
@@ -450,47 +518,151 @@ mod live {
                 TurnResult::Pending => bail!("save turn pending"),
             }
         }
+
+        fn receipt_count(&self) -> usize {
+            self.inner.borrow().receipts.len()
+        }
+
+        fn last_receipt(&self) -> Option<TurnReceipt> {
+            self.inner.borrow().receipts.last().cloned()
+        }
+
+        fn total_balance(&self) -> i128 {
+            self.inner
+                .borrow()
+                .ledger
+                .iter()
+                .map(|(_, c)| c.state.balance() as i128)
+                .sum()
+        }
+    }
+
+    // --- the namespace --------------------------------------------------------
+
+    /// A path → file-cell entry in the in-memory namespace (the first-slice
+    /// directory: a flat path map, the simpler alternative the seam doc names to
+    /// `rbg`'s richer `DirectoryCell`). Each entry is a leaf file cell whose
+    /// content substance is the editable text.
+    struct Entry {
+        cell: CellId,
+    }
+
+    /// The firmament-backed filesystem: file = cell, save = receipted turn.
+    ///
+    /// Mounts file-cells onto a [`LedgerSpine`] — either a FRESH in-process
+    /// `Ledger` + `TurnExecutor` ([`FirmamentFs::new`], the headless / per-editor
+    /// path) or a host's LIVE spine ([`FirmamentFs::over`], e.g. the cockpit's
+    /// `Rc<RefCell<World>>`). Every [`Fs::save`](crate::fs::Fs::save) runs a
+    /// cap-gated `SetField` turn through the spine's executor and the genuine
+    /// [`TurnReceipt`] is recorded on that spine. When mounted `over` the live
+    /// World, a save is visible to a second reader of that World (the cockpit's
+    /// cell inspector) as a new cell + receipt — one ledger, one save path.
+    pub struct FirmamentFs {
+        /// The verified spine the file-cells live on (owned or host-shared).
+        spine: Rc<dyn LedgerSpine>,
+        /// The path → file-cell namespace (single-threaded `RefCell`).
+        entries: RefCell<BTreeMap<PathBuf, Entry>>,
+    }
+
+    impl FirmamentFs {
+        /// A fresh firmament fs over an [`OwnedSpine`] (its own ledger + executor),
+        /// seeded with the editor (author) cell. No files yet — seed them with
+        /// [`FirmamentFs::seed_file`]. This is the headless / test default.
+        pub fn new() -> Self {
+            Self::over(Rc::new(OwnedSpine::new()))
+        }
+
+        /// **Mount a firmament fs OVER an existing verified spine** — the cockpit
+        /// seam. The file-cells land on `spine`'s ledger (e.g. the live cockpit
+        /// `World`), so a save is a real turn on the SAME ledger the cockpit's
+        /// cell inspector reads. Seed files with [`FirmamentFs::seed_file`] (they
+        /// install onto the shared ledger). This is how the editor pane edits the
+        /// ledger the cockpit inspects rather than a per-editor copy.
+        pub fn over(spine: Rc<dyn LedgerSpine>) -> Self {
+            FirmamentFs {
+                spine,
+                entries: RefCell::new(BTreeMap::new()),
+            }
+        }
+
+        /// The editor (author) cell id — the agent of every save turn.
+        pub fn editor_id(&self) -> CellId {
+            self.spine.editor_id()
+        }
+
+        /// How many save-turn receipts have been recorded on the spine (the
+        /// on-ledger save count). Each is a genuine finalized `TurnReceipt`.
+        pub fn receipt_count(&self) -> usize {
+            self.spine.receipt_count()
+        }
+
+        /// The most recent save's receipt (the proof-carrying token that the last
+        /// save happened under the editor's authority), if any save has run.
+        pub fn last_receipt(&self) -> Option<TurnReceipt> {
+            self.spine.last_receipt()
+        }
+
+        /// The file cell backing `path`, if it exists in the namespace.
+        pub fn cell_for(&self, path: &Path) -> Option<CellId> {
+            self.entries.borrow().get(path).map(|e| e.cell)
+        }
+
+        /// The total balance across all cells on the spine's ledger — the
+        /// conservation observable (Σ balance). A content `SetField` save touches
+        /// the file cell's committed `fields_map`, not any balance substance, so a
+        /// genuine save leaves this INVARIANT: the editor's edit conserves value.
+        /// A test asserts `total_balance` before == after a save (Σδ=0).
+        pub fn total_balance(&self) -> i128 {
+            self.spine.total_balance()
+        }
+
+        /// **Seed a file into the namespace** with initial `content`, as GENESIS
+        /// (the directory-owner installing a file, like a node seeds a genesis
+        /// cell): install a file cell holding the content projection onto the
+        /// spine's ledger, grant the editor the file's edit cap, and register the
+        /// path. Returns the file's [`CellId`]. This is the read-side fixture a
+        /// test/host uses to put a file on the ledger so a later
+        /// [`Fs::load`](crate::fs::Fs::load) reads it from the cell, not disk.
+        pub fn seed_file(&self, path: impl Into<PathBuf>, content: &str) -> Result<CellId> {
+            let path = path.into();
+            let file = self.spine.install_file(content)?;
+            self.entries.borrow_mut().insert(path, Entry { cell: file });
+            Ok(file)
+        }
+    }
+
+    impl Default for FirmamentFs {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl Fs for FirmamentFs {
         fn load(&self, path: &Path) -> Result<String> {
-            let inner = self.inner.lock().unwrap();
-            let entry = inner
+            let cell_id = self
                 .entries
+                .borrow()
                 .get(path)
+                .map(|e| e.cell)
                 .ok_or_else(|| anyhow!("no cell mounted at {}", path.display()))?;
-            let cell = inner
-                .ledger
-                .get(&entry.cell)
+            let cell = self
+                .spine
+                .cell(&cell_id)
                 .ok_or_else(|| anyhow!("file cell missing from ledger"))?;
-            decode_content(cell)
+            decode_content(&cell)
         }
 
         fn save(&self, path: &Path, content: &str) -> Result<()> {
-            let mut inner = self.inner.lock().unwrap();
-            // Resolve the path → file cell; if the path is new, mint a file cell
+            // Resolve the path → file cell; if the path is new, install a file cell
             // for it on the fly (a "save as" into the namespace) and grant the
             // editor its cap so this very save commits.
-            let file = match inner.entries.get(path) {
-                Some(e) => e.cell,
+            let file = match self.entries.borrow().get(path).map(|e| e.cell) {
+                Some(c) => c,
                 None => {
-                    let seed = inner.next_seed;
-                    inner.next_seed += 1;
-                    let file_cell = make_file_cell(seed);
-                    let file = file_cell.id();
-                    inner
-                        .ledger
-                        .insert_cell(file_cell)
-                        .map_err(|e| anyhow!("file cell insert: {e:?}"))?;
-                    let editor = inner.editor;
-                    inner
-                        .ledger
-                        .get_mut(&editor)
-                        .ok_or_else(|| anyhow!("editor cell missing"))?
-                        .capabilities
-                        .grant(file, AuthRequired::None)
-                        .ok_or_else(|| anyhow!("editor c-list full"))?;
-                    inner.entries.insert(path.to_path_buf(), Entry { cell: file });
+                    let file = self.spine.install_file("")?;
+                    self.entries
+                        .borrow_mut()
+                        .insert(path.to_path_buf(), Entry { cell: file });
                     file
                 }
             };
@@ -498,17 +670,17 @@ mod live {
             // exact edit happened under this exact authority — recorded in the
             // provenance log; a light client can confirm the file holds this
             // content without trusting the editor.
-            inner.save_turn(file, content)?;
+            self.spine.commit_save(file, content)?;
             Ok(())
         }
 
         fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>> {
-            let inner = self.inner.lock().unwrap();
+            let entries = self.entries.borrow();
             // List the immediate children of `path` in the namespace. The flat
             // map holds full paths; a child is an entry whose parent is `path`.
             let mut out = Vec::new();
             let mut seen_dirs = std::collections::BTreeSet::new();
-            for p in inner.entries.keys() {
+            for p in entries.keys() {
                 let Ok(rest) = p.strip_prefix(path) else {
                     continue;
                 };
@@ -529,17 +701,21 @@ mod live {
         }
 
         fn metadata(&self, path: &Path) -> Result<Metadata> {
-            let inner = self.inner.lock().unwrap();
-            if let Some(entry) = inner.entries.get(path) {
-                let cell = inner
-                    .ledger
-                    .get(&entry.cell)
+            let cell_id = self.entries.borrow().get(path).map(|e| e.cell);
+            if let Some(cell_id) = cell_id {
+                let cell = self
+                    .spine
+                    .cell(&cell_id)
                     .ok_or_else(|| anyhow!("file cell missing from ledger"))?;
-                let len = decode_content(cell).map(|s| s.len()).unwrap_or(0) as u64;
+                let len = decode_content(&cell).map(|s| s.len()).unwrap_or(0) as u64;
                 return Ok(Metadata { is_dir: false, is_symlink: false, len });
             }
             // A directory iff some entry lives under it.
-            let is_dir = inner.entries.keys().any(|p| p.starts_with(path) && p != path);
+            let is_dir = self
+                .entries
+                .borrow()
+                .keys()
+                .any(|p| p.starts_with(path) && p != path);
             if is_dir {
                 Ok(Metadata { is_dir: true, is_symlink: false, len: 0 })
             } else {
@@ -607,25 +783,14 @@ mod live {
             // The cross-cell cap gate is the real save authority: a file cell the
             // editor holds NO cap for cannot be saved (the executor refuses it
             // in-band — the anti-ghost tooth).
-            let fs = FirmamentFs::new();
+            // Build over an OwnedSpine we can reach into: mint a file cell on its
+            // ledger WITHOUT granting the editor its cap, then register the path.
+            let spine = Rc::new(OwnedSpine::new());
+            let file = spine.install_uncapped_file("secret");
+            let fs = FirmamentFs::over(spine);
             let path = PathBuf::from("/locked.txt");
-            // Mint a file cell directly in the ledger WITHOUT granting the editor
-            // its cap, then register the path pointing at it.
-            {
-                let mut inner = fs.inner.lock().unwrap();
-                let seed = inner.next_seed;
-                inner.next_seed += 1;
-                let mut cell = make_file_cell(seed);
-                let file = cell.id();
-                for e in content_write_effects(&cell, file, "secret") {
-                    if let Effect::SetField { index, value, .. } = e {
-                        cell.state.set_field_ext(index as u64, value);
-                    }
-                }
-                inner.ledger.insert_cell(cell).unwrap();
-                inner.entries.insert(path.clone(), Entry { cell: file });
-                // NB: no capabilities.grant — the editor lacks the file's cap.
-            }
+            fs.entries.borrow_mut().insert(path.clone(), Entry { cell: file });
+            // NB: no capabilities.grant — the editor lacks the file's cap.
 
             // The read still works (a read is authority-checked at the namespace,
             // not via a turn).
@@ -684,4 +849,7 @@ mod live {
 }
 
 #[cfg(feature = "firmament")]
-pub use live::FirmamentFs;
+pub use live::{
+    host_content_write_effects, host_decode_content, host_make_editor_cell, host_make_file_cell,
+    FirmamentFs, LedgerSpine, OwnedSpine,
+};
