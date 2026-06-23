@@ -11,6 +11,22 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### WEB-DEOS PAINTS — the gpui cockpit now renders a real frame in the browser (2026-06-23).
+The `gpui_web` first-paint ceiling (`closure invoked recursively or after being dropped`, canvas stuck 1×1)
+is FIXED at root: it was a lifetime bug — `Application::run` dropped the owning `Rc<AppCell>` when it
+returned (web `run` is fire-and-forget), freeing the `WebWindow`'s rAF/ResizeObserver closures while the
+browser still held them. Fix = leak the `Rc` on wasm (`std::mem::forget(self)` in `crates/gpui/src/app.rs`,
+`emberian/zed` fork, committed on the local `zed-dregg-web` working copy as `65f07f431b`). Verified: headless
+Chrome paints the real cockpit (canvas 2560×1640, reentrancy false) — proof `web/cockpit-gpui-web-painted.png`.
+**CUTOVER-SETTLE OWED:** the fix lives in a LOCAL fork checkout wired via a `[patch."…/emberian/zed"]` →
+`../../zed-dregg-web/crates/{gpui,gpui_platform,gpui_wgpu}` in `starbridge-v2/Cargo.toml`. Push the one-line
+fix to `emberian/zed`, bump the `407a6ff` rev in starbridge-v2 (the 4 git deps), drop the `[patch]` block.
+**SIBLING SEAM:** the wasm web bundle build is currently blocked by `embedded-executor → app-registry`
+(`dregg-app-framework`/`starbridge-gallery` aren't wasm-resolvable, and `app_registry.rs`/`powerbox.rs`
+reference the module unconditionally under the feature). Verified the paint fix by temporarily dropping
+`app-registry` from `embedded-executor` (reverted). To unblock the web build, `app-registry` should be made
+`#[cfg(not(target_arch = "wasm32"))]`-clean (owner: the app-registry lane).
+
 ### APPS WIRED INTO THE COCKPIT — LANDED; the shared-World-ledger refactor is the convergent seam (2026-06-23).
 `1710a617`. `starbridge-v2/src/app_registry.rs`: `AppRegistry::standard()` wires gallery/tussle/
 sealed-auction/bounty-board (the framework-shaped apps) — each `AppEntry{id,name,desc,ctor,seed,drive}`

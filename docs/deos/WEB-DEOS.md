@@ -7,12 +7,13 @@ native desktop drives. It is *not* a lesser "web skin" reimplementation of the
 UI — it is one renderer, one model, two platforms (native windowing vs. a
 browser canvas).
 
-**State today (honest):** the gpui-web cockpit is bundled (`web/pkg-gpui/`) and
-runs in headless Chrome far enough to **initialize WebGPU and create the cockpit
-canvas**, but the `gpui_web` run-loop hits a closure-reentrancy error before the
-first paint — so it does *not yet render a cockpit frame in-browser*. The full
-honest ceiling, the bundle, the build script, and the verification are in
-"[The full cockpit](#the-full-cockpit-this-change)" and "[Honest verification
+**State today:** the gpui-web cockpit is bundled (`web/pkg-gpui/`) and **paints a
+real cockpit frame in headless Chrome** — the dock, the cell-list panel, the
+multi-pane surfaces, text and color, the same `Scene` native draws — over a live
+WebGPU canvas at full device-pixel resolution (e.g. 2560×1640 backing on a 2×
+display). The captured proof frame is `web/cockpit-gpui-web-painted.png`. The
+bundle, the build script, and the verification are in "[The full
+cockpit](#the-full-cockpit-this-change)" and "[Honest verification
 (browser-run)](#honest-verification-browser-run)" below.
 
 This document states the architecture, the per-app backend map, the build
@@ -105,21 +106,31 @@ platform **initializes WebGPU successfully** (`gpui_wgpu::wgpu_context: Selected
 GPU adapter … WebGPU context initialized successfully`) and creates the cockpit
 `<canvas>`.
 
-It does **not yet paint a frame in headless Chrome.** After WebGPU init the
-`gpui_web` single-threaded run-loop throws `closure invoked recursively or after
-being dropped` (a wasm-bindgen `Closure` re-entrancy in the frame/event
-scheduler, from the `gpui_web` fork dependency) before the cockpit element tree
-paints — the canvas backing store stays 1×1 (never resized/painted). This
-reproduces in both Chrome headless modes (new + `chrome-headless-shell`), so it
-is a genuine gpui_web run-loop re-entrancy, not a flake. The honest ceiling
-today is therefore: **bundled + browser-loaded + boot_cockpit invoked + WebGPU
-context up — stops at a gpui_web run-loop closure-reentrancy before first
-paint.** The next gap is in the `gpui_web` fork's single-threaded scheduler, not
-in this crate's bundle/boot.
+It then **paints a real cockpit frame in headless Chrome.** After WebGPU init the
+`gpui_web` run-loop runs the requestAnimationFrame + ResizeObserver loop, the
+canvas backing store resizes to the full device-pixel viewport (e.g. 2560×1640
+on a 2× display), and the cockpit element tree draws — the verification reports
+`canvas backing max : 2560x1640 (PAINTED a real frame)` and `run-loop reentrancy
+: false`. The captured frame is `web/cockpit-gpui-web-painted.png`.
+
+**The fix.** Earlier this stopped before first paint: the run-loop threw `closure
+invoked recursively or after being dropped` and the canvas stayed 1×1. The cause
+was a lifetime bug in the `gpui_web` fork's app boot, **not** a scheduler
+re-entrancy. On the web, `Platform::run` is fire-and-forget — WebGPU init and
+`on_finish_launching` run inside a `spawn_local` future and `run()` returns to JS
+immediately, with the browser owning the event loop. But `Application::run` then
+dropped the owning `Application(Rc<AppCell>)` when it returned (and the spawned
+future's clone dropped when `on_finish_launching` finished), destroying the
+`AppCell` → `cx.windows` → the `WebWindow` → its `_raf_closure` /
+`_resize_observer_closure`. The browser's already-scheduled rAF and registered
+ResizeObserver then fired on *freed* closures — wasm-bindgen's "invoked … after
+being dropped" — before any frame painted. The fix (`crates/gpui/src/app.rs`,
+`emberian/zed` fork) leaks the owning `Rc` on wasm (`std::mem::forget(self)`) so
+the app lives for the page's lifetime, mirroring native platforms where `run()`
+blocks forever in the OS event loop.
 
 (The gpui-free `WebImage` JSON skin — `web/pkg`, `web/pkg-release`, exports
-`webimage_*` — DOES paint+drive in headless Chrome, verified separately; that
-bar is what the real cockpit now partially clears.)
+`webimage_*` — also paints+drives in headless Chrome, verified separately.)
 
 ### The module lift (what made it reachable)
 
@@ -203,16 +214,18 @@ gpui-free `WebImage` skin already passes. What was observed, in order:
 4. `[INFO] gpui_wgpu::wgpu_context: Selected GPU adapter … (BrowserWebGpu)`
    then `[INFO] gpui_web::platform: WebGPU context initialized successfully`.
    **WebGPU is up; the cockpit `<canvas>` is created.**
-5. The `gpui_web` run-loop then throws **`closure invoked recursively or after
-   being dropped`** (a wasm-bindgen `Closure` re-entrancy in the frame/event
-   scheduler) **before the first paint** — the canvas backing store stays 1×1.
+5. The `gpui_web` run-loop runs: rAF + ResizeObserver fire, the canvas backing
+   store resizes to the full device-pixel viewport, and the cockpit element tree
+   draws. The harness reports `canvas backing max : 2560x1640 (PAINTED a real
+   frame)` and `run-loop reentrancy : false`; the captured frame is
+   `web/cockpit-gpui-web-painted.png`.
 
-So the honest ceiling is: **bundled + browser-loaded + `boot_cockpit` invoked +
-WebGPU context initialized — stops at a `gpui_web` single-threaded run-loop
-closure-reentrancy before the cockpit paints its first frame.** It reproduces in
-both Chrome headless modes, so it is a genuine `gpui_web` (fork dependency) run-
-loop issue, not a flake and not a bundle/boot defect in this crate. The next
-work is in the `gpui_web` fork's single-threaded scheduler.
+So the verified result is: **bundled + browser-loaded + `boot_cockpit` invoked +
+WebGPU context initialized + the cockpit paints a real frame on a live WebGPU
+canvas.** The earlier `closure invoked recursively or after being dropped` ceiling
+was a lifetime bug in the fork's app boot (the `Application` was dropped while the
+browser still held its scheduled rAF/ResizeObserver closures); it is fixed by
+leaking the owning `Rc` on wasm in `Application::run` (see "The fix" above).
 
 ### The minimal feature set (what's ON / what's deliberately OFF)
 
