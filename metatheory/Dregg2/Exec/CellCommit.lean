@@ -195,8 +195,8 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' => commit_subst h hk; exact subset_of_commitments_eq (recKDelegateAtten_commitments hk)
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h
-      exact List.Subset.refl _
+      obtain ⟨_, rfl⟩ := attenuateA_factors h
+      simp only [attenuateStepA]; exact List.Subset.refl _
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevokeDelegationFull, Option.some.injEq] at h; subst h
       -- the FAITHFUL full step edits only `caps` + the three epoch/snapshot registries — `commitments`

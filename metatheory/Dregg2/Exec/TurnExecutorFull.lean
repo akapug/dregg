@@ -1707,6 +1707,16 @@ def attenuateStepA (s : RecChainedState) (actor : CellId) (idx : Nat) (keep : Li
   { kernel := { s.kernel with caps := attenuateSlotF s.kernel.caps actor idx keep },
     log := authReceipt actor :: s.log }
 
+/-- **`AttenuateInBounds s actor idx`** — the executor's fail-closed gate: the `idx`-th slot is a cap
+the `actor` actually HOLDS. When this is false, `List.modify` would silently no-op, so the arm refuses
+(returns `none`) rather than commit a logged no-op. -/
+def AttenuateInBounds (s : RecChainedState) (actor : CellId) (idx : Nat) : Prop :=
+  idx < (s.kernel.caps actor).length
+
+instance (s : RecChainedState) (actor : CellId) (idx : Nat) :
+    Decidable (AttenuateInBounds s actor idx) :=
+  inferInstanceAs (Decidable (idx < _))
+
 /-- **Chained exercise.** Gate on the actor HOLDING an edge to `target` (the resolved c-list slot —
 the SAME `confersEdgeTo` test `recKDelegate` uses), then append the receipt. The cap table is
 UNCHANGED (exercising reads, never edits, the c-list). Fail-closed: no held edge ⇒ no exercise. The
@@ -2427,7 +2437,12 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   -- §MA-auth: the 6 authority effects route to the (reused/re-founded) chained authority steps.
   | .introduceA intro rec t          => recCDelegate s intro rec t
   | .delegateAttenA del rec t keep   => recCDelegateAtten s del rec t keep
-  | .attenuateA actor idx keep       => some (attenuateStepA s actor idx keep)
+  -- FAIL-CLOSED on an out-of-bounds slot: `List.modify` is silently a NO-OP when `idx ≥ length`, so
+  -- an unguarded `some (attenuateStepA …)` would COMMIT a logged no-op (append an `authReceipt`) for an
+  -- attenuate on an INVALID cap slot. We guard: a slot the actor does not hold (`idx ≥ length`) makes
+  -- the arm REFUSE (`none`), so the receipt is emitted ONLY for a genuine in-place narrowing.
+  | .attenuateA actor idx keep       =>
+      if idx < (s.kernel.caps actor).length then some (attenuateStepA s actor idx keep) else none
   -- §EPOCH: the FAITHFUL delegation revoke — the shared cap-edge `removeEdge` COMPOSED with the
   -- epoch bump (parent's `delegationEpoch +1`) + child-snapshot clear (`apply_revoke_delegation`'s
   -- legs 2+3). Routes to `recCRevokeDelegationFull`, NOT the bare `recCRevoke`: the revoked child's
@@ -2487,6 +2502,31 @@ def execInnerA (s : RecChainedState) : List FullActionA → Option RecChainedSta
     | some s' => execInnerA s' rest
     | none    => none
 end
+
+/-- **`execFullA_attenuateA_eq`** — the `.attenuateA` arm, unfolded to its guarded `if`. The arm
+commits the in-place narrowing IFF the slot is in bounds; an out-of-bounds slot fails closed. -/
+theorem execFullA_attenuateA_eq (s : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth) :
+    execFullA s (.attenuateA actor idx keep)
+      = if idx < (s.kernel.caps actor).length then some (attenuateStepA s actor idx keep) else none :=
+  rfl
+
+/-- **`attenuateA_factors`** — a committed `.attenuateA` was in bounds AND the post-state is exactly the
+in-place narrowing. The fail-closed twin of `exerciseStepA_factors`: every downstream consumer that
+matched on `some (attenuateStepA …)` recovers both legs through this. -/
+theorem attenuateA_factors {s s' : RecChainedState} {actor : CellId} {idx : Nat} {keep : List Auth}
+    (h : execFullA s (.attenuateA actor idx keep) = some s') :
+    idx < (s.kernel.caps actor).length ∧ s' = attenuateStepA s actor idx keep := by
+  rw [execFullA_attenuateA_eq] at h
+  by_cases hb : idx < (s.kernel.caps actor).length
+  · rw [if_pos hb] at h; simp only [Option.some.injEq] at h; exact ⟨hb, h.symm⟩
+  · rw [if_neg hb] at h; exact absurd h (by simp)
+
+/-- **`execFullA_attenuateA_outOfBounds_none`** — the FAIL-CLOSED pole: an out-of-bounds attenuate
+(`idx ≥ length`) is REFUSED (`= none`), not committed as a logged no-op. -/
+theorem execFullA_attenuateA_outOfBounds_none (s : RecChainedState) (actor : CellId) (idx : Nat)
+    (keep : List Auth) (hoob : ¬ idx < (s.kernel.caps actor).length) :
+    execFullA s (.attenuateA actor idx keep) = none := by
+  rw [execFullA_attenuateA_eq, if_neg hoob]
 
 mutual
 /-- **`execFullA_ledger_per_asset` (the COMBINED per-asset conservation VECTOR).** Every
@@ -2608,9 +2648,9 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           unfold recKDelegateAtten at hd
           gate_peel hd with bal_neutral
   | attenuateA actor idx keep =>
-      simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
+      obtain ⟨_, h⟩ := attenuateA_factors h
       subst h
-      simp only [attenuateStepA, recTotalAsset]; ring
+      simp only [ledgerDeltaAsset, attenuateStepA, recTotalAsset]; ring
   | revokeDelegationA holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevokeDelegationFull, Option.some.injEq] at h; subst h
@@ -3026,8 +3066,8 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       | none => reject_none h hd
       | some k' => commit_subst h hd; rfl
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA, fullReceiptA, Option.some.injEq] at h ⊢
-      subst h; rfl
+      obtain ⟨_, h⟩ := attenuateA_factors h
+      subst h; simp only [attenuateStepA, fullReceiptA]
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevokeDelegationFull, fullReceiptA] at h ⊢
       simp only [Option.some.injEq] at h; subst h; rfl
@@ -3575,9 +3615,9 @@ OTHER holder's slot is untouched (the confinement face of "you can only narrow w
 theorem execFullA_attenuateA_confined (s s' : RecChainedState) (actor : CellId) (idx : Nat)
     (keep : List Auth) (h : execFullA s (.attenuateA actor idx keep) = some s') :
     ∀ l, l ≠ actor → s'.kernel.caps l = s.kernel.caps l := by
-  simp only [execFullA, attenuateStepA, Option.some.injEq] at h
+  obtain ⟨_, h⟩ := attenuateA_factors h
   subst h
-  intro l hl; simp only [attenuateSlotF, if_neg hl]
+  intro l hl; simp only [attenuateStepA, attenuateSlotF, if_neg hl]
 
 /-- **`execFullA_revokeDelegationA_removeEdge`.** A committed RevokeDelegation edits the
 graph by EXACTLY `removeEdge … holder ⟨t,()⟩` (the parent drops the child's edge). REUSES
@@ -4394,6 +4434,10 @@ example : ¬ IsNonAmplifyingF (Cap.endpoint 9 [Auth.read, Auth.write]) (Cap.node
 #guard (((execFullA fmaA (.attenuateA 0 1 [Auth.read])).map (fun s => s.kernel.caps 0)).getD []) == [Cap.node 7, Cap.endpoint 9 [Auth.read]]  --  [node 7, endpoint 9 [read]] (write DROPPED)
 #guard ((execFullA fmaA (.attenuateA 0 1 [Auth.read])).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7) (UNCHANGED)
+-- FAIL-CLOSED POLE (the bug fix): actor 0 holds exactly 2 caps (idx 0,1). An OUT-OF-BOUNDS attenuate
+-- (idx 2 ≥ length 2) is REFUSED — `none`, NOT a logged no-op `some` + an authReceipt (codex's bug).
+#guard ((execFullA fmaA (.attenuateA 0 2 [Auth.read])).isNone)  --  true: none (was a logged no-op)
+#guard ((execFullA fmaA (.attenuateA 0 99 [Auth.read])).isNone)  --  true: none
 
 -- (4) REVOKE-DELEGATION: parent drops child 0's edge to 7. Always commits, balance-neutral:
 #guard ((execFullA fmaA (.revokeDelegationA 0 7)).isSome)  --  true

@@ -7,8 +7,9 @@
 
 `attenuateA` is the cleanest cap-touching universe-A instance (`Inst/attenuateA.lean`): it touches the
 `caps` table AS A WHOLE-FUNCTION injective digest (`funcComponent (·.caps) D hD` with the predicted post
-value `attenuateSlotF caps actor idx keep`), freezes the other 16 kernel fields, and has the TRIVIAL
-`True` guard (attenuation always commits). Its validation `attenuateA_full_sound ⇒ AttenuateSpec` is
+value `attenuateSlotF caps actor idx keep`), freezes the other 16 kernel fields, and has the IN-BOUNDS
+guard `idx < (caps actor).length` (attenuation FAILS CLOSED out of bounds — a `List.modify` no-op the
+executor refuses). Its validation `attenuateA_full_sound ⇒ AttenuateSpec` is
 DONE; this module emits the SAME effect onto the running EffectVM row layout and welds the two.
 
 The EffectVM state block carries ONE scalar `cap_root` column (state offset 11, `state.CAP_ROOT`). The
@@ -410,8 +411,8 @@ theorem unify_attenuate (D : Caps → ℤ)
     (s' : RecChainedState)
     (hspec : AttenuateSpec s args.actor args.idx args.keep s') :
     capRootProj D s'.kernel = attenCapDigestNew D s args := by
-  -- AttenuateSpec's first clause is `s'.kernel.caps = attenuateSlotF s.kernel.caps actor idx keep`.
-  obtain ⟨hcaps, _⟩ := hspec
+  -- AttenuateSpec is `idx < length ∧ s'.kernel.caps = attenuateSlotF s.kernel.caps actor idx keep ∧ …`.
+  obtain ⟨_, hcaps, _⟩ := hspec
   show D s'.kernel.caps = D (attenuateSlotF s.kernel.caps args.actor args.idx args.keep)
   rw [hcaps]
 

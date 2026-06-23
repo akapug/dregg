@@ -306,8 +306,8 @@ theorem execFullA_confine {U : List Auth} (hctrl : Auth.control ∈ U)
             exact hpre del (heldCapTo s.kernel.caps del t) a hheld (attenuate_subset keep _ ha)
           · exact absurd hd (by simp)
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA] at h; option_inj at h; rcases h with ⟨rfl⟩
-      exact CapsConfined.attenuateSlot hpre
+      obtain ⟨_, rfl⟩ := attenuateA_factors h
+      simp only [attenuateStepA]; exact CapsConfined.attenuateSlot hpre
   | revokeDelegationA holder t =>
       simp only [execFullA] at h; option_inj at h; rcases h with ⟨rfl⟩
       exact recCRevoke_confine hpre

@@ -144,8 +144,9 @@ theorem delegateAtten_iff_spec (s : RecChainedState) (del rec t : CellId) (keep 
       = { kernel := { s.kernel with caps := attenuateSlotF s.kernel.caps actor idx keep },
           log := authReceipt actor :: s.log }
 
-There is NO admissibility guard — the arm ALWAYS commits (attenuation cannot fail: `List.modify` is a
-no-op when `idx` is out of bounds, and `attenuate` only narrows). So the spec is UNCONDITIONAL. -/
+The arm is GUARDED on the slot being IN BOUNDS (`idx < (caps actor).length`): an out-of-bounds
+attenuate would be a `List.modify` NO-OP, so the executor REFUSES it (`= none`) rather than commit a
+logged no-op. Hence the spec carries the in-bounds precondition — out-of-bounds ⇒ no committed step. -/
 
 /-- **`attenuateCaps_correct`** — the in-place narrowing helper validated DECLARATIVELY. On commit,
 `attenuateA` rewrites the cap table to `attenuateSlotF caps actor idx keep`, which replaces the
@@ -159,13 +160,16 @@ theorem attenuateCaps_correct (caps : Caps) (actor : CellId) (idx : Nat) (keep :
   · intro h hh; simp only [attenuateSlotF, if_neg hh]
   · unfold attenuateSlotF; rw [if_pos rfl]
 
-/-- **The full-state declarative spec of an `attenuateA`** — the INDEPENDENT reference semantics. NO
-guard (always commits). The post-state's `kernel.caps` is the in-place slot narrowing (see
+/-- **The full-state declarative spec of an `attenuateA`** — the INDEPENDENT reference semantics. The
+admissibility guard is the IN-BOUNDS slot precondition (`idx < (caps actor).length`): the actor must
+actually HOLD an `idx`-th cap, else the narrowing would be a `List.modify` no-op and the executor fails
+closed. On commit the post-state's `kernel.caps` is the in-place slot narrowing (see
 `attenuateCaps_correct`); the log gains the authority receipt; and every one of the SIXTEEN non-`caps`
 kernel fields is unchanged. No frame clause mentions the executor. -/
 def AttenuateSpec (s : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
     (s' : RecChainedState) : Prop :=
-  s'.kernel.caps = attenuateSlotF s.kernel.caps actor idx keep
+  idx < (s.kernel.caps actor).length
+  ∧ s'.kernel.caps = attenuateSlotF s.kernel.caps actor idx keep
   ∧ s'.log = authReceipt actor :: s.log
   -- THE FRAME: the sixteen non-`caps` kernel fields, all LITERALLY unchanged.
   ∧ s'.kernel.accounts = s.kernel.accounts
@@ -194,17 +198,24 @@ theorem attenuate_iff_spec (s : RecChainedState) (actor : CellId) (idx : Nat) (k
     execFullA s (.attenuateA actor idx keep) = some s'
       ↔ AttenuateSpec s actor idx keep s' := by
   unfold AttenuateSpec
-  simp only [execFullA, attenuateStepA, Option.some.injEq]
-  constructor
-  · intro h
-    subst h
-    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-  · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15⟩
-    obtain ⟨k', log'⟩ := s'
-    obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp⟩ := k'
-    simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-    subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
-    rfl
+  rw [execFullA_attenuateA_eq]
+  by_cases hb : idx < (s.kernel.caps actor).length
+  · rw [if_pos hb]
+    simp only [attenuateStepA, Option.some.injEq]
+    constructor
+    · intro h
+      subst h
+      exact ⟨hb, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15⟩
+      obtain ⟨k', log'⟩ := s'
+      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp⟩ := k'
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15
+      rfl
+  · rw [if_neg hb]
+    constructor
+    · intro h; exact absurd h (by simp)
+    · rintro ⟨hb', _⟩; exact absurd hb' hb
 
 /-! ## §3 — corollaries: the headline NON-AMPLIFICATION facts read off the spec.
 
@@ -244,7 +255,7 @@ theorem attenuate_spec_balance_neutral (s : RecChainedState) (actor : CellId) (i
     (h : execFullA s (.attenuateA actor idx keep) = some s') :
     s'.kernel.bal = s.kernel.bal ∧ s'.kernel.accounts = s.kernel.accounts := by
   have hspec := (attenuate_iff_spec s actor idx keep s').mp h
-  exact ⟨hspec.2.2.2.2.2.2.2.1, hspec.2.2.1⟩
+  exact ⟨hspec.2.2.2.2.2.2.2.2.1, hspec.2.2.2.1⟩
 
 /-! ## §4 — non-vacuity: the gate is REAL (a forged delegation is REJECTED).
 

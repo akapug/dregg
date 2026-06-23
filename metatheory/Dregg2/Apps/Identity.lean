@@ -125,7 +125,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
   -- §authority — introduce/validateHandoff route to recKDelegate; delegateAtten to recKDelegateAtten;
-  -- attenuate is always-commit (caps-only); dropRef/revokeDelegation to recCRevoke (caps-only);
+  -- attenuate commits in bounds (caps-only); dropRef/revokeDelegation to recCRevoke (caps-only);
   -- exercise factors (kernel UNCHANGED). NONE touches the credential-revocation registry.
   | introduceA intro rec t =>
       simp only [execFullA, recCDelegate] at h
@@ -148,7 +148,7 @@ theorem execFullA_revoked_eq (s s' : RecChainedState) (fa : FullActionA)
           · injection hk with hk; subst hk; rfl
           · exact absurd hk (by simp)
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h; rfl
+      obtain ⟨_, rfl⟩ := attenuateA_factors h; rfl
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h; rfl
   | exerciseA actor t inner =>

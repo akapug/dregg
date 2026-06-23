@@ -990,8 +990,11 @@ theorem handler_refines_execFullA_introduce (s s' : RecChainedState) (intro rec 
   · unfold recKDelegateAtten at hstep; rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
 theorem handler_refines_execFullA_attenuate (s s' : RecChainedState) (actor : CellId) (idx : Nat)
-    (keep : List Auth) (h : execHandlerOne (.attenuateA actor idx keep) s = some s') :
+    (keep : List Auth) (hb : idx < (s.kernel.caps actor).length)
+    (h : execHandlerOne (.attenuateA actor idx keep) s = some s') :
     ∃ s'', execFullA s (.attenuateA actor idx keep) = some s'' ∧ s''.kernel = s'.kernel := by
+  -- The dregg1 handler `attenuateStep` is TOTAL (commits even out of bounds); the dregg2 executor is
+  -- STRICTER — it FAILS CLOSED out of bounds. So the refinement holds exactly on the in-bounds slot `hb`.
   have hstep := execHandlerOne_kernel (.attenuateA actor idx keep) s s' h
   rw [toClosedEffect] at hstep
   change attenuateStep s.kernel { actor := actor, idx := idx, keep := keep } = some s'.kernel at hstep
@@ -999,7 +1002,7 @@ theorem handler_refines_execFullA_attenuate (s s' : RecChainedState) (actor : Ce
   simp only [Option.some.injEq] at hstep
   refine ⟨attenuateStepA s actor idx keep, ?_, ?_⟩
   · show execFullA s (.attenuateA actor idx keep) = _
-    simp only [execFullA, attenuateStepA, Option.some.injEq]
+    rw [Dregg2.Exec.TurnExecutorFull.execFullA_attenuateA_eq, if_pos hb]
   · show (attenuateStepA s actor idx keep).kernel = s'.kernel
     rw [← hstep]; unfold attenuateStepA; rfl
 

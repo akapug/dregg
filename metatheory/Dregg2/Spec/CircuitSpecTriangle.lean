@@ -435,7 +435,7 @@ theorem attenuate_circuit_pins_intent
     s'.kernel.caps = attenuateSlotF s.kernel.caps args.actor args.idx args.keep := by
   have hspec : AttenuateSpec s args.actor args.idx args.keep s' :=
     attenuateA_full_sound S D hD hRest hLog s args s' h
-  exact hspec.1
+  exact hspec.2.1
 
 /-- **ATTENUATE circuit anti-ghost.** -/
 theorem attenuate_circuit_rejects_wrong_caps

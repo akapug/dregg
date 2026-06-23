@@ -125,6 +125,9 @@ structure attenuateEncodes (env : VmRowEnv)
   cellPost : CellState
   capDigestNew : ℤ
   henc : CapRowEncodes env cellPre cellPost capDigestNew
+  -- THE IN-BOUNDS precondition: the actor holds an `idx`-th cap (the decode's evidence that the move was
+  -- an admissible narrowing, not an out-of-bounds no-op the executor fails closed on).
+  inBounds : idx < (pre.kernel.caps actor).length
   -- THE NAMED `Caps`-FUNCTION RESIDUAL: the exact in-place slot narrowing (the felt accumulator the
   -- circuit recomputes does NOT certify this `Caps`-level equality — see the module header).
   capsMove : post.kernel.caps = attenuateSlotF pre.kernel.caps actor idx keep
@@ -227,7 +230,7 @@ theorem attenuate_descriptorRefines (env : VmRowEnv)
     (pre post : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
     (henc : attenuateEncodes env pre post actor idx keep) :
     AttenuateSpec pre actor idx keep post :=
-  ⟨henc.capsMove, henc.logAdv,
+  ⟨henc.inBounds, henc.capsMove, henc.logAdv,
    henc.frAccounts, henc.frCell, henc.frNullifiers, henc.frRevoked, henc.frCommitments,
    henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle, henc.frDeathCert,
    henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch, henc.frDelegationEpochAt,
@@ -281,13 +284,24 @@ theorem attenuate_descriptorRefines_rejects_amplify (env : VmRowEnv)
 
 /-! ## §7 — non-vacuity: the refinement FIRES (the spec is satisfiable on a real narrow). -/
 
-/-- **`attenuate_descriptorRefines_nonvacuous` — the refined spec is INHABITED.** The kernel
-`attenuateStepA` produces a state meeting `AttenuateSpec` (the executor⟺spec `attenuate_iff_spec`
-forward), so the spec the refinement concludes is not vacuously unsatisfiable. -/
+/-- **`attenuate_descriptorRefines_nonvacuous` — the refined spec is INHABITED.** On an IN-BOUNDS slot
+the kernel `attenuateStepA` produces a state meeting `AttenuateSpec` (the executor⟺spec
+`attenuate_iff_spec` forward), so the spec the refinement concludes is not vacuously unsatisfiable. -/
 theorem attenuate_descriptorRefines_nonvacuous (s : RecChainedState)
-    (actor : CellId) (idx : Nat) (keep : List Auth) :
+    (actor : CellId) (idx : Nat) (keep : List Auth)
+    (hb : idx < (s.kernel.caps actor).length) :
     AttenuateSpec s actor idx keep (attenuateStepA s actor idx keep) :=
-  (attenuate_iff_spec s actor idx keep (attenuateStepA s actor idx keep)).mp rfl
+  (attenuate_iff_spec s actor idx keep (attenuateStepA s actor idx keep)).mp
+    (by rw [execFullA_attenuateA_eq, if_pos hb])
+
+/-- **`attenuate_descriptorRefines_failsClosed` — the FAIL-CLOSED pole (non-vacuity, both directions).**
+On an OUT-OF-BOUNDS slot (`idx ≥ length`) the executor REFUSES: NO post-state satisfies the spec via the
+executor (the `↔` collapses to `none = some s'`, impossible). The arm is no longer a logged no-op. -/
+theorem attenuate_descriptorRefines_failsClosed (s : RecChainedState)
+    (actor : CellId) (idx : Nat) (keep : List Auth) (s' : RecChainedState)
+    (hoob : ¬ idx < (s.kernel.caps actor).length) :
+    ¬ execFullA s (.attenuateA actor idx keep) = some s' := by
+  rw [execFullA_attenuateA_outOfBounds_none s actor idx keep hoob]; simp
 
 /-! ## §8 — Axiom hygiene. -/
 
@@ -299,5 +313,6 @@ theorem attenuate_descriptorRefines_nonvacuous (s : RecChainedState)
 #assert_axioms attenuate_spec_non_amplifying
 #assert_axioms attenuate_descriptorRefines_rejects_amplify
 #assert_axioms attenuate_descriptorRefines_nonvacuous
+#assert_axioms attenuate_descriptorRefines_failsClosed
 
 end Dregg2.Circuit.RotatedKernelRefinementAttenuate
