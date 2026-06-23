@@ -17,16 +17,14 @@ have to say about it:
 
 **dregg is a formally verified, distributed object-capability operating system.**
 The kernel is a Lean 4 program with machine-checked soundness, and it is the
-*exact* function the running node executes — every state transition ("turn") is
+*exact* function the running node executes. Every state transition ("turn") is
 gated by an unforgeable capability, leaves a verifiable receipt, and carries a
 STARK proof a light client can check without re-running history. Authority is
-*held*, never *owed*; the walls hold by proof, not by trust.
+*held*, never *owed*.
 
 On top of the kernel, **deos** is the agentic desktop userlayer — the same proofs
 made visual and interactive: a window *is* a capability, an interaction *is* a
-verified turn, a quote *is* the source's committed value (Xanadu, shipped), and a
-screenshot can re-expand into a live, per-viewer, attenuated view of the shared
-witness-graph. (Naming: **robigalia** the project · **dregg** the kernel · **deos**
+verified turn. (Naming: **robigalia** the project · **dregg** the kernel · **deos**
 the desktop. *deos runs on dregg runs in robigalia.*)
 
 > ### The question underneath
@@ -43,50 +41,96 @@ the desktop. *deos runs on dregg runs in robigalia.*)
 
 | | |
 |---|---|
-| **Live devnet** | <https://devnet.dregg.fg-goose.online> |
-| **Site · Studio · Playground · Explorer** | <https://dregg.fg-goose.online> |
-| **Hands-on in 15 minutes** | [QUICKSTART.md](QUICKSTART.md) |
+| **Run it locally** | [First five minutes](#first-five-minutes-local) below · [QUICKSTART.md](QUICKSTART.md) |
 | **The exact guarantees + assumptions** | [docs/ASSURANCE.md](docs/ASSURANCE.md) · [`AssuranceCase.lean`](metatheory/Dregg2/AssuranceCase.lean) |
+| **The machine-facing reference** | [README-LLMs.md](README-LLMs.md) |
 | **Community** | [Discord](https://discord.gg/eSTsv7DWcR) |
+
+There is no public server to point you at — dregg runs **on your machine**, from
+a clean checkout. The three doors below each need only this repo and `cargo`.
 
 ---
 
-## First five minutes (zero install)
+## First five minutes (local)
 
-A public devnet runs the verified Lean executor, with the faucet on. Talk to it
-with nothing but `curl`.
+Everything here runs locally with no external service. Pick a door.
+
+**What you need:** this repo, a recent Rust toolchain (`cargo`); `wasm-pack` for
+the browser playground; Docker for the site bundle.
+
+### A. Run a node and watch it execute a verified turn
+
+The node's state producer is the Lean executor itself. Start one, faucet a cell,
+read it back — a real turn through the verified kernel, on `localhost`.
 
 ```sh
-# 1. The live node — verified-Lean state producer, STARK proving on.
-curl -s https://devnet.dregg.fg-goose.online/status
-# {"healthy":true,"consensus_live":true,"federation_mode":"solo",
-#  "state_producer":"lean","full_turn_proving":true,"producer_covered_effects":19,…}
+cargo build -p dregg-node                                  # builds dregg-node
+./target/debug/dregg-node init --data-dir /tmp/my-dregg
+./target/debug/dregg-node run  --data-dir /tmp/my-dregg --enable-faucet --port 8421 &
 
-# 2. Watch the node execute a REAL verified turn — faucet a cell. NOTE: a cell id
-#    is a commitment to a public key (`id == derive_raw(pubkey, token)`), so this
-#    *random* id is a BARE ADDRESS — you'll see the turn land and read the balance,
-#    but you don't hold its key to spend it. (Funding a cell you OWN is step 4.)
+# the node — verified-Lean state producer:
+curl -s http://localhost:8421/status
+# {"healthy":...,"federation_mode":"solo","state_producer":"lean",
+#  "lean_producer":true,"producer_covered_effects":21,...}
+
+# faucet a cell (a real verified turn lands). NOTE: a cell id is a commitment to a
+# public key, so this *random* id is a BARE ADDRESS — credited + queryable, but you
+# don't hold its key to spend it. (Funding a cell you OWN is door B's `dregg demo`.)
 CID=$(python3 -c "import secrets;print(secrets.token_hex(32))")
-curl -s -X POST https://devnet.dregg.fg-goose.online/api/faucet \
+curl -s -X POST http://localhost:8421/api/faucet \
   -H 'content-type: application/json' -d "{\"recipient\":\"$CID\",\"amount\":1000}"
-# {"success":true,"tx_hash":"…","amount":1000}
+# {"success":true,"tx_hash":"...","amount":1000,"turn_hash":"..."}
 
-# 3. Read it back — credited + queryable, but unspendable (no one holds this address's key).
-curl -s https://devnet.dregg.fg-goose.online/api/cell/$CID
-# {"id":"…","found":true,"balance":1000,"nonce":0,…}
-
-# 4. A cell you CONTROL + can spend from: you need its keypair. The CLI/SDKs manage
-#    your keys — QUICKSTART.md walks through signing a real turn from your own cell.
+# read it back — credited, queryable:
+curl -s http://localhost:8421/api/cell/$CID
+# {"id":"...","found":true,"balance":1000,"nonce":0,...}
 ```
 
-Then open the browser surfaces at <https://dregg.fg-goose.online>: the
-**Studio** (stage a turn by verb and read its verified-Lean explanation), the
-**Playground** (run a turn on the in-browser wasm executor, then *prove* it — a
-real EffectVM STARK produced and self-verified in your tab), and the
-**Explorer** (browse live cells and receipts with witness status and per-cell
-time travel). The full walkthrough — signing a real turn, the guided app demo,
-a governance ceremony — is [QUICKSTART.md](QUICKSTART.md), every command
-verified against this devnet.
+### B. Sign real turns with the CLI
+
+The CLI manages your keys and drives a full app lifecycle against your node —
+each step a real signed turn on the verified commit path.
+
+```sh
+cargo build -p dregg-cli                                   # builds the `dregg` binary
+./target/debug/dregg --node-url http://localhost:8421 demo --passphrase pick-one
+# faucet → register a name → resolve → transfer → revoke, each a verified turn.
+# The first unlock SETS the passphrase on a fresh node and acquires its bearer token.
+```
+
+[QUICKSTART.md](QUICKSTART.md) is the full local walkthrough — identities, a
+governance ceremony, the receipt stream.
+
+### C. The browser playground (the executor in your tab, no server)
+
+The same executor compiles to wasm and runs in-browser. Build the wasm package,
+then serve the site.
+
+```sh
+cd wasm && wasm-pack build --target web --out-dir ../site/pkg --release && cd ..
+docker run --rm -d -p 3000:3000 -v "$PWD:/repo" -w /repo/site node:22 \
+  sh -c "npm install --no-audit --no-fund && npm run build && npx serve dist"
+```
+
+Then open the browser surfaces at <http://localhost:3000>:
+
+- **Playground** (`/playground/#turn-workbench`) — stage a turn by verb, read its
+  verified-Lean explanation, *run* it on the real in-browser wasm executor, then
+  *prove* it: a real EffectVM STARK, produced and self-verified in your tab.
+- **Explorer** (`/explorer/`) — browse cells and receipts with witness status and
+  per-cell time travel; point Settings at your `:8421` node.
+- **Starbridge** (`/starbridge/`) — the workbench/inspector; seed a sandbox world
+  and run turns against the in-browser executor.
+
+### D. Boot the desktop
+
+```sh
+cd starbridge-v2 && cargo build                            # the native deos cockpit
+```
+
+`starbridge-v2` is **deos**: the native cockpit that *embeds the real verified
+executor*. See [deos](#deos--the-agentic-desktop) below. (This is a heavy build —
+it pulls the gpui renderer and the libservo web engine.)
 
 ## The model
 
@@ -185,6 +229,16 @@ Four things make the proofs load-bearing rather than decorative:
   field the effect did not legitimately touch makes the turn unprovable (the
   *anti-ghost* property).
 
+- **Symbolic and full witness modes.** A turn applies its state transition (the
+  abstract semantics — balances, caps, nonces) independently of materializing
+  its witness (Merkle roots, commitments, proofs). `WitnessMode::Symbolic` defers
+  the witness layer, so a local UI/terminal turn pays effectively no hashing;
+  `collapse` re-runs deferred turns through full execution to materialize the
+  exact witnesses on demand. The admission gates (authority, conservation,
+  freshness) are *never* deferred — only the witness — and a symbolic turn is
+  structurally local and unpublishable until collapsed
+  ([`turn/src/collapse.rs`](turn/src/collapse.rs)).
+
 - **Circuits are emitted from Lean.** Constraint systems are generated from
   proved Lean modules as byte-pinned descriptor artifacts (a SHA-256
   fingerprinted registry, drift-rejected in CI). The Rust prover *interprets*
@@ -197,18 +251,14 @@ Four things make the proofs load-bearing rather than decorative:
   recursive aggregation folds a whole history into one root a light client
   checks.
 
-- **An honest assurance case.** [docs/ASSURANCE.md](docs/ASSURANCE.md) and
-  [`AssuranceCase.lean`](metatheory/Dregg2/AssuranceCase.lean) state the
-  guarantees as Lean theorems pinned to exactly `{propext, Classical.choice,
-  Quot.sound}` — no extra axioms — each with non-vacuity witnesses
-  (the property provably *can* fail, and is proven not to), and each named seam
-  between the theorems and the deployed node stated at file:line. The composed
-  apex `deployed_system_secure` conjoins all five guarantees over one committed
-  running-entry forest.
-
 ## Assurance — the five guarantees
 
-The case to a light client is five guarantees plus the running entry:
+[docs/ASSURANCE.md](docs/ASSURANCE.md) and
+[`AssuranceCase.lean`](metatheory/Dregg2/AssuranceCase.lean) state the guarantees
+as Lean theorems, each with non-vacuity witnesses (the property provably *can*
+fail, and is proven not to), each axiom-pinned to exactly `{propext,
+Classical.choice, Quot.sound}` plus the named cryptographic carriers. The case to
+a light client is five guarantees plus the running entry:
 
 - **A — Authority.** Every state change is justified by an unforgeable,
   non-amplified, fresh token chain. Production (mint) is gated on holding the
@@ -230,96 +280,108 @@ The case to a light client is five guarantees plus the running entry:
   aggregate cannot bind.
 - **R — The running entry.** A∧B∧C hold over `execFullForestG` *itself* — the
   exact gated function the deployed node invokes — not just an abstract model.
+  The composed apex `deployed_system_secure` conjoins all five over one committed
+  running-entry forest.
 
-**Assumed, named, never hidden.** A small standard cryptographic floor — each
-entering as a typed hypothesis, never an axiom: Poseidon2 collision-resistance,
-BLAKE3 CR, Ed25519 EUF-CMA, HMAC unforgeability, AEAD, FRI/STARK soundness, BLS
-quorum certs, and post-GST synchrony. Higher assumptions reduce onto this floor;
-nothing else is load-bearing.
+**Assumed, named, never hidden.** A small standard cryptographic floor enters as
+typed hypotheses, never axioms: Poseidon2 collision-resistance, BLAKE3 CR,
+Ed25519 EUF-CMA, HMAC unforgeability, AEAD, FRI/STARK soundness, BLS quorum
+certs, and post-GST synchrony. Higher assumptions reduce onto this floor.
 
 **Open, named — why this is not security-critical-ready.** The honest seams are
 enumerated in §3 of [docs/ASSURANCE.md](docs/ASSURANCE.md). The crypto floor
-above is *assumed*, not discharged — the named primitives enter as hypotheses.
-The deployed-binary bridge is the largest open distance from l4v-grade: the
-Lean→C/`.a` link correspondence and the wire-codec translation validation
-(`dregg-lean-ffi/src/marshal.rs`) are stated as obligations, not yet proven.
-On the shared devnet the per-turn STARK currently stays `proof_pending` (the
-witness lands immediately; the async prove pool isn't attaching proofs), and
-the deployed devnet binary runs solo (single-node ordering). No independent
-audit has happened. **Do not use for anything security-critical.**
+above is *assumed*, not discharged. The deployed-binary bridge is the largest
+open distance from l4v-grade: the Lean→C/`.a` link correspondence and the
+wire-codec translation validation (`dregg-lean-ffi/src/marshal.rs`) are stated as
+obligations, not yet proven. A leaked private key bounds an attacker to the
+attenuation-closure of the leaked c-list (no amplification, no minting), with one
+named open construction — **Settlement Soundness**, a revoke binding into the
+finalized commitment before settlement
+([`metatheory/Metatheory/KeyLeak.lean`](metatheory/Metatheory/KeyLeak.lean)).
+**No independent audit has happened. Do not use for anything security-critical.**
 
 ## deos — the agentic desktop
 
 deos is the userlayer where a *window is a capability* and an interaction is a
 *verified turn*. It adds **zero new trust**: every visual and interactive
-primitive reduces to a kernel theorem. See [docs/deos/DEOS.md](docs/deos/DEOS.md).
+primitive reduces to a kernel theorem. The native cockpit is
+[`starbridge-v2/`](starbridge-v2/); see [docs/deos/DEOS.md](docs/deos/DEOS.md)
+and [docs/DREGG-DESKTOP-OS.md](docs/DREGG-DESKTOP-OS.md).
 
-- **htmx on crack.** A cell declares **affordances** — named, typed, cap-gated
-  verified-turn templates. The "button" is a cap-gated effect, the "fragment" is
-  the attested post-state surface, and *who may press it* is decided by held
-  capabilities, not a session cookie. The render/fire gate is the genuine
-  `is_attenuation` (`required ⊆ held`, the proven lattice), so progressive
-  enhancement becomes progressive *attenuation*: an agent sees exactly the
-  affordances its caps authorize. A `GatedAffordance` further pairs the cap-gate
-  with a live cell-program state-gate — a button lights iff caps *and* state both
-  pass, and goes dark the instant the cell changes
+- **Login = your root capability.** Authenticate a key → derive the root cell →
+  receive your per-user capability template. A session *is* the resulting c-list;
+  logout is `Effect::RevokeCapability` (synchronous + transitive at n=1).
+  Logging back in reopens the exact durable image you left — your world is
+  orthogonally persistent. An agent (e.g. the Hermes bridge) logging in is the
+  identical ceremony with a narrower template
+  ([`starbridge-v2/src/session.rs`](starbridge-v2/src/session.rs) ·
+  [docs/deos/SESSION-LOGIN.md](docs/deos/SESSION-LOGIN.md)).
+
+- **The dock.** A resizable / splittable / dockable pane workspace. Surfaces are
+  panes you split, dock, and float. A code editor, a terminal (a real PTY), a
+  Matrix chat client, and a confined Hermes agent bridge mount as dock panes —
+  deos editing, building, and operating itself
+  ([`starbridge-v2/src/dock/`](starbridge-v2/src/dock/)).
+
+- **dregg-pilled Matrix chat.** The chat client speaks Matrix, but a message can
+  carry a **rehydratable membrane**: a cap-bounded fork of the world a recipient
+  re-attaches to (per-viewer, attenuated, confined by construction), with
+  graduated rights — granted-in, study-ref, or a network-boundary that opens an
+  owner-consent request. Merging diverged forks is the branch-and-stitch pushout;
+  Matrix is the multiplayer transport
+  ([`deos-matrix/`](deos-matrix/) ·
+  [docs/deos/SHARED-FORK-CONSENT.md](docs/deos/SHARED-FORK-CONSENT.md)).
+
+- **htmx on crack — affordances.** A cell declares **affordances**: named, typed,
+  cap-gated verified-turn templates. The "button" is a cap-gated effect, the
+  "fragment" is the attested post-state surface, and *who may press it* is decided
+  by held capabilities. A `GatedAffordance` pairs the cap-gate with a live
+  cell-program state-gate — a button lights iff caps *and* state both pass
   ([`Deos/GatedAffordance.lean`](metatheory/Dregg2/Deos/GatedAffordance.lean)).
-
-- **Transclusion = Xanadu, shipped.** A transcluded quote *is* a first-class
-  provenanced citation of a source cell's committed field value — the value
-  Nelson wanted, made literal and unbreakable. It is the verified cross-cell
-  observation: the quote carries its provenance, cannot be forged or silently
-  edited, and is per-viewer. Each of the four Xanadu properties is an existing
-  kernel theorem restated for the docuverse, no new mathematics
-  ([`Deos/Transclusion.lean`](metatheory/Dregg2/Deos/Transclusion.lean)).
-
-- **A literate docuverse.** Beyond a quote, a whole *document* is a cell: writing
-  is a cap-gated turn, the text is the fold of its edit history, and — Pijul-style
-  — a **conflict is a first-class state you live in**, not a merge failure. When
-  two people edit the same passage, the compatible parts merge cleanly and the
-  genuine clash stays live as *both* alternatives, each attributed to who wrote it,
-  until a later edit resolves it ([docs/deos/DOCUMENT-LANGUAGE.md](docs/deos/DOCUMENT-LANGUAGE.md)).
 
 - **The powerbox (CapDesk).** Granting authority is *designate-then-attenuate*:
   you point at a resource and hand over a strictly weaker capability than you
-  hold, never ambient authority ([`starbridge-v2/src/powerbox.rs`](starbridge-v2/src/powerbox.rs)).
+  hold, never ambient authority
+  ([`starbridge-v2/src/powerbox.rs`](starbridge-v2/src/powerbox.rs)).
 
-- **The web-of-cells.** Cells address each other by `dregg://` reference; a peer
-  reaches a surface by a verified attested read, not by trusting a server. Live
-  DOM and JS bundles publish *as* web-of-cells cells.
+- **The data plane / Bus.** Cells, affordances, and channels ride a CapTP data
+  plane — the capability-transport Bus that carries effects between surfaces and
+  nodes ([`captp/src/data_plane.rs`](captp/src/data_plane.rs)).
 
-- **Rehydratable frustum-snapshots — the dregg-only novelty.** A deos
-  "screenshot" embeds a sturdyref behind a membrane, so *opening the image*
-  re-attaches a live, **per-viewer, attenuated, liveness-typed** surface,
-  confined by construction. The liveness-type is a *proven* confinement readout:
-  `ReplayedDeterministic` is exactly the fragment whose every interaction went
-  through the membrane ([`Deos/Rehydration.lean`](metatheory/Dregg2/Deos/Rehydration.lean)).
-  The membrane composes `is_attenuation` across reshare hops, so a forwarded
-  view can never amplify.
+- **A web-shell.** An `http(s)://` browser surface, rendered by libservo, reached
+  through the net-capability gate — the open web behind a capability, not ambient
+  network access.
 
-- **Recovery without a custodian.** Lose your device keys and you don't lose your
-  identity. You nominate a council of *guardians*; any quorum of them can authorize
-  a fresh key for you — they re-key your identity, they never reconstruct or hold
-  your old one, and no single guardian (nor a sub-quorum) can act alone. The
-  recovery is itself a verified turn, so anyone can check it was genuinely
-  quorum-authorized — not a support ticket, a theorem. The same council can hold a
-  *shared secret* no member individually knows and that only a quorum can ever open
-  — the basis for sealed ballots, sealed-bid auctions, and key escrow no insider
-  can peek at.
+- **A literate docuverse.** A whole *document* is a cell: writing is a cap-gated
+  turn, the text is the fold of its edit history, and — Pijul-style — a *conflict
+  is a first-class state you live in*, not a merge failure. The patch core
+  ([`dregg-doc/`](dregg-doc/)) makes changes first-class objects and conflicts
+  objects; merge correctness is proved
+  ([`Deos/DocMerge.lean`](metatheory/Dregg2/Deos/DocMerge.lean) ·
+  [docs/deos/DOCUMENT-LANGUAGE.md](docs/deos/DOCUMENT-LANGUAGE.md)).
 
-- **Branch-and-stitch — collaborative time-travel.** Rewind a shared history,
-  *fork* a past moment into a private sandbox, try a different course of events,
-  then *merge* back the parts you want. The sandbox is confined by construction —
-  nothing it does touches the live world until you merge — and the merge re-checks
-  authority at the moment of merging, so a permission revoked while you were off in
-  the branch can't slip back in through it.
+- **Transclusion.** A transcluded quote *is* a first-class provenanced citation
+  of a source cell's committed field value — per-viewer, unforgeable. Each
+  property is an existing kernel theorem restated for the docuverse, no new
+  mathematics ([`Deos/Transclusion.lean`](metatheory/Dregg2/Deos/Transclusion.lean)).
+
+- **Rehydratable frustum-snapshots.** A deos "screenshot" embeds a sturdyref
+  behind a membrane, so *opening the image* re-attaches a live, per-viewer,
+  attenuated, liveness-typed surface, confined by construction. The membrane
+  composes `is_attenuation` across reshare hops, so a forwarded view can never
+  amplify ([`Deos/Rehydration.lean`](metatheory/Dregg2/Deos/Rehydration.lean)).
+
+- **Web deos.** The same cockpit runs in a browser tab: the real gpui
+  element-tree renderer on the `gpui_web` platform backend (wasm32 + WebGPU
+  canvas), over the same in-browser verified executor. One renderer, one model,
+  two platforms — not a lesser web skin
+  ([docs/deos/WEB-DEOS.md](docs/deos/WEB-DEOS.md)).
 
 The forcing-function exemplar is a **multiplayer fog-of-war game where the
-security property *is* the game mechanic**: what a player can see is exactly
-what its caps authorize it to rehydrate, fail-closed, with a real proof
-obligation (you provably cannot even *prove* the enemy's vision). It runs a full
-agent-vs-agent match through the cap gate, with a membrane-negotiation spectator
-surface. See [docs/deos/DEOS-APPS.md](docs/deos/DEOS-APPS.md).
+security property *is* the game mechanic**: what a player can see is exactly what
+its caps authorize it to rehydrate, fail-closed, with a real proof obligation
+(you provably cannot even *prove* the enemy's vision). See
+[docs/deos/DEOS-APPS.md](docs/deos/DEOS-APPS.md).
 
 ## The durable verified workflow — what a deos app *is*
 
@@ -336,11 +398,7 @@ It is four surfaces of the one kernel, proven to be the same object. See
   no unauthorized or out-of-order step can ever commit
   ([`Protocol/Workflow.lean`](metatheory/Dregg2/Protocol/Workflow.lean)).
 - **A step *is* an affordance fire** — the deos surface renders the choreography,
-  it does not fork it: the cap-gate is the authorization, the state-gate is the
-  phase precondition ([`Deos/WorkflowBridge.lean`](metatheory/Dregg2/Deos/WorkflowBridge.lean)).
-- **One attenuable mandate** delegates the whole workflow, bounds every step,
-  and keeps it legal forever under any adversarial schedule
-  ([`Apps/CompartmentWorkflowMandate.lean`](metatheory/Dregg2/Apps/CompartmentWorkflowMandate.lean)).
+  it does not fork it ([`Deos/WorkflowBridge.lean`](metatheory/Dregg2/Deos/WorkflowBridge.lean)).
 - **Durable execution over verified turns** — [pg-dregg](docs/PG-DREGG.md) is
   "DBOS, but every step is a verified turn": reads are free SQL over the
   materialized mirror, writes go through the `AUTHZ → CHAIN → APPLY` spine, and
@@ -348,12 +406,9 @@ It is four surfaces of the one kernel, proven to be the same object. See
   ([`pg-dregg/src/workflow.rs`](pg-dregg/src/workflow.rs)).
 - **Composition is right-skewed, and refinement is decidable.** Flows compose by
   choice `⊔`, sequence `⋆`, and meet `⊓`; the algebra is a right-skewed Kleene
-  algebra with distributive meets (RSKA_d⊓), because the reactive rung reads both
-  old and new state ([`Deos/FlowAlgebra.lean`](metatheory/Dregg2/Deos/FlowAlgebra.lean)).
-  That makes *"does flow/policy A refine B"* a **decidable** question:
-  `decideRefines : Flow → Flow → Bool` is sound and complete, with a `Decidable`
-  instance ([`Deos/FlowRefine.lean`](metatheory/Dregg2/Deos/FlowRefine.lean)) —
-  the foundation for ARGUS's "does this protocol evolution refine the spec?" bar.
+  algebra with distributive meets (RSKA_d⊓), so *"does flow/policy A refine B"* is
+  a **decidable** question — `decideRefines : Flow → Flow → Bool`, sound and
+  complete ([`Deos/FlowRefine.lean`](metatheory/Dregg2/Deos/FlowRefine.lean)).
 
 ## The surfaces
 
@@ -364,59 +419,50 @@ the same verified kernel.
   TypeScript ([`@dregg/sdk`](sdk-ts/), browser-parsable), and Python
   ([`sdk-py/`](sdk-py/) — embeds the *real* Lean kernel via FFI). Two nouns and
   an inescapable authorization step: `.turn().sign().submit()`.
+- **The CLI** ([`cli/`](cli/), bin `dregg`). Manages your keys (`dregg id`),
+  drives turns, decodes the app machines (`dregg name`, `dregg polis`, …).
 - **The MCP server** ([`node/src/mcp.rs`](node/src/mcp.rs)). AI-agent access,
   cap-gated: every tool a sub-agent calls carries a biscuit-style capability the
   node admits or refuses, routed through the Lean producer gate.
-- **The Discord bot** ([`discord-bot/`](discord-bot/)). A first-class devnet
-  citizen — councils, real signed turns, cipherclerk macaroons — not a
-  read-only mirror.
+- **The Discord bot** ([`discord-bot/`](discord-bot/)). Councils, real signed
+  turns, cipherclerk macaroons — not a read-only mirror.
 - **The Studio / Playground** (the [site](site/)). Stage, run, and prove turns
   in the browser against a live wasm executor.
 - **[pg-dregg](docs/PG-DREGG.md)** ([`pg-dregg/`](pg-dregg/)). dregg capabilities
   as a PostgreSQL Row-Level-Security + durable-workflow layer: a policy reads
   `dregg_admits('read', id)` instead of hand-rolled SQL — the decision is the
-  *same one the kernel makes*, from the session's presented token — and reads
-  are free SQL while writes are verified turns.
-- **deos — the agentic desktop** ([`starbridge-v2/`](starbridge-v2/) ·
-  [docs/deos/DEOS.md](docs/deos/DEOS.md)). The native cockpit that *embeds the
-  real verified executor*: affordance surfaces, the `dregg://` web-of-cells
-  browser tab, the interactive powerbox, transclusion, and rehydratable
-  frustum-snapshots.
+  *same one the kernel makes*, from the session's presented token.
+- **deos — the agentic desktop** ([`starbridge-v2/`](starbridge-v2/)). The native
+  cockpit that *embeds the real verified executor*.
 - **DreggDL** ([`dregg-deploy/`](dregg-deploy/)). Declarative deployment specs;
   an over-grant in a spec is caught as in-forest capability amplification before
   anything deploys.
 - **The seL4 / Robigalia embedding** ([docs/FIRMAMENT.md](docs/FIRMAMENT.md) ·
-  [docs/SEL4-EMBEDDING.md](docs/SEL4-EMBEDDING.md) · [`sel4/`](sel4/)). The
-  *firmament* is a seL4-hosted ground that holds deterministic apps inside one
-  capability fabric (seL4 caps isolate protection domains; dregg caps mediate
-  the cells inside them) — an seL4 capability and a dregg capability are the
-  *same* abstraction at two points on a distance parameter, and at `n = 1`
-  (one machine) the distributed bounds collapse to strong local properties.
-  **Today:** the Robigalia v0 demo boots Rust userspace protection domains, a
-  real on-device STARK verifier PD, **and the executor PD itself** — the Lean
-  kernel `execFullForestG` runs inside a real seL4 protection domain — on the
-  seL4 microkernel under QEMU (aarch64; riscv64 booting too). The Lean-runtime
-  embedding long called the *one true blocker* is closed: the runtime embeds
-  single-threaded, with no allocator override, IO-free
+  [`sel4/`](sel4/)). An seL4 capability and a dregg capability are the *same*
+  abstraction at two points on a distance parameter; at `n = 1` (one machine) the
+  distributed bounds collapse to strong local properties. **Today:** the
+  Robigalia v0 demo boots Rust userspace protection domains, a real on-device
+  STARK verifier PD, **and the executor PD itself** — the Lean kernel
+  `execFullForestG` runs inside a real seL4 protection domain — under QEMU. The
+  Lean-runtime embedding embeds single-threaded, allocator-override-free, IO-free
   ([docs/EMBEDDABLE-LEAN-RUNTIME.md](docs/EMBEDDABLE-LEAN-RUNTIME.md)).
-  **Remaining (named):** productionization — the crypto floor supplied from the
-  verifier-STARK PD, and the decomposed multi-PD assembly.
+  **Remaining (named):** the crypto floor supplied from the verifier-STARK PD,
+  the decomposed multi-PD assembly, and making the hosted image interactive.
 
-## Run it yourself
+## Run it from a clean checkout
 
 ```sh
 git clone https://github.com/emberian/dregg && cd dregg
-scripts/bootstrap.sh                                   # toolchain + first build
-cargo build -p dregg-cli --release
-export DREGG_NODE_URL=https://devnet.dregg.fg-goose.online
-./target/release/dregg node status
-./target/release/dregg demo --name you.dregg           # full app lifecycle, real signed turns
-cargo run -p dregg-node run                             # or run your own node
+cargo build -p dregg-node -p dregg-cli         # the node + the `dregg` CLI
+./target/debug/dregg-node init --data-dir /tmp/my-dregg
+./target/debug/dregg-node run  --data-dir /tmp/my-dregg --enable-faucet --port 8421 &
+./target/debug/dregg --node-url http://localhost:8421 demo --passphrase pick-one
 ```
 
-[QUICKSTART.md](QUICKSTART.md) is the real 15-minute walkthrough (every command
-verified live). [REORIENT.md](REORIENT.md) holds the architectural laws and the
-build notes.
+[QUICKSTART.md](QUICKSTART.md) is the full local walkthrough (every command run
+against a fresh local node). [REORIENT.md](REORIENT.md) holds the architectural
+laws and the build notes. The embedded-executor crates are slow in debug — use
+`--release` for `starbridge-v2`, the proof suites, and gauntlet runs.
 
 ## The map
 
@@ -426,21 +472,19 @@ build notes.
 | [`dregg-lean-ffi/`](dregg-lean-ffi/) | The link: compiles the Lean executor into `libdregg_lean.a` and exports the entry the node calls. |
 | [`node/`](node/) | The daemon: HTTP/MCP API, gossip + blocklace sync, block production driven by the Lean producer. |
 | [`circuit/`](circuit/) | The STARK stack: the Lean-descriptor interpreter (the prover), Plonky3, recursive aggregation, the light-client verifier. |
-| [`cell/`](cell/), [`turn/`](turn/), [`wire/`](wire/) | Cell state, turn types, and the wire codec — the Rust data plane the executor's decisions flow through. |
-| [`blocklace/`](blocklace/), [`federation/`](federation/), [`captp/`](captp/) | The DAG (signed, equivocation-detecting, BFT-final), committee machinery, and capability transport between nodes. |
+| [`cell/`](cell/), [`cell-crypto/`](cell-crypto/), [`turn/`](turn/), [`wire/`](wire/) | Cell state (zero-crypto types), the crypto (notes, value-commitments, seal/stealth), turn types + the executor + witness-mode/collapse, and the wire codec — the Rust data plane the executor's decisions flow through. |
+| [`blocklace/`](blocklace/), [`federation/`](federation/), [`captp/`](captp/), [`coord/`](coord/) | The DAG (signed, equivocation-detecting, BFT-final), committee machinery, capability transport, and coordination protocols. |
+| [`dregg-doc/`](dregg-doc/) | The document language: a Pijul-shaped patch core (conflicts-as-objects, the branch-and-stitch merge) + a `ropey`↔patch bridge. |
 | [`pg-dregg/`](pg-dregg/) | dregg capabilities + durable verified workflows as a PostgreSQL extension (RLS policies + the verified-write spine). |
-| [`starbridge-v2/`](starbridge-v2/), [`starbridge-web-surface/`](starbridge-web-surface/) | deos: the native cockpit (embeds the real executor) and the web-surface / affordance / rehydration stack. |
-| [`sdk/`](sdk/), [`sdk-ts/`](sdk-ts/), [`sdk-py/`](sdk-py/), [`cli/`](cli/), [`site/`](site/) | Building against dregg: the three SDKs, the `dregg` CLI, and the web Studio/Playground/Explorer. |
-| [`starbridge-apps/`](starbridge-apps/), [`docs/`](docs/) | Applications built on the substrate, and the design documents. |
+| [`starbridge-v2/`](starbridge-v2/), [`starbridge-web-surface/`](starbridge-web-surface/), [`deos-matrix/`](deos-matrix/), [`deos-zed/`](deos-zed/), [`deos-terminal/`](deos-terminal/), [`deos-hermes/`](deos-hermes/) | deos: the native gpui cockpit (embeds the real executor), the web-surface / affordance / rehydration stack, and the dock apps (editor, terminal, Matrix chat, agent bridge). |
+| [`sdk/`](sdk/), [`sdk-ts/`](sdk-ts/), [`sdk-py/`](sdk-py/), [`cli/`](cli/), [`site/`](site/), [`wasm/`](wasm/) | Building against dregg: the three SDKs, the `dregg` CLI, the web Studio/Playground/Explorer, and the in-browser wasm executor. |
+| [`starbridge-apps/`](starbridge-apps/), [`app-framework/`](app-framework/), [`docs/`](docs/) | Applications built on the substrate, the deos app framework, and the design documents. |
 
 ## Status
 
-Research software under active development. The proof system is real, the
-verified Lean executor is what the node runs, and the live devnet executes it.
-The named opens above are open, and there has been no independent audit. **Do
-not use for anything security-critical.**
-
-- [Site / Docs / Studio / Explorer](https://dregg.fg-goose.online) · [Live devnet](https://devnet.dregg.fg-goose.online) · [Discord](https://discord.gg/eSTsv7DWcR) · [Pages mirror](https://emberian.github.io/dregg)
+Research software under active development. The proof system is real, and the
+verified Lean executor is what the node runs. The named opens above are open, and
+there has been no independent audit. **Do not use for anything security-critical.**
 
 ## License
 

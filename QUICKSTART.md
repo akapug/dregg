@@ -1,65 +1,77 @@
 # dregg in 15 minutes
 
-This is the hands-on path: talk to the live devnet, sign a real turn, run the
-guided demo, run the site (playground / explorer / starbridge) locally, and
-drive a governance ceremony on the real executor. Every command below was run
-successfully against this tree; outputs are pasted (truncated) as the expected
-result.
+The hands-on path, entirely local: run a node, sign a real turn, run the guided
+demo, drive a governance ceremony on the real executor, and run the site in your
+browser. There is no public server — everything below runs on `localhost` from a
+clean checkout. Every command was run successfully against this tree; outputs are
+pasted (truncated) as the expected result.
 
-What you need: this repo, `cargo`, `curl`. Docker only for the site section.
+What you need: this repo and `cargo`. `python3` and `curl` for the raw HTTP bits.
+Docker for the site section.
 
 ---
 
-## 1. Talk to the live devnet (60 seconds, no build)
+## 1. Run a node (the verified Lean producer, on localhost)
 
-A public node runs at `https://devnet.dregg.fg-goose.online` (solo-federation
-devnet, verified-Lean state producer, faucet on).
+The node's state producer is the Lean executor itself. Build it, initialize a
+data directory, and start it with the faucet on.
 
 ```sh
-curl -s https://devnet.dregg.fg-goose.online/status
+cargo build -p dregg-node
+./target/debug/dregg-node init --data-dir /tmp/my-dregg
+./target/debug/dregg-node run  --data-dir /tmp/my-dregg --enable-faucet --port 8421 &
+```
+
+Check it:
+
+```sh
+curl -s http://localhost:8421/status
 ```
 
 ```json
-{"healthy":true,"peer_count":0,"dag_height":2798,"consensus_live":true,
+{"healthy":true,"peer_count":0,"dag_height":0,"consensus_live":true,
  "federation_mode":"solo","state_producer":"lean","lean_producer":true,
- "full_turn_proving":true,"producer_covered_effects":19}
+ "full_turn_proving":false,"producer_covered_effects":21}
 ```
+
+`state_producer:"lean"` is the point: the node executes turns by calling the
+verified Lean function, not a Rust reimplementation. (`full_turn_proving` is off
+by default — the per-turn STARK is on the hot path; pass `--prove-turns` to turn
+it on, which is what an audit-grade node runs.)
 
 Faucet a cell. NOTE: a cell id is a commitment to a public key
 (`id == derive_raw(pubkey, token)`), so a bare *random* id is **unspendable** —
 the faucet credits it (a real verified turn you can watch land), but no one holds
-its key to sign a spend. To fund a cell you OWN, pass a `public_key` you hold —
-which is exactly what `dregg demo` (below) does: it generates your keypair,
-derives your agent cell, and funds that.
+its key to sign a spend. To fund a cell you OWN, use `dregg demo` (§4), which
+generates your keypair, derives your agent cell, and funds that.
 
 ```sh
-# watch a verified turn land at a throwaway (unspendable) address:
-curl -s -X POST https://devnet.dregg.fg-goose.online/api/faucet \
+CID=$(python3 -c "import secrets;print(secrets.token_hex(32))")
+curl -s -X POST http://localhost:8421/api/faucet \
   -H 'content-type: application/json' \
-  -d '{"recipient":"28c2cba0ccfd29e8c2cb2773f398dfb652a94fa49dbcb143643cd4df847a076f","amount":1000}'
+  -d "{\"recipient\":\"$CID\",\"amount\":1000}"
 ```
 
 ```json
-{"success":true,"tx_hash":"5ddf8f19a6d3bbbb8a11c9120f27c1debb6be64e899a4ff83a2ff806abdae63b","amount":1000}
+{"success":true,"tx_hash":"5573392f…","amount":1000,"turn_hash":"64c6392a…"}
 ```
 
-Read your cell back (and see it in the explorer at
-`https://devnet.dregg.fg-goose.online/explorer/cell/<your-cell-id>`):
+Read the cell back:
 
 ```sh
-curl -s https://devnet.dregg.fg-goose.online/api/cell/28c2cba0ccfd29e8c2cb2773f398dfb652a94fa49dbcb143643cd4df847a076f
+curl -s http://localhost:8421/api/cell/$CID
 ```
 
 ```json
-{"id":"28c2cba0…","found":true,"balance":1000,"nonce":0,…}
+{"id":"…","found":true,"balance":1000,"nonce":0,…}
 ```
 
 ## 2. Get the CLI
 
 ```sh
-cargo build -p dregg-cli --release
-export PATH="$PWD/target/release:$PATH"        # or invoke ./target/release/dregg
-export DREGG_NODE_URL=https://devnet.dregg.fg-goose.online
+cargo build -p dregg-cli
+export PATH="$PWD/target/debug:$PATH"           # or invoke ./target/debug/dregg
+export DREGG_NODE_URL=http://localhost:8421
 dregg node status
 ```
 
@@ -67,13 +79,12 @@ dregg node status
 === Node Status ===
   Health: HEALTHY
   Federation mode: solo
-  State producer: LEAN (verified, 19 effects)
-  Full-turn proving: on (STARK per turn)
-  DAG height: 2,798
+  State producer: LEAN (verified)
+  DAG height: …
 ```
 
-`dregg doctor` health-checks the whole client surface; `dregg --help` lists
-the verbs (id, cell, turn, name, polis, voting, bounty, cap, proof, …).
+`dregg doctor` health-checks the whole client surface; `dregg --help` lists the
+verbs (id, cell, turn, name, polis, voting, bounty, cap, proof, …).
 
 Give yourself a named identity (a fresh Ed25519 key in
 `~/.dregg/profiles/<name>.json`, mode 0600 — the SDK picks the active one up
@@ -87,11 +98,7 @@ dregg id list
 
 ```text
 === Identity Profiles ===
-+---------+-----------------------+
-| Name    | Public key            |
-+=================================+
 | * ember | 72cf3c9bcc58...466e6b |
-+---------+-----------------------+
   Active: ember (persistent default)
 ```
 
@@ -99,136 +106,93 @@ dregg id list
 
 ## 3. Sign a real turn
 
-Reads are public; **writes need the node's bearer token** (the node signs
-turns with its operator cipherclerk). Two ways to have one:
-
-- **Your own node** (next section): `POST /cipherclerk/unlock` returns
-  `bearer_token`, or just use `dregg demo --passphrase`, which does it for you.
-- **The shared devnet**: the token lives on the instance as
-  `DEVNET_API_TOKEN` in `/etc/dregg/node.env`. If you operate the box:
-
-  ```sh
-  export DREGG_API_TOKEN=$(ssh -i ~/.ssh/negneg-cq.pem ubuntu@34.224.208.52 \
-      'sudo grep ^DEVNET_API_TOKEN /etc/dregg/node.env | cut -d= -f2')
-  ```
-
-Submit one effect — write a field of the operator's own cell (`agent` is
-advisory; the node derives the real signer from its cipherclerk):
+Reads are public; **writes need the node's bearer token** (the node signs turns
+with its operator cipherclerk). On your own node you obtain one by unlocking the
+cipherclerk — `dregg demo --passphrase` does exactly that for you, so the
+simplest path to "I signed a real turn" is the demo in §4. To do it by hand,
+unlock the cipherclerk and submit one effect (write a field of the operator's own
+cell — `agent` is advisory; the node derives the real signer from its
+cipherclerk):
 
 ```sh
-curl -s -X POST https://devnet.dregg.fg-goose.online/api/turns/submit \
+# unlock sets the passphrase on a fresh node and returns a bearer token:
+export DREGG_API_TOKEN=$(curl -s -X POST http://localhost:8421/cipherclerk/unlock \
+  -H 'content-type: application/json' -d '{"passphrase":"pick-a-passphrase"}' \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["bearer_token"])')
+
+AGENT=$(curl -s http://localhost:8421/api/node/identity \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["agent_cell"])')
+
+# fund the operator cell so it can pay the turn's fee (skip if already funded):
+curl -s -X POST http://localhost:8421/api/faucet -H 'content-type: application/json' \
+  -d "{\"recipient\":\"$AGENT\",\"amount\":5000}" >/dev/null
+
+curl -s -X POST http://localhost:8421/api/turns/submit \
   -H "Authorization: Bearer $DREGG_API_TOKEN" -H 'content-type: application/json' \
-  -d '{"agent":"'"$(curl -s $DREGG_NODE_URL/api/node/identity | python3 -c 'import json,sys;print(json.load(sys.stdin)["agent_cell"])')"'",
-       "nonce":0,"fee":1000,"memo":"hello from the quickstart",
-       "actions":[{"effects":[{"kind":"set_field","index":0,"value":"42"}]}]}'
+  -d "{\"agent\":\"$AGENT\",\"nonce\":0,\"fee\":1000,\"memo\":\"hello from the quickstart\",
+       \"actions\":[{\"effects\":[{\"kind\":\"set_field\",\"index\":0,\"value\":\"42\"}]}]}"
 ```
 
 ```json
-{"accepted":true,"turn_hash":"8dae2ff19fb5e2912fb4dc76b1d0693cdc702a5b2194b0540ccbd79b2eccfff8",
- "proof_status":"proof_pending","has_witness":false,"witness_count":0,"error":null}
+{"accepted":true,"turn_hash":"8dae2ff1…","proof_status":"proof_pending",
+ "has_witness":false,"witness_count":0,"error":null}
 ```
 
 Watch the receipt land:
 
 ```sh
-curl -s https://devnet.dregg.fg-goose.online/api/receipts          # the chain, newest first
-dregg turn status 8dae2ff19fb5e2912fb4dc76b1d0693cdc702a5b2194b0540ccbd79b2eccfff8
+curl -s http://localhost:8421/api/receipts          # the chain, newest first
+dregg turn status 8dae2ff1…
 ```
 
 ```text
 === Turn Receipt ===
   Turn hash: 8dae2ff1...fff8
   Finality: tentative
-  Chain index: 8
+  Chain index: …
   Actions: 1
-  Computrons: 422
-  Pre-state: 6bc3a65e...6a29
-  Post-state: abd79a4a...5a0b
-  Proof: none
+  Pre-state: 6bc3a65e…
+  Post-state: abd79a4a…
   Witnessed: yes
-  Witness count: 1
 ```
 
-(One honest caveat: on the shared devnet the per-turn STARK currently stays
-`proof_pending` — the witness lands immediately, the proof attachment is a
-known gap; see "rough edges" at the bottom. On a local node with
-`--prove-turns` off you simply get `Full-turn proving: off`.)
+(With `full_turn_proving` off the receipt's witness lands immediately and the
+proof stays `proof_pending`. Start the node with `--prove-turns` to attach a real
+per-turn STARK; a light client then fetches it at `GET /api/turn/{hash}/proof`.)
 
 ## 4. The guided demo — a full app lifecycle, one command
 
-`dregg demo` drives the whole nameservice machine — faucet → register →
-resolve → transfer → revoke — each step a real signed turn:
+`dregg demo` drives the whole nameservice machine — unlock → fund → register →
+resolve → transfer → revoke — each step a real signed turn on the verified commit
+path. It unlocks the cipherclerk itself, so no token dance:
 
 ```sh
-dregg demo --name you.dregg            # uses DREGG_API_TOKEN against the devnet
+dregg --node-url http://localhost:8421 demo --passphrase pick-a-passphrase
 ```
 
 ```text
 === Step 2: Unlocking the cipherclerk ===
-OK: Node already unlocked; using your configured bearer token.
+OK: Cipherclerk unlocked (bearer token acquired).
 === Step 3: Funding the operator cell ===
 OK: Funded 5000 computrons.
-=== Step 4: Registering 'you.dregg' ===
-OK: Registration committed     Turn: f3ce5e21...8a93
-=== Step 5: Resolving 'you.dregg' ===
-OK: 'you.dregg' is bound and active
-=== Step 6: Transferring 'you.dregg' to bob ===
+=== Step 4: Registering 'alice.dregg' ===
+OK: Registration committed     Turn: 16a4cbe4…
+=== Step 6: Transferring 'alice.dregg' to bob ===
 OK: Transfer committed
-=== Step 7: Revoking 'you.dregg' (one-way) ===
+=== Step 7: Revoking 'alice.dregg' (one-way) ===
 OK: Revocation committed
-ERROR: REVOKED — this name has been tombstoned (one-way).   ← the point!
 === Demo complete ===
+OK: A full nameservice lifecycle ran end-to-end on the verified commit path.
 ```
 
-### …or against your own node (no token dance, full unlock flow)
+The first unlock SETS the passphrase on a fresh node; the demo acquires the
+bearer token itself.
 
-```sh
-cargo build -p dregg-node                 # once; the verified Lean producer is default-on
-./target/debug/dregg-node init --data-dir /tmp/my-dregg
-./target/debug/dregg-node run  --data-dir /tmp/my-dregg --enable-faucet --port 8421 &
-dregg --node-url http://localhost:8421 demo --passphrase pick-a-passphrase
-```
-
-Same lifecycle; the first unlock SETS the passphrase on a fresh node, and the
-demo acquires the bearer token itself.
-
-## 5. Run the site locally (playground · explorer · starbridge)
-
-The site builds in Docker (`node:22`); mount the **repo root** — the build
-regenerates its ontology/predicate catalogs from the Lean sources in
-`metatheory/`:
-
-```sh
-docker run --rm -v "$PWD:/repo" -w /repo/site node:22 \
-  sh -c "npm install --no-audit --no-fund && npm run build"
-docker run --rm -d -p 3000:3000 -v "$PWD/site:/site" -w /site node:22 npx serve dist
-```
-
-(If the build aborts with "generated catalogs are stale", run it as
-`sh -c "node tools/gen-ontology-catalog.js && npm run build"` — the Lean
-sources moved under it.)
-
-Then:
-
-- **<http://localhost:3000/playground/#turn-workbench>** — stage a turn by
-  verb, read the verified-Lean explanation, RUN it on the real in-browser wasm
-  executor, then PROVE it: a real EffectVM STARK, produced and self-verified
-  in your browser (~500 KB proof, 64 trace rows for one SetField).
-- **<http://localhost:3000/explorer/>** — defaults to `http://localhost:8420`;
-  open Settings and point it at `https://devnet.dregg.fg-goose.online` (or your
-  `:8421` node) to browse live cells/receipts with witness status and per-cell
-  time travel. The hosted twin (same build) is
-  <https://devnet.dregg.fg-goose.online/explorer/>.
-- **<http://localhost:3000/starbridge/>** — the workbench/inspector. It boots
-  an EMPTY in-browser world: use the **Start here** strip (seed a sandbox
-  world → run a transfer turn → click the receipt), or switch the Runtime
-  picker to *remote* to browse the devnet read-only.
-
-## 6. Drive a governance ceremony (polis)
+## 5. Drive a governance ceremony (polis)
 
 The polis council machine — charter, proposal, M-of-N approvals, threshold
-certification, execute-exactly-once — runs end-to-end on the real executor in
-one example binary:
+certification, execute-exactly-once — runs end-to-end on the real **embedded**
+executor (no node, no server) in one example binary:
 
 ```sh
 cargo run -p dregg-sdk --example polis_ceremony
@@ -236,23 +200,49 @@ cargo run -p dregg-sdk --example polis_ceremony
 
 ```text
 charter             : 2-of-3
-proposal cell born  : 6628d2df8c0321b8…
+treasury funded     : 100 computrons
 [propose] state=Proposed approvals=0/2 certified=false
 [approve] state=Proposed approvals=1/2 certified=false
-certify at 1-of-2   : EXECUTOR REJECTED (as it must) — program violation on cell …: affine sum 1 > 0
+certify at 1-of-2   : EXECUTOR REJECTED (as it must) — program constraint violated: affine sum 1 > 0
 [certify] state=Approved approvals=2/2 certified=true
 [execute] state=Executed approvals=2/2 certified=true
 grantee balance     : 100 (treasury paid exactly once)
 ```
 
-Every rule there is enforced by the cell program the factory installs — the
-SDK builds turns, the EXECUTOR rejects the bad ones. The same machine on a
-live node decodes with `dregg polis council --cell <proposal-cell-id>`.
-(`sdk/tests/polis_governance_e2e.rs` is the full tooth-by-tooth suite,
-including the constitution + forward-certified amendment ceremony.)
+Every rule there is enforced by the cell program the factory installs — the SDK
+builds turns, the EXECUTOR rejects the bad ones. Also try
+`cargo run -p dregg-sdk --example hello_receipt_chain` — the smallest possible
+"what is a receipt" loop. (`sdk/tests/*_e2e.rs` are the full tooth-by-tooth
+executable specifications.)
 
-Also try `cargo run -p dregg-sdk --example hello_receipt_chain` — the smallest
-possible "what is a receipt" loop.
+## 6. Run the site locally (playground · explorer · starbridge)
+
+The same executor compiles to wasm and runs in your tab. Build the wasm package,
+then build and serve the site. The site builds in Docker (`node:22`); mount the
+**repo root** — the build regenerates its ontology/predicate catalogs from the
+Lean sources in `metatheory/`.
+
+```sh
+# 1. the in-browser executor (writes the package the site loads):
+cd wasm && wasm-pack build --target web --out-dir ../site/pkg --release && cd ..
+
+# 2. build + serve the site:
+docker run --rm -d -p 3000:3000 -v "$PWD:/repo" -w /repo/site node:22 \
+  sh -c "npm install --no-audit --no-fund && npm run build && npx serve dist"
+```
+
+Then:
+
+- **<http://localhost:3000/playground/#turn-workbench>** — stage a turn by verb,
+  read the verified-Lean explanation, RUN it on the real in-browser wasm
+  executor, then PROVE it: a real EffectVM STARK, produced and self-verified in
+  your browser.
+- **<http://localhost:3000/explorer/>** — open Settings and point it at your
+  `http://localhost:8421` node to browse live cells/receipts with witness status
+  and per-cell time travel.
+- **<http://localhost:3000/starbridge/>** — the workbench/inspector. It boots an
+  EMPTY in-browser world: use the **Start here** strip (seed a sandbox world →
+  run a transfer turn → click the receipt).
 
 ## 7. Subscribe to the receipt stream (reactivity)
 
@@ -268,21 +258,14 @@ curl -N "$DREGG_NODE_URL/api/events/stream?cell=<hex-cell-id>&kind=set_field"
 ```text
 event: receipt
 id: 9
-data: {"chain_index":9,"receipt_hash":"…","turn_hash":"8dae2ff1…","cells":["…"],
-       "kinds":["set_field"],"height":2799,"has_proof":false,"finality":"tentative",…}
+data: {"chain_index":9,"turn_hash":"8dae2ff1…","cells":["…"],
+       "kinds":["set_field"],"finality":"tentative",…}
 ```
 
-Each event's `id` is the receipt-chain index; reconnect with a
-`Last-Event-ID:` header to resume where you left off. A `: hb` comment every
-30s keeps proxies from closing the stream. From the SDK the same feed is
+Each event's `id` is the receipt-chain index; reconnect with a `Last-Event-ID:`
+header to resume. From the SDK the same feed is
 `dregg_sdk::events::NodeEvents::new(url).subscribe(filter)` — a reconnecting
-`Stream` of the public `Receipt` noun. The worked agent-actuator pattern
-(watch a cell, react with a budget-mandate-bounded turn — cells are law,
-agents are will, receipts are the nervous system) is:
-
-```sh
-cargo run -p dregg-sdk --example reactive_agent
-```
+`Stream` of the public `Receipt` noun.
 
 ## 8. Inspect what you made
 
@@ -293,8 +276,8 @@ dregg polis council --cell <proposal-cell>    # the council machine, decoded
 dregg turn status <turn-hash>                 # receipt, finality, witness
 ```
 
-and in a browser: `https://devnet.dregg.fg-goose.online/explorer/cell/<id>`
-(also `…/explorer/receipt/<hash>`, `…/explorer/tx/<turn-hash>`).
+and in a browser at `http://localhost:3000/explorer/cell/<id>` (also
+`…/explorer/receipt/<hash>`, `…/explorer/tx/<turn-hash>`).
 
 ## Where next
 
@@ -305,20 +288,14 @@ and in a browser: `https://devnet.dregg.fg-goose.online/explorer/cell/<id>`
 - `sdk/` — `AgentRuntime` (embedded executor), factories, polis builders;
   `sdk/tests/*_e2e.rs` are executable specifications.
 - `metatheory/` — the verified Lean implementation the node runs.
-- The paper: <https://devnet.dregg.fg-goose.online/paper.html>.
+- `starbridge-v2/` — deos, the native cockpit (`cd starbridge-v2 && cargo build`).
 
-## Known rough edges (devnet, 2026-06)
+## Notes
 
-- The shared devnet's reverse proxy forwards only an allowlist of paths; the
-  CLI therefore uses the `/api/turns/*` aliases. Endpoints without aliases
-  (`/cipherclerk/unlock`, `/turn/atomic`, `/turns/peer-exchange`,
-  `/cells/create-from-factory`) are local-node-only for now.
-- Per-turn STARK attachment on the shared devnet stays `proof_pending`
-  (witnesses land; the async prove pool isn't attaching proofs).
-- Thin-HTTP turns currently marshal without `valid_until`, so the Lean
-  producer logs a fallback-to-Rust for them (`turn.valid_until required for
-  wire marshal`) — execution is unaffected, but those turns don't ride the
-  verified producer yet.
-- The devnet's data dir predates starbridge genesis seeding, so the seeded
-  app cells (`privacy-voting-poll`, `bounty-board-bounty`, …) don't exist
-  there; `dregg voting`/`dregg bounty` need a freshly-initialized node.
+- The node's HTTP API binds `127.0.0.1` by default. To reach it from another
+  host, pass `--bind 0.0.0.0` and add a `--cors-origin` for any browser origin.
+- The `--enable-faucet` switch is for devnets only; it lets anyone draw from the
+  genesis faucet cell. A production node leaves it off.
+- The embedded-executor crates (the SDK examples, `starbridge-v2`, the proof
+  suites) are slow to compile in debug — the first `cargo run` of an example
+  takes a few minutes. They link the Lean archive.
