@@ -79,6 +79,18 @@ self-hosting bake) → `InputState` computed an empty visible-line range. Fix = 
 change); the real buffer now paints. Re-baked PNGs (`self-hosting-loop{,-full}.png`) show the editor with
 line-numbered syntax-highlighted code (`fn main(){ println!("v2") }`) beside the terminal that compiled it.
 
+### LIVE HERMES AGENT BRAIN — a real LLM drives the confined loop, by running (2026-06-23).
+`85488a2c` (`deos-hermes/{src/main.rs,tests/live_acp.rs}`). A genuine model (Claude Sonnet 4.5 via the live
+`hermes-acp` subprocess — NOT the mock) drove the real ADOS loop: it emitted a real `terminal` tool-call
+(`rm -rf …`), intercepted at the ACP `session/request_permission` seam → `HermesGateway::admit_call` →
+a REAL cap-gated receipted dregg turn on the embedded Lean executor (turn-hash `dd7d2627…`, mandate 5→4).
+REFUSAL path (`live-refuse`): rate pinned to 0 → the same live brain's `rm -rf` REFUSED in-band (no turn,
+no spend) and the model OBSERVED + ADAPTED ("blocked... I cannot retry"). Both `#[ignore]`+env-gated tests
+PASS against the live provider; the hermetic mock suite stays green (21 pass). FINDINGS: the `acp` install
+was a non-issue (Homebrew `hermes-agent` carries it); ⚠ ember's `ANTHROPIC_API_KEY` (allgame/.env) is
+CREDIT-EXHAUSTED (HTTP 400, $0 billed — rejected pre-gen) → used the box's GitHub Copilot sub for the proof
+(~$0 incremental, identical gateway path). Repro env in the commit; Anthropic path proven to handshake too.
+
 ### CONFINED HERMES AGENT LOOP — RUNS, receipted, by running (2026-06-23).
 `7c58e4da` (`deos-hermes`). 18 green incl. the consolidated `agent_loop_acceptance` (5-prompt session,
 ONE persistent gateway): N in-mandate calls ADMITTED each w/ a real turn receipt on the embedded Lean
