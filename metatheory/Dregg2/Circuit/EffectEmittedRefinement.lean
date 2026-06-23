@@ -488,6 +488,35 @@ theorem revoke_emitted_refines_spec (S : Surface2) (D : Caps → ℤ) (hD : Func
     (revokeCircuitStep S D hD) revokeSpecStep (revoke_circuit_refines_spec S D hD hRest hLog)
     (fun pre args post => revoke_emitted_equiv_circuit S D hD pre args post) s args s' h
 
+/-! ## §12.EPOCH — the FAITHFUL emitted delegation-revoke (the deployed cap-edge wire + the epoch residual).
+
+`.revokeDelegationA` meets the STRENGTHENED `RevokeDelegationFullSpec`. The emitted `revokeE` wire binds the
+cap-edge `RevokeSpec`; the epoch step (parent epoch bumped + child snapshot staled) rides the NAMED
+`RevokeDelegationEpochResidual` (commitment-bound, write-gate residual). The emitted step CONJOINS them. -/
+
+/-- **`revokeDelegationEmittedStep`** — the emitted `revokeEmittedStep` CONJOINED with the NAMED epoch
+residual. The FAITHFUL emitted-wire relation for `.revokeDelegationA`. -/
+def revokeDelegationEmittedStep (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (s : RecChainedState) (args : RevokeArgs) (s' : RecChainedState) : Prop :=
+  revokeEmittedStep S D hD s args s'
+  ∧ RevokeDelegationEpochResidual s args.holder args.t s'
+
+/-- **`revokeDelegation_emitted_refines_spec` — emitted wire ⟹ STRENGTHENED `RevokeDelegationFullSpec`.**
+From the emitted cap-edge wire (forcing `RevokeSpec`) PLUS the NAMED epoch residual, the FAITHFUL
+`RevokeDelegationFullSpec` holds. -/
+theorem revokeDelegation_emitted_refines_spec (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.Revoke.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RevokeArgs) (s' : RecChainedState)
+    (h : revokeDelegationEmittedStep S D hD s args s') :
+    Dregg2.Circuit.Spec.AuthorityRevocation.RevokeDelegationFullSpec s args.holder args.t s' := by
+  obtain ⟨hemit, hep, hdgs, hstamp⟩ := h
+  have hspec : revokeSpecStep s args s' :=
+    revoke_emitted_refines_spec S D hD hRest hLog s args s' hemit
+  obtain ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+         hdc, hdel, _hde, _hdels, _hdea, hhp⟩ := hspec
+  exact ⟨trivial, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+         hdc, hdel, hhp, hep, hdgs, hstamp⟩
+
 /-! ## §16 — SetFieldA (v1 EffectCommit). -/
 
 def setFieldEmittedStep (S : CommitSurface) (s : RecChainedState) (args : SetFieldArgs)

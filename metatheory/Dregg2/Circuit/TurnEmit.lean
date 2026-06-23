@@ -321,7 +321,10 @@ def stepEmittedEncodeAgrees
   | .revoke holder t =>
       assignmentOf sw.assignment = encodeE2 S (revokeE D_caps hD_caps) st ⟨holder, t⟩ st'
   | .revokeDelegationA holder t =>
+      -- §EPOCH: the deployed cap-edge wire CONJOINED with the NAMED epoch residual (parent epoch bump +
+      -- child snapshot stale) — the FAITHFUL emitted relation for `.revokeDelegationA`.
       assignmentOf sw.assignment = encodeE2 S (revokeE D_caps hD_caps) st ⟨holder, t⟩ st'
+      ∧ Dregg2.Circuit.EffectRefinement.RevokeDelegationEpochResidual st holder t st'
   | .setFieldA actor cell f v =>
       assignmentOf sw.assignment = encodeE CS setFieldE st { actor, cell, f, v } st'
   | .emitEventA actor cell topic data =>
@@ -485,9 +488,12 @@ theorem step_emitted_refines_fullActionStep
         ((setField_emitted_equiv_circuit CS st ⟨actor, cell, f, v⟩ st').mpr hc)
   | .revokeDelegationA holder t =>
       simp only [fullActionStep]
-      exact revoke_emitted_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog
-        st ⟨holder, t⟩ st'
-        ((revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mpr hcircuit)
+      -- §EPOCH: the FAITHFUL `RevokeDelegationFullSpec` from the emitted cap-edge wire PLUS the NAMED
+      -- epoch residual (`revokeDelegationEmittedStep` conjoins them).
+      obtain ⟨hwire, hresidual⟩ := hcircuit
+      exact revokeDelegation_emitted_refines_spec S D_caps hD_caps
+        (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog st ⟨holder, t⟩ st'
+        ⟨(revoke_emitted_equiv_circuit S D_caps hD_caps st ⟨holder, t⟩ st').mpr hwire, hresidual⟩
   | .emitEventA actor cell topic data =>
       simp only [fullActionStep]
       rcases hcircuit with ⟨hwf, hwf', hc⟩

@@ -347,8 +347,9 @@ theorem closedLogExtract_delegateAtten_closed {State : Type}
     pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **revokeDelegation (14) — CLASS A.** `Rfix 14 = revokeDelegationWriteCapOpenV3` (position 49): the
-cap-tree REMOVE on the moving genuine face is FORCED via `revokeDelegation_descriptorRefines_capOpenSat`.
-Refines `RevokeSpec`. -/
+cap-tree REMOVE on the moving genuine face is FORCED via `revokeDelegation_descriptorRefines_capOpenSat_full`.
+Refines the FAITHFUL `RevokeDelegationFullSpec` (cap-edge remove FORCED + the epoch step — parent epoch
+bumped + child snapshot staled — carried as the NAMED `RevokeDelegationFullEncodes` epoch residual, §3.EPOCH). -/
 theorem closedLogExtract_revokeDelegation_closed {State : Type}
     (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
@@ -357,10 +358,10 @@ theorem closedLogExtract_revokeDelegation_closed {State : Type}
       Σ' (holder tt : CellId),
         PLift (pubLogPost = LH (authReceipt holder :: pre.log)) ×'
         (post.log = authReceipt holder :: pre.log →
-          Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+          Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationFullEncodes
                 Scap pre post holder tt),
             Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationWriteAnchor
-              Scap pre post holder tt hash minit mfin maddrs t henc)) :
+              Scap pre post holder tt hash minit mfin maddrs t henc.capRemove)) :
     ClosedLogExtract Slive LH hash Rfix 14 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.revokeDelegationWriteCapOpenV3
@@ -858,14 +859,17 @@ structure ClosureReadouts
               Scap pre post del rec tt keep),
           Dregg2.Circuit.RotatedKernelRefinementCapFamily.DelegateAttenWriteAnchor
             Scap pre post del rec tt keep hash minit mfin maddrs t henc)
+  -- §EPOCH: the revokeDelegation readout yields the FAITHFUL `RevokeDelegationFullEncodes` (the cap-tree
+  -- REMOVE decode + the NAMED epoch residual — parent epoch bump + child snapshot stale), so the closed
+  -- extractor proves the STRENGTHENED `RevokeDelegationFullSpec`. The anchor rides `henc.capRemove`.
   rdRevokeDelegation : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 14) minit mfin maddrs t →
     Σ' (holder tt : CellId), PLift (pubLogPost = LH (authReceipt holder :: pre.log)) ×'
       (post.log = authReceipt holder :: pre.log →
-        Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+        Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationFullEncodes
               Scap pre post holder tt),
           Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationWriteAnchor
-            Scap pre post holder tt hash minit mfin maddrs t henc)
+            Scap pre post holder tt hash minit mfin maddrs t henc.capRemove)
   rdRevoke : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 2) minit mfin maddrs t →
     Σ' (holder tt : CellId), PLift (pubLogPost = LH (authReceipt holder :: pre.log)) ×'

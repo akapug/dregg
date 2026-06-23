@@ -260,6 +260,16 @@ append an authority receipt. -/
 def recCRevoke (s : RecChainedState) (holder t : CellId) : RecChainedState :=
   { kernel := recKRevokeTarget s.kernel holder t, log := authReceipt holder :: s.log }
 
+/-- **Chained FULL delegation-revoke.** The committed form of `recKRevokeDelegationFull` (`AuthTurn.lean`):
+the shared cap-edge `removeEdge` (leg 1) COMPOSED with the epoch bump + child-snapshot clear (legs 2+3 —
+the dregg1 `apply_revoke_delegation` extras: bump the PARENT's `delegationEpoch`, clear the CHILD's
+`delegations` snapshot + reset its `delegationEpochAt` stamp). Like `recCRevoke`, always commits
+(revocation only subtracts authority) and appends one authority receipt. This is the FAITHFUL chained
+step for the `.revokeDelegationA` arm — staling the revoked child's snapshot, not merely dropping the
+cap edge. -/
+def recCRevokeDelegationFull (s : RecChainedState) (parent child : CellId) : RecChainedState :=
+  { kernel := recKRevokeDelegationFull s.kernel parent child, log := authReceipt parent :: s.log }
+
 /-- **Chained mint.** Run `recKMint`; on commit, append a supply receipt (a self-`Turn` carrying the
 minted `amt` as its `balance_change` — the disclosed delta on the chain). -/
 def recCMint (s : RecChainedState) (actor cell : CellId) (amt : ℤ) : Option RecChainedState :=
@@ -2418,7 +2428,11 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .introduceA intro rec t          => recCDelegate s intro rec t
   | .delegateAttenA del rec t keep   => recCDelegateAtten s del rec t keep
   | .attenuateA actor idx keep       => some (attenuateStepA s actor idx keep)
-  | .revokeDelegationA holder t      => some (recCRevoke s holder t)
+  -- §EPOCH: the FAITHFUL delegation revoke — the shared cap-edge `removeEdge` COMPOSED with the
+  -- epoch bump (parent's `delegationEpoch +1`) + child-snapshot clear (`apply_revoke_delegation`'s
+  -- legs 2+3). Routes to `recCRevokeDelegationFull`, NOT the bare `recCRevoke`: the revoked child's
+  -- delegation snapshot is now STALED (`delegationStale child = true`), not merely edge-dropped.
+  | .revokeDelegationA holder t      => some (recCRevokeDelegationFull s holder t)
   | .exerciseA actor t inner         =>
       -- R4: hold-gate (`exerciseStepA`) AND the held cap's FACET MASK admits every inner effect
       -- (`innerFacetsAdmittedA`), THEN recurse. Fail-closed on either gate.
@@ -2599,8 +2613,9 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       simp only [attenuateStepA, recTotalAsset]; ring
   | revokeDelegationA holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      simp only [recCRevoke, Option.some.injEq] at h; subst h
-      simp only [recTotalAsset, recKRevokeTarget]; ring
+      simp only [recCRevokeDelegationFull, Option.some.injEq] at h; subst h
+      simp only [recTotalAsset, recKRevokeDelegationFull, recKRevokeDelegationEpoch,
+        recKRevokeTarget]; ring
   | exerciseA actor t inner =>
       -- R4 facet gate first, then the hold-gate is bal-neutral (the c-list is read, not edited); the move
       -- is whatever `inner` moves, read off the mutual `execInnerA_ledger_per_asset`.
@@ -3014,7 +3029,7 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA, attenuateStepA, fullReceiptA, Option.some.injEq] at h ⊢
       subst h; rfl
   | revokeDelegationA holder t =>
-      simp only [execFullA, recCRevoke, fullReceiptA] at h ⊢
+      simp only [execFullA, recCRevokeDelegationFull, fullReceiptA] at h ⊢
       simp only [Option.some.injEq] at h; subst h; rfl
   | createCellA actor newCell =>
       simp only [execFullA, fullReceiptA] at h ⊢
@@ -3572,8 +3587,11 @@ theorem execFullA_revokeDelegationA_removeEdge (s s' : RecChainedState) (holder 
     Dregg2.Spec.execGraph s'.kernel.caps
       = Dregg2.Spec.removeEdge (Dregg2.Spec.execGraph s.kernel.caps) holder
           (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
-  simp only [execFullA, recCRevoke] at h
+  simp only [execFullA, recCRevokeDelegationFull] at h
   simp only [Option.some.injEq] at h; subst h
+  -- the FULL step's `caps` IS the shared `recKRevokeTarget`'s (`recKRevokeDelegationFull_caps`); the
+  -- epoch legs touch no `caps`, so the graph move is verbatim the bare `removeEdge`.
+  rw [recKRevokeDelegationFull_caps]
   exact recKRevokeTarget_execGraph s.kernel.caps holder t
 
 /-- **`execFullA_delegateAttenA_grounds`.** A committed rights-delegation HOLDS the abstract

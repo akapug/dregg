@@ -39,6 +39,7 @@ open Dregg2.Circuit.EffectRefinement
    noteSpendCircuitStep noteSpend_circuit_refines_spec
    noteCreateCircuitStep noteCreate_circuit_refines_spec
    revokeCircuitStep revoke_circuit_refines_spec
+   revokeDelegationCircuitStep revokeDelegation_circuit_refines_spec
    setFieldCircuitStep setField_circuit_refines_spec)
 open Dregg2.Circuit.EffectRefinementBatch2
 open Dregg2.Circuit.Inst.EmitEventA (EmitEventArgs)
@@ -187,7 +188,9 @@ def fullActionCircuitStep
   | .revoke holder t =>
       revokeCircuitStep S D_caps hD_caps st ⟨holder, t⟩ st'
   | .revokeDelegationA holder t =>
-      revokeCircuitStep S D_caps hD_caps st ⟨holder, t⟩ st'
+      -- §EPOCH: the deployed cap-edge `revokeCircuitStep` CONJOINED with the NAMED epoch-step residual
+      -- (parent epoch bumped + child snapshot staled — commitment-bound, write-gate residual).
+      revokeDelegationCircuitStep S D_caps hD_caps st ⟨holder, t⟩ st'
   | .setFieldA actor cell f v =>
       AccountsWF st.kernel ∧ AccountsWF st'.kernel ∧
       setFieldCircuitStep CS st ⟨actor, cell, f, v⟩ st'
@@ -403,8 +406,10 @@ theorem fullAction_circuit_refines_spec
         (restIffNoCaps_delegate_to_attenuate S.RH hRestCaps) hLog st _ st' h
   | .revokeDelegationA holder t =>
       simp only [fullActionStep]
-      exact revoke_circuit_refines_spec S D_caps hD_caps (restIffNoCaps_delegate_to_revoke S.RH hRestCaps)
-        hLog st _ st' h
+      -- §EPOCH: the FAITHFUL `RevokeDelegationFullSpec` from the deployed cap-edge circuit PLUS the
+      -- NAMED epoch residual (`revokeDelegationCircuitStep` conjoins them).
+      exact revokeDelegation_circuit_refines_spec S D_caps hD_caps
+        (restIffNoCaps_delegate_to_revoke S.RH hRestCaps) hLog st _ st' h
   | .exerciseA actor target inner =>
       -- **REAL** exerciseA soundness: hold-gate passes through; the inner CIRCUIT fold
       -- (`exerciseInnerFold`) refines the declarative `turnSpec` via `exerciseInnerFold_refines_turnSpec`,

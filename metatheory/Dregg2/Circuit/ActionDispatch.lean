@@ -199,7 +199,9 @@ mutual
     | .attenuateA actor idx keep =>
         AttenuateSpec st actor idx keep st'
     | .revokeDelegationA holder t =>
-        RevokeSpec st holder t st'
+        -- §EPOCH: the FAITHFUL delegation revoke meets the STRENGTHENED spec (parent epoch bumped +
+        -- child snapshot staled), NOT the bare cap-edge `RevokeSpec`.
+        RevokeDelegationFullSpec st holder t st'
     | .exerciseA actor target inner =>
         innerFacetsAdmittedA st actor target inner = true ∧
         exerciseGuard st actor target ∧

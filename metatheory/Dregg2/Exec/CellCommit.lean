@@ -198,8 +198,11 @@ theorem execFullA_commitments_grow (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA, attenuateStepA, Option.some.injEq] at h; subst h
       exact List.Subset.refl _
   | revokeDelegationA holder t =>
-      simp only [execFullA, recCRevoke, Option.some.injEq] at h; subst h
-      exact subset_of_commitments_eq (recKRevokeTarget_commitments _ _ _)
+      simp only [execFullA, recCRevokeDelegationFull, Option.some.injEq] at h; subst h
+      -- the FAITHFUL full step edits only `caps` + the three epoch/snapshot registries — `commitments`
+      -- is untouched (the epoch legs touch no `commitments`).
+      exact subset_of_commitments_eq
+        (by rfl : (recKRevokeDelegationFull s.kernel holder t).commitments = s.kernel.commitments)
   | exerciseA actor t inner =>
       simp only [execFullA] at h
       by_cases hf : innerFacetsAdmittedA s actor t inner = true

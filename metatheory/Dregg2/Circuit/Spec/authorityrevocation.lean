@@ -179,15 +179,113 @@ theorem execFullA_revoke_iff_spec (st : RecChainedState) (holder t : CellId)
       Option.some.injEq]
   exact recCRevoke_iff_spec st holder t st'
 
-/-- **`execFullA_revokeDelegation_iff_spec` — EXECUTOR ⟺ SPEC for the `revokeDelegationA` arm.** The
-parent-revocation (`apply_revoke_delegation`) routes to the SAME `recCRevoke`; the spec is
-identical. (Distinct dregg1 op from `DropRef`, same graph move, hence same full-state transition.) -/
-theorem execFullA_revokeDelegation_iff_spec (st : RecChainedState) (holder t : CellId)
+/-! ## §2.EPOCH — the STRENGTHENED full-state spec for `revokeDelegationA` (the faithful epoch step).
+
+`.revokeDelegationA holder t` does NOT route to the bare `recCRevoke` (cap-edge removal only). It routes
+to `recCRevokeDelegationFull` (`TurnExecutorFull.lean`), the committed form of `recKRevokeDelegationFull`
+(`AuthTurn.lean`) — the FAITHFUL `apply_revoke_delegation`: the shared cap-edge `removeEdge` (leg 1)
+COMPOSED with the epoch bump + child-snapshot clear (legs 2+3). So the spec it meets is STRICTLY STRONGER
+than `RevokeSpec`: the same `caps` removeEdge + log advance + thirteen-field frame, but instead of FRAMING
+`delegationEpoch`/`delegations`/`delegationEpochAt` UNCHANGED, it ASSERTS the epoch step — the parent's
+epoch bumped `+1`, the child's snapshot cleared (`[]`) and its stamp reset to `0`. The light-client
+freshness consequence (`delegationStale child = true`) is the keystone `recKRevokeDelegationFull_makes_child_stale`. -/
+
+/-- **`RevokeDelegationFullSpec st parent child st'`** — the STRENGTHENED full-state spec of the FAITHFUL
+delegation revoke. Identical to `RevokeSpec` on the shared cap-edge `removeEdge`, the receipt-log advance,
+and the THIRTEEN balance/account/note/lifecycle frame fields — but the three delegation registries are no
+longer FRAMED unchanged; they carry the dregg1 epoch step: the PARENT's `delegationEpoch` bumped `+1`, the
+CHILD's `delegations` snapshot cleared, its `delegationEpochAt` stamp reset to `0`. A forge that removes
+the cap edge WITHOUT performing the epoch step FAILS these clauses. -/
+def RevokeDelegationFullSpec (st : RecChainedState) (parent child : CellId)
+    (st' : RecChainedState) : Prop :=
+  True
+  ∧ st'.kernel.caps = removeEdgeCaps st.kernel.caps parent child
+  ∧ st'.log = authReceipt parent :: st.log
+  ∧ st'.kernel.accounts = st.kernel.accounts
+  ∧ st'.kernel.cell = st.kernel.cell
+  ∧ st'.kernel.nullifiers = st.kernel.nullifiers
+  ∧ st'.kernel.revoked = st.kernel.revoked
+  ∧ st'.kernel.commitments = st.kernel.commitments
+  ∧ st'.kernel.bal = st.kernel.bal
+  ∧ st'.kernel.slotCaveats = st.kernel.slotCaveats
+  ∧ st'.kernel.factories = st.kernel.factories
+  ∧ st'.kernel.lifecycle = st.kernel.lifecycle
+  ∧ st'.kernel.deathCert = st.kernel.deathCert
+  ∧ st'.kernel.delegate = st.kernel.delegate
+  ∧ st'.kernel.heaps = st.kernel.heaps
+  -- THE EPOCH STEP (legs 2+3), no longer framed-unchanged:
+  ∧ st'.kernel.delegationEpoch
+      = (fun c => if c = parent then st.kernel.delegationEpoch c + 1 else st.kernel.delegationEpoch c)
+  ∧ st'.kernel.delegations
+      = (fun c => if c = child then [] else st.kernel.delegations c)
+  ∧ st'.kernel.delegationEpochAt
+      = (fun c => if c = child then 0 else st.kernel.delegationEpochAt c)
+
+/-- **The strengthened core: `recCRevokeDelegationFull` ⟺ `RevokeDelegationFullSpec` (FULL state, both
+directions).** The faithful chained delegation-revoke commits into `st'` IFF `st'` is EXACTLY the
+strengthened spec'd post-state. The `→` validates the FULL step against the independent spec — the
+thirteen frame fields PLUS the three epoch-step clauses are all checked, so a mutator that dropped the
+edge but skipped the epoch bump / snapshot clear would make this FAIL. -/
+theorem recCRevokeDelegationFull_iff_spec (st : RecChainedState) (parent child : CellId)
     (st' : RecChainedState) :
-    execFullA st (.revokeDelegationA holder t) = some st' ↔ RevokeSpec st holder t st' := by
-  rw [show execFullA st (.revokeDelegationA holder t) = some (recCRevoke st holder t) from rfl,
+    recCRevokeDelegationFull st parent child = st' ↔ RevokeDelegationFullSpec st parent child st' := by
+  unfold RevokeDelegationFullSpec recCRevokeDelegationFull recKRevokeDelegationFull
+    recKRevokeDelegationEpoch
+  constructor
+  · intro h; subst h
+    refine ⟨trivial, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+            rfl, rfl, rfl⟩
+    -- the `caps` post is the shared `recKRevokeTarget` post = `removeEdgeCaps` (the epoch legs touch
+    -- no `caps`, so `recKRevokeDelegationFull_caps` carries the §1 equality verbatim).
+    exact removeEdgeCaps_correct st.kernel parent child
+  · rintro ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+           hdc, hdel, hhp, hde, hdels, hdea⟩
+    obtain ⟨k', log'⟩ := st'
+    obtain ⟨acc', cell', caps', null', rev', com', bal', sc', fac', lif', dc', del',
+            dels', de', dea', hp'⟩ := k'
+    rw [← removeEdgeCaps_correct st.kernel parent child] at hcaps
+    subst hacc hcell hcaps hnull hrev hcom hbal hsc hfac hlif hdc hdel hhp hde hdels hdea hlog
+    rfl
+
+/-- **`execFullA_revokeDelegation_iff_spec` — EXECUTOR ⟺ STRENGTHENED SPEC for the `revokeDelegationA`
+arm (FULL state, both directions).** `execFullA st (.revokeDelegationA parent child) = some st'` IFF
+`st'` is exactly the FAITHFUL epoch-step post-state. The arm routes to `recCRevokeDelegationFull` (NOT
+the bare `recCRevoke`), so the iff is the STRONGER `RevokeDelegationFullSpec` — it asserts the parent
+epoch bump + child snapshot clear, not merely the cap-edge removal. -/
+theorem execFullA_revokeDelegation_iff_spec (st : RecChainedState) (parent child : CellId)
+    (st' : RecChainedState) :
+    execFullA st (.revokeDelegationA parent child) = some st'
+      ↔ RevokeDelegationFullSpec st parent child st' := by
+  rw [show execFullA st (.revokeDelegationA parent child)
+        = some (recCRevokeDelegationFull st parent child) from rfl,
       Option.some.injEq]
-  exact recCRevoke_iff_spec st holder t st'
+  exact recCRevokeDelegationFull_iff_spec st parent child st'
+
+/-! ## §2.EPOCH-NV — the strengthened spec is NON-VACUOUS: the child genuinely STALES.
+
+The whole point of the strengthening: a forge that drops the edge but does NOT bump the epoch is REJECTED.
+We exhibit the freshness consequence DIRECTLY off the spec — after the faithful revoke, IF the child's
+parent pointer still points at `parent`, its snapshot is STALE. -/
+
+/-- **`revokeDelegationFull_stales_child` — THE FRESHNESS TOOTH, read off the spec.** From the
+strengthened spec, the child's stamp is reset to `0` while the parent's epoch is bumped to
+`delegationEpoch parent + 1 > 0`; so if the child still points at `parent`, `delegationStale child = true`
+in the post-state. A light client REJECTS the revoked delegation — it cannot be replayed. The forge that
+skips the epoch bump cannot satisfy the spec (its `delegationEpoch parent` would be unchanged, failing the
+epoch-step clause), so it is unreachable. -/
+theorem revokeDelegationFull_stales_child (st : RecChainedState) (parent child : CellId)
+    (st' : RecChainedState) (h : RevokeDelegationFullSpec st parent child st')
+    (hpoint : st'.kernel.delegate child = some parent) :
+    delegationStale st'.kernel child = true := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hde, _, hdea⟩ := h
+  have hstamp : st'.kernel.delegationEpochAt child = 0 := by
+    have := congrFun hdea child; simpa using this
+  have hpar : st'.kernel.delegationEpoch parent = st.kernel.delegationEpoch parent + 1 := by
+    have := congrFun hde parent; simpa using this
+  unfold delegationStale
+  rw [hpoint]
+  simp only [hstamp, hpar]
+  exact decide_eq_true (by omega)
 
 /-! ## §4 — Non-vacuity: the spec is a GENUINE `removeEdge`, not a rubber stamp.
 
@@ -253,7 +351,9 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 #assert_axioms recKRevokeTarget_correct
 #assert_axioms recCRevoke_iff_spec
 #assert_axioms execFullA_revoke_iff_spec
+#assert_axioms recCRevokeDelegationFull_iff_spec
 #assert_axioms execFullA_revokeDelegation_iff_spec
+#assert_axioms revokeDelegationFull_stales_child
 #assert_axioms revoke_drops_holder_edges
 #assert_axioms revoke_preserves_other_holders
 #assert_axioms revoke_preserves_balances
