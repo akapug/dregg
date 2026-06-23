@@ -26,7 +26,18 @@ with `create_room`/`invited_rooms`/`accept_invite` (the cross-user flow now runs
 the sync↔async facade). The earlier fixture path (`real_executor_membrane.json` +
 `deos-matrix`'s `live_two_user_real_executor_membrane_roundtrip`) stays as the
 deos-matrix-workspace-only proof of the SAME wire shape; the one-process loop is the true
-closure. Harness: `FULL_LOOP=1 ./deos-matrix/scripts/live-test.sh`. No residue.
+closure. Harness: `FULL_LOOP=1 ./deos-matrix/scripts/live-test.sh`.
+RESIDUAL (named, INTERACTIVE-UI only — the protocol/test path is fully real): the
+clickable deos-chat gpui UI is still MOCK. `deos-matrix/src/chat.rs:185`
+`attach_membrane` mints `MockMembraneHost::sample_envelope()` (not the real
+`ForkMembraneHost`); the "▶ rehydrate & drive" button (`chat.rs:745`) has NO click
+handler; `ChatPane` mounts with `MockSource` (`starbridge-v2/src/{guest,showcase}.rs`),
+never a live `MatrixHandle` or executor-backed host. Closure shape: thread a real
+`dyn MembraneHost` (= `ForkMembraneHost` over the cockpit's embedded `World`) + a live
+`MatrixHandle` into `ChatPane`; wire the mint/rehydrate/drive/stitch button handlers to
+it. Touches `cockpit/*` + `chat.rs` UI → needs the gpui build check
+(`cargo check --features native-full --bin starbridge-v2`). Ember-decision: greenlight
+the UI strand or keep the interactive surface a mock demo while the protocol loop is real.
 
 ## ✅ EDITOR-SAVE WRITE-BACK TO THE NODE — the self-hosting seam CLOSED, by running (2026-06-23)
 The `--node`-attached cockpit editor save now lands on the NODE's ledger over the
