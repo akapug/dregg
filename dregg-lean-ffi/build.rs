@@ -239,6 +239,11 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         // emitted and the `dregg_decide_refines` symbol is spliced in — the deploy gate
         // (`dregg-deploy/src/refine.rs`) calls it to run the PROVEN `decideRefines` instead of a mirror.
         "Dregg2.Deos.FlowRefine",
+        // The NO-COPY (`lean_object*`) direct boundary builders/readers + the `execDirect` export
+        // (`Dregg2.Exec.FFIDirect`). It IMPORTS `Dregg2.Exec.FFI`, so building FFI already pulls it
+        // into the IR closure — but list it explicitly so a fresh lane with a cold `.lake` emits its
+        // `.c` and the splice picks up the `dregg_exec_full_forest_auth_direct` + `dregg_d_*` symbols.
+        "Dregg2.Exec.FFIDirect",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -1079,6 +1084,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_strand_admit_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_distributed_exports_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_decide_refines_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_direct_present)");
 
     // ── PLATFORM GATE (polarity inversion, docs/FEATURE-HYGIENE.md §Lean): the link is
     // UNCONDITIONAL on native; the ONE opt-out is the `no-lean-link` platform feature, set
@@ -1301,6 +1307,23 @@ fn main() {
         );
     }
 
+    // The NO-COPY DIRECT boundary export (`dregg_exec_full_forest_auth_direct`) + its builder/reader
+    // family live in `Dregg2.Exec.FFIDirect`. FFIDirect IMPORTS `Dregg2.Exec.FFI` (not the reverse),
+    // so its module initializer is OUTSIDE the FFI closure: `dregg_ffi_init` must run
+    // `initialize_Dregg2_Dregg2_Exec_FFIDirect` explicitly (gated on DREGG_DIRECT in the C shim).
+    // We probe + gate the Rust `extern "C"` block AND the C shim define so a stale archive lacking the
+    // export degrades to the JSON path rather than dangling at link time.
+    let direct_present = archive_exports(&build_archive, "dregg_exec_full_forest_auth_direct");
+    if direct_present {
+        println!("cargo:rustc-cfg=dregg_direct_present");
+    } else {
+        println!(
+            "cargo:warning=dregg-lean-ffi: libdregg_lean.a lacks `dregg_exec_full_forest_auth_direct` \
+             — the no-copy direct boundary is compiled out (the JSON marshalling path is used). \
+             Rebuild the archive (it splices Dregg2.Exec.FFIDirect) to enable the lean_object* path."
+        );
+    }
+
     // Compile the C init shim (it uses the `static inline` runtime helpers from
     // <lean/lean.h>, which have no linkable symbol and so must be used from C).
     //
@@ -1349,6 +1372,9 @@ fn main() {
     }
     if decide_refines_present {
         shim.define("DREGG_DECIDE_REFINES", None);
+    }
+    if direct_present {
+        shim.define("DREGG_DIRECT", None);
     }
     // We drive the link with `rustc-link-lib` / `rustc-link-search` directives, NOT
     // `rustc-link-arg`. WHY: with the package's `links = "dregg_lean"` key, build-script

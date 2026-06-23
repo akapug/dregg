@@ -124,6 +124,32 @@ extern lean_object *initialize_Dregg2_Dregg2_Deos_FlowRefine(uint8_t builtin);
 extern lean_object *dregg_decide_refines(lean_object *input);
 #endif
 
+/* The NO-COPY (`lean_object*`) DIRECT boundary lives in `Dregg2.Exec.FFIDirect`, which IMPORTS
+ * `Dregg2.Exec.FFI` — so its initializer is OUTSIDE the FFI module's import closure and is NOT run by
+ * `initialize_Dregg2_Dregg2_Exec_FFI`. `dregg_ffi_init` must run it explicitly (like the gate modules
+ * above). The builders/readers + `dregg_exec_full_forest_auth_direct` are called DIRECTLY from Rust
+ * (plain C-ABI `lean_object*` functions), so no string bridge lives here — only the initializer.
+ *
+ * GATED on DREGG_DIRECT: build.rs probes the archive and only `#define`s it when the export is
+ * present, so a stale archive does not leave a dangling `initialize_…_FFIDirect` reference. */
+#ifdef DREGG_DIRECT
+extern lean_object *initialize_Dregg2_Dregg2_Exec_FFIDirect(uint8_t builtin);
+#endif
+
+/* ── NO-COPY BOUNDARY runtime helpers (linkable wrappers over the `static inline`
+ * <lean/lean.h> primitives the no-copy `lean_direct.rs` boundary needs). `lean_inc_ref`,
+ * `lean_dec_ref`, `lean_box`, and `lean_string_cstr` are `static inline` in the header (no
+ * linkable symbol), so Rust cannot call them directly — exactly the reason this C shim exists.
+ * These thin `dregg_rt_*` wrappers give them a linkable C-ABI symbol. (`lean_mk_string` is a real
+ * LEAN_EXPORT and is called directly from Rust.) */
+/* Use the SCALAR-CHECKING `lean_inc`/`lean_dec` (not `lean_inc_ref`/`lean_dec_ref`): small
+ * `Nat`/`Int`/no-field-enum (Auth) values are TAGGED POINTERS, not heap objects, so the `_ref`
+ * variants would dereference an invalid address. `lean_inc`/`lean_dec` short-circuit on scalars. */
+void dregg_rt_inc(lean_object *o) { lean_inc(o); }
+void dregg_rt_dec(lean_object *o) { lean_dec(o); }
+lean_object *dregg_rt_box(size_t n) { return lean_box(n); }
+const char *dregg_rt_string_cstr(lean_object *s) { return lean_string_cstr(s); }
+
 /* Returns 0 on success, 1 if module initialization reported an IO error. */
 int dregg_ffi_init(void) {
     lean_initialize_runtime_module();
@@ -182,6 +208,19 @@ int dregg_ffi_init(void) {
         return 1;
     }
     lean_dec_ref(rres);
+#endif
+#ifdef DREGG_DIRECT
+    /* The no-copy direct boundary module is OUTSIDE the FFI closure (it imports FFI); initialize it
+     * explicitly so the `dregg_d_*` builders/readers + `dregg_exec_full_forest_auth_direct` are
+     * callable. Its dependency closure (Dregg2.Exec.FFI and below) is re-entrant-safe under Lean's
+     * init guards (already initialized by `initialize_Dregg2_Dregg2_Exec_FFI` above). */
+    lean_object *fdres = initialize_Dregg2_Dregg2_Exec_FFIDirect(1);
+    if (!lean_io_result_is_ok(fdres)) {
+        lean_io_result_show_error(fdres);
+        lean_dec_ref(fdres);
+        return 1;
+    }
+    lean_dec_ref(fdres);
 #endif
     lean_io_mark_end_initialization();
     return 0;

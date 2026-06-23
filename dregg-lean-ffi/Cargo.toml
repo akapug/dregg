@@ -107,3 +107,11 @@ proptest = { version = "1", optional = true }
 
 [build-dependencies]
 cc = "1"
+
+# RE-MEASURE the no-copy boundary win: JSON marshalling vs the direct lean_object* path on the SAME
+# extracted wire (both run the identical verified executor). `harness = false` (plain timed main,
+# prints a table like the Stage-0 baseline in perf/benches/lean_ffi_turn.rs).
+[[bench]]
+name = "direct_vs_json_overhead"
+path = "benches/direct_vs_json_overhead.rs"
+harness = false
