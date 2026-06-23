@@ -8,10 +8,10 @@
 //! and dregg-doc's correct-by-construction blame, with zero host git anywhere.
 //!
 //! It is the substrate Zed's `git_ui` panel renders into its log / status / blame
-//! / diff views. (The panel auto-discovering this repo requires the worktree
-//! scanner to detect a `.git` entry and call `Fs::open_repo` — the remaining
-//! panel seam, reported in `src/cell_git.rs`'s module doc. We drive the
-//! `GitRepository` object the panel would render directly, through Zed's trait.)
+//! / diff views. This file drives the `GitRepository` object directly, through
+//! Zed's trait; the panel AUTO-DISCOVERING this repo from a real `Project`'s
+//! worktree scan (the synthetic `.git` entry → `Fs::open_repo` → `GitStore`) is
+//! proven by running in `tests/git_panel_auto_discovery.rs`.
 //!
 //! No `full-zed` feature needed: this exercises only the `git` + `gpui` + cell-fs
 //! layer, so it runs in the light build.
