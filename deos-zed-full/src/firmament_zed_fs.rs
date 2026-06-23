@@ -32,14 +32,21 @@
 //! `is_file`, `is_dir`, `read_dir`, `canonicalize`, `open_handle` (a stable
 //! cell-path handle), `open_sync`.
 //!
+//! REAL git surface: `open_repo` returns a [`crate::cell_git::CellLedgerGit`]
+//! once [`FirmamentZedFs::enable_git`] is armed, and the fs presents a synthetic
+//! `.git` directory entry at the work root (in `read_dir`/`metadata`) so Zed's
+//! worktree scanner AUTO-DISCOVERS the cell-ledger repository — the panel renders
+//! real cell-ledger status/blame/log/diff with no host `.git`. Proven by running
+//! in `tests/git_panel_auto_discovery.rs`.
+//!
 //! STUBBED (the editor slice does not exercise them; the FULL-Zed embed wires
 //! them — see DESIGN-FULL-ZED-EMBED.md): `watch` (returns an empty event stream
 //! + a no-op watcher — the worktree scan reads the cell namespace directly, so
 //! the project panel lists + recurses the cells; live cross-pane refresh off the
-//! receipt log is the follow-on), `open_repo`/`git_*` (no git over cells yet),
-//! `trash`/`restore`/`remove_*` beyond the namespace, `extract_tar_file`,
-//! `create_symlink`. Each stub is an explicit, honest `bail!`/empty — never a
-//! silent wrong answer.
+//! receipt log is the follow-on), `git_init`/`git_clone`/`git_config` (no git
+//! mutation over cells yet), `trash`/`restore`/`remove_*` beyond the namespace,
+//! `extract_tar_file`, `create_symlink`. Each stub is an explicit, honest
+//! `bail!`/empty — never a silent wrong answer.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -66,6 +73,13 @@ use text::LineEnding;
 // shares the cockpit's `Rc<RefCell<World>>` — so it is `!Send`. `SyncCellFs`
 // keeps the same verified turn semantics behind an `Arc<Mutex<OwnedSpine>>`.)
 use crate::sync_cell_fs::SyncCellFs;
+
+/// The directory name Zed's worktree scanner recognizes as a git repository
+/// marker. Zed's `worktree` crate uses an interned `DOT_GIT` (`".git"`); the
+/// scanner fires its `insert_git_repository` path for any read-dir child whose
+/// `file_name() == ".git"`. We present exactly this synthetic entry at the git
+/// work root so auto-discovery reaches `FirmamentZedFs::open_repo`.
+const DOT_GIT_NAME: &str = ".git";
 
 /// The cell-ledger-backed Zed filesystem.
 ///
@@ -135,6 +149,25 @@ impl FirmamentZedFs {
         self.git.lock().unwrap().clone()
     }
 
+    /// The work root of the enabled git surface (the directory under which a
+    /// synthetic `.git` namespace entry is presented so Zed's worktree scanner
+    /// auto-discovers the cell-ledger repository). `None` when git is disabled.
+    fn git_work_root(&self) -> Option<PathBuf> {
+        self.git.lock().unwrap().as_ref().map(|r| r.work_root().to_path_buf())
+    }
+
+    /// Is `path` the synthetic `.git` directory of the enabled git surface (i.e.
+    /// `<work_root>/.git`)? This is the namespace entry Zed's worktree scanner
+    /// recognizes (`entry.file_name() == ".git"`) to fire `UpdatedGitRepository`
+    /// → `open_repo`. There is NO real `.git` on the cell ledger; we synthesize
+    /// exactly this one directory entry so auto-discovery reaches `open_repo`.
+    fn is_synthetic_dot_git(&self, path: &Path) -> bool {
+        match self.git_work_root() {
+            Some(root) => path == root.join(DOT_GIT_NAME).as_path(),
+            None => false,
+        }
+    }
+
     /// Seed a file-cell at `path` with `content` (genesis — not a turn). Returns
     /// after the cell is on the ledger so a later [`Fs::load`] reads it.
     pub fn seed_file(&self, path: impl Into<PathBuf>, content: &str) -> Result<()> {
@@ -170,6 +203,25 @@ impl FirmamentZedFs {
     }
 
     fn cell_metadata(&self, path: &Path) -> Option<Metadata> {
+        // The synthetic `.git` directory at the git work root: a real directory
+        // entry the worktree scanner's git-detection path recognizes. The scanner
+        // reaches `metadata(<root>/.git)` both in `discover_ancestor_git_repo`
+        // (index 0 → it `break`s, leaving the in-tree scan to build the repo) and
+        // in `scan_dir` (after `insert_git_repository` already fired). It must
+        // report `is_dir: true` with a distinct inode so the scanner does not
+        // treat it as a file or a symlink cycle. The cell ledger holds nothing
+        // there — this is the one synthesized entry that drives auto-discovery.
+        if self.is_synthetic_dot_git(path) {
+            return Some(Metadata {
+                inode: path_inode(path),
+                mtime: MTime::from_seconds_and_nanos(0, 0),
+                is_symlink: false,
+                is_dir: true,
+                len: 0,
+                is_fifo: false,
+                is_executable: false,
+            });
+        }
         let md = self.cell.metadata(path)?;
         Some(Metadata {
             // A UNIQUE, STABLE inode per path. Zed's worktree scanner guards
@@ -374,7 +426,21 @@ impl Fs for FirmamentZedFs {
         path: &Path,
     ) -> Result<Pin<Box<dyn Send + Stream<Item = Result<PathBuf>>>>> {
         let entries = self.cell.read_dir(path);
-        let paths: Vec<Result<PathBuf>> = entries.into_iter().map(|(p, _is_dir)| Ok(p)).collect();
+        let mut paths: Vec<Result<PathBuf>> =
+            entries.into_iter().map(|(p, _is_dir)| Ok(p)).collect();
+        // SYNTHETIC `.git` AT THE WORK ROOT. When the git surface is enabled and
+        // this read_dir is of the git work root, present a `.git` directory entry.
+        // Zed's worktree scanner lists children via `read_dir`, ensures `.git` is
+        // processed first, and (because `child_name == DOT_GIT`) fires
+        // `insert_git_repository` → an `UpdatedGitRepository` event → `GitStore`'s
+        // `update_repositories_from_worktree` → `Fs::open_repo` (which returns our
+        // `CellLedgerGit`). This is the entry that closes panel auto-discovery —
+        // there is no real `.git` on the cell ledger.
+        if let Some(root) = self.git_work_root() {
+            if path == root.as_path() {
+                paths.push(Ok(root.join(DOT_GIT_NAME)));
+            }
+        }
         Ok(Box::pin(stream::iter(paths)))
     }
 

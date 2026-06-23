@@ -35,18 +35,26 @@
 //! `run_hook`, `repair_worktrees`, `load_commit_template`, `merge_message`,
 //! `load_blob_content`, `default_branch`, `remote_url`, `create_archive_*`.
 //!
-//! # The remaining panel seam (reported honestly)
+//! # Panel auto-discovery (CLOSED)
 //!
-//! This object IS the substrate Zed's `git_ui` panel renders. The panel reaching
-//! it requires the *worktree scanner* to discover a repository and call
-//! `Fs::open_repo` — see [`crate::firmament_zed_fs`]'s `open_repo`, now wired to
-//! return a `CellLedgerGit`. The scanner only emits an `UpdatedGitRepository`
-//! (which drives `GitStore` → `open_repo`) when it detects a `.git` directory
-//! entry during the scan: `project/src/git_store.rs:447` (`fs.open_repo(...)`),
-//! triggered from `worktree`'s scan via `update_repositories_from_worktree`
-//! (`git_store.rs:1808`). The cell namespace has no `.git` entry, so the panel's
-//! auto-discovery does not fire on its own; this module proves the repository
-//! object the panel would render by driving Zed's `GitRepository` trait directly.
+//! This object IS the substrate Zed's `git_ui` panel renders, and the panel
+//! AUTO-DISCOVERS it from the worktree scan — no hand-injection. The scanner
+//! emits an `UpdatedGitRepository` (which drives `GitStore` → `Fs::open_repo`)
+//! when it lists a `.git` entry during the scan: it processes `.git` first
+//! (`worktree.rs` `swap_to_front(DOT_GIT)`) and, because the child's
+//! `file_name() == ".git"`, fires `insert_git_repository` → the git-store event
+//! → `project/src/git_store.rs:447` (`fs.open_repo(...)`) →
+//! `update_repositories_from_worktree` (`git_store.rs:1808`).
+//!
+//! [`crate::firmament_zed_fs::FirmamentZedFs`] presents a single synthetic `.git`
+//! directory entry at the git work root (in `read_dir`/`metadata`, only when
+//! [`crate::firmament_zed_fs::FirmamentZedFs::enable_git`] has armed this repo —
+//! there is no host `.git` anywhere on the cell ledger), and `open_repo` returns
+//! this `CellLedgerGit`. The result: a real `Project` over the cell-ledger fs
+//! auto-discovers the repository and the `GitStore` renders REAL cell-ledger
+//! status/blame/log/diff. Proven by running in
+//! `tests/git_panel_auto_discovery.rs` (the discovered repo's status lists the
+//! modified cell after a live edit).
 
 use std::collections::HashMap as StdHashMap;
 use std::path::{Path, PathBuf};
@@ -165,6 +173,14 @@ impl CellLedgerGit {
             executor,
             trusted: std::sync::atomic::AtomicBool::new(true),
         }
+    }
+
+    /// The worktree root the namespace paths are relative to. Used by
+    /// [`crate::firmament_zed_fs::FirmamentZedFs`] to know under which directory
+    /// to present the synthetic `.git` namespace entry that drives Zed's worktree
+    /// scanner to auto-discover this repository.
+    pub fn work_root(&self) -> &Path {
+        &self.work_root
     }
 
     /// Record the genesis content for `path`: the first committed patch (the
