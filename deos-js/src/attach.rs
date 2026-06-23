@@ -38,7 +38,7 @@ use crate::applet::{CellModel, FireError, Slot};
 ///
 /// starbridge-v2's `World` implements this (its `ledger()` + a `commit_turn`-backed
 /// adapter); a `World::fork()` implements it identically (the safe sandbox variant).
-/// The implementor owns the verified executor — every [`commit_turn`](Self::commit_turn)
+/// The implementor owns the verified executor — every [`fire_effects`](Self::fire_effects)
 /// runs the SAME conservation / ocap / authority gate the live world would.
 pub trait WorldSink {
     /// Read the live ledger the reflective crawl walks (the SAME ledger a fire commits
