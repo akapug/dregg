@@ -137,14 +137,16 @@ impl Editor {
         });
 
         // Any edit to the buffer marks the document dirty.
-        let subs = vec![cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                if !this.dirty {
-                    this.dirty = true;
-                    cx.notify();
+        let subs = vec![
+            cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    if !this.dirty {
+                        this.dirty = true;
+                        cx.notify();
+                    }
                 }
-            }
-        })];
+            }),
+        ];
 
         let label = fs.backend_label();
         Self {
@@ -155,8 +157,29 @@ impl Editor {
             status: SharedString::from(format!("ready — {label}")),
             doc: None,
             author: Author(1),
+            save_callback: None,
             _subscriptions: subs,
         }
+    }
+
+    /// Install a host save hook routed AFTER the local [`Fs`] save — the node
+    /// wire. The cockpit calls this when `--node`-attached so an in-editor save
+    /// (Cmd-S) ALSO submits a client-signed turn to the live node. See
+    /// [`SaveCallback`]. Pass `None` to clear it (back to local-only). Builder-style
+    /// twin is [`Editor::with_save_callback`].
+    pub fn set_save_callback(&mut self, cb: Option<SaveCallback>) {
+        self.save_callback = cb;
+    }
+
+    /// Builder-style [`Editor::set_save_callback`].
+    pub fn with_save_callback(mut self, cb: SaveCallback) -> Self {
+        self.save_callback = Some(cb);
+        self
+    }
+
+    /// Whether a host save hook (the node wire) is installed.
+    pub fn has_save_callback(&self) -> bool {
+        self.save_callback.is_some()
     }
 
     /// Set the authoring identity stamped onto the patches this editor commits.
@@ -250,7 +273,12 @@ impl Editor {
     /// Open a file through the [`Fs`] seam: load its content, set the
     /// highlighter language from the extension, and replace the buffer. Returns
     /// any load error so callers can surface it.
-    pub fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
+    pub fn open(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         let content = self.fs.load(&path)?;
         let lang = language_for_path(&path);
         self.input.update(cx, |state, cx| {
@@ -343,16 +371,32 @@ impl Editor {
                 // cap-gated turn, and the status reflects the ledger truth. A
                 // plain RealFs reports no count, so we fall back to the document
                 // patch history.
-                self.status = match self.fs.save_count() {
-                    Some(n) => SharedString::from(format!(
+                let mut status = match self.fs.save_count() {
+                    Some(n) => format!(
                         "saved {name} ({} bytes) — {n} saves · on-ledger",
                         content.len()
-                    )),
-                    None => SharedString::from(format!(
-                        "saved {name} ({} bytes) — {patches} patches",
-                        content.len()
-                    )),
+                    ),
+                    None => format!("saved {name} ({} bytes) — {patches} patches", content.len()),
                 };
+                // THE NODE WIRE: if the host installed a save hook (the cockpit is
+                // `--node`-attached), route the just-saved content there too — a
+                // client-signed turn on the LIVE NODE. Fail-soft: a node hiccup
+                // appends an error note but the local save still stands, so an
+                // interactive Cmd-S never loses the edit to a transient network blip.
+                if let Some(cb) = self.save_callback.as_ref() {
+                    match cb(&content) {
+                        Ok(note) if !note.is_empty() => {
+                            status.push_str(" · ");
+                            status.push_str(&note);
+                        }
+                        Ok(_) => {}
+                        Err(msg) => {
+                            status.push_str(" · node save FAILED: ");
+                            status.push_str(&msg);
+                        }
+                    }
+                }
+                self.status = SharedString::from(status);
                 cx.notify();
                 Ok(())
             }
@@ -384,7 +428,10 @@ impl Render for Editor {
             .size_full()
             .child(
                 // The code editor body fills the available space.
-                div().flex_1().min_h(px(0.)).child(Input::new(&self.input).h_full()),
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .child(Input::new(&self.input).h_full()),
             )
             .child(
                 // A slim status line: which backend, last save, dirty marker.
