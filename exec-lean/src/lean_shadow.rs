@@ -1413,16 +1413,78 @@ pub(crate) fn run_shadow_state(
         stored_head: stored_head_nat,
         budget: host.budget,
     };
+    // The Turn envelope header for the NO-COPY direct path (the root forest is `wire_turn.root`,
+    // built recursively above; `prev_low` is the SAME low-64 the JSON path's `Digest::from_u64`
+    // folds, so the verified ChainHead leg compares like-for-like across both paths).
+    let direct_hdr = dregg_lean_ffi::WireTurnHdr {
+        agent: wire_turn.agent,
+        nonce: wire_turn.nonce,
+        fee: wire_turn.fee,
+        valid_until: wire_turn.valid_until,
+        block_height: wire_turn.block_height,
+        prev_low: u64::from_be_bytes(wire_turn.prev_hash.0[24..32].try_into().unwrap()),
+    };
+
+    // ── THE CUTOVER ── prefer the NO-COPY (`lean_object*`) path: it constructs the Lean inductives
+    // directly + reads the post-state back with no JSON in either direction (~13–15× cheaper than the
+    // string round-trip — see `dregg-lean-ffi/benches/direct_vs_json_overhead.rs`). It runs the
+    // IDENTICAL verified executor (`execFullForestAuthStep`'s body via `execDirect`), so the produced
+    // post-state + verdict are byte-identical to the JSON oracle (pinned by the corpus differential
+    // `direct_vs_json_differential.rs`). When the archive lacks the direct export (stale), or when
+    // `DREGG_FFI_JSON_ORACLE=1` forces the standing one-entry/oracle-sibling cross-check, we ALSO run
+    // the JSON path and (under the env flag) assert byte-identity.
+    let want_oracle = std::env::var("DREGG_FFI_JSON_ORACLE").as_deref() == Ok("1");
+    let want_measure = std::env::var("DREGG_FFI_MEASURE").as_deref() == Ok("1");
+    let debug = std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1");
+
+    if dregg_lean_ffi::direct_available() && !want_oracle && !want_measure {
+        // Fast path: the no-copy boundary alone (no string ever built).
+        return dregg_lean_ffi::shadow_exec_direct(
+            &host_wire,
+            &wire_state,
+            &wire_turn.root,
+            &direct_hdr,
+        );
+    }
+
+    // The JSON ORACLE leg (always runs when the direct path is unavailable, or when measuring /
+    // cross-checking). Kept as the standing byte-exact oracle the cutover is validated against.
     let wire =
         marshal_turn_hosted(&host_wire, &wire_state, &wire_turn).map_err(|e| e.to_string())?;
-    if std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1") {
+    if debug {
         eprintln!("[shadow wire IN ] {wire}");
     }
     let out = dregg_lean_ffi::shadow_exec_full_forest_auth(&wire)?;
-    if std::env::var("DREGG_LEAN_SHADOW_DEBUG").as_deref() == Ok("1") {
+    if debug {
         eprintln!("[shadow wire OUT] {out}");
     }
-    dregg_lean_ffi::decode_shadow_state(&out)
+    if want_measure {
+        eprintln!(
+            "DREGG_FFI_MEASURE in_bytes={} out_bytes={} touched_cells={}",
+            wire.len(),
+            out.len(),
+            pre.id_map.len(),
+        );
+    }
+    let json_state = dregg_lean_ffi::decode_shadow_state(&out)?;
+
+    // ONE-ENTRY / ORACLE-SIBLING cross-check: when forced, run the direct path too and assert it is
+    // byte-identical to the JSON oracle (a divergence is a marshaller/builder bug, surfaced loudly).
+    if want_oracle && dregg_lean_ffi::direct_available() {
+        let direct_state = dregg_lean_ffi::shadow_exec_direct(
+            &host_wire,
+            &wire_state,
+            &wire_turn.root,
+            &direct_hdr,
+        )?;
+        if direct_state != json_state {
+            return Err(format!(
+                "DREGG_FFI_JSON_ORACLE divergence: direct path != JSON oracle (direct={:?} json={:?})",
+                direct_state.verdict, json_state.verdict
+            ));
+        }
+    }
+    Ok(json_state)
 }
 
 fn ledger_to_wire_state(

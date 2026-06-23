@@ -322,6 +322,120 @@ pub fn fresh_executor() -> TurnExecutor {
 }
 
 // ---------------------------------------------------------------------------
+// LEAN FFI turn workloads — the SAME root-agreeing turn shapes the verified Lean
+// producer (`execute_via_lean`) runs, mirrored from `executor_transfer_turn` so
+// the Rust-executor and Lean-FFI legs are timed over identical input. A turn must
+// be in the swap-safe root-agreeing set (Transfer / SetField are) for the FFI
+// producer to run end-to-end. The multi-cell turn scales the wire footprint so the
+// per-cell cost the OUT-delta optimization targets is visible.
+// ---------------------------------------------------------------------------
+
+/// Build a ledger with N open cells (cell 0 funded, the rest empty), so a turn can
+/// touch a configurable footprint. Returns the ledger + the cell ids in order.
+pub fn ledger_with_open_cells(n: usize, funded_balance: i64) -> (Ledger, Vec<dregg_cell::CellId>) {
+    let mut ledger = Ledger::new();
+    let mut ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let bal = if i == 0 { funded_balance } else { 0 };
+        let id = ledger
+            .insert_cell(open_cell(i as u8 + 1, bal))
+            .expect("insert open cell");
+        ids.push(id);
+    }
+    (ledger, ids)
+}
+
+/// The smallest FFI-eligible turn: a single Transfer cell0 → cell1 (the same shape
+/// as `executor_transfer_turn`, the executor bench's input). Touches 2 cells, writes 2.
+pub fn ffi_transfer_turn() -> (Ledger, Turn) {
+    let (ledger, ids) = ledger_with_open_cells(2, 1_000_000);
+    let mut builder = TurnBuilder::new(ids[0], 0);
+    let action = ActionBuilder::new_unchecked_for_tests(ids[0], "transfer", ids[0])
+        .effect_transfer(ids[0], ids[1], 200)
+        .build();
+    builder.add_action(action);
+    // The wire marshaller requires a concrete `valid_until` (the admission clock leg); the
+    // diagnostic host clock is 0, so any future bound passes.
+    let turn = builder.fee(0).valid_until(1000).build();
+    (ledger, turn)
+}
+
+/// A single-SetField FFI-eligible turn: cell0 writes its own state slot 6 (a DIFFERENT
+/// effect type than Transfer through the same producer path — the field-reconstitution
+/// leg). References 1 cell (touched=1), writes 1. Mirrors the known-good
+/// `setfield_lean_produced_ledger_agrees_with_rust` differential. The 3-cell ledger has
+/// two un-referenced cells, so the contrast between ledger size and the wire footprint
+/// (which is the turn's referenced set, not the whole ledger) is explicit.
+pub fn ffi_setfield_turn() -> (Ledger, Turn) {
+    let (ledger, ids) = ledger_with_open_cells(3, 1_000_000);
+    let action = ActionBuilder::new_unchecked_for_tests(ids[0], "setfield", ids[0])
+        .effect_set_field(ids[0], 6, field_from_u64(42))
+        .build();
+    let mut builder = TurnBuilder::new(ids[0], 0);
+    builder.add_action(action);
+    let turn = builder.fee(0).valid_until(1000).build();
+    (ledger, turn)
+}
+
+/// A single-Transfer turn from a sender whose state is already POPULATED (several state
+/// fields set). The richer pre-state cell record makes the IN wire bytes larger than the
+/// bare `ffi_transfer_turn`, exposing how the per-cell serialization cost scales with cell
+/// content — the same effect/shape, a heavier cell. Touches 2 cells; writes 2.
+pub fn ffi_transfer_populated_turn() -> (Ledger, Turn) {
+    let mut ledger = Ledger::new();
+    let mut sender = open_cell(1, 1_000_000);
+    // Populate several state fields so the cell record marshals to a larger wire payload.
+    for slot in 2..7 {
+        sender.state.fields[slot] = field_from_u64(0xABCD_0000 + slot as u64);
+    }
+    let agent_id = ledger.insert_cell(sender).expect("insert sender");
+    let target_id = ledger.insert_cell(open_cell(2, 0)).expect("insert target");
+    let action = ActionBuilder::new_unchecked_for_tests(agent_id, "transfer", agent_id)
+        .effect_transfer(agent_id, target_id, 200)
+        .build();
+    let mut builder = TurnBuilder::new(agent_id, 0);
+    builder.add_action(action);
+    let turn = builder.fee(0).valid_until(1000).build();
+    (ledger, turn)
+}
+
+fn field_from_u64(v: u64) -> dregg_cell::state::FieldElement {
+    let mut out = [0u8; 32];
+    out[24..32].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
+/// The diagnostic host context the FFI producer uses on the bench (clock 0, genesis
+/// head, generous budget) — the same `ShadowHostCtx::diag()` the differential tests use.
+pub fn ffi_host() -> dregg_exec_lean::lean_shadow::ShadowHostCtx {
+    dregg_exec_lean::lean_shadow::ShadowHostCtx::diag()
+}
+
+/// Count the cells whose post-state differs from pre-state — the WRITTEN footprint.
+/// `touched` (the wire serialization footprint) minus this is the echoed-but-unchanged
+/// waste a delta-OUT optimization would remove. Diffs by canonical state commitment.
+pub fn written_cells(pre: &Ledger, post: &Ledger) -> usize {
+    let mut written = 0;
+    for (id, post_cell) in post.iter() {
+        match pre.get(id) {
+            Some(pre_cell) => {
+                if pre_cell.state_commitment() != post_cell.state_commitment() {
+                    written += 1;
+                }
+            }
+            None => written += 1, // a created cell counts as written
+        }
+    }
+    // a removed cell (e.g. MakeSovereign) also counts as written
+    for (id, _) in pre.iter() {
+        if post.get(id).is_none() {
+            written += 1;
+        }
+    }
+    written
+}
+
+// ---------------------------------------------------------------------------
 // Commitment workload: a populated `Cell` for the canonical state commitment.
 // ---------------------------------------------------------------------------
 

@@ -7,6 +7,13 @@
 #[path = "marshal.rs"]
 pub mod marshal;
 
+/// THE NO-COPY (`lean_object*`) boundary — construct/read the Lean inductives directly across the
+/// FFI, no JSON serialize/parse in either direction (the JSON path in `marshal` is the oracle).
+#[path = "lean_direct.rs"]
+pub mod lean_direct;
+
+pub use lean_direct::{direct_available, shadow_exec_direct, WireTurnHdr};
+
 /// The VERIFIED DISTRIBUTED exports (federation strand-admission, etc.) — kept in a module distinct
 /// from the executor-facing marshal/lib plumbing.
 #[path = "distributed_ffi.rs"]

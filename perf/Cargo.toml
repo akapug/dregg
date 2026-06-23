@@ -47,6 +47,10 @@ dregg-types = { path = "../types" }
 # dregg_exec_full_forest_auth`). Already linked transitively via `dregg-turn`'s
 # default Lean link; named here directly so the embedded-commit bench can call it.
 dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# The verified-Lean state PRODUCER cluster — `execute_via_lean` / `produce_via_lean` (the full
+# Rust-JSON-encode → C bridge → Lean parse/exec/encode → Rust-parse round-trip). The lean_ffi_turn
+# bench measures this path's per-turn overhead vs the bare Rust `TurnExecutor::execute`.
+dregg-exec-lean = { path = "../exec-lean" }
 # The deos desktop — pulled with ONLY its `embedded-executor` feature (NO gpui),
 # so the UI-projection bench measures the real `World`/`Shell`/affordance
 # projection the cockpit paints WITHOUT dragging gpui's native GPU/window tree.
@@ -130,6 +134,14 @@ harness = false
 # N-leaf compress chain — the recursive aggregation cost. Gap (c).
 [[bench]]
 name = "recursion_fold"
+harness = false
+
+# LEAN FFI TURN: the FULL Lean-FFI state-producer round-trip per turn
+# (`execute_via_lean` = Rust JSON-encode → C bridge → Lean parse/exec/encode → Rust parse)
+# vs the bare Rust `TurnExecutor::execute` on the SAME turn. The delta is the FFI tax.
+# (Stage 0 of the FFI-optimization campaign.)
+[[bench]]
+name = "lean_ffi_turn"
 harness = false
 
 # EMBEDDED COMMIT: the verified Lean kernel commit_turn throughput
