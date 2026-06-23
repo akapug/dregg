@@ -145,6 +145,17 @@ impl LaunchedRegistryApp {
 /// substrate's cipherclerk + executor.
 type DriveFn = fn(&DeosApp, &AppSubstrate) -> Result<TurnReceipt, FireExecuteError>;
 
+/// Read a [`dregg_app_framework::FieldElement`] (a 32-byte big-endian field) as the
+/// `u64` in its last 8 bytes — the comparison the apps' slot caveats use, so a
+/// `world_drive` closure can read the live cursor/meter/counter off `World`'s ledger
+/// and advance it (mirrors each app crate's own private `field_tail_u64`/`field_to_u64`).
+#[cfg(feature = "embedded-executor")]
+fn field_tail_u64(fe: &dregg_app_framework::FieldElement) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&fe[24..32]);
+    u64::from_be_bytes(b)
+}
+
 /// The per-app **World drive** closure — seed the app's cell onto the cockpit's LIVE
 /// [`World`] and commit one representative affordance THROUGH it (`World::turn` →
 /// `World::commit_turn`), so the app's cell + receipt land on `World::ledger()` /
@@ -571,6 +582,875 @@ impl AppRegistry {
                         Ok((spine, receipt))
                     },
                 },
+                // ───────────────────────────────────────────────────────────
+                // THE SECOND WAVE — the framework-using starbridge-apps wired
+                // onto the cockpit's LIVE `World` ledger. Each re-expresses ONE
+                // representative affordance through `AppWorldSpine::commit`
+                // (`World::turn` → `World::commit_turn`), reusing the app crate's
+                // OWN `*_program()` + `*_effects()`/effect recipe so the World
+                // path fires the SAME verified turn the framework path does —
+                // only the ledger is the cockpit's. (Apps whose first affordance
+                // needs a Merkle-membership witness / sender-bound caveat the
+                // single-custody `World` path cannot carry — identity,
+                // governed-namespace, supply-chain — are NOT wired here; polis
+                // and first-room are not `DeosApp`s. See the module note.)
+                // ───────────────────────────────────────────────────────────
+                AppEntry {
+                    id: "agent-orchestration",
+                    name: "Agent Orchestration",
+                    description:
+                        "A coordinator board with a shared per-worker spend budget — a worker fires one \
+                         metered step, advancing the no-replay epoch (the Σspend ≤ budget gate bites).",
+                    ctor: starbridge_agent_orchestration::deos::orchestration_app,
+                    seed: |exec, _cclerk| {
+                        use starbridge_agent_orchestration as o;
+                        o::seed_board(exec, o::DEFAULT_CREATION_BUDGET, "coordinator");
+                    },
+                    drive: |app, sub| {
+                        use starbridge_agent_orchestration as o;
+                        // A WORKER fires one metered step (worker A, cost 1).
+                        let board = &app.cells()[0];
+                        o::deos::fire_worker_step(
+                            board,
+                            &o::deos::WORKER_RIGHTS,
+                            o::WorkerSlot::A,
+                            1,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_agent_orchestration as o;
+                        let board = app.cells()[0].cell();
+                        // SEED the board onto World: `coordinator_program` (the
+                        // Σspend ≤ budget / Monotonic meters / StrictMonotonic epoch
+                        // policy) + the `seed_board` baseline (lead, budget, spends=0,
+                        // EPOCH=1 ⇒ board OPEN).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            board,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            o::coordinator_program(),
+                            &[
+                                SeedField {
+                                    slot: o::LEAD_SLOT as usize,
+                                    value: dregg_app_framework::field_from_bytes(b"coordinator"),
+                                },
+                                SeedField {
+                                    slot: o::BUDGET_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(
+                                        o::DEFAULT_CREATION_BUDGET,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: o::SPENT_A_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: o::SPENT_B_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: o::EPOCH_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                            ],
+                        );
+                        // COMMIT `worker_step` through World: read the live spend +
+                        // epoch off World's ledger (so the meter accumulates), then
+                        // SPENT_A += cost, EPOCH += 1 (the SAME effects `fire_worker_step`
+                        // computes).
+                        let receipt = spine.commit(
+                            "worker_step",
+                            &o::deos::WORKER_RIGHTS,
+                            &o::deos::WORKER_RIGHTS,
+                            |live| {
+                                let spend_slot = o::WorkerSlot::A.spend_slot() as usize;
+                                let live_spent = field_tail_u64(&live.fields[spend_slot]);
+                                let live_epoch = field_tail_u64(&live.fields[o::EPOCH_SLOT as usize]);
+                                vec![
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: board,
+                                        index: spend_slot,
+                                        value: dregg_app_framework::field_from_u64(
+                                            live_spent.saturating_add(1),
+                                        ),
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: board,
+                                        index: o::EPOCH_SLOT as usize,
+                                        value: dregg_app_framework::field_from_u64(
+                                            live_epoch.saturating_add(1),
+                                        ),
+                                    },
+                                ]
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "agent-provenance",
+                    name: "Agent Provenance",
+                    description:
+                        "A hash-linked provenance log — a recorder appends one entry that chains to the \
+                         prior tip (the link-hash chain the executor's WriteOnce board re-enforces).",
+                    ctor: starbridge_agent_provenance::provenance_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_agent_provenance::seed_log(exec, b"genesis");
+                    },
+                    drive: |app, sub| {
+                        use starbridge_agent_provenance as p;
+                        // A RECORDER appends one claim to the log.
+                        p::fire_append_entry(
+                            app,
+                            &p::RECORDER_RIGHTS,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                            &dregg_app_framework::field_from_u64(0xC1A1),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_agent_provenance as p;
+                        let log = app.cells()[0].cell();
+                        // SEED the log onto World: `provenance_cell_program` + the
+                        // `seed_log` genesis chain (entry[0] = link(0, "genesis"),
+                        // HEAD=1, TIP=that digest).
+                        let genesis_claim = p::claim_digest(b"genesis");
+                        let genesis_link = p::link_hash(&p::GENESIS_PREV, &genesis_claim);
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            log,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            p::provenance_cell_program(),
+                            &[
+                                SeedField {
+                                    slot: p::entry_slot(0),
+                                    value: genesis_link,
+                                },
+                                SeedField {
+                                    slot: p::HEAD_SLOT,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                                SeedField {
+                                    slot: p::TIP_SLOT,
+                                    value: genesis_link,
+                                },
+                            ],
+                        );
+                        // COMMIT `append_entry` through World: `append_effects` reads
+                        // the live HEAD/TIP off World's ledger and chains the next entry.
+                        let claim = dregg_app_framework::field_from_u64(0xC1A1);
+                        let receipt = spine.commit(
+                            "append_entry",
+                            &p::RECORDER_RIGHTS,
+                            &p::RECORDER_RIGHTS,
+                            |live| p::append_effects(log, live, &claim),
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "compartment-workflow-mandate",
+                    name: "Compartment Workflow Mandate",
+                    description:
+                        "A clearance-gated workflow charter (review → redact → sign) — an officer advances \
+                         one step, presenting a clearance that must dominate the entered step's compartment.",
+                    ctor: starbridge_compartment_workflow_mandate::workflow_app,
+                    seed: |exec, _cclerk| {
+                        use starbridge_compartment_workflow_mandate as c;
+                        c::seed_workflow(
+                            exec,
+                            c::DEFAULT_COMMITMENT_ANCHOR,
+                            c::DEFAULT_CHARTER_STEPS,
+                            c::charter_clearance_root(),
+                            c::DEFAULT_STEP_SPEND_POLICY,
+                        );
+                    },
+                    drive: |app, sub| {
+                        use starbridge_compartment_workflow_mandate as c;
+                        // An OFFICER advances the first step (review), presenting the
+                        // officer clearance (which dominates every charter compartment).
+                        c::fire_advance_step(
+                            app,
+                            &c::OPERATOR_RIGHTS,
+                            c::officer_label(),
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_compartment_workflow_mandate as c;
+                        let cell = app.cells()[0].cell();
+                        // SEED onto World: `cwm_cell_program` (the Cases program — the
+                        // `advance_step` case binds ClearanceDominates) + the `seed_workflow`
+                        // baseline (anchor, charter terminal, clearance graph root, spend
+                        // policy, STEP_CURSOR=0).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            cell,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            c::cwm_cell_program(),
+                            &[
+                                SeedField {
+                                    slot: c::COMMITMENT_ANCHOR_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(
+                                        c::DEFAULT_COMMITMENT_ANCHOR,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: c::CHARTER_TERMINAL_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(
+                                        c::DEFAULT_CHARTER_STEPS,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: c::CLEARANCE_GRAPH_ROOT_SLOT as usize,
+                                    value: c::charter_clearance_root(),
+                                },
+                                SeedField {
+                                    slot: c::SPEND_POLICY_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(
+                                        c::DEFAULT_STEP_SPEND_POLICY,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: c::STEP_CURSOR_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT `advance_step` through World: advance cursor 0 → 1
+                        // (entering step 0 = review), presenting the officer clearance
+                        // and the review compartment label — exactly what `fire_advance_step`
+                        // materializes for the executor's ClearanceDominates tooth.
+                        let review_compartment =
+                            c::WorkflowPhase::CHARTER[0].compartment_label();
+                        let receipt = spine.commit(
+                            "advance_step",
+                            &c::OPERATOR_RIGHTS,
+                            &c::OPERATOR_RIGHTS,
+                            |_live| {
+                                c::advance_effects(cell, 1, c::officer_label(), review_compartment)
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "compute-exchange",
+                    name: "Compute Exchange",
+                    description:
+                        "A compute-job market (post → bid → settle) — a provider bids on the posted job, \
+                         advancing the job state machine (the settle conservation AffineEq waits downstream).",
+                    ctor: starbridge_compute_exchange::job_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_compute_exchange::seed_job(exec, "requester-corp", 1_000);
+                    },
+                    drive: |app, sub| {
+                        use starbridge_compute_exchange as j;
+                        // A PROVIDER bids on the posted job.
+                        j::fire_bid(
+                            app,
+                            &j::PROVIDER_RIGHTS,
+                            "provider-gpu",
+                            750,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_compute_exchange as j;
+                        let job = app.cells()[0].cell();
+                        // SEED onto World: `job_program` (Cases: post/bid/settle) + the
+                        // `seed_job` baseline (requester hash, budget, spec, BID=0,
+                        // STATE = POSTED).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            job,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            j::job_program(),
+                            &[
+                                SeedField {
+                                    slot: j::REQUESTER_HASH_SLOT,
+                                    value: dregg_app_framework::field_from_bytes(b"requester-corp"),
+                                },
+                                SeedField {
+                                    slot: j::BUDGET_SLOT,
+                                    value: dregg_app_framework::field_from_u64(1_000),
+                                },
+                                SeedField {
+                                    slot: j::SPEC_HASH_SLOT,
+                                    value: j::spec_digest(b"render-frame-batch"),
+                                },
+                                SeedField {
+                                    slot: j::BID_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: j::STATE_SLOT,
+                                    value: dregg_app_framework::field_from_u64(j::STATE_POSTED),
+                                },
+                            ],
+                        );
+                        // COMMIT `bid` through World: POSTED → BID, recording the provider
+                        // + price (the SAME `bid_effects` the framework path fires).
+                        let receipt = spine.commit(
+                            "bid",
+                            &j::PROVIDER_RIGHTS,
+                            &j::PROVIDER_RIGHTS,
+                            |_live| j::bid_effects(job, "provider-gpu", 750),
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "escrow-market",
+                    name: "Escrow Market",
+                    description:
+                        "A two-party escrow marketplace (list → fund → ship → settle) — a buyer funds the \
+                         listed item into escrow (the settle release+refund=escrowed conservation waits downstream).",
+                    ctor: starbridge_escrow_market::escrow_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_escrow_market::seed_escrow(exec, "acme-corp", 1_000);
+                    },
+                    drive: |app, sub| {
+                        use starbridge_escrow_market as e;
+                        // A BUYER funds the listed item.
+                        e::fire_fund(
+                            app,
+                            &e::BUYER_RIGHTS,
+                            "buyer-bob",
+                            500,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_escrow_market as e;
+                        let escrow = app.cells()[0].cell();
+                        // SEED onto World: `escrow_program` (Cases: list/fund/ship/settle)
+                        // + the `seed_escrow` baseline (seller hash, ceiling, escrowed=0,
+                        // STATE = LISTED).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            escrow,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            e::escrow_program(),
+                            &[
+                                SeedField {
+                                    slot: e::SELLER_HASH_SLOT,
+                                    value: dregg_app_framework::field_from_bytes(b"acme-corp"),
+                                },
+                                SeedField {
+                                    slot: e::CEILING_SLOT,
+                                    value: dregg_app_framework::field_from_u64(1_000),
+                                },
+                                SeedField {
+                                    slot: e::ESCROWED_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: e::STATE_SLOT,
+                                    value: dregg_app_framework::field_from_u64(e::STATE_LISTED),
+                                },
+                            ],
+                        );
+                        // COMMIT `fund` through World: LISTED → FUNDED, escrowing the
+                        // buyer's amount (the SAME `fund_effects` the framework path fires).
+                        let receipt = spine.commit(
+                            "fund",
+                            &e::BUYER_RIGHTS,
+                            &e::BUYER_RIGHTS,
+                            |_live| e::fund_effects(escrow, "buyer-bob", 500),
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "nameservice",
+                    name: "Name Service",
+                    description:
+                        "A registered-name record (owner / expiry / revocation) — the owner renews the name, \
+                         advancing the expiry (the executor re-enforces Monotonic(EXPIRY) + WriteOnce(NAME)).",
+                    ctor: starbridge_nameservice::name_app,
+                    seed: |exec, cclerk| {
+                        use starbridge_nameservice as n;
+                        n::seed_name(
+                            exec,
+                            "deos.dregg",
+                            cclerk.public_key().0,
+                            n::DEFAULT_RENT_EPOCH_BLOCKS,
+                        );
+                    },
+                    drive: |app, sub| {
+                        use starbridge_nameservice as n;
+                        // The OWNER renews the name (advances EXPIRY by one rent epoch).
+                        n::fire_renew(app, &n::OWNER_RIGHTS, sub.cipherclerk(), sub.executor())
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_nameservice as n;
+                        let name_cell = app.cells()[0].cell();
+                        let owner = app.cipherclerk().public_key().0;
+                        // SEED onto World: `name_cell_program` (WriteOnce NAME + Monotonic
+                        // EXPIRY + WriteOnce REVOKED) + the `seed_name` baseline.
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            name_cell,
+                            owner,
+                            default_domain_token(),
+                            n::name_cell_program(),
+                            &[
+                                SeedField {
+                                    slot: n::NAME_HASH_SLOT,
+                                    value: dregg_app_framework::field_from_bytes(b"deos.dregg"),
+                                },
+                                SeedField {
+                                    slot: n::OWNER_HASH_SLOT,
+                                    value: dregg_app_framework::field_from_bytes(&owner),
+                                },
+                                SeedField {
+                                    slot: n::EXPIRY_SLOT,
+                                    value: dregg_app_framework::field_from_u64(
+                                        n::DEFAULT_RENT_EPOCH_BLOCKS,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: n::REVOKED_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT `renew` through World: EXPIRY += one rent epoch, read off
+                        // World's live state (Monotonic(EXPIRY) holds) — the SAME advance
+                        // `fire_renew` computes.
+                        let receipt = spine.commit(
+                            "renew",
+                            &n::OWNER_RIGHTS,
+                            &n::OWNER_RIGHTS,
+                            |live| {
+                                let live_expiry = field_tail_u64(&live.fields[n::EXPIRY_SLOT]);
+                                let new_expiry =
+                                    live_expiry.saturating_add(n::DEFAULT_RENT_EPOCH_BLOCKS);
+                                vec![dregg_app_framework::Effect::SetField {
+                                    cell: name_cell,
+                                    index: n::EXPIRY_SLOT,
+                                    value: dregg_app_framework::field_from_u64(new_expiry),
+                                }]
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "privacy-voting",
+                    name: "Privacy Voting",
+                    description:
+                        "A public-tally poll — an administrator records one vote onto the poll's running tally \
+                         (the executor re-enforces the poll invariants; the poll stays open until closed).",
+                    ctor: starbridge_privacy_voting::voting_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_privacy_voting::seed_poll(exec, "ship it?");
+                    },
+                    drive: |app, sub| {
+                        use starbridge_privacy_voting as v;
+                        // An ADMINISTRATOR records a YES vote onto the poll tally.
+                        v::fire_record_tally(
+                            app,
+                            &v::ADMINISTRATOR_RIGHTS,
+                            v::VOTE_YES,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_privacy_voting as v;
+                        // The poll cell is the agent's own cell (cells()[0]).
+                        let poll = app.cells()[0].cell();
+                        // SEED the poll onto World: `poll_cell_program` + the `seed_poll`
+                        // baseline (question hash, tallies = 0, CLOSED = 0).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            poll,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            v::poll_cell_program(),
+                            &[
+                                SeedField {
+                                    slot: v::QUESTION_HASH_SLOT,
+                                    value: v::question_hash("ship it?"),
+                                },
+                                SeedField {
+                                    slot: v::TALLY_YES_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: v::TALLY_NO_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: v::TALLY_ABSTAIN_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: v::CLOSED_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT `record_tally` through World: increment the YES tally,
+                        // read off World's live state (the SAME accumulating fire
+                        // `fire_record_tally` performs).
+                        let tally_slot = v::tally_slot_for_choice(v::VOTE_YES);
+                        let receipt = spine.commit(
+                            "record_tally",
+                            &v::ADMINISTRATOR_RIGHTS,
+                            &v::ADMINISTRATOR_RIGHTS,
+                            |live| {
+                                let live_tally = field_tail_u64(&live.fields[tally_slot]);
+                                vec![dregg_app_framework::Effect::SetField {
+                                    cell: poll,
+                                    index: tally_slot,
+                                    value: dregg_app_framework::field_from_u64(
+                                        live_tally.saturating_add(1),
+                                    ),
+                                }]
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "storage-gateway-mandate",
+                    name: "Storage Gateway Mandate",
+                    description:
+                        "A metered storage gateway (put / get / list under a volume ceiling) — a writer puts \
+                         an object, debiting the volume meter (the executor re-enforces volume_spent ≤ ceiling).",
+                    ctor: starbridge_storage_gateway_mandate::gateway_app,
+                    seed: |exec, _cclerk| {
+                        use starbridge_storage_gateway_mandate as s;
+                        s::seed_gateway(
+                            exec,
+                            s::DEFAULT_COMMITMENT_ANCHOR,
+                            s::DEFAULT_VOLUME_CEILING,
+                            s::DEFAULT_KEY_PREFIX,
+                            s::DEFAULT_READ_COMPARTMENT,
+                        );
+                    },
+                    drive: |app, sub| {
+                        use starbridge_storage_gateway_mandate as s;
+                        // A WRITER puts a 1-unit object under the prefix.
+                        s::fire_put(
+                            app,
+                            &s::WRITER_RIGHTS,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                            "uploads/first",
+                            1,
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_storage_gateway_mandate as s;
+                        let gateway = app.cells()[0].cell();
+                        // SEED onto World: `gateway_program_with_clearance` (the Cases
+                        // program: get binds ClearanceDominates, put/list bind the meter)
+                        // + the `seed_gateway` baseline (anchor, ceiling, key prefix, read
+                        // compartment, clearance graph root, VOLUME_SPENT=0).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            gateway,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            s::gateway_program_with_clearance(),
+                            &[
+                                SeedField {
+                                    slot: s::COMMITMENT_ANCHOR_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(
+                                        s::DEFAULT_COMMITMENT_ANCHOR,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: s::VOLUME_CEILING_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(
+                                        s::DEFAULT_VOLUME_CEILING,
+                                    ),
+                                },
+                                SeedField {
+                                    slot: s::KEY_PREFIX_HASH_SLOT as usize,
+                                    value: s::key_prefix_field(s::DEFAULT_KEY_PREFIX),
+                                },
+                                SeedField {
+                                    slot: s::READ_COMPARTMENT_SLOT as usize,
+                                    value: dregg_app_framework::field_from_bytes(
+                                        s::DEFAULT_READ_COMPARTMENT.as_bytes(),
+                                    ),
+                                },
+                                SeedField {
+                                    slot: s::CLEARANCE_GRAPH_ROOT_SLOT as usize,
+                                    value: s::clearance_root(),
+                                },
+                                SeedField {
+                                    slot: s::VOLUME_SPENT_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT `put` through World: read the live volume meter off
+                        // World's ledger, debit the object size, and write the object key
+                        // + last-op (the SAME `put_effects` the framework path fires).
+                        let key = "uploads/first";
+                        let blob_hash = s::object_key_field(key);
+                        let receipt = spine.commit(
+                            "put",
+                            &s::WRITER_RIGHTS,
+                            &s::WRITER_RIGHTS,
+                            |live| {
+                                let live_spent =
+                                    field_tail_u64(&live.fields[s::VOLUME_SPENT_SLOT as usize]);
+                                let new_spent = live_spent.saturating_add(1);
+                                s::put_effects(gateway, key, new_spent, blob_hash)
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "subscription",
+                    name: "Subscription Feed",
+                    description:
+                        "A publish/consume message feed under a capacity bound — a publisher publishes one \
+                         message, advancing the head cursor + folding the message-commitment root.",
+                    ctor: starbridge_subscription::subscription_deos_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_subscription::seed_feed(exec, 16, "owner");
+                    },
+                    drive: |app, sub| {
+                        use starbridge_subscription as s;
+                        // A PUBLISHER publishes one message onto the feed.
+                        s::fire_publish(
+                            app,
+                            &s::PUBLISHER_RIGHTS,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_subscription as s;
+                        let feed = app.cells()[0].cell();
+                        // SEED onto World: `feed_invariants_program` (the FLAT invariants
+                        // the deos surface installs — no SenderAuthorized, so the World
+                        // single-custody path admits a plain publish) + the `seed_feed`
+                        // baseline (capacity, owner hash, SEQ_HEAD=1, SEQ_TAIL=0).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            feed,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            s::feed_invariants_program(),
+                            &[
+                                SeedField {
+                                    slot: s::CAPACITY_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(16),
+                                },
+                                SeedField {
+                                    slot: s::OWNER_PK_HASH_SLOT as usize,
+                                    value: dregg_app_framework::field_from_bytes(b"owner"),
+                                },
+                                SeedField {
+                                    slot: s::SEQ_HEAD_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                                SeedField {
+                                    slot: s::SEQ_TAIL_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT `publish` through World: read the live head off World's
+                        // ledger, advance it, and fold the new message-commitment root
+                        // (the SAME `publish_effects` the framework path fires).
+                        let payload = dregg_app_framework::field_from_u64(0xF33D);
+                        let receipt = spine.commit(
+                            "publish",
+                            &s::PUBLISHER_RIGHTS,
+                            &s::PUBLISHER_RIGHTS,
+                            |live| {
+                                let live_head =
+                                    field_tail_u64(&live.fields[s::SEQ_HEAD_SLOT as usize]);
+                                let new_head = live_head.saturating_add(1);
+                                let prev_root = live.fields[s::MESSAGE_ROOT_SLOT as usize];
+                                let new_root =
+                                    s::fold_message_root(&prev_root, new_head, &payload);
+                                s::publish_effects(feed, new_head, new_root, payload)
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "swarm-orchestration",
+                    name: "Swarm Orchestration",
+                    description:
+                        "A swarm dispatch board with a per-worker spend budget — the lead dispatches one task \
+                         to a worker, debiting its meter + advancing the no-replay epoch (Σspend ≤ budget bites).",
+                    ctor: starbridge_swarm_orchestration::board_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_swarm_orchestration::seed_board(exec, "lead", 1_000);
+                    },
+                    drive: |app, sub| {
+                        use starbridge_swarm_orchestration as w;
+                        // The LEAD dispatches one task (cost 1) to worker A.
+                        let board = app.cells()[0].cell();
+                        w::fire_dispatch(
+                            app,
+                            &w::LEAD_RIGHTS,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                            w::Worker::A,
+                            board,
+                            1,
+                            "task-0",
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_swarm_orchestration as w;
+                        let board = app.cells()[0].cell();
+                        // SEED onto World: `coordinator_program` (AffineLe budget,
+                        // WriteOnce BUDGET/LEAD, Monotonic meters, StrictMonotonic EPOCH)
+                        // + the `seed_board` baseline (lead, budget, spends=0, EPOCH=1).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            board,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            w::coordinator_program(),
+                            &[
+                                SeedField {
+                                    slot: w::LEAD_SLOT as usize,
+                                    value: dregg_app_framework::field_from_bytes(b"lead"),
+                                },
+                                SeedField {
+                                    slot: w::BUDGET_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1_000),
+                                },
+                                SeedField {
+                                    slot: w::SPENT_A_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: w::SPENT_B_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: w::EPOCH_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                            ],
+                        );
+                        // COMMIT `dispatch` through World: read the live worker-A meter +
+                        // epoch off World's ledger, debit cost 1, advance the epoch (the
+                        // SAME `dispatch_effects` the framework path fires).
+                        let receipt = spine.commit(
+                            "dispatch",
+                            &w::LEAD_RIGHTS,
+                            &w::LEAD_RIGHTS,
+                            |live| {
+                                let spend_slot = w::Worker::A.spend_slot() as usize;
+                                let live_spent = field_tail_u64(&live.fields[spend_slot]);
+                                let live_epoch = field_tail_u64(&live.fields[w::EPOCH_SLOT as usize]);
+                                w::dispatch_effects(
+                                    board,
+                                    w::Worker::A,
+                                    board,
+                                    live_spent.saturating_add(1),
+                                    live_epoch.saturating_add(1),
+                                    1,
+                                    "task-0",
+                                )
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "tool-access-delegation",
+                    name: "Tool Access Delegation",
+                    description:
+                        "A rate-limited tool-access mandate — a worker invokes the tool once, ticking the \
+                         call counter (the executor re-enforces calls_made ≤ rate_limit + the deadline gate).",
+                    ctor: starbridge_tool_access_delegation::tad_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_tool_access_delegation::seed_mandate(exec, "search-mcp", 8, 0);
+                    },
+                    drive: |app, sub| {
+                        use starbridge_tool_access_delegation as t;
+                        // A WORKER invokes the tool once.
+                        t::fire_invoke(app, &t::WORKER_RIGHTS, sub.cipherclerk(), sub.executor())
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_tool_access_delegation as t;
+                        let mandate = app.cells()[0].cell();
+                        // SEED onto World: `tad_cell_program` (Cases: the `invoke_tool`
+                        // case binds Monotonic CALLS_MADE + the deadline-height gate) + the
+                        // `seed_mandate` baseline (rate limit, tool id, deadline=0, CALLS=0).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            mandate,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            t::tad_cell_program(),
+                            &[
+                                SeedField {
+                                    slot: t::RATE_LIMIT_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(8),
+                                },
+                                SeedField {
+                                    slot: t::TOOL_ID_SLOT as usize,
+                                    value: dregg_app_framework::field_from_bytes(b"search-mcp"),
+                                },
+                                SeedField {
+                                    slot: t::DEADLINE_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: t::CALLS_MADE_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT through World carrying the `invoke_tool` METHOD SYMBOL
+                        // (the Cases dispatch case; the surface name is `invoke` but the
+                        // wire method MUST be `invoke_tool` or the Cases program default-
+                        // denies). Read the live call counter, tick it (Monotonic holds).
+                        let receipt = spine.commit(
+                            "invoke_tool",
+                            &t::WORKER_RIGHTS,
+                            &t::WORKER_RIGHTS,
+                            |live| {
+                                let live_calls =
+                                    field_tail_u64(&live.fields[t::CALLS_MADE_SLOT as usize]);
+                                t::invoke_effects(mandate, live_calls.saturating_add(1))
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
             ],
         }
     }
@@ -619,6 +1499,22 @@ mod tests {
         assert!(ids.contains(&"sealed-auction"));
         assert!(ids.contains(&"bounty-board"));
         assert!(ids.contains(&"tussle"));
+        // The second wave (wired onto the live World ledger).
+        for id in [
+            "agent-orchestration",
+            "agent-provenance",
+            "compartment-workflow-mandate",
+            "compute-exchange",
+            "escrow-market",
+            "nameservice",
+            "privacy-voting",
+            "storage-gateway-mandate",
+            "subscription",
+            "swarm-orchestration",
+            "tool-access-delegation",
+        ] {
+            assert!(ids.contains(&id), "{id} is wired into the standard registry");
+        }
         // Each entry names itself + what it does (the launcher list content).
         for e in reg.entries() {
             assert!(!e.name.is_empty());

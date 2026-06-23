@@ -212,7 +212,26 @@ embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-cell-crypto"
 # `embedded-executor` does NOT pull `app-registry`, so the wasm web bundle (`gpui-web`
 # → `embedded-executor`) never tries to resolve the non-wasm app crates. Native builds
 # turn it on via `native-full` (or `--features app-registry` for the gpui-free test path).
-app-registry = ["embedded-executor", "dep:dregg-app-framework", "dep:starbridge-gallery", "dep:starbridge-tussle", "dep:starbridge-sealed-auction", "dep:starbridge-bounty-board"]
+app-registry = [
+    "embedded-executor",
+    "dep:dregg-app-framework",
+    "dep:starbridge-gallery",
+    "dep:starbridge-tussle",
+    "dep:starbridge-sealed-auction",
+    "dep:starbridge-bounty-board",
+    # The second wave (gallery-shape apps wired onto the live World ledger).
+    "dep:starbridge-agent-orchestration",
+    "dep:starbridge-agent-provenance",
+    "dep:starbridge-compartment-workflow-mandate",
+    "dep:starbridge-compute-exchange",
+    "dep:starbridge-escrow-market",
+    "dep:starbridge-nameservice",
+    "dep:starbridge-privacy-voting",
+    "dep:starbridge-storage-gateway-mandate",
+    "dep:starbridge-subscription",
+    "dep:starbridge-swarm-orchestration",
+    "dep:starbridge-tool-access-delegation",
+]
 
 # OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
 # rasterizer + the cap-gated `render_dregg_page` content-tile entry) so the
@@ -548,6 +567,24 @@ starbridge-gallery = { path = "../starbridge-apps/gallery", optional = true }
 starbridge-tussle = { path = "../starbridge-apps/tussle", optional = true }
 starbridge-sealed-auction = { path = "../starbridge-apps/sealed-auction", optional = true }
 starbridge-bounty-board = { path = "../starbridge-apps/bounty-board", optional = true }
+# The SECOND WAVE of pre-built starbridge-apps wired onto the cockpit's LIVE
+# `World` ledger (`src/app_registry.rs`). Each path-deps the SAME `../sdk`/
+# `../turn`/`../cell` (so cargo resolves IDENTICAL `Effect`/`CellProgram`/
+# `TurnReceipt` instances) and exposes the gallery-shape ctor + `*_program()` +
+# `*_effects()`/seed surface the World bridge re-expresses. NON-WASM ONLY (these
+# crates don't build on wasm32; the wasm `gpui-web` bundle must never resolve
+# them — they are absent from the `cfg(target_arch = "wasm32")` mirror below).
+starbridge-agent-orchestration = { path = "../starbridge-apps/agent-orchestration", optional = true }
+starbridge-agent-provenance = { path = "../starbridge-apps/agent-provenance", optional = true }
+starbridge-compartment-workflow-mandate = { path = "../starbridge-apps/compartment-workflow-mandate", optional = true }
+starbridge-compute-exchange = { path = "../starbridge-apps/compute-exchange", optional = true }
+starbridge-escrow-market = { path = "../starbridge-apps/escrow-market", optional = true }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice", optional = true }
+starbridge-privacy-voting = { path = "../starbridge-apps/privacy-voting", optional = true }
+starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gateway-mandate", optional = true }
+starbridge-subscription = { path = "../starbridge-apps/subscription", optional = true }
+starbridge-swarm-orchestration = { path = "../starbridge-apps/swarm-orchestration", optional = true }
+starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-delegation", optional = true }
 # THE SERVO RENDER LANE — the HOST SWGL render path that IS deos's compositor
 # render pass (Stage A of docs/desktop-os-research/SERVO-ON-SEL4.md). Default
 # `swgl-standalone` features ONLY (swgl's CPU-only C++ rasterizer + gleam + the real

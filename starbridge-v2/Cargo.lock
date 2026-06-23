@@ -186,6 +186,17 @@ dependencies = [
 
 [[package]]
 name = "ahash"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
+dependencies = [
+ "getrandom 0.2.17",
+ "once_cell",
+ "version_check",
+]
+
+[[package]]
+name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
@@ -218,7 +229,7 @@ dependencies = [
  "libc",
  "log",
  "miow",
- "parking_lot",
+ "parking_lot 0.12.5",
  "piper",
  "polling",
  "regex-automata 0.4.14",
@@ -397,7 +408,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
- "parking_lot",
+ "parking_lot 0.12.5",
  "percent-encoding",
  "windows-sys 0.60.2",
  "x11rb",
@@ -459,7 +470,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0c292754729c8a190e50414fd1a37093c786c709899f29c9f7daccecfa855e"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "ark-crypto-primitives-macros",
  "ark-ec",
  "ark-ff",
@@ -493,7 +504,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43d68f2d516162846c1238e755a7c4d131b892b70cc70c471a8e3ca3ed818fce"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "ark-ff",
  "ark-poly",
  "ark-serialize",
@@ -559,7 +570,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "579305839da207f02b89cd1679e50e67b4331e2f9294a57693e5051b7703fe27"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "ark-ff",
  "ark-serialize",
  "ark-std",
@@ -575,7 +586,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d68a105d915bcde6c0687363591c97e72d2d3758f3532d48fd0bf21a3261ce7"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "ark-crypto-primitives",
  "ark-ec",
  "ark-ff",
@@ -2047,7 +2058,6 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "gpui_util",
  "indexmap 2.14.0",
@@ -2839,7 +2849,7 @@ dependencies = [
  "js-sys",
  "libc",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-pty",
  "serde",
  "serde_json",
@@ -2866,7 +2876,10 @@ dependencies = [
  "anyhow",
  "biscuit-auth",
  "clear_on_drop",
+ "dregg-cell",
  "dregg-doc",
+ "dregg-turn",
+ "dregg-types",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
@@ -2976,7 +2989,6 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3148,6 +3160,33 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dregg-app-framework"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "blake3",
+ "dregg-captp",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-intent",
+ "dregg-sdk",
+ "dregg-storage",
+ "dregg-turn",
+ "dregg-types",
+ "ed25519-dalek",
+ "http 1.4.2",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "starbridge-web-surface",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-http",
+]
 
 [[package]]
 name = "dregg-blocklace"
@@ -3596,6 +3635,17 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "dregg-storage"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "reed-solomon-erasure",
+ "serde",
 ]
 
 [[package]]
@@ -4899,7 +4949,6 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -4927,7 +4976,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
- "gpui_macros",
+ "gpui_macros 0.1.0",
  "gpui_shared_string",
  "gpui_util",
  "heapless 0.9.3",
@@ -4943,7 +4992,7 @@ dependencies = [
  "num_cpus",
  "objc",
  "parking",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pathfinder_geometry",
  "pin-project",
  "pollster 0.4.0",
@@ -4994,7 +5043,7 @@ dependencies = [
  "gpui",
  "gpui-component-assets",
  "gpui-component-macros",
- "gpui_macros",
+ "gpui_macros 0.1.0 (git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549)",
  "html5ever 0.27.0",
  "instant",
  "itertools 0.13.0",
@@ -5057,7 +5106,6 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5080,7 +5128,7 @@ dependencies = [
  "log",
  "oo7",
  "open",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pathfinder_geometry",
  "pollster 0.4.0",
  "profiling",
@@ -5108,7 +5156,6 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5141,7 +5188,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pathfinder_geometry",
  "raw-window-handle",
  "semver",
@@ -5150,6 +5197,16 @@ dependencies = [
  "util",
  "uuid",
  "zed-font-kit",
+]
+
+[[package]]
+name = "gpui_macros"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5166,7 +5223,6 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "console_error_panic_hook",
  "gpui",
@@ -5179,7 +5235,6 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -5189,7 +5244,6 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "log",
@@ -5198,7 +5252,6 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5208,7 +5261,7 @@ dependencies = [
  "http_client",
  "js-sys",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "raw-window-handle",
  "smallvec",
  "uuid",
@@ -5222,7 +5275,6 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5235,7 +5287,7 @@ dependencies = [
  "itertools 0.14.0",
  "js-sys",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pollster 0.4.0",
  "profiling",
  "raw-window-handle",
@@ -5252,7 +5304,6 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5264,7 +5315,7 @@ dependencies = [
  "image",
  "itertools 0.14.0",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.9.4",
  "raw-window-handle",
  "smallvec",
@@ -5406,6 +5457,9 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+dependencies = [
+ "ahash 0.7.8",
+]
 
 [[package]]
 name = "hashbrown"
@@ -5679,7 +5733,6 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5691,7 +5744,7 @@ dependencies = [
  "http 1.4.2",
  "http-body 1.0.1",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -7187,6 +7240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e999beba7b6e8345721bd280141ed958096a2e4abdf74f67ff4ce49b4b54e47a"
+dependencies = [
+ "hashbrown 0.12.3",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7738,7 +7800,6 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -9418,12 +9479,37 @@ checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
 name = "parking_lot"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
+dependencies = [
+ "instant",
+ "lock_api",
+ "parking_lot_core 0.8.6",
+]
+
+[[package]]
+name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
  "lock_api",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
+dependencies = [
+ "cfg-if",
+ "instant",
+ "libc",
+ "redox_syscall 0.2.16",
+ "smallvec",
+ "winapi",
 ]
 
 [[package]]
@@ -9548,7 +9634,6 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "collections",
  "serde",
@@ -9875,7 +9960,7 @@ dependencies = [
  "crossbeam-queue",
  "futures",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "pollster 0.2.5",
  "static_assertions",
@@ -10177,7 +10262,7 @@ version = "0.6.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3db184a8b66cfe87f0263a1de147a6b554c864d1767c6f7fa4eb0e5497b565"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "equivalent",
  "hashbrown 0.16.1",
 ]
@@ -10590,6 +10675,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reed-solomon-erasure"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7263373d500d4d4f505d43a2a662d475a894aa94503a1ee28e9188b5f3960d4f"
+dependencies = [
+ "libm",
+ "lru",
+ "parking_lot 0.11.2",
+ "smallvec",
+ "spin 0.9.8",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10612,7 +10710,6 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "derive_refineable",
 ]
@@ -11339,14 +11436,13 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "async-task",
  "backtrace",
  "chrono",
  "flume",
  "futures",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.9.4",
  "web-time",
 ]
@@ -11850,7 +11946,7 @@ dependencies = [
  "keyboard-types",
  "log",
  "mozangle",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustc-hash 2.1.2",
  "serde",
  "servo-background-hang-monitor",
@@ -11945,7 +12041,7 @@ dependencies = [
  "log",
  "mach2 0.6.0",
  "malloc_size_of_derive",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rayon",
  "regex",
  "serde",
@@ -12045,7 +12141,7 @@ dependencies = [
  "ipc-channel",
  "keyboard-types",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.9.4",
  "rustc-hash 2.1.2",
  "serde",
@@ -12250,7 +12346,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-text",
- "parking_lot",
+ "parking_lot 0.12.5",
  "read-fonts 0.35.0",
  "rustc-hash 2.1.2",
  "serde",
@@ -12292,7 +12388,7 @@ dependencies = [
  "memmap2",
  "num-derive",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.12.5",
  "read-fonts 0.35.0",
  "serde",
  "servo-base",
@@ -12362,7 +12458,7 @@ dependencies = [
  "kurbo 0.12.0",
  "log",
  "malloc_size_of_derive",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rayon",
  "rustc-hash 2.1.2",
  "selectors",
@@ -12410,7 +12506,7 @@ dependencies = [
  "html5ever 0.39.0",
  "libc",
  "malloc_size_of_derive",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustc-hash 2.1.2",
  "selectors",
  "serde",
@@ -12450,7 +12546,7 @@ dependencies = [
  "keyboard-types",
  "markup5ever 0.39.0",
  "mime",
- "parking_lot",
+ "parking_lot 0.12.5",
  "resvg",
  "servo-allocator",
  "servo_arc",
@@ -12654,7 +12750,7 @@ dependencies = [
  "mime",
  "mime_guess",
  "nom 8.0.0",
- "parking_lot",
+ "parking_lot 0.12.5",
  "quick_cache",
  "regex",
  "resvg",
@@ -12707,7 +12803,7 @@ dependencies = [
  "malloc_size_of_derive",
  "mime",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.12.5",
  "percent-encoding",
  "rand 0.9.4",
  "rustc-hash 2.1.2",
@@ -12784,7 +12880,7 @@ dependencies = [
  "ipc-channel",
  "log",
  "malloc_size_of_derive",
- "parking_lot",
+ "parking_lot 0.12.5",
  "raw-window-handle",
  "rustc-hash 2.1.2",
  "serde",
@@ -12862,7 +12958,9 @@ name = "servo-render"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "bs58",
  "dpi",
+ "dregg-captp",
  "dregg-firmament",
  "gleam",
  "glow 0.16.0",
@@ -12941,7 +13039,7 @@ dependencies = [
  "p256",
  "p384",
  "p521",
- "parking_lot",
+ "parking_lot 0.12.5",
  "percent-encoding",
  "phf 0.13.1",
  "pkcs8 0.10.2",
@@ -13029,7 +13127,7 @@ dependencies = [
  "malloc_size_of_derive",
  "mozjs",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.12.5",
  "phf 0.13.1",
  "phf_codegen 0.13.1",
  "phf_shared 0.13.1",
@@ -13178,7 +13276,7 @@ dependencies = [
  "half",
  "itertools 0.14.0",
  "log",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustc-hash 2.1.2",
  "servo-base",
  "servo-canvas-traits",
@@ -13670,12 +13768,201 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbridge-agent-orchestration"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-coord",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-agent-provenance"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-bounty-board"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-compartment-workflow-mandate"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-compute-exchange"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-escrow-market"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-gallery"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-nameservice"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "starbridge-polis"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-cell",
  "postcard",
+]
+
+[[package]]
+name = "starbridge-privacy-voting"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-sealed-auction"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-intent",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-storage-gateway-mandate"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-subscription"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-swarm-orchestration"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-coord",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-tool-access-delegation"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-tussle"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-intent",
+ "serde_json",
 ]
 
 [[package]]
@@ -13691,6 +13978,7 @@ dependencies = [
  "deos-terminal",
  "deos-web-cells",
  "deos-zed",
+ "dregg-app-framework",
  "dregg-captp",
  "dregg-cell",
  "dregg-cell-crypto",
@@ -13720,7 +14008,23 @@ dependencies = [
  "serde",
  "serde_json",
  "servo-render",
+ "starbridge-agent-orchestration",
+ "starbridge-agent-provenance",
+ "starbridge-bounty-board",
+ "starbridge-compartment-workflow-mandate",
+ "starbridge-compute-exchange",
+ "starbridge-escrow-market",
+ "starbridge-gallery",
+ "starbridge-nameservice",
+ "starbridge-privacy-voting",
+ "starbridge-sealed-auction",
+ "starbridge-storage-gateway-mandate",
+ "starbridge-subscription",
+ "starbridge-swarm-orchestration",
+ "starbridge-tool-access-delegation",
+ "starbridge-tussle",
  "starbridge-web-surface",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13812,7 +14116,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf776ba3fa74f83bf4b63c3dcbbf82173db2632ed8452cb2d891d33f459de70f"
 dependencies = [
  "new_debug_unreachable",
- "parking_lot",
+ "parking_lot 0.12.5",
  "phf_shared 0.11.3",
  "precomputed-hash",
  "serde",
@@ -13825,7 +14129,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a18596f8c785a729f2819c0f6a7eae6ebeebdfffbfe4214ae6b087f690e31901"
 dependencies = [
  "new_debug_unreachable",
- "parking_lot",
+ "parking_lot 0.12.5",
  "phf_shared 0.13.1",
  "precomputed-hash",
  "serde",
@@ -13930,7 +14234,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "num_cpus",
- "parking_lot",
+ "parking_lot 0.12.5",
  "precomputed-hash",
  "rayon",
  "rayon-core",
@@ -14046,7 +14350,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -14626,7 +14929,9 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot 0.12.5",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2 0.6.4",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -15365,7 +15670,6 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "util"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -15404,7 +15708,6 @@ dependencies = [
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "perf",
  "quote",
@@ -16081,7 +16384,7 @@ dependencies = [
  "js-sys",
  "log",
  "naga 29.0.3",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -16112,7 +16415,7 @@ dependencies = [
  "log",
  "naga 26.0.0",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "profiling",
  "rustc-hash 1.1.0",
  "serde",
@@ -16142,7 +16445,7 @@ dependencies = [
  "log",
  "naga 29.0.3",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -16240,7 +16543,7 @@ dependencies = [
  "ndk-sys",
  "objc",
  "ordered-float 4.6.0",
- "parking_lot",
+ "parking_lot 0.12.5",
  "profiling",
  "range-alloc",
  "raw-window-handle",
@@ -16286,7 +16589,7 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "once_cell",
  "ordered-float 5.3.0",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
@@ -16443,7 +16746,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a4df73e95feddb9ec1a7e9c2ca6323b8c97d5eeeff78d28f1eccdf19c882b24"
 dependencies = [
- "parking_lot",
+ "parking_lot 0.12.5",
  "rayon",
  "thiserror 2.0.18",
  "windows 0.61.3",
@@ -17721,7 +18024,7 @@ name = "zed-xim"
 version = "0.4.0-zed"
 source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "hashbrown 0.14.5",
  "log",
  "x11rb",
@@ -17879,7 +18182,6 @@ dependencies = [
 [[package]]
 name = "zlog"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "anyhow",
  "chrono",
@@ -17924,7 +18226,6 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -17935,7 +18236,6 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/emberian/zed?rev=407a6ffd977d82b828e392f92db5cb34edea9549#407a6ffd977d82b828e392f92db5cb34edea9549"
 
 [[package]]
 name = "zune-core"
