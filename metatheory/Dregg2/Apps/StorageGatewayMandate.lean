@@ -417,7 +417,8 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
   | refreshDelegationA actor child =>
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'
-      show c ∈ ({ s.kernel with delegations := _ }).accounts ∧ ({ s.kernel with delegations := _ }).slotCaveats c = cav
+      show c ∈ ({ s.kernel with delegations := _, delegationEpochAt := _ }).accounts
+        ∧ ({ s.kernel with delegations := _, delegationEpochAt := _ }).slotCaveats c = cav
       exact ⟨hlive, hprog⟩
   | pipelinedSendA actor =>
       simp only [execFullA, Option.some.injEq] at h; subst h; exact ⟨hlive, hprog⟩

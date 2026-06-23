@@ -30,9 +30,13 @@ def RefreshDelegationGuard (s : RecChainedState) (actor child : CellId) : Prop :
 def refreshDelegationsMap (k : RecordKernelState) (child : CellId) : CellId → List Cap :=
   fun c => if c = child then parentClist k child else k.delegations c
 
-/-- **The full-state declarative spec of a committed `refreshDelegationA`.** (The freshness-RESTORE
-epoch re-stamp `delegationEpochAt` is a SCOPED follow-up — refresh leaves it frozen for now; see
-`refreshDelegationChainA` in `TurnExecutorFull`.) -/
+/-- The declarative post-`delegationEpochAt` map: re-stamp the child's epoch tag with the parent's CURRENT
+`delegationEpoch` (`parentEpoch`) — the freshness-RESTORE step. -/
+def refreshEpochAtMap (k : RecordKernelState) (child : CellId) : CellId → Nat :=
+  fun c => if c = child then parentEpoch k child else k.delegationEpochAt c
+
+/-- **The full-state declarative spec of a committed `refreshDelegationA`** — the deployed v1 frozen-face
+descriptor's spec (`delegationEpochAt` framed UNCHANGED; consumed by `apex_iff_refreshDelegationSpec`). -/
 def RefreshDelegationSpec (s : RecChainedState) (actor child : CellId) (s' : RecChainedState) : Prop :=
   RefreshDelegationGuard s actor child
   ∧ s'.kernel.delegations = refreshDelegationsMap s.kernel child
@@ -48,14 +52,36 @@ def RefreshDelegationSpec (s : RecChainedState) (actor child : CellId) (s' : Rec
   ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
   ∧ s'.kernel.heaps = s.kernel.heaps
 
+/-- **The STRENGTHENED full-state spec of a committed `refreshDelegationA`** — the EXECUTOR's faithful
+face. Identical to `RefreshDelegationSpec` EXCEPT the `delegationEpochAt` clause is no longer framed
+UNCHANGED: it carries the FRESHNESS-RESTORE STAMP (`refreshEpochAtMap`), re-syncing the child's epoch tag to
+the parent's CURRENT epoch, so a still-authorized child is FRESH after refresh (`delegationStale child =
+false`). A refresh that leaves the stamp behind FAILS this clause. -/
+def RefreshDelegationFullSpec (s : RecChainedState) (actor child : CellId) (s' : RecChainedState) : Prop :=
+  RefreshDelegationGuard s actor child
+  ∧ s'.kernel.delegations = refreshDelegationsMap s.kernel child
+  ∧ s'.log = refreshDelegationReceipt actor child :: s.log
+  ∧ s'.kernel.accounts = s.kernel.accounts ∧ s'.kernel.cell = s.kernel.cell
+  ∧ s'.kernel.caps = s.kernel.caps
+  ∧ s'.kernel.nullifiers = s.kernel.nullifiers ∧ s'.kernel.revoked = s.kernel.revoked
+  ∧ s'.kernel.commitments = s.kernel.commitments ∧ s'.kernel.bal = s.kernel.bal
+  ∧ s'.kernel.slotCaveats = s.kernel.slotCaveats ∧ s'.kernel.factories = s.kernel.factories
+  ∧ s'.kernel.lifecycle = s.kernel.lifecycle ∧ s'.kernel.deathCert = s.kernel.deathCert
+  ∧ s'.kernel.delegate = s.kernel.delegate
+  ∧ s'.kernel.delegationEpoch = s.kernel.delegationEpoch
+  -- THE FRESHNESS-RESTORE STAMP (no longer framed-unchanged):
+  ∧ s'.kernel.delegationEpochAt = refreshEpochAtMap s.kernel child
+  ∧ s'.kernel.heaps = s.kernel.heaps
+
 /-! ## §2 — executor ⟺ spec. -/
 
-/-- **`refreshDelegation_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
+/-- **`refreshDelegation_iff_spec` — EXECUTOR ⟺ STRENGTHENED FULL SPEC (FULL state, both directions).**
+The executor commits a refresh IFF the strengthened post (with the freshness-restore epoch stamp) holds. -/
 theorem refreshDelegation_iff_spec (s : RecChainedState) (actor child : CellId) (s' : RecChainedState) :
     execFullA s (.refreshDelegationA actor child) = some s'
-      ↔ RefreshDelegationSpec s actor child s' := by
-  unfold RefreshDelegationSpec RefreshDelegationGuard refreshDelegationsMap
-  simp only [execFullA, refreshDelegationChainA, parentClist]
+      ↔ RefreshDelegationFullSpec s actor child s' := by
+  unfold RefreshDelegationFullSpec RefreshDelegationGuard refreshDelegationsMap refreshEpochAtMap
+  simp only [execFullA, refreshDelegationChainA, parentClist, parentEpoch]
   by_cases hg : stateAuthB s.kernel.caps actor child = true ∧ (s.kernel.delegate child).isSome = true
   · rw [if_pos hg]
     constructor

@@ -70,7 +70,10 @@ def cellDestroyStep (k : RecordKernelState) (a : CellDestroyArgs) : Option Recor
             deathCert := fun c => if c = a.cell then a.certHash else k.deathCert c }
   else none
 
-/-- **Refresh delegation** — snapshot the parent's CURRENT c-list into `delegations child`. -/
+/-- **Refresh delegation** — snapshot the parent's CURRENT c-list into `delegations child`. (The
+freshness-restore epoch re-stamp `delegationEpochAt` rides the SEPARATE executor-faithful path
+`refreshDelegationChainA`; this handler mirror models the frozen-face `delegations` snapshot only, like the
+deployed standalone circuit — the epoch stamp is the named residual the chained executor adds.) -/
 def refreshDelegationStep (k : RecordKernelState) (a : RefreshDelegationArgs) :
     Option RecordKernelState :=
   if stateAuthB k.caps a.actor a.child && (k.delegate a.child).isSome then

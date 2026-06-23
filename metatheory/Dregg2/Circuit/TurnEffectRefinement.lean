@@ -33,7 +33,7 @@ open Dregg2.Circuit.EffectRefinement
   (mintCircuitStep mint_circuit_refines_spec
    burnCircuitStep burn_circuit_refines_spec
    createCellCircuitStep createCell_circuit_refines_spec
-   spawnCircuitStep spawn_circuit_refines_spec
+   spawnCircuitStep spawnFullCircuitStep spawn_full_circuit_refines_spec
    balanceACircuitStep balanceA_circuit_refines_spec
    delegateCircuitStep delegate_circuit_refines_spec
    noteSpendCircuitStep noteSpend_circuit_refines_spec
@@ -177,7 +177,7 @@ def fullActionCircuitStep
   | .createCellA actor newCell =>
       createCellCircuitStep S LE_cell cN hN hLE_cell DBal hDBal DSide hDSide st ⟨actor, newCell⟩ st'
   | .spawnA actor child target =>
-      spawnCircuitStep S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
+      spawnFullCircuitStep S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
         st ⟨actor, child, target⟩ st'
   | .bridgeMintA actor cell a value =>
       mintCircuitStep S D_bal hD_bal st ⟨actor, cell, a, value⟩ st'
@@ -234,7 +234,7 @@ def fullActionCircuitStep
   | .cellDestroyA actor cell certHash =>
       cellDestroyCircuitStep S DLife hDLife DDC hDDC st ⟨actor, cell, certHash⟩ st'
   | .refreshDelegationA actor child =>
-      refreshDelegationCircuitStep S DDgs hDDgs st ⟨actor, child⟩ st'
+      refreshDelegationFullCircuitStep S DDgs hDDgs st ⟨actor, child⟩ st'
   | .heapWriteA actor target addr v newRoot =>
       -- THE ROTATION: the heap write's v2-dual circuit step (register write + heaps splice).
       heapWriteCircuitStep S DCell hDCell DHeaps hDHeaps st ⟨actor, target, addr, v, newRoot⟩ st'
@@ -357,8 +357,8 @@ theorem fullAction_circuit_refines_spec
         st _ st' h
   | .spawnA actor child target =>
       simp only [fullActionStep]
-      exact spawn_circuit_refines_spec S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
-        hRestSpawn hLog st _ st' h
+      exact spawn_full_circuit_refines_spec S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel
+        DDgs hDDgs hRestSpawn hLog st _ st' h
   | .bridgeMintA actor cell a value =>
       simp only [fullActionStep]
       exact mint_circuit_refines_spec S D_bal hD_bal hRestBal hLog st _ st' h
@@ -466,7 +466,7 @@ theorem fullAction_circuit_refines_spec
       exact cellDestroy_circuit_refines_spec S DLife hDLife DDC hDDC hRestLifecycleDeathCert hLog st _ st' h
   | .refreshDelegationA actor child =>
       simp only [fullActionStep]
-      exact refreshDelegation_circuit_refines_spec S DDgs hDDgs hRestDelegations hLog st _ st' h
+      exact refreshDelegation_full_circuit_refines_spec S DDgs hDDgs hRestDelegations hLog st _ st' h
   | .heapWriteA actor target addr v newRoot =>
       simp only [fullActionStep]
       exact heapWrite_circuit_refines_spec S DCell hDCell DHeaps hDHeaps hRestCellHeaps hLog

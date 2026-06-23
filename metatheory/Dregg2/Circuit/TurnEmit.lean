@@ -460,10 +460,10 @@ theorem step_emitted_refines_fullActionStep
           hcircuit)
   | .spawnA actor child target =>
       simp only [fullActionStep]
-      exact spawn_emitted_refines_spec S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
-        hRestSpawn hLog st ⟨actor, child, target⟩ st'
-        ((spawn_emitted_equiv_circuit S LE_cell cN hN hLE_cell DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
-            st ⟨actor, child, target⟩ st').mpr hcircuit)
+      -- `hcircuit` is the FAITHFUL `spawnFullCircuitStep` (deployed quint + the birth epoch-stamp residual);
+      -- it forces the STRENGTHENED `SpawnFullSpec` (born child FRESH) the dispatch spec table now demands.
+      exact Dregg2.Circuit.EffectRefinement.spawn_full_circuit_refines_spec S LE_cell cN hN hLE_cell
+        DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRestSpawn hLog st ⟨actor, child, target⟩ st' hcircuit
   | .bridgeMintA actor cell a value =>
       simp only [fullActionStep]
       exact mint_emitted_refines_spec S D_bal hD_bal hRestBal hLog st ⟨actor, cell, a, value⟩ st'
@@ -587,8 +587,10 @@ theorem step_emitted_refines_fullActionStep
         ((cellDestroyA_emitted_equiv_circuit S DLife hDLife DDC hDDC st ⟨actor, cell, certHash⟩ st').mpr hcircuit)
   | .refreshDelegationA actor child =>
       simp only [fullActionStep]
-      exact refreshDelegationA_emitted_refines_spec S DDgs hDDgs hRestDelegations hLog st ⟨actor, child⟩ st'
-        ((refreshDelegationA_emitted_equiv_circuit S DDgs hDDgs st ⟨actor, child⟩ st').mpr hcircuit)
+      -- `hcircuit` is the FAITHFUL `refreshDelegationFullCircuitStep` (deployed func-descriptor + the
+      -- freshness-restore stamp residual); it forces the STRENGTHENED `RefreshDelegationFullSpec`.
+      exact Dregg2.Circuit.EffectRefinementBatch2.refreshDelegation_full_circuit_refines_spec
+        S DDgs hDDgs hRestDelegations hLog st ⟨actor, child⟩ st' hcircuit
   | .heapWriteA actor target addr v newRoot =>
       -- THE ROTATION: the emitted heap-write diamond ⊑ the leaf `HeapWriteSpec`.
       simp only [fullActionStep]

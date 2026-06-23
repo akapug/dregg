@@ -103,8 +103,9 @@ open Dregg2.Exec.Handlers.Lifecycle (refreshDelegationStep RefreshDelegationArgs
 open Dregg2.Circuit.StateCommit (logHashInjective)
 open Dregg2.Circuit.EffectCommit2 (Surface2 satisfiedE2 encodeE2)
 open Dregg2.Circuit.Spec.RefreshDelegation
-  (RefreshDelegationSpec RefreshDelegationGuard refreshDelegationsMap refreshDelegationReceipt
-   refreshDelegation_iff_spec)
+  (RefreshDelegationSpec RefreshDelegationFullSpec RefreshDelegationGuard refreshDelegationsMap
+   refreshEpochAtMap refreshDelegationReceipt refreshDelegation_iff_spec)
+open Dregg2.Exec.TurnExecutorFull (parentEpoch)
 open Dregg2.Circuit.Inst.RefreshDelegationA
   (RestIffNoDelegations refreshDelegationE refreshDelegationA_full_sound)
 open Dregg2.Authority (Caps Cap)
@@ -184,39 +185,36 @@ PLUS the receipt-log prepend `receipt :: s.log` — and, crucially, the SAME two
 cornerstone commits on the kernel, the chained executor commits with the receipt prepended. -/
 
 /-- **`interp_refreshDelegationStmt_chained` — the IR term's executor, lifted to the chained `execFullA`.**
-When the §2 cornerstone commits on the kernel (`interp (refreshDelegationStmt actor child) st.kernel =
-some k'`), the unified action executor `execFullA st (.refreshDelegationA actor child)` commits to the
-chained state `⟨k', refreshDelegationReceipt actor child :: st.log⟩`. So the Argus term's kernel meaning
-lifts to the chained executor the standalone descriptor speaks about — with NO carried side-condition (the
-chained gate IS the kernel gate). -/
+When the §2 cornerstone commits the FROZEN-FACE kernel step (`interp (refreshDelegationStmt actor child)
+st.kernel = some k'`, the `delegations` snapshot only), the unified action executor `execFullA st
+(.refreshDelegationA actor child)` commits to the chained state `⟨k' WITH the freshness-restore epoch
+stamp, refreshDelegationReceipt actor child :: st.log⟩`. The IR term models the frozen face; the FAITHFUL
+chained executor ALSO re-stamps `delegationEpochAt` (`refreshEpochAtMap`), carried here as the named
+epoch-stamp residual ON TOP of the frozen `k'`. -/
 theorem interp_refreshDelegationStmt_chained
     (st : RecChainedState) (actor child : CellId) (k' : RecordKernelState)
     (hexec : interp (refreshDelegationStmt actor child) st.kernel = some k') :
     execFullA st (.refreshDelegationA actor child)
-      = some { kernel := k', log := refreshDelegationReceipt actor child :: st.log } := by
-  -- the §2 cornerstone turns the IR term into the kernel step `refreshDelegationStep`.
+      = some { kernel := { k' with delegationEpochAt := refreshEpochAtMap st.kernel child },
+               log := refreshDelegationReceipt actor child :: st.log } := by
+  -- the §2 cornerstone turns the IR term into the FROZEN-FACE kernel step `refreshDelegationStep`.
   rw [interp_refreshDelegationStmt_eq_refreshDelegationStep] at hexec
-  -- `execFullA st (.refreshDelegationA actor child)` reduces to `refreshDelegationChainA st actor child`,
-  -- whose `if` opens on the SAME two-conjunct gate. The kernel step `hexec` names the post-kernel `k'`;
-  -- the chained arm wraps it with the receipt prepend. We open both on the shared gate.
   show refreshDelegationChainA st actor child
-      = some { kernel := k', log := refreshDelegationReceipt actor child :: st.log }
+      = some { kernel := { k' with delegationEpochAt := refreshEpochAtMap st.kernel child },
+               log := refreshDelegationReceipt actor child :: st.log }
   unfold refreshDelegationChainA
   unfold refreshDelegationStep at hexec
   by_cases hg : (stateAuthB st.kernel.caps actor child && (st.kernel.delegate child).isSome) = true
-  · -- the kernel step committed: read off `k'` from `hexec`, and the chained arm fires on the same gate
-    -- (the chained `if` decodes the Bool gate to its `∧`-of-`= true` Prop form via `Bool.and_eq_true`).
+  · -- the kernel step committed: read off `k'` (frozen face) from `hexec`; the chained arm fires on the
+    -- same gate AND adds the `delegationEpochAt` re-stamp (`refreshEpochAtMap`), which the residual injects.
     rw [if_pos hg] at hexec
     rw [if_pos (by simpa only [Bool.and_eq_true] using hg)]
     simp only [Option.some.injEq] at hexec
     subst hexec
-    -- both kernels are `{ st.kernel with delegations := <the parent snapshot> }` (the chained arm's inline
-    -- write IS `refreshDelegationsMap st.kernel child` by unfolding), and the log is the receipt prepend on
-    -- both (`refreshDelegationReceipt` unfolds to the `{actor, src:=child, dst:=child, amt:=0}` row).
-    -- Definitional.
+    -- the chained post: `delegations := refreshDelegationsMap …` AND `delegationEpochAt := refreshEpochAtMap …`,
+    -- which is EXACTLY the frozen `k'` (delegations move) WITH the epoch stamp residual applied. Definitional.
     rfl
-  · -- the kernel step REJECTED ⇒ `hexec : none = some k'`, contradiction.
-    rw [if_neg hg] at hexec
+  · rw [if_neg hg] at hexec
     exact absurd hexec (by simp)
 
 #assert_axioms interp_refreshDelegationStmt_chained
@@ -243,20 +241,21 @@ def refreshDelegationCircuit (S : Surface2) (D : (CellId → List Cap) → ℤ) 
   satisfiedE2 S (refreshDelegationE D hD)
     (encodeE2 S (refreshDelegationE D hD) st { actor := actor, child := child } st')
 
-/-- **`refreshDelegationSpec_unique` — the spec pins a UNIQUE post-state.** Two chained states that BOTH
-satisfy `RefreshDelegationSpec st actor child ·` are equal. Rather than re-derive this field-by-field, we
-route through the PROVEN executor⟺spec corner `refreshDelegation_iff_spec`: each `RefreshDelegationSpec`
-reconstructs the SAME committed value `execFullA st (.refreshDelegationA actor child) = some ·`, and `some`
-is injective. This is exactly the sense in which `RefreshDelegationSpec` is functional — it determines the
-post-state — so the circuit-side and executor-side spec facts collapse to one welded post-state. -/
+/-- **`refreshDelegationSpec_unique` — the FROZEN-FACE spec pins a UNIQUE post-state.** Two chained states
+that BOTH satisfy `RefreshDelegationSpec st actor child ·` are equal. `RefreshDelegationSpec` is a full-state
+spec: it pins EVERY one of the 17 kernel fields + the log to `st`-determined values, so two satisfying
+states agree field-by-field. (This is the deployed standalone descriptor's FROZEN face — `delegationEpochAt`
+unchanged; the executor's freshness-restore stamp is the separate `RefreshDelegationFullSpec` named
+residual.) Functionality WITHOUT routing through the now-strengthened executor iff. -/
 theorem refreshDelegationSpec_unique {st st₁ st₂ : RecChainedState} {actor child : CellId}
     (h₁ : RefreshDelegationSpec st actor child st₁) (h₂ : RefreshDelegationSpec st actor child st₂) :
     st₁ = st₂ := by
-  have e₁ : execFullA st (.refreshDelegationA actor child) = some st₁ :=
-    (refreshDelegation_iff_spec st actor child st₁).mpr h₁
-  have e₂ : execFullA st (.refreshDelegationA actor child) = some st₂ :=
-    (refreshDelegation_iff_spec st actor child st₂).mpr h₂
-  exact Option.some.injEq _ _ ▸ (e₁.symm.trans e₂)
+  obtain ⟨_, d1, l1, a1, c1, p1, n1, r1, m1, b1, s1, f1, lc1, dc1, dl1, de1, dea1, h1'⟩ := h₁
+  obtain ⟨_, d2, l2, a2, c2, p2, n2, r2, m2, b2, s2, f2, lc2, dc2, dl2, de2, dea2, h2'⟩ := h₂
+  obtain ⟨k1, lg1⟩ := st₁; obtain ⟨k2, lg2⟩ := st₂
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _⟩ := k1
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _⟩ := k2
+  simp_all only []
 
 /-- **`refreshDelegation_compile_sound` — the welded soundness (refreshDelegation slice), against
 refreshDelegation's OWN full-state descriptor.**
@@ -269,12 +268,14 @@ Suppose, for the Argus refreshDelegation term `refreshDelegationStmt actor child
   * the IR term's EXECUTOR interpretation COMMITS on the kernel:
     `interp (refreshDelegationStmt actor child) st.kernel = some k'` (`hexec`).
 
-Then the chained post-state the circuit pins is EXACTLY the chained post-state the IR term's executor
+Then the chained post-state the circuit pins is EXACTLY the FROZEN-FACE chained post-state the IR term
 produces: `st' = { kernel := k', log := refreshDelegationReceipt actor child :: st.log }`. I.e.
-refreshDelegation's OWN circuit and the IR term AGREE on the WHOLE 17-field RecordKernelState (`delegations
-child` overwritten with the parent snapshot, every other field frozen) AND the receipt log — the full
-`RefreshDelegationSpec`, not a per-cell projection. So the circuit the prover runs for refreshDelegation
-pins the complete state the IR term's executor produces. -/
+refreshDelegation's OWN standalone circuit and the IR term AGREE on the WHOLE 17-field RecordKernelState
+(`delegations child` overwritten with the parent snapshot, every other field FROZEN — including
+`delegationEpochAt`, which BOTH the deployed circuit and the IR leave unchanged) AND the receipt log — the
+full FROZEN `RefreshDelegationSpec`. (The FAITHFUL executor ADDS the freshness-restore epoch stamp; that is
+the SEPARATE `RefreshDelegationFullSpec` named residual the deployed standalone descriptor does not yet
+write-gate-force — `interp_refreshDelegationStmt_chained` carries it explicitly.) -/
 theorem refreshDelegation_compile_sound
     (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
@@ -282,18 +283,27 @@ theorem refreshDelegation_compile_sound
     (hcirc : refreshDelegationCircuit S D hD st actor child st')
     (hexec : interp (refreshDelegationStmt actor child) st.kernel = some k') :
     st' = { kernel := k', log := refreshDelegationReceipt actor child :: st.log } := by
-  -- circuit side: refreshDelegation's OWN audited soundness forces the FULL `RefreshDelegationSpec` on
+  -- circuit side: refreshDelegation's OWN audited soundness forces the FROZEN `RefreshDelegationSpec` on
   -- `(st, ⟨actor,child⟩, st')`.
   have hspec : RefreshDelegationSpec st actor child st' :=
     refreshDelegationA_full_sound S D hD hRest hLog st { actor := actor, child := child } st' hcirc
-  -- executor side: the §3 chained lift gives `execFullA st (.refreshDelegationA actor child) = some ⟨k',
-  -- receipt :: st.log⟩`, and the independent executor⟺spec corner turns THAT into the same spec.
-  have hspec' : RefreshDelegationSpec st actor child
-      { kernel := k', log := refreshDelegationReceipt actor child :: st.log } :=
-    (refreshDelegation_iff_spec st actor child _).mp
-      (interp_refreshDelegationStmt_chained st actor child k' hexec)
-  -- both states satisfy the SAME spec ⇒ they are the same state (the spec pins every kernel field + log).
-  exact refreshDelegationSpec_unique hspec hspec'
+  -- IR side: the §2 cornerstone fixes `k'` to the FROZEN-FACE kernel step `refreshDelegationStep` post,
+  -- which satisfies the SAME FROZEN `RefreshDelegationSpec` on `⟨k', receipt :: st.log⟩` (the `delegations`
+  -- snapshot moved, every other field — `delegationEpochAt` included — frozen).
+  rw [interp_refreshDelegationStmt_eq_refreshDelegationStep] at hexec
+  unfold refreshDelegationStep at hexec
+  by_cases hg : (stateAuthB st.kernel.caps actor child && (st.kernel.delegate child).isSome) = true
+  · rw [if_pos hg] at hexec
+    simp only [Option.some.injEq] at hexec
+    have hgP : RefreshDelegationGuard st actor child := by
+      simp only [RefreshDelegationGuard, Bool.and_eq_true] at hg ⊢; exact ⟨hg.1, hg.2⟩
+    have hspec' : RefreshDelegationSpec st actor child
+        { kernel := k', log := refreshDelegationReceipt actor child :: st.log } := by
+      subst hexec
+      exact ⟨hgP, by funext c; simp only [refreshDelegationsMap], rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+             rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    exact refreshDelegationSpec_unique hspec hspec'
+  · rw [if_neg hg] at hexec; exact absurd hexec (by simp)
 
 #assert_axioms refreshDelegation_compile_sound
 

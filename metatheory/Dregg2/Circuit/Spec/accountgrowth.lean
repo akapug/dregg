@@ -390,15 +390,75 @@ def SpawnSpec (st : RecChainedState) (actor child target : CellId) (st' : RecCha
   ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
   ∧ st'.kernel.heaps = st.kernel.heaps
 
-/-- **`spawnChainA_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions) for spawn.** The
-chained record kernel commits a `spawnA` into `st'` IFF `st'` is EXACTLY the spec'd full post-state.
-The `→` VALIDATES `spawnChainA` against the independent spec — the five touched components + `log` +
-12 frame fields = all 18 components are checked; the `←` reconstructs. -/
+/-- The post `delegationEpochAt` stamp map a committed `spawnA` produces: the child is stamped with the
+spawner-parent's CURRENT `delegationEpoch` (so the freshly-born child is NOT stale even under a nonzero
+parent); every other stamp is the pre `delegationEpochAt` (create-leg-orthogonal). -/
+def spawnEpochAtMap (k : RecordKernelState) (actor child : CellId) : CellId → Nat :=
+  fun c => if c = child then k.delegationEpoch actor else k.delegationEpochAt c
+
+/-- **The STRENGTHENED full-state spec of a committed `spawnA`** — the EXECUTOR's faithful face. Identical
+to `SpawnSpec` (the deployed v1 frozen-face descriptor's spec) EXCEPT the `delegationEpochAt` clause is no
+longer framed UNCHANGED: it carries the BIRTH FRESHNESS STAMP (`spawnEpochAtMap`), so a born child under a
+nonzero-epoch parent is FRESH at birth (`delegationStale child = false`). A forge that leaves the stamp at
+the `0` default FAILS this clause (the codex bug rendered such a child stale immediately). -/
+def SpawnFullSpec (st : RecChainedState) (actor child target : CellId) (st' : RecChainedState) : Prop :=
+  spawnAdmit st.kernel actor child target
+  ∧ st'.kernel.accounts = insert child st.kernel.accounts
+  ∧ (st'.kernel.cell = fun c => if c = child then default else st.kernel.cell c)
+  ∧ (st'.kernel.slotCaveats = fun c => if c = child then [] else st.kernel.slotCaveats c)
+  ∧ (st'.kernel.lifecycle = fun c => if c = child then 0 else st.kernel.lifecycle c)
+  ∧ (st'.kernel.deathCert = fun c => if c = child then 0 else st.kernel.deathCert c)
+  ∧ (st'.kernel.bal = fun c a => if c = child then 0 else st.kernel.bal c a)
+  ∧ st'.kernel.caps = spawnCapsMap st.kernel actor child target
+  ∧ st'.kernel.delegate = spawnDelegateMap st.kernel actor child
+  ∧ st'.kernel.delegations = spawnDelegationsMap st.kernel actor child
+  ∧ st'.log = createReceipt actor child :: st.log
+  ∧ st'.kernel.nullifiers = st.kernel.nullifiers
+  ∧ st'.kernel.revoked = st.kernel.revoked
+  ∧ st'.kernel.commitments = st.kernel.commitments
+  ∧ st'.kernel.factories = st.kernel.factories
+  ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+  -- THE BIRTH STAMP (no longer framed-unchanged): the child's epoch tag = the spawner-parent's epoch.
+  ∧ st'.kernel.delegationEpochAt = spawnEpochAtMap st.kernel actor child
+  ∧ st'.kernel.heaps = st.kernel.heaps
+
+/-- **`SpawnFullSpec_implies_SpawnSpec` — the strengthened spec REFINES the frozen face.** Every clause of
+`SpawnSpec` (the deployed descriptor's spec) holds of a `SpawnFullSpec` post EXCEPT the `delegationEpochAt`
+frame — `SpawnFullSpec` STAMPS it instead of framing it. So `SpawnFullSpec` carries strictly MORE than
+`SpawnSpec` minus that one (now-superseded) frame clause; consumers needing the cap/balance/log/accounts
+content read it directly off `SpawnFullSpec`. (The two specs AGREE iff the spawner's epoch is `0`.) -/
+theorem SpawnFullSpec_dropEpochAt (st : RecChainedState) (actor child target : CellId)
+    (st' : RecChainedState) (h : SpawnFullSpec st actor child target st') :
+    spawnAdmit st.kernel actor child target
+    ∧ st'.kernel.accounts = insert child st.kernel.accounts
+    ∧ (st'.kernel.cell = fun c => if c = child then default else st.kernel.cell c)
+    ∧ (st'.kernel.slotCaveats = fun c => if c = child then [] else st.kernel.slotCaveats c)
+    ∧ (st'.kernel.lifecycle = fun c => if c = child then 0 else st.kernel.lifecycle c)
+    ∧ (st'.kernel.deathCert = fun c => if c = child then 0 else st.kernel.deathCert c)
+    ∧ (st'.kernel.bal = fun c a => if c = child then 0 else st.kernel.bal c a)
+    ∧ st'.kernel.caps = spawnCapsMap st.kernel actor child target
+    ∧ st'.kernel.delegate = spawnDelegateMap st.kernel actor child
+    ∧ st'.kernel.delegations = spawnDelegationsMap st.kernel actor child
+    ∧ st'.log = createReceipt actor child :: st.log
+    ∧ st'.kernel.nullifiers = st.kernel.nullifiers
+    ∧ st'.kernel.revoked = st.kernel.revoked
+    ∧ st'.kernel.commitments = st.kernel.commitments
+    ∧ st'.kernel.factories = st.kernel.factories
+    ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+    ∧ st'.kernel.heaps = st.kernel.heaps := by
+  obtain ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5,
+         hde, _hdea, hhp⟩ := h
+  exact ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5, hde, hhp⟩
+
+/-- **`spawnChainA_iff_spec` — CHAINED EXECUTOR ⟺ STRENGTHENED FULL SPEC (FULL state, both directions)
+for spawn.** The chained record kernel commits a `spawnA` into `st'` IFF `st'` is EXACTLY the strengthened
+full post-state — the five touched components + the BIRTH EPOCH STAMP + `log` + 11 frame fields are all
+checked; a forge that skips the stamp (leaving the child stale) FAILS. -/
 theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId)
     (st' : RecChainedState) :
-    spawnChainA st actor child target = some st' ↔ SpawnSpec st actor child target st' := by
-  unfold spawnChainA SpawnSpec spawnAdmit createCellAdmit createReceipt
-    spawnCapsMap spawnDelegateMap spawnDelegationsMap
+    spawnChainA st actor child target = some st' ↔ SpawnFullSpec st actor child target st' := by
+  unfold spawnChainA SpawnFullSpec spawnAdmit createCellAdmit createReceipt
+    spawnCapsMap spawnDelegateMap spawnDelegationsMap spawnEpochAtMap
   by_cases hg : (st.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
       target ∈ st.kernel.accounts
   · rw [if_pos hg]
@@ -411,7 +471,7 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
         simp only [Option.some.injEq] at h
         subst h
         refine ⟨⟨hg.1, hg.2, hc⟩, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl,
-               rfl, rfl, rfl⟩
+               rfl, ?_, rfl⟩
         · funext c; by_cases hc' : c = child <;> simp [hc']
         · funext c; by_cases hc' : c = child <;> simp [hc']
         · funext c; by_cases hc' : c = child <;> simp [hc']
@@ -421,6 +481,7 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
         · funext c; by_cases hc' : c = child <;> simp [hc', spawnDelegateMap]
         · funext c; by_cases hc' : c = child <;> simp [hc', spawnDelegationsMap]
         · simp only [createReceipt]
+        · funext c; by_cases hc' : c = child <;> simp [hc']
       · rintro ⟨⟨he, ht, hca⟩, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2,
                 h3, h4, h5, hde, hdea, hhp⟩
         simp only [Option.some.injEq]
@@ -438,12 +499,13 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
     · intro h; exact absurd h (by simp)
     · rintro ⟨⟨he, hm, _⟩, _⟩; exact absurd ⟨he, hm⟩ hg
 
-/-- **`execSpawnA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC for spawn (FULL
-state, both directions).** The one gated executor commits a `spawnA` turn into `st'` IFF `st'` is
-EXACTLY the independent full-state spec. The `spawnA` corner of the account-growth triangle. -/
+/-- **`execSpawnA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ STRENGTHENED FULL SPEC for
+spawn (FULL state, both directions).** The one gated executor commits a `spawnA` turn into `st'` IFF `st'`
+is EXACTLY the strengthened full-state spec (with the birth epoch stamp). The `spawnA` corner of the
+account-growth triangle. -/
 theorem execSpawnA_iff_spec (st : RecChainedState) (actor child target : CellId)
     (st' : RecChainedState) :
-    execFullA st (.spawnA actor child target) = some st' ↔ SpawnSpec st actor child target st' := by
+    execFullA st (.spawnA actor child target) = some st' ↔ SpawnFullSpec st actor child target st' := by
   rw [execFullA_spawnA]; exact spawnChainA_iff_spec st actor child target st'
 
 /-! ## §8 — `spawnA` derived guarantees off the spec. -/

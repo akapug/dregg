@@ -76,7 +76,7 @@ open Dregg2.Circuit.StateCommit (compressNInjective)
 open Dregg2.Circuit.AccountsCommit (accountsSorted accounts_eq_of_sorted_eq accountsSorted_eq_of_eq)
 open Dregg2.Circuit.Spec.AccountGrowth
   (CreateCellSpec createCellAdmit createReceipt bornEmptyAt
-   SpawnSpec spawnAdmit spawnCapsMap spawnDelegateMap spawnDelegationsMap
+   SpawnSpec SpawnFullSpec spawnAdmit spawnCapsMap spawnDelegateMap spawnDelegationsMap spawnEpochAtMap
    execCreateCellA_iff_spec)
 open Dregg2.Circuit.Spec.FactoryCreation
   (CreateFromFactorySpec factoryAdmit factoryReceipt factoryPostCell factoryPostCaveats
@@ -383,7 +383,10 @@ structure spawnGenuineEncodes (compressN : List FieldElem → FieldElem)
   frCommitments : post.kernel.commitments = pre.kernel.commitments
   frFactories : post.kernel.factories = pre.kernel.factories
   frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
-  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  -- ⚑ THE NAMED SPAWN-EPOCH-STAMP RESIDUAL: the child's `delegationEpochAt` is STAMPED with the
+  -- spawner-parent's current epoch (`spawnEpochAtMap`), not framed unchanged — so the born child is FRESH
+  -- (not stale) under a nonzero-epoch parent. Commitment-bound via record_digest; carried as a Prop.
+  epochStampResidual : post.kernel.delegationEpochAt = spawnEpochAtMap pre.kernel actor child
   frHeaps : post.kernel.heaps = pre.kernel.heaps
 
 /-- **`spawn_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** The child IS
@@ -406,11 +409,11 @@ theorem spawn_descriptorRefines (compressN : List FieldElem → FieldElem)
     (hN : compressNInjective compressN)
     (pre post : RecChainedState) (actor child target : CellId)
     (henc : spawnGenuineEncodes compressN pre post actor child target) :
-    SpawnSpec pre actor child target post := by
+    SpawnFullSpec pre actor child target post := by
   refine ⟨henc.guard, ?_, henc.frCell, henc.frSlotCaveats, henc.frLifecycle, henc.frDeathCert,
     henc.frBal, henc.capHandoff, henc.delegateHandoff, henc.delegationsHandoff, henc.logAdv,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frFactories,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps⟩
+    henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps⟩
   exact spawn_accounts_forced compressN hN pre post actor child target henc
 
 /-- **The refinement, stated against `execFullA` directly** (via `spawnChainA_iff_spec` + the
@@ -687,7 +690,10 @@ structure SpawnTraceReadout (hash : List ℤ → ℤ)
   frCommitments : post.kernel.commitments = pre.kernel.commitments
   frFactories : post.kernel.factories = pre.kernel.factories
   frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
-  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  -- ⚑ THE NAMED SPAWN-EPOCH-STAMP RESIDUAL (commitment-bound via record_digest): the child's
+  -- `delegationEpochAt` STAMPED with the spawner-parent's current epoch (`spawnEpochAtMap`), so the
+  -- born child is FRESH (not stale) under a nonzero-epoch parent.
+  epochStampResidual : post.kernel.delegationEpochAt = spawnEpochAtMap pre.kernel actor child
   frHeaps : post.kernel.heaps = pre.kernel.heaps
 
 /-- **`spawn_forced_sat`** — the accounts growth FORCED by the DEPLOYED `spawnV3` (Class A). The child IS
@@ -709,11 +715,11 @@ theorem spawn_descriptorRefines_sat (hash : List ℤ → ℤ)
     (hsat : Satisfied2 hash spawnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor child target : CellId)
     (rd : SpawnTraceReadout hash minit mfin maddrs t pre post actor child target) :
-    SpawnSpec pre actor child target post := by
+    SpawnFullSpec pre actor child target post := by
   refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
     rd.frBal, rd.capHandoff, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps⟩
   exact spawn_forced_sat hash hsat pre post actor child target rd
 
 /-- **CLASS-A TOOTH** — a spawn whose post accounts drop the child is UNSAT (the grow-gate bites). -/
@@ -761,11 +767,11 @@ theorem spawnWrite_descriptorRefines_sat (hash : List ℤ → ℤ)
     (hsat : Satisfied2 hash spawnWriteV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor child target : CellId)
     (rd : SpawnTraceReadout hash minit mfin maddrs t pre post actor child target) :
-    SpawnSpec pre actor child target post := by
+    SpawnFullSpec pre actor child target post := by
   refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
     rd.frBal, ?_, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps⟩
+    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps⟩
   · -- accounts insert: forced by the cells grow-gate (still present on `spawnWriteV3`).
     exact rd.growthDecodes
       (spawnWriteV3_grow_gate_forces_set_insert hash hsat rd.row rd.hrow rd.hsel).2
@@ -783,7 +789,7 @@ theorem spawnWrite_descriptorRefines_capOpenSat (hash : List ℤ → ℤ)
     (hsat : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.spawnWriteCapOpenV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor child target : CellId)
     (rd : SpawnTraceReadout hash minit mfin maddrs t pre post actor child target) :
-    SpawnSpec pre actor child target post :=
+    SpawnFullSpec pre actor child target post :=
   spawnWrite_descriptorRefines_sat hash
     (Dregg2.Circuit.Emit.CapOpenEmit.capOpen_satisfied2_strips_to_base hash _ spawnWriteV3 _ _
       minit mfin maddrs t hsat)
