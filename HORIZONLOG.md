@@ -81,8 +81,14 @@ it doesn't use the framework, different shape.)
   wire the remaining 16 framework apps into the registry (identity/nameservice/privacy-voting/escrow-
   market/compute-exchange/agent-+swarm-orchestration/…/first-room).
 
-### APPS ON THE LIVE WORLD LEDGER — 18/20 launch + fire real turns (2026-06-23).
-`c16dde94` (wider: +11 → 15) then `d1dd0a9c` (deeper: +3 authenticated → 18). All 18 framework apps
+### APPS ON THE LIVE WORLD LEDGER — 19/20 launch + fire real turns (2026-06-23).
+`c16dde94` (wider: +11 → 15) → `d1dd0a9c` (deeper: +3 authenticated → 18) → `2d25db67` (polis → 19).
+polis isn't a `DeosApp` (ships `CellProgram`s directly), so `AppEntry` gained a `backend` enum:
+`Framework` (the 18 DeosApps) vs `Program` (polis) — ONE registry, two backends. polis seeds a real
+2-of-3 `CouncilCharter` cell + fires a `propose` (DRAFT→PROPOSED, receipt on `World::receipts()`).
+Only first-room remains unwired — it's a multi-cell scenario/weld shim, NOT an app (a launchable
+"scenario" would be its own thing). All 19 framework/program apps below + the authenticated 3:
+`c16dde94`+`d1dd0a9c` detail. All 18 DeosApps
 launch onto the cockpit `World` ledger and fire ONE representative receipted affordance (reusing each
 app's OWN public program+effect-builders; no app `lib.rs` edits). Whole-set tests iterate all 18.
 - AUTHENTICATED PATH (`d1dd0a9c`): the executor derives `ctx.sender` from the AGENT CELL's pubkey
