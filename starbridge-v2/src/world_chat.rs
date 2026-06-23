@@ -81,9 +81,21 @@ impl WorldChatSource {
         let mut world = World::new().with_executor_signing_key([0x42u8; 32]);
 
         let seed_rooms = [
-            ("!deoslab:deos.local", "deos-lab", "the dregg-pilled workshop"),
-            ("!membrane:deos.local", "membrane", "screenshot a moment, hand it over"),
-            ("!firmament:deos.local", "firmament", "one cap across distance"),
+            (
+                "!deoslab:deos.local",
+                "deos-lab",
+                "the dregg-pilled workshop",
+            ),
+            (
+                "!membrane:deos.local",
+                "membrane",
+                "screenshot a moment, hand it over",
+            ),
+            (
+                "!firmament:deos.local",
+                "firmament",
+                "one cap across distance",
+            ),
         ];
         // Build the room + slot cells FIRST (at genesis), collecting their ids, so
         // the local user can be installed holding caps to every cell it will write —
@@ -203,7 +215,9 @@ impl ChatSource for WorldChatSource {
     fn rooms(&self) -> Result<Vec<RoomSummary>> {
         let mut out = Vec::new();
         for r in &self.rooms {
-            let Ok(rid) = deos_matrix::source::parse_room_id(&r.matrix_id) else { continue };
+            let Ok(rid) = deos_matrix::source::parse_room_id(&r.matrix_id) else {
+                continue;
+            };
             out.push(RoomSummary {
                 room_id: rid,
                 display_name: r.name.clone(),
@@ -228,7 +242,9 @@ impl ChatSource for WorldChatSource {
         // Walk the slot ring IN ORDER — the timeline is exactly the written slots,
         // read back from REAL cell state (not a recorded script).
         for (k, slot_id) in room.slots.iter().enumerate() {
-            let Some(cell) = world.ledger().get(slot_id) else { continue };
+            let Some(cell) = world.ledger().get(slot_id) else {
+                continue;
+            };
             let Some((sender, body)) = self.decode_slot(&cell.state.fields) else {
                 continue;
             };
@@ -260,7 +276,9 @@ impl ChatSource for WorldChatSource {
     fn send(&self, room_id: &str, body: &str) -> Result<String> {
         let mut world = self.world.lock().unwrap();
         let Some(ri) = self.room_index(room_id) else {
-            return Err(deos_matrix::Error::Other(format!("no such room: {room_id}")));
+            return Err(deos_matrix::Error::Other(format!(
+                "no such room: {room_id}"
+            )));
         };
         let body_bytes = body.as_bytes();
         if body_bytes.len() > MAX_BODY {
@@ -320,7 +338,10 @@ mod tests {
         let room_id = rooms[0].room_id.to_string();
 
         // Empty room: no messages yet (real cell state, not a recorded script).
-        assert!(chat.timeline(&room_id, 80).unwrap().is_empty(), "a fresh room has no messages");
+        assert!(
+            chat.timeline(&room_id, 80).unwrap().is_empty(),
+            "a fresh room has no messages"
+        );
 
         // SEND = a real verified turn. The returned id is the real slot cell.
         let body = "hello from a real turn — the chat is the dregg world ✦";
@@ -328,25 +349,46 @@ mod tests {
         assert!(!id.is_empty(), "the send returns the real slot cell id");
 
         // TIMELINE = read back from REAL cell state.
-        let tl = chat.timeline(&room_id, 80).expect("timeline off real cells");
+        let tl = chat
+            .timeline(&room_id, 80)
+            .expect("timeline off real cells");
         assert_eq!(tl.len(), 1, "the posted message is in the timeline");
-        assert_eq!(tl[0].body, body, "the body round-trips through real cell fields");
-        assert_eq!(tl[0].sender, "@ember:deos.local", "the sender is decoded from the on-cell tag");
+        assert_eq!(
+            tl[0].body, body,
+            "the body round-trips through real cell fields"
+        );
+        assert_eq!(
+            tl[0].sender, "@ember:deos.local",
+            "the sender is decoded from the on-cell tag"
+        );
         assert_eq!(tl[0].kind, MessageKind::Text);
 
         // A second message orders after the first (the real slot-ring tooth).
-        let id2 = chat.send(&room_id, "and a second, ordered after").expect("second send");
+        let id2 = chat
+            .send(&room_id, "and a second, ordered after")
+            .expect("second send");
         assert_ne!(id, id2, "distinct messages are distinct cells");
         let tl2 = chat.timeline(&room_id, 80).unwrap();
         assert_eq!(tl2.len(), 2, "both messages present");
-        assert_eq!(tl2[0].body, body, "first stays first (ordered by real slot index)");
+        assert_eq!(
+            tl2[0].body, body,
+            "first stays first (ordered by real slot index)"
+        );
         assert!(tl2[1].body.contains("second"), "second follows");
 
         // No cross-room leak — each room has its own slot ring (real cells).
         let other = rooms[1].room_id.to_string();
         chat.send(&other, "in another room").unwrap();
-        assert_eq!(chat.timeline(&room_id, 80).unwrap().len(), 2, "no cross-room leak");
-        assert_eq!(chat.timeline(&other, 80).unwrap().len(), 1, "the other room has its own message");
+        assert_eq!(
+            chat.timeline(&room_id, 80).unwrap().len(),
+            2,
+            "no cross-room leak"
+        );
+        assert_eq!(
+            chat.timeline(&other, 80).unwrap().len(),
+            1,
+            "the other room has its own message"
+        );
     }
 
     #[test]
@@ -355,8 +397,12 @@ mod tests {
         // membrane is a frustum of the real chat, not a separate toy world.
         let chat = WorldChatSource::seeded("@ember:deos.local");
         let rooms = chat.rooms().unwrap();
-        chat.send(&rooms[0].room_id.to_string(), "a message to snapshot").unwrap();
+        chat.send(&rooms[0].room_id.to_string(), "a message to snapshot")
+            .unwrap();
         let fork = chat.fork_world();
-        assert!(fork.ledger().get(&chat.me_cell()).is_some(), "the fork carries the chat world's cells");
+        assert!(
+            fork.ledger().get(&chat.me_cell()).is_some(),
+            "the fork carries the chat world's cells"
+        );
     }
 }

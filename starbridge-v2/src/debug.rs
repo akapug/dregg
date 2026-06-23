@@ -158,7 +158,11 @@ impl TurnTrace {
     /// The last step the executor accepted (the deepest committed prefix). When
     /// the turn refuses, everything after this is the rejected tail.
     pub fn last_committed_index(&self) -> Option<usize> {
-        self.steps.iter().rev().find(|s| s.committed).map(|s| s.index)
+        self.steps
+            .iter()
+            .rev()
+            .find(|s| s.committed)
+            .map(|s| s.index)
     }
 }
 
@@ -238,14 +242,17 @@ fn classify(error: &TurnError) -> (GuardKind, Vec<CellId>) {
         CommittedConservationFailed { .. } => (GuardKind::Conservation, vec![]),
 
         CapabilityNotHeld { actor, target } => (GuardKind::Capability, vec![*actor, *target]),
-        DelegationDenied { parent, child_target } => {
-            (GuardKind::Capability, vec![*parent, *child_target])
-        }
+        DelegationDenied {
+            parent,
+            child_target,
+        } => (GuardKind::Capability, vec![*parent, *child_target]),
         // A delegation MODE that confers nothing (a no-op denial) — a capability-
         // family refusal, fail-closed, naming the parent + intended child target.
-        DelegationModeUnimplemented { parent, child_target, .. } => {
-            (GuardKind::Capability, vec![*parent, *child_target])
-        }
+        DelegationModeUnimplemented {
+            parent,
+            child_target,
+            ..
+        } => (GuardKind::Capability, vec![*parent, *child_target]),
         FacetViolation { actor, target, .. } => (GuardKind::Capability, vec![*actor, *target]),
         BearerCapFacetViolation { target, .. }
         | BearerCapFacetAmplification { target, .. }
@@ -265,9 +272,15 @@ fn classify(error: &TurnError) -> (GuardKind, Vec<CellId>) {
         CapabilityStale { actor, grantor, .. } => (GuardKind::Capability, vec![*actor, *grantor]),
         StaleDelegation { actor, source, .. } => (GuardKind::Capability, vec![*actor, *source]),
         CapabilitySlotOverflow { cell } => (GuardKind::Capability, vec![*cell]),
-        IntroductionDenied { introducer, recipient, target, .. } => {
-            (GuardKind::Capability, vec![*introducer, *recipient, *target])
-        }
+        IntroductionDenied {
+            introducer,
+            recipient,
+            target,
+            ..
+        } => (
+            GuardKind::Capability,
+            vec![*introducer, *recipient, *target],
+        ),
 
         PermissionDenied { cell, .. } => (GuardKind::Authorization, vec![*cell]),
         InvalidAuthorization { .. } => (GuardKind::Authorization, vec![]),
@@ -339,7 +352,11 @@ impl RefusalExplanation {
 fn headline_for(e: &TurnError) -> String {
     use TurnError::*;
     match e {
-        InsufficientBalance { cell, required, available } => format!(
+        InsufficientBalance {
+            cell,
+            required,
+            available,
+        } => format!(
             "over-spend: cell {} needs {required} but holds {available}",
             crate::reflect::short_hex(cell.as_bytes())
         ),
@@ -503,13 +520,20 @@ pub fn debug_turn(world: &World, turn: &Turn) -> TurnTrace {
             // prefix is identifiable; otherwise it's a turn-level refusal.
             let effect_index = first_refusing_effect_index(&steps);
             let _ = at_action;
-            (false, None, Some(RefusalExplanation::from_error(reason, effect_index)))
+            (
+                false,
+                None,
+                Some(RefusalExplanation::from_error(reason, effect_index)),
+            )
         }
         TurnResult::Expired => (
             false,
             None,
             Some(RefusalExplanation::from_error(
-                TurnError::Expired { valid_until: 0, now: 0 },
+                TurnError::Expired {
+                    valid_until: 0,
+                    now: 0,
+                },
                 None,
             )),
         ),
@@ -602,12 +626,7 @@ pub struct PublicInputs {
 
 /// Inspect a turn's witness/PI surface (optionally against a committed receipt).
 pub fn inspect_witness(turn: &Turn, receipt: Option<&TurnReceipt>) -> WitnessInspection {
-    let witness_blob_count = turn
-        .call_forest
-        .roots
-        .iter()
-        .map(count_witness_blobs)
-        .sum();
+    let witness_blob_count = turn.call_forest.roots.iter().map(count_witness_blobs).sum();
     WitnessInspection {
         has_conservation_proof: turn.conservation_proof.is_some(),
         has_execution_proof: turn.execution_proof.is_some(),
@@ -752,7 +771,10 @@ fn describe_breakpoint(bp: &Breakpoint) -> String {
         Breakpoint::OnRefusal => "on refusal".to_string(),
         Breakpoint::OnConservationBreak => "on conservation break".to_string(),
         Breakpoint::OnCellTouched(c) => {
-            format!("on cell {} touched", crate::reflect::short_hex(c.as_bytes()))
+            format!(
+                "on cell {} touched",
+                crate::reflect::short_hex(c.as_bytes())
+            )
         }
         Breakpoint::OnBalanceBelow { cell, floor } => format!(
             "on cell {} balance < {floor}",
@@ -873,7 +895,10 @@ fn run_prefix(
         }
         TurnResult::Expired => (
             false,
-            Some(TurnError::Expired { valid_until: 0, now: 0 }),
+            Some(TurnError::Expired {
+                valid_until: 0,
+                now: 0,
+            }),
             ledger.clone(),
         ),
         TurnResult::Pending => (
@@ -978,11 +1003,7 @@ mod tests {
         // Three transfers out of `a`, in one action: a→b 100, a→c 200, a→b 50.
         let turn = w.turn(
             a,
-            vec![
-                transfer(a, b, 100),
-                transfer(a, c, 200),
-                transfer(a, b, 50),
-            ],
+            vec![transfer(a, b, 100), transfer(a, c, 200), transfer(a, b, 50)],
         );
 
         let trace = debug_turn(&w, &turn);
@@ -1062,7 +1083,11 @@ mod tests {
         let turn = w.turn(a, vec![transfer(a, b, 1_000)]);
 
         let ex = explain_refusal(&w, &turn).expect("over-spend must refuse");
-        assert_eq!(ex.guard, GuardKind::Conservation, "names the conservation guard");
+        assert_eq!(
+            ex.guard,
+            GuardKind::Conservation,
+            "names the conservation guard"
+        );
         assert!(ex.cells.contains(&a), "names the over-spending cell");
         assert!(
             ex.headline.to_lowercase().contains("over-spend")
@@ -1089,7 +1114,11 @@ mod tests {
         let turn = w.turn(a, vec![grant_capability(a, a, b, 0)]);
 
         let ex = explain_refusal(&w, &turn).expect("over-grant must refuse");
-        assert_eq!(ex.guard, GuardKind::Capability, "names the capability guard");
+        assert_eq!(
+            ex.guard,
+            GuardKind::Capability,
+            "names the capability guard"
+        );
     }
 
     /// The OnRefusal breakpoint fires at the effect index where the turn first
@@ -1109,7 +1138,10 @@ mod tests {
         assert!(trace.steps[0].committed);
         assert!(!trace.steps[1].committed);
         assert_eq!(
-            trace.steps[1].refusal.as_ref().map(|e| matches!(e, TurnError::InsufficientBalance { .. })),
+            trace.steps[1]
+                .refusal
+                .as_ref()
+                .map(|e| matches!(e, TurnError::InsufficientBalance { .. })),
             Some(true)
         );
     }
@@ -1129,7 +1161,11 @@ mod tests {
             a,
             vec![
                 transfer(a, b, 100),
-                Effect::Burn { target: b, slot: 0, amount: 50 },
+                Effect::Burn {
+                    target: b,
+                    slot: 0,
+                    amount: 50,
+                },
             ],
         );
 

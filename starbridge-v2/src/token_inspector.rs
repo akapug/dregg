@@ -61,10 +61,17 @@ pub fn caveat_legend(wc: &WireCaveat) -> String {
         Ok(DreggGrant::App { id, actions }) => format!("app({id}) ⇒ {actions}"),
         Ok(DreggGrant::Service { name, actions }) => format!("service({name}) ⇒ {actions}"),
         Ok(DreggGrant::Feature(f)) => format!("feature({f})"),
-        Ok(DreggGrant::ValidityWindow { not_before, not_after }) => format!(
+        Ok(DreggGrant::ValidityWindow {
+            not_before,
+            not_after,
+        }) => format!(
             "valid[{}, {}]",
-            not_before.map(|n| n.to_string()).unwrap_or_else(|| "-∞".into()),
-            not_after.map(|n| n.to_string()).unwrap_or_else(|| "+∞".into()),
+            not_before
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "-∞".into()),
+            not_after
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "+∞".into()),
         ),
         Ok(DreggGrant::ConfineUser(u)) => format!("user({u})"),
         Ok(DreggGrant::OAuthProvider(p)) => format!("oauth-provider({p})"),
@@ -72,13 +79,19 @@ pub fn caveat_legend(wc: &WireCaveat) -> String {
         Ok(DreggGrant::FeatureGlob { include, exclude }) => {
             format!("feature-glob(+{include:?} -{exclude:?})")
         }
-        Ok(DreggGrant::Budget { id, class, limit, .. }) => {
+        Ok(DreggGrant::Budget {
+            id, class, limit, ..
+        }) => {
             format!("budget({id} · {class} ≤ {limit})")
         }
         Ok(DreggGrant::Unknown(ty, body)) => format!("caveat#{ty} ({} bytes, opaque)", body.len()),
         // A caveat whose body cannot decode is still a real narrowing bound in the
         // HMAC chain — report its type honestly rather than swallow it.
-        Err(_) => format!("caveat#{} ({} bytes, undecodable)", wc.caveat_type, wc.body.len()),
+        Err(_) => format!(
+            "caveat#{} ({} bytes, undecodable)",
+            wc.caveat_type,
+            wc.body.len()
+        ),
     }
 }
 
@@ -150,7 +163,11 @@ pub fn attenuation_lineage(tok: &HeldToken, root_key: &[u8; 32]) -> TimelineView
         label: format!(
             "mint · service '{}' · {}",
             tok.service(),
-            if tok.can_mint() { "ROOT (can mint)" } else { "narrowed (cannot mint)" }
+            if tok.can_mint() {
+                "ROOT (can mint)"
+            } else {
+                "narrowed (cannot mint)"
+            }
         ),
         hash: tok.caveat_chain_hash(),
     });
@@ -238,7 +255,10 @@ fn held_raw_fields(tok: &HeldToken, root_key: &[u8; 32]) -> Inspectable {
             });
         }
     } else {
-        fields.push(Field::text("caveats", "(opaque without the service root key)".to_string()));
+        fields.push(Field::text(
+            "caveats",
+            "(opaque without the service root key)".to_string(),
+        ));
     }
     Inspectable {
         kind: ObjectKind::Capability,
@@ -312,7 +332,12 @@ impl Presentable for InspectedToken {
                 search_text: format!(
                     "hmac chain {} {}",
                     self.token.service(),
-                    trace.steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>().join(" ")
+                    trace
+                        .steps
+                        .iter()
+                        .map(|s| s.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 ),
                 body: PresentationBody::Trace(trace),
             });
@@ -326,7 +351,12 @@ impl Presentable for InspectedToken {
             search_text: format!(
                 "lineage {} {}",
                 self.token.service(),
-                lineage.events.iter().map(|e| e.label.as_str()).collect::<Vec<_>>().join(" ")
+                lineage
+                    .events
+                    .iter()
+                    .map(|e| e.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             body: PresentationBody::Timeline(lineage),
         });
@@ -523,7 +553,9 @@ impl TokenLoopGadget {
         let restriction = self.restriction();
         clerk
             .attenuate(root, &restriction)
-            .map_err(|e| GadgetError::Lowering { reason: format!("attenuate failed: {e}") })
+            .map_err(|e| GadgetError::Lowering {
+                reason: format!("attenuate failed: {e}"),
+            })
     }
 
     /// DELEGATE a root token to `recipient_pk` (a real signed envelope), via the
@@ -537,7 +569,9 @@ impl TokenLoopGadget {
         let restriction = self.restriction();
         clerk
             .delegate(root, recipient_pk, &restriction)
-            .map_err(|e| GadgetError::Lowering { reason: format!("delegate failed: {e}") })
+            .map_err(|e| GadgetError::Lowering {
+                reason: format!("delegate failed: {e}"),
+            })
     }
 
     /// SERVICE-SIDE DISCHARGE of a confined token against `request` — the real
@@ -579,7 +613,11 @@ impl Gadget for TokenLoopGadget {
                     "*".to_string(),
                 ],
             },
-            GadgetField::U64 { key: "not_after".to_string(), min: 0, max: u64::MAX },
+            GadgetField::U64 {
+                key: "not_after".to_string(),
+                min: 0,
+                max: u64::MAX,
+            },
         ]
     }
 
@@ -597,12 +635,20 @@ impl Gadget for TokenLoopGadget {
         // r/w/c/d/C (and "*"); a mask must be non-empty and recognized — an empty
         // or all-unknown mask cannot confine, so it must not build.
         if self.service.trim().is_empty() {
-            return GadgetValidation::Invalid { reason: "service must be non-empty".to_string() };
+            return GadgetValidation::Invalid {
+                reason: "service must be non-empty".to_string(),
+            };
         }
-        let recognized = self.mask.chars().any(|c| matches!(c, 'r' | 'w' | 'c' | 'd' | 'C' | '*'));
+        let recognized = self
+            .mask
+            .chars()
+            .any(|c| matches!(c, 'r' | 'w' | 'c' | 'd' | 'C' | '*'));
         if !recognized {
             return GadgetValidation::Invalid {
-                reason: format!("mask '{}' has no atomic action letter (r/w/c/d/C/*)", self.mask),
+                reason: format!(
+                    "mask '{}' has no atomic action letter (r/w/c/d/C/*)",
+                    self.mask
+                ),
             };
         }
         GadgetValidation::Ok
@@ -623,7 +669,9 @@ impl Gadget for TokenLoopGadget {
         let parent_caveats = self.caveat_count(&root);
         let confined = clerk
             .attenuate(&root, &restriction)
-            .map_err(|e| GadgetError::Lowering { reason: format!("attenuate failed: {e}") })?;
+            .map_err(|e| GadgetError::Lowering {
+                reason: format!("attenuate failed: {e}"),
+            })?;
         let caveats_added = self.caveat_count(&confined).saturating_sub(parent_caveats);
 
         // DISCHARGE service-side: the confined token authorizes ITS service+mask,
@@ -637,9 +685,8 @@ impl Gadget for TokenLoopGadget {
         );
         let wider = wider_action(own_action);
         let denies_wider = match wider {
-            Some(w) => {
-                !self.discharge_presented(&confined, &auth_request(&self.service, &w.to_string(), now))
-            }
+            Some(w) => !self
+                .discharge_presented(&confined, &auth_request(&self.service, &w.to_string(), now)),
             None => true, // mask already maximal — nothing wider to deny.
         };
 
@@ -656,7 +703,8 @@ impl Gadget for TokenLoopGadget {
 /// The first atomic action letter of a mask (the action the confined token is
 /// meant to authorize).
 fn first_atomic(mask: &str) -> Option<char> {
-    mask.chars().find(|c| matches!(c, 'r' | 'w' | 'c' | 'd' | 'C'))
+    mask.chars()
+        .find(|c| matches!(c, 'r' | 'w' | 'c' | 'd' | 'C'))
 }
 
 /// A strictly-wider atomic action than `a` (for the least-privilege deny check):
@@ -729,12 +777,16 @@ mod tests {
         // carrying a `PresentationBody::Trace`) + Provenance + Source beside the
         // RawFields floor.
         let kinds: Vec<_> = set.iter().map(|p| p.kind).collect();
-        assert!(kinds.contains(&PresentationKind::Invariant), "Invariant present: {kinds:?}");
+        assert!(
+            kinds.contains(&PresentationKind::Invariant),
+            "Invariant present: {kinds:?}"
+        );
         assert!(kinds.contains(&PresentationKind::Provenance));
         assert!(kinds.contains(&PresentationKind::Source));
         // The HMAC-chain trace really is a Trace body (the step-by-step replay).
         assert!(
-            set.iter().any(|p| matches!(p.body, PresentationBody::Trace(_))),
+            set.iter()
+                .any(|p| matches!(p.body, PresentationBody::Trace(_))),
             "the HMAC caveat chain is a Trace body"
         );
     }
@@ -771,7 +823,10 @@ mod tests {
         );
         // The added steps carry the legible atomic-letter caveats.
         assert!(
-            att_trace.steps.iter().any(|s| s.label.contains("⇒ r") || s.label.contains("service")),
+            att_trace
+                .steps
+                .iter()
+                .any(|s| s.label.contains("⇒ r") || s.label.contains("service")),
             "a confined-to-'r' caveat is legible in the trace: {:?}",
             att_trace.steps.iter().map(|s| &s.label).collect::<Vec<_>>()
         );
@@ -783,8 +838,11 @@ mod tests {
     fn attenuate_genuinely_narrows_more_caveats_than_the_root() {
         let (mut clerk, root_key) = alice_clerk();
         let root = clerk.mint_token(&root_key, "dns");
-        let root_caveats =
-            MacaroonToken::from_encoded(root.encoded(), root_key).unwrap().inner().caveats.len();
+        let root_caveats = MacaroonToken::from_encoded(root.encoded(), root_key)
+            .unwrap()
+            .inner()
+            .caveats
+            .len();
 
         let confined = clerk
             .attenuate(&root, &confine("dns", "r", None))
@@ -800,7 +858,10 @@ mod tests {
             "attenuation strictly narrows: {confined_caveats} > {root_caveats} caveats"
         );
         // The confined token dropped its forging key (the real-semantics finding).
-        assert!(!confined.can_mint(), "an attenuated token carries a zeroed root key");
+        assert!(
+            !confined.can_mint(),
+            "an attenuated token carries a zeroed root key"
+        );
     }
 
     // ── discharge runs the REAL verify verdict (authorize own, deny wider) ───
@@ -847,9 +908,18 @@ mod tests {
         let result = gadget.build().expect("the loop builds + discharges");
         assert_eq!(result.service, "dns");
         assert_eq!(result.mask, "r");
-        assert!(result.caveats_added >= 1, "the attenuation appended real caveats");
-        assert!(result.authorizes_own, "the confined token authorizes its own service/action");
-        assert!(result.denies_wider, "the confined token denies a wider action");
+        assert!(
+            result.caveats_added >= 1,
+            "the attenuation appended real caveats"
+        );
+        assert!(
+            result.authorizes_own,
+            "the confined token authorizes its own service/action"
+        );
+        assert!(
+            result.denies_wider,
+            "the confined token denies a wider action"
+        );
     }
 
     #[test]
@@ -859,7 +929,10 @@ mod tests {
         // A mask with no atomic action letter cannot confine — fail closed.
         gadget.set("mask", GadgetInput::Variant("xyz".to_string()));
         assert!(gadget.validate().is_fail_closed());
-        assert!(matches!(gadget.build(), Err(GadgetError::Incomplete { .. })));
+        assert!(matches!(
+            gadget.build(),
+            Err(GadgetError::Incomplete { .. })
+        ));
     }
 
     // ── the attenuation-lineage Provenance is real ──────────────────────────
@@ -906,7 +979,10 @@ mod tests {
         let set = id.present(&ctx);
 
         // The RawFields floor surfaces the real recipient + signer.
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "delegatee"));
@@ -916,13 +992,18 @@ mod tests {
         }
 
         // The Provenance chain-of-trust hop names the real recipient.
-        let prov = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let prov = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &prov.body {
             PresentationBody::Timeline(t) => {
                 assert_eq!(t.events.len(), 1);
                 assert!(t.events[0].label.contains("delegate"));
                 assert!(
-                    t.events[0].label.contains(&reflect::short_hex(&bob.public_key().0)),
+                    t.events[0]
+                        .label
+                        .contains(&reflect::short_hex(&bob.public_key().0)),
                     "the chain-of-trust hop names the real delegatee"
                 );
             }
@@ -947,7 +1028,10 @@ mod tests {
             .expect("attenuate");
         let att_mac = MacaroonToken::from_encoded(confined.encoded(), root_key).unwrap();
         let src = caveats_source(att_mac.inner());
-        assert!(src.contains("caveats"), "the confined token lists its caveats: {src}");
+        assert!(
+            src.contains("caveats"),
+            "the confined token lists its caveats: {src}"
+        );
         // The atomic-letter render appears (a service-confine to action 'r').
         assert!(
             src.contains("⇒ r") || src.contains("service"),

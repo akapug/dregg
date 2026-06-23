@@ -114,7 +114,12 @@ impl SharedTimeline {
     /// Open a shared timeline at a genesis config, with `main` the frontier official reality owns.
     pub fn genesis(config: DocGraph, main: MainFrontier) -> Self {
         Self {
-            ticks: vec![Tick { step: 0, config, label: "genesis".into(), author: None }],
+            ticks: vec![Tick {
+                step: 0,
+                config,
+                label: "genesis".into(),
+                author: None,
+            }],
             main,
         }
     }
@@ -124,7 +129,12 @@ impl SharedTimeline {
     /// edit, which stays imaginary until stitched.
     pub fn commit(&mut self, config: DocGraph, label: impl Into<String>, party: Party) {
         let step = self.ticks.len();
-        self.ticks.push(Tick { step, config, label: label.into(), author: Some(party) });
+        self.ticks.push(Tick {
+            step,
+            config,
+            label: label.into(),
+            author: Some(party),
+        });
     }
 
     /// The number of landings on the shared timeline (genesis included).
@@ -221,7 +231,10 @@ impl AlternateHistory {
     /// peer's alternate-history discoveries and deletions.
     pub fn edit(&mut self, key: u64, atom: Atom, label: impl Into<String>) {
         self.current.atoms.insert(key, atom);
-        self.edits.push(BranchEdit { label: label.into(), imaginary: false });
+        self.edits.push(BranchEdit {
+            label: label.into(),
+            imaginary: false,
+        });
     }
 
     /// **An attempted MAIN edit — the confinement tooth in action.** The branch *tries* to mutate a
@@ -234,9 +247,15 @@ impl AlternateHistory {
     /// (We model the "drain main" attempt as a debit whose `src` is the main cell; a confined branch
     /// cannot author it, so nothing lands.)
     pub fn try_edit_main(&mut self, main_cell: u64, label: impl Into<String>) -> bool {
-        let debit = crate::branch_stitch::BranchDebit { actor: self.branch.author, src: main_cell };
+        let debit = crate::branch_stitch::BranchDebit {
+            actor: self.branch.author,
+            src: main_cell,
+        };
         let imaginary = self.branch.debit_is_imaginary(debit);
-        self.edits.push(BranchEdit { label: label.into(), imaginary });
+        self.edits.push(BranchEdit {
+            label: label.into(),
+            imaginary,
+        });
         imaginary
     }
 
@@ -399,7 +418,9 @@ mod tests {
 
     /// Helper: a DocGraph from `(key, atom)` pairs.
     fn doc(atoms: &[(u64, Atom)]) -> DocGraph {
-        DocGraph { atoms: atoms.iter().copied().collect() }
+        DocGraph {
+            atoms: atoms.iter().copied().collect(),
+        }
     }
 
     fn frontier(cells: &[u64]) -> MainFrontier {
@@ -421,31 +442,63 @@ mod tests {
             frontier(&[0, 1]), // main owns cells 0 and 1
             vec![
                 // mainline: main works on its own atoms (the shared past).
-                (doc(&[(0, Atom::Alive), (1, Atom::Alive)]), "main adds atom 1".into(), Party::Main),
-                (doc(&[(0, Atom::Dead), (1, Atom::Alive)]), "main deletes atom 0".into(), Party::Main),
+                (
+                    doc(&[(0, Atom::Alive), (1, Atom::Alive)]),
+                    "main adds atom 1".into(),
+                    Party::Main,
+                ),
+                (
+                    doc(&[(0, Atom::Dead), (1, Atom::Alive)]),
+                    "main deletes atom 0".into(),
+                    Party::Main,
+                ),
             ],
-            1,    // the peer rewinds to step 1 (before main deleted atom 0)
-            77,   // the peer's branch author cell
-            vec![BranchCap { target: 99, debit_reach: true }], // only a branch-cap (off-main) ⇒ confined
+            1,  // the peer rewinds to step 1 (before main deleted atom 0)
+            77, // the peer's branch author cell
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }], // only a branch-cap (off-main) ⇒ confined
             vec![
                 // the peer's divergent edits: a new discovery atom 5, and revive atom 0 in-branch.
                 (5, Atom::Alive, "peer discovers atom 5".into()),
                 (0, Atom::Alive, "peer revives atom 0 in branch".into()),
             ],
             None, // no main-probe this run
-            vec![BranchCap { target: 5, debit_reach: true }], // confers authority over its discovery
-            vec![BranchCap { target: 5, debit_reach: true }], // …which it HELD at the settlement tip
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }], // confers authority over its discovery
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }], // …which it HELD at the settlement tip
             None, // no explicit drop — the full pushout
         );
 
-        assert!(run.settled(), "a well-authorized, compatible stitch settles");
+        assert!(
+            run.settled(),
+            "a well-authorized, compatible stitch settles"
+        );
         let settled = run.settled_config().unwrap();
         // The conflict at key 0: main says Dead (head config), branch says Alive ⇒ Dead-wins.
-        assert_eq!(settled.atoms.get(&0), Some(&Atom::Dead), "Dead-wins settles the revive/delete clash");
+        assert_eq!(
+            settled.atoms.get(&0),
+            Some(&Atom::Dead),
+            "Dead-wins settles the revive/delete clash"
+        );
         // The branch's discovery is KEPT (nothing the branch found is dropped).
-        assert_eq!(settled.atoms.get(&5), Some(&Atom::Alive), "the branch discovery is merged in");
+        assert_eq!(
+            settled.atoms.get(&5),
+            Some(&Atom::Alive),
+            "the branch discovery is merged in"
+        );
         // Main's atom 1 survives (nothing main had is lost).
-        assert_eq!(settled.atoms.get(&1), Some(&Atom::Alive), "main's value is preserved (the cocone)");
+        assert_eq!(
+            settled.atoms.get(&1),
+            Some(&Atom::Alive),
+            "main's value is preserved (the cocone)"
+        );
         // The settled config is the new shared head.
         assert_eq!(run.timeline.config_at(run.timeline.head()), settled);
         assert_eq!(run.branched_from, 1);
@@ -461,28 +514,54 @@ mod tests {
             doc(&[(0, Atom::Alive)]),
             frontier(&[0, 1]),
             vec![
-                (doc(&[(0, Atom::Alive), (1, Atom::Alive)]), "main adds atom 1".into(), Party::Main),
-                (doc(&[(0, Atom::Dead), (1, Atom::Alive)]), "main deletes atom 0".into(), Party::Main),
+                (
+                    doc(&[(0, Atom::Alive), (1, Atom::Alive)]),
+                    "main adds atom 1".into(),
+                    Party::Main,
+                ),
+                (
+                    doc(&[(0, Atom::Dead), (1, Atom::Alive)]),
+                    "main deletes atom 0".into(),
+                    Party::Main,
+                ),
             ],
             1,
             77,
-            vec![BranchCap { target: 99, debit_reach: true }],
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
             vec![(5, Atom::Alive, "peer discovers atom 5".into())],
             None,
-            vec![BranchCap { target: 5, debit_reach: true }], // the peer CLAIMS authority over atom 5…
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }], // the peer CLAIMS authority over atom 5…
             // …but at the SETTLEMENT tip it holds nothing reaching cell 5 (revoked while branch open).
-            vec![BranchCap { target: 99, debit_reach: true }],
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
             None,
         );
 
         assert_eq!(
             run.settle,
-            SettleOutcome::Refused { over_authorized_target: 5 },
+            SettleOutcome::Refused {
+                over_authorized_target: 5
+            },
             "a cap not held at the settlement tip ⇒ the stitch is refused (Settlement Soundness)"
         );
-        assert!(!run.settled(), "an authority-violating stitch does not settle");
+        assert!(
+            !run.settled(),
+            "an authority-violating stitch does not settle"
+        );
         // The shared head is UNCHANGED — official reality untouched by the refused stitch.
-        assert_eq!(run.timeline.head(), 2, "the timeline head is still main's last agreed config");
+        assert_eq!(
+            run.timeline.head(),
+            2,
+            "the timeline head is still main's last agreed config"
+        );
         assert_eq!(
             run.timeline.config_at(2),
             &doc(&[(0, Atom::Dead), (1, Atom::Alive)]),
@@ -500,21 +579,43 @@ mod tests {
         let run = run_collaborative_rewind(
             doc(&[(0, Atom::Alive)]),
             frontier(&[0, 1]),
-            vec![(doc(&[(0, Atom::Alive), (1, Atom::Alive)]), "main adds atom 1".into(), Party::Main)],
+            vec![(
+                doc(&[(0, Atom::Alive), (1, Atom::Alive)]),
+                "main adds atom 1".into(),
+                Party::Main,
+            )],
             1,
             77,
-            vec![BranchCap { target: 99, debit_reach: true }], // confined
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }], // confined
             vec![(5, Atom::Alive, "peer's real branch-local discovery".into())],
             Some(1), // the peer PROBES main cell 1 — must be imaginary
-            vec![BranchCap { target: 5, debit_reach: true }],
-            vec![BranchCap { target: 5, debit_reach: true }],
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }],
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }],
             None,
         );
 
-        assert!(run.branch_stayed_imaginary, "the branch's main-probe was structurally imaginary");
-        assert!(run.settled(), "the legitimate branch-local discovery still stitches back");
+        assert!(
+            run.branch_stayed_imaginary,
+            "the branch's main-probe was structurally imaginary"
+        );
+        assert!(
+            run.settled(),
+            "the legitimate branch-local discovery still stitches back"
+        );
         // The divergence carries ONLY the real branch-local edit (atom 5), never a main cell.
-        assert!(run.divergence.contains_key(&5), "the real discovery diverged");
+        assert!(
+            run.divergence.contains_key(&5),
+            "the real discovery diverged"
+        );
         assert!(
             !run.divergence.contains_key(&1) && !run.divergence.contains_key(&0),
             "the imaginary main-probe never entered the divergent config"
@@ -530,11 +631,24 @@ mod tests {
         let timeline = SharedTimeline::genesis(doc(&[(0, Atom::Alive)]), frontier(&[1]));
         // The "branch" illicitly holds a debit-cap to main cell 1.
         let mut alt = timeline
-            .branch_at(0, 77, vec![BranchCap { target: 1, debit_reach: true }])
+            .branch_at(
+                0,
+                77,
+                vec![BranchCap {
+                    target: 1,
+                    debit_reach: true,
+                }],
+            )
             .unwrap();
-        assert!(!alt.confined(), "holding a debit-cap to main breaks confinement (a violation)");
+        assert!(
+            !alt.confined(),
+            "holding a debit-cap to main breaks confinement (a violation)"
+        );
         let imaginary = alt.try_edit_main(1, "probe main 1");
-        assert!(!imaginary, "an un-confined branch's main-drain is REAL, not imaginary (load-bearing)");
+        assert!(
+            !imaginary,
+            "an un-confined branch's main-drain is REAL, not imaginary (load-bearing)"
+        );
     }
 
     /// **THE EXPLICIT DROP — merge only the GOOD parts.** The peer found two atoms in its branch but
@@ -550,10 +664,17 @@ mod tests {
             vec![],
             0,
             77,
-            vec![BranchCap { target: 99, debit_reach: true }],
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
             vec![
                 (5, Atom::Alive, "a good discovery".into()),
-                (6, Atom::Alive, "a discovery the peer decides to drop".into()),
+                (
+                    6,
+                    Atom::Alive,
+                    "a discovery the peer decides to drop".into(),
+                ),
             ],
             None,
             vec![], // confer nothing ⇒ the settlement gate trivially passes
@@ -563,8 +684,15 @@ mod tests {
 
         assert!(run.settled(), "the explicit-drop stitch settles");
         let settled = run.settled_config().unwrap();
-        assert_eq!(settled.atoms.get(&5), Some(&Atom::Alive), "the GOOD part (atom 5) is kept");
-        assert!(settled.atoms.get(&6).is_none(), "the dropped part (atom 6) is explicitly gone");
+        assert_eq!(
+            settled.atoms.get(&5),
+            Some(&Atom::Alive),
+            "the GOOD part (atom 5) is kept"
+        );
+        assert!(
+            settled.atoms.get(&6).is_none(),
+            "the dropped part (atom 6) is explicitly gone"
+        );
     }
 
     /// The shared timeline is scrubbable: every past config is addressable, and branching off step k
@@ -572,15 +700,34 @@ mod tests {
     #[test]
     fn scrub_and_branch_lands_on_the_past_config() {
         let mut tl = SharedTimeline::genesis(doc(&[(0, Atom::Alive)]), frontier(&[0]));
-        tl.commit(doc(&[(0, Atom::Alive), (1, Atom::Alive)]), "add 1", Party::Main);
-        tl.commit(doc(&[(0, Atom::Dead), (1, Atom::Alive)]), "del 0", Party::Main);
+        tl.commit(
+            doc(&[(0, Atom::Alive), (1, Atom::Alive)]),
+            "add 1",
+            Party::Main,
+        );
+        tl.commit(
+            doc(&[(0, Atom::Dead), (1, Atom::Alive)]),
+            "del 0",
+            Party::Main,
+        );
         assert_eq!(tl.head(), 2);
 
         // Branch off step 1 — the config BEFORE main deleted atom 0.
         let alt = tl.branch_at(1, 77, vec![]).unwrap();
-        assert_eq!(alt.base_config, *tl.config_at(1), "the branch starts from the scrubbed-to past");
-        assert_eq!(alt.base_config.atoms.get(&0), Some(&Atom::Alive), "atom 0 is still alive at step 1");
+        assert_eq!(
+            alt.base_config,
+            *tl.config_at(1),
+            "the branch starts from the scrubbed-to past"
+        );
+        assert_eq!(
+            alt.base_config.atoms.get(&0),
+            Some(&Atom::Alive),
+            "atom 0 is still alive at step 1"
+        );
         // Out-of-range branch is rejected.
-        assert!(tl.branch_at(99, 77, vec![]).is_none(), "branching past the head is rejected");
+        assert!(
+            tl.branch_at(99, 77, vec![]).is_none(),
+            "branching past the head is rejected"
+        );
     }
 }

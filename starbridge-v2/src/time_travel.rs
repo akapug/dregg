@@ -153,7 +153,13 @@ impl TimeCockpitModel {
                     crate::replay::RecordedStep::Genesis { .. } => (step.label(), false, None),
                 }
             };
-            ticks.push(ScrubTick { step: cp.step, root: cp.root, label, is_turn, reversible });
+            ticks.push(ScrubTick {
+                step: cp.step,
+                root: cp.root,
+                label,
+                is_turn,
+                reversible,
+            });
         }
 
         // The verified reconstruction at the cursor.
@@ -179,7 +185,11 @@ impl TimeCockpitModel {
         };
 
         // The diff from the previous step — what the cursor's turn did.
-        let diff_from_prev = if cursor > 0 { history.diff(cursor - 1, cursor).ok() } else { None };
+        let diff_from_prev = if cursor > 0 {
+            history.diff(cursor - 1, cursor).ok()
+        } else {
+            None
+        };
 
         // The suspend gate (M5) — read straight off the world.
         let suspended = world.is_suspended();
@@ -318,12 +328,20 @@ mod tests {
         assert_eq!(turns.len(), 2, "two committed turns");
         // The REAL Turn::is_reversible verdict, per step — not a transcription.
         assert_eq!(turns[0].reversible, Some(true), "transfer reverses (clean)");
-        assert_eq!(turns[1].reversible, Some(false), "burn is a committed boundary");
+        assert_eq!(
+            turns[1].reversible,
+            Some(false),
+            "burn is a committed boundary"
+        );
         // The un-turn floor sits AT the burn step — the rewind can't go past it.
         assert_eq!(m.undo_floor(), turns[1].step);
         assert!(m.undo_floor_badge().contains("un-turn floor"));
         // Genesis / empty-root ticks have nothing to invert → None.
-        assert!(m.ticks.iter().filter(|t| !t.is_turn).all(|t| t.reversible.is_none()));
+        assert!(m
+            .ticks
+            .iter()
+            .filter(|t| !t.is_turn)
+            .all(|t| t.reversible.is_none()));
     }
 
     #[test]
@@ -331,8 +349,16 @@ mod tests {
         let (w, _t, _s) = fixture(); // three transfers — all reversible
         let stack = MetaStack::new();
         let m = TimeCockpitModel::build(&w, w.recorded_turns().len(), &stack);
-        assert!(m.ticks.iter().filter(|t| t.is_turn).all(|t| t.reversible == Some(true)));
-        assert_eq!(m.undo_floor(), 0, "no committed boundary → rewind to genesis");
+        assert!(m
+            .ticks
+            .iter()
+            .filter(|t| t.is_turn)
+            .all(|t| t.reversible == Some(true)));
+        assert_eq!(
+            m.undo_floor(),
+            0,
+            "no committed boundary → rewind to genesis"
+        );
         assert!(m.undo_floor_badge().contains("fully reversible"));
     }
 
@@ -347,7 +373,10 @@ mod tests {
         assert_eq!(m.head, head);
         // One tick per landing (empty root + each step).
         assert_eq!(m.ticks.len(), head + 1);
-        assert_eq!(m.ticks[0].step, 0, "the first tick is the empty pre-genesis root");
+        assert_eq!(
+            m.ticks[0].step, 0,
+            "the first tick is the empty pre-genesis root"
+        );
         assert!(!m.ticks[0].is_turn, "the empty root is not a turn");
         // Exactly three ticks are committed TURNS.
         assert_eq!(m.ticks.iter().filter(|t| t.is_turn).count(), 3);
@@ -366,19 +395,39 @@ mod tests {
         assert!(live.at_head());
         assert_eq!(live.liveness, Liveness::Live);
         assert!(live.cursor_verified, "the head reconstruction verifies");
-        let live_bal = live.cursor_cells.iter().find(|(id, ..)| *id == treasury).unwrap().1;
+        let live_bal = live
+            .cursor_cells
+            .iter()
+            .find(|(id, ..)| *id == treasury)
+            .unwrap()
+            .1;
         assert_eq!(live_bal, 650, "the head shows the live balance");
 
         // Rewind ONE turn (step head-1): the image rewinds, the badge says REPLAYED.
         let past = TimeCockpitModel::build(&w, head - 1, &stack);
         assert!(!past.at_head());
-        assert_eq!(past.liveness, Liveness::ReplayedDeterministic, "the past is re-derived");
-        assert!(past.cursor_verified, "the past reconstruction root-verifies");
-        let past_bal = past.cursor_cells.iter().find(|(id, ..)| *id == treasury).unwrap().1;
+        assert_eq!(
+            past.liveness,
+            Liveness::ReplayedDeterministic,
+            "the past is re-derived"
+        );
+        assert!(
+            past.cursor_verified,
+            "the past reconstruction root-verifies"
+        );
+        let past_bal = past
+            .cursor_cells
+            .iter()
+            .find(|(id, ..)| *id == treasury)
+            .unwrap()
+            .1;
         assert_eq!(past_bal, 700, "rewound one turn: 1000 − 100 − 200 = 700");
 
         // The prev-step diff names what that turn did.
-        assert!(past.diff_from_prev.is_some(), "a mid-history cursor has a prev-step diff");
+        assert!(
+            past.diff_from_prev.is_some(),
+            "a mid-history cursor has a prev-step diff"
+        );
     }
 
     // ── the SUSPEND gate: the head freezes, the continuation is staged ───────
@@ -401,8 +450,16 @@ mod tests {
 
         let suspended = TimeCockpitModel::build(&w, w.recorded_turns().len(), &stack);
         assert!(suspended.suspended, "the gate readout shows SUSPENDED");
-        assert_eq!(suspended.pending.len(), 1, "the staged continuation is shown");
-        assert_eq!(suspended.live_height, head as u64 - 2, "head frozen (3 turns done, 2 genesis)");
+        assert_eq!(
+            suspended.pending.len(),
+            1,
+            "the staged continuation is shown"
+        );
+        assert_eq!(
+            suspended.live_height,
+            head as u64 - 2,
+            "head frozen (3 turns done, 2 genesis)"
+        );
 
         // RESUME drains: the queue commits, the readout clears.
         let outcomes = w.resume(ResumeMode::Drain);
@@ -430,7 +487,10 @@ mod tests {
         let m1 = TimeCockpitModel::build(&w, w.recorded_turns().len(), &stack);
         assert_eq!(m1.metastack.len(), 1);
         assert_eq!(m1.metastack[0].level, 0);
-        assert!(m1.metastack[0].is_top, "the lone level is the top (currently debugging)");
+        assert!(
+            m1.metastack[0].is_top,
+            "the lone level is the top (currently debugging)"
+        );
 
         // Push meta¹ — DEBUG THE DEBUGGER. The breadcrumb climbs.
         stack.push(&w);
@@ -455,7 +515,11 @@ mod tests {
         let (w, _t, _s) = fixture();
         let stack = MetaStack::new();
         let head = w.recorded_turns().len();
-        assert!(TimeCockpitModel::build(&w, head, &stack).liveness_badge().contains("LIVE"));
-        assert!(TimeCockpitModel::build(&w, 0, &stack).liveness_badge().contains("REPLAYED"));
+        assert!(TimeCockpitModel::build(&w, head, &stack)
+            .liveness_badge()
+            .contains("LIVE"));
+        assert!(TimeCockpitModel::build(&w, 0, &stack)
+            .liveness_badge()
+            .contains("REPLAYED"));
     }
 }

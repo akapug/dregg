@@ -90,6 +90,15 @@ impl CellModel {
         CellModel { fields, nonce }
     }
 
+    /// An empty model (no fields, nonce 0) — the default a closure-passing ledger
+    /// read fills in (the attach path projects through `with_ledger`).
+    pub fn from_ledger_empty() -> Self {
+        CellModel {
+            fields: BTreeMap::new(),
+            nonce: 0,
+        }
+    }
+
     /// Read a model field as a raw element.
     pub fn field(&self, slot: Slot) -> FieldElement {
         self.fields.get(&slot).copied().unwrap_or([0u8; 32])

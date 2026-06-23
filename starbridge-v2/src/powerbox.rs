@@ -395,7 +395,11 @@ pub struct LaunchedApp {
 impl LaunchedApp {
     /// The app's short-hex id (the trusted-UI label — drawn from the ledger id).
     pub fn label(&self) -> String {
-        format!("{} · app {}", self.name, reflect::short_hex(&self.app_cell.0))
+        format!(
+            "{} · app {}",
+            self.name,
+            reflect::short_hex(&self.app_cell.0)
+        )
     }
 }
 
@@ -515,7 +519,10 @@ impl RegistryLauncher {
             self.rows().len()
         )];
         for r in self.rows() {
-            out.push(format!("· launch {} ({}) — {}", r.name, r.id, r.description));
+            out.push(format!(
+                "· launch {} ({}) — {}",
+                r.name, r.id, r.description
+            ));
         }
         out
     }
@@ -667,13 +674,24 @@ mod tests {
         // targets the principal holds a cap reaching (docs + peer), and nothing else.
         // A confined app that holds nothing would present an EMPTY powerbox.
         let (world, principal, app, docs, peer) = powerbox_world();
-        let request = CapabilityRequest::new(app, "needs to read your documents", AuthRequired::Either);
+        let request =
+            CapabilityRequest::new(app, "needs to read your documents", AuthRequired::Either);
         let pb = Powerbox::present(&world, principal, &request);
 
         let targets: Vec<CellId> = pb.grantable.iter().map(|g| g.target).collect();
-        assert!(targets.contains(&docs), "the user holds docs → it is grantable");
-        assert!(targets.contains(&peer), "the user holds peer → it is grantable");
-        assert_eq!(pb.grantable.len(), 2, "exactly the two held targets, nothing the user doesn't hold");
+        assert!(
+            targets.contains(&docs),
+            "the user holds docs → it is grantable"
+        );
+        assert!(
+            targets.contains(&peer),
+            "the user holds peer → it is grantable"
+        );
+        assert_eq!(
+            pb.grantable.len(),
+            2,
+            "exactly the two held targets, nothing the user doesn't hold"
+        );
 
         // The ceilings are the user's REAL held rights: full (None) over docs, narrowed
         // (Signature) over peer — the picker reflects the user's own authority, never
@@ -682,11 +700,16 @@ mod tests {
         assert_eq!(pb.ceiling_for(&peer), Some(&AuthRequired::Signature));
 
         // A target the user does NOT hold is not grantable (cannot be designated).
-        let unheld = world.ledger().iter().map(|(id, _)| *id).find(|id| {
-            *id != docs && *id != peer && *id != principal && *id != app
-        });
+        let unheld = world
+            .ledger()
+            .iter()
+            .map(|(id, _)| *id)
+            .find(|id| *id != docs && *id != peer && *id != principal && *id != app);
         if let Some(unheld) = unheld {
-            assert!(pb.can_grant(&unheld).is_none(), "an unheld target is not in the picker");
+            assert!(
+                pb.can_grant(&unheld).is_none(),
+                "an unheld target is not in the picker"
+            );
         }
     }
 
@@ -700,8 +723,14 @@ mod tests {
         // `app` itself holds no caps — present the powerbox AS the app (a principal
         // with an empty c-list).
         let pb = Powerbox::present(&world, app, &request);
-        assert!(pb.grantable.is_empty(), "an empty-c-list principal has nothing to grant");
-        assert!(pb.all_text().iter().any(|l| l.contains("can confer nothing")));
+        assert!(
+            pb.grantable.is_empty(),
+            "an empty-c-list principal has nothing to grant"
+        );
+        assert!(pb
+            .all_text()
+            .iter()
+            .any(|l| l.contains("can confer nothing")));
     }
 
     #[test]
@@ -712,7 +741,12 @@ mod tests {
         // Signature. Nothing else.
         let (mut world, principal, app, docs, _peer) = powerbox_world();
         assert!(
-            !world.ledger().get(&app).unwrap().capabilities.has_access(&docs),
+            !world
+                .ledger()
+                .get(&app)
+                .unwrap()
+                .capabilities
+                .has_access(&docs),
             "precondition: the app does NOT reach docs before the grant"
         );
         let receipts_before = world.receipts().len();
@@ -730,11 +764,18 @@ mod tests {
 
         // It is a REAL verified turn: the executor's own receipt landed on the chain.
         assert!(outcome.is_granted());
-        assert_eq!(world.receipts().len(), receipts_before + 1, "the grant added a real receipt");
+        assert_eq!(
+            world.receipts().len(),
+            receipts_before + 1,
+            "the grant added a real receipt"
+        );
 
         // The app's LIVE c-list now reaches docs (the cap was minted in by the executor).
         let app_cell = world.ledger().get(&app).unwrap();
-        assert!(app_cell.capabilities.has_access(&docs), "the app now reaches docs via the granted cap");
+        assert!(
+            app_cell.capabilities.has_access(&docs),
+            "the app now reaches docs via the granted cap"
+        );
         // …and the granted cap carries the ATTENUATED rights, not the user's wider ones.
         let granted = app_cell
             .capabilities
@@ -759,7 +800,10 @@ mod tests {
         let receipts_before = world.receipts().len();
 
         let outcome = Powerbox::grant(&mut world, principal, app, unheld, AuthRequired::Signature);
-        assert!(!outcome.is_granted(), "an unheld target cannot be designated");
+        assert!(
+            !outcome.is_granted(),
+            "an unheld target cannot be designated"
+        );
         match outcome {
             PowerboxOutcome::Denied { reason } => {
                 assert!(
@@ -770,9 +814,18 @@ mod tests {
             PowerboxOutcome::Granted { .. } => panic!("must be denied"),
         }
         // No turn ran; the app got nothing.
-        assert_eq!(world.receipts().len(), receipts_before, "a denied designation runs no turn");
+        assert_eq!(
+            world.receipts().len(),
+            receipts_before,
+            "a denied designation runs no turn"
+        );
         assert!(
-            !world.ledger().get(&app).unwrap().capabilities.has_access(&unheld),
+            !world
+                .ledger()
+                .get(&app)
+                .unwrap()
+                .capabilities
+                .has_access(&unheld),
             "the app does not reach the unheld target"
         );
     }
@@ -787,7 +840,10 @@ mod tests {
 
         // The user holds Signature over peer; confer None (wider) → amplification.
         let outcome = Powerbox::grant(&mut world, principal, app, peer, AuthRequired::None);
-        assert!(!outcome.is_granted(), "conferring more than the user holds must be refused");
+        assert!(
+            !outcome.is_granted(),
+            "conferring more than the user holds must be refused"
+        );
         match outcome {
             PowerboxOutcome::Denied { reason } => assert!(
                 reason.contains("AMPLIFY") || reason.contains("attenuation"),
@@ -795,12 +851,19 @@ mod tests {
             ),
             PowerboxOutcome::Granted { .. } => panic!("must be denied"),
         }
-        assert_eq!(world.receipts().len(), receipts_before, "an amplifying designation runs no turn");
+        assert_eq!(
+            world.receipts().len(),
+            receipts_before,
+            "an amplifying designation runs no turn"
+        );
 
         // But conferring AT or BELOW the held ceiling (Signature) is fine — the same
         // target, the legitimate (non-amplifying) grant succeeds.
         let ok = Powerbox::grant(&mut world, principal, app, peer, AuthRequired::Signature);
-        assert!(ok.is_granted(), "conferring ⊆ the held authority is a legitimate grant");
+        assert!(
+            ok.is_granted(),
+            "conferring ⊆ the held authority is a legitimate grant"
+        );
     }
 
     // ── THE RUNTIME APP-LAUNCHER tests ────────────────────────────────────────
@@ -821,8 +884,15 @@ mod tests {
         );
 
         // A brand-new cell was birthed into the live ledger.
-        assert_eq!(world.cell_count(), count_before + 1, "launch births exactly one new cell");
-        let app = world.ledger().get(&launched.app_cell).expect("the launched app is a real live cell");
+        assert_eq!(
+            world.cell_count(),
+            count_before + 1,
+            "launch births exactly one new cell"
+        );
+        let app = world
+            .ledger()
+            .get(&launched.app_cell)
+            .expect("the launched app is a real live cell");
         // It holds NOTHING — no ambient authority, the ocap floor (a confined app-as-cell).
         assert_eq!(
             app.capabilities.len(),
@@ -852,24 +922,55 @@ mod tests {
             AuthRequired::None,
         );
         assert!(
-            !world.ledger().get(&launched.app_cell).unwrap().capabilities.has_access(&docs),
+            !world
+                .ledger()
+                .get(&launched.app_cell)
+                .unwrap()
+                .capabilities
+                .has_access(&docs),
             "the launched app does NOT reach docs before the powerbox grant"
         );
 
         // 2. ROUTE through the EXISTING powerbox: present the picker for the launched
         //    app's request (the same Powerbox::present the panel renders — not a new path).
         let pb = Powerbox::present(&world, principal, &launched.request);
-        assert_eq!(pb.app_cell, launched.app_cell, "the powerbox mediates the launched app's request");
-        assert!(pb.can_grant(&docs).is_some(), "the user holds docs → it is designable for the launched app");
+        assert_eq!(
+            pb.app_cell, launched.app_cell,
+            "the powerbox mediates the launched app's request"
+        );
+        assert!(
+            pb.can_grant(&docs).is_some(),
+            "the user holds docs → it is designable for the launched app"
+        );
 
         // 3. The user DESIGNATES docs at an attenuated Signature → a real grant turn mints
         //    the cap into the LAUNCHED app's c-list.
         let receipts_before = world.receipts().len();
-        let outcome = Powerbox::grant(&mut world, principal, launched.app_cell, docs, AuthRequired::Signature);
-        let conferred = outcome.conferred().expect("the held, attenuated designation grants").clone();
-        assert_eq!(conferred.app_cell, launched.app_cell, "the cap landed in the LAUNCHED app");
-        assert_eq!(conferred.conferred_rights, AuthRequired::Signature, "attenuated, not the user's wider None");
-        assert_eq!(world.receipts().len(), receipts_before + 1, "the grant is a real verified turn");
+        let outcome = Powerbox::grant(
+            &mut world,
+            principal,
+            launched.app_cell,
+            docs,
+            AuthRequired::Signature,
+        );
+        let conferred = outcome
+            .conferred()
+            .expect("the held, attenuated designation grants")
+            .clone();
+        assert_eq!(
+            conferred.app_cell, launched.app_cell,
+            "the cap landed in the LAUNCHED app"
+        );
+        assert_eq!(
+            conferred.conferred_rights,
+            AuthRequired::Signature,
+            "attenuated, not the user's wider None"
+        );
+        assert_eq!(
+            world.receipts().len(),
+            receipts_before + 1,
+            "the grant is a real verified turn"
+        );
         assert!(
             world.ledger().get(&launched.app_cell).unwrap().capabilities.has_access(&docs),
             "the launched app now reaches docs — the runtime launch + powerbox grant closed the loop"
@@ -884,12 +985,20 @@ mod tests {
         // turn on its live substrate (the integration the census asked for).
         let launcher = RegistryLauncher::standard([0x42u8; 32]);
         let rows = launcher.rows();
-        assert!(rows.iter().any(|r| r.id == "gallery"), "gallery is a launch row");
+        assert!(
+            rows.iter().any(|r| r.id == "gallery"),
+            "gallery is a launch row"
+        );
         assert!(launcher.all_text().iter().any(|l| l.contains("launch")));
 
         let launched = launcher.launch("gallery").expect("gallery launches");
-        let receipt = launched.drive().expect("the launched app fires a real verified turn");
-        assert!(receipt.action_count >= 1, "a real turn landed from the launched app");
+        let receipt = launched
+            .drive()
+            .expect("the launched app fires a real verified turn");
+        assert!(
+            receipt.action_count >= 1,
+            "a real turn landed from the launched app"
+        );
     }
 
     #[test]
@@ -900,13 +1009,26 @@ mod tests {
         let a = AppLauncher::launch(&mut world, "app-a", "r", AuthRequired::None);
         let b = AppLauncher::launch(&mut world, "app-b", "r", AuthRequired::None);
         let c = AppLauncher::launch(&mut world, "app-c", "r", AuthRequired::None);
-        assert_ne!(a.app_cell, b.app_cell, "two launches → two distinct app-cells");
-        assert_ne!(b.app_cell, c.app_cell, "three launches → three distinct app-cells");
+        assert_ne!(
+            a.app_cell, b.app_cell,
+            "two launches → two distinct app-cells"
+        );
+        assert_ne!(
+            b.app_cell, c.app_cell,
+            "three launches → three distinct app-cells"
+        );
         assert_ne!(a.app_cell, c.app_cell);
         // All three are live confined cells holding nothing.
         for app in [&a, &b, &c] {
-            let cell = world.ledger().get(&app.app_cell).expect("launched app is live");
-            assert_eq!(cell.capabilities.len(), 0, "each launched app is confined (empty c-list)");
+            let cell = world
+                .ledger()
+                .get(&app.app_cell)
+                .expect("launched app is live");
+            assert_eq!(
+                cell.capabilities.len(),
+                0,
+                "each launched app is confined (empty c-list)"
+            );
         }
     }
 
@@ -923,14 +1045,28 @@ mod tests {
         let target = world.genesis_cell(0x03, 0);
 
         // The powerbox's own pre-check denies this (empty picker) …
-        let outcome = Powerbox::grant(&mut world, empty_principal, app, target, AuthRequired::Signature);
-        assert!(!outcome.is_granted(), "a principal holding nothing grants nothing");
+        let outcome = Powerbox::grant(
+            &mut world,
+            empty_principal,
+            app,
+            target,
+            AuthRequired::Signature,
+        );
+        assert!(
+            !outcome.is_granted(),
+            "a principal holding nothing grants nothing"
+        );
 
         // … and the raw executor agrees: a hand-built grant from the empty principal is
         // rejected (the backstop), so even bypassing the powerbox cannot amplify.
         let raw = world.turn(
             empty_principal,
-            vec![crate::world::grant_capability(empty_principal, app, target, 0)],
+            vec![crate::world::grant_capability(
+                empty_principal,
+                app,
+                target,
+                0,
+            )],
         );
         assert!(
             !world.commit_turn(raw).is_committed(),

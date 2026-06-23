@@ -27,12 +27,14 @@
 //! would gate those slots once sealed). gpui-free + fully tested — the cockpit's
 //! generic renderer draws the `Presentation`s with no new widget code.
 
-use dregg_cell_crypto::read_cap::{is_read_attenuation, EncryptedState, FieldSet, ReadCap, ViewKey};
 use dregg_cell::state::{FieldVisibility, STATE_SLOTS};
 use dregg_cell::{Cell, CellId};
+use dregg_cell_crypto::read_cap::{
+    is_read_attenuation, EncryptedState, FieldSet, ReadCap, ViewKey,
+};
 
 use crate::presentable::{
-    Presentable, Presentation, PresentationBody, PresentationKind, PresentCtx, LatticeView,
+    LatticeView, PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
 
@@ -53,10 +55,10 @@ pub struct ReadConfidentiality {
 impl ReadConfidentiality {
     /// Wrap the live cell `id` if it is present in the world's ledger.
     pub fn from_world(world: &crate::world::World, id: CellId) -> Option<Self> {
-        world
-            .ledger()
-            .get(&id)
-            .map(|c| ReadConfidentiality { id, cell: c.clone() })
+        world.ledger().get(&id).map(|c| ReadConfidentiality {
+            id,
+            cell: c.clone(),
+        })
     }
 
     /// The slots gated by read-confidentiality: those marked `Committed` or
@@ -276,8 +278,10 @@ mod tests {
         let mut cell = make_open_cell(0x11, 1_000);
         cell.state.set_field(3, dregg_cell::field_from_u64(303));
         cell.state.set_field(7, dregg_cell::field_from_u64(707));
-        cell.state.set_field_visibility(3, FieldVisibility::Committed, 11);
-        cell.state.set_field_visibility(7, FieldVisibility::Committed, 22);
+        cell.state
+            .set_field_visibility(3, FieldVisibility::Committed, 11);
+        cell.state
+            .set_field_visibility(7, FieldVisibility::Committed, 22);
         let id = w.bench_install_cell(cell, 1_000);
         (w, id)
     }

@@ -315,14 +315,11 @@ impl WonderRoom {
     /// The brightest glowing cell — the image's current hotspot (where the eye is
     /// drawn first; `None` if nothing has happened yet). Wonder leads here.
     pub fn brightest(&self) -> Option<&GlowingCell> {
-        self.cells
-            .iter()
-            .filter(|c| c.is_glowing())
-            .max_by(|a, b| {
-                a.liveliness
-                    .partial_cmp(&b.liveliness)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        self.cells.iter().filter(|c| c.is_glowing()).max_by(|a, b| {
+            a.liveliness
+                .partial_cmp(&b.liveliness)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 
     /// The halo ring for any cell (the same small command set on every cell).
@@ -337,7 +334,10 @@ impl WonderRoom {
     /// tab shows ([`reflect::reflect_cell`]). `None` if the cell is gone. This is
     /// the Pharo-liveness leg: a clicked glow opens a live, inspectable object.
     pub fn inspect(&self, world: &World, id: &CellId) -> Option<Inspectable> {
-        world.ledger().get(id).map(|cell| reflect::reflect_cell(id, cell))
+        world
+            .ledger()
+            .get(id)
+            .map(|cell| reflect::reflect_cell(id, cell))
     }
 
     /// **The *grab* halo's action.** Arm a drag whose source is `id`, moving
@@ -575,7 +575,10 @@ mod tests {
         // EXPLAIN maps to a real sentence drawn from the cell's real data (its
         // balance appears in the warm description).
         let say = room.explain(&treasury).expect("the cell explains");
-        assert!(say.contains("1000"), "explain speaks the cell's real balance: {say}");
+        assert!(
+            say.contains("1000"),
+            "explain speaks the cell's real balance: {say}"
+        );
         assert!(say.contains("Grab it"), "explain invites the drag gesture");
     }
 
@@ -590,8 +593,14 @@ mod tests {
 
         let room = WonderRoom::build(&w);
         let say = room.explain(&well_id).expect("the well explains");
-        assert!(say.contains("issuer well"), "a −supply cell is explained as a well: {say}");
-        assert!(say.contains("1000"), "the backed supply is the real magnitude: {say}");
+        assert!(
+            say.contains("issuer well"),
+            "a −supply cell is explained as a well: {say}"
+        );
+        assert!(
+            say.contains("1000"),
+            "the backed supply is the real magnitude: {say}"
+        );
     }
 
     #[test]
@@ -606,7 +615,10 @@ mod tests {
 
         // PREDICT FIRST — the live world is untouched by the prediction.
         let pred = drag.predict(&w);
-        assert!(pred.would_commit(), "a conserving drag is predicted to commit");
+        assert!(
+            pred.would_commit(),
+            "a conserving drag is predicted to commit"
+        );
         assert_eq!(w.height(), 0, "the prediction did not touch the live world");
         assert_eq!(w.receipts().len(), 0);
 
@@ -631,13 +643,18 @@ mod tests {
         let drag = room.grab(treasury, 9_999).drop_on(sink);
 
         // The prediction foresees the refusal.
-        assert!(!drag.predict(&w).would_commit(), "an over-drag is predicted to refuse");
+        assert!(
+            !drag.predict(&w).would_commit(),
+            "an over-drag is predicted to refuse"
+        );
 
         // Resolving refuses with the executor's own reason, and moves NOTHING.
         let outcome = drag.resolve(&mut w);
         assert!(!outcome.moved(), "the over-drag moved nothing");
         match outcome {
-            DragOutcome::Refused { reason } => assert!(!reason.is_empty(), "a real reason is surfaced"),
+            DragOutcome::Refused { reason } => {
+                assert!(!reason.is_empty(), "a real reason is surfaced")
+            }
             DragOutcome::Moved(_) => panic!("an over-drag must not commit"),
         }
         // The live world is exactly as it was — fail-closed.
@@ -660,7 +677,10 @@ mod tests {
 
         let after = WonderRoom::build(&w);
         let after_sink = after.cell(&sink).unwrap().balance;
-        assert!(after_sink > before_sink, "the sink's balance grew after the real drag");
+        assert!(
+            after_sink > before_sink,
+            "the sink's balance grew after the real drag"
+        );
         assert_ne!(before.cells, after.cells, "the room tracks the live image");
     }
 }

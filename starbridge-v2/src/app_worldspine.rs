@@ -89,7 +89,10 @@ impl std::fmt::Display for WorldFireError {
         match self {
             WorldFireError::Gate(e) => write!(f, "app affordance refused by the cap-gate: {e}"),
             WorldFireError::World { reason } => {
-                write!(f, "app turn refused by the cockpit World executor: {reason}")
+                write!(
+                    f,
+                    "app turn refused by the cockpit World executor: {reason}"
+                )
             }
         }
     }
@@ -215,12 +218,9 @@ impl AppWorldSpine {
             )));
         }
         // The live state off World's ledger — the effect-builder's pure input.
-        let live = self
-            .live_state()
-            .ok_or_else(|| WorldFireError::World {
-                reason: "app cell has no live state on the World ledger (was it seeded?)"
-                    .to_string(),
-            })?;
+        let live = self.live_state().ok_or_else(|| WorldFireError::World {
+            reason: "app cell has no live state on the World ledger (was it seeded?)".to_string(),
+        })?;
         let produced = effects(&live);
         // Tooth 2 (STATE) is World's executor re-enforcing the app program on commit.
         // Build the turn carrying `method` so a method-dispatched `Cases` program (the
@@ -396,15 +396,20 @@ mod tests {
 
         // Fire one affordance (cap held = root) — a SetField writing slot 1.
         let receipt = spine
-            .commit("write_slot", &AuthRequired::None, &AuthRequired::Either, |_live| {
-                let mut v = [0u8; 32];
-                v[31] = 42;
-                vec![Effect::SetField {
-                    cell: app_cell,
-                    index: 1,
-                    value: v,
-                }]
-            })
+            .commit(
+                "write_slot",
+                &AuthRequired::None,
+                &AuthRequired::Either,
+                |_live| {
+                    let mut v = [0u8; 32];
+                    v[31] = 42;
+                    vec![Effect::SetField {
+                        cell: app_cell,
+                        index: 1,
+                        value: v,
+                    }]
+                },
+            )
             .expect("the affordance commits through World");
 
         // The receipt is real and authored by the app cell.
@@ -419,8 +424,14 @@ mod tests {
             "the turn landed in World::receipts() (the inspector's receipt log)"
         );
         let after = spine.live_state().expect("app cell still live on World");
-        assert_eq!(after.fields[1][31], 42, "the fire's write is on World's ledger");
-        assert_ne!(before.fields, after.fields, "the cell state advanced on World");
+        assert_eq!(
+            after.fields[1][31], 42,
+            "the fire's write is on World's ledger"
+        );
+        assert_ne!(
+            before.fields, after.fields,
+            "the cell state advanced on World"
+        );
     }
 
     /// An unheld affordance is refused by the cap-gate IN-BAND — nothing is
@@ -442,13 +453,18 @@ mod tests {
         let receipts_before = world.borrow().receipts().len();
 
         // held = Signature does NOT satisfy required = None (root) — refused in-band.
-        let refused = spine.commit("write_slot", &AuthRequired::Signature, &AuthRequired::None, |_live| {
-            vec![Effect::SetField {
-                cell: app_cell,
-                index: 0,
-                value: [1u8; 32],
-            }]
-        });
+        let refused = spine.commit(
+            "write_slot",
+            &AuthRequired::Signature,
+            &AuthRequired::None,
+            |_live| {
+                vec![Effect::SetField {
+                    cell: app_cell,
+                    index: 0,
+                    value: [1u8; 32],
+                }]
+            },
+        );
         assert!(matches!(refused, Err(WorldFireError::Gate(_))));
         assert_eq!(
             world.borrow().receipts().len(),

@@ -412,7 +412,10 @@ mod tests {
         let g = OcapGraph::build(&world);
         let reach = g.reachable_from(&root);
         assert!(reach.contains(&a), "root reaches a directly");
-        assert!(reach.contains(&b), "root reaches b transitively (multi-hop)");
+        assert!(
+            reach.contains(&b),
+            "root reaches b transitively (multi-hop)"
+        );
         assert!(!reach.contains(&iso), "the isolated cell is unreachable");
         assert!(!reach.contains(&root), "a root does not list itself");
         assert_eq!(g.reach_count(&root), 2, "root's blast radius is {{a, b}}");

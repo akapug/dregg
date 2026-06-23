@@ -25,10 +25,7 @@ fn open_then_edits_accrue_patches_with_blame() {
     assert_eq!(doc.history().len(), 1, "open seeds one genesis patch");
 
     // "save": the buffer changed — a second author fills in the body.
-    doc.edit_rope(
-        Author(2),
-        &rope("fn main() {\n    println!(\"hi\");\n}\n"),
-    );
+    doc.edit_rope(Author(2), &rope("fn main() {\n    println!(\"hi\");\n}\n"));
     assert_eq!(doc.history().len(), 2, "each save accrues a patch");
     assert_eq!(
         doc.rope().to_string(),
@@ -62,8 +59,16 @@ fn blame_survives_a_middle_insert_by_a_third_author() {
     let blame = doc.blame();
     let by = |c: &str| blame.iter().find(|b| b.content == c).map(|b| b.author);
     assert_eq!(by("top\n"), Some(Author(1)), "top stays Author(1)");
-    assert_eq!(by("bottom\n"), Some(Author(1)), "bottom stays Author(1) — NOT smeared");
-    assert_eq!(by("middle\n"), Some(Author(3)), "only the insert is Author(3)");
+    assert_eq!(
+        by("bottom\n"),
+        Some(Author(1)),
+        "bottom stays Author(1) — NOT smeared"
+    );
+    assert_eq!(
+        by("middle\n"),
+        Some(Author(3)),
+        "only the insert is Author(3)"
+    );
 }
 
 /// TWO editors branch off a shared document, edit offline, merge — CLEAN where the
@@ -91,7 +96,10 @@ fn two_editors_merge_clean_when_disjoint() {
 
     assert!(!rendered.has_conflict(), "disjoint edits merge CLEAN");
     let text = rendered.to_marked_string();
-    assert!(text.contains("# The Real Title\n"), "Alice's title survived");
+    assert!(
+        text.contains("# The Real Title\n"),
+        "Alice's title survived"
+    );
     assert!(text.contains("## New Section\n"), "Bob's section survived");
 }
 
@@ -123,12 +131,18 @@ fn two_editors_genuine_conflict_is_an_object_with_authorship() {
         .iter()
         .map(|a| a.provenance.author.0)
         .collect();
-    assert!(authors.contains(&1) && authors.contains(&2), "both authors named");
+    assert!(
+        authors.contains(&1) && authors.contains(&2),
+        "both authors named"
+    );
     // The clean prefix is still fully usable while the conflict stands.
     assert!(rendered.to_marked_string().starts_with("status: draft\n"));
     // The viewer renders THIS structure: a Clean run then a Conflict object.
     assert!(
-        rendered.segments.iter().any(|s| matches!(s, Segment::Conflict(_))),
+        rendered
+            .segments
+            .iter()
+            .any(|s| matches!(s, Segment::Conflict(_))),
         "the rendered structure carries a Conflict segment the viewer surfaces"
     );
 }

@@ -218,7 +218,9 @@ pub fn pick_up(
         None => {
             // The grant landed but the source somehow holds no revocable slot —
             // leave the grant (the taker has it) and report the unusual state.
-            return ActionOutcome::Done { receipt: grant_receipt };
+            return ActionOutcome::Done {
+                receipt: grant_receipt,
+            };
         }
     };
     let revoke = world.turn(
@@ -273,11 +275,14 @@ pub fn trade_value(
     receiver: Inhabitant,
     amount: u64,
 ) -> ActionOutcome {
-    let turn = world.turn(giver.cell, vec![Effect::Transfer {
-        from: giver.cell,
-        to: receiver.cell,
-        amount,
-    }]);
+    let turn = world.turn(
+        giver.cell,
+        vec![Effect::Transfer {
+            from: giver.cell,
+            to: receiver.cell,
+            amount,
+        }],
+    );
     match world.commit_turn(turn) {
         CommitOutcome::Committed { receipt, .. } => ActionOutcome::Done { receipt },
         CommitOutcome::Rejected { reason, .. } => ActionOutcome::Refused { reason },
@@ -364,7 +369,10 @@ mod tests {
         let (world, room, item, _alice, _bob) = mud_world();
         // An item-in-room IS a cap-in-the-room's-c-list.
         assert!(room.contains(&world, item), "the item lies in the room");
-        assert!(room.clist(&world).is_some(), "the room IS a cell with a c-list");
+        assert!(
+            room.clist(&world).is_some(),
+            "the room IS a cell with a c-list"
+        );
     }
 
     #[test]
@@ -400,7 +408,10 @@ mod tests {
         // ── ALICE PICKS IT UP: the cap MOVES room → alice, and the room loses it.
         let a = pick_up(&mut world, room.cell, alice, item, AuthRequired::None);
         assert!(a.is_done(), "alice's pickup commits: {a:?}");
-        assert!(alice.holds(&world, item), "alice now holds the item (cap moved to her)");
+        assert!(
+            alice.holds(&world, item),
+            "alice now holds the item (cap moved to her)"
+        );
         assert!(
             !room.contains(&world, item),
             "the item LEFT the floor — the room no longer holds the cap (the move conserved it)"
@@ -416,14 +427,20 @@ mod tests {
         //    The room no longer holds the cap, so the powerbox's mint_needs_held_
         //    factory gate REFUSES — duping is structurally inexpressible.
         let b = pick_up(&mut world, room.cell, bob, item, AuthRequired::None);
-        assert!(!b.is_done(), "bob's dupe attempt is REFUSED (fail-closed): {b:?}");
+        assert!(
+            !b.is_done(),
+            "bob's dupe attempt is REFUSED (fail-closed): {b:?}"
+        );
         if let ActionOutcome::Refused { reason } = &b {
             assert!(
                 reason.contains("hold") || reason.contains("held") || reason.contains("authority"),
                 "the refusal cites the missing-source-cap gate, got: {reason}"
             );
         }
-        assert!(!bob.holds(&world, item), "bob got NOTHING — the item was not duplicated");
+        assert!(
+            !bob.holds(&world, item),
+            "bob got NOTHING — the item was not duplicated"
+        );
 
         // Invariant: exactly ONE holder of the item cap remains — alice. The
         // capability was conserved across the whole scenario (no dupe possible).
@@ -450,8 +467,14 @@ mod tests {
         // Demanding None (wider than the held Signature) is an amplification → the
         // powerbox refuses before any turn (gen_conferral_is_attenuation).
         let out = pick_up(&mut w, room.cell, alice, item, AuthRequired::None);
-        assert!(!out.is_done(), "an amplifying pickup is refused (attenuation-only)");
-        assert!(!alice.holds(&w, item), "alice got nothing — no amplification");
+        assert!(
+            !out.is_done(),
+            "an amplifying pickup is refused (attenuation-only)"
+        );
+        assert!(
+            !alice.holds(&w, item),
+            "alice got nothing — no amplification"
+        );
     }
 
     // ── THE MULTI-INHABITANT SHARED WORLD ─────────────────────────────────────
@@ -517,17 +540,26 @@ mod tests {
 
         // Pre: alice can reach the cellar (holds the door); bob cannot.
         assert!(alice.can_enter(&world, cellar), "alice holds the door cap");
-        assert!(!bob.can_enter(&world, cellar), "bob holds no door cap — locked");
+        assert!(
+            !bob.can_enter(&world, cellar),
+            "bob holds no door cap — locked"
+        );
 
         // ALICE MOVES: a real cap-gated transition. The executor admits it because
         // she holds a cap reaching the cellar room cell.
         let a = move_through(&mut world, alice, cellar, 32);
-        assert!(a.is_done(), "alice holds the door → her move commits: {a:?}");
+        assert!(
+            a.is_done(),
+            "alice holds the door → her move commits: {a:?}"
+        );
 
         // BOB MOVES: the SAME move, but he lacks the door cap. The executor REFUSES
         // — there is no admissible entering turn. Fail-closed, nothing changed.
         let b = move_through(&mut world, bob, cellar, 33);
-        assert!(!b.is_done(), "bob lacks the door → his move is REFUSED: {b:?}");
+        assert!(
+            !b.is_done(),
+            "bob lacks the door → his move is REFUSED: {b:?}"
+        );
         if let ActionOutcome::Refused { reason } = &b {
             // The refusal is the executor's own authority gate (CapabilityNotHeld),
             // surfaced — not a Rust-side bookkeeping check.
@@ -554,14 +586,20 @@ mod tests {
         let (mut world, tavern, _cellar, key, alice, bob, carol) = shared_world();
 
         // Pre: the key lies in the tavern; no inhabitant holds it.
-        assert!(tavern.contains(&world, key), "the key is on the tavern floor");
+        assert!(
+            tavern.contains(&world, key),
+            "the key is on the tavern floor"
+        );
         assert!(!alice.holds(&world, key) && !bob.holds(&world, key) && !carol.holds(&world, key));
 
         // HOP 1 — alice picks the key off the floor (room → alice).
         let h1 = pick_up(&mut world, tavern.cell, alice, key, AuthRequired::None);
         assert!(h1.is_done(), "alice picks up the key: {h1:?}");
         assert!(alice.holds(&world, key), "alice now holds the key");
-        assert!(!tavern.contains(&world, key), "the key LEFT the floor (conserved move)");
+        assert!(
+            !tavern.contains(&world, key),
+            "the key LEFT the floor (conserved move)"
+        );
         // Single-custody: exactly one holder (alice).
         assert_eq!(
             holders_of(&world, key, &[alice, bob, carol]),
@@ -573,7 +611,10 @@ mod tests {
         let h2 = give(&mut world, alice, bob, key, AuthRequired::None);
         assert!(h2.is_done(), "alice gives the key to bob: {h2:?}");
         assert!(bob.holds(&world, key), "bob now holds the key");
-        assert!(!alice.holds(&world, key), "alice no longer holds it (the give MOVED the cap)");
+        assert!(
+            !alice.holds(&world, key),
+            "alice no longer holds it (the give MOVED the cap)"
+        );
         // Still single-custody across the hop: no dupe — exactly one holder (bob).
         assert_eq!(
             holders_of(&world, key, &[alice, bob, carol]),
@@ -585,14 +626,20 @@ mod tests {
         // floor. The floor no longer holds it (it left at hop 1), so the executor's
         // mint_needs_held_factory gate REFUSES. Exactly one inhabitant ends with it.
         let contend = pick_up(&mut world, tavern.cell, carol, key, AuthRequired::None);
-        assert!(!contend.is_done(), "carol cannot pick a key that left the floor: {contend:?}");
+        assert!(
+            !contend.is_done(),
+            "carol cannot pick a key that left the floor: {contend:?}"
+        );
         assert!(!carol.holds(&world, key), "carol got nothing — no dupe");
         assert_eq!(
             holders_of(&world, key, &[alice, bob, carol]),
             1,
             "exactly ONE inhabitant holds the key after the whole trade — linearity"
         );
-        assert!(bob.holds(&world, key), "…and it is bob (the last legitimate recipient)");
+        assert!(
+            bob.holds(&world, key),
+            "…and it is bob (the last legitimate recipient)"
+        );
     }
 
     /// PROPERTY (c): AN ATTEMPTED AUTHORITY-AMPLIFICATION ON A TRADE IS REFUSED.
@@ -609,8 +656,14 @@ mod tests {
         // Alice picks the key up at the ATTENUATED Signature right (≤ the floor's
         // None). She holds the key, but only at Signature.
         let pick = pick_up(&mut world, tavern.cell, alice, key, AuthRequired::Signature);
-        assert!(pick.is_done(), "alice picks the key up at Signature: {pick:?}");
-        assert!(alice.holds(&world, key), "alice holds the key (at Signature)");
+        assert!(
+            pick.is_done(),
+            "alice picks the key up at Signature: {pick:?}"
+        );
+        assert!(
+            alice.holds(&world, key),
+            "alice holds the key (at Signature)"
+        );
 
         // She tries to GIVE it onward at the WIDER None → amplification. Refused.
         let amp = give(&mut world, alice, bob, key, AuthRequired::None);
@@ -623,15 +676,27 @@ mod tests {
                 "the refusal cites amplification, got: {reason}"
             );
         }
-        assert!(!bob.holds(&world, key), "bob got nothing — no amplified key");
+        assert!(
+            !bob.holds(&world, key),
+            "bob got nothing — no amplified key"
+        );
         // Alice STILL holds it (the failed give moved nothing) — single custody.
-        assert!(alice.holds(&world, key), "alice still holds the key — the trade ran nothing");
+        assert!(
+            alice.holds(&world, key),
+            "alice still holds the key — the trade ran nothing"
+        );
 
         // …and a NON-amplifying give (at or below Signature) is legitimate — proving
         // the refusal is the amplification, not a blanket block on giving.
         let ok = give(&mut world, alice, bob, key, AuthRequired::Signature);
-        assert!(ok.is_done(), "a non-amplifying give (≤ held) is legitimate: {ok:?}");
-        assert!(bob.holds(&world, key) && !alice.holds(&world, key), "the cap moved alice → bob");
+        assert!(
+            ok.is_done(),
+            "a non-amplifying give (≤ held) is legitimate: {ok:?}"
+        );
+        assert!(
+            bob.holds(&world, key) && !alice.holds(&world, key),
+            "the cap moved alice → bob"
+        );
     }
 
     /// PROPERTY (a), value face: A VALUABLE TRADE CONSERVES VALUE (Σδ=0) and a
@@ -642,13 +707,24 @@ mod tests {
 
         // Carol carries 1000; alice carries 0. The TOTAL value across the pair.
         let total_before = carol.cell_balance(&world) + alice.cell_balance(&world);
-        assert_eq!(total_before, 1_000, "the pair's total value before the trade");
+        assert_eq!(
+            total_before, 1_000,
+            "the pair's total value before the trade"
+        );
 
         // CAROL TRADES 300 to ALICE — a real conserved Effect::Transfer (Σδ=0).
         let t = trade_value(&mut world, carol, alice, 300);
         assert!(t.is_done(), "carol's conserved trade commits: {t:?}");
-        assert_eq!(carol.cell_balance(&world), 700, "carol's balance fell by 300");
-        assert_eq!(alice.cell_balance(&world), 300, "alice's balance rose by 300");
+        assert_eq!(
+            carol.cell_balance(&world),
+            700,
+            "carol's balance fell by 300"
+        );
+        assert_eq!(
+            alice.cell_balance(&world),
+            300,
+            "alice's balance rose by 300"
+        );
         // Σδ=0 — the executor conserved the total; nothing was conjured.
         assert_eq!(
             carol.cell_balance(&world) + alice.cell_balance(&world),
@@ -660,7 +736,11 @@ mod tests {
         // not have (the executor's conservation / non-overdraft rule). Nothing moves.
         let over = trade_value(&mut world, carol, alice, 10_000);
         assert!(!over.is_done(), "an overdraft trade is refused: {over:?}");
-        assert_eq!(carol.cell_balance(&world), 700, "carol's balance unchanged after the refused overdraft");
+        assert_eq!(
+            carol.cell_balance(&world),
+            700,
+            "carol's balance unchanged after the refused overdraft"
+        );
         assert_eq!(alice.cell_balance(&world), 300, "alice's balance unchanged");
     }
 }

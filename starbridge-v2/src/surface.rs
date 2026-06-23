@@ -286,7 +286,7 @@ mod tests {
         assert!(r.contains(50.0, 50.0));
         assert!(!r.contains(5.0, 50.0));
         assert!(r.contains(10.0, 20.0)); // top-left corner inclusive
-        // Translating past the top-left clamps to 0 (can't be dragged off-screen).
+                                         // Translating past the top-left clamps to 0 (can't be dragged off-screen).
         let t = r.translated(-1000.0, -1000.0);
         assert_eq!(t.x, 0.0);
         assert_eq!(t.y, 0.0);
@@ -325,6 +325,8 @@ mod tests {
         assert_eq!(mirror.rights, dregg_firmament::AuthRequired::Signature);
         assert_eq!(mirror.target, cap.authority().target); // same window, narrowed
         let mirror_only = Capability::surface(backing, dregg_firmament::AuthRequired::Signature);
-        assert!(mirror_only.attenuate(dregg_firmament::AuthRequired::Either).is_none());
+        assert!(mirror_only
+            .attenuate(dregg_firmament::AuthRequired::Either)
+            .is_none());
     }
 }

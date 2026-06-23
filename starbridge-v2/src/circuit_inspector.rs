@@ -49,8 +49,7 @@
 //! `reflect.rs` are.
 
 use dregg_cell::{
-    compute_canonical_state_commitment, Cell, CellId, Note, NoteCommitment, Nullifier,
-    NullifierSet,
+    compute_canonical_state_commitment, Cell, CellId, Note, NoteCommitment, Nullifier, NullifierSet,
 };
 
 use crate::presentable::{
@@ -83,10 +82,18 @@ pub struct VerificationResult {
 
 impl VerificationResult {
     fn green(checked: usize, note: impl Into<String>) -> Self {
-        VerificationResult { ok: true, checked, notes: vec![note.into()] }
+        VerificationResult {
+            ok: true,
+            checked,
+            notes: vec![note.into()],
+        }
     }
     fn red(checked: usize, note: impl Into<String>) -> Self {
-        VerificationResult { ok: false, checked, notes: vec![note.into()] }
+        VerificationResult {
+            ok: false,
+            checked,
+            notes: vec![note.into()],
+        }
     }
 }
 
@@ -217,7 +224,10 @@ impl Presentable for ProvenTurn {
         if let Some(route) = e.upgrade_route() {
             fields.push(Field::text("upgrade_route", route));
         } else {
-            fields.push(Field::text("upgrade_route", "(top tier — no further route)"));
+            fields.push(Field::text(
+                "upgrade_route",
+                "(top tier — no further route)",
+            ));
         }
         out.push(Presentation {
             kind: PresentationKind::Invariant,
@@ -251,7 +261,10 @@ const COMMITMENT_BINDS: &[(&str, &str)] = &[
         "core_state",
         "nonce · signed balance (biased two-limb LE) · fields · roots · delegation_epoch",
     ),
-    ("permissions", "all eight Permissions tiers (incl. Custom vk_hash)"),
+    (
+        "permissions",
+        "all eight Permissions tiers (incl. Custom vk_hash)",
+    ),
     ("verification_key", "the cell's VK hash (if any)"),
     (
         "capability_root",
@@ -283,10 +296,10 @@ pub struct StateCommitmentBinding {
 impl StateCommitmentBinding {
     /// Wrap the live cell `id` if present in the world's ledger.
     pub fn from_world(world: &World, id: CellId) -> Option<Self> {
-        world
-            .ledger()
-            .get(&id)
-            .map(|c| StateCommitmentBinding { id, cell: c.clone() })
+        world.ledger().get(&id).map(|c| StateCommitmentBinding {
+            id,
+            cell: c.clone(),
+        })
     }
 
     /// The genuine 8-felt canonical commitment for this cell (the real bytes).
@@ -418,7 +431,10 @@ impl Gadget for CommitmentRecomputeVerifier {
     type Output = VerificationResult;
 
     fn fields(&self) -> Vec<GadgetField> {
-        vec![GadgetField::HexBytes { key: "expected_commitment".into(), len: 32 }]
+        vec![GadgetField::HexBytes {
+            key: "expected_commitment".into(),
+            len: 32,
+        }]
     }
 
     fn set(&mut self, field: &str, v: GadgetInput) {
@@ -494,11 +510,7 @@ impl Presentable for NullifierSetView {
 
     fn present(&self, _ctx: &PresentCtx) -> Vec<Presentation> {
         let root = self.set.root();
-        let mut leaves: Vec<String> = self
-            .set
-            .iter()
-            .map(|n| reflect::short_hex(&n.0))
-            .collect();
+        let mut leaves: Vec<String> = self.set.iter().map(|n| reflect::short_hex(&n.0)).collect();
         leaves.sort();
         let mut out: Vec<Presentation> = Vec::new();
 
@@ -506,11 +518,18 @@ impl Presentable for NullifierSetView {
         out.push(Presentation {
             kind: PresentationKind::RawFields,
             label: "Nullifier Set".to_string(),
-            search_text: format!("nullifier set {} root {}", self.set.len(), reflect::short_hex(&root)),
+            search_text: format!(
+                "nullifier set {} root {}",
+                self.set.len(),
+                reflect::short_hex(&root)
+            ),
             body: PresentationBody::Fields(Inspectable {
                 kind: ObjectKind::Nullifier,
                 title: format!("Nullifier Set · {}", reflect::short_hex(&root)),
-                subtitle: format!("{} spent nullifier(s) (one-time authority consumed)", self.set.len()),
+                subtitle: format!(
+                    "{} spent nullifier(s) (one-time authority consumed)",
+                    self.set.len()
+                ),
                 fields: vec![
                     Field::count("cardinality", self.set.len() as u64),
                     Field::hash("root", root),
@@ -586,7 +605,10 @@ impl Gadget for NonMembershipVerifier {
     type Output = VerificationResult;
 
     fn fields(&self) -> Vec<GadgetField> {
-        vec![GadgetField::HexBytes { key: "candidate_nullifier".into(), len: 32 }]
+        vec![GadgetField::HexBytes {
+            key: "candidate_nullifier".into(),
+            len: 32,
+        }]
     }
 
     fn set(&mut self, field: &str, v: GadgetInput) {
@@ -633,7 +655,8 @@ impl Gadget for NonMembershipVerifier {
                 } else {
                     Ok(VerificationResult::red(
                         1,
-                        "the non-membership proof failed to verify against the set root".to_string(),
+                        "the non-membership proof failed to verify against the set root"
+                            .to_string(),
                     ))
                 }
             }
@@ -708,20 +731,29 @@ impl Presentable for NoteCommitmentView {
         //     creation_nonce ‖ randomness, the 28-limb preimage the Poseidon2
         //     commitment folds (matching Note::poseidon2_commitment).
         let steps = vec![
-            TraceStep { index: 0, label: "absorb owner (spending authority)".to_string() },
-            TraceStep { index: 1, label: format!("absorb value = {}", self.note.value()) },
+            TraceStep {
+                index: 0,
+                label: "absorb owner (spending authority)".to_string(),
+            },
+            TraceStep {
+                index: 1,
+                label: format!("absorb value = {}", self.note.value()),
+            },
             TraceStep {
                 index: 2,
                 label: format!("absorb asset_type = {}", self.note.asset_type()),
             },
-            TraceStep { index: 3, label: "absorb creation_nonce (domain separation)".to_string() },
-            TraceStep { index: 4, label: "absorb randomness (blinding factor)".to_string() },
+            TraceStep {
+                index: 3,
+                label: "absorb creation_nonce (domain separation)".to_string(),
+            },
+            TraceStep {
+                index: 4,
+                label: "absorb randomness (blinding factor)".to_string(),
+            },
             TraceStep {
                 index: 5,
-                label: format!(
-                    "Poseidon2 → commitment {}",
-                    reflect::short_hex(&commit.0)
-                ),
+                label: format!("Poseidon2 → commitment {}", reflect::short_hex(&commit.0)),
             },
         ];
         out.push(Presentation {
@@ -762,7 +794,10 @@ impl Gadget for NoteCommitmentHasher {
     type Output = VerificationResult;
 
     fn fields(&self) -> Vec<GadgetField> {
-        vec![GadgetField::HexBytes { key: "expected_commitment".into(), len: 32 }]
+        vec![GadgetField::HexBytes {
+            key: "expected_commitment".into(),
+            len: 32,
+        }]
     }
 
     fn set(&mut self, field: &str, v: GadgetInput) {
@@ -841,12 +876,21 @@ impl DescriptorBoundary {
     /// The IR-v2 descriptor on-disk contract fields (the artifact the prover +
     /// verifier read), in canonical JSON order.
     pub const IR2_FIELDS: &[(&'static str, &'static str)] = &[
-        ("name", "the descriptor's stable name (the VK/fingerprint anchor)"),
+        (
+            "name",
+            "the descriptor's stable name (the VK/fingerprint anchor)",
+        ),
         ("ir", "the IR version (2 = the multi-table batch-STARK IR)"),
         ("trace_width", "the number of trace columns (the AIR width)"),
         ("public_input_count", "the number of public-input slots"),
-        ("tables", "the TableDef2 lookup/memory tables (empty for a pure-gate AIR)"),
-        ("constraints", "the VmConstraint2 set: gate · pi_binding · boundary · window_gate · …"),
+        (
+            "tables",
+            "the TableDef2 lookup/memory tables (empty for a pure-gate AIR)",
+        ),
+        (
+            "constraints",
+            "the VmConstraint2 set: gate · pi_binding · boundary · window_gate · …",
+        ),
         ("hash_sites", "the Poseidon2 hash-absorb sites"),
         ("ranges", "the range-check column constraints"),
     ];
@@ -933,17 +977,27 @@ mod tests {
 
         // The DomainVisual tier lattice marks THIS turn's real tier (tier 1 in the
         // embedded single-custody world).
-        let dv = set.iter().find(|p| p.kind == PresentationKind::DomainVisual).unwrap();
+        let dv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::DomainVisual)
+            .unwrap();
         match &dv.body {
             PresentationBody::Lattice(l) => {
                 assert_eq!(l.nodes.len(), 3, "the three honest tiers");
-                assert_eq!(l.current, Some(0), "embedded turn is verified-by-construction");
+                assert_eq!(
+                    l.current,
+                    Some(0),
+                    "embedded turn is verified-by-construction"
+                );
             }
             other => panic!("tier should be a Lattice, got {other:?}"),
         }
 
         // The Invariant names what tier-1 binds (the operator's re-execution).
-        let iv = set.iter().find(|p| p.kind == PresentationKind::Invariant).unwrap();
+        let iv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Invariant)
+            .unwrap();
         match &iv.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "binds"));
@@ -959,7 +1013,10 @@ mod tests {
         let turns = ProvenTurn::all(&w);
         let ctx = PresentCtx::new(&w, _a);
         let set = turns[0].present(&ctx);
-        let prov = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let prov = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &prov.body {
             PresentationBody::Timeline(t) => {
                 assert_eq!(t.events.len(), 2, "pre → post commitment");
@@ -979,7 +1036,10 @@ mod tests {
         let set = binding.present(&ctx);
 
         // RawFields floor carries the genuine canonical commitment.
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "commitment"));
@@ -989,7 +1049,10 @@ mod tests {
 
         // The Invariant enumerates the anti-omission components (≥10, incl.
         // permissions + VK + cap_root + lifecycle — the soundness-critical ones).
-        let iv = set.iter().find(|p| p.kind == PresentationKind::Invariant).unwrap();
+        let iv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Invariant)
+            .unwrap();
         match &iv.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.len() >= 10);
@@ -1010,7 +1073,11 @@ mod tests {
         // A self-consistent verifier is GREEN (the cell opens to its own commitment).
         let v = CommitmentRecomputeVerifier::self_consistent(cell.clone());
         let r = v.build().unwrap();
-        assert!(r.ok, "a genuine cell recomputes to its own commitment: {:?}", r.notes);
+        assert!(
+            r.ok,
+            "a genuine cell recomputes to its own commitment: {:?}",
+            r.notes
+        );
 
         // TAMPER: pin a DIFFERENT expected commitment → the recompute diverges →
         // the verifier flags it (the anti-ghost tooth, in-band).
@@ -1063,7 +1130,11 @@ mod tests {
                 _ => None,
             })
             .expect("a MerkleTree face");
-        assert_eq!(mt.root, set.root(), "the view carries the genuine NullifierSet root");
+        assert_eq!(
+            mt.root,
+            set.root(),
+            "the view carries the genuine NullifierSet root"
+        );
         assert_eq!(mt.leaves.len(), 3);
     }
 
@@ -1075,7 +1146,11 @@ mod tests {
         let absent = Nullifier([15u8; 32]);
         let v = NonMembershipVerifier::new(set.clone(), absent);
         let r = v.build().unwrap();
-        assert!(r.ok, "an absent nullifier proves non-membership: {:?}", r.notes);
+        assert!(
+            r.ok,
+            "an absent nullifier proves non-membership: {:?}",
+            r.notes
+        );
 
         // A PRESENT nullifier is flagged RED (a double-spend — no proof exists).
         let present = Nullifier([20u8; 32]);
@@ -1100,7 +1175,10 @@ mod tests {
         let set = view.present(&ctx);
 
         // The RawFields floor carries the genuine note commitment.
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "commitment"));
@@ -1141,7 +1219,10 @@ mod tests {
         let set = DescriptorBoundary.present(&ctx);
 
         // RawFields surfaces the IR-v2 contract shape.
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "constraints"));
@@ -1150,7 +1231,10 @@ mod tests {
             _ => unreachable!(),
         }
         // The Source face names the dep route honestly (no faked descriptor).
-        let src = set.iter().find(|p| p.kind == PresentationKind::Source).unwrap();
+        let src = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Source)
+            .unwrap();
         match &src.body {
             PresentationBody::Prose(p) => {
                 assert!(p.contains("NOT a direct dependency"));

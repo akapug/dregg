@@ -379,11 +379,15 @@ mod tests {
     #[test]
     fn capture_stamps_the_live_witness_cursor() {
         let (w, treasury, _sink) = two_cell_world();
-        let snap = UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
+        let snap =
+            UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
         // The cursor is the live head: height 0 (no turns), no receipt head yet.
         assert_eq!(snap.cursor.height, 0);
         assert_eq!(snap.cursor.receipt_head, None);
-        assert!(snap.cursor.is_live_head(&w), "a fresh capture is the live head");
+        assert!(
+            snap.cursor.is_live_head(&w),
+            "a fresh capture is the live head"
+        );
     }
 
     // ── KEYSTONE: capture → advance → rehydrate re-derives the historical view ─
@@ -397,9 +401,14 @@ mod tests {
 
         // Capture the treasury's RawFields slice at H (balance 1_000), then read
         // what the LIVE inspector shows there (the camera's paused frame).
-        let snap = UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
+        let snap =
+            UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
         let live_at_h = snap.rehydrate(&w, treasury);
-        assert_eq!(live_at_h.liveness, Liveness::Live, "at the head, the camera is live");
+        assert_eq!(
+            live_at_h.liveness,
+            Liveness::Live,
+            "at the head, the camera is live"
+        );
         let balance_at_h = raw_balance(live_at_h.presentation.as_ref().unwrap()).unwrap();
         assert_eq!(balance_at_h, 1_000, "the live inspector showed 1_000 at H");
 
@@ -427,8 +436,15 @@ mod tests {
         let live_now = Registry::new(&w)
             .present(FocusTarget::Cell(treasury), treasury)
             .unwrap();
-        let live_raw = live_now.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
-        assert_eq!(raw_balance(live_raw).unwrap(), 750, "the live world moved on to 750");
+        let live_raw = live_now
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
+        assert_eq!(
+            raw_balance(live_raw).unwrap(),
+            750,
+            "the live world moved on to 750"
+        );
     }
 
     // ── the liveness-type is Live at the head, Replayed after advancing ──────
@@ -436,7 +452,11 @@ mod tests {
     #[test]
     fn liveness_is_live_at_head_and_replayed_after_advancing() {
         let (mut w, treasury, sink) = two_cell_world();
-        let snap = UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::Provenance);
+        let snap = UiSnapshot::capture(
+            &w,
+            FocusTarget::Cell(treasury),
+            PresentationKind::Provenance,
+        );
 
         // At the head: Live.
         assert_eq!(snap.rehydrate(&w, treasury).liveness, Liveness::Live);
@@ -492,8 +512,11 @@ mod tests {
 
         // Advance so the rehydration goes through the REPLAY path (the per-viewer
         // attenuation must survive re-derivation from the log, not just the live read).
-        let snap =
-            UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::Affordances);
+        let snap = UiSnapshot::capture(
+            &w,
+            FocusTarget::Cell(treasury),
+            PresentationKind::Affordances,
+        );
         let turn = w.turn(treasury, vec![transfer(treasury, sink, 10)]);
         assert!(w.commit_turn(turn).is_committed());
 
@@ -505,8 +528,12 @@ mod tests {
         assert_eq!(slice_owner.liveness, Liveness::ReplayedDeterministic);
         assert_eq!(slice_other.liveness, Liveness::ReplayedDeterministic);
 
-        let owner_aff = slice_owner.presentation.expect("owner gets the affordances lens");
-        let other_aff = slice_other.presentation.expect("other gets the affordances lens");
+        let owner_aff = slice_owner
+            .presentation
+            .expect("owner gets the affordances lens");
+        let other_aff = slice_other
+            .presentation
+            .expect("other gets the affordances lens");
 
         // Both re-derive the lens; the per-viewer projection differs in its
         // authorization read (the search_text carries the cap-badge verdicts), so
@@ -580,15 +607,18 @@ mod tests {
         // balances from the one durability log — the camera re-runs faithfully at
         // each paused point.
         let (mut w, treasury, sink) = two_cell_world();
-        let snap0 = UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
+        let snap0 =
+            UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
 
         let t1 = w.turn(treasury, vec![transfer(treasury, sink, 100)]);
         assert!(w.commit_turn(t1).is_committed());
-        let snap1 = UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
+        let snap1 =
+            UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
 
         let t2 = w.turn(treasury, vec![transfer(treasury, sink, 200)]);
         assert!(w.commit_turn(t2).is_committed());
-        let snap2 = UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
+        let snap2 =
+            UiSnapshot::capture(&w, FocusTarget::Cell(treasury), PresentationKind::RawFields);
 
         // Advance once more so even snap2 is in the past.
         let t3 = w.turn(treasury, vec![transfer(treasury, sink, 50)]);

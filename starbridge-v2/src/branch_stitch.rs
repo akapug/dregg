@@ -108,7 +108,12 @@ pub struct VirtualBranch {
 impl VirtualBranch {
     /// Open a top-level virtual branch off a past config, confined away from `main`.
     pub fn enter(author: u64, main: MainFrontier, caps: Vec<BranchCap>) -> Self {
-        Self { author, main, caps, stratum: 0 }
+        Self {
+            author,
+            main,
+            caps,
+            stratum: 0,
+        }
     }
 
     /// **The confinement check — `BranchHonest M caps author`.** True iff the author is confined
@@ -124,7 +129,10 @@ impl VirtualBranch {
             return false;
         }
         // (ii) no held cap confers debit reach to a main cell.
-        !self.caps.iter().any(|c| c.debit_reach && self.main.contains(&c.target))
+        !self
+            .caps
+            .iter()
+            .any(|c| c.debit_reach && self.main.contains(&c.target))
     }
 
     /// **The no-drain tooth — the operable `branch_cannot_drain_main`.** Decides whether the kernel
@@ -134,7 +142,10 @@ impl VirtualBranch {
     /// Returns `true` iff the debit is admitted. The contract proved in Lean:
     /// `confined() ∧ src ∈ main ⟹ admits_debit == false` (a confined branch cannot drain main).
     pub fn admits_debit(&self, debit: BranchDebit) -> bool {
-        debug_assert_eq!(debit.actor, self.author, "the branch debit must be authored by the branch");
+        debug_assert_eq!(
+            debit.actor, self.author,
+            "the branch debit must be authored by the branch"
+        );
         let src_is_main = self.main.contains(&debit.src);
         if self.confined() && src_is_main {
             // confined + main src ⇒ the gate refuses (no ownership, no reaching cap): IMAGINARY.
@@ -145,7 +156,9 @@ impl VirtualBranch {
             return true;
         }
         // …or one it reaches by a debit-cap.
-        self.caps.iter().any(|c| c.debit_reach && c.target == debit.src)
+        self.caps
+            .iter()
+            .any(|c| c.debit_reach && c.target == debit.src)
     }
 
     /// Whether the given `src`-debit is **structurally imaginary** in this branch: the branch
@@ -162,7 +175,12 @@ impl VirtualBranch {
     /// the no-drain tooth holds at the deeper level by the same check — confinement composes
     /// (`branch_in_branch_cannot_drain`). The nested frontier is the union of the outer frontier and
     /// any inner-parent cells passed in `inner_parent`.
-    pub fn nest(&self, nested_author: u64, inner_parent: MainFrontier, nested_caps: Vec<BranchCap>) -> Self {
+    pub fn nest(
+        &self,
+        nested_author: u64,
+        inner_parent: MainFrontier,
+        nested_caps: Vec<BranchCap>,
+    ) -> Self {
         let mut nested_main = self.main.clone();
         nested_main.extend(inner_parent);
         Self {
@@ -247,7 +265,12 @@ impl DocGraph {
     /// (`stitch_drop_is_below`) — you cannot conjure value by dropping; the omission is visible.
     pub fn restrict(&self, keep: &std::collections::BTreeSet<u64>) -> DocGraph {
         DocGraph {
-            atoms: self.atoms.iter().filter(|(k, _)| keep.contains(k)).map(|(&k, &v)| (k, v)).collect(),
+            atoms: self
+                .atoms
+                .iter()
+                .filter(|(k, _)| keep.contains(k))
+                .map(|(&k, &v)| (k, v))
+                .collect(),
         }
     }
 }
@@ -312,7 +335,9 @@ impl Stitch {
                 .iter()
                 .any(|h| h.target == c.target && (h.debit_reach || !c.debit_reach));
             if !held {
-                return SettleOutcome::Refused { over_authorized_target: c.target };
+                return SettleOutcome::Refused {
+                    over_authorized_target: c.target,
+                };
             }
         }
         let merged = self.pushout();
@@ -353,13 +378,25 @@ mod tests {
         let branch = VirtualBranch::enter(
             7,
             main_frontier(&[1, 2]),
-            vec![BranchCap { target: 99, debit_reach: true }],
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
         );
-        assert!(branch.confined(), "the author owns no main cell and reaches none — confined");
+        assert!(
+            branch.confined(),
+            "the author owns no main cell and reaches none — confined"
+        );
 
         let drain_main = BranchDebit { actor: 7, src: 1 }; // src = 1 ∈ main
-        assert!(!branch.admits_debit(drain_main), "a confined branch cannot drain a main cell");
-        assert!(branch.debit_is_imaginary(drain_main), "the main-debit is structurally imaginary");
+        assert!(
+            !branch.admits_debit(drain_main),
+            "a confined branch cannot drain a main cell"
+        );
+        assert!(
+            branch.debit_is_imaginary(drain_main),
+            "the main-debit is structurally imaginary"
+        );
     }
 
     /// FALSE polarity (the hypothesis is LOAD-BEARING): drop confinement — let the "branch" hold a
@@ -372,13 +409,25 @@ mod tests {
         let branch = VirtualBranch::enter(
             7,
             main_frontier(&[1, 2]),
-            vec![BranchCap { target: 1, debit_reach: true }], // reaches a MAIN cell ⇒ NOT confined
+            vec![BranchCap {
+                target: 1,
+                debit_reach: true,
+            }], // reaches a MAIN cell ⇒ NOT confined
         );
-        assert!(!branch.confined(), "holding a debit-cap to main breaks confinement (a violation)");
+        assert!(
+            !branch.confined(),
+            "holding a debit-cap to main breaks confinement (a violation)"
+        );
 
         let drain_main = BranchDebit { actor: 7, src: 1 };
-        assert!(branch.admits_debit(drain_main), "an un-confined branch CAN drain main (load-bearing)");
-        assert!(!branch.debit_is_imaginary(drain_main), "the drain is REAL — not imaginary");
+        assert!(
+            branch.admits_debit(drain_main),
+            "an un-confined branch CAN drain main (load-bearing)"
+        );
+        assert!(
+            !branch.debit_is_imaginary(drain_main),
+            "the drain is REAL — not imaginary"
+        );
     }
 
     /// A confined branch may still act WITHIN itself: debiting a cell it owns (or reaches off-main)
@@ -389,15 +438,30 @@ mod tests {
         let branch = VirtualBranch::enter(
             7,
             main_frontier(&[1, 2]),
-            vec![BranchCap { target: 99, debit_reach: true }],
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
         );
         let own = BranchDebit { actor: 7, src: 7 }; // debit a cell it owns
-        assert!(branch.admits_debit(own), "the branch may spend its own value");
-        assert!(!branch.debit_is_imaginary(own), "a branch-local debit is real, not imaginary");
+        assert!(
+            branch.admits_debit(own),
+            "the branch may spend its own value"
+        );
+        assert!(
+            !branch.debit_is_imaginary(own),
+            "a branch-local debit is real, not imaginary"
+        );
 
         let reach = BranchDebit { actor: 7, src: 99 }; // debit a branch cell it reaches
-        assert!(branch.admits_debit(reach), "the branch may debit a branch cell it reaches");
-        assert!(!branch.debit_is_imaginary(reach), "a reached branch-debit is real (off-main)");
+        assert!(
+            branch.admits_debit(reach),
+            "the branch may debit a branch cell it reaches"
+        );
+        assert!(
+            !branch.debit_is_imaginary(reach),
+            "a reached branch-debit is real (off-main)"
+        );
     }
 
     /// Confinement COMPOSES: a branch-in-branch confined away from a frontier INCLUDING the outer
@@ -409,12 +473,24 @@ mod tests {
         // Inner branch authored by cell 8, with inner-parent {50} added to the frontier.
         let inner = outer.nest(8, main_frontier(&[50]), vec![]);
         assert_eq!(inner.stratum, 1, "one stratum down the cap-tower");
-        assert!(inner.confined(), "the nested branch is confined away from the union frontier");
-        assert!(inner.main.contains(&1), "the nested frontier INCLUDES the outer main");
+        assert!(
+            inner.confined(),
+            "the nested branch is confined away from the union frontier"
+        );
+        assert!(
+            inner.main.contains(&1),
+            "the nested frontier INCLUDES the outer main"
+        );
 
         let drain_outer = BranchDebit { actor: 8, src: 1 }; // 1 is the OUTER main cell
-        assert!(!inner.admits_debit(drain_outer), "a nested branch cannot drain the OUTER main");
-        assert!(inner.debit_is_imaginary(drain_outer), "the outer-main debit is imaginary at depth");
+        assert!(
+            !inner.admits_debit(drain_outer),
+            "a nested branch cannot drain the OUTER main"
+        );
+        assert!(
+            inner.debit_is_imaginary(drain_outer),
+            "the outer-main debit is imaginary at depth"
+        );
     }
 
     // ── TOOTH 2 — an over-authorized stitch is REFUSED (both polarities) ────────────────────────
@@ -428,14 +504,22 @@ mod tests {
             main: DocGraph::default(),
             branch: DocGraph::default(),
             // The branch CLAIMS a debit-cap to main cell 1…
-            conferred: vec![BranchCap { target: 1, debit_reach: true }],
+            conferred: vec![BranchCap {
+                target: 1,
+                debit_reach: true,
+            }],
         };
         // …but the author held NOTHING reaching cell 1 at the settlement tip (e.g. it was revoked).
-        let settlement_held: Vec<StitchCap> = vec![BranchCap { target: 42, debit_reach: true }];
+        let settlement_held: Vec<StitchCap> = vec![BranchCap {
+            target: 42,
+            debit_reach: true,
+        }];
         let outcome = stitch.settle(&settlement_held, None);
         assert_eq!(
             outcome,
-            SettleOutcome::Refused { over_authorized_target: 1 },
+            SettleOutcome::Refused {
+                over_authorized_target: 1
+            },
             "a cap not held at settlement is over-authorized ⇒ the stitch is refused"
         );
     }
@@ -454,10 +538,16 @@ mod tests {
         let stitch = Stitch {
             main: main.clone(),
             branch: branch.clone(),
-            conferred: vec![BranchCap { target: 1, debit_reach: true }],
+            conferred: vec![BranchCap {
+                target: 1,
+                debit_reach: true,
+            }],
         };
         // The author DID hold a cap reaching cell 1 at the settlement tip.
-        let settlement_held: Vec<StitchCap> = vec![BranchCap { target: 1, debit_reach: true }];
+        let settlement_held: Vec<StitchCap> = vec![BranchCap {
+            target: 1,
+            debit_reach: true,
+        }];
 
         let outcome = stitch.settle(&settlement_held, None);
         let settled = match outcome {
@@ -465,11 +555,25 @@ mod tests {
             SettleOutcome::Refused { .. } => panic!("a well-authorized stitch must settle"),
         };
         // The pushout: Dead-wins at key 0 (a real conflict resolution), branch discovery kept.
-        assert_eq!(settled.atoms.get(&0), Some(&Atom::Dead), "Dead-wins join settles the conflict");
-        assert_eq!(settled.atoms.get(&1), Some(&Atom::Alive), "the branch discovery is kept (no silent drop)");
+        assert_eq!(
+            settled.atoms.get(&0),
+            Some(&Atom::Dead),
+            "Dead-wins join settles the conflict"
+        );
+        assert_eq!(
+            settled.atoms.get(&1),
+            Some(&Atom::Alive),
+            "the branch discovery is kept (no silent drop)"
+        );
         // Pushout legs: both main and branch are included in the settled graph (the cocone).
-        assert!(main.included_in(&settled), "nothing main had is silently lost (main leg)");
-        assert!(branch.included_in(&settled), "nothing the branch found is dropped (branch leg)");
+        assert!(
+            main.included_in(&settled),
+            "nothing main had is silently lost (main leg)"
+        );
+        assert!(
+            branch.included_in(&settled),
+            "nothing the branch found is dropped (branch leg)"
+        );
     }
 
     /// The explicit, linear-logic-forced DROP: an author resolving by `restrict {0}` STRICTLY loses
@@ -483,19 +587,36 @@ mod tests {
         branch.atoms.insert(0, Atom::Alive);
         branch.atoms.insert(1, Atom::Alive);
 
-        let stitch = Stitch { main, branch, conferred: vec![] };
+        let stitch = Stitch {
+            main,
+            branch,
+            conferred: vec![],
+        };
         let full = stitch.pushout();
         let keep: std::collections::BTreeSet<u64> = [0].into_iter().collect();
         let dropped = full.restrict(&keep);
 
         // Strict loss: atom 1 is gone after the drop, present in the full merge.
-        assert!(dropped.atoms.get(&1).is_none(), "the drop removes the branch discovery at key 1");
+        assert!(
+            dropped.atoms.get(&1).is_none(),
+            "the drop removes the branch discovery at key 1"
+        );
         assert!(full.atoms.get(&1).is_some(), "the full pushout kept it");
-        assert_ne!(dropped, full, "a lossy stitch genuinely loses — the drop is not a no-op");
+        assert_ne!(
+            dropped, full,
+            "a lossy stitch genuinely loses — the drop is not a no-op"
+        );
         // Below: dropping only loses, never conjures.
-        assert!(dropped.included_in(&full), "the dropped stitch lies BELOW the full pushout (no conjuring)");
+        assert!(
+            dropped.included_in(&full),
+            "the dropped stitch lies BELOW the full pushout (no conjuring)"
+        );
         // Explicit: the kept key is exactly the one in `keep`.
-        assert_eq!(dropped.atoms.keys().copied().collect::<Vec<_>>(), vec![0], "kept keys are exactly K");
+        assert_eq!(
+            dropped.atoms.keys().copied().collect::<Vec<_>>(),
+            vec![0],
+            "kept keys are exactly K"
+        );
     }
 
     /// A non-drop (`keep` covers every present atom) recovers the full pushout — lossiness is opt-in
@@ -505,9 +626,17 @@ mod tests {
         let mut branch = DocGraph::default();
         branch.atoms.insert(0, Atom::Alive);
         branch.atoms.insert(1, Atom::Alive);
-        let stitch = Stitch { main: DocGraph::default(), branch, conferred: vec![] };
+        let stitch = Stitch {
+            main: DocGraph::default(),
+            branch,
+            conferred: vec![],
+        };
         let full = stitch.pushout();
         let keep: std::collections::BTreeSet<u64> = full.atoms.keys().copied().collect();
-        assert_eq!(full.restrict(&keep), full, "covering every key recovers the full pushout");
+        assert_eq!(
+            full.restrict(&keep),
+            full,
+            "covering every key recovers the full pushout"
+        );
     }
 }

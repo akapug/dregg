@@ -186,17 +186,20 @@ impl ProgramBuilder {
 
     /// `new[index] == value`.
     pub fn field_equals(mut self, index: u8, value: FieldElement) -> Self {
-        self.constraints.push(StateConstraint::FieldEquals { index, value });
+        self.constraints
+            .push(StateConstraint::FieldEquals { index, value });
         self
     }
     /// `new[index] >= value` (unsigned big-endian).
     pub fn field_gte(mut self, index: u8, value: FieldElement) -> Self {
-        self.constraints.push(StateConstraint::FieldGte { index, value });
+        self.constraints
+            .push(StateConstraint::FieldGte { index, value });
         self
     }
     /// `new[index] <= value` (unsigned big-endian).
     pub fn field_lte(mut self, index: u8, value: FieldElement) -> Self {
-        self.constraints.push(StateConstraint::FieldLte { index, value });
+        self.constraints
+            .push(StateConstraint::FieldLte { index, value });
         self
     }
     /// Slot is read-only after its first write (first write free, then frozen).
@@ -216,7 +219,8 @@ impl ProgramBuilder {
     }
     /// `new[index] > old[index]` strictly (auction bids, sequence numbers).
     pub fn strict_monotonic(mut self, index: u8) -> Self {
-        self.constraints.push(StateConstraint::StrictMonotonic { index });
+        self.constraints
+            .push(StateConstraint::StrictMonotonic { index });
         self
     }
     /// Actor binding: the turn's sender must equal `pk` (the per-cell
@@ -312,7 +316,12 @@ impl FactoryBuilder {
     }
 
     /// Allow this factory to grant children a capability matching `template`.
-    pub fn allow_cap(mut self, target: CapTarget, max_permissions: AuthRequired, attenuatable: bool) -> Self {
+    pub fn allow_cap(
+        mut self,
+        target: CapTarget,
+        max_permissions: AuthRequired,
+        attenuatable: bool,
+    ) -> Self {
         self.cap_templates.push(CapTemplate {
             target,
             max_permissions,
@@ -515,7 +524,12 @@ pub struct ProgramDeploy {
 /// (Programs are installed at cell-birth: the protocol has no `SetProgram`
 /// effect — a program is part of a cell's content-addressed identity. This is
 /// the genesis path, the way a node seeds program-carrying cells.)
-pub fn deploy_program(world: &mut World, seed: u8, balance: i64, program: CellProgram) -> ProgramDeploy {
+pub fn deploy_program(
+    world: &mut World,
+    seed: u8,
+    balance: i64,
+    program: CellProgram,
+) -> ProgramDeploy {
     let mut pk = [0u8; 32];
     pk[0] = seed;
     pk[31] = seed.wrapping_mul(37);
@@ -529,7 +543,10 @@ pub fn deploy_program(world: &mut World, seed: u8, balance: i64, program: CellPr
         .get(&id)
         .map(|c| want_program == !matches!(c.program, CellProgram::None))
         .unwrap_or(false);
-    ProgramDeploy { cell: id, installed }
+    ProgramDeploy {
+        cell: id,
+        installed,
+    }
 }
 
 /// The outcome of a validate-then-deploy of an authored forest.
@@ -710,7 +727,10 @@ mod tests {
         assert!(matches!(program, CellProgram::Predicate(_)));
 
         let dep = deploy_program(&mut w, 0x41, 100, program);
-        assert!(dep.installed, "the live cell must carry the authored program");
+        assert!(
+            dep.installed,
+            "the live cell must carry the authored program"
+        );
         let cell = w.ledger().get(&dep.cell).unwrap();
         assert!(matches!(cell.program, CellProgram::Predicate(_)));
     }
@@ -728,19 +748,25 @@ mod tests {
         let id = dep.cell;
 
         // First write: slot 0 was zero, WriteOnce admits the first write.
-        let t1 = w.turn(id, vec![Effect::SetField {
-            cell: id,
-            index: 0,
-            value: field_from_u64(7),
-        }]);
+        let t1 = w.turn(
+            id,
+            vec![Effect::SetField {
+                cell: id,
+                index: 0,
+                value: field_from_u64(7),
+            }],
+        );
         assert!(w.commit_turn(t1).is_committed(), "first write must commit");
 
         // Second, DIFFERING write to the now-frozen slot: the program rejects.
-        let t2 = w.turn(id, vec![Effect::SetField {
-            cell: id,
-            index: 0,
-            value: field_from_u64(9),
-        }]);
+        let t2 = w.turn(
+            id,
+            vec![Effect::SetField {
+                cell: id,
+                index: 0,
+                value: field_from_u64(9),
+            }],
+        );
         assert!(
             !w.commit_turn(t2).is_committed(),
             "the deployed WriteOnce program must freeze slot 0 — second write rejected"
@@ -757,11 +783,14 @@ mod tests {
         let program = ProgramBuilder::new().immutable(0).build();
         let dep = deploy_program(&mut w, 0x43, 100, program);
         let id = dep.cell;
-        let t = w.turn(id, vec![Effect::SetField {
-            cell: id,
-            index: 0,
-            value: field_from_u64(7),
-        }]);
+        let t = w.turn(
+            id,
+            vec![Effect::SetField {
+                cell: id,
+                index: 0,
+                value: field_from_u64(7),
+            }],
+        );
         assert!(
             !w.commit_turn(t).is_committed(),
             "Immutable freezes the slot from birth — any write rejected"
@@ -777,7 +806,11 @@ mod tests {
         let b = w.genesis_cell(2, 0);
 
         let mut fb = ForestBuilder::new();
-        fb.root(ActionBuilder::new(a).effect(Effect::Transfer { from: a, to: b, amount: 250 }));
+        fb.root(ActionBuilder::new(a).effect(Effect::Transfer {
+            from: a,
+            to: b,
+            amount: 250,
+        }));
         let forest = fb.build();
 
         let v = validate(&forest);
@@ -823,11 +856,18 @@ mod tests {
         let f = &v.no_amplification[0];
         assert!(f.guarantee.contains("non-amplification"));
         // The locus points at the child node, effect 0 (the amplifying grant).
-        assert!(f.locus.contains("forest[0][0]"), "locus must point at the child: {}", f.locus);
+        assert!(
+            f.locus.contains("forest[0][0]"),
+            "locus must point at the child: {}",
+            f.locus
+        );
 
         // Deploy must REFUSE (not submit) on a static failure.
         let dep = deploy_forest(&mut w, parent, &forest);
-        assert!(matches!(dep, ForestDeploy::Refused { .. }), "must refuse, not submit");
+        assert!(
+            matches!(dep, ForestDeploy::Refused { .. }),
+            "must refuse, not submit"
+        );
         assert!(!dep.committed());
         assert_eq!(w.height(), 0, "nothing was committed");
     }
@@ -841,17 +881,31 @@ mod tests {
         let target = CellId::from_bytes([3u8; 32]);
 
         let mut fb = ForestBuilder::new();
-        let r = fb.root(
-            ActionBuilder::new(parent)
-                .effect(grant_with(parent, child, target, 0, Some(0b11), Some(100))),
-        );
+        let r = fb.root(ActionBuilder::new(parent).effect(grant_with(
+            parent,
+            child,
+            target,
+            0,
+            Some(0b11),
+            Some(100),
+        )));
         // child grants a NARROWER facet (0b01 ⊆ 0b11) and EARLIER expiry → ok.
         fb.child_of(
             r,
-            ActionBuilder::new(child).effect(grant_with(child, child, target, 1, Some(0b01), Some(50))),
+            ActionBuilder::new(child).effect(grant_with(
+                child,
+                child,
+                target,
+                1,
+                Some(0b01),
+                Some(50),
+            )),
         );
         let v = validate(&fb.build());
-        assert!(v.no_amplification.is_empty(), "a true attenuation must pass: {v:?}");
+        assert!(
+            v.no_amplification.is_empty(),
+            "a true attenuation must pass: {v:?}"
+        );
     }
 
     // ── AUTHOR a malformed forest → WELL-FORMEDNESS FAILS ──
@@ -869,8 +923,16 @@ mod tests {
         );
         let v = validate(&fb.build());
         assert!(!v.pass());
-        assert_eq!(v.wellformed.len(), 2, "empty-effect + Unchecked = 2 findings: {:?}", v.wellformed);
-        assert!(v.wellformed.iter().any(|f| f.message.contains("zero effects")));
+        assert_eq!(
+            v.wellformed.len(),
+            2,
+            "empty-effect + Unchecked = 2 findings: {:?}",
+            v.wellformed
+        );
+        assert!(v
+            .wellformed
+            .iter()
+            .any(|f| f.message.contains("zero effects")));
         assert!(v.wellformed.iter().any(|f| f.message.contains("Unchecked")));
     }
 
@@ -888,7 +950,10 @@ mod tests {
         action.balance_change = Some(500);
         fb.forest.add_root(action);
         let v = validate(&fb.build());
-        assert!(!v.conservation.is_empty(), "a +500 residue must fail conservation: {v:?}");
+        assert!(
+            !v.conservation.is_empty(),
+            "a +500 residue must fail conservation: {v:?}"
+        );
         assert!(v.conservation[0].message.contains("conjured"));
     }
 
@@ -926,7 +991,11 @@ mod tests {
         let a = CellId::from_bytes([1u8; 32]);
         let b = CellId::from_bytes([2u8; 32]);
         let mut fb = ForestBuilder::new();
-        fb.root(ActionBuilder::new(a).effect(Effect::Transfer { from: a, to: b, amount: 250 }));
+        fb.root(ActionBuilder::new(a).effect(Effect::Transfer {
+            from: a,
+            to: b,
+            amount: 250,
+        }));
         st.set_verdict(validate(&fb.build()));
         st.set_deploy("Committed at height 1 (receipt logged)");
         let p1 = render_panel(&st);

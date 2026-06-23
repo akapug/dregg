@@ -46,16 +46,18 @@
 //! tab maps the live scene onto gpui; the assurance value is THIS headless model
 //! + the teeth that bite through the real executor.
 
+use dregg_cell::factory::FactoryDescriptor;
 use dregg_cell::{
     field_from_u64, AuthRequired, Cell, CellId, CellProgram, FieldElement, Permissions,
     StateConstraint,
 };
-use dregg_cell::factory::FactoryDescriptor;
 use dregg_firmament::{NotifyCap, ObjectId, Rights};
 
-use crate::compositor::{label_of, CompositedSurface, CompositorScene, Present, PresentError, RegionId};
+use crate::compositor::{
+    label_of, CompositedSurface, CompositorScene, Present, PresentError, RegionId,
+};
 use crate::dynamics::WorldEvent;
-use crate::world::{World, CommitOutcome};
+use crate::world::{CommitOutcome, World};
 
 /// THE DAMAGE BADGE — the async-signal discriminator a compositor `present()`'s
 /// damage wake carries, projected to ONE bit of the 64-bit notify badge lattice.
@@ -114,7 +116,13 @@ pub const SURFACE_FACTORY_VK: [u8; 32] = [0x5C; 32]; // 'S'urface 'C'ompositor
 ///
 /// It reuses the pure compositor teeth so there is ONE source of truth for the
 /// scene authority (the `compositor` module's T1/T2/T3), closed over the scene.
-pub fn scene_admit(scene: &CompositorScene, presenter: &CellId, p: &Present, old: u64, new: u64) -> bool {
+pub fn scene_admit(
+    scene: &CompositorScene,
+    presenter: &CellId,
+    p: &Present,
+    old: u64,
+    new: u64,
+) -> bool {
     // We evaluate the three teeth against a throwaway `Compositor` holding this
     // scene — the SAME T1/T2/T3 the pure model checks, so the baked table cannot
     // drift from the pure compositor's admission.
@@ -348,11 +356,13 @@ impl VerifiedScene {
         // Seed the compositor's HELD damage-notify authority over this surface's
         // wake object — open by default (admit any damage kind) until a watcher
         // attenuates it. The async damage edge is now a held cap, not ambient emit.
-        self.damage_notify.entry(owner).or_insert_with(|| NotifyCap {
-            target: surface_notify_object(&owner),
-            rights: Rights::Either,
-            badge_mask: u64::MAX,
-        });
+        self.damage_notify
+            .entry(owner)
+            .or_insert_with(|| NotifyCap {
+                target: surface_notify_object(&owner),
+                rights: Rights::Either,
+                badge_mask: u64::MAX,
+            });
         let cell = make_compositor_cell(owner, initial_digest);
         let id = world.genesis_install(cell);
         // The shell hands the presenter a surface cap on its compositor cell (the
@@ -365,10 +375,7 @@ impl VerifiedScene {
         // self-grant arm authorizes it by the cell-owner's consent). This replaces
         // the out-of-band `genesis_grant_cap` mutation — riding a turn lands a
         // `CommitRecord` so a durable image reproduces the grant on replay.
-        let grant = world.turn(
-            id,
-            vec![crate::world::grant_capability(id, owner, id, 0)],
-        );
+        let grant = world.turn(id, vec![crate::world::grant_capability(id, owner, id, 0)]);
         let _ = world.commit_turn(grant);
         self.compositor_cell.insert(owner, id);
         id
@@ -394,7 +401,13 @@ impl VerifiedScene {
     /// The whole admission is decided by the VERIFIED KERNEL: the three teeth are
     /// the real executor refusing a caveat-violating write, exactly as the Lean
     /// `present_*_rejected` `#guard`s witness against `execFullA`.
-    pub fn present(&mut self, world: &mut World, owner: CellId, p: Present, new_digest: u64) -> PresentVerdict {
+    pub fn present(
+        &mut self,
+        world: &mut World,
+        owner: CellId,
+        p: Present,
+        new_digest: u64,
+    ) -> PresentVerdict {
         // The compositor cell for this owner (must have opened a surface).
         let Some(cell_id) = self.compositor_cell.get(&owner).copied() else {
             return PresentVerdict::Refused {
@@ -427,7 +440,11 @@ impl VerifiedScene {
         let turn = world.turn(
             owner,
             vec![
-                crate::world::set_field(cell_id, PRESENT_DIGEST_SLOT as usize, field_from_u64(new_digest)),
+                crate::world::set_field(
+                    cell_id,
+                    PRESENT_DIGEST_SLOT as usize,
+                    field_from_u64(new_digest),
+                ),
                 crate::world::set_program(cell_id, program),
             ],
         );
@@ -495,7 +512,10 @@ impl VerifiedScene {
         // Reuse the pure compositor's folded diagnosis. Its `scene_admit` returns
         // the specific tooth; we feed it the present with the new digest so its
         // frame-advance leg matches the turn we attempted.
-        let probe = Present { new_digest, ..p.clone() };
+        let probe = Present {
+            new_digest,
+            ..p.clone()
+        };
         match c.scene_admit(presenter, &probe) {
             Ok(()) => {
                 // The pure model would have admitted it, yet the executor refused —
@@ -618,7 +638,10 @@ mod tests {
             claims_focus: true,
             new_digest: 2,
         };
-        assert!(scene_admit(vs.scene(), &wallet, &honest, 1, 2), "honest present admitted");
+        assert!(
+            scene_admit(vs.scene(), &wallet, &honest, 1, 2),
+            "honest present admitted"
+        );
         // OVERPAINT: browser targets region 10 (the wallet's).
         let overpaint = Present {
             target: vec![10],
@@ -627,7 +650,10 @@ mod tests {
             claims_focus: false,
             new_digest: 6,
         };
-        assert!(!scene_admit(vs.scene(), &browser, &overpaint, 5, 6), "overpaint rejected (T1)");
+        assert!(
+            !scene_admit(vs.scene(), &browser, &overpaint, 5, 6),
+            "overpaint rejected (T1)"
+        );
     }
 
     #[test]
@@ -643,7 +669,11 @@ mod tests {
             new_digest: 2,
         };
         let t = baked_admit_table(vs.scene(), &wallet, &honest, &[1], &[2]);
-        assert_eq!(t.len(), 1, "honest presentation bakes exactly its one advance");
+        assert_eq!(
+            t.len(),
+            1,
+            "honest presentation bakes exactly its one advance"
+        );
         assert_eq!(t[0], (field_from_u64(1), field_from_u64(2)));
 
         let overpaint = Present {
@@ -654,7 +684,11 @@ mod tests {
             new_digest: 6,
         };
         let t2 = baked_admit_table(vs.scene(), &browser, &overpaint, &[5], &[6]);
-        assert_eq!(t2.len(), 0, "an overpaint presentation bakes an EMPTY table (no present commits)");
+        assert_eq!(
+            t2.len(),
+            0,
+            "an overpaint presentation bakes an EMPTY table (no present commits)"
+        );
     }
 
     // =====================================================================
@@ -679,12 +713,24 @@ mod tests {
             new_digest: 2,
         };
         let verdict = vs.present(&mut w, wallet, p, 2);
-        assert!(verdict.is_committed(), "honest present must commit, got {verdict:?}");
+        assert!(
+            verdict.is_committed(),
+            "honest present must commit, got {verdict:?}"
+        );
         // The frame digest advanced on the live scene.
-        let s = vs.scene().surfaces.iter().find(|s| s.owner == wallet).unwrap();
+        let s = vs
+            .scene()
+            .surfaces
+            .iter()
+            .find(|s| s.owner == wallet)
+            .unwrap();
         assert_eq!(s.content_digest, 2, "the frame digest advanced");
         // A REAL receipt was logged (it ran through the executor).
-        assert_eq!(w.receipts().len(), receipts_before + 1, "a real receipt was logged");
+        assert_eq!(
+            w.receipts().len(),
+            receipts_before + 1,
+            "a real receipt was logged"
+        );
         // The compositor cell's present_digest slot actually moved.
         let cell = vs.compositor_cell(&wallet).unwrap();
         assert_eq!(
@@ -694,7 +740,10 @@ mod tests {
         );
         // A SurfaceDamaged dynamics event was emitted.
         assert!(
-            w.dynamics().all().iter().any(|e| matches!(e, WorldEvent::SurfaceDamaged { .. })),
+            w.dynamics()
+                .all()
+                .iter()
+                .any(|e| matches!(e, WorldEvent::SurfaceDamaged { .. })),
             "a SurfaceDamaged event must be on the dynamics stream"
         );
     }
@@ -715,7 +764,10 @@ mod tests {
             new_digest: 6,
         };
         let verdict = vs.present(&mut w, browser, attack, 6);
-        assert!(!verdict.is_committed(), "overpaint must be refused, got {verdict:?}");
+        assert!(
+            !verdict.is_committed(),
+            "overpaint must be refused, got {verdict:?}"
+        );
         assert!(
             matches!(verdict.tooth(), Some(PresentError::Overpaint { .. })),
             "the tooth must be T1 overpaint, got {:?}",
@@ -737,7 +789,11 @@ mod tests {
             );
         }
         // Fail-closed: no receipt logged, the browser's compositor cell untouched.
-        assert_eq!(w.receipts().len(), receipts_before, "a refused present logs no receipt");
+        assert_eq!(
+            w.receipts().len(),
+            receipts_before,
+            "a refused present logs no receipt"
+        );
         let cell = vs.compositor_cell(&browser).unwrap();
         assert_eq!(
             w.ledger().get(&cell).unwrap().state.fields[PRESENT_DIGEST_SLOT as usize],
@@ -745,7 +801,12 @@ mod tests {
             "the browser's frame is untouched by the refused overpaint"
         );
         // The live scene's frame is untouched too.
-        let s = vs.scene().surfaces.iter().find(|s| s.owner == browser).unwrap();
+        let s = vs
+            .scene()
+            .surfaces
+            .iter()
+            .find(|s| s.owner == browser)
+            .unwrap();
         assert_eq!(s.content_digest, 5, "the live scene frame is untouched");
     }
 
@@ -765,7 +826,10 @@ mod tests {
             new_digest: 6,
         };
         let verdict = vs.present(&mut w, browser, spoof, 6);
-        assert!(!verdict.is_committed(), "label-spoof must be refused, got {verdict:?}");
+        assert!(
+            !verdict.is_committed(),
+            "label-spoof must be refused, got {verdict:?}"
+        );
         assert!(
             matches!(verdict.tooth(), Some(PresentError::LabelSpoof { .. })),
             "the tooth must be T2 label-spoof, got {:?}",
@@ -780,7 +844,11 @@ mod tests {
                 "label-spoof must be refused by the SCENE CAVEAT (allow-list), not authority; got: {reason}"
             );
         }
-        assert_eq!(w.receipts().len(), receipts_before, "a refused present logs no receipt");
+        assert_eq!(
+            w.receipts().len(),
+            receipts_before,
+            "a refused present logs no receipt"
+        );
         let cell = vs.compositor_cell(&browser).unwrap();
         assert_eq!(
             w.ledger().get(&cell).unwrap().state.fields[PRESENT_DIGEST_SLOT as usize],
@@ -813,7 +881,10 @@ mod tests {
             new_digest: 2,
         };
         let verdict = vs.present(&mut w, wallet, honest_but_ambiguous, 2);
-        assert!(!verdict.is_committed(), "a present into a double-focus scene must be refused, got {verdict:?}");
+        assert!(
+            !verdict.is_committed(),
+            "a present into a double-focus scene must be refused, got {verdict:?}"
+        );
         assert!(
             matches!(verdict.tooth(), Some(PresentError::DoubleFocus { .. })),
             "the tooth must be T3 double-focus, got {:?}",
@@ -829,9 +900,18 @@ mod tests {
                 "double-focus must be refused by the SCENE CAVEAT (allow-list), not authority; got: {reason}"
             );
         }
-        assert_eq!(w.receipts().len(), receipts_before, "a refused present logs no receipt");
+        assert_eq!(
+            w.receipts().len(),
+            receipts_before,
+            "a refused present logs no receipt"
+        );
         // Fail-closed: the live scene frame is untouched.
-        let s = vs.scene().surfaces.iter().find(|s| s.owner == wallet).unwrap();
+        let s = vs
+            .scene()
+            .surfaces
+            .iter()
+            .find(|s| s.owner == wallet)
+            .unwrap();
         assert_eq!(s.content_digest, 1, "the live scene frame is untouched");
     }
 
@@ -852,11 +932,22 @@ mod tests {
         };
         let factory = surface_factory(vs.scene(), &wallet, &honest, &[1], &[2]);
         assert_eq!(factory.factory_vk, SURFACE_FACTORY_VK);
-        assert_eq!(factory.state_constraints.len(), 1, "one perpetual scene caveat");
+        assert_eq!(
+            factory.state_constraints.len(),
+            1,
+            "one perpetual scene caveat"
+        );
         match &factory.state_constraints[0] {
-            StateConstraint::AllowedTransitions { slot_index, allowed } => {
+            StateConstraint::AllowedTransitions {
+                slot_index,
+                allowed,
+            } => {
                 assert_eq!(*slot_index, PRESENT_DIGEST_SLOT);
-                assert_eq!(allowed.len(), 1, "the honest advance is the one allowed transition");
+                assert_eq!(
+                    allowed.len(),
+                    1,
+                    "the honest advance is the one allowed transition"
+                );
                 assert_eq!(allowed[0], (field_from_u64(1), field_from_u64(2)));
             }
             other => panic!("expected an AllowedTransitions scene caveat, got {other:?}"),
@@ -916,7 +1007,10 @@ mod tests {
             vs.restrict_damage_notify(&wallet, &[2]),
             "narrowing the damage-notify to a held kind must succeed"
         );
-        assert!(vs.admits_damage(&wallet, 2), "two-region damage is now admitted");
+        assert!(
+            vs.admits_damage(&wallet, 2),
+            "two-region damage is now admitted"
+        );
         assert!(
             !vs.admits_damage(&wallet, 1),
             "one-region damage is now OUTSIDE the mask (strictly fewer admitted)"
@@ -956,14 +1050,11 @@ mod tests {
         let v2 = vs.present(&mut w, wallet, p2, 3);
         assert!(v2.is_committed(), "the in-mask present commits, got {v2:?}");
         assert!(
-            w.dynamics()
-                .since(dyn_before)
-                .iter()
-                .any(|e| matches!(
-                    e,
-                    WorldEvent::SurfaceDamaged { owner, region_count, .. }
-                        if *owner == wallet && *region_count == 2
-                )),
+            w.dynamics().since(dyn_before).iter().any(|e| matches!(
+                e,
+                WorldEvent::SurfaceDamaged { owner, region_count, .. }
+                    if *owner == wallet && *region_count == 2
+            )),
             "the in-mask damage kind SIGNALS the wake (the held cap admitted it)"
         );
     }
@@ -977,8 +1068,14 @@ mod tests {
         let (mut vs, wallet, _browser) = demo(&mut w);
 
         // Open default admits any damage kind.
-        assert!(vs.admits_damage(&wallet, 1), "open grant admits one-region damage");
-        assert!(vs.admits_damage(&wallet, 2), "open grant admits two-region damage");
+        assert!(
+            vs.admits_damage(&wallet, 1),
+            "open grant admits one-region damage"
+        );
+        assert!(
+            vs.admits_damage(&wallet, 2),
+            "open grant admits two-region damage"
+        );
 
         // Narrow to {count 2}: one-region damage is now outside the mask.
         assert!(vs.restrict_damage_notify(&wallet, &[2]));

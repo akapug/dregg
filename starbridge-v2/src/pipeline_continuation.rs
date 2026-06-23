@@ -293,11 +293,9 @@ impl HeldPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dregg_turn::action::{
-        Action, Authorization, CommitmentMode, DelegationMode, Effect,
-    };
-    use dregg_turn::forest::CallForest;
     use dregg_cell::{CellId, Preconditions};
+    use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect};
+    use dregg_turn::forest::CallForest;
 
     fn test_cell(b: u8) -> CellId {
         CellId::derive_raw(&[b; 32], &[0u8; 32])
@@ -456,7 +454,13 @@ mod tests {
         let mut c = HeldPipeline::new();
         c.stage_partial(
             partial_turn(agent, 0, eref.clone()),
-            PipelineHole::open(eref.clone(), "balance", 1, 1, Guard::InRange { lo: 1, hi: 100 }),
+            PipelineHole::open(
+                eref.clone(),
+                "balance",
+                1,
+                1,
+                Guard::InRange { lo: 1, hi: 100 },
+            ),
         );
 
         let outcome = c.resolve(&eref, 50); // 50 ∈ [1,100] → admitted
@@ -481,7 +485,13 @@ mod tests {
         let mut c = HeldPipeline::new();
         c.stage_partial(
             partial_turn(agent, 0, eref.clone()),
-            PipelineHole::open(eref.clone(), "balance", 1, 1, Guard::InRange { lo: 1, hi: 100 }),
+            PipelineHole::open(
+                eref.clone(),
+                "balance",
+                1,
+                1,
+                Guard::InRange { lo: 1, hi: 100 },
+            ),
         );
 
         let outcome = c.resolve(&eref, 555); // 555 ∉ [1,100] → guard violation
@@ -583,7 +593,13 @@ mod tests {
         let mut c = HeldPipeline::new();
         c.stage_partial(
             partial_turn(agent, 0, eref.clone()),
-            PipelineHole::open(eref.clone(), "beacon", 1, 1, Guard::AtLeast { threshold: 100 }),
+            PipelineHole::open(
+                eref.clone(),
+                "beacon",
+                1,
+                1,
+                Guard::AtLeast { threshold: 100 },
+            ),
         );
 
         // Below the threshold (quorum not yet reached) → fail-closed, stays HELD.
@@ -633,13 +649,19 @@ mod tests {
         let mut c = HeldPipeline::new();
         c.stage_partial(
             partial_turn(agent, 0, eref.clone()),
-            PipelineHole::open(eref.clone(), "balance", 7, 9, Guard::InRange { lo: 0, hi: 1000 }),
+            PipelineHole::open(
+                eref.clone(),
+                "balance",
+                7,
+                9,
+                Guard::InRange { lo: 0, hi: 1000 },
+            ),
         );
 
         assert_eq!(c.resolve(&eref, 500), ResolveOutcome::Bound);
         let h = &c.holes[0];
         assert_eq!(h.value, Some(500)); // δ bound
-        // shape untouched:
+                                        // shape untouched:
         assert_eq!(h.eref, eref);
         assert_eq!(h.field, "balance");
         assert_eq!(h.actor, 7);

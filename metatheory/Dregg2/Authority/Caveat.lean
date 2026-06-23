@@ -31,22 +31,86 @@ the identity of a third-party caveat's resolving gateway. -/
 variable {Ctx : Type}
 variable {Gateway : Type}
 
-/-- **A caveat** — the universal gate (`WitnessedCondition`), here in two engines: a **local**
-checkable predicate over the request context (a macaroon 1st-party caveat / a biscuit fact / a
-`CapabilityCaveat`), or a **third-party** caveat naming a `gateway` that must *discharge* it (the
-await authority-face). -/
+/-! ## The reified caveat predicate AST (`CaveatPred`) — the D6 content-level vocabulary.
+
+`Caveat.opaque` carries an *opaque* `Ctx → Bool`: you can RUN it, but you cannot reason about, print,
+or structurally compare what it SAYS. `CaveatPred` is the introspectable twin — a small inductive AST
+of *content-level* request-context atoms closed under the same `and`/`or`/`not`/`true`/`false`
+connectives as `Exec.PredAlgebra.Pred`, so the caveat vocabulary is INSPECTABLE data, not a function.
+
+**The fork question (honest).** `Exec.PredAlgebra.Pred` denotes over the `(old, new) : Value`
+*transition* of a slot write; `CaveatPred` denotes over the *request context* `Ctx` (block height /
+time / action / sender — the `AuthRequest` facts). The two share their CONNECTIVE shape
+(`and`/`or`/`not`/`tt`/`ff`) but NOT their denotation domain, so a literal alias would be unsound. We
+therefore MIRROR `Pred`'s connective layer here (zero re-fork of the connectives' meaning) while
+keeping the atom layer request-context-typed. The atoms read `Ctx` through a `ReqView` seam (below),
+so the AST itself stays pure data — `validAfter t` is a `Time`, not a captured closure.
+
+**Honest framing (no overclaim).** This is an EXPRESSIVENESS / language gain — composable, printable,
+structurally-comparable caveats and the content-level narrowing metatheory below — NOT a soundness
+gain. The circuit still binds an aggregate `caveatBit` and trusts the executor's decision; reifying a
+caveat does not force its policy in-circuit. -/
+
+/-- **`ReqView Ctx`** — the seam by which a `CaveatPred` atom reads a request fact out of the abstract
+context. Here: the request's `time` (the `validAfter` dimension). Instantiated by the real PI surface
+(the `AuthRequest`); keeping it a class means the AST atoms stay pure DATA (`validAfter t` holds a
+`Time`, never a closure) while remaining `Ctx`-abstract. -/
+class ReqView (Ctx : Type) where
+  /-- The request's logical time (block height / wall-clock tick), the field `validAfter` gates on. -/
+  time : Ctx → Time
+
+/-- **`CaveatPred`** — the reified, introspectable caveat AST. One real *content-level* atom
+(`validAfter`, a temporal caveat: "this caveat admits only at request-time ≥ `t`" — the simplest
+`DreggGrant` dimension) plus the Boolean connectives, mirroring `Exec.PredAlgebra.Pred`'s shape. A
+`CaveatPred` is data you can PRINT, structurally compare, and refine — not an opaque `Ctx → Bool`. -/
+inductive CaveatPred where
+  /-- **`validAfter t`** — admits a request iff its time is `≥ t` (a "not-before" / temporal floor;
+  the macaroon `time >` caveat / the `DreggGrant.validAfter` dimension), as inspectable data. -/
+  | validAfter (t : Time)
+  /-- Top — admits every request. -/
+  | tt
+  /-- Bottom — admits no request (fail-closed). -/
+  | ff
+  /-- Conjunction (meet). -/
+  | and (l r : CaveatPred)
+  /-- Disjunction (join). -/
+  | or  (l r : CaveatPred)
+  /-- Negation — at every level (mirroring `Pred.not`, not a single-level escape). -/
+  | not (p : CaveatPred)
+  deriving Repr, DecidableEq
+
+/-- **`CaveatPred.eval`** — the denotation of the reified AST over a request context, reading facts
+through `ReqView`. The structural fold mirrors `Pred.eval`: `validAfter t` admits iff `t ≤ time ctx`;
+the connectives are `&&`/`||`/`!`/`true`/`false`. Decidable, computable, fail-closed (`ff` rejects). -/
+def CaveatPred.eval [ReqView Ctx] : CaveatPred → Ctx → Bool
+  | .validAfter t, ctx => decide (t ≤ ReqView.time ctx)
+  | .tt,           _   => true
+  | .ff,           _   => false
+  | .and l r,      ctx => l.eval ctx && r.eval ctx
+  | .or  l r,      ctx => l.eval ctx || r.eval ctx
+  | .not p,        ctx => !(p.eval ctx)
+
+/-- **A caveat** — the universal gate (`WitnessedCondition`), here in three engines: a **reified**
+`CaveatPred` (introspectable content-level AST, D6), an **opaque** handwritten predicate over the
+request context (the escape hatch for caveats not yet in the AST vocabulary — `local` renamed: it IS
+opaque), or a **third-party** caveat naming a `gateway` that must *discharge* it (the await
+authority-face). -/
 inductive Caveat (Ctx Gateway : Type) where
-  | local      (check : Ctx → Bool)
+  | pred       (p : CaveatPred)
+  | opaque     (check : Ctx → Bool)
   | thirdParty (gateway : Gateway)
 
 /-- The discharges presented alongside a token (dregg1 `Authorization::Token.discharges`): which
 gateways have produced a resolution. -/
 abbrev Discharges (Gateway : Type) := Gateway → Bool
 
-/-- A caveat is satisfied at a request iff its local check holds, or its gateway has discharged. -/
-def Caveat.ok (c : Caveat Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway) : Bool :=
+/-- A caveat is satisfied at a request iff its reified `CaveatPred` admits, its opaque check holds, or
+its gateway has discharged. The reified arm folds through `CaveatPred.eval` (so a `pred`-caveat is an
+inspectable policy), the opaque arm just RUNS its closure. -/
+def Caveat.ok [ReqView Ctx] (c : Caveat Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway) : Bool :=
   match c with
-  | .local check  => check ctx
+  | .pred p       => p.eval ctx
+  | .opaque check => check ctx
   | .thirdParty g => d g
 
 /-- The two token carriers (dregg1 `TokenKeyRef`). -/
@@ -68,7 +132,7 @@ structure Token (Ctx Gateway : Type) where
 
 /-- **A token admits a request iff ALL its caveats are satisfied** (the conjunction / meet ⋀) — the
 fail-closed authority decision. -/
-def Token.admits (tok : Token Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway) : Bool :=
+def Token.admits [ReqView Ctx] (tok : Token Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway) : Bool :=
   tok.caveats.all (fun c => c.ok ctx d)
 
 /-- **Attenuation = appending a caveat** — the *one rule the system rests on* (`dregg2 §1.1`):
@@ -81,7 +145,7 @@ def Token.attenuate (tok : Token Ctx Gateway) (c : Caveat Ctx Gateway) : Token C
 /-- **`attenuate_narrows`** — anything an attenuated token admits, the parent already admitted:
 adding a caveat never grows authority. The concrete realization of "a key may only narrow"
 (the Heyting residual `⇨`) on the actual biscuit/macaroon chain. -/
-theorem attenuate_narrows (tok : Token Ctx Gateway) (c : Caveat Ctx Gateway)
+theorem attenuate_narrows [ReqView Ctx] (tok : Token Ctx Gateway) (c : Caveat Ctx Gateway)
     (ctx : Ctx) (d : Discharges Gateway) :
     (tok.attenuate c).admits ctx d = true → tok.admits ctx d = true := by
   simp only [Token.admits, Token.attenuate, List.all_append, Bool.and_eq_true]
@@ -89,15 +153,16 @@ theorem attenuate_narrows (tok : Token Ctx Gateway) (c : Caveat Ctx Gateway)
 
 /-- **`attenuate_subset`** — set form: a more-attenuated token's admissible-request set is a
 subset of the parent's. Authority strictly shrinks down a delegation chain. -/
-theorem attenuate_subset (tok : Token Ctx Gateway) (c : Caveat Ctx Gateway)
+theorem attenuate_subset [ReqView Ctx] (tok : Token Ctx Gateway) (c : Caveat Ctx Gateway)
     (d : Discharges Gateway) :
     {ctx | (tok.attenuate c).admits ctx d = true} ⊆ {ctx | tok.admits ctx d = true} :=
   fun ctx h => attenuate_narrows tok c ctx d h
 
 /-- Attenuating by an always-true caveat leaves authority unchanged (the trivial
 attenuation = identity edge). Sanity companion to `attenuate_narrows`. -/
-theorem attenuate_trivial (tok : Token Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway) :
-    (tok.attenuate (.local (fun _ => true))).admits ctx d = tok.admits ctx d := by
+theorem attenuate_trivial [ReqView Ctx] (tok : Token Ctx Gateway) (ctx : Ctx)
+    (d : Discharges Gateway) :
+    (tok.attenuate (.opaque (fun _ => true))).admits ctx d = tok.admits ctx d := by
   simp [Token.admits, Token.attenuate, List.all_append, Caveat.ok]
 
 /-! ## The biscuit / macaroon split IS the vat boundary. -/
@@ -124,13 +189,13 @@ theorem biscuit_crossvat (tok : Token Ctx Gateway) (h : tok.kind = .biscuit) :
 predicate is the request context, the witness is the `(token, discharges)` pair, and `Verify` is
 `Token.admits`. The token layer is a `Verify` — biscuit and STARK are both witnesses differing
 only in cost. -/
-instance tokenVerifiable : Verifiable Ctx (Token Ctx Gateway × Discharges Gateway) where
+instance tokenVerifiable [ReqView Ctx] : Verifiable Ctx (Token Ctx Gateway × Discharges Gateway) where
   Verify ctx w := w.1.admits ctx w.2
 
 /-- **`token_discharges`** — a token that admits the request is a discharged verify/find-seam
 witness. The cap's authorization across the boundary is a `Verify`, feeding the cross-vat case
 of the vat-boundary law. -/
-theorem token_discharges (tok : Token Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway)
+theorem token_discharges [ReqView Ctx] (tok : Token Ctx Gateway) (ctx : Ctx) (d : Discharges Gateway)
     (h : tok.admits ctx d = true) :
     Discharged (P := Ctx) (W := Token Ctx Gateway × Discharges Gateway) ctx (tok, d) := h
 
@@ -139,12 +204,18 @@ theorem token_discharges (tok : Token Ctx Gateway) (ctx : Ctx) (d : Discharges G
 /-- A toy request context: the current block height. -/
 abbrev Height := Nat
 
+/-- The toy `ReqView`: a block height IS the request's logical time. (A `CaveatPred.validAfter t`
+over a `Height` request gates on "height ≥ t".) -/
+instance : ReqView Height where time h := (h : Int)
+
 /-- A root biscuit with no caveats (full authority over its target). -/
 def rootBiscuit : Token Height Unit := { kind := .biscuit, caveats := [] }
 
-/-- Attenuate it with "height ≥ 100" then "height ≤ 200" — a validity window. -/
+/-- Attenuate it with "height ≥ 100" then "height ≤ 200" — a validity window. The lower bound is the
+REIFIED `validAfter 100` caveat (`CaveatPred`, inspectable); the upper bound stays an `opaque` check
+(no `validBefore` atom in the toy AST yet — the escape hatch carries it, nothing regresses). -/
 def windowed : Token Height Unit :=
-  (rootBiscuit.attenuate (.local (fun h => decide (100 ≤ h)))).attenuate (.local (fun h => decide (h ≤ 200)))
+  (rootBiscuit.attenuate (.pred (.validAfter 100))).attenuate (.opaque (fun h => decide (h ≤ 200)))
 
 /-- No discharges needed (no third-party caveats). -/
 def noDischarges : Discharges Unit := fun _ => false

@@ -213,23 +213,42 @@ impl CommandId {
         match self {
             Transfer | ComposeMulti | Grant | CreateCell | Seal | Burn | OverGrant
             | LaunchConfinedApp | SimRun | SimCommit | SimAddEffect => Category::Verb,
-            GoHome | GoComposer | GoSimulate | GoObjects | GoDebugger | GoReplay | GoCipherclerk
-            | GoEditor | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm | GoGraph | GoOrgans
-            | GoProofs | GoPowerbox | GoDevtools | GoWebShell => Category::Navigate,
-            WebShellGo | WebShellBack | WebShellForward | WebShellReload => Category::Web,
-            BufferType | BufferCommit | BufferReadOnlyWrite | TerminalRunInMandate
-            | TerminalRunOutOfMandate | OpenTerminalPane | OpenEditorPane | OpenAgentPane
-            | SwarmCoordinatorEmitA | SwarmWorkerADrain | SwarmCoordinatorTransferAndWake
-            | KillerDemoAdvance | KillerDemoRunAll | KillerDemoOverShare | KillerDemoReset => {
-                Category::Ide
+            GoHome | GoComposer | GoSimulate | GoObjects | GoDebugger | GoReplay
+            | GoCipherclerk | GoEditor | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm
+            | GoGraph | GoOrgans | GoProofs | GoPowerbox | GoDevtools | GoWebShell => {
+                Category::Navigate
             }
+            WebShellGo | WebShellBack | WebShellForward | WebShellReload => Category::Web,
+            BufferType
+            | BufferCommit
+            | BufferReadOnlyWrite
+            | TerminalRunInMandate
+            | TerminalRunOutOfMandate
+            | OpenTerminalPane
+            | OpenEditorPane
+            | OpenAgentPane
+            | SwarmCoordinatorEmitA
+            | SwarmWorkerADrain
+            | SwarmCoordinatorTransferAndWake
+            | KillerDemoAdvance
+            | KillerDemoRunAll
+            | KillerDemoOverShare
+            | KillerDemoReset => Category::Ide,
             ReplayStepBack | ReplayStepForward | ReplayToGenesis | ReplayToHead
             | ReplayForkHere | ReplayClearFork => Category::Replay,
             ClerkMint | ClerkAttenuate | ClerkDelegate | ClerkDischarge => Category::Clerk,
-            ShellOpenSelected | ShellFocusFront | ShellCloseFocused | ShellCycleLayout
-            | ShellMinimizeFocused | ShellShareFocused | ShellOverShareFocused
-            | ShellPresentFocused | ShellOverpaintFocused | ShellInputSteal
-            | TearOffActiveSurface | PopBackActiveSurface => Category::Shell,
+            ShellOpenSelected
+            | ShellFocusFront
+            | ShellCloseFocused
+            | ShellCycleLayout
+            | ShellMinimizeFocused
+            | ShellShareFocused
+            | ShellOverShareFocused
+            | ShellPresentFocused
+            | ShellOverpaintFocused
+            | ShellInputSteal
+            | TearOffActiveSurface
+            | PopBackActiveSurface => Category::Shell,
             DebugRetargetSelected => Category::Debug,
             SelectImage => Category::Inspect,
             Dismiss => Category::Palette,
@@ -463,7 +482,11 @@ pub struct Command {
 
 impl Command {
     fn of(id: CommandId) -> Self {
-        Command { id, title: id.title(), category: id.category() }
+        Command {
+            id,
+            title: id.title(),
+            category: id.category(),
+        }
     }
 }
 
@@ -474,40 +497,92 @@ pub fn all_commands() -> Vec<Command> {
     use CommandId::*;
     [
         // verbs first (the most common operator actions)
-        Transfer, ComposeMulti, Grant, CreateCell, Seal, Burn, OverGrant,
+        Transfer,
+        ComposeMulti,
+        Grant,
+        CreateCell,
+        Seal,
+        Burn,
+        OverGrant,
         // the what-if / simulate composer (predict before committing)
-        SimRun, SimCommit, SimAddEffect,
+        SimRun,
+        SimCommit,
+        SimAddEffect,
         // the runtime app-launcher (births a confined app → powerbox request)
         LaunchConfinedApp,
         // the cipherclerk loop
-        ClerkMint, ClerkAttenuate, ClerkDelegate, ClerkDischarge,
+        ClerkMint,
+        ClerkAttenuate,
+        ClerkDelegate,
+        ClerkDischarge,
         // the cap-first shell / compositor
-        ShellOpenSelected, ShellFocusFront, ShellCloseFocused, ShellCycleLayout,
-        ShellMinimizeFocused, ShellShareFocused, ShellOverShareFocused,
-        ShellPresentFocused, ShellOverpaintFocused, ShellInputSteal,
+        ShellOpenSelected,
+        ShellFocusFront,
+        ShellCloseFocused,
+        ShellCycleLayout,
+        ShellMinimizeFocused,
+        ShellShareFocused,
+        ShellOverShareFocused,
+        ShellPresentFocused,
+        ShellOverpaintFocused,
+        ShellInputSteal,
         // SURFACE MIGRATION — the Local→Surface tear-off (pop a pane into its own window)
-        TearOffActiveSurface, PopBackActiveSurface,
+        TearOffActiveSurface,
+        PopBackActiveSurface,
         // the A1 IDE developer surfaces (editor buffer + terminal)
-        BufferType, BufferCommit, BufferReadOnlyWrite,
-        TerminalRunInMandate, TerminalRunOutOfMandate,
+        BufferType,
+        BufferCommit,
+        BufferReadOnlyWrite,
+        TerminalRunInMandate,
+        TerminalRunOutOfMandate,
         // the self-hosting dev panes (edit/build deos INSIDE deos) + the confined agent dock
-        OpenTerminalPane, OpenEditorPane, OpenAgentPane,
+        OpenTerminalPane,
+        OpenEditorPane,
+        OpenAgentPane,
         // the A2 SWARM surface (multi-agent cap-coordination + notify-edge inbox)
-        SwarmCoordinatorEmitA, SwarmWorkerADrain, SwarmCoordinatorTransferAndWake,
+        SwarmCoordinatorEmitA,
+        SwarmWorkerADrain,
+        SwarmCoordinatorTransferAndWake,
         // the four-surface KILLER DEMO (N5) — the pug-handoff artifact
-        KillerDemoRunAll, KillerDemoAdvance, KillerDemoOverShare, KillerDemoReset,
+        KillerDemoRunAll,
+        KillerDemoAdvance,
+        KillerDemoOverShare,
+        KillerDemoReset,
         // navigation
         GoHome,
-        GoComposer, GoSimulate, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
-        GoAgent, GoBuffer, GoTerminal, GoSwarm, GoGraph, GoOrgans, GoProofs, GoPowerbox,
-        GoDevtools, GoWebShell,
+        GoComposer,
+        GoSimulate,
+        GoObjects,
+        GoDebugger,
+        GoReplay,
+        GoCipherclerk,
+        GoEditor,
+        GoShell,
+        GoAgent,
+        GoBuffer,
+        GoTerminal,
+        GoSwarm,
+        GoGraph,
+        GoOrgans,
+        GoProofs,
+        GoPowerbox,
+        GoDevtools,
+        GoWebShell,
         // the 🌐 web-shell browser surface (general http(s):// browser)
-        WebShellGo, WebShellBack, WebShellForward, WebShellReload,
+        WebShellGo,
+        WebShellBack,
+        WebShellForward,
+        WebShellReload,
         // replay
-        ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
-        ReplayForkHere, ReplayClearFork,
+        ReplayStepBack,
+        ReplayStepForward,
+        ReplayToGenesis,
+        ReplayToHead,
+        ReplayForkHere,
+        ReplayClearFork,
         // debugger + inspect
-        DebugRetargetSelected, SelectImage,
+        DebugRetargetSelected,
+        SelectImage,
     ]
     .into_iter()
     .map(Command::of)
@@ -586,7 +661,13 @@ pub fn search(commands: &[Command], query: &str) -> Vec<Hit> {
             (None, None) => None,
         };
         if let Some(score) = best {
-            hits.push((idx, Hit { command: *cmd, score }));
+            hits.push((
+                idx,
+                Hit {
+                    command: *cmd,
+                    score,
+                },
+            ));
         }
     }
     // Sort by score desc, then by registry index asc (stable tie-break).
@@ -754,7 +835,10 @@ mod tests {
         // Dismiss is intentionally NOT a row (Esc handles it).
         assert!(!ids.contains(&CommandId::Dismiss));
         // The registry is non-trivial (and now includes the shell surface + swarm A2).
-        assert!(reg.len() >= 34, "registry should cover the whole action surface");
+        assert!(
+            reg.len() >= 34,
+            "registry should cover the whole action surface"
+        );
     }
 
     #[test]
@@ -764,12 +848,17 @@ mod tests {
         // Verb (it births a cell), and findable by its launch/spawn/confined concepts.
         let reg = all_commands();
         let ids: std::collections::HashSet<CommandId> = reg.iter().map(|c| c.id).collect();
-        assert!(ids.contains(&CommandId::LaunchConfinedApp), "the launcher command is registered");
+        assert!(
+            ids.contains(&CommandId::LaunchConfinedApp),
+            "the launcher command is registered"
+        );
         assert_eq!(CommandId::LaunchConfinedApp.category(), Category::Verb);
         // Found by concept: "launch", "spawn", "confined" all surface the launcher.
         for q in ["launch", "spawn confined", "confined app"] {
             assert!(
-                search(&reg, q).iter().any(|h| h.command.id == CommandId::LaunchConfinedApp),
+                search(&reg, q)
+                    .iter()
+                    .any(|h| h.command.id == CommandId::LaunchConfinedApp),
                 "the launcher is findable via {q:?}"
             );
         }
@@ -792,10 +881,17 @@ mod tests {
         }
         // Found by concept: "killer demo" → run-all; "over-share" → the pixel-layer
         // refusal; "mint" → the advance (frame 1 mints); "four-surface" → the demo.
-        assert!(search(&reg, "killer demo").iter().any(|h| h.command.id == CommandId::KillerDemoRunAll));
-        assert!(search(&reg, "over-share").iter().any(|h| h.command.id == CommandId::KillerDemoOverShare));
+        assert!(search(&reg, "killer demo")
+            .iter()
+            .any(|h| h.command.id == CommandId::KillerDemoRunAll));
+        assert!(search(&reg, "over-share")
+            .iter()
+            .any(|h| h.command.id == CommandId::KillerDemoOverShare));
         assert!(search(&reg, "four-surface").iter().any(|h| {
-            matches!(h.command.id, CommandId::KillerDemoRunAll | CommandId::KillerDemoAdvance)
+            matches!(
+                h.command.id,
+                CommandId::KillerDemoRunAll | CommandId::KillerDemoAdvance
+            )
         }));
     }
 
@@ -808,7 +904,10 @@ mod tests {
         let ids: std::collections::HashSet<CommandId> = reg.iter().map(|c| c.id).collect();
         // GoShell is a tab-switch (Navigate, like the other Go* commands); the
         // Shell* ops are the cap-first window-manager actions (Category::Shell).
-        assert!(ids.contains(&CommandId::GoShell), "GoShell must be registered");
+        assert!(
+            ids.contains(&CommandId::GoShell),
+            "GoShell must be registered"
+        );
         assert_eq!(CommandId::GoShell.category(), Category::Navigate);
         for must in [
             CommandId::ShellOpenSelected,
@@ -824,11 +923,21 @@ mod tests {
         }
         // Found by concept: "tile" → cycle-layout; "open window" → open-surface;
         // "delegate"/"amplify" → the real-executor window-share + its rejection.
-        assert!(search(&reg, "tile").iter().any(|h| h.command.id == CommandId::ShellCycleLayout));
-        assert!(search(&reg, "window").iter().any(|h| h.command.id == CommandId::ShellOpenSelected));
-        assert!(search(&reg, "compositor").iter().any(|h| h.command.id == CommandId::GoShell));
-        assert!(search(&reg, "delegate").iter().any(|h| h.command.id == CommandId::ShellShareFocused));
-        assert!(search(&reg, "amplify").iter().any(|h| h.command.id == CommandId::ShellOverShareFocused));
+        assert!(search(&reg, "tile")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellCycleLayout));
+        assert!(search(&reg, "window")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellOpenSelected));
+        assert!(search(&reg, "compositor")
+            .iter()
+            .any(|h| h.command.id == CommandId::GoShell));
+        assert!(search(&reg, "delegate")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellShareFocused));
+        assert!(search(&reg, "amplify")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellOverShareFocused));
     }
 
     #[test]
@@ -856,12 +965,22 @@ mod tests {
         }
         // Found by concept: "editor"/"buffer" → the buffer; "terminal"/"bash" →
         // the terminal; "read-only"/"commit"/"mandate" → the cap-gated ops.
-        assert!(search(&reg, "editor buffer").iter().any(|h| h.command.id == CommandId::GoBuffer));
-        assert!(search(&reg, "terminal bash").iter().any(|h| h.command.id == CommandId::GoTerminal));
-        assert!(search(&reg, "commit").iter().any(|h| h.command.id == CommandId::BufferCommit));
-        assert!(search(&reg, "read-only").iter().any(|h| h.command.id == CommandId::BufferReadOnlyWrite));
-        assert!(search(&reg, "mandate").iter().any(|h| h.command.id == CommandId::TerminalRunInMandate
-            || h.command.id == CommandId::TerminalRunOutOfMandate));
+        assert!(search(&reg, "editor buffer")
+            .iter()
+            .any(|h| h.command.id == CommandId::GoBuffer));
+        assert!(search(&reg, "terminal bash")
+            .iter()
+            .any(|h| h.command.id == CommandId::GoTerminal));
+        assert!(search(&reg, "commit")
+            .iter()
+            .any(|h| h.command.id == CommandId::BufferCommit));
+        assert!(search(&reg, "read-only")
+            .iter()
+            .any(|h| h.command.id == CommandId::BufferReadOnlyWrite));
+        assert!(search(&reg, "mandate")
+            .iter()
+            .any(|h| h.command.id == CommandId::TerminalRunInMandate
+                || h.command.id == CommandId::TerminalRunOutOfMandate));
     }
 
     #[test]
@@ -870,7 +989,10 @@ mod tests {
         // categorized correctly (Navigate for GoSwarm, Ide for swarm actions).
         let reg = all_commands();
         let ids: std::collections::HashSet<CommandId> = reg.iter().map(|c| c.id).collect();
-        assert!(ids.contains(&CommandId::GoSwarm), "GoSwarm must be registered");
+        assert!(
+            ids.contains(&CommandId::GoSwarm),
+            "GoSwarm must be registered"
+        );
         assert_eq!(CommandId::GoSwarm.category(), Category::Navigate);
         for op in [
             CommandId::SwarmCoordinatorEmitA,
@@ -882,7 +1004,9 @@ mod tests {
         }
         // Findable by concept — "swarm", "notify", "emit", "drain".
         assert!(
-            search(&reg, "swarm").iter().any(|h| h.command.id == CommandId::GoSwarm),
+            search(&reg, "swarm")
+                .iter()
+                .any(|h| h.command.id == CommandId::GoSwarm),
             "GoSwarm findable via 'swarm'"
         );
         assert!(
@@ -893,7 +1017,9 @@ mod tests {
             "emit/notify commands findable"
         );
         assert!(
-            search(&reg, "drain").iter().any(|h| h.command.id == CommandId::SwarmWorkerADrain),
+            search(&reg, "drain")
+                .iter()
+                .any(|h| h.command.id == CommandId::SwarmWorkerADrain),
             "SwarmWorkerADrain findable via 'drain'"
         );
     }
@@ -913,7 +1039,10 @@ mod tests {
         // "burn" as a contiguous word-start should outscore a scattered match.
         let contiguous = fuzzy_score("burn", "Burn 1,000 (supply reduced)").unwrap();
         let scattered = fuzzy_score("burn", "back upstream run now").unwrap_or(i32::MIN);
-        assert!(contiguous > scattered, "contiguous word-start scores higher");
+        assert!(
+            contiguous > scattered,
+            "contiguous word-start scores higher"
+        );
     }
 
     #[test]
@@ -921,7 +1050,11 @@ mod tests {
         let cmds = all_commands();
         let hits = search(&cmds, "transfer");
         assert!(!hits.is_empty());
-        assert_eq!(hits[0].command.id, CommandId::Transfer, "best hit is the transfer verb");
+        assert_eq!(
+            hits[0].command.id,
+            CommandId::Transfer,
+            "best hit is the transfer verb"
+        );
     }
 
     #[test]
@@ -930,7 +1063,8 @@ mod tests {
         let cmds = all_commands();
         let hits = search(&cmds, "wallet");
         assert!(
-            hits.iter().any(|h| h.command.id == CommandId::GoCipherclerk),
+            hits.iter()
+                .any(|h| h.command.id == CommandId::GoCipherclerk),
             "keyword search surfaces the cipherclerk"
         );
         // "amplification" is a keyword of the over-grant guard demo.
@@ -943,7 +1077,8 @@ mod tests {
         let cmds = all_commands();
         let hits = search(&cmds, "verify");
         assert!(
-            hits.iter().any(|h| h.command.id == CommandId::ClerkDischarge),
+            hits.iter()
+                .any(|h| h.command.id == CommandId::ClerkDischarge),
             "discharge is findable by its 'verify' concept"
         );
     }
@@ -990,12 +1125,20 @@ mod tests {
         let mut p = CommandPalette::new();
         p.open();
         p.set_query("burnx"); // the trailing x breaks the burn subsequence
-        // Robust to a growing command set: assert the burn verb specifically is
-        // filtered out (the point of the test), not that the WHOLE list is empty —
-        // another command's keywords may legitimately contain b-u-r-n-…-x.
-        assert_ne!(p.current(), Some(CommandId::Burn), "burnx does not match the burn verb");
+                              // Robust to a growing command set: assert the burn verb specifically is
+                              // filtered out (the point of the test), not that the WHOLE list is empty —
+                              // another command's keywords may legitimately contain b-u-r-n-…-x.
+        assert_ne!(
+            p.current(),
+            Some(CommandId::Burn),
+            "burnx does not match the burn verb"
+        );
         p.backspace(); // → "burn"
-        assert_eq!(p.current(), Some(CommandId::Burn), "backspace re-widens to re-include burn");
+        assert_eq!(
+            p.current(),
+            Some(CommandId::Burn),
+            "backspace re-widens to re-include burn"
+        );
     }
 
     #[test]

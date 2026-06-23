@@ -116,7 +116,13 @@ pub struct DemoFrame {
 }
 
 impl DemoFrame {
-    fn committed(step: u8, stage: &'static str, headline: String, receipt: [u8; 32], height: u64) -> Self {
+    fn committed(
+        step: u8,
+        stage: &'static str,
+        headline: String,
+        receipt: [u8; 32],
+        height: u64,
+    ) -> Self {
         DemoFrame {
             step,
             stage,
@@ -128,7 +134,13 @@ impl DemoFrame {
         }
     }
 
-    fn refused(step: u8, stage: &'static str, headline: String, reason: String, height: u64) -> Self {
+    fn refused(
+        step: u8,
+        stage: &'static str,
+        headline: String,
+        reason: String,
+        height: u64,
+    ) -> Self {
         DemoFrame {
             step,
             stage,
@@ -254,7 +266,8 @@ impl HeadlineDemo {
     pub fn boot() -> Self {
         // A real metered world: production cost model + a per-turn fee covering a
         // single dispatch (the agent pays it from its big balance, conservation-real).
-        let mut world = World::with_costs(ComputronCosts::default_costs()).with_turn_fee(DEMO_TURN_FEE);
+        let mut world =
+            World::with_costs(ComputronCosts::default_costs()).with_turn_fee(DEMO_TURN_FEE);
 
         // `forbidden` — the over-grant target no agent reaches.
         let forbidden = world.genesis_cell(0xF0, 0);
@@ -396,7 +409,8 @@ impl HeadlineDemo {
             initial_caps: vec![],
             owner_pubkey,
         };
-        let birth = world::create_cell_from_factory(MINT_FACTORY_VK, owner_pubkey, [0u8; 32], params);
+        let birth =
+            world::create_cell_from_factory(MINT_FACTORY_VK, owner_pubkey, [0u8; 32], params);
         let turn = self.world.turn(self.agent_a, vec![birth]);
         let outcome = self.world.commit_turn(turn);
 
@@ -473,7 +487,9 @@ impl HeadlineDemo {
     /// frame 1), so the cap-gate admits it.
     pub fn step_agent_turn(&mut self) -> Result<&DemoFrame, DemoError> {
         if self.token == CellId::ZERO {
-            return Err(DemoError::AgentTurnFailed("MINT has not run (no token cell)".into()));
+            return Err(DemoError::AgentTurnFailed(
+                "MINT has not run (no token cell)".into(),
+            ));
         }
         // Fund the token (budget) cell from A so there is value to spend — the
         // genesis path seeds the budget; this is the operator endowing the pool. A
@@ -481,8 +497,12 @@ impl HeadlineDemo {
         // token cell via the cap granted in frame 1).
         let fund = world::transfer(self.agent_a, self.token, 10_000);
         let fund_turn = self.world.turn(self.agent_a, vec![fund]);
-        if let crate::world::CommitOutcome::Rejected { reason, .. } = self.world.commit_turn(fund_turn) {
-            return Err(DemoError::AgentTurnFailed(format!("funding the budget cell: {reason}")));
+        if let crate::world::CommitOutcome::Rejected { reason, .. } =
+            self.world.commit_turn(fund_turn)
+        {
+            return Err(DemoError::AgentTurnFailed(format!(
+                "funding the budget cell: {reason}"
+            )));
         }
 
         // THE AGENT TURN: A spends from the budget cell (token → A). This is the
@@ -495,11 +515,13 @@ impl HeadlineDemo {
             Err(e) => return Err(DemoError::AgentTurnFailed(e.label())),
         };
         if !ao.committed {
-            return Err(DemoError::AgentTurnFailed("the agent spend did not commit".into()));
+            return Err(DemoError::AgentTurnFailed(
+                "the agent spend did not commit".into(),
+            ));
         }
-        let receipt = ao.receipt_hash.ok_or_else(|| {
-            DemoError::AgentTurnFailed("committed but no receipt hash".into())
-        })?;
+        let receipt = ao
+            .receipt_hash
+            .ok_or_else(|| DemoError::AgentTurnFailed("committed but no receipt hash".into()))?;
         let drawn = self
             .swarm
             .stingray_budget()
@@ -527,7 +549,11 @@ impl HeadlineDemo {
         let outcome = self.swarm.run(
             &mut self.world,
             self.agent_a,
-            vec![world::emit_event(self.agent_b, "handoff/drain-the-budget", vec![])],
+            vec![world::emit_event(
+                self.agent_b,
+                "handoff/drain-the-budget",
+                vec![],
+            )],
         );
         let ao = match outcome {
             Ok(ao) => ao,
@@ -612,12 +638,16 @@ impl HeadlineDemo {
         // turn (and before the pool pre-check): B cannot grant authority from a cell
         // it does not control (`granted ⊆ held` — the no-amplification rule).
         let over_grant = world::grant_capability(self.forbidden, self.agent_b, self.forbidden, 0);
-        let outcome = self.swarm.run(&mut self.world, self.agent_b, vec![over_grant]);
+        let outcome = self
+            .swarm
+            .run(&mut self.world, self.agent_b, vec![over_grant]);
         match outcome {
             Ok(ao) if ao.committed => {
                 // FAIL-OPEN — the no-amplification guarantee did NOT fire. This is a
                 // real regression (the worst outcome); the self-check fails loudly.
-                Err(DemoError::RefusalDidNotFire("over-grant (no-amplification)"))
+                Err(DemoError::RefusalDidNotFire(
+                    "over-grant (no-amplification)",
+                ))
             }
             Err(SwarmError::ExecutorRejected { reason, .. }) => {
                 let height = self.world.height();
@@ -694,9 +724,16 @@ impl HeadlineDemo {
         // B attempts a spend (a transfer to A, in-mandate — B holds a cap to A). The
         // verified shared-budget gate refuses the DRAW before the turn runs.
         let over_spend = world::transfer(self.agent_b, self.agent_a, 1);
-        let outcome = self.swarm.run(&mut self.world, self.agent_b, vec![over_spend]);
+        let outcome = self
+            .swarm
+            .run(&mut self.world, self.agent_b, vec![over_spend]);
         match outcome {
-            Err(SwarmError::PoolExhausted { drawn, ceiling, would_be, .. }) => {
+            Err(SwarmError::PoolExhausted {
+                drawn,
+                ceiling,
+                would_be,
+                ..
+            }) => {
                 let height = self.world.height();
                 self.frames.push(DemoFrame::refused(
                     4,
@@ -715,7 +752,9 @@ impl HeadlineDemo {
             }
             Ok(ao) if ao.committed => {
                 // FAIL-OPEN — the budget ceiling did NOT bite. A real regression.
-                Err(DemoError::RefusalDidNotFire("over-spend (Stingray ceiling)"))
+                Err(DemoError::RefusalDidNotFire(
+                    "over-spend (Stingray ceiling)",
+                ))
             }
             other => {
                 // Any other refusal is still fail-closed; surface it honestly (no
@@ -840,12 +879,18 @@ impl HeadlineDemo {
         let has_notify = committed.iter().any(|f| f.stage == "NOTIFY");
         let has_drain = committed.iter().any(|f| f.stage == "DRAIN");
         // The two distinct handoff receipts.
-        let notify_r = committed.iter().find(|f| f.stage == "NOTIFY").and_then(|f| f.receipt.clone());
-        let drain_r = committed.iter().find(|f| f.stage == "DRAIN").and_then(|f| f.receipt.clone());
+        let notify_r = committed
+            .iter()
+            .find(|f| f.stage == "NOTIFY")
+            .and_then(|f| f.receipt.clone());
+        let drain_r = committed
+            .iter()
+            .find(|f| f.stage == "DRAIN")
+            .and_then(|f| f.receipt.clone());
         let two_distinct = notify_r.is_some() && drain_r.is_some() && notify_r != drain_r;
         // Both refusals present, each carrying the executor's reason.
-        let both_refusals = refused.len() >= 2
-            && refused.iter().all(|f| f.refusal_reason.is_some());
+        let both_refusals =
+            refused.len() >= 2 && refused.iter().all(|f| f.refusal_reason.is_some());
         has_mint && has_agent && has_notify && has_drain && two_distinct && both_refusals
     }
 }
@@ -909,7 +954,9 @@ mod tests {
         // THE HEADLINE: the four frames + the dual refusal all run through the REAL
         // executor / the verified counter, and the contract holds.
         let mut demo = HeadlineDemo::boot();
-        let frames = demo.run_headless().expect("the full script must run with no setup failure");
+        let frames = demo
+            .run_headless()
+            .expect("the full script must run with no setup failure");
         // Six frames: mint, agent turn, notify, drain, over-grant refusal, over-spend
         // refusal.
         assert_eq!(frames.len(), 6, "four committed frames + the dual refusal");
@@ -926,11 +973,24 @@ mod tests {
         assert_eq!(frame.stage, "MINT");
         assert!(frame.committed);
         assert!(frame.receipt.is_some(), "the mint has a real receipt");
-        assert_eq!(demo.world().cell_count(), before + 1, "the factory birthed a child cell");
-        assert_ne!(demo.token(), CellId::ZERO, "the token cell id was recovered");
+        assert_eq!(
+            demo.world().cell_count(),
+            before + 1,
+            "the factory birthed a child cell"
+        );
+        assert_ne!(
+            demo.token(),
+            CellId::ZERO,
+            "the token cell id was recovered"
+        );
         // A holds a cap reaching the freshly-minted token cell (the genesis grant).
         assert!(
-            demo.world().ledger().get(&demo.agent_a()).unwrap().capabilities.has_access(&demo.token()),
+            demo.world()
+                .ledger()
+                .get(&demo.agent_a())
+                .unwrap()
+                .capabilities
+                .has_access(&demo.token()),
             "agent-A holds a cap reaching the minted token cell"
         );
     }
@@ -943,17 +1003,41 @@ mod tests {
         let mut demo = HeadlineDemo::boot();
         demo.step_mint().expect("mint");
         let drawn_before = demo.swarm().stingray_budget().unwrap().total_drawn();
-        let token_bal_before = demo.world().ledger().get(&demo.token()).map(|c| c.state.balance()).unwrap_or(0);
-        let frame = demo.step_agent_turn().expect("the agent turn must commit").clone();
+        let token_bal_before = demo
+            .world()
+            .ledger()
+            .get(&demo.token())
+            .map(|c| c.state.balance())
+            .unwrap_or(0);
+        let frame = demo
+            .step_agent_turn()
+            .expect("the agent turn must commit")
+            .clone();
         assert!(frame.committed);
         assert_eq!(frame.stage, "AGENT TURN");
         // The budget meter climbed by a non-zero metered amount (the conservation step).
         let drawn_after = demo.swarm().stingray_budget().unwrap().total_drawn();
-        assert!(drawn_after > drawn_before, "the verified budget meter climbed by the metered spend");
+        assert!(
+            drawn_after > drawn_before,
+            "the verified budget meter climbed by the metered spend"
+        );
         // The token cell's balance changed (a real value move: funded +10_000, spent -2_500).
-        let token_bal_after = demo.world().ledger().get(&demo.token()).unwrap().state.balance();
-        assert_ne!(token_bal_after, token_bal_before, "the spend moved real balance on the budget cell");
-        assert_eq!(token_bal_after, 10_000 - 2_500, "funded 10_000, spent 2_500 back to A");
+        let token_bal_after = demo
+            .world()
+            .ledger()
+            .get(&demo.token())
+            .unwrap()
+            .state
+            .balance();
+        assert_ne!(
+            token_bal_after, token_bal_before,
+            "the spend moved real balance on the budget cell"
+        );
+        assert_eq!(
+            token_bal_after,
+            10_000 - 2_500,
+            "funded 10_000, spent 2_500 back to A"
+        );
     }
 
     #[test]
@@ -975,7 +1059,10 @@ mod tests {
             "the emit and the drain are INDEPENDENT turns (two distinct receipt hashes)"
         );
         // The drain is at a strictly later height (a separate committed turn).
-        assert!(drain.height > notify.height, "the drain is a later, separate turn");
+        assert!(
+            drain.height > notify.height,
+            "the drain is a later, separate turn"
+        );
     }
 
     #[test]
@@ -989,12 +1076,25 @@ mod tests {
         demo.step_notify().expect("notify");
         demo.step_drain().expect("drain");
         let h_before = demo.world().height();
-        let frame = demo.refuse_over_grant().expect("the over-grant must fire its refusal").clone();
-        assert!(!frame.committed, "the over-grant is REFUSED (a feature, not a commit)");
+        let frame = demo
+            .refuse_over_grant()
+            .expect("the over-grant must fire its refusal")
+            .clone();
+        assert!(
+            !frame.committed,
+            "the over-grant is REFUSED (a feature, not a commit)"
+        );
         assert_eq!(frame.stage, "REFUSAL");
-        assert!(frame.refusal_reason.is_some(), "the refusal carries the executor's reason");
+        assert!(
+            frame.refusal_reason.is_some(),
+            "the refusal carries the executor's reason"
+        );
         // FAIL-CLOSED: no turn committed — the height did not advance.
-        assert_eq!(demo.world().height(), h_before, "no height advance on the over-grant refusal");
+        assert_eq!(
+            demo.world().height(),
+            h_before,
+            "no height advance on the over-grant refusal"
+        );
     }
 
     #[test]
@@ -1010,16 +1110,25 @@ mod tests {
         demo.refuse_over_grant().expect("over-grant refusal");
         let drawn_before = demo.swarm().stingray_budget().unwrap().total_drawn();
         let h_before = demo.world().height();
-        let frame = demo.refuse_over_spend().expect("the over-spend must fire its refusal").clone();
+        let frame = demo
+            .refuse_over_spend()
+            .expect("the over-spend must fire its refusal")
+            .clone();
         assert!(!frame.committed, "the over-spend is REFUSED");
         assert_eq!(frame.stage, "REFUSAL");
         let reason = frame.refusal_reason.unwrap();
         assert!(
-            reason.contains("Stingray") || reason.contains("ceiling") || reason.contains("conservation"),
+            reason.contains("Stingray")
+                || reason.contains("ceiling")
+                || reason.contains("conservation"),
             "the refusal cites the verified budget ceiling: {reason}"
         );
         // FAIL-CLOSED: no turn committed, the counter UNMOVED.
-        assert_eq!(demo.world().height(), h_before, "no height advance on the over-spend refusal");
+        assert_eq!(
+            demo.world().height(),
+            h_before,
+            "no height advance on the over-spend refusal"
+        );
         assert_eq!(
             demo.swarm().stingray_budget().unwrap().total_drawn(),
             drawn_before,
@@ -1037,7 +1146,10 @@ mod tests {
         demo.run_headless().expect("the full script runs");
         let refusals: Vec<&DemoFrame> = demo.frames().iter().filter(|f| !f.committed).collect();
         assert_eq!(refusals.len(), 2, "EXACTLY two refusals — the dual refusal");
-        assert!(refusals.iter().all(|f| f.refusal_reason.is_some()), "each refusal cites its reason");
+        assert!(
+            refusals.iter().all(|f| f.refusal_reason.is_some()),
+            "each refusal cites its reason"
+        );
         // One of them is the over-grant; one is the over-spend (Stingray).
         assert!(
             refusals.iter().any(|f| f.headline.contains("OVER-GRANT")),
@@ -1082,9 +1194,16 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(lines, HeadlineDemo::TOTAL_STEPS as usize, "one line per script step");
+        assert_eq!(
+            lines,
+            HeadlineDemo::TOTAL_STEPS as usize,
+            "one line per script step"
+        );
         assert!(demo.is_complete(), "the script completes");
-        assert!(demo.contract_holds(), "the live-driven script satisfies the contract");
+        assert!(
+            demo.contract_holds(),
+            "the live-driven script satisfies the contract"
+        );
     }
 
     #[test]
@@ -1100,9 +1219,15 @@ mod tests {
         assert!(report.contains("DRAIN"));
         assert!(report.contains("OVER-GRANT"));
         assert!(report.contains("OVER-SPEND"));
-        assert!(report.contains("VERDICT ✓"), "a passing verdict when the contract holds");
+        assert!(
+            report.contains("VERDICT ✓"),
+            "a passing verdict when the contract holds"
+        );
         // The deferred step 5 is named as a follow-up, not silently dropped.
-        assert!(report.contains("step 5") || report.contains("Tier-B"), "the deferred pg step is named");
+        assert!(
+            report.contains("step 5") || report.contains("Tier-B"),
+            "the deferred pg step is named"
+        );
     }
 
     #[test]

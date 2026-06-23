@@ -33,9 +33,15 @@ pub enum FieldValue {
     /// A 32-byte hash (receipt/turn/state-commit) — provenance, navigable.
     Hash([u8; 32]),
     /// A capability edge (this object → target), the ocap-graph primitive.
-    CapEdge { target: [u8; 32], slot: u32 },
+    CapEdge {
+        target: [u8; 32],
+        slot: u32,
+    },
     /// Raw field-element slot contents.
-    FieldSlot { index: usize, hex: String },
+    FieldSlot {
+        index: usize,
+        hex: String,
+    },
 }
 
 /// One labeled field of an inspectable object.
@@ -47,22 +53,40 @@ pub struct Field {
 
 impl Field {
     pub fn text(key: impl Into<String>, v: impl Into<String>) -> Self {
-        Field { key: key.into(), value: FieldValue::Text(v.into()) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Text(v.into()),
+        }
     }
     pub fn balance(key: impl Into<String>, v: i64) -> Self {
-        Field { key: key.into(), value: FieldValue::Balance(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Balance(v),
+        }
     }
     pub fn count(key: impl Into<String>, v: u64) -> Self {
-        Field { key: key.into(), value: FieldValue::Count(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Count(v),
+        }
     }
     pub fn boolean(key: impl Into<String>, v: bool) -> Self {
-        Field { key: key.into(), value: FieldValue::Bool(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Bool(v),
+        }
     }
     pub fn id(key: impl Into<String>, v: [u8; 32]) -> Self {
-        Field { key: key.into(), value: FieldValue::Id(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Id(v),
+        }
     }
     pub fn hash(key: impl Into<String>, v: [u8; 32]) -> Self {
-        Field { key: key.into(), value: FieldValue::Hash(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Hash(v),
+        }
     }
 }
 
@@ -108,7 +132,10 @@ pub fn reflect_cell(id: &CellId, cell: &Cell) -> Inspectable {
         Field::boolean("has_program", has_program),
         Field::text("lifecycle", format!("{:?}", cell.lifecycle)),
         Field::text("mode", format!("{:?}", cell.mode)),
-        Field::text("delegation_epoch", cell.state.delegation_epoch().to_string()),
+        Field::text(
+            "delegation_epoch",
+            cell.state.delegation_epoch().to_string(),
+        ),
     ];
     if let Some(d) = &cell.delegate {
         fields.push(Field::id("delegate", *d.as_bytes()));
@@ -139,7 +166,11 @@ pub fn reflect_cell(id: &CellId, cell: &Cell) -> Inspectable {
     Inspectable {
         kind: ObjectKind::Cell,
         title: format!("Cell {}", short_hex(id.as_bytes())),
-        subtitle: format!("{} computrons · {} caps", cell.state.balance(), cell.capabilities.len()),
+        subtitle: format!(
+            "{} computrons · {} caps",
+            cell.state.balance(),
+            cell.capabilities.len()
+        ),
         fields,
     }
 }
@@ -195,10 +226,7 @@ pub fn reflect_image(world: &World) -> Inspectable {
             Field::count("height", world.height()),
             Field::count("receipts", world.receipts().len() as u64),
             Field::hash("state_root", world.state_root()),
-            Field::text(
-                "executor",
-                "embedded verified (TurnExecutor)".to_string(),
-            ),
+            Field::text("executor", "embedded verified (TurnExecutor)".to_string()),
         ],
     }
 }
@@ -240,7 +268,11 @@ pub fn reflect_proof_status(r: &TurnReceipt) -> Inspectable {
         title: format!("Proof status · {}", short_hex(&r.receipt_hash())),
         subtitle: format!(
             "{} · {} · pre {} → post {}",
-            if signed { "executor-signed" } else { "verified-by-construction" },
+            if signed {
+                "executor-signed"
+            } else {
+                "verified-by-construction"
+            },
             format!("{:?}", r.finality),
             short_hex(&r.pre_state_hash),
             short_hex(&r.post_state_hash),
@@ -341,7 +373,10 @@ mod tests {
         // balance + nonce + id are always present.
         assert!(obj.fields.iter().any(|f| f.key == "balance"));
         assert!(obj.fields.iter().any(|f| f.key == "nonce"));
-        assert!(obj.fields.iter().any(|f| matches!(f.value, FieldValue::Balance(500))));
+        assert!(obj
+            .fields
+            .iter()
+            .any(|f| matches!(f.value, FieldValue::Balance(500))));
     }
 
     #[test]
@@ -408,6 +443,9 @@ mod tests {
         let turn = w.turn(a, vec![transfer(a, b, 10)]);
         assert!(w.commit_turn(turn).is_committed());
         let nulls = reflect_nullifiers(&w.receipts()[0]);
-        assert!(nulls.is_empty(), "an Unchecked transfer spends no one-time authority");
+        assert!(
+            nulls.is_empty(),
+            "an Unchecked transfer spends no one-time authority"
+        );
     }
 }

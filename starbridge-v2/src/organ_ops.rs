@@ -50,9 +50,9 @@
 //! [`crate::organs`].
 
 use dregg_cell::blueprint::{
-    flash_well_cell_program, trustline_cell_program, FlashWellTerms, TrustlineTerms,
-    FW_FEE_SLOT, FW_OWNER_SLOT, FW_PRINCIPAL_SLOT, FW_RATCHET_SLOT, FW_STATE_CLOSED, FW_STATE_SLOT,
-    STATE_OPEN, TL_CEILING_SLOT, TL_DRAWN_SLOT, TL_HOLDER_SLOT, TL_ISSUER_SLOT, TL_SETTLED_SLOT,
+    flash_well_cell_program, trustline_cell_program, FlashWellTerms, TrustlineTerms, FW_FEE_SLOT,
+    FW_OWNER_SLOT, FW_PRINCIPAL_SLOT, FW_RATCHET_SLOT, FW_STATE_CLOSED, FW_STATE_SLOT, STATE_OPEN,
+    TL_CEILING_SLOT, TL_DRAWN_SLOT, TL_HOLDER_SLOT, TL_ISSUER_SLOT, TL_SETTLED_SLOT,
     TL_STATE_CLOSED, TL_STATE_SLOT,
 };
 use dregg_cell::program::field_from_u64;
@@ -202,8 +202,10 @@ impl OrganDriver {
             issuer: *issuer.as_bytes(),
             holder: *holder.as_bytes(),
         };
-        let program = trustline_cell_program(&terms)
-            .map_err(|e| OrganOpError::Blueprint { op: OrganOp::Open, reason: format!("{e:?}") })?;
+        let program = trustline_cell_program(&terms).map_err(|e| OrganOpError::Blueprint {
+            op: OrganOp::Open,
+            reason: format!("{e:?}"),
+        })?;
 
         // Birth the organ cell UNINIT (zero balance — value only ever MOVES), with
         // open permissions so the operator's own turns drive it directly.
@@ -217,7 +219,10 @@ impl OrganDriver {
         match world.commit_turn(fund) {
             CommitOutcome::Committed { .. } => {}
             CommitOutcome::Rejected { reason, .. } => {
-                return Err(OrganOpError::ExecutorRejected { op: OrganOp::Open, reason });
+                return Err(OrganOpError::ExecutorRejected {
+                    op: OrganOp::Open,
+                    reason,
+                });
             }
             CommitOutcome::Queued { .. } => {
                 return Err(OrganOpError::ExecutorRejected {
@@ -235,7 +240,10 @@ impl OrganDriver {
         // durable image reproduces it on replay — NOT a timeless genesis mutation.
         let install = world.turn(organ, vec![world::set_program(organ, program)]);
         if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(install) {
-            return Err(OrganOpError::ExecutorRejected { op: OrganOp::Open, reason });
+            return Err(OrganOpError::ExecutorRejected {
+                op: OrganOp::Open,
+                reason,
+            });
         }
 
         // Write the terms + step UNINIT → OPEN in ONE program-gated turn. With the
@@ -353,7 +361,10 @@ impl OrganDriver {
             ],
         );
         self.commit(world, OrganOp::Settle, organ, turn, |_| {
-            format!("trustline SETTLE {outstanding} → holder (settled → {})", r.drawn)
+            format!(
+                "trustline SETTLE {outstanding} → holder (settled → {})",
+                r.drawn
+            )
         })
     }
 
@@ -388,7 +399,11 @@ impl OrganDriver {
                 op: OrganOp::Close,
                 reason: "outstanding draw but no holder to settle to".into(),
             })?;
-            effects.push(world::set_field(organ, TL_SETTLED_SLOT as usize, field_from_u64(r.drawn)));
+            effects.push(world::set_field(
+                organ,
+                TL_SETTLED_SLOT as usize,
+                field_from_u64(r.drawn),
+            ));
             effects.push(world::transfer(organ, holder, outstanding));
         }
         if residual > 0 {
@@ -399,9 +414,15 @@ impl OrganDriver {
             TL_STATE_SLOT as usize,
             field_from_u64(TL_STATE_CLOSED),
         ));
-        self.commit(world, OrganOp::Close, organ, world.turn(organ, effects), move |_| {
-            format!("trustline CLOSE · settled {outstanding} · residual {residual} → issuer")
-        })
+        self.commit(
+            world,
+            OrganOp::Close,
+            organ,
+            world.turn(organ, effects),
+            move |_| {
+                format!("trustline CLOSE · settled {outstanding} · residual {residual} → issuer")
+            },
+        )
     }
 
     // ── FLASH-WELL VERBS ─────────────────────────────────────────────────────
@@ -451,8 +472,10 @@ impl OrganDriver {
             owner: owner_pubkey,
             max_draws,
         };
-        let program = flash_well_cell_program(&terms)
-            .map_err(|e| OrganOpError::Blueprint { op: OrganOp::Open, reason: format!("{e:?}") })?;
+        let program = flash_well_cell_program(&terms).map_err(|e| OrganOpError::Blueprint {
+            op: OrganOp::Open,
+            reason: format!("{e:?}"),
+        })?;
 
         // Fund the well with the principal (a real conserving Transfer-in while
         // UNINIT — before the floor teeth are live).
@@ -460,7 +483,10 @@ impl OrganDriver {
         match world.commit_turn(fund) {
             CommitOutcome::Committed { .. } => {}
             CommitOutcome::Rejected { reason, .. } => {
-                return Err(OrganOpError::ExecutorRejected { op: OrganOp::Open, reason });
+                return Err(OrganOpError::ExecutorRejected {
+                    op: OrganOp::Open,
+                    reason,
+                });
             }
             CommitOutcome::Queued { .. } => {
                 return Err(OrganOpError::ExecutorRejected {
@@ -475,7 +501,10 @@ impl OrganDriver {
         // Lands a `CommitRecord` so a durable image reproduces it on replay.
         let install = world.turn(well, vec![world::set_program(well, program)]);
         if let CommitOutcome::Rejected { reason, .. } = world.commit_turn(install) {
-            return Err(OrganOpError::ExecutorRejected { op: OrganOp::Open, reason });
+            return Err(OrganOpError::ExecutorRejected {
+                op: OrganOp::Open,
+                reason,
+            });
         }
         // Write terms + prime the ratchet at rung 1 (the priming quantum = fee, the
         // schedule origin) + step UNINIT → OPEN. With state == OPEN, the term-pins
@@ -572,7 +601,10 @@ impl OrganDriver {
             ],
         );
         self.commit(world, OrganOp::Draw, well, turn, move |_| {
-            format!("flash well BORROW {amount} (ratchet → {next_ratchet}, +{} fee)", r.fee)
+            format!(
+                "flash well BORROW {amount} (ratchet → {next_ratchet}, +{} fee)",
+                r.fee
+            )
         })
     }
 
@@ -597,12 +629,19 @@ impl OrganDriver {
         let turn = world.turn(
             well,
             vec![
-                world::set_field(well, FW_STATE_SLOT as usize, field_from_u64(FW_STATE_CLOSED)),
+                world::set_field(
+                    well,
+                    FW_STATE_SLOT as usize,
+                    field_from_u64(FW_STATE_CLOSED),
+                ),
                 world::transfer(well, sweep_to, balance),
             ],
         );
         self.commit(world, OrganOp::Close, well, turn, move |_| {
-            format!("flash well CLOSE · swept {balance} → {}", crate::reflect::short_hex(sweep_to.as_bytes()))
+            format!(
+                "flash well CLOSE · swept {balance} → {}",
+                crate::reflect::short_hex(sweep_to.as_bytes())
+            )
         })
     }
 
@@ -719,8 +758,12 @@ mod tests {
     fn draw_within_the_line_commits_and_moves_the_drawn_counter() {
         let (mut world, issuer, holder) = world_with_parties();
         let d = OrganDriver::new();
-        let (organ, _) = d.open_trustline(&mut world, 0x71, issuer, holder, 100).unwrap();
-        let o = d.draw_trustline(&mut world, organ, 40).expect("a draw within the line commits");
+        let (organ, _) = d
+            .open_trustline(&mut world, 0x71, issuer, holder, 100)
+            .unwrap();
+        let o = d
+            .draw_trustline(&mut world, organ, 40)
+            .expect("a draw within the line commits");
         assert_eq!(o.op, OrganOp::Draw);
         let r = d.reflect_trustline(&world, organ).unwrap();
         assert_eq!(r.drawn, 40, "the drawn counter moved");
@@ -735,16 +778,23 @@ mod tests {
         // ceiling)` tooth must REJECT it IN-PROTOCOL.
         let (mut world, issuer, holder) = world_with_parties();
         let d = OrganDriver::new();
-        let (organ, _) = d.open_trustline(&mut world, 0x71, issuer, holder, 100).unwrap();
+        let (organ, _) = d
+            .open_trustline(&mut world, 0x71, issuer, holder, 100)
+            .unwrap();
         // Draw the whole line legitimately.
-        d.draw_trustline(&mut world, organ, 100).expect("drawing exactly the line is fine");
+        d.draw_trustline(&mut world, organ, 100)
+            .expect("drawing exactly the line is fine");
         assert_eq!(d.reflect_trustline(&world, organ).unwrap().drawn, 100);
         let h_before = world.height();
         // Now attempt drawn := 101 DIRECTLY (the driver's pre-check would catch
         // it, so we forge the raw turn to prove the EXECUTOR refuses it).
         let over = world.turn(
             organ,
-            vec![world::set_field(organ, TL_DRAWN_SLOT as usize, field_from_u64(101))],
+            vec![world::set_field(
+                organ,
+                TL_DRAWN_SLOT as usize,
+                field_from_u64(101),
+            )],
         );
         let outcome = world.commit_turn(over);
         assert!(
@@ -752,17 +802,28 @@ mod tests {
             "an over-line draw must be REFUSED by the installed trustline program"
         );
         // Fail-closed: no commit, drawn unchanged, height unmoved.
-        assert_eq!(world.height(), h_before, "the refused over-line draw did not commit");
-        assert_eq!(d.reflect_trustline(&world, organ).unwrap().drawn, 100, "drawn held at the line");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "the refused over-line draw did not commit"
+        );
+        assert_eq!(
+            d.reflect_trustline(&world, organ).unwrap().drawn,
+            100,
+            "drawn held at the line"
+        );
     }
 
     #[test]
     fn draw_then_repay_round_trips_the_line() {
         let (mut world, issuer, holder) = world_with_parties();
         let d = OrganDriver::new();
-        let (organ, _) = d.open_trustline(&mut world, 0x71, issuer, holder, 100).unwrap();
+        let (organ, _) = d
+            .open_trustline(&mut world, 0x71, issuer, holder, 100)
+            .unwrap();
         d.draw_trustline(&mut world, organ, 70).unwrap();
-        d.repay_trustline(&mut world, organ, 30).expect("a repay within outstanding commits");
+        d.repay_trustline(&mut world, organ, 30)
+            .expect("a repay within outstanding commits");
         let r = d.reflect_trustline(&world, organ).unwrap();
         assert_eq!(r.drawn, 40, "drawn restored by the repay (70 − 30)");
         assert_eq!(r.remaining, 60);
@@ -772,26 +833,38 @@ mod tests {
     fn settle_redeems_the_outstanding_draw_to_the_holder_and_conserves() {
         let (mut world, issuer, holder) = world_with_parties();
         let d = OrganDriver::new();
-        let (organ, _) = d.open_trustline(&mut world, 0x71, issuer, holder, 100).unwrap();
+        let (organ, _) = d
+            .open_trustline(&mut world, 0x71, issuer, holder, 100)
+            .unwrap();
         d.draw_trustline(&mut world, organ, 60).unwrap();
         let holder_before = world.ledger().get(&holder).unwrap().state.balance();
         let escrow_before = world.ledger().get(&organ).unwrap().state.balance();
-        let o = d.settle_trustline(&mut world, organ).expect("settle commits");
+        let o = d
+            .settle_trustline(&mut world, organ)
+            .expect("settle commits");
         assert_eq!(o.op, OrganOp::Settle);
         let r = d.reflect_trustline(&world, organ).unwrap();
         assert_eq!(r.settled, 60, "settled := drawn");
         assert_eq!(r.outstanding, 0, "nothing outstanding after settle");
         // The holder received the outstanding amount; the escrow shrank by it
         // (conservation — the hard move).
-        assert_eq!(world.ledger().get(&holder).unwrap().state.balance(), holder_before + 60);
-        assert_eq!(world.ledger().get(&organ).unwrap().state.balance(), escrow_before - 60);
+        assert_eq!(
+            world.ledger().get(&holder).unwrap().state.balance(),
+            holder_before + 60
+        );
+        assert_eq!(
+            world.ledger().get(&organ).unwrap().state.balance(),
+            escrow_before - 60
+        );
     }
 
     #[test]
     fn close_returns_the_residual_and_makes_the_cell_inert() {
         let (mut world, issuer, holder) = world_with_parties();
         let d = OrganDriver::new();
-        let (organ, _) = d.open_trustline(&mut world, 0x71, issuer, holder, 100).unwrap();
+        let (organ, _) = d
+            .open_trustline(&mut world, 0x71, issuer, holder, 100)
+            .unwrap();
         d.draw_trustline(&mut world, organ, 40).unwrap();
         let issuer_before = world.ledger().get(&issuer).unwrap().state.balance();
         let holder_before = world.ledger().get(&holder).unwrap().state.balance();
@@ -801,13 +874,23 @@ mod tests {
         assert!(r.closed, "the line is CLOSED");
         // The outstanding 40 went to the holder; the residual 60 returned to the
         // issuer (escrow was 100). Total conserved.
-        assert_eq!(world.ledger().get(&holder).unwrap().state.balance(), holder_before + 40);
-        assert_eq!(world.ledger().get(&issuer).unwrap().state.balance(), issuer_before + 60);
+        assert_eq!(
+            world.ledger().get(&holder).unwrap().state.balance(),
+            holder_before + 40
+        );
+        assert_eq!(
+            world.ledger().get(&issuer).unwrap().state.balance(),
+            issuer_before + 60
+        );
         // INERT: a draw on the closed line is refused by the lifecycle table.
         let h_before = world.height();
         let r2 = d.draw_trustline(&mut world, organ, 1);
         assert!(r2.is_err(), "a draw on a CLOSED line must be refused");
-        assert_eq!(world.height(), h_before, "no turn committed on the closed organ");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "no turn committed on the closed organ"
+        );
     }
 
     // ── FLASH WELL: open / borrow / close as REAL turns ──────────────────────
@@ -836,14 +919,22 @@ mod tests {
             .open_flash_well(&mut world, 0x72, funder, 1_000, 5, 4)
             .unwrap();
         let borrower_before = world.ledger().get(&borrower).unwrap().state.balance();
-        let o = d.borrow_flash_well(&mut world, well, borrower, 600).expect("a borrow ring commits");
+        let o = d
+            .borrow_flash_well(&mut world, well, borrower, 600)
+            .expect("a borrow ring commits");
         assert_eq!(o.op, OrganOp::Draw);
         let r = d.reflect_flash_well(&world, well).unwrap();
         assert_eq!(r.ratchet, 10, "the ratchet climbed one rung (5 → 10)");
         assert_eq!(r.accrued_fees, 5, "accrued = ratchet − fee = 10 − 5");
-        assert_eq!(r.balance, 1_005, "the well accrued the fee (principal + fee)");
+        assert_eq!(
+            r.balance, 1_005,
+            "the well accrued the fee (principal + fee)"
+        );
         // The borrower paid the fee net (drew 600, repaid 605).
-        assert_eq!(world.ledger().get(&borrower).unwrap().state.balance(), borrower_before - 5);
+        assert_eq!(
+            world.ledger().get(&borrower).unwrap().state.balance(),
+            borrower_before - 5
+        );
     }
 
     #[test]
@@ -889,7 +980,11 @@ mod tests {
                 "the refusal must be the ratchet program tooth, not a cap/balance gate; got: {reason}"
             );
         }
-        assert_eq!(world.height(), h_before, "the fee-evading touch did not commit");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "the fee-evading touch did not commit"
+        );
         assert_eq!(
             d.reflect_flash_well(&world, well).unwrap().ratchet,
             ratchet_before,
@@ -905,11 +1000,14 @@ mod tests {
             .open_flash_well(&mut world, 0x72, funder, 1_000, 5, 4)
             .unwrap();
         // One borrow so there's an accrued fee in the sweep.
-        d.borrow_flash_well(&mut world, well, borrower, 200).unwrap();
+        d.borrow_flash_well(&mut world, well, borrower, 200)
+            .unwrap();
         let sweep_to = funder;
         let funder_before = world.ledger().get(&sweep_to).unwrap().state.balance();
         let well_balance = world.ledger().get(&well).unwrap().state.balance();
-        let o = d.close_flash_well(&mut world, well, sweep_to).expect("close+sweep commits");
+        let o = d
+            .close_flash_well(&mut world, well, sweep_to)
+            .expect("close+sweep commits");
         assert_eq!(o.op, OrganOp::Close);
         let r = d.reflect_flash_well(&world, well).unwrap();
         assert!(r.closed, "the well is CLOSED");
@@ -921,7 +1019,11 @@ mod tests {
         // INERT: a borrow on the closed well is refused.
         let h_before = world.height();
         assert!(d.borrow_flash_well(&mut world, well, borrower, 1).is_err());
-        assert_eq!(world.height(), h_before, "no turn committed on the closed well");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "no turn committed on the closed well"
+        );
     }
 
     #[test]
@@ -930,14 +1032,29 @@ mod tests {
         // open two organs, drive them, and confirm OrganSurvey sees the result.
         let (mut world, issuer, holder) = world_with_parties();
         let d = OrganDriver::new();
-        let (tl, _) = d.open_trustline(&mut world, 0x71, issuer, holder, 100).unwrap();
+        let (tl, _) = d
+            .open_trustline(&mut world, 0x71, issuer, holder, 100)
+            .unwrap();
         d.draw_trustline(&mut world, tl, 30).unwrap();
-        let (_well, _) = d.open_flash_well(&mut world, 0x72, issuer, 1_000, 5, 4).unwrap();
+        let (_well, _) = d
+            .open_flash_well(&mut world, 0x72, issuer, 1_000, 5, 4)
+            .unwrap();
 
         let survey = crate::organs::OrganSurvey::build(&world);
-        assert_eq!(survey.trustlines.len(), 1, "the driven trustline is in the survey");
-        assert_eq!(survey.trustlines[0].drawn, 30, "the survey reflects the driven draw");
-        assert_eq!(survey.flash_wells.len(), 1, "the driven flash well is in the survey");
+        assert_eq!(
+            survey.trustlines.len(),
+            1,
+            "the driven trustline is in the survey"
+        );
+        assert_eq!(
+            survey.trustlines[0].drawn, 30,
+            "the survey reflects the driven draw"
+        );
+        assert_eq!(
+            survey.flash_wells.len(),
+            1,
+            "the driven flash well is in the survey"
+        );
         assert!(survey.flash_wells[0].open);
     }
 }

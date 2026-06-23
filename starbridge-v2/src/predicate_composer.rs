@@ -60,11 +60,11 @@ use dregg_cell::{
     field_from_u64, CellId, CellProgram, CellState, EvalContext, ProgramError, StateConstraint,
 };
 
-use crate::reflect::{self, Field, Inspectable, ObjectKind};
 use crate::presentable::{
-    GadgetError, GadgetValidation, Presentable, PresentCtx, Presentation, PresentationBody,
+    GadgetError, GadgetValidation, PresentCtx, Presentable, Presentation, PresentationBody,
     PresentationKind, TraceStep, TraceView,
 };
+use crate::reflect::{self, Field, Inspectable, ObjectKind};
 use crate::simulate::{self, EffectKind, IntentDraft, SimOutcome};
 use crate::world::{CommitOutcome, World};
 
@@ -671,11 +671,17 @@ fn constraint_inspectable(c: &StateConstraint) -> Inspectable {
             )],
         ),
         StateConstraint::AnyOfBound { branches } => {
-            let witnessed = branches.iter().filter(|b| matches!(b, BoundBranch::Witnessed { .. })).count();
+            let witnessed = branches
+                .iter()
+                .filter(|b| matches!(b, BoundBranch::Witnessed { .. }))
+                .count();
             (
                 "AnyOfBound (anti-strip disjunction)".to_string(),
                 vec![
-                    Field::text("branches".to_string(), format!("{} branch(es)", branches.len())),
+                    Field::text(
+                        "branches".to_string(),
+                        format!("{} branch(es)", branches.len()),
+                    ),
                     Field::text(
                         "witnessed".to_string(),
                         format!("{witnessed} proof-bearing branch(es) (each names its own proof)"),
@@ -733,7 +739,10 @@ fn constraint_prose(c: &StateConstraint) -> String {
                     ),
                 })
                 .collect();
-            format!("at least one branch holds (anti-strip): {}", parts.join("; OR "))
+            format!(
+                "at least one branch holds (anti-strip): {}",
+                parts.join("; OR ")
+            )
         }
         StateConstraint::FieldEquals { index, value } => {
             format!("slot {index} must equal {}", field_prose(value))
@@ -984,7 +993,10 @@ mod tests {
         match built {
             StateConstraint::AnyOf { variants } => {
                 assert_eq!(variants.len(), 2);
-                assert!(matches!(variants[0], SimpleStateConstraint::SenderIs { .. }));
+                assert!(matches!(
+                    variants[0],
+                    SimpleStateConstraint::SenderIs { .. }
+                ));
                 assert!(matches!(
                     variants[1],
                     SimpleStateConstraint::FieldEquals { index: 0, .. }
@@ -1200,7 +1212,10 @@ mod tests {
         new_bad.set_field(0, field_from_u64(500));
         let refl_bad =
             ReflectedConstraint::new(composer.build().unwrap()).with_sample(new_bad, None, None);
-        assert!(!refl_bad.sample_accepts(), "slot 0 = 500 violates slot 0 ≤ 100");
+        assert!(
+            !refl_bad.sample_accepts(),
+            "slot 0 = 500 violates slot 0 ≤ 100"
+        );
         let trace_bad = refl_bad.trace();
         assert!(
             trace_bad.steps.iter().any(|s| s.label.contains("REJECT")),

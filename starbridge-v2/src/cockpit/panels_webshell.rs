@@ -212,7 +212,10 @@ impl Cockpit {
     #[cfg(feature = "web-shell")]
     fn webshell_surface_cap(&self) -> starbridge_web_surface::SurfaceCapability {
         let owner = self.anchors[1]; // the `service` anchor — the surface principal
-        starbridge_web_surface::SurfaceCapability::root(owner, starbridge_web_surface::AuthRequired::Either)
+        starbridge_web_surface::SurfaceCapability::root(
+            owner,
+            starbridge_web_surface::AuthRequired::Either,
+        )
     }
 
     /// Render the current history URL into the content tile through the real,
@@ -244,7 +247,8 @@ impl Cockpit {
             // the socket by the held cap, or unreachable on the transport.
             let net_line = match &net {
                 Some(o) => o.status_line(),
-                None => "net-cap: (no socket fetch this navigation — e.g. an inline/data page)".to_string(),
+                None => "net-cap: (no socket fetch this navigation — e.g. an inline/data page)"
+                    .to_string(),
             };
             match frame {
                 Some(f) => {
@@ -304,16 +308,11 @@ impl Cockpit {
 
         // ── header ──
         col = col.child(section_title("🌐 WEB-SHELL — a general http(s):// browser"));
-        col = col.child(
-            div()
-                .text_xs()
-                .text_color(theme::muted())
-                .child(
-                    "A real Servo WebView render of a live web page, behind the net-cap \
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "A real Servo WebView render of a live web page, behind the net-cap \
                      allowlist (granted ⊆ held). dregg:// addresses route to the \
                      WEB-OF-CELLS browser.",
-                ),
-        );
+        ));
 
         // ── the navigation toolbar: ← → ⟳ + the URL bar + Go ──
         let mut toolbar = div().flex().items_center().gap_1().mt_1();
@@ -322,14 +321,22 @@ impl Cockpit {
             cx,
             "←",
             "webshell-back",
-            if can_back { theme::accent() } else { theme::muted() },
+            if can_back {
+                theme::accent()
+            } else {
+                theme::muted()
+            },
             Cockpit::webshell_back,
         ));
         toolbar = toolbar.child(nav_button(
             cx,
             "→",
             "webshell-forward",
-            if can_fwd { theme::accent() } else { theme::muted() },
+            if can_fwd {
+                theme::accent()
+            } else {
+                theme::muted()
+            },
             Cockpit::webshell_forward,
         ));
         toolbar = toolbar.child(nav_button(
@@ -344,11 +351,7 @@ impl Cockpit {
         // `ensure_webshell_input`). When not yet seeded (first frame / headless) show
         // the current URL as a static field so the bar is never blank.
         if let Some(input) = self.webshell_input.as_ref() {
-            toolbar = toolbar.child(
-                div()
-                    .flex_1()
-                    .child(Input::new(input)),
-            );
+            toolbar = toolbar.child(div().flex_1().child(Input::new(input)));
         } else {
             toolbar = toolbar.child(
                 div()
@@ -555,11 +558,14 @@ fn nav_button(
     color: Hsla,
     handler: fn(&mut Cockpit, &mut Context<Cockpit>),
 ) -> impl IntoElement {
-    button_variant(Button::new(SharedString::from(id.to_string())).label(label.to_string()), color)
-        .small()
-        .on_click(cx.listener(move |this, _ev: &ClickEvent, _window, cx| {
-            handler(this, cx);
-        }))
+    button_variant(
+        Button::new(SharedString::from(id.to_string())).label(label.to_string()),
+        color,
+    )
+    .small()
+    .on_click(cx.listener(move |this, _ev: &ClickEvent, _window, cx| {
+        handler(this, cx);
+    }))
 }
 
 #[cfg(test)]
@@ -568,14 +574,26 @@ mod tests {
 
     #[test]
     fn normalize_passes_through_full_urls() {
-        assert_eq!(normalize_url("https://example.com").as_deref(), Some("https://example.com"));
-        assert_eq!(normalize_url("http://a.b/c").as_deref(), Some("http://a.b/c"));
-        assert_eq!(normalize_url("dregg://cell/0").as_deref(), Some("dregg://cell/0"));
+        assert_eq!(
+            normalize_url("https://example.com").as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            normalize_url("http://a.b/c").as_deref(),
+            Some("http://a.b/c")
+        );
+        assert_eq!(
+            normalize_url("dregg://cell/0").as_deref(),
+            Some("dregg://cell/0")
+        );
     }
 
     #[test]
     fn normalize_defaults_bare_hosts_to_https() {
-        assert_eq!(normalize_url("example.com").as_deref(), Some("https://example.com"));
+        assert_eq!(
+            normalize_url("example.com").as_deref(),
+            Some("https://example.com")
+        );
         assert_eq!(normalize_url("  a.b/c  ").as_deref(), Some("https://a.b/c"));
     }
 

@@ -72,7 +72,10 @@ impl Cockpit {
             // Target = the selected cell; pay a token amount to `user` so there
             // is an effect to step (the debugger re-executes faithfully).
             let to = if user == id { self.anchors[0] } else { user };
-            self.debug_turn = self.world.borrow().turn(id, vec![world::transfer(id, to, 100)]);
+            self.debug_turn = self
+                .world
+                .borrow()
+                .turn(id, vec![world::transfer(id, to, 100)]);
             self.tab = Tab::Debugger;
             cx.notify();
         } else {
@@ -101,7 +104,9 @@ impl Cockpit {
         let short = reflect::short_hex(cell.as_bytes());
         let cap = self.shell.open_cell_view(cell, format!("cell {short}"));
         self.surface_caps.insert(cap.surface(), cap);
-        self.last_outcome = Some(format!("shell: opened surface for cell {short} (cap minted)"));
+        self.last_outcome = Some(format!(
+            "shell: opened surface for cell {short} (cap minted)"
+        ));
         self.tab = Tab::Shell;
         cx.notify();
     }
@@ -144,7 +149,8 @@ impl Cockpit {
         match outcome {
             Ok(()) => {
                 self.surface_caps.remove(&id);
-                self.last_outcome = Some("shell: closed the focused surface (cap retired)".to_string());
+                self.last_outcome =
+                    Some("shell: closed the focused surface (cap retired)".to_string());
             }
             Err(e) => {
                 self.last_outcome = Some(format!("shell: close REFUSED — {}", shell_err(&e)));
@@ -160,7 +166,12 @@ impl Cockpit {
             cx.notify();
             return;
         };
-        self.with_cap(id, |shell, cap| shell.set_minimized(cap, true), cx, "minimize");
+        self.with_cap(
+            id,
+            |shell, cap| shell.set_minimized(cap, true),
+            cx,
+            "minimize",
+        );
     }
 
     /// SHARE the focused window with another app — an ATTENUATING (read-only
@@ -180,7 +191,11 @@ impl Cockpit {
             return;
         };
         // Hand a READ-ONLY mirror (Signature ⊆ the held rights) to a peer app.
-        match self.shell.share(&cap, /*peer app*/ 0x5EED, dregg_cell::AuthRequired::Signature) {
+        match self.shell.share(
+            &cap,
+            /*peer app*/ 0x5EED,
+            dregg_cell::AuthRequired::Signature,
+        ) {
             Ok(shared) => {
                 self.surface_caps.insert(shared.surface(), shared);
                 self.last_outcome = Some(
@@ -214,7 +229,11 @@ impl Cockpit {
             return;
         };
         // Step 1: legitimately hand a peer a read-only mirror (commits).
-        let mirror = match self.shell.share(&cap, /*peer*/ 0xA11CE, dregg_cell::AuthRequired::Signature) {
+        let mirror = match self.shell.share(
+            &cap,
+            /*peer*/ 0xA11CE,
+            dregg_cell::AuthRequired::Signature,
+        ) {
             Ok(m) => m,
             Err(e) => {
                 self.last_outcome = Some(format!("shell: setup share failed — {}", shell_err(&e)));
@@ -225,10 +244,15 @@ impl Cockpit {
         self.surface_caps.insert(mirror.surface(), mirror.clone());
         // Step 2: that read-only-mirror peer tries to OVER-SHARE (Signature →
         // Either is WIDER). The real executor REJECTS it — watch it fire.
-        match self.shell.share(&mirror, /*victim*/ 0xBAD, dregg_cell::AuthRequired::Either) {
+        match self.shell.share(
+            &mirror,
+            /*victim*/ 0xBAD,
+            dregg_cell::AuthRequired::Either,
+        ) {
             Ok(_) => {
-                self.last_outcome =
-                    Some("shell: over-share UNEXPECTEDLY committed (should have rejected!)".to_string());
+                self.last_outcome = Some(
+                    "shell: over-share UNEXPECTEDLY committed (should have rejected!)".to_string(),
+                );
             }
             Err(e) => {
                 self.last_outcome = Some(format!(
@@ -273,7 +297,10 @@ impl Cockpit {
         let region = id.region();
         let digest = self.next_frame_digest();
         let w = self.world.borrow();
-        match self.shell.present(&cap, &w, vec![region], /*claims_focus*/ true, digest) {
+        match self
+            .shell
+            .present(&cap, &w, vec![region], /*claims_focus*/ true, digest)
+        {
             Ok(commit) => {
                 self.last_outcome = Some(format!(
                     "shell: present COMMITTED — frame {} on the focused surface (genuine projection)",
@@ -323,7 +350,10 @@ impl Cockpit {
             cx.notify();
             return;
         };
-        match self.shell.present(&cap, &w, vec![victim_region], true, digest) {
+        match self
+            .shell
+            .present(&cap, &w, vec![victim_region], true, digest)
+        {
             Ok(_) => {
                 self.last_outcome = Some(
                     "shell: overpaint UNEXPECTEDLY committed (should have rejected!)".to_string(),
@@ -370,7 +400,10 @@ impl Cockpit {
             return;
         };
         let region = thief.region();
-        match self.shell.present(&cap, &w, vec![region], /*claims_focus*/ true, digest) {
+        match self
+            .shell
+            .present(&cap, &w, vec![region], /*claims_focus*/ true, digest)
+        {
             Ok(_) => {
                 self.last_outcome = Some(
                     "shell: input-steal UNEXPECTEDLY committed (should have rejected!)".to_string(),
@@ -420,5 +453,4 @@ impl Cockpit {
         }
         cx.notify();
     }
-
 }

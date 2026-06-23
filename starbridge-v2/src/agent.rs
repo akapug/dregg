@@ -252,9 +252,9 @@ fn build_actions(world: &World, agent: &CellId, max: usize) -> Vec<AgentAction> 
 /// that immediately follow it (the transition's effects).
 fn describe_committed(events: &[WorldEvent], receipt_hash: [u8; 32]) -> (Option<u64>, String) {
     // Locate the TurnCommitted with this receipt hash.
-    let idx = events.iter().position(|e| {
-        matches!(e, WorldEvent::TurnCommitted { receipt_hash: rh, .. } if *rh == receipt_hash)
-    });
+    let idx = events.iter().position(
+        |e| matches!(e, WorldEvent::TurnCommitted { receipt_hash: rh, .. } if *rh == receipt_hash),
+    );
     let Some(idx) = idx else {
         return (None, "committed".to_string());
     };
@@ -462,7 +462,11 @@ mod tests {
         // with a real receipt + a human-meaningful summary of what it did.
         let (w, agent, _peer) = agent_world();
         let act = AgentActivity::build(&w, agent, 16);
-        assert_eq!(act.committed_action_count(), 2, "two committed cap-gated turns");
+        assert_eq!(
+            act.committed_action_count(),
+            2,
+            "two committed cap-gated turns"
+        );
         // Every committed action carries a receipt hash (the provenance chain).
         for a in act.actions.iter().filter(|a| a.committed) {
             assert!(a.receipt_hash.is_some(), "a committed action has a receipt");
@@ -479,7 +483,9 @@ mod tests {
         );
         // The grant's summary mentions the cap it granted.
         assert!(
-            act.actions.iter().any(|a| a.summary.contains("granted cap")),
+            act.actions
+                .iter()
+                .any(|a| a.summary.contains("granted cap")),
             "the grant action summarizes the cap it granted"
         );
     }
@@ -491,16 +497,25 @@ mod tests {
         // boundary.
         let (w, agent, _peer) = agent_world();
         let act = AgentActivity::build(&w, agent, 16);
-        assert!(!act.authorizations.is_empty(), "the authorization boundary is projected");
+        assert!(
+            !act.authorizations.is_empty(),
+            "the authorization boundary is projected"
+        );
         // It CAN act on a peer (it holds an outbound cap).
         let act_peer = act
             .authorizations
             .iter()
             .find(|a| a.verb == "act on a peer cell")
             .unwrap();
-        assert!(act_peer.permitted, "the agent can act on a peer (holds a cap)");
+        assert!(
+            act_peer.permitted,
+            "the agent can act on a peer (holds a cap)"
+        );
         // The open-permissions demo agent can send value + modify state.
-        assert!(act.authorizations.iter().any(|a| a.verb == "send value" && a.permitted));
+        assert!(act
+            .authorizations
+            .iter()
+            .any(|a| a.verb == "send value" && a.permitted));
     }
 
     #[test]
@@ -517,8 +532,14 @@ mod tests {
             .iter()
             .find(|a| a.verb == "act on a peer cell")
             .unwrap();
-        assert!(!act_peer.permitted, "it is NOT authorized to act on a peer (confined)");
-        assert!(act_peer.note.contains("confined"), "the boundary is shown honestly");
+        assert!(
+            !act_peer.permitted,
+            "it is NOT authorized to act on a peer (confined)"
+        );
+        assert!(
+            act_peer.note.contains("confined"),
+            "the boundary is shown honestly"
+        );
     }
 
     #[test]
@@ -532,13 +553,21 @@ mod tests {
         let target = w.genesis_cell(0x66, 0);
         // The agent attempts to grant a cap it does NOT hold → rejected.
         let bad = w.turn(agent, vec![grant_capability(agent, agent, target, 0)]);
-        assert!(!w.commit_turn(bad).is_committed(), "over-grant must be refused");
+        assert!(
+            !w.commit_turn(bad).is_committed(),
+            "over-grant must be refused"
+        );
         let act = AgentActivity::build(&w, agent, 16);
         // The refused action appears, flagged committed=false.
         assert!(
-            act.actions.iter().any(|a| !a.committed && a.summary.contains("REFUSED")),
+            act.actions
+                .iter()
+                .any(|a| !a.committed && a.summary.contains("REFUSED")),
             "the refused over-grant is surfaced as REFUSED, got {:?}",
-            act.actions.iter().map(|a| (a.committed, &a.summary)).collect::<Vec<_>>()
+            act.actions
+                .iter()
+                .map(|a| (a.committed, &a.summary))
+                .collect::<Vec<_>>()
         );
         assert_eq!(act.committed_action_count(), 0, "no action committed");
     }
@@ -564,6 +593,9 @@ mod tests {
         assert_eq!(surf.agent, agent);
         let act = surf.activity(&w, 8);
         assert_eq!(act.agent, agent);
-        assert!(act.committed_action_count() >= 1, "the bound surface renders real activity");
+        assert!(
+            act.committed_action_count() >= 1,
+            "the bound surface renders real activity"
+        );
     }
 }

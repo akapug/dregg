@@ -331,7 +331,9 @@ mod tests {
         let w = proven_world();
         let board = ProofBoard::build(&w, usize::MAX);
         // A tier-1 turn's upgrade route names the signature + STARK path honestly.
-        let route = board.entries[0].upgrade_route().expect("tier 1 has a next tier");
+        let route = board.entries[0]
+            .upgrade_route()
+            .expect("tier 1 has a next tier");
         assert!(route.contains("signature") || route.contains("STARK"));
         // The top tier has no further route.
         assert_eq!(VerificationTier::StarkAttached.next_route(), None);
@@ -357,7 +359,10 @@ mod tests {
         assert!(w.commit_turn(t).is_committed());
         let board = ProofBoard::build(&w, usize::MAX);
         assert_eq!(board.len(), 1);
-        assert!(board.entries[0].burn_disclosed, "the burn is disclosed on the proof entry");
+        assert!(
+            board.entries[0].burn_disclosed,
+            "the burn is disclosed on the proof entry"
+        );
     }
 
     #[test]

@@ -164,7 +164,9 @@ impl ImageResponder {
         };
         let request = MirrorFrame::decode(&frame_bytes).ok_or(ResponderError::Malformed)?;
         let reply = self.answer(&request);
-        conn.send(reply.encode()).await.map_err(ResponderError::Send)?;
+        conn.send(reply.encode())
+            .await
+            .map_err(ResponderError::Send)?;
         Ok(true)
     }
 }
@@ -375,7 +377,9 @@ mod tests {
 
         // Alice dials bob; bob accepts. Now there is a live bidirectional NetSession.
         let a_sess = run(alice.dial(&[0xb0; 32])).unwrap();
-        let b_sess = run(bob.accept()).unwrap().expect("bob accepts alice's dial");
+        let b_sess = run(bob.accept())
+            .unwrap()
+            .expect("bob accepts alice's dial");
 
         // Bob's image serves cell `watched` at ReadState depth.
         let responder = ImageResponder::new(MirrorDepth::ReadState)
@@ -408,7 +412,9 @@ mod tests {
 
         // Now alice's recv leg holds bob's CellSnapshot reply. Drain it directly to
         // prove the wire round-trip carried the real state.
-        let snapshot_bytes = run(a_sess.conn.recv()).unwrap().expect("a reply is waiting");
+        let snapshot_bytes = run(a_sess.conn.recv())
+            .unwrap()
+            .expect("a reply is waiting");
         match MirrorFrame::decode(&snapshot_bytes).unwrap() {
             MirrorFrame::CellSnapshot { entry } => {
                 assert_eq!(entry.balance, 1234, "the real balance crossed the wire");
@@ -460,9 +466,15 @@ mod tests {
         // byte leaves the box: a read-only mirror simply holds no write authority.
         match mirror.propose_edit() {
             Err(MirrorRefusal::EditUnauthorized { held }) => {
-                assert_eq!(held, AuthRequired::Signature, "the read-only mirror held only Signature");
+                assert_eq!(
+                    held,
+                    AuthRequired::Signature,
+                    "the read-only mirror held only Signature"
+                );
             }
-            other => panic!("a read-only mirror must NOT author an edit over the wire, got {other:?}"),
+            other => {
+                panic!("a read-only mirror must NOT author an edit over the wire, got {other:?}")
+            }
         }
     }
 
@@ -492,13 +504,24 @@ mod tests {
 
         // What actually crossed the wire: state is ZEROED (no amplification on the
         // serve face), shape survives.
-        let bytes = run(a_sess.conn.recv()).unwrap().expect("a reply is waiting");
+        let bytes = run(a_sess.conn.recv())
+            .unwrap()
+            .expect("a reply is waiting");
         match MirrorFrame::decode(&bytes).unwrap() {
             MirrorFrame::CellSnapshot { entry } => {
-                assert_eq!(entry.balance, 0, "a Structure responder zeroes balance on the wire");
-                assert_eq!(entry.nonce, 0, "a Structure responder zeroes nonce on the wire");
+                assert_eq!(
+                    entry.balance, 0,
+                    "a Structure responder zeroes balance on the wire"
+                );
+                assert_eq!(
+                    entry.nonce, 0,
+                    "a Structure responder zeroes nonce on the wire"
+                );
                 // SHAPE survives: the cap count and id are intact.
-                assert_eq!(entry.capability_count, 2, "shape (cap count) crosses the wire");
+                assert_eq!(
+                    entry.capability_count, 2,
+                    "shape (cap count) crosses the wire"
+                );
                 assert_eq!(entry.id, dregg_types::hex_encode(watched.as_bytes()));
             }
             other => panic!("expected a redacted CellSnapshot, got {other:?}"),
@@ -530,7 +553,10 @@ mod tests {
             responder.serve_one(&b_sess.conn).await.unwrap();
             img.fetch_over_wire(asked).await
         });
-        assert!(got.is_none(), "an absent remote cell is None over the wire, never a faked zero-snapshot");
+        assert!(
+            got.is_none(),
+            "an absent remote cell is None over the wire, never a faked zero-snapshot"
+        );
     }
 
     // ---- the MirrorFrame codec round-trips (the wire contract) ------------------
@@ -549,6 +575,9 @@ mod tests {
         assert_eq!(MirrorFrame::decode(&f3.encode()), Some(f3));
 
         // Garbage is rejected, not silently coerced.
-        assert!(MirrorFrame::decode(&[0xff, 0xff, 0xff, 0xff]).is_none() || MirrorFrame::decode(&[]).is_none());
+        assert!(
+            MirrorFrame::decode(&[0xff, 0xff, 0xff, 0xff]).is_none()
+                || MirrorFrame::decode(&[]).is_none()
+        );
     }
 }

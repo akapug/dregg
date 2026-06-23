@@ -106,8 +106,16 @@ impl Evaluation {
                 }
                 s
             }
-            SimOutcome::Refused { reason, static_refusal, .. } => {
-                let gate = if *static_refusal { "static rail" } else { "executor" };
+            SimOutcome::Refused {
+                reason,
+                static_refusal,
+                ..
+            } => {
+                let gate = if *static_refusal {
+                    "static rail"
+                } else {
+                    "executor"
+                };
                 format!("⇒ REFUSED ({gate}): {}", truncate(reason, 160))
             }
         }
@@ -159,7 +167,10 @@ pub struct Workspace {
 impl Workspace {
     /// A fresh workspace whose draft is authored by `agent` (no actions yet).
     pub fn new(agent: dregg_cell::CellId) -> Self {
-        Workspace { draft: IntentDraft::new(agent), last: None }
+        Workspace {
+            draft: IntentDraft::new(agent),
+            last: None,
+        }
     }
 
     /// A workspace seeded with an already-composed `draft` (e.g. lifted from the
@@ -224,7 +235,11 @@ impl Workspace {
             // A refusal has no committed post-state to inspect.
             SimOutcome::Refused { .. } => Vec::new(),
         };
-        self.last = Some(Evaluation { draft: self.draft.clone(), outcome, inspected });
+        self.last = Some(Evaluation {
+            draft: self.draft.clone(),
+            outcome,
+            inspected,
+        });
         self.last.as_ref().expect("just set")
     }
 
@@ -237,7 +252,10 @@ impl Workspace {
     /// **inspectIt** of the last evaluation (convenience): the predicted post-state
     /// objects. Empty slice if nothing evaluated or the last evaluation refused.
     pub fn inspect_it(&self) -> &[Inspectable] {
-        self.last.as_ref().map(Evaluation::inspect_it).unwrap_or(&[])
+        self.last
+            .as_ref()
+            .map(Evaluation::inspect_it)
+            .unwrap_or(&[])
     }
 
     /// **COMMIT** — run the IDENTICAL turn the last evaluation previewed on the LIVE
@@ -299,7 +317,8 @@ mod tests {
     fn transfer_workspace(a: CellId, b: CellId, amount: u64) -> Workspace {
         let mut ws = Workspace::new(a);
         let ai = ws.draft_mut().add_action(a);
-        ws.draft_mut().add_effect(ai, EffectKind::Transfer { to: b, amount });
+        ws.draft_mut()
+            .add_effect(ai, EffectKind::Transfer { to: b, amount });
         ws
     }
 
@@ -309,13 +328,20 @@ mod tests {
         let mut ws = transfer_workspace(a, b, 250);
 
         let eval = ws.evaluate(&w);
-        assert!(eval.would_commit(), "a conserving transfer predicts a commit");
+        assert!(
+            eval.would_commit(),
+            "a conserving transfer predicts a commit"
+        );
 
         // THE WHOLE POINT: a doIt is a what-if — the live world is UNTOUCHED.
         assert_eq!(w.ledger().get(&a).unwrap().state.balance(), 1_000);
         assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 0);
         assert_eq!(w.height(), 0, "no commit happened on the live world");
-        assert_eq!(w.receipts().len(), 0, "no receipt appended to the live world");
+        assert_eq!(
+            w.receipts().len(),
+            0,
+            "no receipt appended to the live world"
+        );
     }
 
     #[test]
@@ -331,9 +357,18 @@ mod tests {
             SimOutcome::Predicted { receipt, .. } => reflect::short_hex(&receipt.receipt_hash()),
             SimOutcome::Refused { .. } => unreachable!("good intent predicted to commit"),
         };
-        assert!(printed.contains(&real_receipt), "printIt carries the real receipt: {printed}");
-        assert!(printed.contains("action(s)"), "printIt names the action count: {printed}");
-        assert!(printed.contains("root"), "printIt names the predicted image root: {printed}");
+        assert!(
+            printed.contains(&real_receipt),
+            "printIt carries the real receipt: {printed}"
+        );
+        assert!(
+            printed.contains("action(s)"),
+            "printIt names the action count: {printed}"
+        );
+        assert!(
+            printed.contains("root"),
+            "printIt names the predicted image root: {printed}"
+        );
     }
 
     #[test]
@@ -345,9 +380,15 @@ mod tests {
         assert!(!eval.would_commit(), "an overspend predicts a refusal");
 
         let printed = ws.print_it().expect("evaluated");
-        assert!(printed.contains("REFUSED"), "printIt shows the refusal: {printed}");
+        assert!(
+            printed.contains("REFUSED"),
+            "printIt shows the refusal: {printed}"
+        );
         // The refusal is the DYNAMIC executor's (in the fork), not a static rail catch.
-        assert!(printed.contains("executor"), "the overspend is the executor's refusal: {printed}");
+        assert!(
+            printed.contains("executor"),
+            "the overspend is the executor's refusal: {printed}"
+        );
 
         // And the live world is untouched by the refused doIt.
         assert_eq!(w.height(), 0);
@@ -361,7 +402,10 @@ mod tests {
         ws.evaluate(&w);
 
         let objs = ws.inspect_it();
-        assert!(!objs.is_empty(), "a predicted commit yields inspectable post-state");
+        assert!(
+            !objs.is_empty(),
+            "a predicted commit yields inspectable post-state"
+        );
 
         // The image object is first — and its commitment reflects the PREDICTED
         // post-state (it differs from the live image's, because the fork advanced).
@@ -374,14 +418,22 @@ mod tests {
             objs.iter().filter(|o| o.kind == ObjectKind::Cell).collect();
         assert_eq!(cell_objs.len(), 2, "both touched cells are inspectable");
         let balance_of = |obj: &Inspectable| -> Option<i64> {
-            obj.fields.iter().find_map(|f| match (&f.key[..], &f.value) {
-                ("balance", FieldValue::Balance(v)) => Some(*v),
-                _ => None,
-            })
+            obj.fields
+                .iter()
+                .find_map(|f| match (&f.key[..], &f.value) {
+                    ("balance", FieldValue::Balance(v)) => Some(*v),
+                    _ => None,
+                })
         };
         let predicted: Vec<i64> = cell_objs.iter().filter_map(|o| balance_of(o)).collect();
-        assert!(predicted.contains(&750), "a's PREDICTED post-balance is inspectable: {predicted:?}");
-        assert!(predicted.contains(&250), "b's PREDICTED post-balance is inspectable: {predicted:?}");
+        assert!(
+            predicted.contains(&750),
+            "a's PREDICTED post-balance is inspectable: {predicted:?}"
+        );
+        assert!(
+            predicted.contains(&250),
+            "b's PREDICTED post-balance is inspectable: {predicted:?}"
+        );
 
         // The live world still reads the PRE-state — inspectIt never mutated it.
         assert_eq!(w.ledger().get(&a).unwrap().state.balance(), 1_000);
@@ -393,7 +445,10 @@ mod tests {
         let (w, a, b) = two_cell_world();
         let mut ws = transfer_workspace(a, b, 9_999); // overspend → refused
         ws.evaluate(&w);
-        assert!(ws.inspect_it().is_empty(), "a refusal has no post-state to inspect");
+        assert!(
+            ws.inspect_it().is_empty(),
+            "a refusal has no post-state to inspect"
+        );
     }
 
     #[test]
@@ -411,16 +466,24 @@ mod tests {
             SimOutcome::Predicted { receipt, .. } => receipt.receipt_hash(),
             SimOutcome::Refused { .. } => unreachable!(),
         };
-        assert!(ws.can_commit(), "the prediction committed → commit is enabled");
+        assert!(
+            ws.can_commit(),
+            "the prediction committed → commit is enabled"
+        );
 
         // Commit for real on the LIVE world.
-        let outcome = ws.commit(&mut w).expect("a predicted-commit evaluation commits");
+        let outcome = ws
+            .commit(&mut w)
+            .expect("a predicted-commit evaluation commits");
         let real = match outcome {
             CommitOutcome::Committed { receipt, .. } => receipt.receipt_hash(),
             CommitOutcome::Rejected { reason, .. } => panic!("real commit rejected: {reason}"),
             CommitOutcome::Queued { .. } => panic!("unexpected queue (world not suspended)"),
         };
-        assert_eq!(predicted, real, "the real receipt matches the predicted one");
+        assert_eq!(
+            predicted, real,
+            "the real receipt matches the predicted one"
+        );
 
         // The live world now reflects the committed turn.
         assert_eq!(w.height(), 1, "the world advanced one turn");
@@ -429,7 +492,10 @@ mod tests {
         assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 250);
 
         // The evaluation was cleared by the commit (it described the pre-commit fork).
-        assert!(ws.last().is_none(), "commit clears the previewed evaluation");
+        assert!(
+            ws.last().is_none(),
+            "commit clears the previewed evaluation"
+        );
         assert!(!ws.can_commit());
     }
 
@@ -463,11 +529,17 @@ mod tests {
         assert!(!ws.can_commit(), "a refused prediction is not committable");
 
         // commit returns None and does NOT touch the world (no gas, no advance).
-        assert!(ws.commit(&mut w).is_none(), "a refused evaluation does not commit");
+        assert!(
+            ws.commit(&mut w).is_none(),
+            "a refused evaluation does not commit"
+        );
         assert_eq!(w.height(), 0, "the world did not advance");
         // The refused evaluation is preserved (commit put it back) so the operator
         // can read the printIt refusal rather than silently losing it.
-        assert!(ws.last().is_some(), "the refused evaluation is retained, not lost");
+        assert!(
+            ws.last().is_some(),
+            "the refused evaluation is retained, not lost"
+        );
     }
 
     #[test]
@@ -481,7 +553,8 @@ mod tests {
 
         // Mutate the live draft after the evaluation (no re-evaluate).
         let ai = ws.draft_mut().add_action(a);
-        ws.draft_mut().add_effect(ai, EffectKind::Transfer { to: b, amount: 999 });
+        ws.draft_mut()
+            .add_effect(ai, EffectKind::Transfer { to: b, amount: 999 });
 
         // Commit runs the EVALUATION's captured draft (the single 250 transfer).
         let outcome = ws.commit(&mut w).expect("the captured prediction commits");
@@ -506,12 +579,21 @@ mod tests {
             assert!(ws.can_commit(), "step {step} predicts a commit");
             let out = ws.commit(&mut w).expect("step commits");
             assert!(out.is_committed(), "step {step} commits on the live world");
-            assert_eq!(w.height(), step + 1, "the world advanced to height {}", step + 1);
+            assert_eq!(
+                w.height(),
+                step + 1,
+                "the world advanced to height {}",
+                step + 1
+            );
         }
         // Three committed 100-transfers: b holds 300, a holds 700.
         assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 300);
         assert_eq!(w.ledger().get(&a).unwrap().state.balance(), 700);
-        assert_eq!(w.receipts().len(), 3, "three real receipts on the live world");
+        assert_eq!(
+            w.receipts().len(),
+            3,
+            "three real receipts on the live world"
+        );
     }
 
     #[test]
@@ -528,11 +610,17 @@ mod tests {
             .iter()
             .find(|o| o.kind == ObjectKind::Image)
             .expect("the predicted image object is present");
-        let predicted_root = image.fields.iter().find_map(|f| match (&f.key[..], &f.value) {
-            ("state_root", FieldValue::Hash(h)) => Some(*h),
-            _ => None,
-        });
-        assert!(predicted_root.is_some(), "the image object carries a state_root");
+        let predicted_root = image
+            .fields
+            .iter()
+            .find_map(|f| match (&f.key[..], &f.value) {
+                ("state_root", FieldValue::Hash(h)) => Some(*h),
+                _ => None,
+            });
+        assert!(
+            predicted_root.is_some(),
+            "the image object carries a state_root"
+        );
         assert_ne!(
             predicted_root.unwrap(),
             live_root,

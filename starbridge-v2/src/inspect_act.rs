@@ -42,7 +42,9 @@ use dregg_firmament::Capability;
 use dregg_turn::action::{Effect, Event};
 use dregg_turn::turn::TurnReceipt;
 
-use crate::affordance::{AffordanceIntent, AffordanceSurface, CellAffordance, FireError, FireOutcome};
+use crate::affordance::{
+    AffordanceIntent, AffordanceSurface, CellAffordance, FireError, FireOutcome,
+};
 use crate::reflect::{self, Inspectable};
 use crate::surface::{SurfaceCapability, SurfaceId};
 use crate::world::World;
@@ -170,7 +172,10 @@ impl InspectAct {
 
         // 1. INSPECT — reuse reflect.rs (do NOT reinvent reflection). Read the cell
         //    straight off the live ledger; absent ⟹ honestly None (a dangling focus).
-        let inspectable = world.ledger().get(&cell).map(|c| reflect::reflect_cell(&cell, c));
+        let inspectable = world
+            .ledger()
+            .get(&cell)
+            .map(|c| reflect::reflect_cell(&cell, c));
 
         // 2. THE MESSAGES IT UNDERSTANDS — the genuine affordance surface for this
         //    object, every declared verb annotated with the cap badge (the REAL
@@ -229,7 +234,10 @@ impl InspectAct {
         // IN-BAND here, before any executor turn — surfaced, never swallowed.
         let intent: AffordanceIntent = match surface.fire(message, self.viewer, &held) {
             Ok(intent) => intent,
-            Err(FireError::Unauthorized { affordance, required }) => {
+            Err(FireError::Unauthorized {
+                affordance,
+                required,
+            }) => {
                 return SendResult::Refused {
                     reason: format!(
                         "message `{affordance}` refused: the viewer's authority does not \
@@ -266,9 +274,15 @@ impl InspectAct {
                         subtitle: "the send retired this cell".to_string(),
                         fields: vec![],
                     });
-                SendResult::Committed { receipt, reinspected }
+                SendResult::Committed {
+                    receipt,
+                    reinspected,
+                }
             }
-            FireOutcome::Refused { reason, .. } => SendResult::Refused { reason, by_executor: true },
+            FireOutcome::Refused { reason, .. } => SendResult::Refused {
+                reason,
+                by_executor: true,
+            },
         }
     }
 
@@ -313,7 +327,11 @@ impl InspectAct {
                 m.name,
                 m.required,
                 m.effect,
-                if m.authorized { "you may send" } else { "refused: insufficient authority" }
+                if m.authorized {
+                    "you may send"
+                } else {
+                    "refused: insufficient authority"
+                }
             ));
         }
         out
@@ -457,7 +475,10 @@ mod tests {
 
     /// Find a message by name in an inspect→act view.
     fn msg<'a>(ia: &'a InspectAct, name: &str) -> &'a Message {
-        ia.messages.iter().find(|m| m.name == name).expect("the object declares this message")
+        ia.messages
+            .iter()
+            .find(|m| m.name == name)
+            .expect("the object declares this message")
     }
 
     #[test]
@@ -494,13 +515,22 @@ mod tests {
         assert!(msg(&ia, "peek").authorized, "Signature ⊆ Either");
         assert!(msg(&ia, "touch").authorized);
         assert!(msg(&ia, "write").authorized, "Either ⊆ Either");
-        assert!(msg(&ia, "grant").authorized, "None = always allowed (gated in the executor, not the cap-gate)");
+        assert!(
+            msg(&ia, "grant").authorized,
+            "None = always allowed (gated in the executor, not the cap-gate)"
+        );
 
         // The authorized subset is exactly the cleared messages, sorted.
-        assert_eq!(ia.authorized_messages(), vec!["grant", "peek", "touch", "write"]);
+        assert_eq!(
+            ia.authorized_messages(),
+            vec!["grant", "peek", "touch", "write"]
+        );
 
         // The rendered text is non-empty + names the messages (a non-empty gpui tree).
-        assert!(ia.all_text().iter().any(|l| l.contains("messages understood")));
+        assert!(ia
+            .all_text()
+            .iter()
+            .any(|l| l.contains("messages understood")));
     }
 
     #[test]
@@ -514,7 +544,10 @@ mod tests {
         let ia = InspectAct::build(&w, InspectFocus::Cell(cell), cell, AuthRequired::Signature);
         assert_eq!(ia.authorized_messages(), vec!["grant", "peek", "touch"]);
         assert!(!msg(&ia, "write").authorized, "Either ⊄ Signature");
-        assert!(msg(&ia, "grant").authorized, "None = always allowed, even for a Signature viewer");
+        assert!(
+            msg(&ia, "grant").authorized,
+            "None = always allowed, even for a Signature viewer"
+        );
         // The full vocabulary is still shown — the refused message is visible.
         assert_eq!(ia.messages.len(), 4);
     }
@@ -533,8 +566,13 @@ mod tests {
 
         let result = ia.send(&mut w, "write", editor_rights());
         let (receipt, reinspected) = match result {
-            SendResult::Committed { receipt, reinspected } => (receipt, reinspected),
-            SendResult::Refused { reason, .. } => panic!("authorized write should commit: {reason}"),
+            SendResult::Committed {
+                receipt,
+                reinspected,
+            } => (receipt, reinspected),
+            SendResult::Refused { reason, .. } => {
+                panic!("authorized write should commit: {reason}")
+            }
         };
 
         // It was a REAL verified turn — the executor's own receipt, in the provenance log.
@@ -544,10 +582,10 @@ mod tests {
         // THE LOOP CLOSES: the re-inspected object reflects the committed change — slot
         // 1 now carries the written value, surfaced as a `state[1]` field.
         assert!(
-            reinspected.fields.iter().any(|f| matches!(
-                &f.value,
-                FieldValue::FieldSlot { index: 1, .. }
-            )),
+            reinspected
+                .fields
+                .iter()
+                .any(|f| matches!(&f.value, FieldValue::FieldSlot { index: 1, .. })),
             "the re-inspected object reflects the SetField the send committed"
         );
         // And the live ledger agrees (the reflection is not faked — it reads the ledger).
@@ -565,7 +603,10 @@ mod tests {
 
         let ia = InspectAct::build(&w, InspectFocus::Cell(cell), cell, editor_rights());
         let result = ia.send(&mut w, "touch", editor_rights());
-        assert!(result.is_committed(), "touch is authorized for the editor and commits");
+        assert!(
+            result.is_committed(),
+            "touch is authorized for the editor and commits"
+        );
         // The committed `touch` STRICTLY ADVANCES the nonce — the observable self-mutation
         // the closing inspect sees. The exact delta is not a clean +1: the executor bumps
         // the actor's nonce per turn for replay protection (every turn, commit or refusal),
@@ -593,9 +634,18 @@ mod tests {
 
         let result = ia.send(&mut w, "write", AuthRequired::Signature);
         match result {
-            SendResult::Refused { reason, by_executor } => {
-                assert!(!by_executor, "the CAP-GATE refused it (not the executor) — before any turn");
-                assert!(reason.contains("write"), "the refusal names the message + is surfaced");
+            SendResult::Refused {
+                reason,
+                by_executor,
+            } => {
+                assert!(
+                    !by_executor,
+                    "the CAP-GATE refused it (not the executor) — before any turn"
+                );
+                assert!(
+                    reason.contains("write"),
+                    "the refusal names the message + is surfaced"
+                );
             }
             SendResult::Committed { .. } => panic!("an unauthorized write must NOT commit"),
         }
@@ -611,7 +661,10 @@ mod tests {
         let cell = w.genesis_cell(0x40, 10);
         let ia = InspectAct::build(&w, InspectFocus::Cell(cell), cell, editor_rights());
         match ia.send(&mut w, "doesNotUnderstand", editor_rights()) {
-            SendResult::Refused { reason, by_executor } => {
+            SendResult::Refused {
+                reason,
+                by_executor,
+            } => {
                 assert!(!by_executor);
                 assert!(reason.contains("doesNotUnderstand"));
             }
@@ -629,7 +682,13 @@ mod tests {
         let w = World::new();
         let ghost = CellId::derive_raw(&[0xFEu8; 32], &[0u8; 32]);
         let ia = InspectAct::build(&w, InspectFocus::Cell(ghost), ghost, editor_rights());
-        assert!(ia.inspectable.is_none(), "an absent cell is honestly None, never a faked body");
-        assert!(ia.all_text().iter().any(|l| l.contains("absent from the ledger")));
+        assert!(
+            ia.inspectable.is_none(),
+            "an absent cell is honestly None, never a faked body"
+        );
+        assert!(ia
+            .all_text()
+            .iter()
+            .any(|l| l.contains("absent from the ledger")));
     }
 }

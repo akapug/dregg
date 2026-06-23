@@ -173,7 +173,11 @@ impl<'a, T: RemoteImage> LiveMirror<'a, T> {
     /// genuine [`ReceiptFeed`] fed off the remote node's SSE stream; the transport
     /// supplies the honest distance.
     pub fn new(cap: MirrorCap, feed: &'a ReceiptFeed, transport: &'a T) -> Self {
-        LiveMirror { cap, feed, transport }
+        LiveMirror {
+            cap,
+            feed,
+            transport,
+        }
     }
 
     /// The mirror-cap this live mirror holds.
@@ -206,7 +210,9 @@ impl<'a, T: RemoteImage> LiveMirror<'a, T> {
         // tried to follow is asking to widen ReadState -> Live, refused exactly as
         // `MirrorDepth::widens_to(Live)` is `true`.
         if !self.cap.depth().reveals_dynamics() {
-            return Err(LiveRefusal::DepthTooShallow { held: self.cap.depth() });
+            return Err(LiveRefusal::DepthTooShallow {
+                held: self.cap.depth(),
+            });
         }
         let cell = self.cap.cell().ok_or(LiveRefusal::NotARemoteCell)?;
 
@@ -263,7 +269,10 @@ mod tests {
             chain_index,
             receipt_hash: format!("{:064x}", chain_index),
             turn_hash: format!("{:064x}", 0xA0u64.wrapping_add(chain_index)),
-            cells: cells.iter().map(|c| dregg_types::hex_encode(c.as_bytes())).collect(),
+            cells: cells
+                .iter()
+                .map(|c| dregg_types::hex_encode(c.as_bytes()))
+                .collect(),
             kinds: kinds.iter().map(|s| s.to_string()).collect(),
             height,
             has_proof: true,
@@ -300,10 +309,16 @@ mod tests {
             &img,
         );
 
-        let tail = mirror.follow().expect("a Live mirror follows the dynamics tail");
+        let tail = mirror
+            .follow()
+            .expect("a Live mirror follows the dynamics tail");
         assert_eq!(tail.depth, MirrorDepth::Live);
         // ONLY the two turns that NAMED `watched` are surfaced (the per-cell delta).
-        assert_eq!(tail.len(), 2, "the live tail is projected to the mirror's cell");
+        assert_eq!(
+            tail.len(),
+            2,
+            "the live tail is projected to the mirror's cell"
+        );
         assert_eq!(tail.steps[0].chain_index, 1);
         assert_eq!(tail.steps[1].chain_index, 3);
         assert_eq!(tail.latest().unwrap().height, 102);
@@ -318,8 +333,11 @@ mod tests {
         let feed = feed_with(vec![ev(1, 5, &[watched], &["Transfer"])]);
         // A "remote" image in fact on this box (n = 1).
         let img = FixtureImage::new(1);
-        let mirror =
-            LiveMirror::new(MirrorCap::read_only(watched, MirrorDepth::Live), &feed, &img);
+        let mirror = LiveMirror::new(
+            MirrorCap::read_only(watched, MirrorDepth::Live),
+            &feed,
+            &img,
+        );
         let tail = mirror.follow().unwrap();
         assert_eq!(tail.bounds, Bounds::LOCAL);
         assert!(tail.bounds.revocation_immediate && tail.bounds.commit_synchronous);
@@ -357,7 +375,9 @@ mod tests {
         let mirror = LiveMirror::new(MirrorCap::structure_only(watched), &feed, &img);
         assert_eq!(
             mirror.follow().unwrap_err(),
-            LiveRefusal::DepthTooShallow { held: MirrorDepth::Structure }
+            LiveRefusal::DepthTooShallow {
+                held: MirrorDepth::Structure
+            }
         );
     }
 
@@ -372,7 +392,10 @@ mod tests {
             &feed,
             &img,
         );
-        assert_eq!(mirror.follow().unwrap_err(), LiveRefusal::NoReflectAuthority);
+        assert_eq!(
+            mirror.follow().unwrap_err(),
+            LiveRefusal::NoReflectAuthority
+        );
     }
 
     // ---- the projection is honest: a cell that never evolved has an empty tail -
@@ -384,10 +407,18 @@ mod tests {
         // The stream touched only `other`; `watched` never evolved.
         let feed = feed_with(vec![ev(1, 1, &[other], &["Transfer"])]);
         let img = FixtureImage::new(2);
-        let mirror =
-            LiveMirror::new(MirrorCap::read_only(watched, MirrorDepth::Live), &feed, &img);
-        let tail = mirror.follow().expect("a Live mirror over an unevolved cell still succeeds");
-        assert!(tail.is_empty(), "no turn named the cell ⇒ an honest empty tail");
+        let mirror = LiveMirror::new(
+            MirrorCap::read_only(watched, MirrorDepth::Live),
+            &feed,
+            &img,
+        );
+        let tail = mirror
+            .follow()
+            .expect("a Live mirror over an unevolved cell still succeeds");
+        assert!(
+            tail.is_empty(),
+            "no turn named the cell ⇒ an honest empty tail"
+        );
         assert!(tail.latest().is_none());
     }
 }

@@ -47,12 +47,14 @@ pub enum JsTarget {
 }
 
 impl JsTarget {
-    /// The live ledger the reflective crawl walks (the REAL cells of whichever world
-    /// is attached).
-    pub fn ledger(&self) -> &dregg_cell::Ledger {
+    /// Read the live ledger the reflective crawl walks (the REAL cells of whichever
+    /// world is attached) by running `f` over it — closure-passing so the attach
+    /// path can borrow a World held behind an `Rc<RefCell<World>>` for the read's
+    /// duration. The crawl natives produce their JSON inside `f`.
+    pub fn with_ledger(&self, f: &mut dyn FnMut(&dregg_cell::Ledger)) {
         match self {
-            JsTarget::Embedded(a) => a.ledger(),
-            JsTarget::Attached(a) => a.ledger(),
+            JsTarget::Embedded(a) => f(a.ledger()),
+            JsTarget::Attached(a) => a.with_ledger(f),
         }
     }
     /// Fire an affordance — ONE cap-gated verified turn (on the embedded engine, or
@@ -390,6 +392,50 @@ impl JsRuntime {
             Ok(r)
         }
     }
+
+    /// THE ATTACH RUN — install an [`AttachedApplet`] (bound to a PROVIDED live World)
+    /// as the runtime's target, eval `source` against it, then take the target back
+    /// out so the caller can read the committed-fire tape. The crawl + fires inside
+    /// `source` drive the ATTACHED World's real cells (a receipt landing on the live
+    /// ledger), with the cap tooth mounted under the agent's `held`.
+    ///
+    /// Returns `(script_result, committed_receipt_hashes, the_target_back)`. The
+    /// caller keeps the [`AttachedApplet`] (and through it the `WorldSink`) to inspect
+    /// the live ledger after the run.
+    pub fn run_attached(
+        &mut self,
+        applet: AttachedApplet,
+        source: &str,
+    ) -> Result<AttachRunOutcome, String> {
+        set_current_attached(applet);
+        let eval = self.eval(source);
+        let target = take_current_target();
+        let attached = match target {
+            Some(JsTarget::Attached(a)) => a,
+            _ => return Err("attached target vanished during run".into()),
+        };
+        match eval {
+            Ok(result) => Ok(AttachRunOutcome {
+                result,
+                receipts: attached.receipts().to_vec(),
+                fires_committed: attached.receipt_count(),
+                applet: attached,
+            }),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// The outcome of a [`JsRuntime::run_attached`]: what the JS did on the live World.
+pub struct AttachRunOutcome {
+    /// The script's i32 completion value, if any.
+    pub result: Option<i32>,
+    /// The receipt hashes the JS committed on the live World, in order.
+    pub receipts: Vec<[u8; 32]>,
+    /// How many verified turns committed (the audit-tape length).
+    pub fires_committed: usize,
+    /// The attached applet handed back (its `WorldSink` reads the live ledger).
+    pub applet: AttachedApplet,
 }
 
 type RawNative = unsafe extern "C" fn(*mut RawJSContext, u32, *mut Value) -> bool;
@@ -587,10 +633,11 @@ unsafe extern "C" fn native_world_cells(context: *mut RawJSContext, argc: u32, v
     let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let json = CURRENT_APPLET.with(|c| {
-        c.borrow()
-            .as_ref()
-            .map(|a| reflect_binding::world_cells_json(a.ledger()))
-            .unwrap_or_else(|| "[]".to_string())
+        let mut out = "[]".to_string();
+        if let Some(a) = c.borrow().as_ref() {
+            a.with_ledger(&mut |l| out = reflect_binding::world_cells_json(l));
+        }
+        out
     });
     return_string(&mut cx, &args, &json)
 }
@@ -600,10 +647,11 @@ unsafe extern "C" fn native_world_ocap(context: *mut RawJSContext, argc: u32, vp
     let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let json = CURRENT_APPLET.with(|c| {
-        c.borrow()
-            .as_ref()
-            .map(|a| reflect_binding::world_ocap_json(a.ledger()))
-            .unwrap_or_else(|| "{\"nodes\":[],\"edges\":[]}".to_string())
+        let mut out = "{\"nodes\":[],\"edges\":[]}".to_string();
+        if let Some(a) = c.borrow().as_ref() {
+            a.with_ledger(&mut |l| out = reflect_binding::world_ocap_json(l));
+        }
+        out
     });
     return_string(&mut cx, &args, &json)
 }
@@ -620,7 +668,13 @@ unsafe extern "C" fn native_cell(context: *mut RawJSContext, argc: u32, vp: *mut
             None => return "null".to_string(),
         };
         match reflect_binding::parse_cell_id(&id_hex) {
-            Some(id) => reflect_binding::cell_json(applet.ledger(), &id).unwrap_or_else(|| "null".to_string()),
+            Some(id) => {
+                let mut out = "null".to_string();
+                applet.with_ledger(&mut |l| {
+                    out = reflect_binding::cell_json(l, &id).unwrap_or_else(|| "null".to_string())
+                });
+                out
+            }
             None => "null".to_string(),
         }
     });
@@ -639,7 +693,11 @@ unsafe extern "C" fn native_frustum(context: *mut RawJSContext, argc: u32, vp: *
             None => return "{\"viewer\":\"\",\"visibleCount\":0,\"visible\":[]}".to_string(),
         };
         match reflect_binding::parse_cell_id(&viewer_hex) {
-            Some(viewer) => reflect_binding::frustum_json(applet.ledger(), &viewer),
+            Some(viewer) => {
+                let mut out = "{\"viewer\":\"\",\"visibleCount\":0,\"visible\":[]}".to_string();
+                applet.with_ledger(&mut |l| out = reflect_binding::frustum_json(l, &viewer));
+                out
+            }
             None => "{\"viewer\":\"\",\"visibleCount\":0,\"visible\":[]}".to_string(),
         }
     });
@@ -664,7 +722,11 @@ unsafe extern "C" fn native_frustum_reflect(context: *mut RawJSContext, argc: u3
             reflect_binding::parse_cell_id(&target_hex),
         ) {
             (Some(viewer), Some(target)) => {
-                reflect_binding::frustum_reflect_json(applet.ledger(), &viewer, &target)
+                let mut out = "null".to_string();
+                applet.with_ledger(&mut |l| {
+                    out = reflect_binding::frustum_reflect_json(l, &viewer, &target)
+                });
+                out
             }
             _ => "null".to_string(),
         }
@@ -687,8 +749,15 @@ unsafe extern "C" fn native_present(context: *mut RawJSContext, argc: u32, vp: *
             None => return "null".to_string(),
         };
         match reflect_binding::parse_cell_id(&id_hex) {
-            Some(id) => reflect_binding::cell_present_json(applet.ledger(), &id, &applet.full_receipts())
-                .unwrap_or_else(|| "null".to_string()),
+            Some(id) => {
+                let receipts = applet.full_receipts();
+                let mut out = "null".to_string();
+                applet.with_ledger(&mut |l| {
+                    out = reflect_binding::cell_present_json(l, &id, &receipts)
+                        .unwrap_or_else(|| "null".to_string())
+                });
+                out
+            }
             None => "null".to_string(),
         }
     });
@@ -761,11 +830,11 @@ unsafe extern "C" fn native_search(context: *mut RawJSContext, argc: u32, vp: *m
     let args = CallArgs::from_vp(vp, argc);
     let q = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
     let json = CURRENT_APPLET.with(|c| {
-        let guard = c.borrow();
-        match guard.as_ref() {
-            Some(a) => reflect_binding::spotter_json(a.ledger(), &q),
-            None => "[]".to_string(),
+        let mut out = "[]".to_string();
+        if let Some(a) = c.borrow().as_ref() {
+            a.with_ledger(&mut |l| out = reflect_binding::spotter_json(l, &q));
         }
+        out
     });
     return_string(&mut cx, &args, &json)
 }

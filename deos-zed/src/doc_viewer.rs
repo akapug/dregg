@@ -179,7 +179,14 @@ impl DocViewer {
                     .w_full()
                     .gap_2()
                     .items_start()
-                    .child(div().w(px(4.)).h_full().min_h(px(18.)).rounded_sm().bg(color))
+                    .child(
+                        div()
+                            .w(px(4.))
+                            .h_full()
+                            .min_h(px(18.))
+                            .rounded_sm()
+                            .bg(color),
+                    )
                     .child(
                         v_flex()
                             .flex_1()

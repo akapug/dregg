@@ -481,19 +481,21 @@ mod tests {
         let d2 = map.transitive_map(a, 2);
         assert_eq!(d2.root, a);
         assert_eq!(d2.link_count(), 2, "two edges: A<-B and B<-C");
-        assert_eq!(d2.observers_of(a), vec![b], "B still the direct backlink of A");
-        assert_eq!(d2.observers_of(b), vec![c], "C is the backlink of B (the 2nd hop)");
+        assert_eq!(
+            d2.observers_of(a),
+            vec![b],
+            "B still the direct backlink of A"
+        );
+        assert_eq!(
+            d2.observers_of(b),
+            vec![c],
+            "C is the backlink of B (the 2nd hop)"
+        );
         // Every node of the transitive docuverse appears.
         assert!(d2.nodes.contains(&a) && d2.nodes.contains(&b) && d2.nodes.contains(&c));
         // The edges are the two verifiable backlinks, both endpoints named.
-        assert!(d2
-            .edges
-            .iter()
-            .any(|e| e.source == a && e.observer == b));
-        assert!(d2
-            .edges
-            .iter()
-            .any(|e| e.source == b && e.observer == c));
+        assert!(d2.edges.iter().any(|e| e.source == a && e.observer == b));
+        assert!(d2.edges.iter().any(|e| e.source == b && e.observer == c));
     }
 
     // (2b) THE TRANSITIVE WALK IS CYCLE-SAFE + DEPTH-BOUNDED — a transclusion cycle
@@ -515,7 +517,11 @@ mod tests {
         // A deep walk terminates (cycle-safe: each cell expanded once) and finds both
         // edges, no more.
         let g = map.transitive_map(a, 99);
-        assert_eq!(g.link_count(), 2, "the cycle yields exactly its two edges, no loop");
+        assert_eq!(
+            g.link_count(),
+            2,
+            "the cycle yields exactly its two edges, no loop"
+        );
         assert!(g.nodes.contains(&a) && g.nodes.contains(&b));
 
         // depth 0 is the degenerate look-but-take-no-hops map: root only, no edges.
@@ -547,7 +553,11 @@ mod tests {
         assert!(map.viewer_may_see(source, &strong));
         let strong_map = map.project_for(source, 2, &strong);
         assert_eq!(strong_map.observers_of(source), vec![observer]);
-        assert_eq!(strong_map.link_count(), 1, "authorized viewer sees the backlink");
+        assert_eq!(
+            strong_map.link_count(),
+            1,
+            "authorized viewer sees the backlink"
+        );
 
         // An UNAUTHORIZED viewer whose authority is INCOMPARABLE to the lineage: a
         // Signature lineage vs a Proof viewer — neither attenuates the other, so the

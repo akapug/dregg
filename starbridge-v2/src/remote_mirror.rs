@@ -232,7 +232,10 @@ impl MirrorCap {
         if !shallower.is_at_most(self.depth) {
             return None;
         }
-        Some(MirrorCap { cap, depth: shallower })
+        Some(MirrorCap {
+            cap,
+            depth: shallower,
+        })
     }
 }
 
@@ -274,7 +277,10 @@ pub struct FixtureImage {
 impl FixtureImage {
     /// A fixture image at distance `n` (the simulated number of machines).
     pub fn new(distance: u32) -> Self {
-        FixtureImage { distance, cells: Vec::new() }
+        FixtureImage {
+            distance,
+            cells: Vec::new(),
+        }
     }
 
     /// Add a remote cell's wire snapshot to this fixture image.
@@ -421,9 +427,8 @@ fn redact_to_depth(mut view: Inspectable, depth: MirrorDepth) -> Inspectable {
     }
     // Structure: keep shape, redact state values. Balance/nonce are STATE; id,
     // capability count, and the has_* / found flags are SHAPE.
-    view.fields.retain(|f| {
-        !matches!(f.key.as_str(), "balance" | "nonce")
-    });
+    view.fields
+        .retain(|f| !matches!(f.key.as_str(), "balance" | "nonce"));
     view.subtitle = format!("structure-only mirror · {} caps", structure_caps(&view));
     view
 }
@@ -479,7 +484,9 @@ mod tests {
         let img = FixtureImage::new(5).with_cell(cell, entry(cell, 1234, 9, 3));
         let mirror = RemoteMirror::new(MirrorCap::read_only(cell, MirrorDepth::ReadState), &img);
 
-        let r = mirror.reflect().expect("a read mirror reflects the remote cell");
+        let r = mirror
+            .reflect()
+            .expect("a read mirror reflects the remote cell");
         assert_eq!(r.depth, MirrorDepth::ReadState);
         assert_eq!(r.backing, Backing::DistributedTurn);
 
@@ -538,8 +545,10 @@ mod tests {
         let cell = cid(7);
         let img = FixtureImage::new(1).with_cell(cell, entry(cell, 1234, 9, 3));
         // A write-class (Either) mirror.
-        let mirror =
-            RemoteMirror::new(MirrorCap::new(cell, AuthRequired::Either, MirrorDepth::Live), &img);
+        let mirror = RemoteMirror::new(
+            MirrorCap::new(cell, AuthRequired::Either, MirrorDepth::Live),
+            &img,
+        );
         assert_eq!(mirror.propose_edit(), Ok(cell));
     }
 
@@ -549,11 +558,19 @@ mod tests {
         let img = FixtureImage::new(5).with_cell(cell, entry(cell, 999, 4, 2));
         let mirror = RemoteMirror::new(MirrorCap::structure_only(cell), &img);
 
-        let r = mirror.reflect().expect("a structure mirror still reflects shape");
+        let r = mirror
+            .reflect()
+            .expect("a structure mirror still reflects shape");
         assert_eq!(r.depth, MirrorDepth::Structure);
         // STATE is redacted: no balance, no nonce.
-        assert!(field(&r.view, "balance").is_none(), "structure mirror must redact balance");
-        assert!(field(&r.view, "nonce").is_none(), "structure mirror must redact nonce");
+        assert!(
+            field(&r.view, "balance").is_none(),
+            "structure mirror must redact balance"
+        );
+        assert!(
+            field(&r.view, "nonce").is_none(),
+            "structure mirror must redact nonce"
+        );
         // SHAPE survives: id + capability count are present.
         assert!(field(&r.view, "id").is_some());
         match field(&r.view, "capabilities").map(|f| &f.value) {
@@ -585,7 +602,8 @@ mod tests {
         // A read-only Signature mirror cannot widen to Either (write).
         let ro = MirrorCap::read_only(cell, MirrorDepth::ReadState);
         assert!(
-            ro.attenuate(AuthRequired::Either, MirrorDepth::ReadState).is_none(),
+            ro.attenuate(AuthRequired::Either, MirrorDepth::ReadState)
+                .is_none(),
             "widening Signature -> Either (read -> write) must be refused"
         );
     }
@@ -596,7 +614,9 @@ mod tests {
         // A Structure mirror cannot widen to ReadState (shape -> state).
         let structure = MirrorCap::structure_only(cell);
         assert!(
-            structure.attenuate(AuthRequired::Signature, MirrorDepth::ReadState).is_none(),
+            structure
+                .attenuate(AuthRequired::Signature, MirrorDepth::ReadState)
+                .is_none(),
             "widening Structure -> ReadState (shape -> state) must be refused"
         );
         // ... and certainly not to Live.
@@ -626,9 +646,14 @@ mod tests {
     fn impossible_mirror_cannot_reflect() {
         let cell = cid(9);
         let img = FixtureImage::new(1).with_cell(cell, entry(cell, 0, 0, 0));
-        let mirror =
-            RemoteMirror::new(MirrorCap::new(cell, AuthRequired::Impossible, MirrorDepth::ReadState), &img);
-        assert_eq!(mirror.reflect().unwrap_err(), MirrorRefusal::NoReflectAuthority);
+        let mirror = RemoteMirror::new(
+            MirrorCap::new(cell, AuthRequired::Impossible, MirrorDepth::ReadState),
+            &img,
+        );
+        assert_eq!(
+            mirror.reflect().unwrap_err(),
+            MirrorRefusal::NoReflectAuthority
+        );
     }
 
     #[test]
@@ -638,6 +663,9 @@ mod tests {
         // The image has `other`, not `cell`.
         let img = FixtureImage::new(3).with_cell(other, entry(other, 1, 1, 1));
         let mirror = RemoteMirror::new(MirrorCap::read_only(cell, MirrorDepth::ReadState), &img);
-        assert_eq!(mirror.reflect().unwrap_err(), MirrorRefusal::RemoteCellAbsent);
+        assert_eq!(
+            mirror.reflect().unwrap_err(),
+            MirrorRefusal::RemoteCellAbsent
+        );
     }
 }

@@ -233,12 +233,7 @@ impl Pane {
                     )
                     .child(label)
                     .when(dirty, |this| {
-                        this.child(
-                            div()
-                                .size(px(6.))
-                                .rounded_full()
-                                .bg(theme::accent()),
-                        )
+                        this.child(div().size(px(6.)).rounded_full().bg(theme::accent()))
                     }),
             );
         }

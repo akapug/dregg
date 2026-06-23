@@ -34,8 +34,8 @@ use crate::cockpit::Cockpit;
 use crate::views::theme;
 use starbridge_v2::reflect;
 use starbridge_v2::session::{
-    demo_identities, open_session_world, provision_system_principal, session_base_dir, DemoIdentity,
-    IdentityKind, LoginManager, LoginOutcome, Session,
+    demo_identities, open_session_world, provision_system_principal, session_base_dir,
+    DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Session,
 };
 use starbridge_v2::world::{self, World};
 
@@ -167,11 +167,7 @@ impl LoginSurface {
         );
     }
 
-    fn identity_card(
-        &self,
-        identity: &DemoIdentity,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn identity_card(&self, identity: &DemoIdentity, cx: &mut Context<Self>) -> impl IntoElement {
         let id = identity.clone();
         let name = identity.name.to_string();
         let blurb = identity.blurb.to_string();
@@ -361,7 +357,9 @@ impl SessionShell {
         let seeding_cockpit = shell.read(cx).cockpit.downgrade();
         cx.spawn(async move |cx| {
             loop {
-                cx.background_executor().timer(Duration::from_millis(60)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(60))
+                    .await;
                 let more = match seeding_cockpit.update(cx, |c, c_cx| c.seed_next_demo_turn(c_cx)) {
                     Ok(more) => more,
                     // The cockpit entity is gone (logged out / window closed) — stop.
@@ -377,16 +375,16 @@ impl SessionShell {
         // THE LIVE-NODE PUMP — drain a connected node's SSE receipt stream off the
         // async executor (no-op + self-stopping for the embedded-only image).
         let pump_cockpit = shell.read(cx).cockpit.downgrade();
-        cx.spawn(async move |cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_millis(120)).await;
-                let keep = match pump_cockpit.update(cx, |c, c_cx| c.pump_live(c_cx)) {
-                    Ok(keep) => keep,
-                    Err(_) => break,
-                };
-                if !keep {
-                    break;
-                }
+        cx.spawn(async move |cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let keep = match pump_cockpit.update(cx, |c, c_cx| c.pump_live(c_cx)) {
+                Ok(keep) => keep,
+                Err(_) => break,
+            };
+            if !keep {
+                break;
             }
         })
         .detach();

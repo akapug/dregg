@@ -14,7 +14,10 @@ impl Cockpit {
     /// cell's focus/present aim).
     pub fn capture_nav(&self) -> CockpitNavState {
         CockpitNavState {
-            tab_idx: Tab::ALL.iter().position(|t| *t == self.active_tab()).unwrap_or(0),
+            tab_idx: Tab::ALL
+                .iter()
+                .position(|t| *t == self.active_tab())
+                .unwrap_or(0),
             selection: self.selection.clone(),
             moldable_lens: self.moldable_lens,
             inspector_reflexive: self.inspector_reflexive,
@@ -56,27 +59,51 @@ impl Cockpit {
         self.replay_cursor = s.replay_cursor;
         self.time_cursor = s.time_cursor;
         let dbg = std::env::var_os("ATLAS_UI_DEBUG").is_some();
-        if dbg { eprintln!("    RN: inspector_view.commit"); }
+        if dbg {
+            eprintln!("    RN: inspector_view.commit");
+        }
         self.inspector_view.doc_mut().set_focus(s.iv_focus);
         self.inspector_view.doc_mut().set_present_idx(s.iv_present);
         let _ = self.inspector_view.commit(&mut self.world.borrow_mut());
-        if dbg { eprintln!("    RN: set_tab {}", Tab::ALL[s.tab_idx].label()); }
+        if dbg {
+            eprintln!("    RN: set_tab {}", Tab::ALL[s.tab_idx].label());
+        }
         self.set_tab(Tab::ALL[s.tab_idx], cx);
-        if dbg { eprintln!("    RN: done"); }
+        if dbg {
+            eprintln!("    RN: done");
+        }
     }
 
     /// A compact, dedup-able key for the current UI state — the tab plus the
     /// sub-coordinates that tab actually renders.
     pub fn nav_key(&self) -> String {
         let tab = self.active_tab();
-        let sh = |o: Option<CellId>| o.map(|c| reflect::short_hex(c.as_bytes())).unwrap_or_else(|| "-".into());
+        let sh = |o: Option<CellId>| {
+            o.map(|c| reflect::short_hex(c.as_bytes()))
+                .unwrap_or_else(|| "-".into())
+        };
         let sub = match tab {
-            Tab::Moldable => format!("focus={};lens={};refl={};face={}", sh(self.inspector_view.doc().focus()), self.moldable_lens.label(), self.inspector_reflexive, self.inspector_view.doc().present_idx()),
+            Tab::Moldable => format!(
+                "focus={};lens={};refl={};face={}",
+                sh(self.inspector_view.doc().focus()),
+                self.moldable_lens.label(),
+                self.inspector_reflexive,
+                self.inspector_view.doc().present_idx()
+            ),
             Tab::InspectAct => format!("focus={}", sh(self.inspect_act_focus)),
             Tab::Simulate => format!("tgt={};eff={}", self.sim_target_idx, self.sim_effect_idx),
             Tab::Lanes => format!("lane={}", self.lane_idx),
-            Tab::WebOfCells => format!("viewer={:?};open={}", self.web_cells_viewer_rights, sh(self.web_cells_opened)),
-            Tab::LinksHere => format!("depth={};viewer={:?};focus={}", self.links_here_depth, self.links_here_viewer_rights, sh(self.links_here_focus)),
+            Tab::WebOfCells => format!(
+                "viewer={:?};open={}",
+                self.web_cells_viewer_rights,
+                sh(self.web_cells_opened)
+            ),
+            Tab::LinksHere => format!(
+                "depth={};viewer={:?};focus={}",
+                self.links_here_depth,
+                self.links_here_viewer_rights,
+                sh(self.links_here_focus)
+            ),
             Tab::Powerbox => format!("confer={:?}", self.powerbox_confer_rights),
             Tab::Share => format!("wide={}", self.share_preview_wide),
             Tab::Replay => format!("cursor={}", self.replay_cursor),
@@ -96,8 +123,15 @@ impl Cockpit {
             // render work stalls headless stepping; they live in the UI-atlas
             // screenshots instead): Wonder (glow animation), Swarm (boots the
             // killer-demo), Agent (live activity feed).
-            let skip = |t: Tab| matches!(t, Tab::Home | Tab::Wonder | Tab::Swarm | Tab::Agent | Tab::Time);
-            return Tab::ALL.iter().enumerate()
+            let skip = |t: Tab| {
+                matches!(
+                    t,
+                    Tab::Home | Tab::Wonder | Tab::Swarm | Tab::Agent | Tab::Time
+                )
+            };
+            return Tab::ALL
+                .iter()
+                .enumerate()
                 .filter(|(_, t)| !skip(**t))
                 .map(|(i, t)| (format!("open {}", t.label()), NavAction::Tab(i)))
                 .collect();
@@ -115,7 +149,11 @@ impl Cockpit {
                 v.push(("cycle target".into(), NavAction::CycleSimTarget));
                 v.push(("cycle effect".into(), NavAction::CycleSimEffect));
             }
-            Tab::Lanes => for i in 0..4 { v.push((format!("lane {i}"), NavAction::SetLane(i))); },
+            Tab::Lanes => {
+                for i in 0..4 {
+                    v.push((format!("lane {i}"), NavAction::SetLane(i)));
+                }
+            }
             Tab::WebOfCells => {
                 v.push(("toggle viewer".into(), NavAction::ToggleWebViewer));
                 v.push(("open next cell".into(), NavAction::OpenWebCell));
@@ -145,8 +183,13 @@ impl Cockpit {
     pub fn apply_nav(&mut self, a: &NavAction, cx: &mut Context<Self>) {
         let cells = self.cells.clone();
         let cycle = |cur: Option<CellId>| -> Option<CellId> {
-            if cells.is_empty() { return None; }
-            let i = cur.and_then(|c| cells.iter().position(|x| *x == c)).map(|p| (p + 1) % cells.len()).unwrap_or(0);
+            if cells.is_empty() {
+                return None;
+            }
+            let i = cur
+                .and_then(|c| cells.iter().position(|x| *x == c))
+                .map(|p| (p + 1) % cells.len())
+                .unwrap_or(0);
             Some(cells[i])
         };
         match a {
@@ -165,7 +208,11 @@ impl Cockpit {
             }
             NavAction::CycleSimTarget => self.sim_cycle_target(cx),
             NavAction::CycleSimEffect => self.sim_cycle_effect(cx),
-            NavAction::SetLane(i) => { self.lane_idx = *i; self.lane_outcome = None; cx.notify(); }
+            NavAction::SetLane(i) => {
+                self.lane_idx = *i;
+                self.lane_outcome = None;
+                cx.notify();
+            }
             NavAction::ToggleWebViewer => {
                 self.web_cells_viewer_rights = match self.web_cells_viewer_rights {
                     dregg_cell::AuthRequired::None => dregg_cell::AuthRequired::Either,
@@ -173,9 +220,16 @@ impl Cockpit {
                 };
                 cx.notify();
             }
-            NavAction::OpenWebCell => { self.web_cells_opened = cycle(self.web_cells_opened); cx.notify(); }
+            NavAction::OpenWebCell => {
+                self.web_cells_opened = cycle(self.web_cells_opened);
+                cx.notify();
+            }
             NavAction::CycleLinksDepth => {
-                self.links_here_depth = match self.links_here_depth { 0 | 1 => 2, 2 => 3, _ => 1 };
+                self.links_here_depth = match self.links_here_depth {
+                    0 | 1 => 2,
+                    2 => 3,
+                    _ => 1,
+                };
                 cx.notify();
             }
             NavAction::ToggleLinksViewer => {
@@ -185,7 +239,10 @@ impl Cockpit {
                 };
                 cx.notify();
             }
-            NavAction::CycleLinksFocus => { self.links_here_focus = cycle(self.links_here_focus); cx.notify(); }
+            NavAction::CycleLinksFocus => {
+                self.links_here_focus = cycle(self.links_here_focus);
+                cx.notify();
+            }
             NavAction::CyclePowerboxConfer => {
                 self.powerbox_confer_rights = match self.powerbox_confer_rights {
                     dregg_cell::AuthRequired::Signature => dregg_cell::AuthRequired::Either,
@@ -194,7 +251,10 @@ impl Cockpit {
                 };
                 cx.notify();
             }
-            NavAction::ToggleSharePreview => { self.share_preview_wide = !self.share_preview_wide; cx.notify(); }
+            NavAction::ToggleSharePreview => {
+                self.share_preview_wide = !self.share_preview_wide;
+                cx.notify();
+            }
             NavAction::ReplayNext => self.replay_step_forward(cx),
             NavAction::ReplayPrev => self.replay_step_back(cx),
             NavAction::TimeNext => self.time_step_forward(cx),
@@ -313,7 +373,9 @@ impl Cockpit {
                 w.recorded_turns().steps()[start.min(w.recorded_turns().len())..]
                     .iter()
                     .filter_map(|s| match s {
-                        starbridge_v2::replay::RecordedStep::Committed { turn, .. } => Some(turn.clone()),
+                        starbridge_v2::replay::RecordedStep::Committed { turn, .. } => {
+                            Some(turn.clone())
+                        }
                         _ => None,
                     })
                     .collect()
@@ -323,7 +385,11 @@ impl Cockpit {
             self.macro_outcome = Some(if script.is_empty() {
                 "⏹ nothing recorded (no turns committed while recording)".into()
             } else {
-                format!("⏹ captured {} turns as script {} — ▶ to replay", script.len(), id)
+                format!(
+                    "⏹ captured {} turns as script {} — ▶ to replay",
+                    script.len(),
+                    id
+                )
             });
             self.last_macro = Some((script, start_fork));
             cx.notify();
@@ -355,8 +421,16 @@ impl Cockpit {
     /// breadcrumb + a ☆ pin + a live "what can I do here" quick-nav strip + the
     /// pinned views. The programmatic nav API, surfaced as delight.
     pub(crate) fn nav_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let back_color = if self.can_nav_back() { theme::accent() } else { theme::muted() };
-        let fwd_color = if self.can_nav_forward() { theme::accent() } else { theme::muted() };
+        let back_color = if self.can_nav_back() {
+            theme::accent()
+        } else {
+            theme::muted()
+        };
+        let fwd_color = if self.can_nav_forward() {
+            theme::accent()
+        } else {
+            theme::muted()
+        };
         // the current location as a legible breadcrumb (tab · sub-coords)
         let here = self.nav_key();
         let (tab, sub) = here.split_once('|').unwrap_or((here.as_str(), ""));
@@ -370,7 +444,11 @@ impl Cockpit {
         let show_chips = self.active_tab() != Tab::Home && !actions.is_empty();
         let is_pinned = self.nav_pins.iter().any(|p| p.0 == here);
         let pin_glyph = if is_pinned { "★" } else { "☆" };
-        let pin_color = if is_pinned { theme::accent() } else { theme::muted() };
+        let pin_color = if is_pinned {
+            theme::accent()
+        } else {
+            theme::muted()
+        };
 
         let mut bar = div()
             .flex()
@@ -381,23 +459,59 @@ impl Cockpit {
             .border_b_1()
             .border_color(theme::border())
             .bg(theme::panel())
-            .child(small_button(cx, "nav-back", "←", back_color, Cockpit::nav_back))
-            .child(small_button(cx, "nav-fwd", "→", fwd_color, Cockpit::nav_forward))
-            .child(small_button(cx, "nav-pin", pin_glyph, pin_color, Cockpit::pin_current))
+            .child(small_button(
+                cx,
+                "nav-back",
+                "←",
+                back_color,
+                Cockpit::nav_back,
+            ))
+            .child(small_button(
+                cx,
+                "nav-fwd",
+                "→",
+                fwd_color,
+                Cockpit::nav_forward,
+            ))
+            .child(small_button(
+                cx,
+                "nav-pin",
+                pin_glyph,
+                pin_color,
+                Cockpit::pin_current,
+            ))
             // MACRO record/replay (⏺▶) — record a turn-sequence as a Script, replay on a fork.
             .child(small_button(
                 cx,
                 "macro-rec",
-                if self.macro_recording.is_some() { "●rec" } else { "⏺" },
-                if self.macro_recording.is_some() { theme::bad() } else { theme::muted() },
+                if self.macro_recording.is_some() {
+                    "●rec"
+                } else {
+                    "⏺"
+                },
+                if self.macro_recording.is_some() {
+                    theme::bad()
+                } else {
+                    theme::muted()
+                },
                 Cockpit::macro_record,
             ))
-            .child(small_button(cx, "macro-stop", "⏹", theme::muted(), Cockpit::macro_stop))
+            .child(small_button(
+                cx,
+                "macro-stop",
+                "⏹",
+                theme::muted(),
+                Cockpit::macro_stop,
+            ))
             .child(small_button(
                 cx,
                 "macro-play",
                 "▶",
-                if self.last_macro.is_some() { theme::accent() } else { theme::muted() },
+                if self.last_macro.is_some() {
+                    theme::accent()
+                } else {
+                    theme::muted()
+                },
                 Cockpit::macro_replay,
             ))
             .child(

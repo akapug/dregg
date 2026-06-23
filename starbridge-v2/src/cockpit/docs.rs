@@ -52,7 +52,9 @@ impl Cockpit {
     /// co-authors set a different `title` — both survive as a clash a resolution
     /// must CHOOSE (it may need consensus).
     pub(crate) fn doc_sow_field_conflict(&mut self, _cx: &mut Context<Cockpit>) {
-        let (a, b) = self.doc_editor.sow_field_conflict("title", "On Cats", "On Dogs");
+        let (a, b) = self
+            .doc_editor
+            .sow_field_conflict("title", "On Cats", "On Dogs");
         self.doc_outcome = Some(format!(
             "sowed a field conflict (title) · alice: {} · bob: {}",
             if a.committed() { "✓" } else { "✗" },
@@ -164,16 +166,37 @@ impl Cockpit {
                 .items_center()
                 .gap_1()
                 .mt_1()
-                .child(pill(format!("doc cell {}", reflect::short_hex(&region.0)), theme::accent()))
-                .child(pill(format!("editor {}", reflect::short_hex(&editor.0)), theme::accent()))
-                .child(pill(format!("commit {}", reflect::short_hex(&commitment)), theme::muted()))
                 .child(pill(
-                    if seam_ok { "seam: commitment == projection" } else { "seam DRIFT" },
+                    format!("doc cell {}", reflect::short_hex(&region.0)),
+                    theme::accent(),
+                ))
+                .child(pill(
+                    format!("editor {}", reflect::short_hex(&editor.0)),
+                    theme::accent(),
+                ))
+                .child(pill(
+                    format!("commit {}", reflect::short_hex(&commitment)),
+                    theme::muted(),
+                ))
+                .child(pill(
+                    if seam_ok {
+                        "seam: commitment == projection"
+                    } else {
+                        "seam DRIFT"
+                    },
                     if seam_ok { theme::good() } else { theme::bad() },
                 ))
                 .child(pill(
-                    if rendered.has_conflict() { "conflicted" } else { "clean" },
-                    if rendered.has_conflict() { theme::warn() } else { theme::good() },
+                    if rendered.has_conflict() {
+                        "conflicted"
+                    } else {
+                        "clean"
+                    },
+                    if rendered.has_conflict() {
+                        theme::warn()
+                    } else {
+                        theme::good()
+                    },
                 )),
         );
 
@@ -184,7 +207,7 @@ impl Cockpit {
         // reachability gap (the editor surface now BOTH authors AND inspects).
         {
             use starbridge_v2::doc_lens::DocumentInspection;
-            use starbridge_v2::presentable::{Presentable, PresentCtx};
+            use starbridge_v2::presentable::{PresentCtx, Presentable};
             let w = self.world.borrow();
             let ctx = PresentCtx::new(&w, viewer);
             let inspection =
@@ -208,12 +231,11 @@ impl Cockpit {
                         .border_1()
                         .border_color(theme::border())
                         .bg(theme::panel())
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::muted())
-                                .child(format!("{} · {}", p.kind.slug(), p.label)),
-                        )
+                        .child(div().text_xs().text_color(theme::muted()).child(format!(
+                            "{} · {}",
+                            p.kind.slug(),
+                            p.label
+                        )))
                         .child(Self::render_presentation_body(&p.body)),
                 );
             }
@@ -226,10 +248,34 @@ impl Cockpit {
                 .flex_wrap()
                 .gap_1()
                 .mt_1()
-                .child(small_button(cx, "docs-append", "✎ edit (commit a turn)", theme::good(), Cockpit::doc_append_alice))
-                .child(small_button(cx, "docs-unauthorized", "⛔ try unauthorized edit", theme::bad(), Cockpit::doc_attempt_unauthorized))
-                .child(small_button(cx, "docs-sow-prose", "⑂ sow prose conflict", theme::warn(), Cockpit::doc_sow_prose_conflict))
-                .child(small_button(cx, "docs-sow-field", "⑂ sow field conflict (title)", theme::warn(), Cockpit::doc_sow_field_conflict)),
+                .child(small_button(
+                    cx,
+                    "docs-append",
+                    "✎ edit (commit a turn)",
+                    theme::good(),
+                    Cockpit::doc_append_alice,
+                ))
+                .child(small_button(
+                    cx,
+                    "docs-unauthorized",
+                    "⛔ try unauthorized edit",
+                    theme::bad(),
+                    Cockpit::doc_attempt_unauthorized,
+                ))
+                .child(small_button(
+                    cx,
+                    "docs-sow-prose",
+                    "⑂ sow prose conflict",
+                    theme::warn(),
+                    Cockpit::doc_sow_prose_conflict,
+                ))
+                .child(small_button(
+                    cx,
+                    "docs-sow-field",
+                    "⑂ sow field conflict (title)",
+                    theme::warn(),
+                    Cockpit::doc_sow_field_conflict,
+                )),
         );
 
         // ── THE OUTCOME BANNER (the real executor verdict) ───────────────────
@@ -251,7 +297,11 @@ impl Cockpit {
         }
 
         // ── THE RENDERED DOCUMENT (clean runs + inline conflict markers) ─────
-        col = col.child(section_title("THE DOCUMENT (linearized content)").mt_2().mb_1());
+        col = col.child(
+            section_title("THE DOCUMENT (linearized content)")
+                .mt_2()
+                .mb_1(),
+        );
         let mut doc_box = div()
             .flex()
             .flex_col()
@@ -264,7 +314,8 @@ impl Cockpit {
         for seg in &rendered.segments {
             match seg {
                 dregg_doc::Segment::Clean(t) => {
-                    doc_box = doc_box.child(div().text_sm().text_color(theme::text()).child(t.clone()));
+                    doc_box =
+                        doc_box.child(div().text_sm().text_color(theme::text()).child(t.clone()));
                 }
                 dregg_doc::Segment::Conflict(_) => {
                     doc_box = doc_box.child(
@@ -281,12 +332,18 @@ impl Cockpit {
         // ── CONFLICTS-AS-STATES: both alternatives, each with PROVENANCE ─────
         if !conflicts.is_empty() {
             col = col.child(
-                section_title("CONFLICTS — a STATE you live in (both alternatives + who wrote each)")
-                    .mt_2()
-                    .mb_1(),
+                section_title(
+                    "CONFLICTS — a STATE you live in (both alternatives + who wrote each)",
+                )
+                .mt_2()
+                .mb_1(),
             );
             for c in conflicts.iter() {
-                let regime_color = if c.needs_consensus { theme::bad() } else { theme::warn() };
+                let regime_color = if c.needs_consensus {
+                    theme::bad()
+                } else {
+                    theme::warn()
+                };
                 let mut cbox = div()
                     .flex()
                     .flex_col()
@@ -310,7 +367,11 @@ impl Cockpit {
                             ))
                         })
                         .child(pill(
-                            if c.needs_consensus { "may need consensus" } else { "unilaterally resolvable" },
+                            if c.needs_consensus {
+                                "may need consensus"
+                            } else {
+                                "unilaterally resolvable"
+                            },
                             theme::muted(),
                         )),
                 );
@@ -339,7 +400,11 @@ impl Cockpit {
                                     .child(pill(prov, theme::muted())),
                             )
                             .child(div().text_sm().text_color(theme::text()).child(
-                                if alt.text.is_empty() { "(empty)".to_string() } else { alt.text.clone() },
+                                if alt.text.is_empty() {
+                                    "(empty)".to_string()
+                                } else {
+                                    alt.text.clone()
+                                },
                             )),
                     );
                 }
@@ -357,8 +422,20 @@ impl Cockpit {
                         .flex_wrap()
                         .gap_1()
                         .mt_1()
-                        .child(small_button(cx, "docs-resolve-keep", "✓ resolve: keep alice's", theme::good(), Cockpit::doc_resolve_prose_keep))
-                        .child(small_button(cx, "docs-resolve-order", "✓ resolve: order both", theme::good(), Cockpit::doc_resolve_prose_order))
+                        .child(small_button(
+                            cx,
+                            "docs-resolve-keep",
+                            "✓ resolve: keep alice's",
+                            theme::good(),
+                            Cockpit::doc_resolve_prose_keep,
+                        ))
+                        .child(small_button(
+                            cx,
+                            "docs-resolve-order",
+                            "✓ resolve: order both",
+                            theme::good(),
+                            Cockpit::doc_resolve_prose_order,
+                        ))
                 };
                 cbox = cbox.child(resolve_row);
                 col = col.child(cbox);
@@ -367,7 +444,9 @@ impl Cockpit {
 
         // ── THE HYPERMEDIA FACES (the built Nelson pieces, reused) ───────────
         col = col.child(
-            section_title("HYPERMEDIA · transclusion + backlinks (Nelson, verified)").mt_2().mb_1(),
+            section_title("HYPERMEDIA · transclusion + backlinks (Nelson, verified)")
+                .mt_2()
+                .mb_1(),
         );
         if let Some(t) = &transclusion {
             col = col.child(
@@ -385,18 +464,31 @@ impl Cockpit {
                         "TRANSCLUSION — a verified cross-cell quote (content-addressed + receipt; \
                          the quote IS the source's committed value, never a copy):",
                     ))
-                    .child(div().text_xs().text_color(theme::text()).font_family("Menlo").child(format!(
-                        "{} quotes {} · field {} · receipt {} · {}",
-                        reflect::short_hex(&t.host.0),
-                        reflect::short_hex(&t.source.0),
-                        t.transcluded_field,
-                        t.provenance_receipt,
-                        if t.source_finalized { "FINALIZED" } else { "tentative" },
-                    ))),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .font_family("Menlo")
+                            .child(format!(
+                                "{} quotes {} · field {} · receipt {} · {}",
+                                reflect::short_hex(&t.host.0),
+                                reflect::short_hex(&t.source.0),
+                                t.transcluded_field,
+                                t.provenance_receipt,
+                                if t.source_finalized {
+                                    "FINALIZED"
+                                } else {
+                                    "tentative"
+                                },
+                            )),
+                    ),
             );
         } else {
             col = col.child(
-                div().text_xs().text_color(theme::muted()).child("(too few cells to compose a transclusion yet)"),
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("(too few cells to compose a transclusion yet)"),
             );
         }
         col = col.child(
@@ -409,7 +501,11 @@ impl Cockpit {
         );
         for bl in backlinks.backlinks.iter().take(6) {
             col = col.child(
-                div().text_xs().text_color(theme::text()).font_family("Menlo").child(format!("← {}", bl.observer_uri)),
+                div()
+                    .text_xs()
+                    .text_color(theme::text())
+                    .font_family("Menlo")
+                    .child(format!("← {}", bl.observer_uri)),
             );
         }
 

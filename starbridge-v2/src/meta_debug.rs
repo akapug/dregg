@@ -38,7 +38,7 @@
 //! [`crate::ui_snapshot`] / [`crate::view_cell`] are.
 
 use crate::presentable::{
-    FocusTarget, Presentable, PresentCtx, Presentation, PresentationBody, PresentationKind,
+    FocusTarget, PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind,
 };
 use crate::reflect::{Field, Inspectable, ObjectKind};
 use crate::ui_snapshot::{Liveness, WitnessCursor};
@@ -187,7 +187,11 @@ impl Presentable for MetaDebugView {
             title: format!("MetaDebugFrame · level {}", self.level.depth()),
             subtitle: format!(
                 "{} · frozen@h{} · {} pending",
-                if paused_live { "PAUSED-LIVE" } else { liveness.slug() },
+                if paused_live {
+                    "PAUSED-LIVE"
+                } else {
+                    liveness.slug()
+                },
                 self.cursor.height,
                 pending
             ),
@@ -331,14 +335,28 @@ mod tests {
         // A submitted turn QUEUES — it does NOT commit, and the head is frozen.
         let turn = w.turn(treasury, vec![transfer(treasury, sink, 250)]);
         let outcome = w.commit_turn(turn);
-        assert!(outcome.is_queued(), "a turn submitted while suspended queues, got otherwise");
+        assert!(
+            outcome.is_queued(),
+            "a turn submitted while suspended queues, got otherwise"
+        );
         assert_eq!(w.height(), h0, "the head is FROZEN — no height advance");
-        assert_eq!(w.receipts().len(), r0, "no receipt landed — the executor never ran");
-        assert_eq!(w.pending_len(), 1, "the turn is staged in the pending queue");
+        assert_eq!(
+            w.receipts().len(),
+            r0,
+            "no receipt landed — the executor never ran"
+        );
+        assert_eq!(
+            w.pending_len(),
+            1,
+            "the turn is staged in the pending queue"
+        );
 
         // The treasury balance is untouched (the real live head, paused).
         let bal = w.ledger().get(&treasury).unwrap().state.balance();
-        assert_eq!(bal, 1_000, "the frozen head's balance is the pre-suspend value");
+        assert_eq!(
+            bal, 1_000,
+            "the frozen head's balance is the pre-suspend value"
+        );
 
         // A TurnQueued event was emitted (dynamics completeness under suspension).
         assert!(
@@ -364,7 +382,10 @@ mod tests {
         assert!(!w.is_suspended(), "the loop is running again after resume");
         assert_eq!(w.pending_len(), 0, "the queue is drained");
         assert_eq!(outcomes.len(), 1, "one staged turn committed on resume");
-        assert!(outcomes[0].is_committed(), "the drained turn committed for real");
+        assert!(
+            outcomes[0].is_committed(),
+            "the drained turn committed for real"
+        );
         assert_eq!(w.height(), h0 + 1, "the head advanced by the drained turn");
 
         // The transfer actually moved value (the real executor ran on resume).
@@ -387,7 +408,10 @@ mod tests {
 
         let outcomes = w.resume_drain();
         assert_eq!(outcomes.len(), 3);
-        assert!(outcomes.iter().all(|o| o.is_committed()), "all three drained committed");
+        assert!(
+            outcomes.iter().all(|o| o.is_committed()),
+            "all three drained committed"
+        );
         assert_eq!(w.height(), 3, "three turns advanced the head");
         // 1000 − 100 − 200 − 50 = 650.
         assert_eq!(w.ledger().get(&treasury).unwrap().state.balance(), 650);
@@ -454,10 +478,15 @@ mod tests {
         assert_eq!(focus, FocusTarget::DebugFrame(MetaLevelId::BASE));
 
         // The view presents the suspended world.
-        let view = stack.get(MetaLevelId::BASE).expect("the level is materialized");
+        let view = stack
+            .get(MetaLevelId::BASE)
+            .expect("the level is materialized");
         let ctx = PresentCtx::new(&w, treasury);
         let set = view.present(&ctx);
-        assert!(!set.is_empty(), "the meta-view yields a real presentation set");
+        assert!(
+            !set.is_empty(),
+            "the meta-view yields a real presentation set"
+        );
 
         let raw = set
             .iter()
@@ -467,14 +496,19 @@ mod tests {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "suspended"));
                 assert!(
-                    i.fields.iter().any(|f| f.key == "pending_turns (the continuation)"),
+                    i.fields
+                        .iter()
+                        .any(|f| f.key == "pending_turns (the continuation)"),
                     "the staged continuation count is presented"
                 );
             }
             other => panic!("the meta-view RawFields must carry a Fields body, got {other:?}"),
         }
         // It honestly reads PAUSED-LIVE (the head is halted, not a frozen past).
-        assert!(view.is_paused_live(&w), "the meta-view looks at a paused-live head");
+        assert!(
+            view.is_paused_live(&w),
+            "the meta-view looks at a paused-live head"
+        );
 
         // The staged continuation appears as a Provenance timeline (one queued turn).
         let prov = set
@@ -483,7 +517,11 @@ mod tests {
             .expect("the continuation timeline is present");
         match &prov.body {
             PresentationBody::Timeline(t) => {
-                assert_eq!(t.events.len(), 1, "the one queued turn appears in the continuation");
+                assert_eq!(
+                    t.events.len(),
+                    1,
+                    "the one queued turn appears in the continuation"
+                );
             }
             other => panic!("the continuation must be a Timeline, got {other:?}"),
         }
@@ -538,13 +576,19 @@ mod tests {
         // Level 1: DEBUG THE DEBUGGER — focus the inspector on the meta-level's own
         // view by pushing a frame ON the frame. Same present() dispatch.
         let f1 = stack.push(&w);
-        assert_eq!(f1, FocusTarget::DebugFrame(MetaLevelId(1)), "the tower climbed one level");
+        assert_eq!(
+            f1,
+            FocusTarget::DebugFrame(MetaLevelId(1)),
+            "the tower climbed one level"
+        );
         assert_eq!(stack.depth(), 2, "the MetaStack nested");
 
         // Both levels are materialized and each presents a real frame.
         let reg = Registry::with_meta_stack(&w, &stack);
         for f in [f0, f1] {
-            let set = reg.present(f, treasury).expect("each materialized level resolves");
+            let set = reg
+                .present(f, treasury)
+                .expect("each materialized level resolves");
             assert!(set.iter().any(|p| p.kind == PresentationKind::RawFields));
         }
         // The top is the innermost debugger (level 1).
@@ -554,8 +598,14 @@ mod tests {
         assert_eq!(stack.pop().unwrap().level, MetaLevelId(1));
         assert_eq!(stack.depth(), 1);
         assert_eq!(stack.pop().unwrap().level, MetaLevelId(0));
-        assert!(stack.is_empty(), "popped back to the floor (the gpui loop, not a level)");
-        assert!(stack.pop().is_none(), "you cannot pop below the base — the 3-Lisp ground");
+        assert!(
+            stack.is_empty(),
+            "popped back to the floor (the gpui loop, not a level)"
+        );
+        assert!(
+            stack.pop().is_none(),
+            "you cannot pop below the base — the 3-Lisp ground"
+        );
     }
 
     // ── A dangling DebugFrame (unmaterialized level) is surfaced honestly ────
@@ -566,7 +616,9 @@ mod tests {
         let stack = MetaStack::new(); // empty — no level materialized
         let reg = Registry::with_meta_stack(&w, &stack);
         // A focus on a level that was never pushed resolves to None (never faked).
-        assert!(reg.present(FocusTarget::DebugFrame(MetaLevelId(7)), _t).is_none());
+        assert!(reg
+            .present(FocusTarget::DebugFrame(MetaLevelId(7)), _t)
+            .is_none());
     }
 
     // ── liveness: a meta-view falls to Replayed once the world advances past it ─
@@ -576,7 +628,11 @@ mod tests {
         let (mut w, treasury, sink) = two_cell_world();
         // Capture a meta-view at the head while NOT suspended (a live meta-view).
         let view = MetaDebugView::capture(&w, MetaLevelId::BASE);
-        assert_eq!(view.liveness(&w), Liveness::Live, "at the head, the meta-view is live");
+        assert_eq!(
+            view.liveness(&w),
+            Liveness::Live,
+            "at the head, the meta-view is live"
+        );
         assert!(!view.is_paused_live(&w), "not suspended → not paused-live");
 
         // The world advances past the captured head.

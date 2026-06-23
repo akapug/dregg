@@ -94,9 +94,14 @@ pub enum StingrayDrawError {
 impl StingrayDrawError {
     fn from_counter(e: BudgetError) -> Self {
         match e {
-            BudgetError::SliceExhausted { remaining, requested, .. } => {
-                StingrayDrawError::PoolExhausted { remaining, requested }
-            }
+            BudgetError::SliceExhausted {
+                remaining,
+                requested,
+                ..
+            } => StingrayDrawError::PoolExhausted {
+                remaining,
+                requested,
+            },
             BudgetError::DuplicateDebit { digest } => StingrayDrawError::DuplicateDraw { digest },
             BudgetError::UnknownSilo { .. } => StingrayDrawError::PoolMissing,
             other => StingrayDrawError::Counter(other),
@@ -274,7 +279,11 @@ mod tests {
         let b = StingraySwarmBudget::open(agent(), 10_000);
         assert_eq!(b.ceiling(), 10_000);
         assert_eq!(b.total_drawn(), 0, "nothing drawn yet");
-        assert_eq!(b.remaining(), 10_000, "at f=0 the one slice ceiling IS the whole pool");
+        assert_eq!(
+            b.remaining(),
+            10_000,
+            "at f=0 the one slice ceiling IS the whole pool"
+        );
         assert!(!b.is_exhausted());
     }
 
@@ -291,7 +300,11 @@ mod tests {
             300 + 450 + 250,
             "the conserved total is exactly the sum of the drawn amounts"
         );
-        assert_eq!(b.remaining(), 10_000 - 1_000, "headroom shrank by the drawn sum");
+        assert_eq!(
+            b.remaining(),
+            10_000 - 1_000,
+            "headroom shrank by the drawn sum"
+        );
     }
 
     #[test]
@@ -305,14 +318,21 @@ mod tests {
         assert!(b.would_overspend(500), "the pre-check sees the breach");
         let r = b.draw(500, digest(2));
         match r {
-            Err(StingrayDrawError::PoolExhausted { remaining, requested }) => {
+            Err(StingrayDrawError::PoolExhausted {
+                remaining,
+                requested,
+            }) => {
                 assert_eq!(remaining, 400, "the counter's own remaining headroom");
                 assert_eq!(requested, 500);
             }
             other => panic!("expected PoolExhausted, got {other:?}"),
         }
         // FAIL-CLOSED: the refused draw moved nothing.
-        assert_eq!(b.total_drawn(), 600, "a refused draw is unmoved — the gate held");
+        assert_eq!(
+            b.total_drawn(),
+            600,
+            "a refused draw is unmoved — the gate held"
+        );
         assert_eq!(b.remaining(), 400);
     }
 
@@ -321,7 +341,8 @@ mod tests {
         // The ceiling is the inclusive bound the pool may REACH but not pass.
         let mut b = StingraySwarmBudget::open(agent(), 1_000);
         b.draw(600, digest(1)).expect("600 fits");
-        b.draw(400, digest(2)).expect("landing exactly on the ceiling is admitted");
+        b.draw(400, digest(2))
+            .expect("landing exactly on the ceiling is admitted");
         assert_eq!(b.total_drawn(), 1_000);
         assert!(b.is_exhausted(), "the pool is now exactly exhausted");
         // One more unit is refused.
@@ -350,10 +371,15 @@ mod tests {
         b.draw(800, digest(1)).expect("draw fits");
         assert_eq!(b.remaining(), 200);
         b.refund(300).expect("refund restores spent");
-        assert_eq!(b.total_drawn(), 500, "refund decremented the conserved total");
+        assert_eq!(
+            b.total_drawn(),
+            500,
+            "refund decremented the conserved total"
+        );
         assert_eq!(b.remaining(), 500);
         // After the refund there is headroom for a fresh draw again.
-        b.draw(400, digest(2)).expect("a fresh draw fits in the restored headroom");
+        b.draw(400, digest(2))
+            .expect("a fresh draw fits in the restored headroom");
         assert_eq!(b.total_drawn(), 900);
     }
 
@@ -362,7 +388,10 @@ mod tests {
         let mut b = StingraySwarmBudget::open(agent(), 5_000);
         b.draw(1_200, digest(1)).expect("draw");
         let v = StingrayBudgetView::of(&b);
-        assert_eq!(v.total_drawn, 1_200, "the view reads the counter's total_spent");
+        assert_eq!(
+            v.total_drawn, 1_200,
+            "the view reads the counter's total_spent"
+        );
         assert_eq!(v.ceiling, 5_000);
         assert_eq!(v.remaining, 3_800);
         assert!(!v.exhausted);
@@ -380,8 +409,14 @@ mod tests {
         let mut b = StingraySwarmBudget::open(agent(), 2_000);
         b.draw(700, digest(1)).expect("draw");
         let slice = b.sdk_slice().expect("the shared slice exists");
-        assert_eq!(slice.ceiling, 2_000, "the slice ceiling IS the pool ceiling B");
-        assert_eq!(slice.spent, 700, "the slice's spent matches the pool's total_drawn");
+        assert_eq!(
+            slice.ceiling, 2_000,
+            "the slice ceiling IS the pool ceiling B"
+        );
+        assert_eq!(
+            slice.spent, 700,
+            "the slice's spent matches the pool's total_drawn"
+        );
         assert_eq!(slice.remaining(), 1_300);
         // The slice's spent equals the counter's total_spent (one model).
         assert_eq!(slice.spent, b.total_drawn());

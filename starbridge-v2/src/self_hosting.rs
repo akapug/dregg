@@ -169,7 +169,12 @@ impl SelfHostingView {
     /// the editor's genuine `save`, which commits a cap-gated `SetField` turn
     /// through the verified executor. Returns the live on-ledger receipt count
     /// AFTER the save (a fresh `TurnReceipt` was recorded if it grew).
-    pub fn fire_save(&self, content: &str, window: &mut Window, cx: &mut App) -> anyhow::Result<usize> {
+    pub fn fire_save(
+        &self,
+        content: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<usize> {
         let editor = self.editor.editor().clone();
         editor.update(cx, |ed, cx| {
             ed.set_text(content, window, cx);
@@ -344,11 +349,7 @@ fn badge(text: &str, color: gpui::Hsla) -> impl IntoElement {
         .child(text.to_string())
 }
 
-fn framed(
-    title: &str,
-    subtitle: &str,
-    body: gpui::AnyElement,
-) -> impl IntoElement {
+fn framed(title: &str, subtitle: &str, body: gpui::AnyElement) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -376,11 +377,5 @@ fn framed(
                         .child(subtitle.to_string()),
                 ),
         )
-        .child(
-            div()
-                .flex_1()
-                .min_h(px(0.))
-                .overflow_hidden()
-                .child(body),
-        )
+        .child(div().flex_1().min_h(px(0.)).overflow_hidden().child(body))
 }

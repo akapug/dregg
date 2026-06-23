@@ -48,7 +48,11 @@ fn build_items(fs: &Arc<dyn Fs>, dir: &Path, depth_left: usize) -> Vec<TreeItem>
         }
     }
     // Folders first, then alphabetical.
-    items.sort_by(|a, b| b.is_folder().cmp(&a.is_folder()).then(a.label.cmp(&b.label)));
+    items.sort_by(|a, b| {
+        b.is_folder()
+            .cmp(&a.is_folder())
+            .then(a.label.cmp(&b.label))
+    });
     items
 }
 

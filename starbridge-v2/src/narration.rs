@@ -394,7 +394,11 @@ mod tests {
         let coord = world.genesis_install(coord_cell);
         let swarm = Swarm::new(
             &world,
-            [(coord, "coordinator"), (worker_a, "worker-a"), (worker_b, "worker-b")],
+            [
+                (coord, "coordinator"),
+                (worker_a, "worker-a"),
+                (worker_b, "worker-b"),
+            ],
         );
         (world, swarm, coord, worker_a, worker_b)
     }
@@ -445,7 +449,10 @@ mod tests {
         assert!(panel.any_divergence(), "a fabricated action must be caught");
         assert_eq!(panel.rows[0].divergence, Divergence::FabricatedAction);
         assert_eq!(panel.rows[0].committed_in_window, 0);
-        assert!(panel.rows[0].receipt_short.is_none(), "no receipt — it never happened");
+        assert!(
+            panel.rows[0].receipt_short.is_none(),
+            "no receipt — it never happened"
+        );
         assert_eq!(panel.ghosts().len(), 1);
     }
 
@@ -460,8 +467,15 @@ mod tests {
         // without logging, so it would not exercise this feed-level branch.)
         let (mut world, mut swarm, coord, worker_a, _wb) = swarm_world();
         let log0 = swarm.action_log().len();
-        let r = swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 1_000_000)]);
-        assert!(matches!(r, Err(crate::swarm::SwarmError::ExecutorRejected { .. })));
+        let r = swarm.run(
+            &mut world,
+            coord,
+            vec![transfer(coord, worker_a, 1_000_000)],
+        );
+        assert!(matches!(
+            r,
+            Err(crate::swarm::SwarmError::ExecutorRejected { .. })
+        ));
         let claim = ClaimedAction {
             member: coord,
             description: "I was authorized to transfer 1,000,000 to worker-a".to_string(),
@@ -469,7 +483,10 @@ mod tests {
             correlation_id: None,
         };
         let panel = NarrationPanel::build(&swarm, &world, &[claim], log0, &[]);
-        assert!(panel.any_divergence(), "a claimed-but-refused action must be caught");
+        assert!(
+            panel.any_divergence(),
+            "a claimed-but-refused action must be caught"
+        );
         assert_eq!(panel.rows[0].divergence, Divergence::ClaimedButRefused);
         assert!(panel.rows[0].refused_in_window);
     }
@@ -482,9 +499,19 @@ mod tests {
         let (mut world, mut swarm, coord, worker_a, worker_b) = swarm_world();
         let log0 = swarm.action_log().len();
         // Three real committed actions.
-        swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]).unwrap();
-        swarm.run(&mut world, coord, vec![transfer(coord, worker_b, 100)]).unwrap();
-        swarm.run(&mut world, coord, vec![emit_event(worker_a, "task/go", vec![])]).unwrap();
+        swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
+            .unwrap();
+        swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_b, 100)])
+            .unwrap();
+        swarm
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_a, "task/go", vec![])],
+            )
+            .unwrap();
         let claim = ClaimedAction {
             member: coord,
             description: "I only did 1 action (a single transfer)".to_string(),
@@ -493,9 +520,15 @@ mod tests {
         };
         // The claim accounts for only 1 action; the grounded log holds 3.
         let panel = NarrationPanel::build(&swarm, &world, &[claim], log0, &[(coord, 1)]);
-        assert!(panel.any_divergence(), "a concealed side-effect must be caught");
+        assert!(
+            panel.any_divergence(),
+            "a concealed side-effect must be caught"
+        );
         assert_eq!(panel.rows[0].divergence, Divergence::ConcealedSideEffect);
-        assert_eq!(panel.rows[0].committed_in_window, 3, "three turns actually committed");
+        assert_eq!(
+            panel.rows[0].committed_in_window, 3,
+            "three turns actually committed"
+        );
     }
 
     #[test]
@@ -504,8 +537,12 @@ mod tests {
         // there is no concealed side-effect (the claim is honest about its breadth).
         let (mut world, mut swarm, coord, worker_a, worker_b) = swarm_world();
         let log0 = swarm.action_log().len();
-        swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]).unwrap();
-        swarm.run(&mut world, coord, vec![transfer(coord, worker_b, 100)]).unwrap();
+        swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
+            .unwrap();
+        swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_b, 100)])
+            .unwrap();
         let claim = ClaimedAction {
             member: coord,
             description: "I did 2 transfers".to_string(),
@@ -513,7 +550,10 @@ mod tests {
             correlation_id: None,
         };
         let panel = NarrationPanel::build(&swarm, &world, &[claim], log0, &[(coord, 2)]);
-        assert!(!panel.any_divergence(), "an accurate count does not flag concealment");
+        assert!(
+            !panel.any_divergence(),
+            "an accurate count does not flag concealment"
+        );
         assert_eq!(panel.rows[0].divergence, Divergence::None);
     }
 
@@ -523,8 +563,7 @@ mod tests {
         // within budget", but the metered world refused a dispatch with
         // BudgetExhausted — the panel flags the contradiction.
         use dregg_turn::ComputronCosts;
-        let mut world =
-            World::with_costs(ComputronCosts::default_costs()).with_turn_fee(1_000);
+        let mut world = World::with_costs(ComputronCosts::default_costs()).with_turn_fee(1_000);
         let worker_a = world.genesis_cell(0xA0, 5_000);
         let mut coord_cell = make_open_cell(0xC0, 100_000_000);
         coord_cell
@@ -534,11 +573,16 @@ mod tests {
         let coord = world.genesis_install(coord_cell);
         let mut swarm = Swarm::new(&world, [(coord, "coordinator"), (worker_a, "worker-a")]);
         // Spend once, then cap at that spend so the next dispatch breaches.
-        let o1 = swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]).unwrap();
+        let o1 = swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
+            .unwrap();
         swarm.set_ceiling(&coord, Some(o1.computrons));
         let log0 = swarm.action_log().len();
         let r = swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]);
-        assert!(matches!(r, Err(crate::swarm::SwarmError::BudgetExhausted { .. })));
+        assert!(matches!(
+            r,
+            Err(crate::swarm::SwarmError::BudgetExhausted { .. })
+        ));
         let claim = ClaimedAction {
             member: coord,
             description: "I stayed within budget".to_string(),
@@ -546,7 +590,10 @@ mod tests {
             correlation_id: None,
         };
         let panel = NarrationPanel::build(&swarm, &world, &[claim], log0, &[]);
-        assert!(panel.any_divergence(), "a claimed-but-bounded overspend must be caught");
+        assert!(
+            panel.any_divergence(),
+            "a claimed-but-bounded overspend must be caught"
+        );
         assert_eq!(panel.rows[0].divergence, Divergence::ClaimedButBounded);
         assert!(panel.rows[0].budget_breached_in_window);
     }
@@ -556,7 +603,9 @@ mod tests {
         // The dual: a WithinBudget claim when there was no breach is honest.
         let (mut world, mut swarm, coord, worker_a, _) = swarm_world();
         let log0 = swarm.action_log().len();
-        swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]).unwrap();
+        swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
+            .unwrap();
         let claim = ClaimedAction {
             member: coord,
             description: "I stayed within budget".to_string(),
@@ -577,7 +626,9 @@ mod tests {
         // faking it.
         let (mut world, mut swarm, coord, worker_a, _) = swarm_world();
         let log0 = swarm.action_log().len();
-        swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]).unwrap();
+        swarm
+            .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
+            .unwrap();
         let feed_claim = ClaimedAction {
             member: coord,
             description: "did a transfer".to_string(),
@@ -590,8 +641,7 @@ mod tests {
             expected: ClaimPosture::Committed,
             correlation_id: Some([0x11; 32]),
         };
-        let panel =
-            NarrationPanel::build(&swarm, &world, &[feed_claim, joined_claim], log0, &[]);
+        let panel = NarrationPanel::build(&swarm, &world, &[feed_claim, joined_claim], log0, &[]);
         assert_eq!(panel.rows[0].correlation, Correlation::FeedLevelOnly);
         assert!(panel.rows[0].correlation.label().contains("R1"));
         assert_eq!(panel.rows[1].correlation, Correlation::ByCorrelationId);

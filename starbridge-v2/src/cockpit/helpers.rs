@@ -25,14 +25,23 @@ pub(crate) fn sorted_cells(w: &World) -> Vec<CellId> {
 /// `holder ──rights──▶ target` edges), centered on the focused cell.
 pub(crate) fn render_graph_body(g: &GraphView) -> impl IntoElement {
     let mut col = div().flex().flex_col().gap_0p5();
-    col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
-        "{} node(s) · {} edge(s){}",
-        g.nodes.len(),
-        g.edges.len(),
-        g.focus.map(|f| format!(" · focus ⬡ {}", reflect::short_hex(f.as_bytes()))).unwrap_or_default(),
-    )));
+    col = col.child(
+        div().text_xs().text_color(theme::muted()).child(format!(
+            "{} node(s) · {} edge(s){}",
+            g.nodes.len(),
+            g.edges.len(),
+            g.focus
+                .map(|f| format!(" · focus ⬡ {}", reflect::short_hex(f.as_bytes())))
+                .unwrap_or_default(),
+        )),
+    );
     if g.edges.is_empty() {
-        col = col.child(div().text_xs().text_color(theme::muted()).child("(no capability edges)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child("(no capability edges)"),
+        );
     }
     for e in g.edges.iter().take(24) {
         col = col.child(
@@ -46,7 +55,12 @@ pub(crate) fn render_graph_body(g: &GraphView) -> impl IntoElement {
                     reflect::short_hex(e.holder.as_bytes()),
                     reflect::short_hex(e.target.as_bytes()),
                 )))
-                .child(div().text_xs().text_color(theme::accent()).child(format!("[{}]", e.rights_label()))),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .child(format!("[{}]", e.rights_label())),
+                ),
         );
     }
     col
@@ -56,7 +70,12 @@ pub(crate) fn render_graph_body(g: &GraphView) -> impl IntoElement {
 /// directed verb transitions.
 pub(crate) fn render_state_machine(sm: &StateMachineView) -> impl IntoElement {
     let mut col = div().flex().flex_col().gap_0p5();
-    col = col.child(div().text_xs().text_color(theme::good()).child(format!("current: {}", sm.current)));
+    col = col.child(
+        div()
+            .text_xs()
+            .text_color(theme::good())
+            .child(format!("current: {}", sm.current)),
+    );
     let mut states_row = div().flex().flex_wrap().gap_1();
     for st in &sm.states {
         let active = st.name == sm.current;
@@ -68,17 +87,29 @@ pub(crate) fn render_state_machine(sm: &StateMachineView) -> impl IntoElement {
             theme::muted()
         };
         states_row = states_row.child(pill(
-            if st.terminal { format!("{} ⊣", st.name) } else { st.name.clone() },
+            if st.terminal {
+                format!("{} ⊣", st.name)
+            } else {
+                st.name.clone()
+            },
             color,
         ));
     }
     col = col.child(states_row);
-    col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("transitions"));
+    col = col.child(
+        div()
+            .text_xs()
+            .text_color(theme::muted())
+            .mt_1()
+            .child("transitions"),
+    );
     for t in &sm.transitions {
-        col = col.child(div().text_xs().text_color(theme::text()).child(format!(
-            "{} ──{}──▶ {}",
-            t.from, t.verb, t.to
-        )));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::text())
+                .child(format!("{} ──{}──▶ {}", t.from, t.verb, t.to)),
+        );
     }
     col
 }
@@ -98,20 +129,21 @@ pub(crate) fn render_gauge(g: &GaugeView) -> impl IntoElement {
         g.ceiling.map(|c| format!(" / {c}")).unwrap_or_else(|| " (unbounded)".into()),
     )));
     if g.ceiling.is_some() {
-        col = col.child(
-            div()
-                .w_full()
-                .h(px(8.))
-                .rounded_md()
-                .bg(theme::panel_hi())
-                .child(
-                    div()
-                        .h(px(8.))
-                        .w(gpui::relative(frac))
-                        .rounded_md()
-                        .bg(if frac > 0.9 { theme::bad() } else { theme::accent() }),
-                ),
-        );
+        col =
+            col.child(
+                div()
+                    .w_full()
+                    .h(px(8.))
+                    .rounded_md()
+                    .bg(theme::panel_hi())
+                    .child(div().h(px(8.)).w(gpui::relative(frac)).rounded_md().bg(
+                        if frac > 0.9 {
+                            theme::bad()
+                        } else {
+                            theme::accent()
+                        },
+                    )),
+            );
     }
     if !g.rungs.is_empty() {
         let mut rungs = div().flex().flex_wrap().gap_1();
@@ -128,15 +160,31 @@ pub(crate) fn render_gauge(g: &GaugeView) -> impl IntoElement {
 pub(crate) fn render_timeline(t: &TimelineView) -> impl IntoElement {
     let mut col = div().flex().flex_col().gap_0p5();
     if t.events.is_empty() {
-        col = col.child(div().text_xs().text_color(theme::muted()).child("(no events yet)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child("(no events yet)"),
+        );
     }
     for e in t.events.iter().take(32) {
         col = col.child(
             div()
                 .flex()
                 .gap_1()
-                .child(div().text_xs().text_color(theme::muted()).min_w(px(28.)).child(format!("#{}", e.at)))
-                .child(div().text_xs().text_color(theme::text()).child(e.label.clone()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .min_w(px(28.))
+                        .child(format!("#{}", e.at)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text())
+                        .child(e.label.clone()),
+                )
                 .when(e.hash.is_some(), |d| {
                     d.child(pill(reflect::short_hex(&e.hash.unwrap()), theme::good()))
                 }),
@@ -148,7 +196,11 @@ pub(crate) fn render_timeline(t: &TimelineView) -> impl IntoElement {
 /// MerkleTree body — leaves + the committed root + an optional highlighted path.
 pub(crate) fn render_merkle(m: &MerkleTreeView) -> impl IntoElement {
     let mut col = div().flex().flex_col().gap_0p5();
-    col = col.child(div().text_xs().text_color(theme::text()).child(format!("{} · {} leaf/leaves", m.label, m.leaves.len())));
+    col = col.child(div().text_xs().text_color(theme::text()).child(format!(
+        "{} · {} leaf/leaves",
+        m.label,
+        m.leaves.len()
+    )));
     col = col.child(
         div()
             .flex()
@@ -158,11 +210,20 @@ pub(crate) fn render_merkle(m: &MerkleTreeView) -> impl IntoElement {
     );
     for (i, leaf) in m.leaves.iter().take(24).enumerate() {
         let on_path = m.path.contains(leaf);
-        col = col.child(div().text_xs().text_color(if on_path { theme::good() } else { theme::muted() }).child(format!(
-            "{} leaf[{i}] {}",
-            if on_path { "▣" } else { "·" },
-            leaf
-        )));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(if on_path {
+                    theme::good()
+                } else {
+                    theme::muted()
+                })
+                .child(format!(
+                    "{} leaf[{i}] {}",
+                    if on_path { "▣" } else { "·" },
+                    leaf
+                )),
+        );
     }
     col
 }
@@ -175,15 +236,34 @@ pub(crate) fn render_lattice(l: &LatticeView) -> impl IntoElement {
     for (i, n) in l.nodes.iter().enumerate() {
         let active = l.current == Some(i);
         nodes_row = nodes_row.child(pill(
-            if active { format!("● {n}") } else { n.clone() },
-            if active { theme::accent() } else { theme::muted() },
+            if active {
+                format!("● {n}")
+            } else {
+                n.clone()
+            },
+            if active {
+                theme::accent()
+            } else {
+                theme::muted()
+            },
         ));
     }
     col = col.child(nodes_row);
-    col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("⊑ covering relations"));
+    col = col.child(
+        div()
+            .text_xs()
+            .text_color(theme::muted())
+            .mt_1()
+            .child("⊑ covering relations"),
+    );
     for (a, b) in &l.edges {
         if let (Some(na), Some(nb)) = (l.nodes.get(*a), l.nodes.get(*b)) {
-            col = col.child(div().text_xs().text_color(theme::text()).child(format!("{na} ⊑ {nb}")));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::text())
+                    .child(format!("{na} ⊑ {nb}")),
+            );
         }
     }
     col
@@ -194,15 +274,31 @@ pub(crate) fn render_lattice(l: &LatticeView) -> impl IntoElement {
 pub(crate) fn render_trace(t: &TraceView) -> impl IntoElement {
     let mut col = div().flex().flex_col().gap_0p5();
     if t.steps.is_empty() {
-        col = col.child(div().text_xs().text_color(theme::muted()).child("(no steps)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child("(no steps)"),
+        );
     }
     for s in t.steps.iter().take(32) {
         col = col.child(
             div()
                 .flex()
                 .gap_1()
-                .child(div().text_xs().text_color(theme::muted()).min_w(px(24.)).child(format!("{}.", s.index)))
-                .child(div().text_xs().text_color(theme::text()).child(s.label.clone())),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .min_w(px(24.))
+                        .child(format!("{}.", s.index)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text())
+                        .child(s.label.clone()),
+                ),
         );
     }
     col
@@ -214,9 +310,13 @@ pub(crate) fn render_trace(t: &TraceView) -> impl IntoElement {
 pub(crate) fn shell_err(e: &starbridge_v2::shell::ShellError) -> String {
     use starbridge_v2::shell::ShellError;
     match e {
-        ShellError::Unauthorized => "no valid capability presented (no ambient authority)".to_string(),
+        ShellError::Unauthorized => {
+            "no valid capability presented (no ambient authority)".to_string()
+        }
         ShellError::NoSuchSurface(id) => format!("surface {} does not exist", id.as_u64()),
-        ShellError::ConsoleProtected => "the system console is the trusted root (cannot close)".to_string(),
+        ShellError::ConsoleProtected => {
+            "the system console is the trusted root (cannot close)".to_string()
+        }
         ShellError::ShareDenied(why) => format!("widening share refused by the executor: {why}"),
         // The verified-scene tooth that bit (T1 overpaint / T2 spoof / T3
         // misroute|double-focus), surfaced for the operator log.
@@ -266,10 +366,20 @@ pub(crate) fn inspectable_row(ins: &Inspectable) -> impl IntoElement {
             div()
                 .flex()
                 .justify_between()
-                .child(div().text_xs().text_color(theme::text()).child(ins.title.clone()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text())
+                        .child(ins.title.clone()),
+                )
                 .child(kind_badge(ins.kind)),
         )
-        .child(div().text_xs().text_color(theme::muted()).child(ins.subtitle.clone()));
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child(ins.subtitle.clone()),
+        );
     for f in &ins.fields {
         col = col.child(field_row(f));
     }
@@ -290,16 +400,22 @@ pub(crate) fn field_row(f: &Field) -> impl IntoElement {
         ),
         FieldValue::Id(id) => (reflect::short_hex(id), theme::accent()),
         FieldValue::Hash(h) => (reflect::short_hex(h), theme::good()),
-        FieldValue::CapEdge { target, slot } => {
-            (format!("→ {} (slot {slot})", reflect::short_hex(target)), theme::accent())
-        }
+        FieldValue::CapEdge { target, slot } => (
+            format!("→ {} (slot {slot})", reflect::short_hex(target)),
+            theme::accent(),
+        ),
         FieldValue::FieldSlot { hex, .. } => (reflect::short_hex_hexstr(hex), theme::muted()),
     };
     div()
         .flex()
         .justify_between()
         .py_0p5()
-        .child(div().text_xs().text_color(theme::muted()).child(f.key.clone()))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child(f.key.clone()),
+        )
         .child(div().text_xs().text_color(color).child(val))
 }
 
@@ -463,7 +579,9 @@ pub(crate) fn shell_button(
 /// `repl::outputs::ImageView` uses — no parallel renderer, no re-fetch: just the
 /// already-rendered cap-gated pixels handed to gpui.
 #[cfg(feature = "servo")]
-pub(crate) fn rgba_frame_to_image(frame: &servo_render::RgbaFrame) -> std::sync::Arc<gpui::RenderImage> {
+pub(crate) fn rgba_frame_to_image(
+    frame: &servo_render::RgbaFrame,
+) -> std::sync::Arc<gpui::RenderImage> {
     // Copy the RGBA8 bytes and swap R<->B in place to land in gpui's BGRA layout.
     let mut bgra = frame.bytes.clone();
     for px in bgra.chunks_exact_mut(4) {

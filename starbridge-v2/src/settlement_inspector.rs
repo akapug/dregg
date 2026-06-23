@@ -58,7 +58,7 @@ use dregg_cell::{AuthRequired, CellId, CellMode, CellProgram};
 
 use crate::predicate_composer::{Composite, PredicateComposer};
 use crate::presentable::{
-    Gadget, GadgetError, GadgetField, GadgetInput, GadgetValidation, Presentable, PresentCtx,
+    Gadget, GadgetError, GadgetField, GadgetInput, GadgetValidation, PresentCtx, Presentable,
     Presentation, PresentationBody, PresentationKind, SmState, SmTransition, StateMachineView,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
@@ -126,7 +126,9 @@ impl ReflectedFactory {
             d.allowed_cap_templates.len()
         ));
         if let Some(budget) = d.creation_budget {
-            s.push_str(&format!("  · is rate-limited to {budget} birth(s) per epoch\n"));
+            s.push_str(&format!(
+                "  · is rate-limited to {budget} birth(s) per epoch\n"
+            ));
         }
         s
     }
@@ -264,11 +266,7 @@ impl SettlementFamily {
                 ("Finalized", "Finalize (finality witness → pot)"),
                 ("Cancelled", "Cancel (timeout → originator)"),
             ),
-            SettlementFamily::Trustline(_) => lifecycle_sm(
-                "Open",
-                "Closed",
-                "Close",
-            ),
+            SettlementFamily::Trustline(_) => lifecycle_sm("Open", "Closed", "Close"),
             SettlementFamily::Channel(_) => lifecycle_sm("Open", "Closed", "Close"),
         }
     }
@@ -277,20 +275,33 @@ impl SettlementFamily {
 /// A two-outcome settlement state machine (the escrow/obligation/bridge shape):
 /// one live state that resolves to one of two TERMINAL outcomes (the
 /// no-double-resolve tooth — both outcomes are terminal).
-fn dual_resolution_sm(
-    live: &str,
-    a: (&str, &str),
-    b: (&str, &str),
-) -> StateMachineView {
+fn dual_resolution_sm(live: &str, a: (&str, &str), b: (&str, &str)) -> StateMachineView {
     StateMachineView {
         states: vec![
-            SmState { name: live.to_string(), terminal: false },
-            SmState { name: a.0.to_string(), terminal: true },
-            SmState { name: b.0.to_string(), terminal: true },
+            SmState {
+                name: live.to_string(),
+                terminal: false,
+            },
+            SmState {
+                name: a.0.to_string(),
+                terminal: true,
+            },
+            SmState {
+                name: b.0.to_string(),
+                terminal: true,
+            },
         ],
         transitions: vec![
-            SmTransition { from: live.to_string(), to: a.0.to_string(), verb: a.1.to_string() },
-            SmTransition { from: live.to_string(), to: b.0.to_string(), verb: b.1.to_string() },
+            SmTransition {
+                from: live.to_string(),
+                to: a.0.to_string(),
+                verb: a.1.to_string(),
+            },
+            SmTransition {
+                from: live.to_string(),
+                to: b.0.to_string(),
+                verb: b.1.to_string(),
+            },
         ],
         current: live.to_string(),
     }
@@ -301,13 +312,30 @@ fn dual_resolution_sm(
 fn lifecycle_sm(live: &str, closed: &str, close_verb: &str) -> StateMachineView {
     StateMachineView {
         states: vec![
-            SmState { name: "Uninit".to_string(), terminal: false },
-            SmState { name: live.to_string(), terminal: false },
-            SmState { name: closed.to_string(), terminal: true },
+            SmState {
+                name: "Uninit".to_string(),
+                terminal: false,
+            },
+            SmState {
+                name: live.to_string(),
+                terminal: false,
+            },
+            SmState {
+                name: closed.to_string(),
+                terminal: true,
+            },
         ],
         transitions: vec![
-            SmTransition { from: "Uninit".to_string(), to: live.to_string(), verb: "Open".to_string() },
-            SmTransition { from: live.to_string(), to: closed.to_string(), verb: close_verb.to_string() },
+            SmTransition {
+                from: "Uninit".to_string(),
+                to: live.to_string(),
+                verb: "Open".to_string(),
+            },
+            SmTransition {
+                from: live.to_string(),
+                to: closed.to_string(),
+                verb: close_verb.to_string(),
+            },
         ],
         current: "Uninit".to_string(),
     }
@@ -338,7 +366,11 @@ impl Presentable for SettlementFamily {
             search_text: format!(
                 "lifecycle {} {}",
                 sm.current,
-                sm.states.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" ")
+                sm.states
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             body: PresentationBody::StateMachine(sm),
         });
@@ -412,10 +444,7 @@ fn settlement_inspectable(fam: &SettlementFamily) -> Inspectable {
         ),
         SettlementFamily::Channel(t) => (
             "uninit → open → closed".to_string(),
-            vec![
-                Field::hash("admin", t.admin),
-                Field::hash("tag", t.tag),
-            ],
+            vec![Field::hash("admin", t.admin), Field::hash("tag", t.tag)],
         ),
     };
     Inspectable {
@@ -612,10 +641,7 @@ impl FactoryAuthor {
         world.turn(
             self.agent,
             vec![create_cell_from_factory(
-                factory_vk,
-                self.owner,
-                self.token,
-                params,
+                factory_vk, self.owner, self.token, params,
             )],
         )
     }
@@ -696,14 +722,26 @@ impl Gadget for FactoryAuthor {
     /// predicate sub-gadget for the child program + the creation budget.
     fn fields(&self) -> Vec<GadgetField> {
         vec![
-            GadgetField::CellPicker { key: "agent".to_string() },
-            GadgetField::HexBytes { key: "owner".to_string(), len: 32 },
-            GadgetField::HexBytes { key: "token".to_string(), len: 32 },
+            GadgetField::CellPicker {
+                key: "agent".to_string(),
+            },
+            GadgetField::HexBytes {
+                key: "owner".to_string(),
+                len: 32,
+            },
+            GadgetField::HexBytes {
+                key: "token".to_string(),
+                len: 32,
+            },
             GadgetField::SubGadget {
                 key: "program".to_string(),
                 kind: crate::presentable::GadgetKind::Predicate,
             },
-            GadgetField::U64 { key: "creation_budget".to_string(), min: 0, max: u64::MAX },
+            GadgetField::U64 {
+                key: "creation_budget".to_string(),
+                min: 0,
+                max: u64::MAX,
+            },
         ]
     }
 
@@ -774,7 +812,10 @@ mod tests {
 
     /// A simple, safe child program: slot 0 must be ≤ 100 (a real caveat).
     fn capped_slot_program() -> Composite {
-        Composite::Leaf(Atom::FieldLte { index: 0, value: 100 })
+        Composite::Leaf(Atom::FieldLte {
+            index: 0,
+            value: 100,
+        })
     }
 
     // ── a composed factory deploys + a child is born under conservation ──────
@@ -796,16 +837,27 @@ mod tests {
         );
 
         // A real child cell was born under conservation (the executor committed).
-        assert_eq!(w.cell_count(), before + 1, "the factory birthed a child cell");
+        assert_eq!(
+            w.cell_count(),
+            before + 1,
+            "the factory birthed a child cell"
+        );
         let child = outcome.child().expect("a child was born");
-        assert_eq!(child, CellId::derive_raw(&owner, &token), "the child id is derive_raw(owner, token)");
+        assert_eq!(
+            child,
+            CellId::derive_raw(&owner, &token),
+            "the child id is derive_raw(owner, token)"
+        );
 
         // The born child carries the COMPOSED constraints on its CellProgram —
         // the executor installed exactly the predicate the factory advertised.
         let born = w.ledger().get(&child).expect("the child is in the ledger");
         match &born.program {
             CellProgram::Predicate(cs) => {
-                assert!(!cs.is_empty(), "the born child carries the composed perpetual caveat");
+                assert!(
+                    !cs.is_empty(),
+                    "the born child carries the composed perpetual caveat"
+                );
             }
             other => panic!("the born child should carry a Predicate program, got {other:?}"),
         }
@@ -828,7 +880,11 @@ mod tests {
             !outcome.born(),
             "a birth from an unregistered factory must be refused: {outcome:?}"
         );
-        assert_eq!(w.cell_count(), before, "no child cell was born on the refused birth");
+        assert_eq!(
+            w.cell_count(),
+            before,
+            "no child cell was born on the refused birth"
+        );
 
         // The PREDICTION agrees one turn ahead (the live world untouched).
         assert!(
@@ -847,7 +903,10 @@ mod tests {
         // Deploy first (so the factory VK is registered), then predict the birth.
         let descriptor = author.descriptor().expect("a safe composition lowers");
         let vk = w.deploy_factory(descriptor.clone());
-        assert_eq!(vk, descriptor.factory_vk, "deploy returns the content-addressed VK");
+        assert_eq!(
+            vk, descriptor.factory_vk,
+            "deploy returns the content-addressed VK"
+        );
 
         // PREDICT (no commit) shows the birth would commit; the live world untouched.
         let predicted = author.predict_birth(&w, vk);
@@ -858,7 +917,11 @@ mod tests {
         // BIRTH against the already-deployed factory — the identical verified turn.
         let outcome = author.birth_against(&mut w, vk).expect("verdict");
         assert!(outcome.born(), "the birth commits: {outcome:?}");
-        assert_eq!(w.cell_count(), before + 1, "the predicted-then-committed child is born");
+        assert_eq!(
+            w.cell_count(),
+            before + 1,
+            "the predicted-then-committed child is born"
+        );
     }
 
     // ── the authored-factory Presentable reflects real blueprint state ───────
@@ -880,7 +943,10 @@ mod tests {
         match &src.body {
             PresentationBody::Prose(p) => {
                 assert!(p.contains("Hosted"), "the Source names the real mode: {p}");
-                assert!(p.contains("perpetual slot caveat"), "the Source names inherited caveats");
+                assert!(
+                    p.contains("perpetual slot caveat"),
+                    "the Source names inherited caveats"
+                );
             }
             other => panic!("Source should be Prose, got {other:?}"),
         }
@@ -891,7 +957,10 @@ mod tests {
             .expect("Invariant present");
         match &inv.body {
             PresentationBody::Prose(p) => {
-                assert!(p.contains("perpetual slot caveat"), "Invariant readout names the caveats: {p}");
+                assert!(
+                    p.contains("perpetual slot caveat"),
+                    "Invariant readout names the caveats: {p}"
+                );
             }
             other => panic!("Invariant should be Prose, got {other:?}"),
         }
@@ -905,11 +974,20 @@ mod tests {
         // An empty disjunction is vacuously false — the L2 validator refuses it,
         // so the factory never builds and nothing deploys.
         let author = FactoryAuthor::new(agent, [0xC5u8; 32], [0u8; 32], Composite::AnyOf(vec![]));
-        assert!(author.validate().is_fail_closed(), "the unsafe program is fail-closed");
-        assert!(author.build().is_err(), "an unsafe composition does not build a descriptor");
+        assert!(
+            author.validate().is_fail_closed(),
+            "the unsafe program is fail-closed"
+        );
+        assert!(
+            author.build().is_err(),
+            "an unsafe composition does not build a descriptor"
+        );
 
         let before = w.cell_count();
-        assert!(author.deploy_and_birth(&mut w).is_err(), "an unsafe program never deploys");
+        assert!(
+            author.deploy_and_birth(&mut w).is_err(),
+            "an unsafe program never deploys"
+        );
         assert_eq!(w.cell_count(), before, "no factory deployed, no child born");
     }
 
@@ -957,8 +1035,13 @@ mod tests {
         }
 
         // The family lowers to the GENUINE per-deal factory descriptor.
-        let d = escrow.descriptor().expect("a valid escrow lowers to a descriptor");
-        assert!(!d.state_constraints.is_empty(), "the escrow descriptor carries the proven caveats");
+        let d = escrow
+            .descriptor()
+            .expect("a valid escrow lowers to a descriptor");
+        assert!(
+            !d.state_constraints.is_empty(),
+            "the escrow descriptor carries the proven caveats"
+        );
         assert_eq!(d.default_mode, CellMode::Hosted);
     }
 
@@ -988,18 +1071,27 @@ mod tests {
             owner_pubkey: owner,
         };
         let before = w.cell_count();
-        let turn = w.turn(agent, vec![create_cell_from_factory(vk, owner, token, params)]);
+        let turn = w.turn(
+            agent,
+            vec![create_cell_from_factory(vk, owner, token, params)],
+        );
         assert!(
             w.commit_turn(turn).is_committed(),
             "a settlement-family child is born under conservation through the real executor"
         );
-        assert_eq!(w.cell_count(), before + 1, "the bridge factory birthed a deal cell");
+        assert_eq!(
+            w.cell_count(),
+            before + 1,
+            "the bridge factory birthed a deal cell"
+        );
 
         // The born deal cell carries the bridge's proven state constraints.
         let child = CellId::derive_raw(&owner, &token);
         let born = w.ledger().get(&child).expect("the deal cell exists");
         match &born.program {
-            CellProgram::Predicate(cs) => assert!(!cs.is_empty(), "the deal cell carries its caveats"),
+            CellProgram::Predicate(cs) => {
+                assert!(!cs.is_empty(), "the deal cell carries its caveats")
+            }
             other => panic!("the deal cell should carry a Predicate program, got {other:?}"),
         }
     }
@@ -1017,6 +1109,9 @@ mod tests {
             condition: field_from_u64(0), // zero → refused
             timeout_height: 50,
         });
-        assert!(escrow.descriptor().is_err(), "a zero-condition escrow is refused by the blueprint");
+        assert!(
+            escrow.descriptor().is_err(),
+            "a zero-condition escrow is refused by the blueprint"
+        );
     }
 }

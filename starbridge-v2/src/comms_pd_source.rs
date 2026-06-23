@@ -130,7 +130,12 @@ impl ChatSource for CommsPdSource {
     fn send(&self, room_id: &str, body: &str) -> Result<String> {
         self.inner.send(room_id, body)
     }
-    fn send_membrane(&self, room_id: &str, _body: &str, membrane: MembraneEnvelope) -> Result<String> {
+    fn send_membrane(
+        &self,
+        room_id: &str,
+        _body: &str,
+        membrane: MembraneEnvelope,
+    ) -> Result<String> {
         // Record the REAL executor-minted membrane as a posted message in this room.
         // (A live `MatrixHandle` inner would ALSO POST it over the wire; the
         // world-chat inner is local-sovereign, so the post lives in this comms-PD.)
@@ -141,7 +146,9 @@ impl ChatSource for CommsPdSource {
             }
             s
         };
-        let sender = self.whoami().unwrap_or_else(|| "@me:deos.local".to_string());
+        let sender = self
+            .whoami()
+            .unwrap_or_else(|| "@me:deos.local".to_string());
         self.posted
             .lock()
             .unwrap()
@@ -239,7 +246,10 @@ impl ChatSource for CommsPdSource {
                 }
             }
         };
-        let drive = fork.turn(target, vec![crate::world::set_field(target, 0, [0xD7u8; 32])]);
+        let drive = fork.turn(
+            target,
+            vec![crate::world::set_field(target, 0, [0xD7u8; 32])],
+        );
         if !fork.commit_turn(drive).is_committed() {
             return Err(deos_matrix::Error::Other(
                 "the driven turn was refused by the fork executor (fail-closed)".into(),
@@ -259,7 +269,10 @@ impl ChatSource for CommsPdSource {
         let conferred: Vec<BranchCap> = frustum
             .cells
             .iter()
-            .map(|c| BranchCap { target: cell_key(&c.id()), debit_reach: false })
+            .map(|c| BranchCap {
+                target: cell_key(&c.id()),
+                debit_reach: false,
+            })
             .collect();
         let stitch = Stitch {
             main: baseline,
@@ -267,13 +280,18 @@ impl ChatSource for CommsPdSource {
             conferred: conferred.clone(),
         };
         match stitch.settle(&conferred, None) {
-            SettleOutcome::Settled(merged) => {
-                Ok(Self::settle_summary(fork.state_root(), merged.atoms.len(), 0))
-            }
-            SettleOutcome::Refused { over_authorized_target } => {
+            SettleOutcome::Settled(merged) => Ok(Self::settle_summary(
+                fork.state_root(),
+                merged.atoms.len(),
+                0,
+            )),
+            SettleOutcome::Refused {
+                over_authorized_target,
+            } => {
                 // An over-authorized confer is a lossy-drop surfaced as a conflict —
                 // transparent, fail-closed (NOT a silent overwrite).
-                let mut s = String::from("over-authorized confer refused (lossy-drop) at cell key 0x");
+                let mut s =
+                    String::from("over-authorized confer refused (lossy-drop) at cell key 0x");
                 s.push_str(&format!("{over_authorized_target:016x}"));
                 Ok(s)
             }
@@ -310,21 +328,38 @@ mod tests {
         // membrane (the screenshot of the moment) and REHYDRATES+DRIVES+STITCHES it —
         // NO mock envelope, NO recorded sync anywhere.
         let (source, room_id) = wired_source();
-        assert!(source.membrane_capable(), "the comms-PD source is executor-backed");
+        assert!(
+            source.membrane_capable(),
+            "the comms-PD source is executor-backed"
+        );
         assert_eq!(source.backend_label(), "firmament-comms-pd");
 
         // MINT — a genuine frustum of real cells in view of the focus.
-        let env = source.mint_membrane(&room_id).expect("mint a real membrane");
-        assert!(env.cut.cell_count >= 1, "the frustum culled real cells (the focus + its reach)");
+        let env = source
+            .mint_membrane(&room_id)
+            .expect("mint a real membrane");
+        assert!(
+            env.cut.cell_count >= 1,
+            "the frustum culled real cells (the focus + its reach)"
+        );
         assert_eq!(env.version, MembraneEnvelope::VERSION);
 
         // SEND the real membrane → it appears in the timeline as a Membrane card
         // carrying genuine bytes (the interactive "⬡ attach membrane" path).
-        let id = source.send_membrane(&room_id, "", env.clone()).expect("post the real membrane");
+        let id = source
+            .send_membrane(&room_id, "", env.clone())
+            .expect("post the real membrane");
         assert!(!id.is_empty());
         let tl = source.timeline(&room_id, 80).expect("timeline");
-        let card = tl.iter().find(|m| m.membrane.is_some()).expect("a real membrane card is in the timeline");
-        assert_eq!(card.membrane.as_ref().unwrap(), &env, "the card carries the EXACT real envelope");
+        let card = tl
+            .iter()
+            .find(|m| m.membrane.is_some())
+            .expect("a real membrane card is in the timeline");
+        assert_eq!(
+            card.membrane.as_ref().unwrap(),
+            &env,
+            "the card carries the EXACT real envelope"
+        );
 
         // REHYDRATE + DRIVE + STITCH — the received side, all real, returns a settled
         // summary (the clean fold of B's real driven turn).
@@ -350,7 +385,9 @@ mod tests {
         env.frustum_root[0] ^= 0xff;
         let err = source.rehydrate_drive_stitch(&env).unwrap_err();
         assert!(
-            err.to_string().contains("mismatch") || err.to_string().contains("malformed") || err.to_string().contains("frustum"),
+            err.to_string().contains("mismatch")
+                || err.to_string().contains("malformed")
+                || err.to_string().contains("frustum"),
             "a substituted snapshot is refused fail-closed, got: {err}"
         );
     }
@@ -361,7 +398,13 @@ mod tests {
         // live MatrixHandle with no comms-PD world) is NOT membrane-capable and
         // returns MembraneUnavailable — NEVER a mock envelope.
         let world_chat = WorldChatSource::seeded("@ember:deos.local");
-        assert!(!world_chat.membrane_capable(), "a bare transport holds no executor");
-        assert!(world_chat.mint_membrane("!deoslab:deos.local").is_err(), "no mock mint");
+        assert!(
+            !world_chat.membrane_capable(),
+            "a bare transport holds no executor"
+        );
+        assert!(
+            world_chat.mint_membrane("!deoslab:deos.local").is_err(),
+            "no mock mint"
+        );
     }
 }

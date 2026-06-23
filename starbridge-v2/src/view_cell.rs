@@ -43,7 +43,7 @@
 use dregg_cell::{CellId, FieldElement};
 
 use crate::presentable::{
-    Presentable, PresentCtx, Presentation, PresentationBody, PresentationKind,
+    PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
 use crate::world::{self, World};
@@ -108,7 +108,10 @@ impl ViewDoc {
 
     /// A document aimed at `focus` (present index 0).
     pub fn focused(focus: CellId) -> Self {
-        ViewDoc { focus: Some(focus), present_idx: 0 }
+        ViewDoc {
+            focus: Some(focus),
+            present_idx: 0,
+        }
     }
 
     /// The focused cell (the camera's aim), if any.
@@ -165,12 +168,20 @@ pub struct ViewCell {
 impl ViewCell {
     /// Open a view cell over `backing`, named `name`, with an empty draft.
     pub fn new(backing: CellId, name: impl Into<String>) -> Self {
-        ViewCell { backing, doc: ViewDoc::new(), name: name.into() }
+        ViewCell {
+            backing,
+            doc: ViewDoc::new(),
+            name: name.into(),
+        }
     }
 
     /// Open a view cell already aimed at `focus`.
     pub fn focused(backing: CellId, name: impl Into<String>, focus: CellId) -> Self {
-        ViewCell { backing, doc: ViewDoc::focused(focus), name: name.into() }
+        ViewCell {
+            backing,
+            doc: ViewDoc::focused(focus),
+            name: name.into(),
+        }
     }
 
     /// Reconstruct a view cell from a backing cell's **witnessed (committed)**
@@ -181,7 +192,11 @@ impl ViewCell {
     pub fn from_world(world: &World, backing: CellId) -> Option<Self> {
         let probe = ViewCell::new(backing, "view");
         let aim = probe.committed_aim(world)?;
-        Some(ViewCell { backing, doc: aim, name: "view".to_string() })
+        Some(ViewCell {
+            backing,
+            doc: aim,
+            name: "view".to_string(),
+        })
     }
 
     /// The backing cell id (the authenticated anchor).
@@ -331,14 +346,20 @@ impl Presentable for ViewCell {
         }
         fields.push(Field::count(
             "committed_present_idx",
-            committed.as_ref().map(|a| a.present_idx as u64).unwrap_or(0),
+            committed
+                .as_ref()
+                .map(|a| a.present_idx as u64)
+                .unwrap_or(0),
         ));
         // The visible DRAFT (the uncommitted aim — what the operator is mid-move on).
         match self.doc.focus {
             Some(f) => fields.push(Field::id("draft_focus", *f.as_bytes())),
             None => fields.push(Field::text("draft_focus", "(none)".to_string())),
         }
-        fields.push(Field::count("draft_present_idx", self.doc.present_idx as u64));
+        fields.push(Field::count(
+            "draft_present_idx",
+            self.doc.present_idx as u64,
+        ));
 
         let insp = Inspectable {
             kind: ObjectKind::Cell,
@@ -404,7 +425,11 @@ impl WorkspaceCell {
     /// Open a workspace cell over `backing` with `active_tab` selected and NO tabs
     /// torn off.
     pub fn new(backing: CellId, active_tab: usize) -> Self {
-        WorkspaceCell { backing, active_tab, torn: 0 }
+        WorkspaceCell {
+            backing,
+            active_tab,
+            torn: 0,
+        }
     }
 
     /// Open a workspace cell whose free draft is RESTORED from the backing cell's
@@ -413,10 +438,18 @@ impl WorkspaceCell {
     /// durable ledger, so the cockpit knows which tab is active AND which tabs were
     /// popped out. Falls back to `(0, no tabs torn)` if the backing cell is absent.
     pub fn from_world(world: &World, backing: CellId) -> Self {
-        let probe = WorkspaceCell { backing, active_tab: 0, torn: 0 };
+        let probe = WorkspaceCell {
+            backing,
+            active_tab: 0,
+            torn: 0,
+        };
         let active_tab = probe.committed_tab(world).unwrap_or(0);
         let torn = probe.committed_torn(world);
-        WorkspaceCell { backing, active_tab, torn }
+        WorkspaceCell {
+            backing,
+            active_tab,
+            torn,
+        }
     }
 
     /// The backing cell id (the authenticated anchor).
@@ -563,7 +596,11 @@ mod tests {
         let h0 = w.height();
         view.doc_mut().set_focus(Some(treasury));
         view.doc_mut().set_present_idx(2);
-        assert_eq!(w.height(), h0, "an in-memory re-aim does not advance the ledger");
+        assert_eq!(
+            w.height(),
+            h0,
+            "an in-memory re-aim does not advance the ledger"
+        );
         assert_eq!(view.doc().focus(), Some(treasury));
         assert_eq!(view.doc().present_idx(), 2);
     }
@@ -586,7 +623,11 @@ mod tests {
         let rev = view.commit(&mut w).expect("the re-aim commits");
         assert!(rev >= 1, "the revision advanced (the backing cell's nonce)");
         assert_eq!(w.height(), h0 + 1, "a real turn was committed");
-        assert_eq!(w.receipts().len(), r0 + 1, "a receipt was appended (provenance)");
+        assert_eq!(
+            w.receipts().len(),
+            r0 + 1,
+            "a receipt was appended (provenance)"
+        );
 
         // The committed (witnessed) aim now equals the draft → clean.
         assert!(view.is_clean(&w), "after commit the view is clean");
@@ -662,7 +703,8 @@ mod tests {
         // broken by reading the prior frame, and `present` confers no authority.
         let (mut w, treasury, sink, ui) = world_with_ui_cell();
         let mut view = ViewCell::focused(ui, "INSPECTOR", treasury);
-        view.commit(&mut w).expect("commit the initial aim (focus=treasury)");
+        view.commit(&mut w)
+            .expect("commit the initial aim (focus=treasury)");
 
         // Re-aim the DRAFT to the sink, but do NOT commit.
         view.doc_mut().set_focus(Some(sink));
@@ -682,7 +724,11 @@ mod tests {
             // `present` does not read the uncommitted draft (unit-delay).
             match committed.value {
                 reflect::FieldValue::Id(id) => {
-                    assert_eq!(id, *treasury.as_bytes(), "present reads the prior-frame committed focus");
+                    assert_eq!(
+                        id,
+                        *treasury.as_bytes(),
+                        "present reads the prior-frame committed focus"
+                    );
                 }
                 ref other => panic!("committed_focus should be an Id, got {other:?}"),
             }
@@ -703,7 +749,11 @@ mod tests {
         assert!(w.commit_turn(turn).is_committed());
         // The view's committed aim is unchanged — it is real witnessed cell state.
         let aim = view.committed_aim(&w).expect("the backing cell is live");
-        assert_eq!(aim.focus, Some(treasury), "the witnessed aim survives an advance");
+        assert_eq!(
+            aim.focus,
+            Some(treasury),
+            "the witnessed aim survives an advance"
+        );
     }
 
     // ── WIDEN: the WorkspaceCell tab selector is cell-backed ────────────────
@@ -720,7 +770,11 @@ mod tests {
         let rev = ws.commit(&mut w).expect("the tab move commits");
         assert!(rev >= 1);
         assert_eq!(w.height(), h0 + 1, "a real turn landed the tab move");
-        assert_eq!(ws.committed_tab(&w), Some(5), "render() reads the tab from the cell");
+        assert_eq!(
+            ws.committed_tab(&w),
+            Some(5),
+            "render() reads the tab from the cell"
+        );
         assert!(ws.is_clean(&w), "after commit the workspace is clean");
     }
 
@@ -740,7 +794,11 @@ mod tests {
         assert!(!ws.is_clean(&w), "an uncommitted tear-off is dirty");
         ws.commit(&mut w).expect("the tear-off set commits");
         assert!(ws.is_clean(&w), "after commit the workspace is clean");
-        assert_eq!(ws.committed_torn_indices(&w), vec![3, 21], "the witnessed pop-out set");
+        assert_eq!(
+            ws.committed_torn_indices(&w),
+            vec![3, 21],
+            "the witnessed pop-out set"
+        );
 
         // RELAUNCH (rebuild from the durable cell): the torn set comes back.
         let restored = WorkspaceCell::from_world(&w, ui);
@@ -750,7 +808,10 @@ mod tests {
             "a relaunch restores the torn-off tabs from the cell"
         );
         assert!(restored.is_torn(3) && restored.is_torn(21));
-        assert!(!restored.is_torn(0), "tabs that were not torn off stay docked");
+        assert!(
+            !restored.is_torn(0),
+            "tabs that were not torn off stay docked"
+        );
     }
 
     #[test]
@@ -766,7 +827,11 @@ mod tests {
         ws.commit(&mut w).expect("commit the pop-back");
 
         let restored = WorkspaceCell::from_world(&w, ui);
-        assert_eq!(restored.torn_indices(), vec![9], "only the still-torn tab re-pops");
+        assert_eq!(
+            restored.torn_indices(),
+            vec![9],
+            "only the still-torn tab re-pops"
+        );
     }
 
     #[test]
@@ -805,12 +870,16 @@ mod tests {
                 .expect("open a fresh durable image");
             assert!(w.is_durable(), "the image is durable");
             let id = w.genesis_cell(0x5F, 0);
-            assert_eq!(id, backing, "the workspace backing id is seed-deterministic");
+            assert_eq!(
+                id, backing,
+                "the workspace backing id is seed-deterministic"
+            );
             let mut ws = WorkspaceCell::new(backing, 0);
             ws.set_active_tab(7);
             ws.set_torn(3, true);
             ws.set_torn(21, true);
-            ws.commit(&mut w).expect("the tear-off + active-tab commit dual-writes");
+            ws.commit(&mut w)
+                .expect("the tear-off + active-tab commit dual-writes");
             assert_eq!(ws.committed_torn_indices(&w), vec![3, 21]);
             // …and the world drops here — the "crash".
         }
@@ -848,7 +917,11 @@ mod tests {
         let (mut w, _treasury, _sink, ui) = world_with_ui_cell();
         let mut ws = WorkspaceCell::new(ui, 3);
         ws.commit(&mut w).expect("commit the boot tab index (3)");
-        assert_eq!(ws.committed_tab(&w), Some(3), "the witnessed selector is index 3");
+        assert_eq!(
+            ws.committed_tab(&w),
+            Some(3),
+            "the witnessed selector is index 3"
+        );
 
         // Move the FREE draft to index 7 but do NOT commit (a free tab switch).
         ws.set_active_tab(7);
@@ -861,7 +934,11 @@ mod tests {
 
         // Witness it (the occasional commit `witness_tab` lands) → the cell read catches up.
         ws.commit(&mut w).expect("witness the tab move");
-        assert_eq!(ws.committed_tab(&w), Some(7), "after the witness, render() reads index 7");
+        assert_eq!(
+            ws.committed_tab(&w),
+            Some(7),
+            "after the witness, render() reads index 7"
+        );
     }
 
     #[test]
@@ -871,9 +948,15 @@ mod tests {
         let mut w = World::new();
         let ghost = CellId::from_bytes([0x77; 32]); // never installed
         let ws = WorkspaceCell::new(ghost, 4);
-        assert!(ws.committed_tab(&w).is_none(), "a missing cell has no committed tab");
+        assert!(
+            ws.committed_tab(&w).is_none(),
+            "a missing cell has no committed tab"
+        );
         assert!(!ws.is_clean(&w), "an unbacked workspace cell is not clean");
-        assert!(matches!(ws.commit(&mut w), Err(ViewError::Unbacked)), "it cannot commit");
+        assert!(
+            matches!(ws.commit(&mut w), Err(ViewError::Unbacked)),
+            "it cannot commit"
+        );
     }
 
     // ── a view over a missing cell is unbacked and cannot commit ────────────
@@ -883,9 +966,15 @@ mod tests {
         let mut w = World::new();
         let ghost = CellId::from_bytes([0x99; 32]); // never installed
         let view = ViewCell::new(ghost, "ghost");
-        assert!(view.committed_aim(&w).is_none(), "a missing cell has no committed aim");
+        assert!(
+            view.committed_aim(&w).is_none(),
+            "a missing cell has no committed aim"
+        );
         assert!(!view.is_clean(&w), "an unbacked view is not clean");
         let r = view.commit(&mut w);
-        assert!(matches!(r, Err(ViewError::Unbacked)), "a dangling view cannot commit, got {r:?}");
+        assert!(
+            matches!(r, Err(ViewError::Unbacked)),
+            "a dangling view cannot commit, got {r:?}"
+        );
     }
 }

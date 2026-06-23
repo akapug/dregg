@@ -24,18 +24,23 @@
 //!     agent's own cell). This honors `docs/deos/AGENT-CONFINEMENT-REDTEAM.md`:
 //!     mount the JS runtime under the caller's ATTENUATED cap, never root.
 //!
-//! ## The honest seam
+//! ## Two binding paths
 //!
-//! This slice binds the runtime to deos-js's OWN embedded engine (a fresh
-//! [`DreggEngine`](dregg_sdk::embed::DreggEngine) carrying the agent's applet
-//! cell), proving the agent-runs-JS-bound-to-its-cap capability end-to-end.
-//! Binding the runtime to the LIVE cockpit `World` (starbridge-v2's running
-//! image, so the agent crawls + drives the operator's ACTUAL cells) is the
-//! deeper integration — named here as the follow-on.
+//! * EMBEDDED ([`RunJsTool::run`]/[`RunJsTool::run_on`]) — binds the runtime to
+//!   deos-js's OWN embedded engine (a fresh [`DreggEngine`](dregg_sdk::embed::DreggEngine)
+//!   carrying the agent's applet cell). The agent crawls + drives its own private
+//!   world. Proves the agent-runs-JS-bound-to-its-cap shape standalone.
+//! * ATTACHED ([`RunJsTool::run_attached_on`]) — binds the runtime to a PROVIDED
+//!   live [`WorldSink`] (starbridge-v2's running cockpit `World`, or a fork of it),
+//!   so the agent crawls + drives the operator's ACTUAL cells. Every JS-driven turn
+//!   is a real verified turn on the LIVE ledger, receipted, still bounded by the
+//!   agent's `held` (the cap tooth in [`deos_js::AttachedApplet::fire`], mounted
+//!   under the attenuated cap, never the World's root). THIS is "the agent's hands
+//!   on the real glass."
 
-use deos_js::{Affordance, Applet, FireError, JsRuntime};
+use deos_js::{Affordance, Applet, AttachedApplet, FireError, JsRuntime, WorldSink};
 use dregg_cell::state::FieldElement;
-use dregg_cell::AuthRequired;
+use dregg_cell::{AuthRequired, CellId};
 
 use crate::acp::{PermissionOutcome, ToolCallRequest};
 use crate::bridge::HermesGateway;
@@ -244,6 +249,75 @@ impl RunJsTool {
             receipts,
             js_error,
         })
+    }
+
+    /// THE HANDS ON THE REAL GLASS — admit the `run_js` tool-call as a metered,
+    /// receipted gateway turn, then (iff admitted) run `script` on a deos-js runtime
+    /// ATTACHED to a PROVIDED live World (`sink`), bound to the agent's `held`.
+    ///
+    /// Identical accountability + boundedness to [`RunJsTool::run_on`], but the JS
+    /// drives the LIVE World rather than deos-js's own embedded engine:
+    ///   * `deos.world.cells()` / `cell.reflect()` crawl the ATTACHED World's REAL
+    ///     cells (the operator's, or a fork's);
+    ///   * `app.fire(...)` commits a real verified turn ON THAT World (through the
+    ///     `sink`'s [`WorldSink::fire_effects`]) — a receipt that lands on the live
+    ///     ledger. The cap tooth in [`AttachedApplet::fire`] still refuses an
+    ///     over-reach in-band (no turn reaches the World), and a fire binds the
+    ///     agent's OWN cell (no cross-vessel reach). The red-team invariant holds.
+    ///
+    /// `sink` is the host's live World reduced to the crawl + commit surface (the
+    /// cockpit supplies `starbridge_v2::agent_attach::WorldSinkAdapter`). `agent` is
+    /// the agent's cell on that World (the agent of every committed turn).
+    pub fn run_attached_on(
+        &self,
+        rt: &mut JsRuntime,
+        sink: Box<dyn WorldSink>,
+        agent: CellId,
+        gw: &mut HermesGateway<'_>,
+        call: &ToolCallRequest,
+        now: i64,
+        script: &str,
+    ) -> Result<RunJsOutcome, RunJsError> {
+        // (1) THE ACCOUNTABILITY TURN — the same metered, receipted ToolGrant.
+        let tool_outcome = gw.admit_with_work(call, now, Some(vec![]));
+        if !tool_outcome.allowed() {
+            return Ok(RunJsOutcome {
+                tool_outcome,
+                result: None,
+                fires_committed: 0,
+                receipts: Vec::new(),
+                js_error: None,
+            });
+        }
+
+        // (2) THE HANDS — attach the runtime to the live World under the agent's
+        //     `held` (the cap tooth, mounted under the attenuated cap, never root),
+        //     and eval the script. Each affordance fire commits a real verified turn
+        //     ON THE LIVE WORLD; an over-reach is refused in-band.
+        let applet = AttachedApplet::attach(
+            sink,
+            agent,
+            self.held.clone(),
+            self.affordances_spec.clone(),
+            COUNTER_SLOT,
+        );
+
+        match rt.run_attached(applet, script) {
+            Ok(outcome) => Ok(RunJsOutcome {
+                tool_outcome,
+                result: outcome.result,
+                fires_committed: outcome.fires_committed,
+                receipts: outcome.receipts,
+                js_error: None,
+            }),
+            Err(e) => Ok(RunJsOutcome {
+                tool_outcome,
+                result: None,
+                fires_committed: 0,
+                receipts: Vec::new(),
+                js_error: Some(e),
+            }),
+        }
     }
 
     /// A direct, gateway-free fire of one named affordance under the agent's

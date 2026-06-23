@@ -104,7 +104,10 @@ impl CellAffordance {
         // cap-badge inversion (HORIZONLOG). Special-case the always-satisfiable
         // requirement: a `None`-gated message is sendable by anyone; the real
         // guarantee (e.g. grant's non-amplification) fires in the EXECUTOR, not here.
-        if matches!(self.required_rights, dregg_cell::permissions::AuthRequired::None) {
+        if matches!(
+            self.required_rights,
+            dregg_cell::permissions::AuthRequired::None
+        ) {
             return true;
         }
         is_attenuation(held.rights(), &self.required_rights)
@@ -122,15 +125,34 @@ impl CellAffordance {
 /// this is the equality-friendly projection a test or a view can compare.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EffectSummary {
-    SetField { cell: CellId, index: usize },
-    Transfer { from: CellId, to: CellId, amount: u64 },
-    GrantCapability { from: CellId, to: CellId },
-    RevokeCapability { cell: CellId, slot: u32 },
-    EmitEvent { cell: CellId },
-    IncrementNonce { cell: CellId },
+    SetField {
+        cell: CellId,
+        index: usize,
+    },
+    Transfer {
+        from: CellId,
+        to: CellId,
+        amount: u64,
+    },
+    GrantCapability {
+        from: CellId,
+        to: CellId,
+    },
+    RevokeCapability {
+        cell: CellId,
+        slot: u32,
+    },
+    EmitEvent {
+        cell: CellId,
+    },
+    IncrementNonce {
+        cell: CellId,
+    },
     /// Any other real `Effect` variant, tagged by name (still the genuine effect —
     /// only the *summary* is coarse).
-    Other { tag: &'static str },
+    Other {
+        tag: &'static str,
+    },
 }
 
 impl EffectSummary {
@@ -263,11 +285,7 @@ impl AffordanceSurface {
     /// The names a viewer is authorized to see (sorted) — the per-viewer affordance
     /// set, the thing two different-cap viewers DIVERGE on.
     pub fn visible_names(&self, held: &SurfaceCapability) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .project_for(held)
-            .into_iter()
-            .map(|a| a.name)
-            .collect();
+        let mut names: Vec<String> = self.project_for(held).into_iter().map(|a| a.name).collect();
         names.sort();
         names
     }
@@ -342,7 +360,10 @@ pub enum FireOutcome {
     Committed(dregg_turn::turn::TurnReceipt),
     /// The embedded executor REJECTED the turn (a guarantee fired). The reason is
     /// the executor's own — surfaced, not hidden.
-    Refused { reason: String, at_action: Vec<usize> },
+    Refused {
+        reason: String,
+        at_action: Vec<usize>,
+    },
 }
 
 impl FireOutcome {
@@ -494,7 +515,10 @@ mod tests {
     /// A window cap over `backing` carrying `rights` (the firmament surface cap the
     /// shell mints — a window IS this).
     fn window_cap(backing: CellId, rights: FAuth) -> SurfaceCapability {
-        SurfaceCapability::new(crate::surface::SurfaceId(1), Capability::surface(backing, rights))
+        SurfaceCapability::new(
+            crate::surface::SurfaceId(1),
+            Capability::surface(backing, rights),
+        )
     }
 
     #[test]
@@ -551,7 +575,10 @@ mod tests {
             }
         );
         // An unknown affordance name is its own refusal.
-        assert_eq!(surf.fire("nope", cid(0x21), &narrow).unwrap_err(), FireError::NoSuchAffordance);
+        assert_eq!(
+            surf.fire("nope", cid(0x21), &narrow).unwrap_err(),
+            FireError::NoSuchAffordance
+        );
     }
 
     #[test]
@@ -569,7 +596,11 @@ mod tests {
         let surf = AffordanceSurface::new(actor).declare(CellAffordance::new(
             "pay",
             AuthRequired::Signature,
-            Effect::Transfer { from: actor, to: sink, amount: 250 },
+            Effect::Transfer {
+                from: actor,
+                to: sink,
+                amount: 250,
+            },
         ));
         // The operator holds a wide window cap over `actor`.
         let cap = window_cap(actor, FAuth::Either);
@@ -578,10 +609,17 @@ mod tests {
         let intent = surf.fire("pay", actor, &cap).expect("authorized");
         assert_eq!(
             intent.effect_summary(),
-            EffectSummary::Transfer { from: actor, to: sink, amount: 250 }
+            EffectSummary::Transfer {
+                from: actor,
+                to: sink,
+                amount: 250
+            }
         );
         let outcome = intent.fire_through_world(&mut world);
-        assert!(outcome.is_committed(), "the embedded executor committed the affordance's turn");
+        assert!(
+            outcome.is_committed(),
+            "the embedded executor committed the affordance's turn"
+        );
 
         // The value MOVED — conservation held, the real ledger updated.
         assert_eq!(world.ledger().get(&actor).unwrap().state.balance(), 4_750);
@@ -601,15 +639,24 @@ mod tests {
         let surf = AffordanceSurface::new(actor).declare(CellAffordance::new(
             "overspend",
             AuthRequired::Signature,
-            Effect::Transfer { from: actor, to: sink, amount: 1_000_000 },
+            Effect::Transfer {
+                from: actor,
+                to: sink,
+                amount: 1_000_000,
+            },
         ));
         let cap = window_cap(actor, FAuth::Either);
         // The GATE passes (the actor holds the window cap) — but the executor
         // REJECTS the turn (non-conservation / insufficient balance). Both gates
         // are real: the cap gate admits the fire, the executor refuses the turn.
-        let intent = surf.fire("overspend", actor, &cap).expect("cap gate admits");
+        let intent = surf
+            .fire("overspend", actor, &cap)
+            .expect("cap gate admits");
         let outcome = intent.fire_through_world(&mut world);
-        assert!(!outcome.is_committed(), "the executor refused the overspend");
+        assert!(
+            !outcome.is_committed(),
+            "the executor refused the overspend"
+        );
         // Nothing moved; no receipt was appended.
         assert_eq!(world.ledger().get(&actor).unwrap().state.balance(), 100);
         assert_eq!(world.receipts().len(), 0);
@@ -642,7 +689,10 @@ mod tests {
         // attenuated rehydration from the SAME snapshot.
         let wide = window_cap(backing, FAuth::Either);
         let narrow = window_cap(backing, FAuth::Signature);
-        assert_eq!(snap.rehydrate_for(&surf, &wide).names(), vec!["admin", "view"]);
+        assert_eq!(
+            snap.rehydrate_for(&surf, &wide).names(),
+            vec!["admin", "view"]
+        );
         assert_eq!(snap.rehydrate_for(&surf, &narrow).names(), vec!["view"]);
 
         // A snapshot whose live surface DROPPED an affordance rehydrates only what

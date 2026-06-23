@@ -164,7 +164,9 @@ pub fn run_two_image_firmament(
             .map_err(|e| match e {
                 crate::netlayer_image::ResponderError::Recv(n)
                 | crate::netlayer_image::ResponderError::Send(n) => TwoImageRefusal::Transport(n),
-                crate::netlayer_image::ResponderError::Malformed => TwoImageRefusal::RemoteCellAbsent,
+                crate::netlayer_image::ResponderError::Malformed => {
+                    TwoImageRefusal::RemoteCellAbsent
+                }
             })?;
         // A drains the snapshot (the genuine cross-wire read).
         let entry = img
@@ -197,11 +199,9 @@ pub fn run_two_image_firmament(
                 MirrorRefusal::NotARemoteCell | MirrorRefusal::RemoteCellAbsent => {
                     TwoImageRefusal::RemoteCellAbsent
                 }
-                MirrorRefusal::NoReflectAuthority => {
-                    TwoImageRefusal::WriteEdgeRefused {
-                        held: dregg_firmament::AuthRequired::Impossible,
-                    }
-                }
+                MirrorRefusal::NoReflectAuthority => TwoImageRefusal::WriteEdgeRefused {
+                    held: dregg_firmament::AuthRequired::Impossible,
+                },
                 MirrorRefusal::EditUnauthorized { held } => {
                     TwoImageRefusal::WriteEdgeRefused { held }
                 }
@@ -309,7 +309,14 @@ fn run_shared_past_stitch(
     // The peer (image B) rewinds to step 1 and forks a confined branch (it holds
     // only an off-main branch-cap ⇒ confined; its edits are imaginary).
     let mut alt = timeline
-        .branch_at(1, 77, vec![BranchCap { target: 99, debit_reach: true }])
+        .branch_at(
+            1,
+            77,
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
+        )
         .expect("step 1 in range");
     // A real branch-local discovery.
     alt.edit(5, Atom::Alive, "peer discovers atom 5");
@@ -374,16 +381,31 @@ mod tests {
             MirrorDepth::ReadState, // B serves full state
             MirrorDepth::ReadState, // A's read-mirror
             4,                      // n = 4: a genuine remote over the netlayer
-            vec![BranchCap { target: 5, debit_reach: true }], // confer authority over the discovery
-            vec![BranchCap { target: 5, debit_reach: true }], // …held at the dialed settlement tip
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }], // confer authority over the discovery
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }], // …held at the dialed settlement tip
         )
         .expect("the two-image firmament runs end to end");
 
         // 1. The reflection crossed the wire: the REAL remote state arrived.
-        assert_eq!(out.reflected_balance, 4242, "the remote balance crossed the dialed session");
-        assert_eq!(out.reflected_nonce, 11, "the remote nonce crossed the dialed session");
+        assert_eq!(
+            out.reflected_balance, 4242,
+            "the remote balance crossed the dialed session"
+        );
+        assert_eq!(
+            out.reflected_nonce, 11,
+            "the remote nonce crossed the dialed session"
+        );
         assert_eq!(out.reflected_depth, MirrorDepth::ReadState);
-        assert_eq!(out.distance, 4, "n > 1 — a genuine remote, not the n=1 collapse");
+        assert_eq!(
+            out.distance, 4,
+            "n > 1 — a genuine remote, not the n=1 collapse"
+        );
 
         // 2. The write edge was REFUSED across the wire (viewSurface_confers_no_edge).
         assert_eq!(
@@ -395,10 +417,21 @@ mod tests {
         );
 
         // 3. The branch-stitch settled with authority read at the dialed tip.
-        assert!(out.stitch_settled(), "a well-authorized cross-wire stitch settles");
+        assert!(
+            out.stitch_settled(),
+            "a well-authorized cross-wire stitch settles"
+        );
         if let SettleOutcome::Settled(g) = &out.stitch {
-            assert_eq!(g.atoms.get(&5), Some(&Atom::Alive), "the branch discovery merged in");
-            assert_eq!(g.atoms.get(&1), Some(&Atom::Alive), "main's value preserved (the cocone)");
+            assert_eq!(
+                g.atoms.get(&5),
+                Some(&Atom::Alive),
+                "the branch discovery merged in"
+            );
+            assert_eq!(
+                g.atoms.get(&1),
+                Some(&Atom::Alive),
+                "main's value preserved (the cocone)"
+            );
         }
     }
 
@@ -415,19 +448,30 @@ mod tests {
             MirrorDepth::ReadState,
             MirrorDepth::ReadState,
             4,
-            vec![BranchCap { target: 5, debit_reach: true }], // CLAIMS authority over atom 5…
+            vec![BranchCap {
+                target: 5,
+                debit_reach: true,
+            }], // CLAIMS authority over atom 5…
             // …but at the dialed settlement tip it holds nothing reaching cell 5.
-            vec![BranchCap { target: 99, debit_reach: true }],
+            vec![BranchCap {
+                target: 99,
+                debit_reach: true,
+            }],
         )
         .expect("the firmament runs; only the stitch is refused");
 
         // The reflection + write-refusal legs still hold…
         assert_eq!(out.reflected_balance, 1);
-        assert!(matches!(out.write_refusal, TwoImageRefusal::WriteEdgeRefused { .. }));
+        assert!(matches!(
+            out.write_refusal,
+            TwoImageRefusal::WriteEdgeRefused { .. }
+        ));
         // …but the stitch is REFUSED at the dialed tip.
         assert_eq!(
             out.stitch,
-            SettleOutcome::Refused { over_authorized_target: 5 },
+            SettleOutcome::Refused {
+                over_authorized_target: 5
+            },
             "a cap not held at the dialed settlement tip ⇒ the stitch is refused"
         );
         assert!(!out.stitch_settled());
@@ -451,8 +495,14 @@ mod tests {
         .expect("the firmament runs with a structure-only responder");
 
         // The state was ZEROED on the serve side — A cannot read it off the wire.
-        assert_eq!(out.reflected_balance, 0, "a Structure responder zeroes balance on the wire");
-        assert_eq!(out.reflected_nonce, 0, "a Structure responder zeroes nonce on the wire");
+        assert_eq!(
+            out.reflected_balance, 0,
+            "a Structure responder zeroes balance on the wire"
+        );
+        assert_eq!(
+            out.reflected_nonce, 0,
+            "a Structure responder zeroes nonce on the wire"
+        );
         // The stitch (conferring nothing) trivially settles.
         assert!(out.stitch_settled());
     }
@@ -473,7 +523,10 @@ mod tests {
             vec![],
         )
         .expect("the n=1 firmament still dials the session");
-        assert_eq!(out.reflected_balance, 500, "the read still crosses the dialed session at n=1");
+        assert_eq!(
+            out.reflected_balance, 500,
+            "the read still crosses the dialed session at n=1"
+        );
         assert_eq!(out.distance, 1);
     }
 }

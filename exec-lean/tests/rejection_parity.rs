@@ -621,7 +621,11 @@ fn rejection_parity_differential() {
             let note = format!(
                 "  [{}]{} {} — Rust COMMITS, Lean REFUSES",
                 case.gate,
-                if characterised { " (characterised)" } else { " (NEW)" },
+                if characterised {
+                    " (characterised)"
+                } else {
+                    " (NEW)"
+                },
                 case.desc,
             );
             if !characterised {
