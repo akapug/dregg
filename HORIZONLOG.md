@@ -18,12 +18,23 @@ launches a real `DeosApp` over a live `AppSubstrate`, fires one affordance → r
 (`receipt.agent == backing cell`), post-fire state visible to a second reader of the SAME ledger
 (inspector seam). Powerbox `RegistryLauncher` row per app. 4 tests + native-full green. (`polis` skipped —
 it doesn't use the framework, different shape.)
-- CONVERGENT SEAM (shared with the editor-shared-ledger lane): apps run on the app-framework's
-  `EmbeddedExecutor` ledger (`Arc<Mutex<Ledger>>`, genuinely shared writer↔reader) — NOT the cockpit's
-  `World`/`DreggEngine` ledger, which is owned BY VALUE. Folding BOTH apps AND the editor onto the one
-  cockpit World ledger needs the SAME refactor: `DreggEngine` to hold `Arc<Mutex<Ledger>>` so an
-  `AgentRuntime`/FirmamentFs can share it. ONE clean follow-on lane unblocks both. (Watch the
-  editor-shared-ledger lane `a143bf5a` — if it lands that refactor, re-point app_registry onto World.)
+- APP RE-POINT SEAM (solution pattern now KNOWN — NOT the DreggEngine refactor I'd guessed): apps run
+  on the app-framework's `EmbeddedExecutor` ledger (genuinely shared writer↔reader, but a DISTINCT
+  physical ledger from the cockpit's `World`). The editor lane `d11c72e9` solved the identical problem
+  WITHOUT changing `DreggEngine` ownership: a `LedgerSpine` trait (`deos-zed/src/fs/firmament.rs`, in
+  pure `dregg_cell`/`dregg_turn` terms) + a `WorldSpine` (`starbridge-v2/src/dock/editor_surface.rs`)
+  that commits via `World::turn`/`commit_turn` over `Rc<RefCell<World>>` — the SAME path the inspector
+  reads. FOLLOW-ON (firing): re-point `app_registry` `AppEntry::launch/drive` to commit app affordance-
+  turns through a WorldSpine-style path so app cells land on the live World the cockpit inspects. Honest
+  open question: whether `DeosApp`'s owned executor blocks a clean re-point — if so, that's the real work.
+
+### EDITOR PANE ON THE LIVE WORLD LEDGER — LANDED (2026-06-23).
+`d11c72e9`. The cockpit editor now edits the SAME ledger the inspector shows: `LedgerSpine` trait +
+`OwnedSpine` (headless) / `WorldSpine` (over `Rc<RefCell<World>>` via `World::turn`/`commit_turn`).
+`open_editor_pane` mounts `EditorPane::firmament_over(self.world.clone(), …)` under `embedded-executor`,
+fail-soft to per-editor. `Fs` trait relaxed `Send+Sync+'static` → `'static` (gpui single-thread; no
+codepath moves `Arc<dyn Fs>` across threads). Test: drive the real gpui Editor → save → a SECOND reader
+of the spine sees the receipt + edited cell + Σδ=0. PASS 19s; native-full + deos-zed green.
 
 ### MIGRATE VERB (Local→HostPd) — authority half LANDED; live-transport re-home is the seam (2026-06-23).
 `86ad3049`. `migrate(&SurfaceCapability, &MigrationTarget) -> Result<SurfaceCapability, MigrateError>`
