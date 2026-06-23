@@ -59,6 +59,7 @@ import Dregg2.Exec.CapTP
 import Dregg2.Exec.CapTPConcrete
 import Dregg2.Crypto.PortalFloor
 import Dregg2.Circuit.Spec.authorityunattenuated
+import Dregg2.Circuit.Spec.authorityattenuation
 import Dregg2.Exec.AuthTurn
 import Dregg2.Tactics
 
@@ -71,9 +72,12 @@ open Dregg2.Circuit.Spec.AuthorityUnattenuated
   (DelegateSpec delegateGuard recDelegateCaps execFullA_introduceA_iff_spec
    execFullA_introduceA_eq delegate_grants_recipient delegate_rejects_unconnected
    recDelegateCaps_correct)
+open Dregg2.Circuit.Spec.AuthorityAttenuation
+  (DelegateAttenSpec DelegateAttenGuard delegateAtten_iff_spec delegateAttenCaps_correct
+   delegateAtten_spec_non_amplifying delegateAtten_rejects_ungrounded)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
-open Dregg2.Authority (Caps Cap)
+open Dregg2.Authority (Caps Cap Auth)
 
 universe u
 
@@ -122,6 +126,12 @@ structure HandoffCert2 where
   heldEff     : Option Nat
   /-- The GRANTED effect mask. -/
   grantedEff  : Option Nat
+  /-- The cap-rights FACET-KEEP list that realizes the grant: the recipient's installed cap is the
+  introducer's held `targetCell`-cap ATTENUATED to `keep`. This is the cap-lattice realization of
+  `grantedPerm` (the `AuthReq`-lattice §6 bound). The handoff installs `attenuate keep heldCap`, whose
+  conferred rights are `⊆` the held cap's (`attenuate_confRights_le`) — so the recipient receives the
+  NARROWED grant, never the unattenuated held cap. -/
+  keep        : List Auth
   /-- The introducer's ed25519 public key. -/
   introPK     : PubKey
   /-- Replay-prevention nonce. -/
@@ -234,73 +244,93 @@ theorem validateHandoff2_attenuates {K : SignatureKernel PubKey Msg Sig}
   handoff_concrete_attenuation (validateHandoff2_nonAmplifying h)
 
 /-! ## §4 — THEOREM (1): a validated handoff drives the VERIFIED full-state executor to install
-EXACTLY the non-amplifying granted cap.
+EXACTLY the non-amplifying ATTENUATED GRANT.
 
-The `validateHandoffA` effect's executor (`execFullA s (.validateHandoffA intro rec t)`) is, by
-`execFullA_validateHandoff_iff_spec`, equivalent to the INDEPENDENT full-state `DelegateSpec`
-(all 17 kernel fields + log pinned). We connect the certificate to this executor: given the
-Granovetter connectivity premise (A holds a `t`-conferring cap — `delegateGuard`, the §0
-precondition the swiss-entry's existence witnesses) AND a validated certificate, the executor
-commits the unique post-state, the recipient's slot gains EXACTLY A's held `t`-conferring cap,
-and the granted permission is non-amplifying. -/
+The handoff installs the recipient's authority via the ATTENUATING Granovetter arm
+(`execFullA s (.delegateAttenA intro rec t keep)` ⟶ `recCDelegateAtten`), which is — by
+`delegateAtten_iff_spec` — equivalent to the INDEPENDENT full-state `DelegateAttenSpec` (all 17
+kernel fields + log pinned). We connect the certificate to this executor: given the Granovetter
+connectivity premise (A holds a `t`-conferring cap — `DelegateAttenGuard`, the §0 precondition the
+swiss-entry's existence witnesses) AND a validated certificate, the executor commits the unique
+post-state, the recipient's slot gains EXACTLY the introducer's held `t`-cap ATTENUATED to the
+certificate's `keep` facets, and that installed cap's conferred rights are `⊆` the held cap's.
 
-/-- The cap A actually holds and hands off: `heldCapTo`, the first `t`-conferring cap in A's
-slot — the executable `lookup_by_target`. This is what the handoff (`introduceA`) installs into B.
+THE OVER-GRANT FIX: the prior version installed `heldCapTo` (the UNATTENUATED held cap) via
+`.introduceA`, even though §6 validates `grantedPerm ≤ heldPerm` — an over-grant (the recipient
+received the full held cap, not the narrowed grant). We now install `attenuate keep heldCap`
+through `.delegateAttenA`, so the recipient receives EXACTLY the attenuated grant; installing
+`heldCapTo` would now FAIL the `installedCap` clause (mutation-confirmed: a cert with
+`keep ⊊ heldRights` installs the narrowed cap, and the held-but-not-kept facets are absent). -/
 
-NOTE (F3): the dedicated `validateHandoffA` effect dissolved into the caps-in-slots family
-(`REDUCTION F3`, `Circuit/Spec/authorityunattenuated.lean:20`); the handoff IS the Granovetter
-`introduceA` skeleton (the unattenuated held-cap copy). §4 below is wired to `introduceA` /
-`recCDelegate_iff_spec` accordingly — the certificate's §1/§6 crypto+lattice content is unchanged;
-only the executor arm it drives was renamed by the reduction. -/
+/-- The cap A actually hands off: the introducer's held `targetCell`-cap (`heldCapTo`, the
+executable `lookup_by_target`) ATTENUATED to the certificate's `keep` facets. This is what the
+handoff (`delegateAttenA`) installs into B — the NARROWED grant, NOT the unattenuated held cap. Its
+conferred rights are `⊆` the held cap's (`attenuate_confRights_le`), the cap-lattice realization of
+the §6 `grantedPerm ≤ heldPerm` bound. -/
 def HandoffCert2.installedCap (s : RecChainedState) (c : HandoffCert2) : Cap :=
+  attenuate c.keep (heldCapTo s.kernel.caps c.introducer c.targetCell)
+
+/-- The introducer's held `targetCell`-cap (the unattenuated source the grant attenuates). -/
+def HandoffCert2.heldCap (s : RecChainedState) (c : HandoffCert2) : Cap :=
   heldCapTo s.kernel.caps c.introducer c.targetCell
 
 /-- **`handoff_installs_exactly` — THEOREM (1).** Given a validated certificate (`validateHandoff2
-= true`) and the Granovetter connectivity premise (`delegateGuard s introducer targetCell` — A
-already holds a `targetCell`-conferring cap, which the swiss registration witnessed), the
-VERIFIED `validateHandoffA` executor commits a UNIQUE post-state `s'` such that:
-  (a) `s'` satisfies the full independent `DelegateSpec` (all 17 kernel fields + log pinned —
+= true`) and the Granovetter connectivity premise (`DelegateAttenGuard s introducer targetCell` — A
+already holds a `targetCell`-conferring cap, which the swiss registration witnessed), the VERIFIED
+ATTENUATING handoff executor commits a UNIQUE post-state `s'` such that:
+  (a) `s'` satisfies the full independent `DelegateAttenSpec` (all 17 kernel fields + log pinned —
       so no ghost field is mutated);
-  (b) the recipient B's cap-slot gains EXACTLY A's held `targetCell`-conferring cap
-      (`installedCap`); and
-  (c) the granted permission is non-amplifying on the verified concrete `AuthReq` lattice.
+  (b) the recipient B's cap-slot gains EXACTLY the introducer's held `targetCell`-cap ATTENUATED to
+      the certificate's `keep` facets (`installedCap`) — the NARROWED grant, not the held cap;
+  (c) the installed cap's conferred rights are `⊆` the held cap's — genuine cap-lattice
+      non-amplification (`attenuate_confRights_le`, the EXECUTED rights handoff); and
+  (d) the granted permission is non-amplifying on the verified concrete `AuthReq` lattice (§6).
 This wires the de-vacuified certificate to the SAME full-state reference the circuit⟺executor
-triangle uses, and reads back the non-amplification at the CONCRETE carrier. -/
+triangle uses; the recipient receives EXACTLY the attenuated grant, matching what §6 validates. -/
 theorem handoff_installs_exactly
     {K : SignatureKernel PubKey Msg Sig} {c : HandoffCert2} {env : HandoffEnv}
     (hvalid : validateHandoff2 K c env = true)
     (s : RecChainedState)
-    (hconn : delegateGuard s c.introducer c.targetCell) :
-    ∃ s', execFullA s (.introduceA c.introducer c.recipient c.targetCell) = some s'
-        ∧ DelegateSpec s c.introducer c.recipient c.targetCell s'
+    (hconn : DelegateAttenGuard s c.introducer c.targetCell) :
+    ∃ s', execFullA s (.delegateAttenA c.introducer c.recipient c.targetCell c.keep) = some s'
+        ∧ DelegateAttenSpec s c.introducer c.recipient c.targetCell c.keep s'
         ∧ c.installedCap s ∈ s'.kernel.caps c.recipient
+        ∧ confRights (c.installedCap s) ≤ confRights (c.heldCap s)
         ∧ c.grantedPerm ≤ c.heldPerm := by
   -- The executor commits SOME post-state iff the spec holds; the spec is satisfiable from the
   -- connectivity premise. We get the spec'd state from the ← direction of the verified iff.
-  obtain ⟨s', hspec⟩ : ∃ s', DelegateSpec s c.introducer c.recipient c.targetCell s' := by
+  obtain ⟨s', hspec⟩ : ∃ s', DelegateAttenSpec s c.introducer c.recipient c.targetCell c.keep s' := by
     refine ⟨{ kernel := { s.kernel with
-                caps := recDelegateCaps s.kernel.caps c.introducer c.recipient c.targetCell }
+                caps := grant s.kernel.caps c.recipient
+                          (attenuate c.keep (heldCapTo s.kernel.caps c.introducer c.targetCell)) }
             , log := authReceipt c.introducer :: s.log }, ?_⟩
     exact ⟨hconn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
       rfl⟩
-  refine ⟨s', ?_, hspec, ?_, ?_⟩
+  refine ⟨s', ?_, hspec, ?_, ?_, ?_⟩
   · -- the executor commits exactly this state, via the verified iff.
-    rw [execFullA_introduceA_iff_spec]; exact hspec
-  · -- B's slot gains exactly A's held cap (from the spec's caps clause + the declarative helper).
-    exact delegate_grants_recipient s c.introducer c.recipient c.targetCell s' hspec
-  · -- non-amplification at the concrete lattice.
+    rw [delegateAtten_iff_spec]; exact hspec
+  · -- B's slot gains exactly the ATTENUATED grant (from the spec, via the verified executor⟺spec).
+    have hcommit : execFullA s (.delegateAttenA c.introducer c.recipient c.targetCell c.keep)
+        = some s' := (delegateAtten_iff_spec s c.introducer c.recipient c.targetCell c.keep s').mpr hspec
+    exact (delegateAtten_spec_non_amplifying s c.introducer c.recipient c.targetCell c.keep s' hcommit).1
+  · -- genuine cap-lattice non-amplification: the installed (attenuated) cap ⊆ the held cap.
+    have hcommit : execFullA s (.delegateAttenA c.introducer c.recipient c.targetCell c.keep)
+        = some s' := (delegateAtten_iff_spec s c.introducer c.recipient c.targetCell c.keep s').mpr hspec
+    exact (delegateAtten_spec_non_amplifying s c.introducer c.recipient c.targetCell c.keep s' hcommit).2
+  · -- non-amplification at the concrete AuthReq lattice (§6).
     exact validateHandoff2_attenuates hvalid
 
 /-- **`handoff_rejects_unconnected` — the fail-closed companion.** If A holds NO
 `targetCell`-conferring cap (the Granovetter premise FAILS), then even a perfectly-signed,
-non-amplifying certificate cannot drive the executor to commit: `validateHandoffA` returns
-`none`. Manufacturing a cross-vat edge from a key alone is rejected by construction — the
-signature attests intent, but connectivity must already exist. -/
+non-amplifying certificate cannot drive the attenuating handoff executor to commit:
+`delegateAttenA` returns `none`. Manufacturing a cross-vat edge from a key alone is rejected by
+construction — the signature attests intent, but connectivity must already exist. -/
 theorem handoff_rejects_unconnected (s : RecChainedState) (c : HandoffCert2)
     (hbad : (s.kernel.caps c.introducer).any (fun cap => confersEdgeTo c.targetCell cap) = false) :
-    execFullA s (.introduceA c.introducer c.recipient c.targetCell) = none := by
-  rw [execFullA_introduceA_eq]
-  exact delegate_rejects_unconnected s c.introducer c.recipient c.targetCell hbad
+    execFullA s (.delegateAttenA c.introducer c.recipient c.targetCell c.keep) = none := by
+  refine delegateAtten_rejects_ungrounded s c.introducer c.recipient c.targetCell c.keep ?_
+  unfold DelegateAttenGuard
+  rw [hbad]; exact Bool.false_ne_true
 
 /-! ## §5 — THEOREM (2): unforgeability at n>1.
 
@@ -422,6 +452,8 @@ def goodCert : HandoffCert2 :=
     { introducer := 1, recipient := 2, targetCell := 7
     , heldPerm := .signature, grantedPerm := .signature
     , heldEff := none, grantedEff := none
+    -- keep ALL facets ⇒ identity attenuation (held = granted, non-amplifying).
+    , keep := [.read, .write, .grant, .call, .reply, .reset, .control, .notify]
     , introPK := 0, nonce := 0, swiss := 0, introSig := 0 }
   let m := base.signingMessage
   { base with introPK := m, introSig := m }
