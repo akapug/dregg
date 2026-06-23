@@ -384,6 +384,16 @@ impl Cockpit {
             // filter (the whole data plane in view).
             devtools_sub: 0,
             devtools_filter: String::new(),
+            // THE WEB-SHELL BROWSER — the URL-bar input entity is seeded lazily on
+            // the first render (`ensure_webshell_input` needs a live `&mut Window`).
+            // It boots on a sensible default page so the tile renders immediately.
+            webshell_input: None,
+            webshell_history: vec!["https://example.com".to_string()],
+            webshell_cursor: 0,
+            webshell_status: "press ↵ Go to render the page (real Servo WebView → SWGL → glass, behind the net-cap gate)".to_string(),
+            #[cfg(feature = "servo")]
+            webshell_frame: None,
+            webshell_input_pending: None,
         }
     }
 

@@ -416,6 +416,7 @@ pub(crate) fn category_badge(cat: Category) -> (&'static str, Hsla) {
         Category::Replay => (cat.label(), theme::warn()),
         Category::Clerk => (cat.label(), theme::accent()),
         Category::Shell => (cat.label(), theme::accent()),
+        Category::Web => (cat.label(), theme::accent()),
         Category::Ide => (cat.label(), theme::good()),
         Category::Debug => (cat.label(), theme::warn()),
         Category::Inspect => (cat.label(), theme::muted()),

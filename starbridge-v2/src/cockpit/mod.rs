@@ -270,6 +270,20 @@ pub enum Tab {
     /// rehydration liveness-type, firing through the embedded executor. See
     /// [`starbridge_v2::web_cells`].
     WebOfCells,
+    /// THE WEB-SHELL BROWSER tab — a general `http(s)://` BROWSER surface (distinct
+    /// from `WebOfCells`, which browses the `dregg://` web-of-cells). A real
+    /// gpui-component text [`gpui_component::input::InputState`] URL bar
+    /// (Enter-to-go), back / forward / reload navigation over a URL history stack,
+    /// and a content tile that calls
+    /// [`servo_render::webview::render_url_to_frame`] (the real
+    /// `ServoBuilder → WebViewBuilder → SWGL → read_to_image` flow behind the
+    /// [`CapGate`](servo_render::webview) net-cap allowlist) and paints the returned
+    /// `RgbaFrame` through the same `img()` path the web-of-cells tab uses. A
+    /// `dregg://` address routes to the `WebOfCells` browser (the existing web-of-cells
+    /// resolution path); an `http(s)://` address renders here. Fail-closed: a render
+    /// error / cap refusal is shown in-band, the tile never silently blanks. See
+    /// [`super::panels_webshell`].
+    WebShell,
     /// The WHAT-LINKS-HERE tab — Ted Nelson's two-way link, navigable: for the
     /// focused cell it renders the REAL `Backlinks` witness-graph (who transcludes
     /// ME), navigated by the genuine `DreggverseMap` and PROJECTED through the
@@ -363,7 +377,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 29] = [
+    const ALL: [Tab; 30] = [
         Tab::Docs,
         Tab::Trust,
         Tab::Devtools,
@@ -381,6 +395,7 @@ impl Tab {
         Tab::Organs,
         Tab::Proofs,
         Tab::WebOfCells,
+        Tab::WebShell,
         Tab::LinksHere,
         Tab::Powerbox,
         Tab::Share,
@@ -417,6 +432,7 @@ impl Tab {
             Tab::Organs => "ORGANS",
             Tab::Proofs => "PROOFS",
             Tab::WebOfCells => "WEB-OF-CELLS",
+            Tab::WebShell => "🌐 WEB-SHELL",
             Tab::LinksHere => "WHAT-LINKS-HERE",
             Tab::Powerbox => "POWERBOX",
             Tab::Moldable => "INSPECTOR",
@@ -905,6 +921,40 @@ pub struct Cockpit {
     /// The DEVTOOLS row filter (case-insensitive substring over the NETWORK /
     /// LOG row text). Set by the filter-bar preset chips; empty = show all.
     devtools_filter: String,
+
+    // --- THE WEB-SHELL BROWSER surface (a general http(s):// browser) --------
+    /// The URL bar — a real gpui-component single-line text [`gpui_component::input::InputState`].
+    /// LAZY (`None` until the first render): the input entity needs a live
+    /// `&mut Window` (`InputState::new(window, cx)`) + the cockpit's own weak handle
+    /// for the Enter subscription, neither cleanly available in the constructor; it
+    /// is seeded by [`Self::ensure_webshell_input`] on the first paint and the
+    /// `InputEvent::PressEnter` subscription drives [`Self::webshell_go`]. `None` on
+    /// the gpui-free / headless path (which drives navigation through `webshell_go`
+    /// directly).
+    webshell_input: Option<Entity<gpui_component::input::InputState>>,
+    /// The navigation HISTORY stack of URLs the browser has visited (the back /
+    /// forward spine). Each entry is a URL string; [`Self::webshell_cursor`] points
+    /// at the current one. A fresh navigation truncates any forward tail and pushes.
+    webshell_history: Vec<String>,
+    /// The cursor into [`Self::webshell_history`] — the currently-shown URL. Back
+    /// decrements, forward increments, both re-drive the render of the URL at the
+    /// new cursor (so back/forward genuinely re-fetch, not just relabel).
+    webshell_cursor: usize,
+    /// The last render's status / loading line (e.g. "rendered N×M", a cap refusal,
+    /// a parse error, or the net-cap seam note). Fail-closed: a render error is
+    /// SHOWN here, the previous tile is kept (the surface never silently blanks).
+    webshell_status: String,
+    /// The last successfully-rendered page frame (the content tile). `Some` once a
+    /// page has rendered; retained across a failing navigation (fail-closed). Gated
+    /// on `servo` (the `RgbaFrame` type only exists when the render crate is in).
+    #[cfg(feature = "servo")]
+    webshell_frame: Option<servo_render::RgbaFrame>,
+    /// A PENDING URL-bar value to write into [`Self::webshell_input`] on the next
+    /// render (where a live `&mut Window` is in hand — `InputState::set_value` needs
+    /// it). Set by back/forward/programmatic navigation so the address bar mirrors
+    /// the viewed URL; applied + cleared in [`Self::ensure_webshell_input`]. `None`
+    /// while the bar already reflects the cursor (so user typing is never stomped).
+    webshell_input_pending: Option<String>,
 }
 
 /// A navigation action over the cockpit's pure-navigation controls — the edge
@@ -973,6 +1023,7 @@ mod panels_devtools;
 mod panels_moldable;
 mod panels_workspace;
 mod panels_web;
+mod panels_webshell;
 mod live;
 mod render;
 mod time;

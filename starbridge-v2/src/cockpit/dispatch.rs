@@ -52,6 +52,27 @@ impl Cockpit {
             CommandId::GoProofs => self.set_tab(Tab::Proofs, cx),
             CommandId::GoPowerbox => self.set_tab(Tab::Powerbox, cx),
             CommandId::GoDevtools => self.set_tab(Tab::Devtools, cx),
+            CommandId::GoWebShell => self.set_tab(Tab::WebShell, cx),
+
+            // The 🌐 WEB-SHELL browser nav (navigate to the tab on a verb so the
+            // rendered page is in view — the same pattern the SIMULATE verbs use).
+            CommandId::WebShellGo => {
+                self.set_tab(Tab::WebShell, cx);
+                self.webshell_go(cx);
+            }
+            CommandId::WebShellBack => {
+                self.set_tab(Tab::WebShell, cx);
+                self.webshell_back(cx);
+            }
+            CommandId::WebShellForward => {
+                self.set_tab(Tab::WebShell, cx);
+                self.webshell_forward(cx);
+            }
+            CommandId::WebShellReload => {
+                self.set_tab(Tab::WebShell, cx);
+                self.webshell_reload(cx);
+            }
+
             CommandId::LaunchConfinedApp => self.run_launch_confined_app(cx),
 
             CommandId::BufferType => self.buffer_type_demo(cx),
