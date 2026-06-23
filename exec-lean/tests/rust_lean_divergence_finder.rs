@@ -663,16 +663,17 @@ fn rust_lean_divergence_finder() {
     // not a hidden bug:
     //
     //   * `Burn` — a genuine, SAFE-DIRECTION MODEL DIFFERENCE (the verified kernel is
-    //     STRICTER). W1 (issuer-supply): the verified `.burnA` is the RETURN-TO-WELL move —
-    //     value flows from the holder back to the asset's ISSUER cell, gated on the issuer
-    //     capability (`mintAuthorizedB actor asset`), conserving `Σ_c bal c a` EXACTLY. The
-    //     Rust scalar `Effect::Burn` (destroy balance, no destination) has no conserving
-    //     image: the corpus burns marshal to the self-burn shape (`cell = asset` in the
-    //     1-cell wire numbering), which the verified kernel refuses outright. lean=false,
-    //     rust=true — the SAFE direction (the verified executor rejects what apply.rs
-    //     accepts). Recorded, not hidden; closes when the staged W1 Rust migration gives the
-    //     native asset its issuer well (signed well balance + genesis issuer cell) and
-    //     apply.rs's burn becomes the well move.
+    //     STRICTER), now PURELY AUTHORITY. SUPPLY-MODEL Stage 1 (docs/SUPPLY-MODEL.md) closed
+    //     the CONSERVATION half: apply.rs's `Effect::Burn` is now itself a RETURN-TO-WELL move
+    //     — EVERY asset resolves a per-asset issuer well (lazily derived if unregistered) and
+    //     value flows holder→well, conserving `Σ_c bal c a` EXACTLY (per-turn Σδ=0), matching
+    //     the verified `.burnA`'s conservation. What REMAINS is the AUTHORITY gate: Rust accepts
+    //     the permissionless self-redeem; the verified `.burnA` gates on `mintAuthorizedB actor
+    //     asset`, so the corpus self-burns (`cell = asset` in the 1-cell wire numbering) are
+    //     refused by the verified kernel. lean=false, rust=true — the SAFE direction (the
+    //     verified executor rejects what apply.rs accepts). Recorded, not hidden; the remaining
+    //     authority drift closes in Stage 3 (the Lean authority split: self-redeem =
+    //     holder-permissioned, mint = mint-cap-gated).
     //
     // The OLD `Transfer` overspend drift is now RESOLVED (not on the list): the status-bearing
     // export reports the body-failure as `ok:0` and the `Unchecked → Breadstuff` projection

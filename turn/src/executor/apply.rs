@@ -899,9 +899,7 @@ impl TurnExecutor {
         if !c.is_live() {
             return Err((
                 TurnError::InvalidEffect {
-                    reason: format!(
-                        "SetProgram target cell {cell} is not live (sealed/destroyed)"
-                    ),
+                    reason: format!("SetProgram target cell {cell} is not live (sealed/destroyed)"),
                 },
                 path.to_vec(),
             ));
@@ -2577,13 +2575,30 @@ impl TurnExecutor {
                 path,
             )?;
         }
-        // THE EPOCH §5 ("burn as issuer-move", the Lean `burnA` dispatch):
-        // resolve the target asset's ISSUER WELL before mutating. With a
-        // registered well, burn is a MOVE target→well — the well (carrying
-        // −supply) is credited toward zero and the verb conserves exactly.
-        // Without one, the legacy non-conserving debit remains (pre-epoch
-        // assets only; genesis registers the devnet well).
-        let well_id = self.issuer_well_for(ledger, target);
+        // SUPPLY-MODEL Stage 1 ("burn as issuer-move", the Lean `burnA`
+        // dispatch): resolve the target asset's ISSUER WELL before mutating.
+        // EVERY asset resolves a well now (registered override, else the
+        // deterministic lazily-derived per-asset well — `derive_issuer_well`),
+        // so burn is ALWAYS a conserving MOVE target→well: the well (carrying
+        // −supply) is credited toward zero, holder debit == well credit, and
+        // the verb conserves exactly (per-turn Σδ=0). The bare non-conserving
+        // debit path is retired.
+        //
+        // HONEST SCOPE (docs/SUPPLY-MODEL.md): Stage 1 delivers PER-TURN
+        // conservation (each burn nets zero). The STANDING invariant
+        // `Σholders + well = 0` (the well as a proper −supply account) requires
+        // wells to be initialized to −supply at issuance — that is Stage 2
+        // (`Effect::Mint`). A lazily-created well starts at 0, so it goes
+        // POSITIVE here (it accumulates burned value), not negative; the
+        // per-turn delta is still exactly zero. Self-burn stays permissionless
+        // (no mint-auth gate — that is Stage 3).
+        let token_id = match ledger.get(target) {
+            Some(c) => *c.token_id(),
+            None => return Err((TurnError::CellNotFound { id: *target }, path.to_vec())),
+        };
+        let well_id = self
+            .issuer_well_for(ledger, target)
+            .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
 
         let cm = ledger
             .get_mut(target)
@@ -2602,11 +2617,48 @@ impl TurnExecutor {
         }
         journal.record_set_balance(*target, bal);
 
-        if let Some(well_id) = well_id {
+        {
+            // Lazily materialize the well cell if it is absent (the common case
+            // for any non-default asset, whose well is derived not registered).
+            // The created well is a real signed, negative-capable cell in the
+            // target's asset class; its creation is journaled so a later effect
+            // failure rolls it back (the cell is removed).
+            if !ledger.contains(&well_id) {
+                let (well_pubkey, derived_id) = Self::derive_issuer_well(&token_id);
+                // The well id must be the content-addressed id of the cell we
+                // create — guaranteed because `issuer_well_for` derived it the
+                // same way for an unregistered asset. A registered (override)
+                // well, by contract, is created by whoever registered it
+                // (genesis); if such a registered well is somehow absent we
+                // still create a derived cell at `well_id`, but its id would
+                // then mismatch its pre-image. Guard against that: only lazily
+                // create when the resolved id equals the derived id.
+                if well_id != derived_id {
+                    return Err((
+                        TurnError::InvalidEffect {
+                            reason: format!(
+                                "registered issuer well {well_id} for the burn target's \
+                                 asset not found"
+                            ),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let well_cell = Cell::with_balance(well_pubkey, token_id, 0);
+                ledger.insert_cell(well_cell).map_err(|e| {
+                    (
+                        TurnError::InvalidEffect {
+                            reason: format!("{e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                journal.record_create_cell(well_id);
+            }
             let well = ledger.get_mut(&well_id).ok_or_else(|| {
-                // A registered well that is absent refuses the burn (the
-                // genesis-order tooth); the journaled debit above is rolled
-                // back by the caller on this error.
+                // Should be unreachable after the lazy-create above, but a
+                // registered-yet-absent well refuses the burn (the journaled
+                // debit above is rolled back by the caller on this error).
                 (
                     TurnError::InvalidEffect {
                         reason: format!(
