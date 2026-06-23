@@ -1,0 +1,37 @@
+# A throwaway, single-container Matrix homeserver (Conduit) for the LIVE
+# deos-matrix integration test. This is the realistic local homeserver path the
+# repo's Docker convention prescribes — NO direct host install. Conduit is a
+# single self-contained Rust homeserver (no Postgres/Redis sidecar) with open
+# registration, federation off, RocksDB on an ephemeral volume.
+#
+#   bring up:   docker compose -f docker-compose.test.yml up -d
+#   tear down:  docker compose -f docker-compose.test.yml down -v
+#
+# The harness `scripts/live-test.sh` brings this up, registers two users, runs
+# the live two-client round-trip test, then tears it down. The crate's
+# `tests/live_homeserver.rs` is creds-gated on DEOS_MATRIX_TEST_HS/_USER/_PASS,
+# so `cargo test` stays green with no server; this compose supplies the server.
+services:
+  homeserver:
+    image: matrixconduit/matrix-conduit:latest
+    container_name: deos-matrix-test-hs
+    ports:
+      - "6167:6167"
+    environment:
+      # Empty → Conduit reads all config from the CONDUIT_* env vars below (no
+      # conduit.toml file). Without this var set at all, Conduit panics at boot.
+      CONDUIT_CONFIG: ""
+      CONDUIT_SERVER_NAME: deos.local
+      CONDUIT_DATABASE_PATH: /var/lib/matrix-conduit/
+      CONDUIT_DATABASE_BACKEND: rocksdb
+      CONDUIT_PORT: 6167
+      CONDUIT_ADDRESS: 0.0.0.0
+      CONDUIT_MAX_REQUEST_SIZE: "20000000"
+      CONDUIT_ALLOW_REGISTRATION: "true"
+      # Conduit >= 0.7 requires this to enable token-less open registration.
+      CONDUIT_YES_I_AM_VERY_VERY_SURE_I_WANT_AN_OPEN_REGISTRATION_SERVER_PRONE_TO_ABUSE: "true"
+      CONDUIT_ALLOW_FEDERATION: "false"
+      CONDUIT_ALLOW_CHECK_FOR_UPDATES: "false"
+      CONDUIT_TRUSTED_SERVERS: "[]"
+    tmpfs:
+      - /var/lib/matrix-conduit
