@@ -70,6 +70,24 @@ it doesn't use the framework, different shape.)
   wire the remaining 16 framework apps into the registry (identity/nameservice/privacy-voting/escrow-
   market/compute-exchange/agent-+swarm-orchestration/…/first-room).
 
+### APPS WIDER — 15/20 apps launch on the live World ledger; 5 skips reasoned (2026-06-23).
+`c16dde94` adds 11 more framework apps to `app_registry.rs` (now 15 total: gallery/sealed-auction/
+bounty-board/tussle + agent-orchestration/agent-provenance/compartment-workflow-mandate/compute-
+exchange/escrow-market/nameservice/privacy-voting/storage-gateway-mandate/subscription/swarm-
+orchestration/tool-access-delegation). Each fires ONE representative World-committed affordance
+(reuses the app crate's OWN public program+effect-builders; no app `lib.rs` edits needed). Whole-set
+tests `every_wired_app_launches_on_the_cockpit_world` + `_and_fires_a_real_turn` iterate all 15;
+native-full + wasm32 green; the non-wasm dep-table invariant preserved.
+- SKIPPED 5, precise: identity / governed-namespace / supply-chain-provenance need a
+  `SenderAuthorized`/Merkle-membership/sender atom on their first affordance — the World single-custody
+  `commit` path (`Authorization::Unchecked`, no `witness_blobs`, `ctx.sender = None`) can't satisfy it.
+  FOLLOW-ON (the "deeper" rung): an AUTHENTICATED `AppWorldSpine::commit` carrying the cockpit
+  principal as sender + witness blobs → unblocks all 3. · polis = no `DeosApp` ctor (builds charter
+  `CellProgram`s directly, different shape; needs its own integration). · first-room = a scenario/weld
+  shim, not a `DeosApp` (could become a launchable scenario, not an app).
+- ⚠ WATCH: a full `--lib` run showed 3 `cell_transclusion::tests` failures (file untouched since
+  `33c45079`); under investigation — verify real-vs-pre-existing, fix if a shared-dep regression.
+
 ### EDITOR PANE ON THE LIVE WORLD LEDGER — LANDED (2026-06-23).
 `d11c72e9`. The cockpit editor now edits the SAME ledger the inspector shows: `LedgerSpine` trait +
 `OwnedSpine` (headless) / `WorldSpine` (over `Rc<RefCell<World>>` via `World::turn`/`commit_turn`).
