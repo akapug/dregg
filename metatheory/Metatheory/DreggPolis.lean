@@ -34,6 +34,7 @@ shadow only as a TIGHTENING, not a gap: `held ⊆ bound` IS the deployed `fits` 
 import Metatheory.Polis
 import Metatheory.EpistemicDial
 import Dregg2.Authority.Positional
+import Dregg2.Exec.Kernel
 
 namespace Metatheory.DreggPolis
 
@@ -98,9 +99,25 @@ def evidencePrivateInference (PrivateInfer : Prop) :
 theorem privateInference_out_of_jurisdiction (Q : Prop) :
     (evidencePrivateInference Q).status = LawStatus.outOfJurisdiction := rfl
 
-/-! ## §2. The authority floor on the REAL l4v rights type. -/
+/-! ## §2. The authority floor on the REAL l4v rights type — the AUTHORITY-LIST shadow.
 
-/-- A real dregg subject state: held l4v authorities + a recovery coordinate. -/
+⚠ **What this section is, precisely.** It runs the `Polis` spine over the deployed `Auth` enum, so
+the *floor's vocabulary* (`held ⊆ bound` over `Dregg2.Authority.Auth`, bounded recovery) is the real
+l4v rights type, not a toy `DRight`. But its `step` is the **identity** (`rStep _ a := a`) and its
+policy `rPol` gates an ARBITRARY proposed next state by the floor alone. So these theorems are about a
+*proposal envelope* over the real authority TYPE — they do NOT bind the deployed executor's
+transition relation. A controller here proposes a whole next `RState`; the envelope merely refuses
+any proposal outside the floor. This is the same shape as `Polis.lean`'s candidate model
+(`dreggStep _ a := a`), lifted to the real `Auth` enum — useful for the floor/amendment/foreclosure
+algebra, but it is NOT a claim about how `exec` evolves state.
+
+**The genuine executor binding is §2.5 below** (`execStep`/`execPol` over the deployed
+`Dregg2.Exec.exec`), following the `PolisViabilityKernel.kernelArena` pattern: the step IS the
+deployed kernel transition, so a turn `exec` would REJECT is no longer admitted — not the identity
+no-op-of-an-arbitrary-state the shadow allows. -/
+
+/-- An authority-list subject state: held l4v authorities + a recovery coordinate. (The
+*authority-list shadow* — see the §2 caveat; this is NOT the executor's `KernelState`.) -/
 structure RState where
   held : List Dregg2.Authority.Auth
   dist : Nat
@@ -134,6 +151,9 @@ theorem r_genesis_safe (B : Nat) : rShared B ⟨[], 0⟩ := by
 theorem dreggReal_shared_floor_inhabited (B : Nat) : InhabitedFloor (rShared B) :=
   ⟨⟨[], 0⟩, r_genesis_safe B⟩
 
+/-- The authority-list runtime: the controller PROPOSES a next state, the envelope gates it. This is
+the IDENTITY step (`rStep _ a := a`) — it binds the floor over the real `Auth` TYPE, NOT the deployed
+executor's transition relation (see the §2 caveat; the executor binding is §2.5). -/
 def rStep (_ : RState) (a : RState) : RState := a
 def rShield (s : RState) : RState := s
 def rPol (B : Nat) : Policy RState RState := fun _ a => rShared B a
@@ -142,9 +162,11 @@ theorem r_sound (B : Nat) : SoundPolicy rStep (rShared B) (rPol B) := fun _ _ _ 
 theorem r_shieldSafe (B : Nat) :
     ∀ s, rShared B s → rShared B (rStep s (rShield s)) := fun _ hs => hs
 
-/-- **`dreggReal_polis_safety`** — the spine on the deployed l4v authority type: for EVERY
-opaque controller and every step, no dregg subject is driven to hold an authority outside its
-bound, or to lose its bounded recovery. -/
+/-- **`dreggReal_polis_safety`** — the spine on the deployed l4v authority TYPE (the authority-list
+shadow, identity step): for EVERY opaque controller and every step, no proposed `RState` outside its
+bound or bounded recovery is admitted. ⚠ This is a *proposal-envelope* fact over the real `Auth`
+enum — it does NOT bind the deployed `exec` transition. For the executor-bound spine see
+`execPolis_safety` (§2.5). -/
 theorem dreggReal_polis_safety (B : Nat) :
     ∀ (ctrl : RState → RState) (n : Nat),
       rShared B (traj rStep (envAct (rPol B) rShield ctrl) ⟨[], 0⟩ n) :=
@@ -164,6 +186,124 @@ example (B : Nat) : ¬ rShared B ⟨[Dregg2.Authority.Auth.control], 0⟩ := by
   intro h
   have hm := (h false).1 Dregg2.Authority.Auth.control (by simp)
   simp [rBounds] at hm
+
+/-! ## §2.5. The EXECUTOR-BOUND polis — the spine over the DEPLOYED `Dregg2.Exec.exec`.
+
+This is the genuine re-bind codex's review asked for. The §2 spine steps by the IDENTITY over an
+authority-list type; here the `Polis` `step` IS the deployed kernel transition (`Dregg2.Exec.exec`),
+following `PolisViabilityKernel.kernelArena`'s pattern that the arena's advance is the real `exec`
+outcome.
+
+* **State** = the deployed `Dregg2.Exec.KernelState` (the live ledger: accounts, balances, cap
+  table) — the SAME object `exec` and `exec_conserves` reason about.
+* **Action** = the deployed `Dregg2.Exec.Turn`.
+* **`execStep`** = `(exec k t).getD k` — the deployed transition, **fail-closed**: an `exec`-admitted
+  turn advances to the one real post-state; a rejected turn (unauthorized, insolvent, malformed)
+  is a NO-OP (no state change — which is exactly what the kernel does on a rejected turn). The step
+  RANGE is therefore exactly the deployed `exec`'s reachable states ∪ {stay-put}. A controller can no
+  longer hand the system an arbitrary next state — only the kernel's own admitted outcome or the
+  no-op.
+* **Floor** = `execSafe T₀` := total supply pinned at the genesis supply `T₀` (conservation health,
+  decidable, public — reads only `total`). `exec_conserves` PROVES every admitted `exec` step
+  preserves it, so the policy is sound *because the executor conserves*, not by fiat.
+* **`execPol`** = admit a turn iff `exec` actually commits it (`(exec k t).isSome`). The envelope's
+  permission is the deployed admissibility check itself.
+
+The payoff is `polis_safety` over the REAL executor: for EVERY opaque controller and every step, the
+enveloped deployed kernel keeps its conservation floor — and the proof FACTORS THROUGH
+`exec_conserves`, so it is a statement about the genuine `exec` evolution. -/
+
+open Dregg2.Exec
+
+/-- **`execStep` — the deployed kernel transition as a total `Polis` step (fail-closed).** Apply the
+deployed `exec`; on rejection, stay put. The step's image is exactly the kernel's admitted outcomes
+(plus the no-op) — NOT an arbitrary controller-chosen state. -/
+def execStep (k : KernelState) (t : Turn) : KernelState := (exec k t).getD k
+
+/-- **`execSafe T₀` — the public conservation floor:** total supply equals the genesis supply.
+Decidable, interior-free (reads only `total`); `exec_conserves` keeps it across every admitted step. -/
+def execSafe (T₀ : ℤ) : Floor KernelState := fun k => total k = T₀
+
+/-- **`execPol` — the envelope admits exactly the deployed-`exec`-committed turns.** Permission IS the
+kernel's own admissibility check (`(exec k t).isSome`) — a turn `exec` would reject is NOT permitted. -/
+def execPol : Policy KernelState Turn := fun k t => (exec k t).isSome = true
+
+/-- The shield: a no-op turn (`exec` rejects `src = dst`), so the shield always stays put — safe. -/
+def execShield (_ : KernelState) : Turn := { actor := 0, src := 0, dst := 0, amt := 0 }
+
+/-- An `exec`-rejected turn is a no-op under `execStep` (the fail-closed branch). -/
+theorem execStep_reject {k : KernelState} {t : Turn} (h : exec k t = none) :
+    execStep k t = k := by simp [execStep, h]
+
+/-- The shield turn (`src = dst`) is always rejected by `exec`, hence always a no-op. -/
+theorem execShield_noop (k : KernelState) : execStep k (execShield k) = k := by
+  apply execStep_reject
+  unfold exec execShield
+  rw [if_neg]
+  rintro ⟨_, _, _, hne, _⟩
+  exact hne rfl
+
+/-- **`execPol_sound` — the policy is sound BECAUSE the executor conserves.** From a state at the
+genesis supply, every `exec`-admitted turn lands at a state STILL at the genesis supply — the proof
+factors through the deployed `exec_conserves`. (The identity-step shadow's soundness was vacuous
+`fun _ _ _ ha => ha`; this one DISCHARGES conservation of the real transition.) -/
+theorem execPol_sound (T₀ : ℤ) : SoundPolicy execStep (execSafe T₀) execPol := by
+  intro k t hk hp
+  -- `execPol k t` says `exec k t` commits; name the post-state.
+  unfold execPol at hp
+  cases hx : exec k t with
+  | none => rw [hx] at hp; simp at hp
+  | some k' =>
+      have hstep : execStep k t = k' := by simp [execStep, hx]
+      rw [hstep]
+      show total k' = T₀
+      rw [exec_conserves k k' t hx]; exact hk
+
+/-- **`execShieldSafe`** — the shield (a no-op) trivially preserves the conservation floor. -/
+theorem execShieldSafe (T₀ : ℤ) :
+    ∀ k, execSafe T₀ k → execSafe T₀ (execStep k (execShield k)) := by
+  intro k hk; rw [execShield_noop]; exact hk
+
+/-- **`execPolis_safety` — THE EXECUTOR-BOUND POLIS SPINE.** For EVERY opaque controller and every
+step, the enveloped DEPLOYED kernel (`step = exec`, fail-closed) keeps its conservation floor: no
+adversary — proposing turns, scheduling, jailbroken — drives the live ledger off its genesis supply.
+Unlike `dreggReal_polis_safety`, the `step` here IS `Dregg2.Exec.exec`, so this is a theorem about
+the genuine executor's evolution, proven through `exec_conserves`. -/
+theorem execPolis_safety (k₀ : KernelState) :
+    ∀ (ctrl : KernelState → Turn) (n : Nat),
+      execSafe (total k₀) (traj execStep (envAct execPol execShield ctrl) k₀ n) :=
+  polis_safety (execPol_sound (total k₀)) (execShieldSafe (total k₀)) rfl
+
+/-! ### MUTATION-CONFIRM: a non-`exec` transition is rejected by the executor-bound envelope.
+
+The identity-step shadow (§2) admitted ANY floor-passing proposed state. The exec-bound envelope does
+NOT: a turn `exec` rejects produces NO state change (`execStep_reject`), and the policy `execPol`
+does NOT permit it (`execPol` = `(exec k t).isSome`). So an unauthorized / insolvent / malformed turn
+cannot move the ledger — the envelope is bound to the deployed admissibility, not to a free floor. -/
+
+/-- A genesis ledger for the witnesses: cell 0 holds 100, cell 1 holds 5; empty cap table. -/
+def execGenesis : KernelState :=
+  { accounts := {0, 1}, bal := fun c => if c = 0 then 100 else if c = 1 then 5 else 0,
+    caps := fun _ => [] }
+
+/-- An UNAUTHORIZED turn (actor 2 has no cap on src 0): `exec` rejects it. -/
+def execBadTurn : Turn := { actor := 2, src := 0, dst := 1, amt := 30 }
+/-- An AUTHORIZED turn (actor 0 owns src 0). -/
+def execGoodTurn : Turn := { actor := 0, src := 0, dst := 1, amt := 30 }
+
+-- The policy (= the deployed admissibility check) DOES NOT admit the rejected turn — executor-bound,
+-- not free-floor; and DOES admit the genuine `exec` turn:
+#guard (exec execGenesis execBadTurn).isSome == false
+#guard (exec execGenesis execGoodTurn).isSome == true
+example : ¬ execPol execGenesis execBadTurn := by unfold execPol; decide
+example : execPol execGenesis execGoodTurn := by unfold execPol; decide
+-- The rejected turn is a NO-OP under the deployed step (no arbitrary state injected):
+example : execStep execGenesis execBadTurn = execGenesis := execStep_reject (by decide)
+-- The genuine turn actually MOVES the ledger (the step IS `exec`, not the identity):
+#guard (execStep execGenesis execGoodTurn).bal 1 == 35
+#guard (execStep execGenesis execGoodTurn).bal 0 == 70
+-- … conserving total (the floor) exactly as `exec_conserves` guarantees:
+#guard total (execStep execGenesis execGoodTurn) == total execGenesis
 
 /-! ## §4. The politician at trace level — a CONCRETE CaptureBar over REAL dregg states.
 
@@ -213,5 +353,8 @@ example : RForecloses 5 [⟨[], 0⟩, ⟨[], 9⟩] := by decide
 #assert_axioms dreggReal_polis_safety
 #assert_axioms dreggReal_amendment_nonregression
 #assert_axioms dreggReal_envelope_no_foreclosure
+#assert_axioms execPol_sound
+#assert_axioms execShield_noop
+#assert_axioms execPolis_safety
 
 end Metatheory.DreggPolis
