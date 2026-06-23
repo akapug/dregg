@@ -30,6 +30,10 @@ impl Render for Cockpit {
         // so flat-tab navigation (⌘K / the nav API) keeps driving the base pane.
         self.ensure_pane_group(window, cx);
         self.sync_base_pane_active(window, cx);
+        // THE WEB-SHELL URL BAR — seed the gpui-component text input entity on the
+        // first paint (it needs a live `&mut Window` + the Enter subscription), so
+        // the browser surface has its real address bar ready when navigated to.
+        self.ensure_webshell_input(window, cx);
         // Build the right pane's element: the `PaneGroup` rendered with the
         // active-pane decorator (a 2px accent border on the focused pane). Built
         // before the root `div()` so the `&self.pane_group` + `&self.active_pane`

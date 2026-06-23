@@ -67,6 +67,20 @@ pub enum CommandId {
     /// Navigate to the ⚙ DEVTOOLS tab (Firebug for a verified OS — the data plane,
     /// the receipt console, the federation, as three inspector sub-tabs).
     GoDevtools,
+    /// Navigate to the 🌐 WEB-SHELL tab (a general http(s):// browser surface — the
+    /// real Servo WebView render behind the net-cap gate, with a URL bar + nav).
+    GoWebShell,
+
+    // --- the 🌐 WEB-SHELL BROWSER (a general http(s):// browser surface) ---
+    /// GO — render the URL currently in the web-shell address bar (or the current
+    /// history entry): the real `render_url_to_frame` behind the net-cap gate.
+    WebShellGo,
+    /// BACK — step to the previous URL in the browser history + re-render it.
+    WebShellBack,
+    /// FORWARD — step to the next URL in the browser history + re-render it.
+    WebShellForward,
+    /// RELOAD — re-render the current URL (re-drive the WebView render).
+    WebShellReload,
     /// LAUNCH a confined app at RUNTIME — birth a fresh app-cell holding NO ambient
     /// authority (a real confined app-as-cell) and route its capability request through
     /// the existing powerbox (the powerbox's missing first half). Switches to the
@@ -186,7 +200,8 @@ impl CommandId {
             | LaunchConfinedApp | SimRun | SimCommit | SimAddEffect => Category::Verb,
             GoHome | GoComposer | GoSimulate | GoObjects | GoDebugger | GoReplay | GoCipherclerk
             | GoEditor | GoShell | GoAgent | GoBuffer | GoTerminal | GoSwarm | GoGraph | GoOrgans
-            | GoProofs | GoPowerbox | GoDevtools => Category::Navigate,
+            | GoProofs | GoPowerbox | GoDevtools | GoWebShell => Category::Navigate,
+            WebShellGo | WebShellBack | WebShellForward | WebShellReload => Category::Web,
             BufferType | BufferCommit | BufferReadOnlyWrite | TerminalRunInMandate
             | TerminalRunOutOfMandate | OpenTerminalPane | OpenEditorPane
             | SwarmCoordinatorEmitA | SwarmWorkerADrain | SwarmCoordinatorTransferAndWake
@@ -237,6 +252,11 @@ impl CommandId {
             GoProofs => "Go to Proofs (attach + STARK verification status)",
             GoPowerbox => "Go to Powerbox (CapDesk — designate a held cap into an app, attenuated)",
             GoDevtools => "Go to Devtools (Firebug for a verified OS — network · receipts · federation)",
+            GoWebShell => "Go to Web-Shell (a general http(s):// browser — real Servo render behind the net-cap gate)",
+            WebShellGo => "Web-shell: Go (render the address-bar URL through the cap-gated Servo WebView)",
+            WebShellBack => "Web-shell: ← Back (previous URL in history, re-rendered)",
+            WebShellForward => "Web-shell: → Forward (next URL in history, re-rendered)",
+            WebShellReload => "Web-shell: ⟳ Reload (re-render the current URL)",
             LaunchConfinedApp => "Launch a confined app (no ambient authority → it requests via the powerbox)",
             SwarmCoordinatorEmitA => {
                 "Swarm: coordinator emits task/go → worker-a (notify edge, async)"
@@ -317,6 +337,11 @@ impl CommandId {
             GoProofs => "proof stark verify attach tier verification signed by-construction light-client",
             GoPowerbox => "powerbox capdesk designate grant capability attenuate mint file dialog ocap pick picker confined app no-ambient-authority",
             GoDevtools => "devtools firebug devtools network receipts log console federation inspector data-plane deliveries queue inbox wake notify topic pub-sub committee epoch checkpoint revocation bridge filter drill-down",
+            GoWebShell => "web shell browser http https url address bar servo webview render page internet net surf navigate site www tab",
+            WebShellGo => "web shell browser go render http https url navigate load page fetch servo webview cap-gate net",
+            WebShellBack => "web shell browser back previous history navigate url",
+            WebShellForward => "web shell browser forward next history navigate url",
+            WebShellReload => "web shell browser reload refresh re-render current url page",
             LaunchConfinedApp => "launch spawn start run confined app birth new cell powerbox request capability no-ambient-authority sandbox open application capdesk",
             SwarmCoordinatorEmitA => {
                 "emit event notify wake inbox async turn receipt seam swarm coordinator worker"
@@ -379,6 +404,8 @@ pub enum Category {
     Replay,
     Clerk,
     Shell,
+    /// The 🌐 WEB-SHELL browser surface ops (go / back / forward / reload).
+    Web,
     /// The A1 IDE developer surfaces (editor buffer + terminal command ops).
     Ide,
     Debug,
@@ -394,6 +421,7 @@ impl Category {
             Category::Replay => "replay",
             Category::Clerk => "clerk",
             Category::Shell => "shell",
+            Category::Web => "web",
             Category::Ide => "ide",
             Category::Debug => "debug",
             Category::Inspect => "inspect",
@@ -448,7 +476,9 @@ pub fn all_commands() -> Vec<Command> {
         GoHome,
         GoComposer, GoSimulate, GoObjects, GoDebugger, GoReplay, GoCipherclerk, GoEditor, GoShell,
         GoAgent, GoBuffer, GoTerminal, GoSwarm, GoGraph, GoOrgans, GoProofs, GoPowerbox,
-        GoDevtools,
+        GoDevtools, GoWebShell,
+        // the 🌐 web-shell browser surface (general http(s):// browser)
+        WebShellGo, WebShellBack, WebShellForward, WebShellReload,
         // replay
         ReplayStepBack, ReplayStepForward, ReplayToGenesis, ReplayToHead,
         ReplayForkHere, ReplayClearFork,

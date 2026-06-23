@@ -85,6 +85,7 @@ impl Cockpit {
             Tab::Organs => self.organs_panel().into_any_element(),
             Tab::Proofs => self.proofs_panel().into_any_element(),
             Tab::WebOfCells => self.web_of_cells_panel(cx).into_any_element(),
+            Tab::WebShell => self.webshell_panel(cx).into_any_element(),
             Tab::LinksHere => self.links_here_panel(cx).into_any_element(),
             Tab::Powerbox => self.powerbox_panel(cx).into_any_element(),
             Tab::Moldable => self.moldable_panel(cx).into_any_element(),
