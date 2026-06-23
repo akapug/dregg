@@ -49,6 +49,13 @@ pub type MessageHash = [u8; 32];
 /// Maximum number of eager peers per topic (the rest get lazy push).
 const DEFAULT_EAGER_DEGREE: usize = 3;
 
+/// Upper bound on a single outbound dial. Without this, a dial to a DOWN peer
+/// blocks on the QUIC idle timeout (~30s) — which would stall synchronous
+/// startup (`join_topic` dials each bootstrap peer in turn). Bounded so a peer
+/// that is unreachable at boot does not delay the node; the reconnect prober
+/// re-dials it once it comes up.
+const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// How long to wait after receiving an IHave before sending a Graft.
 /// If the message arrives eagerly within this window, no Graft is needed.
 const IHAVE_TIMEOUT: Duration = Duration::from_millis(500);
@@ -1027,6 +1034,71 @@ impl GossipNetwork {
         self.state.read().await.live_peer_count()
     }
 
+    /// Whether we currently hold at least one live QUIC link to `addr`.
+    pub async fn is_peer_connected(&self, addr: &SocketAddr) -> bool {
+        !self.state.read().await.links_to(addr).is_empty()
+    }
+
+    /// All peers we know for `topic` (the full peer set, connected or not).
+    pub async fn topic_peers(&self, topic: &TopicHandle) -> Vec<SocketAddr> {
+        let state = self.state.read().await;
+        match state.topics.get(&topic.topic_id) {
+            Some(ts) => ts.all_peers(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Peers known to `topic` that are **not currently connected** and are NOT
+    /// graylisted — i.e. the re-dial candidate set for a reconnect prober.
+    ///
+    /// A peer that was supplied at boot (an anchor) but never came up, or one
+    /// whose link died, remains in the topic peer set; this surfaces it so a
+    /// periodic prober can (re)establish the link when the peer returns. A
+    /// graylisted (proven-Byzantine) peer is excluded — we do not chase a peer
+    /// the scoreboard has demoted.
+    pub async fn unconnected_topic_peers(&self, topic: &TopicHandle) -> Vec<SocketAddr> {
+        let state = self.state.read().await;
+        let Some(ts) = state.topics.get(&topic.topic_id) else {
+            return Vec::new();
+        };
+        ts.all_peers()
+            .into_iter()
+            .filter(|addr| {
+                state.links_to(addr).is_empty() && !state.scoreboard.is_graylisted(addr)
+            })
+            .collect()
+    }
+
+    /// (Re)dial a known peer and register the resulting link, returning `true`
+    /// on success. Idempotent against an already-live link (returns `true`
+    /// without re-dialing). After a successful (re)connect the eager/lazy split
+    /// is recomputed for every topic so the recovered peer can re-enter a
+    /// spanning tree.
+    ///
+    /// This is the dial primitive a reconnect prober drives on a
+    /// [`crate::peer_score::RequestBackoff`] schedule: a peer that was down at
+    /// boot (or dropped) is re-established when it comes back up, restoring
+    /// convergence without a node restart.
+    pub async fn reconnect_peer(&self, addr: SocketAddr) -> bool {
+        if !self.state.read().await.links_to(&addr).is_empty() {
+            return true; // already connected
+        }
+        match self.connect_peer_bounded(addr).await {
+            Ok(conn) => {
+                let mut state = self.state.write().await;
+                state.add_peer_link(addr, conn);
+                state.scoreboard.observe(addr);
+                state.reclassify_all(DEFAULT_EAGER_DEGREE);
+                debug!("reconnect_peer: (re)established link to {addr}");
+                true
+            }
+            Err(e) => {
+                debug!("reconnect_peer: dial to {addr} failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Join a gossip topic, connecting to bootstrap peers.
     pub async fn join_topic(
         &self,
@@ -1062,7 +1134,7 @@ impl GossipNetwork {
                 state.links_to(&addr).is_empty()
             };
             if needs_connect {
-                if let Ok(conn) = self.connect_peer(addr).await {
+                if let Ok(conn) = self.connect_peer_bounded(addr).await {
                     let mut state = self.state.write().await;
                     state.add_peer_link(addr, conn);
                 }
@@ -1318,7 +1390,7 @@ impl GossipNetwork {
         let needs_connect = state.links_to(&addr).is_empty();
         if needs_connect {
             drop(state);
-            if let Ok(conn) = self.connect_peer(addr).await {
+            if let Ok(conn) = self.connect_peer_bounded(addr).await {
                 let mut state = self.state.write().await;
                 state.add_peer_link(addr, conn);
             }
@@ -1334,6 +1406,23 @@ impl GossipNetwork {
                     message: message.clone(),
                 });
             }
+        }
+    }
+
+    /// Dial `addr` but give up after [`DIAL_TIMEOUT`] rather than blocking on the
+    /// QUIC idle-timeout (~30s) when the peer is DOWN.
+    ///
+    /// This is load-bearing for "down at boot": `join_topic` dials each bootstrap
+    /// peer synchronously, and a single unreachable peer would otherwise stall
+    /// node startup for the full handshake idle window (×every topic). A bounded
+    /// dial keeps startup snappy; the peer reconnect prober re-dials the
+    /// still-unconnected peer once it actually comes up.
+    async fn connect_peer_bounded(&self, addr: SocketAddr) -> Result<Connection, GossipError> {
+        match tokio::time::timeout(DIAL_TIMEOUT, self.connect_peer(addr)).await {
+            Ok(res) => res,
+            Err(_) => Err(GossipError::Join(format!(
+                "dial to {addr} timed out after {DIAL_TIMEOUT:?} (peer down?)"
+            ))),
         }
     }
 
@@ -3473,5 +3562,140 @@ mod tests {
                 Err(_) => return None,   // timed out
             }
         }
+    }
+
+    /// Reserve a currently-free UDP port on loopback by binding a throwaway
+    /// socket and immediately dropping it, returning the address. There is a
+    /// small TOCTOU window before the real endpoint rebinds it, which is
+    /// acceptable for a loopback test and is the standard trick for "bring a
+    /// service up on a known port that nothing is listening on yet."
+    fn free_loopback_addr() -> SocketAddr {
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.local_addr().unwrap()
+    }
+
+    /// LATE-JOIN / DOWN-AT-BOOT RECONNECT. The realistic robustness scenario the
+    /// federation census flagged: node A boots and dials peer B, but B is not up
+    /// yet, so the initial dial FAILS. A must NOT give up — a periodic prober
+    /// re-dials the known-but-unconnected peer on a [`RequestBackoff`] schedule,
+    /// and once B comes up A connects and converges WITHOUT a restart.
+    ///
+    /// This drives the exact prober/backoff path `blocklace_sync` spawns:
+    /// `unconnected_topic_peers` → `RequestBackoff::should_request` →
+    /// `reconnect_peer`, and asserts the recovered link carries gossip in BOTH
+    /// directions (peer_count > 0 on both, a push each way delivered).
+    #[tokio::test]
+    async fn late_join_prober_reconnects_after_initial_dial_failure() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use crate::peer_score::RequestBackoff;
+        use std::time::Duration;
+
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        // The address B WILL listen on — but B is NOT up yet.
+        let addr_b = free_loopback_addr();
+
+        // A boots and joins the topic pointing at B. B is down, so this initial
+        // dial cannot connect: A starts with zero live peers, B in its peer set
+        // as an unconnected anchor.
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let topic_a = gossip_a
+            .join_topic("dregg/late-join", &[addr_b])
+            .await
+            .unwrap();
+        let mut stream_a = gossip_a.subscribe(&topic_a).await.unwrap();
+
+        assert_eq!(
+            gossip_a.connected_peer_count().await,
+            0,
+            "A must start with NO peer connected (B was down at boot)"
+        );
+        assert_eq!(
+            gossip_a.unconnected_topic_peers(&topic_a).await,
+            vec![addr_b],
+            "B must be a known-but-unconnected re-dial candidate"
+        );
+
+        // ─── B comes up (the peer returns) ───────────────────────────────────
+        let node_b = PeerNode::new(PeerNodeConfig {
+            bind_addr: addr_b,
+            ..PeerNodeConfig::default()
+        })
+        .await
+        .unwrap();
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+        let topic_b = gossip_b
+            .join_topic("dregg/late-join", &[addr_a])
+            .await
+            .unwrap();
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+
+        // ─── A's reconnect prober: re-dial unconnected peers on backoff ──────
+        // Exactly the loop `blocklace_sync::spawn_peer_prober` runs (fast base
+        // window for the test). Within the retry window A must (re)connect.
+        let mut backoff: RequestBackoff<SocketAddr> =
+            RequestBackoff::new(Duration::from_millis(50), Duration::from_secs(1));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            for addr in gossip_a.unconnected_topic_peers(&topic_a).await {
+                if backoff.should_request(addr) {
+                    gossip_a.reconnect_peer(addr).await;
+                }
+            }
+            if gossip_a.connected_peer_count().await > 0
+                && gossip_b.connected_peer_count().await > 0
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        assert!(
+            gossip_a.connected_peer_count().await > 0,
+            "A's prober never reconnected to B after B came up"
+        );
+        assert!(
+            gossip_b.connected_peer_count().await > 0,
+            "B never saw A's reconnect (no accepted link)"
+        );
+
+        // ─── Convergence: gossip flows BOTH ways over the recovered link ─────
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let msg_from_a = PeerMessage::PublishTurn {
+            turn_hash: [0xa1; 32],
+            turn_data: b"reconnect-a".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_a.publish_eager(&topic_a, &msg_from_a).await.unwrap();
+
+        let msg_from_b = PeerMessage::PublishTurn {
+            turn_hash: [0xb2; 32],
+            turn_data: b"reconnect-b".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_b.publish_eager(&topic_b, &msg_from_b).await.unwrap();
+
+        let got_on_b = recv_remote_within(&mut stream_b, Duration::from_secs(5)).await;
+        assert_eq!(
+            got_on_b,
+            Some(msg_from_a),
+            "after reconnect, A->B gossip must converge"
+        );
+        let got_on_a = recv_remote_within(&mut stream_a, Duration::from_secs(5)).await;
+        assert_eq!(
+            got_on_a,
+            Some(msg_from_b),
+            "after reconnect, B->A gossip must converge"
+        );
     }
 }

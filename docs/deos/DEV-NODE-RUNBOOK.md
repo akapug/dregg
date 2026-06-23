@@ -208,3 +208,72 @@ block hashes; a round-2 `turn` block surrounded by round 1/2/3 attestation acks)
 `latest_height=1` on both (the turn-bearing block super-ratified cross-node), and
 alice's cell balance = 5000 on BOTH nodes — the faucet turn's effect applied
 deterministically through consensus finalization, not locally.
+
+## Robust federation: LATE JOIN / reconnect (a peer down at boot still converges)
+
+The n=2 run above assumes both nodes are up when they dial. Federation is also
+robust when a peer is DOWN at boot (or drops and returns): each node runs a
+**peer reconnect prober** (`blocklace_sync::spawn_peer_prober`) that re-dials any
+known-but-unconnected federation peer on a `RequestBackoff` schedule
+(`net/src/peer_score.rs`), so the mesh forms — and the DAG converges — without an
+operator restart. Two supporting pieces make this work:
+
+* `GossipNetwork::{unconnected_topic_peers, reconnect_peer}` (`net/src/gossip.rs`):
+  the prober asks which topic peers have no live link (graylisted peers excluded)
+  and re-dials them; a recovered link is registered and the eager/lazy split
+  recomputed, restoring a spanning tree.
+* A **bounded initial dial** (`DIAL_TIMEOUT = 3s`): `join_topic`'s startup dial no
+  longer blocks on the ~30s QUIC idle timeout when a peer is down — a peer
+  unreachable at boot no longer stalls node startup; the prober picks it up.
+
+### Demonstrate a late join (proven by running)
+
+Stage a 2-validator genesis as above (into `/tmp/deos-fed/stage`), build the two
+data dirs, then start **A first while B is still down**:
+
+```sh
+NODE=./target/debug/dregg-node
+# A boots pointing at B (9802) — B is NOT up yet, so A's initial dial fails.
+RUST_LOG=info,dregg_net=info $NODE run --data-dir /tmp/deos-fed/nodeA --enable-faucet \
+  --port 8801 --gossip-port 9801 --federation-peers 127.0.0.1:9802 \
+  --federation-mode full --consensus blocklace &
+# Wait for A's "HTTP API listening" (it comes up promptly — the bounded dial does
+# NOT hang on the down peer). A logs "peer reconnect prober active interval_ms=8000".
+
+# Now B comes up (the peer returns):
+RUST_LOG=info,dregg_net=info $NODE run --data-dir /tmp/deos-fed/nodeB --enable-faucet \
+  --port 8802 --gossip-port 9802 --federation-peers 127.0.0.1:9801 \
+  --federation-mode full --consensus blocklace &
+```
+
+Within the retry window the link forms (whichever node dials first; if A's initial
+dial failed, A's prober re-dials B once it is up — or B's join dials A). A turn
+submitted on EITHER node then converges cross-node to consensus-attested finality:
+
+```sh
+# (derive ALICE_PK / ALICE_CID as in §2)
+curl -s -X POST http://127.0.0.1:8801/api/faucet -H 'Content-Type: application/json' \
+  -d "{\"recipient\":\"$ALICE_CID\",\"amount\":5000,\"public_key\":\"$ALICE_PK\"}"
+sleep 15
+curl -s http://127.0.0.1:8801/status   # dag_height>0, latest_height=1
+curl -s http://127.0.0.1:8802/status   # SAME
+curl -s http://127.0.0.1:8801/api/cell/$ALICE_CID   # balance 5000
+curl -s http://127.0.0.1:8802/api/cell/$ALICE_CID   # balance 5000 (finalized cross-node)
+```
+
+Observed (a real two-process run): A came up with B down (bounded dial, no stall)
+and logged `peer reconnect prober active`; once B joined, both DAGs converged to
+the IDENTICAL height (`dag_height 3`, `latest_height 1`), the turn-bearing block
+reached `CONSENSUS-WIDE Attested finality … votes=2` on BOTH nodes, and alice's
+cell = 5000 on both — the late-joined federation finalized a turn cross-node.
+
+### The faithful in-process reconnect test
+
+The prober/backoff reconnect path is pinned by a real two-node QUIC test,
+`net/src/gossip.rs::late_join_prober_reconnects_after_initial_dial_failure`:
+node A joins a topic pointing at B's address while B is DOWN (initial dial fails,
+`connected_peer_count == 0`, B is an `unconnected_topic_peers` candidate); B then
+comes up; A's prober loop (`unconnected_topic_peers` → `RequestBackoff::should_request`
+→ `reconnect_peer`) reconnects within the retry window, and a `publish_eager` from
+EACH node is delivered to the OTHER — the recovered link carries gossip in both
+directions (`cd net && cargo test late_join_prober`).
