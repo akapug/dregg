@@ -113,6 +113,29 @@ fn main() {
         }
     }
 
+    // `--render-agent-attach <out>`: THE AGENT'S HANDS ON THE REAL GLASS. Attaches
+    // the confined agent's `run_js` (deos-js, real SpiderMonkey) to the cockpit's
+    // LIVE `World` (the operator's real demo cells), runs JS that crawls those ACTUAL
+    // cells + fires a real verified turn on the agent's cell (a receipt landing on the
+    // live ledger) + attempts an over-reach (refused in-band), then bakes the cockpit
+    // INSPECTOR focused on the agent's cell — the PNG shows the field the agent's JS
+    // modified. Pass `--fork` to drive a `world.fork()` (the safe sandbox) instead of
+    // the live image. Default 1400x900.
+    #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "agent-js"))]
+    {
+        if let Some(out) = render_agent_attach_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1400.0, 900.0));
+            let fork = args.iter().any(|a| a == "--fork");
+            match render_agent_attach_headless(&out, w, h, fork) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-agent-attach FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-showcase <out>`: THE SHOWCASE BAKE — one gorgeous high-res PNG of
     // the full working deos desktop with EVERY dev surface mounted + seeded (chat
     // with the membrane card, editor with on-ledger patches, a recorded terminal
@@ -265,6 +288,26 @@ fn main() {
                 }
             }
         }
+
+        // `--render-interactive-node-save <out>`: THE INTERACTIVE SELF-HOSTING WIRE —
+        // a real save in the live `--node`-attached cockpit editor fires a turn on
+        // the NODE's ledger. Unlike `--render-client-signed-turn` (a DIRECT
+        // `save_to_node_client_signed` call), this drives the editor pane's OWN save
+        // path (`Editor::save`, the callback a real Cmd-S invokes) and asserts the
+        // node's `/api/receipts` GREW (N→N+1), client-signed under the USER's cell.
+        // Pass `--node <url>` (with `--enable-faucet`). Default 1900x1000.
+        if let Some(out) = render_interactive_node_save_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1900.0, 1000.0));
+            let node = node_url_arg(&args);
+            let cmd = self_hosting_cmd_arg(&args);
+            match render_interactive_node_save_headless(&out, w, h, node, cmd) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-interactive-node-save FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     // `--render-login <out>`: render the LOGIN CEREMONY surface offscreen (the
@@ -369,7 +412,11 @@ fn headless_report(world: &world::World) {
                 reflect::short_hex(id.as_bytes()),
                 c.state.balance(),
                 c.capabilities.len(),
-                if c.delegate.is_some() { " · delegate" } else { "" },
+                if c.delegate.is_some() {
+                    " · delegate"
+                } else {
+                    ""
+                },
             );
         }
     }
@@ -444,9 +491,7 @@ fn run_window(
     seed: world::DemoSeed,
     node_url: Option<String>,
 ) {
-    use gpui::{
-        px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions,
-    };
+    use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -604,9 +649,9 @@ fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mu
     let muted: Hsla = rgb(0x7d8794).into();
     let accent: Hsla = rgb(0x6cb6ff).into(); // the blue the cockpit accents with
     let on_accent: Hsla = rgb(0x0e1116).into(); // dark text on the bright accent
-    // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
-    // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
-    // matches a hand-rolled status pill exactly.
+                                                // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
+                                                // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
+                                                // matches a hand-rolled status pill exactly.
     let good: Hsla = rgb(0x57d977).into();
     let warn: Hsla = rgb(0xe3b341).into();
     let bad: Hsla = rgb(0xe5534b).into();
@@ -816,6 +861,23 @@ fn render_guest_arg(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse the `--render-agent-attach <out>` (or `=<out>`) argument — the output base
+/// path for THE AGENT'S HANDS ON THE REAL GLASS bake (the agent's `run_js` attached
+/// to the live cockpit World). Returns `None` when absent. `<out>.png` is written.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "agent-js"))]
+fn render_agent_attach_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-agent-attach" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-agent-attach=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 /// Parse the `--render-self-hosting <out>` (or `=<out>`) argument — the output
 /// base path for the SELF-HOSTING bake. Returns `None` when absent.
 #[cfg(all(
@@ -902,6 +964,29 @@ fn render_client_signed_arg(args: &[String]) -> Option<String> {
             return it.next().cloned();
         }
         if let Some(rest) = a.strip_prefix("--render-client-signed-turn=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--render-interactive-node-save <out>` (or `=<out>`) — the interactive
+/// self-hosting wire bake (the editor pane's OWN save → a node-ledger turn).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "dev-surfaces",
+    feature = "firmament",
+    feature = "embedded-executor",
+    feature = "live-node"
+))]
+fn render_interactive_node_save_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-interactive-node-save" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-interactive-node-save=") {
             return Some(rest.to_string());
         }
     }
@@ -1055,9 +1140,27 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
     // The navigable surfaces (the 4 live-animated tabs stall headless stepping; they
     // are reachable in the native cockpit + the UI atlas, just not the IE6 server loop).
     const TABS: &[&str] = &[
-        "home", "inspector", "inspect-act", "graph", "web-of-cells", "objects", "proofs",
-        "lanes", "powerbox", "links-here", "organs", "cipherclerk", "editor", "composer",
-        "simulate", "shell", "terminal", "buffer", "trust", "docs", "replay",
+        "home",
+        "inspector",
+        "inspect-act",
+        "graph",
+        "web-of-cells",
+        "objects",
+        "proofs",
+        "lanes",
+        "powerbox",
+        "links-here",
+        "organs",
+        "cipherclerk",
+        "editor",
+        "composer",
+        "simulate",
+        "shell",
+        "terminal",
+        "buffer",
+        "trust",
+        "docs",
+        "replay",
     ];
 
     static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
@@ -1210,8 +1313,13 @@ fn ie6_page(tab: &str, navs: &[String], tabs: &[&str]) -> String {
     let tab_links: String = tabs
         .iter()
         .map(|t| {
-            let on = tab.to_lowercase().contains(&t.replace('-', "").to_lowercase())
-                || tab.to_lowercase().replace(['-', ' ', '⏳', '⤳', '📄', '⚷'], "").contains(&t.replace('-', ""));
+            let on = tab
+                .to_lowercase()
+                .contains(&t.replace('-', "").to_lowercase())
+                || tab
+                    .to_lowercase()
+                    .replace(['-', ' ', '⏳', '⤳', '📄', '⚷'], "")
+                    .contains(&t.replace('-', ""));
             if on {
                 format!("<b>[{}]</b> ", html_escape(t))
             } else {
@@ -1245,7 +1353,10 @@ screen was driven before canvas existed.</font></p>\n\
 
 #[cfg(feature = "render-capture")]
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// THE UI-EXPLORATION CRAWL — BFS-walk the cockpit's navigation state-space by
@@ -1264,7 +1375,10 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
 
     const W: f32 = 1280.0;
     const H: f32 = 832.0;
-    let max_nodes: usize = std::env::var("ATLAS_UI_NODES").ok().and_then(|s| s.parse().ok()).unwrap_or(220);
+    let max_nodes: usize = std::env::var("ATLAS_UI_NODES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(220);
 
     let states_dir = format!("{outdir}/states");
     std::fs::create_dir_all(&states_dir)?;
@@ -1306,7 +1420,9 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     })?;
 
     let sanitize = |k: &str| -> String {
-        k.chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' }).collect::<String>()
+        k.chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect::<String>()
     };
 
     let mut visited: HashSet<String> = HashSet::new();
@@ -1317,16 +1433,23 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
 
     while let Some(path) = queue.pop_front() {
         if nodes.len() >= max_nodes {
-            eprintln!("explore-ui: node cap {max_nodes} hit ({} queued)", queue.len());
+            eprintln!(
+                "explore-ui: node cap {max_nodes} hit ({} queued)",
+                queue.len()
+            );
             break;
         }
         // reconstruct to `path`, read key + children (all inside one update)
         let dbg = std::env::var("ATLAS_UI_DEBUG").is_ok();
         let (key, tab, children) = window.update(&mut cx, |c, _window, cx| {
-            if dbg { eprintln!("  reconstruct: restore_initial"); }
+            if dbg {
+                eprintln!("  reconstruct: restore_initial");
+            }
             c.restore_nav(&initial, cx);
             for (i, a) in path.iter().enumerate() {
-                if dbg { eprintln!("  reconstruct: apply path[{i}] {a:?}"); }
+                if dbg {
+                    eprintln!("  reconstruct: apply path[{i}] {a:?}");
+                }
                 c.apply_nav(a, cx);
             }
             let key = c.nav_key();
@@ -1334,10 +1457,14 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
             let node_state = c.capture_nav();
             let mut kids = Vec::new();
             for (label, action) in c.available_nav() {
-                if dbg { eprintln!("  child: apply {action:?} ({label})"); }
+                if dbg {
+                    eprintln!("  child: apply {action:?} ({label})");
+                }
                 c.apply_nav(&action, cx);
                 kids.push((label, action, c.nav_key()));
-                if dbg { eprintln!("  child: restore"); }
+                if dbg {
+                    eprintln!("  child: restore");
+                }
                 c.restore_nav(&node_state, cx);
             }
             (key, tab, kids)
@@ -1369,12 +1496,14 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     }
 
     // emit ui-graph.json
-    let nodes_json: Vec<_> = nodes.iter().map(|(k, t, p)| {
-        serde_json::json!({ "key": k, "tab": t, "png": p })
-    }).collect();
-    let edges_json: Vec<_> = edges.iter().map(|(f, l, t)| {
-        serde_json::json!({ "from": f, "label": l, "to": t })
-    }).collect();
+    let nodes_json: Vec<_> = nodes
+        .iter()
+        .map(|(k, t, p)| serde_json::json!({ "key": k, "tab": t, "png": p }))
+        .collect();
+    let edges_json: Vec<_> = edges
+        .iter()
+        .map(|(f, l, t)| serde_json::json!({ "from": f, "label": l, "to": t }))
+        .collect();
     let blob = serde_json::json!({
         "node_count": nodes.len(),
         "edge_count": edges.len(),
@@ -1382,8 +1511,15 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
         "nodes": nodes_json,
         "edges": edges_json,
     });
-    std::fs::write(format!("{outdir}/ui-graph.json"), serde_json::to_string_pretty(&blob)?)?;
-    println!("OK explore-ui -> {outdir}/ui-graph.json ({} states, {} edges)", nodes.len(), edges.len());
+    std::fs::write(
+        format!("{outdir}/ui-graph.json"),
+        serde_json::to_string_pretty(&blob)?,
+    )?;
+    println!(
+        "OK explore-ui -> {outdir}/ui-graph.json ({} states, {} edges)",
+        nodes.len(),
+        edges.len()
+    );
     Ok(())
 }
 
@@ -1473,11 +1609,10 @@ fn render_cockpit_headless(
     //     same self-operator projection the inspect→act panel uses; a refusal is
     //     reported to stderr and skipped (the screenshot stays honest).
     for (cell_pfx, msg) in replays {
-        let resolved = world
-            .ledger()
-            .iter()
-            .map(|(id, _)| *id)
-            .find(|id| hex::encode(id.as_bytes()).starts_with(cell_pfx.trim_start_matches("0x")));
+        let resolved =
+            world.ledger().iter().map(|(id, _)| *id).find(|id| {
+                hex::encode(id.as_bytes()).starts_with(cell_pfx.trim_start_matches("0x"))
+            });
         match resolved {
             Some(cell) => {
                 let ia = starbridge_v2::inspect_act::InspectAct::build(
@@ -1486,7 +1621,11 @@ fn render_cockpit_headless(
                     cell,
                     dregg_cell::permissions::AuthRequired::Either,
                 );
-                match ia.send(&mut world, msg, dregg_cell::permissions::AuthRequired::Either) {
+                match ia.send(
+                    &mut world,
+                    msg,
+                    dregg_cell::permissions::AuthRequired::Either,
+                ) {
                     starbridge_v2::inspect_act::SendResult::Committed { .. } => {}
                     starbridge_v2::inspect_act::SendResult::Refused { reason, .. } => {
                         eprintln!("replay {cell_pfx}:{msg} refused: {reason}");
@@ -1548,6 +1687,137 @@ fn render_cockpit_headless(
          LIVE cockpit::Cockpit element tree, gpui Scene via lavapipe offscreen.",
         if sel4_geometry { " + .rgba" } else { "" },
         tab.map(|t| format!(", tab={t}")).unwrap_or_default()
+    );
+    Ok(())
+}
+
+/// THE AGENT'S HANDS ON THE REAL GLASS — bake a PNG of the cockpit inspector showing
+/// the cell the AGENT'S `run_js` modified on the LIVE World.
+///
+/// 1. Build `world::demo_world()` (the cockpit's real cells) into an
+///    `Rc<RefCell<World>>`. When `fork`, the agent drives a `world.fork()` (the safe
+///    sandbox) instead — the live image is untouched.
+/// 2. Attach the confined agent's deos-js runtime (real SpiderMonkey) to that World
+///    via [`starbridge_v2::agent_attach`], bound to the agent's `held` (Signature —
+///    an attenuated mandate, never the World's root). The agent's cell is the demo
+///    `user` cell.
+/// 3. Run the agent's JS: crawl the LIVE cells, fire a real verified turn on the
+///    agent's cell (a receipt that lands on the live ledger), attempt an over-reach
+///    (refused in-band — no turn). Print the witness to stdout.
+/// 4. Open the cockpit on the INSPECTOR over that SAME World, drive a frame, and bake
+///    `<out>.png` — the agent's modified field is on the glass.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "agent-js"))]
+fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // 1. The cockpit's real image — the SAME `World` the windowed cockpit runs.
+    let (world, anchors) = world::demo_world();
+    let [_treasury, _service, user] = anchors;
+    let live = Rc::new(RefCell::new(world));
+
+    let agent = user;
+    let held = dregg_cell::AuthRequired::Signature;
+    let affordances = vec![
+        ("bump".to_string(), dregg_cell::AuthRequired::Signature),
+        ("escalate".to_string(), dregg_cell::AuthRequired::Proof),
+    ];
+
+    // 2. Attach the agent's deos-js runtime to the LIVE World (or a fork). The SAME
+    //    `Rc<RefCell<World>>` the cockpit will render — so a fire lands on the glass.
+    let (sink, rendered_world, where_) = if fork {
+        let s = WorldSinkAdapter::fork_of(&live);
+        let w = s.world();
+        (s, w, "FORK (the safe sandbox — the live image untouched)")
+    } else {
+        let s = WorldSinkAdapter::live(live.clone());
+        (s, live.clone(), "LIVE cockpit World (the operator's real cells)")
+    };
+    let pre_height = rendered_world.borrow().height();
+    let cell_count = rendered_world.borrow().cell_count();
+    let applet = attach_agent(sink, agent, held, affordances);
+
+    // 3. Run the agent's JS on that World (real SpiderMonkey).
+    let mut rt = deos_js::JsRuntime::new().map_err(|e| anyhow::anyhow!("boot SpiderMonkey: {e}"))?;
+    let script = r#"
+        var app = deos.applet({ affordances: ["bump", "escalate"] });
+        var cells = deos.world.cells().length;     // crawl the LIVE cells
+        var after = app.fire("bump", 42);          // a real verified turn (held)
+        var over = app.fire("escalate", 1);        // over-reach → -1 (refused)
+        (cells * 1000) + (after * 10) + (over === -1 ? 1 : 0);
+    "#;
+    let outcome = rt
+        .run_attached(applet, script)
+        .map_err(|e| anyhow::anyhow!("agent run_js on the World: {e}"))?;
+    let witness = outcome.result.unwrap_or(-1);
+    let crawled = witness / 1000;
+    let after = (witness % 1000) / 10;
+    let over_refused = witness % 10 == 1;
+    let post_height = rendered_world.borrow().height();
+    let live_field = rendered_world
+        .borrow()
+        .ledger()
+        .get(&agent)
+        .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(|fe| deos_js::applet::unpack_u64(fe)))
+        .unwrap_or(0);
+
+    println!(
+        "AGENT-ATTACH [{where_}]: crawled {crawled} cells (of {cell_count}); \
+         fired bump → counter={after} ({} verified turn committed, receipt {}); \
+         over-reach escalate(Proof) refused in-band = {over_refused}; \
+         live ledger height {pre_height}→{post_height}; agent cell slot-0 = {live_field}.",
+        outcome.fires_committed,
+        outcome
+            .receipts
+            .first()
+            .map(|r| hex::encode(&r[..6]))
+            .unwrap_or_else(|| "—".into()),
+    );
+    anyhow::ensure!(after == 42 && live_field == 42, "the agent's JS did not land on the live ledger");
+    anyhow::ensure!(over_refused, "the over-reach was NOT refused");
+    anyhow::ensure!(outcome.fires_committed == 1, "expected exactly ONE committed fire");
+
+    // 4. Bake the cockpit INSPECTOR over the SAME World (the agent's field is on glass).
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let shared = rendered_world.clone();
+    let window = cx.open_window(size(px(w), px(h)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+            if !c.select_tab_named("inspector") {
+                eprintln!("render-agent-attach: no inspector tab — keeping default");
+            }
+            c
+        });
+        view.update(cx, |c, cx| c.focus_on_open(window, cx));
+        view
+    })?;
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+
+    println!(
+        "OK agent-attach render -> {out}.png ({ww}x{hh}, logical {w}x{h}); \
+         the agent's run_js drove the {where_} — its modified cell is on the inspector glass."
     );
     Ok(())
 }
@@ -1797,8 +2067,7 @@ fn render_self_hosting_headless(
 
     // HALF (a) — fire a REAL save and assert the live ledger gained a receipt.
     let before = window.read_with(&cx, |v, _| v.editor_receipt_count())?;
-    let new_content =
-        "// SAVED INSIDE deos — this edit is a cap-gated turn on the LIVE ledger.\n\
+    let new_content = "// SAVED INSIDE deos — this edit is a cap-gated turn on the LIVE ledger.\n\
          fn main() {\n    println!(\"a save is a verified turn, not a disk write\");\n}\n";
     let after = window.update(&mut cx, |v, window, cx| {
         v.fire_save(new_content, window, cx)
@@ -1820,7 +2089,10 @@ fn render_self_hosting_headless(
         cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
         cx.run_until_parked();
         term_text = window.read_with(&cx, |v, cx| v.terminal_text(cx))?;
-        if term_text.to_lowercase().contains(&expect_token.to_lowercase()) {
+        if term_text
+            .to_lowercase()
+            .contains(&expect_token.to_lowercase())
+        {
             term_ok = true;
             break;
         }
@@ -1850,16 +2122,20 @@ fn render_self_hosting_headless(
         .to_string();
 
     println!("OK headless SELF-HOSTING render -> {out}.png ({ww}x{hh}, logical {w}x{h})");
-    println!("  PROOF (a) editor: save fired a real turn — receipts {before} -> {after} on-ledger \
+    println!(
+        "  PROOF (a) editor: save fired a real turn — receipts {before} -> {after} on-ledger \
               (world ledger now {world_receipts} receipts); the buffer was a sovereign CELL, \
-              the save a cap-gated SetField turn through the verified executor.");
+              the save a cap-gated SetField turn through the verified executor."
+    );
     println!("  PROOF (b) terminal: live alacritty PTY ran `{} {}` INSIDE deos — grid shows: {term_first:?}",
              cmd.0, cmd.1.join(" "));
-    println!("  NOTE (full edit→cargo loop): this bake keeps the editor cell-only (saves are \
+    println!(
+        "  NOTE (full edit→cargo loop): this bake keeps the editor cell-only (saves are \
               ledger turns) while cargo reads DISK. The FirmamentFs↔disk dual-write that closes \
               the FULL single loop — editor edit → receipted turn → disk mirror → the terminal's \
               toolchain compiles THAT VERY EDIT — is built and proven by \
-              `--render-self-hosting-full` (see docs/deos/SELF-HOSTING-LOOP.md).");
+              `--render-self-hosting-full` (see docs/deos/SELF-HOSTING-LOOP.md)."
+    );
     Ok(())
 }
 
@@ -1943,14 +2219,8 @@ fn render_unified_boot_headless(
         let node_url = node_url.clone();
         let cmd = cmd.clone();
         cx.open_window(size(px(w), px(h)), |window, cx| {
-            starbridge_v2::unified_boot::build_root(
-                shared,
-                Some(node_url),
-                Some(cmd),
-                window,
-                cx,
-            )
-            .expect("unified-boot root mount")
+            starbridge_v2::unified_boot::build_root(shared, Some(node_url), Some(cmd), window, cx)
+                .expect("unified-boot root mount")
         })?
     };
 
@@ -1979,7 +2249,9 @@ fn render_unified_boot_headless(
     let new_content =
         "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
          fn main() {\n    println!(\"a save is a verified turn on the local World\");\n}\n";
-    let local_after = window.update(&mut cx, |v, window, cx| v.fire_save(new_content, window, cx))??;
+    let local_after = window.update(&mut cx, |v, window, cx| {
+        v.fire_save(new_content, window, cx)
+    })??;
     if local_after <= local_before {
         anyhow::bail!(
             "EDITOR PROOF FAILED: local receipt count did not grow on save \
@@ -2018,7 +2290,10 @@ fn render_unified_boot_headless(
         cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
         cx.run_until_parked();
         term_text = window.read_with(&cx, |v, cx| v.terminal_text(cx))?;
-        if term_text.to_lowercase().contains(&expect_token.to_lowercase()) {
+        if term_text
+            .to_lowercase()
+            .contains(&expect_token.to_lowercase())
+        {
             term_ok = true;
             break;
         }
@@ -2048,14 +2323,19 @@ fn render_unified_boot_headless(
         .trim()
         .to_string();
 
-    let wrote_back = matches!((node_receipts_before, node_receipts_after), (Some(b), Some(a)) if a > b);
+    let wrote_back =
+        matches!((node_receipts_before, node_receipts_after), (Some(b), Some(a)) if a > b);
 
     println!("OK headless UNIFIED-BOOT render -> {out}.png ({ww}x{hh}, logical {w}x{h})");
     println!(
         "  PANE (live node): attached to {node_url} — lean producer LIVE; \
          {} cells · {} receipts on the NODE (pulled over /api/cells + /api/receipts).",
-        node_cells_before.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
-        node_receipts_before.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+        node_cells_before
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
+        node_receipts_before
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
     );
     println!(
         "  PANE (editor): a real save fired — LOCAL receipts {local_before} -> {local_after} \
@@ -2073,8 +2353,12 @@ fn render_unified_boot_headless(
     );
     println!(
         "  PANE (live node, re-read): node receipts now {} (was {}).",
-        node_receipts_after.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
-        node_receipts_before.map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+        node_receipts_after
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
+        node_receipts_before
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
     );
     if wrote_back {
         println!(
@@ -2192,11 +2476,11 @@ fn render_client_signed_turn_headless(
     // cell, sign a SetField AS THE USER over the node's federation id, submit, assert.
     let fingerprint = "777"; // a small content fingerprint into slot 7
     let proof = window
-        .read_with(&cx, |v, _| v.save_to_node_client_signed(&clerk, 7, fingerprint))?
+        .read_with(&cx, |v, _| {
+            v.save_to_node_client_signed(&clerk, 7, fingerprint)
+        })?
         .ok_or_else(|| anyhow::anyhow!("no node attached for the client-signed turn"))?
-        .map_err(|e| {
-            anyhow::anyhow!("CLIENT-SIGNED TURN FAILED: {e:#}")
-        })?;
+        .map_err(|e| anyhow::anyhow!("CLIENT-SIGNED TURN FAILED: {e:#}"))?;
 
     if !proof.proves_user_authority() {
         anyhow::bail!(
@@ -2250,6 +2534,210 @@ fn render_client_signed_turn_headless(
     println!(
         "  => the logged-in user's OWN cell signed a turn the node committed under the USER's \
          authority. The 'corporate account' model, proven by running."
+    );
+    Ok(())
+}
+
+/// THE INTERACTIVE SELF-HOSTING WIRE — a real save in the live `--node`-attached
+/// cockpit editor fires a CLIENT-SIGNED turn on the NODE's ledger, driven by the
+/// EDITOR PANE'S OWN SAVE PATH (the callback a real Cmd-S → `Editor::save` invokes),
+/// NOT a direct `save_to_node` call.
+///
+/// Steps (all HARD — the bake errors if any fails):
+///   1. Attach `--node <url>`, unlock the operator (write credential), and thread the
+///      logged-in user's signing seed in — so `build_with_user` installs the editor's
+///      node-wire save callback. ASSERT the editor pane reports the callback installed.
+///   2. Read the node `/api/receipts` count (N).
+///   3. Drive the editor pane's OWN `save` (set buffer + `Editor::save`, the same path
+///      Cmd-S runs) — its callback submits a client-signed turn to the node.
+///   4. ASSERT the node `/api/receipts` GREW (N→N+1) AND the committed receipt's agent
+///      is the USER's own cell (not the operator) — read off the proof the callback
+///      recorded. Re-sync + capture the PNG.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "dev-surfaces",
+    feature = "firmament",
+    feature = "embedded-executor",
+    feature = "live-node"
+))]
+fn render_interactive_node_save_headless(
+    out: &str,
+    w: f32,
+    h: f32,
+    node_url: Option<String>,
+    cmd: Option<(String, Vec<String>)>,
+) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    let node_url = node_url.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--render-interactive-node-save needs a running node: pass --node <url> \
+             (e.g. --node http://127.0.0.1:8775; the node must run with --enable-faucet \
+             so the user cell can be materialized; see docs/deos/DEV-NODE-RUNBOOK.md)"
+        )
+    })?;
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+    cx.allow_parking();
+
+    let (world, _anchors) = world::demo_world();
+    let shared = Rc::new(RefCell::new(world));
+    let cmd = cmd.unwrap_or_else(|| ("cargo".to_string(), vec!["--version".to_string()]));
+
+    // The LOGGED-IN USER's dev signing seed — the same custody the live login threads
+    // into `session.signing_seed`. Threaded into the view so the editor pane's own
+    // save callback signs AS the user.
+    let identity = starbridge_v2::session::demo_identities()
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no demo identity to sign as"))?;
+    let user_seed = identity.dev_seed;
+    let user_name = identity.name;
+
+    let window = {
+        let shared = shared.clone();
+        let node_url = node_url.clone();
+        let cmd = cmd.clone();
+        cx.open_window(size(px(w), px(h)), |window, cx| {
+            starbridge_v2::unified_boot::build_root_with_user(
+                shared,
+                Some(node_url),
+                Some(user_seed),
+                Some(cmd),
+                window,
+                cx,
+            )
+            .expect("interactive-node-save root mount")
+        })?
+    };
+
+    cx.run_until_parked();
+
+    // (1) ASSERT the attach is LIVE.
+    let lean = window.read_with(&cx, |v, _| v.node_lean_producer())?;
+    match lean {
+        Some(true) => {}
+        Some(false) => anyhow::bail!(
+            "NODE PROOF FAILED: node {node_url} is reachable but NOT running the lean producer"
+        ),
+        None => anyhow::bail!(
+            "NODE PROOF FAILED: could not snapshot node {node_url} (unreachable / not listening)"
+        ),
+    }
+
+    // (1b) ASSERT the EDITOR PANE itself holds the node-wire save callback (so the
+    // save that follows goes through the editor's OWN save path, not a direct call).
+    let wired = window.read_with(&cx, |v, cx| v.editor_has_node_wire(cx))?;
+    if !wired {
+        anyhow::bail!(
+            "INTERACTIVE WIRE FAILED: the editor pane has NO node-wire save callback \
+             installed — `build_with_user` did not wire it (node unlocked? user seed \
+             threaded? write credential present?). The save would be local-only."
+        );
+    }
+
+    // (2) Node receipt count BEFORE the interactive save.
+    let before = window
+        .read_with(&cx, |v, _| v.node_receipt_count())?
+        .ok_or_else(|| anyhow::anyhow!("no node attached to read the receipt count"))?;
+
+    // (3) DRIVE THE EDITOR PANE'S OWN SAVE — `fire_save` sets the buffer and calls
+    // the editor's genuine `save` (the SAME path Cmd-S runs); the save's own callback
+    // submits a client-signed turn to the node. This is the interactive path, not a
+    // direct `save_to_node` call.
+    let new_content =
+        "// edited interactively in the live --node cockpit editor\nfn main() { println!(\"v2 — on the NODE ledger\"); }\n";
+    let _local_after = window.update(&mut cx, |v, window, cx| {
+        v.fire_save(new_content, window, cx)
+    })??;
+
+    cx.run_until_parked();
+
+    // (4) Read the proof the editor's own save callback recorded + the live node count.
+    let proof = window
+        .read_with(&cx, |v, _| v.last_node_save())?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "INTERACTIVE SAVE FAILED: the editor save did not record a node proof — \
+                 the callback either was not invoked or the node refused the turn"
+            )
+        })?;
+    let after = window
+        .read_with(&cx, |v, _| v.node_receipt_count())?
+        .ok_or_else(|| anyhow::anyhow!("no node attached to re-read the receipt count"))?;
+
+    if after <= before {
+        anyhow::bail!(
+            "INTERACTIVE SAVE FAILED: node receipts did not grow ({before} -> {after}) — \
+             the in-editor save did not land on the node ledger"
+        );
+    }
+    if !proof.proves_user_authority() {
+        anyhow::bail!(
+            "INTERACTIVE SAVE PROOF FAILED: receipts {pb}->{pa}, receipt agent {agent}, \
+             user cell {user}, operator cell {op} — the committed turn's agent is NOT the \
+             user's own cell (or count did not grow / matched the operator)",
+            pb = proof.before,
+            pa = proof.after,
+            agent = proof.receipt_agent,
+            user = proof.user_cell,
+            op = proof.operator_cell,
+        );
+    }
+
+    // Re-sync so the live-node pane reflects the new user receipt; capture.
+    window.update(&mut cx, |v, _window, _cx| v.refresh_node())?;
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+
+    println!("OK headless INTERACTIVE-NODE-SAVE render -> {out}.png ({ww}x{hh}, logical {w}x{h})");
+    println!(
+        "  attached to {node_url} — lean producer LIVE. The editor pane's OWN save \
+         callback (a real Cmd-S path) submitted the turn, signed AS demo identity '{user_name}'."
+    );
+    println!(
+        "  NODE LEDGER GREW (the interactive wire): node receipts {before} -> {after} \
+         (proof leg {} -> {}, turn {}).",
+        proof.before,
+        proof.after,
+        &proof.turn_hash.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "  AGENT IDENTITY (load-bearing): committed receipt agent = {} (the USER's own cell)",
+        &proof.receipt_agent.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "    · == user cell   {}…  ✓",
+        &proof.user_cell.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "    · != operator    {}…  ✓ (the node validated + ordered a turn the USER signed via \
+         the EDITOR's own save path)",
+        &proof.operator_cell.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "  => a real interactive editor save in the live --node cockpit landed on the NODE \
+         ledger, client-signed. The last self-hosting wire, proven by running."
     );
     Ok(())
 }
@@ -2337,14 +2825,20 @@ fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Resul
 
     // Confirm the mirror is live and the seed file backfilled to disk (v1).
     let configured = window.read_with(&cx, |v, _| v.mirror_root())?;
-    let configured = configured.ok_or_else(|| {
-        anyhow::anyhow!("disk mirror was not enabled on the firmament editor")
-    })?;
+    let configured = configured
+        .ok_or_else(|| anyhow::anyhow!("disk mirror was not enabled on the firmament editor"))?;
     let disk_file = configured.join("main.rs");
-    let seed_on_disk = std::fs::read_to_string(&disk_file)
-        .map_err(|e| anyhow::anyhow!("seed file not mirrored to disk at {}: {e}", disk_file.display()))?;
+    let seed_on_disk = std::fs::read_to_string(&disk_file).map_err(|e| {
+        anyhow::anyhow!(
+            "seed file not mirrored to disk at {}: {e}",
+            disk_file.display()
+        )
+    })?;
     if !seed_on_disk.contains("v1") {
-        anyhow::bail!("seed mirror at {} should hold v1, got:\n{seed_on_disk}", disk_file.display());
+        anyhow::bail!(
+            "seed mirror at {} should hold v1, got:\n{seed_on_disk}",
+            disk_file.display()
+        );
     }
 
     // STEP 1 — EDIT v1→v2 through the real firmament editor + save.
@@ -2354,7 +2848,9 @@ fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Resul
               fn main() {\n    println!(\"v2\");\n}\n";
     let after = window.update(&mut cx, |v, window, cx| v.fire_save(v2, window, cx))??;
     if after <= before {
-        anyhow::bail!("EDITOR PROOF FAILED: receipt count did not grow (before={before}, after={after})");
+        anyhow::bail!(
+            "EDITOR PROOF FAILED: receipt count did not grow (before={before}, after={after})"
+        );
     }
 
     // DISK-MIRROR PROOF — the on-disk file now holds the v2 edit.

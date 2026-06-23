@@ -117,9 +117,9 @@ impl deos_zed::fs::LedgerSpine for WorldSpine {
         };
         match outcome {
             crate::world::CommitOutcome::Committed { receipt, .. } => Ok(receipt),
-            crate::world::CommitOutcome::Rejected { reason, .. } => {
-                Err(anyhow::anyhow!("save turn refused by the executor: {reason}"))
-            }
+            crate::world::CommitOutcome::Rejected { reason, .. } => Err(anyhow::anyhow!(
+                "save turn refused by the executor: {reason}"
+            )),
             crate::world::CommitOutcome::Queued { .. } => {
                 Err(anyhow::anyhow!("save turn queued (world suspended)"))
             }
@@ -186,8 +186,16 @@ impl EditorPane {
                 Err(e) => {
                     // Fail-soft to the disk pane so a firmament mount error can
                     // never take down the cockpit — but say so loudly.
-                    eprintln!("EditorPane::new: firmament mount failed, falling back to disk: {e:#}");
-                    return EditorPane(EditorSurface::new(id, deos_zed::fs::RealFs::arc(), root, window, cx));
+                    eprintln!(
+                        "EditorPane::new: firmament mount failed, falling back to disk: {e:#}"
+                    );
+                    return EditorPane(EditorSurface::new(
+                        id,
+                        deos_zed::fs::RealFs::arc(),
+                        root,
+                        window,
+                        cx,
+                    ));
                 }
             }
         }
@@ -207,7 +215,9 @@ impl EditorPane {
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Self> {
-        Ok(EditorPane(EditorSurface::firmament(id, root, files, window, cx)?))
+        Ok(EditorPane(EditorSurface::firmament(
+            id, root, files, window, cx,
+        )?))
     }
 
     /// **Build a firmament-backed pane OVER the live cockpit `World`** — the
@@ -261,12 +271,23 @@ impl EditorPane {
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
-        EditorPane(EditorSurface::seeded(id, fs, root, name, revisions, window, cx))
+        EditorPane(EditorSurface::seeded(
+            id, fs, root, name, revisions, window, cx,
+        ))
     }
 
     /// Access the underlying editor entity (host-side open/save).
     pub fn editor(&self) -> &gpui::Entity<deos_zed::editor::Editor> {
         self.0.editor()
+    }
+
+    /// Install the node-wire save hook on this pane's editor — when the cockpit is
+    /// `--node`-attached the host wires the editor's OWN save path (the callback a
+    /// real Cmd-S invokes) to route a client-signed turn to the live node. See
+    /// [`deos_zed::editor::SaveCallback`]. The local firmament save is unchanged;
+    /// the node write is additive and fail-soft.
+    pub fn set_save_callback(&self, cb: deos_zed::editor::SaveCallback, cx: &mut App) {
+        self.0.set_save_callback(cb, cx);
     }
 }
 

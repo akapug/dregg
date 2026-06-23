@@ -62,13 +62,7 @@ impl EditorSurface {
     /// Build an editor surface over the [`Fs`] seam, rooted at `root` for the
     /// file tree. `id` is the stable surface identity within a pane (the host
     /// supplies a monotonic counter or a `Tab` discriminant).
-    pub fn new(
-        id: u64,
-        fs: Arc<dyn Fs>,
-        root: PathBuf,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self {
+    pub fn new(id: u64, fs: Arc<dyn Fs>, root: PathBuf, window: &mut Window, cx: &mut App) -> Self {
         let editor = cx.new(|cx| Editor::new(fs.clone(), window, cx));
         let tree = Arc::new(FileTree::new(fs, root, cx));
         Self {
@@ -222,6 +216,16 @@ impl EditorSurface {
     /// The underlying editor entity, for host-side open/save calls.
     pub fn editor(&self) -> &Entity<Editor> {
         &self.editor
+    }
+
+    /// Install the host save hook on the mounted editor — the node wire. When the
+    /// cockpit is `--node`-attached the host calls this so an in-editor save
+    /// (Cmd-S) ALSO submits a client-signed turn to the live node (the editor pane's
+    /// OWN save path drives the node write, not a separate direct call). See
+    /// [`crate::editor::SaveCallback`].
+    pub fn set_save_callback(&self, cb: crate::editor::SaveCallback, cx: &mut App) {
+        self.editor
+            .update(cx, |ed, _cx| ed.set_save_callback(Some(cb)));
     }
 
     // --- the methods the host's `CockpitSurface` impl forwards to ------------

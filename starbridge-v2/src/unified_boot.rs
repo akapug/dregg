@@ -109,6 +109,13 @@ pub struct UnifiedBootView {
     terminal: TerminalPane,
     /// The local cockpit `World` the editor saves into.
     world: Rc<RefCell<World>>,
+    /// The proof the LAST in-editor save produced on the node, set by the editor's
+    /// own save callback (the node wire). `None` until the first node-routed save.
+    /// The interactive-save bake reads this AFTER driving the editor pane's own
+    /// `save` to prove the node receipt grew through the Cmd-S path (not a direct
+    /// `save_to_node` call).
+    #[cfg(feature = "embedded-executor")]
+    last_node_save: Rc<RefCell<Option<ClientSignedProof>>>,
     focus: FocusHandle,
 }
 
@@ -120,6 +127,23 @@ impl UnifiedBootView {
     pub fn build(
         world: Rc<RefCell<World>>,
         node_url: Option<String>,
+        terminal_cmd: Option<(String, Vec<String>)>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
+        Self::build_with_user(world, node_url, None, terminal_cmd, window, cx)
+    }
+
+    /// Build the unified-boot view, optionally threading the LOGGED-IN USER's dev
+    /// signing seed (`session.signing_seed`). When a seed is present AND the node is
+    /// attached + write-credentialed, the editor pane's OWN save path (the callback a
+    /// real Cmd-S invokes) is wired to submit a CLIENT-SIGNED turn to the live node —
+    /// the interactive self-hosting wire. Without a seed (or without a node) the save
+    /// stays local-only, unchanged.
+    pub fn build_with_user(
+        world: Rc<RefCell<World>>,
+        node_url: Option<String>,
+        user_seed: Option<[u8; 64]>,
         terminal_cmd: Option<(String, Vec<String>)>,
         window: &mut Window,
         cx: &mut App,
@@ -170,6 +194,62 @@ impl UnifiedBootView {
         let editor =
             EditorPane::firmament_over(1, world.clone(), root.clone(), UNIFIED_SEED, window, cx)?;
 
+        #[cfg(feature = "embedded-executor")]
+        let last_node_save: Rc<RefCell<Option<ClientSignedProof>>> = Rc::new(RefCell::new(None));
+
+        // THE INTERACTIVE NODE WIRE: when `--node`-attached, write-credentialed, AND
+        // we hold the logged-in user's signing seed, install the editor's OWN save
+        // callback (the closure a real Cmd-S → `Editor::save` invokes) to ALSO submit
+        // a client-signed turn to the live node. So an in-editor save is BOTH a local
+        // firmament turn AND a real on-node receipt under the USER's authority — the
+        // last self-hosting wire, driven by the editor pane itself, not a direct call.
+        #[cfg(feature = "embedded-executor")]
+        if let (Some(seed), Some(ln)) = (user_seed, live_node.as_ref()) {
+            if ln.client().bearer().is_some() {
+                // The node pubkey (federation-id source) off the live snapshot.
+                let node_pubkey_hex = snapshot
+                    .as_ref()
+                    .map(|s| s.status.public_key.clone())
+                    .unwrap_or_default();
+                // Capture cheap clones into the 'static save callback: the client (by
+                // value `Clone`), the node pubkey hex, the user seed (Copy), and a
+                // handle to record the proof for the bake to read.
+                let client = ln.client().clone();
+                let proof_slot = last_node_save.clone();
+                // A monotonic slot per save so successive saves write distinct field
+                // elements (the node's nonce advances; the slot keeps the content
+                // fingerprint addressable). Closure-owned, bumped each fire.
+                let slot = std::cell::Cell::new(7usize);
+                let cb: deos_zed::editor::SaveCallback = Box::new(move |content: &str| {
+                    let clerk = dregg_sdk::AgentCipherclerk::from_seed(seed);
+                    let idx = slot.get();
+                    slot.set(idx + 1);
+                    // A short content fingerprint (the node's `parse_field_element`
+                    // convention): the low bytes of a blake3 of the saved content.
+                    let fp = {
+                        let h = blake3::hash(content.as_bytes());
+                        let mut n = [0u8; 8];
+                        n.copy_from_slice(&h.as_bytes()[..8]);
+                        u64::from_le_bytes(n).to_string()
+                    };
+                    match client_signed_save(&client, &node_pubkey_hex, &clerk, idx, &fp) {
+                        Ok(proof) => {
+                            let note = format!(
+                                "node receipts {}→{} (client-signed, agent {}…)",
+                                proof.before,
+                                proof.after,
+                                proof.receipt_agent.chars().take(8).collect::<String>(),
+                            );
+                            *proof_slot.borrow_mut() = Some(proof);
+                            Ok(note)
+                        }
+                        Err(e) => Err(format!("{e:#}")),
+                    }
+                });
+                editor.set_save_callback(cb, cx);
+            }
+        }
+
         // TERMINAL — a live PTY running a real command.
         let terminal = TerminalPane::spawn(2, terminal_cmd, cx)?;
 
@@ -180,8 +260,24 @@ impl UnifiedBootView {
             editor,
             terminal,
             world,
+            #[cfg(feature = "embedded-executor")]
+            last_node_save,
             focus: cx.focus_handle(),
         })
+    }
+
+    /// The proof the LAST in-editor save produced on the node (set by the editor's
+    /// own save callback). `None` until an in-editor save routed to the node. The
+    /// interactive-save bake reads this after driving the editor pane's `save`.
+    #[cfg(feature = "embedded-executor")]
+    pub fn last_node_save(&self) -> Option<ClientSignedProof> {
+        self.last_node_save.borrow().clone()
+    }
+
+    /// Whether the editor pane has the node-wire save callback installed (the
+    /// cockpit is `--node`-attached + write-credentialed + holds the user seed).
+    pub fn editor_has_node_wire(&self, cx: &App) -> bool {
+        self.editor.editor().read(cx).has_save_callback()
     }
 
     /// Fire a REAL editor save (set buffer + the editor's genuine `save`, a
@@ -221,7 +317,11 @@ impl UnifiedBootView {
     /// Returns `Ok((before, after))` node receipt counts (the empirical proof:
     /// `after == before + 1`), or an error if the node refused the turn (in-band)
     /// or the submit failed (e.g. no write credential). `None` if no node attached.
-    pub fn save_to_node(&self, index: usize, value: &str) -> Option<anyhow::Result<(usize, usize)>> {
+    pub fn save_to_node(
+        &self,
+        index: usize,
+        value: &str,
+    ) -> Option<anyhow::Result<(usize, usize)>> {
         let ln = self.live_node.as_ref()?;
         Some(self.save_to_node_inner(ln, index, value))
     }
@@ -325,108 +425,138 @@ impl UnifiedBootView {
         index: usize,
         value: &str,
     ) -> anyhow::Result<ClientSignedProof> {
-        let client = ln.client();
-        if client.bearer().is_none() {
-            anyhow::bail!(
-                "node has no operator write credential (unlock failed at attach); /turns/submit \
-                 is bearer-gated even for a client-signed turn"
-            );
-        }
-
-        // The node's executor federation id: for an unconfigured solo node this is
-        // `blake3(node_pubkey)`. The client MUST sign each action over THIS domain
-        // or the executor rejects the Ed25519 signature. Read the node pubkey off
-        // the live `/status` snapshot.
+        // The node's executor federation id derives from the node pubkey on the
+        // live `/status` snapshot — read it off the snapshot this view holds, then
+        // delegate to the free function (the SAME code the in-editor save callback
+        // runs, so one client-signed path, two callers).
         let node_pubkey_hex = self
             .snapshot
             .as_ref()
             .map(|s| s.status.public_key.clone())
             .ok_or_else(|| anyhow::anyhow!("no node snapshot — cannot derive the federation id"))?;
-        let node_pubkey = decode_hex32(&node_pubkey_hex)
-            .ok_or_else(|| anyhow::anyhow!("node /status public_key is not 32-byte hex"))?;
-        let federation_id = *blake3::hash(&node_pubkey).as_bytes();
+        client_signed_save(ln.client(), &node_pubkey_hex, clerk, index, value)
+    }
+}
 
-        // The user's OWN cell (the agent the node will derive + require). The
-        // operator's own agent cell (for the "agent != operator" proof) is the node
-        // pubkey's default cell — derived identically.
-        let user_cell = clerk.cell_id("default");
-        let user_pubkey = clerk.public_key().0;
-        let user_cell_hex = hex::encode(user_cell.0);
-        let user_pubkey_hex = hex::encode(user_pubkey);
-        let operator_cell = dregg_cell::CellId::derive_raw(&node_pubkey, blake3::hash(b"default").as_bytes());
-        let operator_cell_hex = hex::encode(operator_cell.0);
-
-        // (1) Materialize the user cell so its first turn has an existing agent.
-        if !client.faucet_materialize(&user_cell_hex, &user_pubkey_hex)? {
-            anyhow::bail!(
-                "faucet could not materialize the user cell {user_cell_hex} (is the node \
-                 started with --enable-faucet?)"
-            );
-        }
-
-        let before = client.receipts_count()?;
-
-        // The node's executor requires the turn's `previous_receipt_hash` to equal
-        // the node's CURRENT receipt-chain head (the node seeds the executor with
-        // `s.cclerk.receipt_chain().last()`). A client cannot know that locally — its
-        // own clerk chain is empty — so read the head off `/api/receipts` (newest
-        // first) and stamp it. `None` head (a fresh node) leaves it unstamped.
-        let prev_head = client
-            .receipts_raw()
-            .ok()
-            .and_then(|rs| rs.into_iter().next())
-            .and_then(|raw| raw.get("receipt_hash").and_then(|v| v.as_str()).map(String::from))
-            .and_then(|h| decode_hex32(&h));
-
-        // (2) Build + sign the SetField turn AS THE USER, over the node's federation id.
-        let effect = dregg_turn::Effect::SetField {
-            cell: user_cell,
-            index,
-            value: field_element_from(value),
-        };
-        let action = clerk.make_action(user_cell, "save", vec![effect], &federation_id);
-        let mut turn = clerk.make_turn(action);
-        // Thread the node's chain head so the executor's receipt-chain check passes.
-        turn.previous_receipt_hash = prev_head;
-        // Stamp `valid_until` so the turn stays on the verified Lean producer's wire
-        // marshal (an unstamped turn falls back to the Rust path; it still commits,
-        // but we keep it on the covered producer to match the operator path).
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        turn.valid_until = Some(now + 3600);
-        let signed = clerk.sign_turn(&turn);
-
-        // (3) Submit + assert.
-        let resp = client.submit_signed_turn(&signed)?;
-        if !resp.accepted {
-            anyhow::bail!(
-                "the node REFUSED the client-signed turn: {}",
-                resp.error.unwrap_or_else(|| "no reason given".into())
-            );
-        }
-        let after = client.receipts_count()?;
-
-        // The new receipt's agent, read off the chain head — must be the USER's cell.
-        let receipt_agent = client
-            .receipts_raw()
-            .ok()
-            .and_then(|rs| rs.into_iter().next())
-            .and_then(|raw| raw.get("agent").and_then(|v| v.as_str()).map(String::from))
-            .unwrap_or_default();
-
-        Ok(ClientSignedProof {
-            before,
-            after,
-            user_cell: user_cell_hex,
-            operator_cell: operator_cell_hex,
-            receipt_agent,
-            signer: resp.signer.unwrap_or_default(),
-            turn_hash: resp.turn_hash.unwrap_or_default(),
-        })
+/// SUBMIT A CLIENT-SIGNED EDITOR SAVE TO THE NODE — the free function both the
+/// bake's direct [`UnifiedBootView::save_to_node_client_signed`] and the in-editor
+/// save callback ([`UnifiedBootView::build`]'s node wire) run, so the interactive
+/// Cmd-S path and the direct bake call exercise the EXACT same client-signed turn.
+///
+/// The agent is the logged-in user's OWN cell (signed under the user's ed25519
+/// key); the node verifies the signature, requires `agent == derive_raw(user_pubkey,
+/// blake3("default"))`, runs the same `gateOK`/conservation/authority gates, and
+/// commits under the CLIENT's authority. Returns the [`ClientSignedProof`] (receipt
+/// count grew + the committed agent is the user's cell, not the operator's).
+#[cfg(feature = "embedded-executor")]
+pub fn client_signed_save(
+    client: &crate::client::NodeClient,
+    node_pubkey_hex: &str,
+    clerk: &dregg_sdk::AgentCipherclerk,
+    index: usize,
+    value: &str,
+) -> anyhow::Result<ClientSignedProof> {
+    if client.bearer().is_none() {
+        anyhow::bail!(
+            "node has no operator write credential (unlock failed at attach); /turns/submit \
+             is bearer-gated even for a client-signed turn"
+        );
     }
 
+    // The node's executor federation id: for an unconfigured solo node this is
+    // `blake3(node_pubkey)`. The client MUST sign each action over THIS domain
+    // or the executor rejects the Ed25519 signature.
+    let node_pubkey = decode_hex32(node_pubkey_hex)
+        .ok_or_else(|| anyhow::anyhow!("node /status public_key is not 32-byte hex"))?;
+    let federation_id = *blake3::hash(&node_pubkey).as_bytes();
+
+    // The user's OWN cell (the agent the node will derive + require). The
+    // operator's own agent cell (for the "agent != operator" proof) is the node
+    // pubkey's default cell — derived identically.
+    let user_cell = clerk.cell_id("default");
+    let user_pubkey = clerk.public_key().0;
+    let user_cell_hex = hex::encode(user_cell.0);
+    let user_pubkey_hex = hex::encode(user_pubkey);
+    let operator_cell =
+        dregg_cell::CellId::derive_raw(&node_pubkey, blake3::hash(b"default").as_bytes());
+    let operator_cell_hex = hex::encode(operator_cell.0);
+
+    // (1) Materialize the user cell so its first turn has an existing agent.
+    if !client.faucet_materialize(&user_cell_hex, &user_pubkey_hex)? {
+        anyhow::bail!(
+            "faucet could not materialize the user cell {user_cell_hex} (is the node \
+                 started with --enable-faucet?)"
+        );
+    }
+
+    let before = client.receipts_count()?;
+
+    // The node's executor requires the turn's `previous_receipt_hash` to equal
+    // the node's CURRENT receipt-chain head (the node seeds the executor with
+    // `s.cclerk.receipt_chain().last()`). A client cannot know that locally — its
+    // own clerk chain is empty — so read the head off `/api/receipts` (newest
+    // first) and stamp it. `None` head (a fresh node) leaves it unstamped.
+    let prev_head = client
+        .receipts_raw()
+        .ok()
+        .and_then(|rs| rs.into_iter().next())
+        .and_then(|raw| {
+            raw.get("receipt_hash")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .and_then(|h| decode_hex32(&h));
+
+    // (2) Build + sign the SetField turn AS THE USER, over the node's federation id.
+    let effect = dregg_turn::Effect::SetField {
+        cell: user_cell,
+        index,
+        value: field_element_from(value),
+    };
+    let action = clerk.make_action(user_cell, "save", vec![effect], &federation_id);
+    let mut turn = clerk.make_turn(action);
+    // Thread the node's chain head so the executor's receipt-chain check passes.
+    turn.previous_receipt_hash = prev_head;
+    // Stamp `valid_until` so the turn stays on the verified Lean producer's wire
+    // marshal (an unstamped turn falls back to the Rust path; it still commits,
+    // but we keep it on the covered producer to match the operator path).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    turn.valid_until = Some(now + 3600);
+    let signed = clerk.sign_turn(&turn);
+
+    // (3) Submit + assert.
+    let resp = client.submit_signed_turn(&signed)?;
+    if !resp.accepted {
+        anyhow::bail!(
+            "the node REFUSED the client-signed turn: {}",
+            resp.error.unwrap_or_else(|| "no reason given".into())
+        );
+    }
+    let after = client.receipts_count()?;
+
+    // The new receipt's agent, read off the chain head — must be the USER's cell.
+    let receipt_agent = client
+        .receipts_raw()
+        .ok()
+        .and_then(|rs| rs.into_iter().next())
+        .and_then(|raw| raw.get("agent").and_then(|v| v.as_str()).map(String::from))
+        .unwrap_or_default();
+
+    Ok(ClientSignedProof {
+        before,
+        after,
+        user_cell: user_cell_hex,
+        operator_cell: operator_cell_hex,
+        receipt_agent,
+        signer: resp.signer.unwrap_or_default(),
+        turn_hash: resp.turn_hash.unwrap_or_default(),
+    })
+}
+
+impl UnifiedBootView {
     /// RE-SYNC the attached node over the wire (status + cells + chain-head
     /// receipt) so the live-node pane reflects the post-write-back state — e.g.
     /// the new receipt the editor save just committed shows up in the screenshot.
@@ -525,7 +655,10 @@ impl Render for UnifiedBootView {
                     .child("deos · UNIFIED BOOT — live node + editor + terminal, one window"),
             )
             .child(badge(&format!("local h{local_height}"), theme::accent()))
-            .child(badge(&format!("{local_cells} local cells"), theme::accent()))
+            .child(badge(
+                &format!("{local_cells} local cells"),
+                theme::accent(),
+            ))
             .child(badge(
                 &format!("{local_receipts} local receipts"),
                 theme::accent(),
@@ -603,11 +736,19 @@ impl UnifiedBootView {
                         .items_center()
                         .child(pill(
                             if st.healthy { "healthy" } else { "DOWN" },
-                            if st.healthy { theme::good() } else { theme::warn() },
+                            if st.healthy {
+                                theme::good()
+                            } else {
+                                theme::warn()
+                            },
                         ))
                         .child(pill(
                             &format!("producer {}", st.state_producer),
-                            if st.lean_producer { theme::good() } else { theme::warn() },
+                            if st.lean_producer {
+                                theme::good()
+                            } else {
+                                theme::warn()
+                            },
                         ))
                         .child(pill(&format!("h{}", st.latest_height), theme::accent()))
                         .child(pill(&format!("dag {}", st.dag_height), theme::muted()))
@@ -616,12 +757,10 @@ impl UnifiedBootView {
                             theme::muted(),
                         )),
                 );
-                col = col.child(
-                    div()
-                        .text_xs()
-                        .text_color(theme::muted())
-                        .child(format!("{} live cells · synced over /api/cells", s.cell_views.len())),
-                );
+                col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
+                    "{} live cells · synced over /api/cells",
+                    s.cell_views.len()
+                )));
                 for cv in s.cell_views.iter().take(4) {
                     col = col.child(inspectable_card(cv));
                 }
@@ -654,7 +793,12 @@ impl UnifiedBootView {
 /// uniform [`Inspectable`] the live-node pane renders — the genuine on-node
 /// provenance head, drawn straight from the node's own receipt record.
 fn raw_receipt_inspectable(raw: &serde_json::Value) -> Inspectable {
-    let s = |k: &str| raw.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let s = |k: &str| {
+        raw.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let n = |k: &str| raw.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
     let b = |k: &str| raw.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
     let receipt_hash = s("receipt_hash");
@@ -774,15 +918,30 @@ fn inspectable_card(ins: &Inspectable) -> impl IntoElement {
         .bg(theme::panel_hi())
         .border_1()
         .border_color(theme::border())
-        .child(div().text_xs().text_color(theme::text()).child(ins.title.clone()))
-        .child(div().text_xs().text_color(theme::muted()).child(ins.subtitle.clone()));
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::text())
+                .child(ins.title.clone()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child(ins.subtitle.clone()),
+        );
     for f in ins.fields.iter().take(6) {
         let (val, color) = field_display(&f.value);
         card = card.child(
             div()
                 .flex()
                 .justify_between()
-                .child(div().text_xs().text_color(theme::muted()).child(f.key.clone()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(f.key.clone()),
+                )
                 .child(div().text_xs().text_color(color).child(val)),
         );
     }
@@ -797,7 +956,10 @@ fn field_display(v: &FieldValue) -> (String, gpui::Hsla) {
             if *b < 0 { theme::warn() } else { theme::text() },
         ),
         FieldValue::Count(c) => (c.to_string(), theme::text()),
-        FieldValue::Bool(b) => (b.to_string(), if *b { theme::good() } else { theme::muted() }),
+        FieldValue::Bool(b) => (
+            b.to_string(),
+            if *b { theme::good() } else { theme::muted() },
+        ),
         FieldValue::Id(id) => (crate::reflect::short_hex(id), theme::accent()),
         FieldValue::Hash(h) => (crate::reflect::short_hex(h), theme::good()),
         FieldValue::CapEdge { target, slot } => (
@@ -818,8 +980,22 @@ pub fn build_root(
     window: &mut Window,
     cx: &mut App,
 ) -> anyhow::Result<Entity<UnifiedBootView>> {
+    build_root_with_user(world, node_url, None, terminal_cmd, window, cx)
+}
+
+/// Mount the unified-boot view, threading the logged-in user's signing seed so the
+/// editor pane's OWN save routes a client-signed turn to the live node (the
+/// interactive self-hosting wire). See [`UnifiedBootView::build_with_user`].
+pub fn build_root_with_user(
+    world: Rc<RefCell<World>>,
+    node_url: Option<String>,
+    user_seed: Option<[u8; 64]>,
+    terminal_cmd: Option<(String, Vec<String>)>,
+    window: &mut Window,
+    cx: &mut App,
+) -> anyhow::Result<Entity<UnifiedBootView>> {
     let view = cx.new(|cx| {
-        UnifiedBootView::build(world, node_url, terminal_cmd, window, cx)
+        UnifiedBootView::build_with_user(world, node_url, user_seed, terminal_cmd, window, cx)
             .expect("unified-boot view mount")
     });
     view.update(cx, |v, cx| {
