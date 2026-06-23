@@ -18,9 +18,18 @@
 //!     `cargo`/`git` INSIDE deos**.
 //!
 //! The two halves render side by side; the headless bake (`--render-self-hosting`
-//! in `main.rs`) drives both, asserts both proofs, and captures the PNG. The
-//! deliberate honest seam between them — the editor saves to CELLS, `cargo` reads
-//! DISK — is documented at the bottom of this file and in the bake's report.
+//! in `main.rs`) drives both, asserts both proofs, and captures the PNG.
+//!
+//! # The full loop (`--render-self-hosting-full`)
+//!
+//! The CELL/DISK gap — the editor saves to cells, `cargo`/`rustc` reads disk — is
+//! closed by the FirmamentFs↔disk DUAL-WRITE. [`SelfHostingView::build_with_mirror`]
+//! enables a disk-mirror root on the editor's firmament fs: after each save's
+//! verified turn commits (the cell is the durable receipted source of truth), the
+//! new content is ALSO written to `<mirror_root>/<path>` — a derived read-mirror
+//! the legacy disk-reading toolchain compiles from. With the terminal pointed at
+//! that same dir, the FULL single loop runs: editor edit → receipted turn → disk
+//! mirror → terminal's `rustc`/`cargo` sees and compiles THAT VERY EDIT.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -67,10 +76,15 @@ mod theme {
 /// LIVE cockpit `World`. The first entry is opened in the buffer; saving it fires
 /// a real cap-gated turn the cockpit's own cell inspector can see.
 const SELF_HOSTING_SEED: &[(&str, &str)] = &[(
-    "/deos/main.rs",
-    "// edit me — a save here is a RECEIPTED dregg turn on the LIVE cockpit ledger.\n\
-     fn main() {\n    println!(\"hello from a sovereign cell\");\n}\n",
+    "/main.rs",
+    "// edit me — a save here is a RECEIPTED dregg turn on the LIVE cockpit ledger,\n\
+     // dual-written to disk where the terminal's rustc compiles it.\n\
+     fn main() {\n    println!(\"v1\");\n}\n",
 )];
+
+/// The namespace path of the seed source file the demo edits (the file-cell that
+/// dual-writes to `<mirror_root>/main.rs`).
+pub const SELF_HOSTING_SOURCE_PATH: &str = "/main.rs";
 
 /// The root view that mounts BOTH real self-hosting halves.
 pub struct SelfHostingView {
@@ -91,6 +105,23 @@ impl SelfHostingView {
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Self> {
+        Self::build_with_mirror(world, terminal_cmd, None, window, cx)
+    }
+
+    /// Build the self-hosting view with an OPTIONAL disk-mirror root for the
+    /// firmament editor — the FULL-LOOP wire. When `mirror_root` is `Some(dir)`,
+    /// the editor's firmament fs dual-writes every receipted save to
+    /// `<dir>/<path>` so a real terminal toolchain (cargo/git) reading disk sees
+    /// the very edit the editor saved as a cell. `None` → cell-only (today's
+    /// behavior). The cell is always the receipted source of truth; the disk file
+    /// is a derived read-mirror.
+    pub fn build_with_mirror(
+        world: Rc<RefCell<World>>,
+        terminal_cmd: Option<(String, Vec<String>)>,
+        mirror_root: Option<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
         // EDITOR — firmament over the LIVE cockpit World: a save is a real turn on
@@ -104,6 +135,17 @@ impl SelfHostingView {
             cx,
         )?;
 
+        // FULL-LOOP WIRE: if a mirror root was given, turn on the FirmamentFs↔disk
+        // dual-write. Every receipted save now ALSO writes the new content to disk
+        // under `mirror_root`, where the terminal's cargo/rustc reads it. This
+        // closes the edit→receipted-turn→disk-mirror→toolchain-sees-it loop.
+        if let Some(dir) = &mirror_root {
+            let firm = editor
+                .firmament_fs()
+                .ok_or_else(|| anyhow::anyhow!("editor pane is not firmament-backed"))?;
+            firm.enable_disk_mirror(dir.clone())?;
+        }
+
         // TERMINAL — a LIVE PTY running a real command (or `$SHELL`). Real
         // alacritty PTY + grid; its output is genuine child-process stdout.
         let terminal = TerminalPane::spawn(2, terminal_cmd, cx)?;
@@ -114,6 +156,13 @@ impl SelfHostingView {
             world,
             focus: cx.focus_handle(),
         })
+    }
+
+    /// The configured disk-mirror root of the firmament editor, if the dual-write
+    /// is enabled — the directory the terminal toolchain reads the mirrored edits
+    /// from.
+    pub fn mirror_root(&self) -> Option<std::path::PathBuf> {
+        self.editor.firmament_fs().and_then(|f| f.mirror_root())
     }
 
     /// HALF (a) — fire a REAL save: set the editor buffer to `content`, then call
@@ -258,8 +307,21 @@ pub fn build_root(
     window: &mut Window,
     cx: &mut App,
 ) -> anyhow::Result<Entity<SelfHostingView>> {
+    build_root_with_mirror(world, terminal_cmd, None, window, cx)
+}
+
+/// Mount the self-hosting view with an OPTIONAL disk-mirror root (the FULL-LOOP
+/// bake): the firmament editor dual-writes each receipted save to disk under
+/// `mirror_root`, where the terminal's real toolchain reads it.
+pub fn build_root_with_mirror(
+    world: Rc<RefCell<World>>,
+    terminal_cmd: Option<(String, Vec<String>)>,
+    mirror_root: Option<std::path::PathBuf>,
+    window: &mut Window,
+    cx: &mut App,
+) -> anyhow::Result<Entity<SelfHostingView>> {
     let view = cx.new(|cx| {
-        SelfHostingView::build(world, terminal_cmd, window, cx)
+        SelfHostingView::build_with_mirror(world, terminal_cmd, mirror_root, window, cx)
             .expect("self-hosting view mount")
     });
     view.update(cx, |v, cx| {
