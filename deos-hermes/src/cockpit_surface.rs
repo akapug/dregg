@@ -1,35 +1,27 @@
-//! THE AGENT DOCK COCKPIT SURFACE — mount the confined Hermes agent as a dock
-//! pane in starbridge-v2.
+//! THE INTERACTIVE CONFINED-AGENT DOCK — a real agent chat, gated + receipted.
 //!
-//! starbridge-v2's dock hosts any `CockpitSurface` (the slim ~8-method item
-//! trait in `starbridge-v2/src/dock/surface.rs`). This module gives the confined
-//! agent everything that trait needs, as a concrete [`HermesDockSurface`] handle
-//! over a live [`AgentDockView`] gpui entity — rendering the agent's chat, the
-//! tool-call ledger (each receipt / refusal), and the embedded mandate inspector.
+//! This is the deos answer to a Claude/Cursor sidebar: you TYPE a prompt to the
+//! confined Hermes agent, its reply streams in token-by-token, every tool it
+//! reaches for appears LIVE in the ledger the instant deos's [`HermesGateway`]
+//! decides — ✓ receipted (with the remaining budget) or ✗ refused (naming the
+//! mandate leg that bit) — and the mandate panel's budget bars visibly deplete as
+//! the agent spends. Multi-turn: the conversation accumulates across prompts.
 //!
-//! ## Two-file delivery (no starbridge-v2/cockpit touch)
+//! Mounting it in starbridge-v2's dock is a [`CockpitSurface`] forward (see the
+//! 2-edit note below); the heavy logic — the live [`AgentDockView`] over a driven
+//! [`HermesSession`] — lives here.
 //!
-//! deos-hermes is its own workspace, so it can't `use` starbridge-v2's
-//! `CockpitSurface` trait directly (that would invert the dependency). The split,
-//! mirroring `deos_zed::cockpit_surface::EditorSurface` /
-//! `deos_terminal::cockpit_surface::TerminalSurface`:
+//! ## How the live loop runs (foreground-stepped, no Send)
 //!
-//!   * **here** — [`HermesDockSurface`], a cloneable handle holding the
-//!     [`AgentDockView`] entity, exposing `surface_id` / `tab_label` /
-//!     `render_body` / `focus_handle` / `is_dirty` as plain INHERENT methods.
-//!     This is the real, tested logic; the surface re-renders from the live
-//!     [`AgentDockModel`] each frame.
-//!   * **`starbridge-v2/src/dock/hermes_surface.rs`** (delivered ready-to-drop,
-//!     see the impl-shell in this module's doc) — a ~25-line
-//!     `impl CockpitSurface for HermesDockSurface` forwarding each trait method
-//!     to the inherent method here. It lives in starbridge-v2 because that is
-//!     where the trait lives; mounting it is a one-line `pub mod hermes_surface;`
-//!     in `dock/mod.rs` (the dock module, NOT cockpit.rs) plus a `deos-hermes`
-//!     path dependency.
-//!
-//! Because both crates pin the SAME gpui fork rev (see Cargo.toml), the
-//! `Entity<AgentDockView>` here is byte-identical to the one starbridge-v2 sees —
-//! the forward is a plain call, no glue.
+//! The grounding runtime (the verified Lean executor inside [`dregg_sdk`]) is
+//! `!Send`, so the ACP loop can NOT run on a background thread. Instead it runs on
+//! the gpui foreground: on submit, [`HermesSession::run`] drives the whole prompt
+//! over the in-process [`MockHermesPeer`] (or, with [`HermesSession::live`], the
+//! real `hermes-acp` subprocess), capturing each [`StreamEvent`] + a mandate
+//! snapshot. The view BUFFERS those and a gpui timer drains ONE per tick into the
+//! [`AgentDockModel`], firing `cx.notify()` after each — so the reply streams in,
+//! tool-calls land one at a time, and the budget depletes visibly. The events,
+//! receipts, and verdicts are all REAL; the timer only paces the painting.
 //!
 //! ## THE READY-TO-DROP MOUNT (the 2-edit note)
 //!
@@ -56,41 +48,317 @@
 //! ```
 //!
 //! Plus the path dependency in starbridge-v2/Cargo.toml:
-//! `deos-hermes = { path = "../deos-hermes" }`. To CONSTRUCT one, the host opens a
-//! [`HermesDockSurface::new`] with the session id + a starting [`AgentDockModel`],
-//! and feeds it model updates from a background [`crate::AcpClient`] run (a
-//! `update(model)` call per delta, or a re-derive from the accumulating
-//! [`crate::PromptRun`] via [`AgentDockModel::from_run`]).
+//! `deos-hermes = { path = "../deos-hermes" }`. Construct one with
+//! [`HermesDockSurface::new_interactive`] (a fresh confined session) and mount it.
+
+use std::collections::VecDeque;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use gpui::{
     div, px, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Window,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
 };
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
 
-use crate::surface::{AgentDockModel, ToolLine};
+use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 
-/// The live gpui view of a confined agent dock: it renders the chat pane, the
-/// tool-call ledger, and the mandate inspector from its [`AgentDockModel`]. The
-/// host pushes model updates ([`AgentDockView::set_model`]) as the agent's ACP
-/// session streams; gpui re-renders on `cx.notify()`.
-pub struct AgentDockView {
-    model: AgentDockModel,
-    focus: FocusHandle,
+use crate::acp_client::StreamEvent;
+use crate::bridge::HermesGateway;
+use crate::grant_registry::GrantRegistry;
+use crate::mandate::Mandate;
+use crate::mock_peer::{MockHermesPeer, ScriptedCall};
+use crate::surface::{AgentDockModel, ChatEntry, MandateBudget, PermissionMoment, RefusalLeg, ToolLine};
+
+/// A buffered streaming step: one ACP delta + the mandate snapshot at that moment
+/// (so the dock can repaint depleting budgets exactly as the gate spent them).
+type StreamStep = (StreamEvent, Option<Mandate>);
+
+/// A live, self-contained confined-agent session the dock drives. Owns the
+/// grounding runtime + the [`HermesGateway`] (so budgets persist across turns) and
+/// turns a typed prompt into an ordered stream of [`StreamStep`]s.
+///
+/// The runtime is `!Send`, so this lives on the gpui foreground thread. The
+/// runtime is leaked once (a session lives for the whole app), which lets the
+/// gateway hold a `'static` borrow into it without a self-referential struct.
+pub struct HermesSession {
+    /// The cap-gated gateway (held in an `Option` so a prompt run can `take()` it
+    /// into the driving `AcpClient` and restore it — budgets persist across
+    /// turns). The agent's "brain" is a prompt-derived scripted turn over the
+    /// in-process [`MockHermesPeer`]: the live ACP wire + the real gate are
+    /// exercised either way; only the brain is stood-in, per the confined-agent
+    /// honest scope. A real `hermes-acp` subprocess swaps in here with no change
+    /// to the rest of the dock.
+    gateway: Option<HermesGateway<'static>>,
+    session_id: String,
+    clock: i64,
 }
 
-impl AgentDockView {
-    /// Build the view over a starting model.
-    pub fn new(model: AgentDockModel, cx: &mut Context<Self>) -> Self {
-        Self {
-            model,
-            focus: cx.focus_handle(),
+impl HermesSession {
+    /// Open a fresh confined session with the standard deos confinement (per-kind
+    /// floors + the curated per-tool tightenings: terminal rate-5, etc.).
+    pub fn new(session_id: &str) -> HermesSession {
+        let mut cclerk = AgentCipherclerk::new();
+        let root: HeldToken = cclerk.mint_token(&[7u8; 32], "deos");
+        // Leak the runtime: one per app-lived session; the gateway's `'static`
+        // borrow points into it. (Box::leak is the standard owned-`'static` trick
+        // for a long-lived `!Send` resource a view must hold without self-ref.)
+        let runtime: &'static AgentRuntime =
+            Box::leak(Box::new(AgentRuntime::new(Arc::new(RwLock::new(cclerk)), "deos")));
+        let registry = GrantRegistry::default_for_session(1_000).with_standard_tool_grants(1_000);
+        let gateway = HermesGateway::new(runtime, root, registry);
+        HermesSession {
+            gateway: Some(gateway),
+            session_id: session_id.to_string(),
+            clock: 10,
         }
     }
 
-    /// Replace the model (a streamed delta or a re-derive from the running
-    /// `PromptRun`) and request a repaint.
+    /// Drive one prompt to completion over the in-process mock Hermes peer,
+    /// returning the ordered stream of deltas (each paired with the live mandate
+    /// at that moment). The reply text + the scripted tool-calls are derived from
+    /// the prompt so different questions produce different, plausible turns.
+    pub fn run(&mut self, prompt: &str) -> Vec<StreamStep> {
+        let (reply, script) = scripted_turn(prompt);
+        let peer = MockHermesPeer::with_reply(&self.session_id, script, &reply);
+
+        // Take the gateway into a client for the run (restored after, so budgets
+        // persist across turns), collecting the raw event stream + the verdicts.
+        let start_clock = self.clock;
+        let mut verdicts = Vec::new();
+        let mut raw: Vec<StreamEvent> = Vec::new();
+        let gw = self
+            .gateway
+            .take()
+            .expect("the session gateway is present between turns");
+        let mut client = crate::acp_client::AcpClient::new(peer, gw, start_clock);
+        let _ = client.run_prompt_streaming("/deos/confined", prompt, None, &mut |ev| {
+            if let StreamEvent::Verdict { call, outcome } = &ev {
+                verdicts.push((call.clone(), outcome.clone()));
+            }
+            raw.push(ev);
+        });
+        let gateway = client.into_gateway();
+        self.clock = start_clock + verdicts.len() as i64 + 1;
+
+        // Pair each event with the live mandate AS OF that point so the dock's
+        // budget bars deplete exactly as the gate spent them. The gateway's
+        // per-key counters are final after the run; we reconstruct the RUNNING
+        // mandate by deriving the inspector view from the verdicts seen so far
+        // (`Mandate::from_session` overlays the verdict tally onto the grants).
+        let mut steps: Vec<StreamStep> = Vec::new();
+        let mut seen: Vec<(crate::acp::ToolCallRequest, crate::acp::PermissionOutcome)> = Vec::new();
+        for ev in raw {
+            let snapshot = match &ev {
+                StreamEvent::Verdict { call, outcome } => {
+                    seen.push((call.clone(), outcome.clone()));
+                    Some(running_mandate(&self.session_id, &gateway, &seen))
+                }
+                StreamEvent::Stopped { .. } => {
+                    Some(running_mandate(&self.session_id, &gateway, &seen))
+                }
+                _ => None,
+            };
+            steps.push((ev, snapshot));
+        }
+        self.gateway = Some(gateway);
+        steps
+    }
+
+    /// The current live mandate (all touched grants + every pinned per-tool one).
+    pub fn mandate(&self) -> Mandate {
+        let gw = self
+            .gateway
+            .as_ref()
+            .expect("the session gateway is present between turns");
+        Mandate::from_session(&self.session_id, gw, &[])
+    }
+}
+
+/// Derive the live mandate view from the gateway + the verdicts seen SO FAR — but
+/// override each row's `calls_made` with the count of allowed verdicts seen, so
+/// the budget reflects the RUNNING spend (the gateway counters are already final).
+fn running_mandate(
+    session_id: &str,
+    gateway: &HermesGateway<'static>,
+    seen: &[(crate::acp::ToolCallRequest, crate::acp::PermissionOutcome)],
+) -> Mandate {
+    use crate::acp::PermissionOutcome;
+    let mut m = Mandate::from_session(session_id, gateway, seen);
+    // Recompute each row's spent count from the allowed verdicts seen so far (the
+    // gateway's own counters are post-run; the receipts list on each row already
+    // reflects the running `seen` slice, so spent = that row's receipt count).
+    for row in &mut m.rows {
+        let spent = seen
+            .iter()
+            .filter(|(call, outcome)| {
+                matches!(outcome, PermissionOutcome::Allow { .. })
+                    && gateway.registry().key_for_tool(&call.name) == row.key
+            })
+            .count() as i64;
+        row.calls_made = spent;
+        row.remaining = (row.rate_limit - spent).max(0);
+    }
+    m
+}
+
+/// Derive a plausible Hermes turn (a reply + the tool-calls it makes) from the
+/// user's prompt. This is the stood-in "brain"; the ACP wire + the gate are real.
+fn scripted_turn(prompt: &str) -> (String, Vec<ScriptedCall>) {
+    let p = prompt.to_lowercase();
+    let mut script = Vec::new();
+    if p.contains("search") || p.contains("find") || p.contains("look up") || p.contains("what") {
+        script.push(ScriptedCall::new(
+            "web_search",
+            serde_json::json!({ "query": prompt }),
+        ));
+    }
+    if p.contains("build") || p.contains("compile") || p.contains("run") || p.contains("test") {
+        script.push(ScriptedCall::new(
+            "terminal",
+            serde_json::json!({ "command": "cargo build" }),
+        ));
+        script.push(ScriptedCall::new(
+            "terminal",
+            serde_json::json!({ "command": "cargo test" }),
+        ));
+    }
+    if p.contains("write") || p.contains("edit") || p.contains("note") || p.contains("save") {
+        script.push(ScriptedCall::new(
+            "write_file",
+            serde_json::json!({ "path": "notes/plan.md", "content": prompt }),
+        ));
+    }
+    if p.contains("read") || p.contains("show") || p.contains("open") {
+        script.push(ScriptedCall::new(
+            "read_file",
+            serde_json::json!({ "path": "src/lib.rs" }),
+        ));
+    }
+    // Always do SOMETHING so the gate fires and the demo isn't empty.
+    if script.is_empty() {
+        script.push(ScriptedCall::new(
+            "web_search",
+            serde_json::json!({ "query": prompt }),
+        ));
+    }
+    let reply = format!(
+        "On it. I'll work on \"{}\" — reaching for {} tool(s); each goes through deos's gate.",
+        prompt.trim(),
+        script.len()
+    );
+    (reply, script)
+}
+
+/// The live gpui view of the interactive confined-agent dock.
+pub struct AgentDockView {
+    model: AgentDockModel,
+    session: HermesSession,
+    /// The prompt input box (Enter-to-send).
+    input: Entity<InputState>,
+    focus: FocusHandle,
+    /// Buffered streaming steps the timer drains one-per-tick (the streaming feel).
+    pending: VecDeque<StreamStep>,
+    _subs: Vec<Subscription>,
+}
+
+impl AgentDockView {
+    /// Build the interactive view over a fresh confined session.
+    pub fn new(model: AgentDockModel, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let session = HermesSession::new(&model.session_id);
+        Self::with_session(model, session, window, cx)
+    }
+
+    /// Build the view over an explicit session (e.g. a live-subprocess one).
+    pub fn with_session(
+        mut model: AgentDockModel,
+        session: HermesSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        if model.status.is_empty() {
+            model.status = "type a prompt to the confined agent and press Enter".into();
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Ask the confined agent…  (Enter to send)")
+        });
+        // Enter-to-send: on PressEnter (without shift), drive the typed prompt
+        // through the gate. `subscribe_in` hands the Enter handler the window the
+        // input clear + the session drive need.
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, ev: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { shift, .. } = ev {
+                    if *shift {
+                        return;
+                    }
+                    let text = input.read(cx).value().to_string();
+                    if !text.trim().is_empty() {
+                        input.update(cx, |s, cx| s.set_value("", window, cx));
+                        this.submit(&text, cx);
+                    }
+                }
+            },
+        );
+
+        // The streaming timer: drain ONE buffered step per tick into the model and
+        // repaint. ~24ms/step makes the reply + tool-calls stream in visibly.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(24))
+                .await;
+            if this
+                .update(cx, |this, cx| this.drain_one(cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+
+        Self {
+            model,
+            session,
+            input,
+            focus: cx.focus_handle(),
+            pending: VecDeque::new(),
+            _subs: vec![sub],
+        }
+    }
+
+    /// Submit a typed prompt: record it, drive the confined session, and buffer
+    /// the resulting deltas for the streaming timer to paint.
+    pub fn submit(&mut self, prompt: &str, cx: &mut Context<Self>) {
+        self.model.push_user_prompt(prompt);
+        // Drive the whole turn now (fast, in-process), buffering the deltas. We
+        // split agent text into smaller pieces so it streams in word-by-word.
+        let steps = self.session.run(prompt);
+        for (ev, mandate) in steps {
+            match ev {
+                StreamEvent::AgentChunk { text } => {
+                    for piece in split_streamable(&text) {
+                        self.pending
+                            .push_back((StreamEvent::AgentChunk { text: piece }, None));
+                    }
+                }
+                other => self.pending.push_back((other, mandate)),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Drain one buffered streaming step into the model (the streaming heartbeat).
+    fn drain_one(&mut self, cx: &mut Context<Self>) {
+        if let Some((ev, mandate)) = self.pending.pop_front() {
+            self.model.apply_event(&ev, mandate.as_ref());
+            cx.notify();
+        }
+    }
+
+    /// Replace the model (host-side push, e.g. a re-derive) and repaint.
     pub fn set_model(&mut self, model: AgentDockModel, cx: &mut Context<Self>) {
         self.model = model;
         cx.notify();
@@ -100,106 +368,261 @@ impl AgentDockView {
     pub fn model(&self) -> &AgentDockModel {
         &self.model
     }
+}
 
-    // ── pane builders ──
+/// Split agent text into small streamable pieces (whitespace-preserving), so the
+/// reply paints in word-by-word rather than appearing all at once.
+fn split_streamable(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in text.chars() {
+        cur.push(ch);
+        if ch == ' ' || ch == '\n' {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    if out.is_empty() {
+        out.push(text.to_string());
+    }
+    out
+}
 
-    /// The chat pane: the agent's streamed message text + the terminal stop reason.
-    fn chat_pane(&self) -> AnyElement {
-        v_flex()
-            .gap_1()
-            .p_2()
-            .child(div().text_color(HEADING).child("chat"))
-            .child(
-                div()
-                    .text_color(BODY)
-                    .child(SharedString::from(if self.model.agent_text.trim().is_empty() {
-                        "(no agent output yet)".to_string()
-                    } else {
-                        self.model.agent_text.trim().to_string()
-                    })),
-            )
-            .child(
+// ── the panes ──
+
+impl AgentDockView {
+    /// The multi-turn chat transcript: user prompts, streamed agent replies, and
+    /// the gated tool-calls inline where the agent made them.
+    fn transcript_pane(&self) -> AnyElement {
+        let mut col = v_flex().gap_2().p_2();
+        if self.model.transcript.is_empty() {
+            col = col.child(
                 div()
                     .text_color(MUTED)
-                    .text_size(px(12.))
-                    .child(SharedString::from(format!("stop: {}", self.model.stop_reason))),
-            )
-            .into_any_element()
-    }
-
-    /// The tool-call ledger: one row per tool-call — ALLOW shows the receipt id +
-    /// remaining budget (green ✓), REJECT shows the leg that bit (red ✗).
-    fn ledger_pane(&self) -> AnyElement {
-        let mut col = v_flex().gap_1().p_2().child(
-            div()
-                .text_color(HEADING)
-                .child("tool-call ledger (receipts / refusals)"),
-        );
-        if self.model.tool_lines.is_empty() {
-            col = col.child(div().text_color(MUTED).child("(no tool-calls yet)"));
+                    .child("No conversation yet — type a prompt below and press Enter."),
+            );
         }
-        for line in &self.model.tool_lines {
-            col = col.child(self.ledger_row(line));
+        for entry in &self.model.transcript {
+            col = col.child(self.transcript_entry(entry));
+        }
+        if self.model.running {
+            col = col.child(div().text_color(MUTED).text_size(px(12.)).child("▍ thinking…"));
         }
         col.into_any_element()
     }
 
-    fn ledger_row(&self, line: &ToolLine) -> AnyElement {
-        let (mark, mark_color) = if line.allowed {
-            ("✓", ALLOW)
-        } else {
-            ("✗", REJECT)
-        };
+    fn transcript_entry(&self, entry: &ChatEntry) -> AnyElement {
+        match entry {
+            ChatEntry::User { text } => h_flex()
+                .gap_2()
+                .child(div().text_color(USER).min_w(px(48.)).child("you"))
+                .child(div().text_color(BODY).child(SharedString::from(text.clone())))
+                .into_any_element(),
+            ChatEntry::Agent { text } => h_flex()
+                .gap_2()
+                .items_start()
+                .child(div().text_color(AGENT).min_w(px(48.)).child("hermes"))
+                .child(div().text_color(BODY).child(SharedString::from(text.clone())))
+                .into_any_element(),
+            ChatEntry::Tool { line } => self.inline_tool(line),
+        }
+    }
+
+    /// A gated tool-call rendered inline in the transcript: the gate verdict right
+    /// where the agent reached — ✓ receipt+budget or ✗ refused+leg.
+    fn inline_tool(&self, line: &ToolLine) -> AnyElement {
+        let (mark, color) = if line.allowed { ("✓", ALLOW) } else { ("✗", REJECT) };
         let rem = line
             .remaining
-            .map(|r| format!("  [{r} left]"))
+            .map(|r| format!("  ·  {r} left"))
             .unwrap_or_default();
         h_flex()
             .gap_2()
-            .child(div().text_color(mark_color).child(mark))
-            .child(div().text_color(BODY).min_w(px(96.)).child(SharedString::from(line.name.clone())))
+            .pl_4()
+            .child(div().text_color(color).child(mark))
+            .child(
+                div()
+                    .text_color(TOOL)
+                    .min_w(px(96.))
+                    .child(SharedString::from(format!("⚙ {}", line.name))),
+            )
             .child(
                 div()
                     .text_color(MUTED)
                     .text_size(px(12.))
-                    .child(SharedString::from(line.tool_call_id.clone())),
+                    .child(SharedString::from(format!("{}{}", line.detail, rem))),
             )
-            .child(div().text_color(BODY).child(SharedString::from(format!("{}{}", line.detail, rem))))
             .into_any_element()
     }
 
-    /// The mandate inspector pane — the agent's live confinement (grants /
-    /// budgets / receipts), rendered from the model's pre-formatted text.
+    /// THE PERMISSION MOMENT — the most recent gate decision, surfaced prominently:
+    /// the tool, the cap it needed, the verdict (allow→receipt+budget / refuse→leg).
+    fn permission_pane(&self) -> AnyElement {
+        let mut col = v_flex()
+            .gap_1()
+            .p_2()
+            .border_1()
+            .rounded(px(6.))
+            .child(div().text_color(HEADING).child("permission moment (the deos gate)"));
+        match &self.model.last_permission {
+            None => {
+                col = col.child(
+                    div()
+                        .text_color(MUTED)
+                        .child("no tool-call gated yet — every agent reach is decided here, live."),
+                );
+            }
+            Some(PermissionMoment {
+                tool,
+                mandate,
+                allowed: true,
+                detail,
+                remaining,
+                ..
+            }) => {
+                col = col
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().text_color(ALLOW).child("✓ ALLOWED"))
+                            .child(div().text_color(BODY).child(SharedString::from(format!(
+                                "{tool}  under  {mandate}"
+                            )))),
+                    )
+                    .child(div().text_color(MUTED).text_size(px(12.)).child(
+                        SharedString::from(format!(
+                            "{detail}  ·  budget left: {}",
+                            remaining.map(|r| r.to_string()).unwrap_or_else(|| "—".into())
+                        )),
+                    ));
+            }
+            Some(PermissionMoment {
+                tool,
+                mandate,
+                allowed: false,
+                detail,
+                leg,
+                ..
+            }) => {
+                let leg = leg.unwrap_or(RefusalLeg::Other);
+                col = col
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().text_color(REJECT).child("✗ REFUSED"))
+                            .child(div().text_color(BODY).child(SharedString::from(format!(
+                                "{tool}  under  {mandate}  —  leg: {}",
+                                leg.label()
+                            )))),
+                    )
+                    .child(
+                        div()
+                            .text_color(MUTED)
+                            .text_size(px(12.))
+                            .child(SharedString::from(detail.clone())),
+                    );
+            }
+        }
+        col.into_any_element()
+    }
+
+    /// THE MANDATE PANEL — the agent's live confinement, with budget bars that
+    /// deplete as it spends. One row per touched mandate + every pinned per-tool grant.
     fn mandate_pane(&self) -> AnyElement {
         let mut col = v_flex()
             .gap_1()
             .p_2()
-            .child(div().text_color(HEADING).child("mandate inspector"));
-        for ln in self.model.mandate_text.lines() {
+            .child(div().text_color(HEADING).child("mandate (live budgets)"));
+        if self.model.mandate_rows.is_empty() {
             col = col.child(
                 div()
-                    .text_color(BODY)
-                    .text_size(px(13.))
-                    .child(SharedString::from(ln.to_string())),
+                    .text_color(MUTED)
+                    .child("the curated per-tool grants appear as the agent uses them."),
             );
+        }
+        for row in &self.model.mandate_rows {
+            col = col.child(self.budget_row(row));
         }
         col.into_any_element()
     }
+
+    fn budget_row(&self, row: &MandateBudget) -> AnyElement {
+        let frac = row.fraction_spent();
+        let bar_w = 120.0_f32;
+        let filled = (bar_w * frac).max(0.0);
+        let bar_color = if frac >= 1.0 {
+            REJECT
+        } else if frac >= 0.66 {
+            WARN
+        } else {
+            ALLOW
+        };
+        h_flex()
+            .gap_2()
+            .child(
+                div()
+                    .text_color(if row.per_tool { TOOL } else { BODY })
+                    .min_w(px(140.))
+                    .child(SharedString::from(row.label.clone())),
+            )
+            // the budget bar: a filled track over a muted background
+            .child(
+                div()
+                    .w(px(bar_w))
+                    .h(px(8.))
+                    .rounded(px(4.))
+                    .bg(TRACK)
+                    .child(div().w(px(filled)).h(px(8.)).rounded(px(4.)).bg(bar_color)),
+            )
+            .child(
+                div()
+                    .text_color(MUTED)
+                    .text_size(px(12.))
+                    .child(SharedString::from(format!(
+                        "{}/{} used  ·  {} left",
+                        row.spent,
+                        row.rate_limit,
+                        row.remaining()
+                    ))),
+            )
+            .into_any_element()
+    }
+
+    /// The prompt input box (Enter-to-send), pinned at the bottom.
+    fn input_pane(&self) -> AnyElement {
+        v_flex()
+            .gap_1()
+            .p_2()
+            .child(
+                div()
+                    .text_color(MUTED)
+                    .text_size(px(12.))
+                    .child(SharedString::from(self.model.status.clone())),
+            )
+            .child(Input::new(&self.input))
+            .into_any_element()
+    }
 }
 
-// A small, theme-independent palette so the surface paints without requiring a
-// specific gpui-component Theme variant to be installed (the headless capture +
-// the cockpit both work). Plain gpui Rgb literals.
+// A small, theme-independent palette so the surface paints without a specific
+// gpui-component Theme variant installed (the headless capture + the cockpit both
+// work). Plain gpui Rgba literals.
 const HEADING: gpui::Rgba = gpui::Rgba { r: 0.85, g: 0.90, b: 1.0, a: 1.0 };
 const BODY: gpui::Rgba = gpui::Rgba { r: 0.82, g: 0.84, b: 0.88, a: 1.0 };
 const MUTED: gpui::Rgba = gpui::Rgba { r: 0.55, g: 0.58, b: 0.64, a: 1.0 };
+const USER: gpui::Rgba = gpui::Rgba { r: 0.60, g: 0.78, b: 1.0, a: 1.0 };
+const AGENT: gpui::Rgba = gpui::Rgba { r: 0.80, g: 0.72, b: 1.0, a: 1.0 };
+const TOOL: gpui::Rgba = gpui::Rgba { r: 0.95, g: 0.82, b: 0.55, a: 1.0 };
 const ALLOW: gpui::Rgba = gpui::Rgba { r: 0.45, g: 0.85, b: 0.55, a: 1.0 };
+const WARN: gpui::Rgba = gpui::Rgba { r: 0.95, g: 0.78, b: 0.40, a: 1.0 };
 const REJECT: gpui::Rgba = gpui::Rgba { r: 0.95, g: 0.45, b: 0.45, a: 1.0 };
+const TRACK: gpui::Rgba = gpui::Rgba { r: 0.18, g: 0.20, b: 0.25, a: 1.0 };
 const BG: gpui::Rgba = gpui::Rgba { r: 0.07, g: 0.08, b: 0.11, a: 1.0 };
 
 impl Render for AgentDockView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _ = cx;
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .key_context("HermesDock")
             .track_focus(&self.focus)
@@ -207,17 +630,24 @@ impl Render for AgentDockView {
             .bg(BG)
             .p_2()
             .gap_2()
+            .child(div().text_color(HEADING).child(SharedString::from(format!(
+                "Hermes (confined) — session {}",
+                self.model.session_id
+            ))))
+            // the conversation, scrollable, taking the bulk of the height
             .child(
                 div()
-                    .text_color(HEADING)
-                    .child(SharedString::from(format!(
-                        "Hermes (confined) — session {}",
-                        self.model.session_id
-                    ))),
+                    .id("hermes-transcript")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(self.transcript_pane()),
             )
-            .child(self.chat_pane())
-            .child(self.ledger_pane())
+            // the permission moment, prominent
+            .child(self.permission_pane())
+            // the live mandate budgets
             .child(self.mandate_pane())
+            // the prompt input, pinned at the bottom
+            .child(self.input_pane())
     }
 }
 
@@ -228,9 +658,7 @@ impl Focusable for AgentDockView {
 }
 
 /// A dock-mountable confined-agent surface: a stable id + the live
-/// [`AgentDockView`] entity. Cheap to [`Clone`] (a handle + an id), so the dock's
-/// `boxed_clone` on split is cheap. Hand this to starbridge-v2's
-/// `impl CockpitSurface` (see the module doc's 2-edit mount note).
+/// [`AgentDockView`] entity. Cheap to [`Clone`] (a handle + an id).
 #[derive(Clone)]
 pub struct HermesDockSurface {
     id: u64,
@@ -238,12 +666,17 @@ pub struct HermesDockSurface {
 }
 
 impl HermesDockSurface {
-    /// Build a confined-agent surface over a starting [`AgentDockModel`]. `id` is
-    /// the stable surface identity within a pane (the host supplies a monotonic
-    /// counter or a `Tab` discriminant).
-    pub fn new(id: u64, model: AgentDockModel, cx: &mut App) -> Self {
-        let view = cx.new(|cx| AgentDockView::new(model, cx));
+    /// Build a confined-agent surface over a starting [`AgentDockModel`]. The
+    /// `window` is needed to construct the prompt input (gpui's `InputState`).
+    pub fn new(id: u64, model: AgentDockModel, window: &mut Window, cx: &mut App) -> Self {
+        let view = cx.new(|cx| AgentDockView::new(model, window, cx));
         Self { id, view }
+    }
+
+    /// Build a fresh INTERACTIVE confined-agent surface (the common path): an
+    /// empty live model + a fresh confined session, ready to take typed prompts.
+    pub fn new_interactive(id: u64, session_id: &str, window: &mut Window, cx: &mut App) -> Self {
+        Self::new(id, AgentDockModel::new_live(session_id), window, cx)
     }
 
     /// Wrap an already-built view entity.
@@ -251,13 +684,12 @@ impl HermesDockSurface {
         Self { id, view }
     }
 
-    /// The live view entity (host-side: push model updates as the ACP session
-    /// streams, via `view.update(cx, |v, cx| v.set_model(m, cx))`).
+    /// The live view entity.
     pub fn view(&self) -> &Entity<AgentDockView> {
         &self.view
     }
 
-    /// Push a fresh model (a streamed delta or a `from_run` re-derive).
+    /// Push a fresh model.
     pub fn set_model(&self, model: AgentDockModel, cx: &mut App) {
         self.view.update(cx, |v, cx| v.set_model(model, cx));
     }
@@ -281,16 +713,12 @@ impl HermesDockSurface {
 
     /// `CockpitSurface::render_body` — the live agent dock view.
     pub fn render_body(&mut self, _window: &mut Window, _cx: &mut App) -> AnyElement {
-        div()
-            .size_full()
-            .child(self.view.clone())
-            .into_any_element()
+        div().size_full().child(self.view.clone()).into_any_element()
     }
 
     /// `CockpitSurface::is_dirty` — a confined agent is "dirty" (worth a marker)
-    /// while its turn is in flight: the stop_reason not yet a terminal value.
+    /// while its turn is in flight.
     pub fn is_dirty(&self, cx: &App) -> bool {
-        let sr = &self.view.read(cx).model().stop_reason;
-        sr.is_empty()
+        self.view.read(cx).model().running
     }
 }

@@ -236,6 +236,32 @@ impl AcpPeer for AcpTransport {
     }
 }
 
+/// A live delta from a driven prompt — the unit the streaming dock consumes as
+/// it arrives, so the UX paints token-by-token rather than after the run.
+///
+/// The same loop that produces a [`PromptRun`] emits these in order: the session
+/// opens, agent text chunks stream in, each tool-call appears, the gateway's
+/// verdict on that call lands the instant the gate decides, and the turn stops.
+#[derive(Clone, Debug)]
+pub enum StreamEvent {
+    /// The `session/new` handshake completed; the session id is known.
+    SessionStarted { session_id: String },
+    /// A streamed `agent_message_chunk` — append this text to the chat pane.
+    AgentChunk { text: String },
+    /// A `session/update` `tool_call` event — the agent is reaching for a tool
+    /// (before the gate has decided). Surfaces the call in-flight.
+    ToolCall { call: ToolCallRequest },
+    /// The gateway's verdict on a `session/request_permission` — ALLOW (a
+    /// receipted turn, with remaining budget) or REJECT (the leg that bit). This
+    /// is the permission moment, surfaced the instant `HermesGateway` decides.
+    Verdict {
+        call: ToolCallRequest,
+        outcome: PermissionOutcome,
+    },
+    /// The prompt's terminal `stop_reason`; the turn is complete.
+    Stopped { stop_reason: String },
+}
+
 /// The result of driving a prompt: the streamed agent text, the tool-calls seen,
 /// and the gateway verdicts deos returned for each permission request.
 #[derive(Clone, Debug, Default)]
@@ -283,6 +309,13 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
         &self.gateway
     }
 
+    /// Consume the client, returning the (spent) gateway — for a caller that
+    /// drove one prompt over a moved-in gateway and wants it back (the live dock
+    /// reclaims the gateway between turns so budgets persist).
+    pub fn into_gateway(self) -> HermesGateway<'rt> {
+        self.gateway
+    }
+
     fn alloc_id(&mut self) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -292,11 +325,14 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
     /// Send a request and block for its matching response, servicing any
     /// interleaved peer→client REQUESTS (notably `session/request_permission`)
     /// and consuming notifications, until the response with our id arrives.
+    /// Every delta seen along the way is fed to `sink` so a live UX can paint it
+    /// as it arrives (the same deltas are accumulated into `run`).
     fn request_blocking(
         &mut self,
         method: &str,
         params: Value,
         run: &mut PromptRun,
+        sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<Value, AcpError> {
         let id = self.alloc_id();
         self.peer.send(&RpcMessage::request(id, method, params))?;
@@ -315,9 +351,9 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             }
             // A peer→client request (the permission seam) or a notification.
             if msg.is_request() {
-                self.handle_peer_request(&msg, run)?;
+                self.handle_peer_request(&msg, run, sink)?;
             } else if msg.is_notification() {
-                self.handle_notification(&msg, run);
+                self.handle_notification(&msg, run, sink);
             }
         }
     }
@@ -328,6 +364,7 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
         &mut self,
         msg: &RpcMessage,
         run: &mut PromptRun,
+        sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<(), AcpError> {
         let id = msg.id.clone().expect("a request has an id");
         let method = msg.method.as_deref().unwrap_or("");
@@ -340,6 +377,11 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
                 self.clock += 1;
                 let outcome = self.gateway.admit_call(&call, self.clock);
                 run.verdicts.push((call.clone(), outcome.clone()));
+                // The permission moment — surfaced the instant the gate decides.
+                sink(StreamEvent::Verdict {
+                    call,
+                    outcome: outcome.clone(),
+                });
                 let result = permission_outcome_to_acp(&outcome);
                 self.peer.send(&RpcMessage::response(id, result))?;
                 Ok(())
@@ -356,8 +398,13 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
     }
 
     /// Consume a `session/update` notification, accumulating agent text and
-    /// tool-call events into the run.
-    fn handle_notification(&mut self, msg: &RpcMessage, run: &mut PromptRun) {
+    /// tool-call events into the run AND emitting the matching live delta.
+    fn handle_notification(
+        &mut self,
+        msg: &RpcMessage,
+        run: &mut PromptRun,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) {
         if msg.method.as_deref() != Some("session/update") {
             return;
         }
@@ -376,10 +423,19 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
                     .and_then(|t| t.as_str())
                 {
                     run.agent_text.push_str(text);
+                    sink(StreamEvent::AgentChunk {
+                        text: text.to_string(),
+                    });
                 }
             }
             "tool_call" | "tool_call_update" => {
                 if let Some(call) = parse_tool_call_update(params, update) {
+                    // Only the initial `tool_call` start carries a fresh call to
+                    // surface in-flight; the post-decision `tool_call_update`
+                    // (status completed/failed) is a status echo we don't re-list.
+                    if kind == "tool_call" {
+                        sink(StreamEvent::ToolCall { call: call.clone() });
+                    }
                     run.tool_calls.push(call);
                 }
             }
@@ -391,6 +447,21 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
     /// answering every permission request via the gateway, returning the run.
     pub fn run_prompt(&mut self, cwd: &str, prompt: &str) -> Result<PromptRun, AcpError> {
         self.run_prompt_with_model(cwd, prompt, None)
+    }
+
+    /// As [`AcpClient::run_prompt`], but streaming each delta to `sink` as it
+    /// arrives — the live entry the interactive dock drives. The `sink` sees the
+    /// session open, every agent text chunk, every tool-call, and every gateway
+    /// verdict the instant the gate decides, then the stop. The same deltas are
+    /// accumulated into the returned [`PromptRun`].
+    pub fn run_prompt_streaming(
+        &mut self,
+        cwd: &str,
+        prompt: &str,
+        model_id: Option<&str>,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<PromptRun, AcpError> {
+        self.drive_prompt(cwd, prompt, model_id, sink)
     }
 
     /// As [`AcpClient::run_prompt`], but selecting an explicit model before the
@@ -409,6 +480,20 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
         prompt: &str,
         model_id: Option<&str>,
     ) -> Result<PromptRun, AcpError> {
+        // The non-streaming path is the streaming path with a no-op sink.
+        self.drive_prompt(cwd, prompt, model_id, &mut |_| {})
+    }
+
+    /// The one driver loop both [`AcpClient::run_prompt_with_model`] and
+    /// [`AcpClient::run_prompt_streaming`] share. Every delta is both accumulated
+    /// into the returned [`PromptRun`] AND handed to `sink` as it arrives.
+    fn drive_prompt(
+        &mut self,
+        cwd: &str,
+        prompt: &str,
+        model_id: Option<&str>,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<PromptRun, AcpError> {
         let mut run = PromptRun::default();
 
         // 1. initialize — advertise the client + protocol version.
@@ -420,6 +505,7 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
                 "clientInfo": { "name": "deos-hermes", "version": "0.1.0" }
             }),
             &mut run,
+            sink,
         )?;
 
         // 2. session/new — open a session in `cwd`.
@@ -427,6 +513,7 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             "session/new",
             json!({ "cwd": cwd, "mcpServers": [] }),
             &mut run,
+            sink,
         )?;
         let session_id = new_session
             .get("sessionId")
@@ -434,6 +521,9 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             .and_then(|v| v.as_str())
             .unwrap_or("sess-0")
             .to_string();
+        sink(StreamEvent::SessionStarted {
+            session_id: session_id.clone(),
+        });
 
         // 2b. session/set_model — pin the provider model for the live loop. Best
         //     effort: a peer that does not support it answers with a JSON-RPC
@@ -443,6 +533,7 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
                 "session/set_model",
                 json!({ "sessionId": session_id, "modelId": model_id }),
                 &mut run,
+                sink,
             );
         }
 
@@ -455,6 +546,7 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
                 "prompt": [ { "type": "text", "text": prompt } ]
             }),
             &mut run,
+            sink,
         )?;
         run.stop_reason = prompt_result
             .get("stopReason")
@@ -462,6 +554,9 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             .and_then(|v| v.as_str())
             .unwrap_or("end_turn")
             .to_string();
+        sink(StreamEvent::Stopped {
+            stop_reason: run.stop_reason.clone(),
+        });
 
         Ok(run)
     }
