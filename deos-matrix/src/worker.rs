@@ -23,6 +23,7 @@ use std::thread::JoinHandle;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{MatrixClient, RoomSummary, TimelineMessage};
+use crate::membrane::MembraneEnvelope;
 use crate::session::StoredSession;
 use crate::Result;
 
@@ -56,6 +57,23 @@ pub enum WorkerRequest {
         room_id: String,
         limit: u16,
         reply: oneshot::Sender<Result<Vec<TimelineMessage>>>,
+    },
+    /// Send a plain-text message to a room; reply carries the event id.
+    SendText {
+        room_id: String,
+        body: String,
+        reply: oneshot::Sender<Result<String>>,
+    },
+    /// Send a membrane-bearing message to a room; reply carries the event id.
+    SendMembrane {
+        room_id: String,
+        body: String,
+        membrane: Box<MembraneEnvelope>,
+        reply: oneshot::Sender<Result<String>>,
+    },
+    /// The logged-in user's full id (`@user:server`), if any.
+    Whoami {
+        reply: oneshot::Sender<Option<String>>,
     },
     /// Shut the worker down.
     Shutdown,
@@ -133,6 +151,28 @@ impl MatrixWorker {
                     let _ = reply
                         .send(Self::with(&client, |c| c.recent_timeline(&room_id, limit)).await);
                 }
+                WorkerRequest::SendText {
+                    room_id,
+                    body,
+                    reply,
+                } => {
+                    let _ = reply
+                        .send(Self::with(&client, |c| c.send_text(&room_id, &body)).await);
+                }
+                WorkerRequest::SendMembrane {
+                    room_id,
+                    body,
+                    membrane,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        Self::with(&client, |c| c.send_membrane(&room_id, &body, &membrane)).await,
+                    );
+                }
+                WorkerRequest::Whoami { reply } => {
+                    let me = client.as_ref().and_then(|c| c.user_id().map(|u| u.to_string()));
+                    let _ = reply.send(me);
+                }
                 WorkerRequest::Shutdown => break,
             }
         }
@@ -205,6 +245,37 @@ impl MatrixHandle {
             limit,
             reply,
         })
+    }
+
+    pub fn send_text(&self, room_id: String, body: String) -> Result<String> {
+        self.call(|reply| WorkerRequest::SendText {
+            room_id,
+            body,
+            reply,
+        })
+    }
+
+    pub fn send_membrane(
+        &self,
+        room_id: String,
+        body: String,
+        membrane: MembraneEnvelope,
+    ) -> Result<String> {
+        self.call(|reply| WorkerRequest::SendMembrane {
+            room_id,
+            body,
+            membrane: Box::new(membrane),
+            reply,
+        })
+    }
+
+    /// The logged-in user's full id, if the worker holds an authenticated client.
+    pub fn whoami(&self) -> Option<String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self.tx.send(WorkerRequest::Whoami { reply: reply_tx }).is_err() {
+            return None;
+        }
+        reply_rx.blocking_recv().ok().flatten()
     }
 
     /// Ask the worker to stop. The caller may then `join` the worker thread.

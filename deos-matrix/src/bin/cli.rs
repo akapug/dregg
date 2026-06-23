@@ -42,6 +42,18 @@ enum Cmd {
         #[arg(long, default_value = "deos-matrix")]
         device_name: String,
     },
+    /// Log in with a pre-issued access token (the SSO / admin-token path; no
+    /// password held). Needs the user id + device id the token belongs to.
+    LoginToken {
+        #[arg(long)]
+        homeserver: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long)]
+        access_token: String,
+        #[arg(long, default_value = "deos-matrix")]
+        device_id: String,
+    },
     /// Sync once and list joined rooms.
     Rooms,
     /// Sync once and print a room's recent timeline.
@@ -50,6 +62,23 @@ enum Cmd {
         room: String,
         #[arg(long, default_value_t = 20)]
         limit: u16,
+    },
+    /// Send a plain-text message to a room (prints the event id).
+    Send {
+        #[arg(long)]
+        room: String,
+        #[arg(long)]
+        body: String,
+    },
+    /// Send a membrane-bearing message to a room (a sample mock envelope rides
+    /// under the `software.ember.deos.membrane` custom key). Proves the
+    /// deos-pilling over a real homeserver.
+    SendMembrane {
+        #[arg(long)]
+        room: String,
+        /// Human fallback body (empty → the membrane's text_fallback is used).
+        #[arg(long, default_value = "")]
+        body: String,
     },
     /// Show the logged-in user.
     Whoami,
@@ -111,12 +140,47 @@ async fn main() -> anyhow::Result<()> {
             println!("logged in as {}", stored.session.meta.user_id);
             println!("session saved to {}", sess_path.display());
         }
+        Cmd::LoginToken {
+            homeserver,
+            user,
+            access_token,
+            device_id,
+        } => {
+            let passphrase = format!("{:016x}", rand_u64());
+            let (_client, stored) = MatrixClient::login_access_token(
+                &homeserver,
+                &store_path(&dir),
+                &passphrase,
+                &user,
+                &access_token,
+                &device_id,
+            )
+            .await?;
+            stored.save(&sess_path)?;
+            println!("logged in as {} (token)", stored.session.meta.user_id);
+            println!("session saved to {}", sess_path.display());
+        }
         Cmd::Whoami => {
             let client = restore(&sess_path).await?;
             match client.user_id() {
                 Some(uid) => println!("{uid}"),
                 None => println!("(not logged in)"),
             }
+        }
+        Cmd::Send { room, body } => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let event_id = client.send_text(&room, &body).await?;
+            println!("sent to {room}: {event_id}");
+        }
+        Cmd::SendMembrane { room, body } => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let env = deos_matrix::MockMembraneHost::sample_envelope();
+            let event_id = client.send_membrane(&room, &body, &env).await?;
+            println!("sent membrane to {room}: {event_id}");
+            println!("  wire key: software.ember.deos.membrane");
+            println!("  fallback: {}", env.text_fallback());
         }
         Cmd::Rooms => {
             let client = restore(&sess_path).await?;
@@ -149,6 +213,18 @@ async fn main() -> anyhow::Result<()> {
             println!("{} message(s) in {room}:", msgs.len());
             for m in msgs {
                 println!("  [{}] {}: {}", m.timestamp_ms, m.sender, m.body);
+                // If the message carried a deos membrane, the receive-side
+                // extraction parsed it back into a typed envelope — surface it so
+                // the deos-pilling is visible end to end (kind=Membrane).
+                if let Some(env) = &m.membrane {
+                    println!(
+                        "      ↳ deos membrane [kind={:?}] · {} cells · sturdyref {} · rehydratable={}",
+                        m.kind,
+                        env.cut.cell_count,
+                        env.sturdyref,
+                        env.is_rehydratable(),
+                    );
+                }
             }
         }
     }

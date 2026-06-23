@@ -49,6 +49,8 @@ pub use source::{ChatSource, MockSource};
 pub enum Error {
     #[error("matrix sdk error: {0}")]
     Sdk(#[from] matrix_sdk::Error),
+    #[error("matrix http error: {0}")]
+    Http(#[from] matrix_sdk::HttpError),
     #[error("client build error: {0}")]
     ClientBuild(#[from] matrix_sdk::ClientBuildError),
     #[error("matrix id parse error: {0}")]

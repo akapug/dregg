@@ -123,10 +123,9 @@ pub trait ChatSource: Send + Sync + 'static {
 
 impl ChatSource for crate::worker::MatrixHandle {
     fn whoami(&self) -> Option<String> {
-        // The handle does not cache the user id; the real comms-PD will thread it
-        // through. For now the UI reads it from the session at login and passes
-        // it in. Returning None here keeps the trait honest (no fabrication).
-        None
+        // Ask the worker for the live client's user id (the SDK holds it after
+        // login/restore). None only when no client is authenticated yet.
+        crate::worker::MatrixHandle::whoami(self)
     }
 
     fn rooms(&self) -> Result<Vec<RoomSummary>> {
@@ -137,13 +136,20 @@ impl ChatSource for crate::worker::MatrixHandle {
         self.recent_timeline(room_id.to_string(), limit)
     }
 
-    fn send(&self, _room_id: &str, _body: &str) -> Result<String> {
-        // Send is a worker request the protocol foundation does not yet expose
-        // (the headless core proves login/sync/list/read). Wiring it is a single
-        // WorkerRequest variant + a `Room::send` call; the UI is ready for it.
-        Err(crate::Error::Other(
-            "MatrixHandle::send not yet wired (add a WorkerRequest::SendMessage variant)".into(),
-        ))
+    fn send(&self, room_id: &str, body: &str) -> Result<String> {
+        self.send_text(room_id.to_string(), body.to_string())
+    }
+
+    fn send_membrane(
+        &self,
+        room_id: &str,
+        body: &str,
+        membrane: MembraneEnvelope,
+    ) -> Result<String> {
+        // The live membrane send: the envelope rides under MEMBRANE_EVENT_KEY in a
+        // real m.room.message (see MatrixClient::send_membrane). The SAME wire shape
+        // the mock describes locally, now POSTed to a real homeserver.
+        crate::worker::MatrixHandle::send_membrane(self, room_id.to_string(), body.to_string(), membrane)
     }
 
     fn sync(&self) -> Result<()> {
