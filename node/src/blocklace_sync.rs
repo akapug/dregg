@@ -1608,6 +1608,20 @@ pub async fn run_blocklace_sync(
     };
     spawn_catchup_driver(handle.clone(), catchup_interval_ms);
 
+    // ─── Spawn the Peer Reconnect Prober ────────────────────────────────────
+    //
+    // Robust federation beyond the one-shot startup dial: re-dial any known
+    // peer that is currently unconnected (down at boot, or dropped) on a
+    // RequestBackoff schedule, so a late-joining or returning peer rejoins the
+    // mesh and converges WITHOUT an operator restart. Only meaningful when we
+    // have configured peers; a solo node has nothing to re-dial.
+    if !peer_addrs.is_empty() {
+        // Probe cadence: tied to catch-up cadence (a peer-down gap is the same
+        // class of liveness problem), floored at 2s so it is polite.
+        let prober_interval_ms = catchup_interval_ms.max(2_000);
+        spawn_peer_prober(handle.clone(), prober_interval_ms);
+    }
+
     // A fresh/restarted node proactively announces its frontier once gossip is up,
     // so peers push whatever it is missing (initial catch-up without waiting for a
     // peer to notice us first).
@@ -2607,6 +2621,78 @@ async fn cadence_tick_solo(state: &NodeState, handle: &BlocklaceHandle, idle_hea
 /// case the earlier `Pull` was dropped), and (b) when a gap is open, re-announces
 /// its frontier so peers recompute and push the delta. Quiescent when fully synced
 /// (empty buffer ⇒ a frontier ping at most, and only if `interval_ms > 0`).
+/// Spawn the **peer reconnect prober**.
+///
+/// Federation peer join was ONE-SHOT at startup: `join_topic` dialed each
+/// `--federation-peers` address exactly once. A peer that was down at boot was
+/// never retried, and a peer whose link dropped never re-dialed — the node
+/// silently ran degraded (or solo) until an operator restart. This task closes
+/// that gap.
+///
+/// On a slow tick it asks the gossip layer which known topic peers currently
+/// have NO live link ([`GossipNetwork::unconnected_topic_peers`], which already
+/// excludes graylisted/Byzantine peers), and re-dials each on a per-peer
+/// [`RequestBackoff`] schedule: the first miss re-dials promptly, then the
+/// window doubles (capped) so a persistently-down peer is probed politely
+/// rather than hammered every tick. When the peer comes up the dial succeeds,
+/// the link is registered + the eager/lazy split recomputed
+/// ([`GossipNetwork::reconnect_peer`]), and the node converges WITHOUT a
+/// restart. A successful (re)connect clears that peer's backoff so a later drop
+/// of the same peer starts fresh.
+///
+/// Re-dialing the blocklace topic's peer set is sufficient to recover the
+/// transport link for ALL topics: a QUIC connection is shared across the
+/// logical gossip topics, so one restored link carries blocklace + turns +
+/// revocations + … again.
+fn spawn_peer_prober(handle: BlocklaceHandle, interval_ms: u64) {
+    if interval_ms == 0 {
+        info!("peer reconnect prober disabled (interval 0)");
+        return;
+    }
+    tokio::spawn(async move {
+        // Per-peer capped exponential backoff: first re-dial after `base`, then
+        // doubling to `max`. Wired from `dregg_net::peer_score::RequestBackoff`
+        // (the same limiter the missing-block pull path uses).
+        let mut backoff: dregg_net::peer_score::RequestBackoff<SocketAddr> =
+            dregg_net::peer_score::RequestBackoff::new(
+                Duration::from_millis(interval_ms.max(1)),
+                Duration::from_secs(30),
+            );
+        let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await; // skip the immediate tick
+        info!(interval_ms, "peer reconnect prober active");
+        loop {
+            ticker.tick().await;
+            let unconnected = handle
+                .gossip
+                .unconnected_topic_peers(&handle.topic)
+                .await;
+            // Drop backoff state for peers that are no longer candidates (they
+            // reconnected, or were graylisted) so memory stays bounded and a
+            // later re-drop starts fresh.
+            for addr in &unconnected {
+                if backoff.should_request(*addr) {
+                    if handle.gossip.reconnect_peer(*addr).await {
+                        info!(peer = %addr, "peer reconnect prober: (re)established link");
+                        backoff.clear(addr);
+                        crate::metrics::set_federation_peers_connected(
+                            handle.gossip.connected_peer_count().await as f64,
+                        );
+                        // A freshly (re)connected peer wants our frontier so it
+                        // pushes whatever we are missing (and vice-versa) — the
+                        // same catch-up nudge a fresh boot does.
+                        handle.send_frontier().await;
+                    }
+                }
+            }
+            // Bound the backoff map: forget entries for peers no longer in the
+            // unconnected set (now connected) after a generous idle window.
+            backoff.gc(Duration::from_secs(120));
+        }
+    });
+}
+
 fn spawn_catchup_driver(handle: BlocklaceHandle, interval_ms: u64) {
     if interval_ms == 0 {
         info!("catch-up driver disabled (interval 0): catch-up is purely reactive");
