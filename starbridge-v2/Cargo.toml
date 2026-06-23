@@ -96,6 +96,19 @@ p3-circuit = { path = "../../plonky3-recursion/circuit" }
 p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
 p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
 
+# DREGG-OWNED FORK, LOCAL EDITABLE CHECKOUT for the web-deos run-loop work.
+# `emberian/zed@407a6ff` (the rev pinned above) is redirected to a local working
+# copy of that exact rev so the `gpui_web` browser backend (the WebGPU canvas
+# run-loop, the rAF frame scheduler) can be fixed in place. The checkout is the
+# byte-for-byte `407a6ff` tree (copied from the cargo git cache); only the
+# `gpui_web` paint path is touched here. When the fix is pushed to the fork and
+# the rev above bumps, this block is dropped (cutover-settle, same as the
+# plonky3 block).
+[patch."https://github.com/emberian/zed"]
+gpui = { path = "../../zed-dregg-web/crates/gpui" }
+gpui_platform = { path = "../../zed-dregg-web/crates/gpui_platform" }
+gpui_wgpu = { path = "../../zed-dregg-web/crates/gpui_wgpu" }
+
 [package]
 name = "starbridge-v2"
 version = "0.1.0"
@@ -171,7 +184,20 @@ live-node = ["dep:reqwest"]
 # async) deps out of this headless, `cargo test`-able build: the cipherclerk +
 # token surface we surface (identities, mint/attenuate/delegate, cell_id) is in
 # the SDK's un-gated core.
-embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-cell-crypto", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist", "dep:dregg-doc", "dep:dregg-captp"]
+embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-cell-crypto", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist", "dep:dregg-doc", "dep:dregg-captp", "app-registry"]
+
+# THE APP REGISTRY — wire `dregg-app-framework` + a STARTER SET of pre-built
+# starbridge-apps (gallery / tussle / sealed-auction / bounty-board) into the
+# cockpit so a real pre-built deos app launches into a live app-substrate World
+# and fires REAL verified turns (`src/app_registry.rs`). The apps depend only on
+# `dregg-app-framework`, which path-deps the SAME `../sdk`/`../turn`/`../cell`
+# this crate already pulls under `embedded-executor` — so cargo resolves IDENTICAL
+# `AppCipherclerk`/`EmbeddedExecutor`/`DeosApp`/`Effect`/`TurnReceipt` instances
+# (the registry's executor ledger IS an app-framework ledger; a launched app's
+# cell + state is visible to a second reader of that same executor — the
+# inspector seam). The framework drags its server tree (axum/tokio/tower-http)
+# which is fine for the native desktop build; this is gpui-free + `cargo test`-able.
+app-registry = ["dep:dregg-app-framework", "dep:starbridge-gallery", "dep:starbridge-tussle", "dep:starbridge-sealed-auction", "dep:starbridge-bounty-board"]
 
 # OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
 # rasterizer + the cap-gated `render_dregg_page` content-tile entry) so the
@@ -492,6 +518,21 @@ dregg-persist = { path = "../persist", optional = true }
 # blake3 + x25519 + dregg-lean-ffi, the SAME Lean link `dregg-sdk` already brings).
 # Gated on `embedded-executor` (the gpui-free, `cargo test`-able surface).
 dregg-captp = { path = "../captp", optional = true }
+# THE APP FRAMEWORK + a STARTER SET of pre-built starbridge-apps (gated on the
+# `app-registry` feature, pulled by `embedded-executor`). `dregg-app-framework`
+# is the `DeosApp` builder + the `AppCipherclerk`/`EmbeddedExecutor` SDK surface
+# every app fires through; the apps below each expose a `*_app(cipherclerk,
+# executor) -> DeosApp` ctor + a `seed_*` + `fire_*` set. They path-dep the SAME
+# `../sdk`/`../turn`/`../cell` this crate already pulls, so cargo resolves
+# IDENTICAL crate instances — a launched app's verified turn lands on an
+# app-framework ledger the cockpit's app-substrate inspector reads. The framework
+# drags its server tree (axum/tokio/tower-http/reqwest); acceptable for the native
+# desktop build (it already links Lean + servo). `src/app_registry.rs` is the seam.
+dregg-app-framework = { path = "../app-framework", optional = true }
+starbridge-gallery = { path = "../starbridge-apps/gallery", optional = true }
+starbridge-tussle = { path = "../starbridge-apps/tussle", optional = true }
+starbridge-sealed-auction = { path = "../starbridge-apps/sealed-auction", optional = true }
+starbridge-bounty-board = { path = "../starbridge-apps/bounty-board", optional = true }
 # THE SERVO RENDER LANE — the HOST SWGL render path that IS deos's compositor
 # render pass (Stage A of docs/desktop-os-research/SERVO-ON-SEL4.md). Default
 # `swgl-standalone` features ONLY (swgl's CPU-only C++ rasterizer + gleam + the real
