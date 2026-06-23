@@ -355,12 +355,22 @@ impl Turn {
     // is therefore preserved by this bump.
     pub fn hash(&self) -> [u8; 32] {
         let forest_hash = self.call_forest.compute_hash();
+        self.hash_with_forest(&forest_hash)
+    }
+
+    /// `hash()` with an already-computed `forest_hash`. The forest hash is the
+    /// most expensive ingredient (a per-action BLAKE3 walk over the whole call
+    /// tree); the receipt path computes it ONCE and feeds it to both `turn_hash`
+    /// and the receipt's `forest_hash` field, avoiding a second identical walk.
+    /// `forest_hash` MUST equal `self.call_forest.compute_hash()` — byte-identity
+    /// of the resulting `turn_hash` depends on it (the caller owns that invariant).
+    pub fn hash_with_forest(&self, forest_hash: &[u8; 32]) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         // Domain separation: prevents type confusion with other hash preimages.
         hasher.update(b"dregg-turn-v3:");
         hasher.update(self.agent.as_bytes());
         hasher.update(&self.nonce.to_le_bytes());
-        hasher.update(&forest_hash);
+        hasher.update(forest_hash);
         hasher.update(&self.fee.to_le_bytes());
         // Length-prefix the optional memo so the boundary cannot be confused
         // with subsequent fields.

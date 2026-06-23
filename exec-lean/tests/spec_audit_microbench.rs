@@ -152,6 +152,80 @@ fn microbench_where_the_cost_lives() {
     );
 }
 
+/// SUB-COMPONENT split of `post_root` (the dominant ~6µs steady-state phase): how much of a
+/// touched-cell re-commit is the per-cell BLAKE3 canonical-commitment absorption (`hash_cell`)
+/// vs the in-`CellState` `system_roots_digest()` recompute vs the rest. Measurement-only.
+#[test]
+fn microbench_hash_cell_subcomponents() {
+    use dregg_cell::commitment::compute_canonical_state_commitment;
+    const N: u64 = 200_000;
+    let c = cell(0x01, 0x02, 1_000);
+
+    // (a) full canonical commitment (what `Ledger::hash_cell` calls per touched leaf).
+    let t = Instant::now();
+    let mut acc = [0u8; 32];
+    for _ in 0..N {
+        acc = compute_canonical_state_commitment(&c);
+        std::hint::black_box(&acc);
+    }
+    let full_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+    // (b) just the system_roots_digest recompute (a BLAKE3 derive-key sponge over 8 roots),
+    // which `hash_cell_state_into` calls on EVERY commitment.
+    let t = Instant::now();
+    let mut d = [0u8; 32];
+    for _ in 0..N {
+        d = c.state.system_roots_digest();
+        std::hint::black_box(&d);
+    }
+    let srd_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+    // (c) just one BLAKE3 64-byte parent hash (the Merkle-path inner-node cost per level).
+    let t = Instant::now();
+    let mut p = [0u8; 32];
+    for _ in 0..N {
+        let mut h = blake3::Hasher::new();
+        h.update(&[0u8; 32]);
+        h.update(&[1u8; 32]);
+        p = *h.finalize().as_bytes();
+        std::hint::black_box(&p);
+    }
+    let parent_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+    // (d) BLAKE3 new_derive_key context-derivation overhead alone (the per-hash fixed cost
+    // both the canonical commitment and system_roots_digest pay).
+    let t = Instant::now();
+    let mut k = [0u8; 32];
+    for _ in 0..N {
+        let h = blake3::Hasher::new_derive_key(dregg_cell::commitment::CANONICAL_COMMITMENT_CONTEXT);
+        k = *h.finalize().as_bytes();
+        std::hint::black_box(&k);
+    }
+    let dk_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+    // (e) the SAME context but with a precomputed keyed hasher (clone the keyed state) —
+    // models caching the derived key once and cloning per call.
+    static KEYED: std::sync::OnceLock<blake3::Hasher> = std::sync::OnceLock::new();
+    let base = KEYED.get_or_init(|| {
+        blake3::Hasher::new_derive_key(dregg_cell::commitment::CANONICAL_COMMITMENT_CONTEXT)
+    });
+    let t = Instant::now();
+    let mut k2 = [0u8; 32];
+    for _ in 0..N {
+        let h = base.clone();
+        k2 = *h.finalize().as_bytes();
+        std::hint::black_box(&k2);
+    }
+    let dkclone_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+    eprintln!("=== hash_cell sub-components (ns/call) ===");
+    eprintln!("(a) compute_canonical_state_commitment (full leaf): {full_ns:.1} ns");
+    eprintln!("(b)   of which system_roots_digest() recompute:     {srd_ns:.1} ns");
+    eprintln!("(c) one Merkle-path parent BLAKE3 (64B):            {parent_ns:.1} ns");
+    eprintln!("(d) new_derive_key + finalize (empty) overhead:     {dk_ns:.1} ns");
+    eprintln!("(e) clone(precomputed keyed) + finalize (empty):    {dkclone_ns:.1} ns");
+}
+
 /// PROFILE the ~89µs turn-proper across phases (env-gated `DREGG_TURN_PROFILE` fences in
 /// `executor/{execute,execute_tree}.rs`). Same workload as the microbench: a populated 65-cell
 /// ledger, one-Transfer turns. Reports µs/turn per phase + the forest inner breakdown. Off the

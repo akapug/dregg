@@ -189,8 +189,20 @@ fn visibility_byte(vis: FieldVisibility) -> u8 {
 /// All authority-relevant state is included. Omitting any field would allow an
 /// attacker to present two distinct authority-bearing states with the same
 /// commitment.
+/// A `new_derive_key(CANONICAL_COMMITMENT_CONTEXT)` hasher cached at its keyed
+/// initial state. `Hasher::clone` copies that keyed state, so cloning + absorbing
+/// produces output BYTE-IDENTICAL to a fresh `new_derive_key` + absorbing — but
+/// skips re-deriving the key (an extra BLAKE3 compression, ~50ns/call) on every
+/// per-cell commitment. The context string is fixed (`v9`), so the derived key is
+/// a process constant.
+fn canonical_commitment_base() -> blake3::Hasher {
+    static BASE: std::sync::OnceLock<blake3::Hasher> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| blake3::Hasher::new_derive_key(CANONICAL_COMMITMENT_CONTEXT))
+        .clone()
+}
+
 pub fn compute_canonical_state_commitment(cell: &Cell) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key(CANONICAL_COMMITMENT_CONTEXT);
+    let mut hasher = canonical_commitment_base();
 
     // ---- Identity ----
     hasher.update(cell.id.as_bytes());
