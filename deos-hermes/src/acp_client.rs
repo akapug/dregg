@@ -277,6 +277,37 @@ pub struct PromptRun {
     pub stop_reason: String,
 }
 
+/// The outcome of executing a model-chosen `run_js` script against a live World
+/// (the hands-on-glass side-effect of a `run_js` permission request). Carried back
+/// out of [`AcpClient`] so the caller can show the receipts the brain's JS landed.
+#[derive(Clone, Debug, Default)]
+pub struct JsRunRecord {
+    /// The ACP tool-call id the `run_js` answered (correlation back to the call).
+    pub tool_call_id: String,
+    /// The exact script the model chose (from the tool-call's `rawInput.script`).
+    pub script: String,
+    /// The script's i32 completion value, if it produced one.
+    pub result: Option<i32>,
+    /// How many affordance fires committed a real verified turn on the live World.
+    pub fires_committed: usize,
+    /// The receipt hashes the brain's JS left on the live ledger, in order.
+    pub receipts: Vec<[u8; 32]>,
+    /// A JS eval fault (NOT a cap-gate refusal — a refusal is an in-band `-1`).
+    pub js_error: Option<String>,
+}
+
+/// A hook that executes a model-chosen `run_js` script against the LIVE World and
+/// returns both the verdict deos sends back over ACP AND a record of what the JS
+/// did (the receipts it landed). Set with [`AcpClient::with_run_js_hook`].
+///
+/// The hook owns the live `WorldSink` + the agent's `RunJsTool` + the process-global
+/// `JsRuntime` (see `crate::live_js::LiveJsHands`). It is invoked from
+/// [`AcpClient::handle_peer_request`] the instant a `run_js` permission request
+/// arrives, so the brain's JS lands on the cockpit glass exactly when the gate
+/// admits the tool-call.
+pub type RunJsHook<'h> =
+    Box<dyn FnMut(&ToolCallRequest, i64) -> (PermissionOutcome, JsRunRecord) + 'h>;
+
 /// THE ACP CLIENT — deos's editor-half driver over an [`AcpPeer`].
 ///
 /// Holds the [`HermesGateway`] it answers `session/request_permission` with, and
@@ -290,6 +321,14 @@ pub struct AcpClient<'rt, P: AcpPeer> {
     /// real deployment this is the dregg block height; the driver bumps it per
     /// permission so each receipted turn has a monotonic time.
     clock: i64,
+    /// An optional `run_js` execution hook. When set, a `run_js` permission request
+    /// (the brain's hands on the glass) is dispatched here — the model's chosen
+    /// script runs against the live World and the receipts it landed are recorded.
+    /// When unset, `run_js` is gated like any other tool (the metered turn only).
+    run_js_hook: Option<RunJsHook<'rt>>,
+    /// The records of every `run_js` the hook executed this run (the brain's
+    /// hands-on-glass tape — the scripts it chose + the receipts they landed).
+    js_runs: Vec<JsRunRecord>,
 }
 
 impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
@@ -301,7 +340,23 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             gateway,
             next_id: 1,
             clock: start_clock,
+            run_js_hook: None,
+            js_runs: Vec::new(),
         }
+    }
+
+    /// Install a `run_js` execution hook (the brain's HANDS ON THE GLASS). With it
+    /// set, a `run_js` permission request carrying the model's chosen `script` is
+    /// dispatched to `hook`, which runs that JS against the LIVE World and returns
+    /// the verdict + the receipts it landed. Builder-style; returns `self`.
+    pub fn with_run_js_hook(mut self, hook: RunJsHook<'rt>) -> Self {
+        self.run_js_hook = Some(hook);
+        self
+    }
+
+    /// The records of every `run_js` the brain drove this run (script + receipts).
+    pub fn js_runs(&self) -> &[JsRunRecord] {
+        &self.js_runs
     }
 
     /// The gateway (post-run, for the mandate inspector).
@@ -375,7 +430,20 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
                 // THE SEAM — run the tool-call through the gateway. Side-effect
                 // rides the metered turn; verdict maps to the ACP outcome.
                 self.clock += 1;
-                let outcome = self.gateway.admit_call(&call, self.clock);
+                // HANDS ON THE GLASS: a `run_js` call with a hook installed is
+                // dispatched to the hook, which (a) runs the gateway accountability
+                // turn AND (b) executes the model's chosen JS against the LIVE
+                // World, landing real verified turns on the cockpit ledger. The
+                // record (script + receipts) is kept for the caller to surface.
+                let outcome = if call.name == "run_js" && self.run_js_hook.is_some() {
+                    let now = self.clock;
+                    let hook = self.run_js_hook.as_mut().expect("hook present");
+                    let (outcome, record) = hook(&call, now);
+                    self.js_runs.push(record);
+                    outcome
+                } else {
+                    self.gateway.admit_call(&call, self.clock)
+                };
                 run.verdicts.push((call.clone(), outcome.clone()));
                 // The permission moment — surfaced the instant the gate decides.
                 sink(StreamEvent::Verdict {

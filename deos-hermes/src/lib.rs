@@ -70,6 +70,8 @@ pub mod grant_registry;
 pub mod mandate;
 #[cfg(feature = "js-agent")]
 pub mod run_js;
+#[cfg(feature = "js-agent")]
+pub mod live_js;
 pub mod mock_peer;
 #[cfg(feature = "screenshot")]
 pub mod screenshot;
@@ -77,7 +79,9 @@ pub mod surface;
 pub mod tool_effects;
 
 pub use acp::{PermissionOutcome, ToolCallRequest, ToolKind};
-pub use acp_client::{AcpClient, AcpError, AcpPeer, AcpTransport, PromptRun, StreamEvent};
+pub use acp_client::{
+    AcpClient, AcpError, AcpPeer, AcpTransport, JsRunRecord, PromptRun, RunJsHook, StreamEvent,
+};
 pub use bridge::HermesGateway;
 pub use grant_registry::{GrantRegistry, MandateKey};
 
@@ -91,3 +95,5 @@ pub use mandate::{Mandate, MandateRow};
 pub use mock_peer::{MockHermesPeer, ScriptedCall};
 #[cfg(feature = "js-agent")]
 pub use run_js::{RunJsError, RunJsOutcome, RunJsTool};
+#[cfg(feature = "js-agent")]
+pub use live_js::{script_of_call, LiveJsHands};
