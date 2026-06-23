@@ -14078,6 +14078,7 @@ dependencies = [
  "starbridge-governed-namespace",
  "starbridge-identity",
  "starbridge-nameservice",
+ "starbridge-polis",
  "starbridge-privacy-voting",
  "starbridge-sealed-auction",
  "starbridge-storage-gateway-mandate",

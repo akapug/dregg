@@ -178,9 +178,65 @@ type CtorFn = fn(&AppCipherclerk, &EmbeddedExecutor) -> DeosApp;
 /// re-enforces the program.
 type SeedFn = fn(&EmbeddedExecutor, &AppCipherclerk);
 
+/// The per-app **program World drive** closure — the PROGRAM-entry analogue of
+/// [`WorldDriveFn`] for apps that are NOT [`DeosApp`]s. `starbridge-polis` ships
+/// per-charter content-addressed [`CellProgram`]s directly (not a composed app), so
+/// its World drive needs no [`DeosApp`]: it installs a governance cell carrying a
+/// polis program onto `World` via [`AppWorldSpine::seed`] and fires one
+/// representative governance affordance through [`AppWorldSpine::commit`]. Receives
+/// only the shared `World`; returns the seeded spine + the committed receipt — the
+/// SAME contract [`WorldDriveFn`] honours, minus the framework app.
+#[cfg(feature = "embedded-executor")]
+type ProgramWorldDriveFn =
+    fn(Rc<RefCell<World>>) -> Result<(AppWorldSpine, TurnReceipt), WorldFireError>;
+
+/// The framework backend of an [`AppEntry`] — a pre-built [`DeosApp`] over the app
+/// framework's [`AppSubstrate`]. Carries the REAL ctor + seed + drive (the
+/// framework-substrate path) and the `world_drive` (the cockpit-`World` path).
+#[derive(Clone, Copy)]
+struct FrameworkBackend {
+    /// The real `*_app(cipherclerk, executor) -> DeosApp` ctor.
+    ctor: CtorFn,
+    /// Seed the backing cell's program + genesis state on the substrate.
+    seed: SeedFn,
+    /// Fire one representative affordance (a real verified turn) — the proof.
+    drive: DriveFn,
+    /// Seed the app's cell onto the cockpit's LIVE [`World`] and commit one
+    /// representative affordance THROUGH it.
+    #[cfg(feature = "embedded-executor")]
+    world_drive: WorldDriveFn,
+}
+
+/// How an [`AppEntry`] is realized — either a framework [`DeosApp`]
+/// ([`AppBackend::Framework`], the 18 starbridge-apps) or a polis-style PROGRAM
+/// ([`AppBackend::Program`], which installs a bare [`CellProgram`] onto `World` and
+/// fires one affordance, with NO [`DeosApp`]). One registry, two backends — the
+/// program backend is the minimal clean variant for apps that yield a `CellProgram`
+/// directly rather than a composed app.
+#[derive(Clone, Copy)]
+enum AppBackend {
+    /// A pre-built [`DeosApp`] over the app framework (the 18 starbridge-apps).
+    Framework(FrameworkBackend),
+    /// A program-only app (polis): installs a [`CellProgram`] onto `World` + fires
+    /// one affordance, no [`DeosApp`]. It has NO framework-substrate path (it cannot
+    /// build a `DeosApp`), so [`AppEntry::launch`] returns `None` for it — only the
+    /// cockpit-`World` path ([`AppEntry::launch_on_world`]) applies. Gated on
+    /// `embedded-executor` (the program drive carries `World` types); the
+    /// framework-only registry build never constructs a `Program` entry.
+    #[cfg(feature = "embedded-executor")]
+    Program(ProgramWorldDriveFn),
+    /// On a framework-only registry build (`app-registry` without
+    /// `embedded-executor`), there is no `World` type, so a program entry cannot
+    /// exist — this variant is uninhabited there. (Polis is only wired in the
+    /// `embedded-executor` build, which the cockpit always has.)
+    #[cfg(not(feature = "embedded-executor"))]
+    Program(std::convert::Infallible),
+}
+
 /// **One entry in the app registry** — a pre-built starbridge-app the cockpit can
 /// launch. Names the app (id / display name / one-line description) and carries the
-/// REAL ctor + seed + drive so a launch is wiring, not re-implementation.
+/// REAL backend (framework ctor+seed+drive, or a polis-style program drive) so a
+/// launch is wiring, not re-implementation.
 #[derive(Clone, Copy)]
 pub struct AppEntry {
     /// A stable, short id (the launch key / palette token), e.g. `"gallery"`.
@@ -190,40 +246,80 @@ pub struct AppEntry {
     /// A one-line description of what the app does (what the user reads before
     /// launching).
     pub description: &'static str,
-    /// The real `*_app(cipherclerk, executor) -> DeosApp` ctor.
-    ctor: CtorFn,
-    /// Seed the backing cell's program + genesis state on the substrate.
-    seed: SeedFn,
-    /// Fire one representative affordance (a real verified turn) — the proof.
-    drive: DriveFn,
-    /// Seed the app's cell onto the cockpit's LIVE [`World`] and commit one
-    /// representative affordance THROUGH it — so the app's cell + receipt show in
-    /// the cockpit's OWN inspector (`World::ledger()`/`receipts()`), not the
-    /// framework side-ledger. This is the shared-ledger seam the editor lane's
-    /// `WorldSpine` established, brought to launched apps. Gated on
-    /// `embedded-executor` (it carries `World` types); the registry's framework-only
-    /// build (`app-registry` without `embedded-executor`) omits this field.
-    #[cfg(feature = "embedded-executor")]
-    world_drive: WorldDriveFn,
+    /// How this entry is realized (framework `DeosApp` or polis-style program).
+    backend: AppBackend,
 }
 
 impl AppEntry {
-    /// **Launch this app** — build a fresh live [`AppSubstrate`] in `federation`,
-    /// instantiate the [`DeosApp`] over it, seed the backing cell so its program
-    /// bites, and return the [`LaunchedRegistryApp`]. The app's affordances now fire
-    /// REAL verified turns on the substrate ledger (drive them with
-    /// [`LaunchedRegistryApp::drive`]); its cell + state are visible to a second
-    /// reader of the substrate.
-    pub fn launch(&self, federation: [u8; 32]) -> LaunchedRegistryApp {
+    /// Construct a **framework** entry (a pre-built [`DeosApp`]). The 18
+    /// starbridge-apps use this.
+    #[cfg(feature = "embedded-executor")]
+    const fn framework(
+        id: &'static str,
+        name: &'static str,
+        description: &'static str,
+        ctor: CtorFn,
+        seed: SeedFn,
+        drive: DriveFn,
+        world_drive: WorldDriveFn,
+    ) -> Self {
+        AppEntry {
+            id,
+            name,
+            description,
+            backend: AppBackend::Framework(FrameworkBackend {
+                ctor,
+                seed,
+                drive,
+                world_drive,
+            }),
+        }
+    }
+
+    /// Construct a **program** entry (polis): a [`CellProgram`] installed onto
+    /// `World` + one representative affordance, with NO [`DeosApp`]. Only the
+    /// cockpit-`World` path ([`AppEntry::launch_on_world`]) applies.
+    #[cfg(feature = "embedded-executor")]
+    const fn program(
+        id: &'static str,
+        name: &'static str,
+        description: &'static str,
+        program_world_drive: ProgramWorldDriveFn,
+    ) -> Self {
+        AppEntry {
+            id,
+            name,
+            description,
+            backend: AppBackend::Program(program_world_drive),
+        }
+    }
+
+    /// **Launch this app over the app-framework substrate** — build a fresh live
+    /// [`AppSubstrate`] in `federation`, instantiate the [`DeosApp`] over it, seed the
+    /// backing cell so its program bites, and return the [`LaunchedRegistryApp`]. The
+    /// app's affordances now fire REAL verified turns on the substrate ledger (drive
+    /// them with [`LaunchedRegistryApp::drive`]); its cell + state are visible to a
+    /// second reader of the substrate.
+    ///
+    /// `None` for a PROGRAM entry (polis) — it has no [`DeosApp`]/framework-substrate
+    /// path; launch it onto the cockpit `World` with [`AppEntry::launch_on_world`].
+    pub fn launch(&self, federation: [u8; 32]) -> Option<LaunchedRegistryApp> {
+        let fw = match &self.backend {
+            AppBackend::Framework(fw) => fw,
+            #[cfg(feature = "embedded-executor")]
+            AppBackend::Program(_) => return None,
+            #[cfg(not(feature = "embedded-executor"))]
+            AppBackend::Program(never) => match *never {},
+        };
         let substrate = AppSubstrate::new(federation);
-        let app = (self.ctor)(substrate.cipherclerk(), substrate.executor());
-        (self.seed)(substrate.executor(), substrate.cipherclerk());
-        LaunchedRegistryApp {
+        let app = (fw.ctor)(substrate.cipherclerk(), substrate.executor());
+        (fw.seed)(substrate.executor(), substrate.cipherclerk());
+        Some(LaunchedRegistryApp {
             id: self.id,
             app,
             substrate,
-            drive: self.drive,
-        }
+            drive: fw.drive,
+        })
     }
 
     /// **Launch this app ONTO the cockpit's LIVE [`World`]** — the shared-ledger seam.
@@ -245,15 +341,30 @@ impl AppEntry {
         federation: [u8; 32],
         world: Rc<RefCell<World>>,
     ) -> Result<LaunchedOnWorld, WorldFireError> {
-        let substrate = AppSubstrate::new(federation);
-        let app = (self.ctor)(substrate.cipherclerk(), substrate.executor());
-        let (spine, receipt) = (self.world_drive)(&app, world)?;
-        Ok(LaunchedOnWorld {
-            id: self.id,
-            app,
-            spine,
-            receipt,
-        })
+        match &self.backend {
+            AppBackend::Framework(fw) => {
+                let substrate = AppSubstrate::new(federation);
+                let app = (fw.ctor)(substrate.cipherclerk(), substrate.executor());
+                let (spine, receipt) = (fw.world_drive)(&app, world)?;
+                Ok(LaunchedOnWorld {
+                    id: self.id,
+                    app: Some(app),
+                    spine,
+                    receipt,
+                })
+            }
+            // A PROGRAM entry (polis) needs no `DeosApp`/`AppSubstrate` — it installs a
+            // bare `CellProgram` onto `World` and fires one affordance directly.
+            AppBackend::Program(program_world_drive) => {
+                let (spine, receipt) = (program_world_drive)(world)?;
+                Ok(LaunchedOnWorld {
+                    id: self.id,
+                    app: None,
+                    spine,
+                    receipt,
+                })
+            }
+        }
     }
 }
 
@@ -266,8 +377,10 @@ impl AppEntry {
 pub struct LaunchedOnWorld {
     /// The registry id of the app launched (e.g. `"gallery"`).
     pub id: &'static str,
-    /// The composed deos app (cells × affordances).
-    pub app: DeosApp,
+    /// The composed deos app (cells × affordances) — `None` for a PROGRAM entry
+    /// (polis), which has no [`DeosApp`]: its cell + program live directly on `World`
+    /// via the [`Self::spine`].
+    pub app: Option<DeosApp>,
     /// The seeded World bridge — the app cell is installed on `World`; fire MORE
     /// affordances onto the live world with [`AppWorldSpine::commit`].
     pub spine: AppWorldSpine,
@@ -307,17 +420,17 @@ impl AppRegistry {
     pub fn standard() -> Self {
         AppRegistry {
             entries: vec![
-                AppEntry {
-                    id: "gallery",
-                    name: "Sealed Gallery",
-                    description:
+                AppEntry::framework(
+                    "gallery",
+                    "Sealed Gallery",
+                    
                         "A juried art gallery with sealed (commit-reveal) submissions — \
                          artists commit, the curator closes, artists reveal, the curator features.",
-                    ctor: starbridge_gallery::gallery_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_gallery::gallery_app,
+                    |exec, _cclerk| {
                         starbridge_gallery::seed_gallery(exec, "curator");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         // An ARTIST seals a submission in the SUBMISSION phase — a real
                         // verified turn writing the next free WriteOnce submission slot.
                         starbridge_gallery::fire_submit(
@@ -328,8 +441,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_gallery as g;
                         // SEED the gallery cell onto the live World: the program (so World
                         // re-enforces the WriteOnce board + phase invariants) + the genesis
@@ -367,19 +479,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "sealed-auction",
-                    name: "Sealed Auction",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "sealed-auction",
+                    "Sealed Auction",
+                    
                         "A sealed-bid (commit-reveal) auction — bidders commit hashed bids, \
                          the seller closes commits, bidders reveal, the seller resolves the winner.",
-                    ctor: starbridge_sealed_auction::auction_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_sealed_auction::auction_app,
+                    |exec, _cclerk| {
                         starbridge_sealed_auction::seed_auction(exec, "seller");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         // A BIDDER commits a sealed bid in the COMMIT phase.
                         starbridge_sealed_auction::fire_commit_bid(
                             app,
@@ -389,8 +501,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_sealed_auction as a;
                         let app_cell = app.cells()[0].cell();
                         // SEED onto World: program + `seed_auction` baseline (seller bound,
@@ -426,19 +537,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "bounty-board",
-                    name: "Bounty Board",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "bounty-board",
+                    "Bounty Board",
+                    
                         "A bounty with an escrowed reward — a worker claims it, submits work, \
                          and the poster pays out (each step a cap-gated state-machine turn).",
-                    ctor: starbridge_bounty_board::bounty_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_bounty_board::bounty_app,
+                    |exec, _cclerk| {
                         starbridge_bounty_board::seed_bounty(exec, "ship the registry", 1_000);
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         // A WORKER claims the open bounty — a real verified turn advancing
                         // the bounty state machine (OPEN -> CLAIMED).
                         starbridge_bounty_board::fire_claim(
@@ -449,8 +560,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_bounty_board as b;
                         let app_cell = app.cells()[0].cell();
                         // SEED onto World: program + `seed_bounty` baseline (title hash,
@@ -485,21 +595,21 @@ impl AppRegistry {
                             |_live| b::claim_effects(app_cell, "worker"),
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "tussle",
-                    name: "Tussle",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "tussle",
+                    "Tussle",
+                    
                         "A two-figure simultaneous-move game — each player commits a sealed move, \
                          both reveal, the frame resolves (a typed set-membership reveal gate).",
-                    ctor: starbridge_tussle::tussle_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_tussle::tussle_app,
+                    |exec, _cclerk| {
                         // Tussle backs its first figure on the executor's own cell.
                         let cell = exec.cell_id();
                         starbridge_tussle::seed_figure(exec, cell);
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         // A FIGHTER commits a sealed move on its figure (the executor's
                         // own cell) — a real verified turn writing the sealed-move slot.
                         let figure = sub.cell_id();
@@ -513,8 +623,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_tussle as t;
                         // Tussle backs its first figure on the agent's OWN cell.
                         let figure = app.cells()[0].cell();
@@ -580,8 +689,8 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
+                    }
+                ),
                 // ───────────────────────────────────────────────────────────
                 // THE SECOND WAVE — the framework-using starbridge-apps wired
                 // onto the cockpit's LIVE `World` ledger. Each re-expresses ONE
@@ -601,18 +710,18 @@ impl AppRegistry {
                 // single-member membership proof clears the sender clause. (polis
                 // and first-room are not `DeosApp`s. See the module note.)
                 // ───────────────────────────────────────────────────────────
-                AppEntry {
-                    id: "agent-orchestration",
-                    name: "Agent Orchestration",
-                    description:
+                AppEntry::framework(
+                    "agent-orchestration",
+                    "Agent Orchestration",
+                    
                         "A coordinator board with a shared per-worker spend budget — a worker fires one \
                          metered step, advancing the no-replay epoch (the Σspend ≤ budget gate bites).",
-                    ctor: starbridge_agent_orchestration::deos::orchestration_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_agent_orchestration::deos::orchestration_app,
+                    |exec, _cclerk| {
                         use starbridge_agent_orchestration as o;
                         o::seed_board(exec, o::DEFAULT_CREATION_BUDGET, "coordinator");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_agent_orchestration as o;
                         // A WORKER fires one metered step (worker A, cost 1).
                         let board = &app.cells()[0];
@@ -625,8 +734,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_agent_orchestration as o;
                         let board = app.cells()[0].cell();
                         // SEED the board onto World: `coordinator_program` (the
@@ -695,19 +803,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "agent-provenance",
-                    name: "Agent Provenance",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "agent-provenance",
+                    "Agent Provenance",
+                    
                         "A hash-linked provenance log — a recorder appends one entry that chains to the \
                          prior tip (the link-hash chain the executor's WriteOnce board re-enforces).",
-                    ctor: starbridge_agent_provenance::provenance_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_agent_provenance::provenance_app,
+                    |exec, _cclerk| {
                         starbridge_agent_provenance::seed_log(exec, b"genesis");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_agent_provenance as p;
                         // A RECORDER appends one claim to the log.
                         p::fire_append_entry(
@@ -718,8 +826,7 @@ impl AppRegistry {
                             &dregg_app_framework::field_from_u64(0xC1A1),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_agent_provenance as p;
                         let log = app.cells()[0].cell();
                         // SEED the log onto World: `provenance_cell_program` + the
@@ -758,16 +865,16 @@ impl AppRegistry {
                             |live| p::append_effects(log, live, &claim),
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "compartment-workflow-mandate",
-                    name: "Compartment Workflow Mandate",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "compartment-workflow-mandate",
+                    "Compartment Workflow Mandate",
+                    
                         "A clearance-gated workflow charter (review → redact → sign) — an officer advances \
                          one step, presenting a clearance that must dominate the entered step's compartment.",
-                    ctor: starbridge_compartment_workflow_mandate::workflow_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_compartment_workflow_mandate::workflow_app,
+                    |exec, _cclerk| {
                         use starbridge_compartment_workflow_mandate as c;
                         c::seed_workflow(
                             exec,
@@ -777,7 +884,7 @@ impl AppRegistry {
                             c::DEFAULT_STEP_SPEND_POLICY,
                         );
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_compartment_workflow_mandate as c;
                         // An OFFICER advances the first step (review), presenting the
                         // officer clearance (which dominates every charter compartment).
@@ -789,8 +896,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_compartment_workflow_mandate as c;
                         let cell = app.cells()[0].cell();
                         // SEED onto World: `cwm_cell_program` (the Cases program — the
@@ -847,19 +953,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "compute-exchange",
-                    name: "Compute Exchange",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "compute-exchange",
+                    "Compute Exchange",
+                    
                         "A compute-job market (post → bid → settle) — a provider bids on the posted job, \
                          advancing the job state machine (the settle conservation AffineEq waits downstream).",
-                    ctor: starbridge_compute_exchange::job_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_compute_exchange::job_app,
+                    |exec, _cclerk| {
                         starbridge_compute_exchange::seed_job(exec, "requester-corp", 1_000);
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_compute_exchange as j;
                         // A PROVIDER bids on the posted job.
                         j::fire_bid(
@@ -871,8 +977,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_compute_exchange as j;
                         let job = app.cells()[0].cell();
                         // SEED onto World: `job_program` (Cases: post/bid/settle) + the
@@ -916,19 +1021,19 @@ impl AppRegistry {
                             |_live| j::bid_effects(job, "provider-gpu", 750),
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "escrow-market",
-                    name: "Escrow Market",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "escrow-market",
+                    "Escrow Market",
+                    
                         "A two-party escrow marketplace (list → fund → ship → settle) — a buyer funds the \
                          listed item into escrow (the settle release+refund=escrowed conservation waits downstream).",
-                    ctor: starbridge_escrow_market::escrow_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_escrow_market::escrow_app,
+                    |exec, _cclerk| {
                         starbridge_escrow_market::seed_escrow(exec, "acme-corp", 1_000);
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_escrow_market as e;
                         // A BUYER funds the listed item.
                         e::fire_fund(
@@ -940,8 +1045,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_escrow_market as e;
                         let escrow = app.cells()[0].cell();
                         // SEED onto World: `escrow_program` (Cases: list/fund/ship/settle)
@@ -981,16 +1085,16 @@ impl AppRegistry {
                             |_live| e::fund_effects(escrow, "buyer-bob", 500),
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "nameservice",
-                    name: "Name Service",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "nameservice",
+                    "Name Service",
+                    
                         "A registered-name record (owner / expiry / revocation) — the owner renews the name, \
                          advancing the expiry (the executor re-enforces Monotonic(EXPIRY) + WriteOnce(NAME)).",
-                    ctor: starbridge_nameservice::name_app,
-                    seed: |exec, cclerk| {
+                    starbridge_nameservice::name_app,
+                    |exec, cclerk| {
                         use starbridge_nameservice as n;
                         n::seed_name(
                             exec,
@@ -999,13 +1103,12 @@ impl AppRegistry {
                             n::DEFAULT_RENT_EPOCH_BLOCKS,
                         );
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_nameservice as n;
                         // The OWNER renews the name (advances EXPIRY by one rent epoch).
                         n::fire_renew(app, &n::OWNER_RIGHTS, sub.cipherclerk(), sub.executor())
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_nameservice as n;
                         let name_cell = app.cells()[0].cell();
                         let owner = app.cipherclerk().public_key().0;
@@ -1057,19 +1160,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "privacy-voting",
-                    name: "Privacy Voting",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "privacy-voting",
+                    "Privacy Voting",
+                    
                         "A public-tally poll — an administrator records one vote onto the poll's running tally \
                          (the executor re-enforces the poll invariants; the poll stays open until closed).",
-                    ctor: starbridge_privacy_voting::voting_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_privacy_voting::voting_app,
+                    |exec, _cclerk| {
                         starbridge_privacy_voting::seed_poll(exec, "ship it?");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_privacy_voting as v;
                         // An ADMINISTRATOR records a YES vote onto the poll tally.
                         v::fire_record_tally(
@@ -1080,8 +1183,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_privacy_voting as v;
                         // The poll cell is the agent's own cell (cells()[0]).
                         let poll = app.cells()[0].cell();
@@ -1136,16 +1238,16 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "storage-gateway-mandate",
-                    name: "Storage Gateway Mandate",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "storage-gateway-mandate",
+                    "Storage Gateway Mandate",
+                    
                         "A metered storage gateway (put / get / list under a volume ceiling) — a writer puts \
                          an object, debiting the volume meter (the executor re-enforces volume_spent ≤ ceiling).",
-                    ctor: starbridge_storage_gateway_mandate::gateway_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_storage_gateway_mandate::gateway_app,
+                    |exec, _cclerk| {
                         use starbridge_storage_gateway_mandate as s;
                         s::seed_gateway(
                             exec,
@@ -1155,7 +1257,7 @@ impl AppRegistry {
                             s::DEFAULT_READ_COMPARTMENT,
                         );
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_storage_gateway_mandate as s;
                         // A WRITER puts a 1-unit object under the prefix.
                         s::fire_put(
@@ -1167,8 +1269,7 @@ impl AppRegistry {
                             1,
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_storage_gateway_mandate as s;
                         let gateway = app.cells()[0].cell();
                         // SEED onto World: `gateway_program_with_clearance` (the Cases
@@ -1231,19 +1332,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "subscription",
-                    name: "Subscription Feed",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "subscription",
+                    "Subscription Feed",
+                    
                         "A publish/consume message feed under a capacity bound — a publisher publishes one \
                          message, advancing the head cursor + folding the message-commitment root.",
-                    ctor: starbridge_subscription::subscription_deos_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_subscription::subscription_deos_app,
+                    |exec, _cclerk| {
                         starbridge_subscription::seed_feed(exec, 16, "owner");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_subscription as s;
                         // A PUBLISHER publishes one message onto the feed.
                         s::fire_publish(
@@ -1253,8 +1354,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_subscription as s;
                         let feed = app.cells()[0].cell();
                         // SEED onto World: `feed_invariants_program` (the FLAT invariants
@@ -1305,19 +1405,19 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "swarm-orchestration",
-                    name: "Swarm Orchestration",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "swarm-orchestration",
+                    "Swarm Orchestration",
+                    
                         "A swarm dispatch board with a per-worker spend budget — the lead dispatches one task \
                          to a worker, debiting its meter + advancing the no-replay epoch (Σspend ≤ budget bites).",
-                    ctor: starbridge_swarm_orchestration::board_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_swarm_orchestration::board_app,
+                    |exec, _cclerk| {
                         starbridge_swarm_orchestration::seed_board(exec, "lead", 1_000);
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_swarm_orchestration as w;
                         // The LEAD dispatches one task (cost 1) to worker A.
                         let board = app.cells()[0].cell();
@@ -1332,8 +1432,7 @@ impl AppRegistry {
                             "task-0",
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_swarm_orchestration as w;
                         let board = app.cells()[0].cell();
                         // SEED onto World: `coordinator_program` (AffineLe budget,
@@ -1391,25 +1490,24 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "tool-access-delegation",
-                    name: "Tool Access Delegation",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "tool-access-delegation",
+                    "Tool Access Delegation",
+                    
                         "A rate-limited tool-access mandate — a worker invokes the tool once, ticking the \
                          call counter (the executor re-enforces calls_made ≤ rate_limit + the deadline gate).",
-                    ctor: starbridge_tool_access_delegation::tad_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_tool_access_delegation::tad_app,
+                    |exec, _cclerk| {
                         starbridge_tool_access_delegation::seed_mandate(exec, "search-mcp", 8, 0);
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_tool_access_delegation as t;
                         // A WORKER invokes the tool once.
                         t::fire_invoke(app, &t::WORKER_RIGHTS, sub.cipherclerk(), sub.executor())
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_tool_access_delegation as t;
                         let mandate = app.cells()[0].cell();
                         // SEED onto World: `tad_cell_program` (Cases: the `invoke_tool`
@@ -1455,23 +1553,23 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
+                    }
+                ),
                 // ───────────────────────────────────────────────────────────
                 // THE SENDER-BOUND WAVE — affordances that read the turn's
                 // SENDER, committed through `AppWorldSpine::commit_as`.
                 // ───────────────────────────────────────────────────────────
-                AppEntry {
-                    id: "supply-chain-provenance",
-                    name: "Supply-Chain Provenance",
-                    description:
+                AppEntry::framework(
+                    "supply-chain-provenance",
+                    "Supply-Chain Provenance",
+                    
                         "A custody-chain item (mint → handoff) — the incoming custodian accepts custody, \
                          advancing the actor-bound baton (the SenderInSlot(CUSTODIAN) tooth bites).",
-                    ctor: starbridge_supply_chain_provenance::item_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_supply_chain_provenance::item_app,
+                    |exec, _cclerk| {
                         starbridge_supply_chain_provenance::seed_item(exec, "manufacturer");
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_supply_chain_provenance as sc;
                         sc::fire_accept_custody(
                             app,
@@ -1480,8 +1578,7 @@ impl AppRegistry {
                             sub.executor(),
                         )
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_supply_chain_provenance as sc;
                         let item = app.cells()[0].cell();
                         // The custodian IS the firing principal (the agent cell's pubkey =
@@ -1573,24 +1670,23 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "identity",
-                    name: "Identity / Credentials",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "identity",
+                    "Identity / Credentials",
+                    
                         "A credential issuer (issue → revoke) — an authorized issuer issues one credential, \
                          advancing the issuance sequence (the SenderAuthorized membership tooth bites).",
-                    ctor: starbridge_identity::identity_app,
-                    seed: |exec, cclerk| {
+                    starbridge_identity::identity_app,
+                    |exec, cclerk| {
                         starbridge_identity::seed_issuer(exec, cclerk, &starbridge_identity::kyc_schema());
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_identity as id;
                         id::fire_issue(app, &id::ISSUER_RIGHTS, sub.cipherclerk(), sub.executor())
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_identity as id;
                         let issuer = app.cells()[0].cell();
                         // The authorized issuer IS the firing principal (agent pubkey =
@@ -1665,16 +1761,16 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
-                    },
-                },
-                AppEntry {
-                    id: "governed-namespace",
-                    name: "Governed Namespace",
-                    description:
+                    }
+                ),
+                AppEntry::framework(
+                    "governed-namespace",
+                    "Governed Namespace",
+                    
                         "A constitutionally-governed route table (propose → vote → commit) — a committee \
                          member opens a proposal, advancing the pending root (the SenderAuthorized committee tooth bites).",
-                    ctor: starbridge_governed_namespace::governance_app,
-                    seed: |exec, _cclerk| {
+                    starbridge_governed_namespace::governance_app,
+                    |exec, _cclerk| {
                         use starbridge_governed_namespace as gn;
                         gn::seed_governance(
                             exec,
@@ -1684,12 +1780,11 @@ impl AppRegistry {
                             dregg_app_framework::field_from_bytes(b"genesis-route-table-root"),
                         );
                     },
-                    drive: |app, sub| {
+                    |app, sub| {
                         use starbridge_governed_namespace as gn;
                         gn::fire_propose(app, &gn::COMMITTEE_RIGHTS, sub.cipherclerk(), sub.executor())
                     },
-                    #[cfg(feature = "embedded-executor")]
-                    world_drive: |app, world| {
+                    |app, world| {
                         use starbridge_governed_namespace as gn;
                         let board = app.cells()[0].cell();
                         // The committee member IS the firing principal (agent pubkey =
@@ -1771,8 +1866,104 @@ impl AppRegistry {
                             },
                         )?;
                         Ok((spine, receipt))
+                    }
+                ),
+                // ───────────────────────────────────────────────────────────
+                // THE POLIS GOVERNANCE LAYER — a PROGRAM entry, not a `DeosApp`.
+                // `starbridge-polis` ships per-charter content-addressed
+                // `CellProgram`s directly (`council::council_cell_program(charter)`),
+                // so its World drive needs no framework app: it installs a council
+                // governance cell carrying that program onto `World` via
+                // `AppWorldSpine::seed` (birth state DRAFT, all-zero — no seed
+                // fields), then fires ONE representative governance affordance — a
+                // council `propose` — through `AppWorldSpine::commit`. The propose
+                // turn steps STATE 0 (DRAFT) → 1 (PROPOSED), writes the staged
+                // proposal hash (WriteOnce) and pins the membership commitment (the
+                // `pin_term` that bites once the cell leaves DRAFT). The legacy
+                // `CouncilCharter::new` charter carries NO `member_keys`, so there is
+                // NO `SenderIs`/`SenderAuthorized` clause — the single-custody
+                // `commit` path suffices (no witness blob, no `commit_as`). World's
+                // executor RE-ENFORCES the full council program on commit, so a
+                // committed receipt proves the governance state machine accepted the
+                // proposal.
+                #[cfg(feature = "embedded-executor")]
+                AppEntry::program(
+                    "polis",
+                    "Polis Council",
+                    "A constitutional council (M-of-N proposal governance) — a member opens a \
+                     proposal, advancing the council cell DRAFT → PROPOSED (the membership \
+                     commitment pins + the staged-proposal WriteOnce tooth bite).",
+                    |world| {
+                        use starbridge_polis::council;
+                        // A small real charter: a 2-of-3 council over three synthetic
+                        // member cells. The charter is content-addressed into the
+                        // installed program; its membership commitment is the literal
+                        // the cell pins once it leaves DRAFT.
+                        let members: Vec<dregg_cell::CellId> = (1u8..=3)
+                            .map(|i| dregg_cell::CellId::from_bytes([i; 32]))
+                            .collect();
+                        let charter = council::CouncilCharter::new(members, 2);
+                        let program = council::council_cell_program(&charter)
+                            .map_err(|e| WorldFireError::World {
+                                reason: format!("polis charter refused to build: {e}"),
+                            })?;
+                        // The governance cell is born in DRAFT (state 0, every slot
+                        // zero) — exactly the default genesis cell — so NO seed fields
+                        // are needed. The agent/pubkey is a fixed governance-operator
+                        // key (the single-custody operator that opens the proposal).
+                        let operator_pk = [0x90u8; 32];
+                        let spine = AppWorldSpine::seed(
+                            Rc::clone(&world),
+                            dregg_cell::Cell::with_balance(
+                                operator_pk,
+                                default_domain_token(),
+                                1_000_000,
+                            )
+                            .id(),
+                            operator_pk,
+                            default_domain_token(),
+                            program,
+                            &[],
+                        );
+                        let gov_cell = spine.app_cell();
+                        // COMMIT `propose` through World: DRAFT(0) → PROPOSED(1),
+                        // staging a proposal hash (WriteOnce) and publishing the
+                        // membership commitment (`pin_term` — required once out of
+                        // DRAFT). No sender clause on a legacy charter, so the
+                        // single-custody `commit` admits it; World's executor
+                        // re-enforces the council machine.
+                        let proposal_hash =
+                            dregg_app_framework::field_from_u64(0x90_0_5A1);
+                        let members_commit = charter.members_commitment();
+                        let receipt = spine.commit(
+                            "propose",
+                            &AuthRequired::None,
+                            &AuthRequired::None,
+                            |_live| {
+                                vec![
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: gov_cell,
+                                        index: starbridge_polis::STATE_SLOT as usize,
+                                        value: dregg_app_framework::field_from_u64(
+                                            council::STATE_PROPOSED,
+                                        ),
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: gov_cell,
+                                        index: council::PROPOSAL_HASH_SLOT as usize,
+                                        value: proposal_hash,
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: gov_cell,
+                                        index: council::MEMBERS_COMMIT_SLOT as usize,
+                                        value: members_commit,
+                                    },
+                                ]
+                            },
+                        )?;
+                        Ok((spine, receipt))
                     },
-                },
+                )
             ],
         }
     }
@@ -1787,10 +1978,13 @@ impl AppRegistry {
         self.entries.iter().find(|e| e.id == id)
     }
 
-    /// **Launch the app with id `id`** in `federation` — the cockpit's launcher
-    /// entry point. `None` if no entry has that id.
+    /// **Launch the app with id `id`** over the app-framework substrate, in
+    /// `federation` — the cockpit's launcher entry point. `None` if no entry has that
+    /// id, OR if the entry is a PROGRAM entry (polis) with no framework-substrate path
+    /// (launch such an entry onto the cockpit `World` with
+    /// [`AppRegistry::launch_on_world`]).
     pub fn launch(&self, id: &str, federation: [u8; 32]) -> Option<LaunchedRegistryApp> {
-        self.get(id).map(|e| e.launch(federation))
+        self.get(id).and_then(|e| e.launch(federation))
     }
 
     /// **Launch the app with id `id` ONTO the cockpit's LIVE [`World`]** — the
@@ -1841,6 +2035,12 @@ mod tests {
         ] {
             assert!(ids.contains(&id), "{id} is wired into the standard registry");
         }
+        // The polis governance layer — a PROGRAM entry (not a `DeosApp`).
+        #[cfg(feature = "embedded-executor")]
+        assert!(
+            ids.contains(&"polis"),
+            "polis (the council governance program) is wired into the standard registry"
+        );
         // Each entry names itself + what it does (the launcher list content).
         for e in reg.entries() {
             assert!(!e.name.is_empty());
@@ -1907,7 +2107,12 @@ mod tests {
         let reg = AppRegistry::standard();
         let federation = [0x5Eu8; 32];
         for entry in reg.entries() {
-            let launched = entry.launch(federation);
+            // PROGRAM entries (polis) have no framework-substrate path — `launch`
+            // returns `None`. They are exercised by the World-path whole-set test
+            // (`every_wired_app_launches_on_the_cockpit_world`) instead.
+            let Some(launched) = entry.launch(federation) else {
+                continue;
+            };
             let cell = launched.primary_cell();
             let before = launched
                 .substrate
@@ -2075,5 +2280,87 @@ mod tests {
             );
             assert!(launched.receipt.action_count >= 1, "{id} fired an action");
         }
+    }
+
+    /// **THE POLIS GOVERNANCE PROOF** — launch the polis council PROGRAM entry onto a
+    /// cockpit `World`, fire its representative governance affordance (a council
+    /// `propose`), and assert the council cell lands on `World::ledger()` advanced to
+    /// PROPOSED AND its receipt on `World::receipts()` — the REAL cockpit inspector
+    /// path. Polis is NOT a `DeosApp` (it ships a `CellProgram` directly), so this also
+    /// proves the program-backend registry path works. DONE = this RAN.
+    ///
+    /// This is also a proof-by-refutation that the governance state machine accepted
+    /// the proposal: World's executor RE-ENFORCES the full council program on commit
+    /// (the `AllowedTransitions` DRAFT→PROPOSED row, the `WriteOnce` proposal hash, the
+    /// `pin_term` membership commitment that bites the instant the cell leaves DRAFT).
+    /// A malformed propose (wrong commitment, a skipped slot) would be REJECTED, so a
+    /// committed receipt proves the council machine admitted the step.
+    #[cfg(feature = "embedded-executor")]
+    #[test]
+    fn launching_polis_council_commits_a_propose_turn_to_the_cockpit_world() {
+        use starbridge_polis::council;
+
+        let world = Rc::new(RefCell::new(World::new()));
+        let receipts_before = world.borrow().receipts().len();
+        let cells_before = world.borrow().cell_count();
+
+        let reg = AppRegistry::standard();
+        let launched = reg
+            .launch_on_world("polis", [0xC0u8; 32], Rc::clone(&world))
+            .expect("polis is in the standard registry")
+            .expect("polis seeds a council cell + commits a propose turn onto the live World");
+
+        // Polis is a PROGRAM entry — no `DeosApp`.
+        assert!(
+            launched.app.is_none(),
+            "the polis entry is a program backend (no DeosApp)"
+        );
+
+        let gov_cell = launched.primary_cell();
+
+        // THE COCKPIT INSPECTOR PATH (World::ledger): the council cell is on the live
+        // World ledger, advanced to PROPOSED by the committed propose turn.
+        let cell_on_world = world
+            .borrow()
+            .ledger()
+            .get(&gov_cell)
+            .cloned()
+            .expect("the council cell is on the cockpit World ledger (genesis-installed)");
+        assert_eq!(
+            world.borrow().cell_count(),
+            cells_before + 1,
+            "the council cell was added to the cockpit World"
+        );
+
+        // The STATE slot reads PROPOSED (1) — the governance machine stepped DRAFT → PROPOSED.
+        let state_tail = {
+            let f = &cell_on_world.state.fields[starbridge_polis::STATE_SLOT as usize];
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&f[24..32]);
+            u64::from_be_bytes(b)
+        };
+        assert_eq!(
+            state_tail,
+            council::STATE_PROPOSED,
+            "the council cell advanced DRAFT → PROPOSED on the cockpit World"
+        );
+        // The membership commitment slot is non-zero (the `pin_term` published it on leaving DRAFT).
+        assert_ne!(
+            cell_on_world.state.fields[council::MEMBERS_COMMIT_SLOT as usize],
+            [0u8; 32],
+            "the membership commitment was published on the World cell"
+        );
+
+        // THE COCKPIT INSPECTOR PATH (World::receipts): the receipt is in World's OWN log.
+        assert_eq!(
+            launched.receipt.agent, gov_cell,
+            "the World-committed propose turn is authored by the council cell"
+        );
+        assert!(launched.receipt.action_count >= 1);
+        assert_eq!(
+            world.borrow().receipts().len(),
+            receipts_before + 1,
+            "the propose fire landed ONE receipt in World::receipts()"
+        );
     }
 }
