@@ -130,7 +130,8 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
       simp only [execFullA] at h
       obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; exact List.Subset.refl _
   -- §authority — introduce/validateHandoff route to recKDelegate; delegateAtten to recKDelegateAtten;
-  -- attenuate is always-commit (`some (attenuateStepA …)`, a caps-only update); dropRef/revokeDelegation
+  -- attenuate commits IN BOUNDS (`attenuateA_factors`, a caps-only update; fail-closed out of bounds);
+  -- dropRef/revokeDelegation
   -- to recCRevoke; exercise factors (kernel UNCHANGED).
   | introduceA intro rec t =>
       simp only [execFullA, recCDelegate] at h
@@ -157,8 +158,8 @@ theorem execFullA_nullifiers_grow (s s' : RecChainedState) (fa : FullActionA)
             · exact absurd hk (by simp)
           exact hn ▸ List.Subset.refl _
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA] at h
-      obtain ⟨rfl⟩ := h; exact List.Subset.refl _
+      obtain ⟨_, rfl⟩ := attenuateA_factors h
+      simp only [attenuateStepA]; exact List.Subset.refl _
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h
       obtain ⟨rfl⟩ := h; exact List.Subset.refl _

@@ -10,18 +10,18 @@ analog of `burnA` (which touches `bal`): the SAME `funcComponent` shape (a whole
 digest over the cap table `Caps = Label → List Cap`), the SAME growing log. It differs from `burnA` in
 (1) the touched function-field is `caps` (post-value `attenuateSlotF …`, not `bal`'s `recBalCredit …`),
 (2) the frame omits `caps` (`RestIffNoCaps`, ADDED here — the v1 `RestHashIffFrame` minus `caps`), and
-(3) the guard is UNCONDITIONAL — `attenuateA` ALWAYS commits (attenuation cannot fail: `List.modify` is
-a no-op out of bounds and `attenuate` only narrows), so the guard `Prop` is the trivial `True` (the
-`noteCreateA` shape), and the bespoke `AttenuateSpec` has NO guard clause.
+(3) the guard is the IN-BOUNDS slot precondition `idx < (caps actor).length` — `attenuateA` FAILS
+CLOSED out of bounds (a `List.modify` no-op would otherwise commit a logged no-op), so the guard `Prop`
+is `idx < (caps actor).length`, and the bespoke `AttenuateSpec` carries the matching in-bounds clause.
 
 THE VALIDATION: `attenuateA_full_sound ⇒ AttenuateSpec` THROUGH the framework. A satisfying v2
 full-state witness for `attenuateE` proves the complete declarative `AttenuateSpec` (the apex truth in
 `Dregg2/Circuit/Spec/authorityattenuation.lean`, whose executor corner is `attenuate_iff_spec`).
 
-Because the spec has NO guard conjunct (the arm is total), the apex's leading `True` guard clause is
-DROPPED in the bridge (`apex_iff_attenuateSpec` strips it) — the apex full-`caps`-function equality
-(`funcComponent`'s `postClause`) is EXACTLY the spec's `caps` clause, so the apex IMPLIES (and equals)
-the bespoke spec.
+The spec's guard conjunct (`idx < (caps actor).length`) is EXACTLY the v2 guard `Prop`, so the apex's
+leading guard clause IS the spec's in-bounds clause (`apex_iff_attenuateSpec` passes it through), and
+the apex full-`caps`-function equality (`funcComponent`'s `postClause`) is EXACTLY the spec's `caps`
+clause, so the apex IMPLIES (and equals) the bespoke spec.
 
 ADDITIVE: imports `EffectCommit2` + the authority-attenuation spec; edits NEITHER them NOR any other
 file. Follows the `burnA` template (function-field `funcComponent`) + the `noteCreateA` template
@@ -47,11 +47,11 @@ set_option linter.dupNamespace false
 
 /-! ## §0 — the single-bit guard sub-system (`mkBitGuard`, copied from the validated template).
 
-`attenuateA`'s guard is the TRIVIAL `True` — the in-place self-narrowing is UNCONDITIONAL (it always
-commits; at worst the identity, still narrower-or-equal). We still commit it as ONE `propBit` column at
-wire `0` (guardWidth = 1) so the instance shape matches the framework's guard sub-system uniformly;
-`propBit True = 1` always, so the single gate `propBit (guardProp) = 1` is always satisfiable — the
-circuit-level reflection of "always commits". (Identical to `noteCreateA`'s trivial guard.) -/
+`attenuateA`'s guard is the IN-BOUNDS slot precondition `idx < (caps actor).length`: the in-place
+self-narrowing FAILS CLOSED when the actor does not hold an `idx`-th cap (a `List.modify` no-op the
+executor refuses). We commit it as ONE `propBit` column at wire `0` (guardWidth = 1); the single gate
+`propBit (guardProp) = 1` decodes to the in-bounds precondition (`attenuateGuardDecodes`), the
+circuit-level reflection of the arm's fail-closed gate. -/
 
 /-- The guard wire (the single `propBit` column). -/
 abbrev vBitGuard : Var := 0
@@ -98,11 +98,15 @@ structure AttenuateArgs where
 def chainView : StateView RecChainedState :=
   { toKernel := (·.kernel), getLog := (·.log) }
 
-/-- The attenuate guard as a `Prop` (the TRIVIAL `True` — the arm is total/unconditional). -/
-def attenuateGuardProp (_s : RecChainedState) (_args : AttenuateArgs) : Prop := True
+/-- The attenuate guard as a `Prop`: the IN-BOUNDS slot precondition (`idx < (caps actor).length`).
+The actor must actually HOLD an `idx`-th cap, else the in-place narrowing would be a `List.modify`
+no-op — the executor fails closed (`execFullA … = none`). So the v2 guard bit reflects the SAME
+admissibility the `.attenuateA` arm enforces (the circuit-level shadow of "fail closed out of bounds"). -/
+def attenuateGuardProp (s : RecChainedState) (args : AttenuateArgs) : Prop :=
+  args.idx < (s.kernel.caps args.actor).length
 
 instance (s : RecChainedState) (args : AttenuateArgs) : Decidable (attenuateGuardProp s args) := by
-  unfold attenuateGuardProp; exact inferInstanceAs (Decidable True)
+  unfold attenuateGuardProp; exact inferInstanceAs (Decidable (_ < _))
 
 /-- The attenuate guard's witness generator: the single `propBit` column at wire `0`. -/
 def attenuateGuardEncode (s : RecChainedState) (args : AttenuateArgs) (_s' : RecChainedState) :
@@ -188,10 +192,10 @@ theorem attenuateRestFrameDecodes (S : Surface2) (D : Caps → ℤ)
 
 /-! ### §2b — the apex ↔ `AttenuateSpec` bridge.
 
-The framework's derived `apex` is `True ∧ (caps eq) ∧ (log eq) ∧ restFrame`. The bespoke `AttenuateSpec`
-is `(caps eq) ∧ (log eq) ∧ (16 frame fields)` — NO guard conjunct (the arm is total). So the bridge
-DROPS the leading `True` and re-packages the same 18 load-bearing conjuncts (the `restFrame` field order
-is VERBATIM `AttenuateSpec`'s frame order, so it is a flat repackaging once `True` is stripped). The
+The framework's derived `apex` is `(idx < length) ∧ (caps eq) ∧ (log eq) ∧ restFrame`. The bespoke
+`AttenuateSpec` is `(idx < length) ∧ (caps eq) ∧ (log eq) ∧ (16 frame fields)` — the guard conjunct IS
+the in-bounds precondition. So the bridge passes the guard through and re-packages the same load-bearing
+conjuncts (the `restFrame` field order is VERBATIM `AttenuateSpec`'s frame order). The
 component `postClause` is the FULL `caps`-function equality `s'.kernel.caps = attenuateSlotF …`, which is
 EXACTLY `AttenuateSpec`'s `caps` clause — so the apex full-function equality IMPLIES (and here equals)
 the bespoke spec. -/
@@ -211,13 +215,13 @@ theorem apex_iff_attenuateSpec (D : Caps → ℤ) (hD : Function.Injective D)
        ↔ AttenuateSpec s args.actor args.idx args.keep s'
   unfold AttenuateSpec attenuateGuardProp attenuateE
   constructor
-  · rintro ⟨_, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
+  · rintro ⟨hInb, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
+    exact ⟨hInb, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-  · rintro ⟨hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
+  · rintro ⟨hInb, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
-    exact ⟨trivial, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
+    exact ⟨hInb, hcaps, hlog, hAcc, hCell, hNul, hRev, hCom, hBal, hQ, hSC, hFac, hLif,
       hDC, hDel, hDgs, hSB⟩
 
 /-! ### §2c — THE VALIDATION: `attenuateA_full_sound ⇒ AttenuateSpec` through the framework. -/

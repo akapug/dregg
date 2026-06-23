@@ -228,6 +228,9 @@ structure AttenuateCapsTreeEncodes {State : Type} (S : CapHashScheme State)
   hold : SpineCommits S oldRoot spine
   hpresent : atKey ∈ keysOf S oldRoot
   hnew : SpineCommits S newRoot spine
+  -- THE IN-BOUNDS precondition (the kernel-level shadow of `hpresent`: the actor holds an `idx`-th cap,
+  -- so the narrow is an admissible UPDATE-AT-KEY, not an out-of-bounds no-op the executor fails closed on).
+  inBounds : idx < (pre.kernel.caps actor).length
   -- THE NAMED `Caps`-FUNCTION RESIDUAL (the in-place slot narrow; the lift from the FORCED key-set
   -- preservation + the in-circuit `granted ⊑ held` to this `Caps`-function equality is the faithful
   -- cap-tree↔kernel encoding — exactly `RotatedKernelRefinementAttenuate.attenuateEncodes.capsMove`).
@@ -260,7 +263,7 @@ theorem attenuate_descriptorRefines_exact {State : Type} (S : CapHashScheme Stat
     (pre post : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
     (henc : AttenuateCapsTreeEncodes S pre post actor idx keep) :
     AttenuateSpec pre actor idx keep post :=
-  ⟨henc.capsMove, henc.logAdv,
+  ⟨henc.inBounds, henc.capsMove, henc.logAdv,
    henc.frame.frAccounts, henc.frame.frCell, henc.frame.frNullifiers, henc.frame.frRevoked,
    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,

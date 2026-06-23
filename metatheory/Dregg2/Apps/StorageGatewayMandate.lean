@@ -315,8 +315,7 @@ theorem execFullA_progLive_preserved (s s' : RecChainedState) (fa : FullActionA)
             · exact absurd hk (by simp)
           rw [hn]; exact ⟨hlive, hprog⟩
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA] at h
-      obtain ⟨rfl⟩ := h; exact ⟨hlive, hprog⟩
+      obtain ⟨_, rfl⟩ := attenuateA_factors h; exact ⟨hlive, hprog⟩
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h
       obtain ⟨rfl⟩ := h; exact ⟨hlive, hprog⟩
@@ -685,7 +684,7 @@ theorem execFullA_anchorVal_preserved (s s' : RecChainedState) (fa : FullActionA
             · exact absurd hk (by simp)
           rw [hn]
   | attenuateA actor idx keep =>
-      simp only [execFullA, attenuateStepA] at h; obtain ⟨rfl⟩ := h; rfl
+      obtain ⟨_, rfl⟩ := attenuateA_factors h; rfl
   | revokeDelegationA holder t =>
       simp only [execFullA, recCRevoke] at h; obtain ⟨rfl⟩ := h; rfl
   | exerciseA actor t inner =>
