@@ -562,6 +562,15 @@ mod live {
         spine: Rc<dyn LedgerSpine>,
         /// The path → file-cell namespace (single-threaded `RefCell`).
         entries: RefCell<BTreeMap<PathBuf, Entry>>,
+        /// OPTIONAL disk-mirror root (off by default). When `Some(root)`, every
+        /// `save` — AFTER the verified turn commits (the cell update is the
+        /// durable receipted source of truth) — ALSO writes the decoded content to
+        /// `<root>/<path>`, a derived read-mirror the legacy disk-reading
+        /// toolchain (cargo/git) compiles from. This is the FirmamentFs↔disk
+        /// dual-write that closes the full self-hosting loop: cell = receipted
+        /// truth, disk file = derived mirror. `None` → exactly the cell-only
+        /// behavior (no disk writes at all).
+        mirror_root: RefCell<Option<PathBuf>>,
     }
 
     impl FirmamentFs {
@@ -582,6 +591,7 @@ mod live {
             FirmamentFs {
                 spine,
                 entries: RefCell::new(BTreeMap::new()),
+                mirror_root: RefCell::new(None),
             }
         }
 
@@ -626,8 +636,75 @@ mod live {
         pub fn seed_file(&self, path: impl Into<PathBuf>, content: &str) -> Result<CellId> {
             let path = path.into();
             let file = self.spine.install_file(content)?;
+            // If a disk mirror is configured, lay the seed content onto disk too,
+            // so the legacy toolchain sees the genesis file (the cell remains the
+            // source of truth; this is the derived read-mirror).
+            self.mirror_write(&path, content)?;
             self.entries.borrow_mut().insert(path, Entry { cell: file });
             Ok(file)
+        }
+
+        /// **Enable the disk dual-write** by configuring `root` as the mirror root
+        /// (off by default). After this, every [`Fs::save`](crate::fs::Fs::save) —
+        /// once the verified turn commits — also writes the new content to
+        /// `<root>/<path>`, the derived disk mirror the legacy disk-reading
+        /// toolchain (cargo/git) compiles from. The cell stays the receipted
+        /// source of truth; the disk file is a read-mirror. Mirrors EVERY file
+        /// currently in the namespace immediately (so already-seeded files appear
+        /// on disk at the moment the mirror is enabled), then dual-writes on each
+        /// later save. A mirror write error surfaces (fail-loud — the disk never
+        /// silently desyncs from the ledger).
+        pub fn enable_disk_mirror(&self, root: impl Into<PathBuf>) -> Result<()> {
+            let root = root.into();
+            std::fs::create_dir_all(&root)
+                .with_context(|| format!("creating mirror root {}", root.display()))?;
+            *self.mirror_root.borrow_mut() = Some(root);
+            // Backfill: mirror every already-seeded file's current content so the
+            // disk view matches the ledger from the first command.
+            let snapshot: Vec<(PathBuf, CellId)> = self
+                .entries
+                .borrow()
+                .iter()
+                .map(|(p, e)| (p.clone(), e.cell))
+                .collect();
+            for (path, cell_id) in snapshot {
+                if let Some(cell) = self.spine.cell(&cell_id) {
+                    let content = decode_content(&cell)?;
+                    self.mirror_write(&path, &content)?;
+                }
+            }
+            Ok(())
+        }
+
+        /// The configured disk-mirror root, if the dual-write is enabled.
+        pub fn mirror_root(&self) -> Option<PathBuf> {
+            self.mirror_root.borrow().clone()
+        }
+
+        /// Resolve a namespace `path` to its on-disk mirror location under the
+        /// mirror root. The namespace uses absolute-looking paths (e.g.
+        /// `/deos/main.rs`); we strip the leading `/` and join under the root so
+        /// `/deos/main.rs` → `<root>/deos/main.rs`. A relative path joins directly.
+        fn mirror_path(root: &Path, path: &Path) -> PathBuf {
+            let rel = path.strip_prefix("/").unwrap_or(path);
+            root.join(rel)
+        }
+
+        /// Write `content` to the disk mirror for `path` IF the mirror is enabled
+        /// (else a no-op — exactly the cell-only behavior). Creates parent dirs.
+        /// Fail-loud: a write error is returned so the disk can never silently
+        /// desync from the receipted ledger.
+        fn mirror_write(&self, path: &Path, content: &str) -> Result<()> {
+            let root = self.mirror_root.borrow().clone();
+            let Some(root) = root else { return Ok(()) };
+            let disk = Self::mirror_path(&root, path);
+            if let Some(parent) = disk.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating mirror dir {}", parent.display()))?;
+            }
+            std::fs::write(&disk, content)
+                .with_context(|| format!("mirroring save to disk at {}", disk.display()))?;
+            Ok(())
         }
     }
 
@@ -671,6 +748,12 @@ mod live {
             // provenance log; a light client can confirm the file holds this
             // content without trusting the editor.
             self.spine.commit_save(file, content)?;
+            // DUAL-WRITE: the verified turn is committed (the cell is the durable
+            // receipted source of truth); now mirror the new content to disk IF a
+            // mirror root is configured, so the legacy disk-reading toolchain
+            // (cargo/git) compiles THIS edit. Off by default → a no-op. Fail-loud
+            // on a mirror error: the disk must not silently desync from the ledger.
+            self.mirror_write(path, content)?;
             Ok(())
         }
 
@@ -830,6 +913,62 @@ mod live {
             assert!(!md.is_dir && md.len == 1);
             let dmd = fs.metadata(Path::new("/proj/sub")).unwrap();
             assert!(dmd.is_dir);
+        }
+
+        #[test]
+        fn disk_mirror_dual_writes_each_save_after_the_receipt() {
+            // THE FULL-LOOP WIRE: with the mirror enabled, a receipted save also
+            // lands the new content on disk where the legacy toolchain reads it.
+            // The cell is the source of truth; the disk file is a derived mirror.
+            let dir = std::env::temp_dir().join(format!(
+                "firmament-mirror-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let fs = FirmamentFs::new();
+            let path = PathBuf::from("/proj/src/main.rs");
+            let v1 = "fn main() { println!(\"v1\"); }\n";
+            let v2 = "fn main() { println!(\"v2\"); }\n";
+
+            fs.seed_file(&path, v1).unwrap();
+            // Enabling the mirror backfills the seed content onto disk.
+            fs.enable_disk_mirror(&dir).unwrap();
+            let on_disk = dir.join("proj/src/main.rs");
+            assert_eq!(
+                std::fs::read_to_string(&on_disk).unwrap(),
+                v1,
+                "enabling the mirror backfills the seeded content to disk"
+            );
+
+            // A receipted save dual-writes the edit to disk.
+            fs.save(&path, v2).unwrap();
+            assert_eq!(fs.receipt_count(), 1, "the save is a real receipted turn");
+            assert_eq!(
+                std::fs::read_to_string(&on_disk).unwrap(),
+                v2,
+                "the save's new content is mirrored to disk for the legacy toolchain"
+            );
+            // The cell remains the source of truth: a re-load reads from the ledger.
+            assert_eq!(fs.load(&path).unwrap(), v2);
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn mirror_off_by_default_writes_no_disk() {
+            // The default (no mirror) writes NOTHING to disk — exactly today's
+            // cell-only behavior. (We can't easily assert "no file anywhere", but
+            // we can assert the namespace works without a configured root.)
+            let fs = FirmamentFs::new();
+            assert!(fs.mirror_root().is_none(), "mirror is off by default");
+            let path = PathBuf::from("/x.rs");
+            fs.seed_file(&path, "a").unwrap();
+            fs.save(&path, "b").unwrap();
+            assert_eq!(fs.load(&path).unwrap(), "b");
+            assert!(fs.mirror_root().is_none(), "still off after a save");
         }
 
         #[test]
