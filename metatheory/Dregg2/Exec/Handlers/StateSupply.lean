@@ -320,6 +320,148 @@ def stateWriteH : EffectHandler StateWriteArgs where
       rw [stateWrite_recTotalAsset_fixed s a b]; ring
     · rw [if_neg hg] at h; exact absurd h (by simp)
 
+/-! ### §2.0b — FLOOR-CARRYING STATE WRITES (the P1 migration: the gate-hole class closed structurally).
+
+`stateWriteH` (above) is the GENERIC live-gated write the PROTOCOL-SLOT effects
+(`IncrementNonce`/`SetPermissions`/`SetVK`/`SetProgram`/…) ride — each OWNS its (reserved) slot, so a
+reserved-field gate would WRONGLY reject them. But the DEVELOPER-facing `SetField` (`.setFieldA`) must
+fail-closed on the four protocol slots (the nonce-reset replay vector) AND honor the slot caveats; and
+the dedicated `IncrementNonce` (`.incrementNonceA`) must fail-closed on a NON-advancing nonce (the
+monotone floor). Carried TODAY as the `hnr`/`hcav`/`hmono` SIDE-HYPOTHESES of the refinement theorems —
+the silent-gate holes.
+
+The migration gives `.setFieldA` and `.incrementNonceA` their OWN floor-carrying handlers whose `step`
+ROUTES THROUGH the just-banked gated kernel ops. The handler's `step` itself rejects a reserved /
+caveat-violating / non-advancing write, so the refinement theorem reads the floor off the COMMIT
+(`*_discharges` below) instead of taking it as a hypothesis — the side-hyp is SHED. -/
+
+/-! #### `setFieldDevH` — the DEVELOPER `SetField`, reserved-field + caveat gated (sheds `hnr`/`hcav`). -/
+
+/-- **The developer-write kernel step.** Fail-closed on a RESERVED protocol slot (`reservedField`), on
+a caveat-violating write (`caveatsAdmit`), and on the live+authority gate `stateWriteStep` already
+carries — then the same `writeField` post. The kernel twin of `EffectsState.stateStepDev` (which works
+over `RecChainedState`); the reserved + caveat gates are read off the bare `RecordKernelState` so the
+handler's own step now rejects what `hnr`/`hcav` USED to assert about the caller. -/
+def setFieldDevStep (k : RecordKernelState) (a : StateWriteArgs) : Option RecordKernelState :=
+  if (!EffectsState.reservedField a.field)
+      && EffectsState.caveatsAdmit k a.field a.actor a.target a.value then
+    stateWriteStep k a
+  else none
+
+/-- A committed developer write took a NON-reserved slot (`reservedField a.field = false`) — the
+witness the reserved gate was passed. This is the `hnr` that `handler_refines_execFullA_setField`
+USED to take as a hypothesis, now PRODUCED by the commit. -/
+theorem setFieldDevStep_notReserved {k k' : RecordKernelState} {a : StateWriteArgs}
+    (h : setFieldDevStep k a = some k') : EffectsState.reservedField a.field = false := by
+  unfold setFieldDevStep at h
+  by_cases hg : (!EffectsState.reservedField a.field)
+      && EffectsState.caveatsAdmit k a.field a.actor a.target a.value
+  · simp only [Bool.and_eq_true, Bool.not_eq_true'] at hg; exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- A committed developer write satisfied every slot caveat (`caveatsAdmit = true`) — the `hcav` the
+refinement USED to take, now read off the commit. -/
+theorem setFieldDevStep_caveatsAdmit {k k' : RecordKernelState} {a : StateWriteArgs}
+    (h : setFieldDevStep k a = some k') :
+    EffectsState.caveatsAdmit k a.field a.actor a.target a.value = true := by
+  unfold setFieldDevStep at h
+  by_cases hg : (!EffectsState.reservedField a.field)
+      && EffectsState.caveatsAdmit k a.field a.actor a.target a.value
+  · simp only [Bool.and_eq_true, Bool.not_eq_true'] at hg; exact hg.2
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- A committed developer write is EXACTLY the underlying `stateWriteStep` write (the reserved + caveat
+gates only restrict the domain). Lifts `stateWriteStep`'s obligation discharges verbatim. -/
+theorem setFieldDevStep_eq {k k' : RecordKernelState} {a : StateWriteArgs}
+    (h : setFieldDevStep k a = some k') : stateWriteStep k a = some k' := by
+  unfold setFieldDevStep at h
+  by_cases hg : (!EffectsState.reservedField a.field)
+      && EffectsState.caveatsAdmit k a.field a.actor a.target a.value
+  · rw [if_pos hg] at h; exact h
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- FAIL-CLOSED: a developer `SetField` of a RESERVED slot does NOT commit (the reserved floor bites). -/
+theorem setFieldDevStep_reserved_fails (k : RecordKernelState) (a : StateWriteArgs)
+    (h : EffectsState.reservedField a.field = true) : setFieldDevStep k a = none := by
+  unfold setFieldDevStep; rw [if_neg (by simp [h])]
+
+/-- FAIL-CLOSED: a caveat-violating developer write does NOT commit (the caveat floor bites). -/
+theorem setFieldDevStep_caveat_fails (k : RecordKernelState) (a : StateWriteArgs)
+    (h : EffectsState.caveatsAdmit k a.field a.actor a.target a.value = false) :
+    setFieldDevStep k a = none := by
+  unfold setFieldDevStep; rw [if_neg (by simp [h])]
+
+/-- **`setFieldDevH` — the reserved-field + caveat gated developer `SetField` handler.** Same `delta`
+/`auth`/`admission`/`trace`/`conserves`/`auth_gated`/`admission_gated` as `stateWriteH` — all
+discharged by routing the committed step through `setFieldDevStep_eq` to the underlying
+`stateWriteStep`. The headline: the handler's OWN step rejects a reserved-slot or caveat-violating
+write, so the `.setFieldA` refinement reads `hnr`/`hcav` OFF the commit rather than taking them as
+hypotheses. -/
+def setFieldDevH : EffectHandler StateWriteArgs where
+  step := setFieldDevStep
+  delta := fun _ _ => 0
+  auth := fun k a => authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  admission := fun k a => acceptsEffects k a.target
+  trace := fun a => { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  auth_gated := by
+    intro s a s' h; exact stateWriteH.auth_gated s a s' (setFieldDevStep_eq h)
+  admission_gated := by
+    intro s a s' h; exact stateWriteH.admission_gated s a s' (setFieldDevStep_eq h)
+  conserves := by
+    intro s a s' h b; exact stateWriteH.conserves s a s' (setFieldDevStep_eq h) b
+
+/-! #### `incrementNonceDevH` — the MONOTONE `IncrementNonce` (sheds `hmono`). -/
+
+/-- **The monotone-nonce kernel step.** Fail-closed on a NON-advancing nonce
+(`fieldOf "nonce" (k.cell target) < value`), then the same live+authority `stateWriteStep` at the
+`nonce` field. The kernel twin of `EffectsState.incrementNonceStep`; the monotone gate reads the bare
+`RecordKernelState`, so the handler's own step rejects a reset — what `hmono` USED to assert. -/
+def incrementNonceDevStep (k : RecordKernelState) (a : StateWriteArgs) : Option RecordKernelState :=
+  if EffectsState.fieldOf "nonce" (k.cell a.target) < a.value then
+    stateWriteStep k a
+  else none
+
+/-- A committed monotone-nonce write STRICTLY advanced the stored nonce — the `hmono` the refinement
+USED to take, now read off the commit. -/
+theorem incrementNonceDevStep_advances {k k' : RecordKernelState} {a : StateWriteArgs}
+    (h : incrementNonceDevStep k a = some k') :
+    EffectsState.fieldOf "nonce" (k.cell a.target) < a.value := by
+  unfold incrementNonceDevStep at h
+  by_cases hg : EffectsState.fieldOf "nonce" (k.cell a.target) < a.value
+  · exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- A committed monotone-nonce write is EXACTLY the underlying `stateWriteStep` write. -/
+theorem incrementNonceDevStep_eq {k k' : RecordKernelState} {a : StateWriteArgs}
+    (h : incrementNonceDevStep k a = some k') : stateWriteStep k a = some k' := by
+  unfold incrementNonceDevStep at h
+  by_cases hg : EffectsState.fieldOf "nonce" (k.cell a.target) < a.value
+  · rw [if_pos hg] at h; exact h
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- FAIL-CLOSED: a non-advancing `IncrementNonce` (a reset / no-op) does NOT commit (the monotone
+floor bites). -/
+theorem incrementNonceDevStep_nonincreasing_fails (k : RecordKernelState) (a : StateWriteArgs)
+    (h : ¬ EffectsState.fieldOf "nonce" (k.cell a.target) < a.value) :
+    incrementNonceDevStep k a = none := by
+  unfold incrementNonceDevStep; rw [if_neg h]
+
+/-- **`incrementNonceDevH` — the monotone `IncrementNonce` handler.** Same obligations as
+`stateWriteH`, discharged via `incrementNonceDevStep_eq`. The handler's own step rejects a
+non-advancing nonce, so the `.incrementNonceA` refinement reads `hmono` OFF the commit. -/
+def incrementNonceDevH : EffectHandler StateWriteArgs where
+  step := incrementNonceDevStep
+  delta := fun _ _ => 0
+  auth := fun k a => authorizedB k.caps { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  admission := fun k a => acceptsEffects k a.target
+  trace := fun a => { actor := a.actor, src := a.target, dst := a.target, amt := 0 }
+  auth_gated := by
+    intro s a s' h; exact stateWriteH.auth_gated s a s' (incrementNonceDevStep_eq h)
+  admission_gated := by
+    intro s a s' h; exact stateWriteH.admission_gated s a s' (incrementNonceDevStep_eq h)
+  conserves := by
+    intro s a s' h b; exact stateWriteH.conserves s a s' (incrementNonceDevStep_eq h) b
+
 /-! ### §2.1 — The seven STATE effects as the generic write at a fixed field name.
 
 Each is `stateWriteH` (the SAME proven handler) wrapped in a `ClosedEffect` builder that pins the
@@ -421,7 +563,8 @@ the generic state write, and the heap write. Adding an effect is adding one well
 def stateSupplyRegistry : Registry :=
   [ ⟨SupplyArgs, mintH⟩, ⟨SupplyArgs, burnH⟩, ⟨SupplyArgs, bridgeMintH⟩,
     ⟨CreateArgs, createCellH⟩, ⟨CreateArgs, createCellFromFactoryH⟩, ⟨CreateArgs, spawnH⟩,
-    ⟨StateWriteArgs, stateWriteH⟩, ⟨HeapWriteArgs, heapWriteH⟩ ]
+    ⟨StateWriteArgs, stateWriteH⟩, ⟨StateWriteArgs, setFieldDevH⟩,
+    ⟨StateWriteArgs, incrementNonceDevH⟩, ⟨HeapWriteArgs, heapWriteH⟩ ]
 
 /-- Build a closed mint effect (tag `0`). -/
 def mintEffect (actor cell : CellId) (asset : AssetId) (amt : Int) : ClosedEffect :=
@@ -462,12 +605,20 @@ def heapWriteEffect (actor target : CellId) (addr value newRoot : Int) : ClosedE
     args := { actor := actor, target := target, addr := addr, value := value, newRoot := newRoot },
     handler := heapWriteH }
 
-/-- `SetField` — the generic field write at an explicit field. -/
+/-- `SetField` — the DEVELOPER field write, routed through the reserved-field + caveat gated
+`setFieldDevH` (so a write of a protocol slot or a caveat-violating write FAILS in the handler's own
+step — the floor is carried, not a caller obligation). -/
 def setFieldEffect (actor target : CellId) (field : FieldName) (value : Int) : ClosedEffect :=
-  stateWriteEffect actor target field value
-/-- `IncrementNonce` — a write to the `nonce` field. -/
+  { tag := 6, Args := StateWriteArgs,
+    args := { actor := actor, target := target, field := field, value := value },
+    handler := setFieldDevH }
+/-- `IncrementNonce` — a write to the `nonce` field, routed through the MONOTONE-gated
+`incrementNonceDevH` (a non-advancing nonce FAILS in the handler's own step — the monotone floor is
+carried, not a caller obligation). -/
 def incrementNonceEffect (actor target : CellId) (n : Int) : ClosedEffect :=
-  stateWriteEffect actor target nonceField n
+  { tag := 6, Args := StateWriteArgs,
+    args := { actor := actor, target := target, field := nonceField, value := n },
+    handler := incrementNonceDevH }
 /-- `SetPermissions` — a write to the `permissions` field. -/
 def setPermissionsEffect (actor target : CellId) (p : Int) : ClosedEffect :=
   stateWriteEffect actor target permissionsField p
@@ -618,6 +769,26 @@ def hs1Destroyed : RecordKernelState :=
 -- §TEETH-9: the SAME nonce write into a LIVE cell 0 SUCCEEDS and writes the field, measure unchanged.
 #guard ((execEffect (incrementNonceEffect 0 0 7) hs0).map
         (fun k => (fieldOf nonceField (k.cell 0), recTotalAsset k 0))) == some (7, 150)  --  some (7, 150)
+-- §TEETH-9a (RESERVED FLOOR BITES, P1): a DEVELOPER `SetField` of a RESERVED protocol slot ("nonce")
+-- into the LIVE, AUTHORIZED cell 0 is REJECTED by `setFieldDevH`'s OWN step — the reserved-field floor
+-- the handler now CARRIES (a mutation that drops the gate would commit; this confirms it bites).
+#guard ((execEffect (setFieldEffect 0 0 "nonce" 7) hs0).isSome) == false  --  false (reserved floor)
+#guard ((execEffect (setFieldEffect 0 0 "permissions" 7) hs0).isSome) == false  --  false (reserved floor)
+#guard ((execEffect (setFieldEffect 0 0 "verification_key" 7) hs0).isSome) == false  --  false
+#guard ((execEffect (setFieldEffect 0 0 "program" 7) hs0).isSome) == false  --  false
+-- §TEETH-9b: a DEVELOPER `SetField` of a NON-reserved slot ("display_name") SUCCEEDS (the floor only
+-- forbids the four protocol slots — NON-VACUITY: the gate passes the honest write).
+#guard ((execEffect (setFieldEffect 0 0 "display_name" 42) hs0).map
+        (fun k => fieldOf "display_name" (k.cell 0))) == some 42  --  some 42
+-- §TEETH-9c (MONOTONE FLOOR BITES, P1): a NON-advancing `IncrementNonce` is REJECTED by
+-- `incrementNonceDevH`'s OWN step. First advance the stored nonce to 7, then a write of 7 (no-op) and
+-- of 3 (a RESET) are both rejected — the monotone floor the handler now carries.
+def hs0Nonce7 : RecordKernelState :=
+  { hs0 with cell := fun c => if c = 0 then .record [("balance", .int 0), ("nonce", .int 7)] else hs0.cell c }
+#guard ((execEffect (incrementNonceEffect 0 0 7) hs0Nonce7).isSome) == false  --  false (no-op, not advancing)
+#guard ((execEffect (incrementNonceEffect 0 0 3) hs0Nonce7).isSome) == false  --  false (reset, replay vector)
+#guard ((execEffect (incrementNonceEffect 0 0 9) hs0Nonce7).map
+        (fun k => fieldOf nonceField (k.cell 0))) == some 9  --  some 9 (a strict advance commits)
 -- §TEETH-10 (W1): a turn = [mint 25 → cell 1; burn 10 ← cell 1; setPermissions] runs through the
 -- registry foldlM and the combined measure is EXACTLY CONSERVED at 150 — the sum of a family of
 -- zeros (the issuer well absorbed the net +15: 100 → 85; cell 1 ended at 65).
@@ -659,6 +830,8 @@ triple. -/
 #assert_axioms createCellFromFactoryH
 #assert_axioms spawnH
 #assert_axioms stateWriteH
+#assert_axioms setFieldDevH
+#assert_axioms incrementNonceDevH
 #assert_axioms makeSovereignH
 #assert_axioms stateWrite_recTotalAsset_fixed
 

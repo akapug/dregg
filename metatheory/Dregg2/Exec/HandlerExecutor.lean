@@ -151,7 +151,7 @@ def toClosedEffect : FullActionA → ClosedEffect
   | .mintA actor cell a amt     => mintEffect actor cell a amt
   | .burnA actor cell a amt     => burnEffect actor cell a amt
   -- §field writes (the 4 protocol-managed + the 3 Wave-6 flags) → generic live-gated write at a field
-  | .setFieldA actor cell f v        => stateWriteEffect actor cell f v
+  | .setFieldA actor cell f v        => setFieldEffect actor cell f v
   | .emitEventA actor cell topic data => emitEventEffect actor cell topic data
   | .incrementNonceA actor cell n     => incrementNonceEffect actor cell n
   | .setPermissionsA actor cell p     => setPermissionsEffect actor cell p
@@ -560,21 +560,32 @@ the gate `execFullA`'s `stateStep` checks. (The representative for the whole fie
 family — `setField`/`setPermissions`/`setVK`/`makeSovereign`/`refusal`/`receiptArchive`/`emit`/the
 cell-lifecycle arms — which `toClosedEffect` routes through the SAME `stateWriteH`.) -/
 
-/-- **`handler_refines_execFullA_stateWrite` — THE R6 STRENGTHENING.**
+/-- **`handler_refines_execFullA_stateWrite` — THE R6 STRENGTHENING + `hmono` SHED (P1).**
 On the honest path where the target cell EXISTS (`cell ∈ accounts`), whenever the handler executor
 commits a nonce write, `execFullA` ALSO commits it AND produces the SAME kernel. With R6 reconciled,
-`execFullA`'s bare `stateStep` now shares the handler's `acceptsEffects`/`cellLive` liveness gate
+`execFullA`'s bare `stateStep` shares the handler's `acceptsEffects`/`cellLive` liveness gate
 (definitionally), so the handler's liveness conjunct discharges the executor's; the shared authority
-gate (`stateAuthB`) and the SAME `writeField nonceField` post-state make the kernels coincide. -/
+gate (`stateAuthB`) and the SAME `writeField nonceField` post-state make the kernels coincide.
+The `.incrementNonceA` arm now routes through `incrementNonceDevH`, whose `step`
+(`incrementNonceDevStep`) ITSELF rejects a NON-advancing nonce. So the monotone fact (`hmono`) is no
+longer a caller hypothesis — it is READ OFF the commit via `incrementNonceDevStep_advances`. The
+refinement now holds UNCONDITIONALLY (only `hmem` remains). BEFORE this carried
+`(hmono : fieldOf "nonce" … < n)`; AFTER, it does not. -/
 theorem handler_refines_execFullA_stateWrite (s s' : RecChainedState) (actor cell : CellId) (n : Int)
     (hmem : cell ∈ s.kernel.accounts)
-    (hmono : Dregg2.Exec.EffectsState.fieldOf "nonce" (s.kernel.cell cell) < n)
     (h : execHandlerOne (.incrementNonceA actor cell n) s = some s') :
     ∃ s'', execFullA s (.incrementNonceA actor cell n) = some s'' ∧ s''.kernel = s'.kernel := by
   have hstep := execHandlerOne_kernel (.incrementNonceA actor cell n) s s' h
   -- `toClosedEffect`'s `.incrementNonceA` arm = `incrementNonceEffect actor cell n`; step IS
-  -- `stateWriteStep` at `field := nonceField`. Expose the gate `if`.
+  -- `incrementNonceDevStep` at `field := nonceField`.
   rw [toClosedEffect] at hstep
+  change Dregg2.Exec.Handlers.StateSupply.incrementNonceDevStep s.kernel
+    { actor := actor, target := cell, field := nonceField, value := n } = some s'.kernel at hstep
+  -- READ the monotone floor OFF the commit (no caller hypothesis): the handler's own step gated it.
+  -- `nonceField` is DEFINITIONALLY `"nonce"`, so the `target`-field read aligns.
+  have hmono : Dregg2.Exec.EffectsState.fieldOf "nonce" (s.kernel.cell cell) < n :=
+    Dregg2.Exec.Handlers.StateSupply.incrementNonceDevStep_advances hstep
+  replace hstep := Dregg2.Exec.Handlers.StateSupply.incrementNonceDevStep_eq hstep
   change stateWriteStep s.kernel
     { actor := actor, target := cell, field := nonceField, value := n } = some s'.kernel at hstep
   unfold stateWriteStep at hstep
@@ -609,10 +620,9 @@ theorem handler_refines_execFullA_stateWrite (s s' : RecChainedState) (actor cel
 through `incrementNonceEffect` = `stateWriteEffect` at `nonceField`. -/
 theorem handler_refines_execFullA_incrementNonce (s s' : RecChainedState) (actor cell : CellId) (n : Int)
     (hmem : cell ∈ s.kernel.accounts)
-    (hmono : Dregg2.Exec.EffectsState.fieldOf "nonce" (s.kernel.cell cell) < n)
     (h : execHandlerOne (.incrementNonceA actor cell n) s = some s') :
     ∃ s'', execFullA s (.incrementNonceA actor cell n) = some s'' ∧ s''.kernel = s'.kernel :=
-  handler_refines_execFullA_stateWrite s s' actor cell n hmem hmono h
+  handler_refines_execFullA_stateWrite s s' actor cell n hmem h
 
 theorem handler_refines_execFullA_setPermissions (s s' : RecChainedState) (actor cell : CellId) (p : Int)
     (hmem : cell ∈ s.kernel.accounts)
@@ -794,14 +804,28 @@ theorem handler_refines_execFullA_receiptArchive (s s' : RecChainedState) (actor
     ∃ s'', execFullA s (.receiptArchiveA actor cell) = some s'' ∧ s''.kernel = s'.kernel :=
   hole_handler_receiptArchive s s' actor cell hmem h
 
+/-- **`handler_refines_execFullA_setField` — `hnr`/`hcav` SHED (P1, the gate-hole closed structurally).**
+The `.setFieldA` arm now routes through `setFieldDevH`, whose `step` (`setFieldDevStep`) ITSELF rejects
+a RESERVED protocol slot AND a caveat-violating write. So the reserved-field fact (`hnr`) and the caveat
+fact (`hcav`) are no longer caller hypotheses — they are READ OFF the commit via
+`setFieldDevStep_notReserved` / `setFieldDevStep_caveatsAdmit`. The refinement now holds
+UNCONDITIONALLY (only `hmem`, the honest-path cell-existence, remains). BEFORE this carried
+`(hnr : reservedField f = false)` and `(hcav : caveatsAdmit … = true)`; AFTER, neither. -/
 theorem handler_refines_execFullA_setField (s s' : RecChainedState) (actor cell : CellId)
     (f : FieldName) (v : Int) (hmem : cell ∈ s.kernel.accounts)
-    (hnr : Dregg2.Exec.EffectsState.reservedField f = false)
-    (hcav : caveatsAdmit s.kernel f actor cell v = true)
     (h : execHandlerOne (.setFieldA actor cell f v) s = some s') :
     ∃ s'', execFullA s (.setFieldA actor cell f v) = some s'' ∧ s''.kernel = s'.kernel := by
   have hstep := execHandlerOne_kernel (.setFieldA actor cell f v) s s' h
   rw [toClosedEffect] at hstep
+  change Dregg2.Exec.Handlers.StateSupply.setFieldDevStep s.kernel
+    { actor := actor, target := cell, field := f, value := v } = some s'.kernel at hstep
+  -- READ the floors OFF the commit (no caller hypothesis): the handler's own step gated them.
+  have hnr : Dregg2.Exec.EffectsState.reservedField f = false :=
+    Dregg2.Exec.Handlers.StateSupply.setFieldDevStep_notReserved hstep
+  have hcav : caveatsAdmit s.kernel f actor cell v = true :=
+    Dregg2.Exec.Handlers.StateSupply.setFieldDevStep_caveatsAdmit hstep
+  -- the committed dev write IS the underlying `stateWriteStep` write — proceed as before.
+  replace hstep := Dregg2.Exec.Handlers.StateSupply.setFieldDevStep_eq hstep
   change stateWriteStep s.kernel
     { actor := actor, target := cell, field := f, value := v } = some s'.kernel at hstep
   unfold stateWriteStep at hstep

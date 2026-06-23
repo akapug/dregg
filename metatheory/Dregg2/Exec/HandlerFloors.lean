@@ -127,8 +127,8 @@ structure NonceArgs where
 
 The reserved-field floor is the just-banked `c4f4f0012` fix: a developer `SetField` may NOT write a
 protocol-managed slot (`nonce`/`permissions`/`verification_key`/`program`) — only its dedicated effect
-owns it. This is a BOOL gate (`reservedField f = false`). It is carried TODAY as the `hnr` side-hyp of
-`handler_refines_execFullA_setField`.
+owns it. This is a BOOL gate (`reservedField f = false`). It WAS carried as the `hnr` side-hyp of
+`handler_refines_execFullA_setField` — now SHED (§P1): the `.setFieldA` handler's own step carries it.
 
 We give the developer-write step `stateStepDev` a `FloorObligation` whose floor is `reservedField
 a.field = false`, discharged from `stateStepDev_notReserved` (the just-banked lemma proving a committed
@@ -199,15 +199,15 @@ theorem nonceMonotoneFloor_bites (s : RecChainedState) (a : NonceArgs)
   exact EffectsState.incrementNonceStep_nonincreasing_fails s a.actor a.target a.value h
 
 /-- **`reservedFieldFloor` DISCHARGES** — a committed developer write SUPPLIES `reservedField = false`
-WITHOUT a side-hypothesis. This is the `hnr` that `handler_refines_execFullA_setField` currently takes
-as input, now PRODUCED by the commit via the obligation. -/
+WITHOUT a side-hypothesis. This is the `hnr` that `handler_refines_execFullA_setField` USED to take
+as input (now SHED, §P1), produced by the commit via the obligation. -/
 theorem reservedFieldFloor_discharges {s s' : RecChainedState} {a : SetFieldArgs}
     (h : setFieldStep s a = some s') : reservedField a.field = false :=
   reservedFieldFloor.discharge h
 
 /-- **`nonceMonotoneFloor` DISCHARGES** — a committed nonce write SUPPLIES the monotone relation
-WITHOUT a side-hypothesis. This is the `hmono` that `handler_refines_execFullA_stateWrite` currently
-takes as input, now PRODUCED by the commit via the obligation (the relational floor sheds too). -/
+WITHOUT a side-hypothesis. This is the `hmono` that `handler_refines_execFullA_stateWrite` USED to
+take as input (now SHED, §P1), produced by the commit via the obligation (the relational floor shed too). -/
 theorem nonceMonotoneFloor_discharges {s s' : RecChainedState} {a : NonceArgs}
     (h : nonceStep s a = some s') : fieldOf "nonce" (s.kernel.cell a.target) < a.value :=
   nonceMonotoneFloor.discharge h
@@ -222,18 +222,33 @@ theorem nonceMonotoneFloor_discharges {s s' : RecChainedState} {a : NonceArgs}
 #assert_axioms reservedFieldFloor_bites
 #assert_axioms nonceMonotoneFloor_bites
 
-/-! ## §P1 — THE NEXT STEP (the campaign's first migration, recorded for the handoff).
+/-! ## §P1 — DONE (the field-write family migrated; THREE side-hyps SHED). § P2 — THE NEXT FAMILY.
 
-The first handler to migrate is the field-write family handler **`stateWriteH`**
-(`Handlers/StateSupply.lean:294`), routed by `toClosedEffect` for `.setFieldA`/`.incrementNonceA`/the
-seven state effects. The first floor to shed is the **reserved-field** floor on the `.setFieldA` arm
-(`handler_refines_execFullA_setField`, `HandlerExecutor.lean:797`): give `stateWriteH`'s step (or a
-`setFieldH` sibling) the `reservedFieldFloor` obligation by routing `.setFieldA` through `stateStepDev`
-(which ALREADY fail-closes on reserved slots) rather than the bare `stateWriteStep`, so the handler's
-own step rejects a reserved write — then `reservedFieldFloor_discharges` supplies `hnr` from the
-commit and `handler_refines_execFullA_setField` DROPS its `hnr` side-hypothesis. The `hcav`
-(caveat-admission) floor sheds in the same migration via `stateStepGuarded`'s `caveatsAdmit` gate (the
-same Bool-gate shape). The monotone-nonce floor (`hmono`) sheds analogously on the `.incrementNonceA`
-arm by routing through `incrementNonceStep` (with `nonceMonotoneFloor`) instead of the bare write. -/
+**P1 LANDED.** The developer `SetField` (`.setFieldA`) and the dedicated `IncrementNonce`
+(`.incrementNonceA`) now route through their OWN floor-carrying handlers (`Handlers/StateSupply.lean`,
+`setFieldDevH` / `incrementNonceDevH`) whose `step` ITSELF fail-closes on the floor — the reserved
+protocol slot + slot caveat for `.setFieldA` (`setFieldDevStep`), the strict-advance for
+`.incrementNonceA` (`incrementNonceDevStep`). The refinement theorems read the floor OFF the commit
+(`setFieldDevStep_notReserved` / `_caveatsAdmit`, `incrementNonceDevStep_advances`) instead of taking
+it as a caller hypothesis, so:
+
+  * `handler_refines_execFullA_setField` SHED `hnr` (`reservedField f = false`) AND `hcav`
+    (`caveatsAdmit … = true`); and
+  * `handler_refines_execFullA_stateWrite` (=`…_incrementNonce`) SHED `hmono` (the monotone relation).
+
+The generic `stateWriteH` STAYS for the protocol-slot writers (`setPermissions`/`setVK`/`setProgram`/…)
+— each OWNS its (reserved) slot, so the reserved gate must NOT apply to them. The teeth
+(`Handlers/StateSupply.lean §TEETH-9a/9b/9c`) confirm the floors BITE through the migrated handlers (a
+`SetField` of `"nonce"`/`"permissions"`/… and a non-advancing `IncrementNonce` are all REJECTED) and
+do NOT over-reject (a non-reserved write and a strict advance commit).
+
+**P2 — the next floor families** (the obligation table, `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`):
+  * **authority non-amplification** — the `delegateAtten`/`introduce` family: a granted cap-set must be
+    `⊆` the held set (a relational floor, like monotone-nonce). Carried as the descent side-condition.
+  * **lifecycle freshness / delegation-epoch** — the `refreshDelegationA` residual (the
+    `delegationEpochAt` re-stamp `handler_refines_execFullA_refreshDelegation` carries as a named
+    kernel residual): route through an epoch-stamping step so the residual is internal.
+  * **forest-path / index-membership floors** — the `noteSpend`/heap-membership family: the spend's
+    non-membership + the heap leaf-index bound. -/
 
 end Dregg2.Exec.HandlerFloors
