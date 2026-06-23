@@ -69,13 +69,29 @@ silo that happens to render inside deos.
 
 ## What is here today — the LIVE path (proven against a real homeserver)
 
-- `MatrixClient` (`src/client.rs`) — configure a homeserver + SQLite store (URL
-  **or** bare server-name with `.well-known` discovery), **password login** and
-  **access-token / SSO login** with session persistence, session restore,
-  encrypted `sync_once`/`sync_forever`, `joined_rooms()`, `recent_timeline()`,
-  **`send_text()`**, and **`send_membrane()`** — the membrane rides as a custom
-  field inside an ordinary `m.room.message`. The receive side extracts it back
-  into a typed `MembraneEnvelope` (fail-closed on a future wire version).
+- `MatrixClient` (`src/client.rs`) — the protocol surface a heavy Matrix user
+  needs to be comfortable on **his own custom homeserver**:
+  - **Custom-homeserver login**: a URL **or** a bare server-name (`.well-known`
+    discovery), **password**, **access-token**, and **SSO/OIDC** (`login_sso`
+    opens the homeserver's login page via the local-HTTP redirect flow;
+    `sso_login_url` for clients that drive the browser themselves), all with a
+    device display-name, session persistence, and restore.
+  - **E2E a nheko user trusts**: device verification via `VerificationFlow`
+    (`src/verification.rs` — request → SAS-emoji compare → confirm, the
+    cross-signing "verify the person, not the device" flow), key **backup** status
+    (`backup_enabled`), **recovery** (`enable_recovery` → a recovery key;
+    `recover` on a new device), and **live person-trust** read from the crypto
+    store's cross-signing state (`person_trust`).
+  - **The features a heavy user expects**: **spaces** (room hierarchy,
+    `spaces()`), **media** (send `send_attachment`, fetch `fetch_media` — into the
+    existing image/attachment path), **room directory + search** + **join by
+    id/alias** (`search_public_rooms`, `join`), **invites** (`invited_rooms`,
+    `accept_invite`, `reject_invite`, `invite_user`), **power levels** + basic room
+    settings (`power_levels`, `set_power_level`), and **threads** (folded in via
+    `thread_root` extraction off the timeline).
+  - Plus the core: encrypted `sync_once`/`sync_forever`, `joined_rooms()`,
+    `recent_timeline()`, `send_text()`, `send_membrane()`, and **`send_object()`**
+    — the generalized dregg-object send.
 - `StoredSession` (`src/session.rs`) — JSON persistence of the SDK session +
   store location/passphrase; `restore()` rebuilds an authenticated client with no
   password.
@@ -84,14 +100,22 @@ silo that happens to render inside deos.
   `ChatSource` (login/sync/rooms/timeline/`send`/`send_membrane`/`whoami`), so the
   SAME `ChatView` runs over a live server or the mock — one impl swap.
 - `deos-matrix-cli` (`src/bin/cli.rs`) — a headless harness: `login`,
-  `login-token`, `rooms`, `timeline`, `send`, `send-membrane`, `whoami`.
+  `login-token`, `rooms`, `timeline`, `send`, `send-membrane`, `send-object`,
+  `spaces`, `directory`, `join`, `invites`, `accept-invite`, `power`,
+  `encryption`, `whoami`.
 
 ```
-deos-matrix-cli login --homeserver https://matrix.org --user @me:matrix.org
+deos-matrix-cli login --homeserver matrix.org --user @me:matrix.org   # bare name → .well-known
 deos-matrix-cli rooms
 deos-matrix-cli timeline --room '!abc:matrix.org' --limit 30
 deos-matrix-cli send --room '!abc:matrix.org' --body 'hello'
-deos-matrix-cli send-membrane --room '!abc:matrix.org'   # the deos-pilling, live
+deos-matrix-cli send-membrane --room '!abc:matrix.org'                # the deos-pilling, live
+deos-matrix-cli send-object  --room '!abc:matrix.org' --kind transclusion   # any dregg object
+deos-matrix-cli spaces                                                # the room hierarchy
+deos-matrix-cli directory --query 'rust'                             # public room search
+deos-matrix-cli join --room '#matrix:matrix.org'                     # join by alias
+deos-matrix-cli invites                                              # pending invites
+deos-matrix-cli encryption                                           # device id + key-backup health
 ```
 
 ### The membrane-over-real-Matrix wire shape
@@ -109,16 +133,68 @@ fallback while a deos client extracts the typed envelope.
 }
 ```
 
+### dregg semantic objects over Matrix (the generalized membrane)
+
+The membrane was one object riding in a Matrix message. `src/object.rs`
+generalizes that into a **`kind`-tagged envelope** that carries ANY dregg semantic
+object, so a Matrix room becomes a dregg **object-exchange channel**. Every object
+rides under one key (`software.ember.deos.object`) inside a normal
+`m.room.message` with a human `body` fallback:
+
+```json
+{
+  "msgtype": "m.text",
+  "body": "[deos transclusion · e35bbee9.BALANCE_SUM = 0]",   // non-deos clients read this
+  "software.ember.deos.object": {
+    "version": 1,
+    "kind": "transclusion",                                   // the tag selecting the payload
+    "payload": { "source_cell": …, "field": "BALANCE_SUM", "value": "0", "bound_root": … }
+  }
+}
+```
+
+The kinds — each a *citation* the recipient materializes against its OWN authority,
+each rendered specially in the timeline (`object_card` in `src/chat.rs`):
+
+| `kind` | carries | rendered as |
+|--------|---------|-------------|
+| `membrane` | the rehydratable cap-bounded world-fork | the "rehydrate & drive" card (the star feature) |
+| `cell` | a cell reference (id + label + kind) | an "open cell" action |
+| `capability` | a shareable sturdyref + attenuated lineage | "accept into your powerbox" |
+| `transclusion` | a provenanced quote of a cell field (value + bound root) | the live quoted value, "re-resolve live" |
+| `affordance` | a named cap-gated action on a cell | a fireable button (gated on the required cap) |
+| `receipt` | a turn-receipt digest (pre/post root + index) | the receipt summary, "verify" |
+
+**Fail-closed forward-compat (the load-bearing tooth):** an object whose envelope
+`version` is newer than this build, OR whose `kind` this build does not know, is
+treated as **absent** — the message renders its text fallback and the rich object
+is never half-acted-on. A deos client never guesses at a future object, never fires
+an affordance it cannot fully understand. Every kind's mint → wire → extract →
+render-shape round-trip is unit-tested (`object::tests::every_kind_round_trips…`)
+and proven over a real server (`tests/live_homeserver.rs`).
+
 ### Proving the live path
 
 The full live path is exercised by `tests/live_homeserver.rs` (**creds-gated**: a
 no-op without `DEOS_MATRIX_TEST_{HS,USER,PASS}`, so `cargo test` is green in CI
 without network). Point it at a throwaway homeserver (a single-container conduit
 works — see the test's module docs) and it runs **build → login → restore → sync
-→ list rooms → send (text + membrane) → read back → extract the typed envelope**
-against a real server. The wire shape itself is also unit-proven offline
-(`client::tests::membrane_survives_the_room_message_wire_shape`), so the
-send/receive halves are verified agreeing on the format with or without a server.
+→ list rooms → send (text + membrane + dregg-object×2) → read back → extract the
+typed envelopes** against a real server. A second creds-gated test
+(`live_servername_discovery_login`, gated on `DEOS_MATRIX_TEST_SERVERNAME`) proves
+the **bare-server-name `.well-known` discovery** login path. The wire shapes are
+also unit-proven offline (`client::tests::membrane_survives_the_room_message_wire_shape`,
+`object::tests::every_kind_round_trips_through_the_wire`), so the send/receive
+halves are verified agreeing on the format with or without a server.
+
+**What is live vs mock-tested vs gated.** Custom-homeserver login (URL/server-name/
+password/token/SSO), spaces, media, directory/join, invites, power levels, and
+backup/recovery call the **real** SDK and are exercised live (creds-gated). The
+**dregg-object** send/extract is proven both offline (the mock `ChatSource`
+round-trips every kind) and live. **Device verification** (`VerificationFlow`)
+needs a second device/user on a live encrypted session, so its handshake is
+live-gated; what is unit-tested is the renderable **state-machine projection**
+(`SasProgress`/`VerificationPhase` — the SAS-emoji comparison shape the UI drives).
 
 ## The standalone-workspace + async boundary (load-bearing)
 
@@ -156,22 +232,26 @@ net-cap transport, dockable surfaces) — design landed, wiring is the next phas
 ## Parity roadmap
 
 1. **P0 — foundation (this crate):** homeserver config (URL + server-name
-   discovery), password **and** access-token login, encrypted sync, room list,
-   recent timeline, **send (text + membrane)**, session persistence/restore.
-   ✅ builds, ✅ unit-tested, ✅ **proven live** (`tests/live_homeserver.rs`).
-2. **P1 — read/write timeline:** adopt `matrix-sdk-ui`'s `Timeline` (edits,
-   reactions, replies, threads folded in for *received* events — send is live);
-   read receipts/typing over the live source.
-3. **P2 — encryption UX:** device verification (SAS emoji + cross-signing),
-   key backup, recovery; encrypted media.
-4. **P3 — discovery + login breadth:** SSO/OIDC login, spaces tree, room
-   directory/join, invites.
-5. **P4 — media + notifications:** image/file/voice send+receive, thumbnails,
-   push/notification client.
-6. **P5 — gpui UI:** room-list pane, timeline view, composer, verification flow —
-   on the vendored `gpui-component` widgets, rooms as dockable surfaces.
+   discovery), password / access-token / SSO login, encrypted sync, room list,
+   recent timeline, **send (text + membrane + dregg-object)**, session
+   persistence/restore. ✅ builds, ✅ unit-tested, ✅ **proven live**.
+2. **P1 — read/write timeline:** ✅ send is live; edits/reactions/replies are
+   modeled (the mock seeds them; the SDK-UI `Timeline` would fold them in for
+   *received* events), **threads** aggregated via `thread_root`. Read
+   receipts/typing are live-source view-state.
+3. **P2 — encryption UX:** ✅ device verification (`VerificationFlow` — SAS emoji +
+   cross-signing; handshake live-gated, projection unit-tested), ✅ key backup +
+   recovery, ✅ encrypted media (send/fetch attachment), ✅ live person-trust.
+4. **P3 — discovery + login breadth:** ✅ SSO/OIDC login, ✅ spaces tree, ✅ room
+   directory/search/join, ✅ invites (accept/reject/invite), ✅ power levels.
+5. **P4 — media + notifications:** ✅ image/file/audio/video send + fetch; push/
+   notification config is the remaining piece.
+6. **P5 — gpui UI:** ✅ room-list pane, timeline view (membrane + every dregg-object
+   kind rendered), composer — on the vendored `gpui-component` widgets; the
+   verification-flow UI panel and rooms-as-dockable-surfaces are the next UI
+   pieces.
 7. **P6 — deos confinement:** host in the comms-PD, identity-cell session,
-   device-keys-as-caps, net-cap transport, Hermes inhabitant.
+   device-keys-as-caps, net-cap transport, Hermes inhabitant. (Roadmap.)
 
 ## Dependency-weight honesty
 

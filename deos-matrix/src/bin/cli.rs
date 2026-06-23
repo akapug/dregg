@@ -80,6 +80,48 @@ enum Cmd {
         #[arg(long, default_value = "")]
         body: String,
     },
+    /// Send a dregg semantic object (the generalized membrane) to a room. `kind`
+    /// selects which sample object to mint and send.
+    SendObject {
+        #[arg(long)]
+        room: String,
+        /// Which object kind: cell | capability | transclusion | affordance |
+        /// receipt | membrane.
+        #[arg(long, default_value = "cell")]
+        kind: String,
+        #[arg(long, default_value = "")]
+        body: String,
+    },
+    /// List joined spaces (the room hierarchy) and their child rooms.
+    Spaces,
+    /// Search the homeserver's public room directory.
+    Directory {
+        /// Optional search query (empty → popular rooms).
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u16,
+    },
+    /// Join a room by id or alias (`!abc:server` or `#room:server`).
+    Join {
+        #[arg(long)]
+        room: String,
+    },
+    /// List pending room invites.
+    Invites,
+    /// Accept a pending room invite.
+    AcceptInvite {
+        #[arg(long)]
+        room: String,
+    },
+    /// Show a room's power levels (basic room settings).
+    Power {
+        #[arg(long)]
+        room: String,
+    },
+    /// Show this account's device id + key-backup status (E2E health for a heavy
+    /// user: "do my keys survive a device loss?").
+    Encryption,
     /// Show the logged-in user.
     Whoami,
 }
@@ -182,6 +224,80 @@ async fn main() -> anyhow::Result<()> {
             println!("  wire key: software.ember.deos.membrane");
             println!("  fallback: {}", env.text_fallback());
         }
+        Cmd::SendObject { room, kind, body } => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let object = sample_object(&kind)?;
+            let event_id = client.send_object(&room, &body, &object).await?;
+            println!("sent {} object to {room}: {event_id}", object.kind());
+            println!("  wire key: {}", deos_matrix::DREGG_OBJECT_KEY);
+            println!("  fallback: {}", object.text_fallback());
+        }
+        Cmd::Spaces => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let spaces = client.spaces().await?;
+            println!("{} joined space(s):", spaces.len());
+            for s in spaces {
+                println!("  {} ({}) · {} children", s.display_name, s.room_id, s.child_room_ids.len());
+                for c in &s.child_room_ids {
+                    println!("      ↳ {c}");
+                }
+            }
+        }
+        Cmd::Directory { query, limit } => {
+            let client = restore(&sess_path).await?;
+            let rooms = client.search_public_rooms(query.as_deref(), limit).await?;
+            println!("{} public room(s):", rooms.len());
+            for r in rooms {
+                println!(
+                    "  {:<40} {:>5} members  {}{}",
+                    r.name.unwrap_or_else(|| r.room_id.clone()),
+                    r.joined_members,
+                    r.alias.map(|a| format!("{a} ")).unwrap_or_default(),
+                    r.room_id
+                );
+            }
+        }
+        Cmd::Join { room } => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let joined = client.join(&room).await?;
+            println!("joined {joined}");
+        }
+        Cmd::Invites => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let invites = client.invited_rooms().await?;
+            println!("{} pending invite(s):", invites.len());
+            for r in invites {
+                println!("  {} ({}) · {} members", r.display_name, r.room_id, r.joined_members);
+            }
+        }
+        Cmd::AcceptInvite { room } => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let joined = client.accept_invite(&room).await?;
+            println!("accepted invite, joined {joined}");
+        }
+        Cmd::Power { room } => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            let p = client.power_levels(&room).await?;
+            println!("power levels for {room}:");
+            println!("  your level:    {}", p.my_level);
+            println!("  users_default: {}", p.users_default);
+            println!("  invite:        {}", p.invite);
+            println!("  kick:          {}", p.kick);
+            println!("  ban:           {}", p.ban);
+            println!("  redact:        {}", p.redact);
+        }
+        Cmd::Encryption => {
+            let client = restore(&sess_path).await?;
+            client.sync_once().await?;
+            println!("device id:      {}", client.device_id().unwrap_or_else(|| "(none)".into()));
+            println!("key backup:     {}", if client.backup_enabled().await { "enabled" } else { "DISABLED — run recovery setup" });
+        }
         Cmd::Rooms => {
             let client = restore(&sess_path).await?;
             client.sync_once().await?;
@@ -237,6 +353,49 @@ async fn restore(sess_path: &std::path::Path) -> anyhow::Result<MatrixClient> {
     }
     let stored = StoredSession::load(sess_path)?;
     Ok(MatrixClient::restore(&stored).await?)
+}
+
+/// Mint a sample [`DreggObject`] of the named kind — for the CLI's `send-object`
+/// (so each kind's wire round-trip is exercisable against a real homeserver).
+fn sample_object(kind: &str) -> anyhow::Result<deos_matrix::DreggObject> {
+    use deos_matrix::{
+        Affordance, CapabilityGrant, CellId, CellRef, DreggObject, MockMembraneHost,
+        ReceiptObject, Transclusion,
+    };
+    let cell = CellId::derive("!deoslab:deos.local");
+    Ok(match kind {
+        "cell" => DreggObject::Cell(CellRef {
+            cell_id: cell,
+            label: "the deos-lab room cell".into(),
+            cell_kind: Some("room".into()),
+        }),
+        "capability" => DreggObject::Capability(CapabilityGrant {
+            sturdyref: "dregg://cap/post/deoslab".into(),
+            label: "post to deos-lab".into(),
+            lineage: vec![0xca, 0x9a, 0xb1, 0xe],
+        }),
+        "transclusion" => DreggObject::Transclusion(Transclusion {
+            source_cell: cell,
+            field: "members.count".into(),
+            value: "7".into(),
+            bound_root: [0xab; 32],
+        }),
+        "affordance" => DreggObject::Affordance(Affordance {
+            target_cell: cell,
+            action: "approve".into(),
+            label: "Approve the merge".into(),
+            required_cap: "dregg://cap/approve".into(),
+        }),
+        "receipt" => DreggObject::Receipt(ReceiptObject {
+            cell_id: cell,
+            turn_index: 7,
+            post_root: [0xef; 32],
+        }),
+        "membrane" => DreggObject::Membrane(MockMembraneHost::sample_envelope()),
+        other => anyhow::bail!(
+            "unknown object kind {other:?} — use one of: cell capability transclusion affordance receipt membrane"
+        ),
+    })
 }
 
 /// Tiny non-crypto random for the store passphrase (the passphrase only protects

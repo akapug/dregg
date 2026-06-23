@@ -90,8 +90,14 @@ cockpit-surface = ["gui"]
 # needs the mid-level `matrix-sdk` Client/Room/Timeline-via-messages surface.
 # TLS is bundled into the SDK's default HTTP transport in 0.18 (no separate
 # tls feature). We enable the default feature set (which already includes
-# `e2e-encryption` + `sqlite`) plus `markdown` for formatted-message sends.
-matrix-sdk = { version = "0.18", features = ["markdown"] }
+# `e2e-encryption` + `sqlite`) plus `markdown` for formatted-message sends and
+# `sso-login` for the local-HTTP redirect flow a custom homeserver's SSO/OIDC
+# login needs (`MatrixAuth::login_sso` — the nheko-comfort login path).
+matrix-sdk = { version = "0.18", features = ["markdown", "sso-login"] }
+# MIME types for media sends (the content-type an image/file/audio/video upload
+# carries) and guessing one from a filename.
+mime = "0.3"
+mime_guess = "2"
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 anyhow = "1"

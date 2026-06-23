@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{MatrixClient, RoomSummary, TimelineMessage};
 use crate::membrane::MembraneEnvelope;
+use crate::object::DreggObject;
 use crate::session::StoredSession;
 use crate::Result;
 
@@ -69,6 +70,13 @@ pub enum WorkerRequest {
         room_id: String,
         body: String,
         membrane: Box<MembraneEnvelope>,
+        reply: oneshot::Sender<Result<String>>,
+    },
+    /// Send a dregg-object-bearing message to a room; reply carries the event id.
+    SendObject {
+        room_id: String,
+        body: String,
+        object: Box<DreggObject>,
         reply: oneshot::Sender<Result<String>>,
     },
     /// The logged-in user's full id (`@user:server`), if any.
@@ -169,6 +177,16 @@ impl MatrixWorker {
                         Self::with(&client, |c| c.send_membrane(&room_id, &body, &membrane)).await,
                     );
                 }
+                WorkerRequest::SendObject {
+                    room_id,
+                    body,
+                    object,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        Self::with(&client, |c| c.send_object(&room_id, &body, &object)).await,
+                    );
+                }
                 WorkerRequest::Whoami { reply } => {
                     let me = client.as_ref().and_then(|c| c.user_id().map(|u| u.to_string()));
                     let _ = reply.send(me);
@@ -265,6 +283,20 @@ impl MatrixHandle {
             room_id,
             body,
             membrane: Box::new(membrane),
+            reply,
+        })
+    }
+
+    pub fn send_object(
+        &self,
+        room_id: String,
+        body: String,
+        object: DreggObject,
+    ) -> Result<String> {
+        self.call(|reply| WorkerRequest::SendObject {
+            room_id,
+            body,
+            object: Box::new(object),
             reply,
         })
     }
