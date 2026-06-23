@@ -11,6 +11,20 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### APPS WIRED INTO THE COCKPIT — LANDED; the shared-World-ledger refactor is the convergent seam (2026-06-23).
+`1710a617`. `starbridge-v2/src/app_registry.rs`: `AppRegistry::standard()` wires gallery/tussle/
+sealed-auction/bounty-board (the framework-shaped apps) — each `AppEntry{id,name,desc,ctor,seed,drive}`
+launches a real `DeosApp` over a live `AppSubstrate`, fires one affordance → real `TurnReceipt`
+(`receipt.agent == backing cell`), post-fire state visible to a second reader of the SAME ledger
+(inspector seam). Powerbox `RegistryLauncher` row per app. 4 tests + native-full green. (`polis` skipped —
+it doesn't use the framework, different shape.)
+- CONVERGENT SEAM (shared with the editor-shared-ledger lane): apps run on the app-framework's
+  `EmbeddedExecutor` ledger (`Arc<Mutex<Ledger>>`, genuinely shared writer↔reader) — NOT the cockpit's
+  `World`/`DreggEngine` ledger, which is owned BY VALUE. Folding BOTH apps AND the editor onto the one
+  cockpit World ledger needs the SAME refactor: `DreggEngine` to hold `Arc<Mutex<Ledger>>` so an
+  `AgentRuntime`/FirmamentFs can share it. ONE clean follow-on lane unblocks both. (Watch the
+  editor-shared-ledger lane `a143bf5a` — if it lands that refactor, re-point app_registry onto World.)
+
 ### MIGRATE VERB (Local→HostPd) — authority half LANDED; live-transport re-home is the seam (2026-06-23).
 `86ad3049`. `migrate(&SurfaceCapability, &MigrationTarget) -> Result<SurfaceCapability, MigrateError>`
 (`starbridge-v2/src/dock/migrate.rs`) relocates a surface cap along the firmament distance axis,
