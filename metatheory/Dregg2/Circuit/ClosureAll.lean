@@ -299,7 +299,9 @@ theorem delegateAtten_closedLog
       exact Dregg2.Circuit.RotatedKernelRefinementCapFamily.delegateAtten_descriptorRefines
         Scap pre post del rec tt keep (logNeeds hadv))
 
-/-- revokeDelegation (tag 14) — refines `RevokeSpec` (same arm body). -/
+/-- revokeDelegation (tag 14) — refines the FAITHFUL `RevokeDelegationFullSpec` (the cap-tree REMOVE
+decode PLUS the epoch step: parent epoch bumped + child snapshot staled). The `logNeeds` now yields the
+`RevokeDelegationFullEncodes` (the §3.EPOCH decode bundling the cap-remove + the NAMED epoch residual). -/
 theorem revokeDelegation_closedLog
     {State : Type} (Scap : Dregg2.Circuit.DeployedCapTree.CapHashScheme State)
     (pre post : RecChainedState) (holder tt : CellId)
@@ -307,7 +309,7 @@ theorem revokeDelegation_closedLog
     (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
     (hpub : pubLogPost = LH (Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log))
     (logNeeds : post.log = Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log →
-      Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+      Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationFullEncodes
         Scap pre post holder tt) :
     kstepAll 14 pre post :=
   closedLog_of_encode (.revokeDelegationA holder tt)
@@ -315,7 +317,7 @@ theorem revokeDelegation_closedLog
     (fun hadv => by
       show fullActionStep pre (.revokeDelegationA holder tt) post
       simp only [fullActionStep]
-      exact Dregg2.Circuit.RotatedKernelRefinementCapFamily.revoke_descriptorRefines
+      exact Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeDelegation_descriptorRefines
         Scap pre post holder tt (logNeeds hadv))
 
 /-- refreshDelegation (tag 55). -/
@@ -1076,10 +1078,10 @@ theorem revokeDelegation_closedLog_sat
     (hdec : StateDecodeLog Slive LH pc pubLogPre pubLogPost pre post)
     (hpub : pubLogPost = LH (Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log))
     (logNeeds : post.log = Dregg2.Exec.TurnExecutorFull.authReceipt holder :: pre.log →
-      Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeCapsTreeEncodes
+      Σ' (henc : Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationFullEncodes
             Scap pre post holder tt),
         Dregg2.Circuit.RotatedKernelRefinementCapFamily.RevokeDelegationWriteAnchor
-          Scap pre post holder tt hash minit mfin maddrs t henc) :
+          Scap pre post holder tt hash minit mfin maddrs t henc.capRemove) :
     kstepAll 14 pre post :=
   closedLog_of_encode (.revokeDelegationA holder tt)
     (Dregg2.Exec.TurnExecutorFull.authReceipt holder) hdec hpub rfl
@@ -1087,7 +1089,9 @@ theorem revokeDelegation_closedLog_sat
       obtain ⟨henc, anc⟩ := logNeeds hadv
       show fullActionStep pre (.revokeDelegationA holder tt) post
       simp only [fullActionStep]
-      exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeDelegation_descriptorRefines_capOpenSat
+      -- §EPOCH: the deployed descriptor FORCES the cap-tree REMOVE; the epoch step rides the NAMED
+      -- `RevokeDelegationFullEncodes` residual → the FAITHFUL `RevokeDelegationFullSpec`.
+      exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.revokeDelegation_descriptorRefines_capOpenSat_full
         Scap pre post holder tt hash minit mfin maddrs t hsat henc anc).1)
 
 /-- revoke (tag 2), CLASS A — forced from `revokeDelegationWriteCapOpenV3` (`= Rfix 2`, the SAME

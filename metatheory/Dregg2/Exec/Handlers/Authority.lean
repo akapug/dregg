@@ -216,9 +216,33 @@ theorem revokeH_self_limiting (k : RecordKernelState) (a : RevokeArgs) (l : Labe
   · subst hl; simp only [if_pos]; intro d hd; exact List.mem_of_mem_filter hd
   · simp only [if_neg hl]; exact fun d hd => hd
 
-/-- `revokeDelegationA` — a parent revokes a child's delegation (the child's edge is removed). Same
-total self-limiting revocation handler as `revokeH` (distinct dregg1 op, same `removeEdge` move). -/
-def revokeDelegationH : EffectHandler RevokeArgs := revokeH
+/-- The (TOTAL) FAITHFUL delegation-revoke step: `recKRevokeDelegationFull` — the shared cap-edge
+`removeEdge` COMPOSED with the epoch bump (parent `delegationEpoch +1`) + child-snapshot clear (the
+dregg1 `apply_revoke_delegation` legs 2+3). Always commits; edits only `caps` + the three epoch/snapshot
+registries — balances untouched (`recKRevokeDelegationFull_frame`). -/
+def revokeDelegationStep (k : RecordKernelState) (a : RevokeArgs) : Option RecordKernelState :=
+  some (recKRevokeDelegationFull k a.holder a.target)
+
+/-- `revokeDelegationA` — a parent revokes a child's delegation. The FAITHFUL `apply_revoke_delegation`:
+removes the child's cap edge AND stales its delegation snapshot (parent epoch bumped, child snapshot
+cleared). Distinct from `revokeH` (the bare `removeEdge`): this handler agrees with `execFullA`'s
+`.revokeDelegationA` arm (the full epoch step), so the handler-refines-executor kernel equality holds. -/
+def revokeDelegationH : EffectHandler RevokeArgs where
+  step := revokeDelegationStep
+  delta := fun _ _ => 0
+  auth := fun _ _ => true
+  admission := fun _ _ => true
+  trace := fun a => { actor := a.holder, src := a.holder, dst := a.holder, amt := 0 }
+  auth_gated := by intro s a s' _; rfl
+  admission_gated := by intro s a s' _; rfl
+  conserves := by
+    intro s a s' h b
+    unfold revokeDelegationStep at h
+    simp only [Option.some.injEq] at h; subst h
+    -- the FAITHFUL full step edits only `caps` + the epoch/snapshot registries — balance-NEUTRAL.
+    -- `recTotalAsset` reads only `accounts`+`bal`, untouched by either leg.
+    simp only [recKRevokeDelegationFull, recKRevokeDelegationEpoch, recKRevokeTarget, recTotalAsset]
+    ring
 
 /-! ### §2.2 — `attenuateA`: in-place self-narrowing of the actor's held cap (always commits). -/
 

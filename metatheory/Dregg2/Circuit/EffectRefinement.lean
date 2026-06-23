@@ -718,6 +718,62 @@ theorem revoke_circuit_refines_exec (S : Surface2) (D : Caps → ℤ) (hD : Func
 #assert_axioms revoke_spec_refines_circuit
 #assert_axioms revoke_circuit_refines_exec
 
+/-! ## §14.EPOCH — the FAITHFUL delegation-revoke diamond (circuit ⟺ RevokeDelegationFullSpec).
+
+`.revokeDelegationA holder t` does the FULL `apply_revoke_delegation` (the cap-edge `removeEdge` COMPOSED
+with the epoch bump + child-snapshot clear), so it meets the STRENGTHENED `RevokeDelegationFullSpec`, not
+the bare `RevokeSpec`. The deployed `revokeE` circuit binds the cap-edge `RevokeSpec` (its `caps`+log+frame)
+AND — in the deployed commitment — the parent's bumped `delegation_epoch` (rotated limb 30,
+`cell/src/commitment.rs:916`) and the cleared child snapshot (`record_digest` =
+`compute_authority_digest_felt`, limb 24, `commitment.rs:805-813`). What is NOT yet WRITE-GATE-forced is
+that the descriptor binds the epoch WRITE (revokeDelegation's v1 face FREEZES `cap_root`; the genuine
+epoch/snapshot move rides OFF-ROW — the precise residual named in
+`RotatedKernelRefinementCapFamily` §3.5/§3.EPOCH). So the epoch step is carried as the NAMED
+`RevokeDelegationEpochResidual` (commitment-BOUND, write-gate-RESIDUAL) — fail-closed, data-bearing — and
+the circuit step CONJOINS it onto the deployed `revokeCircuitStep`. Closing the residual is the
+moving-face V3-base descriptor cutover (a separate VK change). -/
+
+/-- **`RevokeDelegationEpochResidual`** — the NAMED epoch-step residual the deployed descriptor binds in
+the commitment (limbs 30 + 24) but does not yet WRITE-GATE-force (the v1 frozen-`cap_root` face): the
+parent's `delegationEpoch` bumped `+1`, the child's `delegations` snapshot cleared, the child's
+`delegationEpochAt` stamp reset. Carried as a Prop (a trace-fill identity of the committed delegation
+limbs), never an axiom. -/
+def RevokeDelegationEpochResidual (s : RecChainedState) (parent child : CellId)
+    (s' : RecChainedState) : Prop :=
+  s'.kernel.delegationEpoch
+      = (fun c => if c = parent then s.kernel.delegationEpoch c + 1 else s.kernel.delegationEpoch c)
+  ∧ s'.kernel.delegations = (fun c => if c = child then [] else s.kernel.delegations c)
+  ∧ s'.kernel.delegationEpochAt = (fun c => if c = child then 0 else s.kernel.delegationEpochAt c)
+
+/-- **`revokeDelegationCircuitStep`** — the deployed `revokeCircuitStep` (cap-edge `RevokeSpec`, forced)
+CONJOINED with the NAMED `RevokeDelegationEpochResidual` (the epoch step, commitment-bound, write-gate
+residual). The FAITHFUL circuit-side relation for `.revokeDelegationA`. -/
+def revokeDelegationCircuitStep (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (s : RecChainedState) (args : RevokeArgs) (s' : RecChainedState) : Prop :=
+  revokeCircuitStep S D hD s args s' ∧ RevokeDelegationEpochResidual s args.holder args.t s'
+
+/-- **`revokeDelegation_circuit_refines_spec` — circuit ⟹ STRENGTHENED `RevokeDelegationFullSpec`.** From
+the deployed `revokeCircuitStep` (forcing the cap-edge `RevokeSpec` — the `caps` removeEdge + log + the
+thirteen-field frame; the `delegationEpoch`/`delegations`/`delegationEpochAt` frame clauses of `RevokeSpec`
+are DROPPED) PLUS the NAMED epoch residual, the FAITHFUL `RevokeDelegationFullSpec` holds (the parent epoch
+bumped + child snapshot staled). -/
+theorem revokeDelegation_circuit_refines_spec (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
+    (hRest : Dregg2.Circuit.Inst.Revoke.RestIffNoCaps S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RevokeArgs) (s' : RecChainedState)
+    (h : revokeDelegationCircuitStep S D hD s args s') :
+    RevokeDelegationFullSpec s args.holder args.t s' := by
+  obtain ⟨hcirc, hep, hdgs, hstamp⟩ := h
+  have hspec : RevokeSpec s args.holder args.t s' :=
+    revoke_circuit_refines_spec S D hD hRest hLog s args s' hcirc
+  -- RevokeSpec gives the cap-edge removeEdge + log + the thirteen non-epoch frame clauses; the three
+  -- epoch-step clauses come from the NAMED residual. Repackage into RevokeDelegationFullSpec.
+  obtain ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+         hdc, hdel, _hde, _hdels, _hdea, hhp⟩ := hspec
+  exact ⟨trivial, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+         hdc, hdel, hhp, hep, hdgs, hstamp⟩
+
+#assert_axioms revokeDelegation_circuit_refines_spec
+
 -- (F2a) §17 QueueEnqueueA diamond DELETED with the queue effect family (VerbRegistry:
 -- `.factory .queue`; the FIFO behavior is the verified `Dregg2/Apps/QueueFactory`).
 -- (F3) §15 SealA diamond DELETED with the seal/swiss/sturdyref family (VerbRegistry:

@@ -533,13 +533,15 @@ theorem handler_refines_execFullA_revokeDelegation (s s' : RecChainedState) (hol
     ∃ s'', execFullA s (.revokeDelegationA holder t) = some s'' ∧ s''.kernel = s'.kernel := by
   have hstep := execHandlerOne_kernel (.revokeDelegationA holder t) s s' h
   rw [toClosedEffect] at hstep
-  change revokeStep s.kernel { holder := holder, target := t } = some s'.kernel at hstep
-  unfold revokeStep at hstep
+  -- the handler now routes to the FAITHFUL `revokeDelegationStep` (`recKRevokeDelegationFull`), which
+  -- AGREES with `execFullA`'s full epoch-step arm — so the kernel equality holds.
+  change revokeDelegationStep s.kernel { holder := holder, target := t } = some s'.kernel at hstep
+  unfold revokeDelegationStep at hstep
   simp only [Option.some.injEq] at hstep
-  refine ⟨Dregg2.Exec.TurnExecutorFull.recCRevoke s holder t, ?_, ?_⟩
+  refine ⟨Dregg2.Exec.TurnExecutorFull.recCRevokeDelegationFull s holder t, ?_, ?_⟩
   · show execFullA s (.revokeDelegationA holder t) = _
-    simp only [execFullA, Dregg2.Exec.TurnExecutorFull.recCRevoke]
-  · show (Dregg2.Exec.TurnExecutorFull.recCRevoke s holder t).kernel = s'.kernel
+    simp only [execFullA, Dregg2.Exec.TurnExecutorFull.recCRevokeDelegationFull]
+  · show (Dregg2.Exec.TurnExecutorFull.recCRevokeDelegationFull s holder t).kernel = s'.kernel
     rw [← hstep]; rfl
 
 /-! ### §6.3 — R6: STATE WRITE. The handler and `execFullA` now gate on the SAME predicates (RECONCILED).

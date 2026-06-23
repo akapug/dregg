@@ -558,14 +558,78 @@ theorem revoke_execFullA {State : Type} (S : CapHashScheme State)
   (Dregg2.Circuit.Spec.AuthorityRevocation.execFullA_revoke_iff_spec pre holder t post).mpr
     (revoke_descriptorRefines S pre post holder t henc)
 
+/-! ### §3.EPOCH — the FAITHFUL delegation revoke: the cap-tree REMOVE decode PLUS the epoch step.
+
+`.revokeDelegationA parent child` no longer routes to the bare `recCRevoke`/`RevokeSpec` (cap-edge removal
+only). It routes to `recCRevokeDelegationFull`/`RevokeDelegationFullSpec` (the faithful
+`apply_revoke_delegation`): the shared cap-edge `removeEdge` COMPOSED with the epoch bump (parent
+`delegationEpoch +1`) + child-snapshot clear. So the refinement against this arm must establish BOTH the
+cap-tree remove (the §3 decode) AND the epoch step.
+
+The cap-tree remove leg rides the SAME `RevokeCapsTreeEncodes` decode (the `revokeDelegationWriteV3` remove
+base, `CircuitSoundnessAssembled` tag 14 = position 49). The epoch step is a SEPARATE residual: in the
+DEPLOYED commitment the bumped parent `delegation_epoch` IS bound (`cell/src/commitment.rs:916`, the rotated
+limb 30 = `delegation_epoch & 0x7FFF_FFFF`) and the cleared child snapshot IS bound (the child's
+`delegation` source/epoch-stamp/snapshot fold into `record_digest = compute_authority_digest_felt`,
+`commitment.rs:805-813`, the limb-24 authority residue). So both legs ARE bindable in the deployed
+commitment.
+
+What is NOT yet circuit-FORCED is the GATE that the descriptor binds the epoch WRITE: revokeDelegation's v1
+face FREEZES `cap_root` on-row (`gCapPass`, see §3.5), and its deployed `revokeDelegationWriteV3` map-op
+forces the cap-tree REMOVE but does NOT yet carry a `writesTo delegation_epoch_before (parent_epoch+1)
+delegation_epoch_after` map-op — so the epoch bump is, at HEAD, a NAMED decode residual (the
+`epochStep` clauses below), carried as data, not yet forced from a deployed write op. This mirrors §3.5's
+named moving-face residual for the frozen-face slots; closing it is the SAME V3-base-on-a-moving-face
+descriptor cutover (a separate VK change), reported as the precise obstruction. The kernel + executor
++ iff-spec FAITHFULLY execute the epoch step (the child stales) NOW; the descriptor gate for the epoch
+write is the named residual. -/
+
+/-- **`RevokeDelegationFullEncodes` — the cap-tree REMOVE decode + the epoch-step residual.** Bundles the
+shared `RevokeCapsTreeEncodes` (the cap-edge remove, decode-forced) PLUS the epoch-step residual: the
+post-state's three delegation registries carry the dregg1 `apply_revoke_delegation` legs (parent epoch
+bumped `+1`, child snapshot cleared, child stamp reset). These three `epochStep*` clauses are the NAMED
+residual (deployed-commitment-BOUND — limbs 30 + 24 — but the write GATE is the v1-frozen-face cutover, §3.EPOCH).
+DATA-bearing. -/
+structure RevokeDelegationFullEncodes {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (parent child : CellId) : Type where
+  /-- the cap-tree REMOVE decode (the §3 sorted-tree remove + `removeEdgeCaps` + log + frame). -/
+  capRemove : RevokeCapsTreeEncodes S pre post parent child
+  /-- leg (2): the PARENT's `delegationEpoch` bumped `+1` (NAMED residual; limb-30 bound). -/
+  epochStepParent : post.kernel.delegationEpoch
+    = (fun c => if c = parent then pre.kernel.delegationEpoch c + 1 else pre.kernel.delegationEpoch c)
+  /-- leg (3a): the CHILD's `delegations` snapshot cleared (NAMED residual; `record_digest` bound). -/
+  epochStepChildSnapshot : post.kernel.delegations
+    = (fun c => if c = child then [] else pre.kernel.delegations c)
+  /-- leg (3b): the CHILD's `delegationEpochAt` stamp reset to `0` (NAMED residual; `record_digest` bound). -/
+  epochStepChildStamp : post.kernel.delegationEpochAt
+    = (fun c => if c = child then 0 else pre.kernel.delegationEpochAt c)
+
+/-- **`revokeDelegation_descriptorRefines` — THE FAITHFUL DELEGATION-REVOKE REFINEMENT (epoch-forced).**
+From the decode, the kernel `RevokeDelegationFullSpec pre parent child post`: the cap-tree REMOVE move (the
+`removeEdgeCaps` `Caps`-equality, forced at the set level by `revoke_forces_remove`) + the receipt-log + the
+thirteen-field frame (all from the shared `capRemove` decode) AND the epoch step (the three `epochStep*`
+residual clauses). The guard is `True` (revocation unconditional); non-amplification is vacuous (authority
+only shrinks). -/
+theorem revokeDelegation_descriptorRefines {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (parent child : CellId)
+    (henc : RevokeDelegationFullEncodes S pre post parent child) :
+    Dregg2.Circuit.Spec.AuthorityRevocation.RevokeDelegationFullSpec pre parent child post :=
+  ⟨trivial, henc.capRemove.capsMove, henc.capRemove.logAdv,
+   henc.capRemove.frame.frAccounts, henc.capRemove.frame.frCell, henc.capRemove.frame.frNullifiers,
+   henc.capRemove.frame.frRevoked, henc.capRemove.frame.frCommitments, henc.capRemove.frame.frBal,
+   henc.capRemove.frame.frSlotCaveats, henc.capRemove.frame.frFactories, henc.capRemove.frame.frLifecycle,
+   henc.capRemove.frame.frDeathCert, henc.capRemove.frame.frDelegate, henc.capRemove.frame.frHeaps,
+   henc.epochStepParent, henc.epochStepChildSnapshot, henc.epochStepChildStamp⟩
+
 /-- **`revokeDelegation_execFullA` — the refinement against the executor arm (`revokeDelegationA`).** The
-parent-revocation routes to the SAME `RevokeSpec`, so the SAME decode forces it. -/
+parent-revocation routes to the FAITHFUL `recCRevokeDelegationFull`/`RevokeDelegationFullSpec` (the epoch
+step), so the decode now forces the cap-tree remove AND the epoch step. -/
 theorem revokeDelegation_execFullA {State : Type} (S : CapHashScheme State)
-    (pre post : RecChainedState) (holder t : CellId)
-    (henc : RevokeCapsTreeEncodes S pre post holder t) :
-    execFullA pre (.revokeDelegationA holder t) = some post :=
-  (Dregg2.Circuit.Spec.AuthorityRevocation.execFullA_revokeDelegation_iff_spec pre holder t post).mpr
-    (revoke_descriptorRefines S pre post holder t henc)
+    (pre post : RecChainedState) (parent child : CellId)
+    (henc : RevokeDelegationFullEncodes S pre post parent child) :
+    execFullA pre (.revokeDelegationA parent child) = some post :=
+  (Dregg2.Circuit.Spec.AuthorityRevocation.execFullA_revokeDelegation_iff_spec pre parent child post).mpr
+    (revokeDelegation_descriptorRefines S pre post parent child henc)
 
 /-- **`revoke_drops_edge` — the headline, read off the FORCED spec.** After a committed revoke, `holder`
 confers NO edge to `t` (every cap it still holds fails `confersEdgeTo t`). Reuses
@@ -945,6 +1009,26 @@ theorem revokeDelegation_descriptorRefines_capOpenSat {State : Type} (S : CapHas
   revokeDelegation_descriptorRefines_sat S pre post holder t hash mi mf ma tr
     (capOpen_satisfied2_strips_to_base hash _ revokeDelegationWriteV3 _ _ mi mf ma tr hsat) henc anc
 
+/-- **`revokeDelegation_descriptorRefines_capOpenSat_full` — the EPOCH-strengthened CLASS-A revokeDelegation
+rung.** The deployed descriptor FORCES the cap-tree REMOVE (`revokeDelegation_descriptorRefines_capOpenSat`,
+the `writesTo` on the moving genuine face) — the cap-edge `RevokeSpec`. The FAITHFUL epoch step (parent
+epoch bumped + child snapshot staled) rides the NAMED `RevokeDelegationFullEncodes` epoch residual
+(commitment-bound at limbs 30 + 24, write-gate residual per §3.EPOCH). Produces the STRENGTHENED
+`RevokeDelegationFullSpec` AND the forced cap-tree remove `writesTo`. -/
+theorem revokeDelegation_descriptorRefines_capOpenSat_full {State : Type} (S : CapHashScheme State)
+    (pre post : RecChainedState) (holder t : CellId)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hsat : Satisfied2 hash revokeDelegationWriteCapOpenV3 mi mf ma tr)
+    (hfull : RevokeDelegationFullEncodes S pre post holder t)
+    (anc : RevokeDelegationWriteAnchor S pre post holder t hash mi mf ma tr hfull.capRemove) :
+    Dregg2.Circuit.Spec.AuthorityRevocation.RevokeDelegationFullSpec pre holder t post
+    ∧ writesTo hash hfull.capRemove.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0
+        hfull.capRemove.newRoot :=
+  ⟨revokeDelegation_descriptorRefines S pre post holder t hfull,
+   (revokeDelegation_descriptorRefines_capOpenSat S pre post holder t hash mi mf ma tr hsat
+      hfull.capRemove anc).2⟩
+
 /-! ## §3.5R — CLASS A for refreshDelegation: the DELEGATIONS-tree WRITE is FORCED (the LAST cap-family
 residual, `delegRoot_runtime_column_pending`, CLOSED).
 
@@ -1046,6 +1130,7 @@ WRITE via `revokeCapabilityV3`) are independent rungs the apex composes. -/
 #assert_axioms delegateAtten_descriptorRefines_capOpenSat
 #assert_axioms introduce_descriptorRefines_capOpenSat
 #assert_axioms revokeDelegation_descriptorRefines_capOpenSat
+#assert_axioms revokeDelegation_descriptorRefines_capOpenSat_full
 
 /-! ## §4 — non-vacuity: the sorted-tree teeth BITE on the cap family (the moves are real).
 
@@ -1082,6 +1167,7 @@ private def demoSpine : List ℤ := [10, 20, 30]
 #assert_axioms revoke_forces_remove
 #assert_axioms revoke_descriptorRefines
 #assert_axioms revoke_execFullA
+#assert_axioms revokeDelegation_descriptorRefines
 #assert_axioms revokeDelegation_execFullA
 #assert_axioms revoke_drops_edge
 -- §3.5 CLASS-A: the cap-tree WRITE forced from the DEPLOYED descriptor (the moving-face 3 of 5 gaps).
