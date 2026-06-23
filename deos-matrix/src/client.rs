@@ -759,6 +759,31 @@ impl MatrixClient {
 
     /// Join a room by its id or alias (`!abc:server` or `#room:server`). Returns the
     /// joined room's id.
+    /// **Create a room** (optionally inviting users) and return its room id. The
+    /// creator joins automatically. `name`/`topic` set the room's display metadata;
+    /// `invites` are full `@user:server` ids to invite at creation. This is the
+    /// path a deos user takes to open a fresh conversation (and the harness path the
+    /// live test uses to stand up a two-user room). Encryption is NOT forced here —
+    /// the SDK creates an unencrypted room unless the server defaults otherwise.
+    pub async fn create_room(
+        &self,
+        name: Option<&str>,
+        topic: Option<&str>,
+        invites: &[&str],
+    ) -> Result<String> {
+        use matrix_sdk::ruma::api::client::room::create_room::v3::Request as CreateRoomRequest;
+        let mut request = CreateRoomRequest::new();
+        request.name = name.map(|n| n.to_string());
+        request.topic = topic.map(|t| t.to_string());
+        let mut invite_ids = Vec::with_capacity(invites.len());
+        for u in invites {
+            invite_ids.push(UserId::parse(u)?.to_owned());
+        }
+        request.invite = invite_ids;
+        let room = self.inner.create_room(request).await?;
+        Ok(room.room_id().to_string())
+    }
+
     pub async fn join(&self, id_or_alias: &str) -> Result<String> {
         let room = if id_or_alias.starts_with('#') {
             let alias = matrix_sdk::ruma::RoomOrAliasId::parse(id_or_alias)?;

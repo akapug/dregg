@@ -7,7 +7,16 @@
 //! ## How to run it
 //!
 //! It is **creds-gated**: with no homeserver it is a no-op (so `cargo test` is
-//! green in CI without network/creds). Point it at a server and it runs for real:
+//! green in CI without network/creds). The turnkey path is the harness script —
+//! it stands up a throwaway Conduit homeserver in Docker, registers two users,
+//! runs every test here (incl. the cross-user A→B round-trip), and tears down:
+//!
+//! ```sh
+//! ./scripts/live-test.sh          # full cycle (docker-compose.test.yml)
+//! KEEP_HS=1 ./scripts/live-test.sh   # leave the homeserver up afterward
+//! ```
+//!
+//! Or point it at a server by hand and it runs for real:
 //!
 //! ```sh
 //! # 1. a throwaway local conduit (single docker container, registration on):
@@ -51,6 +60,41 @@ fn live_config() -> Option<(String, String, String)> {
     let user = std::env::var("DEOS_MATRIX_TEST_USER").ok()?;
     let pass = std::env::var("DEOS_MATRIX_TEST_PASS").ok()?;
     Some((hs, user, pass))
+}
+
+/// The two-user gating config for the cross-user A→B round-trip. Absent → no-op.
+/// `DEOS_MATRIX_TEST_HS` plus a SECOND user's creds (the receiver). User A reuses
+/// the `DEOS_MATRIX_TEST_USER/_PASS` triple above.
+fn live_two_user_config() -> Option<(String, String, String, String, String)> {
+    let hs = std::env::var("DEOS_MATRIX_TEST_HS").ok()?;
+    let user_a = std::env::var("DEOS_MATRIX_TEST_USER").ok()?;
+    let pass_a = std::env::var("DEOS_MATRIX_TEST_PASS").ok()?;
+    let user_b = std::env::var("DEOS_MATRIX_TEST_USER_B").ok()?;
+    let pass_b = std::env::var("DEOS_MATRIX_TEST_PASS_B").ok()?;
+    Some((hs, user_a, pass_a, user_b, pass_b))
+}
+
+/// Sync a client until `pred` over its recent timeline for `room_id` is satisfied,
+/// or `tries` syncs elapse (each followed by a short wait). The realistic
+/// receive-side primitive: a real server takes a few syncs to deliver a freshly
+/// sent event to the OTHER user. Returns the matching message or panics.
+async fn sync_until(
+    client: &MatrixClient,
+    room_id: &str,
+    tries: u32,
+    label: &str,
+    pred: impl Fn(&deos_matrix::TimelineMessage) -> bool,
+) -> deos_matrix::TimelineMessage {
+    for attempt in 0..tries {
+        client.sync_once().await.expect("sync");
+        let tl = client.recent_timeline(room_id, 100).await.expect("timeline");
+        if let Some(m) = tl.iter().find(|m| pred(m)) {
+            return m.clone();
+        }
+        eprintln!("  ({label}) not yet visible after sync {} — retrying", attempt + 1);
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+    panic!("{label}: message never arrived on the receiver after {tries} syncs");
 }
 
 fn tmp_store() -> PathBuf {
@@ -191,6 +235,120 @@ async fn live_login_sync_send_membrane_roundtrip() {
 
     eprintln!(
         "LIVE OK: login+restore+sync+send(text)+send(membrane)+send(object×2)+extract all proven against {homeserver}"
+    );
+}
+
+/// **THE CROSS-USER LIVE ROUND-TRIP** — two distinct deos-matrix clients (two
+/// users) on a REAL homeserver: A creates a room and invites B, B accepts, then A
+/// sends and B *receives over the wire* (real server delivery, separate sync
+/// loops, separate SQLite stores). Proven legs:
+///   1. a PLAIN text message A→B (regular chat round-trips);
+///   2. a `MembraneEnvelope` (a forked-subrealm snapshot) A→B — B extracts the
+///      typed envelope and it equals A's, byte-intact through the server;
+///   3. a generalized `DreggObject` A→B — same extraction discipline.
+///
+/// This is the leg `live_login_sync_send_membrane_roundtrip` could NOT cover: that
+/// one reads its OWN sent message back on a single client. Here the bytes leave one
+/// process's client and arrive at a SECOND user's client through the homeserver —
+/// the genuine "real messages over a real server round-trip" demonstration.
+///
+/// Creds-gated on the five-var two-user config; absent → no-op (CI stays green).
+#[tokio::test]
+async fn live_two_user_cross_user_roundtrip() {
+    let Some((hs, user_a, pass_a, user_b, pass_b)) = live_two_user_config() else {
+        eprintln!(
+            "DEOS_MATRIX_TEST_USER_B/_PASS_B (+ the HS/USER/PASS triple) not set — \
+             skipping the cross-user A→B live round-trip (see scripts/live-test.sh to run it)."
+        );
+        return;
+    };
+
+    // Two clients, two SQLite stores — genuinely separate users/devices.
+    let (client_a, _stored_a) = MatrixClient::login_password(
+        &hs, &tmp_store(), "live-A-passphrase", &user_a, &pass_a, "deos-matrix-live-A",
+    )
+    .await
+    .expect("user A login");
+    let (client_b, _stored_b) = MatrixClient::login_password(
+        &hs, &tmp_store(), "live-B-passphrase", &user_b, &pass_b, "deos-matrix-live-B",
+    )
+    .await
+    .expect("user B login");
+
+    let uid_a = client_a.user_id().expect("A user id").to_string();
+    let uid_b = client_b.user_id().expect("B user id").to_string();
+    assert_ne!(uid_a, uid_b, "two genuinely distinct users");
+    eprintln!("LIVE two-user: A={uid_a} B={uid_b} on {hs}");
+
+    // A creates a room and invites B.
+    let room_id = client_a
+        .create_room(Some("deos-lab"), Some("the live deos-pilled room"), &[uid_b.as_str()])
+        .await
+        .expect("A creates room + invites B");
+    eprintln!("LIVE two-user: room {room_id} created by A, B invited");
+
+    // B syncs, sees the invite, accepts it (real join over the wire).
+    let mut joined = false;
+    for attempt in 0..15 {
+        client_b.sync_once().await.expect("B sync for invite");
+        let invites = client_b.invited_rooms().await.expect("B invited rooms");
+        if invites.iter().any(|r| r.room_id.as_str() == room_id) {
+            client_b.accept_invite(&room_id).await.expect("B accepts invite");
+            joined = true;
+            break;
+        }
+        // Maybe already auto-joined / already visible as joined.
+        if client_b.joined_rooms().await.expect("B joined").iter().any(|r| r.room_id.as_str() == room_id) {
+            joined = true;
+            break;
+        }
+        eprintln!("  (invite) not visible to B yet after sync {} — retrying", attempt + 1);
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+    assert!(joined, "B never saw/accepted the invite");
+    client_b.sync_once().await.expect("B sync after join");
+    eprintln!("LIVE two-user: B joined {room_id}");
+
+    // ---- LEG 1: a PLAIN text message A→B ------------------------------------
+    let marker = format!("hello from A · {}", uid_a);
+    let text_id = client_a.send_text(&room_id, &marker).await.expect("A sends text");
+    let got = sync_until(&client_b, &room_id, 20, "text A→B", |m| {
+        m.event_id == text_id || (m.body == marker && m.sender == uid_a)
+    })
+    .await;
+    assert_eq!(got.body, marker, "B received A's exact text over the wire");
+    assert_eq!(got.sender, uid_a, "sender is A");
+    assert_eq!(got.kind, MessageKind::Text, "plain text kind");
+    eprintln!("LIVE two-user: ✓ LEG 1 plain text A→B received by B");
+
+    // ---- LEG 2: a MembraneEnvelope (dregg object) A→B -----------------------
+    let env = MockMembraneHost::sample_envelope();
+    let mem_id = client_a.send_membrane(&room_id, "", &env).await.expect("A sends membrane");
+    let got = sync_until(&client_b, &room_id, 20, "membrane A→B", |m| m.event_id == mem_id).await;
+    assert_eq!(got.kind, MessageKind::Membrane, "B sees a Membrane-kind message");
+    let back = got.membrane.as_ref().expect("B extracts the membrane envelope from the wire");
+    assert_eq!(back, &env, "the MembraneEnvelope round-tripped A→B byte-intact through the real server");
+    // And it is rehydratable on B's side (the forward-compat + anti-substitution teeth hold).
+    let host = deos_matrix::MockMembraneHost::seeded();
+    assert!(back.is_rehydratable(), "B can rehydrate the received envelope");
+    deos_matrix::MembraneHost::rehydrate(&host, back).expect("B rehydrates the membrane");
+    eprintln!("LIVE two-user: ✓ LEG 2 MembraneEnvelope A→B received + extracted + rehydrated by B");
+
+    // ---- LEG 3: a generalized DreggObject A→B -------------------------------
+    let obj = DreggObject::Cell(CellRef {
+        cell_id: CellId::derive("!deoslab:deos.local"),
+        label: "the deos-lab room cell".into(),
+        cell_kind: Some("room".into()),
+    });
+    let obj_id = client_a.send_object(&room_id, "", &obj).await.expect("A sends object");
+    let got = sync_until(&client_b, &room_id, 20, "object A→B", |m| m.event_id == obj_id).await;
+    assert_eq!(got.kind, MessageKind::Object("cell".into()), "B sees an Object(cell)");
+    assert_eq!(got.object.as_ref().expect("B extracts the object"), &obj, "DreggObject round-tripped A→B");
+    eprintln!("LIVE two-user: ✓ LEG 3 DreggObject A→B received + extracted by B");
+
+    eprintln!(
+        "LIVE OK (cross-user): A→B plain text + MembraneEnvelope + DreggObject all delivered \
+         through the real homeserver {hs} and extracted typed on B."
     );
 }
 

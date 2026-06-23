@@ -191,6 +191,17 @@ impl GrantRegistry {
         self
     }
 
+    /// DENY a specific tool entirely: pin it a per-tool grant with rate 0, so
+    /// EVERY call to it fails closed in-band on the first attempt (the gate's
+    /// `delegAdmit` rate conjunct `new(=1) <= 0` is false). This is the
+    /// whole-tool "out of mandate" face — deos confines the session to NOT use
+    /// this tool at all, and the agent sees an in-band refusal if it reaches for
+    /// it. Distinct id + its own (zero) counter, like any per-tool grant.
+    pub fn with_grant_for_tool_deny(self, name: &str) -> Self {
+        let deadline = self.kind_grants[&ToolKind::Other].deadline;
+        self.with_tool_grant(name, 0, deadline)
+    }
+
     /// A curated set of standard per-tool tightenings deos applies on top of the
     /// kind floors: the genuinely dangerous specific tools get their own tight,
     /// independently-metered mandates.
