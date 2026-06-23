@@ -342,6 +342,18 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): the verified `stateStep`
+        // (`Dregg2.Exec.EffectsState.lean:208`) gates the field write on
+        // `cellLive target` (Live-ONLY). A write into a Sealed/Destroyed cell
+        // returns `none` in Lean (`state_nonlive_fails`); mirror that here.
+        if !c.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!("SetField target cell {cell} is not live (sealed/destroyed)"),
+                },
+                path.to_vec(),
+            ));
+        }
         if index < STATE_SLOTS {
             // Fixed register-file slot: the legacy 16-slot path.
             journal.record_set_field(*cell, index, Some(c.state.fields[index]));
@@ -401,6 +413,23 @@ impl TurnExecutor {
         let from_cell = ledger
             .get(from)
             .ok_or_else(|| (TurnError::CellNotFound { id: *from }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): the verified kernel's asset
+        // move gates BOTH legs on Live-ONLY. The SOURCE is gated by
+        // `recKExecAsset` (`cellLifecycleLive k turn.src`,
+        // `Dregg2.Exec.RecordKernel.lean:613`); the DEST by `recCexecAsset`
+        // (`acceptsEffects s.kernel t.dst`, `TurnExecutorFull.lean:893`). Both
+        // Lean predicates are Live-ONLY (discriminant `0`), so a Sealed /
+        // Destroyed / Archived endpoint refuses the move. Without these guards
+        // a live agent could transfer FROM or credit INTO a sealed/destroyed
+        // cell that Lean rolls back.
+        if !from_cell.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!("Transfer source cell {from} is not live (sealed/destroyed)"),
+                },
+                path.to_vec(),
+            ));
+        }
         let amount_i = i64::try_from(amount)
             .map_err(|_| (TurnError::BalanceOverflow { cell: *from }, path.to_vec()))?;
         if from_cell.state.balance() < amount_i {
@@ -413,8 +442,18 @@ impl TurnExecutor {
                 path.to_vec(),
             ));
         }
-        if ledger.get(to).is_none() {
-            return Err((TurnError::TransferDestNotFound { id: *to }, path.to_vec()));
+        let to_cell = ledger
+            .get(to)
+            .ok_or_else(|| (TurnError::TransferDestNotFound { id: *to }, path.to_vec()))?;
+        if !to_cell.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!(
+                        "Transfer destination cell {to} is not live (sealed/destroyed)"
+                    ),
+                },
+                path.to_vec(),
+            ));
         }
         let to_balance = ledger.get(to).unwrap().state.balance();
         if to_balance.checked_add(amount_i).is_none() {
@@ -657,6 +696,20 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): `incrementNonceA` routes
+        // through `incrementNonceStep` → the bare authority-gated `stateStep`
+        // (`Dregg2.Exec.EffectsState.lean:208`), which gates `cellLive target`
+        // (Live-ONLY). A nonce bump on a Sealed/Destroyed cell returns `none`.
+        if !c.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!(
+                        "IncrementNonce target cell {cell} is not live (sealed/destroyed)"
+                    ),
+                },
+                path.to_vec(),
+            ));
+        }
         journal.record_set_nonce(*cell, c.state.nonce());
         if !c.state.increment_nonce() {
             return Err((TurnError::NonceOverflow { cell: *cell }, path.to_vec()));
@@ -714,6 +767,20 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): `setPermissionsA` routes to the
+        // bare authority-gated `stateStep` (`Dregg2.Exec.EffectsState.lean:208`),
+        // gating `cellLive target` (Live-ONLY). A permissions write into a
+        // Sealed/Destroyed cell returns `none`.
+        if !c.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!(
+                        "SetPermissions target cell {cell} is not live (sealed/destroyed)"
+                    ),
+                },
+                path.to_vec(),
+            ));
+        }
         journal.record_set_permissions(*cell, c.permissions.clone());
         c.permissions = new_permissions.clone();
         Ok(())
@@ -765,6 +832,20 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): `setVKA` routes to the bare
+        // authority-gated `stateStep` (`Dregg2.Exec.EffectsState.lean:208`),
+        // gating `cellLive target` (Live-ONLY). A VK write into a
+        // Sealed/Destroyed cell returns `none`.
+        if !c.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!(
+                        "SetVerificationKey target cell {cell} is not live (sealed/destroyed)"
+                    ),
+                },
+                path.to_vec(),
+            ));
+        }
         journal.record_set_verification_key(*cell, c.verification_key.clone());
         c.verification_key = new_vk.cloned();
         Ok(())
@@ -811,6 +892,20 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): `setProgramA` routes to the bare
+        // authority-gated `stateStep` (`Dregg2.Exec.EffectsState.lean:208`),
+        // gating `cellLive target` (Live-ONLY). A program write into a
+        // Sealed/Destroyed cell returns `none`.
+        if !c.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!(
+                        "SetProgram target cell {cell} is not live (sealed/destroyed)"
+                    ),
+                },
+                path.to_vec(),
+            ));
+        }
         journal.record_set_program(*cell, c.program.clone());
         c.program = program.clone();
         Ok(())
@@ -2037,6 +2132,26 @@ impl TurnExecutor {
                 path.to_vec(),
             ));
         }
+        // KERNEL ALIGNMENT (lifecycle liveness): the verified `makeSovereignStep`
+        // (`TurnExecutorFull.lean:1606`) gates `acceptsEffects target` (Live-ONLY).
+        // Caps survive `destroy`, so an authority-only gate would let a
+        // Destroyed/Sealed cell be made sovereign ("Destroyed is terminal").
+        // `make_sovereign` itself does NOT check lifecycle, so gate here.
+        {
+            let c = ledger
+                .get(cell)
+                .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+            if !c.is_live() {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "MakeSovereign target cell {cell} is not live (sealed/destroyed)"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
         // Transition the cell from hosted to sovereign.
         ledger.make_sovereign(cell).map_err(|e| {
             (
@@ -2272,6 +2387,18 @@ impl TurnExecutor {
         let c = ledger
             .get_mut(cell)
             .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT (lifecycle liveness): `refusalA` routes to
+        // `stateStep s refusalField actor cell` (`TurnExecutorFull.lean:2581`),
+        // gating `cellLive cell` (Live-ONLY). A refusal recorded on a
+        // Sealed/Destroyed cell returns `none`.
+        if !c.is_live() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!("Refusal target cell {cell} is not live (sealed/destroyed)"),
+                },
+                path.to_vec(),
+            ));
+        }
         // Bump nonce (orders the refusal with respect to other
         // turns on this cell).
         journal.record_set_nonce(*cell, c.state.nonce());
@@ -2477,18 +2604,34 @@ impl TurnExecutor {
 
         if let Some(well_id) = well_id {
             let well = ledger.get_mut(&well_id).ok_or_else(|| {
-                // A registered well that is not live refuses the burn (the
+                // A registered well that is absent refuses the burn (the
                 // genesis-order tooth); the journaled debit above is rolled
                 // back by the caller on this error.
                 (
                     TurnError::InvalidEffect {
                         reason: format!(
-                            "issuer well {well_id} for the burn target's asset is not live"
+                            "issuer well {well_id} for the burn target's asset not found"
                         ),
                     },
                     path.to_vec(),
                 )
             })?;
+            // KERNEL ALIGNMENT (lifecycle liveness): the verified `recKBurnAsset`
+            // (`Dregg2.Exec.RecordKernel.lean:757`) gates the ISSUER WELL `a` on
+            // `cellLifecycleLive k a` (Live-ONLY). The holder `cell`/`target` is
+            // NOT liveness-gated in Lean (only membership + availability), so we
+            // gate ONLY the well here. A Sealed/Destroyed well refuses the burn.
+            if !well.is_live() {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "issuer well {well_id} for the burn target's asset is not live \
+                             (sealed/destroyed)"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
             let well_bal = well.state.balance();
             if !well.state.credit_balance(amount) {
                 return Err((

@@ -83,6 +83,19 @@ fn make_open_cell(seed: u8, balance: i64) -> Cell {
     make_cell(seed, balance, open_permissions())
 }
 
+/// An open-permission cell pre-SEALED (lifecycle discriminant 1). The verified kernel's per-effect
+/// liveness conjuncts (`cellLive` / `acceptsEffects`, both Live-ONLY) refuse every state-mutating
+/// effect that targets / sources this cell, even though its permissions admit the action — the
+/// gap the cross-cell liveness alignment closes.
+fn make_sealed_cell(seed: u8, balance: i64) -> Cell {
+    let mut c = make_open_cell(seed, balance);
+    c.lifecycle = dregg_cell::lifecycle::CellLifecycle::Sealed {
+        reason_hash: [7u8; 32],
+        sealed_at: 1,
+    };
+    c
+}
+
 fn field_from_u64(v: u64) -> FieldElement {
     let mut out = [0u8; 32];
     out[24..32].copy_from_slice(&v.to_be_bytes());
@@ -396,6 +409,133 @@ fn build_corpus() -> Vec<Case> {
             ),
             ledger: l,
             control: true,
+        });
+    }
+
+    // ════════════════ CROSS-CELL / SELF LIFECYCLE-LIVENESS ALIGNMENT ═════════════════════════
+    // The verified kernel gates EVERY state-mutating effect on the AFFECTED cell being Live-ONLY
+    // (`cellLive`/`acceptsEffects`, discriminant 0). Rust previously gated ONLY emit. A live agent
+    // could thus transfer-FROM / write-TO a SEALED cell — committed in Rust, rolled back in Lean.
+    // Each rejection case is paired with a LIVE control proving the guard does NOT over-reject.
+
+    // ── (T-from-sealed) Transfer FROM a SEALED source ─────────────────────────────────────────
+    // Agent A is SEALED; it transfers to a LIVE B. Lean `recKExecAsset` (RecordKernel.lean:613)
+    // gates `cellLifecycleLive turn.src` (Live-ONLY) ⇒ refuses. apply.rs's `apply_transfer` now
+    // gates `from.is_live()`. Expected AGREE-both-reject.
+    {
+        let a = make_sealed_cell(1, 100);
+        let b = make_open_cell(2, 5);
+        let (ida, idb) = (a.id(), b.id());
+        let mut l = Ledger::new();
+        l.insert_cell(a).unwrap();
+        l.insert_cell(b).unwrap();
+        cases.push(Case {
+            gate: "transfer-from-sealed",
+            desc: "Transfer 30 from a SEALED source A to a LIVE B (src not live)",
+            turn: single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::Transfer {
+                    from: ida,
+                    to: idb,
+                    amount: 30,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+    // ── (T-from-live) CONTROL — Transfer FROM a LIVE source — both ACCEPT ─────────────────────
+    {
+        let (l, a, b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "transfer-from-live",
+            desc: "Transfer 30 from a LIVE A to a LIVE B (honest; both accept)",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::Transfer {
+                    from: a,
+                    to: b,
+                    amount: 30,
+                },
+            ),
+            ledger: l,
+            control: true,
+        });
+    }
+
+    // ── (SF-on-sealed) SetField ON a SEALED cell ─────────────────────────────────────────────
+    // Self-targeted SetField on a SEALED agent A (developer slot 4, not a reserved slot). Lean
+    // `stateStep` (EffectsState.lean:208) gates `cellLive target` (Live-ONLY) ⇒ refuses. apply.rs's
+    // `apply_set_field` now gates `c.is_live()`. Expected AGREE-both-reject.
+    {
+        let a = make_sealed_cell(1, 100);
+        let ida = a.id();
+        let mut l = Ledger::new();
+        l.insert_cell(a).unwrap();
+        cases.push(Case {
+            gate: "setfield-on-sealed",
+            desc: "SetField (slot 4) on a SEALED cell (target not live)",
+            turn: single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::SetField {
+                    cell: ida,
+                    index: 4,
+                    value: field_from_u64(42),
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+    // ── (SF-on-live) CONTROL — SetField ON a LIVE cell — both ACCEPT ──────────────────────────
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "setfield-on-live",
+            desc: "SetField (slot 4) on a LIVE cell (honest; both accept)",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::SetField {
+                    cell: a,
+                    index: 4,
+                    value: field_from_u64(42),
+                },
+            ),
+            ledger: l,
+            control: true,
+        });
+    }
+
+    // ── (SP-on-sealed) SetPermissions ON a SEALED cell ────────────────────────────────────────
+    // Self-targeted SetPermissions on a SEALED agent. Lean `setPermissionsA` routes to `stateStep`
+    // (EffectsState.lean:208) gating `cellLive target` ⇒ refuses. apply.rs now gates `c.is_live()`.
+    {
+        let a = make_sealed_cell(1, 100);
+        let ida = a.id();
+        let mut l = Ledger::new();
+        l.insert_cell(a).unwrap();
+        cases.push(Case {
+            gate: "setperms-on-sealed",
+            desc: "SetPermissions on a SEALED cell (target not live)",
+            turn: single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::SetPermissions {
+                    cell: ida,
+                    new_permissions: open_permissions(),
+                },
+            ),
+            ledger: l,
+            control: false,
         });
     }
 

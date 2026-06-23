@@ -660,6 +660,14 @@ impl Cell {
         self.lifecycle.accepts_effects()
     }
 
+    /// Shortcut for `self.lifecycle.is_live()` — the verified-kernel Live-ONLY
+    /// predicate (lifecycle discriminant `0`), matching Lean's `cellLive` /
+    /// `cellLifecycleLive` / `acceptsEffects`. Unlike [`Self::accepts_effects`]
+    /// this REJECTS `Archived`; cross-cell state-mutating effects gate on this.
+    pub fn is_live(&self) -> bool {
+        self.lifecycle.is_live()
+    }
+
     /// Create a child cell delegated to this cell.
     pub fn spawn_child(&self, child_public_key: [u8; 32], child_token_id: [u8; 32]) -> Cell {
         let id = CellId::derive_raw(&child_public_key, &child_token_id);
