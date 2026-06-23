@@ -2464,9 +2464,7 @@ This is `Handlers.Exercise.capFacetMask` re-stated executor-side (no import cycl
 def capFacetMaskA : Cap → List Authority.Auth
   | .null            => []
   | .endpoint _ r    => r
-  | .node _          => [Authority.Auth.read, Authority.Auth.write, Authority.Auth.grant,
-                         Authority.Auth.call, Authority.Auth.reply, Authority.Auth.reset,
-                         Authority.Auth.control, Authority.Auth.notify]  -- every Auth; notify ⇒ full facet complete
+  | .node _          => Authority.nodeFacets  -- every Auth (`nodeFacets`); the SAME list `capAuthConferred (.node _)` confers — the two node-cap authority surfaces AGREE
 
 /-- **R4 — is `fa`'s required facet admitted by the held cap's mask?** The held cap is `heldCapTo`
 (the SAME `find? confersEdgeTo`-then-`getD null` lookup the handler's `exercisedCap` uses — so the

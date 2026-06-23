@@ -944,7 +944,13 @@ private theorem attenuate_allAuths_id (c : Cap) : attenuate allAuths c = c := by
       apply List.filter_eq_self.mpr
       intro a _
       exact auth_mem_allAuths a
-  | node _ => simp [attenuate]
+  | node t =>
+      -- `attenuate allAuths (.node t)`: `allAuths` admits every Auth, so the full-keep guard
+      -- `nodeFacets.all (allAuths.contains)` holds and the node cap is returned UNCHANGED.
+      simp only [attenuate]
+      rw [if_pos]
+      exact List.all_eq_true.mpr (fun a _ => by
+        have := auth_mem_allAuths a; simpa using this)
 
 private theorem recKDelegateAtten_allAuths_eq_recKDelegate (k : RecordKernelState) (d r t : CellId) :
     recKDelegateAtten k d r t allAuths = recKDelegate k d r t := by

@@ -150,7 +150,14 @@ theorem grantedRightsCard_le_held (actor : CellId) (idx : Nat) (keep : List Auth
                 ≤ (capAuthConferred (heldCapAt actor idx k)).length := by
     cases h : heldCapAt actor idx k with
     | endpoint t r => simp only [attenuate, capAuthConferred]; exact List.length_filter_le _ _
-    | node t => simp [attenuate, capAuthConferred]
+    | node t =>
+        -- `capAuthConferred (.node t) = nodeFacets`. Full-keep ⇒ `.node t` (lengths equal);
+        -- otherwise ⇒ `.endpoint t (nodeFacets.filter keep)` (filtered length ≤ nodeFacets length).
+        simp only [attenuate]
+        by_cases hall : Authority.nodeFacets.all (fun a => keep.contains a) = true
+        · rw [if_pos hall]
+        · rw [if_neg hall]; simp only [capAuthConferred, Authority.capAuthConferred]
+          exact List.length_filter_le _ _
     | null => simp [attenuate, capAuthConferred]
   exact_mod_cast hlen
 
