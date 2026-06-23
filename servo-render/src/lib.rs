@@ -69,6 +69,14 @@ pub mod content_tile;
 #[cfg(feature = "libservo")]
 pub mod webview;
 
+/// **THE CAP-GATED HTTP(S) PROTOCOL HANDLER** — the embedder `ProtocolHandler` the
+/// vendored `servo-net` fork lets us register for `http`/`https`, so the http(s)
+/// byte socket is owned by the cap gate (`Netlayer::dial` connect-decision + a real
+/// cap-gated TCP socket for the bytes) instead of servo's internal hyper. See
+/// [`netcap_http`].
+#[cfg(feature = "libservo")]
+pub mod netcap_http;
+
 /// **THE NET-CAP CONNECTOR** — the page's outbound socket bound to the dregg `captp`
 /// [`Netlayer::dial`](dregg_captp::netlayer::Netlayer::dial) transport. Always
 /// present (it needs neither SWGL nor libservo): a fetch the held
