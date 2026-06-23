@@ -54,7 +54,13 @@ env:
   FORK_REF: "update-plonky3-rev"
 
 jobs:
-  # ── macOS (universal) — per-arch native builds ─────────────────────────────
+  # ── macOS — SEPARATE per-arch installers (NO universal/fat binary) ──────────
+  # We ship ONE clean download per arch — `starbridge-v2-macos-arm64.dmg` and
+  # `starbridge-v2-macos-x86_64.dmg` — so a user grabs only the binary they need.
+  # We deliberately DO NOT `lipo -create` the two arches into a universal Mach-O:
+  # a fat binary forces every user to download both arches (bloat). Separate
+  # downloads are leaner and clearer.
+  #
   # WHY TWO NATIVE BUILDS, NOT ONE CROSS-COMPILE: the embedded executor links
   # `dregg-lean-ffi/libdregg_lean.a`, a HOST-NATIVE Mach-O archive of objects the
   # Lean compiler emits, spliced/linked by `build.rs` via `cargo:rustc-link-lib=
@@ -64,12 +70,11 @@ jobs:
   # `cargo build --target x86_64-apple-darwin` on the arm64 runner would link an
   # arm64-only `libdregg_lean.a` into an x86_64 binary and FAIL. The honest fix:
   # build each arch on its OWN native runner (elan installs the matching-arch
-  # Lean, bootstrap.sh seeds a matching-arch archive), upload each arch's raw
-  # binary, then `lipo -create` them into one universal Mach-O in the fuse job.
-  # That fused binary is what the single `starbridge-v2-macos-universal.dmg`
-  # carries — one artifact for every Mac (Apple Silicon + Intel).
+  # Lean, bootstrap.sh seeds a matching-arch archive). This matrix job then
+  # packages each arch's single-arch binary INDEPENDENTLY into its own
+  # .app/.dmg/.tar.gz — no fuse step, no shared universal artifact.
   macos-build:
-    name: macOS ${{ matrix.arch }} binary
+    name: macOS ${{ matrix.arch }} installer
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -214,66 +219,25 @@ jobs:
         # Each runner runs its OWN native arch, so this exercises both binaries.
         run: ./target/release/starbridge-v2 --headless
 
-      # Upload the RAW per-arch binary; the `macos-universal` fuse job downloads
-      # both and `lipo -create`s them into one universal Mach-O it packages.
-      - name: Stage the per-arch binary
+      # Package THIS arch's single-arch binary into its own .app/.dmg/.tar.gz,
+      # named by arch (`...-arm64.dmg` / `...-x86_64.dmg`) so a user downloads
+      # exactly the one they need. NO `lipo -create`, NO universal artifact: the
+      # binary stays the single arch the assertion above verified.
+      - name: Package per-arch .app + .dmg + .tar.gz
         working-directory: starbridge-v2
         run: |
           set -euo pipefail
-          rm -rf binout && mkdir -p binout
-          cp target/release/starbridge-v2 "binout/starbridge-v2-${{ matrix.arch }}"
-          ls -la binout
-
-      - name: Upload per-arch binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: starbridge-v2-macos-binary-${{ matrix.arch }}
-          path: starbridge-v2/binout/starbridge-v2-${{ matrix.arch }}
-          if-no-files-found: error
-          retention-days: 7
-
-  # ── macOS (universal) — fuse the two arch binaries → .app + .dmg ────────────
-  # The single artifact covering EVERY Mac. Downloads both per-arch binaries from
-  # `macos-build`, `lipo -create`s them into one universal Mach-O, wraps it in the
-  # .app bundle (same Info.plist/ad-hoc-sign as before), and produces
-  # `starbridge-v2-macos-universal.dmg` (+ a raw universal .tar.gz). Runs on
-  # macos-14 (arm64) — hdiutil/codesign/lipo are arch-agnostic; the OUTPUT binary
-  # is universal regardless of which runner fuses it.
-  macos-universal:
-    name: macOS installer (universal .app/.dmg)
-    needs: macos-build
-    runs-on: macos-14
-    steps:
-      - name: Download arm64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: starbridge-v2-macos-binary-arm64
-          path: arm64
-
-      - name: Download x86_64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: starbridge-v2-macos-binary-x86_64
-          path: x86_64
-
-      - name: Fuse → universal Mach-O, package .app + .dmg + .tar.gz
-        run: |
-          set -euo pipefail
-          ARM=arm64/starbridge-v2-arm64
-          X86=x86_64/starbridge-v2-x86_64
-          test -f "$ARM"; test -f "$X86"
-          chmod +x "$ARM" "$X86"
-          # lipo -create fuses the two single-arch Mach-Os into one fat (universal)
-          # binary that the loader runs as arm64 on Apple Silicon and x86_64 on
-          # Intel — one file, every Mac.
+          ARCH="${{ matrix.arch }}"
+          BIN=target/release/starbridge-v2
+          test -x "$BIN"
           mkdir -p dist
-          lipo -create -output dist/starbridge-v2 "$ARM" "$X86"
-          echo "universal arch(s): $(lipo -archs dist/starbridge-v2)"
-          lipo -archs dist/starbridge-v2 | grep -qw arm64
-          lipo -archs dist/starbridge-v2 | grep -qw x86_64
           APP="Starbridge v2.app"
           rm -rf "dist/$APP" && mkdir -p "dist/$APP/Contents/MacOS" "dist/$APP/Contents/Resources"
-          cp dist/starbridge-v2 "dist/$APP/Contents/MacOS/starbridge-v2"
+          cp "$BIN" "dist/$APP/Contents/MacOS/starbridge-v2"
+          # Re-assert the packaged binary is single-arch (exactly this arch, not fat).
+          PKG_ARCHS="$(lipo -archs "dist/$APP/Contents/MacOS/starbridge-v2")"
+          echo "packaged arch(s): $PKG_ARCHS (expected exactly: $ARCH)"
+          test "$PKG_ARCHS" = "$ARCH" || { echo "::error::packaged binary is not single-arch $ARCH (got '$PKG_ARCHS')"; exit 1; }
           cat > "dist/$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -296,20 +260,20 @@ jobs:
           # minimum that lets a local user open it).
           codesign --force --deep --sign - "dist/$APP" || \
             echo "ad-hoc codesign unavailable; shipping unsigned .app (user may need to allow it in System Settings)."
-          # .dmg via hdiutil (always present on macOS runners).
+          # .dmg via hdiutil (always present on macOS runners), named by arch.
           hdiutil create -volname "Starbridge v2" -srcfolder "dist/$APP" \
-            -ov -format UDZO dist/starbridge-v2-macos-universal.dmg
-          # Raw universal-binary tarball fallback.
-          tar -C dist -czf dist/starbridge-v2-macos-universal.tar.gz starbridge-v2
+            -ov -format UDZO "dist/starbridge-v2-macos-$ARCH.dmg"
+          # Raw single-arch binary tarball, named by arch.
+          tar -C target/release -czf "dist/starbridge-v2-macos-$ARCH.tar.gz" starbridge-v2
           ls -la dist
 
-      - name: Upload macOS universal installers
+      - name: Upload macOS ${{ matrix.arch }} installers
         uses: actions/upload-artifact@v4
         with:
-          name: starbridge-v2-macos-universal
+          name: starbridge-v2-macos-${{ matrix.arch }}
           path: |
-            dist/*.dmg
-            dist/*.tar.gz
+            starbridge-v2/dist/*.dmg
+            starbridge-v2/dist/*.tar.gz
           if-no-files-found: error
           retention-days: 30
 
@@ -318,8 +282,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.dmg
-            dist/*.tar.gz
+            starbridge-v2/dist/*.dmg
+            starbridge-v2/dist/*.tar.gz
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
