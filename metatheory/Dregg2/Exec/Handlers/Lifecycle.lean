@@ -82,9 +82,10 @@ def refreshDelegationStep (k : RecordKernelState) (a : RefreshDelegationArgs) :
                                     else k.delegations c }
   else none
 
-/-- **Emit event** — kernel-neutral log append (membership gate only; authority-free). -/
+/-- **Emit event** — kernel-neutral log append (membership ∧ CLASS-1 liveness gate; authority-free).
+A member-but-Destroyed/Sealed cell cannot post an observation ("Destroyed is terminal"). -/
 def emitEventStep (k : RecordKernelState) (a : EmitEventArgs) : Option RecordKernelState :=
-  if a.cell ∈ k.accounts then some k else none
+  if a.cell ∈ k.accounts ∧ acceptsEffects k a.cell = true then some k else none
 
 theorem cellSealStep_balNeutral {k k' : RecordKernelState} {a : CellLifecycleArgs}
     (h : cellSealStep k a = some k') (b : AssetId) :
@@ -135,7 +136,7 @@ theorem emitEventStep_balNeutral {k k' : RecordKernelState} {a : EmitEventArgs}
     (h : emitEventStep k a = some k') (b : AssetId) :
     recTotalAsset k' b = recTotalAsset k b := by
   unfold emitEventStep at h
-  by_cases hmem : a.cell ∈ k.accounts
+  by_cases hmem : a.cell ∈ k.accounts ∧ acceptsEffects k a.cell = true
   · rw [if_pos hmem] at h; simp only [Option.some.injEq] at h; subst h; rfl
   · rw [if_neg hmem] at h; exact absurd h (by simp)
 
@@ -260,15 +261,15 @@ def emitEventH : EffectHandler EmitEventArgs where
   step := emitEventStep
   delta := fun _ _ => 0
   auth := fun _ _ => true
-  admission := fun k a => decide (a.cell ∈ k.accounts)
+  admission := fun k a => decide (a.cell ∈ k.accounts) && acceptsEffects k a.cell
   trace := fun a => { actor := a.actor, src := a.cell, dst := a.cell, amt := 0 }
   auth_gated := by intro _ _ _ _; rfl
   admission_gated := by
     intro s a s' h
     unfold emitEventStep at h
-    by_cases hmem : a.cell ∈ s.accounts
+    by_cases hmem : a.cell ∈ s.accounts ∧ acceptsEffects s a.cell = true
     · rw [if_pos hmem] at h; simp only [Option.some.injEq] at h; subst h
-      simp [hmem]
+      simp [hmem.1, hmem.2]
     · rw [if_neg hmem] at h; exact absurd h (by simp)
   conserves := by
     intro s a s' h b

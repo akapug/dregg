@@ -133,7 +133,7 @@ because the audited executor REBINDS `cell` at one index rather than shrinking `
 conjunct: self-authority over `cell` via `stateAuthB`). Honestly NOT a 3-leg membership/lifecycle gate
 (the recorded frame-gap: `makeSovereignA` admits a non-account, sealed/destroyed target — see header). -/
 def makeSovereignGuard (actor cell : CellId) (k : RecordKernelState) : Bool :=
-  stateAuthB k.caps actor cell
+  stateAuthB k.caps actor cell && acceptsEffects k cell
 
 /-- **The makeSovereign effect as an IR term: gate, then rebind the cell behind its commitment.**
 Mirrors `transferStmt`/`cellSealStmt` (gate, then move) but the move is `setCell {cell}` whose leaf is
@@ -152,8 +152,9 @@ def makeSovereignStmt (actor cell : CellId) : RecStmt :=
 `stateAuthB` conjunct — the `MakeSovereignGuard` proposition). The analog of `cellSealGuard_iff`, but a
 SINGLE conjunct (no membership/lifecycle legs, the honest executor truth). -/
 theorem makeSovereignGuard_iff (actor cell : CellId) (k : RecordKernelState) :
-    makeSovereignGuard actor cell k = true ↔ stateAuthB k.caps actor cell = true := by
-  simp only [makeSovereignGuard]
+    makeSovereignGuard actor cell k = true
+      ↔ (stateAuthB k.caps actor cell = true ∧ acceptsEffects k cell = true) := by
+  simp only [makeSovereignGuard, Bool.and_eq_true]
 
 /-- The `setCell {cell}` commitment-rebind map is EXACTLY `sovereignRebind k.cell cell` (identity off
 `{cell}`; at `cell` the commitment-only record). The `makeSovereignA` analog of `transferCellMap_eq` —
@@ -417,6 +418,17 @@ theorem makeSovereignStmt_no_membership_gate :
   rw [interp_makeSovereignStmt_eq_kernel]
   decide
 
+/-- **⚑ CLASS-1 LIVENESS GATE, ENFORCED (fail-closed: DESTROYED).** A DESTROYED cell (lifecycle 3) is
+REFUSED a rebind EVEN with full self-authority — caps survive `destroy`, but `acceptsEffects` is now a
+conjunct of the guard ("Destroyed is terminal"). `kMS0D` overrides cell 0's lifecycle to Destroyed; the
+term returns `none`. The IR-term twin of `makeSovereignSpec_rejects_destroyed`. -/
+def kMS0D : RecordKernelState := { kMS0 with lifecycle := fun c => if c = 0 then 3 else 0 }
+
+theorem makeSovereignStmt_rejects_destroyed :
+    interp (makeSovereignStmt 0 0) kMS0D = none := by
+  rw [interp_makeSovereignStmt_eq_kernel]
+  decide
+
 #assert_axioms makeSovereignStmt_commits
 #assert_axioms makeSovereignStmt_balance_unreadable
 #assert_axioms makeSovereignStmt_commitment_present
@@ -424,6 +436,7 @@ theorem makeSovereignStmt_no_membership_gate :
 #assert_axioms makeSovereignStmt_other_cell_untouched
 #assert_axioms makeSovereignStmt_bal_frozen
 #assert_axioms makeSovereignStmt_rejects_unauthorized
+#assert_axioms makeSovereignStmt_rejects_destroyed
 #assert_axioms makeSovereignStmt_no_membership_gate
 
 end Dregg2.Circuit.Argus.Effects.MakeSovereign

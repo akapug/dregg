@@ -1586,7 +1586,11 @@ commitment-form (the readable state is dropped behind the §8 commitment) and ex
 by one row (the metadata clock). NO `bal` move, NO cap edit — the regime invariant. -/
 def makeSovereignStep (s : RecChainedState) (actor target : CellId) :
     Option RecChainedState :=
-  if stateAuthB s.kernel.caps actor target = true then
+  -- §LIVENESS-GATE (CLASS-1): authority over `target` AND `target`'s lifecycle still `acceptsEffects`.
+  -- Caps survive `destroy`, so an authority-only gate would let a Destroyed cell be made sovereign
+  -- ("Destroyed is terminal"). The liveness conjunct closes that gap, fail-closed (the executor twin
+  -- of the makeSovereign VERIFIER-ANCHOR; both are commitment-bindable since `lifecycle` ∈ record_digest).
+  if stateAuthB s.kernel.caps actor target = true ∧ acceptsEffects s.kernel target = true then
     some { kernel := makeSovereignKernel s.kernel target,
            log    := { actor := actor, src := target, dst := target, amt := 0 } :: s.log }
   else
@@ -1597,14 +1601,14 @@ produced exactly the commitment-rebind post-state + a one-row chain extension. T
 downstream `makeSovereign` theorem reuses (the analog of `stateStep_factors`). -/
 theorem makeSovereignStep_factors {s s' : RecChainedState} {actor target : CellId}
     (h : makeSovereignStep s actor target = some s') :
-    stateAuthB s.kernel.caps actor target = true ∧
+    (stateAuthB s.kernel.caps actor target = true ∧ acceptsEffects s.kernel target = true) ∧
     s' = { kernel := makeSovereignKernel s.kernel target,
            log    := { actor := actor, src := target, dst := target, amt := 0 } :: s.log } := by
   unfold makeSovereignStep at h
-  by_cases hauth : stateAuthB s.kernel.caps actor target = true
-  · rw [if_pos hauth] at h
-    exact ⟨hauth, (Option.some.inj h).symm⟩
-  · rw [if_neg hauth] at h; exact absurd h (by simp)
+  by_cases hg : stateAuthB s.kernel.caps actor target = true ∧ acceptsEffects s.kernel target = true
+  · rw [if_pos hg] at h
+    exact ⟨hg, (Option.some.inj h).symm⟩
+  · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **Balance-NEUTRALITY of the value-rebind over the per-asset ledger (`rfl`-grade).** The
 `makeSovereignKernel` rebind touches ONLY `k.cell`; `recTotalAsset` reads `k.bal`/`k.accounts`, which
@@ -1672,7 +1676,7 @@ over `target` (dregg1's self-sovereign gate). -/
 theorem makeSovereignStep_authorized {s s' : RecChainedState} {actor target : CellId}
     (h : makeSovereignStep s actor target = some s') :
     stateAuthB s.kernel.caps actor target = true :=
-  (makeSovereignStep_factors h).1
+  (makeSovereignStep_factors h).1.1
 
 /-- **`makeSovereignStep` extends the chain by exactly one row** (the metadata clock; the
 chainlink the spine reuses). -/
@@ -2503,8 +2507,12 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   -- caveat on slot `f` of `cell` is REJECTED (fail-closed). The other field writes (nonce/perms/vk —
   -- protocol-managed slots, not developer SetField) stay on the bare authority-gated `stateStep`.
   | .setFieldA actor cell f v        => stateStepGuarded s f actor cell v
+  -- §LIVENESS-GATE (CLASS-1): an emit is admitted only when the target cell is a live account AND its
+  -- lifecycle still `acceptsEffects` — a member-but-Destroyed/Sealed cell CANNOT post an observation
+  -- ("Destroyed is terminal", the same membership-vs-liveness fix the mint/burn/transfer arms carry).
   | .emitEventA actor cell topic data =>
-      if cell ∈ s.kernel.accounts then some (emitStep s actor cell topic data) else none
+      if cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true then
+        some (emitStep s actor cell topic data) else none
   | .incrementNonceA actor cell n     => stateStep s nonceField actor cell (.int n)
   | .setPermissionsA actor cell p     => stateStep s permsField actor cell (.int p)
   | .setVKA actor cell vk             => stateStep s vkField actor cell (.int vk)
@@ -2674,7 +2682,7 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       rw [stateStepGuarded_recTotalAsset h b]; ring
   | emitEventA actor cell topic data =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      by_cases hlive : cell ∈ s.kernel.accounts
+      by_cases hlive : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hlive] at h
         simp only [Option.some.injEq] at h
         subst h
@@ -3111,7 +3119,7 @@ theorem execFullA_chainlinkExact (s s' : RecChainedState) (fa : FullActionA)
       obtain ⟨_, hs'⟩ := stateStep_factors (stateStepGuarded_eq h); subst hs'; rfl
   | emitEventA actor cell topic data =>
       simp only [execFullA, fullReceiptA] at h ⊢
-      by_cases hlive : cell ∈ s.kernel.accounts
+      by_cases hlive : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
       · rw [if_pos hlive] at h
         simp only [Option.some.injEq] at h
         subst h; rfl
@@ -3855,7 +3863,7 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        stateAuthB s.kernel.caps actor cell = true ∧
        effectLinearity .setField = LinearityClass.Neutral
    | .emitEventA _ cell _ _ =>
-       cell ∈ s.kernel.accounts ∧
+       cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true ∧
        effectLinearity .emitEvent = LinearityClass.Neutral
    | .incrementNonceA actor cell _ =>
        stateAuthB s.kernel.caps actor cell = true ∧
@@ -4011,8 +4019,8 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   -- live-cell ∧ coloring obligation (authority-free, but not ghost-cell-free).
   | setFieldA actor cell f v => exact ⟨execFullA_setFieldA_authorized s s' actor cell f v h, rfl⟩
   | emitEventA actor cell topic data =>
-      by_cases hlive : cell ∈ s.kernel.accounts
-      · exact ⟨hlive, rfl⟩
+      by_cases hlive : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
+      · exact ⟨hlive.1, hlive.2, rfl⟩
       · simp only [execFullA, hlive, if_false] at h
         cases h
   | incrementNonceA actor cell n => exact ⟨execFullA_incrementNonceA_authorized s s' actor cell n h, rfl⟩
@@ -4436,6 +4444,16 @@ def fmaS : RecChainedState :=
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
 -- Non-live event targets reject: no ghost-cell event rows.
 #guard ((execFullA fmaS (.emitEventA 9 99 7 123)).isSome) == false  --  false
+-- §LIVENESS-GATE mutation-confirm: a member-but-DESTROYED cell (cell 0, destroyed by actor 0) is
+--   REFUSED both an emit AND a makeSovereign — "Destroyed is terminal" at the executor (CLASS-1).
+--   Build the Destroyed state by running `cellDestroyA 0 0` (lifecycle 0 → 3, caps survive), then probe.
+#guard ((execFullA fmaS (.cellDestroyA 0 0 777)).bind
+          (fun sD => execFullA sD (.emitEventA 9 0 7 123))).isNone  --  true (Destroyed emit refused)
+#guard ((execFullA fmaS (.cellDestroyA 0 0 777)).bind
+          (fun sD => execFullA sD (.makeSovereignA 0 0))).isNone  --  true (Destroyed makeSovereign refused)
+-- ...and the LIVE pole still commits normally (cell 0 is Live by default):
+#guard ((execFullA fmaS (.emitEventA 9 0 7 123)).isSome)         --  true (Live emit commits)
+#guard ((execFullA fmaS (.makeSovereignA 0 0)).isSome)           --  true (Live makeSovereign commits)
 
 -- A MIXED per-asset turn interleaving pure-state effects with a transfer: ALL balance-neutral
 --   (the transfer conserves; the field writes/emit move no asset) ⇒ (105, 7) preserved:

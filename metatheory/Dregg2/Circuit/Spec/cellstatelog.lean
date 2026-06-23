@@ -59,7 +59,7 @@ Unlike `Transfer.admitGuard` (a six-way conjunction with authority/non-negativit
 `emitGuard` is the single cell-liveness conjunct — dregg1's `apply_emit_event` runs no authority
 check (anyone may post an observation on a live cell). Stated INDEPENDENTLY of the executor. -/
 def emitGuard (st : RecChainedState) (cell : CellId) : Prop :=
-  cell ∈ st.kernel.accounts
+  cell ∈ st.kernel.accounts ∧ acceptsEffects st.kernel cell = true
 
 /-! ## §2 — the receipt the executor appends (the touched-component post-image).
 
@@ -146,7 +146,7 @@ theorem execFullA_emitEvent_iff_spec (st : RecChainedState) (actor cell : CellId
     execFullA st (.emitEventA actor cell topic data) = some st'
       ↔ EmitEventSpec st actor cell topic data st' := by
   unfold execFullA EmitEventSpec emitGuard
-  by_cases hlive : cell ∈ st.kernel.accounts
+  by_cases hlive : cell ∈ st.kernel.accounts ∧ acceptsEffects st.kernel cell = true
   · rw [if_pos hlive]
     constructor
     · intro h
@@ -216,14 +216,31 @@ theorem execFullA_emitEvent_rejects_dead (st : RecChainedState) (actor cell : Ce
     (topic data : Int) (hdead : cell ∉ st.kernel.accounts) :
     execFullA st (.emitEventA actor cell topic data) = none := by
   unfold execFullA
-  rw [if_neg hdead]
+  rw [if_neg (fun hg => hdead hg.1)]
 
 /-- The spec is itself UNSATISFIABLE on a dead cell (the guard conjunct fails) — so the ↔ is not
 vacuously true on dead-cell inputs. -/
 theorem emitSpec_false_on_dead (st : RecChainedState) (actor cell : CellId) (topic data : Int)
     (st' : RecChainedState) (hdead : cell ∉ st.kernel.accounts) :
     ¬ EmitEventSpec st actor cell topic data st' := by
-  intro h; exact hdead h.1
+  intro h; exact hdead h.1.1
+
+/-- **`execFullA_emitEvent_rejects_destroyed` — "Destroyed is terminal" (the CLASS-1 liveness tooth).**
+A member-but-DESTROYED/SEALED cell (`acceptsEffects st.kernel cell ≠ true`) is REJECTED an emit, even
+if it is still in `accounts`: a non-Live cell cannot post an observation. This is the membership-vs-
+liveness fix the mint/burn/transfer arms carry, now closed on the cell-state-log family. -/
+theorem execFullA_emitEvent_rejects_destroyed (st : RecChainedState) (actor cell : CellId)
+    (topic data : Int) (hdead : acceptsEffects st.kernel cell ≠ true) :
+    execFullA st (.emitEventA actor cell topic data) = none := by
+  unfold execFullA
+  rw [if_neg (fun hg => hdead hg.2)]
+
+/-- The spec is itself UNSATISFIABLE on a non-Live cell (the liveness conjunct of the guard fails) —
+so the ↔ is not vacuously true on Destroyed-cell inputs. -/
+theorem emitSpec_false_on_destroyed (st : RecChainedState) (actor cell : CellId) (topic data : Int)
+    (st' : RecChainedState) (hdead : acceptsEffects st.kernel cell ≠ true) :
+    ¬ EmitEventSpec st actor cell topic data st' := by
+  intro h; exact hdead h.1.2
 
 /-! ## §8 — concrete `#guard` witnesses: a live-cell emit commits; a dead-cell emit is rejected. -/
 
@@ -242,6 +259,13 @@ def st0 : RecChainedState :=
         (fun r => (r.actor, r.src, r.dst, r.amt)) == some (5, 1, 1, (0 : Int))  -- true
 -- A dead-cell emit (cell 7 ∉ {0,1}) is REJECTED:
 #guard (execFullA st0 (.emitEventA 5 7 9 42)).isNone  -- true
+-- §LIVENESS-GATE mutation-confirm: a member-but-DESTROYED cell is REFUSED an emit even though it is
+-- still in `accounts` — build the Destroyed state with a `lifecycle` override (3 = Destroyed):
+def st0D : RecChainedState :=
+  { st0 with kernel := { st0.kernel with lifecycle := fun c => if c = 1 then 3 else 0 } }
+#guard (execFullA st0D (.emitEventA 5 1 9 42)).isNone  -- true (Destroyed cell 1 emit refused)
+-- ...while a still-Live member (cell 0) emits normally:
+#guard (execFullA st0D (.emitEventA 5 0 9 42)).isSome  -- true (Live cell 0 emit commits)
 
 /-! ## §9 — axiom-hygiene tripwires.
 
@@ -255,5 +279,7 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 #assert_axioms execFullA_emitEvent_commits_iff
 #assert_axioms execFullA_emitEvent_rejects_dead
 #assert_axioms emitSpec_false_on_dead
+#assert_axioms execFullA_emitEvent_rejects_destroyed
+#assert_axioms emitSpec_false_on_destroyed
 
 end Dregg2.Circuit.Spec.CellStateLog

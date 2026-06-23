@@ -737,11 +737,12 @@ theorem hole_handler_makeSovereign (s s' : RecChainedState) (actor cell : CellId
     simp only [Bool.and_eq_true] at hg
     simp only [Option.some.injEq] at hstep
     have hauth : Dregg2.Exec.EffectsState.stateAuthB s.kernel.caps actor cell = true := hg.2
+    have hlive : acceptsEffects s.kernel cell = true := hg.1
     refine ⟨{ kernel := Dregg2.Exec.TurnExecutorFull.makeSovereignKernel s.kernel cell,
               log := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }, ?_, ?_⟩
     · show Dregg2.Exec.TurnExecutorFull.makeSovereignStep s actor cell = _
       unfold Dregg2.Exec.TurnExecutorFull.makeSovereignStep
-      rw [if_pos hauth]
+      rw [if_pos ⟨hauth, hlive⟩]
     · rw [← hstep]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
@@ -920,7 +921,7 @@ theorem handler_refines_execFullA_emitEvent (s s' : RecChainedState) (actor cell
   rw [toClosedEffect] at hstep
   change emitEventStep s.kernel { actor := actor, cell := cell, topic := topic, data := data } = some s'.kernel at hstep
   unfold emitEventStep at hstep
-  by_cases hmem : cell ∈ s.kernel.accounts
+  by_cases hmem : cell ∈ s.kernel.accounts ∧ acceptsEffects s.kernel cell = true
   · rw [if_pos hmem] at hstep
     have hk : s.kernel = s'.kernel := by simpa only [Option.some.injEq] using hstep
     refine ⟨emitStep s actor cell topic data, ?_, hk⟩
