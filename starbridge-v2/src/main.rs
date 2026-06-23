@@ -136,6 +136,28 @@ fn main() {
         }
     }
 
+    // `--render-live-brain <out>`: THE HEADLINE — a LIVE Hermes brain (a real Claude
+    // over the `hermes-acp` ACP subprocess) is given a short task, DECIDES the JS
+    // itself, and that JS runs `run_js` against the cockpit's LIVE `World`: a real
+    // crawl + real receipted turns landing on the live ledger, every fire bounded by
+    // the agent's `held`. Bakes the cockpit inspector before/after over the SAME
+    // World the brain drove. SKIPS gracefully (exit 0, prints why) when the env
+    // can't reach a provider — the handshake/session still run LIVE. Hard-cap the
+    // session with HERMES_MAX_ITERATIONS to bound provider spend. Default 1400x900.
+    #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+    {
+        if let Some(out) = render_live_brain_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1400.0, 900.0));
+            match render_live_brain_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-live-brain FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-showcase <out>`: THE SHOWCASE BAKE — one gorgeous high-res PNG of
     // the full working deos desktop with EVERY dev surface mounted + seeded (chat
     // with the membrane card, editor with on-ledger patches, a recorded terminal
@@ -872,6 +894,23 @@ fn render_agent_attach_arg(args: &[String]) -> Option<String> {
             return it.next().cloned();
         }
         if let Some(rest) = a.strip_prefix("--render-agent-attach=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-live-brain <out>` (or `=<out>`) argument — the output base
+/// path for THE HEADLINE bake (a LIVE Hermes brain driving `run_js` on the live
+/// cockpit World). Returns `None` when absent. `<out>.before.png` / `<out>.after.png`.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+fn render_live_brain_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-live-brain" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-live-brain=") {
             return Some(rest.to_string());
         }
     }
@@ -1820,6 +1859,291 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
          the agent's run_js drove the {where_} — its modified cell is on the inspector glass."
     );
     Ok(())
+}
+
+/// Bake the cockpit INSPECTOR over a shared `World` to `path` (a PNG). Shared by the
+/// live-brain bake for the before/after shots so both render the same surface over
+/// the SAME World the brain drove. Returns the captured pixel dimensions.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+fn bake_inspector_over_world(
+    path: &str,
+    world: std::rc::Rc<std::cell::RefCell<world::World>>,
+    anchors: [dregg_cell::CellId; 3],
+    w: f32,
+    h: f32,
+) -> anyhow::Result<(u32, u32)> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use std::borrow::Cow;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let shared = world.clone();
+    let window = cx.open_window(size(px(w), px(h)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+            let _ = c.select_tab_named("inspector");
+            c
+        });
+        view.update(cx, |c, cx| c.focus_on_open(window, cx));
+        view
+    })?;
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(path)?;
+    Ok((ww, hh))
+}
+
+/// THE HEADLINE BAKE — a LIVE Hermes brain (a real Claude over the `hermes-acp` ACP
+/// subprocess) drives `run_js` against the cockpit's LIVE `World`.
+///
+/// The flow, end-to-end and REAL:
+///   1. Build the cockpit's live `World` (the same demo image the windowed cockpit
+///      runs) and bake the inspector BEFORE shot over it.
+///   2. Wire the brain's HANDS: a `RunJsTool` over the `user` cell (held =
+///      `Signature`, affordances `bump`/`escalate`), an accountability
+///      `HermesGateway` with a `run_js` grant, and a sink factory producing fresh
+///      `WorldSinkAdapter::live` views of the SAME World — folded into a
+///      `LiveJsHands` → a `run_js` hook on the `AcpClient`.
+///   3. Spawn the REAL `hermes-acp` subprocess, complete the handshake, pin the
+///      model (`HERMES_ACP_MODEL`, e.g. `copilot:claude-sonnet-4.5`), and prompt the
+///      brain with a short task: inspect the ledger, then bump a counter cell. The
+///      model DECIDES the JS; the hook runs it on the live World → real receipted
+///      turns on the live ledger.
+///   4. Bake the inspector AFTER shot over the SAME World (the brain's committed
+///      turns are on the glass) and report what the brain actually did + the
+///      receipts it landed.
+///
+/// SKIPS GRACEFULLY (Ok, prints why, still bakes the BEFORE shot) when the env can't
+/// run it (no `hermes-acp`, or no provider reachable so the brain emits no
+/// `run_js`). Cap provider spend with `HERMES_MAX_ITERATIONS`.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use deos_hermes::{
+        AcpClient, AcpTransport, GrantRegistry, HermesGateway, RunJsTool, ToolCallRequest,
+    };
+    use dregg_cell::AuthRequired;
+    use starbridge_v2::agent_attach::{WorldSinkAdapter, AGENT_COUNTER_SLOT};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
+
+    // ── 1. The BEFORE shot over a throwaway world (the cockpit's `with_node` runs
+    //       genesis on whatever World it mounts, so the live World the brain drives
+    //       gets its FIRST + ONLY cockpit at the AFTER shot — no double-genesis). ──
+    {
+        let (before_world, before_anchors) = world::demo_world();
+        let bw = Rc::new(RefCell::new(before_world));
+        let pre_field0 = bw
+            .borrow()
+            .ledger()
+            .get(&before_anchors[2])
+            .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(deos_js::applet::unpack_u64))
+            .unwrap_or(0);
+        let (pw, ph) = bake_inspector_over_world(&format!("{out}.before.png"), bw, before_anchors, w, h)?;
+        println!("live-brain: BEFORE shot -> {out}.before.png ({pw}x{ph}); agent slot-0 = {pre_field0}.");
+    }
+
+    // ── 2. The live World the brain drives (NO cockpit on it yet). ───────────────
+    let (world, anchors) = world::demo_world();
+    let [_treasury, _service, user] = anchors;
+    let live = Rc::new(RefCell::new(world));
+    let agent = user;
+
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+    let cell_count = live.borrow().cell_count();
+    let pre_field = live
+        .borrow()
+        .ledger()
+        .get(&agent)
+        .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(deos_js::applet::unpack_u64))
+        .unwrap_or(0);
+
+    // The brain's HANDS: a `RunJsTool` over the `user` cell (held = Signature, NOT
+    // root). `bump` (Signature — admitted), `escalate` (Proof — the over-reach the
+    // cap tooth refuses in-band). The applet cell IS the agent's cell.
+    let tool = RunJsTool::new(
+        AuthRequired::Signature,
+        *agent.as_bytes(),
+        [0x01; 32],
+        vec![(AGENT_COUNTER_SLOT, deos_js::applet::pack_u64(pre_field))],
+        vec![
+            ("bump".to_string(), AuthRequired::Signature),
+            ("escalate".to_string(), AuthRequired::Proof),
+        ],
+    );
+    // The accountability gateway: the metered, receipted turn the brain's `run_js`
+    // tool-call itself rides (every agent action is accounted, never free).
+    let mut cclerk = deos_hermes::AgentCipherclerk::new();
+    let root = cclerk.mint_token(&[7u8; 32], "deos");
+    let runtime = deos_hermes::AgentRuntime::new(Arc::new(RwLock::new(cclerk)), "deos");
+    let mut js_gateway = HermesGateway::new(
+        &runtime,
+        root,
+        GrantRegistry::default_for_session(10_000).with_tool_grant("run_js", 50, 10_000),
+    );
+    let mut js_rt = deos_js::JsRuntime::new()
+        .map_err(|e| anyhow::anyhow!("boot SpiderMonkey for the live brain: {e}"))?;
+
+    // ── 3. The LIVE brain loop (real hermes-acp subprocess). ─────────────────────
+    let program = std::env::var("HERMES_ACP_BIN").unwrap_or_else(|_| "hermes-acp".to_string());
+    let usable = std::process::Command::new(&program)
+        .arg("--check")
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("check OK"))
+        .unwrap_or(false);
+    if !usable {
+        println!(
+            "live-brain: SKIP the live brain — no usable `{program}` (set HERMES_ACP_BIN; its \
+             venv needs `agent-client-protocol` so `hermes-acp --check` prints 'check OK'). \
+             The BEFORE shot + the run_js wiring are real; only the subprocess is missing."
+        );
+        return Ok(());
+    }
+
+    // The session gateway answers any Hermes dangerous-command permission request
+    // (a standard registry — any stray tool is still cap-gated + receipted).
+    let mut session_clerk = deos_hermes::AgentCipherclerk::new();
+    let session_root = session_clerk.mint_token(&[9u8; 32], "deos");
+    let session_runtime =
+        deos_hermes::AgentRuntime::new(Arc::new(RwLock::new(session_clerk)), "deos");
+    let session_gateway = HermesGateway::new(
+        &session_runtime,
+        session_root,
+        GrantRegistry::default_for_session(10_000).with_standard_tool_grants(10_000),
+    );
+
+    let transport = match AcpTransport::spawn_hermes(&program, &[]) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("live-brain: SKIP — could not spawn `{program}`: {e}. BEFORE shot is real.");
+            return Ok(());
+        }
+    };
+    let model = std::env::var("HERMES_ACP_MODEL")
+        .unwrap_or_else(|_| "copilot:claude-sonnet-4.5".to_string());
+    let mut client = AcpClient::new(transport, session_gateway, 100);
+
+    // THE TASK. Hermes's own tool registry has no `run_js` (its tools are
+    // terminal/write_file/…), and an MCP `run_js` tool's args do not round-trip
+    // through the ACP permission seam (only dangerous-command approvals do). So we
+    // ask the brain to DECIDE + EMIT the deos-js script as its answer (a fenced
+    // ```js block), and we run that EXACT script through `RunJsTool::run_attached_on`
+    // on the live World — the model's chosen JS, real receipted turns on the live
+    // ledger. (The cleaner long-term seam is a real `run_js` MCP server bridged to
+    // the cockpit World — see docs/deos/LOG-A-HERMES-IN.md "remaining step".)
+    let prompt = "You drive a live verified ocap operating system by writing a small \
+        JavaScript program against its `deos` runtime. The runtime exposes: \
+        `deos.world.cells()` — an array of the live cells; \
+        `var app = deos.applet({ affordances: [\"bump\", \"escalate\"] });` — binds your \
+        affordances; `app.fire(\"bump\", n)` — bumps your agent counter cell by n (a real \
+        verified turn committing to the live ledger, returns the new value); \
+        `app.fire(\"escalate\", n)` — over-reaches your authority, refused (returns -1). \
+        Task: inspect how many cells are on the live ledger, then bump your counter by 5. \
+        Reply with ONLY a single ```js fenced code block (no prose) containing the program; \
+        the last expression must be the new counter value. Do not run any tool — just write the JS.";
+
+    println!("live-brain: driving `{program}` (model `{model}`) — the brain decides the JS…");
+    let run = match client.run_prompt_with_model("/tmp", prompt, Some(&model)) {
+        Ok(run) => run,
+        Err(e) => {
+            println!("live-brain: SKIP — the live loop did not complete the handshake: {e}. BEFORE shot is real.");
+            return Ok(());
+        }
+    };
+    println!(
+        "live-brain: handshake/session/prompt LIVE (stop_reason = {}); the brain answered {} chars.",
+        run.stop_reason,
+        run.agent_text.len()
+    );
+
+    // Extract the brain's chosen JS (the fenced ```js block, else the raw text).
+    let script = extract_js_block(&run.agent_text);
+    if script.trim().is_empty() {
+        println!(
+            "live-brain: the brain reached no provider / produced no JS (text len {}). The \
+             handshake/session were LIVE; nothing to run. Set a reachable HERMES_ACP_MODEL \
+             (e.g. copilot:claude-sonnet-4.5).",
+            run.agent_text.len()
+        );
+        return Ok(());
+    }
+    println!("\n── the brain's chosen JS (run_js on the LIVE World) ──\n{}\n──", script.trim());
+
+    // ── Run the brain's EXACT script on the LIVE World via run_js. ───────────────
+    let sink: Box<dyn deos_js::WorldSink> = Box::new(WorldSinkAdapter::live(live.clone()));
+    let call = ToolCallRequest::new(
+        "live-brain",
+        "tc-run_js-1",
+        "run_js",
+        serde_json::json!({ "script": script }),
+    );
+    let outcome = tool
+        .run_attached_on(&mut js_rt, sink, agent, &mut js_gateway, &call, 200, &script)
+        .map_err(|e| anyhow::anyhow!("run_js on the live World: {e}"))?;
+    println!(
+        "   run_js tool-call admitted = {}; result = {:?}; fires committed = {} (real verified turns); \
+         receipts = [{}]{}",
+        outcome.tool_admitted(),
+        outcome.result,
+        outcome.fires_committed,
+        outcome.receipts.iter().map(|r| hex::encode(&r[..6])).collect::<Vec<_>>().join(", "),
+        outcome.js_error.as_ref().map(|e| format!("; js_error = {e}")).unwrap_or_default(),
+    );
+
+    // ── 4. The AFTER shot over the SAME live World (first cockpit on it). ────────
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    let post_field = live
+        .borrow()
+        .ledger()
+        .get(&agent)
+        .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(deos_js::applet::unpack_u64))
+        .unwrap_or(0);
+    let (aw, ah) = bake_inspector_over_world(&format!("{out}.after.png"), live.clone(), anchors, w, h)?;
+
+    println!(
+        "\nlive-brain: AFTER shot -> {out}.after.png ({aw}x{ah}). LIVE LEDGER: height {pre_height}→{post_height}, \
+         receipts {pre_receipts}→{post_receipts}, agent slot-0 {pre_field}→{post_field} (over {cell_count} cells). \
+         The brain's chosen JS drove the LIVE cockpit World via run_js — its committed turns are on the inspector glass."
+    );
+    Ok(())
+}
+
+/// Pull the first ```js (or ```javascript / generic ```) fenced code block out of
+/// the brain's answer; if none, return the trimmed whole text (the model may answer
+/// with bare JS). The script the live brain CHOSE — run verbatim on the live World.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+fn extract_js_block(text: &str) -> String {
+    // Find a fenced block; prefer a js/javascript-tagged one, else the first fence.
+    for tag in ["```js", "```javascript", "```JS", "```"] {
+        if let Some(start) = text.find(tag) {
+            let after = &text[start + tag.len()..];
+            // Skip the rest of the fence's first line (the language tag / newline).
+            let body_start = after.find('\n').map(|i| i + 1).unwrap_or(0);
+            let body = &after[body_start..];
+            if let Some(end) = body.find("```") {
+                return body[..end].to_string();
+            }
+        }
+    }
+    text.trim().to_string()
 }
 
 /// THE SHOWCASE BAKE — render the full deos desktop offscreen to a high-res PNG:

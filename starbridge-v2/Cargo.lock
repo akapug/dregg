@@ -2798,6 +2798,7 @@ dependencies = [
 name = "deos-hermes"
 version = "0.1.0"
 dependencies = [
+ "deos-js",
  "dregg-cell",
  "dregg-firmament",
  "dregg-sdk",

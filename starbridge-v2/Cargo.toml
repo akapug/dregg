@@ -176,6 +176,17 @@ dev-surfaces = ["dep:deos-zed", "dep:deos-terminal", "dep:deos-hermes", "dep:deo
 # the attach test). Implies `embedded-executor` (it drives a `World`).
 agent-js = ["embedded-executor", "dep:deos-js"]
 
+# live-brain — THE HEADLINE: a LIVE Hermes brain (a real Claude over the
+# `hermes-acp` ACP subprocess) drives `run_js` against the cockpit's LIVE `World`.
+# The model is given a short task, DECIDES the JS itself, and that JS runs on the
+# live ledger (real crawl + real receipted turns), every fire bounded by the
+# agent's `held` (the cap tooth). Pulls `deos-hermes` with `js-agent` (its
+# `LiveJsHands` + `AcpClient::with_run_js_hook` wiring), which shares the SAME
+# `../deos-js` mozjs `agent-js` pulls — one engine across the graph. The
+# `--render-live-brain` bake (main.rs) drives the loop + bakes the cockpit
+# before/after. Off the default build (subprocess + multi-GB mozjs).
+live-brain = ["agent-js", "dep:deos-hermes", "deos-hermes/js-agent"]
+
 # firmament — the cockpit editor pane edits SOVEREIGN CELLS over an in-process
 # `Ledger` + `TurnExecutor`, and every save is a real cap-gated `SetField` turn
 # leaving a verifiable `TurnReceipt` (NOT a disk write). Forwards to deos-zed's
