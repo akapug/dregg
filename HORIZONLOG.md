@@ -164,8 +164,14 @@ graph + mounting the editor/chat views on wasm (touches the cockpit feature-grap
 SWGL `DepthFunc` SIGABRT via a 1-field vendored servo-paint fork `clear_caches_with_quads:false`). 17/17
 green (the once-`#[ignore]`d render test RUNS). PNGs: `servo_real_page_render.png` (a laid-out `data:` page,
 CSS box measured 160×120) + `servo_real_text_render.png` ("dregg" as 212-color antialiased glyphs — SEEN).
-Remainder: http(s) bytes still ride servo's hyper (needs a `net` fork); the servo-paint fork reverts when
-upstream carries a SWGL `RenderingContext`.
+HTTP NOW WORKS `70d546eb`: forked `servo-net` (removed http/https from `FORBIDDEN_SCHEMES`; `scheme_fetch`
+consults an embedder handler first), + `CapGatedHttpHandler` (`netcap_http.rs`) runs the net-cap decision AT
+the socket — cap-denied → 0 bytes, no socket; cap-allowed → a real `TcpStream` HTTP/1.1 GET → servo layout →
+SWGL raster. Proven vs a real local http server (PNG `servo_real_http_render.png` = "dregg over http" fetched
+over a real TCP socket, SEEN). SUB-SEAM: byte leg is plain `http://`; `https://` needs a TLS handshake on the
+same cap-admitted socket (rustls over the `TcpStream`) — bounded, NOT new architecture (gate+registration+
+interception identical; `netcap_http.rs::http_get_over_real_socket` `scheme != "http"` guard). servo-paint
+fork still reverts when upstream carries a SWGL `RenderingContext`.
 ### FEDERATION RECONNECT/RETRY — robust late-join, by running (2026-06-23).
 `1f5d3303` (`node/src/blocklace_sync.rs` + `net/src/gossip.rs`). `spawn_peer_prober` wires
 `RequestBackoff` into the dial path → re-dials unconnected peers on capped exponential backoff (clears +
