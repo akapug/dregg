@@ -508,7 +508,7 @@ def fullAuthCeiling : List Auth :=
 -- `[read]` is confined by the full ceiling; `[grant]`-only ceiling does NOT contain `control`:
 #guard (decide (∀ a ∈ capAuthConferred (Cap.endpoint 7 [Auth.read]), a ∈ fullAuthCeiling))  --  true
 #guard (decide (Auth.control ∈ [Auth.grant])) == false  --  false (a too-tight ceiling rejects connectivity grants)
-#guard (decide (∀ a ∈ capAuthConferred (Cap.node 7), a ∈ fullAuthCeiling))  --  true ([control] ⊆ full)
+#guard (decide (∀ a ∈ capAuthConferred (Cap.node 7), a ∈ fullAuthCeiling))  --  true (nodeFacets ⊆ full)
 
 /-! ## Axiom hygiene — confinement + one-step obligation pinned to the kernel triple. -/
 

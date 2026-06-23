@@ -73,14 +73,26 @@ total function `Caps := Label → List Cap`; other slots are untouched. -/
 def grant (caps : Caps) (holder : Label) (c : Cap) : Caps :=
   fun l => if l = holder then c :: caps l else caps l
 
-/-- **`attenuate`** (the `LossyMorphism` content, concrete): narrow an `endpoint` cap to
-only the rights in `keep` (drop the rest). A `node`/`null` cap is returned unchanged —
-those confer fixed authority with no rights list to filter. The result confers a SUBSET
-of the original authority (`attenuate_subset`). -/
+/-- **`attenuate`** (the `LossyMorphism` content, concrete): narrow a cap to only the rights
+in `keep` (drop the rest). The result confers a SUBSET of the original authority
+(`attenuate_subset`).
+
+* An `endpoint` cap filters its carried `rights` to those in `keep`.
+* A `node` cap confers the full `nodeFacets` (Authority/Positional). When `keep` admits ALL
+  of them the node is the most-powerful cap unchanged (`.node t`); when `keep` DROPS a facet
+  the node is GENUINELY demoted to a restricted `endpoint t (nodeFacets ∩ keep)` — so a
+  `[read]`-attenuated node cap really loses `write`. This is the node-cap-authority
+  reconciliation: attenuation that drops a facet drops it on BOTH surfaces (the conferred-
+  authority surface here AND the executor R4 facet gate `capFacetMaskA`).
+* A `null` cap (confers nothing) is returned unchanged. -/
 def attenuate (keep : List Auth) (c : Cap) : Cap :=
   match c with
   | .endpoint t rights => .endpoint t (rights.filter (fun a => keep.contains a))
-  | other              => other
+  | .node t            =>
+      if Authority.nodeFacets.all (fun a => keep.contains a)
+      then .node t                                                  -- full-keep: most-powerful cap, untouched
+      else .endpoint t (Authority.nodeFacets.filter (fun a => keep.contains a))
+  | .null              => .null
 
 /-- **`derive`** (l4v `derive_cap` ∘ `cap_insert`): grant `holder` an ATTENUATED copy of
 `c` — the standard "hand out a weaker cap" move. Defined as `grant ∘ attenuate`, so it
@@ -117,7 +129,17 @@ theorem attenuate_subset (keep : List Auth) (c : Cap) :
       simp only [attenuate, capAuthConferred]
       intro a ha
       exact List.mem_of_mem_filter ha
-  | node t => simp [attenuate, capAuthConferred]
+  | node t =>
+      -- `capAuthConferred (.node t) = nodeFacets`. Full-keep ⇒ result is `.node t` (⊆ refl);
+      -- otherwise the result is `.endpoint t (nodeFacets.filter keep)`, whose conferred
+      -- authority is `nodeFacets.filter keep ⊆ nodeFacets`.
+      simp only [attenuate]
+      by_cases hall : nodeFacets.all (fun a => keep.contains a) = true
+      · rw [if_pos hall]; exact fun a h => h
+      · rw [if_neg hall]
+        simp only [capAuthConferred]
+        intro a ha
+        exact List.mem_of_mem_filter ha
   | null   => simp [attenuate, capAuthConferred]
 
 /-- **`derive_no_amplify`.** A derived cap confers ≤ the parent's authority: the
@@ -245,5 +267,16 @@ def c0 : Caps := fun l => if l = 0 then [Cap.endpoint 7 [Auth.read, Auth.write]]
 #guard (invoke c0 0 7 Auth.grant) == false  --  false (write/read only)
 #guard (invoke (revoke c0 0 (Cap.endpoint 7 [Auth.read, Auth.write])) 0 7 Auth.write) == false  --  false
 #guard (invoke (grant c0 1 (Cap.node 7)) 1 7 Auth.control)  --  true
+
+-- **The node-cap reconciliation (both poles).** A node cap confers the full facet set on the
+-- attenuation surface, AGREEING with the executor R4 facet gate; attenuation that drops a facet
+-- genuinely narrows it.
+#guard (capAuthConferred (Cap.node 7)) == Dregg2.Authority.nodeFacets  -- node confers ALL 8 facets, not [control]
+-- Pole 1 — narrowing is REAL: a `[read]`-attenuated node cap demotes to a read-only endpoint and DROPS write.
+#guard (attenuate [Auth.read] (Cap.node 7)) == Cap.endpoint 7 [Auth.read]
+#guard (capAuthConferred (attenuate [Auth.read] (Cap.node 7))) == [Dregg2.Authority.Auth.read]
+#guard (capAuthConferred (attenuate [Auth.read] (Cap.node 7))).contains Auth.write == false  -- the codex mutation: [read] node cap CANNOT write
+-- Pole 2 — identity attenuation: a full-keep node cap is UNCHANGED (still the most-powerful `.node`).
+#guard (attenuate Dregg2.Authority.nodeFacets (Cap.node 7)) == Cap.node 7
 
 end Dregg2.Exec

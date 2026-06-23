@@ -75,6 +75,18 @@ inductive Cap where
   | node (target : Label)
   deriving DecidableEq, Repr
 
+/-- **`nodeFacets`** — the full authority a `node` cap confers: EVERY IPC facet. A `node`
+cap is the most-powerful cap (l4v `CNodeCap`/`ThreadCap` confer total control over the
+object); reading it off as the complete facet set — rather than the bare `[control]` token —
+is what makes the two node-cap authority surfaces AGREE: `capAuthConferred (.node t)` (the
+attenuation/`attenuate_subset` surface) is now the SAME list the executor's R4 facet gate
+(`Exec.TurnExecutorFull.capFacetMaskA (.node _)`) admits. So a `node` cap genuinely confers
+all 8 facets on BOTH surfaces, and `attenuate keep (.node t)` (Exec/Caps.lean) demotes it to
+a restricted `endpoint` whenever `keep` drops a facet — a `[read]`-attenuated node cap really
+loses `write`. Same list (same order) as `allAuths` (`Exec/Handlers/Authority.lean`). -/
+def nodeFacets : List Auth :=
+  [Auth.read, Auth.write, Auth.grant, Auth.call, Auth.reply, Auth.reset, Auth.control, Auth.notify]
+
 /-- **`cap_auth_conferred`** — the authority a cap confers. Verbatim l4v
 (`Access.thy:118`):
 ```
@@ -83,11 +95,13 @@ cap_auth_conferred cap ≡ case cap of
   | UntypedCap … ⇒ {Control}
   | EndpointCap oref badge r ⇒ cap_rights_to_auth r True
   | CNodeCap … | ThreadCap … | … ⇒ {Control}
-``` -/
+```
+The `node`/`CNodeCap` arm reads off the FULL facet set `nodeFacets` (not the bare `[control]`
+token), reconciling the two node-cap authority surfaces — see `nodeFacets`. -/
 def capAuthConferred : Cap → List Auth
   | .null            => []
   | .endpoint _ r    => r
-  | .node _          => [Auth.control]
+  | .node _          => nodeFacets
 
 /-- The set of caps held at (the slots of) a label — the cell's slot-table. -/
 abbrev Caps := Label → List Cap
