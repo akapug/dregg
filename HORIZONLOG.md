@@ -175,10 +175,16 @@ into the `gpui-web` graph + renders `WebEditorPane`/`WebChatPane`/`WebCockpitRoo
 REAL wasm32 (`wasm-pack test --node`, 2/2): a web-editor save = a receipted `SetField` turn (receipt count
 grows); a web-chat message = a turn vs a room cell (`SendReceipt`). wasm-check WITH panes + native-full
 green; bundle 28M. PAINT NUANCE (honest): the cockpit paints a FRAME in-browser (proven PNG `449b5941`,
-single-frame capture) + panes drive on wasm (proven test), but SUSTAINED interactive repaint hits a
-pre-existing `gpui_web` fork borrow (`zed-dregg-web/.../gpui_web/src/window.rs:294` RefCell-already-borrowed,
-independent of the panes — the shell alone hits it headless; being fixed in-place in the fork per the
-`[patch]` note). Live interactive web cockpit = that fork borrow fix.
+single-frame capture) + panes drive on wasm (proven test). gpui_web REENTRANCY-BORROW FIXED (fork
+`54fbcb6943` + breadstuffs `7bb4f2f9`): every gpui-side window callback was invoked while
+`callbacks.borrow_mut()` was held + those callbacks re-enter `PlatformWindow` synchronously → next rAF tick
+re-borrowed + panicked (why one frame painted but repaint died). Fixed w/ a `with_callback` take-drop-invoke-
+restore at every reentrant site (window.rs/events.rs); VERIFIED no `window.rs:294` panic across ~940 rAF
+frames. REMAINING BLOCKER (precisely pinpointed, app-wiring not gpui_web): the cockpit uses
+`gpui_component::input::InputState` (URL bar) but never wraps its window root in `gpui_component::Root` →
+`Root::read` `.unwrap()`s None + ABORTS at `gpui-component/crates/ui/src/root.rs:148`; under wasm
+`panic=abort` that poisons the App `RefCell` (the borrow cascade is a SYMPTOM). Live web cockpit = install a
+`Root` wrapper in the web boot (`cockpit_web::WebCockpitRoot`) — a tractable cockpit-wiring fix.
 - ⚠ OPS: disk hit ~117Mi free during builds; the lane reclaimed 72G of `target/debug/incremental`. Now
   ~44Gi free on a 100%-used volume — TIGHT. Heavy parallel rust builds can refill it; prune build caches.
 
