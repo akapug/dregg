@@ -15,11 +15,14 @@ use matrix_sdk::{
     config::SyncSettings,
     ruma::{
         api::client::filter::RoomEventFilter,
-        events::room::message::MessageType, events::AnySyncTimelineEvent, OwnedRoomId, UserId,
+        events::room::message::{MessageType, RoomMessageEventContent},
+        events::AnySyncTimelineEvent,
+        OwnedRoomId, UserId,
     },
     Client, RoomState,
 };
 
+use crate::membrane::{MembraneEnvelope, MEMBRANE_EVENT_KEY};
 use crate::{session::StoredSession, Error, Result};
 
 /// A native deos Matrix client over `matrix-rust-sdk`.
@@ -158,18 +161,28 @@ impl TimelineMessage {
 }
 
 impl MatrixClient {
-    /// Build a client for `homeserver_url`, backed by a SQLite store at
-    /// `store_path` (state + E2E crypto). The store is opened with `passphrase`.
-    pub async fn build(
-        homeserver_url: &str,
-        store_path: &Path,
-        passphrase: &str,
-    ) -> Result<Self> {
-        let inner = Client::builder()
-            .homeserver_url(homeserver_url)
-            .sqlite_store(store_path, Some(passphrase))
-            .build()
-            .await?;
+    /// Build a client for `server`, backed by a SQLite store at `store_path`
+    /// (state + E2E crypto). The store is opened with `passphrase`.
+    ///
+    /// `server` is accepted in either of the two forms a real user types:
+    ///   * a full homeserver URL (`https://matrix-client.matrix.org`,
+    ///     `http://localhost:6167`) — used directly;
+    ///   * a bare server name (`matrix.org`, `deos.local`) — resolved via the SDK's
+    ///     `.well-known` / versions discovery (`server_name_or_homeserver_url`),
+    ///     exactly what a login form's "homeserver" field needs.
+    ///
+    /// A plain-HTTP URL (no TLS — e.g. a local conduit on `http://localhost`) is
+    /// honored as-is; this is the only path that talks to a non-TLS server, and it
+    /// is opt-in by typing an `http://` URL.
+    pub async fn build(server: &str, store_path: &Path, passphrase: &str) -> Result<Self> {
+        let builder = Client::builder().sqlite_store(store_path, Some(passphrase));
+        // A URL (has a scheme) → use it directly; a bare name → discover.
+        let builder = if server.starts_with("http://") || server.starts_with("https://") {
+            builder.homeserver_url(server)
+        } else {
+            builder.server_name_or_homeserver_url(server)
+        };
+        let inner = builder.build().await?;
         Ok(Self { inner })
     }
 
@@ -200,6 +213,49 @@ impl MatrixClient {
             .session()
             .ok_or_else(|| Error::Other("login succeeded but no session present".into()))?;
 
+        let stored = StoredSession {
+            homeserver: homeserver_url.to_string(),
+            session,
+            store_path: store_path.to_path_buf(),
+            store_passphrase: passphrase.to_string(),
+        };
+        Ok((me, stored))
+    }
+
+    /// Log in directly with a pre-issued **access token** (and device id),
+    /// returning a persistable [`StoredSession`]. This is the SSO/token path: an
+    /// SSO flow (or an admin-issued token) yields `access_token` + `device_id` +
+    /// the `user_id` they belong to, with no password ever held by this client.
+    /// Identical session shape to [`Self::login_password`], so the rest of the
+    /// stack (restore, persistence, the comms-PD seam) is unchanged.
+    pub async fn login_access_token(
+        homeserver_url: &str,
+        store_path: &Path,
+        passphrase: &str,
+        user_id: &str,
+        access_token: &str,
+        device_id: &str,
+    ) -> Result<(Self, StoredSession)> {
+        use matrix_sdk::{
+            authentication::{matrix::MatrixSession, SessionTokens},
+            ruma::OwnedDeviceId,
+            SessionMeta,
+        };
+        let me = Self::build(homeserver_url, store_path, passphrase).await?;
+        let session = MatrixSession {
+            meta: SessionMeta {
+                user_id: UserId::parse(user_id)?,
+                device_id: OwnedDeviceId::from(device_id),
+            },
+            tokens: SessionTokens {
+                access_token: access_token.to_string(),
+                refresh_token: None,
+            },
+        };
+        me.inner.restore_session(session.clone()).await?;
+        // Verify the token actually authenticates (fail-closed, not "stored but
+        // dead") before handing back a session the caller will persist as valid.
+        me.inner.whoami().await?;
         let stored = StoredSession {
             homeserver: homeserver_url.to_string(),
             session,
@@ -324,11 +380,14 @@ impl MatrixClient {
                     };
                     // The deos-pilling: detect a membrane riding in the namespaced
                     // event key. A deos message carries the envelope under
-                    // `MEMBRANE_EVENT_KEY` (custom content); non-deos clients see
-                    // only the text fallback. The full extraction (custom-content
-                    // deserialize off the raw event) is the live-backend upgrade;
-                    // the typed seam is here so the model carries it end to end.
-                    let membrane = None;
+                    // `MEMBRANE_EVENT_KEY` inside the message content; non-deos
+                    // clients see only the text fallback. We extract it off the RAW
+                    // event JSON (the typed `RoomMessageEventContent` has no slot for
+                    // a custom field), parsing into the typed envelope. A malformed
+                    // or future-version envelope is treated as absent (the message
+                    // still renders as its text fallback — fail-open on render,
+                    // fail-closed on rehydrate, which `is_rehydratable` enforces).
+                    let membrane = extract_membrane(ev.raw().json().get());
                     let kind = if membrane.is_some() { MessageKind::Membrane } else { kind };
                     let mut m = TimelineMessage::text(
                         original.event_id.to_string(),
@@ -347,6 +406,71 @@ impl MatrixClient {
         Ok(out)
     }
 
+    /// Resolve a joined [`matrix_sdk::Room`] for `room_id`, fail-closed if it is
+    /// not a room we have joined (you cannot send into a room you are not in).
+    async fn joined_room(&self, room_id: &str) -> Result<matrix_sdk::Room> {
+        let room_id = matrix_sdk::ruma::RoomId::parse(room_id)?;
+        let room = self
+            .inner
+            .get_room(&room_id)
+            .ok_or_else(|| Error::Other(format!("not a joined room: {room_id}")))?;
+        if room.state() != RoomState::Joined {
+            return Err(Error::Other(format!("room {room_id} is not joined")));
+        }
+        Ok(room)
+    }
+
+    /// Send a plain-text message to `room_id`, returning the server-assigned event
+    /// id. If the room is encrypted, the SDK transparently encrypts the event
+    /// (the default `e2e-encryption` feature). This is the live counterpart to the
+    /// mock's local-append `send`.
+    pub async fn send_text(&self, room_id: &str, body: &str) -> Result<String> {
+        let room = self.joined_room(room_id).await?;
+        let content = RoomMessageEventContent::text_plain(body);
+        let resp = room.send(content).await?;
+        Ok(resp.response.event_id.to_string())
+    }
+
+    /// Send a **membrane-bearing** message to `room_id`. The membrane rides as a
+    /// custom field ([`MEMBRANE_EVENT_KEY`]) inside an ordinary `m.room.message`,
+    /// so a non-deos client sees the human `text_fallback` while a deos client
+    /// extracts the envelope (see [`Self::recent_timeline`]). Returns the event id.
+    ///
+    /// Wire shape (the deos-pilling, additive over plain Matrix):
+    /// ```json
+    /// {
+    ///   "msgtype": "m.text",
+    ///   "body": "[deos membrane · N cells · root … · cut@hK]",
+    ///   "software.ember.deos.membrane": { ...MembraneEnvelope... }
+    /// }
+    /// ```
+    pub async fn send_membrane(
+        &self,
+        room_id: &str,
+        body: &str,
+        membrane: &MembraneEnvelope,
+    ) -> Result<String> {
+        let room = self.joined_room(room_id).await?;
+        let fallback = if body.trim().is_empty() {
+            membrane.text_fallback()
+        } else {
+            body.to_string()
+        };
+        // Build the m.room.message content, then splice the namespaced membrane
+        // field in. `send_raw` lets us carry the custom key the typed
+        // RoomMessageEventContent has no slot for.
+        let mut content = serde_json::to_value(RoomMessageEventContent::text_plain(&fallback))?;
+        let obj = content
+            .as_object_mut()
+            .ok_or_else(|| Error::Other("message content was not a JSON object".into()))?;
+        obj.insert(
+            MEMBRANE_EVENT_KEY.to_string(),
+            serde_json::to_value(membrane)?,
+        );
+        let resp = room.send_raw("m.room.message", content).await?;
+        Ok(resp.response.event_id.to_string())
+    }
+
     /// The logged-in user's full id, if any.
     pub fn user_id(&self) -> Option<&UserId> {
         self.inner.user_id()
@@ -360,5 +484,79 @@ impl MatrixClient {
     /// The active SDK session, if logged in (for re-persisting after token refresh).
     pub fn session(&self) -> Option<MatrixSession> {
         self.inner.matrix_auth().session()
+    }
+}
+
+/// Extract a [`MembraneEnvelope`] from the raw JSON of an `m.room.message` event,
+/// if it carries one under [`MEMBRANE_EVENT_KEY`] inside its `content`. Returns
+/// `None` for a plain message, malformed envelope, or a wire version this build
+/// cannot rehydrate (forward-compat: an unrehydratable envelope is rendered as
+/// its text fallback, never half-trusted).
+///
+/// This is the receive half of [`MatrixClient::send_membrane`]'s wire shape — the
+/// SAME custom-content field, round-tripped through a real homeserver.
+pub(crate) fn extract_membrane(raw_json: &str) -> Option<MembraneEnvelope> {
+    let value: serde_json::Value = serde_json::from_str(raw_json).ok()?;
+    let field = value.get("content")?.get(MEMBRANE_EVENT_KEY)?;
+    let env: MembraneEnvelope = serde_json::from_value(field.clone()).ok()?;
+    env.is_rehydratable().then_some(env)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The membrane wire shape round-trips through the same JSON an `m.room.message`
+    /// carries on the wire: `send_membrane` splices the envelope under the
+    /// namespaced key inside `content`, and `extract_membrane` pulls it back out.
+    /// This proves the SEND and RECEIVE halves agree on the format WITHOUT a live
+    /// server (the live server merely carries this JSON verbatim).
+    #[test]
+    fn membrane_survives_the_room_message_wire_shape() {
+        let env = crate::membrane::MockMembraneHost::sample_envelope();
+        // Reproduce exactly what send_membrane builds for the wire.
+        let mut content =
+            serde_json::to_value(RoomMessageEventContent::text_plain(env.text_fallback())).unwrap();
+        content.as_object_mut().unwrap().insert(
+            MEMBRANE_EVENT_KEY.to_string(),
+            serde_json::to_value(&env).unwrap(),
+        );
+        // Wrap it as a full m.room.message event the way the homeserver returns it.
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$abc:deos.local",
+            "sender": "@grok:deos.local",
+            "origin_server_ts": 1_718_000_000_000u64,
+            "content": content,
+        });
+        let extracted = extract_membrane(&event.to_string()).expect("membrane round-trips");
+        assert_eq!(extracted, env);
+    }
+
+    /// A plain message carries no membrane (the common case stays clean).
+    #[test]
+    fn plain_message_has_no_membrane() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "content": { "msgtype": "m.text", "body": "hello" },
+        });
+        assert!(extract_membrane(&event.to_string()).is_none());
+    }
+
+    /// A future wire version fails closed at extraction (rendered as text, never
+    /// half-rehydrated).
+    #[test]
+    fn future_version_membrane_is_not_extracted() {
+        let mut env = crate::membrane::MockMembraneHost::sample_envelope();
+        env.version = MembraneEnvelope::VERSION + 1;
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": env.text_fallback(),
+                MEMBRANE_EVENT_KEY: serde_json::to_value(&env).unwrap(),
+            },
+        });
+        assert!(extract_membrane(&event.to_string()).is_none());
     }
 }

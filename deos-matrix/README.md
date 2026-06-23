@@ -67,25 +67,58 @@ silo that happens to render inside deos.
   future version) → drive turns → stitch back** — is exercised in tests with NO
   deos executor. The design grounds in `docs/deos/MEMBRANE-MERGE-SEAM.md`.
 
-## What is here today (the headless foundation, proven to build)
+## What is here today — the LIVE path (proven against a real homeserver)
 
-- `MatrixClient` (`src/client.rs`) — configure a homeserver + SQLite store,
-  password login with session persistence, session restore, encrypted
-  `sync_once`/`sync_forever`, `joined_rooms()`, `recent_timeline()`.
+- `MatrixClient` (`src/client.rs`) — configure a homeserver + SQLite store (URL
+  **or** bare server-name with `.well-known` discovery), **password login** and
+  **access-token / SSO login** with session persistence, session restore,
+  encrypted `sync_once`/`sync_forever`, `joined_rooms()`, `recent_timeline()`,
+  **`send_text()`**, and **`send_membrane()`** — the membrane rides as a custom
+  field inside an ordinary `m.room.message`. The receive side extracts it back
+  into a typed `MembraneEnvelope` (fail-closed on a future wire version).
 - `StoredSession` (`src/session.rs`) — JSON persistence of the SDK session +
-  store location/passphrase.
+  store location/passphrase; `restore()` rebuilds an authenticated client with no
+  password.
 - `MatrixWorker`/`MatrixHandle` (`src/worker.rs`) — the **sync→async bridge**
-  (the iamb `worker.rs` shape): a synchronous caller sends a typed request and
-  blocks on a oneshot reply; the worker owns the tokio runtime. This is the seam
-  the confined comms-PD will cross.
-- `deos-matrix-cli` (`src/bin/cli.rs`) — a headless harness: `login`, `rooms`,
-  `timeline`, `whoami`. No UI required to exercise the protocol path.
+  (the iamb `worker.rs` shape). `MatrixHandle` is a **fully-implemented**
+  `ChatSource` (login/sync/rooms/timeline/`send`/`send_membrane`/`whoami`), so the
+  SAME `ChatView` runs over a live server or the mock — one impl swap.
+- `deos-matrix-cli` (`src/bin/cli.rs`) — a headless harness: `login`,
+  `login-token`, `rooms`, `timeline`, `send`, `send-membrane`, `whoami`.
 
 ```
 deos-matrix-cli login --homeserver https://matrix.org --user @me:matrix.org
 deos-matrix-cli rooms
 deos-matrix-cli timeline --room '!abc:matrix.org' --limit 30
+deos-matrix-cli send --room '!abc:matrix.org' --body 'hello'
+deos-matrix-cli send-membrane --room '!abc:matrix.org'   # the deos-pilling, live
 ```
+
+### The membrane-over-real-Matrix wire shape
+
+A membrane is **additive over plain Matrix**: it rides as a namespaced custom
+field inside a normal `m.room.message`, so a non-deos client shows the human
+fallback while a deos client extracts the typed envelope.
+
+```json
+{
+  "msgtype": "m.text",
+  "body": "[deos membrane · 4 cells · root e35bbee9 · cut@h100]",
+  "software.ember.deos.membrane": { "version": 1, "frustum_root": …,
+    "sturdyref": "dregg://fork/e35bbee9", "snapshot": …, "cut": …, "cursor": … }
+}
+```
+
+### Proving the live path
+
+The full live path is exercised by `tests/live_homeserver.rs` (**creds-gated**: a
+no-op without `DEOS_MATRIX_TEST_{HS,USER,PASS}`, so `cargo test` is green in CI
+without network). Point it at a throwaway homeserver (a single-container conduit
+works — see the test's module docs) and it runs **build → login → restore → sync
+→ list rooms → send (text + membrane) → read back → extract the typed envelope**
+against a real server. The wire shape itself is also unit-proven offline
+(`client::tests::membrane_survives_the_room_message_wire_shape`), so the
+send/receive halves are verified agreeing on the format with or without a server.
 
 ## The standalone-workspace + async boundary (load-bearing)
 
@@ -122,10 +155,13 @@ net-cap transport, dockable surfaces) — design landed, wiring is the next phas
 
 ## Parity roadmap
 
-1. **P0 — foundation (this crate):** homeserver config, password login,
-   encrypted sync, room list, recent timeline. ✅ builds.
+1. **P0 — foundation (this crate):** homeserver config (URL + server-name
+   discovery), password **and** access-token login, encrypted sync, room list,
+   recent timeline, **send (text + membrane)**, session persistence/restore.
+   ✅ builds, ✅ unit-tested, ✅ **proven live** (`tests/live_homeserver.rs`).
 2. **P1 — read/write timeline:** adopt `matrix-sdk-ui`'s `Timeline` (edits,
-   reactions, replies, threads folded in); send messages; read receipts/typing.
+   reactions, replies, threads folded in for *received* events — send is live);
+   read receipts/typing over the live source.
 3. **P2 — encryption UX:** device verification (SAS emoji + cross-signing),
    key backup, recovery; encrypted media.
 4. **P3 — discovery + login breadth:** SSO/OIDC login, spaces tree, room
