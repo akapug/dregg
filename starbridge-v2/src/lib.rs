@@ -183,13 +183,6 @@ pub mod app_worldspine;
 #[cfg(feature = "embedded-executor")]
 pub mod shared_fork;
 
-// AGENT ATTACH — bind the confined agent's `run_js` (deos-js) to the cockpit's LIVE
-// World, so a Claude in Hermes drives the operator's ACTUAL cells (or a fork). The
-// cockpit-side `deos_js::WorldSink` weld + the cap-bounded attach. Gated on
-// `agent-js` (pulls deos-js's mozjs/SpiderMonkey).
-#[cfg(feature = "agent-js")]
-pub mod agent_attach;
-
 // The comms-PD chat source — the REAL, executor-backed `deos_matrix::ChatSource`
 // the interactive deos-chat surface drives: it holds a live `World` and makes the
 // chat UI's membrane affordances genuine (mint/rehydrate/drive/stitch over real

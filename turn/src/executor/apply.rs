@@ -609,8 +609,25 @@ impl TurnExecutor {
         cell: &CellId,
         event: &Event,
     ) -> Result<(), (TurnError, Vec<usize>)> {
-        if ledger.get(cell).is_none() {
-            return Err((TurnError::CellNotFound { id: *cell }, path.to_vec()));
+        let emit_cell = ledger
+            .get(cell)
+            .ok_or_else(|| (TurnError::CellNotFound { id: *cell }, path.to_vec()))?;
+        // KERNEL ALIGNMENT — §LIVENESS-GATE (CLASS-1): the verified kernel's
+        // emit arm (`emitEventA`, TurnExecutorFull.lean:2529) admits an event
+        // ONLY when the target cell is a member AND its lifecycle still
+        // `acceptsEffects` — a Sealed/Destroyed/Migrated cell CANNOT post an
+        // observation ("Destroyed is terminal"). Membership alone (the prior
+        // `ledger.get(cell).is_none()`) let a non-accepting cell emit, where the
+        // verified kernel refuses. (Authority is deliberately NOT gated here —
+        // Lean's emit arm has no authority leg either; only the liveness leg is
+        // added.) Fail-closed on a non-accepting lifecycle.
+        if !emit_cell.accepts_effects() {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "EmitEvent target cell does not accept effects (sealed/destroyed)".into(),
+                },
+                path.to_vec(),
+            ));
         }
         // Record the event in the journal so it appears in the turn receipt.
         journal.record_event_emitted(*cell, event.topic, event.data.clone());
@@ -1671,25 +1688,36 @@ impl TurnExecutor {
         // verify that every inner effect's kind is permitted by the mask.
         // This implements E-language facets — a restricted view of the target
         // cell's interface through this capability.
-        if let Some(mask) = cap.allowed_effects {
-            if mask != 0 {
-                for inner_effect in inner_effects.iter() {
-                    let effect_bit = inner_effect.effect_kind_mask();
-                    if effect_bit & mask == 0 {
-                        return Err((
-                            TurnError::FacetViolation {
-                                actor: *actor,
-                                target: cap_target,
-                                cap_slot,
-                                attempted_effect: format!(
-                                    "{:?}",
-                                    std::mem::discriminant(inner_effect)
-                                ),
-                                allowed_mask: mask,
-                            },
-                            path.to_vec(),
-                        ));
-                    }
+        //
+        // KERNEL ALIGNMENT: route through the canonical `is_effect_permitted`
+        // (the P2-1 fail-closed semantics) rather than an inlined `mask != 0`
+        // skip. The verified kernel's facet gate (`innerFacetsAdmittedA` over
+        // `capFacetMaskA`, TurnExecutorFull.lean:2483) admits an inner effect
+        // only when its required facet lies in the held cap's mask, and an
+        // empty mask (`endpoint _ []` / the `null` cap) admits NOTHING. The
+        // inlined `mask != 0` treated an explicitly-empty facet `Some(0)` as
+        // UNRESTRICTED — re-opening the very hole the `is_effect_permitted`
+        // P2-1 fix closed: an `allowed_effects: Some(0)` cap would admit every
+        // inner effect, where the verified kernel refuses all. `None` (no
+        // mask) remains the full-facet node cap (`is_effect_permitted` returns
+        // `true`), matching `capFacetMaskA (.node _) = nodeFacets`.
+        if cap.allowed_effects.is_some() {
+            for inner_effect in inner_effects.iter() {
+                let effect_bit = inner_effect.effect_kind_mask();
+                if !dregg_cell::is_effect_permitted(cap.allowed_effects, effect_bit) {
+                    return Err((
+                        TurnError::FacetViolation {
+                            actor: *actor,
+                            target: cap_target,
+                            cap_slot,
+                            attempted_effect: format!(
+                                "{:?}",
+                                std::mem::discriminant(inner_effect)
+                            ),
+                            allowed_mask: cap.allowed_effects.unwrap_or(0),
+                        },
+                        path.to_vec(),
+                    ));
                 }
             }
         }
@@ -1762,6 +1790,29 @@ impl TurnExecutor {
                     path.to_vec(),
                 )
             })?;
+        // KERNEL ALIGNMENT / authority-over-time: the introducer's held cap must
+        // be LIVE at the current height. The exercise path
+        // (`apply_exercise_via_capability`) already refuses an expired cap; the
+        // introduce path looked up the held cap with the non-height-aware
+        // `lookup_by_target` and never consulted `expires_at`, so an introducer
+        // could mint a FRESH cap (`grant_with_expiry`) for a recipient FROM an
+        // already-lapsed cap — re-introducing authority that should have died.
+        // The verified kernel's edge/hold gate is snapshot-correct (an absent /
+        // dead conferring edge admits nothing); an expired held edge confers no
+        // introduction authority. Fail-closed on a lapsed held cap.
+        if let Some(expires_at) = held_cap.expires_at {
+            if self.block_height > expires_at {
+                return Err((
+                    TurnError::IntroductionDenied {
+                        introducer: *introducer,
+                        recipient: *recipient,
+                        target: *target,
+                        reason: "introducer's capability to target has expired".to_string(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
         if !dregg_cell::is_attenuation(&held_cap.permissions, permissions) {
             return Err((
                 TurnError::IntroductionDenied {
