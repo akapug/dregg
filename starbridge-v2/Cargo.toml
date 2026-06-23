@@ -235,6 +235,9 @@ app-registry = [
     "dep:starbridge-supply-chain-provenance",
     "dep:starbridge-identity",
     "dep:starbridge-governed-namespace",
+    # The polis governance layer (a PROGRAM entry — installs a polis `CellProgram`
+    # onto World + fires a council `propose`; not a `DeosApp`).
+    "dep:starbridge-polis",
 ]
 
 # OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
@@ -592,6 +595,17 @@ starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-del
 starbridge-supply-chain-provenance = { path = "../starbridge-apps/supply-chain-provenance", optional = true }
 starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
 starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace", optional = true }
+# THE POLIS GOVERNANCE LAYER — unlike the apps above, `starbridge-polis` is NOT a
+# `DeosApp`: its pure library ships per-charter content-addressed `CellProgram`s
+# directly (`council::council_cell_program(charter)` &c.). The registry's polis
+# entry is therefore a PROGRAM entry (`AppEntry::program`): it installs a
+# governance cell carrying a polis `CellProgram` onto the cockpit `World` via
+# `AppWorldSpine::seed` and fires ONE representative governance affordance (a
+# council `propose`) through `AppWorldSpine::commit` — the SAME World machinery the
+# 18 framework apps use, only the program source is polis's pure library, not a
+# composed app. The pure library path-deps ONLY `../cell` (default-features off),
+# so it pulls NO new heavy tree. NON-WASM ONLY (kept out of the wasm32 mirror).
+starbridge-polis = { path = "../starbridge-apps/polis", optional = true }
 # THE SERVO RENDER LANE — the HOST SWGL render path that IS deos's compositor
 # render pass (Stage A of docs/desktop-os-research/SERVO-ON-SEL4.md). Default
 # `swgl-standalone` features ONLY (swgl's CPU-only C++ rasterizer + gleam + the real
