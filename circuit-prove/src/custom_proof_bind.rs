@@ -48,7 +48,6 @@
 //! `custom_program_proofs`, so the sub-proof bytes + PI cannot be swapped after
 //! the fact without changing the turn identity.
 
-
 use dregg_circuit::binding::WideHash;
 use dregg_circuit::dsl::circuit::{CellProgram, ProgramRegistry};
 use dregg_circuit::effect_vm::bytes32_to_8_limbs;
@@ -170,7 +169,10 @@ pub enum ProofBindError {
     },
     /// The sub-proof's public-input commitment does not match the bound
     /// `custom_proof_commitment` column.
-    CommitmentMismatch { claimed: ProofBindCommitment, recomputed: ProofBindCommitment },
+    CommitmentMismatch {
+        claimed: ProofBindCommitment,
+        recomputed: ProofBindCommitment,
+    },
     /// The external STARK sub-proof did not verify under the program's AIR.
     SubProofVerifyFailed(String),
     /// The sub-proof could not be proven (prove side only).
@@ -181,10 +183,16 @@ impl std::fmt::Display for ProofBindError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProofBindError::UnknownProgram { .. } => {
-                write!(f, "proof_bind: bound VK names no registered program (fail closed)")
+                write!(
+                    f,
+                    "proof_bind: bound VK names no registered program (fail closed)"
+                )
             }
             ProofBindError::VkMismatch { .. } => {
-                write!(f, "proof_bind: program VK does not match the bound vk column")
+                write!(
+                    f,
+                    "proof_bind: program VK does not match the bound vk column"
+                )
             }
             ProofBindError::CommitmentMismatch { .. } => write!(
                 f,
@@ -306,20 +314,48 @@ mod tests {
             trace_width: 4,
             max_degree: 2,
             columns: vec![
-                ColumnDef { name: "old".into(), index: 0, kind: ColumnKind::Value },
-                ColumnDef { name: "amt".into(), index: 1, kind: ColumnKind::Value },
-                ColumnDef { name: "new".into(), index: 2, kind: ColumnKind::Value },
-                ColumnDef { name: "dir".into(), index: 3, kind: ColumnKind::Binary },
+                ColumnDef {
+                    name: "old".into(),
+                    index: 0,
+                    kind: ColumnKind::Value,
+                },
+                ColumnDef {
+                    name: "amt".into(),
+                    index: 1,
+                    kind: ColumnKind::Value,
+                },
+                ColumnDef {
+                    name: "new".into(),
+                    index: 2,
+                    kind: ColumnKind::Value,
+                },
+                ColumnDef {
+                    name: "dir".into(),
+                    index: 3,
+                    kind: ColumnKind::Binary,
+                },
             ],
             constraints: vec![
                 ConstraintExpr::Binary { col: 3 },
                 // new - old - amt + 2*dir*amt == 0
                 ConstraintExpr::Polynomial {
                     terms: vec![
-                        PolyTerm { coeff: BabyBear::ONE, col_indices: vec![2] },
-                        PolyTerm { coeff: p_minus_1, col_indices: vec![0] },
-                        PolyTerm { coeff: p_minus_1, col_indices: vec![1] },
-                        PolyTerm { coeff: BabyBear::new(2), col_indices: vec![3, 1] },
+                        PolyTerm {
+                            coeff: BabyBear::ONE,
+                            col_indices: vec![2],
+                        },
+                        PolyTerm {
+                            coeff: p_minus_1,
+                            col_indices: vec![0],
+                        },
+                        PolyTerm {
+                            coeff: p_minus_1,
+                            col_indices: vec![1],
+                        },
+                        PolyTerm {
+                            coeff: BabyBear::new(2),
+                            col_indices: vec![3, 1],
+                        },
                     ],
                 },
             ],
@@ -357,8 +393,8 @@ mod tests {
         let (w, rows) = honest_witness();
         let pis: Vec<BabyBear> = vec![BabyBear::new(10), BabyBear::new(15)];
 
-        let bound = prove_custom_program(&program, &w, rows, &pis)
-            .expect("honest sub-proof proves");
+        let bound =
+            prove_custom_program(&program, &w, rows, &pis).expect("honest sub-proof proves");
         verify_bound_custom_proof(&registry, &bound)
             .expect("the honest bound proof must light-client-verify");
     }
@@ -371,8 +407,8 @@ mod tests {
         let registry = registry_with(program.clone());
         let (w, rows) = honest_witness();
         let pis: Vec<BabyBear> = vec![BabyBear::new(10), BabyBear::new(15)];
-        let mut bound = prove_custom_program(&program, &w, rows, &pis)
-            .expect("honest sub-proof proves");
+        let mut bound =
+            prove_custom_program(&program, &w, rows, &pis).expect("honest sub-proof proves");
 
         // Corrupt the proof bytes (a forged sub-proof).
         for b in bound.proof_bytes.iter_mut().take(64) {
@@ -395,16 +431,21 @@ mod tests {
         let registry = registry_with(program.clone());
         let (w, rows) = honest_witness();
         let pis: Vec<BabyBear> = vec![BabyBear::new(10), BabyBear::new(15)];
-        let bound = prove_custom_program(&program, &w, rows, &pis)
-            .expect("honest sub-proof proves");
+        let bound =
+            prove_custom_program(&program, &w, rows, &pis).expect("honest sub-proof proves");
 
         let claimed = ClaimedProofBind {
             vk_hash: bound.vk_hash_felts(),
             // A commitment for DIFFERENT public inputs — what a forger would supply.
             commitment: custom_proof_pi_commitment(&[BabyBear::new(99), BabyBear::new(99)]),
         };
-        let err = verify_proof_bind(&registry, &bound.proof_bytes, &bound.public_inputs, &claimed)
-            .expect_err("a mismatched commitment MUST be rejected");
+        let err = verify_proof_bind(
+            &registry,
+            &bound.proof_bytes,
+            &bound.public_inputs,
+            &claimed,
+        )
+        .expect_err("a mismatched commitment MUST be rejected");
         assert!(
             matches!(err, ProofBindError::CommitmentMismatch { .. }),
             "swapped commitment must fail the commit-binding step, got {err:?}"
@@ -419,15 +460,20 @@ mod tests {
         let registry = registry_with(program.clone());
         let (w, rows) = honest_witness();
         let pis: Vec<BabyBear> = vec![BabyBear::new(10), BabyBear::new(15)];
-        let bound = prove_custom_program(&program, &w, rows, &pis)
-            .expect("honest sub-proof proves");
+        let bound =
+            prove_custom_program(&program, &w, rows, &pis).expect("honest sub-proof proves");
 
         let claimed = ClaimedProofBind {
             vk_hash: [BabyBear::new(0xDEAD); 8], // names no program
             commitment: bound.proof_commitment(),
         };
-        let err = verify_proof_bind(&registry, &bound.proof_bytes, &bound.public_inputs, &claimed)
-            .expect_err("an unknown VK MUST be rejected");
+        let err = verify_proof_bind(
+            &registry,
+            &bound.proof_bytes,
+            &bound.public_inputs,
+            &claimed,
+        )
+        .expect_err("an unknown VK MUST be rejected");
         assert!(
             matches!(err, ProofBindError::UnknownProgram { .. }),
             "unknown VK must fail closed, got {err:?}"

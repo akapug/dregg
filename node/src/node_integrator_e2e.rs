@@ -85,7 +85,11 @@ fn build_signed_transfer(
     amount: u64,
     nonce: u64,
 ) -> dregg_sdk::SignedTurn {
-    let transfer = Effect::Transfer { from: agent, to, amount };
+    let transfer = Effect::Transfer {
+        from: agent,
+        to,
+        amount,
+    };
     // Sign actions over the SAME federation id the executor verifies against
     // (`federation_id_for_executor`: `blake3(pubkey)` on an unconfigured solo node).
     let exec_federation_id = crate::executor_setup::federation_id_for_executor(state);
@@ -103,7 +107,11 @@ fn build_signed_transfer(
         valid_until: Some(1_000_000_000),
         call_forest,
         depends_on: vec![],
-        previous_receipt_hash: state.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
+        previous_receipt_hash: state
+            .cclerk
+            .receipt_chain()
+            .last()
+            .map(|r| r.receipt_hash()),
         conservation_proof: None,
         sovereign_witnesses: std::collections::HashMap::new(),
         execution_proof: None,
@@ -148,7 +156,11 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
         let agent_id = crate::executor_setup::local_agent_cell(&s);
         let mut agent = Cell::with_balance(agent_pubkey, token, 1_000_000);
         agent.permissions = open_permissions();
-        assert_eq!(agent.id(), agent_id, "seeded agent cell id must match the cclerk-derived agent");
+        assert_eq!(
+            agent.id(),
+            agent_id,
+            "seeded agent cell id must match the cclerk-derived agent"
+        );
         s.ledger.insert_cell(agent).expect("insert agent cell");
 
         // Recipient: a distinct open cell in the same token domain.
@@ -158,7 +170,9 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
         let mut recipient = Cell::with_balance(rk, token, 0);
         recipient.permissions = open_permissions();
         let recipient_id = recipient.id();
-        s.ledger.insert_cell(recipient).expect("insert recipient cell");
+        s.ledger
+            .insert_cell(recipient)
+            .expect("insert recipient cell");
 
         (agent_id, recipient_id, agent_pubkey)
     };
@@ -187,11 +201,19 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
     let amount = 250u64;
     let agent_balance_before: i64 = {
         let s = state.read().await;
-        s.ledger.get(&agent_cell).expect("agent cell present").state.balance()
+        s.ledger
+            .get(&agent_cell)
+            .expect("agent cell present")
+            .state
+            .balance()
     };
     let turn_data = {
         let s = state.read().await;
-        let nonce = s.ledger.get(&agent_cell).map(|c| c.state.nonce()).unwrap_or(0);
+        let nonce = s
+            .ledger
+            .get(&agent_cell)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
         let signed = build_signed_transfer(&s, agent_cell, recipient_cell, amount, nonce);
         postcard::to_stdvec(&signed).expect("serialize SignedTurn")
     };
@@ -231,7 +253,10 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
 
     let recipient_balance_after: i64 = {
         let s = state.read().await;
-        s.ledger.get(&recipient_cell).map(|c| c.state.balance()).unwrap_or(0)
+        s.ledger
+            .get(&recipient_cell)
+            .map(|c| c.state.balance())
+            .unwrap_or(0)
     };
 
     // [A.1] the transfer was applied authoritatively by the FINALIZED executor.
@@ -326,10 +351,13 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
         let peer_creator = peer_sk.verifying_key().to_bytes();
 
         let mut lace = handle.lace.write().await;
-        let honest =
-            Block::new(&peer_sk, 1, Payload::Turn(b"peer-honest-block".to_vec()), Vec::new());
-        lace
-            .receive_block(honest.clone())
+        let honest = Block::new(
+            &peer_sk,
+            1,
+            Payload::Turn(b"peer-honest-block".to_vec()),
+            Vec::new(),
+        );
+        lace.receive_block(honest.clone())
             .expect("[B] an honest first peer block must be accepted");
         // Pre-fork invariant: the honest block IS the peer's tip, the peer is NOT
         // yet an equivocator.
@@ -344,12 +372,19 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
         );
 
         // The fork: SAME creator, SAME seq, DIFFERENT payload ⇒ equivocation.
-        let fork =
-            Block::new(&peer_sk, 1, Payload::Turn(b"peer-FORK-block".to_vec()), Vec::new());
+        let fork = Block::new(
+            &peer_sk,
+            1,
+            Payload::Turn(b"peer-FORK-block".to_vec()),
+            Vec::new(),
+        );
         let result = lace.receive_block(fork);
         match result {
             Err(BlockError::Equivocation { creator, seq, .. }) => {
-                assert_eq!(creator, peer_creator, "[B] the equivocator must be the forking peer");
+                assert_eq!(
+                    creator, peer_creator,
+                    "[B] the equivocator must be the forking peer"
+                );
                 assert_eq!(seq, 1, "[B] the equivocation is at seq 1");
             }
             other => panic!(

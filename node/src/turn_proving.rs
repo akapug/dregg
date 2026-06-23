@@ -406,8 +406,20 @@ fn rotation_witness_for_self_sovereign_impl(
         return None;
     }
 
-    let before_w = rw::produce(before_cell, &ctx_ledger, &nullifier_root, &commitments_root, receipt_hashes);
-    let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, &commitments_root, receipt_hashes);
+    let before_w = rw::produce(
+        before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        receipt_hashes,
+    );
+    let after_w = rw::produce(
+        after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        receipt_hashes,
+    );
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
         before_w,
@@ -519,8 +531,20 @@ fn rotation_witness_for_capability_turn(
     // nonce delta is UNSAT — `setFieldTick_rejects_wrong_nonce_delta` / `mintTick_rejects_wrong_nonce_delta`).
     // No broken-descriptor fallback remains: EVERY cohort effect rotates.
 
-    let before_w = rw::produce(before_cell, &ctx_ledger, &nullifier_root, &commitments_root, receipt_hashes);
-    let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, &commitments_root, receipt_hashes);
+    let before_w = rw::produce(
+        before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        receipt_hashes,
+    );
+    let after_w = rw::produce(
+        after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        receipt_hashes,
+    );
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
         before_w,
@@ -981,9 +1005,7 @@ pub fn prove_and_verify_finalized_turn_capability(
 /// revoke `map_op` reads this value then writes 0 in place). Tombstoned (revoked) slots are omitted.
 /// This is the cell's GENUINE c-list — the prover threads it as the cap-tree write witness so a
 /// wrong post-root is UNSAT (the no-silent-forge guardrail).
-pub fn cap_write_clist_leaves(
-    cell: &dregg_cell::Cell,
-) -> Vec<dregg_circuit::heap_root::HeapLeaf> {
+pub fn cap_write_clist_leaves(cell: &dregg_cell::Cell) -> Vec<dregg_circuit::heap_root::HeapLeaf> {
     cell.capabilities
         .iter()
         .map(|cap| {
@@ -3245,7 +3267,9 @@ mod tests {
         use ed25519_dalek::SigningKey;
         let delegator_sk = SigningKey::from_bytes(&[7u8; 32]);
         let delegator_pk = delegator_sk.verifying_key().to_bytes();
-        let bearer_pk = SigningKey::from_bytes(&[8u8; 32]).verifying_key().to_bytes();
+        let bearer_pk = SigningKey::from_bytes(&[8u8; 32])
+            .verifying_key()
+            .to_bytes();
         (delegator_sk, delegator_pk, bearer_pk)
     }
 
@@ -3349,9 +3373,7 @@ mod tests {
             dregg_cell::compute_canonical_capability_root_felt(&bearer.capabilities);
 
         // The delegator's capability is over the BEARER cell.
-        delegator
-            .capabilities
-            .grant(bearer_id, AuthRequired::None);
+        delegator.capabilities.grant(bearer_id, AuthRequired::None);
         let delegator_id = delegator.id();
         let delegator_cap_root =
             dregg_cell::compute_canonical_capability_root_felt(&delegator.capabilities);
@@ -3451,9 +3473,7 @@ mod tests {
         delegator
             .capabilities
             .grant(CellId::from_bytes([0x66u8; 32]), AuthRequired::None);
-        delegator
-            .capabilities
-            .grant(bearer_id, AuthRequired::None);
+        delegator.capabilities.grant(bearer_id, AuthRequired::None);
         let mut ledger = Ledger::new();
         ledger.insert_cell(delegator).unwrap();
         let turn = make_bearer_transfer_turn(
@@ -3700,9 +3720,7 @@ mod tests {
     /// what `verify_vm_descriptor2` anchors on the deployment side).
     #[test]
     fn honest_cross_vat_cap_gated_transfer_publishes_genuine_identity() {
-        use dregg_circuit::cap_root::{
-            CAP_TREE_DEPTH, CanonicalCapTree, fold_bytes32,
-        };
+        use dregg_circuit::cap_root::{CAP_TREE_DEPTH, CanonicalCapTree, fold_bytes32};
         use dregg_circuit::effect_vm::trace_rotated::{
             CAP_OPEN_TB_PI_ACTOR, CAP_OPEN_TB_PI_DST, CAP_OPEN_TB_PI_SRC,
         };
@@ -3724,19 +3742,20 @@ mod tests {
         ) = run_bearer_delegated_turn();
 
         // The recipient (`dst`) the turn's Transfer effect names.
-        let dst_id = match effects
-            .iter()
-            .find_map(|e| match e {
-                dregg_turn::Effect::Transfer { to, .. } => Some(*to),
-                _ => None,
-            }) {
+        let dst_id = match effects.iter().find_map(|e| match e {
+            dregg_turn::Effect::Transfer { to, .. } => Some(*to),
+            _ => None,
+        }) {
             Some(to) => to,
             None => panic!("bearer fixture must carry a Transfer effect"),
         };
 
         // `B` — the cap's TARGET cell, DISTINCT from the actor `A` and the recipient.
         let src_cell = CellId::from_bytes([0xB2u8; 32]);
-        assert_ne!(src_cell, actor_id, "cross-vat: the cap target B != the actor A");
+        assert_ne!(
+            src_cell, actor_id,
+            "cross-vat: the cap target B != the actor A"
+        );
 
         // The cap HOLDER cell's c-list: a cap whose TARGET is `B` (so `leaf.target =
         // fold(B)`), permitting Transfer, plus a decoy so the consumed cap is not the
@@ -3786,8 +3805,7 @@ mod tests {
         let pos = tree
             .position_of(consumed_leaf.slot_hash)
             .expect("consumed leaf present in holder tree");
-        let (siblings, directions) =
-            tree.prove_membership(pos).expect("membership path");
+        let (siblings, directions) = tree.prove_membership(pos).expect("membership path");
         let consumed = dregg_turn::ConsumedCapWitness {
             holder: holder.id(),
             slot,
@@ -3804,7 +3822,10 @@ mod tests {
             directions,
             cap_root: tree.root().as_u32(),
         };
-        assert!(consumed.verify(), "the cross-vat consumed witness recomputes its own root");
+        assert!(
+            consumed.verify(),
+            "the cross-vat consumed witness recomputes its own root"
+        );
 
         // The actor's REAL rotation witness (the independent state-transition leg).
         let receipts = [receipt.receipt_hash()];

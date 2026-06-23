@@ -328,4 +328,3 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
         max_degree: 9,
         source_hash: None,
     };
-

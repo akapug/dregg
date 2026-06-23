@@ -859,7 +859,10 @@ fn differential_refresh_delegation_passthrough() {
     let turn = one_effect_turn(
         actor,
         nonce,
-        Effect::RefreshDelegation { child: actor, snapshot: [0u8; 32] },
+        Effect::RefreshDelegation {
+            child: actor,
+            snapshot: [0u8; 32],
+        },
     );
     let claim = air_claim(actor_cell, &turn);
 

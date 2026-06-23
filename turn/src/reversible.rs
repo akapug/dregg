@@ -124,10 +124,10 @@ use std::collections::BTreeMap;
 
 use dregg_cell::{Cell, CellId, Ledger};
 
+use crate::Action;
 use crate::action::Effect;
 use crate::forest::CallForest;
 use crate::turn::{Turn, TurnReceipt, TurnResult};
-use crate::Action;
 use crate::{Authorization, ComputronCosts, TurnExecutor};
 
 // ===========================================================================
@@ -245,19 +245,17 @@ impl Effect {
 
             // grant is monotone-up; its retraction is a revoke of the granted
             // slot. The slot is the cap's slot in the *recipient* `to`'s c-list.
-            Effect::GrantCapability { to, cap, .. } => {
-                Inversion::Clean(Effect::RevokeCapability {
-                    cell: *to,
-                    slot: cap.slot,
-                })
-            }
+            Effect::GrantCapability { to, cap, .. } => Inversion::Clean(Effect::RevokeCapability {
+                cell: *to,
+                slot: cap.slot,
+            }),
 
             // The lifecycle quartet is a reversible pair: seal↔unseal. A seal's
             // inverse is an unseal (restores the Live lifecycle); the reason
             // commitment is bound into the receipt, not needed to reverse.
-            Effect::CellSeal { target, .. } => Inversion::Clean(Effect::CellUnseal {
-                target: *target,
-            }),
+            Effect::CellSeal { target, .. } => {
+                Inversion::Clean(Effect::CellUnseal { target: *target })
+            }
             Effect::CellUnseal { target } => {
                 // Unsealing reverses to a re-seal. The reason cleartext lives
                 // off-chain; we re-seal under a zero reason-commitment (the
@@ -1066,10 +1064,11 @@ fn inverse_primary_cell(inv_effects: &[Effect]) -> Option<CellId> {
 /// (the ratchet only advances). A `false` is the fail-closed anti-substitution
 /// catch (an undo that landed on the wrong *state*).
 pub fn ledgers_agree_modulo_nonce(undone: &Ledger, historical: &Ledger) -> bool {
-    let um: BTreeMap<[u8; 32], &Cell> =
-        undone.iter().map(|(id, c)| (*id.as_bytes(), c)).collect();
-    let hm: BTreeMap<[u8; 32], &Cell> =
-        historical.iter().map(|(id, c)| (*id.as_bytes(), c)).collect();
+    let um: BTreeMap<[u8; 32], &Cell> = undone.iter().map(|(id, c)| (*id.as_bytes(), c)).collect();
+    let hm: BTreeMap<[u8; 32], &Cell> = historical
+        .iter()
+        .map(|(id, c)| (*id.as_bytes(), c))
+        .collect();
     if um.len() != hm.len() {
         return false;
     }
@@ -1186,13 +1185,45 @@ mod tests {
         let a = h.record_genesis(&mut l, open_cell(1, 1_000));
         let b = h.record_genesis(&mut l, open_cell(2, 0));
 
-        let t1 = turn_with(a, nonce_of(&l, &a), vec![Effect::Transfer { from: a, to: b, amount: 100 }]);
+        let t1 = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 100,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t1).is_some(), "t1 must commit");
-        let t2 = turn_with(a, nonce_of(&l, &a), vec![Effect::Transfer { from: a, to: b, amount: 50 }]);
+        let t2 = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 50,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t2).is_some(), "t2 must commit");
-        let t3 = turn_with(b, nonce_of(&l, &b), vec![Effect::SetField { cell: b, index: 0, value: [7u8; 32] }]);
+        let t3 = turn_with(
+            b,
+            nonce_of(&l, &b),
+            vec![Effect::SetField {
+                cell: b,
+                index: 0,
+                value: [7u8; 32],
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t3).is_some(), "t3 must commit");
-        let t4 = turn_with(b, nonce_of(&l, &b), vec![Effect::Transfer { from: b, to: a, amount: 30 }]);
+        let t4 = turn_with(
+            b,
+            nonce_of(&l, &b),
+            vec![Effect::Transfer {
+                from: b,
+                to: a,
+                amount: 30,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t4).is_some(), "t4 must commit");
 
         // 2 genesis + 4 turns = 6 steps.
@@ -1206,7 +1237,9 @@ mod tests {
         // explicitness.)
         for k in 2..=h.len() {
             let fwd = h.replay_to(k).expect("forward replay must verify");
-            let bwd = h.undo_to(k).expect("backward undo must verify (state modulo nonce)");
+            let bwd = h
+                .undo_to(k)
+                .expect("backward undo must verify (state modulo nonce)");
             assert!(
                 ledgers_agree_modulo_nonce(&bwd, &fwd),
                 "undo_to({k}) state != replay_to({k}) state (modulo nonce)",
@@ -1222,7 +1255,10 @@ mod tests {
         }
 
         // window_reversible agrees: the whole clean window is reversible.
-        assert!(h.window_reversible(2), "the clean window above genesis is reversible");
+        assert!(
+            h.window_reversible(2),
+            "the clean window above genesis is reversible"
+        );
     }
 
     // --- per-effect invert round-trips (clean + contextual) -----------------
@@ -1234,7 +1270,11 @@ mod tests {
         let b = open_cell(2, 0).id();
         l.insert_cell(open_cell(1, 1_000)).unwrap();
         l.insert_cell(open_cell(2, 0)).unwrap();
-        let e = Effect::Transfer { from: a, to: b, amount: 100 };
+        let e = Effect::Transfer {
+            from: a,
+            to: b,
+            amount: 100,
+        };
         match e.invert(&l) {
             Inversion::Clean(Effect::Transfer { from, to, amount }) => {
                 assert_eq!((from, to, amount), (b, a, 100), "inverse swaps direction");
@@ -1260,10 +1300,18 @@ mod tests {
             allowed_effects: None,
             stored_epoch: None,
         };
-        let e = Effect::GrantCapability { from: a, to: b, cap };
+        let e = Effect::GrantCapability {
+            from: a,
+            to: b,
+            cap,
+        };
         match e.invert(&l) {
             Inversion::Clean(Effect::RevokeCapability { cell, slot }) => {
-                assert_eq!((cell, slot), (b, 3), "grant inverts to a revoke of its slot");
+                assert_eq!(
+                    (cell, slot),
+                    (b, 3),
+                    "grant inverts to a revoke of its slot"
+                );
             }
             other => panic!("grant must invert Clean to RevokeCapability, got {other:?}"),
         }
@@ -1274,10 +1322,17 @@ mod tests {
         let mut l = Ledger::new();
         let c = open_cell(1, 0).id();
         l.insert_cell(open_cell(1, 0)).unwrap();
-        let seal = Effect::CellSeal { target: c, reason: [9u8; 32] };
-        assert!(matches!(seal.invert(&l), Inversion::Clean(Effect::CellUnseal { target }) if target == c));
+        let seal = Effect::CellSeal {
+            target: c,
+            reason: [9u8; 32],
+        };
+        assert!(
+            matches!(seal.invert(&l), Inversion::Clean(Effect::CellUnseal { target }) if target == c)
+        );
         let unseal = Effect::CellUnseal { target: c };
-        assert!(matches!(unseal.invert(&l), Inversion::Contextual(Effect::CellSeal { target, .. }) if target == c));
+        assert!(
+            matches!(unseal.invert(&l), Inversion::Contextual(Effect::CellSeal { target, .. }) if target == c)
+        );
     }
 
     #[test]
@@ -1288,7 +1343,11 @@ mod tests {
         cell.state.fields[0] = [5u8; 32]; // the pre-image value
         let c = cell.id();
         l.insert_cell(cell).unwrap();
-        let e = Effect::SetField { cell: c, index: 0, value: [99u8; 32] };
+        let e = Effect::SetField {
+            cell: c,
+            index: 0,
+            value: [99u8; 32],
+        };
         match e.invert(&l) {
             Inversion::Contextual(Effect::SetField { cell, index, value }) => {
                 assert_eq!(cell, c);
@@ -1313,16 +1372,36 @@ mod tests {
         let a_bal_before = pre.get(&a).unwrap().state.balance();
         let b_bal_before = pre.get(&b).unwrap().state.balance();
 
-        let t = turn_with(a, nonce_of(&l, &a), vec![Effect::Transfer { from: a, to: b, amount: 250 }]);
+        let t = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 250,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t).is_some());
-        assert_ne!(h.root_at(h.len()), pre.clone().root(), "the transfer moved the root");
+        assert_ne!(
+            h.root_at(h.len()),
+            pre.clone().root(),
+            "the transfer moved the root"
+        );
 
         // Undo back to the pre-transfer cursor (step 2 = both genesis cells).
         // `undo_to` internally verifies "state modulo nonce" and fail-closes
         // otherwise, so a returned Ok already proves the value-state restore.
         let undone = h.undo_to(2).expect("undo must verify (state modulo nonce)");
-        assert_eq!(undone.get(&a).unwrap().state.balance(), a_bal_before, "a balance restored");
-        assert_eq!(undone.get(&b).unwrap().state.balance(), b_bal_before, "b balance restored");
+        assert_eq!(
+            undone.get(&a).unwrap().state.balance(),
+            a_bal_before,
+            "a balance restored"
+        );
+        assert_eq!(
+            undone.get(&b).unwrap().state.balance(),
+            b_bal_before,
+            "b balance restored"
+        );
         assert!(
             ledgers_agree_modulo_nonce(&undone, &pre),
             "un-turn restored the prior value-state (modulo the nonce ratchet)",
@@ -1347,7 +1426,12 @@ mod tests {
         let l = Ledger::new();
         let c = open_cell(1, 0).id();
         assert!(matches!(
-            Effect::Burn { target: c, slot: 0, amount: 1 }.invert(&l),
+            Effect::Burn {
+                target: c,
+                slot: 0,
+                amount: 1
+            }
+            .invert(&l),
             Inversion::Committed(CommittedReason::ValueBurned)
         ));
         assert!(matches!(
@@ -1402,22 +1486,55 @@ mod tests {
         let d = h.record_genesis(&mut l, open_cell(4, 0)); // idx 3
 
         // idx 4: a→b. idx 5: c→d (disjoint from a,b).
-        let t_ab = turn_with(a, nonce_of(&l, &a), vec![Effect::Transfer { from: a, to: b, amount: 100 }]);
+        let t_ab = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 100,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t_ab).is_some());
-        let t_cd = turn_with(c, nonce_of(&l, &c), vec![Effect::Transfer { from: c, to: d, amount: 50 }]);
+        let t_cd = turn_with(
+            c,
+            nonce_of(&l, &c),
+            vec![Effect::Transfer {
+                from: c,
+                to: d,
+                amount: 50,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t_cd).is_some());
 
         // The a→b turn (idx 4) is followed only by the DISJOINT c→d turn → it
         // can be undone in isolation (nothing downstream depends on it).
-        assert!(h.can_undo_isolated(4), "a→b is causally independent of the later c→d");
+        assert!(
+            h.can_undo_isolated(4),
+            "a→b is causally independent of the later c→d"
+        );
         // The top turn (idx 5) trivially has nothing above it.
-        assert!(h.can_undo_isolated(5), "the most-recent turn is always isolable");
+        assert!(
+            h.can_undo_isolated(5),
+            "the most-recent turn is always isolable"
+        );
 
         // Now append a turn that DOES touch a → the a→b turn (idx 4) is no longer
         // isolable (a later turn causally depends on a's state).
-        let t_a2 = turn_with(a, nonce_of(&l, &a), vec![Effect::SetField { cell: a, index: 0, value: [1u8; 32] }]);
+        let t_a2 = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::SetField {
+                cell: a,
+                index: 0,
+                value: [1u8; 32],
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, t_a2).is_some());
-        assert!(!h.can_undo_isolated(4), "a later turn now touches a → not isolable");
+        assert!(
+            !h.can_undo_isolated(4),
+            "a later turn now touches a → not isolable"
+        );
         // Genesis steps are never isolable via the un-turn (un-create = destroy).
         assert!(!h.can_undo_isolated(0));
     }
@@ -1435,10 +1552,22 @@ mod tests {
         let b = h.record_genesis(&mut l, open_cell(2, 0)); // step idx 1
 
         // The COMMITTED step (idx 2): an explicit nonce bump on `a`.
-        let committed = turn_with(a, nonce_of(&l, &a), vec![Effect::IncrementNonce { cell: a }]);
+        let committed = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::IncrementNonce { cell: a }],
+        );
         assert!(h.record_commit(&ex, &mut l, committed).is_some());
         // The CLEAN tail (idx 3): a transfer above the commit.
-        let clean = turn_with(a, nonce_of(&l, &a), vec![Effect::Transfer { from: a, to: b, amount: 40 }]);
+        let clean = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 40,
+            }],
+        );
         assert!(h.record_commit(&ex, &mut l, clean).is_some());
 
         // head = 4. The recorded steps (0-based idx) are:
@@ -1461,7 +1590,13 @@ mod tests {
         // bump at idx 2 → fail-closed with IrreversibleStep.
         let err = h.undo_to(2);
         assert!(
-            matches!(err, Err(ReversibleError::IrreversibleStep { step: 2, reason: CommittedReason::FreshnessRatchet })),
+            matches!(
+                err,
+                Err(ReversibleError::IrreversibleStep {
+                    step: 2,
+                    reason: CommittedReason::FreshnessRatchet
+                })
+            ),
             "undo across a committed step must fail-closed, got {err:?}",
         );
         // undo_to(1) also crosses the commit → fail-closed.
@@ -1473,7 +1608,13 @@ mod tests {
         // window_reversible agrees: the clean tail (k=3) is reversible; any
         // window crossing the commit (k<=2) is not.
         assert!(h.window_reversible(3), "the clean tail is reversible");
-        assert!(!h.window_reversible(2), "crossing the commit is not reversible");
-        assert!(!h.window_reversible(1), "crossing the commit is not reversible");
+        assert!(
+            !h.window_reversible(2),
+            "crossing the commit is not reversible"
+        );
+        assert!(
+            !h.window_reversible(1),
+            "crossing the commit is not reversible"
+        );
     }
 }

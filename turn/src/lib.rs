@@ -129,7 +129,7 @@ pub use builder::{
     UncheckedOptIn,
 };
 pub use collapse::{
-    collapse, collapse_with, is_deferred, CollapseResult, WitnessMode, DEFERRED_STATE_HASH,
+    CollapseResult, DEFERRED_STATE_HASH, WitnessMode, collapse, collapse_with, is_deferred,
 };
 pub use composer::{ComposeError, ComposedTurn, SignedFragment, TurnComposer};
 pub use conditional::{
@@ -178,8 +178,8 @@ pub use presence_discharge::{
     PresenceDischargeError, verify_presence_discharge,
 };
 pub use reversible::{
-    changed_cells, ledgers_agree_modulo_nonce, CommittedReason, Inversion, InvertError,
-    ReversibleError, ReversibleHistory, ReversibleStep,
+    CommittedReason, Inversion, InvertError, ReversibleError, ReversibleHistory, ReversibleStep,
+    changed_cells, ledgers_agree_modulo_nonce,
 };
 pub use routing::{IntroductionExport, RoutingDirective};
 pub use shadow::{NoOpShadowObserver, ShadowHostCtx, ShadowObserver};

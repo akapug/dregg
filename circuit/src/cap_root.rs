@@ -715,7 +715,11 @@ pub struct CapMembershipWitness {
 /// the RIGHT child (`hash_fact(sib, cur)`). This is EXACTLY the per-level `mix`
 /// the `descriptor_ir2.rs` Merkle-chain AIR computes (lines ~2109-2135), applied to
 /// the 7-field cap leaf rather than the 2-field heap leaf.
-pub fn recompose_membership(leaf_digest: BabyBear, siblings: &[BabyBear], directions: &[u8]) -> BabyBear {
+pub fn recompose_membership(
+    leaf_digest: BabyBear,
+    siblings: &[BabyBear],
+    directions: &[u8],
+) -> BabyBear {
     assert_eq!(
         siblings.len(),
         directions.len(),
@@ -1069,7 +1073,11 @@ mod tests {
             .membership_witness(held.slot_hash)
             .expect("held slot present");
         assert_eq!(w.leaf, held, "the witness opens the genuine held leaf");
-        assert_eq!(w.root, tree.root(), "the witness root is the committed tree root");
+        assert_eq!(
+            w.root,
+            tree.root(),
+            "the witness root is the committed tree root"
+        );
         assert_eq!(w.siblings.len(), CAP_TREE_DEPTH);
         assert_eq!(w.directions.len(), CAP_TREE_DEPTH);
         assert!(
@@ -1089,7 +1097,10 @@ mod tests {
         let w = tree.membership_witness(held.slot_hash).unwrap();
 
         // target binding: the opened leaf's target IS held.target …
-        assert!(w.target_is(held.target), "target binds to the committed leaf");
+        assert!(
+            w.target_is(held.target),
+            "target binds to the committed leaf"
+        );
         // … and REJECTS an arbitrary other src.
         let mut other = [0u8; 32];
         other[0] = 0x99;
@@ -1099,7 +1110,10 @@ mod tests {
         );
 
         // write submask: bit 1 (0x1) is set in mask_lo = 0xFFFF.
-        assert!(w.confers_write(0x1), "a present mask bit passes the write submask");
+        assert!(
+            w.confers_write(0x1),
+            "a present mask bit passes the write submask"
+        );
         // a bit NOT in the mask is rejected.
         let narrow = leaf(8, 0x55, 1, 0x1); // mask_lo = 0x1
         let tree2 = CanonicalCapTree::new(vec![narrow], CAP_TREE_DEPTH);
@@ -1198,7 +1212,12 @@ mod tests {
 
     fn rand_leaf(rng: &mut Rng) -> CapLeaf {
         // Keep slots in a modest range so collisions (dedup) get exercised.
-        leaf(rng.below(64), rng.below(255) as u8, rng.below(6), rng.next_u64() as u32)
+        leaf(
+            rng.below(64),
+            rng.below(255) as u8,
+            rng.below(6),
+            rng.next_u64() as u32,
+        )
     }
 
     /// THE DIFFERENTIAL: for a 10k-case random corpus of {leaf sets of varying
@@ -1219,8 +1238,7 @@ mod tests {
             let n = rng.below(60) as usize; // 0..=59 live leaves (incl. empty)
             let leaves: Vec<CapLeaf> = (0..n).map(|_| rand_leaf(&mut rng)).collect();
             let n_tomb = rng.below(8) as usize;
-            let tombs: Vec<BabyBear> =
-                (0..n_tomb).map(|_| slot_hash(rng.below(64))).collect();
+            let tombs: Vec<BabyBear> = (0..n_tomb).map(|_| slot_hash(rng.below(64))).collect();
 
             let sparse = CanonicalCapTree::new_with_tombstones(leaves.clone(), &tombs, DEPTH);
             let (oracle_leaves, oracle_levels) = dense_build(leaves, &tombs, DEPTH);
@@ -1265,7 +1283,11 @@ mod tests {
             (vec![], vec![]),
             (vec![leaf(0, 1, 1, 0xFFFF_FFFF)], vec![]),
             (
-                vec![leaf(7, 0x11, 1, 0xFF), leaf(3, 0x22, 1, 0xFFFF), leaf(42, 0x33, 2, 0x1)],
+                vec![
+                    leaf(7, 0x11, 1, 0xFF),
+                    leaf(3, 0x22, 1, 0xFFFF),
+                    leaf(42, 0x33, 2, 0x1),
+                ],
                 vec![],
             ),
             (
@@ -1273,20 +1295,31 @@ mod tests {
                 vec![slot_hash(7)],
             ),
             (
-                (0..50).map(|i| leaf(i, (i % 255) as u8, i % 6, i.wrapping_mul(7))).collect(),
+                (0..50)
+                    .map(|i| leaf(i, (i % 255) as u8, i % 6, i.wrapping_mul(7)))
+                    .collect(),
                 vec![slot_hash(5), slot_hash(13)],
             ),
         ];
         for (leaves, tombs) in cases {
-            let sparse = CanonicalCapTree::new_with_tombstones(leaves.clone(), &tombs, CAP_TREE_DEPTH);
+            let sparse =
+                CanonicalCapTree::new_with_tombstones(leaves.clone(), &tombs, CAP_TREE_DEPTH);
             let (oracle_leaves, oracle_levels) = dense_build(leaves, &tombs, CAP_TREE_DEPTH);
-            assert_eq!(sparse.root(), oracle_levels[CAP_TREE_DEPTH][0], "depth-16 root");
+            assert_eq!(
+                sparse.root(),
+                oracle_levels[CAP_TREE_DEPTH][0],
+                "depth-16 root"
+            );
             assert_eq!(sparse.sorted_leaves(), oracle_leaves.as_slice());
             for pos in 0..oracle_leaves.len() {
                 let (s_sib, s_dir) = sparse.prove_membership(pos).unwrap();
                 let mut idx = pos;
                 for level in 0..CAP_TREE_DEPTH {
-                    assert_eq!(s_sib[level], oracle_levels[level][idx ^ 1], "sibling@{level} pos {pos}");
+                    assert_eq!(
+                        s_sib[level],
+                        oracle_levels[level][idx ^ 1],
+                        "sibling@{level} pos {pos}"
+                    );
                     assert_eq!(s_dir[level], (idx & 1) as u8);
                     idx >>= 1;
                 }

@@ -165,7 +165,11 @@ pub fn step_admissible(verb: WorkflowVerb, completed: &[u64]) -> bool {
 /// reflexive-transitive closure. Decided the SAME way as the executor's `ClearanceDominates` tooth
 /// (both walk [`dominates`]).
 pub fn step_clearance_ok(verb: WorkflowVerb, actor_labels: &[FieldElement]) -> bool {
-    may_read(&job_clearance_graph(), actor_labels, verb.compartment_label())
+    may_read(
+        &job_clearance_graph(),
+        actor_labels,
+        verb.compartment_label(),
+    )
 }
 
 /// Cumulative fuel spent across the completed prefix `0..cursor` (Lean `spentThrough`).
@@ -344,7 +348,12 @@ pub fn advance_effects(
             cell,
             event: Event::new(
                 symbol("job-step-advanced"),
-                vec![old_field, new_field, field_from_u64(new_spend), verb_compartment],
+                vec![
+                    old_field,
+                    new_field,
+                    field_from_u64(new_spend),
+                    verb_compartment,
+                ],
             ),
         },
     ]
@@ -384,7 +393,12 @@ pub fn build_advance_step_action(
 /// **Seed the JOB cell** so the program bites: install [`job_cell_program`], then bind the config
 /// (`job_terminal`, `clearance_graph_root`, `budget` — `WriteOnce`, frozen after), set `job_cursor =
 /// 0` and `spend_accum = 0`. Returns the seeded budget.
-pub fn seed_job(executor: &EmbeddedExecutor, terminal: u64, clearance_root: FieldElement, budget: u64) -> u64 {
+pub fn seed_job(
+    executor: &EmbeddedExecutor,
+    terminal: u64,
+    clearance_root: FieldElement,
+    budget: u64,
+) -> u64 {
     let cell = executor.cell_id();
     executor.install_program(cell, job_cell_program());
     executor.with_ledger_mut(|ledger| {
@@ -393,9 +407,12 @@ pub fn seed_job(executor: &EmbeddedExecutor, terminal: u64, clearance_root: Fiel
                 .set_field(JOB_TERMINAL_SLOT as usize, field_from_u64(terminal));
             c.state
                 .set_field(CLEARANCE_GRAPH_ROOT_SLOT as usize, clearance_root);
-            c.state.set_field(BUDGET_SLOT as usize, field_from_u64(budget));
-            c.state.set_field(JOB_CURSOR_SLOT as usize, field_from_u64(0));
-            c.state.set_field(SPEND_ACCUM_SLOT as usize, field_from_u64(0));
+            c.state
+                .set_field(BUDGET_SLOT as usize, field_from_u64(budget));
+            c.state
+                .set_field(JOB_CURSOR_SLOT as usize, field_from_u64(0));
+            c.state
+                .set_field(SPEND_ACCUM_SLOT as usize, field_from_u64(0));
         }
     });
     budget

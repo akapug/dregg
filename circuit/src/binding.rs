@@ -366,12 +366,18 @@ mod tests {
     #[test]
     fn wide_hash_to_felts_from_felts_round_trip() {
         // to_felts is the exact inverse of from_felts.
-        let h = WideHash::from_poseidon2("dregg-test-widehash", &[BabyBear::new(7), BabyBear::new(11)]);
+        let h = WideHash::from_poseidon2(
+            "dregg-test-widehash",
+            &[BabyBear::new(7), BabyBear::new(11)],
+        );
         let felts = h.to_felts();
         assert_eq!(felts.len(), WideHash::WIDTH);
         // The collision-resistant width is 8 felts (~124-bit birthday).
         assert_eq!(WideHash::WIDTH, 8);
-        assert_eq!(WideHash::from_felts(&felts).expect("8-felt buffer decodes"), h);
+        assert_eq!(
+            WideHash::from_felts(&felts).expect("8-felt buffer decodes"),
+            h
+        );
 
         // The felt decomposition is literally the underlying array.
         assert_eq!(&felts, h.as_slice());

@@ -263,14 +263,8 @@ impl TurnExecutor {
     /// to a single field element (the `BabyBear` the cross-cell collector
     /// partitions on). A cell absent from the ledger (or with the zero token_id,
     /// the native computron asset) derives a stable class.
-    fn asset_class_for_cell(
-        ledger: &Ledger,
-        cell: &CellId,
-    ) -> dregg_circuit::field::BabyBear {
-        let token_id: [u8; 32] = ledger
-            .get(cell)
-            .map(|c| *c.token_id())
-            .unwrap_or([0u8; 32]);
+    fn asset_class_for_cell(ledger: &Ledger, cell: &CellId) -> dregg_circuit::field::BabyBear {
+        let token_id: [u8; 32] = ledger.get(cell).map(|c| *c.token_id()).unwrap_or([0u8; 32]);
         Self::fold_token_id_to_asset(&token_id)
     }
 
@@ -2855,7 +2849,11 @@ mod hardening_tests {
             block.add_contribution(PerCellContribution {
                 asset,
                 net_delta_mag: BabyBear::new_canonical(delta.unsigned_abs() as u32),
-                net_delta_sign: if credit { BabyBear::ZERO } else { BabyBear::ONE },
+                net_delta_sign: if credit {
+                    BabyBear::ZERO
+                } else {
+                    BabyBear::ONE
+                },
             });
         }
         block

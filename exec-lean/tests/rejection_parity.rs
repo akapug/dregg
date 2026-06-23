@@ -1,0 +1,593 @@
+//! rejection_parity.rs — THE REJECTION-PARITY differential.
+//!
+//! The existing state-producer differential (`lean_state_producer_differential.rs`) proves the two
+//! kernels AGREE on the post-state of turns BOTH executors ACCEPT. It says nothing about turns that
+//! SHOULD be REJECTED: a soundness hole is precisely a turn the Rust `TurnExecutor` COMMITS while the
+//! verified Lean kernel REFUSES (Rust under-enforces a gate). This harness builds a corpus of
+//! adversarial turns — each crafted to violate ONE specific kernel gate — and runs BOTH kernels:
+//!
+//!   * the legacy Rust `TurnExecutor::execute` (`apply.rs`),
+//!   * the verified Lean kernel (`dregg_exec_lean::lean_apply::execute_via_lean`),
+//!
+//! recording `(rust_committed, lean_committed)` for each. The verdicts are:
+//!
+//!   * AGREE-both-reject          — `¬rust ∧ ¬lean`. The GOOD result: no hole; both refuse.
+//!   * ASYMMETRY-Rust-accepts     — ` rust ∧ ¬lean`. A CONFIRMED soundness hole: Rust commits what
+//!                                  the verified kernel refuses (the dangerous direction).
+//!   * ASYMMETRY-Rust-rejects     — `¬rust ∧  lean`. Rust is STRICTER than the verified kernel
+//!                                  (a divergence, but the safe direction).
+//!   * AGREE-both-accept          — ` rust ∧  lean`. The adversarial turn was NOT actually rejected
+//!                                  by either gate — the suspicion was wrong / the gate is elsewhere.
+//!   * WIRE-GAP                    — the turn could not be marshalled to Lean (`Ineligible`), so it
+//!                                  cannot be differentially verified here. NOT faked — reported as a gap.
+//!
+//! This test is a CHARACTERISATION harness (it prints the table and only HARD-FAILS on the dangerous
+//! `ASYMMETRY-Rust-accepts` direction, since that is a real soundness hole the maintainer must see).
+//! Requires the linked Lean archive; self-skips when absent (it cannot run the verified kernel).
+//!
+//! Run: `cargo test -p dregg-exec-lean --test rejection_parity -- --nocapture`
+
+use std::collections::HashMap;
+
+use dregg_cell::state::FieldElement;
+use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+use dregg_exec_lean::lean_apply::{self, execute_via_lean};
+use dregg_exec_lean::lean_shadow::ShadowHostCtx;
+use dregg_turn::{
+    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+    turn::Turn,
+};
+
+// ---------------------------------------------------------------------------
+// Fixture builders (shared with the accept-path differential)
+// ---------------------------------------------------------------------------
+
+fn open_permissions() -> Permissions {
+    Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    }
+}
+
+/// Permissions where EVERY action requires a credential the adversarial `Unchecked` turn cannot
+/// present (`Signature`). Used to test the permission-lattice gate for note/lifecycle/bridge.
+fn locked_permissions() -> Permissions {
+    Permissions {
+        send: AuthRequired::Signature,
+        receive: AuthRequired::Signature,
+        set_state: AuthRequired::Signature,
+        set_permissions: AuthRequired::Signature,
+        set_verification_key: AuthRequired::Signature,
+        increment_nonce: AuthRequired::Signature,
+        delegate: AuthRequired::Signature,
+        access: AuthRequired::Signature,
+    }
+}
+
+fn make_cell(seed: u8, balance: i64, perms: Permissions) -> Cell {
+    let mut pk = [0u8; 32];
+    pk[0] = seed;
+    pk[31] = seed.wrapping_mul(37);
+    let mut cell = Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = perms;
+    cell
+}
+
+fn make_open_cell(seed: u8, balance: i64) -> Cell {
+    make_cell(seed, balance, open_permissions())
+}
+
+fn field_from_u64(v: u64) -> FieldElement {
+    let mut out = [0u8; 32];
+    out[24..32].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
+/// A turn carrying `effects` under the given `auth`, with the single root action targeting `target`.
+fn turn_with_auth(
+    agent: CellId,
+    target: CellId,
+    nonce: u64,
+    auth: Authorization,
+    effects: Vec<Effect>,
+) -> Turn {
+    let mut forest = CallForest::new();
+    let action = Action {
+        target,
+        method: [0u8; 32],
+        args: vec![],
+        authorization: auth,
+        preconditions: Default::default(),
+        effects,
+        may_delegate: DelegationMode::None,
+        commitment_mode: Default::default(),
+        balance_change: None,
+        witness_blobs: vec![],
+    };
+    forest.add_root(action);
+    Turn {
+        agent,
+        nonce,
+        call_forest: forest,
+        fee: 0,
+        memo: None,
+        valid_until: Some(1_000),
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    }
+}
+
+fn single_effect_turn(agent: CellId, target: CellId, nonce: u64, effect: Effect) -> Turn {
+    turn_with_auth(agent, target, nonce, Authorization::Unchecked, vec![effect])
+}
+
+// ---------------------------------------------------------------------------
+// One adversarial case
+// ---------------------------------------------------------------------------
+
+struct Case {
+    /// The gate being attacked.
+    gate: &'static str,
+    /// Human description of the adversarial turn.
+    desc: &'static str,
+    /// Pre-state.
+    ledger: Ledger,
+    /// The adversarial turn.
+    turn: Turn,
+    /// If true, this is a CONTROL — a turn that SHOULD be rejected by both (the suspicion is that
+    /// they already agree). Same machinery, just labelled so the report distinguishes them.
+    control: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    AgreeBothReject,
+    AgreeBothAccept,
+    AsymRustAccepts,
+    AsymRustRejects,
+    WireGap,
+}
+
+impl Verdict {
+    fn label(self) -> &'static str {
+        match self {
+            Verdict::AgreeBothReject => "AGREE-both-reject",
+            Verdict::AgreeBothAccept => "AGREE-both-accept",
+            Verdict::AsymRustAccepts => "ASYMMETRY-Rust-accepts",
+            Verdict::AsymRustRejects => "ASYMMETRY-Rust-rejects",
+            Verdict::WireGap => "WIRE-GAP",
+        }
+    }
+}
+
+/// Run both kernels over the case's turn + pre-state. Returns `(rust_committed, lean_status, verdict)`
+/// where `lean_status` is `Some(committed)` or `None` for a wire gap.
+fn run_case(case: &Case) -> (bool, Option<bool>, Verdict) {
+    // --- (1) Rust executor (apply.rs). Fresh executor so each turn is first in its receipt chain. ---
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let mut rust_ledger = case.ledger.clone();
+    let rust_committed = executor
+        .execute(&case.turn, &mut rust_ledger)
+        .is_committed();
+
+    // --- (2) Verified Lean kernel over the same turn + pre-state. ---
+    let host = ShadowHostCtx::diag();
+    let lean_status = match execute_via_lean(&case.turn, &case.ledger, &host) {
+        Ok((_ledger, committed)) => Some(committed),
+        Err(lean_apply::ExtractError::Ineligible) => None, // WIRE-GAP — cannot compare.
+        Err(lean_apply::ExtractError::RootGap { .. }) => None, // root-gap — also a comparison gap.
+        Err(e) => panic!("Lean kernel FAILED on '{}' ({}): {e}", case.gate, case.desc),
+    };
+
+    let verdict = match lean_status {
+        None => Verdict::WireGap,
+        Some(lean_committed) => match (rust_committed, lean_committed) {
+            (false, false) => Verdict::AgreeBothReject,
+            (true, true) => Verdict::AgreeBothAccept,
+            (true, false) => Verdict::AsymRustAccepts,
+            (false, true) => Verdict::AsymRustRejects,
+        },
+    };
+
+    (rust_committed, lean_status, verdict)
+}
+
+// ---------------------------------------------------------------------------
+// The adversarial corpus
+// ---------------------------------------------------------------------------
+
+/// Two open cells (A=agent, B=counterparty) with the given balances.
+fn two_open(bal_a: i64, bal_b: i64) -> (Ledger, CellId, CellId) {
+    let a = make_open_cell(1, bal_a);
+    let b = make_open_cell(2, bal_b);
+    let (ida, idb) = (a.id(), b.id());
+    let mut l = Ledger::new();
+    l.insert_cell(a).unwrap();
+    l.insert_cell(b).unwrap();
+    (l, ida, idb)
+}
+
+fn build_corpus() -> Vec<Case> {
+    let mut cases: Vec<Case> = Vec::new();
+
+    // ── (2) Non-conserving burn, no issuer well ──────────────────────────────────────────────
+    // A Burn on cell A's balance slot, no registered issuer well, A holds NO mint/burn cap.
+    // Lean's `.burnA` requires the return-to-well move (mintAuthorizedB); apply.rs commits on
+    // ownership. Suspected ASYMMETRY-Rust-accepts.
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "burn-no-well",
+            desc: "Burn 10 from A (no issuer well, no mint cap)",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::Burn {
+                    target: a,
+                    slot: 0,
+                    amount: 10,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── (3) Permission lattice not consulted: NoteCreate on a LOCKED cell ─────────────────────
+    // Cell A requires Signature for everything; the turn presents Unchecked. Lean's gate should
+    // fail-closed; does apply.rs's determine_required_permissions even consult the lattice for
+    // NoteCreate? Suspected ASYMMETRY-Rust-accepts.
+    {
+        let a = make_cell(1, 100, locked_permissions());
+        let b = make_cell(2, 5, locked_permissions());
+        let (ida, _idb) = (a.id(), b.id());
+        let mut l = Ledger::new();
+        l.insert_cell(a).unwrap();
+        l.insert_cell(b).unwrap();
+        cases.push(Case {
+            gate: "perm-lattice-notecreate",
+            desc: "NoteCreate on a Signature-locked cell with Unchecked auth",
+            turn: single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::NoteCreate {
+                    commitment: dregg_cell::NoteCommitment([0xBB; 32]),
+                    value: 0,
+                    asset_type: 0,
+                    encrypted_note: vec![],
+                    value_commitment: None,
+                    range_proof: None,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+    // ── (3b) Permission lattice: CellSeal (lifecycle) on a LOCKED cell ────────────────────────
+    {
+        let a = make_cell(1, 100, locked_permissions());
+        let ida = a.id();
+        let mut l = Ledger::new();
+        l.insert_cell(a).unwrap();
+        cases.push(Case {
+            gate: "perm-lattice-cellseal",
+            desc: "CellSeal on a Signature-locked cell with Unchecked auth",
+            turn: single_effect_turn(
+                ida,
+                ida,
+                0,
+                Effect::CellSeal {
+                    target: ida,
+                    reason: [9u8; 32],
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── (4) Reserved-slot SetField ────────────────────────────────────────────────────────────
+    // A developer SetField writing slot 0 (the balance/nonce-adjacent reserved region). Lean's
+    // EffectsState rejects writes to reserved slots; does apply.rs? Try slot 0 and slot 1.
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "reserved-setfield-slot0",
+            desc: "SetField writing reserved slot 0",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::SetField {
+                    cell: a,
+                    index: 0,
+                    value: field_from_u64(999),
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "reserved-setfield-slot1",
+            desc: "SetField writing reserved slot 1",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::SetField {
+                    cell: a,
+                    index: 1,
+                    value: field_from_u64(999),
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── (6) Attenuate out-of-bounds slot ────────────────────────────────────────────────────
+    // AttenuateCapability on slot 5 of an actor with an EMPTY c-list. Lean's `attenuateStepA` is a
+    // List.modify (no-op for an out-of-range slot ⇒ TOTAL ⇒ commits); apply.rs's
+    // attenuate_in_place returns None for a missing slot ⇒ rejects. Suspected ASYMMETRY-Rust-rejects.
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "attenuate-oob-slot",
+            desc: "AttenuateCapability slot 5 on an empty c-list",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::AttenuateCapability {
+                    cell: a,
+                    slot: 5,
+                    narrower_permissions: AuthRequired::Impossible,
+                    narrower_effects: None,
+                    narrower_expiry: None,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── (7) Self-transfer (src == dst) ────────────────────────────────────────────────────────
+    // Transfer from A to A. Lean's recordKernel rejects src==dst; apply.rs? Suspected ASYMMETRY.
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "self-transfer",
+            desc: "Transfer 30 from A to A (src==dst)",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::Transfer {
+                    from: a,
+                    to: a,
+                    amount: 30,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── (9) Negative-vk factory — CreateCellFromFactory ──────────────────────────────────────
+    // The effect is deliberately NOT wire-mappable (see effect_is_mappable `_ => false`); expected
+    // WIRE-GAP. We still run it so the report records the gap rather than silently omitting it.
+    {
+        let (l, a, _b) = two_open(100, 5);
+        let params = dregg_cell::factory::FactoryCreationParams {
+            mode: dregg_cell::CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![],
+            initial_caps: vec![],
+            owner_pubkey: [3u8; 32],
+        };
+        cases.push(Case {
+            gate: "negative-vk-factory",
+            desc: "CreateCellFromFactory (effect has no Lean wire arm)",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::CreateCellFromFactory {
+                    factory_vk: [0u8; 32],
+                    owner_pubkey: [3u8; 32],
+                    token_id: [0u8; 32],
+                    params,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── IncrementNonce (monotone-nonce family) ───────────────────────────────────────────────
+    // dregg's IncrementNonce carries NO target value — it strictly increments (+1), so the
+    // "non-strictly-greater" attack (#5) is INEXPRESSIBLE in the effect grammar (safe-by-construction).
+    // We still exercise the effect to confirm both kernels agree on its commit decision (control).
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "increment-nonce",
+            desc: "IncrementNonce on A (monotone +1; the regress attack is inexpressible)",
+            turn: single_effect_turn(a, a, 0, Effect::IncrementNonce { cell: a }),
+            ledger: l,
+            control: true,
+        });
+    }
+
+    // ════════════════════ CONTROLS (should AGREE-both-reject) ════════════════════════════════
+
+    // (C1) Overspend transfer: A has 10, transfers 9999 to B. Both must reject.
+    {
+        let (l, a, b) = two_open(10, 5);
+        cases.push(Case {
+            gate: "control-overspend",
+            desc: "Transfer 9999 from A (balance 10) to B",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::Transfer {
+                    from: a,
+                    to: b,
+                    amount: 9999,
+                },
+            ),
+            ledger: l,
+            control: true,
+        });
+    }
+
+    // (C2) Proofless NoteSpend: empty spending_proof. Both must reject.
+    {
+        let (l, a, _b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "control-proofless-notespend",
+            desc: "NoteSpend with empty spending_proof",
+            turn: single_effect_turn(
+                a,
+                a,
+                0,
+                Effect::NoteSpend {
+                    nullifier: dregg_cell::Nullifier([0xAA; 32]),
+                    note_tree_root: [0x11; 32],
+                    value: 0,
+                    asset_type: 0,
+                    spending_proof: vec![],
+                    value_commitment: None,
+                },
+            ),
+            ledger: l,
+            control: true,
+        });
+    }
+
+    // (C3) Unauthorized cross-cell SetPermissions: A (agent) tries to SetPermissions on B.
+    // apply.rs requires ownership/cap on B; A owns only A. Both should reject.
+    {
+        let (l, a, b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "control-cross-cell-setperms",
+            desc: "A sets B's permissions (A does not own B)",
+            turn: turn_with_auth(
+                a,
+                b,
+                0,
+                Authorization::Unchecked,
+                vec![Effect::SetPermissions {
+                    cell: b,
+                    new_permissions: open_permissions(),
+                }],
+            ),
+            ledger: l,
+            control: true,
+        });
+    }
+
+    cases
+}
+
+// ---------------------------------------------------------------------------
+// The harness
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rejection_parity_differential() {
+    if !dregg_lean_ffi::lean_available() {
+        eprintln!(
+            "SKIP: Lean archive not linked (lean_available()==false) — cannot run the verified kernel"
+        );
+        return;
+    }
+
+    let mut rows: Vec<String> = Vec::new();
+    let mut holes: Vec<String> = Vec::new();
+    let mut gaps: Vec<&'static str> = Vec::new();
+
+    for case in build_corpus() {
+        let (rust, lean, verdict) = run_case(&case);
+        let lean_s = match lean {
+            Some(true) => "accepts",
+            Some(false) => "rejects",
+            None => "—(gap)",
+        };
+        let kind = if case.control { "control" } else { "suspicion" };
+        rows.push(format!(
+            "| {} | {} | {} | rust={} | lean={} | {} |",
+            kind,
+            case.gate,
+            case.desc,
+            if rust { "accepts" } else { "rejects" },
+            lean_s,
+            verdict.label(),
+        ));
+        if verdict == Verdict::AsymRustAccepts {
+            holes.push(format!(
+                "  [{}] {} — Rust COMMITS, Lean REFUSES",
+                case.gate, case.desc
+            ));
+        }
+        if verdict == Verdict::WireGap {
+            gaps.push(case.gate);
+        }
+    }
+
+    println!("\n=== REJECTION-PARITY DIFFERENTIAL ===\n");
+    println!("| kind | gate | adversarial turn | rust | lean | verdict |");
+    println!("|------|------|------------------|------|------|---------|");
+    for r in &rows {
+        println!("{r}");
+    }
+
+    if !gaps.is_empty() {
+        println!(
+            "\nWIRE-GAP (not differentially verifiable — effect has no Lean wire arm): {gaps:?}"
+        );
+    }
+
+    if holes.is_empty() {
+        println!(
+            "\nNo ASYMMETRY-Rust-accepts (no confirmed soundness hole on the wire-mappable set)."
+        );
+    } else {
+        println!(
+            "\n!!! CONFIRMED SOUNDNESS HOLE(S) — Rust accepts what the verified kernel refuses:"
+        );
+        for h in &holes {
+            println!("{h}");
+        }
+    }
+
+    // HARD-FAIL only on the dangerous direction: Rust commits a turn the verified kernel refuses.
+    // (The safe-direction divergence ASYMMETRY-Rust-rejects and AGREE-both-accept are reported,
+    // not failed — they are characterisations, not holes.)
+    assert!(
+        holes.is_empty(),
+        "CONFIRMED SOUNDNESS HOLE(S): Rust under-enforces a gate the verified Lean kernel enforces:\n{}",
+        holes.join("\n")
+    );
+}

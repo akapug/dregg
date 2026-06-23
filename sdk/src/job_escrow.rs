@@ -59,7 +59,9 @@ use dregg_turn::Effect;
 use dregg_turn::turn::TurnReceipt;
 
 use crate::error::SdkError;
-use crate::factories::{ADOPT_TURN_FEE, create_escrow_cell, party_field, refund_escrow, release_escrow};
+use crate::factories::{
+    ADOPT_TURN_FEE, create_escrow_cell, party_field, refund_escrow, release_escrow,
+};
 use crate::runtime::AgentRuntime;
 
 /// Domain-separation tag for the payer's approval token. The token an escrow's
@@ -280,7 +282,12 @@ mod tests {
     /// escrow). Σδ=0 is the conservation badge — a release/refund only MOVES
     /// value between columns, never mints it (modulo the per-turn computron fee,
     /// which leaves the system by design — accounted explicitly per test).
-    fn three_column_total(runtime: &AgentRuntime, payer: CellId, worker: CellId, escrow: CellId) -> i128 {
+    fn three_column_total(
+        runtime: &AgentRuntime,
+        payer: CellId,
+        worker: CellId,
+        escrow: CellId,
+    ) -> i128 {
         balance(runtime, payer) + balance(runtime, worker) + balance(runtime, escrow)
     }
 
@@ -420,7 +427,8 @@ mod tests {
 
         // The legitimate release still pays exactly the reward afterward.
         let approval = JobEscrow::approval_token(&payer_pk, &jid);
-        job.approve_and_pay(&runtime, approval).expect("legit release");
+        job.approve_and_pay(&runtime, approval)
+            .expect("legit release");
         assert_eq!(balance(&runtime, worker) - worker_before, REWARD as i128);
     }
 

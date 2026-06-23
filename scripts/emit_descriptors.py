@@ -178,12 +178,15 @@ def split_wide(stdout: str, written):
 
 
 def split_wide_registry(stdout: str, written):
-    """The wide-registry emitter prints one `key\tname\tjson` line per wide member (45 lines).
-    The checked-in artifact is those lines joined with a trailing newline."""
+    """The wide-registry emitter prints one `key\tname\tjson` line per wide member: the 45
+    emit-source members (`v3RegistryCapOpenWide`) PLUS the 10 WRITE-bearing cap-open tail members
+    (`v3RegistryCapOpenWriteWide`, §10 — the `…WriteCapOpen…` wrappers + `spawnCapOpen` +
+    `exerciseCapOpen` made 8-felt-wide) = 55 lines. The checked-in artifact is those lines joined
+    with a trailing newline."""
     lines = [ln for ln in stdout.splitlines() if ln.strip()]
-    if len(lines) != 45:
+    if len(lines) != 55:
         sys.exit(
-            f"emit_descriptors: wide registry emitter produced {len(lines)} lines (expected 45)"
+            f"emit_descriptors: wide registry emitter produced {len(lines)} lines (expected 55)"
         )
     for ln in lines:
         if ln.count("\t") != 2:

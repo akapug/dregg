@@ -26,17 +26,15 @@
 // descriptor-level prove/verify (`prove_vm_descriptor2`/`verify_vm_descriptor2`) is
 // now unconditional in dregg-circuit, so this test compiles + runs by default.)
 
-use dregg_cell::commitment::{
-    V9RotationContext, compute_canonical_state_commitment_v9_felt8,
-};
+use dregg_cell::commitment::{V9RotationContext, compute_canonical_state_commitment_v9_felt8};
 use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};
 use dregg_circuit::descriptor_ir2::{
     EffectVmDescriptor2, MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
     verify_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    GRAD_ROT_WIDTH, RotatedBlockWitness, WIDE_BEFORE_CBASE, WIDE_COMMIT_CARRIER,
-    SET_FIELD_DYN_HOST_WIDTH, empty_caveat_manifest, generate_rotated_create_cell_wide,
+    GRAD_ROT_WIDTH, RotatedBlockWitness, SET_FIELD_DYN_HOST_WIDTH, WIDE_BEFORE_CBASE,
+    WIDE_COMMIT_CARRIER, empty_caveat_manifest, generate_rotated_create_cell_wide,
     generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
     generate_rotated_note_spend_wide, generate_rotated_set_field_dyn_wide,
     generate_rotated_spawn_wide, generate_rotated_transfer_shape_wide,
@@ -113,20 +111,33 @@ fn assert_roundtrip(
     map_heaps: &[Vec<HeapLeaf>],
     wide_pi_base: usize,
 ) {
-    assert_eq!(trace[0].len(), GRAD_ROT_WIDTH + 208, "{name}: wide width 816");
-    assert_eq!(desc.trace_width, trace[0].len(), "{name}: descriptor width matches trace");
+    assert_eq!(
+        trace[0].len(),
+        GRAD_ROT_WIDTH + 208,
+        "{name}: wide width 816"
+    );
+    assert_eq!(
+        desc.trace_width,
+        trace[0].len(),
+        "{name}: descriptor width matches trace"
+    );
     assert_eq!(
         dpis.len(),
         wide_pi_base + 16,
         "{name}: base {wide_pi_base} PIs + 16 wide PIs"
     );
-    assert_eq!(desc.public_input_count, dpis.len(), "{name}: descriptor PI count matches");
+    assert_eq!(
+        desc.public_input_count,
+        dpis.len(),
+        "{name}: descriptor PI count matches"
+    );
 
     // The 8 BEFORE wide PIs (at wide_pi_base..+8) equal the BEFORE carrier-12 columns on row 0.
     let commit = before_commit_8(trace);
     for j in 0..8 {
         assert_eq!(
-            dpis[wide_pi_base + j], commit[j],
+            dpis[wide_pi_base + j],
+            commit[j],
             "{name}: wide PI {} = BEFORE 8-felt commit felt {j}",
             wide_pi_base + j
         );
@@ -256,15 +267,38 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let (trace, dpis) = generate_rotated_transfer_shape_wide(
-        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
     )
     .expect("wide burn producer");
     assert_roundtrip(name, &desc, &trace, &dpis, &[], 46);
-    assert_executor_anchor(name, &before_cell, &before_w, nullifier_root, commitments_root, &trace);
+    assert_executor_anchor(
+        name,
+        &before_cell,
+        &before_w,
+        nullifier_root,
+        commitments_root,
+        &trace,
+    );
 }
 
 /// **setFieldDyn wide roundtrip — the DYNAMIC overflow-field write PROVES (the residual CLOSED).**
@@ -280,8 +314,15 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
 fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
     let name = "setFieldDynVmDescriptor2R24";
     let desc = wide_desc(name);
-    assert_eq!(desc.trace_width, SET_FIELD_DYN_HOST_WIDTH + 208, "setFieldDyn wide width 789");
-    assert_eq!(desc.public_input_count, 63, "setFieldDyn wide carries 47 base + 16 wide PIs");
+    assert_eq!(
+        desc.trace_width,
+        SET_FIELD_DYN_HOST_WIDTH + 208,
+        "setFieldDyn wide width 789"
+    );
+    assert_eq!(
+        desc.public_input_count, 63,
+        "setFieldDyn wide carries 47 base + 16 wide PIs"
+    );
 
     let balance: i64 = 50_000;
     let st = CellState::new(balance as u64, 0);
@@ -293,18 +334,43 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     // slot 3 (the overflow-memory address 0..7), previous value 0 at that address.
     let slot = 3u32;
     let prev_value = BabyBear::new(0);
     let (trace, dpis, mem_boundary) = generate_rotated_set_field_dyn_wide(
-        &st, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(), slot, prev_value,
+        &st,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
+        slot,
+        prev_value,
     )
     .expect("wide setFieldDyn producer");
-    assert_eq!(trace[0].len(), desc.trace_width, "setFieldDyn wide trace width matches descriptor");
-    assert_eq!(dpis.len(), desc.public_input_count, "setFieldDyn wide PI count matches descriptor");
+    assert_eq!(
+        trace[0].len(),
+        desc.trace_width,
+        "setFieldDyn wide trace width matches descriptor"
+    );
+    assert_eq!(
+        dpis.len(),
+        desc.public_input_count,
+        "setFieldDyn wide PI count matches descriptor"
+    );
 
     let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &[])
         .unwrap_or_else(|e| panic!("setFieldDyn wide proof must prove (789): {e}"));
@@ -339,15 +405,37 @@ fn wide_note_spend_grow_gate_proves_verifies_and_executor_anchors() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[7u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let before_nullifiers = vec![
-        HeapLeaf { addr: BabyBear::new(0x1111), value: BabyBear::new(1) },
-        HeapLeaf { addr: BabyBear::new(0x2222), value: BabyBear::new(1) },
+        HeapLeaf {
+            addr: BabyBear::new(0x1111),
+            value: BabyBear::new(1),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0x2222),
+            value: BabyBear::new(1),
+        },
     ];
     let (trace, dpis, map_heaps) = generate_rotated_note_spend_wide(
-        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
         &before_nullifiers,
     )
     .expect("wide noteSpend producer");
@@ -366,7 +454,10 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
     let value: u64 = 250;
     let st = CellState::new(before_balance as u64, 0);
     let cm = BabyBear::new(0xC0FFEE);
-    let effects = vec![Effect::NoteCreate { commitment: cm, value }];
+    let effects = vec![Effect::NoteCreate {
+        commitment: cm,
+        value,
+    }];
 
     let mut ledger = Ledger::new();
     let before_cell = producer_cell(before_balance, 0);
@@ -375,15 +466,37 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let before_commitments = vec![
-        HeapLeaf { addr: BabyBear::new(0x111), value: BabyBear::new(1) },
-        HeapLeaf { addr: BabyBear::new(0x222), value: BabyBear::new(1) },
+        HeapLeaf {
+            addr: BabyBear::new(0x111),
+            value: BabyBear::new(1),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0x222),
+            value: BabyBear::new(1),
+        },
     ];
     let (trace, dpis, map_heaps) = generate_rotated_note_create_wide(
-        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
         &before_commitments,
     )
     .expect("wide noteCreate producer");
@@ -401,7 +514,9 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
     let before_balance: i64 = 40_000;
     let st = CellState::new(before_balance as u64, 0);
     let new_cell_id = BabyBear::new(0xCE11);
-    let effects = vec![Effect::CreateCell { create_hash: [new_cell_id; 8] }];
+    let effects = vec![Effect::CreateCell {
+        create_hash: [new_cell_id; 8],
+    }];
 
     let mut ledger = Ledger::new();
     let before_cell = producer_cell(before_balance, 0);
@@ -410,15 +525,37 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let before_accounts = vec![
-        HeapLeaf { addr: BabyBear::new(0xAA01), value: BabyBear::new(0xAA01) },
-        HeapLeaf { addr: BabyBear::new(0xAA02), value: BabyBear::new(0xAA02) },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
     ];
     let (trace, dpis, map_heaps) = generate_rotated_create_cell_wide(
-        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
         &before_accounts,
     )
     .expect("wide createCell producer");
@@ -429,7 +566,13 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
 /// The shared birth-leg producer witnesses (a non-empty BEFORE accounts set distinct from the new-cell
 /// key, so the `.absent` no-collision precondition has a bracketing witness). Mirrors the createCell
 /// wide setup; the only per-effect difference is the lead effect + its new-cell key column.
-fn birth_witnesses() -> (CellState, Ledger, rw::RotationWitness, rw::RotationWitness, Vec<HeapLeaf>) {
+fn birth_witnesses() -> (
+    CellState,
+    Ledger,
+    rw::RotationWitness,
+    rw::RotationWitness,
+    Vec<HeapLeaf>,
+) {
     let before_balance: i64 = 40_000;
     let st = CellState::new(before_balance as u64, 0);
     let mut ledger = Ledger::new();
@@ -439,11 +582,29 @@ fn birth_witnesses() -> (CellState, Ledger, rw::RotationWitness, rw::RotationWit
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
     let before_accounts = vec![
-        HeapLeaf { addr: BabyBear::new(0xAA01), value: BabyBear::new(0xAA01) },
-        HeapLeaf { addr: BabyBear::new(0xAA02), value: BabyBear::new(0xAA02) },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
     ];
     (st, ledger, before_w, after_w, before_accounts)
 }
@@ -463,7 +624,11 @@ fn wide_factory_grow_gate_proves_verifies_and_executor_anchors() {
         child_vk_derived: BabyBear::new(0xC417),
     }];
     let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
-        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
         &before_accounts,
     )
     .expect("wide factory producer");
@@ -482,9 +647,15 @@ fn wide_spawn_grow_gate_proves_verifies_and_executor_anchors() {
     let desc = wide_desc(name);
     let (st, _ledger, before_w, after_w, before_accounts) = birth_witnesses();
     let spawn_id = BabyBear::new(0x5BA1);
-    let effects = vec![Effect::SpawnWithDelegation { spawn_hash: [spawn_id; 8] }];
+    let effects = vec![Effect::SpawnWithDelegation {
+        spawn_hash: [spawn_id; 8],
+    }];
     let (trace, dpis, map_heaps) = generate_rotated_spawn_wide(
-        &st, &effects, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(),
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
         &before_accounts,
     )
     .expect("wide spawn (accounts birth leg) producer");
@@ -498,17 +669,29 @@ fn wide_spawn_grow_gate_proves_verifies_and_executor_anchors() {
 #[test]
 fn wide_birth_wrappers_refuse_mismatched_lead() {
     let (st, _ledger, before_w, after_w, before_accounts) = birth_witnesses();
-    let cc = vec![Effect::CreateCell { create_hash: [BabyBear::new(0xCE11); 8] }];
+    let cc = vec![Effect::CreateCell {
+        create_hash: [BabyBear::new(0xCE11); 8],
+    }];
     assert!(
         generate_rotated_create_from_factory_wide(
-            &st, &cc, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(), &before_accounts,
+            &st,
+            &cc,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &empty_caveat_manifest(),
+            &before_accounts,
         )
         .is_err(),
         "factory wide wrapper must refuse a createCell lead"
     );
     assert!(
         generate_rotated_spawn_wide(
-            &st, &cc, &bridge(&before_w), &bridge(&after_w), &empty_caveat_manifest(), &before_accounts,
+            &st,
+            &cc,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &empty_caveat_manifest(),
+            &before_accounts,
         )
         .is_err(),
         "spawn wide wrapper must refuse a createCell lead"

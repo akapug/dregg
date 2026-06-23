@@ -202,11 +202,11 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
         target: h8(cell_id.as_bytes()),
         reason_hash: bytes32_to_8_limbs(&[0u8; 32]),
     };
-    let name = rotated_descriptor_name_for_effect(&vm_effect)
-        .expect("Refusal is a rotated cohort member");
+    let name =
+        rotated_descriptor_name_for_effect(&vm_effect).expect("Refusal is a rotated cohort member");
     assert_eq!(name, "refusalVmDescriptor2R24");
-    let desc =
-        parse_vm_descriptor2(rotated_descriptor_json(name)).expect("rotated refusal descriptor parses");
+    let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+        .expect("rotated refusal descriptor parses");
     assert_eq!(
         desc.public_input_count, 47,
         "refusal carries the appended record pin (47 PIs)"
@@ -224,10 +224,20 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &Ledger::new(), &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&honest_after, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &Ledger::new(),
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &honest_after,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     assert_ne!(
         before_w.pre_limbs[B_RECORD_DIGEST], after_w.pre_limbs[B_RECORD_DIGEST],
@@ -307,13 +317,10 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
     // We witness this by confirming the honest trace (genuine after-root) accepts while ONLY the after-root
     // changed: the rejection is keyed precisely on the after-`fields_root` write, not on any other column.
     assert!(
-        forged_trace
+        forged_trace.iter().zip(trace.iter()).all(|(f, h)| f
             .iter()
-            .zip(trace.iter())
-            .all(|(f, h)| f
-                .iter()
-                .enumerate()
-                .all(|(c, v)| c == AFTER_BASE + B_FIELDS_ROOT || *v == h[c])),
+            .enumerate()
+            .all(|(c, v)| c == AFTER_BASE + B_FIELDS_ROOT || *v == h[c])),
         "the forge perturbs ONLY the after-`fields_root` limb (36) — the rejection is the map-op gate \
          biting on the forged write, not an unrelated trace break"
     );
@@ -361,8 +368,8 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
     let name = rotated_descriptor_name_for_effect(&vm_effect)
         .expect("CellSeal is a rotated cohort member");
     assert_eq!(name, "cellSealVmDescriptor2R24");
-    let desc =
-        parse_vm_descriptor2(rotated_descriptor_json(name)).expect("rotated cellSeal descriptor parses");
+    let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+        .expect("rotated cellSeal descriptor parses");
     assert_eq!(
         desc.public_input_count, 47,
         "cellSeal carries the appended record pin (47 PIs)"
@@ -380,10 +387,20 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &Ledger::new(), &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&honest_after, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &Ledger::new(),
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &honest_after,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     assert_ne!(
         before_w.pre_limbs[B_LIFECYCLE], after_w.pre_limbs[B_LIFECYCLE],
@@ -391,9 +408,14 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
     );
 
     let caveat = empty_caveat_manifest();
-    let (trace, dpis) =
-        generate_rotated_effect_vm_trace(&st, &effects, &bridge(&before_w), &bridge(&after_w), &caveat)
-            .expect("live rotated generator must produce a cellSeal trace + 47 PIs");
+    let (trace, dpis) = generate_rotated_effect_vm_trace(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &caveat,
+    )
+    .expect("live rotated generator must produce a cellSeal trace + 47 PIs");
 
     // The honest declared payload-hash column IS the felt-domain `lifecycle_felt` of the sealed cell —
     // the value the light client recomputes from `(disc=Sealed, reason_hash, block_height)`. It equals
@@ -447,13 +469,10 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
     // `AFTER_BASE + B_LIFECYCLE`); every other column (incl. the recomputed `prmCol 3`) is unchanged — so
     // the rejection is the gate's weld biting on the forged limb, not an unrelated trace malformation.
     assert!(
-        forged_trace
+        forged_trace.iter().zip(trace.iter()).all(|(f, h)| f
             .iter()
-            .zip(trace.iter())
-            .all(|(f, h)| f
-                .iter()
-                .enumerate()
-                .all(|(c, v)| c == AFTER_BASE + B_LIFECYCLE || *v == h[c])),
+            .enumerate()
+            .all(|(c, v)| c == AFTER_BASE + B_LIFECYCLE || *v == h[c])),
         "the forge perturbs ONLY the after-lifecycle limb (29) — the rejection is the payload hash gate \
          biting on the forged limb, not an unrelated trace break"
     );
@@ -463,7 +482,13 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
     let mut anchored_forged_dpis = dpis.clone();
     full_node_anchor(&mut anchored_forged_dpis, honest_payload_felt);
     assert!(
-        !accepts(&desc, &forged_trace, &anchored_forged_dpis, &mem_boundary, &map_heaps),
+        !accepts(
+            &desc,
+            &forged_trace,
+            &anchored_forged_dpis,
+            &mem_boundary,
+            &map_heaps
+        ),
         "FULL-NODE leg also sound (belt-and-suspenders): the off-cell anchor likewise rejects the \
          forged-payload limb"
     );

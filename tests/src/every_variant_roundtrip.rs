@@ -42,11 +42,11 @@
 
 use std::collections::HashMap;
 
-use dregg_cell_crypto::note_bridge::PortableNoteProof;
 use dregg_cell::{
     AuthRequired, CapabilityRef, Cell, CellId, CellMode, Ledger, NoteCommitment, Nullifier,
     Permissions, Preconditions, factory::FactoryCreationParams,
 };
+use dregg_cell_crypto::note_bridge::PortableNoteProof;
 use dregg_sdk::AgentCipherclerk;
 use dregg_turn::action::{BearerCapProof, DelegationProofData, symbol};
 use dregg_turn::eventual::EventualRef;

@@ -1314,7 +1314,9 @@ pub fn execute_committed_fulfillment_flow(
 ) -> Result<TurnReceipt, FulfillmentError> {
     use curve25519_dalek::scalar::Scalar;
     use dregg_cell::note::NoteCommitment;
-    use dregg_cell_crypto::{BulletproofRangeProof, ValueCommitment, prove_conservation_with_range};
+    use dregg_cell_crypto::{
+        BulletproofRangeProof, ValueCommitment, prove_conservation_with_range,
+    };
     use dregg_turn::action::{CommitmentMode, DelegationMode, symbol};
 
     // Step 1: Verify the fulfillment (same verification as cleartext path).

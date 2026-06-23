@@ -46,11 +46,11 @@ use serde::{Deserialize, Serialize};
 use dregg_cell::AuthRequired;
 use dregg_types::{CellId, PublicKey};
 
+use crate::FederationId;
 use crate::data_plane::{ChannelName, SendCap};
 use crate::handoff::{HandoffAcceptance, HandoffError, HandoffPresentation, validate_handoff};
 use crate::netlayer::{NetConnection, NetlayerError};
 use crate::sturdy::SwissTable;
-use crate::FederationId;
 
 // =============================================================================
 // Wire frames
@@ -85,10 +85,7 @@ pub enum HandoffReply {
     /// `amplification` is set when the refusal was specifically an
     /// authority-amplification attempt (granted ⊄ held), the no-amplification
     /// bound this transport exists to enforce.
-    Refused {
-        reason: String,
-        amplification: bool,
-    },
+    Refused { reason: String, amplification: bool },
 }
 
 /// Errors carrying a presentation across the transport.
@@ -152,8 +149,8 @@ pub async fn present_handoff<C: NetConnection>(
             .map_err(|e| HandoffTransportError::Codec(e.to_string()))?,
         introducer_pk,
     };
-    let bytes = postcard::to_stdvec(&frame)
-        .map_err(|e| HandoffTransportError::Codec(e.to_string()))?;
+    let bytes =
+        postcard::to_stdvec(&frame).map_err(|e| HandoffTransportError::Codec(e.to_string()))?;
     conn.send(bytes).await?;
     Ok(())
 }
@@ -295,7 +292,7 @@ mod tests {
     use crate::handoff::HandoffCertificate;
     use crate::netlayer::{InProcessFabric, Netlayer};
     use dregg_cell::EffectMask;
-    use dregg_types::{generate_keypair, SigningKey};
+    use dregg_types::{SigningKey, generate_keypair};
 
     /// A tiny no-op-waker executor (the in-process transport's futures never
     /// pend on external wakeups; they complete synchronously). Same shape as the
@@ -340,7 +337,11 @@ mod tests {
             let node_a = fabric.join([0xAA; 32]);
             let node_b = fabric.join([0xBB; 32]);
             let a_sess = node_a.dial(&[0xBB; 32]).await.unwrap();
-            let b_sess = node_b.accept().await.unwrap().expect("B has a pending dial");
+            let b_sess = node_b
+                .accept()
+                .await
+                .unwrap()
+                .expect("B has a pending dial");
 
             // 1. A presents the handoff frame over the wire.
             present_handoff(&a_sess.conn, presentation, introducer_pk)
@@ -366,7 +367,13 @@ mod tests {
         held_effects: Option<EffectMask>,
         granted: AuthRequired,
         granted_effects: Option<EffectMask>,
-    ) -> (HandoffPresentation, [u8; 32], FederationId, SwissTable, CellId) {
+    ) -> (
+        HandoffPresentation,
+        [u8; 32],
+        FederationId,
+        SwissTable,
+        CellId,
+    ) {
         let (intro_sk, intro_pk): (SigningKey, PublicKey) = generate_keypair();
         let intro_fed = FederationId(intro_pk.0);
         let (recip_sk, recip_pk) = generate_keypair();
@@ -374,14 +381,8 @@ mod tests {
         let target_cell = CellId([0xEE; 32]);
 
         let mut swiss_table = SwissTable::new();
-        let swiss = swiss_table.export_with_options(
-            target_cell,
-            held,
-            100,
-            None,
-            held_effects,
-            None,
-        );
+        let swiss =
+            swiss_table.export_with_options(target_cell, held, 100, None, held_effects, None);
 
         let cert = HandoffCertificate::create(
             &intro_sk,
@@ -396,7 +397,13 @@ mod tests {
             swiss,
         );
         let presentation = HandoffPresentation::create(cert, &recip_sk);
-        (presentation, intro_pk.0, intro_fed, swiss_table, target_cell)
+        (
+            presentation,
+            intro_pk.0,
+            intro_fed,
+            swiss_table,
+            target_cell,
+        )
     }
 
     /// THE CROSS-NODE DEMONSTRATION (positive): node A presents an attenuating
@@ -412,8 +419,14 @@ mod tests {
 
         // Two nodes on one in-process fabric: A (the holder) and B (the target).
         let fabric = InProcessFabric::new();
-        let (reply, resolution) =
-            drive_handoff(&fabric, &presentation, intro_pk, &mut swiss_table, &known, 150);
+        let (reply, resolution) = drive_handoff(
+            &fabric,
+            &presentation,
+            intro_pk,
+            &mut swiss_table,
+            &known,
+            150,
+        );
         let resolution = resolution.expect("B resolved the handoff");
 
         // (a) The reply is Accepted with the GRANTED (attenuated) authority.
@@ -491,8 +504,14 @@ mod tests {
         let known = vec![intro_fed];
 
         let fabric = InProcessFabric::new();
-        let (reply, resolution) =
-            drive_handoff(&fabric, &presentation, intro_pk, &mut swiss_table, &known, 150);
+        let (reply, resolution) = drive_handoff(
+            &fabric,
+            &presentation,
+            intro_pk,
+            &mut swiss_table,
+            &known,
+            150,
+        );
 
         assert!(
             resolution.is_none(),
@@ -527,8 +546,14 @@ mod tests {
         let known = vec![intro_fed];
 
         let fabric = InProcessFabric::new();
-        let (reply, resolution) =
-            drive_handoff(&fabric, &presentation, intro_pk, &mut swiss_table, &known, 150);
+        let (reply, resolution) = drive_handoff(
+            &fabric,
+            &presentation,
+            intro_pk,
+            &mut swiss_table,
+            &known,
+            150,
+        );
 
         assert!(resolution.is_none());
         match reply {
@@ -547,7 +572,7 @@ mod tests {
     #[test]
     fn cross_node_handoff_over_the_relay_netlayer() {
         use crate::netlayer::{RelayAddr, RelayNetlayer};
-        use crate::store_forward::{generate_x25519_keypair, MessageRelay};
+        use crate::store_forward::{MessageRelay, generate_x25519_keypair};
         use std::sync::{Arc, Mutex};
 
         let (presentation, intro_pk, intro_fed, mut swiss_table, target_cell) =
@@ -648,8 +673,14 @@ mod tests {
         let known: Vec<FederationId> = vec![]; // B trusts no one
 
         let fabric = InProcessFabric::new();
-        let (reply, resolution) =
-            drive_handoff(&fabric, &presentation, intro_pk, &mut swiss_table, &known, 150);
+        let (reply, resolution) = drive_handoff(
+            &fabric,
+            &presentation,
+            intro_pk,
+            &mut swiss_table,
+            &known,
+            150,
+        );
 
         assert!(resolution.is_none());
         match reply {

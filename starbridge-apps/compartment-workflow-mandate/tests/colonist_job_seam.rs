@@ -157,7 +157,10 @@ fn an_overspend_is_refused_by_the_budget_tooth() {
     );
     let msg = format!("{:?}", refused.unwrap_err()).to_lowercase();
     assert!(
-        msg.contains("lte") || msg.contains("field") || msg.contains("program") || msg.contains("budget"),
+        msg.contains("lte")
+            || msg.contains("field")
+            || msg.contains("program")
+            || msg.contains("budget"),
         "refused on the FieldLteField(SPEND_ACCUM <= BUDGET) tooth, got: {msg}"
     );
     // Anti-ghost: cursor holds at 1, spend holds at 3 (the overspend committed nothing).
@@ -189,7 +192,12 @@ fn a_skip_ahead_is_refused_by_the_monotonic_sequence_tooth() {
     // A SKIP: cursor 0 -> 2 (skipping gather). MonotonicSequence(JOB_CURSOR) requires exactly +1
     // (here 1); 2 is refused. We build the effects directly to bypass the +1 derivation. Crafter +
     // the make compartment so clearance + budget would pass — ONLY the skip bites.
-    let skip = advance_effects(cell, 2, crafter_label(), WorkflowVerb::Make.compartment_label());
+    let skip = advance_effects(
+        cell,
+        2,
+        crafter_label(),
+        WorkflowVerb::Make.compartment_label(),
+    );
     let action = cclerk.make_action(cell, "advance_step", skip);
     let refused = executor.submit_action(&cclerk, action);
     assert!(
@@ -198,7 +206,10 @@ fn a_skip_ahead_is_refused_by_the_monotonic_sequence_tooth() {
     );
     let msg = format!("{:?}", refused.unwrap_err()).to_lowercase();
     assert!(
-        msg.contains("monotonic") || msg.contains("sequence") || msg.contains("program") || msg.contains("field[0]"),
+        msg.contains("monotonic")
+            || msg.contains("sequence")
+            || msg.contains("program")
+            || msg.contains("field[0]"),
         "refused on the MonotonicSequence(JOB_CURSOR) tooth, got: {msg}"
     );
     // Anti-ghost: nothing committed.

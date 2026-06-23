@@ -294,7 +294,7 @@ and in a browser at `http://localhost:3000/explorer/cell/<id>` (also
 
 - The node's HTTP API binds `127.0.0.1` by default. To reach it from another
   host, pass `--bind 0.0.0.0` and add a `--cors-origin` for any browser origin.
-- The `--enable-faucet` switch is for devnets only; it lets anyone draw from the
+- The `--enable-faucet` switch is for local dev nodes only; it lets anyone draw from the
   genesis faucet cell. A production node leaves it off.
 - The embedded-executor crates (the SDK examples, `starbridge-v2`, the proof
   suites) are slow to compile in debug — the first `cargo run` of an example

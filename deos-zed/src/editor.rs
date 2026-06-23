@@ -100,8 +100,25 @@ pub struct Editor {
     /// what). Distinct editors (co-authors) use distinct ids so blame + conflict
     /// attribution are real.
     author: Author,
+    /// An OPTIONAL hook the host installs to route a save somewhere BEYOND the
+    /// local [`Fs`] seam — the node-attach wire. When the cockpit is
+    /// `--node`-attached, the host sets this to submit a client-signed turn to the
+    /// LIVE NODE (the logged-in user's own cell signs; the node commits under the
+    /// user's authority). It runs AFTER the local `fs.save` succeeds, so the local
+    /// ledger stays the editor's source of truth and the node write is additive.
+    /// It receives the just-saved content; on `Ok(note)` the status appends the
+    /// note (e.g. the node receipt growth), on `Err(msg)` the save still succeeds
+    /// locally but the status reports the node leg failed (fail-soft — a node hiccup
+    /// must not lose the local edit). `None` (the default, not `--node`-attached)
+    /// leaves the save local-only — unchanged.
+    save_callback: Option<SaveCallback>,
     _subscriptions: Vec<Subscription>,
 }
+
+/// The host-installed save hook (see [`Editor::set_save_callback`]). Given the
+/// saved content, returns `Ok(status_note)` to append to the status line, or
+/// `Err(message)` if the remote leg failed (the local save still stands).
+pub type SaveCallback = Box<dyn Fn(&str) -> std::result::Result<String, String> + 'static>;
 
 impl Editor {
     /// Create an empty editor over the given filesystem seam.

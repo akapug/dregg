@@ -308,9 +308,8 @@ pub fn verify_selective_disclosure(
     // composition commitment. If the proof doesn't contain the commitment at these
     // indices, it was not generated in selective disclosure mode and MUST be rejected.
     //   leaf(1) + root(1) + action_binding(ACTION_BINDING_WIDTH) + composition(WideHash::WIDTH)
-    const RFC_PI_START: usize = 2
-        + dregg_circuit::ACTION_BINDING_WIDTH
-        + dregg_circuit::binding::WideHash::WIDTH;
+    const RFC_PI_START: usize =
+        2 + dregg_circuit::ACTION_BINDING_WIDTH + dregg_circuit::binding::WideHash::WIDTH;
     const RFC_PI_END: usize = RFC_PI_START + dregg_circuit::binding::WideHash::WIDTH;
 
     if pi.len() < RFC_PI_END {
@@ -319,10 +318,9 @@ pub fn verify_selective_disclosure(
         return Ok(false);
     }
 
-    let proof_commitment = dregg_circuit::binding::WideHash::from_felts(
-        &pi[RFC_PI_START..RFC_PI_END],
-    )
-    .expect("RFC slice is exactly WideHash::WIDTH felts by construction");
+    let proof_commitment =
+        dregg_circuit::binding::WideHash::from_felts(&pi[RFC_PI_START..RFC_PI_END])
+            .expect("RFC slice is exactly WideHash::WIDTH felts by construction");
 
     // Compare the recomputed commitment to what's in the proof's public inputs.
     // If they don't match, the caller passed different facts than what the prover committed to.

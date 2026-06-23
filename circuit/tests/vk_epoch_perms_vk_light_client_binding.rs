@@ -183,10 +183,20 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     // The perms-digest limb GENUINELY MOVED (anti-vacuity: the bound limb distinguishes A from B).
     assert_ne!(
@@ -220,7 +230,8 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         "row-0 param[0] = the declared perms-digest"
     );
     assert_eq!(
-        last[AFTER_BASE + B_PERMS], after_w.pre_limbs[B_PERMS],
+        last[AFTER_BASE + B_PERMS],
+        after_w.pre_limbs[B_PERMS],
         "the AFTER block's perms-digest limb is the honest post value"
     );
 
@@ -292,7 +303,13 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
     );
 
     assert!(
-        refused(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
+        refused(
+            &desc,
+            &forged_trace,
+            &forged_dpis,
+            &mem_boundary,
+            &map_heaps
+        ),
         "SOUNDNESS (light-client unfoolable, anchor-disabled): a post-cell forged to differ ONLY \
          in permissions — committed AFTER perms-digest != the declared param — MUST be UNSAT \
          through prove/verify ALONE; the in-circuit permsVKWeldGate bites with NO off-cell \
@@ -326,8 +343,8 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
     let name = rotated_descriptor_name_for_effect(&effect)
         .expect("SetVerificationKey is a rotated cohort member");
     assert_eq!(name, "setVKVmDescriptor2R24");
-    let desc =
-        parse_vm_descriptor2(rotated_descriptor_json(name)).expect("rotated setVK descriptor parses");
+    let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+        .expect("rotated setVK descriptor parses");
     assert_eq!(
         desc.public_input_count, 47,
         "setVK carries the appended record-forcing pin (47 PIs)"
@@ -345,10 +362,20 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     assert_ne!(
         before_w.pre_limbs[B_VK], after_w.pre_limbs[B_VK],
@@ -432,7 +459,13 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
     );
 
     assert!(
-        refused(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
+        refused(
+            &desc,
+            &forged_trace,
+            &forged_dpis,
+            &mem_boundary,
+            &map_heaps
+        ),
         "SOUNDNESS (light-client unfoolable, anchor-disabled): a post-cell forged to differ ONLY \
          in the verification key — committed AFTER vk-digest != the declared param — MUST be \
          UNSAT through prove/verify ALONE; the in-circuit vk weld bites with NO off-cell anchor"

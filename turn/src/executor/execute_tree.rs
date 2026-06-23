@@ -441,6 +441,8 @@ impl TurnExecutor {
         // For other cells, the parent must hold a capability.
         // Bearer authorization bypasses this check: bearer caps carry their own
         // delegation proof that validates authority without requiring a c-list entry.
+        let _pf = super::turn_profile::enabled();
+        let _pf_cap = std::time::Instant::now();
         let is_bearer_auth = matches!(&action.authorization, Authorization::Bearer(_));
         if &action.target != parent_cell && !is_bearer_auth {
             let parent = ledger
@@ -545,16 +547,28 @@ impl TurnExecutor {
             }
         }
 
+        if _pf {
+            super::turn_profile::accum(super::turn_profile::Phase::f_cap, _pf_cap);
+        }
+
         // Re-fetch target_cell after potential delegation mutations above.
         let target_cell = ledger
             .get(&action.target)
             .ok_or_else(|| (TurnError::CellNotFound { id: action.target }, path.clone()))?;
 
         // Check preconditions (including witnessed clauses — Block 3.5).
+        let _pf_precond = std::time::Instant::now();
         self.check_preconditions(action, target_cell, &path)?;
+        if _pf {
+            super::turn_profile::accum(super::turn_profile::Phase::f_precond, _pf_precond);
+        }
 
         // Verify authorization (including signature/proof verification).
+        let _pf_authz = std::time::Instant::now();
         self.verify_authorization(action, target_cell, ledger, parent_cell, &path, turn_nonce)?;
+        if _pf {
+            super::turn_profile::accum(super::turn_profile::Phase::f_authz, _pf_authz);
+        }
 
         // Refusal-vs-mutation structural conflict guard.
         // `Effect::Refusal { cell, .. }` is the categorical
@@ -673,6 +687,7 @@ impl TurnExecutor {
         // against its (old, new) pair — closing the "B was mutated
         // from action targeting A, but B's program was never checked"
         // gap codex flagged.
+        let _pf_snapshot = std::time::Instant::now();
         let mut old_cell_states: std::collections::HashMap<CellId, dregg_cell::CellState> =
             std::collections::HashMap::new();
         for cell_id in Self::collect_touched_cells(action) {
@@ -699,6 +714,10 @@ impl TurnExecutor {
         // in verify_authorization which ran before any effects were applied).
         // This prevents an action from SetPermissions -> exploit weakened perms.
         // =====================================================================
+        if _pf {
+            super::turn_profile::accum(super::turn_profile::Phase::f_snapshot, _pf_snapshot);
+        }
+        let _pf_apply = std::time::Instant::now();
         let (regular_effects, permission_effects): (Vec<&Effect>, Vec<&Effect>) = action
             .effects
             .iter()
@@ -876,6 +895,10 @@ impl TurnExecutor {
         // `WitnessedPredicateRegistry`, plus a fresh `TransitionMeta`
         // carrying the action's method symbol + effects-kind mask so
         // `CellProgram::Cases` programs can dispatch by op-shape.
+        if _pf {
+            super::turn_profile::accum(super::turn_profile::Phase::f_apply, _pf_apply);
+        }
+        let _pf_program = std::time::Instant::now();
         let parent_pk_opt: Option<[u8; 32]> = ledger.get(parent_cell).map(|p| *p.public_key());
         let effects_mask: u32 = action
             .effects
@@ -994,6 +1017,10 @@ impl TurnExecutor {
                 &path,
             )?;
             self.validate_capability_uniqueness(cell_id, &touched_cell.program, ledger, &path)?;
+        }
+
+        if _pf {
+            super::turn_profile::accum(super::turn_profile::Phase::f_program, _pf_program);
         }
 
         // Suppress unused warning on the legacy alias.

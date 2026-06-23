@@ -16,8 +16,8 @@ use dregg_cell::{
     state::{FieldElement, STATE_SLOTS},
 };
 
-use dregg_cell_crypto::note_bridge::BridgedNullifierSet;
 use crate::action::Symbol;
+use dregg_cell_crypto::note_bridge::BridgedNullifierSet;
 
 /// A single undo entry in the journal.
 #[derive(Debug)]

@@ -847,7 +847,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "26b57280f4c48e786696bf2ea23f10b3dc95f185b7931644744c161012243ca3";
+    "3236bd45bf5b0cef3368c6a1e59e5fba837bfeec909f25cfa9870b5adaa3207b";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1493,8 +1493,7 @@ mod tests {
         // Phase B-GATE: graduated width = caveat probe width + 7·n_sites chip lane cols (the
         // before/after rotated absorbs + the caveat absorbs); the surplus is a multiple of 7.
         assert!(
-            d.trace_width >= cav::PROBE_WIDTH
-                && (d.trace_width - cav::PROBE_WIDTH) % 7 == 0,
+            d.trace_width >= cav::PROBE_WIDTH && (d.trace_width - cav::PROBE_WIDTH) % 7 == 0,
             "{key}: caveat probe width + 7·n_sites chip lane cols"
         );
         assert_eq!(d.public_input_count, 3, "{key}: three PI pins");
@@ -1860,9 +1859,7 @@ mod tests {
             // spawnV3}`).
             let new_cell_key_pin_member = matches!(
                 key,
-                "createCellVmDescriptor2R24"
-                    | "factoryVmDescriptor2R24"
-                    | "spawnVmDescriptor2R24"
+                "createCellVmDescriptor2R24" | "factoryVmDescriptor2R24" | "spawnVmDescriptor2R24"
             );
             if key == "noteSpendVmDescriptor2R24" {
                 assert_eq!(
@@ -2029,7 +2026,10 @@ mod tests {
             let key = it.next().expect("wide key");
             let _name = it.next().expect("wide name");
             let json = it.next().expect("wide json");
-            assert_eq!(key, live_keys[i], "wide registry key {i} name-stable with the live registry");
+            assert_eq!(
+                key, live_keys[i],
+                "wide registry key {i} name-stable with the live registry"
+            );
             let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} wide parses: {e}"));
             // the wide member is `host + 208` (two 13×8 carrier blocks) and `host.piCount + 16`.
             // The host widths in play are 581 (custom/setFieldDyn), 609 (817-wide), 819 (cap-open):
@@ -2047,7 +2047,13 @@ mod tests {
             if i == 0 {
                 assert_eq!(
                     json,
-                    WIDE_TRANSFER_STAGED_TSV.lines().next().unwrap().splitn(3, '\t').nth(2).unwrap(),
+                    WIDE_TRANSFER_STAGED_TSV
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .splitn(3, '\t')
+                        .nth(2)
+                        .unwrap(),
                     "wide registry row 0 (transfer) == the single-line WIDE_TRANSFER_STAGED_TSV"
                 );
             }

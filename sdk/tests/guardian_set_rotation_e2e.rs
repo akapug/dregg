@@ -47,8 +47,8 @@ use hints::PartialSignature;
 use starbridge_polis::identity::COUNCIL_COMMIT_SLOT;
 
 use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor};
-use dregg_cell::{CapabilityRef, CellMode};
 use dregg_cell::permissions::AuthRequired;
+use dregg_cell::{CapabilityRef, CellMode};
 use dregg_turn::Effect;
 
 use guardian_rotation::{
@@ -233,7 +233,14 @@ fn rotatable_identity(domain: &str, c: &Councils) -> (AgentRuntime, CellId, Vec<
     };
     let descriptor = guardian_rotatable_identity_descriptor(COOLING).expect("valid cooling");
     let owner_pk = agent_pubkey(&runtime);
-    let cell = bootstrap_rotatable(&mut runtime, &descriptor, owner_pk, [0x1D; 32], agent, agent);
+    let cell = bootstrap_rotatable(
+        &mut runtime,
+        &descriptor,
+        owner_pk,
+        [0x1D; 32],
+        agent,
+        agent,
+    );
     runtime.set_block_height(1_000);
 
     let g0: Vec<[u8; 32]> = vec![[0x10; 32], [0x11; 32]];
@@ -345,11 +352,21 @@ fn sign_action(
         Authorization::Custom { predicate } => predicate.clone(),
         other => panic!("action must carry Authorization::Custom, got {other:?}"),
     };
-    let message =
-        TurnExecutor::compute_custom_signing_message(action, &predicate, 0, federation_id, turn_nonce);
+    let message = TurnExecutor::compute_custom_signing_message(
+        action,
+        &predicate,
+        0,
+        federation_id,
+        turn_nonce,
+    );
     let shares: Vec<(usize, PartialSignature)> = signers
         .iter()
-        .map(|&i| (members[i].index, committee.sign_share(&members[i], &message)))
+        .map(|&i| {
+            (
+                members[i].index,
+                committee.sign_share(&members[i], &message),
+            )
+        })
         .collect();
     Ok(committee.aggregate(&shares, &message)?.to_bytes())
 }
@@ -381,8 +398,15 @@ fn old_quorum_rotates_the_council() {
         council_rotation_action(cell, &c.new_council, OLD_VK, old_guardian_root()).unwrap();
 
     // Three OLD guardians (a quorum) sign.
-    let qc = sign_action(&action, &[0u8; 32], nonce, &old_committee, &old_members, &[0, 2, 4])
-        .expect("a 3-of-5 quorum must aggregate");
+    let qc = sign_action(
+        &action,
+        &[0u8; 32],
+        nonce,
+        &old_committee,
+        &old_members,
+        &[0, 2, 4],
+    )
+    .expect("a 3-of-5 quorum must aggregate");
     action.witness_blobs[0] = WitnessBlob::proof(qc);
 
     execute_chained(&runtime, relay, nonce, action)
@@ -419,7 +443,14 @@ fn sub_threshold_quorum_refused() {
 
     // Only TWO guardians sign — below the 3-of-5 floor; the aggregator must
     // refuse to certify a QC meeting the threshold.
-    let agg = sign_action(&action, &[0u8; 32], nonce, &old_committee, &old_members, &[0, 1]);
+    let agg = sign_action(
+        &action,
+        &[0u8; 32],
+        nonce,
+        &old_committee,
+        &old_members,
+        &[0, 1],
+    );
     assert!(
         agg.is_err(),
         "aggregating two shares must not satisfy the 3-of-5 guardian threshold"
@@ -492,8 +523,15 @@ fn rotated_council_then_authorizes_a_recovery() {
     let nonce = cell_nonce(&runtime, cell).max(1);
     let mut action =
         council_rotation_action(cell, &c.new_council, OLD_VK, old_guardian_root()).unwrap();
-    let qc = sign_action(&action, &[0u8; 32], nonce, &old_committee, &old_members, &[0, 2, 4])
-        .expect("old quorum aggregates");
+    let qc = sign_action(
+        &action,
+        &[0u8; 32],
+        nonce,
+        &old_committee,
+        &old_members,
+        &[0, 2, 4],
+    )
+    .expect("old quorum aggregates");
     action.witness_blobs[0] = WitnessBlob::proof(qc);
     execute_chained(&runtime, cell, nonce, action).expect("old quorum rotates the council");
     assert_eq!(
@@ -505,12 +543,8 @@ fn rotated_council_then_authorizes_a_recovery() {
     // ── Step 2: stand up the NEW HINTS committee, re-permission the cell to
     //    answer under NEW_VK, and wire the new verifier. The old committee is
     //    retired — it no longer governs. ──
-    let (new_committee, new_members) = generate_test_committee_with_seed(
-        GUARDIAN_N,
-        GUARDIAN_K,
-        [0xBB; 32],
-    )
-    .unwrap();
+    let (new_committee, new_members) =
+        generate_test_committee_with_seed(GUARDIAN_N, GUARDIAN_K, [0xBB; 32]).unwrap();
     install_authority(&runtime, cell, NEW_VK);
     wire_verifier(&mut runtime, NEW_VK, new_guardian_root(), &new_committee);
 
@@ -539,10 +573,20 @@ fn rotated_council_then_authorizes_a_recovery() {
         rotate_effects(cell, presented, fresh_next, height),
     );
     r_action.authorization = Authorization::Custom { predicate };
-    r_action.witness_blobs = vec![WitnessBlob::preimage(presented), WitnessBlob::proof(Vec::new())];
+    r_action.witness_blobs = vec![
+        WitnessBlob::preimage(presented),
+        WitnessBlob::proof(Vec::new()),
+    ];
 
-    let r_qc = sign_action(&r_action, &[0u8; 32], r_nonce, &new_committee, &new_members, &[0, 1, 2])
-        .expect("new quorum aggregates");
+    let r_qc = sign_action(
+        &r_action,
+        &[0u8; 32],
+        r_nonce,
+        &new_committee,
+        &new_members,
+        &[0, 1, 2],
+    )
+    .expect("new quorum aggregates");
     r_action.witness_blobs[1] = WitnessBlob::proof(r_qc);
 
     execute_chained(&runtime, cell, r_nonce, r_action)

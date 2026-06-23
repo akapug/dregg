@@ -129,14 +129,24 @@ impl std::fmt::Display for GovernanceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GovernanceError::Seal(e) => write!(f, "sealed-governance seal error: {e}"),
-            GovernanceError::WrongPhase => write!(f, "sealed-governance wrong phase for this action"),
+            GovernanceError::WrongPhase => {
+                write!(f, "sealed-governance wrong phase for this action")
+            }
             GovernanceError::TranscriptMismatch => {
-                write!(f, "sealed-governance transcript mismatch: the submission set was altered")
+                write!(
+                    f,
+                    "sealed-governance transcript mismatch: the submission set was altered"
+                )
             }
             GovernanceError::MalformedSubmission => {
-                write!(f, "sealed-governance malformed submission (opened, but not a valid bid/ballot)")
+                write!(
+                    f,
+                    "sealed-governance malformed submission (opened, but not a valid bid/ballot)"
+                )
             }
-            GovernanceError::DoubleVote => write!(f, "sealed-governance double vote (nullifier re-use)"),
+            GovernanceError::DoubleVote => {
+                write!(f, "sealed-governance double vote (nullifier re-use)")
+            }
             GovernanceError::NullifierMismatch => write!(
                 f,
                 "sealed-governance nullifier mismatch: the sealed ballot's bound nullifier does not match its claimed eligibility token (ballot substitution)"
@@ -375,7 +385,10 @@ impl AuctionOutcome {
     /// draw no one could steer, because the randomness is fixed AFTER the seals
     /// are committed (the beacon cliff). Deterministic, so any verifier with the
     /// same opened bids + draw recomputes the identical winner.
-    pub fn recompute(mut bids: Vec<(Bid, [u8; 32])>, beacon_randomness: [u8; 32]) -> AuctionOutcome {
+    pub fn recompute(
+        mut bids: Vec<(Bid, [u8; 32])>,
+        beacon_randomness: [u8; 32],
+    ) -> AuctionOutcome {
         debug_assert!(!bids.is_empty());
         // Stable canonical order first (by id) so the recompute is reproducible.
         bids.sort_by(|a, b| a.1.cmp(&b.1));
@@ -881,9 +894,18 @@ mod tests {
         let committee = auction.committee().clone();
         let label = auction.label().to_vec();
 
-        let alice = Bid { bidder: [1u8; 32], amount: 100 };
-        let bob = Bid { bidder: [2u8; 32], amount: 250 };
-        let carol = Bid { bidder: [3u8; 32], amount: 175 };
+        let alice = Bid {
+            bidder: [1u8; 32],
+            amount: 100,
+        };
+        let bob = Bid {
+            bidder: [2u8; 32],
+            amount: 250,
+        };
+        let carol = Bid {
+            bidder: [3u8; 32],
+            amount: 175,
+        };
 
         auction
             .collect(seal_bid(&committee, &label, alice, [10u8; 32]))
@@ -923,7 +945,15 @@ mod tests {
         let committee = auction.committee().clone();
         let label = auction.label().to_vec();
         auction
-            .collect(seal_bid(&committee, &label, Bid { bidder: [9u8; 32], amount: 9999 }, [1u8; 32]))
+            .collect(seal_bid(
+                &committee,
+                &label,
+                Bid {
+                    bidder: [9u8; 32],
+                    amount: 9999,
+                },
+                [1u8; 32],
+            ))
             .unwrap();
         auction.close().unwrap();
 
@@ -948,7 +978,15 @@ mod tests {
         let mut auction = SealedAuction::new(council(33), b"auction:phase");
         let committee = auction.committee().clone();
         let label = auction.label().to_vec();
-        let sub = seal_bid(&committee, &label, Bid { bidder: [5u8; 32], amount: 5 }, [1u8; 32]);
+        let sub = seal_bid(
+            &committee,
+            &label,
+            Bid {
+                bidder: [5u8; 32],
+                amount: 5,
+            },
+            [1u8; 32],
+        );
         auction.collect(sub.clone()).unwrap();
 
         // Reveal before close: refused.
@@ -977,7 +1015,15 @@ mod tests {
         let committee = auction.committee().clone();
         let label = auction.label().to_vec();
         auction
-            .collect(seal_bid(&committee, &label, Bid { bidder: [1u8; 32], amount: 10 }, [1u8; 32]))
+            .collect(seal_bid(
+                &committee,
+                &label,
+                Bid {
+                    bidder: [1u8; 32],
+                    amount: 10,
+                },
+                [1u8; 32],
+            ))
             .unwrap();
         auction.close().unwrap();
 
@@ -985,8 +1031,15 @@ mod tests {
         let mut tampered = SealedAuction::new(council(44), b"auction:swap");
         tampered.phase = Phase::Revealing;
         tampered.closed_transcript = auction.closed_transcript; // pin the ORIGINAL fingerprint
-        tampered.submissions =
-            vec![seal_bid(&committee, &label, Bid { bidder: [1u8; 32], amount: 1 }, [9u8; 32])];
+        tampered.submissions = vec![seal_bid(
+            &committee,
+            &label,
+            Bid {
+                bidder: [1u8; 32],
+                amount: 1,
+            },
+            [9u8; 32],
+        )];
 
         assert_eq!(
             tampered.reveal(&[0, 1, 2], [0u8; 32]).err(),
@@ -1003,20 +1056,36 @@ mod tests {
         let mut auction = SealedAuction::new(council(55), b"auction:tie");
         let committee = auction.committee().clone();
         let label = auction.label().to_vec();
-        let a = Bid { bidder: [1u8; 32], amount: 500 };
-        let b = Bid { bidder: [2u8; 32], amount: 500 };
-        auction.collect(seal_bid(&committee, &label, a, [1u8; 32])).unwrap();
-        auction.collect(seal_bid(&committee, &label, b, [2u8; 32])).unwrap();
+        let a = Bid {
+            bidder: [1u8; 32],
+            amount: 500,
+        };
+        let b = Bid {
+            bidder: [2u8; 32],
+            amount: 500,
+        };
+        auction
+            .collect(seal_bid(&committee, &label, a, [1u8; 32]))
+            .unwrap();
+        auction
+            .collect(seal_bid(&committee, &label, b, [2u8; 32]))
+            .unwrap();
         auction.close().unwrap();
 
         let draw = [0x5au8; 32];
         let o1 = auction.reveal(&[0, 1, 2], draw).unwrap();
         let o2 = auction.reveal(&[2, 3, 4], draw).unwrap();
         // Same draw ⇒ same winner regardless of quorum subset.
-        assert_eq!(o1.winner, o2.winner, "the tie-break is a function of the draw");
+        assert_eq!(
+            o1.winner, o2.winner,
+            "the tie-break is a function of the draw"
+        );
         assert!(o1.winner == a || o1.winner == b);
         // Recompute agrees.
-        assert_eq!(AuctionOutcome::recompute(o1.bids.clone(), draw).winner, o1.winner);
+        assert_eq!(
+            AuctionOutcome::recompute(o1.bids.clone(), draw).winner,
+            o1.winner
+        );
     }
 
     /// A malformed reveal (a non-bid plaintext sealed under the auction label) is
@@ -1028,7 +1097,9 @@ mod tests {
         let committee = auction.committee().clone();
         // A seal of a 3-byte payload — not a 40-byte bid.
         auction
-            .collect(Submission { sealed: seal(&committee, b"auction:malformed", b"xyz", [7u8; 32]) })
+            .collect(Submission {
+                sealed: seal(&committee, b"auction:malformed", b"xyz", [7u8; 32]),
+            })
             .unwrap();
         auction.close().unwrap();
         assert_eq!(
@@ -1054,7 +1125,12 @@ mod tests {
         for (i, choice) in [1u32, 1, 1, 0, 0].iter().enumerate() {
             let seed = [(i as u8) + 1; 32];
             election
-                .collect(seal_ballot(&committee, &label, Ballot { choice: *choice }, seed))
+                .collect(seal_ballot(
+                    &committee,
+                    &label,
+                    Ballot { choice: *choice },
+                    seed,
+                ))
                 .unwrap();
         }
         election.close().unwrap();
@@ -1074,7 +1150,12 @@ mod tests {
         let committee = election.committee().clone();
         let label = election.label().to_vec();
         election
-            .collect(seal_ballot(&committee, &label, Ballot { choice: 1 }, [1u8; 32]))
+            .collect(seal_ballot(
+                &committee,
+                &label,
+                Ballot { choice: 1 },
+                [1u8; 32],
+            ))
             .unwrap();
         election.close().unwrap();
         assert_eq!(
@@ -1120,7 +1201,10 @@ mod tests {
         // nullifier (cross-election unlinkable).
         let n_here = eligibility_nullifier(&[10u8; 32], b"election:anon");
         let n_other = eligibility_nullifier(&[10u8; 32], b"election:other");
-        assert_ne!(n_here, n_other, "nullifiers are per-election (cross-election unlinkable)");
+        assert_ne!(
+            n_here, n_other,
+            "nullifiers are per-election (cross-election unlinkable)"
+        );
     }
 
     /// UNLINKABLE double-vote tooth: the SAME eligibility secret cannot vote
@@ -1192,7 +1276,11 @@ mod tests {
             election.close().unwrap();
             let outcome = election.tally(&[0, 1, 2]).unwrap();
             assert_eq!(outcome.counted, 1);
-            assert_eq!(outcome.tallies.get(&3), Some(&1), "genuine bound ballot tallies");
+            assert_eq!(
+                outcome.tallies.get(&3),
+                Some(&1),
+                "genuine bound ballot tallies"
+            );
         }
 
         // ---- FALSE polarity: a valid public nullifier paired with a seal that

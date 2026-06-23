@@ -1074,9 +1074,7 @@ impl GossipNetwork {
         };
         ts.all_peers()
             .into_iter()
-            .filter(|addr| {
-                state.links_to(addr).is_empty() && !state.scoreboard.is_graylisted(addr)
-            })
+            .filter(|addr| state.links_to(addr).is_empty() && !state.scoreboard.is_graylisted(addr))
             .collect()
     }
 
@@ -3588,8 +3586,14 @@ mod tests {
         // Cross-dial: each joins the topic pointing at the OTHER's listen address.
         // This creates the dial+accept coexistence the fix targets (A dials B and
         // accepts B's dial, and symmetrically) — the exact n=2 committee shape.
-        let topic_a = gossip_a.join_topic("dregg/bidi-test", &[addr_b]).await.unwrap();
-        let topic_b = gossip_b.join_topic("dregg/bidi-test", &[addr_a]).await.unwrap();
+        let topic_a = gossip_a
+            .join_topic("dregg/bidi-test", &[addr_b])
+            .await
+            .unwrap();
+        let topic_b = gossip_b
+            .join_topic("dregg/bidi-test", &[addr_a])
+            .await
+            .unwrap();
 
         let mut stream_a = gossip_a.subscribe(&topic_a).await.unwrap();
         let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
@@ -3899,7 +3903,10 @@ mod tests {
         // receiver re-checks committee membership; here we drive the transport
         // primitive directly with C's already-committee-known identity.)
         let learned = gossip_b.learn_peer(&topic_b, addr_c).await;
-        assert!(learned, "B must newly learn C's address (it did not know it)");
+        assert!(
+            learned,
+            "B must newly learn C's address (it did not know it)"
+        );
         assert!(
             gossip_b.topic_peers(&topic_b).await.contains(&addr_c),
             "after learn_peer, C must be a known topic peer on B"

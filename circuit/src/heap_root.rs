@@ -652,18 +652,28 @@ mod tests {
             vec![],
             vec![entry(3, 4, 42)],
             vec![entry(1, 1, 10), entry(1, 2, 20), entry(2, 1, 30)],
-            (0..50).map(|i| entry(i, i + 1, i.wrapping_mul(11))).collect(),
+            (0..50)
+                .map(|i| entry(i, i + 1, i.wrapping_mul(11)))
+                .collect(),
         ];
         for leaves in cases {
             let sparse = CanonicalHeapTree::new(leaves.clone(), HEAP_TREE_DEPTH);
             let (oracle_leaves, oracle_levels) = dense_build(leaves, HEAP_TREE_DEPTH);
-            assert_eq!(sparse.root(), oracle_levels[HEAP_TREE_DEPTH][0], "depth-16 root");
+            assert_eq!(
+                sparse.root(),
+                oracle_levels[HEAP_TREE_DEPTH][0],
+                "depth-16 root"
+            );
             assert_eq!(sparse.sorted_leaves(), oracle_leaves.as_slice());
             for pos in 0..oracle_leaves.len() {
                 let (s_sib, s_dir) = sparse.prove_membership(pos).unwrap();
                 let mut idx = pos;
                 for level in 0..HEAP_TREE_DEPTH {
-                    assert_eq!(s_sib[level], oracle_levels[level][idx ^ 1], "sibling@{level} pos {pos}");
+                    assert_eq!(
+                        s_sib[level],
+                        oracle_levels[level][idx ^ 1],
+                        "sibling@{level} pos {pos}"
+                    );
                     assert_eq!(s_dir[level], (idx & 1) as u8);
                     idx >>= 1;
                 }

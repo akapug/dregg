@@ -24,6 +24,7 @@
 pub mod distributed_gates;
 pub mod lean_apply;
 pub mod lean_shadow;
+pub mod spec_audit;
 
 use std::sync::Arc;
 
@@ -32,8 +33,14 @@ use dregg_turn::shadow::{ShadowHostCtx, ShadowObserver};
 use dregg_turn::turn::{Turn, TurnResult};
 
 pub use distributed_gates::{LeanDistributedGate, register_distributed_gates};
-pub use lean_apply::{ProducerOutcome, execute_via_lean, produce_via_lean};
+pub use lean_apply::{
+    ProducerOutcome, execute_via_lean, produce_via_lean, prof_outer_dump, profile_lean_phases,
+};
 pub use lean_shadow::{ShadowAgreement, ShadowReport, maybe_shadow_turn, shadow_report};
+pub use spec_audit::{
+    AuditEntry, AuditOutcome, AuditWorker, DivergenceKind, DivergenceReport, DivergenceSink,
+    SpeculativeAudit, WorkerStop,
+};
 
 /// The verified-Lean shadow/gate observer — the real implementation of
 /// [`dregg_turn::ShadowObserver`] that `dregg-turn`'s executor drives through the seam.

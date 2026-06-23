@@ -183,12 +183,21 @@ fn wire_guardian_verifier(runtime: &mut AgentRuntime, committee: &FederationComm
 #[allow(clippy::type_complexity)]
 fn lost_identity(
     domain: &str,
-) -> (AgentRuntime, CellId, IdentityCharter, Vec<[u8; 32]>, Vec<[u8; 32]>) {
+) -> (
+    AgentRuntime,
+    CellId,
+    IdentityCharter,
+    Vec<[u8; 32]>,
+    Vec<[u8; 32]>,
+) {
     let mut runtime = AgentRuntime::new_simple(AgentCipherclerk::new(), domain);
     let agent = runtime.cell_id();
     let charter = IdentityCharter {
         council: CouncilCharter::new(
-            vec![CellId::from_bytes([0xD1; 32]), CellId::from_bytes([0xD2; 32])],
+            vec![
+                CellId::from_bytes([0xD1; 32]),
+                CellId::from_bytes([0xD2; 32]),
+            ],
             2,
         ),
         cooling_period: COOLING,
@@ -250,7 +259,10 @@ fn recovery_rotation_action(
     action.authorization = Authorization::Custom { predicate };
     // index 0: the KeyRotationGate preimage exhibit (G1's commitment).
     // index 1: a placeholder for the guardian QC (swapped in after signing).
-    action.witness_blobs = vec![WitnessBlob::preimage(presented), WitnessBlob::proof(Vec::new())];
+    action.witness_blobs = vec![
+        WitnessBlob::preimage(presented),
+        WitnessBlob::proof(Vec::new()),
+    ];
     action
 }
 
@@ -308,7 +320,12 @@ fn sign_recovery(
     );
     let shares: Vec<(usize, PartialSignature)> = signers
         .iter()
-        .map(|&i| (members[i].index, committee.sign_share(&members[i], &message)))
+        .map(|&i| {
+            (
+                members[i].index,
+                committee.sign_share(&members[i], &message),
+            )
+        })
         .collect();
     Ok(committee.aggregate(&shares, &message)?.to_bytes())
 }
@@ -428,14 +445,7 @@ fn sub_threshold_quorum_refused() {
 
     // Only TWO guardians sign — below the 3-of-5 floor. The aggregator must
     // refuse to certify a QC meeting the threshold.
-    let agg = sign_recovery(
-        &action,
-        &[0u8; 32],
-        nonce,
-        &committee,
-        &members,
-        &[0, 1],
-    );
+    let agg = sign_recovery(&action, &[0u8; 32], nonce, &committee, &members, &[0, 1]);
     assert!(
         agg.is_err(),
         "aggregating two shares must not satisfy the 3-of-5 guardian threshold"
@@ -496,8 +506,10 @@ fn wrong_committee_quorum_refused() {
         .execute_turn(&turn)
         .expect_err("a QC from a committee other than the host-trusted guardians must be refused");
     assert!(
-        matches!(err, dregg_sdk::SdkError::Turn(TurnError::ProgramViolation { .. }))
-            || matches!(err, dregg_sdk::SdkError::Turn(_)),
+        matches!(
+            err,
+            dregg_sdk::SdkError::Turn(TurnError::ProgramViolation { .. })
+        ) || matches!(err, dregg_sdk::SdkError::Turn(_)),
         "rejection must be at the auth/threshold-sig boundary, got: {err:?}"
     );
 

@@ -60,13 +60,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use dregg_cell::Ledger;
 use dregg_cell::cell::{Cell, CellConfig, CellMode};
 use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor, FactoryError};
 use dregg_cell::id::CellId;
 use dregg_cell::program::CellProgram;
-use dregg_cell::Ledger;
 
-use crate::snapshot::{snapshot_ledger_root, Snapshot, SnapshotHead};
+use crate::snapshot::{Snapshot, SnapshotHead, snapshot_ledger_root};
 
 /// One cell to create in an image, naming the factory that constructs it.
 ///
@@ -340,11 +340,12 @@ pub fn build_image(manifest: &ImageManifest) -> Result<ImageArtifact, BuildError
     let mut seen_ids = std::collections::BTreeSet::new();
 
     for spec in &manifest.cells {
-        let factory = manifest
-            .factory_by_hash(&spec.factory_hash)
-            .ok_or(BuildError::UnknownFactory {
-                factory_hash: spec.factory_hash,
-            })?;
+        let factory =
+            manifest
+                .factory_by_hash(&spec.factory_hash)
+                .ok_or(BuildError::UnknownFactory {
+                    factory_hash: spec.factory_hash,
+                })?;
 
         // REAL EROS validation: the params must satisfy the factory descriptor.
         factory.validate_creation(&spec.params)?;
@@ -432,7 +433,10 @@ pub struct ImageFacts {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VerifyError {
     /// The recomputed manifest hash disagrees with the attestation.
-    ManifestHashMismatch { claimed: [u8; 32], computed: [u8; 32] },
+    ManifestHashMismatch {
+        claimed: [u8; 32],
+        computed: [u8; 32],
+    },
     /// The snapshot's `claimed_root` disagrees with the attestation's.
     RootBindingMismatch {
         snapshot_root: [u8; 32],
@@ -440,7 +444,10 @@ pub enum VerifyError {
     },
     /// Rebuilding the cell-graph yields a root that does not match the
     /// `claimed_root` (the snapshot anti-substitution tooth tripped).
-    RootReconstructMismatch { rebuilt: [u8; 32], claimed: [u8; 32] },
+    RootReconstructMismatch {
+        rebuilt: [u8; 32],
+        claimed: [u8; 32],
+    },
     /// `Σ balance ≠ 0` — the image does not conserve value.
     ConservationViolated { balance_sum: i64 },
     /// The attestation's recomputed balance sum disagrees with its cells.
@@ -588,11 +595,12 @@ pub fn verify_image(artifact: &ImageArtifact) -> Result<ImageFacts, VerifyError>
         }
         // Recompute the program the claimed factory bakes in, and require the
         // cell to carry EXACTLY it.
-        let factory = manifest
-            .factory_by_hash(&p.factory_hash)
-            .ok_or(VerifyError::UnknownFactory {
-                factory_hash: p.factory_hash,
-            })?;
+        let factory =
+            manifest
+                .factory_by_hash(&p.factory_hash)
+                .ok_or(VerifyError::UnknownFactory {
+                    factory_hash: p.factory_hash,
+                })?;
         let expected_program = if factory.state_constraints.is_empty() {
             CellProgram::None
         } else {
@@ -715,7 +723,10 @@ mod tests {
         // The attestation (Eq) round-trips exactly, and so does the manifest.
         assert_eq!(decoded.attestation, artifact.attestation);
         assert_eq!(decoded.manifest, artifact.manifest);
-        assert_eq!(decoded.snapshot.claimed_root, artifact.snapshot.claimed_root);
+        assert_eq!(
+            decoded.snapshot.claimed_root,
+            artifact.snapshot.claimed_root
+        );
     }
 
     #[test]

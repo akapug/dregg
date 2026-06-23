@@ -114,6 +114,22 @@ fn measure(
     dregg_exec_lean::prof_outer_dump(name);
     dregg_lean_ffi::lean_direct::prof_dump(name);
 
+    // --- ATTRIBUTE the fixed per-call verified-executor cost (the ~11.7µs execDirect): the BARE
+    // FFI-into-Lean identity floor + the 4 Lean sub-phases. Env-gated, additive, off the timed
+    // medians. `profile_lean_phases` times `dregg_ffi_identity` (the floor) and runs the profiled
+    // executor `iters` times under DREGG_LEAN_PROFILE=1 (each prints a per-sub-phase ns line on
+    // stderr; aggregate them with: grep DREGG_LEAN_PROFILE | awk). SAFETY: single-threaded.
+    if std::env::var("DREGG_LEAN_PROFILE").as_deref() == Ok("1") {
+        match dregg_exec_lean::profile_lean_phases(&turn, &pre_ledger, &host, iters) {
+            Ok(id_floor) => eprintln!(
+                "  [{name}] DREGG_LEAN_IDENTITY_FLOOR median={} (n={iters}) \
+                 — per-sub-phase ns on the DREGG_LEAN_PROFILE lines above",
+                fmt_secs(id_floor)
+            ),
+            Err(e) => eprintln!("  [{name}] profile_lean_phases skipped: {e:?}"),
+        }
+    }
+
     // --- Cell footprint + JSON bytes: ONE dedicated call with the measure instrumentation ON, so
     // the IN/OUT byte line prints exactly once per shape (kept OUT of the timed loops above so the
     // eprintln I/O never pollutes the timings). SAFETY: single-threaded; toggled around one call.
@@ -126,7 +142,10 @@ fn measure(
     unsafe {
         std::env::remove_var("DREGG_FFI_MEASURE");
     }
-    assert!(lean_committed, "{name}: lean turn must commit (root-agreeing)");
+    assert!(
+        lean_committed,
+        "{name}: lean turn must commit (root-agreeing)"
+    );
     let written = written_cells(&pre_ledger, &post_ledger);
     // touched = the cells the marshaller serialized = the pre-state id map. The
     // DREGG_FFI_MEASURE line (printed during the calls above) reports the exact count;
@@ -189,8 +208,16 @@ fn main() {
 
     let rows = vec![
         measure("transfer (bare, 2 cells)", ffi_transfer_turn, iters),
-        measure("transfer (populated sender, 2 cells)", ffi_transfer_populated_turn, iters),
-        measure("setfield (1 cell ref / 3-cell ledger)", ffi_setfield_turn, iters),
+        measure(
+            "transfer (populated sender, 2 cells)",
+            ffi_transfer_populated_turn,
+            iters,
+        ),
+        measure(
+            "setfield (1 cell ref / 3-cell ledger)",
+            ffi_setfield_turn,
+            iters,
+        ),
     ];
 
     println!("\n================= LEAN↔RUST FFI PER-TURN BASELINE (Stage 0) =================");

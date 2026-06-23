@@ -92,7 +92,10 @@ impl std::fmt::Display for BeaconCellError {
             BeaconCellError::Dkg(e) => write!(f, "beacon-cell DKG/reshare error: {e}"),
             BeaconCellError::InvalidParameters => write!(f, "beacon-cell invalid parameters"),
             BeaconCellError::LineageBroken => {
-                write!(f, "beacon-cell lineage broken: reshare changed the group key")
+                write!(
+                    f,
+                    "beacon-cell lineage broken: reshare changed the group key"
+                )
             }
             BeaconCellError::Beacon(s) => write!(f, "beacon-cell beacon error: {s}"),
         }
@@ -478,8 +481,7 @@ mod tests {
 
         // Forward security is VISIBLE: the committee re-randomizes each tick, so
         // its fingerprint changes even though the group key (anchor) is fixed.
-        let roots: std::collections::BTreeSet<_> =
-            ticks.iter().map(|t| t.committee_root).collect();
+        let roots: std::collections::BTreeSet<_> = ticks.iter().map(|t| t.committee_root).collect();
         assert!(
             roots.len() > 1,
             "committee fingerprint must change across ticks (proactive refresh)"

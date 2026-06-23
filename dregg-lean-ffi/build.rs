@@ -1481,27 +1481,9 @@ fn main() {
         // Lean's bundled LLVM libc++ (the `std::__1::` ABI the runtime is compiled against),
         // its math/number deps, then the Win32 import libs the runtime + libuv reference.
         for name in [
-            "c++",
-            "c++abi",
-            "gmp",
-            "uv",
-            "icu",
-            "m",
-            "unwind",
-            "psapi",
-            "user32",
-            "advapi32",
-            "iphlpapi",
-            "userenv",
-            "ws2_32",
-            "dbghelp",
-            "ole32",
-            "shell32",
-            "bcrypt",
-            "ucrtbase",
-            "moldname",
-            "mingwex",
-            "pthread",
+            "c++", "c++abi", "gmp", "uv", "icu", "m", "unwind", "psapi", "user32", "advapi32",
+            "iphlpapi", "userenv", "ws2_32", "dbghelp", "ole32", "shell32", "bcrypt", "ucrtbase",
+            "moldname", "mingwex", "pthread",
             // ntdll — Rust std's `Nt*` syscalls (NtCreateFile/NtWriteFile/...) resolve from the
             // generated import lib; the MinGW sysroot omits it.
             "ntdll",
@@ -1574,7 +1556,11 @@ fn windows_gnu_link_env(sysroot: &Path) {
     let ntdll = shim.join("libntdll.a");
     if !ntdll.exists() {
         let sysntdll = PathBuf::from(r"C:\Windows\System32\ntdll.dll");
-        if let Ok(out) = Command::new("llvm-objdump").arg("-p").arg(&sysntdll).output() {
+        if let Ok(out) = Command::new("llvm-objdump")
+            .arg("-p")
+            .arg(&sysntdll)
+            .output()
+        {
             let text = String::from_utf8_lossy(&out.stdout);
             let mut names = Vec::new();
             let mut in_table = false;

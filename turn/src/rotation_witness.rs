@@ -48,10 +48,10 @@
 //!   per-cell shape (the v1 state block is one cell's before/after). The turn-level
 //!   `cells_root` and `iroot` are the same for every effect row of the turn.
 
+use crate::action::Effect;
 use dregg_cell::commitment::{
     compute_authority_digest_felt, compute_canonical_capability_root_felt,
 };
-use crate::action::Effect;
 use dregg_cell::{Cell, Ledger, lifecycle::CellLifecycle};
 use dregg_circuit::effect_vm::{fold_bytes32_to_bb, split_u64};
 use dregg_circuit::field::BabyBear;
@@ -397,8 +397,7 @@ pub fn produce(
     // The per-cell asset class (the fold of the cell's committed token_id) the
     // light-client conservation partition keys on — the SAME fold the executor's
     // collector uses, so the proof-bound class agrees with the ledger class.
-    let asset_class =
-        dregg_circuit::block_conservation::fold_token_id_to_asset(cell.token_id());
+    let asset_class = dregg_circuit::block_conservation::fold_token_id_to_asset(cell.token_id());
     RotationWitness {
         pre_limbs,
         iroot: iroot_val,
@@ -452,8 +451,20 @@ pub fn mint_rotated_participant_leg(
         .insert_cell(after_cell.clone())
         .map_err(|e| format!("mint_rotated_participant_leg: ledger seed failed: {e:?}"))?;
 
-    let before_w = produce(before_cell, &ledger, nullifier_root, commitments_root, receipt_log);
-    let after_w = produce(after_cell, &ledger, nullifier_root, commitments_root, receipt_log);
+    let before_w = produce(
+        before_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let after_w = produce(
+        after_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
             .map_err(|e| format!("mint_rotated_participant_leg: rotated block witness: {e}"))
@@ -563,9 +574,7 @@ pub fn apply_effect_to_cell(
         // `lifecycle_felt` (limb 29) folds — NOT the r23 authority residue. The current
         // `record_pin_offset` routes receiptArchive to `B_RECORD_DIGEST`, which this write does NOT
         // move; the genuine forced limb is `B_LIFECYCLE`.
-        Effect::ReceiptArchive {
-            checkpoint, ..
-        } if checkpoint.cell_id == *cell_id => {
+        Effect::ReceiptArchive { checkpoint, .. } if checkpoint.cell_id == *cell_id => {
             let _ = cell.archive(checkpoint);
         }
         // cellSeal (lifecycle limb 29): mirror `apply_cell_seal` (`c.seal(reason, block_height)`),
@@ -749,10 +758,17 @@ mod tests {
             apply_effect_to_cell(
                 &mut a,
                 &id,
-                &Effect::SetVerificationKey { cell: id, new_vk: Some(vk) },
+                &Effect::SetVerificationKey {
+                    cell: id,
+                    new_vk: Some(vk),
+                },
                 0,
             );
-            assert_ne!(rd(&base), rd(&a), "setVK MUST move the record digest (anchored)");
+            assert_ne!(
+                rd(&base),
+                rd(&a),
+                "setVK MUST move the record digest (anchored)"
+            );
         }
         // refusal → record-digest: MOVES (anchored — the anchor bites). The deployed `apply_refusal`
         // writes the audit into the EXT `fields_root` (`REFUSAL_AUDIT_EXT_KEY`), which
@@ -797,16 +813,35 @@ mod tests {
             apply_effect_to_cell(
                 &mut a,
                 &id,
-                &Effect::ReceiptArchive { prefix_end_height: 5, checkpoint: att },
+                &Effect::ReceiptArchive {
+                    prefix_end_height: 5,
+                    checkpoint: att,
+                },
                 0,
             );
-            assert_eq!(rd(&base), rd(&a), "receiptArchive does NOT move the record digest");
-            assert_ne!(lf(&base), lf(&a), "receiptArchive moves the LIFECYCLE (the genuine forced limb)");
+            assert_eq!(
+                rd(&base),
+                rd(&a),
+                "receiptArchive does NOT move the record digest"
+            );
+            assert_ne!(
+                lf(&base),
+                lf(&a),
+                "receiptArchive moves the LIFECYCLE (the genuine forced limb)"
+            );
         }
         // cellSeal → lifecycle: MOVES (the lifecycle forced limb genuinely separates Live/Sealed).
         {
             let mut a = base.clone();
-            apply_effect_to_cell(&mut a, &id, &Effect::CellSeal { target: id, reason: [9u8; 32] }, 42);
+            apply_effect_to_cell(
+                &mut a,
+                &id,
+                &Effect::CellSeal {
+                    target: id,
+                    reason: [9u8; 32],
+                },
+                42,
+            );
             assert_ne!(lf(&base), lf(&a), "cellSeal MUST move the lifecycle felt");
         }
         // cellUnseal → lifecycle: MOVES (Sealed → Live).
@@ -815,7 +850,11 @@ mod tests {
             sealed.seal([9u8; 32], 42).unwrap();
             let mut a = sealed.clone();
             apply_effect_to_cell(&mut a, &id, &Effect::CellUnseal { target: id }, 0);
-            assert_ne!(lf(&sealed), lf(&a), "cellUnseal MUST move the lifecycle felt");
+            assert_ne!(
+                lf(&sealed),
+                lf(&a),
+                "cellUnseal MUST move the lifecycle felt"
+            );
         }
         // cellDestroy → lifecycle: MOVES, and the death certificate is REFLECTED (distinct certs ⇒
         // distinct lifecycle felt, since `lifecycle_felt` folds `death_certificate_hash`).
@@ -827,13 +866,40 @@ mod tests {
                 destroyed_at_height: 9,
                 reason: DeathReason::Voluntary,
             };
-            let cert2 = DeathCertificate { reason: DeathReason::Forced, ..cert.clone() };
+            let cert2 = DeathCertificate {
+                reason: DeathReason::Forced,
+                ..cert.clone()
+            };
             let mut a = base.clone();
             let mut a2 = base.clone();
-            apply_effect_to_cell(&mut a, &id, &Effect::CellDestroy { target: id, certificate: cert }, 0);
-            apply_effect_to_cell(&mut a2, &id, &Effect::CellDestroy { target: id, certificate: cert2 }, 0);
-            assert_ne!(lf(&base), lf(&a), "cellDestroy MUST move the lifecycle felt");
-            assert_ne!(lf(&a), lf(&a2), "cellDestroy reflects the death certificate (distinct certs distinct felt)");
+            apply_effect_to_cell(
+                &mut a,
+                &id,
+                &Effect::CellDestroy {
+                    target: id,
+                    certificate: cert,
+                },
+                0,
+            );
+            apply_effect_to_cell(
+                &mut a2,
+                &id,
+                &Effect::CellDestroy {
+                    target: id,
+                    certificate: cert2,
+                },
+                0,
+            );
+            assert_ne!(
+                lf(&base),
+                lf(&a),
+                "cellDestroy MUST move the lifecycle felt"
+            );
+            assert_ne!(
+                lf(&a),
+                lf(&a2),
+                "cellDestroy reflects the death certificate (distinct certs distinct felt)"
+            );
         }
     }
 
@@ -846,7 +912,7 @@ mod tests {
     #[cfg(feature = "prover")]
     fn faithful_8felt_commit_distinguishes_authority_near_collision() {
         use dregg_cell::commitment::{
-            compute_canonical_state_commitment_v9_felt8, V9RotationContext,
+            V9RotationContext, compute_canonical_state_commitment_v9_felt8,
         };
         let mut ledger = Ledger::new();
         let base = Cell::with_balance([3u8; 32], [0u8; 32], 100);
@@ -867,7 +933,10 @@ mod tests {
 
         let c_base = compute_canonical_state_commitment_v9_felt8(&base, &ctx);
         let c_flip = compute_canonical_state_commitment_v9_felt8(&flipped, &ctx);
-        assert_ne!(c_base, c_flip, "an authority flip must move the 8-felt commitment");
+        assert_ne!(
+            c_base, c_flip,
+            "an authority flip must move the 8-felt commitment"
+        );
         assert!(
             (0..8).any(|i| c_base[i] != c_flip[i]),
             "≥ 1 of the 8 committed felts must differ"
@@ -889,12 +958,18 @@ mod tests {
     /// folded mid-chain) still moves the published 8-felt commit — the carrier is 8-wide throughout.
     #[test]
     fn faithful_8felt_commit_intermediate_carrier() {
-        let limbs: Vec<BabyBear> = (0..NUM_PRE_LIMBS).map(|i| BabyBear::new(7 * i as u32 + 1)).collect();
+        let limbs: Vec<BabyBear> = (0..NUM_PRE_LIMBS)
+            .map(|i| BabyBear::new(7 * i as u32 + 1))
+            .collect();
         let base = wire_commit_8(&limbs, BabyBear::new(5));
         // limb 1 (r0/balance_lo) is folded in the FIRST head site — deep before the final squeeze.
         let mut early = limbs.clone();
         early[1] += BabyBear::new(1);
-        assert_ne!(base, wire_commit_8(&early, BabyBear::new(5)), "early mid-chain limb is bound");
+        assert_ne!(
+            base,
+            wire_commit_8(&early, BabyBear::new(5)),
+            "early mid-chain limb is bound"
+        );
     }
 
     /// Distinct lifecycle states yield distinct limbs (the anti-omission tooth).

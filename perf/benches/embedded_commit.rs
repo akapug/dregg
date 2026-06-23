@@ -51,8 +51,7 @@ fn bench_embedded_commit(c: &mut Criterion) {
     // (a) the on-device commit: run the verified kernel, get the output wire.
     group.bench_function("forest_auth_transfer", |b| {
         b.iter(|| {
-            let out =
-                shadow_exec_full_forest_auth(black_box(&wire)).expect("embedded kernel runs");
+            let out = shadow_exec_full_forest_auth(black_box(&wire)).expect("embedded kernel runs");
             black_box(out);
         });
     });
@@ -60,8 +59,7 @@ fn bench_embedded_commit(c: &mut Criterion) {
     // (b) the full node admit step: run + decode the verdict (the ACCEPT decision).
     group.bench_function("forest_auth_transfer_decode", |b| {
         b.iter(|| {
-            let out =
-                shadow_exec_full_forest_auth(black_box(&wire)).expect("embedded kernel runs");
+            let out = shadow_exec_full_forest_auth(black_box(&wire)).expect("embedded kernel runs");
             let v = decode_shadow_verdict(&out).expect("verdict decodes");
             debug_assert!(v.body_committed());
             black_box(v);

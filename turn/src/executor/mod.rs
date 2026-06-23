@@ -42,8 +42,8 @@ use std::sync::Mutex;
 use tracing::info;
 
 use dregg_cell::{
-    AuthRequired, Cell, CellId, CellStateDelta, FIELD_ZERO, FieldElement,
-    Ledger, LedgerDelta, RevocationChannelSet,
+    AuthRequired, Cell, CellId, CellStateDelta, FIELD_ZERO, FieldElement, Ledger, LedgerDelta,
+    RevocationChannelSet,
     note::NoteError,
     nullifier_set::NullifierSet,
     preconditions::EvalContext,
@@ -51,8 +51,7 @@ use dregg_cell::{
     state::STATE_SLOTS,
 };
 use dregg_cell_crypto::{
-    BulletproofRangeProof, ValueCommitment, ValueCommitmentBytes,
-    note_bridge::BridgedNullifierSet,
+    BulletproofRangeProof, ValueCommitment, ValueCommitmentBytes, note_bridge::BridgedNullifierSet,
 };
 use dregg_types::AttestedRoot;
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -1618,7 +1617,11 @@ mod execute;
 mod execute_tree;
 mod finalize;
 mod proof_verify;
+
+// MEASUREMENT-ONLY: env-gated (`DREGG_TURN_PROFILE=1`) per-turn phase profiler.
+mod turn_profile;
 pub use proof_verify::{SovereignCohortChain, SovereignCohortLeg};
+pub use turn_profile::dump as turn_profile_dump;
 
 // ─── Pipeline Execution ──────────────────────────────────────────────────────
 

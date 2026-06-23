@@ -108,10 +108,14 @@ fn install_pairing_authority(runtime: &AgentRuntime, cell: CellId) {
     c.permissions = Permissions {
         send: AuthRequired::Impossible,
         receive: AuthRequired::None,
-        set_state: AuthRequired::Custom { vk_hash: PAIRING_VK },
+        set_state: AuthRequired::Custom {
+            vk_hash: PAIRING_VK,
+        },
         set_permissions: AuthRequired::Impossible,
         set_verification_key: AuthRequired::Impossible,
-        increment_nonce: AuthRequired::Custom { vk_hash: PAIRING_VK },
+        increment_nonce: AuthRequired::Custom {
+            vk_hash: PAIRING_VK,
+        },
         delegate: AuthRequired::Impossible,
         access: AuthRequired::None,
     };
@@ -140,7 +144,10 @@ fn paired_ready_identity(
     let agent = runtime.cell_id();
     let charter = IdentityCharter {
         council: CouncilCharter::new(
-            vec![CellId::from_bytes([0xD1; 32]), CellId::from_bytes([0xD2; 32])],
+            vec![
+                CellId::from_bytes([0xD1; 32]),
+                CellId::from_bytes([0xD2; 32]),
+            ],
             2,
         ),
         cooling_period: COOLING,
@@ -399,8 +406,11 @@ fn forged_unbound_commitment_refused() {
     let phone = device(0x01); // the genuine, on-chain current device
     let laptop = device(0x02); // the pre-committed new device
     let genuine_current = vec![pubkey(&phone)];
-    let (mut runtime, cell, _current) =
-        paired_ready_identity("pairing-forged-commitment", &genuine_current, pubkey(&laptop));
+    let (mut runtime, cell, _current) = paired_ready_identity(
+        "pairing-forged-commitment",
+        &genuine_current,
+        pubkey(&laptop),
+    );
     wire_pairing_verifier(&mut runtime);
 
     let after_next = vec![pubkey(&phone), pubkey(&laptop), [0x03; 32]];

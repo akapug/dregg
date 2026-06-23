@@ -44,8 +44,16 @@ fn probe_stark_accept_reject() {
         let invalid = c.generate_trace(5, 3);
         let rv = c.eval_constraints(&valid[0], &valid[1], &[], alpha);
         let ri = c.eval_constraints(&invalid[0], &invalid[1], &[], alpha);
-        assert_eq!(rv, z(), "LE valid (3 <= 5) must be accepted (alpha={alpha:?})");
-        assert_ne!(ri, z(), "LE violation (5 <= 3) must be REJECTED (alpha={alpha:?})");
+        assert_eq!(
+            rv,
+            z(),
+            "LE valid (3 <= 5) must be accepted (alpha={alpha:?})"
+        );
+        assert_ne!(
+            ri,
+            z(),
+            "LE violation (5 <= 3) must be REJECTED (alpha={alpha:?})"
+        );
 
         // Equal: 4 == 4 holds; 4 == 9 violates.
         let c = ProbeEqCircuit;
@@ -53,8 +61,16 @@ fn probe_stark_accept_reject() {
         let invalid = c.generate_trace(4, 9);
         let rv = c.eval_constraints(&valid[0], &valid[1], &[], alpha);
         let ri = c.eval_constraints(&invalid[0], &invalid[1], &[], alpha);
-        assert_eq!(rv, z(), "EQ valid (4 == 4) must be accepted (alpha={alpha:?})");
-        assert_ne!(ri, z(), "EQ violation (4 == 9) must be REJECTED (alpha={alpha:?})");
+        assert_eq!(
+            rv,
+            z(),
+            "EQ valid (4 == 4) must be accepted (alpha={alpha:?})"
+        );
+        assert_ne!(
+            ri,
+            z(),
+            "EQ violation (4 == 9) must be REJECTED (alpha={alpha:?})"
+        );
 
         // NotEqual: 4 != 9 holds; 4 != 4 violates.
         let c = ProbeNeCircuit;
@@ -62,7 +78,15 @@ fn probe_stark_accept_reject() {
         let invalid = c.generate_trace(4, 4);
         let rv = c.eval_constraints(&valid[0], &valid[1], &[], alpha);
         let ri = c.eval_constraints(&invalid[0], &invalid[1], &[], alpha);
-        assert_eq!(rv, z(), "NE valid (4 != 9) must be accepted (alpha={alpha:?})");
-        assert_ne!(ri, z(), "NE violation (4 != 4) must be REJECTED (alpha={alpha:?})");
+        assert_eq!(
+            rv,
+            z(),
+            "NE valid (4 != 9) must be accepted (alpha={alpha:?})"
+        );
+        assert_ne!(
+            ri,
+            z(),
+            "NE violation (4 != 4) must be REJECTED (alpha={alpha:?})"
+        );
     }
 }

@@ -89,7 +89,6 @@
 //!
 //! See `cell/src/vk_v2.rs` for the canonical encoder.
 
-
 use dregg_circuit::field::BabyBear;
 
 // ---------------------------------------------------------------------------
@@ -134,7 +133,8 @@ pub fn recursive_verifier_source_hash() -> [u8; 32] {
 /// to a call through `dregg_cell::vk_v2::canonical_vk_v2` with the
 /// equivalent `VkComponents`.
 pub fn compute_recursive_vk_hash() -> [u8; 32] {
-    let air_fp = dregg_circuit::air_descriptor::fingerprint(&dregg_circuit::effect_vm::AIR_DESCRIPTOR);
+    let air_fp =
+        dregg_circuit::air_descriptor::fingerprint(&dregg_circuit::effect_vm::AIR_DESCRIPTOR);
     let verifier_fp = recursive_verifier_source_hash();
 
     // BLAKE3 keyed under "dregg-vk-v2" — same domain as
@@ -234,10 +234,10 @@ impl RecursiveProofProducer {
         public_inputs: &[BabyBear],
     ) -> Result<RecursiveProofOutput, String> {
         use crate::effect_vm_p3_air::EffectVmShapeAir;
-        use dregg_circuit::plonky3_prover::to_p3;
         use crate::plonky3_recursion_impl::recursive::{
             prove_inner_for_air, prove_recursive_layer_for_air, verify_inner_for_air,
         };
+        use dregg_circuit::plonky3_prover::to_p3;
         use p3_baby_bear::BabyBear as P3BabyBear;
         use p3_matrix::dense::RowMajorMatrix;
 

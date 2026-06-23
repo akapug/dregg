@@ -266,7 +266,10 @@ pub fn shielded_spend_descriptor() -> CircuitDescriptor {
     // The two value-binding pad terms are constant-zero (Polynomial, every row).
     for pad in [col::VB_PAD0, col::VB_PAD1] {
         constraints.push(ConstraintExpr::Polynomial {
-            terms: vec![PolyTerm { coeff: BabyBear::ONE, col_indices: vec![pad] }],
+            terms: vec![PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![pad],
+            }],
         });
     }
 
@@ -296,26 +299,106 @@ pub fn shielded_spend_descriptor() -> CircuitDescriptor {
     ];
 
     let columns = vec![
-        ColumnDef { name: "current".into(), index: col::CURRENT, kind: ColumnKind::Hash },
-        ColumnDef { name: "sib0".into(), index: col::SIB0, kind: ColumnKind::Value },
-        ColumnDef { name: "sib1".into(), index: col::SIB1, kind: ColumnKind::Value },
-        ColumnDef { name: "sib2".into(), index: col::SIB2, kind: ColumnKind::Value },
-        ColumnDef { name: "position".into(), index: col::POSITION, kind: ColumnKind::Value },
-        ColumnDef { name: "parent".into(), index: col::PARENT, kind: ColumnKind::Hash },
-        ColumnDef { name: "is_leaf".into(), index: col::IS_LEAF, kind: ColumnKind::Binary },
-        ColumnDef { name: "nullifier".into(), index: col::NULLIFIER, kind: ColumnKind::Hash },
-        ColumnDef { name: "key0".into(), index: col::KEY0, kind: ColumnKind::Value },
-        ColumnDef { name: "key1".into(), index: col::KEY1, kind: ColumnKind::Value },
-        ColumnDef { name: "key2".into(), index: col::KEY2, kind: ColumnKind::Value },
-        ColumnDef { name: "key3".into(), index: col::KEY3, kind: ColumnKind::Value },
-        ColumnDef { name: "value".into(), index: col::VALUE, kind: ColumnKind::Value },
-        ColumnDef { name: "asset_type".into(), index: col::ASSET_TYPE, kind: ColumnKind::Value },
-        ColumnDef { name: "owner".into(), index: col::OWNER, kind: ColumnKind::Value },
-        ColumnDef { name: "randomness".into(), index: col::RANDOMNESS, kind: ColumnKind::Value },
-        ColumnDef { name: "leaf_commit".into(), index: col::LEAF_COMMIT, kind: ColumnKind::Hash },
-        ColumnDef { name: "value_binding".into(), index: col::VALUE_BINDING, kind: ColumnKind::Hash },
-        ColumnDef { name: "vb_pad0".into(), index: col::VB_PAD0, kind: ColumnKind::Value },
-        ColumnDef { name: "vb_pad1".into(), index: col::VB_PAD1, kind: ColumnKind::Value },
+        ColumnDef {
+            name: "current".into(),
+            index: col::CURRENT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "sib0".into(),
+            index: col::SIB0,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "sib1".into(),
+            index: col::SIB1,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "sib2".into(),
+            index: col::SIB2,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "position".into(),
+            index: col::POSITION,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "parent".into(),
+            index: col::PARENT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "is_leaf".into(),
+            index: col::IS_LEAF,
+            kind: ColumnKind::Binary,
+        },
+        ColumnDef {
+            name: "nullifier".into(),
+            index: col::NULLIFIER,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "key0".into(),
+            index: col::KEY0,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "key1".into(),
+            index: col::KEY1,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "key2".into(),
+            index: col::KEY2,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "key3".into(),
+            index: col::KEY3,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "value".into(),
+            index: col::VALUE,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "asset_type".into(),
+            index: col::ASSET_TYPE,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "owner".into(),
+            index: col::OWNER,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "randomness".into(),
+            index: col::RANDOMNESS,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "leaf_commit".into(),
+            index: col::LEAF_COMMIT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "value_binding".into(),
+            index: col::VALUE_BINDING,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "vb_pad0".into(),
+            index: col::VB_PAD0,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "vb_pad1".into(),
+            index: col::VB_PAD1,
+            kind: ColumnKind::Value,
+        },
     ];
 
     CircuitDescriptor {
@@ -377,7 +460,10 @@ impl ShieldedSpendWitness {
     /// `dregg_cell_crypto::value_commitment::value_link_binding` re-derives exactly this
     /// from the Pedersen leg's `(value, randomness)` opening to tie the two halves.
     pub fn value_binding(&self) -> BabyBear {
-        hash_fact(self.value, &[self.randomness, BabyBear::ZERO, BabyBear::ZERO])
+        hash_fact(
+            self.value,
+            &[self.randomness, BabyBear::ZERO, BabyBear::ZERO],
+        )
     }
 
     /// The Merkle root this spend proves membership under — the LAST trace row's
@@ -463,7 +549,12 @@ pub fn generate_shielded_spend_trace(
         let prev_parent = trace.last().unwrap()[col::PARENT];
         let pad_parent = hash_fact(
             prev_parent,
-            &[BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+            &[
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ],
         );
         let mut row = vec![BabyBear::ZERO; WIDTH];
         row[col::CURRENT] = prev_parent;
@@ -498,18 +589,14 @@ mod tests {
     /// debug build) panic in p3's `check_constraints` debug assertion. Either way
     /// it does NOT yield a verifying proof. This helper treats both as
     /// "rejected", which is the soundness property we test.
-    fn proving_rejects(
-        circuit: &DslCircuit,
-        trace: &[Vec<BabyBear>],
-        pis: &[BabyBear],
-    ) -> bool {
+    fn proving_rejects(circuit: &DslCircuit, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_dsl_zk(circuit, trace, pis)
         }));
         match r {
-            Err(_) => true,        // panicked in the debug constraint check
-            Ok(Err(_)) => true,    // self-verify rejected
-            Ok(Ok(_)) => false,    // produced a verifying proof — UNSOUND
+            Err(_) => true,     // panicked in the debug constraint check
+            Ok(Err(_)) => true, // self-verify rejected
+            Ok(Ok(_)) => false, // produced a verifying proof — UNSOUND
         }
     }
 
@@ -622,8 +709,8 @@ mod tests {
             w.leaf_commitment(),
             "leaf must be the C6-bound note commitment, not a free cell"
         );
-        let proof = prove_dsl_zk(&circuit, &trace, &pis)
-            .expect("honest leaf-bound spend must prove");
+        let proof =
+            prove_dsl_zk(&circuit, &trace, &pis).expect("honest leaf-bound spend must prove");
         verify_dsl_zk(&circuit, &proof, &pis).expect("honest proof must verify");
 
         // FALSE: substitute a foreign leaf into current[0] (the classic free-leaf
@@ -688,19 +775,24 @@ mod tests {
         // And it is genuinely a commitment to the LEAF's value (same cells as C6).
         assert_eq!(
             trace[0][col::VALUE_BINDING],
-            hash_fact(trace[0][col::VALUE], &[trace[0][col::RANDOMNESS], BabyBear::ZERO, BabyBear::ZERO]),
+            hash_fact(
+                trace[0][col::VALUE],
+                &[trace[0][col::RANDOMNESS], BabyBear::ZERO, BabyBear::ZERO]
+            ),
             "the value-binding cell must be computed from the leaf's own value/randomness"
         );
-        let proof = prove_dsl_zk(&circuit, &trace, &pis)
-            .expect("honest value-bound spend must prove");
+        let proof =
+            prove_dsl_zk(&circuit, &trace, &pis).expect("honest value-bound spend must prove");
         verify_dsl_zk(&circuit, &proof, &pis).expect("honest proof must verify");
 
         // FALSE: publish a value_binding PI for a DIFFERENT value (the splice an
         // attacker would use to mismatch the Pedersen leg). The C7b boundary
         // (`value_binding == pi[2]`) no longer holds — no verifying proof.
         let mut mismatched_pis = pis.clone();
-        mismatched_pis[pi::VALUE_BINDING] =
-            hash_fact(w.value + BabyBear::new(0xBADCA5), &[w.randomness, BabyBear::ZERO, BabyBear::ZERO]);
+        mismatched_pis[pi::VALUE_BINDING] = hash_fact(
+            w.value + BabyBear::new(0xBADCA5),
+            &[w.randomness, BabyBear::ZERO, BabyBear::ZERO],
+        );
         assert!(
             proving_rejects(&circuit, &trace, &mismatched_pis),
             "a value_binding PI for a different value must NOT prove — C7b bites"
@@ -710,7 +802,10 @@ mod tests {
         // match a forged PI, leaving the leaf's value/randomness untouched. Now the
         // UNGATED C7a hash (value_binding == hash_fact(value,[randomness,0,0]))
         // disagrees on every row — no verifying proof.
-        let forged_vb = hash_fact(w.value + BabyBear::new(7), &[w.randomness, BabyBear::ZERO, BabyBear::ZERO]);
+        let forged_vb = hash_fact(
+            w.value + BabyBear::new(7),
+            &[w.randomness, BabyBear::ZERO, BabyBear::ZERO],
+        );
         let mut attack = trace.clone();
         for row in attack.iter_mut() {
             row[col::VALUE_BINDING] = forged_vb;

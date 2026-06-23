@@ -31,13 +31,17 @@ fn bench_fold_prove(c: &mut Criterion) {
     group.sample_size(10);
     for n in fold_sizes() {
         let (trace, pi) = build_tree_fold_trace(&fold_digests(n));
-        group.bench_with_input(BenchmarkId::from_parameter(format!("{n}_leaves")), &n, |b, _| {
-            b.iter(|| {
-                let proof =
-                    prove_tree_fold_v2(black_box(&trace), black_box(&pi)).expect("fold must prove");
-                black_box(proof);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{n}_leaves")),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let proof = prove_tree_fold_v2(black_box(&trace), black_box(&pi))
+                        .expect("fold must prove");
+                    black_box(proof);
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -49,12 +53,16 @@ fn bench_fold_verify(c: &mut Criterion) {
         let (trace, pi) = build_tree_fold_trace(&fold_digests(n));
         let proof = prove_tree_fold_v2(&trace, &pi).expect("fold must prove");
         verify_tree_fold_v2(&proof, &pi).expect("fold proof must verify");
-        group.bench_with_input(BenchmarkId::from_parameter(format!("{n}_leaves")), &n, |b, _| {
-            b.iter(|| {
-                verify_tree_fold_v2(black_box(&proof), black_box(&pi))
-                    .expect("fold proof must verify");
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{n}_leaves")),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    verify_tree_fold_v2(black_box(&proof), black_box(&pi))
+                        .expect("fold proof must verify");
+                });
+            },
+        );
     }
     group.finish();
 }

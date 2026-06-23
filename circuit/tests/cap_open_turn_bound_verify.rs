@@ -98,7 +98,10 @@ fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
 fn build_transfer_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let before_balance: i64 = 100_000;
     let st = CellState::new(before_balance as u64, 0);
-    let effects = vec![Effect::Transfer { amount: 1_000, direction: 1 }];
+    let effects = vec![Effect::Transfer {
+        amount: 1_000,
+        direction: 1,
+    }];
 
     let mut ledger = Ledger::new();
     let before_cell = producer_cell(before_balance, 0);
@@ -109,8 +112,20 @@ fn build_transfer_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
 
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = transfer_caveat_manifest();
     let (trace, pis) = generate_rotated_effect_vm_trace(
@@ -155,9 +170,13 @@ fn cap_open_witness() -> CapOpenWitness {
 /// REJECTED by `verify_vm_descriptor2` ALONE (the verifier override realizes `TurnIdentityAnchored`).
 #[test]
 fn cap_open_turn_bound_verifier_forces_published_identity() {
-    let desc = parse_vm_descriptor2(reg_json(CAP_OPEN_TB_KEY)).expect("TB cap-open descriptor parses");
+    let desc =
+        parse_vm_descriptor2(reg_json(CAP_OPEN_TB_KEY)).expect("TB cap-open descriptor parses");
     assert_eq!(desc.trace_width, CAP_OPEN_TB_WIDTH, "TB width 409");
-    assert_eq!(desc.public_input_count, 49, "TB carries 49 PIs (46 rotated + 3 turn-identity)");
+    assert_eq!(
+        desc.public_input_count, 49,
+        "TB carries 49 PIs (46 rotated + 3 turn-identity)"
+    );
 
     // The TRUSTED turn the light client holds. `src` IS the cap-leaf target the targetBind roots; the
     // owner arm publishes `actor == dst == src` (the cap is a member of the actor's own c-list).
@@ -214,7 +233,10 @@ fn cap_open_turn_bound_verifier_forces_published_identity() {
         let mut forged = honest_pis.clone();
         let forged_actor = BabyBear::new(0xDEAD);
         anchor_cap_open_turn_pins(&mut forged, trusted_src, forged_actor, trusted_dst);
-        assert_ne!(forged[CAP_OPEN_TB_PI_ACTOR], honest_pis[CAP_OPEN_TB_PI_ACTOR]);
+        assert_ne!(
+            forged[CAP_OPEN_TB_PI_ACTOR],
+            honest_pis[CAP_OPEN_TB_PI_ACTOR]
+        );
         let rejected = verify_vm_descriptor2(&desc, &proof, &forged).is_err();
         assert!(
             rejected,

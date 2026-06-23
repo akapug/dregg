@@ -223,8 +223,7 @@ fn cli_node_json_tampered_signature_rejected() {
     });
 
     // Still a structurally-valid proof (deserializes fine)...
-    let proof: BearerCapProof =
-        serde_json::from_value(cli_json).expect("structurally valid proof");
+    let proof: BearerCapProof = serde_json::from_value(cli_json).expect("structurally valid proof");
     let DelegationProofData::SignedDelegation {
         delegator_pk,
         signature: sig_bytes,

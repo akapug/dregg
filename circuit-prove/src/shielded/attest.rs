@@ -187,12 +187,36 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
     let p = BABYBEAR_P;
     let mut constraints = Vec::new();
     let mut columns = vec![
-        ColumnDef { name: "attr".into(), index: col::ATTR, kind: ColumnKind::Value },
-        ColumnDef { name: "salt".into(), index: col::SALT, kind: ColumnKind::Value },
-        ColumnDef { name: "commitment".into(), index: col::COMMITMENT, kind: ColumnKind::Hash },
-        ColumnDef { name: "pad0".into(), index: col::PAD0, kind: ColumnKind::Value },
-        ColumnDef { name: "pad1".into(), index: col::PAD1, kind: ColumnKind::Value },
-        ColumnDef { name: "pad2".into(), index: col::PAD2, kind: ColumnKind::Value },
+        ColumnDef {
+            name: "attr".into(),
+            index: col::ATTR,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "salt".into(),
+            index: col::SALT,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "commitment".into(),
+            index: col::COMMITMENT,
+            kind: ColumnKind::Hash,
+        },
+        ColumnDef {
+            name: "pad0".into(),
+            index: col::PAD0,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "pad1".into(),
+            index: col::PAD1,
+            kind: ColumnKind::Value,
+        },
+        ColumnDef {
+            name: "pad2".into(),
+            index: col::PAD2,
+            kind: ColumnKind::Value,
+        },
     ];
 
     // OPEN: commitment == hash_fact(attr, [salt, pad0, pad1, pad2]).
@@ -203,7 +227,10 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
     // The three pad terms are constant-zero (so the absorbed terms are [salt,0,0,0]).
     for pad in [col::PAD0, col::PAD1, col::PAD2] {
         constraints.push(ConstraintExpr::Polynomial {
-            terms: vec![PolyTerm { coeff: BabyBear::ONE, col_indices: vec![pad] }],
+            terms: vec![PolyTerm {
+                coeff: BabyBear::ONE,
+                col_indices: vec![pad],
+            }],
         });
     }
 
@@ -236,9 +263,18 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
                     // attr - diff - 1 == 0
                     constraints.push(ConstraintExpr::Polynomial {
                         terms: vec![
-                            PolyTerm { coeff: BabyBear::ONE, col_indices: vec![col::ATTR] },
-                            PolyTerm { coeff: BabyBear::new(p - 1), col_indices: vec![diff_col] },
-                            PolyTerm { coeff: BabyBear::new(p - 1), col_indices: vec![] },
+                            PolyTerm {
+                                coeff: BabyBear::ONE,
+                                col_indices: vec![col::ATTR],
+                            },
+                            PolyTerm {
+                                coeff: BabyBear::new(p - 1),
+                                col_indices: vec![diff_col],
+                            },
+                            PolyTerm {
+                                coeff: BabyBear::new(p - 1),
+                                col_indices: vec![],
+                            },
                         ],
                     });
                 }
@@ -257,9 +293,18 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
                     });
                     constraints.push(ConstraintExpr::Polynomial {
                         terms: vec![
-                            PolyTerm { coeff: BabyBear::ONE, col_indices: vec![col::ATTR] },
-                            PolyTerm { coeff: BabyBear::new(p - 1), col_indices: vec![diff_col] },
-                            PolyTerm { coeff: BabyBear::new(p - 1), col_indices: vec![thr_col] },
+                            PolyTerm {
+                                coeff: BabyBear::ONE,
+                                col_indices: vec![col::ATTR],
+                            },
+                            PolyTerm {
+                                coeff: BabyBear::new(p - 1),
+                                col_indices: vec![diff_col],
+                            },
+                            PolyTerm {
+                                coeff: BabyBear::new(p - 1),
+                                col_indices: vec![thr_col],
+                            },
                         ],
                     });
                 }
@@ -271,10 +316,16 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
             let mut pow = BabyBear::ONE;
             let two = BabyBear::new(2);
             for i in 0..RANGE_BITS {
-                terms.push(PolyTerm { coeff: pow, col_indices: vec![bit0 + i] });
+                terms.push(PolyTerm {
+                    coeff: pow,
+                    col_indices: vec![bit0 + i],
+                });
                 pow = pow * two;
             }
-            terms.push(PolyTerm { coeff: BabyBear::new(p - 1), col_indices: vec![diff_col] });
+            terms.push(PolyTerm {
+                coeff: BabyBear::new(p - 1),
+                col_indices: vec![diff_col],
+            });
             constraints.push(ConstraintExpr::Polynomial { terms });
         }
 
@@ -300,8 +351,14 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
                     selector_col: flag,
                     inner: Box::new(ConstraintExpr::Polynomial {
                         terms: vec![
-                            PolyTerm { coeff: BabyBear::ONE, col_indices: vec![col::ATTR] },
-                            PolyTerm { coeff: BabyBear::new(p - (felt(m).as_u32() % p)), col_indices: vec![] },
+                            PolyTerm {
+                                coeff: BabyBear::ONE,
+                                col_indices: vec![col::ATTR],
+                            },
+                            PolyTerm {
+                                coeff: BabyBear::new(p - (felt(m).as_u32() % p)),
+                                col_indices: vec![],
+                            },
                         ],
                     }),
                 });
@@ -322,8 +379,14 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
             });
             constraints.push(ConstraintExpr::Polynomial {
                 terms: vec![
-                    PolyTerm { coeff: BabyBear::ONE, col_indices: vec![col::ATTR] },
-                    PolyTerm { coeff: BabyBear::new(p - 1), col_indices: vec![val_col] },
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![col::ATTR],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(p - 1),
+                        col_indices: vec![val_col],
+                    },
                 ],
             });
         }
@@ -401,7 +464,10 @@ impl AttestWitness {
     /// The published commitment this attestation is verified against:
     /// `hash_fact(attr, [salt, 0, 0, 0])`.
     pub fn commitment(&self) -> BabyBear {
-        hash_fact(self.attr, &[self.salt, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO])
+        hash_fact(
+            self.attr,
+            &[self.salt, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+        )
     }
 }
 
@@ -496,7 +562,9 @@ mod tests {
         for pred in [
             Predicate::Threshold { threshold: 18 },
             Predicate::Positive,
-            Predicate::Membership { members: vec![3, 7, 11] },
+            Predicate::Membership {
+                members: vec![3, 7, 11],
+            },
             Predicate::Equality { value: 42 },
         ] {
             let dsl = attest_circuit(&pred);
@@ -515,7 +583,10 @@ mod tests {
 
         // TRUE: age 21 ≥ 18. The attestation verifies against the commitment and
         // the public inputs are only [commitment, 18] — the age 21 stays hidden.
-        let w = AttestWitness { attr: BabyBear::new(21), salt: BabyBear::new(0x5EED) };
+        let w = AttestWitness {
+            attr: BabyBear::new(21),
+            salt: BabyBear::new(0x5EED),
+        };
         let (trace, pis) = generate_attest_trace(&w, &pred);
         assert_eq!(pis[pi::COMMITMENT], w.commitment());
         assert_eq!(pis[pi::PARAM], BabyBear::new(18));
@@ -529,7 +600,10 @@ mod tests {
         // verifying proof exists. (The diff column itself is pinned to attr-threshold
         // by the linking constraint, and attr is pinned by the opening, so the prover
         // cannot substitute a small fake diff.)
-        let under = AttestWitness { attr: BabyBear::new(16), salt: BabyBear::new(0x1234) };
+        let under = AttestWitness {
+            attr: BabyBear::new(16),
+            salt: BabyBear::new(0x1234),
+        };
         let (bad_trace, bad_pis) = generate_attest_trace(&under, &pred);
         assert!(
             proving_rejects(&circuit, &bad_trace, &bad_pis),
@@ -564,8 +638,10 @@ mod tests {
         // (2) The boundary adversary: attr = threshold - 1 (the tightest miss).
         let pred = Predicate::Threshold { threshold: 1_000 };
         let circuit = attest_circuit(&pred);
-        let just_under =
-            AttestWitness { attr: BabyBear::new(999), salt: BabyBear::new(0xBEE5) };
+        let just_under = AttestWitness {
+            attr: BabyBear::new(999),
+            salt: BabyBear::new(0xBEE5),
+        };
         let (bad_trace, bad_pis) = generate_attest_trace(&just_under, &pred);
         assert!(
             proving_rejects(&circuit, &bad_trace, &bad_pis),
@@ -575,12 +651,14 @@ mod tests {
 
         // And the honest just-at-threshold case (diff = 0) DOES attest, so the
         // gadget is not merely rejecting everything (non-vacuity from the other side).
-        let at = AttestWitness { attr: BabyBear::new(1_000), salt: BabyBear::new(0xBEE6) };
+        let at = AttestWitness {
+            attr: BabyBear::new(1_000),
+            salt: BabyBear::new(0xBEE6),
+        };
         let (ok_trace, ok_pis) = generate_attest_trace(&at, &pred);
         let proof = prove_dsl_zk(&circuit, &ok_trace, &ok_pis)
             .expect("attr=1000 >= threshold 1000 (diff=0) must attest");
-        verify_dsl_zk(&circuit, &proof, &ok_pis)
-            .expect("the at-threshold attestation must verify");
+        verify_dsl_zk(&circuit, &proof, &ok_pis).expect("the at-threshold attestation must verify");
     }
 
     /// PROVE-SOLVENT: a cell committing balance = 500 issues an accepting
@@ -591,7 +669,10 @@ mod tests {
         let circuit = attest_circuit(&pred);
 
         // TRUE: balance 500 ≥ 1. Only [commitment] is public — the balance is hidden.
-        let w = AttestWitness { attr: BabyBear::new(500), salt: BabyBear::new(0xBA1) };
+        let w = AttestWitness {
+            attr: BabyBear::new(500),
+            salt: BabyBear::new(0xBA1),
+        };
         let (trace, pis) = generate_attest_trace(&w, &pred);
         assert_eq!(pis.len(), 1, "Positive discloses only the commitment");
         let proof = prove_dsl_zk(&circuit, &trace, &pis)
@@ -600,7 +681,10 @@ mod tests {
 
         // FALSE: balance 0. diff = 0 - 1 = -1 (field rep p-1 ≈ 2^31) has no
         // 30-bit decomposition (2^30 < p-1) → no verifying proof.
-        let broke = AttestWitness { attr: BabyBear::new(0), salt: BabyBear::new(0xDEAD) };
+        let broke = AttestWitness {
+            attr: BabyBear::new(0),
+            salt: BabyBear::new(0xDEAD),
+        };
         let (bad_trace, bad_pis) = generate_attest_trace(&broke, &pred);
         assert!(
             proving_rejects(&circuit, &bad_trace, &bad_pis),
@@ -612,10 +696,15 @@ mod tests {
     /// committing tag = 5 cannot (no selector can fire without violating its gate).
     #[test]
     fn prove_membership_worked_example() {
-        let pred = Predicate::Membership { members: vec![3, 7, 11] };
+        let pred = Predicate::Membership {
+            members: vec![3, 7, 11],
+        };
         let circuit = attest_circuit(&pred);
 
-        let w = AttestWitness { attr: BabyBear::new(7), salt: BabyBear::new(0xCAFE) };
+        let w = AttestWitness {
+            attr: BabyBear::new(7),
+            salt: BabyBear::new(0xCAFE),
+        };
         let (trace, pis) = generate_attest_trace(&w, &pred);
         let proof = prove_dsl_zk(&circuit, &trace, &pis)
             .expect("tag 7 ∈ {3,7,11} must produce an accepting membership attestation");
@@ -624,7 +713,10 @@ mod tests {
         // FALSE: tag 5 ∉ {3,7,11}. No flag can be set: setting any flag forces
         // attr == that member (gate), which is false; leaving all flags 0 fails
         // AtLeastOne. The honest generator leaves all flags 0 → AtLeastOne bites.
-        let outsider = AttestWitness { attr: BabyBear::new(5), salt: BabyBear::new(0xF00D) };
+        let outsider = AttestWitness {
+            attr: BabyBear::new(5),
+            salt: BabyBear::new(0xF00D),
+        };
         let (bad_trace, bad_pis) = generate_attest_trace(&outsider, &pred);
         assert!(
             proving_rejects(&circuit, &bad_trace, &bad_pis),
@@ -648,7 +740,10 @@ mod tests {
         let pred = Predicate::Equality { value: 42 };
         let circuit = attest_circuit(&pred);
 
-        let w = AttestWitness { attr: BabyBear::new(42), salt: BabyBear::new(0xABBA) };
+        let w = AttestWitness {
+            attr: BabyBear::new(42),
+            salt: BabyBear::new(0xABBA),
+        };
         let (trace, pis) = generate_attest_trace(&w, &pred);
         let proof = prove_dsl_zk(&circuit, &trace, &pis)
             .expect("field == 42 must produce an accepting equality attestation");
@@ -657,7 +752,10 @@ mod tests {
         // FALSE: the cell committed 41 but tries to claim == 42. The opening binds
         // attr = 41 (to its real commitment), and attr - value == 0 then fails
         // against value = 42.
-        let other = AttestWitness { attr: BabyBear::new(41), salt: BabyBear::new(0xBEEF) };
+        let other = AttestWitness {
+            attr: BabyBear::new(41),
+            salt: BabyBear::new(0xBEEF),
+        };
         let real_commitment = other.commitment();
         // Build a trace that opens the REAL commitment (attr=41) but pins value=42.
         let (mut bad_trace, _) = generate_attest_trace(&other, &Predicate::Equality { value: 41 });
@@ -681,7 +779,10 @@ mod tests {
     fn opening_binds_to_published_commitment() {
         let pred = Predicate::Positive;
         let circuit = attest_circuit(&pred);
-        let w = AttestWitness { attr: BabyBear::new(500), salt: BabyBear::new(0xBA1) };
+        let w = AttestWitness {
+            attr: BabyBear::new(500),
+            salt: BabyBear::new(0xBA1),
+        };
         let (trace, pis) = generate_attest_trace(&w, &pred);
 
         // Swap in a DIFFERENT attr (still ≥ 1) but keep the published commitment PI

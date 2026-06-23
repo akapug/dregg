@@ -94,13 +94,8 @@ pub async fn run(
 
 /// Read the spec file, surfacing a legible IO error (exit 1 via the caller).
 fn read_spec(path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
-    std::fs::read_to_string(path).map_err(|e| {
-        format!(
-            "cannot read deployment spec `{}`: {e}",
-            path.display()
-        )
-        .into()
-    })
+    std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read deployment spec `{}`: {e}", path.display()).into())
 }
 
 /// Parse + lower in one place so BOTH commands share the `Lowered` the rich
@@ -123,9 +118,7 @@ fn check(
     // Parse + lower ourselves so we keep the `Lowered` for diagnostics; a failure
     // here is a usage error (exit 1), surfaced with the file context.
     let (_dep, lowered) = parse_and_lower(&text)
-        .map_err(|e| -> Box<dyn std::error::Error> {
-            format!("{}: {e}", spec.display()).into()
-        })?;
+        .map_err(|e| -> Box<dyn std::error::Error> { format!("{}: {e}", spec.display()).into() })?;
 
     // THE STATIC CHECK over the whole declared authority layout. `check` re-lowers
     // internally; we reuse our `lowered` only to enrich the (same) findings.
@@ -161,8 +154,10 @@ fn check(
             "Static check PASSED — conservation · non-amplification · well-formedness hold over \
              the whole declared authority layout.",
         );
-        ctx.info("  (The static audit is artifact-decidable; the live executor still checks held \
-                  caps, balances, signatures, and freshness.)");
+        ctx.info(
+            "  (The static audit is artifact-decidable; the live executor still checks held \
+                  caps, balances, signatures, and freshness.)",
+        );
         return Ok(());
     }
 
@@ -180,9 +175,7 @@ fn apply(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let text = read_spec(spec)?;
     let (dep, lowered) = parse_and_lower(&text)
-        .map_err(|e| -> Box<dyn std::error::Error> {
-            format!("{}: {e}", spec.display()).into()
-        })?;
+        .map_err(|e| -> Box<dyn std::error::Error> { format!("{}: {e}", spec.display()).into() })?;
 
     // THE GATE then the plan. `plan_apply` runs the static check FIRST and refuses
     // to emit any turn if it fails — an over-grant never reaches a submittable
@@ -266,9 +259,7 @@ fn apply(
 
         // Lowering failed on the `plan_apply` path (we already lowered above so
         // this is unlikely, but it is a usage error either way): exit 1.
-        Err(e @ ApplyError::Lower(_)) => {
-            Err(format!("{}: {e}", spec.display()).into())
-        }
+        Err(e @ ApplyError::Lower(_)) => Err(format!("{}: {e}", spec.display()).into()),
     }
 }
 

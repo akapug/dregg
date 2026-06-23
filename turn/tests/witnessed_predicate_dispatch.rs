@@ -193,7 +193,9 @@ fn turn_executor_new_defaults_to_real_verifier_registry() {
         "bare-executor default must install the real MerkleMembership STARK verifier"
     );
     assert_eq!(
-        reg.get(WitnessedPredicateKind::NonMembership).unwrap().name(),
+        reg.get(WitnessedPredicateKind::NonMembership)
+            .unwrap()
+            .name(),
         "sorted-neighbor-non-membership",
     );
     assert_eq!(

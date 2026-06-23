@@ -438,11 +438,8 @@ impl PresentationAir {
     /// + timestamp (1)
     /// + presentation_tag (narrow, 1)
     /// + revealed_facts_commitment (`WideHash::WIDTH` = 8)
-    pub const SUMMARY_WIDTH: usize = 1
-        + crate::binding::ACTION_BINDING_WIDTH
-        + 1
-        + 1
-        + crate::binding::WideHash::WIDTH;
+    pub const SUMMARY_WIDTH: usize =
+        1 + crate::binding::ACTION_BINDING_WIDTH + 1 + 1 + crate::binding::WideHash::WIDTH;
 
     pub fn new(witness: PresentationWitness) -> Self {
         Self { witness }

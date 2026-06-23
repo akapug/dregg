@@ -334,8 +334,9 @@ pub fn build_query_trace(
         row[i] = to_p3(dregg_circuit::lean_descriptor_air::i64_to_babybear(v));
     }
     for r in ranges {
-        let field_val = dregg_circuit::lean_descriptor_air::i64_to_babybear(base_assignment[r.query_col])
-            .as_u32() as u64;
+        let field_val =
+            dregg_circuit::lean_descriptor_air::i64_to_babybear(base_assignment[r.query_col])
+                .as_u32() as u64;
         let n = num_limbs(r.bits);
         for i in 0..n {
             let byte = ((field_val >> (i * LIMB_BITS)) & 0xff) as usize;

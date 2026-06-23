@@ -550,7 +550,9 @@ mod tests {
         wrong_anchor.0[0] ^= 0xFF;
         match verify_history(&agg, &wrong_anchor) {
             Err(LightClientError::AggregateInvalid(
-                dregg_circuit_prove::ivc_turn_chain::TurnChainError::VkFingerprintMismatch { .. },
+                dregg_circuit_prove::ivc_turn_chain::TurnChainError::VkFingerprintMismatch {
+                    ..
+                },
             )) => {}
             other => panic!("a mismatched VK anchor must refuse the aggregate; got {other:?}"),
         }
@@ -661,7 +663,9 @@ mod tests {
         let cert = make_cert(3, 4, final_root);
         match verify_finalized_history(&agg, &vk, final_root, &cert) {
             Err(FinalizedError::AggregateInvalid(
-                dregg_circuit_prove::ivc_turn_chain::TurnChainError::ClaimedPublicsUnattested { .. },
+                dregg_circuit_prove::ivc_turn_chain::TurnChainError::ClaimedPublicsUnattested {
+                    ..
+                },
             )) => {}
             other => panic!(
                 "a relabeled aggregate final root must be refused by the binding attestation; \
@@ -792,7 +796,9 @@ mod tests {
 
         match verify_history(&agg, &vk) {
             Err(LightClientError::AggregateInvalid(
-                dregg_circuit_prove::ivc_turn_chain::TurnChainError::ClaimedPublicsUnattested { .. },
+                dregg_circuit_prove::ivc_turn_chain::TurnChainError::ClaimedPublicsUnattested {
+                    ..
+                },
             )) => {
                 // The verifier rejected outright — the publics are read against a proof now.
             }

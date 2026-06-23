@@ -310,23 +310,45 @@ pub enum ObligationError {
 impl std::fmt::Display for ObligationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObligationError::NotAnObligation => write!(f, "cell carries no standing-obligation binding"),
-            ObligationError::TermsMismatch => write!(f, "supplied terms do not match the bound obligation"),
+            ObligationError::NotAnObligation => {
+                write!(f, "cell carries no standing-obligation binding")
+            }
+            ObligationError::TermsMismatch => {
+                write!(f, "supplied terms do not match the bound obligation")
+            }
             ObligationError::IllFormedTerms => write!(f, "obligation terms are not well-formed"),
             ObligationError::NotYetDue { due_block, clock } => {
-                write!(f, "not yet due: period falls due at block {due_block}, clock is {clock}")
+                write!(
+                    f,
+                    "not yet due: period falls due at block {due_block}, clock is {clock}"
+                )
             }
-            ObligationError::WrongPeriod { expected, presented } => {
-                write!(f, "wrong period: cursor expects {expected}, discharge presented {presented}")
+            ObligationError::WrongPeriod {
+                expected,
+                presented,
+            } => {
+                write!(
+                    f,
+                    "wrong period: cursor expects {expected}, discharge presented {presented}"
+                )
             }
             ObligationError::AmountMismatch { owed, presented } => {
-                write!(f, "amount mismatch: owed {owed}, discharge presented {presented}")
+                write!(
+                    f,
+                    "amount mismatch: owed {owed}, discharge presented {presented}"
+                )
             }
             ObligationError::Completed { count } => {
                 write!(f, "obligation completed: all {count} periods discharged")
             }
-            ObligationError::BehindSchedule { required, committed } => {
-                write!(f, "behind schedule: {required} periods due, only {committed} committed")
+            ObligationError::BehindSchedule {
+                required,
+                committed,
+            } => {
+                write!(
+                    f,
+                    "behind schedule: {required} periods due, only {committed} committed"
+                )
             }
         }
     }
@@ -508,7 +530,9 @@ pub fn discharge(
 /// Whether a cell carries a standing-obligation binding (a terms digest in its
 /// reserved heap collection). A plain cell returns `false`.
 pub fn is_obligation(cell: &Cell) -> bool {
-    cell.state.get_heap(OBLIGATION_COLL, KEY_TERMS_DIGEST).is_some()
+    cell.state
+        .get_heap(OBLIGATION_COLL, KEY_TERMS_DIGEST)
+        .is_some()
 }
 
 #[cfg(test)]
@@ -547,7 +571,8 @@ mod tests {
             amount: 50,
             clock: 1000,
         };
-        let moved = discharge(&mut cell, &terms, &step0).expect("on-schedule discharge must accept");
+        let moved =
+            discharge(&mut cell, &terms, &step0).expect("on-schedule discharge must accept");
         assert_eq!(moved, 50);
 
         let view = ObligationState::read(&cell).unwrap();
@@ -580,11 +605,18 @@ mod tests {
         discharge(
             &mut cell,
             &terms,
-            &Discharge { period_index: 0, amount: 50, clock: 1000 },
+            &Discharge {
+                period_index: 0,
+                amount: 50,
+                clock: 1000,
+            },
         )
         .unwrap();
         let after = cell.state_commitment();
-        assert_ne!(before, after, "discharging a period re-seals the commitment");
+        assert_ne!(
+            before, after,
+            "discharging a period re-seals the commitment"
+        );
     }
 
     // ── FORGE-DETECTOR 1: early / not-yet-due discharge ──────────────────────
@@ -601,20 +633,48 @@ mod tests {
         let view = ObligationState::read(&cell).unwrap();
         // honest, on-time at 1000 WOULD accept (non-vacuity).
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
             Ok(50),
             "on-time discharge is live"
         );
         // one block early is refused.
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 0, amount: 50, clock: 999 }),
-            Err(ObligationError::NotYetDue { due_block: 1000, clock: 999 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 999
+                }
+            ),
+            Err(ObligationError::NotYetDue {
+                due_block: 1000,
+                clock: 999
+            }),
             "cannot discharge before the due block"
         );
         // and the mutating path refuses too, leaving the cursor untouched.
         assert_eq!(
-            discharge(&mut cell, &terms, &Discharge { period_index: 0, amount: 50, clock: 999 }),
-            Err(ObligationError::NotYetDue { due_block: 1000, clock: 999 })
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 999
+                }
+            ),
+            Err(ObligationError::NotYetDue {
+                due_block: 1000,
+                clock: 999
+            })
         );
         assert_eq!(ObligationState::read(&cell).unwrap().discharged_count, 0);
     }
@@ -631,8 +691,18 @@ mod tests {
         let view = ObligationState::read(&cell).unwrap();
         // clock is well past period 1's due block (1100), but cursor expects 0.
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 1, amount: 50, clock: 5000 }),
-            Err(ObligationError::WrongPeriod { expected: 0, presented: 1 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 1,
+                    amount: 50,
+                    clock: 5000
+                }
+            ),
+            Err(ObligationError::WrongPeriod {
+                expected: 0,
+                presented: 1
+            }),
             "cannot skip the current period to discharge a later one"
         );
     }
@@ -650,21 +720,50 @@ mod tests {
 
         // honest discharge of period 0.
         assert_eq!(
-            discharge(&mut cell, &terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }),
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
             Ok(50)
         );
 
         // replay of period 0 — cursor now expects 1.
         let view = ObligationState::read(&cell).unwrap();
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }),
-            Err(ObligationError::WrongPeriod { expected: 1, presented: 0 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::WrongPeriod {
+                expected: 1,
+                presented: 0
+            }),
             "a discharged period cannot be discharged again (one-shot)"
         );
         // and the mutating replay path refuses too — total stays at one period.
         assert_eq!(
-            discharge(&mut cell, &terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }),
-            Err(ObligationError::WrongPeriod { expected: 1, presented: 0 })
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::WrongPeriod {
+                expected: 1,
+                presented: 0
+            })
         );
         assert_eq!(ObligationState::read(&cell).unwrap().discharged_total, 50);
     }
@@ -683,19 +782,46 @@ mod tests {
         let view = ObligationState::read(&cell).unwrap();
         // honest exactly-50 accepts (non-vacuity).
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
             Ok(50)
         );
         // over-discharge.
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 0, amount: 9_999, clock: 1000 }),
-            Err(ObligationError::AmountMismatch { owed: 50, presented: 9_999 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 9_999,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::AmountMismatch {
+                owed: 50,
+                presented: 9_999
+            }),
             "cannot discharge more than the schedule owes"
         );
         // under-discharge.
         assert_eq!(
-            view.check_discharge(&terms, &Discharge { period_index: 0, amount: 1, clock: 1000 }),
-            Err(ObligationError::AmountMismatch { owed: 50, presented: 1 }),
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 1,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::AmountMismatch {
+                owed: 50,
+                presented: 1
+            }),
             "cannot under-pay a period"
         );
     }
@@ -713,25 +839,68 @@ mod tests {
         open_obligation(&mut cell, &terms).unwrap();
 
         // discharge ONLY period 0, then let the clock run to 1250.
-        discharge(&mut cell, &terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }).unwrap();
+        discharge(
+            &mut cell,
+            &terms,
+            &Discharge {
+                period_index: 0,
+                amount: 50,
+                clock: 1000,
+            },
+        )
+        .unwrap();
 
         let view = ObligationState::read(&cell).unwrap();
         // By block 1250 the schedule demands 3 periods discharged.
         assert_eq!(terms.periods_due_by(1250), 3);
         assert_eq!(
             view.audit(&terms, 1250),
-            Err(ObligationError::BehindSchedule { required: 3, committed: 1 }),
+            Err(ObligationError::BehindSchedule {
+                required: 3,
+                committed: 1
+            }),
             "a cell that skipped periods 1 and 2 is behind schedule"
         );
 
         // An honest cell that discharged all three periods passes the SAME audit.
         let mut honest = obligation_cell();
         open_obligation(&mut honest, &terms).unwrap();
-        discharge(&mut honest, &terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }).unwrap();
-        discharge(&mut honest, &terms, &Discharge { period_index: 1, amount: 50, clock: 1100 }).unwrap();
-        discharge(&mut honest, &terms, &Discharge { period_index: 2, amount: 50, clock: 1200 }).unwrap();
+        discharge(
+            &mut honest,
+            &terms,
+            &Discharge {
+                period_index: 0,
+                amount: 50,
+                clock: 1000,
+            },
+        )
+        .unwrap();
+        discharge(
+            &mut honest,
+            &terms,
+            &Discharge {
+                period_index: 1,
+                amount: 50,
+                clock: 1100,
+            },
+        )
+        .unwrap();
+        discharge(
+            &mut honest,
+            &terms,
+            &Discharge {
+                period_index: 2,
+                amount: 50,
+                clock: 1200,
+            },
+        )
+        .unwrap();
         let honest_view = ObligationState::read(&honest).unwrap();
-        assert_eq!(honest_view.audit(&terms, 1250), Ok(3), "an on-schedule cell passes the audit");
+        assert_eq!(
+            honest_view.audit(&terms, 1250),
+            Ok(3),
+            "an on-schedule cell passes the audit"
+        );
     }
 
     // ── additional teeth ─────────────────────────────────────────────────────
@@ -748,10 +917,20 @@ mod tests {
         let other = ObligationTerms::new(cid(1), cid(2), cid(9), 51, 100, 1000, 0);
         let view = ObligationState::read(&cell).unwrap();
         assert_eq!(
-            view.check_discharge(&other, &Discharge { period_index: 0, amount: 51, clock: 1000 }),
+            view.check_discharge(
+                &other,
+                &Discharge {
+                    period_index: 0,
+                    amount: 51,
+                    clock: 1000
+                }
+            ),
             Err(ObligationError::TermsMismatch)
         );
-        assert_eq!(view.audit(&other, 1250), Err(ObligationError::TermsMismatch));
+        assert_eq!(
+            view.audit(&other, 1250),
+            Err(ObligationError::TermsMismatch)
+        );
     }
 
     /// A bounded obligation refuses a discharge past its count. A 2-period
@@ -763,20 +942,47 @@ mod tests {
         open_obligation(&mut cell, &terms).unwrap();
 
         assert_eq!(
-            discharge(&mut cell, &terms, &Discharge { period_index: 0, amount: 50, clock: 1000 }),
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
             Ok(50)
         );
         assert_eq!(
-            discharge(&mut cell, &terms, &Discharge { period_index: 1, amount: 50, clock: 1100 }),
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 1,
+                    amount: 50,
+                    clock: 1100
+                }
+            ),
             Ok(50)
         );
         // period 2 is past the bounded count.
         assert_eq!(
-            discharge(&mut cell, &terms, &Discharge { period_index: 2, amount: 50, clock: 1200 }),
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 2,
+                    amount: 50,
+                    clock: 1200
+                }
+            ),
             Err(ObligationError::Completed { count: 2 })
         );
         // a bounded obligation that discharged all its periods is never "behind".
-        assert_eq!(ObligationState::read(&cell).unwrap().audit(&terms, 9_999), Ok(2));
+        assert_eq!(
+            ObligationState::read(&cell).unwrap().audit(&terms, 9_999),
+            Ok(2)
+        );
     }
 
     /// `periods_due_by` is the schedule's ground truth: 0 before start, then one
@@ -785,13 +991,25 @@ mod tests {
     fn periods_due_by_is_correct() {
         let terms = sample_terms(); // start 1000, period 100, unbounded
         assert_eq!(terms.periods_due_by(999), 0, "nothing due before start");
-        assert_eq!(terms.periods_due_by(1000), 1, "period 0 due exactly at start");
-        assert_eq!(terms.periods_due_by(1099), 1, "still only period 0 just before period 1");
+        assert_eq!(
+            terms.periods_due_by(1000),
+            1,
+            "period 0 due exactly at start"
+        );
+        assert_eq!(
+            terms.periods_due_by(1099),
+            1,
+            "still only period 0 just before period 1"
+        );
         assert_eq!(terms.periods_due_by(1100), 2, "period 1 due at 1100");
         assert_eq!(terms.periods_due_by(1250), 3, "periods 0,1,2 due by 1250");
 
         let bounded = ObligationTerms::new(cid(1), cid(2), cid(9), 50, 100, 1000, 2);
-        assert_eq!(bounded.periods_due_by(99_999), 2, "capped at the bounded count");
+        assert_eq!(
+            bounded.periods_due_by(99_999),
+            2,
+            "capped at the bounded count"
+        );
     }
 
     /// Opening ill-formed terms is refused (non-positive amount or period).
@@ -799,12 +1017,18 @@ mod tests {
     fn ill_formed_terms_are_rejected() {
         let mut cell = obligation_cell();
         assert_eq!(
-            open_obligation(&mut cell, &ObligationTerms::new(cid(1), cid(2), cid(9), 0, 100, 1000, 0)),
+            open_obligation(
+                &mut cell,
+                &ObligationTerms::new(cid(1), cid(2), cid(9), 0, 100, 1000, 0)
+            ),
             Err(ObligationError::IllFormedTerms),
             "zero amount is ill-formed"
         );
         assert_eq!(
-            open_obligation(&mut cell, &ObligationTerms::new(cid(1), cid(2), cid(9), 50, 0, 1000, 0)),
+            open_obligation(
+                &mut cell,
+                &ObligationTerms::new(cid(1), cid(2), cid(9), 50, 0, 1000, 0)
+            ),
             Err(ObligationError::IllFormedTerms),
             "zero period is ill-formed"
         );
@@ -814,7 +1038,10 @@ mod tests {
     #[test]
     fn non_obligation_cell_is_rejected() {
         let cell = obligation_cell();
-        assert_eq!(ObligationState::read(&cell), Err(ObligationError::NotAnObligation));
+        assert_eq!(
+            ObligationState::read(&cell),
+            Err(ObligationError::NotAnObligation)
+        );
     }
 
     /// The i64 encode/decode round-trips, including negatives.

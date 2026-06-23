@@ -362,13 +362,22 @@ impl std::fmt::Display for LocationVerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LocationVerifyError::MalformedPublicKey => {
-                write!(f, "session-pubkey is not a valid Ed25519 public-key descriptor")
+                write!(
+                    f,
+                    "session-pubkey is not a valid Ed25519 public-key descriptor"
+                )
             }
             LocationVerifyError::MalformedSignature => {
-                write!(f, "acceptable-location-sig is not a valid Ed25519 sig-val descriptor")
+                write!(
+                    f,
+                    "acceptable-location-sig is not a valid Ed25519 sig-val descriptor"
+                )
             }
             LocationVerifyError::BadSignature => {
-                write!(f, "location signature does not verify against the session public key")
+                write!(
+                    f,
+                    "location signature does not verify against the session public key"
+                )
             }
         }
     }
@@ -459,7 +468,9 @@ pub mod desc {
             }
         }
         let q = named_bytes(params, "q").ok_or(LocationVerifyError::MalformedPublicKey)?;
-        let arr: [u8; 32] = q.try_into().map_err(|_| LocationVerifyError::MalformedPublicKey)?;
+        let arr: [u8; 32] = q
+            .try_into()
+            .map_err(|_| LocationVerifyError::MalformedPublicKey)?;
         Ok(PublicKey(arr))
     }
 
@@ -485,9 +496,7 @@ pub mod desc {
     /// If `v` is a `<label …>` record, return its fields.
     fn record_fields<'a>(v: &'a Value, label: &str) -> Option<&'a [Value]> {
         match v {
-            Value::Record { label: l, fields }
-                if matches!(l.as_ref(), Value::Symbol(s) if s == label) =>
-            {
+            Value::Record { label: l, fields } if matches!(l.as_ref(), Value::Symbol(s) if s == label) => {
                 Some(fields)
             }
             _ => None,
@@ -874,7 +883,10 @@ mod tests {
         // session_pubkey is the OLD opaque junk shape, not <public-key <ecc …>>.
         let ss = StartSession::new(
             CAPTP_VERSION,
-            Value::record("public-key", [Value::symbol("eddsa"), Value::bytes(vec![0u8; 32])]),
+            Value::record(
+                "public-key",
+                [Value::symbol("eddsa"), Value::bytes(vec![0u8; 32])],
+            ),
             LOC,
             desc::ed25519_sig_descriptor(&sig),
         );

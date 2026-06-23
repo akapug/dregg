@@ -14,10 +14,10 @@
 //! needed. No light client, no relay chain, no committee — just math.
 
 use dregg_cell::note::Note;
+use dregg_cell::nullifier_set::NullifierSet;
 use dregg_cell_crypto::note_bridge::{
     BridgedNullifierSet, PortableNoteProof, create_portable_note, verify_portable_note,
 };
-use dregg_cell::nullifier_set::NullifierSet;
 use dregg_types::AttestedRoot;
 
 /// Asset type constant for GOLD.

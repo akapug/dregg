@@ -165,6 +165,7 @@ impl RotatedParticipantLeg {
         after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
         turn_id: Option<BabyBear>,
     ) -> Result<RotatedParticipantLeg, String> {
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
         use dregg_circuit::descriptor_ir2::{
             MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
             prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
@@ -174,7 +175,6 @@ impl RotatedParticipantLeg {
             rotated_descriptor_name_for_effect, transfer_caveat_manifest,
         };
         use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
-        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
 
         // Resolve the rotated descriptor for this turn's single cohort effect — the `*R24` wire
         // name and the staged-registry JSON, exactly as the live SDK rotated prover does
@@ -310,8 +310,8 @@ impl DescriptorParticipant {
 /// does not verify against its descriptor, or whose descriptor is not a registry member, is
 /// rejected here.
 pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize, String> {
-    use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
 
     let leg = &p.rotated;
     // (1) The rotated proof must verify against its carried descriptor over the carried PI

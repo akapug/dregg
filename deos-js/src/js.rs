@@ -31,14 +31,118 @@ use mozjs::rust::{
     evaluate_script, CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS,
 };
 
-use crate::applet::Applet;
+use crate::applet::{Applet, FireError};
+use crate::attach::AttachedApplet;
 use crate::reflect_binding;
 
+/// The substance the native functions drive: EITHER deos-js's own embedded engine
+/// ([`Applet`]) or a PROVIDED live World ([`AttachedApplet`] — the attach path). The
+/// natives call the SAME surface on both (crawl `ledger()`, fire, read, view-state),
+/// so one set of bindings serves both the embedded spike and the live cockpit.
+pub enum JsTarget {
+    /// deos-js's own fresh embedded engine — a private single-cell world.
+    Embedded(Applet),
+    /// A provided live World (the cockpit's real ledger, or a fork) — the attach path.
+    Attached(AttachedApplet),
+}
+
+impl JsTarget {
+    /// The live ledger the reflective crawl walks (the REAL cells of whichever world
+    /// is attached).
+    pub fn ledger(&self) -> &dregg_cell::Ledger {
+        match self {
+            JsTarget::Embedded(a) => a.ledger(),
+            JsTarget::Attached(a) => a.ledger(),
+        }
+    }
+    /// Fire an affordance — ONE cap-gated verified turn (on the embedded engine, or
+    /// the live World). Returns the receipt hash on commit.
+    pub fn fire(&mut self, affordance: &str, arg: i64) -> Result<[u8; 32], FireError> {
+        match self {
+            JsTarget::Embedded(a) => a.fire(affordance, arg).map(|r| r.receipt_hash()),
+            JsTarget::Attached(a) => a.fire(affordance, arg),
+        }
+    }
+    /// Witnessed read of one model field as a u64.
+    pub fn get_u64(&self, slot: usize) -> u64 {
+        match self {
+            JsTarget::Embedded(a) => a.get_u64(slot),
+            JsTarget::Attached(a) => a.get_u64(slot),
+        }
+    }
+    /// The agent/applet cell (the affordance projection's subject).
+    pub fn cell(&self) -> dregg_types::CellId {
+        match self {
+            JsTarget::Embedded(a) => a.cell(),
+            JsTarget::Attached(a) => a.cell(),
+        }
+    }
+    /// The registered affordance specs (name + required authority).
+    pub fn affordance_specs(&self) -> Vec<(String, dregg_cell::AuthRequired)> {
+        match self {
+            JsTarget::Embedded(a) => a.affordance_specs(),
+            JsTarget::Attached(a) => a.affordance_specs(),
+        }
+    }
+    /// The committed receipt count (the audit tape length).
+    pub fn receipt_count(&self) -> usize {
+        match self {
+            JsTarget::Embedded(a) => a.receipt_count(),
+            JsTarget::Attached(a) => a.receipt_count(),
+        }
+    }
+    /// The committed receipt-hash tape (the rewindable lineage).
+    pub fn receipts(&self) -> Vec<[u8; 32]> {
+        match self {
+            JsTarget::Embedded(a) => a.receipts().to_vec(),
+            JsTarget::Attached(a) => a.receipts().to_vec(),
+        }
+    }
+    fn set_view(&mut self, key: &str, value: &str) {
+        match self {
+            JsTarget::Embedded(a) => a.set_view(key, value),
+            JsTarget::Attached(a) => a.set_view(key, value),
+        }
+    }
+    fn get_view(&self, key: &str) -> Option<String> {
+        match self {
+            JsTarget::Embedded(a) => a.get_view(key).map(|s| s.to_string()),
+            JsTarget::Attached(a) => a.get_view(key).map(|s| s.to_string()),
+        }
+    }
+    /// The full committed receipts — the Provenance face's lineage. Empty for the
+    /// attach path (the live World owns the full provenance log; the attach tape
+    /// carries hashes only).
+    fn full_receipts(&self) -> Vec<dregg_turn::turn::TurnReceipt> {
+        match self {
+            JsTarget::Embedded(a) => a.full_receipts().to_vec(),
+            JsTarget::Attached(_) => Vec::new(),
+        }
+    }
+    /// Snapshot the substance for cheap rewind — only the embedded engine supports
+    /// it (a fork is the live World's own rewind primitive). `None` for attach.
+    fn snapshot(&self) -> Option<(Vec<u8>, usize)> {
+        match self {
+            JsTarget::Embedded(a) => Some((a.snapshot(), a.receipt_count())),
+            JsTarget::Attached(_) => None,
+        }
+    }
+    /// Restore the embedded substance to a snapshot. The attach path cannot rewind
+    /// here (the live World rewinds itself).
+    fn restore(&mut self, bytes: &[u8], keep: usize) -> Result<(), String> {
+        match self {
+            JsTarget::Embedded(a) => a.restore(bytes, keep),
+            JsTarget::Attached(_) => Err("attach path cannot rewind in-JS".into()),
+        }
+    }
+}
+
 thread_local! {
-    /// The applet the native functions drive. ONE applet per runtime for the spike
-    /// (the polynomial-functor interface of a single sovereign cell). A real multi-app
-    /// surface would key by an integer handle returned from `deos.applet`.
-    static CURRENT_APPLET: RefCell<Option<Applet>> = const { RefCell::new(None) };
+    /// The substance the native functions drive. ONE target per runtime for the spike
+    /// (the polynomial-functor interface of a single sovereign cell, embedded OR live).
+    /// A real multi-app surface would key by an integer handle returned from
+    /// `deos.applet`.
+    static CURRENT_APPLET: RefCell<Option<JsTarget>> = const { RefCell::new(None) };
     /// The last error message a native produced (surfaced to the test).
     static LAST_NATIVE_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     /// A scratch string for the UTF-8-encode callback to deposit into.
@@ -48,14 +152,40 @@ thread_local! {
     static SNAPSHOTS: RefCell<Vec<(Vec<u8>, usize)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Install the applet the native functions drive.
+/// Install the embedded applet the native functions drive (deos-js's own engine).
 pub fn set_current_applet(applet: Applet) {
-    CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(applet));
+    CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(JsTarget::Embedded(applet)));
 }
 
-/// Take the applet back out (to inspect its ledger/receipts after a JS run).
-pub fn take_current_applet() -> Option<Applet> {
+/// Install an ATTACHED applet — the runtime bound to a PROVIDED live World (the
+/// cockpit's real ledger, or a fork). The crawl + fire then drive that World.
+pub fn set_current_attached(applet: AttachedApplet) {
+    CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(JsTarget::Attached(applet)));
+}
+
+/// Install a fully-formed [`JsTarget`] (embedded or attached) directly.
+pub fn set_current_target(target: JsTarget) {
+    CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(target));
+}
+
+/// Take the target back out (to inspect its ledger/receipts after a JS run).
+pub fn take_current_target() -> Option<JsTarget> {
     CURRENT_APPLET.with(|c| c.borrow_mut().take())
+}
+
+/// Take the EMBEDDED applet back out, if the current target is embedded (else `None`).
+/// Preserves the existing `take_current_applet()` shape for the embedded callers.
+pub fn take_current_applet() -> Option<Applet> {
+    match CURRENT_APPLET.with(|c| c.borrow_mut().take()) {
+        Some(JsTarget::Embedded(a)) => Some(a),
+        other => {
+            // Not embedded — put it back so an attached caller can take it.
+            if let Some(t) = other {
+                CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(t));
+            }
+            None
+        }
+    }
 }
 
 /// The last native-function error, if any.
@@ -339,8 +469,8 @@ unsafe extern "C" fn native_fire(context: *mut RawJSContext, argc: u32, vp: *mut
     let outcome = CURRENT_APPLET.with(|c| {
         let mut guard = c.borrow_mut();
         match guard.as_mut() {
-            Some(applet) => match applet.fire(&name, arg) {
-                Ok(_receipt) => FireOutcome::Committed(applet.get_u64(0) as i32),
+            Some(target) => match target.fire(&name, arg) {
+                Ok(_receipt_hash) => FireOutcome::Committed(target.get_u64(0) as i32),
                 Err(crate::applet::FireError::Unauthorized { .. }) => FireOutcome::Refused,
                 Err(crate::applet::FireError::UnknownAffordance(n)) => {
                     FireOutcome::Fatal(format!("unknown affordance '{n}'"))
@@ -557,7 +687,7 @@ unsafe extern "C" fn native_present(context: *mut RawJSContext, argc: u32, vp: *
             None => return "null".to_string(),
         };
         match reflect_binding::parse_cell_id(&id_hex) {
-            Some(id) => reflect_binding::cell_present_json(applet.ledger(), &id, applet.full_receipts())
+            Some(id) => reflect_binding::cell_present_json(applet.ledger(), &id, &applet.full_receipts())
                 .unwrap_or_else(|| "null".to_string()),
             None => "null".to_string(),
         }
@@ -587,16 +717,12 @@ unsafe extern "C" fn native_snapshot(_context: *mut RawJSContext, argc: u32, vp:
     let args = CallArgs::from_vp(vp, argc);
     let token = CURRENT_APPLET.with(|c| {
         let guard = c.borrow();
-        match guard.as_ref() {
-            Some(a) => {
-                let bytes = a.snapshot();
-                let count = a.receipt_count();
-                SNAPSHOTS.with(|s| {
-                    let mut v = s.borrow_mut();
-                    v.push((bytes, count));
-                    (v.len() - 1) as i32
-                })
-            }
+        match guard.as_ref().and_then(|a| a.snapshot()) {
+            Some((bytes, count)) => SNAPSHOTS.with(|s| {
+                let mut v = s.borrow_mut();
+                v.push((bytes, count));
+                (v.len() - 1) as i32
+            }),
             None => -1,
         }
     });

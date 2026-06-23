@@ -225,13 +225,12 @@ impl TurnExecutor {
         // regenerate the identical trace + PI vector — otherwise the Fiat–Shamir transcript
         // diverges and the FRI proof-of-work witness is rejected (`InvalidPowWitness`).
         let record_digest = dregg_cell::compute_authority_digest_felt(cell);
-        let initial_vm_state =
-            dregg_circuit::CellState::with_capability_root_and_record_digest(
-                pre_balance,
-                pre_nonce,
-                cap_root,
-                record_digest,
-            );
+        let initial_vm_state = dregg_circuit::CellState::with_capability_root_and_record_digest(
+            pre_balance,
+            pre_nonce,
+            cap_root,
+            record_digest,
+        );
         let vm_effects = convert_turn_effects_to_vm(cell_id, turn);
 
         // 3b. WHOLE-TURN FOREST (foolable gap #2, the LIVE-WIRE of the
@@ -281,7 +280,8 @@ impl TurnExecutor {
             // below then binds each run's transition to those same anchored commits.
             if chain.legs[0].before8 != stored_old8 {
                 return Err(TurnError::ProofVerificationFailed(
-                    "rotated verify: cohort chain leg[0].before != stored OLD commitment".to_string(),
+                    "rotated verify: cohort chain leg[0].before != stored OLD commitment"
+                        .to_string(),
                 ));
             }
             if chain.legs[runs.len() - 1].after8 != claimed_new8 {
@@ -322,14 +322,14 @@ impl TurnExecutor {
                     &leg.before8,
                     &leg.after8,
                     cell_committed_height,
-                    0,    // multi-cohort legs run fee-free (chained producer requires turn.fee == 0)
+                    0, // multi-cohort legs run fee-free (chained producer requires turn.fee == 0)
                     true, // is_chain_leg: route the BARE (non-fee) descriptor per the chained producer
                     &ir2_proof,
                 )
                 .map_err(|e| match e {
-                    TurnError::ProofVerificationFailed(m) => TurnError::ProofVerificationFailed(
-                        format!("cohort leg {k}: {m}"),
-                    ),
+                    TurnError::ProofVerificationFailed(m) => {
+                        TurnError::ProofVerificationFailed(format!("cohort leg {k}: {m}"))
+                    }
                     other => other,
                 })?;
                 // Thread s_k → s_{k+1} off the generator's STATE_AFTER columns (the last run's after
@@ -449,12 +449,11 @@ impl TurnExecutor {
         use crate::rotation_witness::{NUM_PRE_LIMBS, committed_height_felt};
         use dregg_circuit::descriptor_ir2::{parse_vm_descriptor2, verify_vm_descriptor2};
         use dregg_circuit::effect_vm::trace_rotated::{
-            RotatedBlockWitness, ROT_PI_COUNT, V1_PI_COUNT, empty_caveat_manifest,
+            ROT_PI_COUNT, RotatedBlockWitness, V1_PI_COUNT, empty_caveat_manifest,
             generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
-            generate_rotated_record_pin_wide,
-            generate_rotated_transfer_shape_wide, generate_rotated_transfer_shape_with_fee_wide,
-            rotated_descriptor_name_for_effect, rotated_descriptor_name_for_effect_fee,
-            transfer_caveat_manifest,
+            generate_rotated_record_pin_wide, generate_rotated_transfer_shape_wide,
+            generate_rotated_transfer_shape_with_fee_wide, rotated_descriptor_name_for_effect,
+            rotated_descriptor_name_for_effect_fee, transfer_caveat_manifest,
         };
         use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
         use dregg_circuit::field::BabyBear;
@@ -485,7 +484,10 @@ impl TurnExecutor {
         // A mismatch would diverge the trace width / Fiat–Shamir ⇒ honest reject, so the two halves
         // route in lock-step.
         let is_fee_transfer = !is_chain_leg
-            && matches!(vm_effects, [dregg_circuit::effect_vm::Effect::Transfer { .. }]);
+            && matches!(
+                vm_effects,
+                [dregg_circuit::effect_vm::Effect::Transfer { .. }]
+            );
         let name = if is_fee_transfer {
             rotated_descriptor_name_for_effect_fee(lead)
         } else {
@@ -2133,9 +2135,7 @@ impl TurnExecutor {
         let mut out = [BabyBear::ZERO; 8];
         for (i, slot) in out.iter_mut().enumerate() {
             let off = i * 4;
-            *slot = BabyBear::new(u32::from_le_bytes(
-                bytes[off..off + 4].try_into().unwrap(),
-            ));
+            *slot = BabyBear::new(u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()));
         }
         out
     }

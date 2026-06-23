@@ -397,8 +397,16 @@ mod tests {
         // pre=canonical pre-root, post=in-circuit-derived insertion root.
         assert_eq!(pis[pi::OLD_LEAF], w.old_leaf_digest);
         assert_eq!(pis[pi::NEW_LEAF], w.new_leaf_digest());
-        assert_eq!(pis[pi::PRE_ROOT], pre.root(), "PRE_ROOT is the canonical pre-state fields_root");
-        assert_eq!(pis[pi::POST_ROOT], w.post_root, "POST_ROOT is DERIVED in-circuit");
+        assert_eq!(
+            pis[pi::PRE_ROOT],
+            pre.root(),
+            "PRE_ROOT is the canonical pre-state fields_root"
+        );
+        assert_eq!(
+            pis[pi::POST_ROOT],
+            w.post_root,
+            "POST_ROOT is DERIVED in-circuit"
+        );
         // A ledgerless client recomputes the audit value from the PUBLIC bytes
         // and confirms the new leaf binds it — no trusted post-cell.
         assert_eq!(
@@ -523,10 +531,18 @@ mod tests {
         let (pre, w) = refusal_witness(&audit);
         let mut siblings = w.siblings.clone();
         siblings[5] = siblings[5] + BabyBear::new(1);
-        let (proof, pis) =
-            prove_insertion_p3(w.old_leaf_digest, w.new_leaf_digest(), &siblings, &w.directions)
-                .expect("the tampered path still proves SOME insertion");
-        assert_ne!(pis[pi::PRE_ROOT], pre.root(), "tampered path tops a different pre-root");
+        let (proof, pis) = prove_insertion_p3(
+            w.old_leaf_digest,
+            w.new_leaf_digest(),
+            &siblings,
+            &w.directions,
+        )
+        .expect("the tampered path still proves SOME insertion");
+        assert_ne!(
+            pis[pi::PRE_ROOT],
+            pre.root(),
+            "tampered path tops a different pre-root"
+        );
         assert!(
             verify_insertion_p3(
                 &proof,

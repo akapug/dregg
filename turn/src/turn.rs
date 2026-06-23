@@ -543,7 +543,11 @@ impl Turn {
                 public_inputs: b.public_inputs.iter().map(|f| f.as_u32()).collect(),
             })
             .collect();
-        self.custom_program_proofs = if proofs.is_empty() { None } else { Some(proofs) };
+        self.custom_program_proofs = if proofs.is_empty() {
+            None
+        } else {
+            Some(proofs)
+        };
         self
     }
 }

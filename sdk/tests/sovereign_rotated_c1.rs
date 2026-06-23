@@ -46,7 +46,8 @@ fn setup_sovereign_cell(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
         commitments_root,
         iroot,
     };
-    let commitment = dregg_cell::commitment::compute_canonical_state_commitment_v9_8(&cell, &v9_ctx);
+    let commitment =
+        dregg_cell::commitment::compute_canonical_state_commitment_v9_8(&cell, &v9_ctx);
 
     let mut cclerk = cclerk;
     cclerk.store_sovereign_state(cell.clone());
@@ -1303,7 +1304,9 @@ mod whole_turn_forest {
         let executor = TurnExecutor::new(ComputronCosts::zero());
         match executor.execute(&turn, &mut ledger) {
             TurnResult::Committed { .. } => {}
-            other => panic!("honest 2-cohort turn must commit through the deployed verifier, got {other:?}"),
+            other => panic!(
+                "honest 2-cohort turn must commit through the deployed verifier, got {other:?}"
+            ),
         }
         let committed = ledger
             .get_sovereign_commitment(&cell_id)
@@ -1367,7 +1370,9 @@ mod whole_turn_forest {
             TurnResult::Rejected { reason, .. } => {
                 let s = format!("{reason:?}");
                 assert!(
-                    s.contains("adjacency") || s.contains("chain") || s.contains("ProofVerificationFailed"),
+                    s.contains("adjacency")
+                        || s.contains("chain")
+                        || s.contains("ProofVerificationFailed"),
                     "expected a chain-adjacency rejection, got: {s}"
                 );
             }
@@ -1437,8 +1442,20 @@ mod wall_a {
         let mut ctx_ledger = Ledger::new();
         let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-        let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-        let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+        let before_w = rw::produce(
+            &before_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
 
         let rotation = RotationTurnWitness::for_effects(before_w, after_w, &vm_effects);
 
@@ -1499,13 +1516,22 @@ mod wall_a {
             .expect("rotated leg present")
             .sub_public_inputs;
         let n = rot_pi.len();
-        assert!(n >= 16, "wide rotated leg must carry the 8-felt commit tail, got {n} PIs");
+        assert!(
+            n >= 16,
+            "wide rotated leg must carry the 8-felt commit tail, got {n} PIs"
+        );
         let pi_before: [dregg_circuit::field::BabyBear; 8] =
             rot_pi[n - 16..n - 8].try_into().expect("slice of len 8");
         let pi_after: [dregg_circuit::field::BabyBear; 8] =
             rot_pi[n - 8..n].try_into().expect("slice of len 8");
-        assert_eq!(pi_before, old_commit, "before anchor must equal the proof's bound PI tail");
-        assert_eq!(pi_after, new_commit, "after anchor must equal the proof's bound PI tail");
+        assert_eq!(
+            pi_before, old_commit,
+            "before anchor must equal the proof's bound PI tail"
+        );
+        assert_eq!(
+            pi_after, new_commit,
+            "after anchor must equal the proof's bound PI tail"
+        );
 
         verify_full_turn(&proof, old_commit, new_commit).expect("rotated full-turn should verify");
     }
@@ -1585,8 +1611,8 @@ mod wall_a {
 mod multi_residue_record_pin {
     use dregg_cell::{Cell, CellId, CellMode, Ledger, Permissions};
     use dregg_sdk::AgentCipherclerk;
-    use dregg_turn::rotation_witness as rw;
     use dregg_turn::Effect;
+    use dregg_turn::rotation_witness as rw;
 
     /// Register a sovereign cell; return the live cipherclerk, the sovereign cell id, the ledger.
     fn setup() -> (AgentCipherclerk, CellId, Ledger) {

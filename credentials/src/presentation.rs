@@ -194,8 +194,11 @@ fn present_impl(
     //
     // We don't trust the holder to remember the exact attenuation; we
     // re-derive it from `credential.attributes`.
-    let root_token =
-        dregg_token::MacaroonToken::mint(credential.root_key, b"dregg-credential", "dregg.fg-goose.online");
+    let root_token = dregg_token::MacaroonToken::mint(
+        credential.root_key,
+        b"dregg-credential",
+        "dregg.fg-goose.online",
+    );
 
     let mut builder =
         BridgePresentationBuilder::new(credential.root_key, credential.federation_root);

@@ -91,10 +91,16 @@ fn exec_single_chained(
     // of, per execute_tree.rs's per-action Refusal witness pass). Supply one
     // blob per distinct referenced index so a refusal turn opens against a real
     // witness rather than the empty list (which is fail-closed rejected).
-    let max_refusal_idx = effects.iter().filter_map(|e| match e {
-        Effect::Refusal { proof_witness_index, .. } => Some(*proof_witness_index as usize),
-        _ => None,
-    }).max();
+    let max_refusal_idx = effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Refusal {
+                proof_witness_index,
+                ..
+            } => Some(*proof_witness_index as usize),
+            _ => None,
+        })
+        .max();
     let mut ab_effects = effects;
     let action = {
         for e in ab_effects.drain(..) {
@@ -656,7 +662,9 @@ fn refusal_bumps_nonce_and_stores_audit() {
         "Refusal (plus executor Phase 1) must bump nonce by 2"
     );
     assert_ne!(
-        after.state.get_field_ext(dregg_cell::state::REFUSAL_AUDIT_EXT_KEY),
+        after
+            .state
+            .get_field_ext(dregg_cell::state::REFUSAL_AUDIT_EXT_KEY),
         before_audit,
         "Refusal must write the audit commitment to the protocol-reserved ext field \
          (REFUSAL_AUDIT_EXT_KEY, folded by fields_root)"

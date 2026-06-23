@@ -1023,7 +1023,10 @@ mod revoke_tombstone_tests {
         assert!(caps.revoke(s)); // exercise a tombstone too
         let bytes = postcard::to_allocvec(&caps).expect("postcard serialize");
         let back: CapabilitySet = postcard::from_bytes(&bytes).expect("postcard round-trip");
-        assert_eq!(back, caps, "a cap-carrying c-list round-trips through postcard");
+        assert_eq!(
+            back, caps,
+            "a cap-carrying c-list round-trips through postcard"
+        );
     }
 
     #[test]

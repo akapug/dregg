@@ -156,10 +156,14 @@ fn seed_job_on(exec: &EmbeddedExecutor, cell: CellId, budget: u64) {
     exec.install_program(cell, job::job_cell_program());
     exec.with_ledger_mut(|ledger| {
         if let Some(c) = ledger.get_mut(&cell) {
-            c.state
-                .set_field(job::JOB_TERMINAL_SLOT as usize, field_from_u64(JOB_TERMINAL));
-            c.state
-                .set_field(job::CLEARANCE_GRAPH_ROOT_SLOT as usize, job::job_clearance_root());
+            c.state.set_field(
+                job::JOB_TERMINAL_SLOT as usize,
+                field_from_u64(JOB_TERMINAL),
+            );
+            c.state.set_field(
+                job::CLEARANCE_GRAPH_ROOT_SLOT as usize,
+                job::job_clearance_root(),
+            );
             c.state
                 .set_field(job::BUDGET_SLOT as usize, field_from_u64(budget));
             c.state
@@ -258,7 +262,9 @@ fn birth_job_cell(
         // Grant the driving agent an owner cap to the job cell so its advance turns are authorized
         // (the same cap-grant the factory-born escrow gets — the inhabitant acts through a held cap).
         if let Some(agent_cell) = ledger.get_mut(&agent) {
-            agent_cell.capabilities.grant(job_cell, AuthRequired::Signature);
+            agent_cell
+                .capabilities
+                .grant(job_cell, AuthRequired::Signature);
         }
     });
     seed_job_on(exec, job_cell, budget);
@@ -319,8 +325,11 @@ pub fn run_first_room() -> Transcript {
     let mut conserved = false;
     if job_done {
         let delivery = escrow::sealed_delivery_digest(b"the-finished-work");
-        exec.submit_action(&payer, escrow::build_ship_action(&payer, escrow_cell, &delivery))
-            .expect("ship the finished work commits");
+        exec.submit_action(
+            &payer,
+            escrow::build_ship_action(&payer, escrow_cell, &delivery),
+        )
+        .expect("ship the finished work commits");
         // Release the escrow IN FULL to the inhabitant (released = escrowed, refunded = 0):
         // conserving by construction.
         exec.submit_action(
@@ -345,10 +354,19 @@ pub fn run_first_room() -> Transcript {
     //     pass — ONLY the skip bites.
     {
         let cheat_job = birth_job_cell(&exec, &payer, &owner, b"cheat-skip", FULL_BUDGET);
-        let skip = job::advance_effects(cheat_job, 2, job::crafter_label(), WorkflowVerb::Make.compartment_label());
+        let skip = job::advance_effects(
+            cheat_job,
+            2,
+            job::crafter_label(),
+            WorkflowVerb::Make.compartment_label(),
+        );
         let action = payer.make_action(cheat_job, "advance_step", skip);
         let res = exec.submit_action(&payer, action);
-        let o = classify(CheatClass::SkipPrerequisite, &res, &["monotonic", "sequence", "field[0]", "program"]);
+        let o = classify(
+            CheatClass::SkipPrerequisite,
+            &res,
+            &["monotonic", "sequence", "field[0]", "program"],
+        );
         // Anti-ghost: nothing committed (cursor holds at 0).
         assert_eq!(cursor_of(&exec, cheat_job), 0, "the skip committed nothing");
         refusals_in_room.push(refusal(&o));
@@ -363,8 +381,16 @@ pub fn run_first_room() -> Transcript {
         advance_job_on(&payer, &exec, cheat_job, job::crafter_label())
             .expect("gather fits the tight budget (3 ≤ 6)");
         let res = advance_job_on(&payer, &exec, cheat_job, job::crafter_label());
-        let o = classify(CheatClass::OverspendBudget, &res, &["lte", "field", "budget", "program"]);
-        assert_eq!(cursor_of(&exec, cheat_job), 1, "the overspend committed nothing");
+        let o = classify(
+            CheatClass::OverspendBudget,
+            &res,
+            &["lte", "field", "budget", "program"],
+        );
+        assert_eq!(
+            cursor_of(&exec, cheat_job),
+            1,
+            "the overspend committed nothing"
+        );
         refusals_in_room.push(refusal(&o));
         cheats.push(o);
     }
@@ -374,10 +400,20 @@ pub fn run_first_room() -> Transcript {
     //     it was granted — its reach is exactly its compartment.
     {
         let cheat_escrow = birth_escrow_cell(&exec, &payer, b"cheat-overreach");
-        exec.submit_action(&payer, escrow::build_list_action(&payer, cheat_escrow, "the-payer", CEILING))
-            .expect("list commits");
-        let res = exec.submit_action(&payer, escrow::build_fund_action(&payer, cheat_escrow, "the-room", 1500));
-        let o = classify(CheatClass::ReachOutsideCompartment, &res, &["lte", "field", "program"]);
+        exec.submit_action(
+            &payer,
+            escrow::build_list_action(&payer, cheat_escrow, "the-payer", CEILING),
+        )
+        .expect("list commits");
+        let res = exec.submit_action(
+            &payer,
+            escrow::build_fund_action(&payer, cheat_escrow, "the-room", 1500),
+        );
+        let o = classify(
+            CheatClass::ReachOutsideCompartment,
+            &res,
+            &["lte", "field", "program"],
+        );
         refusals_in_room.push(refusal(&o));
         cheats.push(o);
     }
@@ -390,8 +426,16 @@ pub fn run_first_room() -> Transcript {
         advance_job_on(&payer, &exec, cheat_job, job::hauler_label())
             .expect("hauler clears gather (hauler→gather edge)");
         let res = advance_job_on(&payer, &exec, cheat_job, job::hauler_label());
-        let o = classify(CheatClass::UngrantedVerb, &res, &["dominate", "clearance", "program"]);
-        assert_eq!(cursor_of(&exec, cheat_job), 1, "the ungranted-verb attempt committed nothing");
+        let o = classify(
+            CheatClass::UngrantedVerb,
+            &res,
+            &["dominate", "clearance", "program"],
+        );
+        assert_eq!(
+            cursor_of(&exec, cheat_job),
+            1,
+            "the ungranted-verb attempt committed nothing"
+        );
         refusals_in_room.push(refusal(&o));
         cheats.push(o);
     }
@@ -402,18 +446,38 @@ pub fn run_first_room() -> Transcript {
     //     You cannot get paid for value that does not exist.
     {
         let cheat_escrow = birth_escrow_cell(&exec, &payer, b"cheat-unapproved-release");
-        exec.submit_action(&payer, escrow::build_list_action(&payer, cheat_escrow, "the-payer", CEILING))
-            .expect("list commits");
-        exec.submit_action(&payer, escrow::build_fund_action(&payer, cheat_escrow, "the-room", REWARD))
-            .expect("fund commits");
+        exec.submit_action(
+            &payer,
+            escrow::build_list_action(&payer, cheat_escrow, "the-payer", CEILING),
+        )
+        .expect("list commits");
+        exec.submit_action(
+            &payer,
+            escrow::build_fund_action(&payer, cheat_escrow, "the-room", REWARD),
+        )
+        .expect("fund commits");
         let delivery = escrow::sealed_delivery_digest(b"goods");
-        exec.submit_action(&payer, escrow::build_ship_action(&payer, cheat_escrow, &delivery))
-            .expect("ship commits");
-        let res = exec.submit_action(&payer, escrow::build_settle_action(&payer, cheat_escrow, 900, 0));
-        let o = classify(CheatClass::ReleaseWithoutApproval, &res, &["sum", "affine", "conserv", "eq", "program"]);
+        exec.submit_action(
+            &payer,
+            escrow::build_ship_action(&payer, cheat_escrow, &delivery),
+        )
+        .expect("ship commits");
+        let res = exec.submit_action(
+            &payer,
+            escrow::build_settle_action(&payer, cheat_escrow, 900, 0),
+        );
+        let o = classify(
+            CheatClass::ReleaseWithoutApproval,
+            &res,
+            &["sum", "affine", "conserv", "eq", "program"],
+        );
         // Anti-ghost: the escrow did NOT reach SETTLED on the conjuring settle.
         let st = exec.cell_state(cheat_escrow).unwrap();
-        assert_ne!(read_u64(&st.fields[STATE_SLOT]), STATE_SETTLED, "the conjuring settle committed nothing");
+        assert_ne!(
+            read_u64(&st.fields[STATE_SLOT]),
+            STATE_SETTLED,
+            "the conjuring settle committed nothing"
+        );
         refusals_in_room.push(refusal(&o));
         cheats.push(o);
     }
@@ -452,10 +516,14 @@ pub fn run_first_room() -> Transcript {
         cell: payer.cell_id(),
         short: short_hex(&payer.cell_id()),
         name: "the payer".to_string(),
-        mandate: format!("ESCROW: a conserved reward pool (ceiling {CEILING}); releases ONLY a balanced split (released + refunded == escrowed)"),
+        mandate: format!(
+            "ESCROW: a conserved reward pool (ceiling {CEILING}); releases ONLY a balanced split (released + refunded == escrowed)"
+        ),
         committed_actions: vec![
             GenuineAction {
-                summary: format!("escrow funded: {funded_reward} (≤ ceiling {CEILING}) — the reward pool"),
+                summary: format!(
+                    "escrow funded: {funded_reward} (≤ ceiling {CEILING}) — the reward pool"
+                ),
                 receipt_hash: [0u8; 32],
             },
             GenuineAction {
@@ -598,7 +666,11 @@ mod tests {
         ];
         for (o, exp) in t.cheats.iter().zip(expected) {
             assert_eq!(o.class, exp);
-            assert!(o.refused, "cheat [{}] must be REFUSED in-band, got {o:#?}", o.class.label());
+            assert!(
+                o.refused,
+                "cheat [{}] must be REFUSED in-band, got {o:#?}",
+                o.class.label()
+            );
             assert!(
                 o.tooth_cited,
                 "cheat [{}] must be refused on its tooth {}, got reason: {}",
@@ -615,21 +687,37 @@ mod tests {
         // THE ROOM, FELT: the room contains the colonist (held mandate + genuine actions + pay) and
         // the payer; every refusal is surfaced in-room with the receipt-why.
         let t = run_first_room();
-        assert_eq!(t.room.occupancy(), 2, "the colonist and the payer are in the room");
+        assert_eq!(
+            t.room.occupancy(),
+            2,
+            "the colonist and the payer are in the room"
+        );
         let colonist = &t.room.inhabitants[0];
         assert_eq!(colonist.name, "the colonist");
         assert!(!colonist.mandate.is_empty(), "the held mandate is shown");
-        assert_eq!(colonist.committed_count(), 3, "three genuine job actions rendered");
+        assert_eq!(
+            colonist.committed_count(),
+            3,
+            "three genuine job actions rendered"
+        );
         assert_eq!(colonist.paid, REWARD, "the pay is rendered in-room");
         // Every cheat rendered as an in-room refusal carrying the why.
         assert_eq!(colonist.refusals.len(), 5, "five in-room refusals");
         for r in &colonist.refusals {
             assert!(!r.attempted.is_empty());
-            assert!(r.reason.contains("refused by"), "the refusal carries the tooth + why: {}", r.reason);
+            assert!(
+                r.reason.contains("refused by"),
+                "the refusal carries the tooth + why: {}",
+                r.reason
+            );
         }
         // The room-wide refusal surface sees them all.
         assert_eq!(t.room.refusals().len(), 5);
         // The genuine activity is there too (the colonist's 3 committed actions).
-        assert_eq!(t.room.committed_action_count(), 3 + 2, "colonist 3 + payer 2 (fund/release) shown");
+        assert_eq!(
+            t.room.committed_action_count(),
+            3 + 2,
+            "colonist 3 + payer 2 (fund/release) shown"
+        );
     }
 }

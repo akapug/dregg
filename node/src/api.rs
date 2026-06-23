@@ -1924,7 +1924,8 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     // The DEFAULT-ON producer INSTALLS verified state only for the swap-safe (root-agreeing) set;
     // report that, not the wider "merely mappable" surface, so the status is honest about what the
     // verified executor actually commits.
-    let producer_covered_effects = dregg_exec_lean::lean_shadow::producer_root_agreeing_effects().len();
+    let producer_covered_effects =
+        dregg_exec_lean::lean_shadow::producer_root_agreeing_effects().len();
 
     Json(StatusResponse {
         healthy,

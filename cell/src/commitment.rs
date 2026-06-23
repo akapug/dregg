@@ -976,7 +976,9 @@ pub fn fields_root_felt(fields_root: &[u8; 32]) -> dregg_circuit::field::BabyBea
 /// weld (`EffectVmEmitRotationV3.rotateV3WithPermsVKGate`) FORCES the AFTER perms-digest limb EQUAL to
 /// this declared param (PI-anchored via `effects_hash`), so a forged post-permissions is UNSAT for a
 /// ledgerless client. The CANONICAL definition; `turn::rotation_witness::perms_digest_felt` calls it.
-pub fn perms_digest_felt(perms: &crate::permissions::Permissions) -> dregg_circuit::field::BabyBear {
+pub fn perms_digest_felt(
+    perms: &crate::permissions::Permissions,
+) -> dregg_circuit::field::BabyBear {
     let bytes = postcard::to_allocvec(perms).unwrap_or_default();
     let h = blake3::hash(&bytes);
     dregg_circuit::effect_vm::bytes32_to_8_limbs(h.as_bytes())[0]
@@ -987,9 +989,7 @@ pub fn perms_digest_felt(perms: &crate::permissions::Permissions) -> dregg_circu
 /// (revoke) mapping to the all-zero limb (the deployed `vk_hash == [0; 8]` convention). The setVK weld
 /// forces the AFTER vk-digest limb to this declared param, closing the upgrade-safety (post-VK)
 /// light-client forgery. CANONICAL; `turn::rotation_witness::vk_digest_felt` calls it.
-pub fn vk_digest_felt(
-    vk: &Option<crate::cell::VerificationKey>,
-) -> dregg_circuit::field::BabyBear {
+pub fn vk_digest_felt(vk: &Option<crate::cell::VerificationKey>) -> dregg_circuit::field::BabyBear {
     match vk {
         Some(v) => {
             let bytes = postcard::to_allocvec(v).unwrap_or_default();
@@ -1253,7 +1253,10 @@ mod tests {
         struct Lcg(u64);
         impl Lcg {
             fn next(&mut self) -> u64 {
-                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                self.0 = self
+                    .0
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 self.0 >> 16
             }
             fn pick(&mut self, n: u64) -> u64 {
@@ -1282,12 +1285,15 @@ mod tests {
             let mut live_slots: Vec<u32> = Vec::new();
 
             for step in 0..120u64 {
-                let target =
-                    CellId::derive_raw(&test_key((lcg.pick(250) + 1) as u8), &test_token((lcg.pick(250) + 1) as u8));
+                let target = CellId::derive_raw(
+                    &test_key((lcg.pick(250) + 1) as u8),
+                    &test_token((lcg.pick(250) + 1) as u8),
+                );
                 match lcg.pick(9) {
                     0 => {
                         // grant
-                        if let Some(slot) = cell.capabilities.grant(target, AuthRequired::Signature) {
+                        if let Some(slot) = cell.capabilities.grant(target, AuthRequired::Signature)
+                        {
                             live_slots.push(slot);
                         }
                     }
@@ -1304,7 +1310,8 @@ mod tests {
                     2 => {
                         // grant_with_expiry
                         if let Some(slot) =
-                            cell.capabilities.grant_with_expiry(target, AuthRequired::Proof, 1000)
+                            cell.capabilities
+                                .grant_with_expiry(target, AuthRequired::Proof, 1000)
                         {
                             live_slots.push(slot);
                         }
@@ -1336,8 +1343,10 @@ mod tests {
                         if !live_slots.is_empty() {
                             let idx = lcg.pick(live_slots.len() as u64) as usize;
                             let slot = live_slots[idx];
-                            if let Some(cap) =
-                                cell.capabilities.iter_mut().find(|r: &&mut CapabilityRef| r.slot == slot)
+                            if let Some(cap) = cell
+                                .capabilities
+                                .iter_mut()
+                                .find(|r: &&mut CapabilityRef| r.slot == slot)
                             {
                                 cap.expires_at = Some(lcg.next());
                             }
@@ -1906,7 +1915,11 @@ mod tests {
         let cell = Cell::with_balance(test_key(7), test_token(0), 100_000);
         let pre = compute_rotated_pre_limbs(&cell, &v9_ctx(11, 22));
         assert_eq!(pre.len(), V9_NUM_PRE_LIMBS);
-        assert_eq!(pre.len(), 37, "33 base + disc + perms + vk + mode + fields_root (WAVE-2/3)");
+        assert_eq!(
+            pre.len(),
+            37,
+            "33 base + disc + perms + vk + mode + fields_root (WAVE-2/3)"
+        );
         // cells_root rides limb 0; the welded r0 (balance_lo) is non-zero for a funded cell.
         assert_eq!(pre[0], BabyBear::new(11));
         let (lo, _hi) = dregg_circuit::effect_vm::split_u64(100_000u64);
@@ -1918,7 +1931,11 @@ mod tests {
             "commitments_root rides limb 27"
         );
         // limb 32 is the lifecycle_disc (a Live cell's disc is 0).
-        assert_eq!(pre[32], BabyBear::new(0), "lifecycle_disc rides limb 32 (Live=0)");
+        assert_eq!(
+            pre[32],
+            BabyBear::new(0),
+            "lifecycle_disc rides limb 32 (Live=0)"
+        );
         // limbs 33,34 are the WAVE-2 perms-digest / vk-digest sub-limbs (= the declared-param felts).
         assert_eq!(
             pre[33],
@@ -2094,4 +2111,3 @@ mod tests {
         assert_eq!(&bytes[4..], &[0u8; 28], "felt encoding zero-pads the tail");
     }
 }
-

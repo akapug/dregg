@@ -78,9 +78,17 @@ fn lean_discharge_replay(
 
 /// Build a root macaroon with one third-party caveat, returning (root, discharge_key, ticket).
 fn root_with_3p(root_key: &[u8; 32], shared_key: &[u8; 32]) -> (Macaroon, [u8; 32], Vec<u8>) {
-    let mut mac = Macaroon::new(root_key, b"kid-root".to_vec(), "https://dregg.fg-goose.online".into());
-    mac.add_third_party("https://auth.dregg.fg-goose.online", shared_key, CaveatSet::new())
-        .unwrap();
+    let mut mac = Macaroon::new(
+        root_key,
+        b"kid-root".to_vec(),
+        "https://dregg.fg-goose.online".into(),
+    );
+    mac.add_third_party(
+        "https://auth.dregg.fg-goose.online",
+        shared_key,
+        CaveatSet::new(),
+    )
+    .unwrap();
     let tp_caveats = mac.caveats.third_party_caveats();
     let tp = crate::caveat_3p::ThirdPartyCaveat::decode_body(&tp_caveats[0].body).unwrap();
     let wire_ticket =
@@ -100,7 +108,12 @@ fn lean_replay_matches_real_discharge_chain() {
     let shared_key = crypto::random_key();
     let (mac, dk, ticket) = root_with_3p(&root_key, &shared_key);
 
-    let mut discharge = create_discharge(ticket, &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+    let mut discharge = create_discharge(
+        ticket,
+        &dk,
+        "https://auth.dregg.fg-goose.online".into(),
+        &[],
+    );
     // Record the UNBOUND tail and compare to Lean replay (no binding).
     let nonce_bytes = discharge.nonce.encode();
     let lean_unbound = lean_discharge_replay(&dk, &nonce_bytes, &[], None);
@@ -127,7 +140,12 @@ fn bound_discharge_verifies() {
     let root_key = crypto::random_key();
     let shared_key = crypto::random_key();
     let (mac, dk, ticket) = root_with_3p(&root_key, &shared_key);
-    let mut discharge = create_discharge(ticket, &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+    let mut discharge = create_discharge(
+        ticket,
+        &dk,
+        "https://auth.dregg.fg-goose.online".into(),
+        &[],
+    );
     mac.bind_discharge(&mut discharge);
     assert!(
         mac.verify(&root_key, &[discharge]).is_ok(),
@@ -143,7 +161,12 @@ fn unbound_discharge_rejected() {
     let shared_key = crypto::random_key();
     let (mac, dk, ticket) = root_with_3p(&root_key, &shared_key);
     // Create the discharge but DO NOT bind it.
-    let discharge = create_discharge(ticket, &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+    let discharge = create_discharge(
+        ticket,
+        &dk,
+        "https://auth.dregg.fg-goose.online".into(),
+        &[],
+    );
     assert!(
         mac.verify(&root_key, &[discharge]).is_err(),
         "unbound discharge must be rejected (fail-closed)"
@@ -163,7 +186,12 @@ fn binding_not_replayable_to_other_root() {
     let (mac1, dk, ticket) = root_with_3p(&root_key1, &shared_key);
 
     // Build a discharge and bind it to R1.
-    let mut discharge = create_discharge(ticket.clone(), &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+    let mut discharge = create_discharge(
+        ticket.clone(),
+        &dk,
+        "https://auth.dregg.fg-goose.online".into(),
+        &[],
+    );
     mac1.bind_discharge(&mut discharge);
     assert!(
         mac1.verify(&root_key1, &[discharge.clone()]).is_ok(),

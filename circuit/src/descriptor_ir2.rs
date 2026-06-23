@@ -2163,7 +2163,8 @@ where
                 let q01_pad_abs = AB::Expr::from_u64(1848);
                 for i in 0..2 {
                     let inp: AB::Expr = local[CHIP_IN0 + i].into();
-                    builder.assert_zero(inp * (q01.clone() + q01_pad_abs.clone() * is_fact.clone()));
+                    builder
+                        .assert_zero(inp * (q01.clone() + q01_pad_abs.clone() * is_fact.clone()));
                 }
                 // in2: genuine for arity ∈ {3,4,7,11}; pinned on {0,2} and fact.
                 builder.assert_zero(
@@ -2192,7 +2193,8 @@ where
                 // (incl. 7 — the largest narrow arity uses lanes 0..6). The old `state[7]=0` pin
                 // is now the in7 case here, LIFTED for arity 11 which genuinely seeds in7..in10.
                 for i in 7..CHIP_WIDE_ARITY {
-                    builder.assert_zero(local[CHIP_IN0 + i].into() * (arity.clone() - eleven.clone()));
+                    builder
+                        .assert_zero(local[CHIP_IN0 + i].into() * (arity.clone() - eleven.clone()));
                 }
                 // The three AMBIGUOUS seed-source columns S4/S5/S6, pinned by SIDE constraints
                 // (off the S-box path). When `seed456 = 0` (rate-4 / fact): S4 = arity tag,
@@ -2960,7 +2962,10 @@ fn perm_lanes(st: [BabyBear; POSEIDON2_WIDTH]) -> [BabyBear; CHIP_OUT_LANES] {
 /// returns `perm_lanes(seed)[1..8]` — `state[1..8]` of the SINGLE final permutation. This is the
 /// fill every chip-bearing producer writes into a hash site's lane columns so the 17-wide chip
 /// lookup matches (`out[i] == lane[i]`); a forged lane is UNSAT. `arity ≤ CHIP_RATE`.
-pub(crate) fn chip_absorb_lanes(arity: usize, inputs: &[BabyBear]) -> [BabyBear; CHIP_OUT_LANES - 1] {
+pub(crate) fn chip_absorb_lanes(
+    arity: usize,
+    inputs: &[BabyBear],
+) -> [BabyBear; CHIP_OUT_LANES - 1] {
     debug_assert!(arity <= CHIP_RATE && inputs.len() >= arity.min(CHIP_RATE));
     let big = arity == 7;
     let wide = arity == CHIP_WIDE_ARITY;
@@ -3034,7 +3039,9 @@ pub fn chip_absorb_all_lanes(arity: usize, inputs: &[BabyBear]) -> [BabyBear; CH
 /// forged lane is UNSAT (`ir2_forged_output_lane_refuses`). Idempotent on the lane columns.
 pub fn fill_chip_lanes(desc: &EffectVmDescriptor2, row: &mut [BabyBear]) {
     for k in &desc.constraints {
-        let VmConstraint2::Lookup(l) = k else { continue };
+        let VmConstraint2::Lookup(l) = k else {
+            continue;
+        };
         if l.table != TID_P2 {
             continue;
         }
@@ -4141,8 +4148,16 @@ fn build_traces(
             }
             row[CHIP_MULT] = BabyBear::new((*mult % (BABYBEAR_P as u64)) as u32);
             row[CHIP_IS_FACT] = BabyBear::ZERO;
-            row[CHIP_BIG] = if big_row { BabyBear::ONE } else { BabyBear::ZERO };
-            row[CHIP_WIDE] = if wide_row { BabyBear::ONE } else { BabyBear::ZERO };
+            row[CHIP_BIG] = if big_row {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            };
+            row[CHIP_WIDE] = if wide_row {
+                BabyBear::ONE
+            } else {
+                BabyBear::ZERO
+            };
             // Seed-source columns, mirroring the AIR's S4/S5/S6 blend (is_fact = 0 here).
             if seed456 {
                 row[CHIP_S4] = BabyBear::new(tuple[CHIP_IN0 + 4]);
@@ -4696,7 +4711,12 @@ mod tests {
         // And the lanes 1..7 the producer fill helper writes match plain[1..8].
         let absorb = chip_absorb_lanes(CHIP_WIDE_ARITY, &ins);
         for j in 0..(CHIP_OUT_LANES - 1) {
-            assert_eq!(plain[j + 1], absorb[j], "chip_absorb_lanes lane {} mismatch", j + 1);
+            assert_eq!(
+                plain[j + 1],
+                absorb[j],
+                "chip_absorb_lanes lane {} mismatch",
+                j + 1
+            );
         }
     }
 
@@ -5225,13 +5245,8 @@ mod tests {
         // Honest first: a genuine wide absorb PROVES (the wide arity is admitted + satisfiable).
         // No mem/map ops in this descriptor → empty boundary + empty heap.
         let rows = wide_test_trace();
-        if let Err(e) = prove_vm_descriptor2(
-            &desc,
-            &rows,
-            &[],
-            &MemBoundaryWitness::default(),
-            &[],
-        ) {
+        if let Err(e) = prove_vm_descriptor2(&desc, &rows, &[], &MemBoundaryWitness::default(), &[])
+        {
             panic!("honest arity-11 wide absorb must prove — the wide arity is unusable: {e}");
         }
         // Forge input felt 8 (col 9 = in8, a CARRIER felt past the old rate-7 cap). The lanes were

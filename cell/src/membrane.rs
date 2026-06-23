@@ -60,7 +60,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::facet::{is_facet_attenuation, EffectMask};
+use crate::facet::{EffectMask, is_facet_attenuation};
 use crate::id::CellId;
 
 /// One inner authority the membrane holds — a facet (`mask`) over a target
@@ -397,8 +397,14 @@ mod tests {
 
     #[test]
     fn compose_is_the_meet() {
-        let a = HeldFacet::new(cell(1), EFFECT_SET_FIELD | EFFECT_TRANSFER | EFFECT_EMIT_EVENT);
-        let b = HeldFacet::new(cell(1), EFFECT_TRANSFER | EFFECT_EMIT_EVENT | EFFECT_SET_PERMISSIONS);
+        let a = HeldFacet::new(
+            cell(1),
+            EFFECT_SET_FIELD | EFFECT_TRANSFER | EFFECT_EMIT_EVENT,
+        );
+        let b = HeldFacet::new(
+            cell(1),
+            EFFECT_TRANSFER | EFFECT_EMIT_EVENT | EFFECT_SET_PERMISSIONS,
+        );
         // only TRANSFER and EMIT_EVENT are in BOTH.
         assert_eq!(compose_both(&a, &b), EFFECT_TRANSFER | EFFECT_EMIT_EVENT);
         assert_eq!(
@@ -547,9 +553,15 @@ mod tests {
         // floor — must be refused even with both presented.
         let a = HeldFacet::new(cell(1), EFFECT_TRANSFER); // floor will be TRANSFER
         let b = HeldFacet::new(cell(1), EFFECT_TRANSFER);
-        let m = Membrane::maximal(cell(9), a.clone(), b.clone(), CompositionPolicy::BothOf, cell(1))
-            .seal()
-            .unwrap();
+        let m = Membrane::maximal(
+            cell(9),
+            a.clone(),
+            b.clone(),
+            CompositionPolicy::BothOf,
+            cell(1),
+        )
+        .seal()
+        .unwrap();
         let err = m
             .exercise(&Presentation::both(a, b), EFFECT_SET_FIELD)
             .unwrap_err();
@@ -590,14 +602,23 @@ mod tests {
         // membrane, exposed ⊑ a & b.
         for (am, bm) in [
             (EFFECT_TRANSFER | EFFECT_EMIT_EVENT, EFFECT_TRANSFER),
-            (EFFECT_SET_FIELD | EFFECT_TRANSFER, EFFECT_TRANSFER | EFFECT_EMIT_EVENT),
+            (
+                EFFECT_SET_FIELD | EFFECT_TRANSFER,
+                EFFECT_TRANSFER | EFFECT_EMIT_EVENT,
+            ),
             (EFFECT_ALL_TEST, EFFECT_TRANSFER | EFFECT_SET_FIELD),
         ] {
             let a = HeldFacet::new(cell(1), am);
             let b = HeldFacet::new(cell(1), bm);
-            let m = Membrane::maximal(cell(9), a.clone(), b.clone(), CompositionPolicy::BothOf, cell(1))
-                .seal()
-                .unwrap();
+            let m = Membrane::maximal(
+                cell(9),
+                a.clone(),
+                b.clone(),
+                CompositionPolicy::BothOf,
+                cell(1),
+            )
+            .seal()
+            .unwrap();
             let exposed = m.cap_c().authority;
             let meet = compose_both(&a, &b);
             assert_eq!(exposed & meet, exposed, "exposed must be ⊑ a & b");

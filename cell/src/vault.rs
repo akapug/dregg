@@ -336,15 +336,24 @@ impl std::fmt::Display for VaultError {
             VaultError::TermsMismatch => write!(f, "supplied terms do not match the bound vault"),
             VaultError::IllFormedTerms => write!(f, "vault terms are not well-formed"),
             VaultError::WrongBeneficiary => write!(f, "claimant is not the vault's beneficiary"),
-            VaultError::HeightNotReached { at_block, release_height } => write!(
+            VaultError::HeightNotReached {
+                at_block,
+                release_height,
+            } => write!(
                 f,
                 "early release: claimed at block {at_block} but release height is {release_height}"
             ),
             VaultError::ProofMismatch => {
-                write!(f, "forged condition-proof: witness does not satisfy the committed condition")
+                write!(
+                    f,
+                    "forged condition-proof: witness does not satisfy the committed condition"
+                )
             }
             VaultError::AlreadySettled => {
-                write!(f, "vault already settled (one-shot): cannot be claimed twice")
+                write!(
+                    f,
+                    "vault already settled (one-shot): cannot be claimed twice"
+                )
             }
         }
     }
@@ -474,7 +483,9 @@ impl VaultState {
         }
         // The released value is the COMMITTED amount — a claim cannot release more
         // than the vault locked.
-        Ok(ClaimOutcome { released: self.amount })
+        Ok(ClaimOutcome {
+            released: self.amount,
+        })
     }
 }
 
@@ -502,8 +513,7 @@ pub fn open_vault(cell: &mut Cell, terms: &VaultTerms) -> Result<(), VaultError>
 pub fn claim(cell: &mut Cell, terms: &VaultTerms, step: &Claim) -> Result<i64, VaultError> {
     let view = VaultState::read(cell)?;
     let outcome = view.check_claim(terms, step)?;
-    cell.state
-        .set_heap(VAULT_COLL, KEY_SETTLED, encode_i64(1));
+    cell.state.set_heap(VAULT_COLL, KEY_SETTLED, encode_i64(1));
     Ok(outcome.released)
 }
 
@@ -567,15 +577,24 @@ mod tests {
 
         // before release, not claimable; at release, claimable.
         let view = VaultState::read(&cell).unwrap();
-        assert!(!is_claimable_at(&view, &terms, 10_999, b""), "not yet claimable");
-        assert!(is_claimable_at(&view, &terms, 11_000, b""), "claimable at release");
+        assert!(
+            !is_claimable_at(&view, &terms, 10_999, b""),
+            "not yet claimable"
+        );
+        assert!(
+            is_claimable_at(&view, &terms, 11_000, b""),
+            "claimable at release"
+        );
 
         let released = claim(&mut cell, &terms, &Claim::at_height(cid(1), 11_500))
             .expect("a height claim after release must accept");
         assert_eq!(released, 500);
 
         let settled = VaultState::read(&cell).unwrap();
-        assert!(settled.settled, "the vault is marked settled after a genuine claim");
+        assert!(
+            settled.settled,
+            "the vault is marked settled after a genuine claim"
+        );
     }
 
     /// BONUS HONEST PATH: a hashlock vault claimed with the GENUINE preimage
@@ -613,10 +632,16 @@ mod tests {
         let bare = cell.state_commitment();
         open_vault(&mut cell, &terms).unwrap();
         let opened = cell.state_commitment();
-        assert_ne!(bare, opened, "opening the vault seals it into the commitment");
+        assert_ne!(
+            bare, opened,
+            "opening the vault seals it into the commitment"
+        );
         claim(&mut cell, &terms, &Claim::at_height(cid(1), 11_500)).unwrap();
         let claimed = cell.state_commitment();
-        assert_ne!(opened, claimed, "claiming re-seals the commitment (the settle is visible)");
+        assert_ne!(
+            opened, claimed,
+            "claiming re-seals the commitment (the settle is visible)"
+        );
     }
 
     // ── FORGE-DETECTOR 1: early release (height not reached) ─────────────────
@@ -640,15 +665,24 @@ mod tests {
         // early: one block before the release height.
         assert_eq!(
             view.check_claim(&terms, &Claim::at_height(cid(1), 10_999)),
-            Err(VaultError::HeightNotReached { at_block: 10_999, release_height: 11_000 }),
+            Err(VaultError::HeightNotReached {
+                at_block: 10_999,
+                release_height: 11_000
+            }),
             "cannot release before the timelock"
         );
         // the mutating path refuses too, leaving the vault unsettled.
         assert_eq!(
             claim(&mut cell, &terms, &Claim::at_height(cid(1), 10_999)),
-            Err(VaultError::HeightNotReached { at_block: 10_999, release_height: 11_000 })
+            Err(VaultError::HeightNotReached {
+                at_block: 10_999,
+                release_height: 11_000
+            })
         );
-        assert!(!VaultState::read(&cell).unwrap().settled, "an early claim does not settle");
+        assert!(
+            !VaultState::read(&cell).unwrap().settled,
+            "an early claim does not settle"
+        );
     }
 
     // ── FORGE-DETECTOR 2: forged condition-proof (wrong preimage) ────────────
@@ -682,7 +716,11 @@ mod tests {
         );
         // the mutating path refuses too, leaving the vault unsettled.
         assert_eq!(
-            claim(&mut cell, &terms, &Claim::on_proof(cid(1), 0, b"WRONG-preimage")),
+            claim(
+                &mut cell,
+                &terms,
+                &Claim::on_proof(cid(1), 0, b"WRONG-preimage")
+            ),
             Err(VaultError::ProofMismatch)
         );
         assert!(!VaultState::read(&cell).unwrap().settled);
@@ -708,7 +746,10 @@ mod tests {
         );
 
         // the honest claim settles the vault.
-        assert_eq!(claim(&mut cell, &terms, &Claim::at_height(cid(1), 11_500)), Ok(500));
+        assert_eq!(
+            claim(&mut cell, &terms, &Claim::at_height(cid(1), 11_500)),
+            Ok(500)
+        );
 
         // now the replay is rejected by the one-shot flag.
         let settled = VaultState::read(&cell).unwrap();
@@ -811,8 +852,16 @@ mod tests {
         let height = VaultTerms::at_height(cid(1), cid(9), 500, 11_000);
         let proof = VaultTerms::on_proof(cid(1), cid(9), 500, 11_000, b"secret-a");
         let proof_b = VaultTerms::on_proof(cid(1), cid(9), 500, 11_000, b"secret-b");
-        assert_ne!(height.digest(), proof.digest(), "condition kind distinguishes");
-        assert_ne!(proof.digest(), proof_b.digest(), "hashlock target distinguishes");
+        assert_ne!(
+            height.digest(),
+            proof.digest(),
+            "condition kind distinguishes"
+        );
+        assert_ne!(
+            proof.digest(),
+            proof_b.digest(),
+            "hashlock target distinguishes"
+        );
     }
 
     /// The i64 amount encode/decode round-trips, including negatives.

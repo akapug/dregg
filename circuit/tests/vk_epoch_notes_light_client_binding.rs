@@ -56,8 +56,8 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
 use dregg_circuit::effect_vm::trace_rotated::{
-    AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT, BEFORE_BASE,
-    GRAD_ROT_WIDTH, ROT_WIDTH, RotatedBlockWitness, append_wide_carriers, empty_caveat_manifest,
+    AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT, BEFORE_BASE, GRAD_ROT_WIDTH,
+    ROT_WIDTH, RotatedBlockWitness, append_wide_carriers, empty_caveat_manifest,
     generate_rotated_note_create_trace_with_commitments_tree, generate_rotated_note_create_wide,
     generate_rotated_note_spend_trace_with_nullifier_tree, recompute_after_blocks_for_test,
     rotated_descriptor_name_for_effect,
@@ -172,10 +172,20 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[7u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = empty_caveat_manifest();
     let mem_boundary = MemBoundaryWitness::default();
@@ -183,8 +193,14 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     // A non-empty BEFORE nullifier set (distinct from the spent nullifier `0xBEEF`) — the openable
     // sorted-Poseidon2 accumulator the grow-gate forces against.
     let before_nullifiers = vec![
-        HeapLeaf { addr: BabyBear::new(0x1111), value: BabyBear::new(1) },
-        HeapLeaf { addr: BabyBear::new(0x2222), value: BabyBear::new(1) },
+        HeapLeaf {
+            addr: BabyBear::new(0x1111),
+            value: BabyBear::new(1),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0x2222),
+            value: BabyBear::new(1),
+        },
     ];
     let (trace, dpis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
         &st,
@@ -208,7 +224,10 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     let nf_key = trace[0][PARAM_BASE + param::NULLIFIER];
     let nf_value = trace[0][PARAM_BASE + param::NOTE_VALUE_LO];
     let mut honest_after_leaves = before_nullifiers.clone();
-    honest_after_leaves.push(HeapLeaf { addr: nf_key, value: nf_value });
+    honest_after_leaves.push(HeapLeaf {
+        addr: nf_key,
+        value: nf_value,
+    });
     let honest_after_root = CanonicalHeapTree::new(honest_after_leaves, HEAP_TREE_DEPTH).root();
     assert_eq!(
         trace[trace.len() - 1][AFTER_BASE + B_NULLIFIER_ROOT],
@@ -259,7 +278,13 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     );
 
     assert!(
-        refused(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
+        refused(
+            &desc,
+            &forged_trace,
+            &forged_dpis,
+            &mem_boundary,
+            &map_heaps
+        ),
         "SOUNDNESS (light-client unfoolable, anchor-disabled): a post-state forged to differ ONLY \
          in the nullifier-root — a root the kernel never grew — MUST be UNSAT through prove/verify \
          ALONE; the in-circuit `.write` grow-gate (nullifierInsertOp) bites with NO off-cell \
@@ -285,7 +310,10 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     let value: u64 = 250;
 
     let cm = BabyBear::new(0xC0FFEE);
-    let effect = Effect::NoteCreate { commitment: cm, value };
+    let effect = Effect::NoteCreate {
+        commitment: cm,
+        value,
+    };
     let name = rotated_descriptor_name_for_effect(&effect).expect("NoteCreate is a cohort member");
     assert_eq!(name, "noteCreateVmDescriptor2R24");
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
@@ -306,18 +334,34 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = empty_caveat_manifest();
     let mem_boundary = MemBoundaryWitness::default();
 
     // A non-empty BEFORE commitments set (distinct from the published commitment).
     let before_commitments = vec![
-        HeapLeaf { addr: BabyBear::new(0x111), value: BabyBear::new(1) },
-        HeapLeaf { addr: BabyBear::new(0x222), value: BabyBear::new(1) },
+        HeapLeaf {
+            addr: BabyBear::new(0x111),
+            value: BabyBear::new(1),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0x222),
+            value: BabyBear::new(1),
+        },
     ];
     let (trace, dpis, map_heaps) = generate_rotated_note_create_trace_with_commitments_tree(
         &st,
@@ -340,7 +384,10 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     let cm_key = trace[0][PARAM_BASE + param::NULLIFIER]; // param0 (the commitment rides param slot 0)
     let cm_value = trace[0][PARAM_BASE + param::NOTE_VALUE_LO];
     let mut honest_after_leaves = before_commitments.clone();
-    honest_after_leaves.push(HeapLeaf { addr: cm_key, value: cm_value });
+    honest_after_leaves.push(HeapLeaf {
+        addr: cm_key,
+        value: cm_value,
+    });
     let honest_after_root = CanonicalHeapTree::new(honest_after_leaves, HEAP_TREE_DEPTH).root();
     assert_eq!(
         trace[trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
@@ -389,7 +436,13 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     );
 
     assert!(
-        refused(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
+        refused(
+            &desc,
+            &forged_trace,
+            &forged_dpis,
+            &mem_boundary,
+            &map_heaps
+        ),
         "SOUNDNESS (light-client unfoolable, anchor-disabled): a post-state forged to differ ONLY \
          in the commitments-root — a root the kernel never grew — MUST be UNSAT through prove/verify \
          ALONE; the in-circuit `.insert` grow-gate (commitmentsInsertOp) bites with NO off-cell \
@@ -438,7 +491,10 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     let value: u64 = 250;
 
     let cm = BabyBear::new(0xC0FFEE);
-    let effect = Effect::NoteCreate { commitment: cm, value };
+    let effect = Effect::NoteCreate {
+        commitment: cm,
+        value,
+    };
     let name = rotated_descriptor_name_for_effect(&effect).expect("NoteCreate is a cohort member");
     assert_eq!(name, "noteCreateVmDescriptor2R24");
 
@@ -461,17 +517,33 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = empty_caveat_manifest();
     let mem_boundary = MemBoundaryWitness::default();
 
     let before_commitments = vec![
-        HeapLeaf { addr: BabyBear::new(0x111), value: BabyBear::new(1) },
-        HeapLeaf { addr: BabyBear::new(0x222), value: BabyBear::new(1) },
+        HeapLeaf {
+            addr: BabyBear::new(0x111),
+            value: BabyBear::new(1),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0x222),
+            value: BabyBear::new(1),
+        },
     ];
 
     // THE LIVE WIDE PRODUCER (the exact function `full_turn_proof`/`cipherclerk`/`proof_verify` now
@@ -485,13 +557,27 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         &before_commitments,
     )
     .expect("the live wide note-create producer must build a wide trace (was fail-closed before the weld)");
-    assert_eq!(wide_trace[0].len(), GRAD_ROT_WIDTH + 208, "wide member width 816");
-    assert_eq!(wide_dpis.len(), 63, "wide PI vector (47 base + 16 wide commit PIs)");
+    assert_eq!(
+        wide_trace[0].len(),
+        GRAD_ROT_WIDTH + 208,
+        "wide member width 816"
+    );
+    assert_eq!(
+        wide_dpis.len(),
+        63,
+        "wide PI vector (47 base + 16 wide commit PIs)"
+    );
 
     // POSITIVE TOOTH (no downgrade): the honest noteCreate proves + verifies through the WIDE
     // descriptor — the geometry a light client runs.
-    let proof = prove_vm_descriptor2(&wide_desc, &wide_trace, &wide_dpis, &mem_boundary, &wide_map_heaps)
-        .expect("NO DOWNGRADE: the honest noteCreate must prove through the live WIDE producer");
+    let proof = prove_vm_descriptor2(
+        &wide_desc,
+        &wide_trace,
+        &wide_dpis,
+        &mem_boundary,
+        &wide_map_heaps,
+    )
+    .expect("NO DOWNGRADE: the honest noteCreate must prove through the live WIDE producer");
     verify_vm_descriptor2(&wide_desc, &proof, &wide_dpis)
         .expect("NO DOWNGRADE: the honest wide noteCreate proof must verify independently");
 
@@ -500,15 +586,16 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     // re-append the wide carriers — but PUBLISH THE HONEST wide PIs (the light client is shown the
     // honest commit). The `.insert` grow-gate pins `after == insert(before, key)` against the forged
     // AFTER root limb → no witness → UNSAT, regardless of the published PIs.
-    let (mut base_trace, base_dpis, _heaps) = generate_rotated_note_create_trace_with_commitments_tree(
-        &st,
-        &effects,
-        &bridge(&before_w),
-        &bridge(&after_w),
-        &caveat,
-        &before_commitments,
-    )
-    .expect("base commitments-tree trace builds");
+    let (mut base_trace, base_dpis, _heaps) =
+        generate_rotated_note_create_trace_with_commitments_tree(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &caveat,
+            &before_commitments,
+        )
+        .expect("base commitments-tree trace builds");
     let bump = BabyBear::new(0x9999);
     for row in base_trace.iter_mut() {
         row[AFTER_BASE + B_COMMITMENTS_ROOT] = row[AFTER_BASE + B_COMMITMENTS_ROOT] + bump;
@@ -518,7 +605,11 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     // self-consistent at the wide geometry — the ONLY thing broken is the in-circuit grow-gate).
     let _forged_self_consistent_dpis =
         append_wide_carriers(&mut base_trace, base_dpis, GRAD_ROT_WIDTH);
-    assert_eq!(base_trace[0].len(), GRAD_ROT_WIDTH + 208, "forged wide width");
+    assert_eq!(
+        base_trace[0].len(),
+        GRAD_ROT_WIDTH + 208,
+        "forged wide width"
+    );
     assert_ne!(
         base_trace[base_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
         wide_trace[wide_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
@@ -528,7 +619,13 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     // Publish the HONEST wide PIs against the FORGED wide trace: the grow-gate `.insert` has no
     // membership/update witness for the forged after-root → UNSAT.
     assert!(
-        refused(&wide_desc, &base_trace, &wide_dpis, &mem_boundary, &wide_map_heaps),
+        refused(
+            &wide_desc,
+            &base_trace,
+            &wide_dpis,
+            &mem_boundary,
+            &wide_map_heaps
+        ),
         "SOUNDNESS (light-client unfoolable, wide geometry): a forged commitments-root post-state is \
          UNSAT through the LIVE WIDE producer's descriptor — the in-circuit `.insert` grow-gate bites \
          with NO off-cell anchor, exactly as on the live producer/verifier path"

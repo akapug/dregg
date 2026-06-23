@@ -75,22 +75,22 @@
 //! [`COUNCIL_COMMIT_SLOT`]: starbridge_polis::identity::COUNCIL_COMMIT_SLOT
 //! [`KeyRotationGate`]: dregg_cell::program::StateConstraint::KeyRotationGate
 
+use dregg_cell::factory::{CapTarget, CapTemplate, ChildVkStrategy, FactoryDescriptor};
 use dregg_cell::permissions::{AuthRequired, Permissions};
+use dregg_cell::predicate::{InputRef, WitnessedPredicate, WitnessedPredicateKind};
 use dregg_cell::program::{
     CellProgram, HashKind, SimpleStateConstraint, StateConstraint, field_from_u64,
 };
 use dregg_cell::state::{FIELD_ZERO, FieldElement};
 use dregg_cell::{CellId, CellMode};
-use dregg_cell::factory::{CapTarget, CapTemplate, ChildVkStrategy, FactoryDescriptor};
 use dregg_turn::Effect;
 use dregg_turn::action::{Action, Authorization, DelegationMode, WitnessBlob, symbol};
-use dregg_cell::predicate::{InputRef, WitnessedPredicate, WitnessedPredicateKind};
 
+use starbridge_polis::council::CouncilCharter;
 use starbridge_polis::identity::{
     COUNCIL_COMMIT_SLOT, CURRENT_KEYS_COMMIT_SLOT, IdentityCharter, LAST_ROTATED_AT_SLOT,
     NEXT_KEYS_DIGEST_SLOT, STATE_ACTIVE, STATE_RETIRED, STATE_UNINIT,
 };
-use starbridge_polis::council::CouncilCharter;
 use starbridge_polis::{PolisError, STATE_SLOT};
 
 // =============================================================================
@@ -194,12 +194,10 @@ pub fn guardian_rotatable_identity_constraints(
 }
 
 /// The `CellProgram` for a guardian-rotatable identity cell.
-pub fn guardian_rotatable_identity_program(
-    cooling_period: u64,
-) -> Result<CellProgram, PolisError> {
-    Ok(CellProgram::Predicate(guardian_rotatable_identity_constraints(
-        cooling_period,
-    )?))
+pub fn guardian_rotatable_identity_program(cooling_period: u64) -> Result<CellProgram, PolisError> {
+    Ok(CellProgram::Predicate(
+        guardian_rotatable_identity_constraints(cooling_period)?,
+    ))
 }
 
 /// The per-charter, content-addressed factory for a guardian-rotatable
@@ -317,10 +315,7 @@ pub fn new_council_commitment(new_council: &CouncilCharter) -> Result<FieldEleme
 /// This mutates the ledger directly (the genesis-posture install), exactly as
 /// the proven recovery weld's `install_guardian_authority` does; it is a
 /// driver/test affordance, not a turn.
-pub fn install_guardian_council_authority(
-    permissions: &mut Permissions,
-    vk_hash: [u8; 32],
-) {
+pub fn install_guardian_council_authority(permissions: &mut Permissions, vk_hash: [u8; 32]) {
     permissions.send = AuthRequired::Impossible;
     permissions.receive = AuthRequired::None;
     permissions.set_state = AuthRequired::Custom { vk_hash };

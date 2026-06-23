@@ -24,9 +24,7 @@
 
 use dregg_cell::commitment::{V9RotationContext, compute_rotated_pre_limbs};
 use dregg_cell::{Cell, CellMode, Ledger};
-use dregg_circuit::descriptor_ir2::{
-    parse_vm_descriptor2, verify_vm_descriptor2,
-};
+use dregg_circuit::descriptor_ir2::{parse_vm_descriptor2, verify_vm_descriptor2};
 use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
@@ -76,8 +74,20 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
     let mut ctx_ledger = Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-    let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-    let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+    let before_w = rw::produce(
+        &before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
 
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
         balance as u64,
@@ -85,13 +95,23 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
         dregg_cell::compute_authority_digest_felt(&before_cell),
     );
-    let effects = vec![VmEffect::Transfer { amount: amount as u64, direction: 1 }];
+    let effects = vec![VmEffect::Transfer {
+        amount: amount as u64,
+        direction: 1,
+    }];
     let caveat = dregg_circuit::effect_vm::trace_rotated::transfer_caveat_manifest();
 
     // -- PRODUCER LEG: mint a real wide proof + the 16 published wide PIs. --
-    let (proof, producer_dpis) =
-        prove_effect_vm_rotated_wide(&initial_vm_state, &effects, &before_w, &after_w, &caveat, None, None)
-            .expect("wide sovereign producer must mint a proof");
+    let (proof, producer_dpis) = prove_effect_vm_rotated_wide(
+        &initial_vm_state,
+        &effects,
+        &before_w,
+        &after_w,
+        &caveat,
+        None,
+        None,
+    )
+    .expect("wide sovereign producer must mint a proof");
 
     // Resolve the wide descriptor (the executor pulls the same WIDE registry).
     let json = WIDE_REGISTRY_STAGED_TSV
@@ -107,7 +127,11 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         })
         .expect("wide transfer member");
     let desc = parse_vm_descriptor2(json).expect("wide transfer descriptor parses");
-    assert_eq!(producer_dpis.len(), desc.public_input_count, "wide PI count");
+    assert_eq!(
+        producer_dpis.len(),
+        desc.public_input_count,
+        "wide PI count"
+    );
 
     // -- EXECUTOR LEG: anchor the 16 wide PIs to the TRUSTED before/after cell chip-commits (the wide
     //    analog of the live `dpis[42]/[43]` override — the 1-felt-retire the flip performs). --
@@ -160,8 +184,20 @@ fn wide_sovereign_forged_anchor_is_rejected() {
     let commitments_root = [0u8; 32];
     let mut ctx_ledger = Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
-    let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &[]);
-    let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &[]);
+    let before_w = rw::produce(
+        &before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &[],
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &[],
+    );
 
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
         100_000u64,
@@ -169,11 +205,21 @@ fn wide_sovereign_forged_anchor_is_rejected() {
         dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
         dregg_cell::compute_authority_digest_felt(&before_cell),
     );
-    let effects = vec![VmEffect::Transfer { amount: 100, direction: 1 }];
+    let effects = vec![VmEffect::Transfer {
+        amount: 100,
+        direction: 1,
+    }];
     let caveat = dregg_circuit::effect_vm::trace_rotated::transfer_caveat_manifest();
-    let (proof, producer_dpis) =
-        prove_effect_vm_rotated_wide(&initial_vm_state, &effects, &before_w, &after_w, &caveat, None, None)
-            .expect("wide sovereign producer must mint a proof");
+    let (proof, producer_dpis) = prove_effect_vm_rotated_wide(
+        &initial_vm_state,
+        &effects,
+        &before_w,
+        &after_w,
+        &caveat,
+        None,
+        None,
+    )
+    .expect("wide sovereign producer must mint a proof");
 
     let json = WIDE_REGISTRY_STAGED_TSV
         .lines()
@@ -272,8 +318,20 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
     let mut ctx_ledger = Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-    let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-    let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+    let before_w = rw::produce(
+        &before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
 
     // The refusal moves the AFTER record-digest / fields_root limbs (the genuine write — non-vacuity).
     assert_ne!(
@@ -288,7 +346,9 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         dregg_cell::compute_authority_digest_felt(&before_cell),
     );
     let effects = vec![VmEffect::Refusal {
-        target: dregg_circuit::effect_vm::bytes32_to_8_limbs(blake3::hash(cell_id.as_bytes()).as_bytes()),
+        target: dregg_circuit::effect_vm::bytes32_to_8_limbs(
+            blake3::hash(cell_id.as_bytes()).as_bytes(),
+        ),
         reason_hash: dregg_circuit::effect_vm::bytes32_to_8_limbs(&[0u8; 32]),
     }];
     let caveat = dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest();
@@ -335,7 +395,10 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         desc.public_input_count,
         "wide refusal PI count (47 base + 16 wide = 63)"
     );
-    assert_eq!(desc.public_input_count, 63, "refusal wide descriptor carries 63 PIs");
+    assert_eq!(
+        desc.public_input_count, 63,
+        "refusal wide descriptor carries 63 PIs"
+    );
 
     // -- EXECUTOR LEG: anchor the 16 wide commit PIs to the TRUSTED before/after cell chip-commits
     //    (the wide analog of the live executor's 1-felt-retire override). --
@@ -450,15 +513,30 @@ fn flagday_transfer_witness(
         dregg_cell::compute_canonical_capability_root_felt(&before_cell.capabilities),
         dregg_cell::compute_authority_digest_felt(&before_cell),
     );
-    let vm_effects = vec![VmEffect::Transfer { amount, direction: 1 }];
+    let vm_effects = vec![VmEffect::Transfer {
+        amount,
+        direction: 1,
+    }];
 
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_hashes: Vec<[u8; 32]> = Vec::new();
     let mut ctx_ledger = Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
-    let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-    let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+    let before_w = rw::produce(
+        &before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
 
     let rotation = RotationTurnWitness {
         before: before_w.clone(),
@@ -507,7 +585,10 @@ fn flagday_wide_full_turn_proves_and_light_client_verifies_at_124_bit() {
         .find(|sp| sp.label == "effect-vm-rotated")
         .expect("rotated effect-vm leg present");
     let n = leg.sub_public_inputs.len();
-    assert!(n >= 16 + 46, "the WIDE transfer leg carries the 46 base PIs + 16 wide commit PIs (got {n})");
+    assert!(
+        n >= 16 + 46,
+        "the WIDE transfer leg carries the 46 base PIs + 16 wide commit PIs (got {n})"
+    );
     let leg_after8: [BabyBear; 8] = leg.sub_public_inputs[n - 8..n].try_into().unwrap();
     assert_eq!(
         leg_after8, new8,
@@ -525,7 +606,9 @@ fn flagday_wide_full_turn_proves_and_light_client_verifies_at_124_bit() {
         verify_full_turn(&proof, old8, forged_new).is_err(),
         "a forged 8-felt NEW commit MUST be rejected — the light-client surface binds the full ~124-bit commit"
     );
-    eprintln!("FLAG-DAY GREEN: the composed full-turn / light-client surface binds the 8-felt (~124-bit) commit.");
+    eprintln!(
+        "FLAG-DAY GREEN: the composed full-turn / light-client surface binds the 8-felt (~124-bit) commit."
+    );
 }
 
 /// **THE REJECT TOOTH: a 1-felt V3 full-turn proof is REJECTED post-cutover.** We splice a NARROW
@@ -554,7 +637,12 @@ fn flagday_rejects_one_felt_v3_full_turn_leg() {
     // pre-flag-day producer emitted (the ~31-bit-commit leg).
     let caveat = transfer_caveat_manifest();
     let narrow = prove_effect_vm_rotated_ir2_with_caveat(
-        &initial, &effects, &rot.before, &rot.after, &caveat, None,
+        &initial,
+        &effects,
+        &rot.before,
+        &rot.after,
+        &caveat,
+        None,
     )
     .expect("the 1-felt V3 transfer leg proves (it is sound for the narrow descriptor)");
     let narrow_bytes = postcard::to_allocvec(&narrow).expect("serialize narrow leg");

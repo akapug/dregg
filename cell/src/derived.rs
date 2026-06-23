@@ -167,7 +167,10 @@ impl std::fmt::Display for DerivationError {
                 write!(f, "source cell {id:?} not supplied to verifier")
             }
             DerivationError::SpecMismatch => {
-                write!(f, "supplied spec digest does not match the bound derivation")
+                write!(
+                    f,
+                    "supplied spec digest does not match the bound derivation"
+                )
             }
             DerivationError::ValueMismatch { claimed, actual } => write!(
                 f,
@@ -251,16 +254,14 @@ impl Aggregate {
                 acc.saturating_add(v)
             }),
             Aggregate::Count => sources.len() as i64,
-            Aggregate::FilteredSumBalance { threshold } => {
-                sources.iter().fold(0i64, |acc, c| {
-                    let b = c.state.balance();
-                    if b >= *threshold {
-                        acc.saturating_add(b)
-                    } else {
-                        acc
-                    }
-                })
-            }
+            Aggregate::FilteredSumBalance { threshold } => sources.iter().fold(0i64, |acc, c| {
+                let b = c.state.balance();
+                if b >= *threshold {
+                    acc.saturating_add(b)
+                } else {
+                    acc
+                }
+            }),
         }
     }
 }
@@ -290,7 +291,9 @@ pub fn decode_value_from_field(f: &FieldElement) -> i64 {
 /// Whether a cell carries a derivation binding (a spec digest in its reserved
 /// heap collection). A plain (non-derived) cell returns `false`.
 pub fn is_derived(cell: &Cell) -> bool {
-    cell.state.get_heap(DERIVATION_COLL, KEY_SPEC_DIGEST).is_some()
+    cell.state
+        .get_heap(DERIVATION_COLL, KEY_SPEC_DIGEST)
+        .is_some()
 }
 
 /// The spec digest bound in a derived cell's committed heap, if any.
@@ -329,7 +332,11 @@ pub fn bind_derivation<'a>(
 /// already computed the value, and by tests constructing forged/stale cells.
 pub fn write_binding(state: &mut CellState, spec: &DerivationSpec, value: i64) {
     state.set_heap(DERIVATION_COLL, KEY_SPEC_DIGEST, spec.digest());
-    state.set_heap(DERIVATION_COLL, KEY_CLAIMED_VALUE, encode_value_into_field(value));
+    state.set_heap(
+        DERIVATION_COLL,
+        KEY_CLAIMED_VALUE,
+        encode_value_into_field(value),
+    );
 }
 
 /// **The forge detector.** Verify that a derived cell's committed claim equals

@@ -487,7 +487,10 @@ fn ffi_decide_refines_agrees_with_lean_both_polarities() {
     );
 
     // The high-level gate (which routes through the FFI) returns the same verdicts.
-    assert!(decide_refines(&early, &late), "gate via FFI: the half holds");
+    assert!(
+        decide_refines(&early, &late),
+        "gate via FFI: the half holds"
+    );
     assert!(
         !decide_refines(&late, &early),
         "gate via FFI: the right-skew fails"

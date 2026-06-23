@@ -151,7 +151,6 @@
 //! (`running ∘ next_turn -> new_running`); see its docs for what the unbounded
 //! driver still needs.
 
-
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing;
@@ -161,13 +160,13 @@ use p3_recursion::{
     build_and_prove_aggregation_layer, build_and_prove_next_layer,
 };
 
-use dregg_circuit::descriptor_ir2::Ir2BatchProof;
-use dregg_circuit::field::BabyBear;
 use crate::joint_turn_aggregation::{DescriptorParticipant, verify_descriptor_participant};
 use crate::plonky3_recursion_impl::recursive::{
     DreggRecursionConfig, RecursionCompatibleProof, create_recursion_backend,
     recursion_vk_fingerprint, verify_recursive_batch_proof_with_config,
 };
+use dregg_circuit::descriptor_ir2::Ir2BatchProof;
+use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_4_to_1;
 
 // Re-exported so chain consumers (the light client) name the trust-anchor type
@@ -597,7 +596,12 @@ pub fn prove_descriptor_leaf_rotated_with_config(
     // empty elsewhere), and the canonical symbolic `CommonData<DreggRecursionConfig>` (the
     // IR-v2 AIRs have NO preprocessed columns, so `common` is config-value-independent).
     let (airs, table_public_inputs, common) =
-        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(desc, proof, descriptor_pis, config)?;
+        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
+            desc,
+            proof,
+            descriptor_pis,
+            config,
+        )?;
 
     let input: RecursionInput<'_, DreggRecursionConfig, dregg_circuit::descriptor_ir2::Ir2Air> =
         RecursionInput::NativeBatchStark {
@@ -756,11 +760,10 @@ impl WholeChainProofBytes {
                 reason: "empty whole-chain proof envelope".to_string(),
             });
         }
-        let env: WholeChainProofBytes = postcard::from_bytes(bytes).map_err(|e| {
-            TurnChainError::EnvelopeDecode {
+        let env: WholeChainProofBytes =
+            postcard::from_bytes(bytes).map_err(|e| TurnChainError::EnvelopeDecode {
                 reason: format!("envelope body does not decode: {e}"),
-            }
-        })?;
+            })?;
         if env.version != WHOLE_CHAIN_PROOF_ENVELOPE_V1 {
             return Err(TurnChainError::EnvelopeDecode {
                 reason: format!(
@@ -794,10 +797,8 @@ impl WholeChainProofBytes {
         TurnChainError,
     > {
         let root_proof: p3_circuit_prover::BatchStarkProof<DreggRecursionConfig> =
-            postcard::from_bytes(&self.root_proof).map_err(|e| {
-                TurnChainError::EnvelopeDecode {
-                    reason: format!("root BatchStarkProof does not decode: {e}"),
-                }
+            postcard::from_bytes(&self.root_proof).map_err(|e| TurnChainError::EnvelopeDecode {
+                reason: format!("root BatchStarkProof does not decode: {e}"),
             })?;
         // Re-check the structural invariants the prover enforces but a raw
         // `#[derive(Deserialize)]` can bypass (ext-degree, row counts, packing,
@@ -888,8 +889,8 @@ pub fn verify_turn_chain_recursive_from_blobs(
         .map_err(|e| TurnChainError::EnvelopeDecode {
             reason: format!("root BatchStarkProof failed structural validation: {e:?}"),
         })?;
-    let binding_proof: RecursionCompatibleProof = postcard::from_bytes(binding_blob)
-        .map_err(|e| TurnChainError::EnvelopeDecode {
+    let binding_proof: RecursionCompatibleProof =
+        postcard::from_bytes(binding_blob).map_err(|e| TurnChainError::EnvelopeDecode {
             reason: format!("binding Proof blob does not decode: {e}"),
         })?;
     verify_turn_chain_recursive_from_parts(

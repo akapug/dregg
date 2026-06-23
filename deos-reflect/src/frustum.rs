@@ -20,7 +20,7 @@ use dregg_cell::Ledger;
 use dregg_types::CellId;
 
 use crate::graph::OcapGraph;
-use crate::substance::{reflect_cell, Inspectable};
+use crate::substance::{Inspectable, reflect_cell};
 
 /// A viewer's cap-bounded view of the image: the set of cells it may crawl + the
 /// reflective projection of each, computed off the live ledger through the viewer's
@@ -47,7 +47,12 @@ impl<'l> Frustum<'l> {
         // Intersect with what is actually on the ledger (reachability is over edges,
         // which could name a target absent from this ledger snapshot).
         visible.retain(|c| ledger.get(c).is_some());
-        Frustum { ledger, graph, viewer, visible }
+        Frustum {
+            ledger,
+            graph,
+            viewer,
+            visible,
+        }
     }
 
     /// The viewer this frustum is projected for.

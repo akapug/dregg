@@ -162,11 +162,13 @@ pub const INTRO_AS_TARGET_COUNT: usize = INTRO_AS_RECIPIENT_COUNT + 1;
 pub const OUTGOING_TRANSFER_ROOT_BASE: usize = INTRO_AS_TARGET_COUNT + 1;
 pub const OUTGOING_TRANSFER_ROOT_LEN: usize = 4;
 /// Mirror of OUTGOING_TRANSFER_ROOT for the inbound side.
-pub const INCOMING_TRANSFER_ROOT_BASE: usize = OUTGOING_TRANSFER_ROOT_BASE + OUTGOING_TRANSFER_ROOT_LEN;
+pub const INCOMING_TRANSFER_ROOT_BASE: usize =
+    OUTGOING_TRANSFER_ROOT_BASE + OUTGOING_TRANSFER_ROOT_LEN;
 pub const INCOMING_TRANSFER_ROOT_LEN: usize = 4;
 
 /// 4-felt accumulator over outbound grant_ids (this cell as grantor).
-pub const OUTGOING_GRANT_ROOT_BASE: usize = INCOMING_TRANSFER_ROOT_BASE + INCOMING_TRANSFER_ROOT_LEN;
+pub const OUTGOING_GRANT_ROOT_BASE: usize =
+    INCOMING_TRANSFER_ROOT_BASE + INCOMING_TRANSFER_ROOT_LEN;
 pub const OUTGOING_GRANT_ROOT_LEN: usize = 4;
 /// 4-felt accumulator over inbound grant_ids (this cell as grantee).
 pub const INCOMING_GRANT_ROOT_BASE: usize = OUTGOING_GRANT_ROOT_BASE + OUTGOING_GRANT_ROOT_LEN;
@@ -176,10 +178,12 @@ pub const INCOMING_GRANT_ROOT_LEN: usize = 4;
 pub const INTRO_AS_INTRODUCER_ROOT_BASE: usize = INCOMING_GRANT_ROOT_BASE + INCOMING_GRANT_ROOT_LEN;
 pub const INTRO_AS_INTRODUCER_ROOT_LEN: usize = 4;
 /// 4-felt accumulator over intro_ids where this cell is the recipient.
-pub const INTRO_AS_RECIPIENT_ROOT_BASE: usize = INTRO_AS_INTRODUCER_ROOT_BASE + INTRO_AS_INTRODUCER_ROOT_LEN;
+pub const INTRO_AS_RECIPIENT_ROOT_BASE: usize =
+    INTRO_AS_INTRODUCER_ROOT_BASE + INTRO_AS_INTRODUCER_ROOT_LEN;
 pub const INTRO_AS_RECIPIENT_ROOT_LEN: usize = 4;
 /// 4-felt accumulator over intro_ids where this cell is the target.
-pub const INTRO_AS_TARGET_ROOT_BASE: usize = INTRO_AS_RECIPIENT_ROOT_BASE + INTRO_AS_RECIPIENT_ROOT_LEN;
+pub const INTRO_AS_TARGET_ROOT_BASE: usize =
+    INTRO_AS_RECIPIENT_ROOT_BASE + INTRO_AS_RECIPIENT_ROOT_LEN;
 pub const INTRO_AS_TARGET_ROOT_LEN: usize = 4;
 
 /// Single-felt boolean: 1 iff this per-cell proof was the actor's
@@ -271,11 +275,13 @@ pub const BRIDGE_MINT_VALUE_LIMBS_BASE: usize = HAS_TRANSITION_PROOF + 1;
 pub const BRIDGE_MINT_VALUE_LIMBS_LEN: usize = 4;
 /// 4-limb decomposition of `BridgeLock.value`. RETIRED (VERB-LOCKSTEP):
 /// the effect no longer exists; the slot is always the zero sentinel.
-pub const BRIDGE_LOCK_VALUE_LIMBS_BASE: usize = BRIDGE_MINT_VALUE_LIMBS_BASE + BRIDGE_MINT_VALUE_LIMBS_LEN;
+pub const BRIDGE_LOCK_VALUE_LIMBS_BASE: usize =
+    BRIDGE_MINT_VALUE_LIMBS_BASE + BRIDGE_MINT_VALUE_LIMBS_LEN;
 pub const BRIDGE_LOCK_VALUE_LIMBS_LEN: usize = 4;
 /// 4-limb decomposition of `CreateEscrow.amount`. RETIRED (VERB-LOCKSTEP):
 /// the effect no longer exists; the slot is always the zero sentinel.
-pub const CREATE_ESCROW_AMOUNT_LIMBS_BASE: usize = BRIDGE_LOCK_VALUE_LIMBS_BASE + BRIDGE_LOCK_VALUE_LIMBS_LEN;
+pub const CREATE_ESCROW_AMOUNT_LIMBS_BASE: usize =
+    BRIDGE_LOCK_VALUE_LIMBS_BASE + BRIDGE_LOCK_VALUE_LIMBS_LEN;
 pub const CREATE_ESCROW_AMOUNT_LIMBS_LEN: usize = 4;
 
 // ---- Custom proof commitments ----

@@ -159,8 +159,20 @@ fn setfield_lead_with_foreign_transfer_tail_is_unsat() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
     let caveat = empty_caveat_manifest();
 
     let (mut trace, dpis) = generate_rotated_effect_vm_trace(
@@ -215,8 +227,8 @@ fn setfield_lead_with_foreign_transfer_tail_is_unsat() {
 #[test]
 fn mint_lead_with_foreign_transfer_tail_is_unsat() {
     let name = "mintVmDescriptor2R24";
-    let desc =
-        parse_vm_descriptor2(rotated_descriptor_json(name)).expect("mint rotated descriptor parses");
+    let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+        .expect("mint rotated descriptor parses");
 
     let before_balance: i64 = 100_000;
     let st = CellState::new(before_balance as u64, 0);
@@ -244,8 +256,20 @@ fn mint_lead_with_foreign_transfer_tail_is_unsat() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
     let caveat = empty_caveat_manifest();
 
     let (mut trace, dpis) = generate_rotated_effect_vm_trace(
@@ -314,8 +338,20 @@ fn honest_homogeneous_setfield_still_proves_and_verifies() {
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
     let caveat = empty_caveat_manifest();
 
     let (trace, dpis) = generate_rotated_effect_vm_trace(
@@ -328,16 +364,25 @@ fn honest_homogeneous_setfield_still_proves_and_verifies() {
     .expect("generator builds the honest homogeneous setField trace");
 
     // The active row (0) carries the setField selector; all later rows are NoOp pads — both admitted.
-    assert_eq!(trace[0][sel::SET_FIELD], BabyBear::ONE, "row 0 is the active setField row");
+    assert_eq!(
+        trace[0][sel::SET_FIELD],
+        BabyBear::ONE,
+        "row 0 is the active setField row"
+    );
     for row in trace.iter().skip(1) {
-        assert_eq!(row[sel::NOOP], BabyBear::ONE, "every pad row carries sel[NOOP] = 1");
+        assert_eq!(
+            row[sel::NOOP],
+            BabyBear::ONE,
+            "every pad row carries sel[NOOP] = 1"
+        );
     }
 
     let mem_boundary = MemBoundaryWitness::default();
     let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
 
-    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
-        .expect("NO DOWNGRADE: the honest homogeneous setField turn must still prove under the gate");
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps).expect(
+        "NO DOWNGRADE: the honest homogeneous setField turn must still prove under the gate",
+    );
     verify_vm_descriptor2(&desc, &proof, &dpis)
         .expect("NO DOWNGRADE: the honest setField proof must verify under the gate");
 

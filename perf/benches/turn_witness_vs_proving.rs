@@ -71,7 +71,8 @@ fn bench_contrast(c: &mut Criterion) {
     for (name, rt) in rotated_turns() {
         group.bench_function(format!("full_proving_{name}"), |b| {
             b.iter(|| {
-                let proof = prove_full_turn(black_box(&rt.witness)).expect("honest turn must prove");
+                let proof =
+                    prove_full_turn(black_box(&rt.witness)).expect("honest turn must prove");
                 black_box(proof);
             });
         });

@@ -35,5 +35,5 @@ pub mod scenario;
 
 pub use room::{InRoomRefusal, InhabitantView, Room, RoomView};
 pub use scenario::{
-    CheatClass, CheatOutcome, Transcript, davids_door, run_first_room, JobStepRecord,
+    CheatClass, CheatOutcome, JobStepRecord, Transcript, davids_door, run_first_room,
 };

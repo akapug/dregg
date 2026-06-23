@@ -325,5 +325,8 @@ async fn the_app_ships_a_web_component_surface_and_a_manifest() {
         .expect("gated affordances");
     let names: Vec<&str> = gated.iter().filter_map(|g| g["name"].as_str()).collect();
     assert!(names.contains(&"put"), "put is advertised as gated");
-    assert!(names.contains(&"get"), "get (clearance-gated) is advertised as gated");
+    assert!(
+        names.contains(&"get"),
+        "get (clearance-gated) is advertised as gated"
+    );
 }

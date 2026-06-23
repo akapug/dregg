@@ -87,7 +87,10 @@ fn producer_cell(balance: i64, nonce: u64) -> Cell {
 fn rotated_transfer_leaf_folds_as_batchstark() {
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
-    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width 608");
+    assert_eq!(
+        desc.trace_width, GRAD_ROT_WIDTH,
+        "graduated rotated width 608"
+    );
     assert_eq!(desc.public_input_count, 46, "42 v1 PIs + 4 appended");
 
     // -- a real transfer-out (the validated v1 reference witness). --
@@ -107,8 +110,20 @@ fn rotated_transfer_leaf_folds_as_batchstark() {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
 
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let bridge = |w: &rw::RotationWitness| -> RotatedBlockWitness {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("31 pre-iroot limbs")
@@ -208,8 +223,20 @@ fn two_rotated_leaves_aggregate_at_wrap_config() {
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
         let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
         let bridge = |w: &rw::RotationWitness| -> RotatedBlockWitness {
             RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("31 pre-iroot limbs")
         };

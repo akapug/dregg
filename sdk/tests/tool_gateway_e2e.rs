@@ -52,7 +52,11 @@ fn granted_tool_call_commits_with_receipt_and_conserved_spend() {
     let worker_cell = gw.worker_cell();
     let balance_before = {
         let ledger = runtime.ledger().lock().unwrap();
-        ledger.get(&worker_cell).expect("worker cell").state.balance()
+        ledger
+            .get(&worker_cell)
+            .expect("worker cell")
+            .state
+            .balance()
     };
 
     let out = gw
@@ -61,7 +65,10 @@ fn granted_tool_call_commits_with_receipt_and_conserved_spend() {
 
     assert_eq!(out.calls_made, 1, "the metered counter advanced 0 -> 1");
     assert_eq!(out.remaining, 2, "two calls remain on the rate-3 mandate");
-    assert_eq!(out.receipt.agent, worker_cell, "receipt is the worker's turn");
+    assert_eq!(
+        out.receipt.agent, worker_cell,
+        "receipt is the worker's turn"
+    );
     assert_eq!(gw.calls_made(), 1);
 
     // CONSERVED SPEND: the metered write moves the counter, not value beyond the
@@ -69,7 +76,11 @@ fn granted_tool_call_commits_with_receipt_and_conserved_spend() {
     // (worker + agent) is conserved across the call — the counter is not money.
     let balance_after = {
         let ledger = runtime.ledger().lock().unwrap();
-        ledger.get(&worker_cell).expect("worker cell").state.balance()
+        ledger
+            .get(&worker_cell)
+            .expect("worker cell")
+            .state
+            .balance()
     };
     // The counter slot holds 1 now (the metered advance is recorded on-cell).
     {
@@ -121,7 +132,11 @@ fn rate_budget_exhausts_and_over_rate_call_refused_in_band() {
     }
 
     // The refusal did NOT advance the counter or submit a turn.
-    assert_eq!(gw.calls_made(), 3, "a refused call leaves the counter untouched");
+    assert_eq!(
+        gw.calls_made(),
+        3,
+        "a refused call leaves the counter untouched"
+    );
 }
 
 #[test]
@@ -142,7 +157,11 @@ fn out_of_scope_tool_call_refused_in_band() {
         }
         other => panic!("expected an in-band OutOfScope refusal, got {other:?}"),
     }
-    assert_eq!(gw.calls_made(), 0, "a refused call leaves the counter untouched");
+    assert_eq!(
+        gw.calls_made(),
+        0,
+        "a refused call leaves the counter untouched"
+    );
 }
 
 #[test]
@@ -162,7 +181,11 @@ fn past_deadline_tool_call_refused_in_band() {
         }
         other => panic!("expected an in-band PastDeadline refusal, got {other:?}"),
     }
-    assert_eq!(gw.calls_made(), 0, "a refused call leaves the counter untouched");
+    assert_eq!(
+        gw.calls_made(),
+        0,
+        "a refused call leaves the counter untouched"
+    );
 }
 
 #[test]
@@ -170,7 +193,7 @@ fn granted_call_carries_tool_work_payload() {
     // GENUINE ✓ — the tool's actual work rides the SAME metered turn as the
     // counter advance. Here the tool emits an event (its payload); the call
     // commits and the receipt reflects the whole turn.
-    use dregg_turn::action::{symbol, Event};
+    use dregg_turn::action::{Event, symbol};
     let (runtime, root) = runtime_with_root();
     let mut gw = ToolGateway::admit(&runtime, &root, demo_grant()).expect("admit worker");
     let worker_cell = gw.worker_cell();
@@ -201,8 +224,8 @@ fn executor_rate_backstop_rejects_over_ceiling_write_bypassing_in_band() {
     // EXECUTOR reject the turn. This proves the cell-program rate constraint bites
     // on its own — the in-band check and the executor check are two independent
     // enforcement surfaces, both real.
-    use dregg_sdk::CALLS_MADE_SLOT;
     use dregg_cell::program::field_from_u64;
+    use dregg_sdk::CALLS_MADE_SLOT;
     let (runtime, root) = runtime_with_root();
     let gw = ToolGateway::admit(&runtime, &root, demo_grant()).expect("admit worker");
     let worker_cell = gw.worker_cell();
@@ -235,7 +258,7 @@ fn routed_invoke_loop_enqueues_executes_and_delivers_results_back() {
     //   back, the meter advanced, and a real Vec<Effect> side-effect rode the
     //   routed turn. The gate is the on-ramp; the executor is the road.
     use dregg_sdk::{DeliveryReceipt, RoutedStatus};
-    use dregg_turn::action::{symbol, Event};
+    use dregg_turn::action::{Event, symbol};
 
     let (runtime, root) = runtime_with_root();
     let mut gw = ToolGateway::admit(&runtime, &root, demo_grant()).expect("admit worker");
@@ -273,7 +296,11 @@ fn routed_invoke_loop_enqueues_executes_and_delivers_results_back() {
 
     // DRIVE THE EXECUTOR — the execution environment drains the inbox and runs it.
     let drained = gw.drive_executor(60);
-    assert_eq!(drained, vec![handle.routed_hash()], "the one routed call drained");
+    assert_eq!(
+        drained,
+        vec![handle.routed_hash()],
+        "the one routed call drained"
+    );
     assert_eq!(gw.inbox_depth(), 0, "the inbox is empty after the drain");
     assert_eq!(
         gw.status(&handle),
@@ -286,8 +313,14 @@ fn routed_invoke_loop_enqueues_executes_and_delivers_results_back() {
         .resolve(&handle)
         .expect("the delivered routed call must resolve to a result");
     // The metered turn committed: counter 0 -> 1, meter advanced, real receipt.
-    assert_eq!(result.tool_receipt.calls_made, 1, "the meter advanced 0 -> 1");
-    assert_eq!(result.tool_receipt.remaining, 2, "two calls remain on rate-3");
+    assert_eq!(
+        result.tool_receipt.calls_made, 1,
+        "the meter advanced 0 -> 1"
+    );
+    assert_eq!(
+        result.tool_receipt.remaining, 2,
+        "two calls remain on rate-3"
+    );
     assert_eq!(result.tool_receipt.receipt.agent, worker_cell);
     // The tool's side-effect (EmitEvent) rode the routed turn alongside the meter.
     assert_eq!(
@@ -301,7 +334,11 @@ fn routed_invoke_loop_enqueues_executes_and_delivers_results_back() {
         enqueued_at,
         delivered_at,
     } = result.delivery;
-    assert_eq!(routed_hash, handle.routed_hash(), "delivery binds the routed call");
+    assert_eq!(
+        routed_hash,
+        handle.routed_hash(),
+        "delivery binds the routed call"
+    );
     assert_eq!(executor_cell, worker_cell, "delivered to the executor cell");
     assert_eq!(enqueued_at, 50, "enqueued at the on-ramp height");
     assert_eq!(delivered_at, 60, "delivered at the drain height");
@@ -337,10 +374,21 @@ fn routed_gate_refuses_over_budget_and_over_deadline_at_the_on_ramp() {
         .expect_err("a past-deadline routed call MUST be refused at the on-ramp");
     assert!(matches!(
         err,
-        ToolCallError::Refused(GatewayRefusal::PastDeadline { now: 101, deadline: 100 })
+        ToolCallError::Refused(GatewayRefusal::PastDeadline {
+            now: 101,
+            deadline: 100
+        })
     ));
-    assert_eq!(gw.inbox_depth(), 0, "a refused enqueue puts nothing on the inbox");
-    assert_eq!(gw.calls_made(), 0, "a refused enqueue reserves no rate budget");
+    assert_eq!(
+        gw.inbox_depth(),
+        0,
+        "a refused enqueue puts nothing on the inbox"
+    );
+    assert_eq!(
+        gw.calls_made(),
+        0,
+        "a refused enqueue reserves no rate budget"
+    );
 
     // Out-of-scope: refused at the on-ramp.
     let err = gw
@@ -348,7 +396,10 @@ fn routed_gate_refuses_over_budget_and_over_deadline_at_the_on_ramp() {
         .expect_err("an out-of-scope routed call MUST be refused at the on-ramp");
     assert!(matches!(
         err,
-        ToolCallError::Refused(GatewayRefusal::OutOfScope { presented: 99, granted: 77 })
+        ToolCallError::Refused(GatewayRefusal::OutOfScope {
+            presented: 99,
+            granted: 77
+        })
     ));
 
     // Now exhaust the rate budget through the ROUTED path: 3 enqueue+drives commit.
@@ -369,9 +420,16 @@ fn routed_gate_refuses_over_budget_and_over_deadline_at_the_on_ramp() {
         .expect_err("the 4th routed call (over rate 3) MUST be refused at the on-ramp");
     assert!(matches!(
         err,
-        ToolCallError::Refused(GatewayRefusal::OverRate { calls_made: 3, rate_limit: 3 })
+        ToolCallError::Refused(GatewayRefusal::OverRate {
+            calls_made: 3,
+            rate_limit: 3
+        })
     ));
-    assert_eq!(gw.inbox_depth(), 0, "the over-rate refusal enqueued nothing");
+    assert_eq!(
+        gw.inbox_depth(),
+        0,
+        "the over-rate refusal enqueued nothing"
+    );
 }
 
 #[test]
@@ -383,15 +441,27 @@ fn routed_pipelining_two_calls_drain_in_one_pass() {
     let (runtime, root) = runtime_with_root();
     let mut gw = ToolGateway::admit(&runtime, &root, demo_grant()).expect("admit worker");
 
-    let h1 = gw.enqueue(77, 50, vec![]).expect("first routed call enqueues");
-    let h2 = gw.enqueue(77, 50, vec![]).expect("second routed call enqueues");
+    let h1 = gw
+        .enqueue(77, 50, vec![])
+        .expect("first routed call enqueues");
+    let h2 = gw
+        .enqueue(77, 50, vec![])
+        .expect("second routed call enqueues");
     assert_ne!(
         h1.routed_hash(),
         h2.routed_hash(),
         "distinct routed calls get distinct promise keys"
     );
-    assert_eq!(gw.inbox_depth(), 2, "both routed calls buffered on the inbox");
-    assert_eq!(gw.calls_made(), 2, "both reserved their rate slot at enqueue");
+    assert_eq!(
+        gw.inbox_depth(),
+        2,
+        "both routed calls buffered on the inbox"
+    );
+    assert_eq!(
+        gw.calls_made(),
+        2,
+        "both reserved their rate slot at enqueue"
+    );
 
     // One drain pass executes BOTH.
     let drained = gw.drive_executor(70);
@@ -400,8 +470,14 @@ fn routed_pipelining_two_calls_drain_in_one_pass() {
 
     let r1 = gw.resolve(&h1).expect("first delivers");
     let r2 = gw.resolve(&h2).expect("second delivers");
-    assert_eq!(r1.tool_receipt.calls_made, 1, "first committed counter -> 1");
-    assert_eq!(r2.tool_receipt.calls_made, 2, "second committed counter -> 2");
+    assert_eq!(
+        r1.tool_receipt.calls_made, 1,
+        "first committed counter -> 1"
+    );
+    assert_eq!(
+        r2.tool_receipt.calls_made, 2,
+        "second committed counter -> 2"
+    );
     let _ = runtime; // keep the runtime alive for the shared ledger.
 }
 

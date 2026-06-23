@@ -21,7 +21,6 @@
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
-
 use std::collections::HashMap;
 
 use dregg_cell::capability::CapabilityRef;
@@ -29,9 +28,9 @@ use dregg_cell::lifecycle::{DeathCertificate, DeathReason};
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{Cell, CellId, Ledger, NoteCommitment, Permissions, VerificationKey};
-use dregg_turn::action::Event;
 use dregg_exec_lean::lean_apply::{self, execute_via_lean};
 use dregg_exec_lean::lean_shadow::{self, ShadowHostCtx};
+use dregg_turn::action::Event;
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
     turn::Turn,
@@ -146,7 +145,9 @@ fn ledgers_agree(rust: &mut Ledger, lean: &mut Ledger, ids: &[CellId]) -> Result
                 let rc = dregg_cell::compute_canonical_capability_root(&r.capabilities);
                 let lc = dregg_cell::compute_canonical_capability_root(&l.capabilities);
                 if rc != lc {
-                    return Err(format!("cap_root divergence on {id:?}: rust={rc:?} lean={lc:?}"));
+                    return Err(format!(
+                        "cap_root divergence on {id:?}: rust={rc:?} lean={lc:?}"
+                    ));
                 }
             }
             (None, Some(_)) => {
@@ -208,7 +209,9 @@ fn assert_denotational_and_conservation(
 
     // (3a) Full-state denotational agreement.
     if let Err(why) = ledgers_agree(&mut rust_ledger, &mut lean_ledger, ids) {
-        panic!("[{label}] DENOTATIONAL DIVERGENCE — Rust ledger ≠ Lean-reconstituted ledger: {why}");
+        panic!(
+            "[{label}] DENOTATIONAL DIVERGENCE — Rust ledger ≠ Lean-reconstituted ledger: {why}"
+        );
     }
 
     // (3b) Conservation invariant on BOTH producers (the deployed scalar projection of §MA-scalar).
@@ -267,7 +270,16 @@ fn census_transfer() {
         return;
     }
     let (pre, a, b) = two_open_cells();
-    let turn = single_effect_turn(a, a, 0, Effect::Transfer { from: a, to: b, amount: 30 });
+    let turn = single_effect_turn(
+        a,
+        a,
+        0,
+        Effect::Transfer {
+            from: a,
+            to: b,
+            amount: 30,
+        },
+    );
     // Transfer MOVES value but conserves the sum: net supply delta 0.
     assert_denotational_and_conservation("Transfer", pre, turn, &[a, b], 0);
 }
@@ -282,7 +294,11 @@ fn census_set_field() {
         a,
         a,
         0,
-        Effect::SetField { cell: a, index: 6, value: field_from_u64(42) },
+        Effect::SetField {
+            cell: a,
+            index: 6,
+            value: field_from_u64(42),
+        },
     );
     assert_denotational_and_conservation("SetField", pre, turn, &[a], 0);
 }
@@ -309,7 +325,10 @@ fn census_emit_event() {
         0,
         Effect::EmitEvent {
             cell: a,
-            event: Event { topic: field_from_u64(11), data: vec![field_from_u64(22)] },
+            event: Event {
+                topic: field_from_u64(11),
+                data: vec![field_from_u64(22)],
+            },
         },
     );
     assert_denotational_and_conservation("EmitEvent", pre, turn, &[a], 0);
@@ -327,7 +346,10 @@ fn census_set_permissions() {
         a,
         a,
         0,
-        Effect::SetPermissions { cell: a, new_permissions: new_perms },
+        Effect::SetPermissions {
+            cell: a,
+            new_permissions: new_perms,
+        },
     );
     assert_denotational_and_conservation("SetPermissions", pre, turn, &[a], 0);
 }
@@ -344,7 +366,10 @@ fn census_set_verification_key() {
         a,
         a,
         0,
-        Effect::SetVerificationKey { cell: a, new_vk: Some(vk) },
+        Effect::SetVerificationKey {
+            cell: a,
+            new_vk: Some(vk),
+        },
     );
     assert_denotational_and_conservation("SetVerificationKey", pre, turn, &[a], 0);
 }
@@ -378,7 +403,15 @@ fn census_cell_seal() {
         return;
     }
     let (pre, a) = one_open_cell();
-    let turn = single_effect_turn(a, a, 0, Effect::CellSeal { target: a, reason: [9u8; 32] });
+    let turn = single_effect_turn(
+        a,
+        a,
+        0,
+        Effect::CellSeal {
+            target: a,
+            reason: [9u8; 32],
+        },
+    );
     assert_denotational_and_conservation("CellSeal", pre, turn, &[a], 0);
 }
 
@@ -410,7 +443,15 @@ fn census_cell_destroy() {
         destroyed_at_height: 42,
         reason: DeathReason::Voluntary,
     };
-    let turn = single_effect_turn(a, a, 0, Effect::CellDestroy { target: a, certificate: cert });
+    let turn = single_effect_turn(
+        a,
+        a,
+        0,
+        Effect::CellDestroy {
+            target: a,
+            certificate: cert,
+        },
+    );
     // The cell stays present (lifecycle Destroyed) and keeps its balance; supply unchanged.
     assert_denotational_and_conservation("CellDestroy", pre, turn, &[a], 0);
 }
@@ -452,7 +493,16 @@ fn census_grant_capability() {
         allowed_effects: None,
         stored_epoch: None,
     };
-    let turn = single_effect_turn(a_id, a_id, 0, Effect::GrantCapability { from: a_id, to: b_id, cap });
+    let turn = single_effect_turn(
+        a_id,
+        a_id,
+        0,
+        Effect::GrantCapability {
+            from: a_id,
+            to: b_id,
+            cap,
+        },
+    );
     assert_denotational_and_conservation("GrantCapability", pre, turn, &[a_id, b_id], 0);
 }
 
@@ -600,7 +650,10 @@ fn census_refresh_delegation() {
         b_id,
         b_id,
         0,
-        Effect::RefreshDelegation { child: b_id, snapshot: parent_snapshot },
+        Effect::RefreshDelegation {
+            child: b_id,
+            snapshot: parent_snapshot,
+        },
     );
     assert_denotational_and_conservation("RefreshDelegation", pre, turn, &[a_id, b_id], 0);
 }
@@ -910,17 +963,30 @@ fn vm_effect_universe_is_complete() {
         Vm::NoOp,
         Vm::IncrementNonce,
         Vm::MakeSovereign,
-        Vm::SetField { field_idx: 0, value: bb },
-        Vm::SetPermissions { permissions_hash: zero8 },
+        Vm::SetField {
+            field_idx: 0,
+            value: bb,
+        },
+        Vm::SetPermissions {
+            permissions_hash: zero8,
+        },
         Vm::SetVerificationKey { vk_hash: zero8 },
         Vm::RevokeDelegation { child_hash: zero8 },
         Vm::CreateCell { create_hash: zero8 },
         Vm::SpawnWithDelegation { spawn_hash: zero8 },
-        Vm::ExerciseViaCapability { exercise_hash: zero8 },
+        Vm::ExerciseViaCapability {
+            exercise_hash: zero8,
+        },
         Vm::Introduce { intro_hash: zero8 },
         Vm::PipelinedSend { send_hash: zero8 },
-        Vm::NoteSpend { nullifier: bb, value: 0 },
-        Vm::NoteCreate { commitment: bb, value: 0 },
+        Vm::NoteSpend {
+            nullifier: bb,
+            value: 0,
+        },
+        Vm::NoteCreate {
+            commitment: bb,
+            value: 0,
+        },
     ];
     let universe: std::collections::HashSet<&str> = VM_EFFECT_UNIVERSE.iter().copied().collect();
     for s in &samples {
@@ -942,8 +1008,10 @@ fn vm_effect_universe_is_complete() {
 /// root-agreeing ⊆ covered ∪ residual.
 #[test]
 fn every_root_agreeing_effect_is_covered_or_named_residual() {
-    let agreeing: std::collections::HashSet<&str> =
-        lean_shadow::producer_root_agreeing_effects().iter().copied().collect();
+    let agreeing: std::collections::HashSet<&str> = lean_shadow::producer_root_agreeing_effects()
+        .iter()
+        .copied()
+        .collect();
     let covered: std::collections::HashSet<&str> = CENSUS_COVERED.iter().copied().collect();
     let residual: std::collections::HashSet<&str> =
         CENSUS_NAMED_RESIDUALS.iter().map(|(k, _)| *k).collect();
@@ -1031,7 +1099,10 @@ fn census_receipt_archive() {
         a,
         a,
         0,
-        Effect::ReceiptArchive { prefix_end_height: 0, checkpoint: att },
+        Effect::ReceiptArchive {
+            prefix_end_height: 0,
+            checkpoint: att,
+        },
     );
     assert_denotational_and_conservation("ReceiptArchive", pre, turn, &[a], 0);
 }
@@ -1048,12 +1119,23 @@ fn conservation_check_is_non_vacuous() {
 
     let executor = TurnExecutor::new(ComputronCosts::zero());
     let mut post = pre.clone();
-    assert!(executor
-        .execute(
-            &single_effect_turn(a, a, 0, Effect::Transfer { from: a, to: b, amount: 30 }),
-            &mut post
-        )
-        .is_committed());
+    assert!(
+        executor
+            .execute(
+                &single_effect_turn(
+                    a,
+                    a,
+                    0,
+                    Effect::Transfer {
+                        from: a,
+                        to: b,
+                        amount: 30
+                    }
+                ),
+                &mut post
+            )
+            .is_committed()
+    );
     assert_eq!(post.get(&a).unwrap().state.balance(), 70, "A debited");
     assert_eq!(post.get(&b).unwrap().state.balance(), 35, "B credited");
     assert_eq!(

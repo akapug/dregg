@@ -12,7 +12,10 @@ pub mod marshal;
 #[path = "lean_direct.rs"]
 pub mod lean_direct;
 
-pub use lean_direct::{direct_available, shadow_exec_direct, WireTurnHdr};
+pub use lean_direct::{
+    direct_available, identity_floor_median, shadow_exec_direct, shadow_exec_direct_profiled,
+    WireTurnHdr,
+};
 
 /// The VERIFIED DISTRIBUTED exports (federation strand-admission, etc.) — kept in a module distinct
 /// from the executor-facing marshal/lib plumbing.

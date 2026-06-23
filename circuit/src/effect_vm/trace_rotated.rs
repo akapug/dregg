@@ -217,7 +217,11 @@ impl RotatedBlockWitness {
                 pre_limbs.len()
             ));
         }
-        Ok(Self { pre_limbs, iroot, asset_class: BabyBear::ZERO })
+        Ok(Self {
+            pre_limbs,
+            iroot,
+            asset_class: BabyBear::ZERO,
+        })
     }
 
     /// Set the per-cell asset class (the fold of the cell's committed `token_id`).
@@ -696,7 +700,14 @@ pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_nullifiers: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     use super::columns::{PARAM_BASE, param};
     use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
 
@@ -779,7 +790,14 @@ pub fn generate_rotated_create_cell_trace_with_accounts_tree(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_accounts: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     use super::columns::PARAM_BASE;
     use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
 
@@ -854,7 +872,14 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_commitments: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     use super::columns::{PARAM_BASE, param};
     use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
 
@@ -939,7 +964,14 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
     caveat: &RotatedCaveatManifest,
     before_fields_leaves: &[crate::heap_root::HeapLeaf],
     audit_value: BabyBear,
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     use super::columns::PARAM_BASE;
     use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
 
@@ -1261,7 +1293,8 @@ pub fn generate_rotated_cap_write_base(
             // MUST be present (else `update_witness` returns `None` — fail closed). The key set is
             // preserved (the in-place narrow's sorted-tree shadow).
             let (_unused_key, keep_mask) = inserted.ok_or_else(|| {
-                "cap-write Update: no (key,KEEP_MASK) supplied — the narrowed value to write".to_string()
+                "cap-write Update: no (key,KEEP_MASK) supplied — the narrowed value to write"
+                    .to_string()
             })?;
             let updated_key = anchor_key;
             let held_value = before_tree
@@ -1424,9 +1457,7 @@ fn lifecycle_payload_gated(lead: Option<&Effect>) -> bool {
 fn new_cell_key_param_col(lead: Option<&Effect>) -> Option<usize> {
     match lead {
         Some(Effect::CreateCell { .. }) | Some(Effect::SpawnWithDelegation { .. }) => Some(0),
-        Some(Effect::CreateCellFromFactory { .. }) => {
-            Some(super::columns::param::CHILD_VK_DERIVED)
-        }
+        Some(Effect::CreateCellFromFactory { .. }) => Some(super::columns::param::CHILD_VK_DERIVED),
         _ => None,
     }
 }
@@ -1757,11 +1788,7 @@ pub fn cap_node(left: BabyBear, right: BabyBear) -> BabyBear {
 /// Mix `(cur, sib)` by the direction bit into `(left, right)` (Lean `leftExpr`/`rightExpr`):
 /// `dir = 0 ⇒ (cur, sib)` (cur is LEFT), `dir = 1 ⇒ (sib, cur)`.
 fn cap_mix(cur: BabyBear, sib: BabyBear, dir: u8) -> (BabyBear, BabyBear) {
-    if dir == 0 {
-        (cur, sib)
-    } else {
-        (sib, cur)
-    }
+    if dir == 0 { (cur, sib) } else { (sib, cur) }
 }
 
 impl CapOpenWitness {
@@ -1811,8 +1838,7 @@ impl CapOpenWitness {
         // full_mask) == eff_bit`, the kernel's `is_effect_permitted` for a single bit (`facet.rs:123`),
         // NOT the over-strict equality `mask_lo == eff_bit`. A BROAD honest cap (`EFFECT_ALL`, mask_lo =
         // 0xFFFF, mask_hi = 0xFFFF) PASSES — there is NO `mask_hi == 0` pin.
-        let chosen_full_mask: u64 =
-            chosen[3].as_u32() as u64 + (chosen[4].as_u32() as u64) * 65536;
+        let chosen_full_mask: u64 = chosen[3].as_u32() as u64 + (chosen[4].as_u32() as u64) * 65536;
         if (eff_bit as u64 & chosen_full_mask) != eff_bit as u64 {
             return Err(format!(
                 "cap-open witness: chosen leaf full mask {chosen_full_mask} (mask_lo {}, mask_hi {}) \
@@ -1857,7 +1883,11 @@ impl CapOpenWitness {
             src: chosen[1],
             eff_bit: WRITE_MASK_LO,
         };
-        debug_assert_eq!(w.recomposes(), w.cap_root, "cap-open witness must recompose");
+        debug_assert_eq!(
+            w.recomposes(),
+            w.cap_root,
+            "cap-open witness must recompose"
+        );
         Ok(w)
     }
 
@@ -1956,7 +1986,11 @@ impl CapOpenWitness {
             src: leaf[1],
             eff_bit,
         };
-        debug_assert_eq!(w.recomposes(), w.cap_root, "cap-open from_membership recompose");
+        debug_assert_eq!(
+            w.recomposes(),
+            w.cap_root,
+            "cap-open from_membership recompose"
+        );
         Ok(w)
     }
 }
@@ -1991,7 +2025,10 @@ pub fn fill_cap_open(row: &mut [BabyBear], base: usize, w: &CapOpenWitness) {
         row[base + 10 + 3 * lvl] = node;
         cur = node;
     }
-    debug_assert_eq!(cur, w.cap_root, "cap-open fill: top node must equal cap_root");
+    debug_assert_eq!(
+        cur, w.cap_root,
+        "cap-open fill: top node must equal cap_root"
+    );
     row[base + 56] = w.cap_root;
     row[base + 57] = w.src;
     // residual (a): the committed effect-bit column. Carries the turn's ACTUAL effect-kind bit
@@ -2064,8 +2101,7 @@ fn recompute_v1_state_commit(
     row[i1] = hash_many(&[row[s], row[s + 1], row[s + 2], row[s + 3]]);
     row[i2] = hash_many(&[row[s + 4], row[s + 5], row[s + 6], row[s + 7]]);
     row[i3] = hash_many(&[row[s + 8], row[s + 9], row[s + 10], row[s + 11]]);
-    row[s + state::STATE_COMMIT] =
-        hash_many(&[row[i1], row[i2], row[i3], BabyBear::ZERO]);
+    row[s + state::STATE_COMMIT] = hash_many(&[row[i1], row[i2], row[i3], BabyBear::ZERO]);
 }
 
 /// Make a generated rotated AttenuateCapability trace satisfy the `attenuateV3` base
@@ -2404,7 +2440,10 @@ fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
     inputs[8] = row[limb_base + B_IROOT];
     d = chip_absorb_all_lanes(11, &inputs);
     row[cbase + 8 * carrier..cbase + 8 * carrier + 8].copy_from_slice(&d);
-    debug_assert_eq!(carrier, WIDE_COMMIT_CARRIER, "wide chain must end on carrier 12");
+    debug_assert_eq!(
+        carrier, WIDE_COMMIT_CARRIER,
+        "wide chain must end on carrier 12"
+    );
 }
 
 /// **THE WIDE TRANSFER trace generator (`transferVmDescriptor2R24Wide`, faithful 8-felt commit).**
@@ -2565,7 +2604,12 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
     fee: u64,
 ) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
     let (mut trace, base_pis) = generate_rotated_effect_vm_trace_with_fee(
-        initial_state, effects, before_w, after_w, caveat, fee,
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        fee,
     )?;
     if base_pis.len() != ROT_PI_COUNT + 1 {
         return Err(format!(
@@ -2593,7 +2637,14 @@ pub fn generate_rotated_note_spend_wide(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_nullifiers: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     let (mut trace, base_pis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
         initial_state,
         effects,
@@ -2616,15 +2667,23 @@ pub fn generate_rotated_note_create_wide(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_commitments: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
-    let (mut trace, base_pis, map_heaps) = generate_rotated_note_create_trace_with_commitments_tree(
-        initial_state,
-        effects,
-        before_w,
-        after_w,
-        caveat,
-        before_commitments,
-    )?;
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
+    let (mut trace, base_pis, map_heaps) =
+        generate_rotated_note_create_trace_with_commitments_tree(
+            initial_state,
+            effects,
+            before_w,
+            after_w,
+            caveat,
+            before_commitments,
+        )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
     Ok((trace, dpis, map_heaps))
 }
@@ -2639,7 +2698,14 @@ pub fn generate_rotated_create_cell_wide(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_accounts: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     let (mut trace, base_pis, map_heaps) = generate_rotated_create_cell_trace_with_accounts_tree(
         initial_state,
         effects,
@@ -2669,7 +2735,14 @@ pub fn generate_rotated_create_from_factory_wide(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_accounts: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     if !matches!(effects.first(), Some(Effect::CreateCellFromFactory { .. })) {
         return Err(
             "factory wide generator: lead effect is not a CreateCellFromFactory (route createCell / \
@@ -2678,7 +2751,14 @@ pub fn generate_rotated_create_from_factory_wide(
                 .into(),
         );
     }
-    generate_rotated_create_cell_wide(initial_state, effects, before_w, after_w, caveat, before_accounts)
+    generate_rotated_create_cell_wide(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_accounts,
+    )
 }
 
 /// **THE WIDE SPAWN trace generator — the BIRTH/ACCOUNTS-GROW leg ONLY (grow-gate cohort).** Spawn's
@@ -2704,7 +2784,14 @@ pub fn generate_rotated_spawn_wide(
     after_w: &RotatedBlockWitness,
     caveat: &RotatedCaveatManifest,
     before_accounts: &[crate::heap_root::HeapLeaf],
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     if !matches!(effects.first(), Some(Effect::SpawnWithDelegation { .. })) {
         return Err(
             "spawn wide generator: lead effect is not a SpawnWithDelegation (route createCell / factory \
@@ -2712,7 +2799,14 @@ pub fn generate_rotated_spawn_wide(
                 .into(),
         );
     }
-    generate_rotated_create_cell_wide(initial_state, effects, before_w, after_w, caveat, before_accounts)
+    generate_rotated_create_cell_wide(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_accounts,
+    )
 }
 
 /// **THE WIDE REFUSAL trace generator (record-pin cohort + the `fields_root` WRITE gate).** Wraps the
@@ -2734,7 +2828,14 @@ pub fn generate_rotated_refusal_wide(
     caveat: &RotatedCaveatManifest,
     before_fields_leaves: &[crate::heap_root::HeapLeaf],
     audit_value: BabyBear,
-) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<crate::heap_root::HeapLeaf>>), String> {
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
     let (mut trace, base_pis, map_heaps) = generate_rotated_refusal_trace_with_fields_tree(
         initial_state,
         effects,
@@ -2879,7 +2980,11 @@ pub fn generate_rotated_set_field_dyn_base(
     // THE FIFTH PIN (col 263 = AFTER_BASE + B_RECORD_DIGEST → PI[46]): SetField has no
     // `record_pin_offset`, so push the AFTER record-digest limb here (the descriptor pins it last row).
     dpis.push(trace[last_idx][AFTER_BASE + B_RECORD_DIGEST]); // PI 46
-    debug_assert_eq!(dpis.len(), ROT_PI_COUNT + 1, "setFieldDyn carries the rotated 46-PI + PI[46]");
+    debug_assert_eq!(
+        dpis.len(),
+        ROT_PI_COUNT + 1,
+        "setFieldDyn carries the rotated 46-PI + PI[46]"
+    );
 
     // THE BLUM BOUNDARY: ONE declared address (the slot, init value = prev_value, init serial 0). The
     // write (serial 1) opens against (prev_value, 0); the read (serial 2) opens against (slot, 1) —
@@ -2911,8 +3016,14 @@ pub fn generate_rotated_set_field_dyn_wide(
     ),
     String,
 > {
-    let (mut trace, base_pis, mem_boundary) =
-        generate_rotated_set_field_dyn_base(initial_state, before_w, after_w, caveat, slot, prev_value)?;
+    let (mut trace, base_pis, mem_boundary) = generate_rotated_set_field_dyn_base(
+        initial_state,
+        before_w,
+        after_w,
+        caveat,
+        slot,
+        prev_value,
+    )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, SET_FIELD_DYN_HOST_WIDTH);
     debug_assert_eq!(trace[0].len(), SET_FIELD_DYN_HOST_WIDTH + 208); // 789
     Ok((trace, dpis, mem_boundary))
@@ -3010,18 +3121,26 @@ mod tests {
         let desc: EffectVmDescriptor2 = parse_vm_descriptor2(json).unwrap();
 
         // Build a transfer wide trace via the generator over a hand-made witness (no dregg_turn).
-        let limbs: Vec<BabyBear> = (0..NUM_PRE_LIMBS as u32).map(|i| BabyBear::new(i + 1)).collect();
+        let limbs: Vec<BabyBear> = (0..NUM_PRE_LIMBS as u32)
+            .map(|i| BabyBear::new(i + 1))
+            .collect();
         let bw = RotatedBlockWitness::new(limbs.clone(), BabyBear::new(99)).unwrap();
         let aw = RotatedBlockWitness::new(limbs, BabyBear::new(199)).unwrap();
         let st = CellState::new(100_000, 0);
-        let effects = vec![Effect::Transfer { amount: 50, direction: 1 }];
+        let effects = vec![Effect::Transfer {
+            amount: 50,
+            direction: 1,
+        }];
         let (mut trace, _dpis) =
-            generate_rotated_transfer_wide(&st, &effects, &bw, &aw, &empty_caveat_manifest()).unwrap();
+            generate_rotated_transfer_wide(&st, &effects, &bw, &aw, &empty_caveat_manifest())
+                .unwrap();
 
         let check_row = |row: &mut Vec<BabyBear>, label: &str| {
             fill_chip_lanes(&desc, row);
             for (ci, k) in desc.constraints.iter().enumerate() {
-                let VmConstraint2::Lookup(l) = k else { continue };
+                let VmConstraint2::Lookup(l) = k else {
+                    continue;
+                };
                 if l.table != TID_P2 {
                     continue;
                 }

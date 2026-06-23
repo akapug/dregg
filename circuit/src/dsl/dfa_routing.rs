@@ -379,7 +379,10 @@ pub fn build_routing_witness(
     transitions: &[(u32, u32, u32)],
     start_state: u32,
     symbols: &[u32],
-) -> Option<(std::collections::HashMap<String, Vec<BabyBear>>, Vec<BabyBear>)> {
+) -> Option<(
+    std::collections::HashMap<String, Vec<BabyBear>>,
+    Vec<BabyBear>,
+)> {
     assert!(!symbols.is_empty(), "need at least one symbol");
     let step = |s: u32, y: u32| -> Option<u32> {
         transitions
@@ -672,8 +675,8 @@ mod tests {
     #[test]
     fn tampered_transition_fails_proving() {
         let transitions = router_transitions();
-        let (mut witness, public_inputs) = build_routing_witness(&transitions, 0, &[0, 1, 0])
-            .expect("honest witness builds");
+        let (mut witness, public_inputs) =
+            build_routing_witness(&transitions, 0, &[0, 1, 0]).expect("honest witness builds");
 
         // Tamper: claim row 1's next_state is LOCAL=1 instead of the real REMOTE=2.
         // (IDLE-internal->LOCAL, then LOCAL-external-> should be REMOTE=2.) The
@@ -685,8 +688,7 @@ mod tests {
         let descriptor = dfa_routing_descriptor(NAME, &transitions);
         let circuit = DslCircuit::new(descriptor.clone());
         let n = witness.get("current_state").map(|v| v.len()).unwrap_or(0);
-        let trace =
-            build_trace_from_witness(&descriptor, &witness, n).expect("trace assembles");
+        let trace = build_trace_from_witness(&descriptor, &witness, n).expect("trace assembles");
         assert!(
             stark::try_prove(&circuit, &trace, &public_inputs).is_err(),
             "a fabricated transition edge must fail to prove"

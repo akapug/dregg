@@ -267,8 +267,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     // (A) ADMITS: serialize → bytes → deserialize → the env carries the true publics.
     let bytes = whole.to_bytes();
     assert!(!bytes.is_empty(), "the byte envelope must be non-empty");
-    let env = WholeChainProofBytes::from_postcard(&bytes)
-        .expect("the honest envelope must decode");
+    let env = WholeChainProofBytes::from_postcard(&bytes).expect("the honest envelope must decode");
     assert_eq!(env.version, 1);
     assert_eq!(env.genesis_root, genesis.as_u32());
     assert_eq!(env.final_root, final_root.as_u32());

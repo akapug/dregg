@@ -18,7 +18,6 @@
 //! by the assertion — never papered over. Requires the linked Lean archive (`lean-shadow` feature +
 //! `lean_available()`); when the archive is absent the test self-skips (it cannot compare).
 
-
 use std::collections::HashMap;
 
 use dregg_cell::state::FieldElement;

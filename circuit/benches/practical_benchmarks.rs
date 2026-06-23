@@ -102,7 +102,11 @@ fn bench_token_operations(c: &mut Criterion) {
     let key = test_key("mint");
     group.bench_function("mint_token", |b| {
         b.iter(|| {
-            black_box(MacaroonToken::mint(key, b"kid-bench", "dregg.fg-goose.online"));
+            black_box(MacaroonToken::mint(
+                key,
+                b"kid-bench",
+                "dregg.fg-goose.online",
+            ));
         });
     });
 
@@ -530,7 +534,11 @@ fn bench_full_flow(c: &mut Criterion) {
             // 3. Build presentation and prove (real STARK)
             let mut builder =
                 BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-            builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
+            builder.set_root_token(MacaroonToken::mint(
+                key,
+                b"e2e-kid",
+                "dregg.fg-goose.online",
+            ));
             builder.add_attenuation(&att);
 
             let request = AuthRequest {
@@ -559,7 +567,11 @@ fn bench_full_flow(c: &mut Criterion) {
     // Phase 1: Mint
     group.bench_function("phase1_mint", |b| {
         b.iter(|| {
-            black_box(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
+            black_box(MacaroonToken::mint(
+                key,
+                b"e2e-kid",
+                "dregg.fg-goose.online",
+            ));
         });
     });
 
@@ -581,7 +593,11 @@ fn bench_full_flow(c: &mut Criterion) {
         b.iter(|| {
             let mut builder =
                 BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-            builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
+            builder.set_root_token(MacaroonToken::mint(
+                key,
+                b"e2e-kid",
+                "dregg.fg-goose.online",
+            ));
             builder.add_attenuation(&att);
             let request = AuthRequest {
                 app_id: Some("my-app".into()),
@@ -594,7 +610,11 @@ fn bench_full_flow(c: &mut Criterion) {
 
     // Generate proof for serialize/verify phases
     let mut builder = BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
-    builder.set_root_token(MacaroonToken::mint(key, b"e2e-kid", "dregg.fg-goose.online"));
+    builder.set_root_token(MacaroonToken::mint(
+        key,
+        b"e2e-kid",
+        "dregg.fg-goose.online",
+    ));
     builder.add_attenuation(&att);
     let request = AuthRequest {
         app_id: Some("my-app".into()),

@@ -464,9 +464,7 @@ mod tests {
             wrapped_diff == BabyBear::from_u64(1),
             "the wrap: 0 - (p-1) collapses to the tiny value 1"
         );
-        let recon: u32 = (0..30)
-            .map(|i| wrapped_diff_bits[i] << i)
-            .sum();
+        let recon: u32 = (0..30).map(|i| wrapped_diff_bits[i] << i).sum();
         assert_eq!(
             recon, 1,
             "BEFORE: the wrapped diff (=1) has a clean 30-bit decomposition that the \
@@ -484,9 +482,9 @@ mod tests {
                 ct_u, // current_time = p-1
                 wrapped_diff,
                 &wrapped_diff_bits,
-                ct,                  // operand 1 diff = current_time = p-1
+                ct, // operand 1 diff = current_time = p-1
                 &bits30(ct.as_u32()),
-                te,                  // operand 2 diff = token_expiry = 0
+                te, // operand 2 diff = token_expiry = 0
                 &bits30(te.as_u32()),
             ),
             "AFTER: current_time = p-1 does NOT fit OPERAND_RANGE_BITS (=29) bits, so \
@@ -504,7 +502,7 @@ mod tests {
                 ct_u,
                 wrapped_diff,
                 &wrapped_diff_bits,
-                fake_small,          // fake operand-1 diff != current_time (=p-1)
+                fake_small, // fake operand-1 diff != current_time (=p-1)
                 &bits30(7),
                 te,
                 &bits30(te.as_u32()),

@@ -25,13 +25,13 @@
 //! prover state, no ledger, no executor, no program registry. The only
 //! dependencies on shared context are the bytes it reads from disk / stdin.
 
+#[cfg(feature = "prover")]
+use dregg_verifier::replay_chain_recursive;
 use dregg_verifier::{
     CommitteeDescriptor, JsonRequest, ReplayEntry, VerifierOutput, exit_code,
     parse_public_inputs_json, replay_chain, verify_aggregated_bundle_json,
     verify_bilateral_bundle_json, verify_cross_fed_bundle, verify_effect_vm_proof,
 };
-#[cfg(feature = "prover")]
-use dregg_verifier::replay_chain_recursive;
 use std::{
     env,
     io::{self, Read},

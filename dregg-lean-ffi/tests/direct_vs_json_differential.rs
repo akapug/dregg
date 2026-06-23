@@ -14,8 +14,8 @@
 
 use dregg_lean_ffi::marshal::{conformance_input_corpus, marshal_turn_hosted, WForest, WireTurn};
 use dregg_lean_ffi::{
-    decode_shadow_state, direct_available, lean_available, shadow_exec_direct, shadow_exec_full_forest_auth,
-    WireTurnHdr,
+    decode_shadow_state, direct_available, lean_available, shadow_exec_direct,
+    shadow_exec_full_forest_auth, WireTurnHdr,
 };
 
 /// Split a `WireTurn` into the envelope header (for the direct builder) + the root forest (built
@@ -71,5 +71,8 @@ fn direct_path_equals_json_oracle_over_the_whole_corpus() {
     }
     eprintln!("direct_vs_json: {compared} corpus cases — direct == JSON oracle (byte-identical).");
     // The corpus is the 12+30+structural set; ensure we actually drove the whole surface.
-    assert!(compared >= 45, "expected the full corpus (>=45 cases), got {compared}");
+    assert!(
+        compared >= 45,
+        "expected the full corpus (>=45 cases), got {compared}"
+    );
 }

@@ -14,12 +14,10 @@
 //! (admission is mode-independent — only the witness is deferred, never the
 //! decision).
 
-use dregg_cell::{
-    AuthRequired, Cell, CellId, Ledger, Permissions,
-};
+use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::{
-    collapse::{collapse, is_deferred, WitnessMode, DEFERRED_STATE_HASH},
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+    collapse::{DEFERRED_STATE_HASH, WitnessMode, collapse, is_deferred},
     turn::{Turn, TurnResult},
 };
 
@@ -104,7 +102,11 @@ fn three_cell_ledger() -> (Ledger, CellId, CellId, CellId) {
 
 /// Drive a turn through an executor exactly as the live commit path does
 /// (thread + advance the chain head). Returns the committed receipt.
-fn drive(exec: &TurnExecutor, ledger: &mut Ledger, mut turn: Turn) -> dregg_turn::turn::TurnReceipt {
+fn drive(
+    exec: &TurnExecutor,
+    ledger: &mut Ledger,
+    mut turn: Turn,
+) -> dregg_turn::turn::TurnReceipt {
     turn.previous_receipt_hash = exec.get_last_receipt_hash(&turn.agent);
     match exec.execute(&turn, ledger) {
         TurnResult::Committed { receipt, .. } => {
@@ -126,7 +128,15 @@ fn symbolic_turn_applies_transition_without_witness() {
     exec.set_witness_mode(WitnessMode::Symbolic);
     assert!(exec.is_symbolic());
 
-    let t = bare_turn(alice, 0, vec![Effect::Transfer { from: alice, to: bob, amount: 250 }]);
+    let t = bare_turn(
+        alice,
+        0,
+        vec![Effect::Transfer {
+            from: alice,
+            to: bob,
+            amount: 250,
+        }],
+    );
     let receipt = drive(&exec, &mut ledger, t);
 
     // The STATE TRANSITION fully applied — balances moved (the AbstractState
@@ -138,7 +148,10 @@ fn symbolic_turn_applies_transition_without_witness() {
     // not a real Merkle root.
     assert_eq!(receipt.post_state_hash, DEFERRED_STATE_HASH);
     assert_eq!(receipt.pre_state_hash, DEFERRED_STATE_HASH);
-    assert!(is_deferred(&receipt), "symbolic receipt must be flagged deferred");
+    assert!(
+        is_deferred(&receipt),
+        "symbolic receipt must be flagged deferred"
+    );
 }
 
 // ===========================================================================
@@ -153,7 +166,15 @@ fn full_mode_is_byte_identical_to_default() {
     let r_default = drive(
         &exec_default,
         &mut l_default,
-        bare_turn(alice, 0, vec![Effect::Transfer { from: alice, to: bob, amount: 250 }]),
+        bare_turn(
+            alice,
+            0,
+            vec![Effect::Transfer {
+                from: alice,
+                to: bob,
+                amount: 250,
+            }],
+        ),
     );
 
     // An executor explicitly set to Full.
@@ -164,7 +185,15 @@ fn full_mode_is_byte_identical_to_default() {
     let r_full = drive(
         &exec_full,
         &mut l_full,
-        bare_turn(alice2, 0, vec![Effect::Transfer { from: alice2, to: bob2, amount: 250 }]),
+        bare_turn(
+            alice2,
+            0,
+            vec![Effect::Transfer {
+                from: alice2,
+                to: bob2,
+                amount: 250,
+            }],
+        ),
     );
 
     // Byte-identical receipts (same receipt_hash) and a REAL, non-deferred root.
@@ -188,9 +217,33 @@ fn collapse_reproduces_full_run() {
     sym_exec.set_witness_mode(WitnessMode::Symbolic);
 
     let turns = vec![
-        bare_turn(alice, 0, vec![Effect::Transfer { from: alice, to: bob, amount: 300 }]),
-        bare_turn(bob, 0, vec![Effect::Transfer { from: bob, to: carol, amount: 100 }]),
-        bare_turn(alice, 1, vec![Effect::Transfer { from: alice, to: carol, amount: 50 }]),
+        bare_turn(
+            alice,
+            0,
+            vec![Effect::Transfer {
+                from: alice,
+                to: bob,
+                amount: 300,
+            }],
+        ),
+        bare_turn(
+            bob,
+            0,
+            vec![Effect::Transfer {
+                from: bob,
+                to: carol,
+                amount: 100,
+            }],
+        ),
+        bare_turn(
+            alice,
+            1,
+            vec![Effect::Transfer {
+                from: alice,
+                to: carol,
+                amount: 50,
+            }],
+        ),
     ];
     for t in &turns {
         let r = drive(&sym_exec, &mut sym_ledger, t.clone());
@@ -226,8 +279,15 @@ fn collapse_reproduces_full_run() {
     // REAL witness (no longer deferred).
     assert_eq!(collapsed.receipts.len(), full_receipts.len());
     for (c, f) in collapsed.receipts.iter().zip(full_receipts.iter()) {
-        assert!(!is_deferred(c), "a collapsed receipt carries a real witness");
-        assert_eq!(c.receipt_hash(), f.receipt_hash(), "collapse == Full receipt");
+        assert!(
+            !is_deferred(c),
+            "a collapsed receipt carries a real witness"
+        );
+        assert_eq!(
+            c.receipt_hash(),
+            f.receipt_hash(),
+            "collapse == Full receipt"
+        );
         assert_eq!(c.post_state_hash, f.post_state_hash);
     }
 
@@ -252,24 +312,42 @@ fn collapse_reproduces_full_run() {
 #[test]
 fn symbolic_does_not_relax_admission() {
     // An over-spend (insufficient balance) must be rejected in BOTH modes.
-    let bad_transfer =
-        |from: CellId, to: CellId| bare_turn(from, 0, vec![Effect::Transfer { from, to, amount: 10_000 }]);
+    let bad_transfer = |from: CellId, to: CellId| {
+        bare_turn(
+            from,
+            0,
+            vec![Effect::Transfer {
+                from,
+                to,
+                amount: 10_000,
+            }],
+        )
+    };
 
     let (mut l_full, alice, bob, _c) = three_cell_ledger();
     let exec_full = zero_executor();
     let mut t = bad_transfer(alice, bob);
     t.previous_receipt_hash = exec_full.get_last_receipt_hash(&t.agent);
-    let full_rejected = matches!(exec_full.execute(&t, &mut l_full), TurnResult::Rejected { .. });
+    let full_rejected = matches!(
+        exec_full.execute(&t, &mut l_full),
+        TurnResult::Rejected { .. }
+    );
 
     let (mut l_sym, alice2, bob2, _c2) = three_cell_ledger();
     let exec_sym = zero_executor();
     exec_sym.set_witness_mode(WitnessMode::Symbolic);
     let mut t2 = bad_transfer(alice2, bob2);
     t2.previous_receipt_hash = exec_sym.get_last_receipt_hash(&t2.agent);
-    let sym_rejected = matches!(exec_sym.execute(&t2, &mut l_sym), TurnResult::Rejected { .. });
+    let sym_rejected = matches!(
+        exec_sym.execute(&t2, &mut l_sym),
+        TurnResult::Rejected { .. }
+    );
 
     assert!(full_rejected, "an over-spend is rejected in Full");
-    assert!(sym_rejected, "an over-spend is rejected IDENTICALLY in Symbolic");
+    assert!(
+        sym_rejected,
+        "an over-spend is rejected IDENTICALLY in Symbolic"
+    );
 
     // And the rejecting ledgers are equal: neither mode edited state on refusal.
     assert_eq!(l_full.get(&alice).unwrap().state.balance(), 1_000);

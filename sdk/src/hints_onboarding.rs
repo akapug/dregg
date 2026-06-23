@@ -46,9 +46,7 @@
 //! HINTS committee wrapper (`threshold.rs`) and the `hints` primitives
 //! (`generate_hint` / `setup_universe`) into the onboarding shape.
 
-use dregg_federation::threshold::{
-    FederationCommittee, MemberSecret, ThresholdError, ThresholdQC,
-};
+use dregg_federation::threshold::{FederationCommittee, MemberSecret, ThresholdError, ThresholdQC};
 use hints::{
     GlobalData, Hint, PublicKey as BlsPublicKey, SecretKey as BlsSecretKey, generate_hint,
     setup_universe, snark::F,
@@ -90,7 +88,10 @@ impl std::fmt::Display for OnboardingError {
         match self {
             OnboardingError::Threshold(e) => write!(f, "onboarding threshold error: {e}"),
             OnboardingError::AdmissionRefused => {
-                write!(f, "the council's admission quorum did not meet the threshold")
+                write!(
+                    f,
+                    "the council's admission quorum did not meet the threshold"
+                )
             }
             OnboardingError::DuplicateGuardian => {
                 write!(f, "that guardian is already admitted to the council")
@@ -219,7 +220,12 @@ impl AdmissionCertificate {
         let message = admission_signing_message(&enrollment);
         let shares: Vec<_> = signers
             .iter()
-            .map(|&i| (sitting_members[i].index, sitting.sign_share(&sitting_members[i], &message)))
+            .map(|&i| {
+                (
+                    sitting_members[i].index,
+                    sitting.sign_share(&sitting_members[i], &message),
+                )
+            })
             .collect();
         // Below threshold -> the aggregator refuses to certify the QC.
         let qc = sitting
@@ -489,20 +495,17 @@ mod tests {
         .expect("a well-formed candidate must enroll");
 
         // Leg 2: a 3-of-5 quorum of the SITTING council admits the candidate.
-        let cert = AdmissionCertificate::issue(
-            &sitting,
-            &sitting_members,
-            &[0, 2, 4],
-            enrollment,
-        )
-        .expect("a 3-of-5 quorum must certify the admission");
+        let cert = AdmissionCertificate::issue(&sitting, &sitting_members, &[0, 2, 4], enrollment)
+            .expect("a 3-of-5 quorum must certify the admission");
 
         // The admission QC verifies against the sitting council.
         cert.verify(&sitting)
             .expect("a genuine admission QC verifies against the sitting council");
 
         // Leg 3: the roster grows and re-assembles.
-        roster.admit(&cert).expect("a certified candidate is admitted");
+        roster
+            .admit(&cert)
+            .expect("a certified candidate is admitted");
         assert_eq!(roster.len(), 6, "the council grew by one guardian");
 
         // The assembled SIX-guardian committee verifies a REAL aggregate. Build
@@ -555,8 +558,8 @@ mod tests {
             roster.next_slot(),
         )
         .unwrap();
-        let cert =
-            AdmissionCertificate::issue(&sitting, &sitting_members, &[0, 1, 2], enrollment).unwrap();
+        let cert = AdmissionCertificate::issue(&sitting, &sitting_members, &[0, 1, 2], enrollment)
+            .unwrap();
         roster.admit(&cert).unwrap();
 
         let after = roster.committed_vk().expect("VK after");
@@ -592,8 +595,7 @@ mod tests {
         while other_sk.public(roster.global()) == declared_pk {
             other_sk = fresh_candidate(&roster.global().clone());
         }
-        let mismatched_hint =
-            generate_hint(roster.global(), &other_sk, new_domain, slot).unwrap();
+        let mismatched_hint = generate_hint(roster.global(), &other_sk, new_domain, slot).unwrap();
 
         let forged = GuardianEnrollment {
             public_key: declared_pk,
@@ -657,8 +659,7 @@ mod tests {
         .unwrap();
 
         // Only TWO sitting guardians sign — below the 3-of-5 floor.
-        let result =
-            AdmissionCertificate::issue(&sitting, &sitting_members, &[0, 1], enrollment);
+        let result = AdmissionCertificate::issue(&sitting, &sitting_members, &[0, 1], enrollment);
         assert!(
             matches!(result, Err(OnboardingError::AdmissionRefused)),
             "a 2-of-5 admission quorum must be refused, got: {result:?}"

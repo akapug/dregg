@@ -127,6 +127,7 @@ mod threshold_decrypt_diff;
 #[cfg(feature = "runtime")]
 pub mod transport;
 pub mod types;
+pub mod verified_gate;
 /// Per-agent ECVRF sortition (RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI): each
 /// candidate PRIVATELY evaluates `VRF_sk(beacon ‖ role)` and self-selects
 /// under a public threshold — nobody can enumerate the jury before members
@@ -135,13 +136,11 @@ pub mod types;
 /// CURRENT-key-class members of the agent's identity cell, covered by
 /// KERI-shaped pre-rotation.
 pub mod vrf;
-pub mod verified_gate;
 
 // Re-export primary types.
 pub use admission::{
     AdmissionRegistry, Bond, EquivocationEvidence, StrandId as AdmissionStrandId, Vouch,
 };
-pub use verified_gate::{FederationVerifiedGate, register_federation_verified_gate};
 pub use checkpoint::{
     Checkpoint, CheckpointError, DEFAULT_CHECKPOINT_INTERVAL, create_checkpoint,
     finalize_checkpoint, is_checkpoint_height, verify_checkpoint,
@@ -150,6 +149,7 @@ pub use court::{
     CourtRefusal, CourtVerdict, EquivocationCourt, EquivocationEvidenceVerifier,
     equivocation_predicate_vk, register_equivocation_court, seed_council,
 };
+pub use verified_gate::{FederationVerifiedGate, register_federation_verified_gate};
 // The unified `Federation` type (FEDERATION-UNIFICATION-DESIGN.md §2).
 // Frees the bare name `Federation` for the canonical attestation context;
 // the Morpheus-era simulator type that previously held this name is now

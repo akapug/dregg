@@ -54,7 +54,12 @@ fn fresh_world() -> (World, dregg_cell::CellId, dregg_cell::CellId) {
 /// Commit `n` single-transfer turns of `1` unit each from `treasury` to `user`
 /// against `world` (in whatever witness mode the world is currently in). Returns
 /// the number that committed (asserted == n in the bench).
-fn run_batch(world: &mut World, treasury: dregg_cell::CellId, user: dregg_cell::CellId, n: usize) -> usize {
+fn run_batch(
+    world: &mut World,
+    treasury: dregg_cell::CellId,
+    user: dregg_cell::CellId,
+    n: usize,
+) -> usize {
     let mut committed = 0;
     for _ in 0..n {
         let turn = world.turn(treasury, vec![transfer(treasury, user, 1)]);
@@ -112,7 +117,9 @@ fn bench_symbolic_collapse(c: &mut Criterion) {
                     world
                 },
                 |mut world| {
-                    let collapsed = world.collapse().expect("honest symbolic batch must collapse");
+                    let collapsed = world
+                        .collapse()
+                        .expect("honest symbolic batch must collapse");
                     debug_assert_eq!(collapsed, n, "all buffered turns collapse");
                     black_box(collapsed);
                 },

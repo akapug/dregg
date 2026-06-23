@@ -500,7 +500,9 @@ fn emit_requirement_constraints(
             // Operand range-checks close the wrap-around (see OPERAND_RANGE_BITS):
             // each operand must fit in OPERAND_RANGE_BITS bits, so the diff cannot
             // wrap the field modulus and a violation's wrapped diff stays > p/2.
-            out.extend(emit_operand_range_checks(layout, aux_idx, left_col, right_col));
+            out.extend(emit_operand_range_checks(
+                layout, aux_idx, left_col, right_col,
+            ));
             out
         }
         RequirementKind::GreaterEqual { left, right } => {
@@ -513,7 +515,9 @@ fn emit_requirement_constraints(
             let diff_def = quote! { local[#left_col] - local[#right_col] };
             let mut out =
                 emit_range_check_constraints(diff_col, bits_start, RANGE_CHECK_BITS, &diff_def);
-            out.extend(emit_operand_range_checks(layout, aux_idx, left_col, right_col));
+            out.extend(emit_operand_range_checks(
+                layout, aux_idx, left_col, right_col,
+            ));
             out
         }
         RequirementKind::Equal { left, right } => {
@@ -867,7 +871,11 @@ fn emit_operand_range_check_fill(
         let op_bits_start = layout.aux_start + *aux_idx + 1;
         *aux_idx += 1 + RANGE_CHECK_BITS;
         let value_def = quote! { row[#operand_col] };
-        stmts.push(emit_range_check_fill(op_diff_col, op_bits_start, &value_def));
+        stmts.push(emit_range_check_fill(
+            op_diff_col,
+            op_bits_start,
+            &value_def,
+        ));
     }
 }
 

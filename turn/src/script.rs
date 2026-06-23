@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::eventual::{Pipeline, PipelineError};
-use crate::executor::{execute_pipeline, TurnExecutor};
+use crate::executor::{TurnExecutor, execute_pipeline};
 use crate::turn::{Turn, TurnReceipt};
 use dregg_cell::Ledger;
 
@@ -48,13 +48,19 @@ impl Script {
             }
             prev = Some(idx);
         }
-        Script { name: name.into(), pipeline }
+        Script {
+            name: name.into(),
+            pipeline,
+        }
     }
 
     /// Wrap an already-built [`Pipeline`] (e.g. one carrying holes / a non-linear
     /// dependency DAG) as a named script.
     pub fn from_pipeline(name: impl Into<String>, pipeline: Pipeline) -> Self {
-        Script { name: name.into(), pipeline }
+        Script {
+            name: name.into(),
+            pipeline,
+        }
     }
 
     /// Make the replay ATOMIC — any turn failing rolls back the whole replay.
@@ -103,12 +109,12 @@ impl Script {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Preconditions;
     use crate::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect};
     use crate::executor::ComputronCosts;
     use crate::forest::CallForest;
-    use crate::Preconditions;
-    use dregg_cell::permissions::{AuthRequired, Permissions};
     use dregg_cell::CellId;
+    use dregg_cell::permissions::{AuthRequired, Permissions};
 
     fn make_test_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
         let action = Action {
@@ -164,7 +170,10 @@ mod tests {
     fn two_nonce_turns() -> (CellId, Vec<Turn>) {
         let cell = make_open_cell([7u8; 32], 1_000_000);
         let id = cell.id();
-        (id, vec![make_test_turn(id, 0, vec![]), make_test_turn(id, 1, vec![])])
+        (
+            id,
+            vec![make_test_turn(id, 0, vec![]), make_test_turn(id, 1, vec![])],
+        )
     }
 
     #[test]

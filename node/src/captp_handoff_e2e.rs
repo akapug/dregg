@@ -28,26 +28,22 @@
 
 use std::sync::Arc;
 
+use dregg_captp::FederationId;
 use dregg_captp::data_plane::{Bus, ChannelName, DataPlaneError, SendCap};
 use dregg_captp::handoff::{
     HandoffCertificate, HandoffError, HandoffPresentation, validate_handoff,
 };
 use dregg_captp::handoff_session::PresentHandoffFrame;
-use dregg_captp::store_forward::{
-    BlocklaceEnvelope, generate_x25519_keypair, queue_via_blocklace,
-};
+use dregg_captp::store_forward::{BlocklaceEnvelope, generate_x25519_keypair, queue_via_blocklace};
 use dregg_captp::sturdy::SwissTable;
-use dregg_captp::FederationId;
 use dregg_cell::{AuthRequired, CellId};
 use dregg_sdk::AgentCipherclerk;
 use dregg_sdk_net::mailbox::{MailboxTransport, RelayHttpTransport};
 use dregg_storage::operator::RelayOperator;
-use dregg_types::{generate_keypair, PublicKey, SigningKey};
+use dregg_types::{PublicKey, SigningKey, generate_keypair};
 use tokio::sync::RwLock;
 
-use crate::relay_service::{
-    relay_router, RelayConfig, RelayState, RelayTemplateState,
-};
+use crate::relay_service::{RelayConfig, RelayState, RelayTemplateState, relay_router};
 
 /// Spawn the REAL relay HTTP router on an ephemeral port; return its base URL.
 /// (Same shape as `mailbox_crank_e2e::spawn_relay`.)
@@ -101,7 +97,13 @@ fn spawn_relay() -> String {
 fn scenario(
     held: AuthRequired,
     granted: AuthRequired,
-) -> (HandoffPresentation, [u8; 32], FederationId, SwissTable, CellId) {
+) -> (
+    HandoffPresentation,
+    [u8; 32],
+    FederationId,
+    SwissTable,
+    CellId,
+) {
     let (intro_sk, intro_pk): (SigningKey, PublicKey) = generate_keypair();
     let intro_fed = FederationId(intro_pk.0);
     let (recip_sk, recip_pk) = generate_keypair();
@@ -124,7 +126,13 @@ fn scenario(
         swiss,
     );
     let presentation = HandoffPresentation::create(cert, &recip_sk);
-    (presentation, intro_pk.0, intro_fed, swiss_table, target_cell)
+    (
+        presentation,
+        intro_pk.0,
+        intro_fed,
+        swiss_table,
+        target_cell,
+    )
 }
 
 /// THE CROSS-NODE HANDOFF, BY RUNNING over the real relay HTTP routes.
@@ -144,8 +152,7 @@ fn cross_node_cap_handoff_over_the_relay_routes() {
     let (a_x_secret, _a_x_public) = generate_x25519_keypair();
 
     // B subscribes: create its hosted inbox on the relay.
-    let mut b_transport =
-        RelayHttpTransport::new(&base_url, b_clerk.clone()).expect("b transport");
+    let mut b_transport = RelayHttpTransport::new(&base_url, b_clerk.clone()).expect("b transport");
     b_transport
         .subscribe(Some(64), Some(1))
         .expect("B subscribes a hosted inbox");
@@ -167,7 +174,13 @@ fn cross_node_cap_handoff_over_the_relay_routes() {
         introducer_pk: intro_pk,
     };
     let frame_bytes = postcard::to_stdvec(&frame).unwrap();
-    let sealed = queue_via_blocklace(FederationId(b_pk), &frame_bytes, &b_x_public, &a_x_secret, 0);
+    let sealed = queue_via_blocklace(
+        FederationId(b_pk),
+        &frame_bytes,
+        &b_x_public,
+        &a_x_secret,
+        0,
+    );
     a_transport
         .send(&b_pk, &a_transport.owner_pk(), &sealed, 100)
         .expect("A sends the handoff over the real relay route");
@@ -218,7 +231,10 @@ fn cross_node_cap_handoff_over_the_relay_routes() {
             1,
         )
         .expect("the handed-off cap must work on B");
-    assert_ne!(delivery.content_hash, [0u8; 32], "a committed custody receipt");
+    assert_ne!(
+        delivery.content_hash, [0u8; 32],
+        "a committed custody receipt"
+    );
 
     // And using the cap BEYOND its grant is refused at the Bus seam.
     let over = bus.enqueue(

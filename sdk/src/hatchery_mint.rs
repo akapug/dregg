@@ -117,7 +117,9 @@ impl Invariant {
             Invariant::BalanceNeverBelow { slot, floor } => {
                 format!("balance slot {slot} never below {floor}")
             }
-            Invariant::MonotoneField { slot } => format!("field slot {slot} monotone (never decreases)"),
+            Invariant::MonotoneField { slot } => {
+                format!("field slot {slot} monotone (never decreases)")
+            }
         }
     }
 }
@@ -256,8 +258,12 @@ impl MintedKind {
         new_state: &CellState,
         old_state: Option<&CellState>,
     ) -> Result<(), ProgramError> {
-        self.child_program
-            .evaluate_with_meta(new_state, old_state, None, &TransitionMeta::wildcard())
+        self.child_program.evaluate_with_meta(
+            new_state,
+            old_state,
+            None,
+            &TransitionMeta::wildcard(),
+        )
     }
 
     /// **The forge-detector.** Attest that a cell *claiming* this kind actually
@@ -480,7 +486,9 @@ mod tests {
         let stricter = CellProgram::Cases(vec![TransitionCase {
             guard: TransitionGuard::Always,
             constraints: vec![
-                StateConstraint::Monotonic { index: COUNTER_SLOT },
+                StateConstraint::Monotonic {
+                    index: COUNTER_SLOT,
+                },
                 StateConstraint::WriteOnce { index: 5 },
             ],
         }]);
@@ -533,7 +541,9 @@ mod tests {
         let variant = CellProgram::Cases(vec![
             TransitionCase {
                 guard: TransitionGuard::Always,
-                constraints: vec![StateConstraint::Monotonic { index: COUNTER_SLOT }],
+                constraints: vec![StateConstraint::Monotonic {
+                    index: COUNTER_SLOT,
+                }],
             },
             TransitionCase {
                 guard: TransitionGuard::Always,

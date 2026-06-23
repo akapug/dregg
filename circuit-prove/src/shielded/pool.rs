@@ -65,11 +65,11 @@
 //! `DslP3Air`, hiding config swapped in. This module assembles witnesses and
 //! composes proofs; it emits no AIR of its own.
 
-use dregg_circuit::field::BabyBear;
+use crate::shielded::spend_circuit::{PUBLIC_INPUT_COUNT, pi};
 use crate::shielded::transfer::{ShieldedError, ShieldedInputProof, prove_shielded_input};
 use crate::shielded::{ShieldedTransferWitness, shielded_spend_circuit};
 use dregg_circuit::dsl::dsl_p3_air::verify_dsl_zk;
-use crate::shielded::spend_circuit::{PUBLIC_INPUT_COUNT, pi};
+use dregg_circuit::field::BabyBear;
 
 /// One asset-hiding value-commitment leg of a multi-asset pool transfer.
 ///
@@ -258,7 +258,10 @@ impl MultiAssetPoolTransfer {
 
     /// Output asset-hiding commitment bytes, in order (for the downstream verifier).
     pub fn output_commitment_bytes(&self) -> Vec<[u8; 32]> {
-        self.output_legs.iter().map(|l| l.commitment_bytes).collect()
+        self.output_legs
+            .iter()
+            .map(|l| l.commitment_bytes)
+            .collect()
     }
 
     /// Input asset-hiding commitment bytes, in order (for the downstream verifier).

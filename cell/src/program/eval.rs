@@ -1876,7 +1876,8 @@ fn evaluate_constraint_full(
             pred,
         } => {
             let anchor = pred.anchor_offset();
-            let Some(coll) = read_collection_fields(new_state, *base, *stride, *fuel, anchor) else {
+            let Some(coll) = read_collection_fields(new_state, *base, *stride, *fuel, anchor)
+            else {
                 return violated(
                     constraint,
                     format!(
@@ -2370,7 +2371,11 @@ fn reachable_closure(edges: &[(u64, u64)], a: u64, b: u64) -> bool {
 /// untyped felt substrate, fuel = `edges.len() + 1` bounding the search depth on
 /// a finite graph. Reflexive: `a == b ⇒ true` (an actor holding exactly the box
 /// label is cleared).
-fn dominates_closure(edges: &[(FieldElement, FieldElement)], a: FieldElement, b: FieldElement) -> bool {
+fn dominates_closure(
+    edges: &[(FieldElement, FieldElement)],
+    a: FieldElement,
+    b: FieldElement,
+) -> bool {
     fn go(
         edges: &[(FieldElement, FieldElement)],
         a: FieldElement,

@@ -96,7 +96,9 @@ fn main() {
             continue;
         };
         let (hdr, root) = split(turn);
-        let in_bytes = marshal_turn_hosted(host, state, turn).map(|w| w.len()).unwrap_or(0);
+        let in_bytes = marshal_turn_hosted(host, state, turn)
+            .map(|w| w.len())
+            .unwrap_or(0);
         let j = time_median(iters, || json_once(host, state, turn));
         let d = time_median(iters, || direct_once(host, state, root, &hdr));
         let speedup = if d > 0.0 { j / d } else { 0.0 };

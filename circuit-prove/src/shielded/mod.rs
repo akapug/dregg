@@ -91,6 +91,12 @@ pub mod pool;
 pub mod spend_circuit;
 mod transfer;
 
+pub use attest::{
+    AttestWitness, Predicate, attest_circuit, attest_descriptor, generate_attest_trace,
+};
+pub use pool::{
+    HiddenAssetLeg, MultiAssetPoolTransfer, PoolBalanceMode, PoolInputWitness, prove_pool_transfer,
+};
 pub use spend_circuit::{
     ShieldedSpendWitness, generate_shielded_spend_trace, shielded_spend_circuit,
     shielded_spend_descriptor,
@@ -98,10 +104,4 @@ pub use spend_circuit::{
 pub use transfer::{
     ShieldedError, ShieldedInputProof, ShieldedTransfer, ShieldedTransferWitness, ShieldedValueLeg,
     prove_shielded_input, prove_shielded_transfer as transfer_from_witnesses,
-};
-pub use pool::{
-    HiddenAssetLeg, MultiAssetPoolTransfer, PoolBalanceMode, PoolInputWitness, prove_pool_transfer,
-};
-pub use attest::{
-    AttestWitness, Predicate, attest_circuit, attest_descriptor, generate_attest_trace,
 };

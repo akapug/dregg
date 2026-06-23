@@ -72,9 +72,7 @@
 //!   it, but no guardian (and no sub-quorum) ever holds it.
 
 use dregg_federation::beacon::{BeaconCommittee, BeaconPartial, BeaconShare};
-use dregg_federation::dkg::{
-    DkgError, DkgOutput, DkgParams, DkgParticipant, ShareResponse,
-};
+use dregg_federation::dkg::{DkgError, DkgOutput, DkgParams, DkgParticipant, ShareResponse};
 use hints::G1;
 
 use ark_ec::{AffineRepr, CurveGroup, pairing::Pairing};
@@ -113,10 +111,16 @@ impl std::fmt::Display for CouncilSealError {
             CouncilSealError::Dkg(e) => write!(f, "council-seal DKG error: {e}"),
             CouncilSealError::InvalidParameters => write!(f, "council-seal invalid parameters"),
             CouncilSealError::BelowThreshold => {
-                write!(f, "council-seal below threshold: the quorum did not reach K")
+                write!(
+                    f,
+                    "council-seal below threshold: the quorum did not reach K"
+                )
             }
             CouncilSealError::OpenFailed => {
-                write!(f, "council-seal open failed: wrong council/label or tampered seal")
+                write!(
+                    f,
+                    "council-seal open failed: wrong council/label or tampered seal"
+                )
             }
         }
     }
@@ -454,7 +458,10 @@ mod tests {
             .map(|&i| council.contribute_open(i, &s))
             .collect();
         let opened2 = council.open(&s, &contribs2).unwrap();
-        assert_eq!(opened2, plaintext, "any quorum subset opens to the same plaintext");
+        assert_eq!(
+            opened2, plaintext,
+            "any quorum subset opens to the same plaintext"
+        );
 
         // All five also open it (more than K is fine).
         let all = council.open_contributions(&s);
@@ -485,7 +492,10 @@ mod tests {
 
         // Even a SINGLE guardian (the strongest individual) gets nothing.
         let solo: Vec<_> = vec![council.contribute_open(2, &s)];
-        assert_eq!(council.open(&s, &solo), Err(CouncilSealError::BelowThreshold));
+        assert_eq!(
+            council.open(&s, &solo),
+            Err(CouncilSealError::BelowThreshold)
+        );
     }
 
     /// A forged contribution (right structure, wrong share data) is dropped by the
@@ -517,7 +527,12 @@ mod tests {
     #[test]
     fn tampered_seal_fails_closed() {
         let council = Council::genesis(4, 2, [44u8; 32]).unwrap();
-        let mut s = seal(council.committee(), b"recovery:bob", b"key bytes", [9u8; 32]);
+        let mut s = seal(
+            council.committee(),
+            b"recovery:bob",
+            b"key bytes",
+            [9u8; 32],
+        );
         s.ciphertext[0] ^= 0xff;
 
         let contribs = council.open_contributions(&s);

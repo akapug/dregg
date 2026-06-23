@@ -110,11 +110,11 @@ pub mod cipherclerk;
 // seal; `sealed_governance` is the auction/ballot ceremony over it). Wired here
 // so they ship in the built image (the `_sealed_governance_typecheck` `#[path]`
 // fixture is RETIRED by this real declaration).
-pub mod council_seal;
-pub mod sealed_governance;
 pub mod committed_turn;
+pub mod council_seal;
 pub mod device_pairing;
 pub mod guardian_rotation;
+pub mod sealed_governance;
 // `embed` houses the no-I/O `DreggEngine` (executor + ledger + token core,
 // wire-free). It is unconditional in the offline core. The networked
 // `WireCodec` over it lives in `dregg-sdk-net`.
@@ -123,8 +123,8 @@ pub mod error;
 pub mod explain;
 pub mod factories;
 pub mod flashwell;
-pub mod hatchery_mint;
 pub mod full_turn_proof;
+pub mod hatchery_mint;
 pub mod identity;
 pub mod job_escrow;
 // TEMP-DISABLED-FOR-DEVICE-PAIRING-VERIFY: sibling draft, Cargo deps not yet wired
@@ -142,8 +142,8 @@ pub mod receipt;
 // in-band refusal. Welds the verified `Dregg2/Apps/ToolAccessDelegation.lean`
 // crown to the `AgentRuntime`/`SubAgent` cap-gated executor path. Usable by ANY
 // external loop (a buildr/hermes agent) via `ToolGateway::invoke`.
-pub mod tool_gateway;
 pub mod runtime;
+pub mod tool_gateway;
 pub mod trustline;
 pub mod turns;
 pub mod verify;
@@ -201,8 +201,8 @@ pub use runtime::{AgentRuntime, SubAgent};
 // tool-calling agent loop (the proven `delegAdmit` mandate over the cap-gated
 // executor).
 pub use tool_gateway::{
-    deleg_admit, mandate_program, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult,
-    RoutedStatus, ToolCallError, ToolGateway, ToolGrant, ToolReceipt, CALLS_MADE_SLOT,
+    CALLS_MADE_SLOT, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult, RoutedStatus,
+    ToolCallError, ToolGateway, ToolGrant, ToolReceipt, deleg_admit, mandate_program,
 };
 
 // Receipt-chain verification (the chain the Receipt noun links into).
