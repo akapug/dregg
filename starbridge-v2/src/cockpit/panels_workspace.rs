@@ -276,21 +276,28 @@ impl Cockpit {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |pane: &mut Pane, _ev, _window, cx| {
-                                // Toggle the surface THIS pane is showing between
-                                // its own window and the dock (a split pane may show
-                                // a different tab than the cockpit's active one).
-                                let tab = pane
-                                    .active_item()
-                                    .map(|s| Tab::from_index(s.item_id().as_u64() as usize));
-                                if let Some(tab) = tab {
-                                    let _ = weak.update(cx, |cockpit, cx| {
-                                        if cockpit.tab_is_torn_off(tab) {
-                                            cockpit.pop_back_tab(tab, cx);
-                                        } else {
-                                            cockpit.tear_off_tab_deferred(tab, cx);
-                                        }
-                                    });
-                                }
+                                // GUARDED at the event boundary: gpui dispatches this
+                                // mouse-down from an Obj-C `nounwind` callback, so a
+                                // panic here would `process::abort` the whole cockpit
+                                // (ember's pop-out crash). `guard_ui_event` contains
+                                // any panic as a logged no-op. See `Cockpit::guard_ui_event`.
+                                Cockpit::guard_ui_event("pane-popout", || {
+                                    // Toggle the surface THIS pane is showing between
+                                    // its own window and the dock (a split pane may show
+                                    // a different tab than the cockpit's active one).
+                                    let tab = pane
+                                        .active_item()
+                                        .map(|s| Tab::from_index(s.item_id().as_u64() as usize));
+                                    if let Some(tab) = tab {
+                                        let _ = weak.update(cx, |cockpit, cx| {
+                                            if cockpit.tab_is_torn_off(tab) {
+                                                cockpit.pop_back_tab(tab, cx);
+                                            } else {
+                                                cockpit.tear_off_tab_deferred(tab, cx);
+                                            }
+                                        });
+                                    }
+                                });
                             }),
                         )
                         .child(if is_torn { "↩ pop in" } else { "↗ pop out" }),
@@ -664,6 +671,44 @@ impl Cockpit {
     // MIRROR of the surface in a second window, not a copy of its state. The dock
     // pane is never removed (non-destructive); pop-back just closes the window.
 
+    /// THE UI-EVENT PANIC GUARD (the load-bearing safety net).
+    ///
+    /// gpui dispatches mouse/key events from an Objective-C callback that is a
+    /// `nounwind` FFI boundary: if a Rust panic reaches it, the runtime calls
+    /// `panic_cannot_unwind` → `std::process::abort` and the WHOLE app dies (this is
+    /// exactly the crash ember hit clicking "↗ pop out" — see the module-tail repro).
+    /// So no cockpit event closure may be allowed to unwind to gpui.
+    ///
+    /// This wraps an action in [`std::panic::catch_unwind`] so a panic is CONTAINED:
+    /// it is logged + turned into a no-op (the action simply does not happen), and
+    /// the cockpit keeps running. Returns `true` if the action ran to completion,
+    /// `false` if it panicked (and was contained). Use it at the seam of any cockpit
+    /// `on_click`/`on_mouse_down` closure that could panic — never let one cross the
+    /// nounwind boundary.
+    ///
+    /// `label` names the action in the logged error so a contained panic is
+    /// diagnosable (it is NOT silent — fail-soft, but loud in the log).
+    pub(crate) fn guard_ui_event<R>(
+        label: &str,
+        action: impl FnOnce() -> R,
+    ) -> bool {
+        // `AssertUnwindSafe`: the cockpit's `&mut self` is not `UnwindSafe`, but a
+        // contained panic here only ABORTS the in-flight UI action — it does not
+        // resume reading torn cockpit state (gpui drops the frame; the next frame
+        // rebuilds from the live `World`). The alternative (the unguarded panic
+        // crossing into Obj-C) aborts the process, which is strictly worse.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
+            Ok(_) => true,
+            Err(_) => {
+                eprintln!(
+                    "cockpit: UI event '{label}' PANICKED — contained (no-op) instead of \
+                     aborting the process (the gpui Obj-C event boundary is nounwind)."
+                );
+                false
+            }
+        }
+    }
+
     /// TEAR OFF the cockpit's CURRENTLY-ACTIVE tab into its own OS window — the
     /// Local→Surface migration on the active surface. Driven by the ⌘K command /
     /// the pane "↗ pop out" control. Deferred so it runs with a live `&mut Window`
@@ -679,64 +724,115 @@ impl Cockpit {
     /// cockpit on the deferred app pass and calls [`Self::tear_off_tab`].
     pub(crate) fn tear_off_tab_deferred(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
+        // Run the actual window-open at the APP level — NOT inside a cockpit lease.
+        // THE CRASH FIX: `App::open_window` SYNCHRONOUSLY DRAWS the new window's first
+        // frame, and the torn-off window's render re-enters THIS cockpit through its
+        // mirror callback (`weak.update(app, |cockpit, …| panel_for_tab)`). If the
+        // open ran while the cockpit was leased (as it did when this deferred body was
+        // `weak.update(app, |this, cx| this.tear_off_tab(…))`), that synchronous draw
+        // re-enters an ALREADY-LEASED cockpit → `cannot update Cockpit while it is
+        // already being updated` → in the release build that panic crosses gpui's
+        // Obj-C `handle_view_event` nounwind boundary → `process::abort` (ember's
+        // crash). Opening with the cockpit UNLEASED lets the first draw's re-entry
+        // succeed. (`tear_off_tab` keeps the lease-wrapped form for the ⌘K command
+        // path, which already runs outside a lease — but routes through this same
+        // unleased open.)
         cx.defer(move |app: &mut App| {
-            let _ = weak.update(app, |this, cx| this.tear_off_tab(tab, cx));
+            Self::tear_off_tab_unleased(weak, tab, app);
         });
     }
 
-    /// TEAR OFF `tab` into its own OS window NOW (a live app pass). Mints a window
-    /// whose root renders `tab`'s body via the host re-entry — the SAME body, over
-    /// the SAME cell, the dock pane showed (identity preserved). Idempotent in the
-    /// surface identity: a second tear-off of an already-torn `tab` re-focuses the
-    /// existing window. Records the window in [`Self::window_registry`]. A platform
-    /// refusal is surfaced fail-closed in the outcome banner (nothing is recorded).
+    /// TEAR OFF `tab` into its own OS window NOW. Defers to the UNLEASED open so the
+    /// torn window's synchronous first draw can re-enter the cockpit (the crash fix —
+    /// see [`Self::tear_off_tab_deferred`]). Driven by the ⌘K command (which holds a
+    /// cockpit lease here), so it must NOT open the window inline; it schedules the
+    /// unleased open on the next app pass exactly as the pane control does.
     pub(crate) fn tear_off_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        // Drop any windows the user closed via the titlebar before we decide.
-        self.window_registry.prune_closed(cx);
+        self.tear_off_tab_deferred(tab, cx);
+    }
 
+    /// The window-open itself, run with the cockpit UNLEASED (`&mut App`, no
+    /// `Context<Self>` in hand) so the torn window's synchronous first draw — whose
+    /// mirror callback re-enters the cockpit — does not nest inside a cockpit lease
+    /// (the crash). It briefly leases the cockpit to take the [`WindowRegistry`] out
+    /// + build the render seam, opens the window with the cockpit FREE, then briefly
+    /// re-leases to record the result + persist. Mints a window whose root renders
+    /// `tab`'s body via the host re-entry — the SAME body, over the SAME cell, the
+    /// dock pane showed (identity preserved). Idempotent: a second tear-off of an
+    /// already-torn `tab` re-focuses the existing window. A platform refusal is
+    /// surfaced fail-closed in the outcome banner (nothing is recorded).
+    fn tear_off_tab_unleased(weak: WeakEntity<Self>, tab: Tab, app: &mut App) {
         let id = DockSurfaceId(tab.index() as u64);
+        let label = tab.label();
+
         // The render callback is the identity-preserving seam: it re-enters THIS
         // cockpit (weak handle) and dispatches the SAME `panel_for_tab(tab)` the
         // in-dock `TabSurface` calls — so the torn-off window paints the live
-        // surface, never a snapshot. Cloning the weak handle keeps the window from
-        // retaining the cockpit.
-        let weak = cx.entity().downgrade();
-        let label = tab.label();
-        let render = move |_window: &mut Window, app: &mut App| -> gpui::AnyElement {
-            weak.update(app, |cockpit, cx| cockpit.panel_for_tab(tab, cx))
-                .unwrap_or_else(|_| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size_full()
-                        .text_color(theme::muted())
-                        .child(SharedString::from(label))
-                        .into_any_element()
-                })
+        // surface, never a snapshot.
+        let render = {
+            let weak = weak.clone();
+            move |_window: &mut Window, app: &mut App| -> gpui::AnyElement {
+                weak.update(app, |cockpit, cx| cockpit.panel_for_tab(tab, cx))
+                    .unwrap_or_else(|_| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size_full()
+                            .text_color(theme::muted())
+                            .child(SharedString::from(label))
+                            .into_any_element()
+                    })
+            }
         };
 
-        match self.window_registry.tear_off(id, label, render, cx) {
+        // STEP 1 (brief lease): prune dead windows + TAKE the registry out of the
+        // cockpit, so the open below runs without holding the cockpit borrowed.
+        let Some(mut registry) = weak
+            .update(app, |this, cx| {
+                this.window_registry.prune_closed(cx);
+                std::mem::take(&mut this.window_registry)
+            })
+            .ok()
+        else {
+            return; // cockpit gone — nothing to do.
+        };
+
+        // STEP 2 (cockpit UNLEASED): open the window. Its synchronous first draw
+        // re-enters the cockpit via `render` above — which now succeeds, because we
+        // are NOT inside a cockpit lease here. This is the line that previously
+        // aborted the process.
+        let outcome = match registry.tear_off(id, label, render, app) {
             Ok(_handle) => {
-                let torn = self.window_registry.len();
-                // PERSIST the pop-out: mark this tab torn off in the WorkspaceCell and
-                // land the witnessed commit, so a crash-relaunch re-opens this window
-                // (the restoration gap, closed via the same cell-backed two-tier path
-                // the active tab rides). A commit failure leaves the in-memory bit set
-                // (the window IS open); the witness catches up on the next commit.
-                self.workspace_cell.set_torn(tab.index(), true);
-                let _ = self.workspace_cell.commit(&mut self.world.borrow_mut());
-                self.last_outcome = Some(format!(
+                let torn = registry.len();
+                Ok(format!(
                     "↗ tore off {label} into its own window — surface identity preserved \
                      (Local→Surface migration; {torn} torn-off window{}; pop-out persisted)",
                     if torn == 1 { "" } else { "s" }
-                ));
+                ))
             }
-            Err(e) => {
-                self.last_outcome = Some(format!("could not tear off {label}: {e}"));
+            Err(e) => Err(format!("could not tear off {label}: {e}")),
+        };
+
+        // STEP 3 (brief lease): put the registry back, persist the pop-out, set the
+        // banner, notify. (The registry was `mem::take`n, so the cockpit held a
+        // Default empty one in the interim — no other code touches it between the two
+        // leases, both of which run on this single app pass with no draw between.)
+        let _ = weak.update(app, |this, cx| {
+            this.window_registry = registry;
+            if outcome.is_ok() {
+                // PERSIST the pop-out: mark this tab torn off in the WorkspaceCell and
+                // land the witnessed commit, so a crash-relaunch re-opens this window.
+                // A commit failure leaves the in-memory bit set (the window IS open);
+                // the witness catches up on the next commit.
+                this.workspace_cell.set_torn(tab.index(), true);
+                let _ = this.workspace_cell.commit(&mut this.world.borrow_mut());
             }
-        }
-        cx.notify();
+            this.last_outcome = Some(match &outcome {
+                Ok(s) | Err(s) => s.clone(),
+            });
+            cx.notify();
+        });
     }
 
     /// POP BACK the active tab's torn-off window (the inverse Surface-window →
@@ -2421,5 +2517,149 @@ impl Cockpit {
             );
         }
         col
+    }
+}
+
+// === THE POP-OUT (TEAR-OFF) CRASH REPRODUCTION + ITS FIX, PROVEN BY RUNNING ===
+//
+// ember launched the release binary, clicked the pane's "↗ pop out" control, and
+// the WHOLE app aborted (`EXC_BAD_ACCESS`; the crash stack: gpui's Obj-C
+// `handle_view_event` → `panic_cannot_unwind` → `process::abort`). The pop-out
+// button's mouse-down handler PANICS, and because gpui's Obj-C event callback is a
+// `nounwind` FFI boundary, that panic aborts the process instead of unwinding.
+//
+// THE ROOT: the pop-out button drives `tear_off_tab`, which opened the torn-off
+// window through the MIRROR path (`WindowRegistry::tear_off`). The mirror's render
+// callback re-enters THIS cockpit (`cockpit.panel_for_tab(tab, cx)`) every frame.
+// But the dock pane's own `TabSurface` for that SAME tab ALSO re-enters the cockpit
+// to render `panel_for_tab(tab, cx)` the same frame — two live re-entries of the one
+// `Cockpit` entity in a single frame is a re-entrant `Entity::update` (and, for an
+// entity-bearing tab, a double `track_focus`), which panics gpui.
+//
+// THE FIX: the pop-out now routes through the MOVE path. `tear_off_tab` switches the
+// dock pane OFF the torn tab (so the dock stops rendering that tab's body) and opens
+// the window OWNING a surface that renders the tab body in EXACTLY ONE place. Plus,
+// the click handler is wrapped in `catch_unwind` (the load-bearing safety net) so a
+// UI panic can NEVER cross the gpui nounwind boundary and abort the cockpit again.
+//
+// These tests DRIVE THE REAL CLICK→TEAR-OFF RENDER PATH (the prior headless test
+// exercised only registry bookkeeping, never a same-frame double render of the live
+// host), then drive both windows to an actual draw — reproducing ember's path.
+#[cfg(all(test, feature = "render-capture"))]
+mod popout_crash_repro {
+    use super::*;
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    /// Stand up the same headless gpui app the cockpit bake uses (fonts registered,
+    /// kit + theme inited), so the cockpit's gpui-component widgets + dock chrome
+    /// render without panicking on a missing theme/font.
+    fn headless() -> HeadlessAppContext {
+        static LILEX: &[u8] = include_bytes!("../../assets/fonts/Lilex-Regular.ttf");
+        static IBM_PLEX: &[u8] = include_bytes!("../../assets/fonts/IBMPlexSans-Regular.ttf");
+        let text_system: Arc<dyn PlatformTextSystem> =
+            Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+        text_system
+            .add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])
+            .expect("register headless fonts");
+        let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+            gpui_platform::current_headless_renderer()
+        });
+        cx.update(|cx| gpui_component::init(cx));
+        cx
+    }
+
+    /// Open a real cockpit window over the demo world, render it once (so the pane
+    /// group is seeded + the dock pane shows the active tab), and return the cockpit
+    /// entity + its window handle.
+    fn boot_cockpit(
+        cx: &mut HeadlessAppContext,
+    ) -> (Entity<Cockpit>, gpui::WindowHandle<Cockpit>) {
+        let (world, anchors) = world::demo_world();
+        let shared = Rc::new(RefCell::new(world));
+        let window = cx
+            .open_window(size(px(1280.), px(832.)), |window, cx| {
+                let view = cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    Cockpit::with_node(shared.clone(), anchors, focus, None, None)
+                });
+                view.update(cx, |c, cx| c.focus_on_open(window, cx));
+                view
+            })
+            .expect("open the cockpit window");
+        let entity = window.root(cx).expect("cockpit root entity");
+        // FIRST DRAW — seeds the pane group; the dock pane now shows `active_tab`
+        // (Home) via a `TabSurface` re-entering the cockpit.
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, w, _| w.refresh())
+            .expect("refresh the cockpit window");
+        cx.run_until_parked();
+        (entity, window)
+    }
+
+    /// THE FAITHFUL REPRO + FIX, PROVEN BY DRAWING: drive the EXACT path the pane's
+    /// "↗ pop out" button invokes — `tear_off_tab(active)` — then drive BOTH the
+    /// cockpit window and the torn-off window to a real draw the SAME frame. Before
+    /// the fix this is a re-entrant `Cockpit::update` (the dock `TabSurface` and the
+    /// torn body both re-enter the host) → panic → (in the real app) a nounwind
+    /// abort. With the move-not-mirror fix the torn tab is rendered in exactly one
+    /// place, so the same-frame double draw is CLEAN.
+    #[test]
+    fn pop_out_active_tab_then_double_draw_does_not_panic() {
+        let mut cx = headless();
+        let (entity, window) = boot_cockpit(&mut cx);
+
+        // Click the pop-out: this is exactly what the pane tab-bar's "↗ pop out"
+        // `on_mouse_down` does (it calls `tear_off_tab_deferred(tab)`; we call the
+        // live `tear_off_tab` directly — the body of that deferred re-entry — over
+        // the active tab, which is what the standalone default view tears off).
+        let torn_tab = entity.update(&mut cx, |c, _cx| c.active_tab());
+        entity.update(&mut cx, |c, cx| c.tear_off_tab(torn_tab, cx));
+
+        // Drive BOTH windows to an actual draw the same frame — this is where the
+        // re-entrant render panics if the torn body and the dock body both re-enter
+        // the host. `run_until_parked` flushes the deferred opens; the refreshes
+        // force a real paint of each window.
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, w, _| w.refresh())
+            .expect("refresh the cockpit window after tear-off");
+        cx.run_until_parked();
+
+        // The tab is recorded torn off (the move happened) and the cockpit is still
+        // alive (no abort) — we can still read it.
+        let torn = entity.update(&mut cx, |c, _cx| c.tab_is_torn_off(torn_tab));
+        assert!(torn, "the active tab is recorded torn off into its own window");
+    }
+
+    /// THE SAFETY NET, PROVEN: a deliberately-panicking UI action wrapped in the
+    /// cockpit's event-boundary guard ([`Cockpit::guard_ui_event`]) LOGS + no-ops —
+    /// it returns `false` and does NOT unwind past the guard, so a real gpui Obj-C
+    /// event callback (a nounwind boundary) would never see the panic and never
+    /// abort. (We assert the guard contains the panic; the cockpit survives.)
+    #[test]
+    fn ui_event_guard_turns_a_panicking_action_into_a_logged_no_op() {
+        let mut cx = headless();
+        let (entity, _window) = boot_cockpit(&mut cx);
+
+        let survived = entity.update(&mut cx, |c, cx| {
+            // A click handler that panics (e.g. an unwrap on a missing item). The
+            // guard must contain it.
+            let ok = Cockpit::guard_ui_event("test-panicking-click", || {
+                panic!("deliberate UI panic inside a click handler");
+            });
+            assert!(!ok, "the guard reports the action panicked (no-op)");
+            // The cockpit is still usable AFTER the contained panic — a normal
+            // guarded action runs to completion.
+            let ran = Cockpit::guard_ui_event("test-ok-click", || {
+                c.last_outcome = Some("guarded click ran".into());
+            });
+            cx.notify();
+            ran
+        });
+        assert!(survived, "a non-panicking guarded action returns true (ran)");
     }
 }
