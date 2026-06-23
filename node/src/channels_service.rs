@@ -2,7 +2,7 @@
 //! trustline / court service patterns.
 //!
 //! A group is a CELL (blueprint twin: `dregg_cell::blueprint` channel
-//! section; SDK noun: `dregg_sdk::channels`). This service drives the same
+//! section; SDK noun: `dregg_sdk_net::channels`). This service drives the same
 //! canonical turns through the node's AUTHORITATIVE executor
 //! ([`crate::trustline_service::run_signed_turn`]) and carries the DATA
 //! PLANE off-cell: posted ciphertext lives in a node-held ring + SSE stream
@@ -11,7 +11,7 @@
 //! ## THE KEYSTONE — epoch unification (control plane)
 //!
 //! `POST /channels/remove` commits ONE turn
-//! (`dregg_sdk::channels::epoch_step_effects`): the membership-root rewrite,
+//! (`dregg_sdk_net::channels::epoch_step_effects`): the membership-root rewrite,
 //! the epoch-slot step, the fresh key commitment, the
 //! `RevokeDelegation{epoch_anchor}` that bumps the group cell's
 //! `delegation_epoch`, and the survivors' capability refresh
@@ -63,7 +63,7 @@ use dregg_cell::blueprint::{
 };
 use dregg_cell::factory::{FactoryCreationParams, canonical_program_vk};
 use dregg_cell::{CellId, Ledger};
-use dregg_sdk::channels::{
+use dregg_sdk_net::channels::{
     Roster, SealedEpochKey, anchor_token_id, channel_token_id, epoch_step_effects, open_effects,
     roster_root, seal_epoch_key_to_roster,
 };
@@ -1526,7 +1526,7 @@ mod tests {
     /// cells (with seal keyrings) on the live ledger.
     async fn funded_state() -> (
         NodeState,
-        Vec<(CellId, dregg_sdk::channels::MemberKeyring)>,
+        Vec<(CellId, dregg_sdk_net::channels::MemberKeyring)>,
         tempfile::TempDir,
     ) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1560,7 +1560,7 @@ mod tests {
                 let mut secret = [0u8; 32];
                 secret[0] = 0x60 + i;
                 secret[31] = 0xB0 + i;
-                members.push((id, dregg_sdk::channels::MemberKeyring::new(id, secret)));
+                members.push((id, dregg_sdk_net::channels::MemberKeyring::new(id, secret)));
             }
             members
         };
@@ -1603,7 +1603,7 @@ mod tests {
     }
 
     fn members_json(
-        members: &[(CellId, dregg_sdk::channels::MemberKeyring)],
+        members: &[(CellId, dregg_sdk_net::channels::MemberKeyring)],
     ) -> Vec<serde_json::Value> {
         members
             .iter()
@@ -1618,7 +1618,7 @@ mod tests {
 
     async fn create_group(
         state: &NodeState,
-        members: &[(CellId, dregg_sdk::channels::MemberKeyring)],
+        members: &[(CellId, dregg_sdk_net::channels::MemberKeyring)],
     ) -> (CellId, serde_json::Value) {
         let (status, json) = post_json(
             state,
@@ -1653,7 +1653,7 @@ mod tests {
                 .step_by(2)
                 .map(|i| u8::from_str_radix(&ct_hex[i..i + 2], 16).unwrap())
                 .collect();
-            ring.accept(&dregg_sdk::channels::SealedEpochKey {
+            ring.accept(&dregg_sdk_net::channels::SealedEpochKey {
                 member,
                 epoch: 1,
                 ephemeral_pk: eph,

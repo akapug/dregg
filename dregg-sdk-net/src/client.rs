@@ -11,8 +11,8 @@ use std::time::Duration;
 use dregg_commit::{MerkleTree, NonMembershipProof};
 use dregg_wire::prelude::*;
 
-use crate::cipherclerk::{AgentCipherclerk, HeldToken};
-use crate::error::SdkError;
+use dregg_sdk::cipherclerk::{AgentCipherclerk, HeldToken};
+use dregg_sdk::error::SdkError;
 
 /// Result of a revocation check, distinguishing between cryptographically verified
 /// outcomes and unverified server assertions.

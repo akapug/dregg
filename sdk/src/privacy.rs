@@ -33,8 +33,6 @@ use dregg_token::AuthRequest;
 // `discovery` is gated behind `network` (tokio-using); the lone method below
 // that needs it is gated the same way.
 use crate::cipherclerk::{AgentCipherclerk, HeldToken};
-#[cfg(feature = "network")]
-use crate::discovery::{PirTransport, PrivateDiscoveryClient};
 use crate::error::SdkError;
 
 // =============================================================================
@@ -464,47 +462,9 @@ impl AgentCipherclerk {
         })
     }
 
-    /// Discover intents privately using 2-server information-theoretic PIR.
-    ///
-    /// # Privacy Guarantee
-    ///
-    /// Each PIR server learns:
-    /// - That some client is querying the intent index.
-    ///
-    /// Neither server learns:
-    /// - Which capability tag you are searching for.
-    /// - Which row of the index you are interested in.
-    ///
-    /// This is information-theoretic (not computational): even an infinitely powerful
-    /// adversary controlling one server cannot determine your query.
-    ///
-    /// # Non-collusion Requirement
-    ///
-    /// The two servers MUST NOT collude. If they share their query vectors, they can
-    /// XOR them to discover the unit vector `e_i` and learn which tag was queried.
-    ///
-    /// # Arguments
-    ///
-    /// * `tag` - The capability tag to search for (e.g., `"action:read"`).
-    /// * `node_a_url` - Base URL of the first PIR server.
-    /// * `node_b_url` - Base URL of the second PIR server (must be non-colluding).
-    /// * `transport` - The HTTP transport implementation for making requests.
-    ///
-    /// # Returns
-    ///
-    /// A vector of 32-byte intent IDs matching the tag, discovered without
-    /// revealing which tag was queried.
-    #[cfg(feature = "network")]
-    pub async fn discover_intents_privately<T: PirTransport>(
-        &self,
-        tag: &str,
-        node_a_url: &str,
-        node_b_url: &str,
-        transport: T,
-    ) -> Result<Vec<[u8; 32]>, SdkError> {
-        let client = PrivateDiscoveryClient::new(node_a_url, node_b_url, transport);
-        client.discover_intents(tag).await
-    }
+    // `discover_intents_privately` (2-server PIR over a PirTransport) is the
+    // networked face and lives in `dregg-sdk-net` as a free function over
+    // `&AgentCipherclerk`; the core privacy module stays net-free (wasm-safe).
 
     /// Prove a token is not in the revocation set without revealing the token's identity.
     ///

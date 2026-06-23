@@ -29,6 +29,7 @@ dregg-token = { path = "../token", default-features = false, features = ["macaro
 dregg-persist = { path = "../persist" }
 dregg-federation = { path = "../federation" }
 dregg-sdk = { path = "../sdk" }
+dregg-sdk-net = { path = "../dregg-sdk-net" }
 dregg-intent = { path = "../intent" }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }

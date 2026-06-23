@@ -37,6 +37,11 @@ dregg-intent = { path = "../intent" }
 dregg-token = { path = "../token" }
 dregg-turn = { path = "../turn" }
 dregg-cell = { path = "../cell" }
+# The data plane (DP-2) — the cap-gated, receipted message `Bus` a deos app uses
+# to MOVE work (`captp::data_plane`). The `data_plane` bench times its enqueue /
+# drain / publish throughput. `dregg-types` for the relay's `FederationId`/keypair.
+dregg-captp = { path = "../captp" }
+dregg-types = { path = "../types" }
 # The verified Lean kernel FFI — the EMBEDDED executor the node + the seL4
 # `executor` PD drive (`shadow_exec_full_forest_auth` = `@[export]
 # dregg_exec_full_forest_auth`). Already linked transitively via `dregg-turn`'s
@@ -156,6 +161,13 @@ harness = false
 # fail-closed gate) + `Stitch::settle` (the merge-back), plus the end-to-end roundtrip.
 [[bench]]
 name = "membrane"
+harness = false
+
+# DATA PLANE (DP-2): the cap-gated, receipted message `Bus` throughput
+# (`captp::data_plane`) — enqueue (gate + relay + Ed25519 custody receipt), drain
+# (witnessed delivery), the enqueue+drain unit, and the publish/sub fan-out.
+[[bench]]
+name = "data_plane"
 harness = false
 
 [[bin]]

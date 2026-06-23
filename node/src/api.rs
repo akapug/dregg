@@ -7687,7 +7687,7 @@ mod tests {
     /// through the ONE producer gate (`executor_setup::execute_via_producer`),
     /// and the receipt is retrievable from `GET /api/receipts` — while a
     /// tampered envelope, a wrong-agent envelope, and a replayed envelope all
-    /// refuse. Mirrors the exact `dregg_sdk::remote::RemoteRuntime` flow
+    /// refuse. Mirrors the exact `dregg_sdk_net::remote::RemoteRuntime` flow
     /// (federation-bound action signature, `valid_until` stamp, receipt-chain
     /// binding).
     #[tokio::test]

@@ -19,7 +19,7 @@ use dregg_intent::pir::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::SdkError;
+use dregg_sdk::error::SdkError;
 
 // ---------------------------------------------------------------------------
 // HTTP transport trait (allows mocking and alternative HTTP clients)
@@ -286,33 +286,67 @@ impl<T: PirTransport> PrivateDiscoveryClient<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Integration with AgentCipherclerk
+// Integration with AgentCipherclerk (net-side free functions)
+//
+// These used to be inherent methods on `AgentCipherclerk`. The CapTP/federation
+// state-lift (crate-split #4) moved the networked surface OFF the core type:
+// the core stays wasm-safe and net-free, and these PIR discovery helpers live
+// here as free functions over a `&AgentCipherclerk` (they never read agent
+// state — they only carry the agent's identity into the query path).
 // ---------------------------------------------------------------------------
 
-impl crate::cipherclerk::AgentCipherclerk {
-    /// Discover intents matching a capability using private information retrieval.
-    ///
-    /// This is a convenience method that creates a [`PrivateDiscoveryClient`] with
-    /// the given transport and nodes, then performs the PIR query.
-    ///
-    /// # Arguments
-    ///
-    /// * `capability` - The capability tag to search for (e.g., `"action:read"`).
-    /// * `nodes` - A pair of base URLs for the two non-colluding PIR servers.
-    /// * `transport` - The HTTP transport implementation.
-    ///
-    /// # Returns
-    ///
-    /// A vector of 32-byte intent IDs matching the capability.
-    pub async fn discover_matching_intents<T: PirTransport>(
-        &self,
-        capability: &str,
-        nodes: (&str, &str),
-        transport: T,
-    ) -> Result<Vec<[u8; 32]>, SdkError> {
-        let client = PrivateDiscoveryClient::new(nodes.0, nodes.1, transport);
-        client.discover_intents(capability).await
-    }
+/// Discover intents matching a capability using private information retrieval.
+///
+/// Net-side replacement for the former
+/// `AgentCipherclerk::discover_matching_intents` inherent method. Creates a
+/// [`PrivateDiscoveryClient`] with the given transport and nodes, then performs
+/// the PIR query.
+///
+/// # Arguments
+///
+/// * `_cclerk` - The querying agent (carried for symmetry; the PIR query reveals
+///   nothing about it).
+/// * `capability` - The capability tag to search for (e.g., `"action:read"`).
+/// * `nodes` - A pair of base URLs for the two non-colluding PIR servers.
+/// * `transport` - The HTTP transport implementation.
+///
+/// # Returns
+///
+/// A vector of 32-byte intent IDs matching the capability.
+pub async fn discover_matching_intents<T: PirTransport>(
+    _cclerk: &dregg_sdk::cipherclerk::AgentCipherclerk,
+    capability: &str,
+    nodes: (&str, &str),
+    transport: T,
+) -> Result<Vec<[u8; 32]>, SdkError> {
+    let client = PrivateDiscoveryClient::new(nodes.0, nodes.1, transport);
+    client.discover_intents(capability).await
+}
+
+/// Discover intents privately using 2-server information-theoretic PIR.
+///
+/// Net-side replacement for the former `AgentCipherclerk::discover_intents_privately`
+/// inherent method. Each PIR server learns only that *some* client is querying
+/// the intent index; neither learns which tag was queried (information-theoretic,
+/// assuming the two servers do not collude).
+///
+/// # Arguments
+///
+/// * `_cclerk` - The querying agent (carried for symmetry; the PIR query reveals
+///   nothing about it).
+/// * `tag` - The capability tag to search for (e.g., `"action:read"`).
+/// * `node_a_url` - Base URL of the first PIR server.
+/// * `node_b_url` - Base URL of the second PIR server (must be non-colluding).
+/// * `transport` - The HTTP transport implementation.
+pub async fn discover_intents_privately<T: PirTransport>(
+    _cclerk: &dregg_sdk::cipherclerk::AgentCipherclerk,
+    tag: &str,
+    node_a_url: &str,
+    node_b_url: &str,
+    transport: T,
+) -> Result<Vec<[u8; 32]>, SdkError> {
+    let client = PrivateDiscoveryClient::new(node_a_url, node_b_url, transport);
+    client.discover_intents(tag).await
 }
 
 // ---------------------------------------------------------------------------
@@ -546,15 +580,15 @@ mod tests {
         let (index, intents) = build_test_index();
         let transport = MockTransport::new(index);
 
-        let cclerk = crate::cipherclerk::AgentCipherclerk::new();
-        let ids = cclerk
-            .discover_matching_intents(
-                "action:capability_3",
-                ("http://node-a:8080", "http://node-b:8080"),
-                transport,
-            )
-            .await
-            .unwrap();
+        let cclerk = dregg_sdk::cipherclerk::AgentCipherclerk::new();
+        let ids = discover_matching_intents(
+            &cclerk,
+            "action:capability_3",
+            ("http://node-a:8080", "http://node-b:8080"),
+            transport,
+        )
+        .await
+        .unwrap();
 
         let expected_id = intents[3].id;
         assert!(

@@ -33,18 +33,6 @@ dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 # OFF and `run_turn` uses the legacy Rust-producer path — the platform boundary is now this dep, not
 # a flag carving the cluster out of `dregg-turn`.
 dregg-exec-lean = { path = "../exec-lean", optional = true }
-# `network` feature: tokio + dregg-wire — non-wasm32 (mio, quinn). Wasm
-# consumers set `default-features = false`; the modules that depend on
-# these (client, embed, discharge, discovery) are `#[cfg]`-gated.
-dregg-wire = { path = "../wire", optional = true }
-# `captp` feature: dregg-captp pulls async runtimes that are non-wasm32.
-# captp_client + names are gated on this.
-dregg-captp = { path = "../captp", optional = true }
-# `captp` feature (mailbox crank): the relay hosted-inbox dequeue-proof
-# verifier (`dregg_storage::queue::verify_dequeue_proof{,_against}`) — the
-# crank checks custody with the SAME verifier the relay's queue produces
-# proofs for, no reimplementation.
-dregg-storage = { path = "../storage", optional = true }
 dregg-circuit = { path = "../circuit" }
 # The SDK's producer path mints rotated proofs and binds custom sub-proofs
 # (`dregg_circuit_prove::custom_proof_bind`), so it depends on the heavy prove
@@ -74,8 +62,6 @@ ark-serialize = { version = "0.5.0", features = ["serde_with"] }
 
 async-trait = "0.1"
 base64 = { workspace = true }
-chacha20poly1305 = { workspace = true, optional = true }
-futures-core = { version = "0.3", optional = true }
 blake3 = "1"
 curve25519-dalek = { version = "4", features = ["alloc"] }
 ed25519-dalek = { version = "2", features = ["std"] }
@@ -89,37 +75,31 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
 tracing = "0.1"
 zeroize = { workspace = true }
 
 [features]
-# Native default keeps full networking surface — backward-compatible. Wasm
-# consumers (and any embedded callers that only want the cipherclerk/runtime)
-# pass `default-features = false`.
+# This crate is the OFFLINE CORE of the SDK. It carries NO networking surface
+# (no tokio/reqwest/dregg-wire/dregg-captp): the networked layer lives in
+# `dregg-sdk-net`. Wasm / no-lean-link verifier builds pass
+# `default-features = false`, so they get neither the SDK rotated prover wrappers
+# nor `dregg-circuit/prover`.
 #
 # `prover` is in the DEFAULT set: native builds compile the rotated IR-v2
 # (R=24) producer + verifier (the cutover's target path; `descriptor_ir2` is
-# present via `dregg-circuit`'s own default `prover`). Wasm / no-lean-link
-# verifier builds pass `default-features = false`, so they get NEITHER the SDK
-# rotated wrappers NOR `dregg-circuit/prover` (the prover-free rotated VERIFY
-# surface they need is C2 of the cutover, ROTATION-CUTOVER §EXEC).
-default = ["federation-client", "network", "captp", "prover", "exec-lean"]
-federation-client = ["dep:reqwest"]
+# present via `dregg-circuit`'s own default `prover`).
+default = ["prover", "exec-lean"]
 # THE SWAP producer cluster (native): pulls `dregg-exec-lean` so `AgentRuntime::run_turn` drives
 # the verified Lean executor as the authoritative state producer. ON by default; a
 # `default-features = false` (wasm / no-lean-link) build leaves it off and falls back to the Rust
 # producer. The platform boundary is this dep, not a core-gating flag.
 exec-lean = ["dep:dregg-exec-lean"]
-network = ["dep:dregg-wire", "dep:tokio", "dep:futures-core"]
-# `embed-core`: the wire-free `DreggEngine` (executor + ledger + token + proof
-# core) WITHOUT the `network` stack (no tokio/quinn/dregg-wire). For embedded,
-# headless callers (e.g. starbridge-v2's native `World`) that want the real
-# engine but not the networking surface. `network` is a superset (it also
-# compiles the `embed::WireCodec`).
+# COMPAT NO-OP: the wire-free `DreggEngine` (the former `embed-core` surface) is
+# now UNCONDITIONAL in the offline core, so this feature gates nothing. Kept as
+# an empty alias so existing consumers (e.g. starbridge-v2) that request
+# `features = ["embed-core"]` keep resolving. The networked `WireCodec` over the
+# engine lives in `dregg-sdk-net`.
 embed-core = []
-captp = ["dep:dregg-captp", "dep:dregg-storage", "dep:chacha20poly1305"]
 # PLATFORM gate, OFF by default: only wasm32/zkvm builds set it. It compiles the legacy
 # Rust-producer path IN PLACE OF the verified Lean producer — a statement about the
 # target's linker, never about which guarantees this dregg has. On native the producer is
