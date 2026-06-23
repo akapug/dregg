@@ -40,8 +40,24 @@ FORCED** (threaded the inner emitted witness, mutation-confirmed, 32/32 stands).
 NAMED FOLLOW-UPS (burn down): (1) **the `prover` feature is GONE from dregg-circuit** (moved to `dregg-circuit-prove`)
 but ~13 `circuit/tests/` (vk_epoch_*, effect_vm_selector_gate_forgery, rotation_flip, wide_roundtrip, cap_open_*_verify)
 are still `cfg(feature="prover")`-gated ⟹ they NEVER COMPILE/RUN (green-testing-nothing); closure = relocate to
-`dregg-circuit-prove` tests or add the dev-dep + re-gate. (2) registry 45-wide-vs-56-v3 routing audit (the 11
-cap-open/heapWrite variants — confirm every selector resolves to a forced wide entry). (3) the 3 epoch residuals'
+`dregg-circuit-prove` tests or add the dev-dep + re-gate. (2) registry 45-wide-vs-56-v3 routing audit — DONE, and it surfaced a **P1 CROSS-SURFACE
+COMMITMENT-WIDTH GAP** (2026-06-23, assess pass, NOT a verifier-only fix — raised, not papered): the 45 WIDE names are a
+strict subset of the 56 V3 names, but the 45 common rows are **NOT byte-identical** — V3 = 1-felt (`trace_width 609`,
+`public_input_count 46`, ~31-bit commit waist), WIDE = 8-felt (`trace_width 817`, `public_input_count 62`, ~124-bit).
+The two are SEPARATE descriptor families (distinct VK fingerprints). The DEPLOYED SOVEREIGN EXECUTOR
+(`turn/src/executor/proof_verify.rs::verify_one_cohort_run`, mirroring `cipherclerk::prove_sovereign_turn_rotated`)
+verifies the WIDE 8-felt surface; the DEPLOYED LIGHT-CLIENT verifier (`sdk verify_full_turn_bound` →
+`verify_effect_vm_rotated_with_cutover`, iterating `V3_STAGED_REGISTRY_TSV`) verifies the 1-felt V3 surface — and the
+node PERSISTS the 1-felt `prove_full_turn`/`prove_cohort_run_chain` output for light clients (`api.rs get_turn_proof`,
+`turn_proving`). So a light client re-verifying a served turn binds the ~31-bit waist the wide flip was BUILT to close
+(HORIZONLOG "#1 PRECIOUS"), while the executor's own commit binds ~124-bit. This is the staged-additive flip's UNCLOSED
+half: `prove_effect_vm_rotated_wide` (the wide producer) exists but `prove_cohort_run_chain` (the full-turn/light-client
+producer) was deliberately left 1-felt ("the 1-felt producer is UNTOUCHED — the flag-day repoints", full_turn_proof.rs:781).
+CLOSURE (larger than a verifier re-point — a verifier-only align to the wide registry would REJECT every honest 1-felt
+full-turn proof, breaking `prove_and_verify_finalized_turn` + the served light-client pipeline): flip BOTH the full-turn
+PRODUCER (`prove_cohort_run_chain` → wide legs) AND the verifier (`verify_effect_vm_rotated_with_cutover` →
+`WIDE_REGISTRY_STAGED_TSV`) in lock-step, then add the reject test (a 1-felt V3 proof is REJECTED post-flip). The 11
+cap-open/heapWrite V3-only tail is a separate concern under it. (3) the 3 epoch residuals'
 both-poles non-vacuity witnesses. (4) `CrossTurnFreshness`'s `TurnChain`-from-`Admission.runTurn` composition (over
 existing lemmas, not a new obligation). · Tightened codex prompt READY — point codex at the residual the pre-codex
 did NOT reach (joint/forest adversarial-scheduler, note-nullifier internals, the routing audit, adversarial re-verify
