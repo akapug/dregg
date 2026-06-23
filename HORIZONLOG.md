@@ -11,6 +11,36 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### SELF-HOSTING LOOP — DEMONSTRATED, ran + screenshotted (2026-06-23).
+`f4597aeb` (`starbridge-v2/src/self_hosting.rs` + `main.rs --render-self-hosting` bake). BOTH halves real,
+side by side: (1) the firmament EDITOR fired a real cap-gated `SetField` turn → live `TurnReceipt` 5→6 on
+the SAME World ledger the cockpit inspects (status: "6 saves · on-ledger"); (2) a live alacritty PTY ran
+real `cargo --version` INSIDE deos ("cargo 1.98.0-nightly"). Screenshot `starbridge-v2/self-hosting-loop.png`
+(3200×2000) shows both panes under the live image header (`h6 · 6 cells · 6 receipts · on-ledger`). The
+editor code-input body renders dark (established headless gpui-component `InputState` baseline; the save is
+proven by the status line + assertions, not painted glyphs). EXACT REMAINING SEAM for the FULL single loop
+(edit-the-very-file-cargo-compiles): a FirmamentFs↔disk DUAL-WRITE (cell = durable receipted form; disk =
+derived read-mirror the terminal's cargo reads). Both halves real today; that mirror is the one wire left.
+
+### CONFINED HERMES AGENT LOOP — RUNS, receipted, by running (2026-06-23).
+`7c58e4da` (`deos-hermes`). 18 green incl. the consolidated `agent_loop_acceptance` (5-prompt session,
+ONE persistent gateway): N in-mandate calls ADMITTED each w/ a real turn receipt on the embedded Lean
+executor · budget DEPLETES monotonically · over-budget refused in-band (names the rate leg) · past-deadline
+refused (names the deadline leg, no turn) · out-of-mandate tool refused first-try (counter stays 0). Loop =
+`HermesGateway::admit_call` (delegAdmit SCOPE∧DEADLINE∧RATE → metered turn) + `AcpClient` (real ndjson
+JSON-RPC ACP) + confinement (Rust ACP peer in an OS-sandboxed firmament host-PD). SEAM: tested over the
+faithful mock peer — the live `hermes-acp` subprocess transport is built but needs an `acp` install + model
+creds (absent here); gate+executor+ACP-wire+confinement all real, only the agent "brain" is stood-in.
+
+### CHAT ON A LIVE HOMESERVER — real Matrix round-trip, dregg-pilled, by running (2026-06-23).
+`7c58e4da` (`deos-matrix`; swept into the Hermes commit by the shared-index race — byte-identical final,
+HEAD compiles, worktree clean). Against a REAL Conduit homeserver in Docker (`scripts/live-test.sh` +
+`docker-compose.test.yml`): two distinct clients (separate logins/stores/sync) A→B — a plain `m.text`
+round-trips, a `MembraneEnvelope` (forked-subrealm dregg object under `software.ember.deos.membrane`)
+round-trips BYTE-INTACT + REHYDRATES on B (anti-substitution holds across the real server), a generalized
+`DreggObject` round-trips. 3 live tests pass; `cargo test` green w/o Docker (creds-gated no-ops). SEAM: the
+envelope payload is the mock-host sample (deos-matrix can't link the Lean executor — executor-real mint is
+starbridge-v2's); the WIRE leg (envelope survives a real server + rehydrates) is proven on a real server.
 ### DATA-PLANE BUS = THE REAL SPINE, by running (2026-06-23).
 `19ae22f1` (`captp/src/data_plane.rs` + `node/src/channels_service.rs`). `channels_service` already rides
 the `Bus` (POST→`enqueue`→drain→SSE in lockstep); a multi-party flow now proves 4 spine properties, all
