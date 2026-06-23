@@ -345,6 +345,36 @@ Floor: Poseidon2-permutation-CR (the `recStateCommit`/`cellCommit`/`stateCommit`
 injectivity portals reduce to it; the MMR discharge rests on the SAME `Poseidon2SpongeCR`). A
 second pre-image would be the only way to forge a receipt for a different state; that is exactly
 the CR assumption.
+
+THE HOSTILE-WITNESS CIRCUIT BACKBONE (what makes the binding hold against an ADVERSARIAL prover,
+not just an honest one). The integrity guarantee is "a receipt binds the WHOLE post-state"; the
+circuit-soundness side proves a forged proof cannot bind a post-state the kernel did not produce,
+for every live effect:
+  • THE COMMITMENT BINDS EVERY KERNEL WRITE. The deployed per-cell commitment absorbs a
+    `record_digest` limb folding all authority-bearing fields the other limbs miss (permissions, VK,
+    lifecycle, deathCert, delegate, delegation, mode, the side-table roots); two states differing in
+    ANY kernel field commit differently (`cell/src/commitment.rs` `compute_authority_digest_felt`;
+    test `record_digest_binds_commitment_p0_2`). This realizes the Lean `recStateCommit`'s
+    whole-kernel injectivity (`RestHashIffFrame`).
+  • HOSTILE-WITNESS EXTRACTION IS CLOSED FOR ALL 32 LIVE EFFECTS. `Circuit.CircuitOpenFronts`
+    registers `countOpenFronts = 0`: every live effect has an `*_extract` theorem proving ANY
+    public-input-bound satisfying witness — an arbitrary trace pinned only by the verifier's PI check,
+    NO dead whole-trace `hEnc` — FORCES the genuine kernel step, with anti-ghost `*_extract_rejects_*`
+    teeth refuting a forged component/frame/log.
+  • THE VERIFIER ANCHORS. For the record-digest family (setPermissions/setVK/refusal +
+    cellSeal/Unseal/Destroy/receiptArchive/makeSovereign) and the value-forced effects
+    (transfer/burn/mint/bridgeMint/setField/incrementNonce), `proof_verify.rs` step 6b overrides the
+    published limb to `compute_authority_digest_felt`/`lifecycle_felt_cell(trusted post-cell)`, so the
+    gate forces `pubPost = digest(stepped pre)`, not `published == published` (both-polarity tests green).
+  • THE NAMED MOVING-FACE RESIDUALS. For three epoch/snapshot moves — `RevokeDelegationEpochResidual`,
+    `SpawnEpochStampResidual`, `RefreshEpochStampResidual` (`Circuit.EffectRefinement` /
+    `EffectRefinementBatch2`) — the commitment BINDS the field (it folds into `record_digest`), the
+    extractor forces the gate, and the executor PERFORMS the move, but the FROZEN v1-face descriptor
+    commitment-binds the `delegationEpochAt` stamp rather than write-gate-forcing it. Each is carried as
+    a fail-closed, data-bearing `Prop` (never an open hole, never an `axiom`); the faithful refinement is
+    proven against it (e.g. `spawn_full_circuit_refines_spec` — the spawn cap HANDOFF itself is forced,
+    only the epoch stamp is residual). The closure is the moving-face descriptor cutover: per-effect
+    circuit engineering on an already-binding commitment, NOT a commitment change.
 =========================================================================== -/
 
 /-- **`integrity_guarantee` (NOW A REAL STATEMENT — the receipt binds the WHOLE post-state).**
