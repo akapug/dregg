@@ -407,6 +407,52 @@ mod tests {
         assert!(node_b.is_consensus_attested(&blk));
     }
 
+    /// THE FUNNEL INVARIANT (the n=2 self-emit/gossip race fix): `record`
+    /// returns `ReachedQuorum` EXACTLY ONCE — on whichever vote crosses the
+    /// threshold — and `AlreadyQuorum` thereafter. This is the property
+    /// `blocklace_sync::record_finalization_vote` relies on to fire the
+    /// consensus-wide Attested transition exactly once whether the crossing vote
+    /// is the node's OWN (self-emit) or the PEER's (received). The live bug was
+    /// NOT here (the collector is correct) but in the node routing the self-vote
+    /// through a path that DISCARDED this outcome — so when the peer's vote
+    /// landed first, the self-record crossed quorum and the transition was
+    /// swallowed. This test pins the contract that record surfaces the crossing
+    /// on whichever vote is second, so BOTH funnel call-sites can act on it.
+    #[test]
+    fn quorum_crossing_is_reported_on_whichever_vote_is_second() {
+        let a = keypair(11);
+        let b = keypair(22);
+        let committee = [pk(&a), pk(&b)];
+        let quorum = dregg_blocklace::ordering::supermajority_threshold(2); // = 2
+        let blk = BlockId([77; 32]);
+        let vote_a = FinalizationVote::sign(&a, blk, FinalityLevel::Ordered);
+        let vote_b = FinalizationVote::sign(&b, blk, FinalityLevel::Ordered);
+
+        // Case 1: PEER vote first, then SELF vote crosses (the race that broke the
+        // live node — the self-record was the threshold-crosser).
+        let mut col = VoteCollector::new(committee, quorum);
+        assert_eq!(col.record(&vote_b), RecordOutcome::Counted { distinct_votes: 1 });
+        assert_eq!(
+            col.record(&vote_a),
+            RecordOutcome::ReachedQuorum { distinct_votes: 2 },
+            "the SECOND distinct vote (here the self vote) must report the crossing"
+        );
+        // A confirming vote after the crossing is idempotent (AlreadyQuorum).
+        assert!(matches!(
+            col.record(&vote_b),
+            RecordOutcome::AlreadyQuorum { .. }
+        ));
+
+        // Case 2: SELF vote first, then PEER vote crosses (the orientation that
+        // already worked). The crossing is reported symmetrically.
+        let mut col2 = VoteCollector::new([pk(&a), pk(&b)], quorum);
+        assert_eq!(col2.record(&vote_a), RecordOutcome::Counted { distinct_votes: 1 });
+        assert_eq!(
+            col2.record(&vote_b),
+            RecordOutcome::ReachedQuorum { distinct_votes: 2 }
+        );
+    }
+
     #[test]
     fn bilateral_level_votes_do_not_count() {
         let a = keypair(1);

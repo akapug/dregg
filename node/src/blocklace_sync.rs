@@ -667,11 +667,11 @@ impl BlocklaceHandle {
         let vote = FinalizationVote::sign(&self.signing_key, block_id, level);
 
         // Record our own vote (a member's local finality is one signature toward
-        // its own quorum), then broadcast it on the blocklace topic.
-        {
-            let mut col = self.votes.write().await;
-            let _ = col.record(&vote);
-        }
+        // its own quorum) through the SAME funnel as a received vote, so that if
+        // OUR vote is the one that crosses quorum (the peer's vote already landed
+        // — a routine self-emit/gossip race at n=2) the consensus-wide Attested
+        // transition still fires exactly once. See `record_finalization_vote`.
+        record_finalization_vote(self, &vote).await;
 
         // Track this signed vote for RE-DELIVERY over a bounded budget. It is
         // piggybacked onto every `Frontier` (the proven-bidirectional anti-
@@ -1690,18 +1690,30 @@ async fn handle_blocklace_message(
     }
 }
 
-/// Process a received finalization vote: verify + collect by distinct signer,
-/// and log when a block crosses the quorum (2f+1) into consensus-wide Attested.
-async fn handle_finalization_vote(
-    handle: &BlocklaceHandle,
-    from: SocketAddr,
-    vote: crate::finalization_votes::FinalizationVote,
-) {
+/// Record ONE finalization vote into the collector and fire the consensus-wide
+/// Attested transition (metric + log) EXACTLY ONCE, on whichever recorded vote
+/// crosses the quorum threshold.
+///
+/// This is the single funnel for BOTH the node's OWN vote (`emit_finalization_vote`)
+/// and a peer's vote (`handle_finalization_vote`). Routing both through here is
+/// load-bearing: at n=2 the quorum is crossed by the SECOND distinct vote, and
+/// either party's vote can be the second one to land in this node's collector.
+/// If the peer's vote arrives BEFORE this node has recorded its own (a routine
+/// gossip/self-emit race — the peer can finalize and gossip its vote before our
+/// local finalizer emits ours), then it is the SELF-vote record that crosses the
+/// threshold. A self-record path that discarded its `RecordOutcome` (the old
+/// `let _ = col.record(..)`) therefore swallowed the `ReachedQuorum` transition,
+/// leaving the node permanently at `AlreadyQuorum` with the metric never
+/// incremented and the log never emitted — the per-boot "one direction reaches
+/// consensus-wide Attested, the other never does" symptom (purely a counting
+/// race in the node, independent of transport). Funnelling both records here
+/// fires the transition once regardless of which vote is the threshold-crosser.
+async fn record_finalization_vote(handle: &BlocklaceHandle, vote: &crate::finalization_votes::FinalizationVote) {
     use crate::finalization_votes::RecordOutcome;
     let block_id = vote.block_id;
     let outcome = {
         let mut col = handle.votes.write().await;
-        col.record(&vote)
+        col.record(vote)
     };
     match outcome {
         RecordOutcome::ReachedQuorum { distinct_votes } => {
@@ -1723,11 +1735,21 @@ async fn handle_finalization_vote(
         RecordOutcome::AlreadyQuorum { .. } => {}
         RecordOutcome::Rejected => {
             debug!(
-                from = %from,
+                block_id = %block_id,
                 "rejected finalization vote (bad signature or non-member signer)"
             );
         }
     }
+}
+
+/// Process a received finalization vote: verify + collect by distinct signer,
+/// firing the consensus-wide Attested transition if THIS vote crosses quorum.
+async fn handle_finalization_vote(
+    handle: &BlocklaceHandle,
+    _from: SocketAddr,
+    vote: crate::finalization_votes::FinalizationVote,
+) {
+    record_finalization_vote(handle, &vote).await;
 }
 
 /// Handle a Push (or PullResponse) message: receive blocks into our blocklace.
