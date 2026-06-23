@@ -68,6 +68,18 @@ libservo = [
     "dep:dpi",
     "dep:image",
     "dep:glow",
+    # The `surfman::Connection` the real `RenderingContext::connection()` returns.
+    # servo-paint's `register_rendering_context` (`paint.rs:236`) UNCONDITIONALLY
+    # calls `rendering_context.connection().expect("Failed to get connection")` then
+    # `create_adapter()` to seed its per-painter WebGL `SwapChains<_, surfman::Device>`
+    # bookkeeping — so a SWGL context that returns the trait-default `None` panics
+    # BEFORE any page paints. We hand back a real surfman software `Connection`
+    # (`Connection::new()` → CGL/EGL default display, NO window/GPU surface created)
+    # so registration succeeds; the connection is touched ONLY when a page allocates a
+    # WebGL canvas surface (none of our test pages do), while SWGL still does ALL the
+    # actual page rasterization through `gleam_gl_api()`. Pinned to the EXACT version
+    # servo 0.1.x resolves so the `Connection` type UNIFIES with servo-paint's copy.
+    "dep:surfman",
 ]
 
 [dependencies]
@@ -155,6 +167,13 @@ image = { version = "0.25", optional = true }
 # implement glow; our impl stubs it to the offscreen-blit path a DRAW-compositor
 # context never takes — see `src/webview.rs`). Pinned to servo's `glow 0.16`.
 glow = { version = "0.16", optional = true }
+# `surfman::Connection` — the type the real `RenderingContext::connection()` returns
+# (re-exported by `servo-paint-api` as `surfman::Connection`). servo-paint's
+# `register_rendering_context` `.expect()`s it (the surfman ceiling, see the
+# `libservo` feature note + `webview.rs::ServoSwglContext::connection`). Pinned to
+# the EXACT version servo 0.1.x resolves (`surfman 0.11`) so our `Connection` IS the
+# same type servo-paint stores in its `PainterSurfmanDetails`.
+surfman = { version = "0.11", optional = true }
 
 [dev-dependencies]
 # (tests live inline + in tests/)
@@ -177,6 +196,21 @@ glow = { version = "0.16", optional = true }
 [patch.crates-io]
 ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
 ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+# THE servo-paint SWGL FORK — a vendored copy of published `servo-paint 0.1.0`
+# (registry-normalized source; ALL deps are the SAME crates.io pins, so it unifies
+# with servo 0.1.x's own `paint_api`/`webrender`/`surfman` copies) with a SINGLE
+# change: `WebRenderOptions { clear_caches_with_quads: false }` (see
+# `vendor/servo-paint/painter.rs`). Published servo-paint leaves WebRender's
+# default `clear_caches_with_quads: true`, whose picture-cache clear issues a
+# depth-`GL_ALWAYS` quad that SWGL's `DepthFunc` asserts-false on (`gl.cc:1384`) →
+# SIGABRT. Real servo avoids this via a `SwCompositor`; servo-paint 0.1.0 exposes no
+# SWGL option, so this fork sets the flag WebRender's own software path uses (clear
+# caches with a scissored `glClear`, depth-LEQUAL). This is the minimal SWGL
+# adaptation that lets the real engine paint a page into our SWGL framebuffer. Only
+# applies to THIS standalone workspace (`servo-render`); reverts once servo-paint
+# carries a SWGL `RenderingContext` path upstream.
+servo-paint = { path = "vendor/servo-paint" }
 
 # THE stylo FORK PATCH — stylo's `ToCss` derive (`stylo_derive`) emits a `to_css`
 # body whose `?` operators rely on an implicit `From` into `core::fmt::Error`. On

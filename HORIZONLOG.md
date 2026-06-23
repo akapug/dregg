@@ -151,18 +151,35 @@ all four endpoints 200, faucet receipt pushes over SSE. The faucet enforces reci
   `handler_refines_execFullA_attenuate`) must go green first. Their lane, not ours; the node is
   unblocked regardless.
 
-### WEB-SHELL REAL-PAGE RENDER — blocked on a servo-paint surfman ceiling (2026-06-23).
-Named in `384d1f68` (servo net-cap lane). The net-cap socket gate is DONE+proven (cap-denied
-origin → `RefusedByCap`, `Netlayer::dial` never called — `servo-render/src/netcap_connector.rs`
-+ the real libservo `CapGate` test). But driving servo's HTML layout into the SWGL frame is
-REFUTED against published `servo-paint 0.1.0`: `Painter::new` is hardwired to surfman
-(`rendering_context.connection().expect(...)`, paint.rs:238), `ServoSwglContext::connection()`
-returns `None` → panic before any page paints (confirmed by building+running `--features
-libservo`; render test `#[ignore]`d with that reason). CLOSURE = a surfman software `Connection`
-OR a `servo-paint` SWGL fork (the multi-day pole). `dregg://` cell fetches ride the connector
-end-to-end TODAY with no such ceiling; http(s) bytes still ride servo's internal hyper (its
-`FORBIDDEN_SCHEMES` blocks an embedder http(s) ProtocolHandler — replacing the byte socket needs
-a servo `net` fork). SWGL pixel path itself is real+green (`tests/swgl_render_to_png.rs`).
+### WEB-SHELL REAL-PAGE RENDER — ✅ SHIPPED: a real page rasterizes end-to-end (2026-06-23).
+The surfman ceiling is BROKEN and a real Servo `WebView` lays out + paints a page into the SWGL
+framebuffer, captured to a PNG. Two fixes (both in `servo-render/` only):
+(1) **`ServoSwglContext::connection()`** (`src/webview.rs`) now returns a real surfman software
+`Connection` (`Connection::new()` — the default display connection, NO window/GPU surface) instead
+of the trait-default `None`, so servo-paint's `register_rendering_context`
+(`paint.rs:236` `.connection().expect(...)` + `create_adapter()`, its WebGL `SwapChains<_, Device>`
+bookkeeping) no longer panics; SWGL still does ALL page rasterization through `gleam_gl_api()`, the
+surfman device only instantiated for a WebGL canvas (none on our pages).
+(2) **a minimal vendored `servo-paint` fork** (`servo-render/vendor/servo-paint/`, wired via
+`[patch.crates-io] servo-paint` — registry-normalized source, ALL deps the SAME crates.io pins so
+it unifies with servo's copy) flips ONE field: `WebRenderOptions { clear_caches_with_quads: false }`.
+Published servo-paint left WebRender's default `true`, whose picture-cache clear issues a
+depth-`GL_ALWAYS` quad that SWGL's `DepthFunc` (`gl.cc:1384`, accepts only `GL_LESS`/`GL_LEQUAL`)
+`assert(false)`s on → SIGABRT before any page painted. Real servo avoids this via a `SwCompositor`;
+servo-paint 0.1.0 exposes no SWGL option, so the fork sets the flag WebRender's own software path
+uses. Also: paced the headless `spin_event_loop` pump (1ms yields) so servo's async actor threads
+make load/layout/paint progress (a tight busy-loop out-ran them — the page never loaded), and
+flipped the readback vertically (GL bottom-left origin, matching servo's own
+`read_framebuffer_to_image`). RESULT (`cargo test --features libservo --lib`, 17/17 green, 0 ignored):
+a `data:` page with a centered CSS `<div>` rasterizes to `servo_real_page_render.png` (240×200, blue
+bg + yellow 160×120 block at the exact CSS box) AND a text page rasterizes to
+`servo_real_text_render.png` (320×120, the antialiased word "dregg" — 212 distinct colors = real
+glyph raster). Both flow through the genuine compositor-PD T1/T2/T3 gate. The net-cap socket gate
+remains DONE+proven (cap-denied origin → `RefusedByCap`, `Netlayer::dial` never called). REMAINING
+(unchanged, out of this lane): http(s) bytes still ride servo's internal hyper (its
+`FORBIDDEN_SCHEMES` blocks an embedder http(s) ProtocolHandler — replacing the byte socket needs a
+servo `net` fork); the vendored servo-paint fork reverts once upstream carries a SWGL
+`RenderingContext` path.
 
 ### DIRECTIONS RECONSTRUCTION (2026-06-23): the 06-21→06-23 far-seeing arc, recovered.
 `docs/deos/RECONSTRUCTED-DIRECTIONS-2026-06-23.md` — mined the session corpus via `cv` after a
