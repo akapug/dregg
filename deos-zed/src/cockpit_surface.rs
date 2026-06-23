@@ -105,11 +105,12 @@ impl EditorSurface {
     /// disk). The returned surface keeps the typed `FirmamentFs` so the host can
     /// read the live receipt log.
     ///
-    /// This is the honest first mount: a PER-EDITOR firmament fs (its own ledger).
-    /// A host with a live cockpit `World`/executor it wants edits to land on can
-    /// instead hand a pre-mounted `Arc<dyn Fs>` to [`EditorSurface::new`] once a
-    /// `FirmamentFs::over(ledger, executor)` constructor exists; until then this
-    /// is the genuine, receipt-producing default.
+    /// This is the PER-EDITOR mount: a firmament fs over a FRESH `OwnedSpine`
+    /// (its own ledger + executor). It is the headless / test / no-live-World
+    /// default. A host with a live cockpit `World` it wants edits to land on
+    /// mounts [`EditorSurface::firmament_over`] instead, handing the spine that
+    /// wraps the live World — then the editor edits the SAME ledger the cockpit
+    /// inspects.
     #[cfg(feature = "firmament")]
     pub fn firmament(
         id: u64,
@@ -118,7 +119,33 @@ impl EditorSurface {
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<Self> {
-        let firm = Arc::new(crate::fs::FirmamentFs::new());
+        Self::firmament_over(
+            id,
+            Arc::new(crate::fs::FirmamentFs::new()),
+            root,
+            files,
+            window,
+            cx,
+        )
+    }
+
+    /// **Mount a firmament-backed editor surface OVER an existing FirmamentFs** —
+    /// the cockpit seam. The caller builds the [`FirmamentFs`](crate::fs::FirmamentFs)
+    /// (via [`FirmamentFs::over`](crate::fs::FirmamentFs::over) the live cockpit
+    /// spine, or [`FirmamentFs::new`](crate::fs::FirmamentFs::new) for a fresh
+    /// one), then this seeds the `files` onto THAT fs's ledger, opens the first
+    /// through the editor's real `open()`, and roots the tree over it. When `firm`
+    /// is mounted over the live `World`, a save lands on the ledger the cockpit's
+    /// cell inspector reads — one ledger, one save path.
+    #[cfg(feature = "firmament")]
+    pub fn firmament_over(
+        id: u64,
+        firm: Arc<crate::fs::FirmamentFs>,
+        root: PathBuf,
+        files: &[(&str, &str)],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
         for (path, content) in files {
             firm.seed_file(*path, content)?;
         }

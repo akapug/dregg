@@ -428,9 +428,56 @@ impl Cockpit {
 
         let id = self.next_dev_surface_id();
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let fs = deos_zed::fs::RealFs::arc();
-        let surface: Box<dyn CockpitSurface> =
-            Box::new(EditorPane::new(id, fs, root, window, cx));
+
+        // The seed project the editor opens onto — file-cells installed on the
+        // LIVE cockpit `World`, so a save lands on the ledger this cockpit's own
+        // cell inspector reads (one ledger, one save path). First entry is opened
+        // in the buffer; saving it fires a real cap-gated turn.
+        #[cfg(feature = "embedded-executor")]
+        const EDITOR_SEED: &[(&str, &str)] = &[
+            (
+                "/deos/main.rs",
+                "// edit me — every save here is a RECEIPTED dregg turn on the LIVE cockpit ledger.\n\
+                 // a save shows up in the cockpit's own cell inspector as a new cell + receipt.\n\
+                 fn main() {\n    println!(\"hello from a sovereign cell\");\n}\n",
+            ),
+            (
+                "/deos/notes.md",
+                "# on-ledger notes\n\nThis file is a cell on the live World. Saving it is a\n\
+                 cap-gated turn the cockpit inspector can see — not a disk write.\n",
+            ),
+        ];
+
+        // Mount the editor OVER the live cockpit `World` (the shared-ledger seam):
+        // the editor edits the SAME ledger the inspector reads. Fail-soft to the
+        // per-editor firmament default if the shared mount errors, so a mount
+        // failure can never take down the cockpit — but say so loudly.
+        #[cfg(feature = "embedded-executor")]
+        let surface: Box<dyn CockpitSurface> = {
+            match EditorPane::firmament_over(
+                id,
+                self.world.clone(),
+                root.clone(),
+                EDITOR_SEED,
+                window,
+                cx,
+            ) {
+                Ok(pane) => Box::new(pane),
+                Err(e) => {
+                    eprintln!(
+                        "open_editor_pane: shared-World mount failed, falling back to \
+                         per-editor firmament: {e:#}"
+                    );
+                    Box::new(EditorPane::new(id, deos_zed::fs::RealFs::arc(), root, window, cx))
+                }
+            }
+        };
+        #[cfg(not(feature = "embedded-executor"))]
+        let surface: Box<dyn CockpitSurface> = {
+            let fs = deos_zed::fs::RealFs::arc();
+            Box::new(EditorPane::new(id, fs, root, window, cx))
+        };
+
         self.graft_dev_pane(surface, window, cx);
     }
 
@@ -446,7 +493,8 @@ impl Cockpit {
         use starbridge_v2::dock::hermes_surface::AgentPane;
 
         let id = self.next_dev_surface_id();
-        let surface: Box<dyn CockpitSurface> = Box::new(AgentPane::demo(id, cx));
+        let surface: Box<dyn CockpitSurface> =
+            Box::new(AgentPane::interactive(id, "deos-agent", window, cx));
         self.graft_dev_pane(surface, window, cx);
     }
 

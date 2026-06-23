@@ -25,6 +25,125 @@ use gpui::{AnyElement, App, FocusHandle, IntoElement, SharedString, Window};
 
 use super::surface::{CockpitSurface, SurfaceId};
 
+/// The cockpit-`World` realization of deos-zed's [`LedgerSpine`](deos_zed::fs::LedgerSpine):
+/// file-cells live on the LIVE cockpit `World`, so a save is a real turn committed
+/// through `World::commit_turn` and visible to the cockpit's cell inspector (which
+/// reads the SAME `World::ledger()`). Mounting a [`FirmamentFs::over`](deos_zed::fs::FirmamentFs::over)
+/// this spine is how the editor pane edits the ledger the cockpit inspects, not a
+/// per-editor copy.
+///
+/// Single-threaded (`Rc<RefCell<World>>`), matching the cockpit's own ownership —
+/// no second `Arc<Mutex<…>>` model. The editor cell (the save agent) is installed
+/// once on the World at construction; each seeded/saved file gets its cap granted.
+#[cfg(all(feature = "firmament", feature = "embedded-executor"))]
+struct WorldSpine {
+    world: std::rc::Rc<std::cell::RefCell<crate::world::World>>,
+    /// The editor (author) cell id — installed on the World once, the agent of
+    /// every save turn.
+    editor: dregg_cell::CellId,
+    /// A monotonic seed for new file cells (domain-tagged so they can't collide
+    /// with the editor cell; offset high so it can't collide with cockpit genesis
+    /// seeds either).
+    next_seed: std::cell::Cell<u32>,
+}
+
+#[cfg(all(feature = "firmament", feature = "embedded-executor"))]
+impl WorldSpine {
+    /// Mount a spine over the live cockpit `World`, installing the editor (author)
+    /// cell onto it (genesis path) so saves have an agent that holds the file caps.
+    fn new(world: std::rc::Rc<std::cell::RefCell<crate::world::World>>) -> Self {
+        let editor_cell = deos_zed::fs::host_make_editor_cell();
+        let editor = editor_cell.id();
+        world.borrow_mut().genesis_install(editor_cell);
+        WorldSpine {
+            world,
+            editor,
+            // Start high so file-cell seeds don't collide with the cockpit's own
+            // small genesis seeds (anchors etc.).
+            next_seed: std::cell::Cell::new(0x1000_0000),
+        }
+    }
+}
+
+#[cfg(all(feature = "firmament", feature = "embedded-executor"))]
+impl deos_zed::fs::LedgerSpine for WorldSpine {
+    fn editor_id(&self) -> dregg_cell::CellId {
+        self.editor
+    }
+
+    fn cell(&self, id: &dregg_cell::CellId) -> Option<dregg_cell::Cell> {
+        self.world.borrow().ledger().get(id).cloned()
+    }
+
+    fn install_file(&self, content: &str) -> anyhow::Result<dregg_cell::CellId> {
+        let seed = self.next_seed.get();
+        self.next_seed.set(seed.wrapping_add(1));
+        // Build the file cell in EXACTLY the layout deos-zed's `load` decodes
+        // (the host wire API), install it on the live World as genesis, and grant
+        // the editor its per-file edit cap so a later save commits.
+        let file_cell = deos_zed::fs::host_make_file_cell(seed, content);
+        let file = file_cell.id();
+        let mut w = self.world.borrow_mut();
+        w.genesis_install(file_cell);
+        w.genesis_grant_cap(&self.editor, file)
+            .ok_or_else(|| anyhow::anyhow!("editor c-list full granting file edit cap"))?;
+        Ok(file)
+    }
+
+    fn commit_save(
+        &self,
+        file: dregg_cell::CellId,
+        content: &str,
+    ) -> anyhow::Result<dregg_turn::TurnReceipt> {
+        // Build the content `SetField` effects against the file cell's CURRENT
+        // state (so the stale-tail vacate is computed) — the SAME wire shape the
+        // owned spine + `seed_file` lay, so the editor's `load` decodes the save.
+        let effects = {
+            let w = self.world.borrow();
+            let cell = w
+                .ledger()
+                .get(&file)
+                .ok_or_else(|| anyhow::anyhow!("file cell vanished from ledger"))?;
+            deos_zed::fs::host_content_write_effects(cell, content)
+        };
+        // THE SAVE IS A TURN through the LIVE World — `World::turn` threads the
+        // editor's nonce, `commit_turn` threads the receipt chain head + records
+        // the receipt + emits dynamics. A second reader of this World (the cockpit
+        // inspector) now sees the new cell content + the new receipt.
+        let outcome = {
+            let mut w = self.world.borrow_mut();
+            let turn = w.turn(self.editor, effects);
+            w.commit_turn(turn)
+        };
+        match outcome {
+            crate::world::CommitOutcome::Committed { receipt, .. } => Ok(receipt),
+            crate::world::CommitOutcome::Rejected { reason, .. } => {
+                Err(anyhow::anyhow!("save turn refused by the executor: {reason}"))
+            }
+            crate::world::CommitOutcome::Queued { .. } => {
+                Err(anyhow::anyhow!("save turn queued (world suspended)"))
+            }
+        }
+    }
+
+    fn receipt_count(&self) -> usize {
+        self.world.borrow().receipts().len()
+    }
+
+    fn last_receipt(&self) -> Option<dregg_turn::TurnReceipt> {
+        self.world.borrow().receipts().last().cloned()
+    }
+
+    fn total_balance(&self) -> i128 {
+        self.world
+            .borrow()
+            .ledger()
+            .iter()
+            .map(|(_, c)| c.state.balance() as i128)
+            .sum()
+    }
+}
+
 /// A dock-hostable wrapper around a deos-zed editor surface.
 pub struct EditorPane(EditorSurface);
 
@@ -89,6 +208,29 @@ impl EditorPane {
         cx: &mut App,
     ) -> anyhow::Result<Self> {
         Ok(EditorPane(EditorSurface::firmament(id, root, files, window, cx)?))
+    }
+
+    /// **Build a firmament-backed pane OVER the live cockpit `World`** — the
+    /// shared-ledger seam. The editor edits file-cells on the SAME `World` ledger
+    /// the cockpit's cell inspector reads, so a save is a real turn committed
+    /// through `World::commit_turn` and shows up as a new cell + receipt in the
+    /// cockpit's live world (not a per-editor copy). `files` is the seed project
+    /// (installed as genesis on the World; first entry opened in the buffer).
+    #[cfg(all(feature = "firmament", feature = "embedded-executor"))]
+    pub fn firmament_over(
+        id: u64,
+        world: std::rc::Rc<std::cell::RefCell<crate::world::World>>,
+        root: std::path::PathBuf,
+        files: &[(&str, &str)],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
+        let spine: std::rc::Rc<dyn deos_zed::fs::LedgerSpine> =
+            std::rc::Rc::new(WorldSpine::new(world));
+        let firm = std::sync::Arc::new(deos_zed::fs::FirmamentFs::over(spine));
+        Ok(EditorPane(EditorSurface::firmament_over(
+            id, firm, root, files, window, cx,
+        )?))
     }
 
     /// The real on-ledger receipt count (genuine `TurnReceipt`s), if this pane is
