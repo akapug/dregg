@@ -109,15 +109,7 @@ def openFronts : List OpenFront := [
   -- Each has `*_extract` (hostile-witness closure) + anti-ghost `*_extract_rejects_*` teeth (a forged
   -- component / frame / log has NO satisfying PI-bound witness), all `#assert_axioms`-clean.
   --
-  -- 31/32 building + axiom-clean. exerciseA composite is the ONE remaining open front:
-  { id := "exerciseA_composite_extraction"
-  , wave := .w7_exercise_r4
-  , action? := some "exerciseA"
-  , note := "Hostile-witness extractor for the COMPOSITE exerciseA (v1 hold-gate ∘ inner-turn fold) is WRITTEN "
-      ++ "in WitnessExtractComposite.lean (exerciseHold_extract via WitnessExtractV1.effect_extract + exerciseA_extract "
-      ++ "composing the inner-turn bridge) but its opens reference wrong namespaces (FullActionA is in Exec.TurnExecutorFull, "
-      ++ "ExerciseHoldSpec/innerFacetsAdmittedA not in ActionDispatch) so it does NOT yet build — deferred out of the "
-      ++ "Dregg2 build pending the import fix. The other 31 effects ARE fully closed (WitnessExtract/Dual/3/5 + V1)." }
+  -- NO REMAINING GAP in the per-effect adversarial-extraction lane — all 32 effects closed.
 ]
 
 def countOpenFronts : Nat := openFronts.length
