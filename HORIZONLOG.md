@@ -81,21 +81,20 @@ it doesn't use the framework, different shape.)
   wire the remaining 16 framework apps into the registry (identity/nameservice/privacy-voting/escrow-
   market/compute-exchange/agent-+swarm-orchestration/…/first-room).
 
-### APPS WIDER — 15/20 apps launch on the live World ledger; 5 skips reasoned (2026-06-23).
-`c16dde94` adds 11 more framework apps to `app_registry.rs` (now 15 total: gallery/sealed-auction/
-bounty-board/tussle + agent-orchestration/agent-provenance/compartment-workflow-mandate/compute-
-exchange/escrow-market/nameservice/privacy-voting/storage-gateway-mandate/subscription/swarm-
-orchestration/tool-access-delegation). Each fires ONE representative World-committed affordance
-(reuses the app crate's OWN public program+effect-builders; no app `lib.rs` edits needed). Whole-set
-tests `every_wired_app_launches_on_the_cockpit_world` + `_and_fires_a_real_turn` iterate all 15;
-native-full + wasm32 green; the non-wasm dep-table invariant preserved.
-- SKIPPED 5, precise: identity / governed-namespace / supply-chain-provenance need a
-  `SenderAuthorized`/Merkle-membership/sender atom on their first affordance — the World single-custody
-  `commit` path (`Authorization::Unchecked`, no `witness_blobs`, `ctx.sender = None`) can't satisfy it.
-  FOLLOW-ON (the "deeper" rung): an AUTHENTICATED `AppWorldSpine::commit` carrying the cockpit
-  principal as sender + witness blobs → unblocks all 3. · polis = no `DeosApp` ctor (builds charter
-  `CellProgram`s directly, different shape; needs its own integration). · first-room = a scenario/weld
-  shim, not a `DeosApp` (could become a launchable scenario, not an app).
+### APPS ON THE LIVE WORLD LEDGER — 18/20 launch + fire real turns (2026-06-23).
+`c16dde94` (wider: +11 → 15) then `d1dd0a9c` (deeper: +3 authenticated → 18). All 18 framework apps
+launch onto the cockpit `World` ledger and fire ONE representative receipted affordance (reusing each
+app's OWN public program+effect-builders; no app `lib.rs` edits). Whole-set tests iterate all 18.
+- AUTHENTICATED PATH (`d1dd0a9c`): the executor derives `ctx.sender` from the AGENT CELL's pubkey
+  (`turn/src/executor/execute_tree.rs:879`), NOT from `Authorization` — so seeding the app cell over the
+  signer pubkey + attaching a single-member `MerklePath` membership witness satisfies `SenderInSlot`
+  (supply-chain-provenance) / `SenderAuthorized` (identity ISSUER_AUTH_ROOT, governed-namespace
+  GOVERNANCE_COMMITTEE_ROOT) with NO fake-authorized turn. `AppWorldSpine::commit_as` `debug_assert`s
+  the declared sender == the live agent pubkey (a mis-seed fails fast, can't forge). native-full + wasm32
+  green; non-wasm dep-table invariant preserved.
+- REMAINING 2 (not `DeosApp`s — out of the bridge's scope): polis builds charter `CellProgram`s
+  directly (`Result<CellProgram, PolisError>` — own integration, lane firing); first-room is a
+  scenario/weld shim (could become a launchable scenario, not an app).
 ### CELL_TRANSCLUSION 3 RED — CLOSED `e8d08d18` (2026-06-23).
 NOT a leak: the 3 fails were stale tests assuming Proof ⊥ Either, but the `cell` lattice intends
 `Proof ⊆ Either` (comparable); `Membrane::project` was correct. Realigned the tests to use a genuinely-
