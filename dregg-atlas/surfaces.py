@@ -133,6 +133,47 @@ SURFACES = [
      "The self-hosting cockpit dock — editor + terminal + chat + agent as resizable "
      "dock panes (PaneGroup / Pane), the desktop epoch's self-hosting cockpit. Baked "
      "via the showcase composite (the full cockpit, not a single tab)."),
+
+    # ---- EXTERNAL BAKES (committed PNGs from their own e2e/headless bakes) ----
+    # These surfaces are NOT cockpit `Tab`s and are not produced by the MCP
+    # screenshot tool; each is captured by the run that demonstrates it (a bake
+    # that hard-asserts its proofs, or a live e2e). The atlas carries the
+    # committed PNG (copied in by shoot.py when bake='external', via `src`) plus a
+    # first-principles explainer. Each `src` is a repo path under the parent tree.
+    ("self-hosting-loop", None, "SELF-HOSTING LOOP", "external", "self-hosting-loop",
+     "Develop dregg INSIDE deos: the firmament editor (a save is a cap-gated SetField "
+     "ledger turn) beside a live alacritty PTY running real cargo/rustc — one image. "
+     "The bake hard-asserts the receipt grew AND the toolchain ran; "
+     "src `starbridge-v2/self-hosting-loop-full.png`."),
+    ("zed-workspace", None, "ZED WORKSPACE", "external", "zed-workspace",
+     "The full Zed IDE over the cell ledger: a real workspace::Workspace whose Fs IS "
+     "the dregg cell ledger; Zed's own project/outline/terminal panels dock + resolve, "
+     "and a save through the IDE fires a verified TurnReceipt. (No committed PNG — "
+     "the proof is the green full-zed test suite; this is the surface explainer.)"),
+    ("web-deos", None, "WEB DEOS (in-browser)", "external", "web-deos",
+     "The same gpui cockpit bundled to wasm32 + WebGPU, painting a real frame in a "
+     "browser tab over the same in-tab verified executor — one renderer, two platforms. "
+     "src `starbridge-v2/web/cockpit-gpui-web-painted.png` (headless Chrome, canvas 2560×1640)."),
+    ("servo-page", None, "SERVO REAL PAGE", "external", "servo-page",
+     "A real Servo web engine page laid out + rasterized (the surfman / event-loop / "
+     "SWGL ceilings cleared): a data: page's CSS box measured, glyphs as 212-color "
+     "antialiased text. src `servo-render/servo_real_page_render.png`."),
+    ("mud", None, "MUD MULTI-INHABITANT", "external", "mud",
+     "A multi-inhabitant MUD where the PHYSICS is the proof: 3 inhabitants / 2 rooms "
+     "over the real executor; a door is a cap you lack, items conserve across trades, "
+     "a give can't amplify authority, value Σδ=0 — all executor-gated via real receipts. "
+     "(No committed PNG — the proof is the 9-test mud suite.)"),
+    ("membrane", None, "MULTIPLAYER MEMBRANE", "external", "membrane",
+     "The fork-and-stitch primitive: one cap-bounded World::fork (a MembraneFrustum) "
+     "carried over the wire, rehydrated into TWO real Worlds under two principals "
+     "(anti-substitution), each committing a real turn, then stitched (linear Dead-wins "
+     "join, over-authorized confer REFUSED). (No committed PNG — the proof is the "
+     "21-test shared_fork suite.)"),
+    ("federation", None, "FEDERATION (n=2)", "external", "federation",
+     "A real two-node dregg-node federation over QUIC gossip + blocklace consensus: a "
+     "faucet turn on A gossips to B and both DAGs converge byte-identically to "
+     "consensus-attested finality. (No committed PNG — the proof is the runbook + the "
+     "named net/node tests.)"),
 ]
 
 

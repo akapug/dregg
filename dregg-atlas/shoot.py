@@ -17,14 +17,27 @@ import json
 import os
 import sys
 
+import shutil
+
 from mcp_client import Mcp
 from surfaces import SURFACES
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+PARENT = os.path.dirname(ROOT)
 SHOTS = os.path.join(ROOT, "screenshots")
 DATA = os.path.join(ROOT, "data")
 os.makedirs(SHOTS, exist_ok=True)
 os.makedirs(DATA, exist_ok=True)
+
+# EXTERNAL bakes (bake='external'): committed PNGs from each demonstration's own
+# e2e/headless bake, copied in by id. Repo-relative to the atlas's parent tree.
+# A surface with no entry here (e.g. the test-proved-only ones) simply carries no
+# screenshot — build.py renders its explainer without an image.
+EXTERNAL_SOURCES = {
+    "self-hosting-loop": "starbridge-v2/self-hosting-loop-full.png",
+    "web-deos":          "starbridge-v2/web/cockpit-gpui-web-painted.png",
+    "servo-page":        "servo-render/servo_real_page_render.png",
+}
 
 
 def manifest_entry(sid, label, bake, deep, blurb, png=None, size=None):
@@ -56,6 +69,21 @@ def main():
             prior = os.path.join(SHOTS, sid + ".png")
             if os.path.exists(prior):
                 png = prior
+            if bake == "external":
+                # copy the committed demonstration PNG into the atlas (no MCP).
+                src_rel = EXTERNAL_SOURCES.get(sid)
+                if src_rel:
+                    src = os.path.join(PARENT, src_rel)
+                    if os.path.exists(src):
+                        dst = os.path.join(SHOTS, sid + ".png")
+                        shutil.copyfile(src, dst)
+                        png = dst
+                        captured += 1
+                        print(f"  ext  {sid} <- {src_rel}", file=sys.stderr)
+                    else:
+                        print(f"  MISS-EXT {sid}: source not found {src_rel}", file=sys.stderr)
+                manifest.append(manifest_entry(sid, label, bake, deep, blurb, png, size))
+                continue
             if m is not None:
                 out = os.path.join(SHOTS, sid)
                 try:

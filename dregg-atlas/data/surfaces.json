@@ -7,7 +7,7 @@
     "deep": "home",
     "explainer": "The at-rest landing \u2014 the warm front door of the live verified image; names the running system reflectively (executor \u00b7 cells \u00b7 receipts \u00b7 organs) with live counts read off the real ledger.",
     "file": "home.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:inspector",
@@ -17,7 +17,7 @@
     "deep": "inspector",
     "explainer": "The moldable inspector (Registry \u00b7 Spotter \u00b7 Halo): every object's presentation faces as a sub-tab strip; the inspector is itself inspectable.",
     "file": "inspector.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:inspect-act",
@@ -27,7 +27,7 @@
     "deep": "inspect-act",
     "explainer": "The Smalltalk inspect\u2192act\u2192inspect loop: a cell's reflected state plus the messages it understands, each with a cap badge; firing one commits a real turn.",
     "file": "inspect-act.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:workspace",
@@ -37,7 +37,7 @@
     "deep": "workspace",
     "explainer": "The doIt / printIt / inspectIt evaluator \u2014 compose an intent, evaluate it in a forked throwaway world (predict, never mutate), then commit-or-discard.",
     "file": "workspace.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:wonder",
@@ -47,7 +47,7 @@
     "deep": "wonder",
     "explainer": "The AOL-wonder front door \u2014 every cell a pokeable glowing object (glow = real recent activity) with direct-manipulation halos (inspect / grab / explain).",
     "file": "wonder.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:lanes",
@@ -57,7 +57,7 @@
     "deep": "lanes",
     "explainer": "The moldable-inspector gadgets made reachable: the predicate composer (caveat language), the turn builder, the attenuation dial, the macaroon token loop.",
     "file": "lanes.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:objects",
@@ -67,7 +67,7 @@
     "deep": "objects",
     "explainer": "The object browser around the accounting axes \u2014 cell lifecycle, turn proofs, nullifiers \u2014 a direct reflection of the live ledger + receipt log.",
     "file": "objects.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:graph",
@@ -77,7 +77,7 @@
     "deep": "graph",
     "explainer": "The whole-image ocap delegation graph \u2014 cells as nodes, capability grants as directed edges, laid out by multi-hop delegation depth (the blast radius).",
     "file": "graph.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:web-of-cells",
@@ -87,7 +87,7 @@
     "deep": "web-of-cells",
     "explainer": "The cockpit as a native browser of the dregg:// docuverse \u2014 attested cross-cell reads with ledger-drawn origin chrome and the per-viewer affordance membrane.",
     "file": "web-of-cells.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:links-here",
@@ -97,7 +97,7 @@
     "deep": "links-here",
     "explainer": "Ted Nelson's two-way link navigable: the real Backlinks witness-graph (who transcludes ME), projected through the viewer's membrane (link fog-of-war).",
     "file": "links-here.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:powerbox",
@@ -107,7 +107,7 @@
     "deep": "powerbox",
     "explainer": "CapDesk's trusted designation flow \u2014 a confined app requests authority; the trusted powerbox presents a picker of what the USER holds and mints an attenuated cap into the app's c-list via a real grant turn.",
     "file": "powerbox.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:proofs",
@@ -117,7 +117,7 @@
     "deep": "proofs",
     "explainer": "The proof-attach + STARK verification board \u2014 each committed turn's verification tier and the attach/verify route.",
     "file": "proofs.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:debugger",
@@ -127,7 +127,7 @@
     "deep": "debugger",
     "explainer": "Step + explain a turn against the live world \u2014 the time-aware debugger.",
     "file": "debugger.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:replay",
@@ -137,7 +137,7 @@
     "deep": "replay",
     "explainer": "Deterministic replay / time-travel over the canonical witnessed history.",
     "file": "replay.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:time",
@@ -147,7 +147,7 @@
     "deep": "time",
     "explainer": "The temporal cockpit \u2014 time-travel + suspend + fractal meta-debug as one panel: the rewind scrubber re-derives any past point (root-verified), \u23f8 suspends the real loop (M5 gate), the metastack climbs a reflective tower over the world.",
     "file": "time.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:cipherclerk",
@@ -157,7 +157,7 @@
     "deep": "cipherclerk",
     "explainer": "The sovereign cipherclerk vault \u2014 HD-derived identities, macaroon signing.",
     "file": "cipherclerk.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:trust",
@@ -167,7 +167,7 @@
     "deep": "trust",
     "explainer": "The human-layer 'you cannot lose your own OS' face \u2014 your devices, your guardians-as-faces with the K-of-N threshold drawn, the KEL rotation timeline, and the ask-your-guardians recovery quorum gauge.",
     "file": "trust.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:editor",
@@ -177,7 +177,7 @@
     "deep": "editor",
     "explainer": "The conserving forest editor \u2014 build a turn, validate it (\u03a3\u03b4=0), commit.",
     "file": "editor.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:composer",
@@ -187,7 +187,7 @@
     "deep": "composer",
     "explainer": "The predicate / caveat composer \u2014 the attenuable proof-carrying caveat language.",
     "file": "composer.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:simulate",
@@ -197,7 +197,7 @@
     "deep": "simulate",
     "explainer": "The what-if intent composer \u2014 predict a turn's consequences in a forked throwaway world (the real executor over a deep copy), then commit the identical turn for real; the live world is untouched until commit.",
     "file": "simulate.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:docs",
@@ -207,7 +207,7 @@
     "deep": "docs",
     "explainer": "The dreggverse document language as a surface \u2014 a document IS a cell, an edit IS a cap-gated turn; a CONFLICT is a first-class state (two live alternatives, each tagged with its provenance receipt, with a one-click resolving patch).",
     "file": "docs.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:share",
@@ -217,7 +217,7 @@
     "deep": "share",
     "explainer": "The share-with-attenuation pre-send editor \u2014 cull the frustum (which lenses are shared), pare the authority (an amplifying choice is refused in-band), verify the per-viewer membrane preview, and share a revocable rehydratable artifact.",
     "file": "share.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:agent",
@@ -227,7 +227,7 @@
     "deep": "agent",
     "explainer": "The agent surface \u2014 an autonomous loop over the image, confined to the ACP\u2194ToolGateway seam (every tool-call a cap-gated, witnessed turn).",
     "file": "agent.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:swarm",
@@ -237,7 +237,7 @@
     "deep": "swarm",
     "explainer": "The swarm orchestration surface \u2014 N agent panes as confined Surface cells, coordinating via the notify-edge inbox (EmitEvent \u2192 NotifyEdge \u2192 async drain).",
     "file": "swarm.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:shell",
@@ -247,7 +247,7 @@
     "deep": "shell",
     "explainer": "The cap-first command shell over the image \u2014 the cockpit's own trusted root.",
     "file": "shell.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:webshell",
@@ -257,7 +257,7 @@
     "deep": "webshell",
     "explainer": "A general http(s):// browser surface (distinct from web-of-cells): a real gpui-component URL bar (Enter-to-go), back/forward/reload, and a content tile rendered through the Servo SWGL pipeline behind the net-cap allowlist; fail-closed (a cap refusal shows in-band, the tile never silently blanks).",
     "file": "webshell.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:devtools",
@@ -267,7 +267,7 @@
     "deep": "devtools",
     "explainer": "Firebug for a verified OS \u2014 one tab, three inspector sub-tabs: NETWORK (the data plane: deliveries / inboxes / wakes / notify-edges), LOG/RECEIPTS (the blocklace + receipt timeline console), FEDERATION (committee \u00b7 epoch \u00b7 checkpoint \u00b7 bridges \u00b7 revocation).",
     "file": "devtools.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:buffer",
@@ -277,7 +277,7 @@
     "deep": "buffer",
     "explainer": "The IDE's EDITOR pane \u2014 a text buffer as a cap-confined Surface cell (A1); the editor half of the \u2318K real PTY/editor split.",
     "file": "buffer.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:terminal",
@@ -287,7 +287,7 @@
     "deep": "terminal",
     "explainer": "The IDE's TERMINAL pane \u2014 a command surface as a cap-confined Surface cell (A1), home of the ADOS tool-call seam (a real PTY).",
     "file": "terminal.png",
-    "size": "1280x832"
+    "size": null
   },
   {
     "id": "surface:dock-workspace",
@@ -297,6 +297,76 @@
     "deep": "dock-workspace",
     "explainer": "The self-hosting cockpit dock \u2014 editor + terminal + chat + agent as resizable dock panes (PaneGroup / Pane), the desktop epoch's self-hosting cockpit. Baked via the showcase composite (the full cockpit, not a single tab).",
     "file": "dock-workspace.png",
-    "size": "1600x1000"
+    "size": null
+  },
+  {
+    "id": "surface:self-hosting-loop",
+    "tab": "self-hosting-loop",
+    "label": "SELF-HOSTING LOOP",
+    "bake": "external",
+    "deep": "self-hosting-loop",
+    "explainer": "Develop dregg INSIDE deos: the firmament editor (a save is a cap-gated SetField ledger turn) beside a live alacritty PTY running real cargo/rustc \u2014 one image. The bake hard-asserts the receipt grew AND the toolchain ran; src `starbridge-v2/self-hosting-loop-full.png`.",
+    "file": "self-hosting-loop.png",
+    "size": null
+  },
+  {
+    "id": "surface:zed-workspace",
+    "tab": "zed-workspace",
+    "label": "ZED WORKSPACE",
+    "bake": "external",
+    "deep": "zed-workspace",
+    "explainer": "The full Zed IDE over the cell ledger: a real workspace::Workspace whose Fs IS the dregg cell ledger; Zed's own project/outline/terminal panels dock + resolve, and a save through the IDE fires a verified TurnReceipt. (No committed PNG \u2014 the proof is the green full-zed test suite; this is the surface explainer.)",
+    "file": null,
+    "size": null
+  },
+  {
+    "id": "surface:web-deos",
+    "tab": "web-deos",
+    "label": "WEB DEOS (in-browser)",
+    "bake": "external",
+    "deep": "web-deos",
+    "explainer": "The same gpui cockpit bundled to wasm32 + WebGPU, painting a real frame in a browser tab over the same in-tab verified executor \u2014 one renderer, two platforms. src `starbridge-v2/web/cockpit-gpui-web-painted.png` (headless Chrome, canvas 2560\u00d71640).",
+    "file": "web-deos.png",
+    "size": null
+  },
+  {
+    "id": "surface:servo-page",
+    "tab": "servo-page",
+    "label": "SERVO REAL PAGE",
+    "bake": "external",
+    "deep": "servo-page",
+    "explainer": "A real Servo web engine page laid out + rasterized (the surfman / event-loop / SWGL ceilings cleared): a data: page's CSS box measured, glyphs as 212-color antialiased text. src `servo-render/servo_real_page_render.png`.",
+    "file": "servo-page.png",
+    "size": null
+  },
+  {
+    "id": "surface:mud",
+    "tab": "mud",
+    "label": "MUD MULTI-INHABITANT",
+    "bake": "external",
+    "deep": "mud",
+    "explainer": "A multi-inhabitant MUD where the PHYSICS is the proof: 3 inhabitants / 2 rooms over the real executor; a door is a cap you lack, items conserve across trades, a give can't amplify authority, value \u03a3\u03b4=0 \u2014 all executor-gated via real receipts. (No committed PNG \u2014 the proof is the 9-test mud suite.)",
+    "file": null,
+    "size": null
+  },
+  {
+    "id": "surface:membrane",
+    "tab": "membrane",
+    "label": "MULTIPLAYER MEMBRANE",
+    "bake": "external",
+    "deep": "membrane",
+    "explainer": "The fork-and-stitch primitive: one cap-bounded World::fork (a MembraneFrustum) carried over the wire, rehydrated into TWO real Worlds under two principals (anti-substitution), each committing a real turn, then stitched (linear Dead-wins join, over-authorized confer REFUSED). (No committed PNG \u2014 the proof is the 21-test shared_fork suite.)",
+    "file": null,
+    "size": null
+  },
+  {
+    "id": "surface:federation",
+    "tab": "federation",
+    "label": "FEDERATION (n=2)",
+    "bake": "external",
+    "deep": "federation",
+    "explainer": "A real two-node dregg-node federation over QUIC gossip + blocklace consensus: a faucet turn on A gossips to B and both DAGs converge byte-identically to consensus-attested finality. (No committed PNG \u2014 the proof is the runbook + the named net/node tests.)",
+    "file": null,
+    "size": null
   }
 ]
