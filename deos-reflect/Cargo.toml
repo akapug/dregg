@@ -1,0 +1,28 @@
+# deos-reflect — the gpui-free reflective substrate.
+#
+# The cap-bounded, attested REFLECTION over the deos substance: crawl the ledger,
+# read a cell's four substances (value · authority · state · evidence), build the
+# ocap graph, project a per-viewer FRUSTUM (what a principal may observe), and
+# render the moldable `present()` faces — ALL as pure functions of a
+# `dregg_cell::Ledger` + receipts, with NO gpui and NO starbridge-v2 dep.
+#
+# This is the shared crate the design calls for (SCRIPTING-AND-DISTRIBUTED-DOM.md
+# §3): both `deos-js` (the JS reflective binding) and, in time, `starbridge-v2`
+# (de-bloated) can depend on it. The algorithms are ported from starbridge-v2's
+# gpui-free `reflect`/`graph` modules, rebased off the cockpit `World` onto the
+# lower-level `Ledger` so the reflection needs nothing but the substance.
+[package]
+name = "deos-reflect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cap-bounded, attested reflection over the deos substance: crawl cells, read the four substances, build the ocap graph, project a per-viewer frustum — gpui-free."
+
+[lints]
+workspace = true
+
+[dependencies]
+dregg-cell = { path = "../cell" }
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
