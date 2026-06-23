@@ -82,6 +82,7 @@
 pub use dregg_types::FederationId;
 
 pub mod custody;
+pub mod data_plane;
 pub mod gc;
 pub mod handoff;
 pub mod netlayer;
@@ -109,6 +110,9 @@ pub use ocapn::{
 pub use pipeline::{
     BrokenPromiseNotification, CrossFedPipelineBridge, PipelineError, PipelinePromiseState,
     PipelineRegistry, PipelineResultValue, PipelineWireMessage, PipelinedAction, PipelinedMessage,
+};
+pub use data_plane::{
+    Bus, ChannelName, DataPlaneError, Delivery, SendCap, TopicName, Wake, Waker,
 };
 pub use session::CapSession;
 pub use store_forward::{
