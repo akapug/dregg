@@ -1169,9 +1169,13 @@ pub fn execute_via_lean(
     if !lean_shadow::forest_is_marshallable(turn) {
         return Err(ExtractError::Ineligible);
     }
+    let prof = std::env::var("DREGG_FFI_PROFILE").as_deref() == Ok("1");
+    let t0 = if prof { Some(std::time::Instant::now()) } else { None };
     let pre = lean_shadow::build_pre_ledger(turn, pre_ledger);
+    let t1 = if prof { Some(std::time::Instant::now()) } else { None };
     let shadow_state =
         lean_shadow::run_shadow_state(turn, &pre, host).map_err(ExtractError::Ffi)?;
+    let t2 = if prof { Some(std::time::Instant::now()) } else { None };
     let inv = invert_id_map(&pre.id_map);
     let committed = shadow_state.verdict.committed;
     // The deterministic cap mutations this turn performs (Grant/Introduce/Attenuate). An
@@ -1191,7 +1195,44 @@ pub fn execute_via_lean(
         &state_ops,
         committed,
     )?;
+    if prof {
+        let t3 = std::time::Instant::now();
+        prof_outer_accum(
+            (t1.unwrap() - t0.unwrap()).as_secs_f64(),
+            (t2.unwrap() - t1.unwrap()).as_secs_f64(),
+            (t3 - t2.unwrap()).as_secs_f64(),
+        );
+    }
     Ok((ledger, committed))
+}
+
+/// Outer-phase profile accumulator (seconds), gated on `DREGG_FFI_PROFILE=1`: (build_pre_ledger,
+/// run_shadow_state [mirror IN + FFI + mirror OUT], wire_state_to_ledger reconstruct). The
+/// run_shadow_state slot's in_build/exec/out_read split is reported separately by
+/// `dregg_lean_ffi::lean_direct::prof_dump`. Use `prof_outer_dump` to print + reset.
+use std::sync::atomic::{AtomicU64, Ordering};
+static POUT_PRE: AtomicU64 = AtomicU64::new(0);
+static POUT_SHADOW: AtomicU64 = AtomicU64::new(0);
+static POUT_RECON: AtomicU64 = AtomicU64::new(0);
+static POUT_N: AtomicU64 = AtomicU64::new(0);
+
+fn prof_outer_accum(pre_s: f64, shadow_s: f64, recon_s: f64) {
+    POUT_PRE.fetch_add((pre_s * 1e9) as u64, Ordering::Relaxed);
+    POUT_SHADOW.fetch_add((shadow_s * 1e9) as u64, Ordering::Relaxed);
+    POUT_RECON.fetch_add((recon_s * 1e9) as u64, Ordering::Relaxed);
+    POUT_N.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Print + reset the outer-phase per-call averages (µs).
+pub fn prof_outer_dump(label: &str) {
+    let n = POUT_N.swap(0, Ordering::Relaxed).max(1);
+    let pre = POUT_PRE.swap(0, Ordering::Relaxed) as f64 / 1e3 / n as f64;
+    let sh = POUT_SHADOW.swap(0, Ordering::Relaxed) as f64 / 1e3 / n as f64;
+    let rec = POUT_RECON.swap(0, Ordering::Relaxed) as f64 / 1e3 / n as f64;
+    eprintln!(
+        "DREGG_FFI_PROFILE_OUTER[{label}] n={n} build_pre={pre:.3}us run_shadow={sh:.3}us reconstruct={rec:.3}us total={:.3}us",
+        pre + sh + rec
+    );
 }
 
 /// THE DENOTATIONAL DIFFERENTIAL leg used by [`crate::lean_shadow::maybe_shadow_turn`]: reconstitute

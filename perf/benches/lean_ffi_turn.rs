@@ -97,6 +97,23 @@ fn measure(
         execute_via_lean(&turn, &pre_ledger, &host).expect("execute_via_lean runs")
     });
 
+    // --- Sub-phase profile: run the FFI boundary with DREGG_FFI_PROFILE=1 so `run_direct`
+    // accumulates (in_build, execDirect, out_read) per call; dump the averages. Kept out of the
+    // timed medians above. SAFETY: single-threaded; toggled around this loop only.
+    unsafe {
+        std::env::set_var("DREGG_FFI_PROFILE", "1");
+    }
+    for _ in 0..iters {
+        std::hint::black_box(
+            execute_via_lean(&turn, &pre_ledger, &host).expect("execute_via_lean runs"),
+        );
+    }
+    unsafe {
+        std::env::remove_var("DREGG_FFI_PROFILE");
+    }
+    dregg_exec_lean::prof_outer_dump(name);
+    dregg_lean_ffi::lean_direct::prof_dump(name);
+
     // --- Cell footprint + JSON bytes: ONE dedicated call with the measure instrumentation ON, so
     // the IN/OUT byte line prints exactly once per shape (kept OUT of the timed loops above so the
     // eprintln I/O never pollutes the timings). SAFETY: single-threaded; toggled around one call.
