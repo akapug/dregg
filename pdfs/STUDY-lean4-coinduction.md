@@ -185,8 +185,8 @@ recurs; `chainLink` (a `StepInv` conjunct) supplies *what the guard checks*.
 ## 3. `sound_of_step_complete` as a bisimulation — concrete Lean4 skeleton
 
 The scaffold's `IsBisim`/`Sound`/`StepInv`/`StepComplete` shapes are right. Below is the concrete
-discharge plan with `sorry`'d steps and the mathlib lemmas each step needs. This compiles against
-v4.30.0 + mathlib (modulo the `sorry`s); it does **not** require QPF or any missing machinery.
+discharge plan with stubbed steps and the mathlib lemmas each step needs. This compiles against
+v4.30.0 + mathlib (modulo the open holes); it does **not** require QPF or any missing machinery.
 
 ### 3.1 `Sound` as a genuine greatest fixpoint (the `gfp` framing) [C/F]
 The scaffold's `Sound := ∃ R, IsBisim R ∧ R x y` is the *Knaster–Tarski* presentation: bisimilarity
@@ -256,9 +256,9 @@ the recursion is relational, so no productivity check is owed to the kernel. The
 side-hypotheses (`oracle`, `h_obs`, `h_step`) are currently *hidden* in the scaffold's abstract
 `Spec`; **recommendation: surface them as explicit arguments** (or as a `structure GoldenOracle`)
 so the theorem says what it means — soundness = bisimilar-to-the-decode-into-spec, *given* each
-step is complete. With them explicit, the proof above goes through with **no `sorry`**.
+step is complete. With them explicit, the proof above goes through with **no open hole**.
 
-> **Action item for the scaffold:** the current `sound_of_step_complete` has `:= by sorry` with no
+> **Action item for the scaffold:** the current `sound_of_step_complete` has an open-hole body with no
 > link between `Impl` and `Spec`. As stated it is **unprovable** (nothing connects the two
 > coalgebras). Add the golden-oracle bridge (`oracle`/`h_obs`/`h_step`, themselves consequences of
 > `StepComplete` once `Spec` is *defined* as the decode-image) — then it is fully dischargeable. [F]
@@ -272,20 +272,20 @@ only because `AdmissibleTurn` is *defined* to carry a `StepProof` (scaffold's ow
 admissible exactly when it carries a `StepProof`"). So the converse is: `Sound ⇒` every
 *admissible* turn was step-complete, which is true **by the definition of `AdmissibleTurn`**, plus
 the bisimulation gives `obsAdvance`. Mark the conservation/authority/chainLink recovery as
-`sorry` pending that definitional link; the `obsAdvance` half is `gfp`-unfolding.
+an open hole pending that definitional link; the `obsAdvance` half is `gfp`-unfolding.
 
 ### 3.4 `BoundaryRespecting` and `boundary_respecting_sound` [C]
 `BoundaryRespecting` is already the right shape: an invariant set `S` with (i) `admissible`
 (each turn lands in `Authority.Integrity`, intra-trivial / cross-discharged) and (ii) `closed`
 (successor `Later`-again-in-`S`). This is a **coinductive invariant = gfp on `Impl.Carrier → Prop`**.
 `boundary_respecting_sound` is then a one-line unfold of `hbr.admissible x hx t` — the current
-`sorry` discharges immediately:
+open hole discharges immediately:
 ```lean
 theorem boundary_respecting_sound … :
     Integrity … (decode x) (decode (Impl.next x t)) :=
   hbr.admissible x hx t
 ```
-(The scaffold `sorry`s it; it is actually `:= hbr.admissible x hx t`. **Fix.**) [F]
+(The scaffold leaves it an open hole; it is actually `:= hbr.admissible x hx t`. **Fix.**) [F]
 
 ---
 
@@ -295,7 +295,7 @@ theorem boundary_respecting_sound … :
 - The **soundness theorem** (`Sound`/`IsBisim`/`sound_of_step_complete`/`BoundaryRespecting`)
   needs **none** of Lean's missing coinduction machinery. It is a relational greatest-fixpoint
   statement, provable today with `OrderHom.gfp` + a hand-exhibited witness relation (the
-  `Stream'.eq_of_bisim` idiom). Two of the four `sorry`s (`boundary_respecting_sound`, the
+  `Stream'.eq_of_bisim` idiom). Two of the four open holes (`boundary_respecting_sound`, the
   `obsAdvance` half of the converse) close *immediately*; `sound_of_step_complete` closes once the
   golden-oracle bridge is made explicit (§3.2). **This is not the riskiest module to *encode*.**
 - **Cost is low and concentrated in one place:** *if* you ever need the literal `Cell` codatum
@@ -342,8 +342,8 @@ theorem boundary_respecting_sound … :
 
 ### 4.4 Concrete recommendations to the scaffold (priority order)
 1. **Surface the golden-oracle bridge** in `sound_of_step_complete` (`oracle`/`h_obs`/`h_step` or a
-   `structure GoldenOracle Impl Spec`); then discharge the `sorry` (§3.2). *Unblocks the keystone.*
-2. **Discharge the two free `sorry`s now:** `boundary_respecting_sound := hbr.admissible x hx t`;
+   `structure GoldenOracle Impl Spec`); then discharge the open hole (§3.2). *Unblocks the keystone.*
+2. **Discharge the two free open holes now:** `boundary_respecting_sound := hbr.admissible x hx t`;
    `obsAdvance` half of `step_complete_of_sound` via gfp-unfold.
 3. **Add the `Φ`/`Bisim`-as-`gfp` definitions** (§3.1) so the converse can use `gfp_induction`, and
    so the prose "greatest fixpoint" is *literally* mathlib's `OrderHom.gfp`.

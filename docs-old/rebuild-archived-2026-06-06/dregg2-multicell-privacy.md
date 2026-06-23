@@ -90,8 +90,8 @@ the algebra).
   **premise, NEVER derived** from the per-cell `Sound`s. Note atomicity = the cumulative-AND prophecy
   property (an invariant on the aggregate, not a coordinator).
 - `Authority/Positional.lean`: add `set_program` upgrade admissibility = `AIR_VERSION`-pinned, with the
-  `older_version ⇒ signature_fallback` clause as a `sorry`'d lemma (`upgrade_never_bricks`).
-- Privacy: the conservation functor's target instance over commitments (a `sorry`'d
+  `older_version ⇒ signature_fallback` clause as an open-hole lemma (`upgrade_never_bricks`).
+- Privacy: the conservation functor's target instance over commitments (an open-hole
   `commitment_conservation`); `FieldVisibility` as the public/witness split already in `Laws.lean`.
 
 ## 6. The coordination layer — multi-party · multi-turn · multi-privacy (above the JointTurn)

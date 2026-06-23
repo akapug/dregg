@@ -11,7 +11,7 @@ The doc below is the proposed content for `/Users/ember/dev/breadstuffs/docs/reb
 
 Confirmed by reading the source:
 
-- **`Dregg2/Tactics.lean`** — `#assert_axioms id` (an `elab … : command` that runs `Lean.collectAxioms` and rejects anything outside `{propext, Classical.choice, Quot.sound}`, notably `sorryAx`), `dregg_auto` (a `first | rfl | trivial | … | omega | tauto` closer), `option_inj at h` (a `simp only [Option.some.injEq, Prod.mk.injEq]` macro).
+- **`Dregg2/Tactics.lean`** — `#assert_axioms id` (an `elab … : command` that runs `Lean.collectAxioms` and rejects anything outside `{propext, Classical.choice, Quot.sound}`, notably the open-hole kernel axiom), `dregg_auto` (a `first | rfl | trivial | … | omega | tauto` closer), `option_inj at h` (a `simp only [Option.some.injEq, Prod.mk.injEq]` macro).
 - **`Dregg2/Conserve.lean`** — the general conservation library (`sum_indicator`, `sum_pointUpdate`, `sum_conserve_of_deltas_zero`, `sum_transfer_conserve`) plus two honest tactics: `conserve` (pointwise delta cancellation, wrapped in `first | <real>; done | fail "…"`) and `commit_cases h with pat` (`split at h`; kill the `none` branch via `case isFalse => exact absurd h (by simp)`; read back `Option`/`Prod` injection + `subst` + `obtain pat := ‹_ ∧ _›`, leaving the content goal OPEN). The honesty rail — `done` is load-bearing, negative tests use `fail_if_success` — is the template for every new tactic.
 - **`Dregg2/Claims.lean`** — 153-line ledger: `import Dregg2` + ~110 `#assert_axioms FullyQualified.name` lines, grouped §0–§17, with PARKED (commented) pins for not-yet-in-olean-closure constants (§12 Coherence, §16 Upgrade spine). This is the hand-maintained CI artifact.
 - **`Dregg2/Spec/Guard.lean`** — the unification keystone: the 5-constructor `Guard` inductive (`firstParty`/`witnessed`/`all`/`any`/`gnot`), `admits` via a `mutual` block, and §7 "DERIVED legacy reconstructions" — `monotonic`, `sumEquals`, `senderAuthorized`, `oneOf`, `nonMembership`, each a one-liner over a primitive PLUS an `@[simp] admits_X … ↔ …` characterization lemma PLUS an `#assert_axioms` pin at §8. **This §7+§8 triple is exactly the shape a codegen must emit, ~90 times.**
@@ -126,8 +126,8 @@ Elaborator sketch (`Lean.Elab.Command`):
           elabCommand (← `(command| #assert_axioms $thmName))
 
 **Honesty rail (inherited automatically):** because step 3 emits `#assert_axioms` for every
-generated characterization, a variant whose default `simp [name]` proof secretly needs a
-`sorry` fails the pin AT GENERATION TIME. The codegen cannot manufacture a fake lemma — the
+generated characterization, a variant whose default `simp [name]` proof secretly needs an
+open hole fails the pin AT GENERATION TIME. The codegen cannot manufacture a fake lemma — the
 tripwire is wired into its output. A variant whose characterization is non-trivial supplies
 an explicit `by …`; if that proof is incomplete the build breaks at the pin, not downstream.
 
@@ -327,7 +327,7 @@ discharged by the elaborator. If the DSL author does not prove them, the surroun
 definition has open goals and the build fails. The elaborator is incapable of fake-closing
 (it only *emits* goals; it never *solves* them). Each top-level eDSL definition is then
 pinned with `#assert_axioms`, closing the loop: a DSL program whose obligations were
-discharged by `sorry` trips the tripwire.
+discharged by an open hole trips the tripwire.
 
 ### 3.4 Phasing
 
@@ -367,7 +367,7 @@ Usage in `Claims.lean`:
     #assert_axioms_all Dregg2.Conserve        -- replaces 4 §0 lines
 
 **Critical honesty caveat:** module-wide pinning can hide a *legitimately-resting* keystone
-(one that rests on a §8 oracle / Law-1 `sorry`'d primitive, which `Claims.lean` deliberately
+(one that rests on a §8 oracle / Law-1 open-hole primitive, which `Claims.lean` deliberately
 does NOT pin). So `#assert_axioms_all` needs an **allow-out list**:
 
     elab "#assert_axioms_all" ns:ident ("except" ids:ident*)? : command => …

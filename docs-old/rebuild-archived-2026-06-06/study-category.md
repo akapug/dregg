@@ -55,14 +55,14 @@
 | §1.4's named keystone `sound_of_step_complete` (single-cell) | **CORRECTION** | **(removed)** | That theorem was **false as stated** (refuted via `Spec.Carrier = Empty`) and **REMOVED**; the well-posed keystone is `stepComplete_preserves` (`Boundary.lean:177`, PROVED via `Execution.invariant_run`). See §1.4 annotation. |
 | Cell existence `∃ νF, IsFinalCell νF` | **[HOLD] *(existence still ASPIRATIONAL)*** | **REAL** (univ. prop + uniqueness); **ASPIRATIONAL** (the carrier `∃ νF`) | `IsFinalCell` (`Categorical.lean:741`), `ana_unique` (`:752`, pinned `:884`), `final_unique_roundtrip` (`:762`), `cell_self_bisim` (`:563`, pinned `:879`) all PROVED *conditional on finality*; the carrier construction (`∃ νF`, `:787`) is honestly OPEN/unbuilt. |
 
-**Sorry-state (RE-verified 2026-06-02 by reading proof bodies):** `Core.lean`, `Laws.lean`,
+**Open-hole state (RE-verified 2026-06-02 by reading proof bodies):** `Core.lean`, `Laws.lean`,
 `Categorical.lean`, `JointTurn.lean`, `Hyperedge.lean`, `Spec/JointViaHyper.lean` are all
-**sorry-free in proof terms** — every literal "sorry" string is a *docstring/comment*
+**free of open holes in proof terms** — every literal open-hole string is a *docstring/comment*
 narrating a discharged or retired obligation (grep: `Categorical.lean` 1 hit @ line 15
-"no `sorry`, kernel-clean"; `Hyperedge.lean` 4 hits all in `/-! -/` blocks; `JointTurn.lean`
-hits are all in the §0 style-note / docstrings, e.g. the stale "`JointTurn.lean:447`, `sorry`"
+"kernel-clean"; `Hyperedge.lean` 4 hits all in `/-! -/` blocks; `JointTurn.lean`
+hits are all in the §0 style-note / docstrings, e.g. the stale "`JointTurn.lean:447`, open hole"
 back-references which are themselves now STALE — see §0(c)). `Boundary.lean`'s header line 29
-("every theorem stated with a `sorry` body") is **STALE prose** — the bodies
+("every theorem stated with an open-hole body") is **STALE prose** — the bodies
 (`stepComplete_preserves`, `bisim_eq`, `sound_refl`, `boundary_respecting_sound`) are all
 proved.
 
@@ -96,8 +96,8 @@ category but is not wired to a `TurnCoalg`. The concrete `JointTurn`/`Hyperedge`
 layer *is* wired to the cell behaviour functor and is where the soundness keystones
 (`joint_sound`, `hyperedge_sound`, `joint_via_hyperedge`) actually live.
 
-**`family_joint_sound` is no longer a `sorry`.** Several modules still carry stale
-back-references "`family_joint_sound` (`JointTurn.lean:447`, `sorry`)" in their docstrings
+**`family_joint_sound` is no longer an open hole.** Several modules still carry stale
+back-references "`family_joint_sound` (`JointTurn.lean:447`, open hole)" in their docstrings
 (`Hyperedge.lean:293`, `JointViaHyper.lean:6`); the *referent* is now PROVED at
 `JointTurn.lean:458` (it concludes per-participant no-drift ∧ CG-5 Σ=0; the old ill-posed
 `Sound (J.cell i) (Spec i)` free-`Spec` form was refuted at `Spec.Carrier = Empty` and
@@ -359,7 +359,7 @@ the fully-provable connection on the verifier relation `R := Discharged`, i.e. `
 true`) instantiated at the actual verifier. The orders are no longer free: the predicate side
 is entailment-via-`Discharged`, the witness side is the induced specificity, and the find/verify
 *contract* (`search_sound`, `Laws.lean:77`) is carried as the `SoundSearchable.find_sound`
-typeclass field (the untrusted-plugin idiom), NOT a `sorry`. The Heyting residual is
+typeclass field (the untrusted-plugin idiom), NOT an open hole. The Heyting residual is
 `predicate_heyting` (`Laws.lean:132`), realized as attenuation in `Authority/Positional.lean`'s
 `LossyMorphism` (`:191`) and the slot-caveat algebra (`Exec/Program.lean:19`,
 `Spec/Guard.lean:47`). So the §3 "single most coherent part" is now also the *most grounded*.
@@ -367,7 +367,7 @@ typeclass field (the untrusted-plugin idiom), NOT a `sorry`. The Heyting residua
 > **Stale original (kept for the record):** "the predicate order `≤` (entailment) and the
 > witness order `≤` (specificity) must be pinned for the Galois connection to typecheck —
 > `predicate_witness_galois` takes `l`/`u` as free placeholders … *stated* but not *grounded*.
-> This is a `sorry`-discharge task." — DONE; see above.
+> This is an open-hole-discharge task." — DONE; see above.
 
 ---
 

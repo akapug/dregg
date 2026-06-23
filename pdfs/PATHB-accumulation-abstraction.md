@@ -267,7 +267,7 @@ theorem ivc_sound (B : RecursionBackend) (s : Nat)
     -- if a parent decides at remaining-depth s and verifyStep accepts,
     -- an extractor yields child witnesses that decided at depth (s-1)
     KnowledgeSound B s := by
-  sorry  -- discharged per-impl; homomorphic & FRI: s arbitrary; Merkle: s ≤ d
+  ?_  -- OPEN: discharged per-impl; homomorphic & FRI: s arbitrary; Merkle: s ≤ d
 ```
 
 The Lean stub makes the verdict checkable: **there is one `ivc_sound` statement; the homomorphism

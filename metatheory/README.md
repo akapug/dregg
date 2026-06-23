@@ -128,7 +128,7 @@ keystones — the land-before-kill replacements the verb registry cross-referenc
 `Dregg2/Tactics.lean` (`docs/AXIOM-HYGIENE.md` is the prose):
 
 - `#assert_axioms foo` / `#assert_clean foo` — pin one keystone; errors at build time if its
-  transitive axiom set escapes the triple (notably on any `sorryAx`, i.e. a leaked `sorry`).
+  transitive axiom set escapes the triple (notably on the kernel open-hole axiom, i.e. a leaked open hole).
 - `#assert_all_clean [a, b, c]` — pin a list in one command.
 - `#assert_namespace_axioms NS (except …)?` — pin *every* theorem under a namespace; strictly
   stronger than a hand-curated block because it cannot miss one someone forgot to add.
@@ -136,8 +136,8 @@ keystones — the land-before-kill replacements the verb registry cross-referenc
 These are **pure rejectors**: a checker can only error, never close or weaken a goal, so adding
 one can never make a false theorem look true. They were validated non-vacuous against a planted
 `axiom bad : True`. `Dregg2/Claims.lean` is the corpus-wide CI net (~190 per-keystone pins);
-`Dregg2/AssuranceCase.lean` is the by-guarantee reading artifact. A textual zero-`sorry` grep
-(`scripts/no-sorry-metatheory.sh`) is the second guard layer.
+`Dregg2/AssuranceCase.lean` is the by-guarantee reading artifact. A textual whole-corpus open-hole grep
+(`scripts/axiom-hygiene-guard.sh`) is the second guard layer.
 
 **Non-vacuity is tested in both polarities.** A guarantee is not just *true* — its teeth are
 exhibited: a tampered receipt is UNSAT, an amplifying grant is rejected, a replayed nullifier
@@ -204,7 +204,7 @@ fuller where-is-X map.
 
 ## Honest open items — the named research frontier
 
-The corpus is `sorry`-free; an open obligation enters as an explicit interface hypothesis,
+The corpus is free of open holes; an open obligation enters as an explicit interface hypothesis,
 never a silent gap. Three are worth naming up front so an evaluator can find them rather than
 discover them:
 

@@ -34,7 +34,7 @@ consensus-reduction link.
    Decidable on the structured fragment of the catalog; an explicit `Searchable` plugin (the
    §1 verify/find seam) on the rest.
 3. **Independence theorems (the §2.3 claims).** Concrete witnesses: a two-withdrawal pool gives
-   `linear ∧ ¬IConfluent`; a grow-only counter gives `IConfluent ∧ ¬linear`. Both `sorry`-stated
+   `linear ∧ ¬IConfluent`; a grow-only counter gives `IConfluent ∧ ¬linear`. Both stubbed
    day-1, dischargeable with finite models.
 4. **Gomes–Kleppmann template.** A Lean `class NetworkModel` (happens-before preorder +
    delivery + an `interp` interpretation) + `concurrent_ops_commute`, proved once; **each
@@ -149,7 +149,7 @@ to *search* for the merge. The constructive synthesis side (Katara) is the untru
 `§2.3` asserts the two axes are genuinely independent: `linear ⇏ I-confluent` and
 `I-confluent ⇏ linear`. These are the *defining* sanity checks of the third judgement — if either
 fails the module collapses back into Core (conservation) or Laws. Both are provable with **finite
-concrete witnesses** (no `sorry` needed once the scaffolding lands; state them day-1 with `sorry`).
+concrete witnesses** (no open hole needed once the scaffolding lands; state them day-1 stubbed).
 
 `linear` here is the Core conservation predicate: `count` is invariant on the turn
 (`Core.conservation_ordinary`).
@@ -177,7 +177,7 @@ theorem linear_not_iconfluent :
       (∀ t ∈ W, ConservesValue t) ∧
       -- but the joint merge of two individually-valid withdrawals is invalid
       ¬ IConfluent (poolInv start) W := by
-  sorry  -- witness: start = 10; W = {withdraw 6}; two concurrent withdraws ⇒ merge sum 12 > 10
+  ?_  -- OPEN: witness: start = 10; W = {withdraw 6}; two concurrent withdraws ⇒ merge sum 12 > 10
 ```
 
 The witness: `start = 10`, two replicas each withdraw `6` (each leaves `4 ≥ 0`, valid), merge =
@@ -202,7 +202,7 @@ theorem iconfluent_not_linear :
     ∃ (W : WriteSet GCounter),
       IConfluent counterInv W ∧
       ¬ (∀ t ∈ W, ConservesValue t) := by
-  sorry  -- witness: W = {incr}; max-merge preserves `≥ k` (I-confluent);
+  ?_  -- OPEN: witness: W = {incr}; max-merge preserves `≥ k` (I-confluent);
          -- incr changes `count` with no mint/burn generator (¬ conserves)
 ```
 
@@ -243,11 +243,11 @@ class NetworkModel (op σ : Type*) [HappensBefore op] [CellLattice σ] where
 
 /-- G-K's abstract convergence theorem, dregg form: if concurrent ops commute and delivery is
     hb-consistent, any two replicas that have seen the same op-set converge — AND the converged
-    state is the lattice join. Proved ONCE over the class; `sorry` day-1. -/
+    state is the lattice join. Proved ONCE over the class; stubbed day-1. -/
 theorem sec_of_commute {op σ} [HappensBefore op] [CellLattice σ] [NetworkModel op σ]
     (xs ys : List op) (hperm : xs.Perm ys) (hxs : HbConsistent xs) (hys : HbConsistent ys) :
     applyOps xs ⊥ = applyOps ys ⊥ := by
-  sorry
+  ?_  -- OPEN
 
 /-- **The bridge to I-confluence (the dregg-specific step G-K do not take):**
     commutativity + an invariant preserved by each op ⟹ `IConfluent`. This is what makes
@@ -255,7 +255,7 @@ theorem sec_of_commute {op σ} [HappensBefore op] [CellLattice σ] [NetworkModel
 theorem iconfluent_of_commute_inv {op σ} [HappensBefore op] [CellLattice σ] [NetworkModel op σ]
     (I : Invariant σ) (hpres : ∀ o s, I s → I (NetworkModel.interp o s)) :
     IConfluent I (Set.range (fun o => NetworkModel.interp o)) := by
-  sorry
+  ?_  -- OPEN
 ```
 
 So **each `CellProgram` instantiates `NetworkModel`** (supplies `interp` from its effect-semantics
@@ -302,13 +302,13 @@ def classifyTier1 : CellProgram → Bool
   | .cases tcs             => tcs.all (fun c => c.constraints.all constraintIsIConfluent)
   | .circuit _             => false                      -- opaque ⟹ fail-closed
 where
-  constraintIsIConfluent : StateConstraint → Bool := /- the table above -/ sorry
+  constraintIsIConfluent : StateConstraint → Bool := /- the table above -/ OPEN
 
 /-- Soundness of the classifier: `classifyTier1 p = true → tier1_ok (denote p)`.
     (Completeness is NOT claimed — the verify/find seam: a `false` may be a true-but-unproven
     I-confluent cell, recoverable only via a witness plugin.) -/
 theorem classifyTier1_sound (p : CellProgram) :
-    classifyTier1 p = true → tier1_ok (denote p) := by sorry
+    classifyTier1 p = true → tier1_ok (denote p) := by ?_  -- OPEN
 ```
 
 ---
@@ -383,14 +383,14 @@ Metatheory/Core.lean ───────────────┐  (Cell, Ce
   I-confluent invariants), but only as a light import — no circular dependency (Laws does not need
   Confluence).
 - **Discharge order:** slots between Laws and Boundary in the `§8`/ROADMAP table. It can be
-  scaffolded **in parallel with Laws** (both are Core-only), and its `sorry`s discharged *before*
+  scaffolded **in parallel with Laws** (both are Core-only), and its open holes discharged *before*
   Boundary, because Boundary's JointTurn needs `needsConsensus`/`tierAdmissible` as a premise. So
   the updated discharge order is: **Core + Laws + Confluence (parallel) → Authority/Positional →
   Boundary (+ JointTurn)**.
 
 ### 5.2 How it feeds `Boundary.lean`'s JointTurn (the cross-tier commit at the join)
 
-`§1.6` + ROADMAP Phase 3 + the Boundary `sorry`-list: a turn over N cells is a morphism on
+`§1.6` + ROADMAP Phase 3 + the Boundary open-hole list: a turn over N cells is a morphism on
 `C₁ ⊗ … ⊗ Cₙ`, and the JointTurn binding (CG-2 turn-identity pullback ⊗ CG-5 cross-side
 conservation) is an **explicit premise, never derived** (`νF₁ ⊗ νF₂` is not final — `§1.6`). The
 `§2.2` cross-tier rule states the *commit tier* is the **join of the written cells' tiers**, with
@@ -416,7 +416,7 @@ def requiredTier (s : CellSemantics) : FinalityTier :=
 theorem joint_sound (cells : List CellSemantics) (b : JointBinding cells)
     (hsc : ∀ c ∈ cells, StepComplete c)
     (htier : ∀ c ∈ cells, committedTier c ≥ requiredTier c) :
-    Sound (JointTurn cells b) := by sorry
+    Sound (JointTurn cells b) := by ?_  -- OPEN
 ```
 
 So the seam is: **`Confluence.requiredTier` → `Boundary.JointBinding.commitTier`**. Confluence

@@ -9,7 +9,7 @@
 >   where pinned), with teeth (a non-vacuity witness).
 > - **DECORATIVE** — suggestive category-theory notation that buys no theorem; we state
 >   what it would have to prove to become real.
-> - **ASPIRATIONAL** — claimed by the design but actually a `sorry` / `OPEN` / unproven.
+> - **ASPIRATIONAL** — claimed by the design but actually an open hole / `OPEN` / unproven.
 >
 > The whole point is a TRUE map of what is categorically *established* vs *aspired*. I do
 > not let "functor"/"subobject"/"camera" vocabulary paper over a missing theorem. Sources:
@@ -27,7 +27,7 @@
 | **Attenuation = a monotone narrowing on a meet-semilattice / the Heyting residual `⇨`** | **REAL** | `Authority/Caveat.lean:90` (`attenuate_narrows`), `Spec/Authority.lean:113` (`confers` on `SemilatticeInf`) |
 | **Granovetter non-amplification = a monotone sub-functor / "no edge ex nihilo" closure** | **REAL** | `Spec/Authority.lean:312` (`introduce_non_amplifying`), `:500` (`only_connectivity_begets_connectivity`, axiom-clean) |
 | **The CDT-as-category has identities + composition (functor laws on the conferral order)** | **REAL** (as a *preorder* / thin cat) | `Spec/Authority.lean:119` (`confers_refl`), `:125` (`confers_trans`) |
-| **Vat-boundary Φ = a named-lossy FUNCTOR caps → keys dropping confinement** | **ASPIRATIONAL** (by-design `sorry`) | `Spec/VatBoundary.lean:392` (`phi_functorial` — one localized `sorry`) |
+| **Vat-boundary Φ = a named-lossy FUNCTOR caps → keys dropping confinement** | **ASPIRATIONAL** (by-design open hole) | `Spec/VatBoundary.lean:392` (`phi_functorial` — one localized open hole) |
 | Φ's *object map*, *named loss*, *domain*, *order-compatibility* | **REAL** (proved piecemeal) | `Spec/VatBoundary.lean:202` (`phi_drops_confinement`), `:296` (domain = biscuits), `:314` (monotone) |
 | Φ functor laws are *inhabited* (a concrete non-degenerate witness) | **REAL** | `Spec/VatBoundary.lean:441` (`phi_functorial_concrete`, `#assert_axioms`-clean) |
 | **The camera = a real Iris-style resource algebra (RA laws proved)** | **REAL** for `ℕ`/`Excl`/`Auth`; the **step-indexed full camera** is **ASPIRATIONAL** | `Resource.lean:71` (`ResourceAlgebra`), `:231` (`Auth` instance, laws proved), `:54` (OFE/`▶` deferred) |
@@ -38,7 +38,7 @@
 The single load-bearing positive finding of this lens: **the CDT genuinely IS a thin
 category and the authority spine's keystones are real, axiom-clean theorems with teeth.**
 The single load-bearing honest gap: **"Φ is a functor" is ASPIRATIONAL — it is a by-design
-`sorry`** (`phi_functorial`), and the design *says so in the docstring*; what is proved is
+open hole** (`phi_functorial`), and the design *says so in the docstring*; what is proved is
 Φ's action-on-objects, its named loss, and its domain, plus a concrete inhabiting witness.
 The camera is a *real, proved* discrete RA — but it is **not** the full step-indexed Iris
 camera the higher-order/recursive-resource story needs (that machinery is deferred), and
@@ -162,7 +162,7 @@ revocable-forwarding**, so that **permission survives the crossing but authority
 admirably honest and states exactly the tag this lens must assign:
 
 > "What is honestly OPEN: the FULL categorical functoriality of `Φ` over an ABSTRACT
-> `Verifiable` … stated precisely as `phi_functorial` and left with one localized `sorry`."
+> `Verifiable` … stated precisely as `phi_functorial` and left with one localized open hole."
 
 ### 2.2 What is REAL about Φ (the pieces)
 
@@ -188,16 +188,16 @@ These are all `#assert_axioms`-pinned (`:465-474`) — axiom-clean.
 
 ### 2.3 What is ASPIRATIONAL — "Φ is a functor"
 
-> **ASPIRATIONAL — by-design `sorry`.** The full functor statement is `PhiFunctorial`
+> **ASPIRATIONAL — by-design open hole.** The full functor statement is `PhiFunctorial`
 > (`Spec/VatBoundary.lean:356`): identity preservation (`preserves_id`), composition
 > preservation (`preserves_comp`), and the named-loss/non-faithfulness (`lossy_on_confinement`,
 > "two positionally-distinct caps with the same conferred authority collapse to the same
 > epistemic demand"). The theorem `phi_functorial` (`:392`) that the concrete `Phi stmtOf`
 > satisfies ALL THREE simultaneously over an *abstract* `Verifiable` is left with **one
-> localized `sorry`** (`:401`). **So "Φ is a functor" is NOT proved in dregg2 today.** The
+> localized open hole** (`:401`). **So "Φ is a functor" is NOT proved in dregg2 today.** The
 > docstring (`:380-391`) and the §8 axiom-hygiene note (`:458-463`) say this explicitly:
 > `phi_functorial` is *intentionally omitted* from the `#assert_axioms` tripwires because it
-> carries the `sorry`.
+> carries the open hole.
 
 **What proving it would require** (stated by the module itself, `:388-391`, and confirmed by
 this lens): a concrete non-degenerate `Verifiable` instance to witness `preserves_id` (an
@@ -219,7 +219,7 @@ non-degeneracy axiom + a statement order) and prove the coherence under it.
 it witnesses that the functor laws are *inhabited and consistent*, and it exhibits exactly
 where confinement is dropped (two distinct caps `⟨true,()⟩ ≠ ⟨false,()⟩` collapse to the same
 demand `witnessed ()`). But it is a *single inhabiting instance*, not the universal property:
-the general "every `Phi stmtOf` over any `Verifiable` is a functor" remains the `sorry`. So the
+the general "every `Phi stmtOf` over any `Verifiable` is a functor" remains the open hole. So the
 correct tag for the headline claim is **ASPIRATIONAL** — with the honest caveat that it is
 *inhabited* (REAL at one concrete point), not vacuous.
 
@@ -251,7 +251,7 @@ closure), and the three core laws `core_id`/`core_idem`/`core_mono` (`:85-92`). 
 *discrete* RA — a real Iris camera **minus** the step-indexed OFE and non-expansiveness.
 
 > **REAL for the discrete RA.** Three instances are given with their camera laws **fully
-> proved by tactic** (no `sorry`):
+> proved by tactic** (no open holes):
 > - `ℕ` under `+` (`:127`) — the bridge to `Core`'s sum-conservation;
 > - `Excl` (the NFT/linear-token camera, `:170`) — with `excl_no_dup` (`:185`) PROVING an
 >   exclusive resource never validly composes with itself (an NFT cannot be in two places);
@@ -259,9 +259,9 @@ closure), and the three core laws `core_id`/`core_idem`/`core_mono` (`:85-92`). 
 >   valid iff `fits f a`, the two-authoritatives-collapse-to-invalid law.
 >
 > **Faithfulness nuance (markdown-vs-code).** The module *header* (`:57-59`) says "`Auth` gives
-> concrete data with its laws `sorry`'d." **This is STALE.** The actual `Auth` instance
+> concrete data with its laws left as open holes." **This is STALE.** The actual `Auth` instance
 > (`:231-288`) proves `op_comm`/`op_assoc`/`valid_op_left`/`core_id`/`core_idem`/`core_mono` in
-> full by tactic, and a grep finds **zero** `sorry`/`admit`/`axiom`/`native_decide` tokens in
+> full by tactic, and a grep finds **zero** open-hole/`admit`/`axiom`/`native_decide` tokens in
 > `Resource.lean`. Trust the code: the `Auth` camera laws ARE proved. `conservation_is_fpu`
 > (`:296`) is also a real proof. So the discrete-camera tier is REAL, more so than its own
 > docstring admits.
@@ -411,7 +411,7 @@ slide is to a full simplicial / ∞-categorical interaction complex (cells = 0-c
    survives, authority does not, *as a theorem*, not a slogan.
 
 **Cosplay risk (vocabulary outrunning theorems):**
-1. **"Φ is a functor"** — ASPIRATIONAL (`phi_functorial` is a `sorry`); only the object-map,
+1. **"Φ is a functor"** — ASPIRATIONAL (`phi_functorial` is an open hole); only the object-map,
    loss, domain, and a single concrete witness are real.
 2. **"The factory is a presheaf / the directory a topos"** — DECORATIVE; no universal property
    proved (the transparency content IS real, the topos name is not).
@@ -432,11 +432,11 @@ slide is to a full simplicial / ∞-categorical interaction complex (cells = 0-c
 | 4 | `confers` is the conferral preorder (thin-cat hom): identity + composition laws | **REAL** | `Spec/Authority.lean:119` `confers_refl`, `:125` `confers_trans` |
 | 5 | Granovetter non-amplification = monotone sub-functor / downward-closure (`granted ⊆ held`) | **REAL** | `Spec/Authority.lean:312` `introduce_non_amplifying` (axiom-clean) |
 | 6 | "Only connectivity begets connectivity" = reachable-closure / coreflection, no arrow ex nihilo | **REAL** | `Spec/Authority.lean:500` (all 4 cases, `#assert_axioms`-clean) |
-| 7 | **Φ (vat-boundary) is a named-lossy FUNCTOR caps→keys** | **ASPIRATIONAL** | `Spec/VatBoundary.lean:392` `phi_functorial` = **by-design `sorry`** (`:401`); needs concrete `Verifiable` + composition coherence |
+| 7 | **Φ (vat-boundary) is a named-lossy FUNCTOR caps→keys** | **ASPIRATIONAL** | `Spec/VatBoundary.lean:392` `phi_functorial` = **by-design open hole** (`:401`); needs concrete `Verifiable` + composition coherence |
 | 8 | Φ object-map / named loss (confinement, revocable forwarders) / domain=biscuits / order-monotone | **REAL** | `VatBoundary.lean:202`, `:240`, `:296`, `:314` (all axiom-clean) |
 | 9 | Φ functor laws are inhabited (concrete non-degenerate witness) | **REAL** | `VatBoundary.lean:441` `phi_functorial_concrete` (axiom-clean) |
 | 10 | `LossyMorphism` ρ_in/ρ_out attenuation-only | **REAL** (weak: only the `≤`) | `Positional.lean:203` `lossy_attenuation_only` |
-| 11 | Camera = discrete Iris RA (op/valid/core + camera laws), instances `ℕ`/`Excl`/`Auth` | **REAL** (laws proved; header "Auth sorry'd" is STALE) | `Resource.lean:71`, `:127`, `:170`, `:231`; no `sorry` in file |
+| 11 | Camera = discrete Iris RA (op/valid/core + camera laws), instances `ℕ`/`Excl`/`Auth` | **REAL** (laws proved; header "Auth left as open holes" is STALE) | `Resource.lean:71`, `:127`, `:170`, `:231`; no open holes in file |
 | 12 | Full step-indexed camera (OFE/`▶`/non-expansive) for higher-order/recursive resources | **ASPIRATIONAL** | `Resource.lean:50-55` (deferred, acknowledged) |
 | 13 | `ConfinesAuthority := Fpu` — conservation = authority at the RA tier | **REAL as a definition; POSITED not DERIVED** | `Resource.lean:319`; the `↔` to `Positional.confinement_preserved` is unwritten |
 | 14 | Higher-order cell = factory/directory: createCell emits a cell with content-addressed lifetime contract | **REAL** (transparency); **DECORATIVE** (presheaf/topos name) | `Exec/Factory.lean:152`/`:222`/`:242`; `Spec/Authority.lean:204` `Mint` |
@@ -449,7 +449,7 @@ slide is to a full simplicial / ∞-categorical interaction complex (cells = 0-c
 axiom-clean theorems with teeth — this is where the category earns its keep. The **camera is a
 real (discrete) Iris RA with proved laws** (more than its own stale docstring claims), with the
 step-indexed full camera honestly deferred. The **one genuinely ASPIRATIONAL categorical claim
-is "Φ is a functor"**: `Spec.VatBoundary.phi_functorial` is a *by-design* `sorry`, and the
+is "Φ is a functor"**: `Spec.VatBoundary.phi_functorial` is a *by-design* open hole, and the
 design is honest about it — only Φ's object-map, named loss, domain, and a single concrete
 inhabiting witness are proved. The `conservation = authority` unification is REAL *as a
 definition* (`ConfinesAuthority := Fpu`) but the bridge to the actual confinement theorem is

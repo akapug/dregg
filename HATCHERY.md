@@ -167,7 +167,7 @@ example {s} (h : MyRegistry.Inv s) (sched) :
 
 Properties expressible out of the box: *no double-spend*, *append-only audit log*, *authority confinement* (capability safety — the seL4 shape), *supply conservation / no inflation*, *monotone state* (once-true-stays-true: revocations, registrations, finalizations), and *field-relational invariants* (caps, ordering, balances-in-range). With the temporal layer: *□ safety* and *◇ liveness/progress* specs.
 
-The guarantee is strictly stronger than typical smart-contract tools: not "holds in the tested traces" or "holds modulo an SMT oracle," but **holds at every step of the unbounded trajectory, against every adversarial schedule, with no `sorry` and no external solver in the trust base.**
+The guarantee is strictly stronger than typical smart-contract tools: not "holds in the tested traces" or "holds modulo an SMT oracle," but **holds at every step of the unbounded trajectory, against every adversarial schedule, with no external solver in the trust base.**
 
 ---
 
@@ -187,9 +187,9 @@ Build the multiplier, then everything downstream is cheaper and more uniform.
 ## 5. Engineering & TCB hygiene
 
 - **Substrate:** Lean 4.30 metaprogramming (`elab` / `macro` / `Lean.Elab.Tactic`), simp-attribute sets, and **`aesop` (already a v4.30 dependency)** as the search engine. **No new lake dependencies.**
-- **Axiom-clean by construction:** the tactics produce ordinary proof terms checked by the kernel. Every Hatchery-generated theorem is pinned with `#assert_axioms` like everything else. No `native_decide`, no SMT oracle, no `sorry` — the tactics either close the goal honestly or hand it back.
+- **Axiom-clean by construction:** the tactics produce ordinary proof terms checked by the kernel. Every Hatchery-generated theorem is pinned with `#assert_axioms` like everything else. No `native_decide`, no SMT oracle — the tactics either close the goal honestly or hand it back.
 - **Honest by construction:** `exec_frame` *hands back* the arms it can't frame rather than fudging them; `crypto_portal` *forces* the soundness carrier to remain an explicit hypothesis. The tooling cannot launder a gap into a false "PROVED."
-- **External work = blueprints, not deps:** the adoptable Lean libs (CSLib, VCVio, LeanLTL, Lentil) all target older toolchains than our 4.30; we port-thin their relevant cores (all sorry-free) rather than add version-skewed dependencies — the same discipline that refused the Z3-laden CRDT lib. `Veil` (z3/cvc5 oracle) is blacklisted from the TCB.
+- **External work = blueprints, not deps:** the adoptable Lean libs (CSLib, VCVio, LeanLTL, Lentil) all target older toolchains than our 4.30; we port-thin their relevant cores (all fully discharged) rather than add version-skewed dependencies — the same discipline that refused the Z3-laden CRDT lib. `Veil` (z3/cvc5 oracle) is blacklisted from the TCB.
 
 ---
 

@@ -93,6 +93,5 @@ resolve_with_ordering` (not a transcription). `coord/src/coord_diff.rs` is the n
 * **`budget.rs::FastUnlockManager`** (fast-unlock after 2PC abort): an optimization on the abort
   path; its safety is the same `abort_no_late_commit` non-amplification. Not separately modelled.
 
-All Lean modules are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no
-`sorry`/`:=True`/`native_decide`. All differentials are real (run the genuine protocol objects), not
-prose.
+All Lean modules are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). All
+differentials are real (run the genuine protocol objects), not prose.

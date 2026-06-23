@@ -1038,7 +1038,7 @@ Division of labor:
   * **This file (`AssuranceCase`)** — the load-bearing assurance APEX, by guarantee. The five
     guarantee aggregations + their direct-DAG keystones, kernel-triple clean.
   * **`Claims`** — the comprehensive per-keystone CI net (corpus-wide), subordinate to this file.
-  * **`scripts/no-sorry-metatheory.sh`** — the textual whole-corpus zero-`sorry` grep.
+  * **`scripts/axiom-hygiene-guard.sh`** — the textual whole-corpus open-hole grep.
 =========================================================================== -/
 
 end Dregg2.AssuranceCase

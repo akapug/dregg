@@ -89,7 +89,7 @@
 ## Proposed `./metatheory` layout & build order
 
 **[F]** Lean4 project (`lakefile.lean`, depend on mathlib4 at `~/src/mathlib4`). Order is
-cheapest-coherence-first; each step has a clear `sorry`-to-`theorem` arc.
+cheapest-coherence-first; each step has a clear stub-to-`theorem` arc.
 
 ```
 metatheory/
@@ -108,7 +108,7 @@ metatheory/
                              --     (model as a monoid hom `Turn → (Class → ℤ or multiset)`). This is
                              --     the symmetric-monoidal / linear law all three spines kept.
       Ordering.lean          -- (2) strand = composable chain; canonicity; the "not subsumable" claim
-                             --     stated (proved later / `sorry` first)
+                             --     stated (proved later / stubbed first)
     Authority/
       Positional.lean        -- (3) caps-as-caps: authority = possession of a slot in a CDT/CSpace-like
                              --     structure; mediator-enforced; unforgeable by construction
@@ -132,22 +132,22 @@ metatheory/
   test/                      -- Lean-side golden vectors (mirror dregg-dsl-differential corpus)
 ```
 
-**Build order & what to `sorry` first:**
-1. **`Core/` (Cell, Turn, Category)** — fully prove `id`/`∘`/assoc. No `sorry`. This is the
+**Build order & what to stub first:**
+1. **`Core/` (Cell, Turn, Category)** — fully prove `id`/`∘`/assoc. No open holes. This is the
    coherence stress-test of "turn-as-generator" (§8): if `comp` won't typecheck cleanly, the
    spine is wrong. Cheapest, highest signal. **[F]**
 2. **`Laws/Conservation`** — *prove* the monoid-hom preservation theorem early; it's small and it's
-   the claim "all three spines asserted" (§1). `Laws/Ordering` — *state* canonicity, `sorry` the
+   the claim "all three spines asserted" (§1). `Laws/Ordering` — *state* canonicity, stub the
    "not subsumable" non-existence result (it's the hardest pure-math claim; defer). **[F]**
-3. **`Authority/` three files** — define both models; `sorry` `LossyMorphism`'s loss theorem until
+3. **`Authority/` three files** — define both models; stub `LossyMorphism`'s loss theorem until
    the two models are stable (you need both before you can state what the morphism drops). **[F]**
-4. **`Membrane/VatBoundary`** — state the law immediately (so it anchors design), `sorry` the proof;
-   it depends on 1–3. This is the one to make `sorry`-free *last*, deliberately. **[F]**
+4. **`Membrane/VatBoundary`** — state the law immediately (so it anchors design), stub the proof;
+   it depends on 1–3. This is the one to make hole-free *last*, deliberately. **[F]**
 5. **`Finality/` + `Oracle/`** — independent of the membrane; can proceed in parallel. `Oracle` is
-   `sorry`-free by construction (it's executable code). `Finality` follows the Velisarios template. **[F]**
+   hole-free by construction (it's executable code). `Finality` follows the Velisarios template. **[F]**
 
-`sorry`-first discipline: state *every* top-level theorem with its real signature on day 1
-(so the .lean compiles and the shape is reviewable), `sorry` the bodies, then discharge
+Stub-first discipline: state *every* top-level theorem with its real signature on day 1
+(so the .lean compiles and the shape is reviewable), stub the bodies with open holes, then discharge
 bottom-up (Core → Laws → Authority → Membrane). This mirrors l4v's "spec first, proof grinds up."
 
 ## The vat-boundary law: Lean statement sketch (with the crypto-attestation substitution)
@@ -237,12 +237,12 @@ prove "Verify accepts ⇒ the computation actually happened." Two obligations, n
 2. The Rust harness feeds **the same corpus** (canonicalized turn vectors — reuse the existing
    differential corpus) to both `lake exe oracle` and the Rust executor; assert observable equality.
    Lean is the *golden* side (its output defines "correct"); a mismatch is a Rust bug **unless**
-   the Lean theorem for that case is still `sorry` (track this — an un-proved oracle is only as good
+   the Lean theorem for that case is still an open hole (track this — an un-proved oracle is only as good
    as its test coverage; be honest about it).
 3. Direction of trust: **for proven theorems**, Lean is ground truth and Rust is checked against it.
-   **For `sorry`'d regions**, the difftest is just cross-validation (neither side certified) — mark
+   **For open-hole regions**, the difftest is just cross-validation (neither side certified) — mark
    these in the corpus so reports don't overclaim.
-4. Long-game **[F]**: as `Membrane/VatBoundary` becomes `sorry`-free, the difftest upgrades from
+4. Long-game **[F]**: as `Membrane/VatBoundary` becomes hole-free, the difftest upgrades from
    "cross-check" to "Rust conforms to a *certified* oracle" — the property that answers the peers'
    "huge-TCB / incoherent" complaints (§9.1 rationale).
 

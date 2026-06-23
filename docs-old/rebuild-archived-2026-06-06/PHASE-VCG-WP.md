@@ -373,7 +373,7 @@ research increment, correctly fenced off in `StepCamera.lean` already.
 > VCG-discharged cell sound w.r.t. the operational `recCexec`. Keep it `#assert_axioms`-clean.
 
 Per-step soundness is `recCexec_attests`/`cexec_attests` re-packaged and needs no new proof. The camera
-frame rule's soundness is `conservation_is_fpu`. **No new axioms, no `sorry` — the VCG is a generator over
+frame rule's soundness is `conservation_is_fpu`. **No new axioms, no open holes — the VCG is a generator over
 proved keystones.** `[C: RecordCellLive.lean:87; StepComplete.lean:74; Resource.lean:296]`
 
 ---

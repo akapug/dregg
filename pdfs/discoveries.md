@@ -121,7 +121,7 @@ These are grounded; recommend applying them.
 ## 5. Concrete artifacts now specified for `./metatheory` (forward-design, paper-anchored)
 
 - **Layout & order:** ~6–8 modules (Core / Laws / Authority / Boundary / Finality / Oracle). **State every
-  theorem on day 1 with `sorry` bodies; discharge Core (category laws) + Conservation (the monoid-hom) first;
+  theorem on day 1 with open-hole bodies; discharge Core (category laws) + Conservation (the monoid-hom) first;
   the vat-boundary law LAST.** Mirrors l4v's "spec-first, grind up."
 
 - **Vat-boundary law = two theorems** (the seL4 integrity case-split lifted: `part s ⤳ p` vs `part s ⤳̸ p`,
@@ -165,7 +165,7 @@ These are grounded; recommend applying them.
 
 - **Bridge:** wire the executable Lean core in as **backend #8 of the existing `dregg-dsl-differential` harness**,
   as the golden oracle (IGLOO's refinement *contract* — "verifier accepts ⇒ impl refines spec" — discharged
-  *empirically*; honest caveat: over `sorry`'d regions it's cross-validation, not certification). A Lean
+  *empirically*; honest caveat: over open-hole regions it's cross-validation, not certification). A Lean
   `def … deriving DecidableEq/Repr` is *simultaneously* the proof target and a runnable `Verify P w : Bool` —
   this directly answers the peers' "huge-TCB / doesn't cohere" complaint. **Iris is overkill** for the skeleton/laws;
   reserve it (or a hand-rolled PCM argument) for the one future obligation that needs it: the concurrent live-session

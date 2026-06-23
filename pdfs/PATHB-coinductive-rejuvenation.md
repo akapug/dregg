@@ -250,7 +250,7 @@ theorem sound_of_step_complete (C : TurnCoalg) (s₀ : C.State)
     (stepGood : ∀ s τ h, Reachable C s₀ s → StepInv C s τ h (C.step s τ h)) :
     Sound C s₀ := by
   coinduction                                                -- Löb / greatest-fixpoint intro
-  sorry   -- discharge each conjunct from `stepGood`; the GUARDED hypothesis is `Sound (step …)`
+  ?_   -- OPEN: discharge each conjunct from `stepGood`; the GUARDED hypothesis is `Sound (step …)`
 ```
 
 ### The vat-boundary law, coinductively

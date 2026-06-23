@@ -161,7 +161,7 @@ land on the same proven binding.
   in plain Lean4 (`OrderHom.gfp`+`gfp_induction`; `MvQPF.Cofix`/`Fix` available if value-level `Cell` is ever
   needed). `▶` = `Later := id` (productivity assumed via `StepComplete` contractivity) or explicit ℕ-step-indexing.
   **Do NOT move to Coq.** Found two scaffold bugs (the keystone `sound_of_step_complete` is *currently unprovable
-  as stated* — needs the golden-oracle bridge surfaced; `boundary_respecting_sound` is a one-liner) + a `sorry`-free
+  as stated* — needs the golden-oracle bridge surfaced; `boundary_respecting_sound` is a one-liner) + a hole-free
   proof skeleton.
 - **`STUDY-projection-split.md`** — the frontier. Split rule = **Whittaker segmented invariant-confluence** (blue =
   I-confluent within a segment, partition-tolerant; red = crosses a segment boundary → atomic JointTurn), tightened

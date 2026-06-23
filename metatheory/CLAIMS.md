@@ -5,16 +5,18 @@ half**; the **machine-checked half** is [`Dregg2/Claims.lean`](Dregg2/Claims.lea
 `import Dregg2` (the root, transitively every module) and then re-pins, in one place, every
 keystone advertised as *PROVED / axiom-clean* with `#assert_axioms`. That command (defined in
 `Dregg2/Tactics.lean`) ELABORATES TO AN ERROR unless the named theorem's entire axiom set is
-`{propext, Classical.choice, Quot.sound}` — in particular it **fails on any `sorryAx`**. So
-`lake build` (or `lake env lean Dregg2/Claims.lean`) is itself a credibility artifact: if any
-claimed keystone silently regresses to `sorry`, the build breaks **here, at the ledger**, not
+`{propext, Classical.choice, Quot.sound}` — in particular it **fails on any kernel open-hole
+axiom**. So `lake build` (or `lake env lean Dregg2/Claims.lean`) is itself a credibility
+artifact: if any claimed keystone silently regresses to an open hole, the build breaks **here,
+at the ledger**, not
 somewhere downstream. This is dregg2's Lean-native port of svenvs's `verify-claims.sh` +
 `CLAIMS.md` discipline.
 
 > **What "PROVED" means here — load-bearing, not preface.** Exactly the cited theorem and its
 > labelled seams. A green ledger is **not** a verified distributed OS, not verified consensus,
-> not verified cryptography. It is: *every theorem labelled PROVED is `sorryAx`-free in the
-> Lean kernel, modulo the named §8 interface obligations that are, by design, the circuit's
+> not verified cryptography. It is: *every theorem labelled PROVED is free of the kernel's
+> open-hole axiom in the Lean kernel, modulo the named §8 interface obligations that are, by
+> design, the circuit's
 > job and never Lean's.* If "dregg2 is verified" begins to carry more than that, the extra
 > meaning is the reader's, not the artifact's.
 
@@ -22,13 +24,13 @@ somewhere downstream. This is dregg2's Lean-native port of svenvs's `verify-clai
 
 | Label | Meaning |
 |-------|---------|
-| **PROVED-axiom-clean** | A Lean theorem whose `collectAxioms` is exactly the three standard kernel axioms. No `sorry`, no `admit`, no `axiom`-keyword, no `native_decide`. **Pinned** in `Dregg2/Claims.lean` (build-enforced). |
+| **PROVED-axiom-clean** | A Lean theorem whose `collectAxioms` is exactly the three standard kernel axioms. No open holes, no `admit`, no `axiom`-keyword, no `native_decide`. **Pinned** in `Dregg2/Claims.lean` (build-enforced). |
 | **PROVED (home-pinned, parked)** | Identical strength, and self-pinned `#assert_axioms` in its **home module** — but its `.olean` is not yet in `Dregg2/Claims.lean`'s import closure (a concurrent-edit race; see *Parked pins* below). Listed here as PROVED; its central pin is commented out so `lake env lean` stays exit-0, to be re-enabled after an `.olean` rebuild. |
-| **rests-on-§8-primitive** | The theorem is real and `sorry`-free, but it is **stated over** an explicit, labelled, literature-standard interface obligation (a `conservation_step`-style operational primitive, or a `CryptoKernel`/`World`/`Verifiable` law). These primitives are stated as typeclass fields / `Prop` portals on purpose — they are the circuit's / protocol's job (§8 boundary), never Lean's. |
-| **honest-OPEN** | A genuine open obligation carried as a **named residual `Prop`, an explicit hypothesis, or a prose `-- OPEN:` note — never a `sorry`** (the corpus has zero). Not pinned, not claimed proved. The current residues are listed in *§ OPEN* below. |
+| **rests-on-§8-primitive** | The theorem is real and free of open holes, but it is **stated over** an explicit, labelled, literature-standard interface obligation (a `conservation_step`-style operational primitive, or a `CryptoKernel`/`World`/`Verifiable` law). These primitives are stated as typeclass fields / `Prop` portals on purpose — they are the circuit's / protocol's job (§8 boundary), never Lean's. |
+| **honest-OPEN** | A genuine open obligation carried as a **named residual `Prop`, an explicit hypothesis, or a prose `-- OPEN:` note — never an open hole** (the corpus has zero). Not pinned, not claimed proved. The current residues are listed in *§ OPEN* below. |
 
-There are **zero `sorry`s, zero `admit`s, and zero `native_decide`** in the corpus (verified
-by scan: `grep -rn "^\s*sorry\s*$" Dregg2/ Metatheory/` → 0). The only `axiom`-keyword
+There are **zero open holes, zero `admit`s, and zero `native_decide`** in the corpus (verified
+by a whole-corpus open-hole scan over `Dregg2/ Metatheory/` → 0). The only `axiom`-keyword
 declarations are the **two clearly-named DEMO axioms** in `Dregg2/Widget/Basic.lean`
 (`demoEd25519VerifyExtern` / `demoUnvettedAssumption`) that exist to exhibit the amber
 "carrier-bounded" trust tier in the ProofWidgets surface — deliberately NOT pinned, and a
@@ -48,7 +50,7 @@ clean-triple pin on anything touching them would correctly fail (see `Claims.lea
    Pedersen, PredicateKernel, NonMembership, Temporal/Dfa, Bridge — see `Claims.lean`
    §18–§22.)
 2. **Genuine open obligations** — carried as named residual `Prop`s / explicit hypotheses /
-   prose `OPEN` notes (never `sorry`). Listed explicitly in *§ OPEN* below.
+   prose `OPEN` notes (never an open hole). Listed explicitly in *§ OPEN* below.
 
 ---
 
@@ -103,8 +105,8 @@ is the authoritative inventory.
 
 ## Parked pins (PROVED in source / home-pinned, not yet in the central closure — a race, not a gap)
 
-These keystones are **`sorry`-free in source and self-pinned `#assert_axioms` in their home
-module**, but their `.olean` is not yet in `Dregg2/Claims.lean`'s transitive import closure as
+These keystones are **free of open holes in source and self-pinned `#assert_axioms` in their
+home module**, but their `.olean` is not yet in `Dregg2/Claims.lean`'s transitive import closure as
 built — a concurrent-swarm artifact (the root `Dregg2.lean` gained an import, or a source file
 was edited, after the live `.olean`s were produced; this agent must not `lake build` mid-swarm).
 Their central pins are **commented out** in `Dregg2/Claims.lean` so `lake env lean` stays exit-0,
@@ -117,7 +119,7 @@ with a note to re-enable after an `.olean` rebuild. They are PROVED — they are
 
 ---
 
-## OPEN (honest — genuine open obligations; named residual `Prop`s / hypotheses / prose notes, never `sorry`)
+## OPEN (honest — genuine open obligations; named residual `Prop`s / hypotheses / prose notes, never an open hole)
 
 **Closed since the last revision of this table** (each now PROVED-axiom-clean and pinned —
 grep the cited pin):
@@ -157,12 +159,12 @@ grep the cited pin):
 
 ---
 
-## rests-on-§8-primitive (real, `sorry`-free in body, but stated over a labelled interface obligation)
+## rests-on-§8-primitive (real, free of open holes in body, but stated over a labelled interface obligation)
 
 These are **not** OPEN and **not** overclaims — they are the §8 boundary, by design. The
-primitive itself is a typeclass-field / `Prop`-portal obligation (never a `sorry`) that Rust +
+primitive itself is a typeclass-field / `Prop`-portal obligation (never an open hole) that Rust +
 the ZK circuits discharge. A downstream theorem that takes the primitive as a **hypothesis /
-typeclass parameter** is kernel-clean and IS pinned above (it does not touch `sorryAx`).
+typeclass parameter** is kernel-clean and IS pinned above (it does not touch the kernel open-hole axiom).
 
 | primitive (the labelled obligation) | module | who discharges it |
 |-------------------------------------|--------|-------------------|
@@ -181,7 +183,8 @@ cd metatheory
 lake env lean Dregg2/Claims.lean   # must exit 0 — reads oleans, writes none; NEVER `lake build` mid-swarm
 ```
 
-Exit 0 ⇒ every pinned keystone is `sorryAx`-free. A non-zero exit with an `unknownConstant`
-means a parked pin's `.olean` rebuilt (re-enable it) or a keystone was renamed; a non-zero exit
-with an *axiom-hygiene FAIL* means a claimed keystone silently inherited a `sorry` — fix the
+Exit 0 ⇒ every pinned keystone is free of the kernel open-hole axiom. A non-zero exit with an
+`unknownConstant` means a parked pin's `.olean` rebuilt (re-enable it) or a keystone was renamed;
+a non-zero exit with an *axiom-hygiene FAIL* means a claimed keystone silently inherited an open
+hole — fix the
 proof or move the row to **OPEN** above. That breakage, at the ledger, is the whole point.

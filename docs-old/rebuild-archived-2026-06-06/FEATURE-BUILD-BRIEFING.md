@@ -35,7 +35,7 @@ Public surface, exactly:
   (flat form so an unclosed commit goal ESCAPES to the caller) → the **reject/stay-put arm is closed
   universally** (`Option.getD_none; exact hgood`) → the commit arm tries, in order:
   `exact Trans.trans hgood ($grow s s' cf.1 hc)` (if a forest-grow lemma supplied), then
-  `aesop (rule_sets := [Dregg2])`, then **honest hand-back** (`skip` — never a hidden `sorry`; the
+  `aesop (rule_sets := [Dregg2])`, then **honest hand-back** (`skip` — never a hidden discharge; the
   open commit goal exposes `hgood`/`s`/`s'`/`cf`/`hc` as raw binders, see `logMono_handback_demo:166`).
   Optional `grow` parsed with `colGt`.
 - Minimal usage (the four gate theorems, `:117`–`:155`):
@@ -167,7 +167,7 @@ existing fixpoint algebra.
 ### The `FullActionA` inductive (`metatheory/Dregg2/Exec/TurnExecutorFull.lean:1928`) — 51 constructors
 
 Grouped exactly as in source. **All 51 have real `execFullA` semantics** (the dispatch is
-`execFullA:2236`–`2303`); there are NO `sorry`/no-op stubs in the dispatch. Crypto is portaled at the
+`execFullA:2236`–`2303`); there are NO open-hole/no-op stubs in the dispatch. Crypto is portaled at the
 *theorem* layer (`fullActionInvA` / §8 carriers), not faked in the executor. The per-effect kernel op:
 
 | group | constructor (`:line`) | `execFullA` kernel op (`:2236+`) |

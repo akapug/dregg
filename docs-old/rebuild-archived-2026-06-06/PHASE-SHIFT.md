@@ -109,7 +109,7 @@ Rust the extension calls.
 - **RESEARCH (may not close):** the operational LTS / full forward-simulation diagram (iii) — the
   longest pole, gates the coinductive `Boundary` keystone; the three-judgement projection split
   (`OPEN-PROBLEMS #1`, no paper); cross-disjoint-group atomic+live+partition-tolerant commit
-  (`[IMPOSSIBLE]` — design around it); the deep coinductive/Byzantine/GST sorrys (bucket 2).
+  (`[IMPOSSIBLE]` — design around it); the deep coinductive/Byzantine/GST open holes (bucket 2).
 - **HARD ENGINEERING:** the §8 discharge (real AIR over records, prover extraction); the Lean→Rust
   trust boundary at scale (marshalling `Digest`/`Proof`/`Finset` state must not become an unverified
   TCB; differential is *cross-validation, not certification*); **step-completeness in dregg1 is

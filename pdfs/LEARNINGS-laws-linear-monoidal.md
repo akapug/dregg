@@ -197,7 +197,7 @@ variable [HeytingAlgebra Pred]            -- the predicate algebra (synthesis §
 def Witness  : Pred → WitnessOrder
 def Predicate : WitnessOrder → Pred
 theorem pred_witness_gc : GaloisConnection Predicate Witness   -- the wired direction
--- "half-wired": the other adjunct / the round-trip is `sorry`/`NotYetWired` — model as a
+-- "half-wired": the other adjunct / the round-trip is an open hole / `NotYetWired` — model as a
 --   `GaloisCoinsertion` stub or an axiom flagged for discharge.
 ```
 

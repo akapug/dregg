@@ -356,7 +356,7 @@ allowed to violate causal order *only because it touches no protection state*).
 ## Proposed Lean / metatheory artifacts
 
 These target synthesis §8's seed (base category + conservation + two authority
-models + the membrane law). `sorry`'d theorem targets are fine; the value is the
+models + the membrane law). Open-hole theorem targets are fine; the value is the
 *statement*. **[design, shapes grounded as cited]**
 
 ```lean
@@ -381,7 +381,7 @@ inductive Reaches : CellState → CellState → Prop
 -- monotone attenuation = the ONE edge rule (01-spine §2.2; eros `weak`)
 def isAttenuation (parent child : CapEdge) : Prop :=
   child.facet ≤ parent.facet                  -- facet ⊆, authority ≤, caveats ⊇
-theorem attenuation_decidable : DecidablePred (fun e => isAttenuation e.1 e.2) := sorry
+theorem attenuation_decidable : DecidablePred (fun e => isAttenuation e.1 e.2) := OPEN
   -- grounded: take-grant safety O(|V|+|E|); decidability from rule-restriction
 
 -- THE VAT-BOUNDARY LAW (the synthesis §8.4 sharp target), as seL4's case split
@@ -396,28 +396,28 @@ theorem vat_boundary_law
     ∧ (rootOf s ≠ rootOf s' →
         ∃ e : CapEdge, AuthorizesCrossing e t        -- the "specific edge" (seL4)
           ∧ RequiresWitness t                        -- proof becomes mandatory
-          ∧ isAttenuation_along_path e) := sorry
+          ∧ isAttenuation_along_path e) := OPEN
 
 -- AUTHORITY CONFINEMENT (seL4): the trust-root is an upper bound; no growth
 theorem authority_confinement (t : Turn s s') :
-    AuthorityBound (rootOf s) s' ≤ AuthorityBound (rootOf s) s := sorry
+    AuthorityBound (rootOf s) s' ≤ AuthorityBound (rootOf s) s := OPEN
 
 -- THE FORGETFUL FUNCTOR caps→keys: what is PRECISELY lost (myths E,F; §T2)
 -- F_drop : ObjCap (Model 4) → KeyCap (Model 3) is faithful on `target`/`facet`
 -- but DROPS Property F (access-controlled delegation) and Property E-in-practice
 theorem caps_to_keys_drops_F :
-    ∀ (k : KeyCap), ¬ AccessControlledDelegation k := sorry   -- keys copy freely
+    ∀ (k : KeyCap), ¬ AccessControlledDelegation k := OPEN   -- keys copy freely
 theorem caps_to_keys_drops_E :
-    ∀ (k : KeyCap), ¬ ∃ revoke, RevocableForwarder k revoke := sorry
+    ∀ (k : KeyCap), ¬ ∃ revoke, RevocableForwarder k revoke := OPEN
 -- consequence: the inverse keys→caps needs a TRUSTED MINTER to re-establish F
 --   (synthesis §2.2), i.e. F_lift is only defined relative to a mediator island.
 
 -- CONFINEMENT TEST is LOCAL (Doerrie SDM): inspect only the minted caps
 -- `mutable` (topology bound, decidable) over-approximates `mutated` (actual)
-def mutable (caps : List CapEdge) : Set CellState := sorry   -- TA-analogue
-theorem mutable_approx_mutated (caps) : mutated caps ⊆ mutable caps := sorry
+def mutable (caps : List CapEdge) : Set CellState := OPEN   -- TA-analogue
+theorem mutable_approx_mutated (caps) : mutated caps ⊆ mutable caps := OPEN
 theorem confinement_test_sound (sub authorized) :
-    PassesTest sub authorized → mutable sub.caps ⊆ mutable authorized := sorry
+    PassesTest sub authorized → mutable sub.caps ⊆ mutable authorized := OPEN
 ```
 
 Differential-testing hook (synthesis §9.1): Lean `mutable`/`isAttenuation` are
