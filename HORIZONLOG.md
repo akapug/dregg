@@ -8,6 +8,25 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## ✅ CARD EDITOR — a card is EDITABLE FROM WITHIN deos (HYPERDREGGMEDIA gap #1), by running (2026-06-23)
+The keystone of authoring: inspection becomes authoring. `deos-js/src/card_editor.rs` (`CardEditor`)
+authors a target card (an applet = a cell), each gesture a real verified turn / a receipted patch,
+all bounded by the editor's `held` (the cap tooth). THREE surfaces: (1) **view** — `edit_view`
+appends a structural patch (add a button / relabel) to the card's `view_source` document
+(`ProgramSource`/`dregg_doc::Doc`); the view re-folds, re-seals into the manifest, and `deos-view`
+re-renders it (the new `+1` button reaches REAL gpui pixels — before/after PNGs differ); the edit is a
+receipted patch `blame` attributes to its author. (2) **field** — `set_field` is a real `SetField`
+verified turn (re-read reflects it). (3) **affordance** — `add_affordance` welds a new fireable
+affordance (a new button), recorded in the manifest so it travels in the re-minted cell. THE AGENT
+DOES IT: the same path is the `run_js` agent's hands — it authors an authorized card's UI (each edit a
+receipt attributed to the agent) and is REFUSED in-band on a card outside its `held`. Proven by running:
+`deos-js/tests/card_editor.rs` (6 tests) + `deos-view/tests/card_editor_rerenders.rs` (the rendered
+keystone). New `Applet::register_affordance` (the live weld); `ApplyOp::into_closure` → `pub(crate)`.
+RESIDUAL (named here per WE-SHIP): the `run_js` SpiderMonkey BINDING that exposes `CardEditor` as a JS
+surface (`deos.editor.editView(...)`) is the next wire — the cap-tooth + receipt semantics the JS
+surface relies on are proven on the SAME Rust code path the binding will call, so this is WIRE, not
+build. (`deos-hermes/src/run_js.rs` is the host; a tiny `pub` there + a `deos-js::js` editor binding.)
+
 ## ✅ CLIENT-SIGNED TURN — the logged-in user's OWN cell signs (the "corporate account" model), by running (2026-06-23)
 The cockpit can now submit a turn signed by the LOGGED-IN USER's own ed25519 key, where
 the node commits it UNDER THE USER's authority (NOT the operator). One node hosts many
@@ -126,6 +145,18 @@ remaining wire is hooking `deos-zed`'s in-editor `save` to call `save_to_node`
 
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
+
+### CIRCUIT FRONTIER VERIFIED-COMPLETE + CAVEAT LANGUAGE LIVE (2026-06-23, the "do all" push).
+The circuit residuals handler-floors NAMED turned out ALREADY-DONE (verify-source, the session's ironclad pattern):
+heaps bound in RestHashIffFrame (`19374214b`, StateCommit:238 + Rust limb 28); the in-circuit non-membership <->
+executor nullifier-set agreement is a THEOREM `circuit_gate_meets_executor_guard` (`32653a915`, NoteSpend:741);
+§3.EPOCH SUBSUMED (both epoch fields already in RestHashIffFrame + the record_digest channel — the deferral was right).
+ONE genuinely-OPEN circuit residual remains (named hypothesis, not silent): `NmRowEncodes` — the sorted-tree ADJACENCY
+OPENING binding the noteSpend gate's prover-supplied (lo,hi) neighbor columns to the committed nullifier root (analog
+of RowEncodesSum; a descriptor-wiring gate-kind the 4-arity Poseidon2 hash-site IR lacks). The deeper circuit follow-on.
+CAVEAT LANGUAGE: CaveatPred wired LIVE into caveatsAdmit via the TxCtx bridge (`a60e0abc`, composed-superset PredCaveatLive,
+no VK/regression) + validUntil/heightLt atoms. The §3B 4-algebra convergence (SlotCaveat/Pred/RelPred/CaveatPred -> views
+of one core via faithful embeddings, first weld caveatPred_embeds_pred) is IN PROGRESS — the fork-debt resolution.
 
 ### HANDLER-FLOORS CAMPAIGN COMPLETE — silent-gate-hole class RETIRED on the executor/forest layer (2026-06-23).
 The proof-carrying handler executor (research found it ~80% pre-built; we finished it). All 6 missing floors are now
