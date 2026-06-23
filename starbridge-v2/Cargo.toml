@@ -231,6 +231,10 @@ app-registry = [
     "dep:starbridge-subscription",
     "dep:starbridge-swarm-orchestration",
     "dep:starbridge-tool-access-delegation",
+    # The sender-bound wave (affordances that read the turn's sender, via `commit_as`).
+    "dep:starbridge-supply-chain-provenance",
+    "dep:starbridge-identity",
+    "dep:starbridge-governed-namespace",
 ]
 
 # OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
@@ -585,6 +589,9 @@ starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gatewa
 starbridge-subscription = { path = "../starbridge-apps/subscription", optional = true }
 starbridge-swarm-orchestration = { path = "../starbridge-apps/swarm-orchestration", optional = true }
 starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-delegation", optional = true }
+starbridge-supply-chain-provenance = { path = "../starbridge-apps/supply-chain-provenance", optional = true }
+starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace", optional = true }
 # THE SERVO RENDER LANE — the HOST SWGL render path that IS deos's compositor
 # render pass (Stage A of docs/desktop-os-research/SERVO-ON-SEL4.md). Default
 # `swgl-standalone` features ONLY (swgl's CPU-only C++ rasterizer + gleam + the real
