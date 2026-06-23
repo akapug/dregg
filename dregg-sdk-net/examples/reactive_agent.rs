@@ -11,23 +11,22 @@
 //! Run a node (see QUICKSTART), then:
 //!
 //!   DREGG_NODE_URL=http://localhost:8421 \
-//!     cargo run -p dregg-sdk --example reactive_agent
+//!     cargo run -p dregg-sdk-net --example reactive_agent
 //!
 //!   DREGG_WATCH_CELL=<hex cell id>   react only to that cell's receipts
 //!                                    (default: every committed receipt)
 //!
 //! The same stream is curl-able: `curl -N $DREGG_NODE_URL/api/events/stream`.
 
-#[cfg(all(feature = "federation-client", feature = "network"))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use dregg_cell::Cell;
-    use dregg_sdk::events::{NodeEvents, ReceiptFilter};
     use dregg_sdk::factories::ADOPT_TURN_FEE;
     use dregg_sdk::polis::{
         WorkerMandate, activate_worker, spawn_worker_mandate, tool_scope_commitment, worker_spend,
     };
     use dregg_sdk::{AgentCipherclerk, AgentRuntime};
+    use dregg_sdk_net::events::{NodeEvents, ReceiptFilter};
     use dregg_types::hex_encode;
 
     let node_url =
@@ -123,9 +122,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
-}
-
-#[cfg(not(all(feature = "federation-client", feature = "network")))]
-fn main() {
-    eprintln!("reactive_agent needs the default `federation-client` + `network` features");
 }

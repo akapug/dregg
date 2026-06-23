@@ -24,10 +24,11 @@ pub enum SdkError {
     #[error("wire error: {0}")]
     Wire(String),
 
-    /// A CapTP operation was attempted before
-    /// [`AgentCipherclerk::set_captp_client`](crate::AgentCipherclerk::set_captp_client)
-    /// was called.
-    #[error("CapTP client not configured; call set_captp_client() first")]
+    /// A CapTP operation was attempted before a CapTP client was configured.
+    ///
+    /// Configure the networked CapTP client via `dregg-sdk-net` (`NetClerk`)
+    /// before using the CapTP convenience methods.
+    #[error("CapTP client not configured; configure the dregg-sdk-net CapTP client first")]
     CapTpNotConfigured,
 
     /// The cipherclerk has no token matching the requested operation.

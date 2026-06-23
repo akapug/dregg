@@ -34,7 +34,7 @@ use dregg_turn::TurnReceipt;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::receipt::Receipt;
+use dregg_sdk::receipt::Receipt;
 
 /// Server-side stream filter (`?cell=…&kind=…`).
 #[derive(Clone, Debug, Default)]

@@ -30,7 +30,7 @@ use dregg_cell::AuthRequired;
 use dregg_types::CellId;
 use dregg_wire::message::WireMessage;
 
-use crate::error::SdkError;
+use dregg_sdk::error::SdkError;
 
 // =============================================================================
 // Wire outbox

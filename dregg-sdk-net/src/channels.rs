@@ -5,7 +5,7 @@
 //! A group is a CELL: the membership commitment, the key-epoch counter, and
 //! the epoch key commitment live on-cell; joins / removals / rekeys are
 //! ordinary turns under the group's installed program, riding the owner
-//! runtime's normal `.turn()` path exactly like [`crate::trustline`].
+//! runtime's normal `.turn()` path exactly like [`dregg_sdk::trustline`].
 //! Message bodies NEVER touch the chain — control plane on-cell, data plane
 //! ciphertext over any transport (mailboxes, SSE, captp store-and-forward).
 //!
@@ -89,9 +89,9 @@ use dregg_turn::Effect;
 use dregg_turn::action::{Event, symbol};
 use dregg_turn::turn::TurnReceipt;
 
-use crate::error::SdkError;
-use crate::factories::ADOPT_TURN_FEE;
-use crate::runtime::AgentRuntime;
+use dregg_sdk::error::SdkError;
+use dregg_sdk::factories::ADOPT_TURN_FEE;
+use dregg_sdk::runtime::AgentRuntime;
 
 /// Domain tag for the sealed epoch-key payload.
 const EPOCH_KEY_PAYLOAD_DOMAIN: &[u8] = b"dregg-channel-epoch-key-v1";
@@ -828,7 +828,7 @@ impl Channel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cipherclerk::AgentCipherclerk;
+    use dregg_sdk::cipherclerk::AgentCipherclerk;
     use dregg_turn::TurnError;
 
     const FUNDING: u64 = 10_000_000;

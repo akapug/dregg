@@ -24,7 +24,7 @@ use std::sync::Arc;
 use dregg_captp::FederationId;
 use dregg_captp::store_forward::generate_x25519_keypair;
 use dregg_cell::{AuthRequired, CapabilityRef, Cell, CellId, CellMode, FactoryCreationParams};
-use dregg_sdk::mailbox::{
+use dregg_sdk_net::mailbox::{
     CrankDisposition, MailboxCrank, MailboxTurnIntent, RefusalReason, RelayHttpTransport,
     seal_intent,
 };
@@ -194,7 +194,7 @@ fn offline_sealed_send_drains_executes_and_custody_receipt_checks() {
         // The executor-committed slot-5 root anchors the crank's opening.
         let ledger = b_runtime.ledger().lock().unwrap();
         let root =
-            ledger.get(&inbox_cell).unwrap().state.fields[dregg_sdk::mailbox::SENDER_SET_ROOT_SLOT];
+            ledger.get(&inbox_cell).unwrap().state.fields[dregg_sdk_net::mailbox::SENDER_SET_ROOT_SLOT];
         assert_ne!(root, [0u8; 32], "grant must commit a non-zero sender root");
     }
 

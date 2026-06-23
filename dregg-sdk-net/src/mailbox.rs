@@ -24,7 +24,7 @@
 //!   is not possible from dequeue proofs alone: enqueues that happen while
 //!   the crank sleeps legitimately move the root.)
 //! * **Execution** rides the owner runtime's ONE public turn shape:
-//!   [`AgentRuntime::turn()`](crate::AgentRuntime::turn) →
+//!   [`AgentRuntime::turn()`](dregg_sdk::AgentRuntime::turn) →
 //!   `sign()` → `submit()`. No new executor entry.
 //!
 //! ## Authorization (fail-closed)
@@ -65,10 +65,10 @@ use dregg_storage::queue::{
 };
 use dregg_turn::Effect;
 
-use crate::cipherclerk::AgentCipherclerk;
-use crate::error::SdkError;
-use crate::receipt::Receipt;
-use crate::runtime::AgentRuntime;
+use dregg_sdk::cipherclerk::AgentCipherclerk;
+use dregg_sdk::error::SdkError;
+use dregg_sdk::receipt::Receipt;
+use dregg_sdk::runtime::AgentRuntime;
 
 /// Slot index of the sender-set commitment on a CapInbox cell. Mirrors
 /// `dregg_storage_templates::cap_inbox::SENDER_SET_ROOT_SLOT` (the published
@@ -530,7 +530,6 @@ impl<'rt, T: MailboxTransport> MailboxCrank<'rt, T> {
 /// HTTP client for the `dregg-node relay` hosted-inbox routes, signing
 /// owner-authenticated requests with the agent's Ed25519 key exactly as the
 /// relay's `verify_owner_signature` expects (F-P1-1 domains).
-#[cfg(all(feature = "federation-client", feature = "network"))]
 pub struct RelayHttpTransport {
     base_url: String,
     owner_pk: [u8; 32],
@@ -539,10 +538,8 @@ pub struct RelayHttpTransport {
     client: reqwest::Client,
 }
 
-#[cfg(all(feature = "federation-client", feature = "network"))]
 pub use relay_http::ProofResponseWire;
 
-#[cfg(all(feature = "federation-client", feature = "network"))]
 mod relay_http {
     use super::*;
     use base64::Engine;

@@ -97,13 +97,11 @@
 //! }).unwrap();
 //! ```
 
-// Modules that pull tokio / dregg-wire / dregg-captp are gated so the crate
-// stays buildable on wasm32 (set `default-features = false`). Anything in
-// the always-on group below is wasm-friendly.
-#[cfg(feature = "captp")]
-pub mod captp_client;
-#[cfg(feature = "captp")]
-pub mod channels;
+// This crate is the OFFLINE CORE of the SDK: no tokio / reqwest / dregg-wire /
+// dregg-captp / dregg-federation. It builds on wasm32. The networked layer
+// (CapTP capability sharing, federation registration, the hosted-mailbox crank,
+// receipt event streams, the PIR discovery client, and the wire codec) lives in
+// the `dregg-sdk-net` crate, which depends on this one.
 pub mod beacon_cell;
 pub mod cipherclerk;
 // The threshold-seal organ (DKG group-key hashed-ElGamal) and the
@@ -114,24 +112,14 @@ pub mod cipherclerk;
 // fixture is RETIRED by this real declaration).
 pub mod council_seal;
 pub mod sealed_governance;
-#[cfg(feature = "network")]
-pub mod client;
 pub mod committed_turn;
 pub mod device_pairing;
 pub mod guardian_rotation;
-#[cfg(feature = "network")]
-pub mod discharge;
-#[cfg(feature = "network")]
-pub mod discovery;
 // `embed` houses the no-I/O `DreggEngine` (executor + ledger + token core,
-// wire-free) AND the `WireCodec` (which needs `dregg-wire`). The engine core
-// is available whenever `network` OR the lighter `embed-core` is on; the
-// `WireCodec` block inside is itself gated under `network`.
-#[cfg(any(feature = "network", feature = "embed-core"))]
+// wire-free). It is unconditional in the offline core. The networked
+// `WireCodec` over it lives in `dregg-sdk-net`.
 pub mod embed;
 pub mod error;
-#[cfg(all(feature = "federation-client", feature = "network"))]
-pub mod events;
 pub mod explain;
 pub mod factories;
 pub mod flashwell;
@@ -141,11 +129,7 @@ pub mod identity;
 pub mod job_escrow;
 // TEMP-DISABLED-FOR-DEVICE-PAIRING-VERIFY: sibling draft, Cargo deps not yet wired
 pub mod hints_onboarding;
-#[cfg(feature = "captp")]
-pub mod mailbox;
 pub mod mnemonic;
-#[cfg(feature = "captp")]
-pub mod names;
 pub mod polis;
 pub mod privacy;
 #[cfg(not(target_arch = "wasm32"))]
@@ -159,8 +143,6 @@ pub mod receipt;
 // crown to the `AgentRuntime`/`SubAgent` cap-gated executor path. Usable by ANY
 // external loop (a buildr/hermes agent) via `ToolGateway::invoke`.
 pub mod tool_gateway;
-#[cfg(feature = "federation-client")]
-pub mod remote;
 pub mod runtime;
 pub mod trustline;
 pub mod turns;
@@ -195,11 +177,6 @@ pub mod cclerk {
 /// **Noun 1**: proof-of-execution for one committed turn, with the composed
 /// STARK lazily attached. See [`receipt`].
 pub use receipt::{Receipt, TurnProof};
-
-/// The receipt nervous system: subscribe to a node's committed receipts as
-/// a `Stream` of [`Receipt`]. See [`events`].
-#[cfg(all(feature = "federation-client", feature = "network"))]
-pub use events::{NodeEvents, ReceiptFilter, ReceiptStream};
 
 /// **Noun 2**: the light-client artifact — the verdict from verifying ONE
 /// succinct whole-history aggregate (re-witnessing nothing), plus its
@@ -253,8 +230,6 @@ pub use cipherclerk::{
     DisclosureSpec, FactDisclosure, FactIndex, HeldToken, LocalDelegation, OwnedStealthNote,
     VerificationMode,
 };
-#[cfg(feature = "network")]
-pub use client::{PresentationResult, RevocationStatus, SiloClient};
 pub use dregg_token::{Attenuation, AuthRequest, AuthToken};
 
 // The factory/polis plan builders (authorized by construction: they emit
@@ -285,9 +260,9 @@ pub use sealed_governance::{
     seal_ballot, seal_bid, seal_unlinkable_ballot,
 };
 
-// The no-IO embed layer for service integration.
-#[cfg(feature = "network")]
-pub use embed::{DreggEngine, EmbedError, EngineConfig, WireCodec};
+// The no-IO embed layer for service integration. (`WireCodec` is the networked
+// face; it lives in `dregg-sdk-net`.)
+pub use embed::{DreggEngine, EmbedError, EngineConfig};
 
 // Full-turn proof prove/verify entry points + witness types the node's
 // proving pool names at root. The REST of the proof composition API is
@@ -306,42 +281,13 @@ pub use witness_artifact::{
     decode_witnessed_receipt_artifact_hex, encode_witnessed_receipt_artifact,
 };
 
-// Discharge gateway client functions.
-#[cfg(feature = "network")]
-pub use discharge::{authorize_with_discharges, extract_third_party_tickets, obtain_discharge};
-
 // Standalone credential verification the node/teasting name at root; the
 // rest lives in [`verify`].
 #[cfg(any(test, feature = "dev"))]
 pub use verify::verify_any_tier;
 pub use verify::{verify_authorization_proof, verify_committed_threshold};
 
-// Name resolution types for the petname system.
-#[cfg(feature = "captp")]
-pub use names::{
-    CipherclerkNames, EdgeNameEntry, NameError, NameProvenance, NameResolver, PetnameDb,
-    PetnameEntry, ProposedNameEntry, ResolvedName, WhoisResult,
-};
-
-// CapTP client types for capability sharing and pipelining.
-#[cfg(feature = "captp")]
-pub use captp_client::{CapTpClient, CapTpConfig, EventualRef, LiveRef};
-
-// The mailbox crank (ORGANS §2): drain a hosted inbox, execute sealed
-// turn-intents through the owner's `.turn()` path, custody-receipted by the
-// relay's existing dequeue proofs.
-#[cfg(feature = "captp")]
-pub use dregg_captp::handoff::HandoffCertificate;
-#[cfg(feature = "captp")]
-pub use dregg_captp::pipeline::PipelinedAction;
-#[cfg(feature = "captp")]
-pub use dregg_captp::uri::DreggUri;
-#[cfg(feature = "captp")]
-pub use dregg_captp::{FederationId, GroupId};
-#[cfg(all(feature = "captp", feature = "federation-client", feature = "network"))]
-pub use mailbox::RelayHttpTransport;
-#[cfg(feature = "captp")]
-pub use mailbox::{
-    CrankDisposition, CrankOutcome, CrankReport, CustodyReceipt, DeliveredMessage, MailboxCrank,
-    MailboxTransport, MailboxTurnIntent, RefusalReason, seal_intent,
-};
+// The networked surface — CapTP capability sharing + pipelining, petname
+// resolution, the hosted-mailbox crank, the silo/discharge/discovery clients,
+// the receipt event streams, and the wire codec — lives in the `dregg-sdk-net`
+// crate, which depends on this offline core.

@@ -1,7 +1,7 @@
 //! Remote turn submission (#171): build + sign a turn LOCALLY, submit the
 //! canonical signed envelope to a node over HTTP.
 //!
-//! [`RemoteRuntime`] is the remote twin of [`crate::runtime::AgentRuntime`]'s
+//! [`RemoteRuntime`] is the remote twin of [`dregg_sdk::runtime::AgentRuntime`]'s
 //! two-nouns surface: `remote.turn().transfer(..).sign().await?.submit().await?`
 //! yields a committed receipt from a NODE — the agent's keypair never leaves
 //! this process, and the node may never have seen it before.
@@ -35,9 +35,9 @@ use dregg_turn::{Action, Authorization, CallForest, Effect, Turn, TurnExecutor, 
 use dregg_types::hex_encode;
 use serde::Deserialize;
 
-use crate::cipherclerk::{AgentCipherclerk, SignedTurn};
-use crate::error::SdkError;
-use crate::raw;
+use dregg_sdk::cipherclerk::{AgentCipherclerk, SignedTurn};
+use dregg_sdk::error::SdkError;
+use dregg_sdk::raw;
 
 /// Validity horizon stamped on every remote turn: wall-clock now + one hour.
 /// A TIMESTAMP deadline (the executor enforces `current_timestamp <= valid_until`),
@@ -436,9 +436,9 @@ pub struct RemoteAuthorizedTurn<'rt> {
 
 impl RemoteAuthorizedTurn<'_> {
     /// The clerk's faithful, total explanation of exactly what was signed
-    /// (the anti-blind-signing reading; see [`crate::explain`]).
+    /// (the anti-blind-signing reading; see [`dregg_sdk::explain`]).
     pub fn explain(&self) -> String {
-        crate::explain::explain_action(&self.action)
+        dregg_sdk::explain::explain_action(&self.action)
     }
 
     /// The signed action (inspection only — `submit` consumes the turn).
