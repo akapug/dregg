@@ -41,10 +41,32 @@
 //! dark-after-revoke proves the flow without a GPU.
 
 use dregg_cell::{AuthRequired, CellId};
+use dregg_sdk::cipherclerk::AgentCipherclerk;
 use dregg_turn::action::Effect;
 use dregg_turn::turn::TurnReceipt;
 
 use crate::world::{CommitOutcome, World};
+
+/// The domain string under which a logged-in identity derives its DEFAULT value
+/// cell from its clerk — `clerk.cell_id("default")` =
+/// `derive_raw(pubkey, blake3("default"))`. This is the cell the cockpit's
+/// client-signed turns operate over by default.
+pub const DEFAULT_CELL_DOMAIN: &str = "default";
+
+/// Expand a per-identity dev label into a deterministic 64-byte seed for an
+/// [`AgentCipherclerk`]. Two independent BLAKE3 `derive_key` outputs (distinct
+/// context strings) concatenated → the full 64-byte SDK seed. Fixed + per-label,
+/// so the SAME label always reconstructs the SAME clerk (and thus the same
+/// pubkey / root cell) across launches. A DEV seed — honest convenience, NOT
+/// production key custody.
+fn dev_seed(label: &str) -> [u8; 64] {
+    let lo = blake3::derive_key("deos-dev-identity-v1", label.as_bytes());
+    let hi = blake3::derive_key("deos-dev-identity-v1-hi", label.as_bytes());
+    let mut seed = [0u8; 64];
+    seed[..32].copy_from_slice(&lo);
+    seed[32..].copy_from_slice(&hi);
+    seed
+}
 
 /// The fixed root token under which a principal's identity cell is derived. The
 /// identity cell = `derive_raw(pubkey, ROOT_TOKEN)` — the content-address of the
@@ -156,9 +178,40 @@ pub struct Session {
     /// The receipts the login ceremony left (mint + per-entry grant) — the
     /// session's verifiable lifecycle on the ledger.
     pub receipts: Vec<TurnReceipt>,
+    /// The logged-in identity's 64-byte DEV signing seed, if known. The cockpit
+    /// rebuilds the identity's [`AgentCipherclerk`] from this to CLIENT-SIGN turns
+    /// (see [`Session::user_clerk`]). `None` for a session reconstructed from a
+    /// durable record (which carries only the public identity, not the seed) — such
+    /// a session can render + revoke but cannot client-sign until re-derived. A
+    /// dev seed, NOT production key custody.
+    pub signing_seed: Option<[u8; 64]>,
 }
 
 impl Session {
+    /// Rebuild the logged-in identity's signing clerk to CLIENT-SIGN turns, if this
+    /// session carries the dev seed. `AgentCipherclerk` is NOT `Clone`, so it is
+    /// rebuilt from the stored seed on demand (cheap + deterministic). Returns
+    /// `None` for a session restored from a durable record (no seed carried).
+    pub fn user_clerk(&self) -> Option<AgentCipherclerk> {
+        self.signing_seed.map(AgentCipherclerk::from_seed)
+    }
+
+    /// The logged-in identity's DEFAULT value cell — `clerk.cell_id("default")` =
+    /// `derive_raw(pubkey, blake3("default"))` — if the signing seed is carried.
+    /// The cell the cockpit's client-signed turns operate over by default.
+    pub fn user_default_cell(&self) -> Option<CellId> {
+        self.user_clerk().map(|c| c.cell_id(DEFAULT_CELL_DOMAIN))
+    }
+
+    /// Attach the logged-in identity's DEV signing seed to this session so the
+    /// cockpit can client-sign turns. The grant ceremony only knows the proven
+    /// principal (a pubkey); the caller that holds the picked [`DemoIdentity`]
+    /// threads the seed in here (builder style). A dev seed, NOT production custody.
+    pub fn with_signing_seed(mut self, seed: [u8; 64]) -> Self {
+        self.signing_seed = Some(seed);
+        self
+    }
+
     /// Does the session currently reach `target` in the live ledger? The WM
     /// uses this to decide what to render; after logout it is false for every
     /// session target (the tree is dark).
@@ -314,6 +367,11 @@ impl LoginManager {
             root_cell,
             granted,
             receipts,
+            // The ceremony knows only the proven principal (a pubkey), not the
+            // secret seed. The signing seed is attached by the caller that holds
+            // the picked `DemoIdentity` (see `Session::with_signing_seed` /
+            // `login.rs::login_as`).
+            signing_seed: None,
         })
     }
 
@@ -411,6 +469,11 @@ impl SessionRecord {
             root_cell: self.root_cell,
             granted: self.granted.clone(),
             receipts: Vec::new(),
+            // The durable record carries only the PUBLIC identity (pubkey), never
+            // the secret seed — so a resumed session cannot client-sign until the
+            // caller re-attaches the seed from the picked identity. Fail-closed: a
+            // tampered record cannot manufacture a signing key.
+            signing_seed: None,
         }
     }
 }
@@ -709,15 +772,30 @@ pub enum IdentityKind {
 }
 
 /// A **demo seed identity** the login surface offers to pick (the held-key
-/// stand-in: selecting it is "I possess this key"). Each carries a fixed pubkey
-/// (so its root cell is stable across logins) and the kind that selects its
-/// template. The live manager replaces the pick with a real key challenge.
+/// stand-in: selecting it is "I possess this key"). Each is backed by a REAL
+/// Ed25519 key reconstructable from `dev_seed`: `pubkey` is the actual public key
+/// of `AgentCipherclerk::from_seed(dev_seed)`, so the identity can CLIENT-SIGN
+/// turns (it is not a fabricated stand-in pubkey). The `kind` selects its
+/// template. The live manager replaces the pick with a real key challenge; the
+/// dev seed is honest convenience, NOT production key custody.
+///
+/// NOTE: because each pubkey is now the REAL key (not the old fabricated
+/// `[0xE3;32]`/`[0x67;32]`/`[0xA6;32]` bytes), every identity's derived
+/// `root_cell` (= `derive_raw(pubkey, ROOT_TOKEN)`) is DIFFERENT from before. Any
+/// session image persisted under the old fabricated pubkeys will NOT resume — a
+/// fresh per-user image is expected on first login with the real keys.
 #[derive(Clone, Debug)]
 pub struct DemoIdentity {
     /// The human-readable name shown in the login picker.
     pub name: &'static str,
-    /// The identity's public key — its root cell is `derive_raw(pubkey, ROOT_TOKEN)`.
+    /// The identity's public key — the REAL Ed25519 public key of the clerk
+    /// rebuilt from `dev_seed`. Its root cell is `derive_raw(pubkey, ROOT_TOKEN)`.
     pub pubkey: [u8; 32],
+    /// The deterministic 64-byte DEV seed backing this identity's signing key.
+    /// `AgentCipherclerk::from_seed(dev_seed)` rebuilds the exact clerk whose
+    /// public key is `pubkey`. A dev convenience (NOT production key custody) —
+    /// honest because the resulting key really is the identity's signing key.
+    pub dev_seed: [u8; 64],
     /// User vs agent — selects the `CapTemplate` granted on login.
     pub kind: IdentityKind,
     /// A one-line description of what this inhabitant's session is born holding.
@@ -725,9 +803,38 @@ pub struct DemoIdentity {
 }
 
 impl DemoIdentity {
+    /// Construct a demo identity from a fixed dev `label`: derive the 64-byte dev
+    /// seed, rebuild the clerk, and take its REAL public key as the identity's
+    /// pubkey. The same label always reconstructs the same key (and root cell).
+    fn from_label(name: &'static str, label: &str, kind: IdentityKind, blurb: &'static str) -> Self {
+        let dev_seed = dev_seed(label);
+        let pubkey = AgentCipherclerk::from_seed(dev_seed).public_key().0;
+        DemoIdentity {
+            name,
+            pubkey,
+            dev_seed,
+            kind,
+            blurb,
+        }
+    }
+
     /// The root identity cell this demo identity logs into.
     pub fn root_cell(&self) -> CellId {
         CellId::derive_raw(&self.pubkey, &ROOT_TOKEN)
+    }
+
+    /// Rebuild this identity's REAL signing clerk from its dev seed. The cockpit
+    /// uses this to CLIENT-SIGN turns as the logged-in identity. `AgentCipherclerk`
+    /// is NOT `Clone`, so we rebuild from the seed on demand (cheap + deterministic).
+    pub fn clerk(&self) -> AgentCipherclerk {
+        AgentCipherclerk::from_seed(self.dev_seed)
+    }
+
+    /// This identity's DEFAULT value cell — `clerk.cell_id("default")` =
+    /// `derive_raw(pubkey, blake3("default"))`. The cell the cockpit's client-signed
+    /// turns operate over by default. Stateless: the same key always derives it.
+    pub fn user_default_cell(&self) -> CellId {
+        self.clerk().cell_id(DEFAULT_CELL_DOMAIN)
     }
 
     /// The `CapTemplate` this identity's session is born holding, over `anchors`.
@@ -741,28 +848,29 @@ impl DemoIdentity {
 
 /// The deos image's seed identities — the login picker's roster. Two human users
 /// (each gets the full desktop) and one agent inhabitant (Hermes, cap-bounded to
-/// its tool surface — the kill-switch-on-logout polis frame). A real deployment
-/// authenticates keys; these are the demo's held-key stand-ins.
+/// its tool surface — the kill-switch-on-logout polis frame). Each is backed by a
+/// REAL Ed25519 key reconstructable from a fixed per-identity dev seed (so the
+/// cockpit can client-sign as them); a real deployment authenticates live keys.
 pub fn demo_identities() -> Vec<DemoIdentity> {
     vec![
-        DemoIdentity {
-            name: "ember",
-            pubkey: [0xE3u8; 32],
-            kind: IdentityKind::User,
-            blurb: "a human user — full home cell + a launchable app (attenuatable)",
-        },
-        DemoIdentity {
-            name: "guest",
-            pubkey: [0x67u8; 32],
-            kind: IdentityKind::User,
-            blurb: "a second human user — the same desktop, their own root cell",
-        },
-        DemoIdentity {
-            name: "Hermes (agent)",
-            pubkey: [0xA6u8; 32],
-            kind: IdentityKind::Agent,
-            blurb: "an agent inhabitant — ONLY its tool surface, no home cell, no re-delegate",
-        },
+        DemoIdentity::from_label(
+            "ember",
+            "ember",
+            IdentityKind::User,
+            "a human user — full home cell + a launchable app (attenuatable)",
+        ),
+        DemoIdentity::from_label(
+            "guest",
+            "guest",
+            IdentityKind::User,
+            "a second human user — the same desktop, their own root cell",
+        ),
+        DemoIdentity::from_label(
+            "Hermes (agent)",
+            "hermes",
+            IdentityKind::Agent,
+            "an agent inhabitant — ONLY its tool surface, no home cell, no re-delegate",
+        ),
     ]
 }
 

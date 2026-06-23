@@ -139,6 +139,13 @@ impl LoginSurface {
                 return;
             }
         };
+        // CARRY THE SIGNING CAPABILITY — attach the picked identity's DEV signing
+        // seed to the session so the cockpit can CLIENT-SIGN turns as the logged-in
+        // identity (`session.user_clerk()` / `session.user_default_cell()`). The
+        // grant ceremony / durable resume know only the proven principal (a pubkey);
+        // the seed is re-derived here from the identity the user actually picked. A
+        // dev seed — honest convenience, NOT production key custody.
+        let session = session.with_signing_seed(identity.dev_seed);
 
         // Swap the shared world to the principal's durable image — the cockpit the
         // session shell builds renders THIS image (resumed or freshly provisioned).

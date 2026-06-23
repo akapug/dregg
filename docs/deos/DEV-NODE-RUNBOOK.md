@@ -218,6 +218,53 @@ LOCAL `World` (`EditorPane::firmament_over` over a `WorldSpine`); hooking
 keystroke-save is the remaining wire (the bake proves the full submit→commit path
 end to end; the interactive hook reuses `UnifiedBootView::save_to_node`).
 
+### Two write models: operator-signed vs CLIENT-signed (the "corporate account")
+
+The write-back above is **operator-signed**: the node signs the turn as ITSELF
+(its own cipherclerk), so the agent is the node operator's cell. That is the right
+model for "the node IS the user" (a personal/solo deos).
+
+The other model — **client-signed** — is for one node hosting MANY sovereign
+identities (a corporate account, a family, a co-op): the LOGGED-IN USER's OWN cell
+is the agent, signed under the USER's OWN key. The node validates + orders but
+never impersonates. The node already speaks this: `POST /turns/submit` (PLURAL,
+octet-stream `postcard(SignedTurn)`) VERIFIES the client signature, derives the
+agent as `derive_raw(user_pubkey, H("default"))`, requires the signer to BE that
+agent, then runs the same verified executor.
+
+The cockpit holds a real per-identity signing key (a dev-seed `AgentCipherclerk`;
+`session.user_clerk()` / `demo_identities()[*].clerk()`), so it can client-sign.
+The `--render-client-signed-turn` bake proves the whole chain by running:
+
+```sh
+# node MUST run with --enable-faucet (a brand-new user cell must be materialized
+# before its first turn — a turn cannot conjure its own agent cell).
+./starbridge-v2/target/debug/starbridge-v2 \
+  --render-client-signed-turn /tmp/deos-client-signed \
+  --node http://127.0.0.1:8775
+```
+
+It (1) reads `/status` and derives the node's executor federation id
+(`blake3(node_pubkey)` for an unconfigured solo node — the domain the executor
+verifies each action signature against), (2) faucet-materializes the user's cell at
+balance 0, (3) builds + signs a `SetField` turn AS THE USER over that federation
+id (stamping `valid_until` so it stays on the verified Lean producer), (4) submits
+it to `/turns/submit`, and (5) **HARD-ASSERTS** three things:
+
+* node `/api/receipts` grew `N -> N+1`,
+* the committed receipt's `agent` == the **USER's** own cell, and
+* that agent **!=** the node OPERATOR's cell.
+
+That triple (`ClientSignedProof::proves_user_authority`) is the proof that the node
+committed a turn under the CLIENT's authority, not its own. The bake also re-syncs
+the live-node pane and captures `<out>.png`.
+
+Two open follow-ups (named, small): a *configured* federation (not solo) needs the
+federation id surfaced on `/status` (today the bake derives `blake3(node_pubkey)`,
+correct only for unconfigured-solo); and a user's SECOND client-signed turn needs
+the live nonce (read `/api/cell/{id}`) since `make_turn` hardcodes `nonce:0` (fine
+for the first turn the slice proves).
+
 ## A REAL two-node federation (n=2, proven by running)
 
 This stands up two `dregg-node` processes that form ONE federation (committee of

@@ -247,6 +247,24 @@ fn main() {
                 }
             }
         }
+
+        // `--render-client-signed-turn <out>`: the CLIENT-SIGNED turn proof — the
+        // logged-in user's OWN cell signs a turn the node commits UNDER THE USER's
+        // authority (not the operator). Stands up the full custody→sign→submit→commit
+        // chain against a running --node and ASSERTS the new receipt's agent == the
+        // user's cell (not the operator's). Pass `--node <url>`.
+        if let Some(out) = render_client_signed_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1900.0, 1000.0));
+            let node = node_url_arg(&args);
+            let cmd = self_hosting_cmd_arg(&args);
+            match render_client_signed_turn_headless(&out, w, h, node, cmd) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-client-signed-turn FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     // `--render-login <out>`: render the LOGIN CEREMONY surface offscreen (the
@@ -859,6 +877,31 @@ fn render_unified_boot_arg(args: &[String]) -> Option<String> {
             return it.next().cloned();
         }
         if let Some(rest) = a.strip_prefix("--render-unified-boot=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--render-client-signed-turn <out>` (or `=<out>`) — the CLIENT-SIGNED
+/// turn bake output base path (the "corporate account" proof: the logged-in user's
+/// OWN cell signs a turn the node commits under the user's authority). `None` when
+/// absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "dev-surfaces",
+    feature = "firmament",
+    feature = "embedded-executor",
+    feature = "live-node"
+))]
+fn render_client_signed_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-client-signed-turn" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-client-signed-turn=") {
             return Some(rest.to_string());
         }
     }
@@ -2045,6 +2088,169 @@ fn render_unified_boot_headless(
              (in-band submit reported {wb_before} -> {wb_after}; the public read may lag)."
         );
     }
+    Ok(())
+}
+
+/// THE CLIENT-SIGNED TURN BAKE — the "corporate account" proof, by running.
+///
+/// Stands up the unified view over a real running node, then drives a turn signed
+/// by the LOGGED-IN USER's OWN ed25519 key (a demo identity's real dev-seed
+/// cipherclerk — the same custody `session.user_clerk()` exposes). The node
+/// verifies the user signature, derives the agent as the USER's cell, commits it
+/// UNDER THE USER's authority, and orders it. The bake HARD-ASSERTS:
+///
+///   * the node `/api/receipts` grew `N -> N+1`,
+///   * the new receipt's agent == the USER's own cell, and
+///   * that agent != the node OPERATOR's cell.
+///
+/// That triple is the load-bearing proof that one node hosts many sovereign
+/// identities, each signing their own turns — the node never impersonates. Then it
+/// re-syncs + captures `<out>.png`.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "dev-surfaces",
+    feature = "firmament",
+    feature = "embedded-executor",
+    feature = "live-node"
+))]
+fn render_client_signed_turn_headless(
+    out: &str,
+    w: f32,
+    h: f32,
+    node_url: Option<String>,
+    cmd: Option<(String, Vec<String>)>,
+) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    let node_url = node_url.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--render-client-signed-turn needs a running node: pass --node <url> \
+             (e.g. --node http://127.0.0.1:8775; the node must run with --enable-faucet \
+             so the user cell can be materialized; see docs/deos/DEV-NODE-RUNBOOK.md)"
+        )
+    })?;
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+    cx.allow_parking();
+
+    let (world, _anchors) = world::demo_world();
+    let shared = Rc::new(RefCell::new(world));
+    let cmd = cmd.unwrap_or_else(|| ("cargo".to_string(), vec!["--version".to_string()]));
+
+    let window = {
+        let shared = shared.clone();
+        let node_url = node_url.clone();
+        let cmd = cmd.clone();
+        cx.open_window(size(px(w), px(h)), |window, cx| {
+            starbridge_v2::unified_boot::build_root(shared, Some(node_url), Some(cmd), window, cx)
+                .expect("client-signed-turn root mount")
+        })?
+    };
+
+    cx.run_until_parked();
+
+    // (1) ASSERT the attach is LIVE — reachable + lean producer.
+    let lean = window.read_with(&cx, |v, _| v.node_lean_producer())?;
+    match lean {
+        Some(true) => {}
+        Some(false) => anyhow::bail!(
+            "NODE PROOF FAILED: node {node_url} is reachable but NOT running the lean producer"
+        ),
+        None => anyhow::bail!(
+            "NODE PROOF FAILED: could not snapshot node {node_url} (unreachable / not listening)"
+        ),
+    }
+
+    // (2) Build the LOGGED-IN USER's signing key — a real demo identity's dev-seed
+    // cipherclerk (the same custody the live login threads into `session.user_clerk`).
+    // This is a genuine sovereign user key the cockpit holds; the node never sees it.
+    let identity = starbridge_v2::session::demo_identities()
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no demo identity to sign as"))?;
+    let clerk = identity.clerk();
+    let user_name = identity.name;
+
+    // (3) Drive the CLIENT-SIGNED turn through the node: faucet-materialize the user
+    // cell, sign a SetField AS THE USER over the node's federation id, submit, assert.
+    let fingerprint = "777"; // a small content fingerprint into slot 7
+    let proof = window
+        .read_with(&cx, |v, _| v.save_to_node_client_signed(&clerk, 7, fingerprint))?
+        .ok_or_else(|| anyhow::anyhow!("no node attached for the client-signed turn"))?
+        .map_err(|e| {
+            anyhow::anyhow!("CLIENT-SIGNED TURN FAILED: {e:#}")
+        })?;
+
+    if !proof.proves_user_authority() {
+        anyhow::bail!(
+            "CLIENT-SIGNED PROOF FAILED: receipts {before}->{after}, receipt agent {agent}, \
+             user cell {user}, operator cell {op} — the committed turn's agent is NOT the \
+             user's own cell (or the count did not grow / matched the operator)",
+            before = proof.before,
+            after = proof.after,
+            agent = proof.receipt_agent,
+            user = proof.user_cell,
+            op = proof.operator_cell,
+        );
+    }
+
+    // (4) Re-sync so the live-node pane reflects the new user receipt; capture.
+    window.update(&mut cx, |v, _window, _cx| v.refresh_node())?;
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+
+    println!("OK headless CLIENT-SIGNED-TURN render -> {out}.png ({ww}x{hh}, logical {w}x{h})");
+    println!(
+        "  attached to {node_url} — lean producer LIVE. Signed AS demo identity '{user_name}' \
+         (the cockpit holds the user's OWN dev-seed key; the node never sees it)."
+    );
+    println!(
+        "  CLIENT-SIGNED COMMIT: node receipts {} -> {} (turn {}).",
+        proof.before,
+        proof.after,
+        &proof.turn_hash.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "  AGENT IDENTITY (the load-bearing proof): committed receipt agent = {} (the USER's own cell)",
+        &proof.receipt_agent.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "    · == user cell   {}…  ✓",
+        &proof.user_cell.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "    · != operator    {}…  ✓ (the node did NOT impersonate — it validated + ordered \
+         a turn the USER signed)",
+        &proof.operator_cell.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "    · node-reported signer = {}…  (the user's pubkey, verified by the node before commit)",
+        &proof.signer.chars().take(16).collect::<String>(),
+    );
+    println!(
+        "  => the logged-in user's OWN cell signed a turn the node committed under the USER's \
+         authority. The 'corporate account' model, proven by running."
+    );
     Ok(())
 }
 

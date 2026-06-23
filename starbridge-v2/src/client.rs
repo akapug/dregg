@@ -16,8 +16,8 @@
 //! backend they are bound to.
 
 use crate::model::{
-    BlockInfo, CellListEntry, FederationInfo, NodeStatus, ReceiptEvent, SubmitTurnRequest,
-    SubmitTurnResponse, TurnActionSpec, TurnEffectSpec, UnlockResponse,
+    BlockInfo, CellListEntry, FederationInfo, NodeStatus, ReceiptEvent, SubmitSignedTurnResponse,
+    SubmitTurnRequest, SubmitTurnResponse, TurnActionSpec, TurnEffectSpec, UnlockResponse,
 };
 
 /// Where the shell gets its data.
@@ -227,6 +227,68 @@ impl NodeClient {
             }
         }
     }
+
+    /// SUBMIT a CLIENT-SIGNED turn to the node (`POST /turns/submit`, plural). The
+    /// turn is a [`dregg_sdk::SignedTurn`] the cockpit signed under its OWN ed25519
+    /// key (the node never holds it — distinct from the operator [`Self::submit_turn`]
+    /// path, where the node signs as its own cipherclerk). The body is the
+    /// postcard-encoded `SignedTurn` (`application/octet-stream`); the node verifies
+    /// the signature, runs the turn through the same `gateOK`/conservation/authority
+    /// gates, and commits it under the CLIENT'S authority. A refusal is reported
+    /// IN-BAND ([`SubmitSignedTurnResponse::accepted`] `= false`, `error: …`).
+    ///
+    /// Requires the operator bearer token (`require_auth` gates this route too) AND
+    /// the node be unlocked: call [`Self::unlock`] and bind it with
+    /// [`Self::with_bearer`], or use [`Self::http_authed`]. The client cell should
+    /// already EXIST (its first turn can't materialize it) — call
+    /// [`Self::faucet_materialize`] once on a fresh key.
+    #[cfg(feature = "embedded-executor")]
+    pub fn submit_signed_turn(
+        &self,
+        signed: &dregg_sdk::SignedTurn,
+    ) -> anyhow::Result<SubmitSignedTurnResponse> {
+        match self {
+            NodeClient::Mock => Ok(SubmitSignedTurnResponse {
+                accepted: true,
+                turn_hash: Some("mock-signed-receipt".into()),
+                proof_status: Some("not_required".into()),
+                ..Default::default()
+            }),
+            NodeClient::Http { base_url, bearer } => {
+                let bytes = postcard::to_stdvec(signed)?;
+                http_post_octet(base_url, "/turns/submit", bearer.as_deref(), bytes)
+            }
+        }
+    }
+
+    /// MATERIALIZE a recipient cell at balance 0 via the node's faucet
+    /// (`POST /api/faucet` with `amount: 0` + the cell's `public_key`), so a
+    /// brand-new client cell `derive_raw(pubkey, blake3("default"))` EXISTS before
+    /// its first signed turn (a turn can't conjure its own agent cell). Returns the
+    /// faucet's `success` truth. The faucet route is PUBLIC (no bearer) but requires
+    /// the node be started with `--enable-faucet`. Mock returns `Ok(true)`.
+    pub fn faucet_materialize(
+        &self,
+        recipient_hex: &str,
+        public_key_hex: &str,
+    ) -> anyhow::Result<bool> {
+        match self {
+            NodeClient::Mock => Ok(true),
+            NodeClient::Http { base_url, .. } => {
+                let body = serde_json::json!({
+                    "recipient": recipient_hex,
+                    "amount": 0u64,
+                    "public_key": public_key_hex,
+                });
+                let resp: serde_json::Value =
+                    http_post_json(base_url, "/api/faucet", None, &body)?;
+                Ok(resp
+                    .get("success")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false))
+            }
+        }
+    }
 }
 
 /// Blocking JSON GET. The live shell drives reads on a background thread (the
@@ -269,6 +331,38 @@ fn http_post_json<T: serde::Serialize, R: serde::de::DeserializeOwned>(
     Ok(serde_json::from_str(&body)?)
 }
 
+/// Blocking OCTET-STREAM POST returning a typed JSON response, with an optional
+/// `Bearer` operator token. The body is a raw `Vec<u8>` (a postcard-encoded
+/// `SignedTurn`) sent as `application/octet-stream`.
+///
+/// Like [`http_post_json`], the node reports turn refusals IN-BAND with a 200 body
+/// (`accepted: false`), so we do NOT `error_for_status` on a success — only a
+/// genuine transport/HTTP failure (401/403/5xx) becomes an `Err`, with the body
+/// text folded in.
+#[cfg(feature = "live-node")]
+fn http_post_octet<R: serde::de::DeserializeOwned>(
+    base: &str,
+    path: &str,
+    bearer: Option<&str>,
+    body: Vec<u8>,
+) -> anyhow::Result<R> {
+    let url = format!("{base}{path}");
+    let mut builder = reqwest::blocking::Client::new()
+        .post(&url)
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(body);
+    if let Some(token) = bearer {
+        builder = builder.bearer_auth(token);
+    }
+    let resp = builder.send()?;
+    let status = resp.status();
+    let text = resp.text()?;
+    if !status.is_success() {
+        anyhow::bail!("POST {path} -> HTTP {status}: {text}");
+    }
+    Ok(serde_json::from_str(&text)?)
+}
+
 // Without `live-node` (no reqwest), an `Http` arm can't reach the network. These
 // stubs keep `NodeClient` compiling (the `Mock` backend stays fully functional);
 // an `Http` call returns an honest "feature off" error rather than failing to
@@ -284,6 +378,16 @@ fn http_post_json<T: serde::Serialize, R: serde::de::DeserializeOwned>(
     _path: &str,
     _bearer: Option<&str>,
     _req: &T,
+) -> anyhow::Result<R> {
+    anyhow::bail!("live-node feature is off (no reqwest); only NodeClient::Mock is available")
+}
+
+#[cfg(not(feature = "live-node"))]
+fn http_post_octet<R: serde::de::DeserializeOwned>(
+    _base: &str,
+    _path: &str,
+    _bearer: Option<&str>,
+    _body: Vec<u8>,
 ) -> anyhow::Result<R> {
     anyhow::bail!("live-node feature is off (no reqwest); only NodeClient::Mock is available")
 }

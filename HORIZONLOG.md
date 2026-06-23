@@ -8,6 +8,60 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## ✅ CLIENT-SIGNED TURN — the logged-in user's OWN cell signs (the "corporate account" model), by running (2026-06-23)
+The cockpit can now submit a turn signed by the LOGGED-IN USER's own ed25519 key, where
+the node commits it UNDER THE USER's authority (NOT the operator). One node hosts many
+sovereign identities; it validates + orders but never impersonates. Proven by running
+(`--render-client-signed-turn`): node receipts **1 → 2**, committed receipt agent ==
+`d51ff43c…` (the user 'ember's own cell) AND `!= 3519624224…` (the operator cell);
+node-verified signer == the user's pubkey. Independent curl confirms head agent + executor_signed.
+Wire: cockpit reads `/status` → derives node executor federation id `blake3(node_pubkey)`
+(unconfigured-solo) → faucet-materializes the user cell (`amount:0`, a turn can't conjure its
+agent) → reads the node's receipt-chain head and stamps it as `previous_receipt_hash` (the
+executor requires it) → `AgentCipherclerk::make_action/make_turn/sign_turn` over that fed-id →
+`POST /turns/submit` (octet-stream postcard SignedTurn; node verifies sig, derives agent ==
+signer's cell, runs the SAME verified executor). Code: `session.rs` (`DemoIdentity.dev_seed` +
+`clerk()`; `Session::{user_clerk,user_default_cell,with_signing_seed}` — real per-identity dev-seed
+keys, the old fabricated pubkeys are GONE so root_cells changed), `login.rs` (threads the seed),
+`client.rs` (`submit_signed_turn`, `faucet_materialize`, `http_post_octet`), `model` (`SubmitSignedTurnResponse`),
+`unified_boot.rs` (`save_to_node_client_signed` + `ClientSignedProof::proves_user_authority`),
+`main.rs` (the bake). Screenshot `deos-client-signed-turn.png`. Operator-path regression (the
+prior write-back) re-ran green on the same node (receipts 2 → 3).
+TWO follow-ups (named, small): (1) a CONFIGURED federation needs the federation_id surfaced on
+`/status` (today derived `blake3(node_pubkey)`, correct only unconfigured-solo); (2) a user's
+2ND client-signed turn needs the live nonce from `/api/cell/{id}` (`make_turn` hardcodes nonce:0,
+fine for the first turn). Also still open: the INTERACTIVE editor save (vs the bake) — the editor
+pane is architecturally isolated from `LiveNode` (`cockpit/mod.rs:698`); hooking `deos-zed`'s
+in-editor save to `save_to_node{,_client_signed}` is the remaining wire.
+
+## ⚑ LIGHT-CLIENT FLAG-DAY — composed full-turn now binds the WIDE 8-felt commit (the 31-bit floor close) (2026-06-23)
+The #1-precious ~31-bit light-client floor is CLOSED for the NORMAL (owner-authorized) effect core.
+The SDK full-turn producer (`sdk/src/full_turn_proof.rs::prove_cohort_run_chain`) now emits WIDE legs
+via `prove_effect_vm_rotated_wide` (the 8-felt ~124-bit commit at the leg's LAST 16 PIs), and the
+light-client verifier (`verify_effect_vm_rotated_with_cutover` → iterates `WIDE_REGISTRY_STAGED_TSV`;
+`verify_full_turn_bound` → binds the 8-felt commit endpoints+adjacency, signature changed `BabyBear`
+→ `[BabyBear; 8]`). New `RotationTurnWitness::wide_commit_anchors(initial, effects, before_nullifiers)`
+re-derives the trusted anchors GENERATE-ONLY (transfer-shape / record-pin / note-spend / note-create
+families). Proven: `sdk/tests/sovereign_rotated_wide.rs::flagday_wide_full_turn_proves_and_light_client_verifies_at_124_bit`
+(honest wide prove+verify + forged-8-felt reject) and `::flagday_rejects_one_felt_v3_full_turn_leg`
+(a 1-felt V3 transfer leg is REJECTED post-cutover). `cargo build -p dregg-sdk -p dregg-turn -p dregg-node` GREEN.
+
+**RESIDUALS (named):**
+1. **The cap-open tail stays at 1-felt.** The 11 V3-only `…CapOpen…`/`…WriteCapOpen…`/`heapWrite`
+   descriptors have NO wide twin in `WIDE_REGISTRY_STAGED_TSV`. The verifier FALLS BACK to V3 for
+   CAP-OPEN members only (a plain normal narrow leg is filtered out → rejected, so the normal-effect
+   floor is genuinely closed), binding their 1-felt commit (slot-0 broadcast). So a **capability-gated
+   turn** (`prove_and_verify_finalized_turn_capability_holder`, which threads `cap_membership`) is the
+   residual ~31-bit waist. CLOSURE: emit the wide cap-open descriptors (Lean `v3RegistryCapOpenWide`
+   extension) + route the cap-open producer/anchor wide. Until then the node cap path passes the
+   1-felt-in-slot-0 anchor (`wide_from_felt`), so honest cap turns still verify.
+2. **`wide_commit_anchors` fails-closed on the distinct-geometry families** (CreateCell / factory /
+   spawn / setFieldDyn / Custom) — they thread extra grow-gate/V1Face witness the SDK chained
+   full-turn path doesn't currently carry. They are NOT on that path today; a caller reaching one gets
+   a precise `InvalidWitness` NAMED error, not a silent wrong anchor.
+3. **VK re-pin / descriptor-drift:** no descriptor JSON or `*_FP` changed (Rust-only routing flip), so
+   `scripts/check-descriptor-drift.sh` is unaffected; the wide registry was already staged.
+
 ## ✅ MEMBRANE FULL LOOP — the killer primitive RUNS cross-user, ONE process, no fixture shirk (2026-06-23)
 The "screenshot a moment → carry over real Matrix → rehydrate into a drivable fork →
 drive a real turn → stitch back sound" loop now runs END-TO-END in a SINGLE process,
