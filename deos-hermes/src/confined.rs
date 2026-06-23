@@ -237,7 +237,11 @@ pub fn stand_in_acp_peer(
 
 /// Run the four sandbox probes (mirror of `tests/process_sandbox.rs`) and fold
 /// the result into the probe bitmask. Runs INSIDE the confined child.
-fn run_sandbox_probes() -> i32 {
+///
+/// Public so the [`crate::mcp_server`] confined-`terminal` body can prove the
+/// shell ran in the container (ambient-authority probes denied) from inside its
+/// own PD, reusing the SAME teeth the stand-in agent reports.
+pub fn run_sandbox_probes() -> i32 {
     let mut v = 0;
     if !can_open("/etc/passwd") {
         v |= probe::OPEN_DENIED;

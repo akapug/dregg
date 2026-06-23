@@ -329,6 +329,12 @@ pub struct AcpClient<'rt, P: AcpPeer> {
     /// The records of every `run_js` the hook executed this run (the brain's
     /// hands-on-glass tape — the scripts it chose + the receipts they landed).
     js_runs: Vec<JsRunRecord>,
+    /// The `mcpServers` deos registers on `session/new` — the model's tool
+    /// source. When this carries the dregg confined MCP server (and ONLY it), the
+    /// model has no unconfined tool path: every tool it calls (`run_js`,
+    /// `terminal`) routes to that server (the dregg sandbox). Empty by default
+    /// (the historical `session/new` with no extra tool sources).
+    mcp_servers: Vec<Value>,
 }
 
 impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
@@ -342,7 +348,39 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             clock: start_clock,
             run_js_hook: None,
             js_runs: Vec::new(),
+            mcp_servers: Vec::new(),
         }
+    }
+
+    /// Register the dregg confined stdio MCP server as the model's tool source on
+    /// `session/new` — the DEEP-INTEGRATION wire. `command`/`args`/`env` describe
+    /// the binary Hermes spawns (e.g. `deos-hermes mcp-server`); once registered,
+    /// the model's tools are exactly the ones THAT server advertises (`run_js`,
+    /// `terminal`), so every tool-call routes through the dregg sandbox. Builder
+    /// style; call once with the dregg server (and ONLY it) for full confinement.
+    ///
+    /// The shape is the ACP `McpServerStdio` (`acp_adapter/server.py
+    /// ::_register_session_mcp_servers` consumes `{name, command, args, env}`).
+    pub fn with_dregg_mcp_server(
+        mut self,
+        name: &str,
+        command: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        self.mcp_servers.push(json!({
+            "name": name,
+            "command": command,
+            "args": args,
+            "env": env.iter().map(|(n, v)| json!({ "name": n, "value": v })).collect::<Vec<_>>(),
+        }));
+        self
+    }
+
+    /// The `mcpServers` deos will register on `session/new` (the model's tool
+    /// source). Empty unless [`AcpClient::with_dregg_mcp_server`] registered one.
+    pub fn mcp_servers(&self) -> &[Value] {
+        &self.mcp_servers
     }
 
     /// Install a `run_js` execution hook (the brain's HANDS ON THE GLASS). With it
@@ -362,6 +400,12 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
     /// The gateway (post-run, for the mandate inspector).
     pub fn gateway(&self) -> &HermesGateway<'rt> {
         &self.gateway
+    }
+
+    /// The peer (post-run) — e.g. to read what a [`crate::MockHermesPeer`]
+    /// captured (the `mcpServers` deos registered on `session/new`).
+    pub fn peer(&self) -> &P {
+        &self.peer
     }
 
     /// Consume the client, returning the (spent) gateway — for a caller that
@@ -576,10 +620,14 @@ impl<'rt, P: AcpPeer> AcpClient<'rt, P> {
             sink,
         )?;
 
-        // 2. session/new — open a session in `cwd`.
+        // 2. session/new — open a session in `cwd`, registering deos's confined
+        //    MCP server(s) as the model's tool source. When the dregg server is
+        //    registered (and ONLY it), the model's tools are exactly the ones it
+        //    advertises (`run_js`, `terminal`) — every tool-call routes through
+        //    the dregg sandbox; the model has no unconfined tool path.
         let new_session = self.request_blocking(
             "session/new",
-            json!({ "cwd": cwd, "mcpServers": [] }),
+            json!({ "cwd": cwd, "mcpServers": self.mcp_servers.clone() }),
             &mut run,
             sink,
         )?;

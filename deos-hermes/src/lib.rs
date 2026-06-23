@@ -68,6 +68,7 @@ pub mod cockpit_surface;
 pub mod confined;
 pub mod grant_registry;
 pub mod mandate;
+pub mod mcp_server;
 #[cfg(feature = "js-agent")]
 pub mod run_js;
 #[cfg(feature = "js-agent")]
@@ -84,6 +85,7 @@ pub use acp_client::{
 };
 pub use bridge::HermesGateway;
 pub use grant_registry::{GrantRegistry, MandateKey};
+pub use mcp_server::{ConfinedToolResult, McpServer, McpToolHost, DREGG_TOOL_NAMES};
 
 // Re-export the grounding SDK types a HOST needs to construct a confined gateway
 // (mint a root token, build a runtime) WITHOUT depending on `dregg-sdk` directly —

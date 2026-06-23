@@ -101,6 +101,10 @@ pub struct MockHermesPeer {
     opening: String,
     /// The closing agent message chunk (streamed once the script drains).
     closing: String,
+    /// The `mcpServers` the client registered on `session/new` (captured so a test
+    /// can assert deos registered the dregg confined MCP server as the model's
+    /// tool source — the deep-integration wire).
+    registered_mcp_servers: Value,
 }
 
 impl MockHermesPeer {
@@ -120,7 +124,15 @@ impl MockHermesPeer {
             tool_call_seq: 0,
             opening: "working… ".into(),
             closing: "done.".into(),
+            registered_mcp_servers: Value::Null,
         }
+    }
+
+    /// The `mcpServers` the client registered on `session/new` (the model's tool
+    /// source). `Null` until a `session/new` arrived; then the array the client
+    /// sent — asserting deos registered the dregg confined MCP server.
+    pub fn registered_mcp_servers(&self) -> &Value {
+        &self.registered_mcp_servers
     }
 
     /// As [`MockHermesPeer::new`], but streaming a custom agent reply: `reply` is
@@ -271,6 +283,13 @@ impl AcpPeer for MockHermesPeer {
                 Ok(())
             }
             (Phase::NewSession, "session/new") => {
+                // Capture the model's tool source the client registered (the dregg
+                // confined MCP server, when deep integration is wired).
+                self.registered_mcp_servers = msg
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("mcpServers").cloned())
+                    .unwrap_or(Value::Null);
                 self.outbox.push_back(RpcMessage::response(
                     id,
                     json!({ "sessionId": self.session_id, "models": [], "modes": [] }),
