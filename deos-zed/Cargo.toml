@@ -47,6 +47,15 @@ required-features = ["gui"]
 name = "firmament_fs"
 path = "tests/firmament_fs.rs"
 
+# THE THROUGH-THE-PANE firmament test — drives the REAL gpui `Editor`/`EditorSurface`
+# (the cockpit pane's own path) in a headless gpui app: open a seeded cell, edit,
+# save → a genuine `TurnReceipt`. Needs the headless harness (`screenshot`) +
+# the live FS (`firmament`) + the surface (`cockpit-surface`).
+[[test]]
+name = "firmament_pane"
+path = "tests/firmament_pane.rs"
+required-features = ["firmament", "cockpit-surface", "screenshot"]
+
 [features]
 # By default the editor builds the full windowed gpui surface with
 # rust/json/toml/markdown tree-sitter grammars so a real source file highlights
