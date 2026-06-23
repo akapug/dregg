@@ -4455,3 +4455,17 @@ refused).
 ###   wire-codec refinement theorems still prove). NOTE concurrent swarm WIP broke circuit/src/binding.rs
 ###   (8-felt presentation-tag campaign, NOT my file-set) — blocks the dregg-node build only; my dregg-turn/
 ###   dregg-lean-ffi/Lean scope is clean. NOT committed (per directive).
+
+### deos CAP-SECURED DATA STORE — first slice landed (2026-06-22)
+### Designed + built the deos cap-secured store: PG18 + pg-dregg (caps-as-RLS) + dregg-query
+### (attested reads). Doc: `docs/deos/DREGG-DATA-STORE.md` (vision/bundle/trust-story/builders-dev path).
+### Runnable slice (postgres-free CORE, green): `pg-dregg/tests/cap_secured_store.rs` (5 tests — the RLS
+### row-filter = the EXACT `authz::decide` the `dregg_admits` extern runs per row: cap-reachable-only,
+### attenuation = strict subset, wrong/expired/forged = nothing, instant revocation, no-key = empty) +
+### `dregg-query/tests/cap_secured_read.rs` (4 tests — attested `granted ∧ ¬revoked` read with the
+### non-omission certificate + CALM grade; a server that omits a row is CAUGHT). pg-dregg 126 / dregg-query 26.
+### FOLLOW-UP (named seam): the circuit crate-split #5 retired the `prover` feature + moved the IVC recursion
+### tower to `dregg-circuit-prove`. Repointed pg-dregg's `tier-c` dep + `src/attest.rs` import to
+### `dregg-circuit-prove` (default core resolves + tests green). STILL TODO: port `tests/tier_c_real_proof.rs`'s
+### internal `dregg_circuit::{ivc_turn_chain,joint_turn_aggregation}` paths to the split crate (test is wholly
+### `#[cfg(feature="tier-c")]`, does NOT block the core). Bundle packaging (one-command PG18 + auto-load) = next.
