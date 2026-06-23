@@ -45,11 +45,14 @@ Verified: `lake build Dregg2.Exec.HandlerFloors`.
 import Dregg2.Exec.Handler
 import Dregg2.Exec.EffectsState
 import Dregg2.Exec.Handlers.StateSupply
+import Dregg2.Exec.Handlers.Authority
 import Dregg2.Tactics
 
 namespace Dregg2.Exec.HandlerFloors
 
 open Dregg2.Exec
+open Dregg2.Exec (confRights heldCapTo attenuate recKDelegateAtten recKDelegateAtten_non_amplifying)
+open Dregg2.Exec.Handlers.Authority (DelegateArgs delegateAttenStep delegateAttenH)
 open Dregg2.Exec.EffectsState (reservedField stateStepDev stateStepDev_notReserved
   incrementNonceStep incrementNonceStep_advances fieldOf)
 
@@ -179,6 +182,43 @@ def nonceMonotoneFloor : FloorObligation RecChainedState NonceArgs nonceStep whe
     intro s a s' h
     exact incrementNonceStep_advances h
 
+/-! ## §4b — POC INSTANCE C (RELATIONAL FLOOR): AUTHORITY NON-AMPLIFICATION, over `delegateAttenStep`.
+
+The non-amplification floor is the authority-graph keystone (the §P2 family): a granted/delegated cap
+may confer rights NO GREATER than the cap the delegator actually held — `confRights granted ≤ confRights
+held` over the genuine `ExecAuth` lattice. A delegation that *amplified* rights (handed the recipient a
+stronger cap than the delegator possessed) would be the rights-forgery the whole ocap discipline forbids.
+This is RELATIONAL — it relates the rights of the GRANTED cap (`attenuate keep (heldCapTo … delegator t)`)
+to the rights of the HELD cap (`heldCapTo … delegator t`), both read off the pre-state's cap graph. It
+is NOT a `St → Args → Bool` gate over args alone, exactly like monotone-nonce (§4).
+
+THE CLEANER DISCHARGE (the prompt's "even cleaner" path). Unlike the reserved-field / monotone floors —
+where the handler's `step` had to be RE-ROUTED through a fail-closing guard before the floor could be
+read off the commit — the authority handler `delegateAttenStep` ALREADY installs the *attenuated* grant
+`attenuate keep (heldCapTo …)` by construction (it routes through `recKDelegateAtten`, the faithful
+`apply_introduce`, NOT a fresh control cap). The non-amplification relation therefore holds on the
+pre-state UNCONDITIONALLY — `recKDelegateAtten_non_amplifying` (`AuthTurn.lean`, a genuine `≤` over
+`ExecAuth`, NOT a `()≤()` collapse) proves it for ANY `keep`, with or without a commit. So the floor
+DISCHARGES from the existing step's post-condition with no re-route: the handler was ALREADY strong
+enough, and the `FloorObligation` simply PROMOTES the latent non-amp fact to a typed obligation. A
+`delegateAttenStep` variant that granted a control cap exceeding the held cap could NOT inhabit this
+structure — the missing-non-amp gate becomes unrepresentable, as auth/admission already are. -/
+
+/-- **`authNonAmpFloor` — the AUTHORITY NON-AMPLIFICATION floor as a `FloorObligation`.** Floor: the cap
+the delegation grants (`attenuate keep (heldCapTo … delegator t)`) confers rights `≤` the delegator's
+HELD cap to `t` (`heldCapTo … delegator t`) over the `ExecAuth` lattice — a relation over the pre-state's
+cap graph, NOT a Bool gate. Discharged on EVERY commit by `recKDelegateAtten_non_amplifying` (which holds
+unconditionally for any `keep`, so the `delegateAttenStep` post-condition supplies it directly — no
+re-route). The relational floor needs NO different treatment than monotone-nonce: a different `floor`
+body in the SAME structure. -/
+def authNonAmpFloor : FloorObligation RecordKernelState DelegateArgs delegateAttenStep where
+  floor := fun k a =>
+    confRights (attenuate a.keep (heldCapTo k.caps a.delegator a.target))
+      ≤ confRights (heldCapTo k.caps a.delegator a.target)
+  gated := by
+    intro k a k' _
+    exact recKDelegateAtten_non_amplifying k.caps a.delegator a.target a.keep
+
 /-! ## §5 — TEETH: the floors BITE (a violating step does not commit), and DISCHARGE works.
 
 The methodology pin: a step that would VIOLATE the floor returns `none`, so `gated` is never asked to
@@ -198,6 +238,17 @@ theorem nonceMonotoneFloor_bites (s : RecChainedState) (a : NonceArgs)
   unfold nonceStep
   exact EffectsState.incrementNonceStep_nonincreasing_fails s a.actor a.target a.value h
 
+/-- **The non-amp floor BITES — a grant cannot be manufactured from nothing.** A delegator holding NO
+cap conferring an edge to `target` produces NO commit (`delegateAttenStep = none`) — the Granovetter
+premise is the over-grant guard: connectivity (hence authority) cannot begin from nothing, so there is
+no witness in which the recipient receives a cap exceeding a (nonexistent) held one. The non-amp floor
+is load-bearing precisely because the ONLY committing path attenuates a cap the delegator REALLY held. -/
+theorem authNonAmpFloor_overgrant_rejected (k : RecordKernelState) (a : DelegateArgs)
+    (h : (k.caps a.delegator).any (fun cap => confersEdgeTo a.target cap) = false) :
+    delegateAttenStep k a = none := by
+  unfold delegateAttenStep recKDelegateAtten
+  rw [if_neg (by simp [h])]
+
 /-- **`reservedFieldFloor` DISCHARGES** — a committed developer write SUPPLIES `reservedField = false`
 WITHOUT a side-hypothesis. This is the `hnr` that `handler_refines_execFullA_setField` USED to take
 as input (now SHED, §P1), produced by the commit via the obligation. -/
@@ -212,15 +263,29 @@ theorem nonceMonotoneFloor_discharges {s s' : RecChainedState} {a : NonceArgs}
     (h : nonceStep s a = some s') : fieldOf "nonce" (s.kernel.cell a.target) < a.value :=
   nonceMonotoneFloor.discharge h
 
-/-! ## §6 — Axiom-hygiene pins (the floor surface + both instances rest only on the kernel triple). -/
+/-- **`authNonAmpFloor` DISCHARGES** — a committed delegation SUPPLIES the non-amplification relation
+(`confRights granted ≤ confRights held`) WITHOUT a side-hypothesis. This is the `granted ⊆ held` /
+`confRights granted ≤ confRights held` that a refinement consumer USED to take as input (now SHED, §P2 —
+see `HandlerExecutor.handler_refines_execFullA_delegateAtten_nonAmp`), produced by the commit via the
+obligation. The relational authority floor sheds exactly as the monotone floor did. -/
+theorem authNonAmpFloor_discharges {k k' : RecordKernelState} {a : DelegateArgs}
+    (h : delegateAttenStep k a = some k') :
+    confRights (attenuate a.keep (heldCapTo k.caps a.delegator a.target))
+      ≤ confRights (heldCapTo k.caps a.delegator a.target) :=
+  authNonAmpFloor.discharge h
+
+/-! ## §6 — Axiom-hygiene pins (the floor surface + all instances rest only on the kernel triple). -/
 
 #assert_axioms FloorObligation.discharge
 #assert_axioms reservedFieldFloor
 #assert_axioms nonceMonotoneFloor
+#assert_axioms authNonAmpFloor
 #assert_axioms reservedFieldFloor_discharges
 #assert_axioms nonceMonotoneFloor_discharges
+#assert_axioms authNonAmpFloor_discharges
 #assert_axioms reservedFieldFloor_bites
 #assert_axioms nonceMonotoneFloor_bites
+#assert_axioms authNonAmpFloor_overgrant_rejected
 
 /-! ## §P1 — DONE (the field-write family migrated; THREE side-hyps SHED). § P2 — THE NEXT FAMILY.
 
@@ -242,9 +307,26 @@ The generic `stateWriteH` STAYS for the protocol-slot writers (`setPermissions`/
 `SetField` of `"nonce"`/`"permissions"`/… and a non-advancing `IncrementNonce` are all REJECTED) and
 do NOT over-reject (a non-reserved write and a strict advance commit).
 
-**P2 — the next floor families** (the obligation table, `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`):
-  * **authority non-amplification** — the `delegateAtten`/`introduce` family: a granted cap-set must be
-    `⊆` the held set (a relational floor, like monotone-nonce). Carried as the descent side-condition.
+**P2 — DONE (authority NON-AMPLIFICATION migrated; the relational floor SHED).** The
+`delegateAtten`/`introduce`/`delegate` family carries the non-amplification floor as a TYPED
+`FloorObligation` (`authNonAmpFloor`, §4b): the granted cap confers rights `≤` the delegator's HELD cap
+(`confRights (attenuate keep (heldCapTo … delegator t)) ≤ confRights (heldCapTo … delegator t)`), a
+RELATIONAL floor over the pre-state cap graph (like monotone-nonce, §4). The CLEANER discharge: the
+authority handler `delegateAttenStep` ALREADY installs the *attenuated* grant (via `recKDelegateAtten`,
+NOT a fresh control cap), so the floor discharges from the EXISTING step's post-condition —
+`recKDelegateAtten_non_amplifying` holds unconditionally for any `keep`. No re-route: the handler was
+already strong enough; the obligation PROMOTES the latent fact to a typed floor.
+
+`HandlerExecutor.handler_refines_execFullA_delegateAtten_nonAmp` (and the `_delegate`/`_introduce`
+variants) prove kernel-agreement AND deliver the non-amp relation OFF the commit via
+`authNonAmpFloor_discharges` — the strengthened refinement SHEDS the `hamp : confRights granted ≤
+confRights held` side-hypothesis a non-amp-aware consumer USED to take (the BEFORE shape,
+`handler_refines_execFullA_delegateAtten_nonAmp_weak`, takes it as a hypothesis; the AFTER does not).
+The mutation teeth (`authNonAmpFloor_overgrant_rejected`) confirm the floor BITES: an over-granting
+delegator with NO held cap to the target produces no commit, so a manufactured stronger grant has no
+witness.
+
+**P3 — the next floor families** (the obligation table, `docs/CIRCUIT-FUNCTIONAL-CORRECTNESS.md`):
   * **lifecycle freshness / delegation-epoch** — the `refreshDelegationA` residual (the
     `delegationEpochAt` re-stamp `handler_refines_execFullA_refreshDelegation` carries as a named
     kernel residual): route through an epoch-stamping step so the residual is internal.
