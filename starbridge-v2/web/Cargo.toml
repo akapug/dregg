@@ -18,6 +18,8 @@ gpui-web = [
     "starbridge-v2/gpui-web",
     "dep:gpui",
     "dep:gpui_platform",
+    "dep:gpui-component",
+    "dep:web-sys",
 ]
 
 [dependencies]
@@ -35,6 +37,13 @@ hex = "0.4"
 # block forwards to the gpui_web backend (no native windowing in the graph).
 gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
 gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+# gpui-component — the real widget library `cockpit_web` calls `init(cx)` on at
+# boot (the cockpit's `Input`/`Button`/list globals). VENDORED fork (same rev as
+# starbridge-v2 pins) so cargo resolves ONE gpui-component instance. Default
+# features OFF (no tree-sitter grammars), matching starbridge-v2's dep.
+gpui-component = { path = "../../../gpui-component/crates/ui", default-features = false, optional = true }
+# `web_sys::console` for the wasm warn path (the web platform has no stderr).
+web-sys = { version = "0.3", features = ["console"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
