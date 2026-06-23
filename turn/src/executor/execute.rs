@@ -527,8 +527,9 @@ impl TurnExecutor {
                     );
 
                     let post_state_hash = ledger.root();
-                    let turn_hash = turn.hash();
+                    // Compute the forest hash once; reuse for turn_hash + receipt field.
                     let forest_hash = turn.call_forest.compute_hash();
+                    let turn_hash = turn.hash_with_forest(&forest_hash);
 
                     // Audit P0 #78: the proof-carrying path previously emitted a
                     // stub receipt with `effects_hash = H(&[])`,
@@ -1209,9 +1210,13 @@ impl TurnExecutor {
         let _pt_receipt = std::time::Instant::now();
         let effects_hash = self.compute_effects_hash(&all_effects_hashes);
 
-        // Compute turn hash.
-        let turn_hash = turn.hash();
+        // Compute the forest hash ONCE and reuse it for both the turn hash and
+        // the receipt's `forest_hash` field — `turn.hash()` would otherwise walk
+        // the whole call tree a SECOND time internally (the forest BLAKE3 walk is
+        // the dominant ingredient of both). Byte-identical: `hash_with_forest`
+        // takes exactly the value `turn.hash()` recomputes.
         let forest_hash = turn.call_forest.compute_hash();
+        let turn_hash = turn.hash_with_forest(&forest_hash);
 
         // Build ledger delta from the journal, Phase 1 (fee + nonce), and Phase 3 (distribution).
         let delta = Self::compute_delta_from_journal_with_fee(

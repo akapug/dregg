@@ -246,8 +246,30 @@ pub const SYSTEM_ROOTS_CONTEXT: &str = "dregg-cell:system-roots v1";
 /// injective enough that two distinct sub-blocks cannot share a digest (the
 /// anti-ghost guarantee — a `:= 0` stub is forbidden). The all-zero sub-block
 /// yields the fixed [`empty_system_roots_digest`].
+/// A `new_derive_key(SYSTEM_ROOTS_CONTEXT)` hasher cached at its keyed initial
+/// state. `Hasher::clone` copies that keyed state, so cloning + absorbing is
+/// BYTE-IDENTICAL to a fresh `new_derive_key` + absorbing, while skipping the
+/// key-derivation compression on each call. This digest is recomputed inside
+/// every `compute_canonical_state_commitment` (the per-touched-cell Merkle leaf),
+/// so the saved compression is on the hot post-state-root path.
+fn system_roots_base() -> blake3::Hasher {
+    static BASE: std::sync::OnceLock<blake3::Hasher> = std::sync::OnceLock::new();
+    BASE.get_or_init(|| blake3::Hasher::new_derive_key(SYSTEM_ROOTS_CONTEXT))
+        .clone()
+}
+
 pub fn compute_system_roots_digest(roots: &[FieldElement; N_SYSTEM_ROOTS]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_derive_key(SYSTEM_ROOTS_CONTEXT);
+    // Fast path: a legacy (no-side-table-activity) cell carries the all-zero
+    // sub-block, whose digest is the cell-independent `empty_system_roots_digest()`
+    // constant. Return it WITHOUT re-running the sponge — a 256-byte equality check
+    // is ~30x cheaper than the BLAKE3 fold, and the returned bytes are IDENTICAL to
+    // the full computation (the constant IS this function over the zero block). This
+    // is the common case on the hot per-cell-commitment path (ordinary balance/nonce
+    // cells never touch the kernel side-table roots).
+    if roots == &default_system_roots() {
+        return empty_system_roots_digest();
+    }
+    let mut hasher = system_roots_base();
     // Length prefix (seed): pins the root count (always N_SYSTEM_ROOTS, but the
     // seed keeps the sponge shape identical to the fields-root accumulator).
     hasher.update(&(N_SYSTEM_ROOTS as u64).to_le_bytes());
@@ -263,7 +285,20 @@ pub fn compute_system_roots_digest(roots: &[FieldElement; N_SYSTEM_ROOTS]) -> [u
 /// backward-compat keystone, mirrored in Lean by
 /// `SystemRoots.emptySystemRootsDigest`).
 pub fn empty_system_roots_digest() -> [u8; 32] {
-    compute_system_roots_digest(&default_system_roots())
+    // Cached process constant. Computes the sponge DIRECTLY (not via
+    // `compute_system_roots_digest`, which fast-paths to THIS function — calling
+    // back would recurse). The result is byte-identical to the full fold over the
+    // all-zero sub-block.
+    static EMPTY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    *EMPTY.get_or_init(|| {
+        let roots = default_system_roots();
+        let mut hasher = system_roots_base();
+        hasher.update(&(N_SYSTEM_ROOTS as u64).to_le_bytes());
+        for root in roots.iter() {
+            hasher.update(root);
+        }
+        *hasher.finalize().as_bytes()
+    })
 }
 
 /// Domain-separation context for the user-field-map keyed digest
