@@ -115,6 +115,9 @@ gpui-component-assets = { path = "../../gpui-component/crates/assets", optional 
 # gpui_wgpu's `image` (one resolved version, same as starbridge-v2 / deos-zed).
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+# `anyhow` unifies the offscreen-capture error path (font load / window open /
+# screenshot / PNG write). Only pulled with the `screenshot` feature.
+anyhow = { version = "1", optional = true }
 
 [features]
 default = []
@@ -132,6 +135,7 @@ screenshot = [
     "cockpit-surface",
     "dep:image",
     "dep:gpui_wgpu",
+    "dep:anyhow",
     "gpui_wgpu/test-support",
     "gpui_platform/test-support",
 ]

@@ -96,6 +96,11 @@ pub struct MockHermesPeer {
     next_id: i64,
     next_call: usize,
     tool_call_seq: usize,
+    /// The opening agent message chunk (streamed on prompt). Defaults to
+    /// `"working… "`; the interactive dock supplies a prompt-derived reply.
+    opening: String,
+    /// The closing agent message chunk (streamed once the script drains).
+    closing: String,
 }
 
 impl MockHermesPeer {
@@ -113,7 +118,20 @@ impl MockHermesPeer {
             next_id: 1000,
             next_call: 0,
             tool_call_seq: 0,
+            opening: "working… ".into(),
+            closing: "done.".into(),
         }
+    }
+
+    /// As [`MockHermesPeer::new`], but streaming a custom agent reply: `reply` is
+    /// streamed as the OPENING `agent_message_chunk` (the agent "speaks" before it
+    /// reaches for tools), and the closing chunk is omitted. The interactive dock
+    /// uses this so the reply text reflects the user's actual prompt.
+    pub fn with_reply(session_id: &str, script: Vec<ScriptedCall>, reply: &str) -> MockHermesPeer {
+        let mut peer = MockHermesPeer::new(session_id, script);
+        peer.opening = format!("{reply} ");
+        peer.closing = String::new();
+        peer
     }
 
     fn alloc_id(&mut self) -> i64 {
@@ -193,17 +211,20 @@ impl MockHermesPeer {
             }),
         ));
         if !self.queue_next_call() {
-            // No more calls: stream a closing agent message + the prompt response.
-            self.outbox.push_back(RpcMessage::notification(
-                "session/update",
-                json!({
-                    "sessionId": self.session_id,
-                    "update": {
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": { "type": "text", "text": "done." }
-                    }
-                }),
-            ));
+            // No more calls: stream a closing agent message (if any) + the prompt
+            // response.
+            if !self.closing.is_empty() {
+                self.outbox.push_back(RpcMessage::notification(
+                    "session/update",
+                    json!({
+                        "sessionId": self.session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "type": "text", "text": self.closing.clone() }
+                        }
+                    }),
+                ));
+            }
             self.phase = Phase::Done;
         }
     }
@@ -273,7 +294,7 @@ impl AcpPeer for MockHermesPeer {
                         "sessionId": self.session_id,
                         "update": {
                             "sessionUpdate": "agent_message_chunk",
-                            "content": { "type": "text", "text": "working… " }
+                            "content": { "type": "text", "text": self.opening.clone() }
                         }
                     }),
                 ));

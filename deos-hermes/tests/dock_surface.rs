@@ -90,3 +90,57 @@ fn dock_surface_captures_offscreen() {
         }
     }
 }
+
+/// OFFSCREEN render of a LIVE multi-turn conversation: a typed prompt → streamed
+/// reply → gated tool-calls inline (✓ receipt / ✗ refused) → the permission
+/// moment → depleting budget bars, driven through the REAL gate. Best-effort.
+#[cfg(feature = "screenshot")]
+#[test]
+fn live_conversation_captures_offscreen() {
+    let out = std::env::temp_dir().join("deos-hermes-live-conversation.png");
+    match deos_hermes::screenshot::capture_live_conversation(&out) {
+        Ok((w, h)) => {
+            assert!(w > 0 && h > 0, "captured a non-empty frame");
+            assert!(out.exists(), "wrote the PNG to {}", out.display());
+            println!("LIVE conversation captured offscreen: {}x{} -> {}", w, h, out.display());
+        }
+        Err(e) => {
+            println!("offscreen capture unavailable in-env (skipping): {e}");
+        }
+    }
+}
+
+/// The live-conversation MODEL (no gpui) carries the full interactive shape: a
+/// multi-turn transcript with inline gated tool-calls, the permission moment, and
+/// depleting budgets — the render proof that runs without an offscreen GPU.
+#[cfg(feature = "screenshot")]
+#[test]
+fn live_conversation_model_is_a_gated_multi_turn_chat() {
+    use deos_hermes::surface::ChatEntry;
+    let model = deos_hermes::screenshot::live_conversation_model();
+    let users = model
+        .transcript
+        .iter()
+        .filter(|e| matches!(e, ChatEntry::User { .. }))
+        .count();
+    assert_eq!(users, 2, "two typed prompts (multi-turn)");
+    let tools = model
+        .transcript
+        .iter()
+        .filter(|e| matches!(e, ChatEntry::Tool { .. }))
+        .count();
+    assert_eq!(tools, 4, "four gated tool-calls inline");
+    // terminal is rate-2: the 3rd terminal call (cargo bench) is refused.
+    assert!(
+        model.tool_lines.iter().any(|l| l.name == "terminal" && !l.allowed),
+        "a terminal call was refused once the rate-2 budget exhausted"
+    );
+    let term = model
+        .mandate_rows
+        .iter()
+        .find(|r| r.label == "tool:terminal")
+        .expect("terminal budget row");
+    assert_eq!(term.rate_limit, 2);
+    assert_eq!(term.spent, 2, "rate-2 terminal fully spent");
+    assert_eq!(term.remaining(), 0);
+}

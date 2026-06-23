@@ -75,7 +75,7 @@ pub mod surface;
 pub mod tool_effects;
 
 pub use acp::{PermissionOutcome, ToolCallRequest, ToolKind};
-pub use acp_client::{AcpClient, AcpError, AcpPeer, AcpTransport, PromptRun};
+pub use acp_client::{AcpClient, AcpError, AcpPeer, AcpTransport, PromptRun, StreamEvent};
 pub use bridge::HermesGateway;
 pub use grant_registry::{GrantRegistry, MandateKey};
 pub use mandate::{Mandate, MandateRow};
