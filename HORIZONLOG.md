@@ -11,6 +11,14 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### LEGIBILITY CAPSTONE — DEOS-RUNS reproduce-index + atlas refresh (2026-06-23).
+`d5471d05`. `docs/deos/DEOS-RUNS.md` — a sober what-runs index: every demonstration with its exact reproduce
+command, the proof it emits (receipt/bake/test), the screenshot path, + an honest "Not yet / needs X"
+section (servo http(s) net fork · live ACP creds · web-deos `[patch]`→upstream cutover · deos-matrix
+executor mint · web dev-pane backends · MUD presence). `dregg-atlas/` 30→37 surfaces (+7 explainers:
+self-hosting · full Zed · web-deos · Servo real page · MUD · membrane · federation; 3 with real PNGs);
+site regenerated, opens offline. Spot-verified 2 reproduce cmds green (captp data_plane, servo-render).
+
 ### HERMES AGENT PANEL in the Zed Workspace — live + receipted, by running (2026-06-23).
 `2d319930` (`deos-zed-full/src/hermes_panel.rs` + tiny `deos-hermes` pub exposures). A real `workspace::Panel`
 wrapping deos-hermes's live `AgentDockView` docks via `add_panel` alongside project/outline/terminal. Test:
