@@ -449,6 +449,16 @@ struct GossipState {
     /// Dandelion++ stem hop, so the origin stays one hop removed even when the
     /// network is too small for a random stem to provide cover.
     anchors: HashSet<SocketAddr>,
+    /// **Cryptographically-verified peer address bindings** (the gossip-of-peers
+    /// trust substrate): the live `remote_address()` of every connection over
+    /// which we have accepted an envelope whose Ed25519 signature verified against
+    /// the sender's registered public key. The KEY is the sender's gossip
+    /// [`NodeId`] (`blake3(public_key)`) — proven, not claimed — so this is an
+    /// authenticated `who -> where` map. The discovery protocol reads it to share
+    /// "the addresses I have personally verified belong to committee member X";
+    /// the receiver re-checks X against its OWN committee key set before dialing,
+    /// so a wire peer can never inject an address for a non-committee identity.
+    verified_addrs: HashMap<NodeId, SocketAddr>,
 }
 
 impl GossipState {
@@ -896,6 +906,7 @@ impl GossipNetwork {
             stem_messages: HashMap::new(),
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
+            verified_addrs: HashMap::new(),
         }));
 
         let signing_key = Arc::new(signing_key);
@@ -1067,6 +1078,57 @@ impl GossipNetwork {
                 state.links_to(addr).is_empty() && !state.scoreboard.is_graylisted(addr)
             })
             .collect()
+    }
+
+    /// The cryptographically-verified `peer NodeId -> dialable listen address`
+    /// bindings this node holds — every entry is an address WE dialed over which a
+    /// signature from that `NodeId` (a federation `blake3(public_key)`) verified.
+    /// This is the authenticated material the gossip-of-peers discovery protocol
+    /// shares: "these are addresses I have personally verified for these
+    /// identities." The receiver re-checks each identity against its own committee
+    /// key set, so an introducer cannot inject an address for an untrusted key.
+    pub async fn verified_peer_bindings(&self) -> Vec<(NodeId, SocketAddr)> {
+        self.state
+            .read()
+            .await
+            .verified_addrs
+            .iter()
+            .map(|(id, addr)| (*id, *addr))
+            .collect()
+    }
+
+    /// Learn a peer's address for `topic` WITHOUT dialing it now: add it to the
+    /// topic peer set and observe it on the scoreboard so the reconnect prober
+    /// surfaces it via [`Self::unconnected_topic_peers`] and dials it on its
+    /// backoff schedule. Returns `true` if the address was newly added (it was not
+    /// already a known peer / already connected).
+    ///
+    /// This is the discovery write-path: a node that learns a committee member's
+    /// authenticated address from a peer (gossip-of-peers) feeds it here, and the
+    /// existing prober transitively forms the mesh from a single seed — no
+    /// synchronous dial on the gossip receive path, no new dialing machinery.
+    pub async fn learn_peer(&self, topic: &TopicHandle, addr: SocketAddr) -> bool {
+        let mut state = self.state.write().await;
+        // Already connected to this address ⇒ nothing to discover.
+        if !state.links_to(&addr).is_empty() {
+            return false;
+        }
+        let already_known = state
+            .topics
+            .get(&topic.topic_id)
+            .is_some_and(|t| t.peer_states.contains_key(&addr));
+        if already_known {
+            return false;
+        }
+        if let Some(topic_state) = state.topics.get_mut(&topic.topic_id) {
+            topic_state.add_peer(addr);
+        } else {
+            return false;
+        }
+        state.scoreboard.observe(addr);
+        state.reclassify_eager(topic.topic_id, DEFAULT_EAGER_DEGREE);
+        debug!("learn_peer: discovered topic peer {addr} (prober will dial)");
+        true
     }
 
     /// (Re)dial a known peer and register the resulting link, returning `true`
@@ -1842,6 +1904,33 @@ impl GossipNetwork {
                         );
                         return;
                     };
+
+                    // AUTHENTICATED ADDRESS BINDING (gossip-of-peers substrate):
+                    // the signature just proved `signed.sender` (a federation
+                    // NodeId = blake3(public_key)) authored this envelope, and it
+                    // arrived over a live connection from `remote_addr`. We record
+                    // the proven `who -> where` so the discovery protocol can share
+                    // the addresses we have personally verified for each committee
+                    // identity — but ONLY when `remote_addr` is a DIALABLE listen
+                    // address, i.e. it appears in a joined topic's peer set or as a
+                    // trusted anchor (the addresses WE dialed). An INBOUND accepted
+                    // connection's `remote_address()` is the peer's EPHEMERAL source
+                    // port, which nothing can dial; binding+sharing that would
+                    // propagate dead hints. Restricting to known listen addresses
+                    // keeps every shared binding actually connectable. (The receiver
+                    // re-validates committee membership + address shape before
+                    // dialing regardless, so this is a quality filter, not the
+                    // trust gate.)
+                    {
+                        let mut s = state.write().await;
+                        let dialable = s.anchors.contains(&remote_addr)
+                            || s.topics
+                                .values()
+                                .any(|t| t.peer_states.contains_key(&remote_addr));
+                        if dialable {
+                            s.verified_addrs.insert(signed.sender, remote_addr);
+                        }
+                    }
 
                     Self::handle_envelope(
                         envelope,
@@ -3120,6 +3209,7 @@ mod tests {
             stem_messages: HashMap::new(),
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
+            verified_addrs: HashMap::new(),
         };
 
         // Add a topic with 5 peers (3 eager, 2 lazy)
@@ -3226,6 +3316,7 @@ mod tests {
             stem_messages: HashMap::new(),
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
+            verified_addrs: HashMap::new(),
         };
 
         // 3 eager + 2 lazy peers
@@ -3445,6 +3536,7 @@ mod tests {
             stem_messages: HashMap::new(),
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
+            verified_addrs: HashMap::new(),
         };
         // No links yet: links_to is empty and the address counts as not-connected.
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -3696,6 +3788,177 @@ mod tests {
             got_on_a,
             Some(msg_from_b),
             "after reconnect, B->A gossip must converge"
+        );
+    }
+
+    /// GOSSIP-OF-PEERS DISCOVERY (transport layer). Three real gossip networks
+    /// over loopback QUIC. The SEED node A is configured with BOTH B's and C's
+    /// listen addresses; B is configured with ONLY A (it does NOT know C). After
+    /// A dials B and C and they exchange (signed) gossip, A holds a
+    /// CRYPTOGRAPHICALLY-VERIFIED binding `C's NodeId -> C's listen address` —
+    /// proven by C's Ed25519-signed envelope over the link A dialed. We then drive
+    /// exactly the discovery write-path the node runs: A shares its verified
+    /// binding for C, B accepts it (C's key is committee-known) via `learn_peer`,
+    /// and B's prober dials C. Asserts: B starts NOT knowing C, the binding A holds
+    /// for C is C's real LISTEN address (dialable), and after learn_peer+probe B
+    /// has a live link to C and gossip flows B<->C — the mesh formed transitively
+    /// from B's single seed.
+    #[tokio::test]
+    async fn gossip_of_peers_transitive_discovery_from_single_seed() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use crate::peer_score::RequestBackoff;
+        use std::time::Duration;
+
+        // Three federation identities. Gossip node_id = blake3(public_key).
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let (sk_c, pk_c) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let id_c: NodeId = *blake3::hash(pk_c.as_bytes()).as_bytes();
+
+        // Every node's registry resolves all three federation senders (the
+        // committee key set — the trust anchor).
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+        keys.insert(id_c, pk_c);
+
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_c = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+        let addr_b = node_b.local_addr();
+        let addr_c = node_c.local_addr();
+
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+        let gossip_c = GossipNetwork::new(node_c.endpoint().clone(), id_c, sk_c, keys.clone());
+
+        const TOPIC: &str = "dregg/discovery-test";
+        // SEED A knows EVERYONE (B and C). B knows ONLY A. C knows ONLY A.
+        let topic_a = gossip_a.join_topic(TOPIC, &[addr_b, addr_c]).await.unwrap();
+        let topic_b = gossip_b.join_topic(TOPIC, &[addr_a]).await.unwrap();
+        let topic_c = gossip_c.join_topic(TOPIC, &[addr_a]).await.unwrap();
+
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+        let mut stream_c = gossip_c.subscribe(&topic_c).await.unwrap();
+
+        // B does NOT know C at boot (the whole point — partial config).
+        assert!(
+            !gossip_b.topic_peers(&topic_b).await.contains(&addr_c),
+            "B must NOT know C's address at boot (partial config)"
+        );
+
+        // Let A's dials to B and C establish and signed gossip cross (A publishes
+        // so B and C each sign an envelope back over A's dialed links — giving A a
+        // verified binding for each).
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let probe = PeerMessage::PublishTurn {
+            turn_hash: [0x01; 32],
+            turn_data: b"seed-probe".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_a.publish_eager(&topic_a, &probe).await.unwrap();
+        // B and C answer over the link (a reply push makes their signed envelope
+        // reach A so A binds their identity to the address it dialed).
+        let _ = recv_remote_within(&mut stream_b, Duration::from_secs(3)).await;
+        let _ = recv_remote_within(&mut stream_c, Duration::from_secs(3)).await;
+        let reply_b = PeerMessage::PublishTurn {
+            turn_hash: [0x02; 32],
+            turn_data: b"reply-b".to_vec(),
+            causal_deps: vec![],
+        };
+        let reply_c = PeerMessage::PublishTurn {
+            turn_hash: [0x03; 32],
+            turn_data: b"reply-c".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_b.publish_eager(&topic_b, &reply_b).await.unwrap();
+        gossip_c.publish_eager(&topic_c, &reply_c).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // A now holds a CRYPTOGRAPHICALLY-VERIFIED binding for C, and it is C's
+        // real LISTEN address (the one A dialed) — i.e. dialable, not an ephemeral
+        // accept port.
+        let a_bindings = gossip_a.verified_peer_bindings().await;
+        let c_binding = a_bindings.iter().find(|(id, _)| *id == id_c);
+        assert!(
+            c_binding.is_some(),
+            "A must hold a verified binding for C (A dialed C and C's envelope verified). \
+             bindings: {a_bindings:?}"
+        );
+        assert_eq!(
+            c_binding.unwrap().1,
+            addr_c,
+            "A's verified binding for C must be C's dialable LISTEN address"
+        );
+
+        // ─── DISCOVERY WRITE-PATH: A shares C's address; B learns it ─────────
+        // (In the live node `share_peer_addrs` maps id->committee pubkey and the
+        // receiver re-checks committee membership; here we drive the transport
+        // primitive directly with C's already-committee-known identity.)
+        let learned = gossip_b.learn_peer(&topic_b, addr_c).await;
+        assert!(learned, "B must newly learn C's address (it did not know it)");
+        assert!(
+            gossip_b.topic_peers(&topic_b).await.contains(&addr_c),
+            "after learn_peer, C must be a known topic peer on B"
+        );
+        assert!(
+            gossip_b
+                .unconnected_topic_peers(&topic_b)
+                .await
+                .contains(&addr_c),
+            "C must surface as an unconnected re-dial candidate for B's prober"
+        );
+
+        // ─── B's prober dials the discovered peer → B<->C link forms ─────────
+        let mut backoff: RequestBackoff<SocketAddr> =
+            RequestBackoff::new(Duration::from_millis(50), Duration::from_secs(1));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            for addr in gossip_b.unconnected_topic_peers(&topic_b).await {
+                if backoff.should_request(addr) {
+                    gossip_b.reconnect_peer(addr).await;
+                }
+            }
+            if gossip_b.is_peer_connected(&addr_c).await
+                && gossip_c.is_peer_connected(&addr_b).await
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            gossip_b.is_peer_connected(&addr_c).await,
+            "B never connected to the DISCOVERED peer C"
+        );
+
+        // ─── The mesh formed: gossip flows B<->C directly ───────────────────
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let bc_msg = PeerMessage::PublishTurn {
+            turn_hash: [0xbc; 32],
+            turn_data: b"b-to-c-direct".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_b.publish_eager(&topic_b, &bc_msg).await.unwrap();
+        // Drain any messages C buffered earlier (it is also connected to the seed
+        // A, which relays); we are proving the SPECIFIC B->C-direct message lands.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_bc = false;
+        while Instant::now() < deadline {
+            match recv_remote_within(&mut stream_c, Duration::from_secs(5)).await {
+                Some(m) if m == bc_msg => {
+                    saw_bc = true;
+                    break;
+                }
+                Some(_) => continue, // an earlier relayed message; keep draining
+                None => break,
+            }
+        }
+        assert!(
+            saw_bc,
+            "B<->C must converge over the discovered link — mesh formed from B's single seed"
         );
     }
 }

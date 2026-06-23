@@ -118,9 +118,22 @@ nudges a frontier on reconnect). Also fixed a deeper pathology: a bounded 3s ini
 PROVEN: in-process (A joins DOWN B → dial fails → B up → prober reconnects → bidirectional delivery) +
 REAL two-process late-join (A boots w/ B down, no stall; B joins late; both DAGs converge dag_height 3 /
 latest_height 1; turn block CONSENSUS-WIDE Attested votes=2 on BOTH; balance 5000 both). net 88/88, node
-246/246. SEAM: discovery-bootstrap skipped (needs authenticated gossip-of-peers wire msg — larger than the
-reconnect core); same-node drop-and-return on abrupt kill hits a pre-existing store-integrity guard
+246/246. SEAM: same-node drop-and-return on abrupt kill hits a pre-existing store-integrity guard
 (persistence correctly refusing a torn-crash divergent ledger — not this lane's path).
+
+### FEDERATION DISCOVERY BOOTSTRAP — authenticated gossip-of-peers, by running (2026-06-23).
+`node/src/blocklace_sync.rs` + `net/src/gossip.rs`. CLOSES the discovery-bootstrap seam the reconnect lane
+(`1f5d3303`) named: nodes no longer need to list every peer on the CLI. The gossip layer keeps a
+cryptographically-verified `peer-identity → dialable listen address` map (`verified_peer_bindings`, recorded
+only over links WE dialed where an Ed25519 envelope verified); a node SHARES those as a signed
+`BlocklaceGossipMessage::PeerAddrs(Vec<(committee_pubkey, addr)>)` each prober tick + on PeerJoined
+(`share_peer_addrs`). Receiver (`handle_peer_addrs`) accepts an address ONLY for a key in its own
+`known_federation_keys` (committee = the trust anchor, NOT the wire sender) → `learn_peer` (no sync dial) →
+existing prober dials it. So the mesh forms transitively from a single seed; a forged address for a
+non-committee key is rejected; self/un-dialable addrs dropped. PROVEN: net real-3-QUIC transitive-discovery
+test (seed A knows B+C; B knows only A → B learns C's verified LISTEN addr → B↔C link forms + converges) +
+node committee-gate test (valid C learned, forged Sybil X rejected, self ignored, idempotent). net 89/89,
+node 247/247. Runbook: `docs/deos/DEV-NODE-RUNBOOK.md` "Federation DISCOVERY: gossip-of-peers".
 
 ### MULTIPLAYER MEMBRANE — the killer primitive, DEMONSTRATED by running (2026-06-23).
 `2bdb6ed2` (`shared_fork.rs`). ONE minted `MembraneFrustum` (the screenshot-of-the-moment, a cap-bounded

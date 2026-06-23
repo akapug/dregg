@@ -277,3 +277,74 @@ comes up; A's prober loop (`unconnected_topic_peers` → `RequestBackoff::should
 → `reconnect_peer`) reconnects within the retry window, and a `publish_eager` from
 EACH node is delivered to the OTHER — the recovered link carries gossip in both
 directions (`cd net && cargo test late_join_prober`).
+
+## Federation DISCOVERY: gossip-of-peers (learn the mesh from one seed)
+
+A node no longer has to list EVERY peer on its CLI. Configure one node (the
+**seed**) with the full peer set and each other node with just the seed; the
+nodes learn the rest of the mesh transitively over authenticated gossip-of-peers.
+
+### How it works (authenticated; the committee key set is the trust anchor)
+
+* The gossip layer records a **cryptographically-verified** `peer-identity →
+  dialable listen address` binding for every link it dials over which an
+  Ed25519-signed envelope verifies (`GossipNetwork::verified_peer_bindings`,
+  `net/src/gossip.rs`). The identity is `blake3(committee_public_key)` — proven by
+  the signature, not claimed.
+* Each prober tick (and on every `PeerJoined`) a node SHARES those verified
+  bindings as a `BlocklaceGossipMessage::PeerAddrs(Vec<(committee_pubkey, addr)>)`
+  (`BlocklaceHandle::share_peer_addrs`, `node/src/blocklace_sync.rs`). The carrying
+  envelope is itself signed by the sender's federation key.
+* The receiver (`handle_peer_addrs`) accepts an address **only** when its
+  `committee_pubkey` is one of its OWN `known_federation_keys` — a genesis-trusted
+  member — and never for itself or an un-dialable (`0.0.0.0`/port-0) socket. A
+  claimed address for a NON-committee key (a stranger an introducer tries to
+  smuggle in) is REJECTED. Accepted addresses are fed to `GossipNetwork::learn_peer`
+  (no synchronous dial); the existing reconnect prober dials them on its backoff
+  schedule. So the trust anchor is the COMMITTEE, never the wire sender: discovery
+  learns ADDRESSES for already-trusted identities, it never admits new identities.
+
+### Demonstrate transitive discovery from partial config (3 nodes, one seed)
+
+The committee (the trusted key set, `known_federation_keys`) is shared by all
+three nodes via an identical `genesis.json` (its `validators[].public_key` list =
+pkA, pkB, pkC) in each `--data-dir`. ONLY the `--federation-peers` address list
+differs per node — that is the partial config discovery fills in.
+
+```
+# A is the SEED — its peer list names B and C.
+dregg-node run --data-dir /tmp/dregg-A --auto-approve-joins \
+  --port 8801 --gossip-port 9801 --federation-peers 127.0.0.1:9802,127.0.0.1:9803
+
+# B's peer list names ONLY A (it does NOT list C).
+dregg-node run --data-dir /tmp/dregg-B --auto-approve-joins \
+  --port 8802 --gossip-port 9802 --federation-peers 127.0.0.1:9801
+
+# C's peer list names ONLY A (it does NOT list B).
+dregg-node run --data-dir /tmp/dregg-C --auto-approve-joins \
+  --port 8803 --gossip-port 9803 --federation-peers 127.0.0.1:9801
+```
+
+B connects to its seed A, receives A's verified `PeerAddrs` (which includes C's
+authenticated address, because C is a committee member A has dialed), learns it,
+and B's prober dials C — symmetrically for C learning B. A full 3-node mesh forms
+from partial CLI config; the DAG converges on all three. Watch for
+`gossip-of-peers: learned committee peer address` then `peer reconnect prober:
+(re)established link` on B and C.
+
+### The faithful in-process discovery tests
+
+* `net/src/gossip.rs::gossip_of_peers_transitive_discovery_from_single_seed` —
+  three REAL gossip networks over loopback QUIC. Seed A knows B+C; B knows only A.
+  After signed gossip crosses, A holds a verified binding for C that is C's real
+  LISTEN address (asserted dialable). Driving the exact discovery write-path
+  (`verified_peer_bindings` → `learn_peer` → prober `reconnect_peer`), B connects
+  to the DISCOVERED peer C and B↔C gossip converges over the new link — the mesh
+  formed from B's single seed (`cd net && cargo test gossip_of_peers_transitive`).
+* `node/src/blocklace_sync.rs::gossip_of_peers_accepts_committee_rejects_forged` —
+  the trust gate: a `PeerAddrs` carrying a valid committee binding (C), a FORGED
+  binding for a non-committee Sybil key (X), and a self-binding is fed through the
+  real `handle_peer_addrs`; ONLY C's address is learned into the gossip topic peer
+  set. X is rejected (a stranger is not admitted), self is ignored, and re-announcing
+  a known address is idempotent (`cd node && cargo test --bin dregg-node
+  gossip_of_peers_accepts_committee_rejects_forged`).

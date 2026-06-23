@@ -121,6 +121,25 @@ pub enum BlocklaceGossipMessage {
         height: u64,
         checkpoint_hash: [u8; 32],
     },
+    /// AUTHENTICATED GOSSIP-OF-PEERS: the sender shares dialable listen addresses
+    /// it has CRYPTOGRAPHICALLY VERIFIED for committee members, so a node booted
+    /// with only a partial peer list (a single seed) learns the rest of the mesh
+    /// transitively instead of every node having to enumerate every peer.
+    ///
+    /// Each entry is `(committee_public_key, listen_addr)`. The whole gossip
+    /// envelope carrying this message is already Ed25519-signed by the sender's
+    /// federation key (so an unauthenticated wire peer cannot inject it at all),
+    /// AND each individual address is one the sender verified by dialing that
+    /// identity and validating its signature ([`GossipNetwork::verified_peer_bindings`]).
+    ///
+    /// THE TRUST ANCHOR IS THE COMMITTEE KEY SET, NOT THE WIRE SENDER: the
+    /// receiver ([`handle_peer_addrs`]) accepts an address ONLY when
+    /// `committee_public_key` is one of its OWN `known_federation_keys` — a member
+    /// it already trusts from genesis. A claimed address for a non-committee key
+    /// (a stranger an introducer tries to smuggle in) is rejected outright. So
+    /// discovery learns ADDRESSES for already-trusted identities; it never admits
+    /// new identities.
+    PeerAddrs(Vec<([u8; 32], SocketAddr)>),
     /// A signed QUORUM FINALIZATION VOTE: the emitting member asserts it has
     /// locally finalized `vote.block_id` to `vote.level`. Carried ON the
     /// blocklace topic (the proven-bidirectional dissemination channel) rather
@@ -727,6 +746,58 @@ impl BlocklaceHandle {
                 v
             })
             .collect()
+    }
+
+    /// AUTHENTICATED GOSSIP-OF-PEERS: share the dialable committee-member
+    /// addresses we have personally VERIFIED so peers booted with only a partial
+    /// peer list learn the rest of the mesh transitively.
+    ///
+    /// The gossip layer hands back its cryptographically-verified bindings
+    /// (`peer NodeId -> dialable listen address`, where the NodeId is
+    /// `blake3(committee_public_key)` proven by an Ed25519-verified envelope over a
+    /// link WE dialed). We map each verified `NodeId` back to its committee PUBLIC
+    /// KEY using `known_federation_keys` (the genesis-trusted set) — dropping any
+    /// binding whose identity is NOT a current committee member — and broadcast the
+    /// surviving `(committee_pubkey, addr)` pairs. The carrying envelope is signed
+    /// by our federation key, and the receiver re-checks each pubkey against ITS
+    /// OWN committee set before dialing, so the trust anchor is the committee on
+    /// both ends, never the wire path.
+    ///
+    /// Quiet when we hold no verified bindings (a brand-new solo node) — nothing
+    /// to share.
+    pub async fn share_peer_addrs(&self, state: &NodeState) {
+        // Reverse map: gossip NodeId (blake3(pubkey)) -> committee public key.
+        let id_to_pubkey: HashMap<[u8; 32], [u8; 32]> = {
+            let s = state.read().await;
+            s.known_federation_keys
+                .iter()
+                .map(|k| (*blake3::hash(k.as_bytes()).as_bytes(), k.0))
+                .collect()
+        };
+        let bindings = self.gossip.verified_peer_bindings().await;
+        let to_share: Vec<([u8; 32], SocketAddr)> = bindings
+            .into_iter()
+            .filter_map(|(node_id, addr)| {
+                // Only share bindings whose identity is a CURRENT committee member
+                // (the receiver enforces the same, but filtering here keeps the
+                // message tight and never leaks a rotated-out identity).
+                let pubkey = id_to_pubkey.get(&node_id)?;
+                // Never advertise an un-dialable address.
+                if addr.ip().is_unspecified() || addr.port() == 0 {
+                    return None;
+                }
+                Some((*pubkey, addr))
+            })
+            .collect();
+        if to_share.is_empty() {
+            return;
+        }
+        debug!(
+            count = to_share.len(),
+            "gossip-of-peers: sharing verified committee addresses"
+        );
+        self.broadcast_gossip_message(&BlocklaceGossipMessage::PeerAddrs(to_share))
+            .await;
     }
 
     /// Broadcast a blocklace gossip message to the topic.
@@ -1554,6 +1625,12 @@ pub async fn run_blocklace_sync(
                     // When a new peer joins, send our frontier (with any held
                     // votes piggybacked) for efficient catch-up.
                     handle_for_receiver.send_frontier().await;
+                    // …and share the committee addresses we have verified, so a
+                    // peer that connected to us with only a partial peer list
+                    // immediately learns the rest of the mesh (gossip-of-peers).
+                    handle_for_receiver
+                        .share_peer_addrs(&state_for_receiver)
+                        .await;
                 }
                 Some(GossipEvent::PeerLeft(addr)) => {
                     info!(peer = %addr, "peer left blocklace topic");
@@ -1619,7 +1696,7 @@ pub async fn run_blocklace_sync(
         // Probe cadence: tied to catch-up cadence (a peer-down gap is the same
         // class of liveness problem), floored at 2s so it is polite.
         let prober_interval_ms = catchup_interval_ms.max(2_000);
-        spawn_peer_prober(handle.clone(), prober_interval_ms);
+        spawn_peer_prober(handle.clone(), state.clone(), prober_interval_ms);
     }
 
     // A fresh/restarted node proactively announces its frontier once gossip is up,
@@ -1698,6 +1775,9 @@ async fn handle_blocklace_message(
             // The actual checkpoint data is fetched via HTTP when needed (during bootstrap).
             let _ = (height, checkpoint_hash);
         }
+        BlocklaceGossipMessage::PeerAddrs(addrs) => {
+            handle_peer_addrs(handle, state, from, addrs).await;
+        }
         BlocklaceGossipMessage::FinalizationVote(vote) => {
             handle_finalization_vote(handle, from, vote).await;
         }
@@ -1764,6 +1844,82 @@ async fn handle_finalization_vote(
     vote: crate::finalization_votes::FinalizationVote,
 ) {
     record_finalization_vote(handle, &vote).await;
+}
+
+/// Process a received `PeerAddrs` gossip-of-peers announcement: learn dialable
+/// listen addresses for committee members from a connected peer, so the mesh
+/// forms transitively from a single seed.
+///
+/// SECURITY — the committee key set is the trust anchor:
+///   * The whole envelope was already Ed25519-verified by the gossip layer
+///     against the sending NODE's federation key, so a non-committee wire peer
+///     cannot deliver this message at all (it would be dropped as "unknown
+///     sender" / bad signature before reaching here).
+///   * EACH advertised `(committee_pubkey, addr)` is accepted ONLY when
+///     `committee_pubkey` is one of OUR `known_federation_keys` — a genesis-known
+///     member we already trust. A claimed address for any other key (a stranger
+///     an introducer tries to smuggle in) is REJECTED. Discovery learns
+///     ADDRESSES for trusted identities; it never admits new identities, and the
+///     wire SENDER is never the trust anchor.
+///   * We never learn an address for OURSELVES (`self_key`) and the address must
+///     be a well-formed, routable socket (non-unspecified host, non-zero port).
+///
+/// An accepted address is fed to the gossip layer's topic peer set
+/// ([`GossipNetwork::learn_peer`]) WITHOUT a synchronous dial; the existing
+/// reconnect prober dials it on its backoff schedule. Returns the number of
+/// newly-learned committee addresses (for tests / diagnostics).
+async fn handle_peer_addrs(
+    handle: &BlocklaceHandle,
+    state: &NodeState,
+    from: SocketAddr,
+    addrs: Vec<([u8; 32], SocketAddr)>,
+) -> usize {
+    // The committee key set: the genesis-trusted identities. Discovery may learn
+    // an address ONLY for a key in this set (never an introducer-supplied stranger).
+    let committee: std::collections::HashSet<[u8; 32]> = {
+        let s = state.read().await;
+        s.known_federation_keys.iter().map(|k| k.0).collect()
+    };
+
+    let mut learned = 0usize;
+    for (pubkey, addr) in addrs {
+        // TRUST GATE: the address is only acceptable if it is claimed FOR a known
+        // committee member. A non-committee key is a stranger — reject it.
+        if !committee.contains(&pubkey) {
+            debug!(
+                from = %from,
+                "gossip-of-peers: rejecting address for non-committee key (untrusted introducer claim)"
+            );
+            continue;
+        }
+        // Never learn our own address (we don't dial ourselves).
+        if pubkey == handle.self_key {
+            continue;
+        }
+        // Validate the address shape: a routable host + non-zero port. Drops
+        // 0.0.0.0/::/port-0 hints that nothing can dial.
+        if addr.ip().is_unspecified() || addr.port() == 0 {
+            debug!(from = %from, %addr, "gossip-of-peers: rejecting un-dialable address");
+            continue;
+        }
+        if handle.gossip.learn_peer(&handle.topic, addr).await {
+            info!(
+                from = %from,
+                %addr,
+                member = %hex_encode(&pubkey[..4]),
+                "gossip-of-peers: learned committee peer address (prober will dial)"
+            );
+            learned += 1;
+        }
+    }
+    if learned > 0 {
+        // A freshly-learned peer is an open gap: nudge a frontier so once the
+        // prober dials it, catch-up flows promptly.
+        crate::metrics::set_federation_peers_connected(
+            handle.gossip.connected_peer_count().await as f64,
+        );
+    }
+    learned
 }
 
 /// Handle a Push (or PullResponse) message: receive blocks into our blocklace.
@@ -2644,7 +2800,7 @@ async fn cadence_tick_solo(state: &NodeState, handle: &BlocklaceHandle, idle_hea
 /// transport link for ALL topics: a QUIC connection is shared across the
 /// logical gossip topics, so one restored link carries blocklace + turns +
 /// revocations + … again.
-fn spawn_peer_prober(handle: BlocklaceHandle, interval_ms: u64) {
+fn spawn_peer_prober(handle: BlocklaceHandle, state: NodeState, interval_ms: u64) {
     if interval_ms == 0 {
         info!("peer reconnect prober disabled (interval 0)");
         return;
@@ -2664,6 +2820,15 @@ fn spawn_peer_prober(handle: BlocklaceHandle, interval_ms: u64) {
         info!(interval_ms, "peer reconnect prober active");
         loop {
             ticker.tick().await;
+            // AUTHENTICATED GOSSIP-OF-PEERS: each tick, share the committee
+            // addresses we have personally verified so a peer booted with only a
+            // partial peer list learns the rest of the mesh transitively. This is
+            // the discovery half that pairs with the reconnect half below: the
+            // shared addresses become unconnected topic peers on the receiver,
+            // which ITS prober then dials — so the mesh forms from a single seed
+            // without every node enumerating every peer.
+            handle.share_peer_addrs(&state).await;
+
             let unconnected = handle
                 .gossip
                 .unconnected_topic_peers(&handle.topic)
@@ -4900,6 +5065,122 @@ mod tests {
             canonical_ledger_root(&b),
             "the attested root must witness a public_key divergence at the same id"
         );
+    }
+
+    // ─── Gossip-of-peers: committee-gated address acceptance ────────────────
+
+    /// Build a minimal real [`BlocklaceHandle`] over a live gossip network for a
+    /// committee of `participants`, so `handle_peer_addrs` can be exercised
+    /// end-to-end (it learns into the REAL gossip topic peer set).
+    async fn test_handle_with_committee(
+        self_key: [u8; 32],
+        participants: Vec<[u8; 32]>,
+    ) -> BlocklaceHandle {
+        use dregg_blocklace::constitution::{Constitution, ConstitutionManager};
+        let (sk, _pk) = dregg_types::generate_keypair();
+        let node_id: NodeId = *blake3::hash(&self_key).as_bytes();
+        let peer_node = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let gossip = Arc::new(GossipNetwork::new(
+            peer_node.endpoint().clone(),
+            node_id,
+            sk,
+            HashMap::new(),
+        ));
+        let topic = gossip.join_topic(TOPIC_BLOCKLACE, &[]).await.unwrap();
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let quorum = dregg_blocklace::supermajority_threshold(participants.len());
+        let blocklace =
+            dregg_blocklace::finality::Blocklace::new(signing_key.clone(), quorum);
+        let constitution = ConstitutionManager::new(Constitution::new(participants.clone(), 60_000));
+        let votes = crate::finalization_votes::VoteCollector::new(participants.iter().copied(), quorum);
+        BlocklaceHandle {
+            lace: Arc::new(RwLock::new(blocklace)),
+            constitution: Arc::new(RwLock::new(constitution)),
+            gossip,
+            topic,
+            self_key,
+            signing_key,
+            votes: Arc::new(RwLock::new(votes)),
+            my_pending_votes: Arc::new(RwLock::new(HashMap::new())),
+            cursor: Arc::new(RwLock::new(crate::execution_cursor::ExecutionCursor::new())),
+            finality_notify: Arc::new(Notify::new()),
+            auto_approve_joins: false,
+            checkpoint_interval: 100,
+            orphans: Arc::new(RwLock::new(crate::catchup::OrphanBuffer::new())),
+            pull_backoff: Arc::new(RwLock::new(dregg_net::peer_score::RequestBackoff::new(
+                Duration::from_secs(1),
+                Duration::from_secs(30),
+            ))),
+            last_produced: Arc::new(RwLock::new(std::time::Instant::now())),
+            ack_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending_payloads: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+        }
+    }
+
+    /// THE DISCOVERY TRUST GATE: a `PeerAddrs` announcement learns an address ONLY
+    /// for a key already in the committee (`known_federation_keys`), and REJECTS a
+    /// forged address claimed for a non-committee key. The committee — not the wire
+    /// sender — is the trust anchor: discovery learns addresses for trusted
+    /// identities, never admits strangers.
+    #[tokio::test]
+    async fn gossip_of_peers_accepts_committee_rejects_forged() {
+        // The gossip/QUIC transport needs a rustls CryptoProvider (idempotent).
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        // Committee = three genesis-trusted members (self + B + C).
+        let (_sk_self, pk_self) = dregg_types::generate_keypair();
+        let (_sk_b, pk_b) = dregg_types::generate_keypair();
+        let (_sk_c, pk_c) = dregg_types::generate_keypair();
+        // A STRANGER: a free Sybil keypair NOT in the committee.
+        let (_sk_x, pk_x) = dregg_types::generate_keypair();
+
+        state
+            .write()
+            .await
+            .set_federation_keys(vec![pk_self, pk_b, pk_c]);
+
+        let handle = test_handle_with_committee(pk_self.0, vec![pk_self.0, pk_b.0, pk_c.0]).await;
+
+        let from: SocketAddr = "127.0.0.1:40000".parse().unwrap();
+        let addr_c: SocketAddr = "127.0.0.1:41000".parse().unwrap();
+        let addr_x: SocketAddr = "127.0.0.1:42000".parse().unwrap();
+        let addr_self: SocketAddr = "127.0.0.1:43000".parse().unwrap();
+
+        // One message carrying: a VALID committee binding for C, a FORGED binding
+        // for the non-committee stranger X, and a (self) binding we must ignore.
+        let learned = handle_peer_addrs(
+            &handle,
+            &state,
+            from,
+            vec![(pk_c.0, addr_c), (pk_x.0, addr_x), (pk_self.0, addr_self)],
+        )
+        .await;
+
+        // Exactly ONE address was learned: C's. X (stranger) and self were dropped.
+        assert_eq!(
+            learned, 1,
+            "only the committee member C's address may be learned"
+        );
+
+        let topic_peers = handle.gossip.topic_peers(&handle.topic).await;
+        assert!(
+            topic_peers.contains(&addr_c),
+            "C's authenticated committee address must be learned into the topic peer set"
+        );
+        assert!(
+            !topic_peers.contains(&addr_x),
+            "a FORGED address for a non-committee key must be REJECTED (stranger not admitted)"
+        );
+        assert!(
+            !topic_peers.contains(&addr_self),
+            "we must never learn an address for ourselves"
+        );
+
+        // Idempotent: re-announcing C's address learns nothing new.
+        let again = handle_peer_addrs(&handle, &state, from, vec![(pk_c.0, addr_c)]).await;
+        assert_eq!(again, 0, "re-announcing a known address learns nothing new");
     }
 }
 
