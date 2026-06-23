@@ -76,6 +76,12 @@ use crate::sync_cell_fs::SyncCellFs;
 /// panel) sees the cell-ledger as its filesystem.
 pub struct FirmamentZedFs {
     cell: SyncCellFs,
+    /// The cell-ledger GIT SURFACE, if enabled. When `Some`, `open_repo` returns
+    /// it: Zed's git panel renders change history/status/blame derived from the
+    /// receipt chain + dregg-doc patch history (NOT a host `.git`). Built lazily
+    /// via [`FirmamentZedFs::enable_git`] (it needs a `BackgroundExecutor` for
+    /// `status`'s `Task`, the same way `RealFs::open_repo` uses `self.executor`).
+    git: std::sync::Mutex<Option<Arc<crate::cell_git::CellLedgerGit>>>,
 }
 
 impl FirmamentZedFs {
@@ -84,13 +90,49 @@ impl FirmamentZedFs {
     pub fn new() -> Self {
         FirmamentZedFs {
             cell: SyncCellFs::new(),
+            git: std::sync::Mutex::new(None),
         }
     }
 
     /// Wrap an already-mounted cell fs (e.g. one a deos image handed over with
     /// files pre-seeded).
     pub fn with_cell_fs(cell: SyncCellFs) -> Self {
-        FirmamentZedFs { cell }
+        FirmamentZedFs {
+            cell,
+            git: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// **Enable the cell-ledger GIT SURFACE.** Builds a [`CellLedgerGit`] rooted at
+    /// `work_root`, seeds the genesis content of every currently-mounted file-cell
+    /// into its dregg-doc history (the initial "commit"), and arms `open_repo` to
+    /// return it. The `executor` (the gpui `BackgroundExecutor`, available at boot
+    /// the same way `RealFs` holds one) backs `GitRepository::status`'s `Task`.
+    /// Returns the repo so a caller can drive it / observe receipts.
+    ///
+    /// After this, a `save` on the fs ALSO records the new content as a committed
+    /// patch in the git history (a save = a turn = a "commit"), so the panel's log
+    /// and blame stay in lockstep with the receipt chain.
+    pub fn enable_git(
+        &self,
+        work_root: impl Into<std::path::PathBuf>,
+        executor: gpui::BackgroundExecutor,
+    ) -> Arc<crate::cell_git::CellLedgerGit> {
+        let work_root = work_root.into();
+        let repo = Arc::new(crate::cell_git::CellLedgerGit::new(
+            work_root.clone(),
+            executor,
+        ));
+        // Seed the genesis content of every mounted file-cell as the first commit
+        // (recursively walk the cell namespace: read_dir lists one level).
+        seed_git_from_namespace(&self.cell, &repo, std::path::Path::new("/"));
+        *self.git.lock().unwrap() = Some(repo.clone());
+        repo
+    }
+
+    /// The enabled cell-ledger git surface, if [`FirmamentZedFs::enable_git`] ran.
+    pub fn git(&self) -> Option<Arc<crate::cell_git::CellLedgerGit>> {
+        self.git.lock().unwrap().clone()
     }
 
     /// Seed a file-cell at `path` with `content` (genesis — not a turn). Returns
@@ -115,6 +157,16 @@ impl FirmamentZedFs {
     /// Borrow the underlying cell fs (for receipt/cell introspection in tests).
     pub fn cell_fs(&self) -> &SyncCellFs {
         &self.cell
+    }
+
+    /// Record a save into the cell-ledger git history IF the git surface is
+    /// enabled: the new content becomes a committed patch (a "commit") on the
+    /// path's dregg-doc history, so the panel's log + blame stay in lockstep with
+    /// the receipt chain. A no-op when git is disabled.
+    fn record_git_save(&self, path: &Path, content: &str) {
+        if let Some(repo) = self.git() {
+            repo.record_save(path.to_path_buf(), content);
+        }
     }
 
     fn cell_metadata(&self, path: &Path) -> Option<Metadata> {
@@ -272,6 +324,7 @@ impl Fs for FirmamentZedFs {
 
     async fn atomic_write(&self, path: PathBuf, text: String) -> Result<()> {
         self.cell.save(&path, &text)?;
+        self.record_git_save(&path, &text);
         Ok(())
     }
 
@@ -282,6 +335,7 @@ impl Fs for FirmamentZedFs {
         // follow-on; the rope already carries the editor's content faithfully.)
         let content = text.to_string();
         self.cell.save(path, &content)?;
+        self.record_git_save(path, &content);
         Ok(())
     }
 
@@ -289,6 +343,7 @@ impl Fs for FirmamentZedFs {
         let text = String::from_utf8(content.to_vec())
             .map_err(|_| anyhow!("FirmamentZedFs: write non-UTF-8 content"))?;
         self.cell.save(path, &text)?;
+        self.record_git_save(path, &text);
         Ok(())
     }
 
@@ -344,7 +399,18 @@ impl Fs for FirmamentZedFs {
         _abs_dot_git: &Path,
         _system_git_binary_path: Option<&Path>,
     ) -> Result<Arc<dyn GitRepository>> {
-        bail!("FirmamentZedFs: no git over cells yet (this slice)")
+        // THE CELL-LEDGER GIT SURFACE. If `enable_git` has armed a `CellLedgerGit`,
+        // return it: the panel's status/blame/log/diff come from the receipt chain
+        // + dregg-doc patch history, NOT a host `.git`. (Discovery — the worktree
+        // scanner detecting a `.git` entry and calling THIS — is the remaining
+        // panel seam; see cell_git.rs's module doc. Driving this repo directly
+        // proves the substrate the panel renders.)
+        match self.git() {
+            Some(repo) => Ok(repo as Arc<dyn GitRepository>),
+            None => bail!(
+                "FirmamentZedFs: cell-ledger git not enabled — call enable_git(work_root, executor) first"
+            ),
+        }
     }
 
     async fn git_init(&self, _abs_work_directory: &Path, _fallback_branch_name: String) -> Result<()> {
@@ -396,6 +462,23 @@ fn path_inode(path: &Path) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut h);
     h.finish() | 1
+}
+
+/// Recursively walk the cell namespace under `dir` and seed each file-cell's
+/// current content as the genesis commit in the git surface. `read_dir` lists one
+/// level (files + implicit directories); we recurse into directories.
+fn seed_git_from_namespace(
+    cell: &SyncCellFs,
+    repo: &crate::cell_git::CellLedgerGit,
+    dir: &Path,
+) {
+    for (path, is_dir) in cell.read_dir(dir) {
+        if is_dir {
+            seed_git_from_namespace(cell, repo, &path);
+        } else if let Ok(content) = cell.load(&path) {
+            repo.record_genesis(path, &content);
+        }
+    }
 }
 
 // A small helper so callers can ignore the unused-import lint footprint of the
