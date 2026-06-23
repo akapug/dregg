@@ -42,7 +42,7 @@ is a faithful replacement + list the verb-family surface to remove + the re-poin
 
 NEW file. Imports the probe + the factory executor; does NOT touch `cell/src/capability.rs`/`seal.rs`,
 `Argus/Compile.lean`, or the Substrate/Dynamics files. `#assert_axioms`-pinned to
-`{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`.
+`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Verify.EscrowFactoryProbe
 import Dregg2.Exec.TurnExecutorFull

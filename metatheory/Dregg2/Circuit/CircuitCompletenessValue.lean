@@ -42,8 +42,7 @@ Completeness is vacuous if the constructed witness is degenerate. Each rung carr
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every new theorem; the trace-construction
-floors enter as named structure carriers (Type-valued realizable prover witnesses), never as axioms. No
-`sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+floors enter as named structure carriers (Type-valued realizable prover witnesses), never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompleteness
 import Dregg2.Circuit.RotatedKernelRefinementMintBurn

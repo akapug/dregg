@@ -66,8 +66,8 @@ balanceA's weld treats it.
 
 The Poseidon2-CR / whole-list-digest assumption enters ONLY inside the reused `noteSpendA_full_sound`
 (its `compressNInjective cN` + `listLeafInjective LE` portals), not in the welded conclusion's
-statement. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every headline theorem; no
-`sorry`, no `:= True`, no `native_decide`. Imports are READ-ONLY; this file owns only itself.
+statement. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every headline theorem.
+Imports are READ-ONLY; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Effects.NoteSpend
 import Dregg2.Circuit.Inst.noteSpendA

@@ -385,7 +385,7 @@ theorem cx_mkt0_revoked_pay_safety_forever (credNul : Nat)
     simpa [mkt0, payAsset, cellObsA] using h
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty pins). Every keystone depends ONLY on the three
-standard kernel axioms `{propext, Classical.choice, Quot.sound}` — no `sorryAx`. -/
+standard kernel axioms `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms execFullForestG_leaf
 #assert_axioms execFullForestG_cxNode

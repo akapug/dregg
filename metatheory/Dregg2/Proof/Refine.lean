@@ -298,14 +298,14 @@ chain — the async square's conservation arm bites. Relay of `ConditionalTurn.n
 theorem refine_async_bites (a a' : ℤ) (h : a' ≠ a) : ¬ CondAbsStep a a' :=
   Dregg2.Exec.ConditionalTurn.not_condAbsStep_of_ne a a' h
 
-/-! ## 9. THE NAMED RESIDUALS (precise, NOT `sorry`, NOT vacuous hypotheses).
+/-! ## 9. THE NAMED RESIDUALS (precise, an open named obligation, NOT vacuous hypotheses).
 
 The per-STEP forward-simulation square is now CLOSED on all three axes (intra-vat `refine_step`,
 cross-vat `refine_cross_vat_step`, async `refine_async_run`), each with teeth. The whole-history
 connectivity closure — once a named run-level residual — is now likewise PROVED
 (`ExecRefinementFull.onlyConnectivityCloses`). The genuinely remaining obligations are the two
 contended/coinductive properties, ORTHOGONAL to the per-step square, each isolated as a NAMED
-predicate in its home module (NOT a `sorry`, NOT a carried-conclusion hypothesis):
+predicate in its home module (an open named obligation, NOT a carried-conclusion hypothesis):
 
   * **Whole-history connectivity closure** — `Spec.ExecRefinementFull.OnlyConnectivityCloses`:
     across an entire run, no reachable authority edge appears that some authorized op did not

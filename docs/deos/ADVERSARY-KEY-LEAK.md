@@ -8,7 +8,7 @@ leaks" is already answered by the deployed proofs*; the genuinely-new work is on
 named seam.
 
 The companion model is `metatheory/Metatheory/KeyLeak.lean` — a kernel-clean Lean
-harness (no `sorry`, no `:= True`; axioms `propext`/`Classical.choice`/`Quot.sound`
+harness (axioms `propext`/`Classical.choice`/`Quot.sound`
 only) that instantiates the adversary as an opaque controller and proves the
 blast-radius bound, the containment, and that revocation kills it. It builds under the
 `Metatheory.+` glob (`metatheory/lakefile.toml`), so CI covers it.

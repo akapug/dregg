@@ -75,7 +75,7 @@ digest `D` (layer 1) is universe-A's bar, retained only for the v1 connector `ca
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY as
 the NAMED hypothesis `Poseidon2SpongeCR hash`; the cap-table digest enters ONLY as `Function.Injective D`
-(universe-A's portal). No `sorry`, no `:= True`, no `native_decide`, no `rfl`-posing-as-bridge. Imports
+(universe-A's portal). Imports
 are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

@@ -34,7 +34,7 @@ under the deployed `exec` semantics, whether a fully-solvent state is reachable 
 admissible transfers. The conservation law itself is the deployed `exec_conserves`; here we witness
 the bounded *solvency-recovery GAME*, not re-prove conservation.
 
-l4v bar: no `sorry`, no load-bearing `:= True`; every floor is `Bool`/decidable and non-vacuous both
+l4v bar: every floor is `Bool`/decidable and non-vacuous both
 polarities (a solvent reachable state passes; an insolvent dead-end is foreclosed). `#guard`s and
 `decide` proofs execute both, over the real deployed `exec` and the heterogeneous `or`-fold.
 -/

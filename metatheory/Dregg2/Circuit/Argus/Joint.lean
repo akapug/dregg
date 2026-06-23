@@ -65,8 +65,7 @@ per-cell soundnesses). The binding is carried as a NAMED premise exactly as the 
     is the per-leg circuit weld composed (each leg's `balanceA_compile_sound`), NOT a monolithic joint-AIR.
     That shape-AIR gap (one circuit for the whole N-cell par) is the residual, stated not hidden.
 
-`#assert_axioms` on the keystone ⊆ {propext, Classical.choice, Quot.sound}; NO `sorry`/`:=True`/
-`native_decide`. Imports `EntangledJoint` + `Effects.BalanceA` READ-ONLY; this file owns only itself.
+`#assert_axioms` on the keystone ⊆ {propext, Classical.choice, Quot.sound}. Imports `EntangledJoint` + `Effects.BalanceA` READ-ONLY; this file owns only itself.
 Verified with `lake build Dregg2.Circuit.Argus.Joint`.
 -/
 import Dregg2.Distributed.EntangledJoint

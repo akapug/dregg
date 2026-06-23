@@ -59,7 +59,7 @@ and the state-commitment conjunct (`Circuit/StateCommit.RestHashIffFrame` does n
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto enters ONLY as the named
 `Poseidon2SpongeCR` hypothesis (the cap-root floor) and ONLY where an opening is compared across
-distinct addresses. No `sorry`, no `:= True`, no `native_decide`.
+distinct addresses.
 -/
 import Dregg2.Substrate.Heap
 import Dregg2.Exec.EffectsState

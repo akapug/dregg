@@ -41,8 +41,8 @@ machinery is untouched (the cutover that retires it is `§10`, run by the main l
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `native_decide`,
-no `:= True`, no faked constants. Pure, `#guard`-able. NEW names only; imports read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Pure, `#guard`-able.
+NEW names only; imports read-only.
 -/
 import Dregg2.Exec.Kernel
 import Dregg2.Tactics

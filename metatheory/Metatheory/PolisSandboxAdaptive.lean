@@ -12,7 +12,7 @@ anticipated.
     governor strands the victim under NO attack of ANY depth (the search can run forever and never
     win), because it preserves the victim's reach-home option at every governed step.
 
-Pure Lean 4 core; no `sorry`.
+Pure Lean 4 core.
 -/
 import Metatheory.PolisSandboxLongGame
 

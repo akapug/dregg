@@ -44,7 +44,7 @@ exactly as `transferRunnableSpec` is the worked reference):
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. The sole crypto carrier is the
 NAMED `Poseidon2SpongeCR` portal, entering ONLY through the generic `runnable_full_sound` / the §4 anti-ghost.
-No `sorry`, no `:= True`, no `native_decide`. Imports are read-only; this module owns only its declarations.
+Imports are read-only; this module owns only its declarations.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitBurn
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

@@ -45,8 +45,7 @@ you contend.*
 
 No import of the executor or the blocklace: this module is the pure order-theoretic
 core, deliberately dependency-light so the fast-path argument is reusable against any
-deterministic `step`. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound});
-NO `sorry`/`:=True`/`native_decide`.
+deterministic `step`. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Consensus.OnDemandFeasibility`.
 -/
 import Mathlib.Data.List.Perm.Basic

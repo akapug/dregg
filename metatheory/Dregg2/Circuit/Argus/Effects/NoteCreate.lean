@@ -65,7 +65,7 @@ This module covers both directions:
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the Poseidon-CR /
 whole-list-digest assumption enters ONLY inside the reused `noteCreateA_full_sound` (its
 `compressNInjective`/`listLeafInjective`/`logHashInjective`/`RestIffNoCommitments` portal hypotheses),
-not in the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`. Imports are
+not in the welded conclusion's statement. Imports are
 read-only; this file OWNS only its own declarations.
 -/
 import Dregg2.Circuit.Argus.Stmt

@@ -66,7 +66,7 @@ rather than read off the leaf's committed `auth_tag` generically (FacetAuthority
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters only as the named
 `CapHashScheme.chipAbsorb`/`chipCR` floor (and the chip-soundness `ChipTableSound`), inherited
-unchanged from `DeployedCapOpen`. No sorry/native_decide/:= True.
+unchanged from `DeployedCapOpen`.
 -/
 import Dregg2.Circuit.DeployedCapOpen
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3

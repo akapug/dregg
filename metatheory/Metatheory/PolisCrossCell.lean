@@ -9,7 +9,7 @@ and falsely claim anti-tyranny). Deployment: instantiate `polisFloorProp` from
 `PolisSelfCompose.dominationBar` lifted to streams, and `circuitSoundnessProp` from the deployed
 `CoinductiveAdversary` confluence; share `violation_has_finite_witness`, never the predicate.
 
-Pure Lean 4 core (imports only the import-free `Metatheory.Polis`); no `sorry`.
+Pure Lean 4 core (imports only the import-free `Metatheory.Polis`).
 -/
 import Metatheory.Polis
 

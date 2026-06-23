@@ -78,8 +78,7 @@ about the GENUINE descriptor (the one with the real recompute + non-amp), not th
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named carriers inherited through the
-imported genuine keystones (`Poseidon2SpongeCR` via the recompute anti-ghost). No `sorry`, no
-`native_decide`, no `:= True`, no fresh axiom. NEW file; imports are read-only.
+imported genuine keystones (`Poseidon2SpongeCR` via the recompute anti-ghost). NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 import Dregg2.Circuit.Spec.authorityattenuation

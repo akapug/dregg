@@ -247,8 +247,7 @@ def kR0 : RecordKernelState :=
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms removeEdgeCaps_correct
 #assert_axioms recKRevokeTarget_correct

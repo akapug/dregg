@@ -3134,14 +3134,14 @@ def wideRoundtripState : WState :=
 #assert_axioms cellNatsOfFun
 #assert_axioms funOfCellNats
 
-/-! ## §W8 — keystone axiom-hygiene pins (the FILL I no-`sorryAx` guard).
+/-! ## §W8 — keystone axiom-hygiene pins (the FILL I axiom-hygiene guard).
 
 The wide codec is TCB (cross-validated, not yet proved — FILL J adds the round-trip theorem). But the
 EXECUTED object under it — `execFullTurnWide`, which runs the PROVED `execFullForestA` over the decoded
 tree — and the load-bearing structural projections (`eraseAuth`: WForest → the proved `FullForestA`;
 `stateOfWState`: the decoded state → `RecordKernelState`) are pinned to
 the three standard kernel axioms `{propext, Classical.choice, Quot.sound}` (mathlib's `Finset`/`toFinset`
-pull in `Classical.choice`/`Quot.sound`; a `sorryAx` here would FAIL the build). -/
+pull in `Classical.choice`/`Quot.sound`). -/
 
 #assert_axioms execFullTurnWide
 #assert_axioms eraseAuth

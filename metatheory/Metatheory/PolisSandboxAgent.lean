@@ -16,7 +16,7 @@ but the viability governor refuses the discovered move and the victim reaches ho
 (`optimizing_adversary_governed`). Emergence + governance, end to end.
 
 Honest: this is a bounded greedy/lookahead optimizer (a Lean function), not an LLM — but it genuinely
-*chooses* and genuinely *discovers* the strategy. No `sorry`.
+*chooses* and genuinely *discovers* the strategy.
 -/
 import Metatheory.PolisSandboxLongGame
 

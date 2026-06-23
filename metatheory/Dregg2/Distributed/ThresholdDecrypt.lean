@@ -51,7 +51,7 @@ share-MAC tamper-detection (`combine_shares` verifying each `share_mac` before i
 not the BLAKE3 internals. The prototype's trusted-dealer key generation (vs a production DKG) is an
 out-of-model setup assumption stated explicitly, not proved away.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 
 Differential: `federation/src/threshold_decrypt_diff.rs` transcribes §1–§3 and asserts the Lean semantics is
 the one the real `gf256`/`shamir_reconstruct_byte`/`combine_shares` compute, on the Rust test vectors plus

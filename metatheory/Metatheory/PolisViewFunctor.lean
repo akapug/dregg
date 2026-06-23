@@ -31,7 +31,7 @@ by the real down-closed config — including the `eraseAuthor` counterfactual.
 for any config. It is NOT a peek into controller intent and NOT an unbounded membership oracle over an
 infinite event space — it is the public author-occurrence of a finite published config snapshot.
 The §8 crypto seam (hash-injectivity, signature-unforgeability) is untouched, exactly as in the
-deployed `Blocklace.lean`. No `sorry`, no load-bearing `:= True`, no faked green.
+deployed `Blocklace.lean`.
 -/
 import Metatheory.PolisDominationDregg
 

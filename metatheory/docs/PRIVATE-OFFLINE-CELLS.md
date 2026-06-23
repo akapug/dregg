@@ -135,8 +135,7 @@ FALSE under an injective commitment — only the extractability carrier could ev
 the forging verifier that lacks it is unsound). `private_reveals_strictly_less` pins the disclosure
 position.
 
-All `#assert_axioms`-clean (⊆ {`propext`, `Classical.choice`, `Quot.sound`}); no `sorry`, no
-`native_decide`, no load-bearing `:= True`.
+All `#assert_axioms`-clean (⊆ {`propext`, `Classical.choice`, `Quot.sound`}).
 
 ---
 

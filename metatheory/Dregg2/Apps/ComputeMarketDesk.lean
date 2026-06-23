@@ -72,7 +72,7 @@ contained (the desk can only wake within its held badge mask).
     the notification object's badge accumulator; the gate/attenuation laws are proved here and in
     `NotifyAuthority`.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` —
+Discipline: axiom-clean (`#assert_all_clean` at the close) —
 `decide` / `#guard` / `Exec.Program` + `NotifyAuthority` keystone reuse only. `lake build` green (LOCAL).
 -/
 import Dregg2.Exec.Program

@@ -38,7 +38,7 @@ are what a "pipelining is verified" citation must point at:
     queued eventual-send's authorization `Guard` survives promise resolution unchanged.
 The **distributed/multi-vat liveness** of pipelining (cross-vat GC of exported
 promises) is OPEN — see `Exec.CapTP` §4 (`-- OPEN: distributed_gc_liveness`), a
-documented residue, not a `sorry`.
+documented residue, not an unproven hole.
 -/
 import Dregg2.Core
 import Dregg2.Laws

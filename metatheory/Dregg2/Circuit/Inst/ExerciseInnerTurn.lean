@@ -3,7 +3,7 @@
 
 The outer `exerciseA` hold-gate is arithmetized in `exerciseA.lean`; the INNER `List FullActionA`
 fold from `exerciseHoldState` is NOT yet composed into the emitted-turn layer. This module names the
-parameterized witness bundle and tracks the remaining refinement fronts as explicit `sorry` portals.
+parameterized witness bundle and tracks the remaining refinement fronts as explicit named open holes.
 
 POLICY: no silent gaps — every unfinished inner-turn / R4 facet front is named here.
 -/

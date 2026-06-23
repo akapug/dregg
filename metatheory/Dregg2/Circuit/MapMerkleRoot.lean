@@ -32,7 +32,7 @@ SAME `Poseidon2SpongeCR`, now used at the 2-to-1 node (`mapNode`) and the leaf (
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `native_decide`. Crypto
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Crypto
 enters ONLY as the named `Poseidon2SpongeCR` floor (at the node + leaf), the SAME floor the whole
 commitment tower carries. NEW file; imports read-only.
 -/

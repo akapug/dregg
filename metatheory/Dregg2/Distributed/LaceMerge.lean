@@ -46,7 +46,7 @@ SIMPLIFIED (a faithful PROJECTION, stated, not hidden):
   unforgeability is the §8 crypto seam (a HYPOTHESIS `WellFormedDelta`), exactly the status of
   `Authority.Blocklace`'s §8 boundary.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Distributed.LaceMerge`. Differential: `blocklace/src/finality.rs::merge`.
 -/
 import Dregg2.Distributed.BlocklaceFinality

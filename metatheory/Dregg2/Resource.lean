@@ -55,7 +55,7 @@ the SAME `▶` ("later") as `Boundary.lean`'s guard — exactly how Iris builds 
 guarded fixpoint over cameras. Until then the discrete RA is the canonical tier.
 
 Style: spec-first. The `ℕ` and `Excl` cameras are proved in full (including the core
-laws); `Auth` gives concrete data with its laws `sorry`'d (the obligations to discharge
+laws); `Auth` gives concrete data with its laws left open (the obligations to discharge
 when the authoritative resource kind is admitted).
 -/
 import Mathlib.Algebra.Group.Defs

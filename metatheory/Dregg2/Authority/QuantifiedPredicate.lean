@@ -29,7 +29,7 @@ named escape to the witnessed seam, connected to the existing `MemberOf` / `Send
 
 NEW file only. Does NOT edit `RelationalClosure`, `Authority.Predicate`, `Exec.Value`, or `Dregg2.lean`.
 Reuses `RelationalClosure.RelPred` (the relational closure) + `Authority.Predicate.registryVerify`
-(the witnessed-membership dispatch). Every keystone `#assert_axioms`-pinned — no sorry, no `:= True`.
+(the witnessed-membership dispatch). Every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Authority.RelationalClosure
 import Dregg2.Authority.Predicate

@@ -58,7 +58,7 @@ retrieval AFTER the grantor's revoke (epoch bump) is REFUSED; an unheld payload 
 (no forging at the store mouth). No keystone vacuous.
 
 NEW file only (the F3 lane's land-before-kill). Imports the epoch machinery (`Exec/AuthTurn`) +
-the executor surface. Every keystone `#assert_axioms`-pinned — no sorry, no `:= True`.
+the executor surface. Every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Exec.AuthTurn
 import Dregg2.Exec.TurnExecutorFull

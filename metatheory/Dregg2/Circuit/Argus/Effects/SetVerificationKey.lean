@@ -93,8 +93,7 @@ This module covers both directions, exactly as BalanceA/RefreshDelegation:
 
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the
 `CommitSurface` cell-leaf/rest/log/compression injectivity portals + `AccountsWF` enter ONLY inside the
-reused `setVKA_full_sound`, not in the welded conclusion's statement. No `sorry`, no `:= True`, no
-`native_decide`. Imports are read-only; this file owns only itself.
+reused `setVKA_full_sound`, not in the welded conclusion's statement. Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt
 import Dregg2.Circuit.Inst.setVKA

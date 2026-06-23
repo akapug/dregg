@@ -3,7 +3,7 @@
 **Generated:** 2026-06-08 · branch `p3-effectvm-commit-path-migration`
 **Author:** coverage-ledger agent (owns coord/federation/net/macaroon/directory/captp/blocklace + new `Dregg2/Distributed/*`)
 **Last VERIFY+CLOSE sweep:** 2026-06-08 — each "FULL/DONE" below RE-VERIFIED against (a) the cited Lean
-theorem body (non-vacuous, `#assert_axioms`-clean, no `sorry`/`:=True`/`native_decide`) AND (b) the actual
+theorem body (non-vacuous, `#assert_axioms`-clean) AND (b) the actual
 Rust differential RUN on persvati (`scripts/pbuild silversweep cargo test`). A proven-but-dark mirror
 (proved Lean never connected to running Rust, or modeling a TOY) does NOT count as coverage. Sweep results
 recorded inline as **[VERIFIED ✅]** / **[corrected]** tags. Build: `lake build` → 3858 jobs, exit 0

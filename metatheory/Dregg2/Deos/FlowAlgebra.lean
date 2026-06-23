@@ -76,7 +76,7 @@ Duplicator wins `SG(∅ | {e} ⊢ f)`. The ARGUS "refines" bar (does this protoc
 spec?) inherits a decision procedure with known complexity. This module pins the PRECONDITION of that
 payoff — the right-skew — as a machine-checked theorem; the decision procedure itself is the follow-on.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2.Deos.FlowAlgebra` green (LOCAL). Disjoint + additive: a NEW module, touches NO existing proof.
 -/
 import Dregg2.Exec.Program

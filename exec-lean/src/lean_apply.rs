@@ -4,7 +4,7 @@
 //! # The authority inversion (Stage 0 / CRITICAL-1)
 //!
 //! On the COVERED set the verified Lean executor (`dregg_exec_full_forest_auth` / `execFullForestG`,
-//! proven sorry-free) is the AUTHORITATIVE state producer AND verdict: `produce_via_lean` installs
+//! fully proven) is the AUTHORITATIVE state producer AND verdict: `produce_via_lean` installs
 //! its post-state and commit decision UNCONDITIONALLY, and demotes the legacy Rust `TurnExecutor` to
 //! a checked REFERENCE that is verified AGAINST. A Lean↔Rust disagreement on a covered turn is a
 //! surfaced RUST BUG (Rust is the artifact dregg2 replaces *because it is buggy*), NEVER a fallback

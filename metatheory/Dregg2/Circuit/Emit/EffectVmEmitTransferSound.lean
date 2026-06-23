@@ -69,7 +69,7 @@ of the block, so the witness binds the whole post-state.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY
 as the NAMED hypothesis `Poseidon2Binding.Poseidon2SpongeCR hash` (task #13's discharged carrier),
-never as a fresh axiom. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only.
+never as a fresh axiom. Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Poseidon2Binding

@@ -17,7 +17,7 @@ The factory writes only NON-`balance` record fields (no economic-column counterp
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
-No `sorry`/`:= True`/`native_decide`. `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
+`fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

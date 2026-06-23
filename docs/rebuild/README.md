@@ -69,7 +69,7 @@ These are the explorations that **fed `dregg2.md`**; they are *not* the current 
 ## The executable semantics — `metatheory/`
 
 `metatheory/` is the Lean4 (`leanprover/lean4:v4.30.0`) spec — every theorem stated
-day-1 with a `sorry` body ("spec-first, grind up," mirroring l4v). It is the executable
+day-1 with an open body ("spec-first, grind up," mirroring l4v). It is the executable
 statement of the semantics, not yet a proof.
 
 - `Metatheory/Core.lean` — symmetric-monoidal cells/turns + the `Σ_k` conservation hom.
@@ -80,7 +80,7 @@ statement of the semantics, not yet a proof.
 **Crypto-soundness is NEVER merged into the Lean law** — `Verify P w` is treated as a
 decidable oracle; its binding/extractability is a *circuit* obligation discharged
 separately. The Lean↔Rust bridge is backend #8 of `dregg-dsl-differential` (golden
-oracle, empirical cross-validation over `sorry`'d regions — not certification).
+oracle, empirical cross-validation over open-hole regions — not certification).
 
 ## How to implement from here
 

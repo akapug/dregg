@@ -61,7 +61,7 @@ exactly as `exec` does.
     submits → reviewer approves → CI merges), every corner: authorized∧in-phase FIRES, unauthorized
     REFUSES (cap tooth), out-of-phase REFUSES (skip tooth), and the reactive transition tooth.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2.Deos.WorkflowBridge` green (LOCAL). NO core edit, NO sibling edit — the cap-gate is the REAL
 `Affordance.fireGate`, the state gate the REAL `RecordProgram.admitsCtx`, the transition gate the REAL
 `Reactive.TransitionGate`; the bridge is a faithful PROJECTION of `Workflow` onto them, nothing more.

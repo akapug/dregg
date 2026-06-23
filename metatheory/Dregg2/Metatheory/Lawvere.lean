@@ -817,7 +817,7 @@ end PartB
 # Kernel-clean pins (`#assert_axioms`).
 ##################################################################################
 Every keystone of BOTH parts is pinned to the kernel triple `{propext, Classical.choice,
-Quot.sound}`. A `sorryAx` or stray `axiom` would fail the pin and the build. -/
+Quot.sound}`. -/
 
 -- PART A: the posetal triple, Frobenius, Beck–Chevalley, and the teeth.
 #assert_axioms PartA.existsAlong_adj_reindex

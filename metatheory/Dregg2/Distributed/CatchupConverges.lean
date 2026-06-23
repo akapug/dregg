@@ -54,7 +54,7 @@ SIMPLIFIED (a faithful PROJECTION, stated, not hidden — inherited from `LaceMe
   caught-up node is fed a well-formed closed set (`receive_block`/`apply_with_buffering` enforce sig+seq+
   equivocation at the Rust boundary — the A1 fix — and the buffer enforces causal order before each merge).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Distributed.CatchupConverges`. Differential: `node/src/catchup.rs` +
 `node/src/blocklace_sync.rs::handle_push`.
 -/

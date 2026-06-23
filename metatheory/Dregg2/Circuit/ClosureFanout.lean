@@ -50,8 +50,7 @@ ClosureFloors}` — all realizable.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. All carriers (`StarkSound`,
 `Poseidon2SpongeCR`, the `CommitSurface` CR fields, `logHashInjective`, the `ClosureFloors`/`ClosedLogRung`
-family) enter as Prop hypotheses/classes, never as axioms. No `sorry`, no `native_decide`, no `:= True`,
-no fresh axiom. NEW file; imports read-only.
+family) enter as Prop hypotheses/classes, never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureTransfer
 

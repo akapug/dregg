@@ -52,7 +52,7 @@ live slot-caveat gate (all 8 `SlotCaveat` shapes, the gate every committed `gwri
 does NOT yet cover the heap/temporal/epistemic atom families (same recipe expected — their
 evaluators are decidable Bool tests too), nor S3's linear tensor, nor S5.
 
-No `sorry`, no `:= True`, no `native_decide`; every keystone `#assert_axioms`-pinned.
+Every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Calculus.DreggCalculus
 import Dregg2.Exec.Program
@@ -668,7 +668,7 @@ theorem modality_span (r : LitTest) :
 One batch tripwire (`#assert_namespace_axioms Dregg2.Calculus.Biorth`, after `end` below)
 pins EVERY theorem under this namespace — including the nested `Cav.*` and `ListGuard.*`
 members (the prefix walk descends) — to `{propext, Classical.choice, Quot.sound}`, failing
-on the first `sorryAx`/stray axiom. Replaces the §1–§6 per-keystone block, strictly stronger
+on the first unproven hole / stray axiom. Replaces the §1–§6 per-keystone block, strictly stronger
 (audits every theorem, nested ones included). See `metatheory/docs/AXIOM-HYGIENE.md`. -/
 
 end Dregg2.Calculus.Biorth

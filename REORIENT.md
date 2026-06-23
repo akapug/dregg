@@ -227,7 +227,7 @@ abstract kernel sound / deployed-binary bridge unverified / NOT l4v-grade; §4 =
 manifest; §5 = closure roadmap Stages 0-6) · `5df9a091a` flip G3 (r23 full-authority digest — a
 real soundness fix) · `59eef48dd` flip G4 (cohort-general generator) · `231c70c39` pg-dregg M2
 (node→pg verified mirror) · `fb2da3600` seL4 v0 source · `a0d0d45d3` cutover STEP 1 (rotated
-v3Registry 26→34 + an EmitEvent sorryAx fix).
+v3Registry 26→34 + an EmitEvent axiom-hole fix).
 
 ⚑ THE CUTOVER IS PARKED at step-1 by EMBER DECISION (2026-06-13): **"finish cap-crown #103 first."**
 Step 2 (the live-path rewrite, ~70 call-sites + executor PI reconstruction) is NOT started. Full

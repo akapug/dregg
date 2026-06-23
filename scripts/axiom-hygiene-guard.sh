@@ -28,7 +28,7 @@
 #       honest division of labor: (b) is deep-but-targeted, (a) here is the
 #       broad textual net that needs no enumeration to stay comprehensive.
 #
-# Run from the repo root: `scripts/no-sorry-metatheory.sh`
+# Run from the repo root: `scripts/axiom-hygiene-guard.sh`
 # In CI, `elan`/`lake` are installed by the leanprover/lean-action step (or the
 # elan path is exported); locally export `PATH=$HOME/.elan/bin:$PATH` first.
 
@@ -45,13 +45,13 @@ elif [ -x "$HOME/.elan/bin/lake" ]; then
     LAKE="$HOME/.elan/bin/lake"
     export PATH="$HOME/.elan/bin:$PATH"
 else
-    echo "no-sorry-metatheory.sh: FATAL — could not find \`lake\`."
+    echo "axiom-hygiene-guard.sh: FATAL — could not find \`lake\`."
     echo "  Install the elan toolchain (leanprover/lean-action) or put lake on PATH."
     exit 2
 fi
 
-echo "no-sorry-metatheory.sh: using lake at $LAKE"
-echo "no-sorry-metatheory.sh: building $META ..."
+echo "axiom-hygiene-guard.sh: using lake at $LAKE"
+echo "axiom-hygiene-guard.sh: building $META ..."
 
 LOG="$(mktemp -t metatheory-build.XXXXXX.log)"
 trap 'rm -f "$LOG"' EXIT
@@ -87,7 +87,7 @@ fail=0
 
 if [ "$build_status" -ne 0 ]; then
     echo
-    echo "no-sorry-metatheory.sh: the metatheory \`lake build\` FAILED (exit $build_status)."
+    echo "axiom-hygiene-guard.sh: the metatheory \`lake build\` FAILED (exit $build_status)."
     echo "  A green build is a precondition for the zero-sorry guarantee."
     echo "  --- last 40 lines of build log ---"
     tail -n 40 "$LOG"
@@ -96,7 +96,7 @@ fi
 
 if [ "$sorry_warnings" -gt 0 ]; then
     echo
-    echo "no-sorry-metatheory.sh: FOUND $sorry_warnings \`sorry\`/\`admit\` warning(s)."
+    echo "axiom-hygiene-guard.sh: FOUND $sorry_warnings \`sorry\`/\`admit\` warning(s)."
     echo "  The dregg2 metatheory must remain at ZERO sorry. Offending decls:"
     grep -nE "declaration uses .sorry." "$LOG" | sed 's/^/    /'
     fail=1
@@ -104,16 +104,16 @@ fi
 
 if [ "$sorryax_hits" -gt 0 ]; then
     echo
-    echo "no-sorry-metatheory.sh: FOUND $sorryax_hits \`sorryAx\` mention(s) in the build output."
+    echo "axiom-hygiene-guard.sh: FOUND $sorryax_hits \`sorryAx\` mention(s) in the build output."
     grep -nE "sorryAx" "$LOG" | sed 's/^/    /'
     fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
     echo
-    echo "no-sorry-metatheory.sh: GUARD TRIPPED. Do not merge a metatheory with a sorry."
+    echo "axiom-hygiene-guard.sh: GUARD TRIPPED. Do not merge a metatheory with a sorry."
     exit 1
 fi
 
-echo "no-sorry-metatheory.sh: ok — metatheory built clean with ZERO sorry / admit / sorryAx."
+echo "axiom-hygiene-guard.sh: ok — metatheory built clean with ZERO sorry / admit / sorryAx."
 exit 0

@@ -59,7 +59,7 @@ one-sided), and a `Membrane` predicate conjoining viewer authority with a witnes
     quorum-reached transition — and every off-corner (wrong old, after deadline, missing cap, equal-
     authority-different-membrane) REFUSES.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2.Deos.Reactive` green (LOCAL). NO core edit — the cap-gate is the REAL `Affordance.fireGate`, the
 commit the REAL `Affordance.fire`; the transition/window/membrane gates are decidable Bool conjunctions
 layered ON TOP, never a new lattice.

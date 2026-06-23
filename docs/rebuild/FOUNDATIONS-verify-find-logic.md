@@ -5,7 +5,7 @@
 > `StepInv`) as a colimit/gluing. The question throughout: is the categorical vocabulary
 > **load-bearing** (a universal property actually PROVED in the Lean) or **decorative**
 > (suggestive notation buying no theorem) or **aspirational** (claimed by the design but
-> standing on a `sorry`)? Every claim is tagged and grounded at `file:line`.
+> standing on an open hole)? Every claim is tagged and grounded at `file:line`.
 >
 > **Read-only excavation. No code was changed.** Sources: `study-category.md`,
 > `cand-{A,B,C}.md`, `REORIENT.md`, `GLOSSARY.md`, `pdfs/STUDY-lean4-coinduction.md`,
@@ -43,7 +43,7 @@ On the lens's own two objects:
 - **The verify/find seam IS a real adjunction** — but it is `verify`, not `find`, that carries
   the universal property. `Laws.predicate_witness_galois` (`Laws.lean:101`) is a genuine,
   fully-PROVED Galois connection (the Birkhoff polarity of the `Discharged` relation). `find`'s
-  side (`search_sound`, `Laws.lean:53`) is a **by-design `sorry`**: a *contract on an untrusted
+  side (`search_sound`, `Laws.lean:53`) is a **by-design open hole**: a *contract on an untrusted
   plugin*, never an in-Lean theorem. So "`find ⊣ verify`" as a literal adjunction-between-the-
   two-maps is **DECORATIVE**; the *real* adjunction is the predicate⊣witness polarity, and the
   asymmetry (decidable `Bool` verify / `Option` undecidable find) is baked into the **types**.
@@ -109,7 +109,7 @@ predicate-sets and witness-sets, not between the two *functions* `find` and `ver
 The literal reading "`find` is the left adjoint of `verify`" buys no theorem and is not even
 stated as one. `find` is `Searchable.find : P → Option W` (`Laws.lean:48`), and its only contract
 is `search_sound` (`Laws.lean:53`): *if* `find p = some w` *then* `Discharged p w`. That theorem's
-body is a **`sorry`** with an explicit, correct justification (`Laws.lean:54–60`):
+body is an **open hole** with an explicit, correct justification (`Laws.lean:54–60`):
 
 > "PRIMITIVE: `Searchable.find` is an opaque oracle (the prover/matcher plugin).
 > Soundness-by-verification is a *contract* on that external plugin; there is no relation between
@@ -133,7 +133,7 @@ real Galois adjunction (predicate⊣witness); `find` carries a contract, not an 
 
 ### 1.4 The genuine teeth on the find side — `[REAL]`
 
-The honest content the `search_sound` `sorry` defers is PROVED in `Authority/Predicate.lean`:
+The honest content the `search_sound` open hole defers is PROVED in `Authority/Predicate.lean`:
 
 - `find_untrusted` (`Predicate.lean:138`) — **PROVED `∃`**: there is a registry, statement, and
   prover returning `none` while a discharging witness exists. So "the prover found nothing" can
@@ -313,7 +313,7 @@ whole history into one badge?* The Lean answer is explicit and honest:
 realizes the orthogonality concretely and non-vacuously:
 
 - **Conservation (Law 1, linear/SMC).** `Core.conservation_step` (`Core.lean:154`) is the one
-  balance `sorry` (an operational obligation, honestly a `-- PRIMITIVE:`), from which
+  balance open hole (an operational obligation, honestly a `-- PRIMITIVE:`), from which
   `conservation_ordinary`/`mint_delta`/`burn_delta`/`withholding_no_free_copy`
   (`Core.lean:166,176,187,209`) are all **PROVED**. The "no free copy" (`Δ` withheld) is real
   (`left_eq_add.mp` over a cancellative monoid). **`[REAL]` for the monoid-hom + invariance.**
@@ -327,9 +327,9 @@ realizes the orthogonality concretely and non-vacuously:
   "linear ⇏ I-confluent" is a *proved falsifiable distinction*, not prose. **`[REAL]`.**
 - **Ordering / canonicity (Law 2, finality).** `Finality.lean` — `Tier` is a PROVED `LinearOrder`
   (`Finality.lean:96`), `rank_injective` (`Finality.lean:84`, PROVED). The genuine distributed-
-  agreement obligations (the `committed`/quorum laws) are honest `Prop`-`sorry`s (`Finality.lean:
-  34`: "each `sorry` is a real obligation"). **`[REAL]` for the tier lattice + no-downgrade
-  shape; the consensus-agreement theorems themselves are partly `[ASPIRATIONAL]` (`sorry`'d
+  agreement obligations (the `committed`/quorum laws) are honest open `Prop`-obligations (`Finality.lean:
+  34`: "each open obligation is a real obligation"). **`[REAL]` for the tier lattice + no-downgrade
+  shape; the consensus-agreement theorems themselves are partly `[ASPIRATIONAL]` (open
   obligations).**
 
 The three are genuinely separate in the type structure: conservation lives in `Core`
@@ -437,7 +437,7 @@ have opposite REAL/ASPIRATIONAL status:
 | # | Structural claim | Tag | Ground (file:line) | What it would have to prove to be REAL |
 |---|---|---|---|---|
 | 1 | predicate⊣witness is a Galois connection (the verify side's universal property) | **REAL** | `Laws.predicate_witness_galois` (`Laws.lean:101`), via `polarity_galois` (`Laws.lean:75`) | — (proved: `l A ≤ B ↔ A ≤ u B`) |
-| 2 | `find ⊣ verify` as a literal adjunction between the two maps | **DECORATIVE** | `Laws.search_sound` is a by-design `sorry` (`Laws.lean:53–60`) | a unit/counit (`p ≤ verify(find p)`, `find(verify w) ≤ w`); impossible since `find` is undecidable — asymmetry is in the *types* (`Bool` vs `Option`) instead |
+| 2 | `find ⊣ verify` as a literal adjunction between the two maps | **DECORATIVE** | `Laws.search_sound` is a by-design open hole (`Laws.lean:53–60`) | a unit/counit (`p ≤ verify(find p)`, `find(verify w) ≤ w`); impossible since `find` is undecidable — asymmetry is in the *types* (`Bool` vs `Option`) instead |
 | 3 | soundness-by-verification holds against an adversarial prover | **REAL** | `Predicate.adversarial_find_cannot_forge` (`Predicate.lean:151`); `find_untrusted` (`:138`) | — (proved: gate is sole authority; prover never in conclusion) |
 | 4 | badge = (permitted ∧ committed), not a grant of standing | **REAL** | `GLOSSARY:153`; `Positional.boundary_law` (`Positional.lean:152`); `VatBoundary.phi_drops_confinement` (`VatBoundary.lean:202`) | — (permission survives crossing, authority does not — proved) |
 | 5 | §8 portal: crypto soundness is a `Prop`-carrier, never a Lean law ("the law never learns a secret") | **REAL** | `CryptoKernel.collisionHard` (`CryptoKernel.lean:61`); `MacKernel.unforgeable` (`CaveatChain.lean:87`); `DVKernel.simulate_verifies` (`DesignatedVerifier.lean:102`) | — (named-loss keystones proved from abstract `Verify` alone) |
@@ -448,12 +448,12 @@ have opposite REAL/ASPIRATIONAL status:
 | 10 | ∞-cell as behaviour: coinductive greatest-fixpoint bisimilarity over `νF` along ∞ schedules | **REAL** | `CoinductiveAdversary.ObsBisim` (`:113`), `obsBisim_traj_of_bisim` (`:166`), `obsBisim_of_uptoComm` (`:436`), `stepComplete_carries_infinite` (`:227`) | — (proved, axiom-clean, native coinduction + ported Paco) |
 | 11 | tensor non-finality (`νF₁ ⊗ νF₂` not final ⇒ binding irreducible) | **DECORATIVE / corrected (was FALSE)** | `JointTurn.lean:319–333` — the audit calls the slogan "mis-stated"; product of finals IS final | nothing — the true content is #12 |
 | 12 | the cross-cell binding (CG-2 ⊗ CG-5) is an irreducible proper-subobject hypothesis | **REAL** | `JointTurn.binding_is_proper` (`:333`); `Hyperedge.hyperedge_sound` (`:374`) + `_needs_binding` (`:409`) | — (proper equalizer/wide-pullback subobject; proved `¬` that it is derivable) |
-| 13 | `Φ` (caps→keys) is a *functor* between positional & epistemic authority categories | **ASPIRATIONAL** | `Spec.VatBoundary.phi_functorial` (`VatBoundary.lean:392`) carries one localized `sorry` | identity + composition preservation *with* the loss, for one `Phi stmtOf` over abstract `Verifiable` |
+| 13 | `Φ` (caps→keys) is a *functor* between positional & epistemic authority categories | **ASPIRATIONAL** | `Spec.VatBoundary.phi_functorial` (`VatBoundary.lean:392`) carries one localized open hole | identity + composition preservation *with* the loss, for one `Phi stmtOf` over abstract `Verifiable` |
 | 13b | `Φ`-functor laws are *inhabited* (a concrete non-degenerate witness) | **REAL** | `phi_functorial_concrete` (`VatBoundary.lean:441`), `#assert_axioms`-clean | — (proved for a concrete discriminating verifier; locates the loss) |
-| 14 | conservation `Σ_k` is a *monoid-hom + invariance* | **REAL** | `Core.conservation_ordinary`/`withholding_no_free_copy` (`Core.lean:166,209`) | — (proved from one balance `sorry`) |
+| 14 | conservation `Σ_k` is a *monoid-hom + invariance* | **REAL** | `Core.conservation_ordinary`/`withholding_no_free_copy` (`Core.lean:166,209`) | — (proved from one balance open hole) |
 | 14b | conservation `Σ_k` is a *strong monoidal functor* | **DECORATIVE** | `Core.lean:11–13` — "functor laws collapse" (discrete target) | functoriality-on-morphisms with non-trivial target — vacuous here |
 | 15 | three orthogonal judgements (conservation / I-confluence / ordering) genuinely distinct | **REAL** | `Confluence.top_iconfluent`/`cardLeOne_not_iconfluent` (`:95,104`); separate carriers across `Core`/`Confluence`/`Finality` | — (proved falsifiable distinction) |
-| 16 | finality consensus-agreement laws (quorum/commit) | **ASPIRATIONAL** | `Finality.lean:34` — honest `Prop`-`sorry` obligations (tier `LinearOrder` itself is REAL, `:96`) | the distributed-agreement theorems the `sorry`s name |
+| 16 | finality consensus-agreement laws (quorum/commit) | **ASPIRATIONAL** | `Finality.lean:34` — honest open `Prop`-obligations (tier `LinearOrder` itself is REAL, `:96`) | the distributed-agreement theorems the open obligations name |
 | 17 | higher-order turn as an n-ary atomic joint-turn (wide pullback) | **REAL** | `Hyperedge` (`:80`), `hyperedge_sound` (`:374`), `legs_agree` (`:111`) | — (proved; N-ary CG-2 cone + CG-5 Σ=0) |
 | 18 | the interaction complex is a *full simplicial / ∞-category* (face & degeneracy maps, simplicial identities) | **ASPIRATIONAL** | `DREGG4-HYPERSYSTEM §4.3` — "no proved simplicial-identity layer"; only sound as a fibration-over-bindings | a fibration whose every n-simplex filler is a `Hyperedge` carrying its CG-2 ⊗ CG-5 |
 

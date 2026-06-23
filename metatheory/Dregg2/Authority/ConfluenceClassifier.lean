@@ -39,7 +39,7 @@ ceiling guard classified NOT, AND forced to order (a constructive clashing pair)
 
 NEW file only. Reuses `Confluence` (the lattice + `IConfluent` + `Tier1Eligible` + the escalation
 witness) and the two poles' shapes; defines no new lattice. Every keystone `#assert_axioms`-pinned to
-`{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`.
+`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Confluence
 import Dregg2.Confluence.CRDT
@@ -315,7 +315,7 @@ end Witness
 /-! ## §6 — Axiom-hygiene pins (the honesty tripwires over every keystone).
 
 Each pin elaborates to an error if the keystone depends on any axiom outside
-`{propext, Classical.choice, Quot.sound}` (notably `sorryAx`). -/
+`{propext, Classical.choice, Quot.sound}` (notably any unproven-hole axiom). -/
 
 -- §3 the cost-payoff theorem (the dichotomy)
 #assert_axioms keeps_iff_coordinationFree

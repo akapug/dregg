@@ -37,7 +37,7 @@ hypothesis (a `structure` field, not an axiom; witnessed non-vacuously). The fin
 proved: `isSuperRatified` is a concrete `Bool` function over the lace, and the quorum count is a real
 arithmetic check — no hypothesis needed for it.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Distributed.FinalizedLightClient`.
 -/
 import Dregg2.Circuit.RecursiveAggregation

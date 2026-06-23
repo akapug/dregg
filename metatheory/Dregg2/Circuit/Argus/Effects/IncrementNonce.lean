@@ -76,7 +76,7 @@ faked into the weld).
 cell-leaf / rest-frame / log-hash injectivity assumptions enter ONLY inside the reused
 `incrementNonceA_full_sound` (its `compressNInjective`/`cellLeafInjective`/`RestHashIffFrame`/
 `logHashInjective` portal hypotheses + the `AccountsWF` well-formedness side-conditions), not in the
-welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only; this
+welded conclusion's statement. Imports are read-only; this
 file owns only itself. Build: `lake build Dregg2.Circuit.Argus.Effects.IncrementNonce`.
 -/
 import Dregg2.Circuit.Argus.Stmt

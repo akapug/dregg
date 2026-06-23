@@ -27,7 +27,7 @@ DISCIPLINE: faithful Props, candidate-independent. The PROVED keystones are pinn
 cryptographic obligation — that "a sub-threshold coalition's indistinguishability is TOTAL on the
 secret-fiber" reflects an ACTUAL information-theoretic security (perfect privacy of the SSS scheme
 below `K`) — enters ONLY as the `ThresholdFrame.subThreshold_blind` structural field, never as an
-`axiom`/`sorry`. It is the EXACT analogue of the `Disclosure` separation parameter in
+`axiom` or `admit`. It is the EXACT analogue of the `Disclosure` separation parameter in
 `ConstructiveKnowledge`/`EpistemicDial` (the crypto layer discharges the antecedent; the
 metatheory says *if* the scheme is perfectly private below `K`, *then* the cliff holds). A
 DISCRIMINATING concrete model (§5) certifies every keystone non-vacuous: a real 2-of-2 scheme

@@ -800,8 +800,8 @@ end ForwardSim
 
 /-! ## §7 — Axiom-hygiene tripwires (honesty pins over every keystone).
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. The §8 foreign-finality portal `ForeignFinal` is an `opaque` `Prop` (a data carrier,
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. The §8 foreign-finality
+portal `ForeignFinal` is an `opaque` `Prop` (a data carrier,
 never an axiom — it never closes a goal, only appears as a hypothesis on the bridge keystones). The
 `#assert_axioms` below confirm the local transitions are proved; the foreign half is carried,
 never faked. -/

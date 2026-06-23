@@ -36,8 +36,8 @@ the block frozen, the post-state bound into `state_commit` via the GROUP-4 hash 
   * NONCE: descriptor FREEZES the nonce; the bridge-mint arm ticks NO nonce — MATCHES (no divergence).
   * `state.RESERVED` not absorbed by any hash-site (inherited transfer-keystone finding).
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR = NAMED hypothesis. No sorry /
-:= True / native_decide / rfl-bridge. Imports read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR = NAMED hypothesis.
+Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

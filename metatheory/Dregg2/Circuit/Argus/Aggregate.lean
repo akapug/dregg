@@ -65,7 +65,7 @@ transfer term, lifted to chained state, is `interpChained (transferStmt turn)`, 
    Argus executor here, yet the identity "the folded leaf's AIR = the descriptor `compile` emits" is
    the carried `InnerProofSound` hypothesis, NOT proved in Lean.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`. The reused
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). The reused
 layer hypotheses are `structure` FIELDS, not axioms; non-vacuity witnessed over a real Argus transfer
 strand (§5). Verified with `lake build Dregg2.Circuit.Argus.Aggregate`.
 -/

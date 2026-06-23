@@ -46,7 +46,7 @@ that id. `createCellStmt` is `seq (guard <gate>) (allocCell (fun _ => newCell))`
 
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the whole-function
 / Poseidon-CR digest assumptions enter ONLY inside the reused `createCellA_full_sound` (its injectivity
-hypotheses), never in the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`.
+hypotheses), never in the welded conclusion's statement.
 Imports are read-only (`Argus/Stmt` for the IR + `Inst/createCellA` for the audited triple descriptor +
 `Spec/accountgrowth` for the executor⟺spec corner); this file owns only its own declarations.
 -/

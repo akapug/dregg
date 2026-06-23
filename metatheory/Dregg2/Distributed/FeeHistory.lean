@@ -51,8 +51,8 @@ arbitrary-length fee-wrapped history is the named protocol sink, additively.
   (a node whose proposer = agent would genuinely break the accounting — the hypotheses are
   load-bearing, not decorative).
 
-l4v bar: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every keystone; no
-`sorry`, no `:= True`, no `native_decide`. Non-vacuity both polarities, `#guard`-EXECUTED over a
+l4v bar: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every keystone.
+Non-vacuity both polarities, `#guard`-EXECUTED over a
 REAL accepted fee-wrapped transfer turn (the burn is 2, not 0 and not the whole fee 10).
 Verified with `lake build Dregg2.Distributed.FeeHistory`.
 -/

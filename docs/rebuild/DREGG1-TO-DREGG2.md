@@ -67,7 +67,7 @@ Three fates (the prompt's (a)/(b)/(c)):
 | `cli` (commands, output) | operator CLI (`cli/src/`) | **STAY-RUST** (product) | thin over SDK/node |
 | `federation` | federation membership/state | **STAY-RUST** (impl) discharging `World` | membership bound is the protocol-supplied hypothesis `World` lacks (the `hbound` in `quorum_intersection_safety_OPEN`) |
 | `app-framework`, `starbridge-apps/*`, `demo*` | product apps + server infra | **STAY-RUST** (product) | above the core; consume the SDK |
-| `dregg-dsl*`, `dreggscript`, `dregg-dsl-differential` | caveat DSL + cross-backend differential harness | **STAY-RUST** as the **Lean↔Rust bridge** | `dregg-dsl-differential` is **backend #8**: Lean = golden oracle, empirical cross-validation over `sorry`'d regions (`ROADMAP`, `dregg2 §8`) |
+| `dregg-dsl*`, `dreggscript`, `dregg-dsl-differential` | caveat DSL + cross-backend differential harness | **STAY-RUST** as the **Lean↔Rust bridge** | `dregg-dsl-differential` is **backend #8**: Lean = golden oracle, empirical cross-validation over open-obligation regions (`ROADMAP`, `dregg2 §8`) |
 | `verifier` | standalone Effect-VM proof verifier | **STAY-RUST** (TCB impl) | the minimal verifier = the §1.2 TCB; ideal first FFI-shim *consumer* of the compiled kernel |
 | `preflight` | e2e promotion gate | **STAY-RUST** (CI) | the gate that runs the differential bridge |
 | `types`, `commit`, `wire`, `persist`, `trace`, `secrets`, `hints`, `tokenizer`, `directory`, `rbg`, `bridge`, `discharge-gateway` | shared types, Merkle/commit, wire format, persistence, threshold sigs, directory/VFS, presentation bridge, HTTP gateway | **STAY-RUST** (plumbing/impl) | below or beside the portal; `secrets`/`commit`/`hints`/crypto = `CryptoKernel` material; `persist`/`wire` = transport; `directory`/`rbg` = userspace cells over the kernel |
@@ -260,7 +260,7 @@ surface. The runtime-character payoff (checkpoint/replay/time-travel, `observabi
 falls out as Lean *theorems* over the codata model (`Boundary`).
 
 **Throughout:** the **metatheory track runs in parallel** (`ROADMAP`): close the
-remaining `sorry`s (the genuine open theorems + the `World`/`CryptoKernel` interface
+remaining open obligations (the genuine open theorems + the `World`/`CryptoKernel` interface
 obligations the Rust+circuits discharge), keep `lake build` green, and keep the
 differential harness asserting Rust ≡ Lean. **Never reimplement the prover in Lean;
 never merge crypto-soundness into the law.**
@@ -293,7 +293,7 @@ with crypto/proving/transport/UI staying Rust the entire time.
 3. **The portal laws are *assumed*, and the empirical bridge is not certification.**
    `commit_hom`/`hash_inj`/`recv_mono` are interface laws the Rust impl must satisfy but
    Lean never proves; the differential harness (backend #8) is *empirical cross-validation
-   over `sorry`'d regions, not certification* (`dregg2 §8`). A Rust impl that violates a
+   over open-obligation regions, not certification* (`dregg2 §8`). A Rust impl that violates a
    law (a non-homomorphic commit, a non-monotone receive log) makes the parametric Lean
    theorems vacuously inapplicable, silently. Mitigation: property-test the laws hard in
    the harness; keep the reference (Lean-as-host) kernels as the always-lawful baseline.

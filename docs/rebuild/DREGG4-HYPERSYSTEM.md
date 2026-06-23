@@ -102,7 +102,7 @@ output object `Obs`*:
   (`cell/src/state.rs`), generalization to per-turn is the work (`§4.1`).
 - **Transferability** (*to whom convincing*): `public | designated(V) | deniable(ring)`
   (`§3`/`§4.2`). **REAL — LANDED IN LEAN since this doc was written** (was "entirely new").
-  `Dregg2/Authority/DesignatedVerifier.lean` (axiom-clean, zero `sorry`, `#print axioms`-audited
+  `Dregg2/Authority/DesignatedVerifier.lean` (axiom-clean, `#print axioms`-audited
   `:369-372`) builds the whole axis: the **verifier-indexed `Discharged[V]`** the doc filed as the
   "named-new theory piece" is the proved `DischargedFor V stmt proof` (`DesignatedVerifier.lean:113`);
   the dial itself is `inductive TransferDial = transferable | designated V₀` (`:146`); `Transferable`
@@ -371,7 +371,7 @@ Goubault–Kniazev–Ledent–Rajsbaum (arXiv:2311.01351v3), pages read:
 
 > **NEW SINCE THIS DOC (folded forward).** The paper's epistemic machinery — which §5.1 cited as
 > paper-only — now has a **proved, axiom-clean Lean realization**: `Dregg2/Apps/EpistemicSheaf.lean`
-> (327 lines, zero `sorry`, `#assert_axioms`-pinned `:318-325`). It ports arXiv:2311.01351 directly:
+> (327 lines, `#assert_axioms`-pinned `:318-325`). It ports arXiv:2311.01351 directly:
 > `Frame`/`Indist` (the simplicial `∼ᵢ` indistinguishability, `:86,90`); **`DistKnows B φ w`** = the
 > paper's distributed-knowledge `D_B φ = ∩_{a∈B} ∼_a` (`:106`, PROVED keystones
 > `honest_distributed_knows_discharged:115`, `honest_dist_knowledge_composes:129`);

@@ -55,7 +55,7 @@ Each spec is INHABITABLE (cited from the soundness/spec file's own witnesses, e.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every new theorem; the trace/root
 construction floors enter as named structure carriers (Type-valued realizable prover witnesses), never
-as axioms. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompleteness
 import Dregg2.Circuit.RotatedKernelRefinementIncNonce

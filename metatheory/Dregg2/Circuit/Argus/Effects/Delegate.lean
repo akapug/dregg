@@ -91,8 +91,7 @@ SAME per-cell + genuine-side-table-root surface the escrow welds live on, now fo
 ## Axiom hygiene
 
 `#assert_axioms` on the cornerstone + the weld ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR
-enters ONLY inside the reused emitter (not in the welded conclusion's statement). No `sorry`, no `:= True`,
-no `native_decide`, no `rfl`-posing-as-bridge. Non-vacuity teeth: the IR term INSTALLS the edge
+enters ONLY inside the reused emitter (not in the welded conclusion's statement). No `rfl`-posing-as-bridge. Non-vacuity teeth: the IR term INSTALLS the edge
 (observable cap-graph write), REJECTS an unconnected delegator (fail-closed), is
 NON-AMPLIFYING (copies the held cap), and the welded descriptor is the genuine class-A one (12 frame gates +
 6 hash-sites: 2 cap-root-recompute + 4 commitment), not the inert placeholder. Imports are read-only; this

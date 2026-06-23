@@ -26,7 +26,7 @@ theorem; per-effect is just the decode.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem; Poseidon2 CR enters ONLY
 through the generic `runnable_full_sound`/`runnable_full_commit_binds` (the named `Poseidon2SpongeCR`
-portal). No `sorry`, no `:= True`, no `native_decide`. `fullClause` is NON-VACUOUS (the genuine per-cell
+portal). `fullClause` is NON-VACUOUS (the genuine per-cell
 nonce-tick + the frozen 8-root sub-block, refutable on a forged post). Imports are read-only; this file
 owns only its own declarations.
 -/

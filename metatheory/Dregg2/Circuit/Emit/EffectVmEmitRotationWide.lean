@@ -43,7 +43,7 @@ THIS module is the proof infrastructure that closes that gap — purely additive
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto only as the named
-`Poseidon2WideCR`/`Poseidon2Width8` hypotheses. No `sorry`, no `native_decide`.
+`Poseidon2WideCR`/`Poseidon2Width8` hypotheses.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 

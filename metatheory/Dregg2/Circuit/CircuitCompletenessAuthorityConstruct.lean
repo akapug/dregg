@@ -44,8 +44,7 @@ no longer assumed. (The slimmed carrier is `CapOpenTraceFloor`, §4 below.)
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No `Satisfied2`/`DeployedFaithfulEff` is
-ASSUMED here — they are CONSTRUCTED/PROVED. No `sorry`, no `native_decide`, no `:= True`, no fresh
-axiom. NEW file; imports read-only.
+ASSUMED here — they are CONSTRUCTED/PROVED. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompletenessAuthority
 

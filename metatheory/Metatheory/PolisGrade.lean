@@ -16,7 +16,7 @@ theorem. The deployed `Dregg2.Finality.Tier` is the intended *finality* grade in
 the severity order); that instance is wired in `Metatheory.PolisGradeTier` (`instTierGrade`), and
 `Tier × ℕ` (laundering × rent) follows for free via `instProd`.
 
-Pure Lean 4 core (imports only the import-free `Metatheory.Polis`; `ℕ` + `omega`); no `sorry`.
+Pure Lean 4 core (imports only the import-free `Metatheory.Polis`; `ℕ` + `omega`).
 -/
 import Metatheory.Polis
 

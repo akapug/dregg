@@ -39,7 +39,7 @@ UNSAT: the open would prove `nfKey nf ∉ keysOf S root`, but the faithful encod
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable carriers already in play
 (`CapHashScheme.chipCR` via the deployed cap/nullifier tree; `compressNInjective` + `noteLeaf_injective`
 from `RotatedKernelRefinementNotes`; `SpineCommits`/`NullifierTreeEncodes` are HYPOTHESES, never axioms).
-No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; all imports read-only.
+NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.SortedTreeNonMembership
 import Dregg2.Circuit.RotatedKernelRefinementNotes

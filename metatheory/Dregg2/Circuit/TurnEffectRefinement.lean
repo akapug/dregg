@@ -8,7 +8,7 @@ Composes with `turn_circuit_refines_spec_of_steps` / `turn_circuit_refines_exec_
 `turn_conservation_descends` for the full turn diamond down to `execFullTurnA`.
 
 POLICY: no lurking holes — unmapped circuit arms use `hole_circuit_step`; refinement via explicit
-`sorry` hole theorems (never silent `exact h`).
+hole-portal theorems (never silent `exact h`).
 -/
 import Dregg2.Circuit.TurnRefinement
 import Dregg2.Circuit.EffectRefinement
@@ -86,7 +86,7 @@ open Dregg2.Exec.TurnExecutorFull
 /-! ## §0 — explicit hole portals (no silent `exact h`). -/
 
 /-- HOLE: placeholder circuit step for unmapped `FullActionA` arms (NOT silent spec-as-circuit).
-    Refinement is via `hole_*_circuit_refines_spec` sorry theorems below. -/
+    Refinement is via the `hole_*_circuit_refines_spec` hole-portal theorems below. -/
 abbrev hole_circuit_step (st : RecChainedState) (fa : FullActionA) (st' : RecChainedState) : Prop :=
   fullActionStep st fa st'
 

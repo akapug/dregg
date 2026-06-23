@@ -33,8 +33,8 @@ v1 emitter (`emitVmJson`, no `"ir"` key ⇒ version 1) is untouched.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as
 the named `Poseidon2SpongeCR` hypothesis; memory consistency is the PROVED
-`MemoryChecking.memcheck_sound` (unconditional combinatorics — no crypto, no hypothesis). No
-`sorry`, no `native_decide`. NEW file; imports are read-only.
+`MemoryChecking.memcheck_sound` (unconditional combinatorics — no crypto, no hypothesis).
+NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmit
 import Dregg2.Circuit.Lookup

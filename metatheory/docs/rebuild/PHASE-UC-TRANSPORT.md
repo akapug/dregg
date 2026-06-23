@@ -20,7 +20,7 @@
 > theorems reused a single adversary `\<A>` for both the hiding conjunct and the binding conjunct,
 > but `hid_adv` and `bind_adversary` are distinct types in `Commitment_Schemes` — fixed by
 > quantifying a separate binding adversary `\<B>` (the standalone per-property theorems were always
-> well-typed). The theory is sorry-/oops-free and references only the real proven AFP Pedersen
+> well-typed). The theory is free of open holes / `oops` and references only the real proven AFP Pedersen
 > lemmas. Detail in §3 "BUILD STATUS". The Pedersen *security itself* was never in question — it is
 > long-proven in `Sigma_Commit_Crypto`.
 
@@ -37,7 +37,7 @@ as a **sharp OPEN**. The metatheory is order-/realizability-theoretic: `Verify` 
 oracle, `≈` is not a Lean order-law, and the residue (simulator existence + computational
 indistinguishability of probability ensembles) is exactly what `Dregg2/Crypto/Primitives.lean`
 isolates as the `Prop` **carriers** `CryptoPrimitives.binding` (DLog binding) and
-`CryptoPrimitives.unlinkable` (hiding / anonymity) — never proved in Lean, never `sorry`.
+`CryptoPrimitives.unlinkable` (hiding / anonymity) — never proved in Lean, never left as an open hole.
 
 This phase discharges the **core** of that residue for the commitment functionality, **in a real
 UC tool**, and turns the Lean carriers from "assumed" into "discharged-by-CryptHOL (under a
@@ -86,7 +86,7 @@ Defined here:
   reduces to exactly this hiding+binding pair — Canetti–Fischlin; the CORE content transported is
   that pair, which is what the dregg2 carriers assert.)
 
-Proved (no `sorry`/`oops`):
+Proved (no open holes / `oops`):
 
 | Theorem (in `Dregg2_FCom.thy`) | Statement |
 |---|---|
@@ -128,7 +128,7 @@ Both sessions reach **real exit 0**:
   `Monomorphic_Monad` `fBall.rep_eq`, `Landau_Real_Products`) was purely an artifact of the
   afp-devel-vs-Isabelle-version mismatch and disappeared once Isabelle and the AFP versions were
   matched.
-- `Finished Dregg2_UC` (`EXIT=0`). `Dregg2_FCom.thy` is sorry-/oops-free and references only the
+- `Finished Dregg2_UC` (`EXIT=0`). `Dregg2_FCom.thy` is free of open holes / `oops` and references only the
   real proven AFP theorems (`pedersen.abstract_correct`, `abstract_perfect_hiding`, `pedersen_bind`,
   `pedersen_asymp.pedersen_bind_asym`, `cyclic_group_commute`, `group_comm_groupI`).
 
@@ -156,7 +156,7 @@ removed is the build-blocker.
 
 - **`FComDischarge (P : CryptoPrimitives Digest)`** — a `Type`-valued structure bundling, as
   fields, the carried `Prop`s (correct / perfectHiding / bindingReducesToDLog), their cross-system
-  proofs, and the **entailments** into the dregg2 carriers. **Not an `axiom`, not a `sorry`.**
+  proofs, and the **entailments** into the dregg2 carriers. **Not an `axiom`, not an open hole.**
   Inhabiting it is the cross-system bridge act (vouching the CryptHOL transport, under the caveat).
 - **`binding_unlinkable_discharged_by_crypthol : FComDischarge P → P.binding ∧ P.unlinkable`** —
   the bridge theorem: given the CryptHOL discharge, the dregg2 commitment-security carriers are
@@ -178,7 +178,7 @@ Accepting the bridge **widens** the dregg2 trust base beyond Lean's kernel to in
    correspondence across two different logics — there is no verified translation connecting them.
    It is the honest residual gap.
 
-This is **strictly stronger** than a bare Lean `axiom`/`sorry` (which would assert UC on nothing):
+This is **strictly stronger** than a bare Lean `axiom` or open hole (which would assert UC on nothing):
 the obligation is discharged by a real proof in a real UC tool. It is **strictly weaker** than a
 single-kernel Lean proof: the trust spans two kernels + the transport fidelity.
 

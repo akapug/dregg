@@ -11,7 +11,7 @@ This is the shared foundation every leaf inspector widget reuses. It carries two
    declaration `Name`, reads its **REAL** axiom set with `Lean.collectAxioms` (the same primitive the
    project's `#assert_axioms` tripwire uses, `Dregg2/Tactics.lean:34`) and classifies a *trust tier*
    straight off the proof term. The badge is therefore **computed, never hand-set**: you cannot paint a
-   green "KernelChecked" pill on a theorem that secretly leans on `sorryAx` or an extra `axiom`, because
+   green "KernelChecked" pill on a theorem that secretly leans on a faked-green axiom or an extra `axiom`, because
    the pill's colour is a function of what `collectAxioms` actually returns.
 
    The tiers (ascending in trust-debt):
@@ -27,7 +27,7 @@ This is the shared foundation every leaf inspector widget reuses. It carries two
      assumption") rather than silently green. The discriminating demo at the bottom of this file proves
      the classifier distinguishes this case.
    * **`extraAxioms`** — depends on an axiom that is neither kernel-standard nor a recognised carrier:
-     an *un-vetted* trust assumption. Red. (`sorryAx` lands here — a hidden `sorry` shows up RED.)
+     an *un-vetted* trust assumption. Red. (a faked-green axiom lands here — a hidden faked-green shows up RED.)
    * **`axiomItself`** — the named declaration *is* an `axiom` (no proof term at all). Grey: "asserted,
      not proved". This is the "clearly-marked no-term state" the inspector must never confuse with green.
 
@@ -133,7 +133,7 @@ inductive Tier where
   | kernelChecked
   /-- Clean PLUS a named dregg §8 carrier (crypto/authority oracle) booked as an `axiom`. -/
   | carrierBounded
-  /-- Depends on an un-vetted axiom outside the kernel set and not a recognised carrier (incl. `sorryAx`). -/
+  /-- Depends on an un-vetted axiom outside the kernel set and not a recognised carrier (incl. a faked-green axiom). -/
   | extraAxioms
   /-- The named declaration IS an `axiom` — no proof term at all. -/
   | axiomItself
@@ -165,7 +165,7 @@ def Tier.label : Tier → String
 def Tier.blurb : Tier → String
   | .kernelChecked  => "axioms ⊆ {propext, Classical.choice, Quot.sound} — kernel-clean"
   | .carrierBounded => "clean, modulo a named §8 carrier (crypto/authority oracle)"
-  | .extraAxioms    => "depends on an un-vetted axiom (a hidden sorry shows up here)"
+  | .extraAxioms    => "depends on an un-vetted axiom (a hidden faked-green shows up here)"
   | .axiomItself    => "asserted, not proved — this declaration IS an axiom"
 
 /-! ## §3 — The classifier: tier read straight off the real axiom set.
@@ -283,7 +283,7 @@ print the same value; they do not. -/
 #guard (classifyAxioms false #[``propext, `dregg_someVerifyExtern]).label == "CarrierBounded"  -- "CarrierBounded"
 -- ExtraAxioms: an extra axiom that is NOT a recognised carrier.
 #guard (classifyAxioms false #[``propext, `someRandomAssumption]).label == "ExtraAxioms"  -- "ExtraAxioms"
--- ExtraAxioms: a hidden sorry shows up RED.
+-- ExtraAxioms: a faked-green axiom shows up RED.
 #guard (classifyAxioms false #[``sorryAx]).label == "ExtraAxioms"                   -- "ExtraAxioms"
 -- AxiomItself: the decl is an axiom.
 #guard (classifyAxioms true #[]).label == "AxiomItself"                             -- "AxiomItself"

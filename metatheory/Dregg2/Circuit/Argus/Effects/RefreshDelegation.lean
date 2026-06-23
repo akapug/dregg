@@ -83,8 +83,7 @@ This module covers both directions, exactly as BalanceA:
 
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the
 whole-function-digest assumption enters ONLY inside the reused `refreshDelegationA_full_sound` (its
-`Function.Injective D` hypothesis), not in the welded conclusion's statement. No `sorry`, no `:= True`, no
-`native_decide`. Imports are read-only; this file owns only itself.
+`Function.Injective D` hypothesis), not in the welded conclusion's statement. Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt
 import Dregg2.Circuit.Inst.refreshDelegationA

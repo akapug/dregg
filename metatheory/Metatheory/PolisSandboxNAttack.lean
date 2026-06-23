@@ -22,7 +22,7 @@ agent home. `all_agents_reach_home` — under governance, EVERY agent of EVERY `
 Honest scope: the worlds are finite (`Fin n` agents, distances in `Nat`); the adversary is a scripted /
 bounded Lean searcher exhaustively enumerating the move space at each round, not an LLM — but it
 genuinely explores every actor×action×victim, and the governance guarantee is proven UNIVERSAL over
-those trees and over the agent count `n`. No `sorry`, no load-bearing `True`; `#eval`/`#guard` assert
+those trees and over the agent count `n`. `#eval`/`#guard` assert
 TRUE props (`decide` tells the truth).
 -/
 import Metatheory.PolisSandboxN

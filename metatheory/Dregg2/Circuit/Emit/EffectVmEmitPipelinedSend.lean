@@ -32,7 +32,7 @@ AGREES with the hand-AIR on the honest witness AND both anti-ghost teeth bite.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR ONLY as `Poseidon2SpongeCR
-hash`. No `sorry`/`:= True`/`native_decide`/`rfl`-bridge. Imports read-only.
+hash`. Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

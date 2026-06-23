@@ -51,7 +51,7 @@ Everything here is a NAMING of `Authority.CrossCellImport` / `Authority.ImportBi
 `Deos.Membrane`. NO new construct, NO core edit, every keystone `#assert_all_clean` (kernel-clean:
 only `propext` / `Classical.choice` / `Quot.sound`). The §8 receipt-digest collision-resistance enters
 exactly where the underlying keystones name it (`HInj`/`HFresh` hypotheses through
-`CrossCellImport.chain_tamper_evident`), never a Lean axiom, never a `sorry`. `lake build Dregg2`
+`CrossCellImport.chain_tamper_evident`). `lake build Dregg2`
 green (LOCAL).
 -/
 import Dregg2.Authority.ImportBinding

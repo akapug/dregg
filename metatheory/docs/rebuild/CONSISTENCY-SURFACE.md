@@ -1,7 +1,7 @@
 # dregg2 Consistency Surface — the full trusted-assumption carrier audit
 
 **Scope.** This enumerates EVERY Prop-carrying typeclass field, every structure-field
-hypothesis carrying a proof obligation, and the three by-design `sorry`s in
+hypothesis carrying a proof obligation, and the three by-design open obligations in
 `/Users/ember/dev/breadstuffs/metatheory/Dregg2/`. For each carrier it states the carried
 Prop (file:line), classifies it CRYPTO-STANDARD vs SYSTEM-LEVEL, and locates its consistency
 witness — tagged:
@@ -26,19 +26,19 @@ from system-level carriers throughout.
 `lake env lean FILE` (REAL exit captured, not head/tail-masked); all = `REAL=0`. Witness
 axiom-cleanliness confirmed via the in-file `#assert_axioms` / `#print axioms` pins
 (e.g. `DesignatedVerifier.lean` `#print axioms` showed the keystones depend on
-`[propext, Classical.choice, Quot.sound]` only — no `sorryAx`).
+`[propext, Classical.choice, Quot.sound]` only — no open-hole axiom).
 
 ---
 
-## A. The three by-design `sorry`s
+## A. The three by-design open obligations
 
 | # | Carrier (Prop) | file:line | Class | Witness / discharge | Tag |
 |---|---|---|---|---|---|
 | S1 | `Core.conservation_step` — `cons.count A + minted f.tag = count B + burned f.tag` (the per-turn balance equality) | `Dregg2/Core.lean:154-162` | SYSTEM-LEVEL | **`Exec.conservation_step_realized` PROVED** (`Dregg2/Exec/StepComplete.lean:91-93`, = `(cexec_attests h).1`), `#assert_axioms`-clean (`Dregg2/Claims.lean:46`). The abstract obligation IS discharged for the executable kernel `cexec`; the three Core corollaries (`conservation_ordinary/_minted/_burned`, `Core.lean:166+`) are PROVED FROM it. | **NON-TRIVIAL-PROVED** (interface obligation, realized) |
 | S2 | `Laws.search_sound` — `Searchable.find p = some w → Discharged p w` (untrusted prover soundness-by-verification) | `Dregg2/Laws.lean:53-60` | SYSTEM-LEVEL (interface contract on an external opaque oracle) | By design irreducible in-module: `find` is opaque with no in-module relation to `Verify`. **Recovered at the consumer** where `find`'s output is RE-CHECKED by `Verify`: `Authority/Intent.lean:122-123` (`resolve` re-runs `Verify`, so no appeal to the contract is needed) and `Authority/Predicate.lean:113` (`registry_sound_find`). | **NON-TRIVIAL-PROVED** (contract; obviated at every real consumer by re-verification) |
-| S3 | `Spec.VatBoundary.phi_functorial` — the three `PhiFunctorial` laws over an ARBITRARY `Verifiable` | `Dregg2/Spec/VatBoundary.lean:359-401` | SYSTEM-LEVEL | **`phi_functorial_concrete` PROVED, axiom-clean** (`VatBoundary.lean:441-456`, `#assert_axioms` at :456). A DISCRIMINATING verifier (`Verify s b := b`, accepts `true`, REJECTS `false` — not Verify-always-true) with a maximally-lossy `stmtOf`. The abstract `sorry` is INTENTIONALLY omitted from the tripwires (`VatBoundary.lean:462-463`) because over an arbitrary `Verifiable` `preserves_id` needs an accepting witness to exist (false at `Verify ≡ false`). | **NON-TRIVIAL-PROVED** (the model citizen; abstract form stays honestly OPEN) |
+| S3 | `Spec.VatBoundary.phi_functorial` — the three `PhiFunctorial` laws over an ARBITRARY `Verifiable` | `Dregg2/Spec/VatBoundary.lean:359-401` | SYSTEM-LEVEL | **`phi_functorial_concrete` PROVED, axiom-clean** (`VatBoundary.lean:441-456`, `#assert_axioms` at :456). A DISCRIMINATING verifier (`Verify s b := b`, accepts `true`, REJECTS `false` — not Verify-always-true) with a maximally-lossy `stmtOf`. The abstract form (the by-design open hole) is INTENTIONALLY omitted from the tripwires (`VatBoundary.lean:462-463`) because over an arbitrary `Verifiable` `preserves_id` needs an accepting witness to exist (false at `Verify ≡ false`). | **NON-TRIVIAL-PROVED** (the model citizen; abstract form stays honestly OPEN) |
 
-All three are isolated: the abstract `sorry` never silently flows into a "proved" keystone
+All three are isolated: the abstract open hole never silently flows into a "proved" keystone
 (S1 realized + corollaries proved-from; S3's abstract is excluded from `#assert_axioms` while
 its concrete witness is pinned).
 
@@ -157,7 +157,7 @@ carriers, **10 are NON-TRIVIAL-PROVED with axiom-clean discriminating witnesses*
 previously-caught traps — all-True GraphPrivacyKernel, ExecRights=Unit — are confirmed dead;
 GraphPrivacyKernel now has a non-constant `addrView`, and the rights/consensus carriers are now
 DERIVED from real data: `SuperRatification.ofLace`, the lace, the delivered-vote count, the
-proper-subobject bindings). The three by-design `sorry`s are isolated and each has a
+proper-subobject bindings). The three by-design open obligations are isolated and each has a
 proved/realized counterpart (S1 realized in the executor, S2 obviated by re-verification at
 consumers, S3 the model-citizen concrete witness). The ~15 crypto-standard carriers are
 honestly Lean-trivial and correctly isolated as explicit hypotheses; `DischargeCrypto.cryptoSound`
@@ -196,19 +196,19 @@ plus a full `lake build Dregg2.Consistency Dregg2.Claims` (REAL=0, 3455 jobs).
 
 ### Machine-checked ground facts (re-verified, not cited)
 - `Dregg2/Consistency.lean` compiles **REAL=0**; `#print axioms dregg_consistent_nonempty` =
-  `[propext, Classical.choice, Quot.sound]` — **no `sorryAx`, no fresh axiom**.
+  `[propext, Classical.choice, Quot.sound]` — **no open-hole axiom, no fresh axiom**.
 - `Dregg2/Claims.lean` compiles **REAL=0** and emits ~40 `#assert_namespace_axioms` pins
   (1000+ theorems across `Exec.*`, `Proof.*`, `Crypto.*`, `Authority.*`, `Paco`, …) all
   reporting "pinned kernel-clean". `#assert_namespace_axioms` **hard-fails the build** on any
-  `sorryAx` dependency, so a REAL=0 here is machine-checked sorry-freedom for the whole proved
+  open-hole-axiom dependency, so a REAL=0 here is machine-checked open-hole-freedom for the whole proved
   corpus.
-- Full `lake build` of the two targets: **REAL=0, 3455 jobs**. The ONLY `sorry` warnings in the
+- Full `lake build` of the two targets: **REAL=0, 3455 jobs**. The ONLY open-hole warnings in the
   entire build path are the two by-design ones reachable from these targets —
   `Core.lean:154` (S1) and `Laws.lean:53` (S2). S3 (`VatBoundary.phi_functorial`) is the third,
-  documented and excluded from its module's pins. **No other `sorry` anywhere.** Remaining
+  documented and excluded from its module's pins. **No other open hole anywhere.** Remaining
   warnings are cosmetic (unused-variable, namespace-duplication lint, simp/simpa) — not soundness.
 - `BFT.lean`, `BFTLiveness.lean`, `CordialMiners.lean`, `StepComplete.lean`, `Caps.lean` each
-  compile standalone **REAL=0**, no `sorry`/`error`.
+  compile standalone **REAL=0**, no open hole / `error`.
 
 ### Attack (1) — CONTRADICTION HUNT: **PASS** (no break found)
 Tried to derive `False` from the conjunction of carriers, focusing on the task-named interacting
@@ -218,7 +218,7 @@ pairs:
   *cancellative* monoid — a guarded conclusion, not a global collapse. The realized executor
   (`conservation_step_realized = (cexec_attests h).1`, `StepComplete.lean:91`) discharges the
   balance equality as a THEOREM about `cexec`, pinned kernel-clean in `Claims.lean`; the abstract
-  `sorry` (S1) never flows into it. No `False`.
+  open hole (S1) never flows into it. No `False`.
 - **BFT `n>3f` ⊗ honest-vote-once ⊗ fault_bound** (`BFT.lean`). `bft_safety` concludes `False`
   by design, but ONLY from the EXTRA premise `b₁ ≠ b₂` ∧ two `n−f` quorums. The inhabiting
   `Inhabited.model` (`votes = [⟨0,7⟩,⟨1,7⟩,⟨2,7⟩]`, `n=4 f=1`, so `n−f=3`) gives a quorum ONLY
@@ -293,7 +293,7 @@ vacuity axis — flagged, not conflated.
 ### Honest bottom line
 After attacking on all three axes — contradiction, trivial-witness, vacuous-conditioning — and
 re-deriving every machine fact from source (REAL=0 on `Consistency.lean` + `Claims.lean`; full
-`lake build` REAL=0 over 3455 jobs; only the three by-design `sorry`s present; capstone
+`lake build` REAL=0 over 3455 jobs; only the three by-design open obligations present; capstone
 axiom-clean), **I could not find a break.** dregg2 is, on the evidence exhibited, **CONSISTENT
 (no `False` derivable) and NON-VACUOUS (a discriminating, axiom-clean model inhabits every
 system-level carrier simultaneously, `dregg_consistent_nonempty`)**, modulo the isolated

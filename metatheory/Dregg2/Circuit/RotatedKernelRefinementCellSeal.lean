@@ -62,8 +62,7 @@ roots are modelled (a `ListCommit.listDigest` over the entry, binding via the re
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound, lifecycleLeafInjective-style CR carrier} on
 every new theorem. The ONLY carried crypto assumption is the realizable Poseidon CR
 (`compressNInjective` + an injective lifecycle leaf) — the SAME carrier `SystemRoots`/`ListCommit`
-already use, never a fresh axiom. No `sorry`, no `:= True`, no `native_decide`. NEW file; imports are
-read-only.
+already use, never a fresh axiom. NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementIncNonce
 import Dregg2.Circuit.ListCommit
@@ -357,8 +356,8 @@ cellSealV3` witness DIRECTLY, by
     reads (the limb-level decode the COMMITMENT does not certify, supplied by `StarkSound`).
 
 Editing `cellSealV3`'s disc gate breaks `cellSealV3_disc_forces_sealed`, hence `cellSeal_forced`, hence
-`cellSeal_descriptorRefines` — Class A. The seam is a NAMED realizable carrier (a structure field), never a
-`sorry`: it is `#assert_axioms`-clean, the `WitnessDecodes`-class floor transfer carries too. -/
+`cellSeal_descriptorRefines` — Class A. The seam is a NAMED realizable carrier (a structure field), never an
+assumed hole: it is `#assert_axioms`-clean, the `WitnessDecodes`-class floor transfer carries too. -/
 
 /-- **`CellSealTraceReadout` — the realizable circuit-witness extraction for cellSeal (NAMED).**
 The trace-determined part a satisfying `cellSealV3` witness supplies, EXACTLY the `WitnessDecodes` class of

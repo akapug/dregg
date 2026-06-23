@@ -43,7 +43,7 @@ amplifying child, `mint_refuses_amplification`); `revoke` maintains it by removi
 slots cannot create an over-broad child). We prove `mint` preserves it (the load-bearing step) and that
 the resulting child satisfies the dregg authority bound — the same `grantOk`.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. Builds on the
+Discipline: axiom-clean (`#assert_all_clean` at the close). Builds on the
 existing `SeL4Kernel` mint/attenuation theorems and the `SeL4Abstract` α-grounding — no new kernel model,
 no core `Auth` edit. `notify` participates for free (the rights lattice `AuthReq` is unchanged by the
 new `Auth.notify`; a notify cap minted into a PD is governed by the SAME `grantOk`).

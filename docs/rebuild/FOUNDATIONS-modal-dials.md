@@ -9,7 +9,7 @@
 > **Discipline (the whole point).** Every structural claim is tagged **REAL** (the law / universal
 > property is actually PROVED in the Lean, `file:line`), **DECORATIVE** (suggestive notation that
 > buys no theorem — I say what it would have to prove to be real), or **ASPIRATIONAL** (claimed by
-> the design but actually a `sorry` / OPEN / unbuilt). Category vocabulary is never allowed to
+> the design but actually an open hole / OPEN / unbuilt). Category vocabulary is never allowed to
 > paper over a missing theorem.
 >
 > **Sources.** `study-category.md`, `DREGG4-HYPERSYSTEM.md` (the complex-1 dial-cube exploration),
@@ -44,7 +44,7 @@ is a *design proposal over three independently-real axes*, and its sharpest clai
 `deniable × high-agreement` empty face, the directed `public → designated` wall, the order-ideal
 achievable-subcomplex — are **asserted-only, theorem-shaped but unproven.** "Modality" is, today,
 **decorative**: each dial is a type (or an order), none is wired into a modal/presheaf type theory
-that buys a coherence theorem. The `Φ`-as-functor coherence is a **BY-DESIGN `sorry`**
+that buys a coherence theorem. The `Φ`-as-functor coherence is a **BY-DESIGN open hole**
 (`phi_functorial:401`), so the only sense in which the system is "a category of authority with a
 functor between the two regimes" is ASPIRATIONAL (a concrete *witness* `phi_functorial_concrete:441`
 is PROVED, but the abstract functor laws are open).
@@ -295,7 +295,7 @@ proved identities, and it lives on the *verifier* index (a discrete set), not on
 
 ---
 
-## 7. The `Φ`-functor between the two authority regimes — ASPIRATIONAL (a BY-DESIGN `sorry`)
+## 7. The `Φ`-functor between the two authority regimes — ASPIRATIONAL (a BY-DESIGN open hole)
 
 The deepest "is the categorical framing real?" probe, and the answer is the cleanest illustration of
 the discipline. `cand-C` / `cand-A §2.1` claim the caps→keys conversion is a *forgetful functor* `Φ`
@@ -304,8 +304,8 @@ Properties E and F. In Lean (`Spec/VatBoundary.lean`):
 
 - The functor laws are *stated* as `PhiFunctorial` (`:356`): `preserves_id`, `preserves_comp`,
   `lossy_on_confinement`.
-- **`phi_functorial` (`:392-401`) is left as a localized, honest `sorry`** — by the module's own
-  declaration (`§8`, `:461`): "carries the one honest `sorry` (the OPEN categorical-coherence thread
+- **`phi_functorial` (`:392-401`) is left as a localized, honest open hole** — by the module's own
+  declaration (`§8`, `:461`): "carries the one honest open hole (the OPEN categorical-coherence thread
   over an ABSTRACT `Verifiable`)". So **Φ-being-a-functor is ASPIRATIONAL, not proved.**
 - A *concrete* non-degenerate witness `phi_functorial_concrete` (`:441-454`) IS PROVED and axiom-clean
   (`#assert_axioms`, `:456`): for `Statement=Unit, Witness=Bool, Verify _ b := b`, all three laws
@@ -313,7 +313,7 @@ Properties E and F. In Lean (`Spec/VatBoundary.lean`):
 
 > **TAG — ASPIRATIONAL (the abstract functor) / REAL (a concrete inhabited witness).** This is the
 > template for the whole document's honesty: a categorical claim ("Φ is a functor") whose universal
-> form is an open `sorry`, made non-vacuous by a proved concrete instance. The lens's instruction —
+> form is an open hole, made non-vacuous by a proved concrete instance. The lens's instruction —
 > "Φ-being-a-functor is ASPIRATIONAL not proved" — is exactly right and grounded at
 > `phi_functorial:401`.
 
@@ -432,7 +432,7 @@ extend: a face's CG-5 sub-sum need not vanish, `hyper_not_all_admissible`).
 | 11 | Impossibility face `deniable × high-agreement` is empty (agreement fights deniability) | **ASPIRATIONAL** | theorem-shaped but **not proved**; ingredients in two unconnected modules; no `deniable_high_agreement_empty` |
 | 12 | Directed walls `public → designated` / `public → deniable` unreachable | **ASPIRATIONAL** | no edge/reachability structure on transferability |
 | 13 | disclosure×transferability 2-cell commutes (dials orthogonal to effects/caveats) | **ASPIRATIONAL** | no `ObsDelta` projection commutation theorem; prose-only `DesignatedVerifier.lean:24` |
-| 14 | `Φ` caps→keys is a functor between authority categories | **ASPIRATIONAL** (abstract) / **REAL** (concrete witness) | `phi_functorial:401` is a BY-DESIGN `sorry`; `phi_functorial_concrete:441` PROVED axiom-clean |
+| 14 | `Φ` caps→keys is a functor between authority categories | **ASPIRATIONAL** (abstract) / **REAL** (concrete witness) | `phi_functorial:401` is a BY-DESIGN open hole; `phi_functorial_concrete:441` PROVED axiom-clean |
 | 15 | n-ary higher-order turn = `Hyperedge` (wide pullback); keystone sound | **REAL** | `Hyperedge.lean:80,374` `#assert_axioms:538`; `JointViaHyper:75` |
 | 16 | every higher cell carries an irreducible binding (proper subobject, no free fillers) | **REAL** | `Hyperedge.hyper_binding_is_proper:164` (over `Unit`); `hyper_not_all_admissible:505` |
 | 17 | ∞-cell in TIME: a cell sound-forever along unbounded adversarial schedules | **REAL** | `CoinductiveAdversary.lean` `obsBisim_traj_of_bisim`, `stepComplete_carries_infinite`, §8 `gupaco` |

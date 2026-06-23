@@ -379,7 +379,7 @@ The terminal fibre of conservation is the single-machine ledger law (`Exec.Unifi
 `unified_ledger_conserves`: the n=1 ledger conserves `total` *exactly*, window `0`). Its DISTRIBUTED
 bound — by how much a network partition can transiently skew the *visible* total before reconciliation
 — is NOT yet derived in Lean. Per the honesty discipline we carry it as an EXPLICIT named hypothesis,
-NOT `sorry`/`True`: a `DistConservationBound` supplies the window and the after-window property; from
+NOT an unproven hole: a `DistConservationBound` supplies the window and the after-window property; from
 it we BUILD the conservation fibre through the same `Fibre`/`lift` machinery. -/
 
 /-- **`DistConservationBound P`** — the NAMED OPEN for conservation's distributed bound. It packages
@@ -452,8 +452,7 @@ the terminal (single-machine) fibre by ONE definitional law. -/
 
 /-- **`three_fibres_one_lift`** — the same `lift_from_apex` reindexes all three fibres from any apex
 source to any destination. Revocation is fully proven; conservation and attenuation are gated on their
-NAMED distributed-bound hypotheses (`DistConservationBound`/`DistAttenuationBound`) — never `sorry`,
-never `True`. This is the milestone-1 statement: one base, one fibre shape, one `lift`. -/
+NAMED distributed-bound hypotheses (`DistConservationBound`/`DistAttenuationBound`). This is the milestone-1 statement: one base, one fibre shape, one `lift`. -/
 theorem three_fibres_one_lift
     {Digest Proof : Type} [AddCommGroup Digest] [CryptoKernel Digest Proof]
     (log : List RevEvent) (cred : VC Digest Proof) (m n : Node) (τ : Time)

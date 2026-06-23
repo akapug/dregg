@@ -315,7 +315,7 @@ then atomic commit through the verified executor"
 end NonVacuity
 
 /-! ## §9 — Axiom-hygiene tripwires. Every PROVED keystone depends ONLY on the three standard
-kernel axioms (no `sorryAx`). -/
+kernel axioms (no extra axiom). -/
 
 #assert_axioms unsettled_freezes_state
 #assert_axioms missing_party_blocks_settlement

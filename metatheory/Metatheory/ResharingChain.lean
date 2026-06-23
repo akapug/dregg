@@ -22,9 +22,9 @@ DISCIPLINE (the `CommonSecret`/`PreRotation` bar, verbatim): faithful Props; the
 cryptographic obligation — that a sub-threshold POST-reshare coalition's pooled view is
 information-theoretically consistent with EVERY value of the PRE-reshare secret (HJKY renewal-secrecy
 / the mobile-adversary floor) — enters ONLY as the `ReshareLink.forward_blind` STRUCTURAL FIELD, the
-exact analogue of `subThreshold_blind` (and of `KeySetCR` on the ∀-side), NEVER an `axiom`/`sorry`.
-Every keystone is pinned `#assert_axioms` (kernel-clean: only `propext`/`Classical.choice`/
-`Quot.sound`), so a `sorryAx` fails the build. A discriminating concrete model (§5) — a real reshare
+exact analogue of `subThreshold_blind` (and of `KeySetCR` on the ∀-side), never as an `axiom` or an
+open hole. Every keystone is pinned `#assert_axioms` (kernel-clean: only `propext`/`Classical.choice`/
+`Quot.sound`), so any unproven keystone fails the build. A discriminating concrete model (§5) — a real reshare
 of a 2-of-2 XOR secret to two FRESH shares of the SAME secret — certifies the keystones non-vacuous.
 
 The four angles (`docs/deos/RESHARING-CHAINS.md`):

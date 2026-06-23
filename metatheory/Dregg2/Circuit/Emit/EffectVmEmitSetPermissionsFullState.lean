@@ -18,7 +18,7 @@ block), so a `cap_root` tamper is anti-ghosted too; the cap-graph MEMBERSHIP sta
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
-No `sorry`/`:= True`/`native_decide`. `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
+`fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

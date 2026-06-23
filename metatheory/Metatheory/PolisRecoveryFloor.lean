@@ -38,7 +38,7 @@ faithfully: under the deployed `rotateStep` semantics, whether a *committed* rec
 `≤ k` to a designated set EXISTS. The crypto floor (`KeySetCR`) lives in the deployed module; here we
 witness the GAME, not re-prove the hash.
 
-l4v bar: no `sorry`, no load-bearing `:= True`; the floor is `Bool`-valued and non-vacuous both
+l4v bar: the floor is `Bool`-valued and non-vacuous both
 polarities (a recoverable view passes; a locked-out view is foreclosed). `#guard`s execute both.
 -/
 import Metatheory.PolisViability

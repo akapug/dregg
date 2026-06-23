@@ -57,7 +57,7 @@ notify algebra — REFUSE an un-capped wake while a properly-capped wake COMMITS
   declared spend to ACTUAL ledger debits is the executor's conservation keystone, a separate axis
   (`AgentOrchestration.workForest_conserves`) — this app gates the POLICY, that one moves value.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` —
+Discipline: axiom-clean (`#assert_all_clean` at the close) —
 `decide` / `#guard` / `Exec.Program`-keystone reuse only. `lake build` green (LOCAL).
 -/
 import Dregg2.Exec.Program

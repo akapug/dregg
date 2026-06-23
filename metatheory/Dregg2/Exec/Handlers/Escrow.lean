@@ -148,8 +148,7 @@ def es0 : RecordKernelState :=
 /-! ## §7 — Axiom-hygiene pins (every handler keystone rests only on the three kernel axioms).
 
 Pinning each handler def pins its obligation fields transitively (the literal CARRIES the proofs), and
-each settle-actor / conservation helper is pinned directly. A `sorryAx` anywhere fails the pin AND the
-build. -/
+each settle-actor / conservation helper is pinned directly. -/
 
 #assert_axioms noteSpendStep_measure_fixed
 #assert_axioms noteSpendA

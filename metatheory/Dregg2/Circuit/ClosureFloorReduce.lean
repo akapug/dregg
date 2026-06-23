@@ -45,8 +45,7 @@ uniform pattern is named in `ClosureColumnDischarge`. This module realizes it on
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. All residual fields enter as Prop/Type
-hypotheses; the column reads are `rfl` via the discharge. No `sorry`, no `native_decide`, no `:= True`,
-no fresh axiom. NEW file; imports read-only.
+hypotheses; the column reads are `rfl` via the discharge. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureColumnDischarge
 import Dregg2.Circuit.ClosureTransfer

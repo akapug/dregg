@@ -650,7 +650,7 @@ issuer-moves, so `turn_conserves` holds the measure EXACTLY fixed (the cross-che
 
 Pinning each handler `def` pins its obligation FIELDS transitively (the structure literal carries the
 proofs), so these pins certify that mint/burn/createCell/state-write soundness rests only on the kernel
-triple — a `sorryAx` anywhere in the composed lemmas would fail the pin (and the build). -/
+triple. -/
 
 #assert_axioms mintH
 #assert_axioms burnH

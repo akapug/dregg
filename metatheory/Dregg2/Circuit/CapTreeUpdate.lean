@@ -41,8 +41,7 @@ carrier to deliver the per-effect `Caps`-function spec. We do NOT fake that lift
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable `CapHashScheme` carriers
 inherited from `DeployedCapTree`/`SortedTreeNonMembership` (`Compress1CR` via `chipCR`; the
-`SpineCommits` spine↔root binding, a HYPOTHESIS). No `sorry`, no `native_decide`, no `:= True`, no fresh
-axiom. NEW file; imports read-only.
+`SpineCommits` spine↔root binding, a HYPOTHESIS). NEW file; imports read-only.
 -/
 import Dregg2.Circuit.SortedTreeNonMembership
 

@@ -61,8 +61,8 @@ The Lean foundation proves the binding is SOUND once that field exists and is co
 deployment wires the field + regenerates the VK under ember's gate.
 
 l4v bar: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto enters ONLY as the named
-`RosterCR` hypothesis + the StateCommit CR set carried by `recStateCommit_binds_kernel`; no `sorry`,
-no `:= True`, no `native_decide`. Non-vacuity both polarities: the binding RECOVERS (positive) and the
+`RosterCR` hypothesis + the StateCommit CR set carried by `recStateCommit_binds_kernel`.
+Non-vacuity both polarities: the binding RECOVERS (positive) and the
 tooth DISTINGUISHES (refusal); concrete `#guard`s exhibit a guardian-swap root divergence.
 -/
 import Dregg2.Circuit.StateCommit

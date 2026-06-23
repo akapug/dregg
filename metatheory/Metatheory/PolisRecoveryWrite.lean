@@ -54,7 +54,7 @@ to a designated set EXISTS. The crypto floor (`KeySetCR`, hash collision-resista
 deployed module and is the one TERMINAL seam — it cannot be proven in Lean; here we witness the GAME
 over the live verb, never re-prove the hash.
 
-l4v bar: no `sorry`, no load-bearing `:= True`; `floorOk` is `Bool`-valued, non-vacuous both
+l4v bar: `floorOk` is `Bool`-valued, non-vacuous both
 polarities (a recoverable live state passes; a locked-out live state is foreclosed). `#guard`s run
 the real bounded game over the deployed `rotateWrite`.
 -/

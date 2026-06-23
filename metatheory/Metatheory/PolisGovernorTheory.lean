@@ -32,7 +32,7 @@ of `genGovStep`.
 
 Honest scope: the *theory* is fully general (any `State`, any `step`, any decidable floor); the
 non-vacuity/adversary demonstrations live in the concrete sandbox files (bounded worlds, scripted
-optimizers, not LLMs). No `sorry`, no load-bearing `True`.
+optimizers, not LLMs).
 -/
 import Metatheory.Polis
 

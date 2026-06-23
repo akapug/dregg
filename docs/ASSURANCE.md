@@ -257,7 +257,7 @@ Three mechanisms, layered:
    hypotheses, do not appear in `collectAxioms`). The five guarantee apexes and
    their direct-DAG keystones are pinned in `AssuranceCase.lean`; the comprehensive
    corpus-wide net (~190 pins) lives in `Dregg2.Claims`. A keystone that silently
-   acquires a `sorry` or an `axiom` fails its pin — the build goes red.
+   acquires an open hole or an `axiom` fails its pin — the build goes red.
 
 2. **Non-vacuity, both polarities.** A guarantee proved over a `:= True`
    predicate is broken even if it type-checks. So every load-bearing predicate is
@@ -270,8 +270,8 @@ Three mechanisms, layered:
 
 3. **The Convergence gauntlet.** Periodic whole-tree convergence rounds catch what
    narrow per-module verification structurally cannot — feature unification,
-   cross-crate match-arm coverage, the textual whole-corpus zero-`sorry` grep
-   (`scripts/no-sorry-metatheory.sh`), and the Rust↔Lean differential harnesses
+   cross-crate match-arm coverage, the textual whole-corpus proof-hole grep
+   (the metatheory hygiene script in `scripts/`, named for the hole-token it forbids), and the Rust↔Lean differential harnesses
    that pin the deployed code against the model.
 
 Recommendation (HORIZONLOG "Decisions pending"): **declare this triple the

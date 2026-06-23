@@ -11,7 +11,7 @@ Two deliverables:
            admits (name <args>) req w = true ↔ <rhs> := by <proof | simp [name]>
        #assert_axioms admits_name        -- honesty pin on 100% of output
 
-   The auto-`#assert_axioms` is the tripwire: a default proof that secretly needs a `sorry`
+   The auto-`#assert_axioms` is the tripwire: a default proof that secretly needs an unproven hole
    fails at generation time. The anti-goal is a flat coproduct inductive; the goal is
    derived smart-constructors over the small primitives (`firstParty`/`witnessed`/`all`/`any`/`gnot`).
 
@@ -100,7 +100,7 @@ elab_rules : command
             ($reqV : $reqT) ($wV : $stmtT → $witT) :
             admits ($appHead) $reqV $wV = true ↔ $rhs := by $proofTac)
       -- 3. THE HONESTY PIN — wired into 100% of generated output. A default-proof variant
-      --    that secretly needed a `sorry` trips this `#assert_axioms` AT GENERATION TIME.
+      --    that secretly needed an unproven hole trips this `#assert_axioms` AT GENERATION TIME.
       elabCommand <| ← `(command| #assert_axioms $thmName:ident)
 
 /-! ## §2 — Worked slice: regenerate `Spec/Guard.lean §7` via the codegen.

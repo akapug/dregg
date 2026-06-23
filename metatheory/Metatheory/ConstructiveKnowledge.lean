@@ -117,7 +117,7 @@ theorem find_realizes (k : Knower P W) (X : Claim P) (w : W)
 -- untrusted prover plugin (`Knower.search` is a bare, untrusted `Searchable` by design, so
 -- there is no in-module data relating its opaque `find` to `Verify`). This is the
 -- `SoundSearchable.find_sound` / `Dregg2.Laws.search_sound` contract made explicit; given
--- it, the theorem is kernel-clean (no `sorry`, no `search_sound` primitive appeal). A
+-- it, the theorem is kernel-clean (no `search_sound` primitive appeal). A
 -- contracted searcher (`[SoundSearchable P W]`) discharges `hsound` via `search_sound`.
 #assert_axioms find_realizes
 

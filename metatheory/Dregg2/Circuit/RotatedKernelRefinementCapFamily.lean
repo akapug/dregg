@@ -52,7 +52,7 @@ DELIVER the spec from the decode, with the both-polarity tooth making a forged m
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable `CapHashScheme` carriers
 (`Compress1CR` via `chipCR`; the `SpineCommits` spine↔root binding) inherited through `CapTreeUpdate`.
-No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CapTreeUpdate
 import Dregg2.Circuit.Spec.authorityunattenuated
@@ -591,7 +591,7 @@ which FORCES `writesTo cap_root_before key value cap_root_after` on the committe
 (`writesTo` FUNCTIONAL under CR — a forged `new_cap_root` is UNSAT). The realizable
 `WitnessDecodes`-class seam (the SAME class `cellSeal`'s `discLimbDecodes` / the existing `SpineCommits`
 residual is) is that the committed `state.CAP_ROOT` BEFORE/AFTER limbs ARE the decode's `oldRoot`/`newRoot`
-— a trace-fill identity, a NAMED carrier, never a sorry. Editing `<slot>V3`'s write op turns the forced
+— a trace-fill identity, a NAMED carrier, never an assumed hole. Editing `<slot>V3`'s write op turns the forced
 `writesTo` RED (mutation-confirmed). The kernel `Caps`-move + frame + log ride the §1/§2 decode residual.
 
 The FROZEN-face slots (introduce / revokeDelegation / refreshDelegation) are NOT closed here: their v1

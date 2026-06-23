@@ -86,7 +86,7 @@ Commit `ed3b2bc46`'s message lists "compute_marketplace's unmasked multi-cell re
 ### unintegrated-draft
 
 **Coordinated/bilateral turn: covenant φ guard is a binding propBit gate, full polynomial φ deferred** — *coordinated-turn session*
-`CoordinatedTurnEmit.lean` has 0 sorry; the covenant guard is a real binding gate (`cCTCovenantGuard {vCovenantGuard=1}`, `propBit(step.covenant.φ … = true)`) with proven `ct_pub_charter_iff` + Wave-6 `covenantGuard_of_emitted`/teeth. But `:300` still reads "scaffold; full polynomial φ deferred" — φ is enforced via a propBit witness column, NOT in-circuit φ recompute. `DESIGN-recursion-aggregation-private-joint-turns.md` is stale (cites line-619 sorries that no longer exist). Matters because the residual propBit-vs-polynomial gap is the difference between a witnessed guard and a recomputed one.
+`CoordinatedTurnEmit.lean` has no open holes; the covenant guard is a real binding gate (`cCTCovenantGuard {vCovenantGuard=1}`, `propBit(step.covenant.φ … = true)`) with proven `ct_pub_charter_iff` + Wave-6 `covenantGuard_of_emitted`/teeth. But `:300` still reads "scaffold; full polynomial φ deferred" — φ is enforced via a propBit witness column, NOT in-circuit φ recompute. `DESIGN-recursion-aggregation-private-joint-turns.md` is stale (cites line-619 open holes that no longer exist). Matters because the residual propBit-vs-polynomial gap is the difference between a witnessed guard and a recomputed one.
 **Recommendation:** Mostly closed (genuine binding gate + refinement lemma + teeth, not a no-op). Refresh the stale DESIGN doc; decide whether the propBit-vs-polynomial-φ gap warrants closure.
 
 ### follow-up
@@ -192,5 +192,5 @@ These candidates pertain to `~/dev/allgame` or `~/dev/rig`, not dregg. Recorded 
 - **Nemo (Nemotron) persona + extractor/code-leak fixes uncommitted** — `nemotron_resident.py` is at allgame HEAD; verify the specific fenced-tool-call extractor + code-fence-strip fixes via `git log -p`.
 - **MAPPO/MARL analytical backprop never implemented** — belongs to `~/dev/rig` (or allgame `game/rl/`); grep analytical-backprop vs the documented ES-gradient bottleneck.
 - **"rust-eval-harness" subagent never launched** (`rig-core/src/eval.rs`) — likely resolved-by-rename to `skill_eval.rs` in rig; reconcile there.
-- **graphplay prove-everything: 8 killed proof agents' drafts** — `~/dev/graphplay`; the lost drafts are unrecoverable, but sorry-closing was carried forward by waves 21/22. Re-target the remaining specific sorries (`Path.lean`, `DistributedQuotient`) with fresh agents rather than mourning the aborted run.
+- **graphplay prove-everything: 8 killed proof agents' drafts** — `~/dev/graphplay`; the lost drafts are unrecoverable, but open-hole-closing was carried forward by waves 21/22. Re-target the remaining specific open holes (`Path.lean`, `DistributedQuotient`) with fresh agents rather than mourning the aborted run.
 - **Completed subagent report lost to a plan-mode rewind** — rig/allgame era; unrecoverable by nature. Re-derive findings if they matter.

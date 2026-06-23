@@ -32,7 +32,7 @@ views in the trace, some council's bounded `k`-rotation recovery game (over the 
 `captureBar_exactly_floor_violation` gives that the composed bar bars EXACTLY the union floor
 violation (no astrology, no forgotten case). Non-vacuity is EXECUTED both polarities below.
 
-l4v bar: no `sorry`, no load-bearing `:= True`; the floor is decidable and bites both ways (a trace
+l4v bar: the floor is decidable and bites both ways (a trace
 where both councils stay recoverable clears; a trace where one council locks itself out is caught).
 -/
 import Metatheory.PolisRecoveryFloor

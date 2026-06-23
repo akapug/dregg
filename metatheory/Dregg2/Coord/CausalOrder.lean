@@ -73,7 +73,7 @@ The hashes are abstract identities (`Nat`); content-addressing / collision-resis
 the standard named assumption that makes distinct turns have distinct hashes (`causal.rs:99-103`
 notes self-reference is "computationally infeasible" under content-addressing). We model the
 *graph* discipline `insert` enforces given distinct hashes; we do not re-derive collision
-resistance. No `sorry`/`:=True`/`native_decide`. `#assert_axioms`-clean (⊆ {propext,
+resistance. `#assert_axioms`-clean (⊆ {propext,
 Classical.choice, Quot.sound}). No import of the executor — this is pure coordination-layer topology.
 -/
 import Mathlib.Data.List.Basic

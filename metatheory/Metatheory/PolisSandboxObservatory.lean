@@ -12,7 +12,7 @@ floor-breaking move) are proven.
 
 Honest scope: agents are scripted Lean policies, not LLMs — the politics is among archetypes we
 write; this is the verified governor + a runnable arena, not yet emergent LLM politics (that's the
-Minecraft phase). No `sorry`.
+Minecraft phase).
 -/
 import Metatheory.PolisSandboxN
 

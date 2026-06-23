@@ -506,7 +506,7 @@ theorem programGuardStmt_admits_all [Verifiable ObligationStmt Witness]
 Pin every keystone: the lift's meaning, the full domain-restriction keystone (both directions + the
 "never mutates" corollary + fail-closed), the two concrete executor-property lifts, the non-vacuity
 theorems, and the Bucket-B routing characterizations + program-level lifts. Each ⊆ {propext,
-Classical.choice, Quot.sound} (no `sorryAx`). -/
+Classical.choice, Quot.sound}. -/
 
 #assert_axioms interp_guardG
 #assert_axioms interp_guardSeq

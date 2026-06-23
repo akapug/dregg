@@ -43,7 +43,7 @@ regresses.
 NEW file only. Does NOT edit `EffectsState`/`RecordKernel`/`Dregg2.lean` or any Metatheory/*.
 Reuses the proved `EffectsState` keystones + `RecordKernel.recKExecAsset_conserves_per_asset`;
 defines the record-level caveat surface here as the live promotion. Every keystone
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.EffectsState
 

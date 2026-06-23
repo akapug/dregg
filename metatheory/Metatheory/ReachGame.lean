@@ -31,7 +31,7 @@ Then the monitorable face: `reachWithin : Nat → World → Prop`, an explicit `
 Connection: `PolisSandboxLiveness.reachHome` IS `reachWithin` for the gate game (target = "home now",
 one move = the victim's step through an open gate). Recorded as `reachHome_is_reachWithin_shape`.
 
-No `sorry`, no load-bearing `True`. `#guard` asserts TRUE props (`decide` tells the truth).
+`#guard` asserts TRUE props (`decide` tells the truth).
 -/
 import Mathlib.Order.FixedPoints
 import Metatheory.SafetyGame

@@ -76,9 +76,7 @@ deployed row does not carry. Those are **class C**, not A.
   Conservation ≠ correctness. This is the dominant class.
 - **(D) UNVERIFIED** — no meaningful from-scratch soundness for the effect.
 
-Every effect below is `#assert_axioms`-clean (⊆ {`propext`, `Classical.choice`, `Quot.sound`}); no
-`sorry`, no `:= True`, no `native_decide` (verified: the only textual matches are header comments
-asserting their absence). Build green (`lake build` of the touched Emit + turn modules: **3198 jobs,
+Every effect below is `#assert_axioms`-clean (⊆ {`propext`, `Classical.choice`, `Quot.sound`}). Build green (`lake build` of the touched Emit + turn modules: **3198 jobs,
 0 errors**, warnings only — re-run on this finalization pass).
 
 ---

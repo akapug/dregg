@@ -698,8 +698,7 @@ def transferDescriptorRangedJson : String :=
 
 /-! ## §10 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms tauth_iff
 #assert_axioms tconserve_iff

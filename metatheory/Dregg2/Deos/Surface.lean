@@ -35,7 +35,7 @@ restated: the SAME `Dregg2.Exec.confersEdgeTo` gate, on a surface cap.
     keeps `read`, drops `write` (the positive direction, witnessed): the "render a read-only copy for
     a less-authorized viewer" move, on the real lattice.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2` green (LOCAL). NO core-`Auth`/`Cap` edit — every name is the REAL kernel lattice
 (`Dregg2.Authority.Cap` / `capAuthConferred` / `Dregg2.Exec.attenuate` / `confersEdgeTo`); the deos
 surface is a NAMING of the existing endpoint cap, not a new object.

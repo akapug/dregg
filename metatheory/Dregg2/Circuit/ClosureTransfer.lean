@@ -68,8 +68,8 @@ surface decode, authority from the per-effect cap-open).
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. All carriers
 (`TransferTraceReadout`/`LedgerSurfaceReadout`/`TransferAuthorityWitness`/`logHashInjective`/the CR
-fields) enter as Prop/Type hypotheses, never as axioms. No `sorry`, no `native_decide`, no `:= True`,
-no fresh axiom. NEW file; imports read-only.
+fields) enter as Prop/Type hypotheses, never as axioms.
+NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureAll
 import Dregg2.Circuit.TransferDecodeBridge

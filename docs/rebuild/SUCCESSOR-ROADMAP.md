@@ -10,9 +10,9 @@
 
 ## What's REAL today (machine-checked, no inflation) — 2026-06-02
 - A Lean4 project that compiles: **~181 `Dregg2/**` modules + 12 `Metatheory/**` modules**
-  (was "31"). **ZERO real `sorry`/`admit`/`axiom`/`native_decide`** across the corpus
-  (the last 3 by-design sorries were retired + a CI guard now forbids `sorry`; task #128 /
-  `WF-ZERO-SORRY`). The hundreds of grep hits for "sorry" are all prose in doc-comments.
+  (was "31"). **ZERO real open holes / `admit`/`axiom`/`native_decide`** across the corpus
+  (the last 3 by-design open holes were retired + a CI guard now forbids them; task #128 /
+  `WF-ZERO-HOLES`). The hundreds of grep hits in doc-comments are all prose.
 - **The executable turn is no longer a 5-effect scalar kernel.** `Dregg2/Exec/TurnExecutorFull.lean`
   defines `FullActionA` — a **46-arm** per-asset action sum (`TurnExecutorFull.lean:1928`) —
   and `execFullA` dispatches **all 46 arms** (`:2236`): transfer/mint/burn (per-asset), 5
@@ -55,7 +55,7 @@
   **Rust marshaller** `dregg-lean-ffi/src/marshal.rs` (+ `marshal_roundtrip.rs`) is byte-exact vs
   the live export (task #142, THE SWAP Rust half — in progress).
 - **FILL J — the codec is being PROVED a left-inverse** (task #136). `Dregg2/Exec/CodecRoundtrip.lean`
-  proves, all sorry-free and `#assert_axioms`-pinned (29 keystones, `:2479`–`:2507`): every leaf
+  proves, all hole-free and `#assert_axioms`-pinned (29 keystones, `:2479`–`:2507`): every leaf
   (§0), the per-asset `BAL` entry (§2), recursive `Value`/`FIELDS` (§5), the SECURITY-CRITICAL
   `Authorization`/WHO decoder at all **10 variants + recursive `oneOf`** (§6, `parseAuthW_roundtrip`),
   the `FullActionA`/WHAT decoder at **all 46 arms** (§7, `parseActionW_roundtrip` + `parseActionW_setfield`),
@@ -63,7 +63,7 @@
   top-level `parseWState`/`parseWTurn`/`parseWWire` assembly is the remaining follow-on (its
   component list-productions are all proven).
 - Honest classification of the genuine OPEN theorems (now isolated in `Metatheory/Open/`, NOT
-  `sorry`'d — stated as honest scope-notes / named assumptions): Byzantine quorum-intersection
+  left as open holes — stated as honest scope-notes / named assumptions): Byzantine quorum-intersection
   & GST-liveness (`Dregg2/Proof/BFT.lean`, `BFTLiveness.lean`), family joint-soundness
   (`ConservationMultiEdge`, `CrossCellBisim`), perfect ZK/UC (`PerfectZK`, `PerfectUC`),
   final-coalgebra & authority-closure.
@@ -109,7 +109,7 @@ distributed-object/capability layer. So "dregg2 should be bootable" is a non-goa
 is a real, verified dregg1 successor that rbg can host" is the goal.
 
 ## The discipline that got us here (keep it)
-Spec-first, every claim compiler-checked; NO fake-to-pass (honest `sorry` with PRIMITIVE/
+Spec-first, every claim compiler-checked; NO fake-to-pass (honest open holes with PRIMITIVE/
 OPEN notes, never `axiom`/`admit`/`native_decide` cheats); race-free parallel via
 `lake env lean`; the portals keep crypto out of the trusted Lean; the differential harness
 keeps Rust ≡ the Lean golden oracle.

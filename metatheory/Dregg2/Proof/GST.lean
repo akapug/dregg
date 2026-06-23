@@ -303,7 +303,7 @@ end Inhabited
 
 All theorems reduce to `GSTModel` STRUCTURE FIELDS (hypotheses, not `axiom`s), `BFTLiveness`'s proved
 `liveness_of_pacemaker` / `gstRound_obtains` (themselves field-free), and pure `Nat`/`List`
-combinatorics (`votersFor_length_mono`, `omega`, `max`). None pull in `sorryAx` or any oracle axiom —
+combinatorics (`votersFor_length_mono`, `omega`, `max`). None pull in a faked-green or oracle axiom —
 `collectAxioms` sees only the standard kernel triple. The partial-synchrony assumptions live entirely
 in `GSTModel`'s fields and the theorem premises (the `recv_mono` discipline), never in `#print axioms`.
 The `World.rand`-measure bridge (that honest leaders are co-final a.s.) stays the SAME named OPEN

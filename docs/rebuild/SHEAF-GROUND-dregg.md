@@ -249,7 +249,7 @@ theorem predicate_witness_galois [Verifiable P W] :                            -
 
 The Galois connection is the Birkhoff polarity of the `Discharged` relation (`polarity_galois:75`,
 fully proved). `find` (`Searchable.find`, `:48`) is the opaque, untrusted, possibly-nonterminating
-search side; `search_sound` (`:53`) is a by-design `sorry` (`:60`) — *a contract on an external
+search side; `search_sound` (`:53`) is a by-design open hole (`:60`) — *a contract on an external
 plugin*, never an in-Lean theorem.
 
 > **MAP TO SHEAF.** The seam tells us *which side is the verifier* — and it is the side with the

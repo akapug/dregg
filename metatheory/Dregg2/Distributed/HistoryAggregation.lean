@@ -28,7 +28,7 @@ verified executor), the chain is correctly ordered (each post-root = next pre-ro
 chain is a `Run recChainedSystem` from genesis whose final state is the genuine fold of the history,
 so `recChained_run_conserves` (no mint/burn over the entire history) applies.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Distributed.HistoryAggregation`.
 -/
 import Dregg2.Circuit.StateCommit

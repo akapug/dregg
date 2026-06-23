@@ -69,8 +69,8 @@ debits a shared counter:
      `TrustlineRegistry` forever-carrier law.
 
 Non-vacuity both polarities (§7/§13 `#guard`s): a within-line draw ADMITS (and the boundary draw is
-tight); an over-line draw, a replayed digest, and an over-repay are each REFUSED. No
-`sorry`/`:= True`/`native_decide`; `#assert_axioms`-clean (⊆ {propext, Classical.choice,
+tight); an over-line draw, a replayed digest, and an over-repay are each REFUSED.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice,
 Quot.sound}). No executor import — the cell shape (which registers, which slot caveats) is the
 design doc's §3; the SGM/CWM mandate modules are the executor-welding precedent.
 -/
@@ -1457,7 +1457,7 @@ def pdemo₁ : ChannelC := (settleC .pureCredit pdemo₀ 30).getD pdemo₀
 `#assert_namespace_axioms Dregg2.Apps.Trustline` (below, after `end`) pins EVERY theorem in
 this namespace — §1–§14, both the `Line` and `SLine`/`Channel`/reserve models — to the
 kernel-clean triple `{propext, Classical.choice, Quot.sound}` in a single line, failing on
-the first `sorryAx`/stray axiom. It replaces the two former ~26- and ~49-line per-keystone
+the first unproven hole / stray axiom. It replaces the two former ~26- and ~49-line per-keystone
 blocks and is strictly stronger: it audits every theorem, not just the ones a human listed. -/
 
 end Dregg2.Apps.Trustline

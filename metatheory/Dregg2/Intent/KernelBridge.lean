@@ -265,8 +265,7 @@ theorem bridge_accepts_iff_conserves {a c : DemoRes} :
 /-! ## 6. Axiom hygiene — pin EVERY bridge keystone to the three kernel axioms.
 
 Walks every theorem under `Dregg2.Intent.KernelBridge`'s declarations and errors if any escapes
-`{propext, Classical.choice, Quot.sound}` — a `sorryAx`/`admit`/`native_decide` anywhere would fail the
-build. The refinement bridge is kernel-clean. -/
+`{propext, Classical.choice, Quot.sound}`. The refinement bridge is kernel-clean. -/
 #assert_axioms toBal_inj
 #assert_axioms converts_refines_toBal
 #assert_axioms settle_refines_per_asset_conservation

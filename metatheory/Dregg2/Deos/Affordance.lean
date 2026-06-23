@@ -43,7 +43,7 @@ produced).
     fewer rights is offered a subset of the affordances (those whose `required` it still satisfies);
     the per-viewer affordance set only SHRINKS as authority shrinks (monotone), via `fireGate`.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2` green (LOCAL). The fire gate IS `required ⊆ held` (the `is_attenuation` order the cap crown
 proves); the attested root IS the EXISTING `Receipts.Receipt.newCommit`. No new gate, no new commitment.
 -/

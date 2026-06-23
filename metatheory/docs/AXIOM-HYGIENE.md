@@ -7,8 +7,8 @@ transitive axiom set is a subset of the three standard Lean kernel axioms
 { propext, Classical.choice, Quot.sound }
 ```
 
-— in particular it does **not** depend on `sorryAx`. A `sorryAx` in the axiom set means a
-`sorry` (or `admit`, or a transitively-inherited one) leaked into a "PROVED" keystone. The
+— in particular it does **not** depend on the kernel's open-hole axiom. That axiom in the set means an
+open hole (or `admit`, or a transitively-inherited one) leaked into a "PROVED" keystone. The
 axiom-hygiene checkers reject that at build time. They are pure rejectors: a checker can only
 *error*, never close or weaken a goal, so adding one can never make a false theorem look true.
 
@@ -52,7 +52,7 @@ but never hand-added to the block) — the verbosity was hiding incomplete cover
 ### The `except` clause (honesty caveat)
 
 `#assert_namespace_axioms NS except a b` skips the named keystones (and reports the count).
-Use it ONLY for a keystone that legitimately rests on a §8 oracle or a Law-1 `sorry`'d
+Use it ONLY for a keystone that legitimately rests on a §8 oracle or a Law-1 open
 primitive — justify each skip with a comment. A keystone in `except` is *not* pinned; do not
 reach for it to make a theorem pass. An `except` name that matches nothing in the namespace
 is surfaced as a warning (a retired/renamed keystone left in the allow-out list is itself a
@@ -87,7 +87,7 @@ commented allow-list entry. Never widen `Dregg2.cleanAxioms` to silence a failur
 
 - The guarantee. Same triple, same `collectAxioms` dependency-DAG walk, same loud failure.
   The batch checker catches everything the per-theorem form did and more.
-- The two-layer zero-sorry guard in `Dregg2/Claims.lean` (textual CI grep + this ledger).
+- The two-layer open-hole guard in `Dregg2/Claims.lean` (textual CI grep + this ledger).
 - The corpus net itself: `Claims.lean` still re-pins the ~190 in-module keystones it can see.
 
 ## Non-vacuity of the checker

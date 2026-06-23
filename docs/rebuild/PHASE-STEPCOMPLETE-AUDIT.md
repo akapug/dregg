@@ -281,8 +281,8 @@ executor-checked, `proof_verify.rs:629`). This makes replay detectable by the *p
   (`dregg-dsl-differential`, backend #8) should assert Rust-accept ≡ Lean `exec = some` on
   the new PI surface throughout the transition.
 - Once (1)+(2) hold in-circuit and the bridge is green, `Boundary.sound_of_step_complete`
-  fires for the concrete machine: `Core.conservation_step` (`Dregg2/Core.lean:154`, today a
-  `sorry`/operational obligation, `Core.lean:162`) is discharged for dregg1 exactly as
+  fires for the concrete machine: `Core.conservation_step` (`Dregg2/Core.lean:154`, today an
+  open / operational obligation, `Core.lean:162`) is discharged for dregg1 exactly as
   `conservation_step_realized` discharges it for the Lean kernel (`StepComplete.lean:91`).
 
 ---

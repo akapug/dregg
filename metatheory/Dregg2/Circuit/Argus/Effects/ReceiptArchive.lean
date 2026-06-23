@@ -97,7 +97,7 @@ carry, here named precisely:
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the Poseidon-CR /
 sponge-injectivity assumptions enter ONLY inside the reused `receiptArchiveA_full_sound` (its
 `compressNInjective`/`cellLeafInjective`/`RestHashIffFrame`/`logHashInjective` portals + `AccountsWF` on
-both kernels), NOT in the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`.
+both kernels), NOT in the welded conclusion's statement.
 Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt

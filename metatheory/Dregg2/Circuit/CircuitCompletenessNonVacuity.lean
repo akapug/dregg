@@ -64,7 +64,7 @@ no additional satisfiability assumption is hidden.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The `Satisfied2` inhabitant is CONSTRUCTED,
-not carried. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+not carried. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompletenessTransferConstruct
 

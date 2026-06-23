@@ -68,7 +68,7 @@ The binding is a TWO-PART contract, the honest cross-cell story split exactly al
     sense `CrossCellImport` proves — the constitution citation never forces ordering against the
     constitution's amendments.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` —
+Discipline: axiom-clean (`#assert_all_clean` at the close) —
 `decide` / `#guard` / `Exec.Program` + `CrossCellImport` keystone reuse only. `lake build` green (LOCAL).
 -/
 import Dregg2.Exec.Program

@@ -60,8 +60,7 @@ resolved cell and REJECTS a tampered one. `#guard` witnesses both polarities on 
 
 Imports are READ-ONLY (`Verify/Contract`, `Exec/RecordCommit`, `Verify/EscrowFactoryProbe`);
 this file owns only its own declarations and registers no import line elsewhere. Every keystone
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no `sorry`, no `:= True`,
-no `native_decide`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Verify.Contract
 import Dregg2.Exec.RecordCommit

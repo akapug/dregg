@@ -527,7 +527,7 @@ theorem pv_token_good_commits :
           (castNodeWithChain goodTokenCred pvCaveatViolationChain voterNullB 9)).isSome) == false
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty pins). Every keystone depends ONLY on the three
-standard kernel axioms `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`native_decide`. (The
+standard kernel axioms `{propext, Classical.choice, Quot.sound}`. (The
 portal soundness is a Prop carrier in `FullForestAuth`, never an axiom, so it does not appear.) -/
 
 #assert_axioms execFullForestG_leaf

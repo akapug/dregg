@@ -66,7 +66,7 @@ disjunct is a decision on published data) but does not yet weld it into the Merk
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named carriers inherited through the
-imported cap-open keystones. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom.
+imported cap-open keystones.
 -/
 import Dregg2.Circuit.Emit.CapOpenEmit
 

@@ -39,8 +39,7 @@ The Ed25519 receipt verify is modeled as a NAMED off-circuit predicate, NEVER a 
 forcing layer (it does not appear in `TurnAuthVerified` / `Authorized`).
 
 `#assert_all_clean` (⊆ `{propext, Classical.choice, Quot.sound}` + the reused curve floors
-`SchnorrDLHard`/`ForkingExtractor` as explicit hypotheses); NO `sorry` / `:= True` / `native_decide` /
-fresh `axiom`.
+`SchnorrDLHard`/`ForkingExtractor` as explicit hypotheses).
 -/
 import Dregg2.Crypto.TurnAuthSignature
 import Dregg2.Tactics
@@ -348,8 +347,7 @@ def cpkB : CurvePubKey ℤ := ⟨8⟩
 
 /-! ## §12 — Axiom-hygiene tripwires. Standing obligations are the REUSED named curve floors
 `SchnorrCurveField.SchnorrDLHard` + `TurnAuthSignature.ForkingExtractor` (explicit hypotheses) and the
-OFF-circuit `Ed25519ReceiptVerifies` (opaque, never an AIR gate). No `sorry` / `:= True` /
-`native_decide` / fresh `axiom`. -/
+OFF-circuit `Ed25519ReceiptVerifies` (opaque, never an AIR gate). -/
 
 #assert_all_clean [
   dualscheme_proven_forces_authorization,

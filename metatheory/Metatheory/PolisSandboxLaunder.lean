@@ -17,7 +17,7 @@ to match. The LAUNDERER skips the work and just escalates `claim`.
   * **Gentle**: a move that keeps claims backed is admitted UNCHANGED (honest earning-then-claiming
     is never blocked); every refusal is a genuine unearned escalation.
 
-Proven end-to-end, no `sorry`:
+Proven end-to-end:
   * UNGOVERNED — the launderer reaches a high claim with zero earned work; the floor BREAKS and the
     detector fires.
   * GOVERNED — the SAME launderer, under the envelope, is pinned to what it earned; the floor holds

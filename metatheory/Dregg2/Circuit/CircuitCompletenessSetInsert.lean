@@ -78,8 +78,7 @@ style disjunction here; the non-membership is a single determined Prop. Surfaced
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every new theorem; the set-root /
 cap-tree-spine construction floors enter as named structure carriers (Type-valued realizable prover
 witnesses), never as axioms — exactly as wave-3's `LifecycleRootProver` and the soundness side's
-`SpineCommits`. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports
-read-only.
+`SpineCommits`. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompleteness
 import Dregg2.Circuit.RotatedKernelRefinementNotes

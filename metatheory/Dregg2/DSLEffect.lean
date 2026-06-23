@@ -124,7 +124,7 @@ macro_rules
         /-- The documentary payload-field names of this effect (generated). -/
         def $argsId : List String := [ $argStrs,* ]
         /-- **The INHERITED conservation obligation of this effect — GENERATED, proved by the §2
-        `obligation_holds` fact (NO hand-written proof, NO `sorry`).** Its statement is the
+        `obligation_holds` fact (NO hand-written proof).** Its statement is the
         `Spec.Conservation` obligation the color demands; its proof is the one already-proved fact. -/
         theorem $oblId : obligationProp $colorId := obligation_holds $colorId)
 
@@ -254,7 +254,7 @@ theorem regimes_coincide_with_catalog :
 /-! ## §9 — Axiom-hygiene tripwire.
 
 Every theorem under `Dregg2.DSLEffect` — including the generated `<name>.obligation` theorems —
-must rest only on the three kernel axioms. A `sorryAx` anywhere trips this. -/
+must rest only on the three kernel axioms. Any axiom outside that triple anywhere trips this. -/
 
 #assert_namespace_axioms Dregg2.DSLEffect
 

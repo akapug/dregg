@@ -65,8 +65,7 @@
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named `Poseidon2SpongeCR` carrier
-(inherited through `EffectVmEmitHeapRoot` for the heapWrite recompute anti-ghost). No `sorry`, no
-`native_decide`, no `:= True`, no fresh axiom. NEW file; all imports read-only.
+(inherited through `EffectVmEmitHeapRoot` for the heapWrite recompute anti-ghost). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.ActionDispatch
 import Dregg2.Circuit.Emit.EffectVmEmitHeapRoot

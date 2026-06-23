@@ -46,8 +46,7 @@ is UNSAT — the insert gate forces the root to MOVE.
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable `CapHashScheme` carriers
 (`Compress1CR` via `chipCR`; the `SpineCommits` spine↔root binding) inherited through `CapTreeUpdate`,
 plus the realizable `compressNInjective` for the accounts leg (inherited through `RotatedKernel-
-RefinementBirth`). No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports
-read-only.
+RefinementBirth`). NEW file; imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementBirth
 import Dregg2.Circuit.CapTreeUpdate

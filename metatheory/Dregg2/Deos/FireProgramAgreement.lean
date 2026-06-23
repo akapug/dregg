@@ -63,8 +63,7 @@ faithful match: the context atoms (`senderIs`/`balance…`) are the ctx-aware EX
 closed on under the empty context, and a turn-context-bearing executor gate is the lift the convergence
 carries forward — not weakened here, scoped honestly.
 
-Discipline: `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`, no
-`native_decide`, no new axiom; NON-VACUOUS (§5 exhibits both verdicts). `lake build
+Discipline: `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NON-VACUOUS (§5 exhibits both verdicts). `lake build
 Dregg2.Deos.FireProgramAgreement` green (LOCAL). NO core edit, NO sibling edit — imports are READ-ONLY.
 -/
 import Dregg2.Deos.WorkflowBridge

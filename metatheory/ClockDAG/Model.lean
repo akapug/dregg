@@ -39,7 +39,7 @@ dregg2's `Authority.Blocklace` (`signed : Bool`) and `Crypto.Merkle` (`compress`
    `nonmembership_sound` (non-inclusion): a light-client inclusion / non-inclusion proof is
    sound against the committed `balances_root`.
 
-Discipline: REUSE proved theorems (no reproof). No `axiom`/`admit`/`native_decide`/`sorry`.
+Discipline: REUSE proved theorems (no reproof).
 `#assert_axioms` on the four keystones. Imports ONLY existing built dregg2 modules.
 -/
 import Dregg2.Spec.Conservation
@@ -400,7 +400,7 @@ def demoSwap : HtlcSwap :=
 /-! ## 6. Axiom hygiene — pin the four SAFETY keystones (each reuses a verified dregg2 theorem).
 
 Every invariant is `#assert_axioms`-clean: it rests only on `propext`/`Classical.choice`/
-`Quot.sound` (inherited from the reused dregg2 theorem), with no `axiom`/`sorry`/`native_decide`
+`Quot.sound` (inherited from the reused dregg2 theorem), with nothing
 introduced here. The reuse is total — these are application sites, not reproofs. -/
 
 #assert_axioms clockdag_transfer_conserves

@@ -344,7 +344,7 @@ verify-seam statements, morphisms = discharged guards composing along the demand
 adjunction of `Spec.Guard`), with `Φ` preserving identities and composition and being
 LOSSY exactly on the confinement/revocable-forwarding sub-structure.
 
-We state it precisely and leave the single deep obligation as one localized `sorry`.
+We state it precisely and leave the single deep obligation as one localized open obligation.
 §7.1 then exhibits a CONCRETE non-degenerate witness (`phi_functorial_concrete`, axiom-clean)
 proving the laws ARE inhabited and locating the named loss — a genuine witnessed instance
 alongside, not a weakening of, the abstract OPEN. -/

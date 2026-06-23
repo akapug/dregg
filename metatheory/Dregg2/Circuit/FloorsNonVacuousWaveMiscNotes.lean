@@ -25,7 +25,7 @@ carries — exactly the trace-fill identity the deployed prover establishes by c
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Every inhabitation is a CONSTRUCTED term;
-no `sorry`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+no fresh axiom. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.FloorsNonVacuousWave
 import Dregg2.Circuit.RotatedKernelRefinementMisc

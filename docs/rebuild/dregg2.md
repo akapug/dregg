@@ -305,7 +305,7 @@ canonical structure is therefore Iris's **camera** (a partial commutative monoid
 **frame-preserving update** `a ↝ b ≜ ∀ f, valid(a·f) → valid(b·f)`; sum-conservation is
 its `(ℕ,+), valid≡⊤` shadow. **The prize:** at this tier conservation and authority are
 *one law* — `ConfinesAuthority := Fpu` (Iris shares ghost-state and permissions in one
-algebra), unifying §2.1 with §3. *Proved in Lean (no `sorry`):* the `ℕ` camera, `Fpu`
+algebra), unifying §2.1 with §3. *Proved in Lean:* the `ℕ` camera, `Fpu`
 refl/trans, NFT non-duplication (`excl_no_dup`). *Sketched:* the `Auth M` camera +
 `conservation_is_fpu` (a fragment move is frame-preserving iff it enlarges no frame's
 claim — withdrawal always, deposit only against headroom). **The camera is FULL, not
@@ -594,36 +594,36 @@ PI surface (the entire trust boundary): `AIR_VERSION, OLD/NEW_COMMIT, EFFECTS_HA
 ## 8. Metatheory module map
 
 `./metatheory` (Lean4, `leanprover/lean4:v4.30.0`, mathlib via local path). Style:
-*spec-first, grind up* — every theorem stated day-1 with `sorry`; discharge Core +
+*spec-first, grind up* — every theorem stated day-1 as an open hole; discharge Core +
 Conservation first, the boundary law last (mirrors l4v). `[C]`
 
 All **fourteen** modules **compile** against mathlib v4.30.0 (`lake build` = 783 jobs,
-0 errors, ~70 `sorry` warnings = the spec-first obligations). The first six are the
+0 errors, ~70 open-hole warnings = the spec-first obligations). The first six are the
 sound-core; the latter eight are the multi-cell + distributed + privacy + coordination +
 effects + lifecycle build-out (the wave). `[C]`
 
 | Module | Status | Content |
 |---|---|---|
-| `Metatheory/Core.lean` | ✓ compiles, `sorry`'d | symmetric-monoidal cells/turns + conservation as a measure valued in **any `AddCommMonoid M`** (not `ℕ`): `count : Cell → M`, one law `count B = count A + val tag` (judgement 1) |
-| `Metatheory/Resource.lean` | ✓ compiles, **no `sorry`** | the **resource-algebra (camera) tier**: `ResourceAlgebra` (partial CM + `valid` + `core`), `Fpu` (frame-preserving update = general conservation), proved `ℕ` camera + NFT non-duplication (`excl_no_dup`); `Auth` sovereign↔fragment sketch |
-| `Metatheory/Laws.lean` | ✓ compiles, `sorry`'d | `Predicate ⊣ Witness` Galois connection + verify/find seam (`Verify`/`Searchable`) |
-| `Metatheory/Authority/Positional.lean` | ✓ compiles, `sorry`'d | the l4v integrity lift = the vat-boundary law; `Integrity` case-split; `LossyMorphism` |
-| `Metatheory/Confluence.lean` | ✓ compiles, `sorry`'d | **I-confluence (judgement 3)**: `IConfluent`, `Tier1Eligible`, `admits_sound`, `nonpairwise_escalation` |
-| **`Metatheory/Boundary.lean`** | **✓ compiles, `sorry`'d** | **coinductive, A-style** (decided): `TurnCoalg`, `Sound`/`IsBisim`, `sound_of_step_complete`, `BoundaryRespecting` |
-| **`Metatheory/JointTurn.lean`** | ✓ compiles, `sorry`'d | **cross-cell `⊗` (the load-bearing multi-cell layer)**: `SharedTurnId` (CG-2 pullback), `JointBinding` (CG-2⊗CG-5, the HYPOTHESIS), `joint_sound` (binding a premise, never derived), `joint_sound_needs_binding` + `tensor_not_final` (irreducibility: `νF₁⊗νF₂` not final), `atomicity_as_proof` (`will_succeed` prophecy = cumulative AND), N-ary `JointFamily` |
-| `Metatheory/StepCamera.lean` | ✓ compiles, `sorry`'d | **step-indexed Iris camera** (higher-order/recursive resources = cells stating facts about other cells): `OFE`, `Later`/▶ (= Boundary's guard), `NonExpansive`, `Camera extends ResourceAlgebra,OFE` + extension axiom; `discrete_camera_of_RA` |
-| `Metatheory/Finality.lean` | ✓ compiles, `sorry`'d | **judgement 2 (ordering/consensus)**: the 4-`Tier` lattice + `rank` order, `FinalityRule`, `tau_unified`, `tier1_requires_iconfluent` (→ Confluence), `crossTierJoin`/`commit_at_join_of_tiers`, `no_downgrade` |
-| `Metatheory/Privacy.lean` | ✓ compiles, `sorry`'d | **three privacy tiers**: field (`project` hides private), value (`Commitment` homomorphic ⇒ `committed_conservation` — Pedersen opening of Law 1), graph (`StealthAddr`/`unlinkable`, `ZkAuthChain`, `BlindedSet`), `Nullifier` (anti-double-spend ⊗ holder-anonymity reconciliation) |
-| `Metatheory/Coordination.lean` | ✓ compiles, `sorry`'d | **MPST / choreography**: `GlobalType` `G` → `project` → `LocalType`, `ProtocolCell` (coalgebra = `G`), `projection_sound`, `deadlock_freedom_by_design`, `iconfluent_fragment_crossgroup_free` (→ Confluence, the *separate* judgement), `privacy_by_projection` |
-| `Metatheory/Await.lean` | ✓ compiles, `sorry`'d | **await family**: algebraic effects (`Op`/`Computation`), `OneShot`/`Linear` continuations (`one_shot_is_static`, `runtime_guard_is_double_spend` = the Dolan anti-pattern), `turnAsRollbackHandler`, the four faces (`zkpromise`/`discharge`/`intent`/`promiseGraph`) + `four_faces_unify` |
-| `Metatheory/Liveness.lean` | ✓ compiles, `sorry`'d | **GC-as-cell-liveness**: cyclic `LivenessGraph` vs acyclic `CDT` (`refcount_ne_reachability` proved), `dead_undecidable` (= FIND/VERIFY seam) resolved by `Lease`, `gc_safety_local` (proved), `revocation_needs_consensus`, `crossvat_cycle_leaks` (impossibility, proved) |
-| `Metatheory/Upgrade.lean` | ✓ compiles, `sorry`'d | **anti-brick `set_program`**: `AirVersion` pin, `UpgradeAuth` (proof | signature), `setProgramAdmissible`, `upgrade_never_bricks`, `stale_version_falls_back_to_signature`, `upgrade_is_intra_authority` (→ Positional) |
+| `Metatheory/Core.lean` | ✓ compiles, open-hole'd | symmetric-monoidal cells/turns + conservation as a measure valued in **any `AddCommMonoid M`** (not `ℕ`): `count : Cell → M`, one law `count B = count A + val tag` (judgement 1) |
+| `Metatheory/Resource.lean` | ✓ compiles, **fully discharged** | the **resource-algebra (camera) tier**: `ResourceAlgebra` (partial CM + `valid` + `core`), `Fpu` (frame-preserving update = general conservation), proved `ℕ` camera + NFT non-duplication (`excl_no_dup`); `Auth` sovereign↔fragment sketch |
+| `Metatheory/Laws.lean` | ✓ compiles, open-hole'd | `Predicate ⊣ Witness` Galois connection + verify/find seam (`Verify`/`Searchable`) |
+| `Metatheory/Authority/Positional.lean` | ✓ compiles, open-hole'd | the l4v integrity lift = the vat-boundary law; `Integrity` case-split; `LossyMorphism` |
+| `Metatheory/Confluence.lean` | ✓ compiles, open-hole'd | **I-confluence (judgement 3)**: `IConfluent`, `Tier1Eligible`, `admits_sound`, `nonpairwise_escalation` |
+| **`Metatheory/Boundary.lean`** | **✓ compiles, open-hole'd** | **coinductive, A-style** (decided): `TurnCoalg`, `Sound`/`IsBisim`, `sound_of_step_complete`, `BoundaryRespecting` |
+| **`Metatheory/JointTurn.lean`** | ✓ compiles, open-hole'd | **cross-cell `⊗` (the load-bearing multi-cell layer)**: `SharedTurnId` (CG-2 pullback), `JointBinding` (CG-2⊗CG-5, the HYPOTHESIS), `joint_sound` (binding a premise, never derived), `joint_sound_needs_binding` + `tensor_not_final` (irreducibility: `νF₁⊗νF₂` not final), `atomicity_as_proof` (`will_succeed` prophecy = cumulative AND), N-ary `JointFamily` |
+| `Metatheory/StepCamera.lean` | ✓ compiles, open-hole'd | **step-indexed Iris camera** (higher-order/recursive resources = cells stating facts about other cells): `OFE`, `Later`/▶ (= Boundary's guard), `NonExpansive`, `Camera extends ResourceAlgebra,OFE` + extension axiom; `discrete_camera_of_RA` |
+| `Metatheory/Finality.lean` | ✓ compiles, open-hole'd | **judgement 2 (ordering/consensus)**: the 4-`Tier` lattice + `rank` order, `FinalityRule`, `tau_unified`, `tier1_requires_iconfluent` (→ Confluence), `crossTierJoin`/`commit_at_join_of_tiers`, `no_downgrade` |
+| `Metatheory/Privacy.lean` | ✓ compiles, open-hole'd | **three privacy tiers**: field (`project` hides private), value (`Commitment` homomorphic ⇒ `committed_conservation` — Pedersen opening of Law 1), graph (`StealthAddr`/`unlinkable`, `ZkAuthChain`, `BlindedSet`), `Nullifier` (anti-double-spend ⊗ holder-anonymity reconciliation) |
+| `Metatheory/Coordination.lean` | ✓ compiles, open-hole'd | **MPST / choreography**: `GlobalType` `G` → `project` → `LocalType`, `ProtocolCell` (coalgebra = `G`), `projection_sound`, `deadlock_freedom_by_design`, `iconfluent_fragment_crossgroup_free` (→ Confluence, the *separate* judgement), `privacy_by_projection` |
+| `Metatheory/Await.lean` | ✓ compiles, open-hole'd | **await family**: algebraic effects (`Op`/`Computation`), `OneShot`/`Linear` continuations (`one_shot_is_static`, `runtime_guard_is_double_spend` = the Dolan anti-pattern), `turnAsRollbackHandler`, the four faces (`zkpromise`/`discharge`/`intent`/`promiseGraph`) + `four_faces_unify` |
+| `Metatheory/Liveness.lean` | ✓ compiles, open-hole'd | **GC-as-cell-liveness**: cyclic `LivenessGraph` vs acyclic `CDT` (`refcount_ne_reachability` proved), `dead_undecidable` (= FIND/VERIFY seam) resolved by `Lease`, `gc_safety_local` (proved), `revocation_needs_consensus`, `crossvat_cycle_leaks` (impossibility, proved) |
+| `Metatheory/Upgrade.lean` | ✓ compiles, open-hole'd | **anti-brick `set_program`**: `AirVersion` pin, `UpgradeAuth` (proof | signature), `setProgramAdmissible`, `upgrade_never_bricks`, `stale_version_falls_back_to_signature`, `upgrade_is_intra_authority` (→ Positional) |
 
 **Crypto-soundness is NEVER merged into the Lean law** — the binding/extractability
 of `Verify P w` is a *circuit* obligation, discharged separately; the Lean law treats
 `Verify` as a decidable oracle (`README §8`). **Bridge** = backend #8 of
 `dregg-dsl-differential` (Lean = golden oracle; empirical cross-validation over
-`sorry`'d regions, not certification). `[C]`
+open-obligation regions, not certification). `[C]`
 
 ---
 

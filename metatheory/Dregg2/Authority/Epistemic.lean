@@ -60,7 +60,7 @@ C_G constructor demands, by `superMajority_gt_half`), against the explicit doubl
 counterexample that breaks the unguarded version (`unguarded_double_settles`).
 
 NON-VACUITY: every operator carries a TRUE and a FALSE witness (§3 Demo + the mechanism sections).
-No `sorry`, no `:= True` carriers; `#assert_axioms`-clean (⊆ {propext, Classical.choice,
+No `:= True` carriers; `#assert_axioms`-clean (⊆ {propext, Classical.choice,
 Quot.sound}). The crypto floor enters ONLY through the modules this one consumes (named there:
 `Blake3Prf`, the BLS/SNARK contracts, the DV simulator law) — nothing new is assumed here.
 -/

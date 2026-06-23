@@ -55,8 +55,7 @@ commits and advances ONLY reader 3's cursor (reader 4 + head untouched). No keys
 
 NEW file only. Imports the live relational caveat surface + the escrow factory executor. Does NOT
 edit `Dregg2.lean`, any shared mod, the kernel, or any Metatheory/*. Every keystone
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`,
-no `native_decide`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.RelationalCaveat
 import Dregg2.Exec.TurnExecutorFull

@@ -79,7 +79,7 @@ readings are folds; the one obstruction is the current non-compositional `compil
 ## Axiom hygiene
 
 `#assert_axioms` clean below (the standard three kernel axioms only — `propext`,
-`Classical.choice`, `Quot.sound`); no `sorry`, no `:= True`, no `native_decide`. This file owns
+`Classical.choice`, `Quot.sound`). This file owns
 ONLY its own declarations and imports the IR read-only (it edits no existing file).
 -/
 import Dregg2.Circuit.Argus.Stmt

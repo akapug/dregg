@@ -30,7 +30,7 @@ Every theorem carries BOTH a non-vacuity witness AND a **negative tooth**: a con
 fee-too-low instance where the deterred attack IS profitable / IS unbounded, proving the bound
 is a real constraint and not vacuously true. Genuinely-open economic quantities (the exact
 `proveCost` of a turn, the exact attacker-side `submitCost`) are carried as EXPLICITLY-NAMED
-parameters of the model, never `sorry`, never `:= True`. Keystones are `#assert_axioms`-clean
+parameters of the model. Keystones are `#assert_axioms`-clean
 (axioms ⊆ {propext, Classical.choice, Quot.sound}).
 
 The fee-split semantics (`proposerShare`/`treasuryShare`/`feeBurned`) are REUSED verbatim from

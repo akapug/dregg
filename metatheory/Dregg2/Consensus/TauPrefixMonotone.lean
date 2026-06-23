@@ -65,7 +65,7 @@ in `BlocklaceFinality` §9):
     `stableCheck` is `false` and the failing field is coverage growth (`leaders_extend`
     still holds — the guards isolate the mechanism).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Consensus.TauPrefixMonotone`.
 -/
 import Dregg2.Distributed.BlocklaceFinality

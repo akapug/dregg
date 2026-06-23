@@ -24,7 +24,6 @@ Every keystone is `#assert_axioms` / `#print axioms` within:
 
 Several depend on **no axioms at all** (`envelope_least_restrictive`,
 `structural_requires_proof`, `disjoint_floors_no_polis`, `dregg_shared_floor_inhabited`).
-Zero `sorry`, zero `:= True` load-bearing.
 
 ## Proven (`Metatheory.Polis` · `Metatheory.DreggPolis` · `Metatheory.PolisNonConfusion`)
 

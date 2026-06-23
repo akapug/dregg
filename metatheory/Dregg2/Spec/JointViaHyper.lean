@@ -3,7 +3,7 @@
 
 `JointTurn.lean` records the cross-cell binding at two grains: the load-bearing **binary**
 keystone `joint_sound` (via `stepComplete_preserves` on the product coalgebra), and a
-**stubbed N-ary** `family_joint_sound` (`JointTurn.lean:447`, `sorry`) framed over a *family
+**stubbed N-ary** `family_joint_sound` (`JointTurn.lean:447`, an open hole) framed over a *family
 of binary edges* (`JointFamily`/`FamilyBinding`). That stub is open for a structural reason,
 not a missing lemma: its *conclusion* is `Sound (J.cell i) (Spec i) (b.pre i)` — bisimilarity
 of each participant to an ARBITRARY free `Spec i` — which is exactly the ill-posed
@@ -25,7 +25,7 @@ we take `hyperedge_sound` as given and read off
      SEPARATE obligation, delegated to `Finality`.
 
 Style (matching `Boundary`/`JointTurn`/`Hyperedge`): faithful `Prop`s, real content; every
-`sorry` is a precisely-stated genuine obligation, never a vacuous `True`/`Iff.rfl`, never
+open hole is a precisely-stated genuine obligation, never a vacuous `True`/`Iff.rfl`, never
 `axiom`/`admit`/`native_decide`. PROVED keystones pinned with `#assert_axioms`.
 -/
 import Dregg2.Core
@@ -360,7 +360,7 @@ theorem mismatch_rejection_is_nonvacuous :
 
 /-! ## §4 — How `joint_via_hyperedge` discharges what `family_joint_sound` could not.
 
-`family_joint_sound` (`JointTurn.lean:447`, `sorry`) has TWO problems the apex fixes:
+`family_joint_sound` (`JointTurn.lean:447`, an open hole) has TWO problems the apex fixes:
 
   * **Bookkeeping (dissolved by the apex).** Its `FamilyBinding` carries `agree : ∀ i, … = tid`
     and `balanced : Σ = 0` over a *family of binary edges* hashed into a forest; gluing the

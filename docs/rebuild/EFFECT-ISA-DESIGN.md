@@ -61,7 +61,7 @@ Lean object with teeth), **DECORATIVE** (vocabulary only — no Lean object; gre
 
 **The executable ISA is `FullActionA` — and it is per-asset.** — **REAL.**
 `inductive FullActionA` (`Exec/TurnExecutorFull.lean:1928`, **46 constructors**), dispatched by
-`execFullA` (`:2236`–`:2660`, **46 arms**, zero `sorry`/`admit`/`native_decide`). Every value-moving
+`execFullA` (`:2236`–`:2660`, **46 arms**, no open holes / `native_decide`). Every value-moving
 arm carries `(asset : AssetId)`: `balanceA (turn) (asset)`, `mintA/burnA (…) (asset)`,
 `bridgeMintA/bridgeLockA/bridgeFinalizeA (…) (asset)`, `createEscrowA/createObligationA/createCommittedEscrowA (…) (asset)`.
 This is the **executable artifact of the proposed §A CORE** (C1 balance, C2 supply, C9/C10 side-table
@@ -98,15 +98,15 @@ over the pre-order lowering. `execFullForestA_unauthorized_fails` (`:309`) is th
 family as algebraic effects + a one-shot continuation: `OneShot` (`:109`, "intentionally **no**
 projection back to a reusable `k`", `:103`); `four_faces_unify` (`:426`, term-proved) collapses
 zkpromise / discharge / intent / eventual to one `AwaitCore`; `runtime_guard_is_double_spend` (`:223`)
-and `commit_resumes_once` (`:312`) are term-proved. ⚠ **Docstring drift:** the header says "`sorry`
-bodies are real obligations" (`Await.lean:42`) — **STALE**; grep finds zero proof-term `sorry` (the only
-`sorry` tokens are that comment). The await *engine* the doc called "MISSING as a typed effect" is now a
+and `commit_resumes_once` (`:312`) are term-proved. ⚠ **Docstring drift:** the header says "open-hole
+bodies are real obligations" (`Await.lean:42`) — **STALE**; grep finds zero proof-term open holes (the only
+such tokens are that comment). The await *engine* the doc called "MISSING as a typed effect" is now a
 proved algebra; it is still **not** a kernel selector/effect, so the ISA-level §B claim stands.
 
 **The vat-boundary *law* — LANDED coinductively; ρ_in/ρ_out as a *typed selector* — still absent.**
 — Boundary law **REAL**, ρ-effect **ASPIRATIONAL**. `Boundary.lean` carries the coinductive
 `BoundaryRespecting` law + `boundary_respecting_sound` (`:244`, term-proved `:= by exact hbr.admissible …`).
-⚠ **Docstring drift:** "every theorem is stated with a `sorry` body" (`:29`) and "Stated `sorry`" (`:243`)
+⚠ **Docstring drift:** "every theorem is stated with an open-hole body" (`:29`) and "Stated open" (`:243`)
 are **STALE** — those theorems have real bodies. But this is the *soundness law of the membrane*, **not**
 a `Cap.exportAsKey`/`importKey` effect: grep confirms no ρ_in/ρ_out selector in `FullActionA` or
 `Exec/VatBoundary.lean`. So §B #3 (ρ_in/ρ_out as first-class typed effects) is **still genuinely OPEN**.
@@ -407,7 +407,7 @@ retained log, per `cand-A §5/§10`).
 | **revocable-forwarder / named-lossy Φ** (the membrane) | `cand-A §2.1`, `cand-C §210` | NONE (the loss is by-construction; `revocation_channel` on bearer caps `action.rs:470` is the closest) | **IS-A-RUNTIME-THEOREM** (`LossyMorphism` theorem, `cand-A §8`) + revocation = a tombstone edge (C8/C4) |
 | **beacon / VRF randomness** | (implied by any fair-ordering / leader / lottery; absent from canon as a primitive) | NONE — only `note_spending_air.rs:305` note `randomness` (a blinding scalar, not a beacon) | **MISSING-NEEDS-PRIMITIVE** *iff* the kernel must consume verifiable randomness in a turn (leader election lives in finality, but app-level lotteries need it) — **deferrable** |
 | **proof-carrying-forest ops** (attest a forest of step-proofs) | `circuit/src/proof_forest.rs` (new), `ProofForest.lean` | NONE at the effect level (forest is a *turn/finality* structure, not an effect) | **NOT an effect** — it is the JointTurn aggregation layer; correctly above the ISA |
-| **conditional / await (zkpromise/zkawait)** | `cand-A §3` | `pipelinedSend` + `pending.rs`/`conditional.rs` (`ProofCondition`, `ConditionProof`) | **ENGINE LANDED in metatheory (2026-06-02)** — `Await.lean` now proves the **one-shot linear continuation typing** as a term-proved algebra: `OneShot:109` (no reusable-`k` projection, `:103`), `four_faces_unify:426` (zkpromise/discharge/intent/eventual unified), `runtime_guard_is_double_spend:223`. ⚠ its header "`sorry` bodies" comment (`Await.lean:42`) is STALE. Still **not a kernel selector**; the **settled-call return projection** (next row) remains MISSING |
+| **conditional / await (zkpromise/zkawait)** | `cand-A §3` | `pipelinedSend` + `pending.rs`/`conditional.rs` (`ProofCondition`, `ConditionProof`) | **ENGINE LANDED in metatheory (2026-06-02)** — `Await.lean` now proves the **one-shot linear continuation typing** as a term-proved algebra: `OneShot:109` (no reusable-`k` projection, `:103`), `four_faces_unify:426` (zkpromise/discharge/intent/eventual unified), `runtime_guard_is_double_spend:223`. ⚠ its header "open-hole bodies" comment (`Await.lean:42`) is STALE. Still **not a kernel selector**; the **settled-call return projection** (next row) remains MISSING |
 | **return projection** (typed `Obs`-delta the callee commits, caller awaits) | `cand-A §2.2/§3` | NONE | **STILL MISSING — the genuinely-open #4 residual.** The `Await` one-shot covers the *caller-resumes-once* face; the *callee commits a typed `Obs`-delta the caller awaits* (the "second observation", bidirectional turn) is unbuilt. Task #82 (`W3-I` zkpromise/zkawait + await unification) is `in_progress` |
 | **sealer/unsealer + three-vat handoff** | `cand-A §3`, Miller | `CreateSealPair` (28), `Seal` (10), `Unseal` (11) | **COVERED** (shape S11) — but overloaded with field-seal at selector 10 |
 | **multi-asset / Resource camera** | `REORIENT §2`, `Resource.lean` | ✅ **DONE (Lean executable layer)** — `FullActionA` arms carry `(asset : AssetId)` (`Exec/TurnExecutorFull.lean:1928`); the per-asset ledger + conservation vector is REAL (`MultiAsset.lean:38,86,130`; `FullForest.lean:224`). `Resource.lean` is the Iris-**camera** conceptual tier (`Resource.lean:22`). (Rust `bal` is still a scalar `u64` — the Lean kernel is now *ahead* of Rust here, which is the point of the swap.) | **WAS the #1 soundness gap; now REAL on the executable kernel.** Residual = wire/breadth (task #129) |
@@ -440,7 +440,7 @@ retained log, per `cand-A §5/§10`).
    #138.)
 3. **Vat-boundary ρ_in/ρ_out as typed effects.** 🟡 **Boundary LAW landed; typed effect still open.** The
    coinductive membrane soundness obligation is discharged — `Boundary.lean` `boundary_respecting_sound:244`
-   (REAL; its "Stated `sorry`" docstring `:243` is STALE). But ρ_out (serialize-held-slot→key,
+   (REAL; its "Stated open" docstring `:243` is STALE). But ρ_out (serialize-held-slot→key,
    attenuation-only) and ρ_in (verify-key→mint-slot) are **still not selectors/arms**: today the crossing is
    split across `exportSturdyRefA`/`enlivenRefA` (swiss) + `Authorization::Token` (biscuit carrier) with no
    unifying typed effect. This is what makes it cross-vat at all — **genuinely OPEN as a primitive.**

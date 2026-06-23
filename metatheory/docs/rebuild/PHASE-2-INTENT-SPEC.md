@@ -114,7 +114,7 @@ full-build gate.
   `frameWithin` one does.
 - `Match`/the coend is non-vacuous (a concrete bilateral match exists; the multi-hop `∫^B` typechecks).
 - The receipt⊣intent discharge keystone (`fulfill_discharges`) holds for at least the bilateral case.
-- NO sorry/admit/native_decide; crypto/authority enters only as explicit §8 carriers; bring the
+- crypto/authority enters only as explicit §8 carriers; bring the
   `ResourceTheory` category-shape (what exactly are the resource objects) to ember before it sets.
 
 Then **Phase 3** (conservation-as-monoid-hom + userspace escrow ≥ kernel-escrow) and **Phase 4** (the

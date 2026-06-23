@@ -43,7 +43,7 @@ Rehydration.replayedDeterministic_iff_confined` says a context is replay-determi
 interaction stayed inside the membrane; here a viewer's RENDER is determined by exactly the fragment
 inside its capability. The desktop's "what you see" and "what replays" are one confinement story.
 
-Discipline: axiom-clean (`#assert_all_clean`), no `sorry`, no `native_decide`. `lake build Dregg2`
+Discipline: axiom-clean (`#assert_all_clean`). `lake build Dregg2`
 green (LOCAL). The vision gate IS `Dregg2.Deos.Affordance.fireGate` (= `is_attenuation`, `required ⊆
 held`); no new gate, no new trust — the cross-domain guarantee reduces to the kernel's attenuation law.
 -/

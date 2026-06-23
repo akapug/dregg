@@ -27,7 +27,7 @@ OWN deployed theorems, never re-proved:
   * `gov_refuses_unauthorized` ⇐ `Kernel.exec_unauthorized_fails` / `exec_authorized`.
 
 This is the authority/conservation-axis counterpart of `PolisDreggGame` over PHYSICALLY-REALIZABLE
-dregg turns: every admitted move is one the deployed kernel actually committed. No `sorry`, no
+dregg turns: every admitted move is one the deployed kernel actually committed. No
 load-bearing `True`; the concrete admit/refuse facts are `decide`-checked on a real `KernelState`.
 -/
 import Metatheory.PolisGovernorTheory

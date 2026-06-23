@@ -156,7 +156,7 @@ So the architecture is: *op computes a candidate → program is a fail-closed FI
 that candidate.* Nothing pins the **uniquely-correct** next state; a program may admit
 many predicate-satisfying next-states.
 
-### What IS verified (real, sorry-free, `#assert_axioms`-pinned to the 3 kernel axioms)
+### What IS verified (real, `#assert_axioms`-pinned to the 3 kernel axioms)
 
 **The envelope / Hoare-postconditions:**
 - `recExec_admitted` — every committed transition was admitted by the program (the gate is load-bearing, never bypassed).
@@ -247,5 +247,5 @@ executor admission. The per-product "push-next" below is the lane that fuses the
 - **"Turn" is overloaded.** Protocol turn = credentialed call-forest (`FullForestG` / Rust `Turn{call_forest}`); `Exec.Turn` is just a 4-field receipt log row; the commitment `Receipt`/`TurnReceipt` (Merkle roots + STARK) is a third, separate thing.
 - **An effect** is one `FullActionA` constructor / Rust `Effect` variant (~43, mapped 1:1-ish) mutating an 18-field `RecordKernelState` (Rust: a Ledger of `Cell`s).
 - **A cell program is a predicate, not a function** — it filters `(old,new)` candidates; the next state is computed by a separate tiny op language with no spec it refines.
-- **Verified = the envelope** (conservation, authority, chain-link, non-amplification, revocation/caveat teeth) — real sorry-free theorems. **Not verified = full functional semantics** (output-uniqueness), proved only for the transfer beachhead.
+- **Verified = the envelope** (conservation, authority, chain-link, non-amplification, revocation/caveat teeth) — real theorems. **Not verified = full functional semantics** (output-uniqueness), proved only for the transfer beachhead.
 - **Product:** orchestration & toolcalling **RUN** end-to-end on the Rust engine (real attenuation, real biscuit caps, real receipts) but the capability gate is **out-of-band/advisory** (`Authorization::Token` wired nowhere agent-facing; MCP tools un-gated behind one global unlock); storage-gateway & workflow mandates are **verified Lean policy models + thin runnable demos** whose rich admission logic is **not enforced by the executor at runtime**. Every gap is one integration/refinement step, not a missing primitive.

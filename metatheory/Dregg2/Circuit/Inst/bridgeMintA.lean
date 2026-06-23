@@ -198,8 +198,7 @@ theorem bridgeMintA_full_sound
 
 /-! ## §2 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms bridgeMintGuardLocal
 #assert_axioms bridgeMintGuardDecodes

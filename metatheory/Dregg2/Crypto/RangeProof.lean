@@ -501,7 +501,7 @@ theorem reference_cascade_nonvacuous :
       ∧ ∃ v r : Int, refKernel.commit v r = inRangeStmt.commitment ∧ InRange inRangeStmt.lo inRangeStmt.hi v :=
   range_registry_cascade (K := refKernel) trivial trivial refVk base inRangeStmt 0 (by decide)
 
--- The reference cascade rests only on the standard kernel axioms — no `sorryAx`, no crypto axiom.
+-- The reference cascade rests only on the standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
 /-- Non-vacuity of the dial wiring: the floor is `selective`. -/

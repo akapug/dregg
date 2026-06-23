@@ -55,8 +55,7 @@ transition IS universe-A's validated `caps`-digest transition; not a fourth spec
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY as
-`Poseidon2SpongeCR hash`; the cap-table digest ONLY as `Function.Injective D`. No `sorry`, no `:= True`,
-no `native_decide`, no `rfl`-posing-as-bridge. Imports are read-only.
+`Poseidon2SpongeCR hash`; the cap-table digest ONLY as `Function.Injective D`. Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 import Dregg2.Circuit.Inst.delegate

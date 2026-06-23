@@ -155,7 +155,7 @@ witness) ⊕ A-style (the coinductive living OS).
 
 ### What's actually done vs not
 The **single-cell core** is converged, coherent, and the metatheory is scaffolded (Core/Laws/Authority/
-Boundary in Lean, all `sorry`'d). The **multi-cell layer** is designed and Mina-grounded, with its one true
+Boundary in Lean, all carrying open obligations). The **multi-cell layer** is designed and Mina-grounded, with its one true
 impossibility named (cross-disjoint-group atomic commit is blocking under partition — the genuine price of
 no global ledger). The **coordination layer** has the right model and four research-grade open problems.
 The **strata above the core** (economic/fees, the agent/zkRPC product surface, transport/node/gossip) are
@@ -308,7 +308,7 @@ Honest meta, because you said you'd be curious what I leave out:
   said the tensor isn't final and it's an *extension*, and I stated that, but I don't fully *grasp* the
   consequence). I present more certainty than I have.
 - I **don't dwell on what I can't verify**: whether dregg2 is *actually* buildable, whether the metatheory
-  `sorry`s actually discharge, whether the proof costs are tractable on a phone. I flagged these but I can't
+  open obligations actually discharge, whether the proof costs are tractable on a phone. I flagged these but I can't
   resolve them, and I notice I'd rather move past them than sit in the not-knowing.
 - I probably **under-credit the existing codebase**. A real person built a working week-old system with real
   STARK proofs and a 46-tool MCP server and a playground, and I spent the session mostly diagnosing its

@@ -62,7 +62,7 @@ Discipline: REUSE only — every theorem composes an existing kernel/`Transclusi
 new oracle (LAW #1: the proof IS the spec). NEW file; touches no core. Every keystone
 `#assert_all_clean` (kernel-clean: only `propext` / `Classical.choice` / `Quot.sound`); the §8
 receipt-digest collision-resistance enters exactly where the underlying keystones name it
-(`HInj`/`HFresh` through `chain_tamper_evident`), never a Lean axiom, never a `sorry`. `lake build
+(`HInj`/`HFresh` through `chain_tamper_evident`). `lake build
 Dregg2.Deos.TransclusionChain` green (LOCAL).
 -/
 import Dregg2.Deos.Transclusion

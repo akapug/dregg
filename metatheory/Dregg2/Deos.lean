@@ -46,7 +46,7 @@ a kernel theorem restated for the desktop:
   * Leg 3's REPLAY PAYOFF (`replayedDeterministic_replays`) carries the receipt-digest
     collision-resistance as NAMED hypotheses `HInj : Function.Injective H` / `HFresh : ∀ p, H p ≠
     genesisSentinel` — the SAME `dregg2 §8` oracle `Dregg2.Exec.Receipts.chain_tamper_evident` already
-    names, NEVER a Lean axiom and NEVER a `sorry`. This is the one honest seam (the digest's
+    names, NEVER a Lean axiom and NEVER an unproved hole. This is the one honest seam (the digest's
     collision-resistance), in the house honesty-ledger style: a named crypto primitive, not a laundered
     vacuity. The CROWN itself (the confinement `↔`) needs no such hypothesis.
 

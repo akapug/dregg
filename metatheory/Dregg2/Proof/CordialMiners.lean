@@ -60,7 +60,7 @@ What this models **faithfully**: the DAG round/wave/leader structure (`ordering.
 at most one super-ratified leader, with the `n > 3f` quorum-intersection core *transferred*
 from the classical model and the equivocation-repelling read reused from `Authority.Blocklace`.
 
-What remains **idealized** (named `OPEN`s below, never `sorry`/`axiom`):
+What remains **idealized** (named `OPEN`s below, never faked or assumed via `axiom`):
   * **OPEN-CM-LIVENESS / GST → PROVEN CONDITIONAL.** That a wave *eventually* produces a
     super-ratified leader (the `tau` ordering makes progress) is the post-GST pacemaker argument.
     Unconditional liveness is FLP-impossible, so the honest form is the CONDITIONAL — and it is
@@ -69,7 +69,7 @@ What remains **idealized** (named `OPEN`s below, never `sorry`/`axiom`):
     primitives (honest-supermajority + Δ-delivery + bare honest-leader co-finality,
     `cm_liveness_from_cofinality`), with the synchrony hypothesis LOAD-BEARING
     (`cm_liveness_needs_cofinality`). The carrier is a structure-field bundle (a Prop-portal like
-    `World.recv_mono`/`gst_liveness`), never an `axiom`/`sorry`. Off the safety critical path.
+    `World.recv_mono`/`gst_liveness`), never an `axiom` or an open hole. Off the safety critical path.
   * **OPEN-CM-DISSEMINATION.** The gossip/`dissemination.rs` reliable-broadcast that makes a
     block's causal past converge across honest nodes is assumed (the runtime guarantee, like
     `World.recv_mono`), not derived here.
@@ -675,7 +675,7 @@ end Inhabited
 `cordial_agreement` / `cordial_no_conflicting_final_leaders` / `cordial_agreement_via_bft`
 reduce to the transferred `BFT.honest_witness_in_intersection` (pure `Finset` counting under
 the `BFTModel` *fields* — hypotheses, not `axiom`s), the `SuperRatification` structure fields,
-and the honesty hypothesis (itself the BFT honest-vote-once field). None pull `sorryAx` or any
+and the honesty hypothesis (itself the BFT honest-vote-once field). None pull any
 oracle axiom; `collectAxioms` sees only the three standard kernel axioms. -/
 #assert_axioms cordial_agreement
 #assert_axioms cordial_no_conflicting_final_leaders

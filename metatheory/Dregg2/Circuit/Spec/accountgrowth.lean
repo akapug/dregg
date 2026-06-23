@@ -552,8 +552,7 @@ def sAG0 : RecChainedState :=
 
 /-! ## §11 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms createCellIntoAsset_correct
 #assert_axioms execFullA_createCellA

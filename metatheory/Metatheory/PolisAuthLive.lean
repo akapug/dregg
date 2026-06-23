@@ -25,7 +25,7 @@ rule-base is read off the real cells — revoke the grant cap and the rule simpl
   * `live_delegation_admitted` — with the grant cap present, the derived rule fires and `t` reaches
     `target` (`decide`-checked).
 
-No `sorry`, no load-bearing `True`. The remaining toy edges are the scan domain `cells` (an explicit
+The remaining toy edges are the scan domain `cells` (an explicit
 roster, since `Caps := Label → List Cap` has no enumerable domain) and the fixed delegated-authority
 set — both named, neither load-bearing for the foreclosure/admission content.
 -/

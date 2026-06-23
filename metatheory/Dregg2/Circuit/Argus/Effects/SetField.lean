@@ -73,7 +73,7 @@ the WHOLE chained post-state.
 
 `#assert_axioms` on both keystones ⊆ {propext, Classical.choice, Quot.sound}; the Poseidon CR /
 `AccountsWF` assumptions enter ONLY inside the reused `setfield_circuit_full_sound` hypotheses, not in
-the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only;
+the welded conclusion's statement. Imports are read-only;
 this file owns only its own declarations.
 -/
 import Dregg2.Circuit.Argus.Stmt

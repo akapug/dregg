@@ -60,8 +60,7 @@ carry. A wrong/duplicate-misplaced commitment insert is REJECTED (the root gate 
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carrier
-(`compressNInjective` + the injective `noteLeaf`, the SAME carrier `ListCommit` uses). No `sorry`, no
-`:= True`, no `native_decide`, no fresh axiom. NEW file; all imports read-only.
+(`compressNInjective` + the injective `noteLeaf`, the SAME carrier `ListCommit` uses). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementMisc
 import Dregg2.Circuit.ListCommit

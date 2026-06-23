@@ -332,7 +332,7 @@ theorem gstep_comm_routes (a b : Role) (s : Payload) (k : GlobalType) :
   ⟨GStep.comm a b s k, routing_projects_message_flow a b s⟩
 
 /-! ## §7 — Axiom-hygiene tripwires. The keystones depend ONLY on the three kernel axioms
-(no `sorryAx`, no oracle): delivery soundness, the dest/non-empty corollaries, no-misroute, the
+(no extra axiom, no oracle): delivery soundness, the dest/non-empty corollaries, no-misroute, the
 verify-seam authorization, and the choreography projection. -/
 
 #assert_axioms routed_message_followed_accepting_route

@@ -74,7 +74,7 @@ per-cell transition, and its safety reduces to the per-cell laws (`recKExecAsset
     that also delegated caps would compose `recKDelegateAtten` legs (proved non-amplifying in
     `AuthTurn.lean`) — out of scope here, the named residual.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Imports `Exec.RecordKernel` READ-ONLY. Verified with `lake build Dregg2.Distributed.EntangledJoint`.
 -/
 import Dregg2.Exec.RecordKernel

@@ -583,7 +583,7 @@ theorem pipelineDifferentialCorpus_drain_order :
 end Registry
 
 /-! ## §9 — Axiom-hygiene tripwires. Every PROVED keystone depends ONLY on the three standard
-kernel axioms (no `sorryAx`). -/
+kernel axioms (no extra axiom). -/
 
 #assert_axioms drainStep_preserves_caps
 #assert_axioms drainAll_preserves_caps

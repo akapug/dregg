@@ -273,8 +273,7 @@ theorem delegateAtten_no_spec_when_ungrounded (s : RecChainedState) (del rec t :
 
 /-! ## §5 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms delegateAttenCaps_correct
 #assert_axioms delegateAtten_iff_spec

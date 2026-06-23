@@ -44,7 +44,7 @@ These three are the genuine cryptographic assumptions of weighted-threshold BLS 
 named, exactly like `PortalFloor` names ed25519 EUF-CMA. The reduction *from* them *to* "an
 honest quorum signed" is the load-bearing thing proved here.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Companion to `Distributed/ThresholdDecrypt.lean` (the t-of-n decryption) — that is Shamir over GF(256);
 THIS is the dual constant-size *aggregation* (KZG over BLS12-381). Differential anchor: the §4 `#guard`s
 pin the selector arithmetic against `federation/src/threshold.rs`'s equal-weight committee semantics.

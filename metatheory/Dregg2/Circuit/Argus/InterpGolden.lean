@@ -9,7 +9,7 @@ agreement battery (`tests/effect_vm_descriptor_exhaustive_differential.rs` + the
 differentials) pins the running AIR against a RUST transcription of `decideVm`
 (`oracle_decide_vm` / `denote_vm_descriptor`) — but those oracles are themselves hand
 transcriptions. THIS module closes the remaining leg of the cascade: it computes `decideVm`'s
-verdicts IN LEAN (the verified function itself, no `sorry`, no `native_decide`) over a fixed
+verdicts IN LEAN (the verified function itself) over a fixed
 corpus of (descriptor, row-window, flags) cases and renders them to a line format the Rust test
 `lean_descriptor_air.rs::tests::lean_decide_vm_golden_corpus_agrees` embeds verbatim and
 re-decides with its own per-window transcription. A verdict mismatch on any case is a

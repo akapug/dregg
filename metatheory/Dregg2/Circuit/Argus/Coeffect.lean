@@ -74,8 +74,7 @@ The NAMED GAP (not papered):
 
 `#assert_axioms` on every headline ⊆ {propext, Classical.choice, Quot.sound}; the Poseidon-CR /
 whole-function-digest assumption enters ONLY inside the reused `balanceA_full_sound` (its
-`Function.Injective D` portal), never in a welded conclusion's *statement*. No `sorry`, no `:= True`,
-no `native_decide`. Imports are read-only; this file owns only its own declarations. Pure.
+`Function.Injective D` portal), never in a welded conclusion's *statement*. Imports are read-only; this file owns only its own declarations. Pure.
 -/
 import Dregg2.Intent.Ring
 import Dregg2.Circuit.Argus.Effects.BalanceA

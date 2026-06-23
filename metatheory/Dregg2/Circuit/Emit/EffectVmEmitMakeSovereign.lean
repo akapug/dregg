@@ -38,8 +38,8 @@ was sovereign-committed. The rebind SOUNDNESS lives ONLY in `makeSovereignA_full
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR named hypothesis only. No
-`sorry`/`:= True`/`native_decide`. Read-only imports.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR named hypothesis only.
+Read-only imports.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

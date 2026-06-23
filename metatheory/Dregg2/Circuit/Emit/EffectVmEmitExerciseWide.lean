@@ -47,8 +47,8 @@ ONLY the side-table-root binding gap on the kernel state.
 ## The terminal (named, the ONLY acceptable irreducible)
 
 `Poseidon2Binding.Poseidon2SpongeCR hash` — discharged ONCE in the generic crown; this module carries NO
-new portal. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. No `sorry`,
-no `:= True`, no `native_decide`. Imports are read-only; this file owns only itself.
+new portal. `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem.
+Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitExercise
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

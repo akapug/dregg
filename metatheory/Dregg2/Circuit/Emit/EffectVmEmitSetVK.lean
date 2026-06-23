@@ -30,8 +30,7 @@ This v2 reconciles the descriptor to the runtime passthrough+tick.
     state block (the hand-AIR carries no VK `field` column). The VK-write soundness lives in universe-A's
     `SetVKSpec` (cited via the §connector); the runnable row pins the conserved frame + nonce tick.
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR = NAMED hypothesis. No sorry /
-:= True / native_decide / rfl-bridge. Imports read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR = NAMED hypothesis. Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

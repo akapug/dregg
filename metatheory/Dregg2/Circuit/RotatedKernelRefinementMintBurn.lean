@@ -34,8 +34,7 @@ circuit-forced debit/credit is UNSAT, because the gate pins the limb to `pre ∓
 
 `#assert_axioms` on every theorem ⊆ {propext, Classical.choice, Quot.sound} + the named carriers
 inherited through the imports (here NONE of the hash carriers are even needed — the value-block intent
-is forced by the gates, not the commitment). No `sorry`, no `native_decide`, no `:= True`, no fresh
-axiom. NEW file; imports are read-only.
+is forced by the gates, not the commitment). NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinement
 import Dregg2.Circuit.Emit.EffectVmEmitBurn

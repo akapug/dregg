@@ -39,8 +39,7 @@ shape (it changes once, covering cellSeal + all four here).
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carriers
-(`compressNInjective` + the injective leaf encoders, REUSED from cellSeal where possible). No `sorry`,
-no `:= True`, no `native_decide`, no fresh axiom. NEW file; all imports read-only.
+(`compressNInjective` + the injective leaf encoders, REUSED from cellSeal where possible). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementCellSeal
 import Dregg2.Circuit.Spec.cellstateaudit
@@ -547,7 +546,7 @@ gap, EXACTLY as `RotatedKernelRefinementCellSeal.§6.5` does for cellSeal:
 
 Editing the respective deployed descriptor's gate breaks its `*_forced` lemma, hence the
 `*_descriptorRefines_sat`, hence the rung — Class A. Each seam is a NAMED realizable structure field
-(`#assert_axioms`-clean), never a `sorry`/assumed-decode. -/
+(`#assert_axioms`-clean), never an assumed hole/decode. -/
 
 /-! ### cellUnseal — Class A from the DEPLOYED disc gate (`cellUnsealV3`). -/
 

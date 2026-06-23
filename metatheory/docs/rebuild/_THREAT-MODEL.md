@@ -182,7 +182,7 @@ on the running Rust, not just in Lean.** Crypto is real `ed25519_dalek`
   `consume_then_replay_rejected` (present-once-then-replay-fails), and
   `fresh_nonce_still_validates` (the tooth rejects only re-presented nonces, not
   legitimate fresh handoffs) — non-vacuous on the reference EUF-CMA carrier.
-  `#assert_axioms`-clean, no `sorry`. The pre-fix `validateHandoff2` gate could
+  `#assert_axioms`-clean. The pre-fix `validateHandoff2` gate could
   not even EXPRESS this property; §6b is the proof extension that now catches it.
 
 ### A3 — Byzantine peer / strand
@@ -444,8 +444,7 @@ The two NEW GC findings (F-11, F-12) are the GC analogues of F-2 and F-3:
   that minted no ref (the session-free / forged / "session 0" credential) is a total
   NO-OP on the table: `(invalid, t)` with `totalRefs` unchanged (the law the pre-fix
   code VIOLATED). The honest holder still gets through (`right_session_decrements`),
-  and `byzantine_cannot_drop_victim_ref` carries over. `#assert_axioms`-clean, no
-  `sorry`.
+  and `byzantine_cannot_drop_victim_ref` carries over. `#assert_axioms`-clean.
 - **F-12 (FINDING — `redteam`-proven, design subtlety):** `session_id` was stored
   **per-(cell, federation) holder, not per-ref** (`gc.rs:129-139`). A re-export to
   the same federation on a new session **overwrote the session id of ALL that
@@ -465,7 +464,7 @@ The two NEW GC findings (F-11, F-12) are the GC analogues of F-2 and F-3:
   (a new session's bucket leaves the original session's bucket untouched) and
   `f12_session_drops_only_its_own` (a drop touches only the named session's bucket).
   The `gcDifferentialCorpus` (Lean ⟷ Rust `gc_session_tooth_matches_lean_corpus`) now
-  pins the corrected per-ref rows. `#assert_axioms`-clean, no `sorry`.
+  pins the corrected per-ref rows. `#assert_axioms`-clean.
 
 ---
 

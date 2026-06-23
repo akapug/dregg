@@ -473,7 +473,7 @@ def demoAssetTurn : Turn := { actor := 0, src := 0, dst := 1, amt := 30 }
 
 /-! ## §7 — AXIOM CLEANLINESS: the refinement rests only on `propext`/`Classical.choice`/`Quot.sound`.
 
-No `sorryAx` — the squares and the proof-transfer corollary are genuine (the prompt's hard gate). -/
+No extra axiom — the squares and the proof-transfer corollary are genuine (the prompt's hard gate). -/
 
 #print axioms toAbstract_concreteTransfer
 #print axioms toAbstract_concreteWriteField

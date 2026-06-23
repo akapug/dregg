@@ -51,7 +51,7 @@ Not aspirational — verified against the live tree this session:
 | Lean has an official Emscripten build | runs under Node; browser-as-library WIP (leanprover Zulip) |
 | ProofWidgets fully present | `GraphDisplay`, `Recharts`, `InteractiveSvg`, `HtmlDisplay`, `OfRpcMethod`, `PenroseDiagram`, `Panel` |
 | `livingCellA_carries` is real | `Exec/CellCarry.lean` — the "prove one step, get forever free" coalgebra |
-| Build is green & current | `.lake/build/lib/lean/Dregg2.olean` present (last-known 3455 jobs, 0 sorry) |
+| Build is green & current | `.lake/build/lib/lean/Dregg2.olean` present (last-known 3455 jobs, 0 open holes) |
 
 **What the spike must still establish (the one honest unknown):** the Lean *runtime*
 (`leancpp/leanrt/gmp/uv`) built for `wasm32-emscripten`, and the **weight** of the
@@ -292,7 +292,7 @@ because every panel is a Lean term the user's own browser elaborated, checked, o
   weight first, then press to B/C.
 - 2026-06-02 — **Pillars 2 + 3 LANDED + GATED (my reconcile, not self-report).** The
   fan-out workflow produced 11 file-disjoint modules; `scripts/gate-starbridge.sh`
-  reconcile-builds all 11 (3018 jobs, **zero sorry**; the only `sorry` hits are comments
+  reconcile-builds all 11 (3018 jobs, **zero open holes**; the only grep hits are comments
   documenting the discipline). Bodies read for vacuity:
   - **Hatchery** (`Dregg2/Verify/{Frames,Tactics,Contract,Catalog,Regression}`):
     `exec_frame` is *honest by construction* — it splits flat so the commit goal ESCAPES
@@ -340,7 +340,7 @@ because every panel is a Lean term the user's own browser elaborated, checked, o
   crowns; `Regression.lean` now REUSES them (local dup defs deleted — no name clash, no semantic
   duplication) for its both-directions defeq suite. Now `Contract.lean` self-contains the full H3 gate
   (Identity/NameService/Subscription, all three). **Gate evidence (verify-don't-trust):** `lake build
-  Dregg2` EXIT=0, 3497 jobs, zero error / zero sorry; `#print axioms` on `nameRegisteredContract`,
+  Dregg2` EXIT=0, 3497 jobs, zero error / zero open holes; `#print axioms` on `nameRegisteredContract`,
   `subWFContract`, `CellContract.forever/always`, the catalog `gate*` defs, and every reproduced crown
   ⊆ `{propext, Classical.choice, Quot.sound}` (most are just `[propext, Quot.sound]`); non-vacuity has
   TEETH — NameService `isRegistered fma0 alice = false` then `some true` after a real `register`,

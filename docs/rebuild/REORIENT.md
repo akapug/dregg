@@ -133,7 +133,7 @@ on-vision:**
   (`Authority/Positional.lean`: the l4v integrity case-split = vat-boundary law), **the JointTurn**
   (`JointTurn.lean`: `binding_is_proper`, `joint_sound` given the binding), **Finality**/**Confluence**
   (the ordering + I-confluence judgements), the **CryptoKernel/World portals**, the **circuit
-  bridge** (`Circuit.lean`), the working **FFI** (`dregg-lean-ffi/`). ~11–19 honest `sorry` (no
+  bridge** (`Circuit.lean`), the working **FFI** (`dregg-lean-ffi/`). ~11–19 honest open holes (no
   cheats), classified into §8 crypto-interface obligations + genuine deep-open theorems.
 - **The Preserves data substrate + structure-map (built last session, on-vision in SHAPE):**
   `Exec/Value.lean` (name-keyed records over a `Schema`; `flatten_width` PROVED — a schema fixes a
@@ -166,7 +166,7 @@ by `StepComplete`, not the guard). Steps:
 3. **Recover `sound_of_step_complete` as a genuine bisimulation for this cell.** Soundness = the
    running cell is behaviourally equivalent to the golden oracle *forever, given* step-completeness
    — and **`cexec_attests` already supplies that hypothesis** (all four conjuncts). The study's
-   skeleton closes with no `sorry` once the oracle bridge is explicit. This is the keystone that the
+   skeleton closes with no open holes once the oracle bridge is explicit. This is the keystone that the
    safety-invariant reframe only approximated.
 4. **Derive the runtime-character theorems** over the codata: checkpoint = name a `(head, receipt)`;
    restore = re-seed the anamorphism; replay = re-run from the log; time-travel = fork the unfold.
@@ -189,13 +189,13 @@ CryptoKernel portal (NOT into the Lean law). The choreography front-end (`Projec
   Rust+circuits prove "Verify accepts ⇒ it actually happened." Two obligations, never one.
 - **Step-completeness is THE soundness question.** Everything downstream is conditional on it. In the
   Lean cell, make it hold *by construction* (`cexec_attests`); never weaken `StepInv` to fake it.
-- **No fake-to-pass.** No `axiom`/`admit`/`native_decide`/`sorry`-aliases; never weaken a statement to
-  close it. An honest `-- OPEN:`/`-- PRIMITIVE:` `sorry` beats a vacuous theorem. The swarms have
+- **No fake-to-pass.** No `axiom`/`admit`/`native_decide`/open-hole-aliases; never weaken a statement to
+  close it. An honest `-- OPEN:`/`-- PRIMITIVE:` open hole beats a vacuous theorem. The swarms have
   *correctly refused* to fake over-strong claims before (and caught ~4 false-as-stated theorems);
   honor that.
 - **Improve, don't degrade.** When an audit finds a gap, fix it; don't add "experimental" flags or
   downgrade a tier to reflect a known gap.
-- **The differential bridge is cross-validation, not certification** over `sorry`'d regions (Lean =
+- **The differential bridge is cross-validation, not certification** over open-hole regions (Lean =
   golden oracle, backend #8). Don't overclaim it.
 - **Lean gotchas (re-learned, will bite you):** `/-- -/` doc-comments can't precede `mutual` (put
   them on the inner `def`); nested-`List` inductives don't auto-derive `DecidableEq` (drop or write

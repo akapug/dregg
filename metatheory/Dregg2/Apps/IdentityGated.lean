@@ -165,7 +165,7 @@ def idRevoked : RecChainedState :=
 #guard ((execFullForestG id0 (idNode goodCred statusSlot 1)).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
 
-/-! ## §8 — Axiom-hygiene tripwires (the honesty pins; kernel-clean, no `sorryAx`). -/
+/-! ## §8 — Axiom-hygiene tripwires (the honesty pins; kernel-clean). -/
 
 #assert_axioms execFullForestG_leaf
 #assert_axioms gateOK_forged_false

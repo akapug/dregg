@@ -33,7 +33,7 @@ ONLY undecidable content is the named heap-opening oracle, exactly as the spike 
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `native_decide`. The
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The
 abstract `hash` enters only as a compared value (never inverted); `mapDec` is a SUPPLIED oracle, its
 faithfulness a NAMED hypothesis (the heap-opening floor — the v2 analog of the v1 reference's totality).
 NEW file; imports read-only.

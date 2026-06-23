@@ -274,8 +274,7 @@ def revokeEmitted : EmittedDescriptor := emittedEffect2 revokeAirName revokeEWir
 
 /-! ## §3 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms revokeGuardLocal
 #assert_axioms revokeGuardDecodes

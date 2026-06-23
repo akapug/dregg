@@ -220,7 +220,7 @@ Template (the pattern that worked for consensus, `BlocklaceFinality.lean`): **(i
 Lean model of the real Rust protocol (cite `file:line`, mirror line-for-line as pure functions); **(ii)** a
 proved *safety* property the node relies on; **(iii)** a connection to the verified executor / state;
 **(iv)** a Rust **differential** (`#guard` golden vector that the Rust test reproduces); `#assert_axioms`-
-clean, no `sorry`/`:=True`. Reuse `Dregg2.Authority.Blocklace` (`Lace`, `Block`, `precedes`, `incomparable`,
+clean. Reuse `Dregg2.Authority.Blocklace` (`Lace`, `Block`, `precedes`, `incomparable`,
 `Equivocation`) and `Dregg2.Distributed.BlocklaceFinality` (`tauOrder`, `causalPastIncl`, `computeRounds`).
 
 Ranking is by *(security load-bearing) × (faithfulness achievable now) × (fills a real gap)*.

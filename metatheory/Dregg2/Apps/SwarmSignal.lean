@@ -37,7 +37,7 @@ coordinator's schedule. The badge-mask bounds this (an attenuation `mask₁ ⊆ 
 dregg has no noninterference argument yet (out-of-scope, `SeL4Abstract.lean:40`). **That gap is the
 named, carried-forward risk — flagged here in the same breath as the bricks, not laundered away.**
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` — `decide`
+Discipline: axiom-clean (`#assert_all_clean` at the close) — `decide`
 / `#guard` / Step-1-keystone-reuse only. `lake build Dregg2.Apps.SwarmSignal` green (LOCAL).
 -/
 import Dregg2.Firmament.NotifyAuthority
@@ -310,8 +310,8 @@ section Witnesses
 
 end Witnesses
 
-/-! ## §6 — Axiom hygiene. Every load-bearing theorem checked kernel-clean (no `sorry`, no extra
-`axiom` — only the standard `propext`/`Classical.choice`/`Quot.sound`). -/
+/-! ## §6 — Axiom hygiene. Every load-bearing theorem checked kernel-clean (only the standard
+`propext`/`Classical.choice`/`Quot.sound`). -/
 
 #assert_all_clean [
   subToA_is_compile_only,

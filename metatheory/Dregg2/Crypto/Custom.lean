@@ -321,7 +321,7 @@ theorem reference_cascade_nonvacuous :
       ∧ ∃ wit : Int, eqRegistration.Relation 5 wit :=
   custom_registry_cascade eqRegistration (K := refKernel) trivial base 5 5 (by decide)
 
--- Non-vacuity axiom footprint: rests only on the standard axioms — no `sorryAx`, no crypto axiom.
+-- Non-vacuity axiom footprint: rests only on the standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
 /-- Non-vacuity of the dial wiring: the floor is the registration's own (`fullDisclosure` for the

@@ -69,7 +69,7 @@ AIR. The caveats, all named (not papered): (a) the executor side refines bare `i
 verified kernel step, because the executor's op-set has no noop action; (b) the circuit is the empty
 descriptor, so its soundness is the trivial freeze-agreement, sound ONLY because the executor freezes —
 proved non-vacuously by `noop_skipDescriptor_unsound_without_freeze`. No nonce-tick divergence (the no-op
-freezes the nonce too — its state is literally unchanged). No `sorry`, no `:= True`, no `native_decide`.
+freezes the nonce too — its state is literally unchanged).
 Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt

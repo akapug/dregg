@@ -37,8 +37,7 @@ vs `mintVmDescriptor` vs … — NOT all `skipDescriptor`. The §Coda residual i
 
 ## Axiom hygiene
 
-`#assert_axioms` clean (the standard three kernel axioms only); no `sorry`, no `:= True`, no
-`native_decide`. This file owns ONLY its own declarations; it imports the descriptor layer + the
+`#assert_axioms` clean (the standard three kernel axioms only). This file owns ONLY its own declarations; it imports the descriptor layer + the
 fold machinery + `compileE` read-only, and adds ONE import line to `Argus.lean`. It edits no other
 file's contents.
 -/

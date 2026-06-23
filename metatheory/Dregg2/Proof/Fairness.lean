@@ -64,7 +64,7 @@ carried as the explicit `JustLTSC.commits_stable` FIELD obligation — and DE-VA
 NON-stutter witness (`commits_stable_concrete`, §6.bis: an independent authority-free emit on cell 7
 COMMITS — no stutter — yet provably leaves `transferCF`'s commit on `{0,1}` intact), so the
 field is shown TRUE for real independent COMMITTING forests, not merely for stutters. NOT stubbed and NOT
-`sorry`'d. See `commits_stable_off_npc` (the stutter theorem), `commits_stable_concrete` (the concrete
+left open. See `commits_stable_off_npc` (the stutter theorem), `commits_stable_concrete` (the concrete
 commit-vs-commit witness) and `JustLTSC.commits_stable` (the carried universal field) for the division.
 
 ## Teeth (non-vacuity — machine-checked, the criterion REJECTS)
@@ -227,7 +227,7 @@ end. The dregg2 reading: if `cf` commits at `s` and the fired `u` is concurrent 
 (afcA u)`), `cf` still commits at `cellNextA s u`. We PROVE the operationally load-bearing half — the
 **stutter branch** — which is exactly the branch justness exists to exclude (the eternal `getD`-self-
 loop). The commit-vs-commit uniform per-effect frame is carried as `JustLTSC.commits_stable` (the
-honest field), discharged concretely in the teeth — NOT stubbed, NOT `sorry`'d. -/
+honest field), discharged concretely in the teeth — NOT stubbed, NOT left open. -/
 
 /-- **`commits_stable_off_npc` (the stutter branch of [Just] closure (3)).** If `cf` commits
 at `s` and the fired `u` is a STUTTER at `s` (`execFullForestA s u.1 = none` ⇒ `cellNextA s u = s`),

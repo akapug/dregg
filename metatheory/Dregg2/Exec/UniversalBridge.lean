@@ -47,8 +47,8 @@ Plus the two umem-lane adapters that arise here:
       (`docs/UNIVERSAL-MEMORY.md:115-121`).
 
 Axiom hygiene: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} everywhere; crypto
-enters ONLY as the named `Poseidon2SpongeCR` hypothesis. No `sorry`, no `:= True`, no
-`native_decide`. Non-vacuity: a concrete three-verb run is `#guard`-folded address-by-address.
+enters ONLY as the named `Poseidon2SpongeCR` hypothesis. Non-vacuity: a concrete three-verb
+run is `#guard`-folded address-by-address.
 -/
 import Dregg2.Exec.EffectsState
 import Dregg2.Exec.EffectsSupply

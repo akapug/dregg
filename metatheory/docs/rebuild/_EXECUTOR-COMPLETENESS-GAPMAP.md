@@ -77,7 +77,7 @@ Prioritized; load-bearing first.
   SEPARATE algebraic layer over its own `NetCell`/`Tier` types.
 - **file:line:** `Consensus.lean` (no `execFullForestG`/`RecChainedState` references — grep
   confirms). The header itself states Byzantine quorum-intersection safety and post-GST
-  liveness are left as `sorry`'d `…_OPEN` theorems in `World.lean`.
+  liveness are left as open `…_OPEN` theorems in `World.lean`.
 - **Load-bearing?** YES. A real node must: place each committed turn into a block, track
   height/epoch/checkpoint, gather quorum, and only then finalize. `execFullForestG` has no
   block height (the `AdmCtx.blockHeight`/`admissionClock` exists in `Admission.lean:135`–

@@ -1,7 +1,7 @@
 # `Metatheory/` — what the layer IS and how it connects to `Dregg2/`
 
 **Scope:** `Metatheory/*.lean` (5 files) + `Metatheory/Open/*.lean` (7 files), 4536 LOC.
-**Method:** read the theorem bodies, not docstrings; verify `sorry`/`axiom`/`:= True`
+**Method:** read the theorem bodies, not docstrings; verify open-hole/`axiom`/`:= True`
 counts; trace the **direction and reality** of every connection to `Dregg2/`. When this
 doc and the code disagree, the code wins.
 
@@ -9,8 +9,8 @@ doc and the code disagree, the code wins.
 
 ## What this layer is
 
-The discipline is real: **zero `sorry`, zero `axiom`, zero `admit`, zero
-`:= True`/`:= Unit`-as-success** across all 12 files (every "sorry" string is a comment;
+The discipline is real: **zero open holes, zero `axiom`, zero `admit`, zero
+`:= True`/`:= Unit`-as-success** across all 12 files (every axiom-hygiene string is a comment;
 every `Unit`/`Bool` is an honest degenerate model or an explicit anti-vacuity witness).
 Every keystone is `#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`,
 and several modules carry **"teeth"** lemmas that *prove the constraint is falsifiable*

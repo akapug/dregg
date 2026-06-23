@@ -98,7 +98,7 @@ theorem conservation_step_realized {s s' : ChainedState} {t : Turn}
 `Core.lean` carries Law-1's per-turn balance as the class field `Core.ConservesStep cons`
 (the operational obligation it cannot derive from in-module data). We now PROVIDE that
 instance from the executable machine — a real proof routed through
-`conservation_step_realized`, never a re-`sorry`.
+`conservation_step_realized`, never re-opened as a hole.
 
 The abstract `count : Core.Cell → M` is a measure *normalised against the conserved value*: the
 running kernel keeps `total` invariant across every committed turn (`conservation_step_realized`),
@@ -145,7 +145,7 @@ theorem conservation_step_realizes_balance {s s' : ChainedState} {t : Turn}
 /-- **`Core.ConservesStep` DISCHARGED for the executable kernel (the instance).** The
 abstract Law-1 class field is provided by a real proof about the running machine: every
 committed `cexec` step conserves total supply (`conservation_step_realized`), so the abstract
-zero-delta balance holds for `execConservation`. NOT a re-`sorry`. Every `Core` corollary
+zero-delta balance holds for `execConservation`. NOT re-opened as a hole. Every `Core` corollary
 (`conservation_ordinary`, `mint_delta`, `burn_delta`, `withholding_no_free_copy`, and the
 downstream `Finality`/`Privacy` consumers) auto-resolves its `[Core.ConservesStep cons]`
 constraint against this executable witness. -/

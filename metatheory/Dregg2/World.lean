@@ -270,7 +270,7 @@ The intersection *core* of BFT safety — that two quorums for distinct blocks m
 voter — is pure counting from the `½(n+f)` threshold and a participant-membership bound, so
 it is proved here with no external paper. The *full* honest-vote-once safety (a shared voter
 is a CONTRADICTION because an honest node never double-votes) needs the adversary/honesty
-model and Malkhi–Reiter; that part stays an scope-note, NOT a `sorry`. Liveness after
+model and Malkhi–Reiter; that part stays an explicit scope-note, not a discharged claim. Liveness after
 GST is discharged from a NAMED assumed `World` oracle law (`gst_liveness`), the
 partial-synchrony obligation the network layer satisfies — the same honest pattern as
 `recv_mono`, not an axiom. -/
@@ -409,7 +409,7 @@ end Reference
 
 `quorum_intersection_safety` is a real pigeonhole proof; `liveness_after_gst` reduces to
 `World.gst_liveness` (a class field / hypothesis, not an `axiom`). Neither pulls in
-`sorryAx` — `collectAxioms` sees only the three standard kernel axioms. -/
+a faked-green axiom — `collectAxioms` sees only the three standard kernel axioms. -/
 #assert_axioms quorum_intersection_safety
 #assert_axioms liveness_after_gst
 

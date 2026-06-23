@@ -85,7 +85,7 @@ carries. Cross-row composition is the turn layer (`TurnEmit`), cited not claimed
 
 `#assert_axioms` on both welds ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY via
 the named `Poseidon2SpongeCR` hypothesis (inside the cited anti-ghost `attenuateGenuine_binds_edge`, not
-the welds here). No `sorry`, no `:= True`, no `native_decide`, no `rfl`-posing-as-bridge. Non-vacuity:
+the welds here). No `rfl`-posing-as-bridge. Non-vacuity:
 `checkSubset` REJECTS an over-broad grant (rights SET ⊄ parent ⇒ `none`) AND an INCOMPARABLE pair (the
 gain over `checkLe`), and ADMITS a genuine attenuation; the genuine descriptor is the non-trivial class-A
 circuit, not the placeholder. This module OWNS only itself; every import is read-only.

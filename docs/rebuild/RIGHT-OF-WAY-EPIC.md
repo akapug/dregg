@@ -5,7 +5,7 @@
 > dregg2's power to reason about **distributed epistemic** problems — for an orbital
 > right-of-way / collision-avoidance pitch. Five Lean modules, all build green on the dregg2
 > toolchain (`lake build Dregg2`, 3466 jobs), **60 keystones** `#assert_axioms`-pinned to
-> `{propext, Classical.choice, Quot.sound}`, **zero** `sorry`/`admit`/`native_decide`/`axiom` in
+> `{propext, Classical.choice, Quot.sound}`, **zero** open holes / `admit`/`native_decide`/`axiom` in
 > any definition.
 
 The discipline (non-negotiable): everything below is labelled **REAL** (a term-proved theorem

@@ -277,8 +277,7 @@ theorem balanceMovement_rejects_sealed_dst (st : RecChainedState) (t : Turn) (a 
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms recTransferBal_correct
 #assert_axioms recCexecAsset_iff_spec

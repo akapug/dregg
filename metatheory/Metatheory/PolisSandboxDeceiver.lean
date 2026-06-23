@@ -25,7 +25,7 @@ Proven end to end:
   * `defection_passes_per_step_trust` but `defection_fails_viability` — the gap the con lives in.
 
 Honest: bounded Lean world (small `Nat`s so `decide` is cheap); the "detectors" are Lean functions,
-not learned models. No `sorry`, no load-bearing `True`.
+not learned models.
 -/
 import Metatheory.Polis
 

@@ -41,7 +41,7 @@ witness it) and the theorem fails without the digest bound (a `2^256`-wrap value
 counterexample) — real teeth, not a triviality.
 
 Soundness note: no new axioms; keystones are `#assert_axioms`-pinned to
-`{propext, Classical.choice, Quot.sound}` (a `sorryAx` would fail the pin and the build).
+`{propext, Classical.choice, Quot.sound}` (an extra axiom would fail the pin and the build).
 -/
 import Dregg2.Exec.CodecRoundtrip.Leaves
 import Dregg2.Exec.CodecRoundtrip.Value
@@ -53,7 +53,7 @@ import Dregg2.Exec.CodecRoundtrip.Wire
 
 namespace Dregg2.Exec.CodecRoundtrip
 
-/-! ## §4 — axiom hygiene (the FILL-J no-`sorryAx` pins).
+/-! ## §4 — axiom hygiene (the FILL-J axiom-clean pins).
 
 Every keystone is `#assert_axioms`-pinned to the standard kernel triple `{propext, Classical.choice,
 Quot.sound}`. -/

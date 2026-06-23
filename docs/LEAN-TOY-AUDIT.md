@@ -1,7 +1,7 @@
 # Lean toy audit — exhaustive census (2026-06-13)
 
 An exhaustive, read-only audit of the entire Lean codebase (`metatheory/Dregg2/`,
-**630 files / 251,638 lines**) for *toys* — holes in the "axiom-clean, sorry-free,
+**630 files / 251,638 lines**) for *toys* — holes in the "axiom-clean, open-hole-free,
 non-vacuity-tested" assurance claim. Method: one auditor per module group (27
 groups), each confirming findings by reading actual code (not grepping), plus an
 **adversarial verify pass** on every RED/load-bearing finding (a skeptic tries to
@@ -9,14 +9,14 @@ groups), each confirming findings by reading actual code (not grepping), plus an
 
 ## Verdict: the discipline largely HOLDS
 
-The raw greps were ~99% false positives — the 615 "sorry" hits, 221 "native_decide"
+The raw greps were ~99% false positives — the 615 open-hole-keyword hits, 221 "native_decide"
 hits, 238 ":= True" hits were overwhelmingly **doc-comments and self-attestation
-banners** ("no sorry, no `:= True`, no native_decide, #assert_axioms-pinned…"),
+banners** (hygiene brags naming `:= True`, native_decide, #assert_axioms-pinned…),
 field names (`Caveat.admits`), and prose. Confirmed real toy surface:
 
 | category | raw grep | **confirmed real** |
 |---|---:|---:|
-| sorry / admit (proof position) | 615 | **0** |
+| open-hole / admit (proof position) | 615 | **0** |
 | laundering axioms | 8 decls | **0** (all 8 are the legit crypto floor) |
 | fake `#eval`-as-test | 228 | **0** (real smoke uses `#guard`) |
 | load-bearing vacuity | 238 | **1** |

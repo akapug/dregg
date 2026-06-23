@@ -4,8 +4,8 @@
 > lens: **the cell as a point of a final coalgebra**. The fulcrum is honesty — every
 > structural claim is tagged **REAL** (the universal property / law is actually *proved* in
 > the Lean), **DECORATIVE** (suggestive notation that buys no theorem; I say what it would
-> have to prove to become real), or **ASPIRATIONAL** (claimed by the design but actually a
-> `sorry` / `-- OPEN` / refuted-and-downgraded). No code changed.
+> have to prove to become real), or **ASPIRATIONAL** (claimed by the design but actually an
+> open hole / `-- OPEN` / refuted-and-downgraded). No code changed.
 >
 > **The discipline (carried from `REORIENT §6` / `study-category §0`):** category-theory
 > vocabulary must not paper over a missing theorem. "Final coalgebra", "functor",
@@ -64,7 +64,7 @@ The headline, sharpened against the Lean and against the prior `study-category.m
    load-bearing premise, DECORATIVE as a kernel-checked guard.
 
 5. **The vat-boundary `Φ` being a functor (caps→keys) is ASPIRATIONAL** — `phi_functorial` is
-   the single genuine proof-body `sorry` in this lens (`Spec/VatBoundary.lean:401`). Its named
+   the single genuine proof-body open hole in this lens (`Spec/VatBoundary.lean:401`). Its named
    loss, monotonicity, and domain are REAL (proved); its *functoriality* is open, with a
    concrete witnessed instance (`phi_functorial_concrete`) proving the laws are inhabited.
 
@@ -382,7 +382,7 @@ The real obstruction is that the **binding carves a proper subobject** of the pr
 > "the 'strong monoidal functor' packaging is *decorative* — its target is discrete on objects,
 > so the functor laws collapse to the monoid-hom + invariance."
 
-The real obligation is `conservation_step` (`:154`, the one **stated-`sorry` PRIMITIVE** — the
+The real obligation is `conservation_step` (`:154`, the one **stated-OPEN PRIMITIVE** — the
 operational model must discharge Law 1's balance) plus the *proved* corollaries
 `conservation_ordinary` (`:166`), `mint_delta`/`burn_delta` (`:176,187`), and the genuinely
 nice `withholding_no_free_copy` (`:209`, PROVED): a conservation-respecting comonoid copy
@@ -417,7 +417,7 @@ The crucial coalgebra tie is `Resource.lean:50–55`:
 > fixpoint over cameras. Until then the discrete RA is the canonical tier."
 
 > **Tag: REAL** for the camera tier (the RA class, the three instances, `Fpu`, the
-> conservation=authority unification — all PROVED with only one localized `sorry` for the `Auth`
+> conservation=authority unification — all PROVED with only one localized open hole for the `Auth`
 > validity laws that's actually discharged in-module). This is the cleanest "conservation and
 > authority are one law" content.
 >
@@ -431,7 +431,7 @@ The crucial coalgebra tie is `Resource.lean:50–55`:
 
 ---
 
-## 8. The vat-boundary functor `Φ` (caps→keys) — ASPIRATIONAL (the one real `sorry`)
+## 8. The vat-boundary functor `Φ` (caps→keys) — ASPIRATIONAL (the one real open hole)
 
 `Spec/VatBoundary.lean` is where the coalgebra meets authority: `Φ` (`Phi`, `:106`) crosses a
 positional cap to the witnessed epistemic demand it becomes off-vat. The named loss is REAL and
@@ -443,10 +443,10 @@ PROVED:
   (`:281,289,296`), `phi_composes_with_attenuation` (`:314`) — all PROVED, all
   `#assert_axioms`-clean (`:465–474`).
 
-But the **functoriality** of `Φ` is exactly the one genuine proof-body `sorry`:
+But the **functoriality** of `Φ` is exactly the one genuine proof-body open hole:
 - `PhiFunctorial` (`:356`) states the functor laws (preserves-id, preserves-comp, lossy-on-
   confinement = non-faithful).
-- `phi_functorial` (`:392`) — **`sorry` at `:401`** (confirmed: the only proof-body `sorry`
+- `phi_functorial` (`:392`) — **open hole at `:401`** (confirmed: the only proof-body open hole
   in all of this lens's files). Its doc (`:380–391`) is precise about what's open: "the
   *categorical coherence* tying the positional graph dynamics … to the epistemic discharge
   composition … into identity/composition-preserving functor laws SIMULTANEOUSLY with the
@@ -455,7 +455,7 @@ But the **functoriality** of `Φ` is exactly the one genuine proof-body `sorry`:
   non-degenerate instance proving the three laws ARE inhabited and locating the named loss.
 
 > **Tag: ASPIRATIONAL** for "the vat boundary is a **functor** caps→keys": this is precisely the
-> brief's example — `phi_functorial` is a by-design `sorry`, so Φ-being-a-functor is *aspired*,
+> brief's example — `phi_functorial` is a by-design open hole, so Φ-being-a-functor is *aspired*,
 > not proved. To become REAL it needs the full two-category bridge (positional authority category
 > ↦ epistemic authority category, id/composition preservation + the lossiness witness for one
 > `Phi stmtOf` over an abstract `Verifiable`). The concrete witness shows it's *consistent*, not
@@ -466,7 +466,7 @@ But the **functoriality** of `Φ` is exactly the one genuine proof-body `sorry`:
 > biscuits cross, macaroons don't; no amplification), all proved.
 
 This is the categorical dual to §3.1: where `sound_of_step_complete` was an *over-claim caught
-and retired*, `phi_functorial` is an *under-delivered claim honestly marked `sorry`* — the same
+and retired*, `phi_functorial` is an *under-delivered claim honestly marked as an open hole* — the same
 discipline, two faces.
 
 ---
@@ -606,7 +606,7 @@ resource cell is the higher-order cell that is aspired.**
 | 17 | `TurnCat` symmetric-monoidal category instance | **ASPIRATIONAL** | `Core.TurnCat:85` (TODO `class`, no instances) | discharge `Category`/`MonoidalCategory`/`SymmetricCategory Cell` |
 | 18 | Camera tier: conservation = authority = one FPU law | **REAL** | `Resource.Fpu:103`, `conservation_is_fpu:296`, `ConfinesAuthority:319` | — |
 | 19 | Guarded fixpoint over cameras (`iProp`, camera-`▶` = `Boundary`-`▶`); higher-order cell | **ASPIRATIONAL** | `Resource:50–55` ("until then") | step-indexed OFE camera + guarded `iProp` fixpoint sharing `Boundary`'s `▶` |
-| 20 | Vat boundary `Φ` is a **functor** caps→keys | **ASPIRATIONAL** | `phi_functorial` **`sorry`** `VatBoundary:401` | the full positional↦epistemic two-category bridge over abstract `Verifiable` (concrete witness exists `:441`) |
+| 20 | Vat boundary `Φ` is a **functor** caps→keys | **ASPIRATIONAL** | `phi_functorial` **open hole** `VatBoundary:401` | the full positional↦epistemic two-category bridge over abstract `Verifiable` (concrete witness exists `:441`) |
 | 21 | Φ's named loss / domain / monotonicity (permission survives, authority doesn't) | **REAL** | `phi_drops_confinement:202`, `phi_domain_is_exactly_biscuit:296`, `phi_composes_with_attenuation:314` | — |
 | 22 | 2-cell = bisimulation-up-to / provable rewrite between executions (the coherence axis) | **REAL** | `commClo:394` + `commClo_compatible:413`, Paco `companion_compat` | — |
 | 23 | ∞-cell tower above dimension 2 (simplicial identities / free Kan fillers) | **DECORATIVE / UNSOUND-if-free** | `DREGG4-HYPERSYSTEM §4.3–4.4`; `hyper_not_all_admissible:505` | a simplicial object whose every n-face filler is a binding-carrying `Hyperedge` (fibration over bindings, not free) |

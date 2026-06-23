@@ -35,7 +35,7 @@ The shapes used:
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Every inhabitation is a CONSTRUCTED term;
-no `sorry`, no `:= True`, no `native_decide`, no fresh axiom. NEW file; imports read-only.
+no fresh axiom. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.FloorsNonVacuousWave
 import Dregg2.Circuit.FloorsNonVacuousWaveLifecycle

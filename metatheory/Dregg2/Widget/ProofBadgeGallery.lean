@@ -214,7 +214,7 @@ exercises the render path. Put your cursor on it to see the gallery in the infov
 This is the gallery's credibility. We re-run the classifier in `CommandElabM` and demand the EXACT tier we
 claim for each entry: the five real theorems MUST be `kernelChecked` (green) and the synthetic
 demonstrator MUST be `carrierBounded` (amber). If any real crown ever picked up a stray axiom — a hidden
-`sorry`, an accidental `axiom` dependency — this `run_cmd` would `throwError` and the FILE WOULD NOT BUILD.
+faked-green, an accidental `axiom` dependency — this `run_cmd` would `throwError` and the FILE WOULD NOT BUILD.
 So a green row in the rendered gallery is not a claim; it is a checked fact, exactly like `#assert_axioms`.
 
 It also proves the gallery is NON-VACUOUS: the verdicts are not all the same. The real rows are green AND

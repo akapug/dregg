@@ -52,8 +52,7 @@ hypothesis rather than pinning a specific `S`, so the bridge is parametric and t
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; `Poseidon2SpongeCR` enters ONLY as a named
-hypothesis (via the imported `rotV3_*` keystones / `CommitSurface` CR). No `sorry`, no `native_decide`,
-no `:= True`, no fresh axiom. NEW file; imports are read-only.
+hypothesis (via the imported `rotV3_*` keystones / `CommitSurface` CR). NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.CircuitSoundnessAssembled
 import Dregg2.Circuit.RotatedKernelRefinement

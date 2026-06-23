@@ -283,8 +283,7 @@ theorem incrementNonce_rejects_nonlive (s : RecChainedState) (actor cell : CellI
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms incNonceCellMap_eq_writeField
 #assert_axioms incrementNonce_cellWrite_correct

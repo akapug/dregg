@@ -155,7 +155,7 @@ pane_group/dock) → Zed-in-deos (FirmamentFs) + terminal + Hermes (the desktop 
 
 ### DESKTOP EPOCH — KEY-LEAK fully caged + the lone open theorem (2026-06-22):
 "What happens if someone leaks a private key" — which I previously couldn't model ("too much proof machinery") —
-is ALREADY ANSWERED by the deployed proofs. metatheory/Metatheory/KeyLeak.lean (kernel-clean, no sorry, CI-glob'd)
+is ALREADY ANSWERED by the deployed proofs. metatheory/Metatheory/KeyLeak.lean (kernel-clean, CI-glob'd)
 + docs/deos/ADVERSARY-KEY-LEAK.md prove it by INSTANTIATION: key_leak_contained = polis_safety (Polis.lean:102)
 with ctrl:=attacker — polis_safety already ∀-quantifies an OPAQUE controller ("verify the cage not the animal"),
 and a leaked-key attacker IS such a controller. Blast radius = the attenuation-closure of the leaked c-list (a
@@ -682,7 +682,7 @@ ops (new `keepWriteOpRot` + reused `heldReadOpRot`/`removeWriteOpRot`, var 213�
 `sel.ATTENUATE_CAPABILITY = 48` / `sel.REVOKE_CAPABILITY = 24`; the v1-state cap-root cols 65/87 FREEZE. Apex rungs
 re-proved + axiom-clean (`attenuateV3_non_amp`, `revokeCapabilityV3_non_amp`, `attenuate_descriptorRefines_sat`,
 `revokeCapability_descriptorRefines_sat`; `AttenuateWriteAnchor`/`RevokeCapabilityTraceReadout` re-anchored to the
-rotated limbs). lake green, full Dregg2 no-sorry. Descriptors REGEN (`emit_descriptors.py`) — on the wire the
+rotated limbs). lake green, full Dregg2. Descriptors REGEN (`emit_descriptors.py`) — on the wire the
 attenuate/revokeCapability map_op now `op=write guard=var48/24 root=var213 new_root=var264` (var 264 GENUINELY
 BOUND, verified). FORGE-DETECTORS GREEN (`sdk/.../full_turn_proof.rs`): `cap_write_attenuate_no_silent_forge` +
 `cap_write_revoke_cap_no_silent_forge` (a genuine 213≠264 change proves-with-empty-map_heaps → REJECTED).
@@ -809,7 +809,7 @@ CellConfine/Identity/StorageGatewayMandate via `receiptArchiveChainA_factors`; t
 deployed `cellArchiveEffect`/`cellArchiveH`; the v2 Surface2 layer via a NEW
 `Inst/receiptArchiveLifecycleA.lean` archive circuit — the `cellSealE` analog — wired through
 EffectRefinementBatch2/TurnEffectRefinement/EffectEmittedRefinement/TurnEmit/CircuitCompletenessAssembled).
-`lake build Dregg2` GREEN (4106 jobs); the reconciliation theorems axiom-clean (no sorryAx). NOT committed.
+`lake build Dregg2` GREEN (4106 jobs); the reconciliation theorems axiom-clean. NOT committed.
 
 ## ✅ ENMESHMENT STRIKE — 72 orphans pulled into the root build graph (2026-06-20)
 84 `Dregg2/*` modules were unreachable from `Dregg2.lean` (their `#assert_axioms` hygiene
@@ -833,21 +833,21 @@ cycle; it's a top-of-graph CI pin-net, separately buildable); `Circuit.Emit.Emit
 2. `Circuit.Argus.InterpGolden` (:244) — ROTTED GOLDEN PIN: the `#guard (corpus.map
    GoldenCase.verdict) = [literal list]` no longer matches the computed verdict vector
    (corpus drifted from the hard-coded expectation). A non-vacuity pin gone stale.
-3. `Circuit.Argus.Effects.BridgeMint` — `rewrite`/`decide` tactic failures ⇒ `sorryAx`
-   leaked into `bridgeMint_compile_sound` + 6 sibling keystones (pins FIRE on enmesh).
-4. `Circuit.Argus.Effects.CreateCellFromFactory` — `unsolved goals` (:165) ⇒ `sorryAx` in
+3. `Circuit.Argus.Effects.BridgeMint` — `rewrite`/`decide` tactic failures leaked an open hole
+   into `bridgeMint_compile_sound` + 6 sibling keystones (pins FIRE on enmesh).
+4. `Circuit.Argus.Effects.CreateCellFromFactory` — `unsolved goals` (:165) leaked an open hole in
    `interp_…_eq_chainK` + 8 siblings (the factory-chain proofs rotted).
 5. `Deos.DocPatch` — multiple breaks: `Unknown constant Finset.Insert.comm` (:146),
-   `Unknown identifier i` (:303), unsolved goals ⇒ sorryAx in all 6 CRDT-comm lemmas.
-6. `Substrate.FpuProbe` (:857) — `rewrite` failure ⇒ sorryAx in `move_is_fpu`.
+   `Unknown identifier i` (:303), unsolved goals leaked an open hole in all 6 CRDT-comm lemmas.
+6. `Substrate.FpuProbe` (:857) — `rewrite` failure leaked an open hole in `move_is_fpu`.
 7. `Authority.CredentialAttenuation` (:132,178,529-539) — COMPUTABILITY rot: 9 defs need
    `noncomputable` (depend on `instConditionallyCompleteLinearOrder`/`Clearance.admits`).
-8. `Apps.ToolAccessDelegation` (:225 unsolved goals, :312) — sorryAx in
+8. `Apps.ToolAccessDelegation` (:225 unsolved goals, :312) — an open hole in
    `tool_invocation_over_rate_rejected`.
 Closure lane: each is a self-contained drifted-proof / stale-API fix; fixing any one →
 re-add its import to the ENMESHMENT block in `Dregg2.lean`. The `Argus` aggregator + its
 Effects depend on #3/#4 fixes. These 8 are EXACTLY the value of the strike: theorems that
-read "PROVED, sorry-free" by token-grep but are silently broken / non-building at HEAD.
+read "PROVED, hole-free" by token-grep but are silently broken / non-building at HEAD.
 
 ## ✅ M2 EFFICIENCY — VALIDATED AT SCALE (the #[ignore]'d microbench, run 2026-06-20)
 The headline livability claim — per-render projection is O(changed), not O(ledger) — is now
@@ -1824,7 +1824,7 @@ Lean strands are GREEN and HELD uncommitted — to be committed with the facetEf
 ADVERSARIAL RE-REVIEW VERDICT (2026-06-18, agent a65e0528, the gate before completeness). The Lean apex CORE
 is CLEAN-CONFIRMED: 0 forgery-accept unsoundness; `lightclient_unfoolable_circuit_sound` carries exactly
 {StarkSound, Poseidon2/Merkle CR, logHashInjective, ClosedWitness} built from genuine per-effect `_closedLog`
-readouts (no circular carrier, no `sorry`/`native_decide`/`:= True`, transfer teeth both-polarity real). The
+readouts (no circular carrier, transfer teeth both-polarity real). The
 CONNECTION-TO-DEPLOYMENT is NOT yet sound enough for completeness — must close first:
   • **Finding 1 → RESOLVED to a PRECISE verdict (task #214, agent a21e2f7a + direct confirmation).** The
     reviewer's "verifier leaves record-pin dpis[38] ZERO" was IMPRECISE; the TRUE finding is sharper and
@@ -3680,7 +3680,7 @@ The user's holistic "is it end-to-end enmeshed / would edits turn proofs red" ce
   circuit⟺spec = CircuitSpecTriangle.lean *_circuit_pins_intent + _rejects_wrong_ledger + _intent_is_circuit_acceptable
   for ~13 effects against INTENT oracles; whole-turn WholeTurnTriangle.lean binds the composed turnSpec post to one
   authenticated root. Terminal seams = named CR carriers (Injective D, logHashInjective) + the distributed Σδ=0
-  consensus binding — typeclass params, never sorry.
+  consensus binding — typeclass params, never an open hole.
 
 ## ⚑ ENMESHMENT CENSUS layer 1/4: CIRCUIT effect-slot discharge (adc53df9) — the real frontier
 ALL 30 live effect families DISCHARGED (the ∀ e hyp is NOT an open hole — closedLogExtract_all_genuine
@@ -3696,7 +3696,7 @@ splits them:
   fact) but the readout TAKES Satisfied2(Rfix e) AND DISCARDS IT — encode derived from its own gate, not the
   circuit denotation. Spec-edit still reds them (they refine real Spec); circuit-descriptor-edit does NOT.
   Worst: heapWrite(56) Rfix 56 = the WRONG descriptor (transfer fallback), descriptor-abstract by design.
-- No sorry; all keystones #assert_axioms-clean ⊆ {propext, Classical.choice, Quot.sound} + named floors.
+- All keystones #assert_axioms-clean ⊆ {propext, Classical.choice, Quot.sound} + named floors.
 THE NEXT CAMPAIGN (precise): close the 24 Class-B slots — make each <e>Encodes a FUNCTION of Satisfied2(Rfix e)
 the way transfer's is (closedLogExtract_transfer_closed = the template), so a circuit-constraint bug in any effect
 propagates red. The spec<->proof weld is COMPLETE; the circuit<->proof weld is deep for 6, shallow for 24.
@@ -3726,14 +3726,14 @@ DISTRIBUTED protocols (consensus/finality/lace-merge/catchup) PROVEN + thread re
 per-turn fact is the EngineSound sibling, not the apex — same missing weld.
 
 ## ⚑⚑ ENMESHMENT CENSUS layer 4/4: GLOBAL TOPOLOGY (aa129798) + THE SYNTHESIS
-GLOBAL: the spine is PRISTINE. ZERO real sorry/admit/sorryAx in 758 modules (all hits = docstring prose / a fn
+GLOBAL: the spine is PRISTINE. ZERO real open holes / `admit` tactics in 758 modules (all hits = docstring prose / a fn
 named `admit`). EXACTLY 2 axiom decls, both deliberate test fixtures (Widget/Basic.lean:298 tier-classifier) — NO
 smuggled axioms. Floors = 8 named *Kernel crypto carriers (ed25519/STARK-FRI-extractability/Poseidon2-CR/BLAKE3/
 nullifier/seal/HMAC, PortalFloor.lean) as typeclass Prop-fields (invisible to collectAxioms) + injectivity portals
 + PostGSTProgress. Kernel triple only {propext,Classical.choice,Quot.sound}. native_decide's ofReduceBool is NOT
 whitelisted -> hygiene SELF-ENFORCING (#assert_axioms across ~645 files). Apex deployed_system_secure
 (AssuranceCase.lean:835) names the REAL gated executor execFullForestG, concludes A∧B∧C∧D∧E, pinned.
-⚑ THE REFRAMING FINDING: 87 modules (11.5%) are ORPHANS — outside lake build Dregg2 (real, sorry-free, but their
+⚑ THE REFRAMING FINDING: 87 modules (11.5%) are ORPHANS — outside lake build Dregg2 (real, hole-free, but their
 hygiene pins DON'T RUN by default). Clusters = Circuit.SettlementSoundness (!! the "one true weld" itself),
 36/46 Circuit.Argus.* per-effect refinement subtree, 24 EffectVmEmit*FullState, Exec.ConcreteKernel (the hard
 kernel-bridge gate), 3 Distributed (FinalityGate/MembershipSafety/CrashRecovery). NOT broken — UNENMESHED.
@@ -3755,7 +3755,7 @@ ONE SOLID TOWER + a third-of-a-circle of real-but-unorbited moons. Two-axis trut
    circuit soundness flows through the WHOLE multi-turn/distributed stack. ~1 bridging theorem, largest blast radius.
 3. THE 24 CLASS-B CIRCUIT SLOTS — make each <e>Encodes consume Satisfied2(Rfix e) (transfer's
    closedLogExtract_transfer_closed = template) so circuit-constraint edits propagate red for ALL effects, not 6.
-Plus: joint-turn aggregation AIR; promise-hole-as-nullifier weld; the stale "Stated sorry" docstring Boundary.lean:217.
+Plus: joint-turn aggregation AIR; promise-hole-as-nullifier weld; the stale "Stated open" docstring Boundary.lean:217.
 
 ## ⚑⚑ CLASS-B DIAGNOSIS (2026-06-20, a7b6aece) — NOT garbage, NOT false: a missing Lean JOIN; the VK work is DEPLOYED
 cellSeal probe verdict: the Class-B decoupling is neither lazy-sloppy nor a false-but-hidden rung. It is a
@@ -4189,7 +4189,7 @@ chain, NO new primitive needed (the raw operand slots 174+ past the window are r
 DISCRIMINATOR FLIPPED: `circuit/tests/vk_epoch_refusal_lifecycle_light_client_binding.rs` now asserts FORCED-ON-WIRE
 (forged refusal-audit / sealing-payload REJECTED through `verify_vm_descriptor2` ALONE under the anchored PI[46];
 honest ACCEPTED; sanity: forged verifies vs its OWN producer-free PI → the force is the anchor bite). Both tests GREEN.
-Lake `Dregg2.Circuit.Emit.EffectVmEmitRotationV3` GREEN + axiom-clean (no sorry/native_decide/:=True).
+Lake `Dregg2.Circuit.Emit.EffectVmEmitRotationV3` GREEN + axiom-clean.
 → THE HAND-OFF (the parallel agent owns `proof_verify.rs`; this is the SDK LIGHT-CLIENT half): `sdk/src/full_turn_proof.rs`
   `verify_effect_vm_rotated_with_cutover` line ~2150 takes `dpis = &public_inputs[..public_input_count]` VERBATIM. To
   make refusal/lifecycle light-client-forced ON THE DEPLOYED PATH, it must — for the record-pin family (public_input_count
@@ -4233,12 +4233,12 @@ the swarm settles, then ONE clean integrated verify + coherent banks. Do NOT sur
 (provenance-leak risk). lake green 4109 at this snapshot.
 
 ## ⚑⚑ PROOF-LEVEL SIN AUDIT (a6f7fa16, read-only) — spine sin-free; 3 real laundered-green items found
-VERDICT: the Lean spine is genuinely sin-free — ZERO sorry/admit/sorryAx/native_decide in tactic/term position
+VERDICT: the Lean spine is genuinely sin-free — ZERO open holes / `admit` / `native_decide` in tactic/term position
 (all hits = docstring prose or the `admit` upgrade-policy VERB identifier); only 2 benign labeled demo axioms
 (Widget/Basic.lean:298, prove 1=1/2=2 for the tier-classifier, never used by real proofs); every crypto floor is a
 typeclass/Prop portal not a bare axiom; the apex (19 load-bearing theorems incl. lightclient_unfoolable_*,
 engineSound_of_apex) is #assert_axioms-pinned IN-FILE (7223 enmeshed decl pins); the orphan Claims is PROVABLY
-REDUNDANT (0 of its 171 pins are Claims-only). The foil can't slip a sorry or smuggled axiom past the spine.
+REDUNDANT (0 of its 171 pins are Claims-only). The foil can't slip an open hole or smuggled axiom past the spine.
 ⚑ 3 REAL LAUNDERED-GREEN ITEMS (the burn-down the goal must close — passing-by-wrong-reason, not forges):
 1. ~65 BLIND is_err() RUST TESTS — reject but NOT provably for the right reason (a setup error passes them). Same
    sin-class as catch_unwind. Heaviest: full_turn_proof.rs (14 light-client/path-preserve teeth, lines 3831…6846),
@@ -4301,7 +4301,7 @@ re-proves fullActionStep_exec_iff; a NEW Inst/setProgramA.lean v1 encoder track 
 leaf arms built not skipped). APEX MEMBERSHIP: v3RegistryHeap pos 51 (52 total), actionTagToPos 13=>51,
 Rfix_setProgram rfl, closedLogExtract_setProgram_closed via setProgram_descriptorRefines_sat, the |13=> dispatch arm
 before the fallback. MUTATION-CONFIRMED (wrong registry pos OR dropped record-pin binding reds the apex). lake 4109
-axiom-clean, no sorry. SetProgram now a GENUINE apex leg — editing setProgramV3 reds the apex.
+axiom-clean. SetProgram now a GENUINE apex leg — editing setProgramV3 reds the apex.
 HELD: its apex edits (ClosureFanoutGenuine/ClosureAll/CircuitSoundnessAssembled) are SHARED with ae15d66a's
 revoke-tag2 apex re-point -> bank in the final integrated pass when ae15d66a + a72bf75a settle, not mid-edit.
 RESIDUAL-WELD WAVE STATUS: 7 welds — SetProgram ✅(held), payload-Lean ✅(held, Rust verifier-anchor queued),

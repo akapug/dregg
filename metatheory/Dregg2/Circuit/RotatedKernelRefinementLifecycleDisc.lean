@@ -52,8 +52,7 @@ two layers diverge on receiptArchive only, recorded in §6 — the deployed disc
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carrier
-(`compressNInjective` + `lifecycleLeaf_injective`, REUSED). No `sorry`, no `:= True`, no `native_decide`,
-no fresh axiom. NEW file; all imports read-only.
+(`compressNInjective` + `lifecycleLeaf_injective`, REUSED). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementCellSeal
 

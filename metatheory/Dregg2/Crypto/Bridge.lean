@@ -404,7 +404,7 @@ theorem reference_cascade_nonvacuous :
           BridgeRelation refCompress sampleStmt.c sampleStmt.threshold v vD salt :=
   bridge_registry_cascade (K := refKernel) trivial base sampleStmt () (by decide)
 
--- Non-vacuity axiom footprint: rests only on the standard axioms — no `sorryAx`, no crypto axiom.
+-- Non-vacuity axiom footprint: rests only on the standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
 /-- Non-vacuity of the dial wiring: the floor is `selective`, the dial's bottom notch is the verifier's

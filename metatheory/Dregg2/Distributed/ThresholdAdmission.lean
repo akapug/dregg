@@ -71,7 +71,7 @@ content of the three named pairing primitives (`KzgBinding`/`BlsAggUnforgeable`/
 PROVED here, purely, is the HOST-POLICY decision logic ON TOP: floor-pinning, fail-closed
 committee-resolution, and the lift of single-cert soundness to host-floor quorum authority.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Differential anchor: the `#[cfg(feature="threshold-sig")] mod threshold_sig` tests
 (`membership_verifier.rs:2134-2348`) — `valid_quorum_verifies` / `under_host_floor_rejected` /
 `wrong_committee_rejected` / `unregistered_commitment_fails_closed` — re-run here as both-polarity

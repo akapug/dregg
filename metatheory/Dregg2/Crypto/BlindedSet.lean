@@ -373,7 +373,7 @@ theorem reference_cascade_nonvacuous :
       ∧ ∃ member : Int, MemberOf refCompress authStmt.root member :=
   blindedset_registry_cascade (K := refKernel) trivial base authStmt 0 (by decide)
 
--- Non-vacuity axiom footprint: rests only on the standard axioms — no `sorryAx`, no crypto axiom.
+-- Non-vacuity axiom footprint: rests only on the standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
 /-- A degenerate reference holder-anonymity kernel over `ℤ`: `view := fun _ _ => 0` (the blinded

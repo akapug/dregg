@@ -82,8 +82,7 @@ No new IR constructor is needed (the `guard` primitive is the whole kernel conte
 
 ## Axiom hygiene
 
-`#assert_axioms` on both headline theorems ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no
-`:= True` vacuity, no weakening-that-just-typechecks. Poseidon2 CR enters ONLY via the cited descriptor
+`#assert_axioms` on both headline theorems ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR enters ONLY via the cited descriptor
 soundness lemmas (their own named hypotheses). Imports are read-only; this file owns only itself and edits
 no other Argus module.
 -/

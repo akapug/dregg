@@ -39,7 +39,7 @@ as the validated REFERENCE PATTERN, and pushes it across the surviving families.
      output (non-vacuously: we also exhibit, via `#guard`, a concrete tampered candidate that the
      executor refuses while accepting the spec's output).
 
-`#assert_axioms`-clean, no `sorry`, no `:= True`. Imports the escrow handlers (`createEscrowStep`,
+`#assert_axioms`-clean. Imports the escrow handlers (`createEscrowStep`,
 `releaseStep`, `refundStep` — the actor-gated R2 steps).
 -/
 import Dregg2.Exec.Handlers.Escrow

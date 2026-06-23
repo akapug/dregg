@@ -839,7 +839,7 @@ def diffCorpus : List Block :=
 end NonVacuity
 
 /-! ## §10 — Axiom-hygiene tripwires. Every PROVED keystone depends ONLY on the three standard
-kernel axioms (no `sorryAx`). -/
+kernel axioms (no extra axiom). -/
 
 #assert_axioms unsigned_does_not_count
 #assert_axioms wrong_author_does_not_count

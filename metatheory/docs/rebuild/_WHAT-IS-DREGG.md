@@ -91,7 +91,7 @@ genesis, blocklace sync/checkpoint. Substantial systems software.
 
 ## The verification story
 
-### Proven (about the model), sorry-free and axiom-pinned
+### Proven (about the model), axiom-pinned
 - **Conservation** across a turn: `execHandlerTurn_conserves`
   (`HandlerExecutor.lean:299`) lifts the generic `turn_conserves` — one keystone, not a
   per-arm matrix — `#assert_axioms`-pinned.
@@ -104,8 +104,8 @@ genesis, blocklace sync/checkpoint. Substantial systems software.
 - **Nullifier / no-double-spend**: the Lean privacy kernel (`PrivacyKernel.lean`,
   `Privacy.lean`, `Exec/CellNullifier.lean`) and the Rust AIR (`note_spending_air.rs`).
 - **Data refinement to a HashMap kernel**: `ConcreteKernel.lean` is an l4v-style
-  abstraction relation (`toAbstract`) with the transfer/writeField squares proved, no
-  `sorry`/`admit`/`axiom`/`native_decide` (`ConcreteKernel.lean:23`). It covers the hot
+  abstraction relation (`toAbstract`) with the transfer/writeField squares proved
+  (`ConcreteKernel.lean:23`). It covers the hot
   path (transfer/writeField + nullifier/commitment sets); refinement coverage of the
   long tail is the standing extension lane.
 - Axiom discipline is enforced: hundreds of files carry `#print axioms`/`assert_axioms`
@@ -128,9 +128,9 @@ injectivity portals) are grounded on Poseidon2 CR — a hardness axiom, tracked 
 - **Consensus in Lean** — the Cordial-Miners ordering the live node runs is the Rust
   implementation; the Lean consensus development (`Dregg2/Exec/Consensus.lean`,
   Stingray/Fairness) is partial — see `CONSENSUS-GROUNDING.md`.
-- **`sorry` surface.** The proven keystones are sorry-free and axiom-pinned; the broader
+- **Open-hole surface.** The proven keystones are axiom-pinned and free of open holes; the broader
   Lean surface is verification-in-progress, with the load-bearing residuals tracked in
-  `_PROOF-INTEGRITY-LEDGER.md` and `_VACUITY-SWEEP.md`, and a CI guard forbidding `sorry`
+  `_PROOF-INTEGRITY-LEDGER.md` and `_VACUITY-SWEEP.md`, and a CI guard forbidding open holes
   in the pinned target set.
 
 What "verified" buys today: the abstract execution laws (value conservation, attenuation

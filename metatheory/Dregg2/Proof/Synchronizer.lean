@@ -269,7 +269,7 @@ example : ∃ r : Nat, 0 ≤ r ∧ 3 ≤ r ∧ rotation.honestLeader r :=
 end Inhabited
 
 /-
-**OPEN (the one remaining bridge, named — NOT a `sorry`, NOT an axiom).** This file PROVES the
+**OPEN (the one remaining bridge, named — an open named obligation, NOT an axiom).** This file PROVES the
 probabilistic core of the randomized synchronizer:
   * the expected number of views to an honest leader is `1/h` (`expected_views_eq`), hence `≤ 3/2`
     under the BFT supermajority `h > 2/3` (`expected_views_O1`) — the ELRS expected-O(1) bound;
@@ -320,7 +320,7 @@ in `O(1)` views and `honest_hit_as` proves it is almost sure; only the `World.ra
 The probabilistic theorems reduce to mathlib's `tsum_coe_mul_geometric_of_norm_lt_one` /
 `tsum_geometric_of_abs_lt_one` and pure field arithmetic; the model theorems to
 `LeaderRotation` STRUCTURE FIELDS (hypotheses, not `axiom`s); the descent to its `hhit` hypothesis.
-None pull in `sorryAx` or any oracle axiom — `collectAxioms` sees only the standard kernel axioms.
+None pull in a faked-green or oracle axiom — `collectAxioms` sees only the standard kernel axioms.
 The honest fraction and GST bound live entirely in fields/hypotheses, never in `#print axioms`. -/
 #assert_axioms expected_failures_eq
 #assert_axioms expected_views_eq

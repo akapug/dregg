@@ -45,8 +45,8 @@ on the Lean side modulo only the named Poseidon2-CR floor (`hCR`) that `MapMerkl
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The CR floor enters as a HYPOTHESIS
-(`hCR : Poseidon2SpongeCR hash`), exactly as in `MapMerkleRoot`, not as a new axiom. No `sorry`, no
-`native_decide`. NEW file; imports read-only.
+(`hCR : Poseidon2SpongeCR hash`), exactly as in `MapMerkleRoot`, not as a new axiom.
+NEW file; imports read-only.
 -/
 import Dregg2.Circuit.DecideSatisfied2
 import Dregg2.Circuit.MapMerkleRoot

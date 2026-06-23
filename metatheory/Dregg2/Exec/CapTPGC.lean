@@ -363,11 +363,11 @@ end RefcountNonVacuity
 
 /-! ## §5 — Axiom-hygiene tripwires.
 
-Every PROVED keystone depends ONLY on the three standard kernel axioms (no `sorryAx`). The
+Every PROVED keystone depends ONLY on the three standard kernel axioms (no extra axiom). The
 cross-vat-cycle leak and deadness-undecidability are REUSED from `Liveness` (themselves
-`sorry`-free), so the entailment "undecidable ⇒ lease-reclaim" carries no hidden residue. The
+fully proved), so the entailment "undecidable ⇒ lease-reclaim" carries no hidden residue. The
 §6 refcount-drop laws (F-11/F-12) are pure arithmetic over the per-session bucket model and
-likewise carry no `sorry`. -/
+likewise carry no unproven residue. -/
 
 #assert_axioms captp_gc_by_lease
 #assert_axioms captp_no_premature_reclaim

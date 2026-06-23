@@ -55,7 +55,7 @@ interpretations, provably aligned.
 
 ## Axiom hygiene
 
-`#assert_axioms transfer_compile_sound` ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no
+`#assert_axioms transfer_compile_sound` ⊆ {propext, Classical.choice, Quot.sound}. No
 `:= True` vacuity, no weakening-that-just-typechecks: the conclusion is the genuine per-cell
 agreement the reused theorem proves. Imports are read-only; this file owns only itself.
 -/

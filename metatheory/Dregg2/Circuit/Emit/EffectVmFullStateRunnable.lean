@@ -30,7 +30,7 @@ fills them; §RECIPE + the §WORKLIST name which effects need one).
     sysRootsDigestCol)` — transfer's spare `.zero` 4th slot REPLACED by the carrier, so the published
     `state_commit` absorbs the side-table digest.
 
-## What is PROVEN here (l4v bar — genuine, NO sorry/:=True/native_decide)
+## What is PROVEN here (l4v bar — genuine)
 
   * **§1 `wideHashSites` + `wideCommit_binds_everything`** — under `Poseidon2SpongeCR hash`, a row
     satisfying the wide hash-sites whose published `state_commit` is fixed has BOTH (a) its 13

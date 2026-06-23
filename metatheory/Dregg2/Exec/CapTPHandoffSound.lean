@@ -603,7 +603,7 @@ end ReplayNonVacuity
 /-! ## §7 — Axiom-hygiene tripwires.
 
 Every PROVED theorem depends ONLY on the three standard kernel axioms (whitelist
-`{propext, Classical.choice, Quot.sound}`); no `sorryAx`. The `#guard`/`example` non-vacuity
+`{propext, Classical.choice, Quot.sound}`); no extra axiom. The `#guard`/`example` non-vacuity
 checks are `decide`/term-mode clean (the kernel-trusted decision procedure, NOT `native_decide`);
 they are demonstrations, not load-bearing theorems, and are NOT in the asserted set. -/
 

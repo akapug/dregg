@@ -44,7 +44,7 @@ R=24 (`docs/ROTATION-CUTOVER.md` §2b, ember 2026-06-12):
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto only as the named
-`Poseidon2SpongeCR` hypothesis. No `sorry`, no `native_decide`. STAGED: nothing here rides
+`Poseidon2SpongeCR` hypothesis. STAGED: nothing here rides
 the live v1 wire (the live `SlotCaveatEntry` manifest at PI 101..126 is untouched); the
 Rust consumers are the recursion-gated IR-v2 tests + the drift guards.
 -/

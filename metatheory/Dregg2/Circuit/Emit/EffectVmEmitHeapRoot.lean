@@ -39,7 +39,7 @@ cap Phase-A discipline). The Rust differential mirroring `cap_root_cell_circuit_
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY as the named
-`Poseidon2SpongeCR` hypothesis. No `sorry`, no `:= True`, no `native_decide`. Imports read-only.
+`Poseidon2SpongeCR` hypothesis. Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitCapRoot
 

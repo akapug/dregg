@@ -26,8 +26,7 @@ Classification (per the crypto-ledger discipline):
     structural serialization injectivity. The hash CR is the named primitive; the serialization is
     proved injective (a `Reference` instance exhibits one).
 
-l4v bar: every theorem pins `{propext, Classical.choice, Quot.sound}` (`#assert_axioms`); no `sorry`,
-no `:= True`, no `native_decide`.
+l4v bar: every theorem pins `{propext, Classical.choice, Quot.sound}` (`#assert_axioms`).
 -/
 import Dregg2.Crypto.SpongeReduction
 import Dregg2.Crypto.PortalFloor

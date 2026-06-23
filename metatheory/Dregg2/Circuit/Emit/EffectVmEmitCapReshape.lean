@@ -75,8 +75,8 @@ authority-binding (`full_turn_proof.rs`, the Phase-D payoff), cited not claimed 
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as the
-named `Poseidon2SpongeCR` hypothesis (via `Heap`), never as an axiom. No `sorry`, no `:= True`, no
-`native_decide`. NEW file; imports are read-only.
+named `Poseidon2SpongeCR` hypothesis (via `Heap`), never as an axiom.
+NEW file; imports are read-only.
 -/
 import Dregg2.Substrate.Heap
 import Dregg2.Exec.Caps

@@ -373,7 +373,7 @@ def noteCreateFA : FullForestA := ⟨.noteCreateA 42 9, []⟩
 -- The carried predicate at a published baseline `[42]` holds AFTER the create (and would FAIL on `∅`-state):
 #guard ((execFullForestA fma0 noteCreateFA).map (fun s' => decide (([42] : List Nat) ⊆ s'.kernel.commitments))) == some true  --  some true
 
-/-! ## Axiom hygiene — the persistence crown + the registry frame pinned to the kernel triple (NO `sorryAx`). -/
+/-! ## Axiom hygiene — the persistence crown + the registry frame pinned to the kernel triple (NO extra axiom). -/
 
 #assert_axioms execFullA_commitments_grow
 #assert_axioms execFullTurnA_commitments_grow

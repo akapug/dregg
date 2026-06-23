@@ -69,7 +69,7 @@ is the *effect*. Together they cover the whole Layer-2 atomic turn (decision + a
 
 The Ed25519 vote-signature verification is the named crypto assumption (a cast vote = a verified
 vote); we do not re-derive signature unforgeability. We model the *counting* `evaluate_votes` does on
-verified votes, which is what the safety reduces to. No `sorry`/`:=True`/`native_decide`.
+verified votes, which is what the safety reduces to.
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). No executor import.
 -/
 import Mathlib.Tactic

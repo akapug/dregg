@@ -10,7 +10,7 @@ when its caps are revoked — and an equivocator (partial knowledge, no cap) is 
 cannot forge the discharge.
 
 Grounded on the real `Dregg2.Laws.{Verifiable, Discharged}` (the `PolisAuthCoord` instance) and the
-`Caps`/derivation reachability (`PolisAuthReach`). No `sorry`.
+`Caps`/derivation reachability (`PolisAuthReach`).
 -/
 import Metatheory.PolisAuthReach
 import Metatheory.PolisAuthCoord

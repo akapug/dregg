@@ -495,7 +495,7 @@ depth/branching, the bilateral case as the `Fin 2` slice.
 --   flattening here) is the contended/overlapping-forest case, exactly the residue both
 --   `ForestLTS §11` and `CrossCellLTS §10` named (concurrent overlapping forests, the coinductive
 --   `Boundary`), and remains the genuine next research pole — left as a documented `-- OPEN:`,
---   NOT a `sorry`/`axiom`.
+--   NOT an `axiom` or unproven hole.
 -/
 
 end Dregg2.Exec.CrossCellForest

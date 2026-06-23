@@ -37,7 +37,7 @@ So they are not three unrelated scalars: they are three honestly-encoded digests
 `RecordKernelState`, and injectivity of the shared hashes makes equality of any one *cross-determine*
 the shared projection of the others.
 
-## What is PROVED here (l4v bar — genuine, NO sorry/:=True/native_decide/rfl-bridge)
+## What is PROVED here (l4v bar — genuine)
 
 * **§1 same-state agreement (the "ONE object" direction).** Each commitment is a *total function* of
   the state object, so equal post-states ⟹ equal commitment, across all three

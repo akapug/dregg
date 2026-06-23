@@ -176,7 +176,7 @@ theorem crossvat_leak_reclaimed_by_lease
 -- it ONLY by lease expiry (`crossvat_leak_reclaimed_by_lease`). We do NOT add a cycle collector.
 
 -- OPEN: "dead" is not globally decidable. `Liveness.dead_undecidable` states (with an
--- honest `sorry`, its residual obligation a Turing-reduction needing a computability model not in
+-- honest open obligation — a Turing-reduction needing a computability model not in
 -- the imported modules) that NO uniform `decide : LivenessGraph → CellId → Bool` soundly and
 -- completely decides `Dead`. We deliberately import that fact rather than re-attempt it, and we
 -- never DECIDE death anywhere in this module: every collection above gates on the locally-decidable
@@ -189,7 +189,7 @@ open Nat.Partrec (Code) in
 open Nat.Partrec.Code in
 /-- Re-exposes the undecidability obligation under this module's namespace: this executable layer
 cannot ship a decision procedure for death — only the lease-timeout. Mirrors `Liveness.dead_undecidable`'s
-computable-undecidability form; the proof is delegated there. No new `sorry`, nothing weakened. -/
+computable-undecidability form; the proof is delegated there. Nothing weakened. -/
 theorem death_not_decidable (n : ℕ) :
     ¬ ∃ d : Code → Bool,
         Computable d ∧

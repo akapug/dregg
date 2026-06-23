@@ -19,7 +19,7 @@ obstruction is proven in `Argus/Effects/CreateCell`. The §RECIPE applied to cre
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
-No `sorry`/`:= True`/`native_decide`. `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
+`fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitCreateCell
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

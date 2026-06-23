@@ -9,7 +9,7 @@
 >   `Dregg2/Authority/DesignatedVerifier.lean` (374 lines) defines `DischargedFor : Verifier → … →
 >   Prop` (`:113`), `Transferable`/`DesignatedFor` endpoints (`:129`,`:138`), `TransferDial`/`DialHolds`
 >   (`:146`,`:156`), and proves `public_convinces_any_third_party`/`designated_not_transferable`/
->   `designated_is_deniable`/`dial_endpoints_distinct` — all `sorry`-free, `#print axioms`-audited
+>   `designated_is_deniable`/`dial_endpoints_distinct` — all `#print axioms`-audited
 >   (`:369-372`). The deniability crypto is an honest §8 `DVKernel` class portal (`:84`), NEVER faked.
 > - **§0 disclosure dial — REAL.** `Metatheory/EpistemicDial.lean` proves `Dial` a `LinearOrder` +
 >   `BoundedOrder` (`acceptanceOnly < selective < fullDisclosure`, `:92`,`:100`), `#assert_axioms`-pinned
@@ -33,14 +33,14 @@
 > Tag legend used inline below: **REAL** = a Lean object exists, term/tactic-proved (often
 > `#assert_axioms`/`#print axioms`-pinned) with teeth; **DECORATIVE** = vocabulary only, no Lean object
 > (grep-confirmed absent); **ASPIRATIONAL** = honestly-named OPEN/unbuilt frontier. `#assert_axioms`
-> certifies KERNEL-CLEAN (no sorry/axiom), never faithful-or-non-vacuous — meaning is read from the body.
+> certifies KERNEL-CLEAN (no open holes/axioms), never faithful-or-non-vacuous — meaning is read from the body.
 >
 > **Current as of 2026-06-02.** This is a *forward-looking dregg4 vision* doc; its
 > architecture/vision content is largely still live. BUT it was written when the
 > **transferability dial was a stub**, and that is **no longer true** — the doc's own
 > §13.1 "build first" keystone (verifier-indexed `DischargedFor` + the public↔designated
 > transferability dial) **has since been built** in `Dregg2/Authority/DesignatedVerifier.lean`
-> (374 lines, all `theorem`s `sorry`-free) and the disclosure dial unified in
+> (374 lines, all `theorem`s fully discharged) and the disclosure dial unified in
 > `Metatheory/EpistemicDial.lean` (`#assert_axioms`-pinned). The "dregg has it? **NO**"
 > cells for designated-verifier/deniable in §13.1's table are therefore **STALE**; corrected
 > inline below. Several other "dregg lacks X" claims have likewise partially moved (CSpace

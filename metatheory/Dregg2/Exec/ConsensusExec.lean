@@ -60,7 +60,7 @@ never Lean-proved crypto) ↦ **fold `recCexec`** over the decoded turns from a 
   are *parametric* in it, so any concrete decoder slots in.
 * `decodeAdmissible` — that every finalized turn is *executable* (`recCexec` returns `some`) — is a
   hypothesis on the order (the network only finalizes turns the proposers' replicas accepted). It is
-  named and explicit, NOT a sorry; `finalized_run`/`_conserves` are stated *conditionally* on it.
+  named and explicit, NOT an unproven hole; `finalized_run`/`_conserves` are stated *conditionally* on it.
 * The **adversary/fault model** for the no-conflict tooth is exactly `Proof.BFT.BFTModel`'s
   (`n > 3f`, `≤ f` Byzantine ratifiers, honest-one-ratification) — carried by `cordial_agreement`'s
   hypotheses, restated here so the fault bound is visible at the bridge.
@@ -350,7 +350,7 @@ theorem honest_order_conserves :
 
 /-! ## 9. Axiom-hygiene tripwires — the bridge keystones are kernel-clean.
 
-Every keystone rides only `sorry`-free lemmas: `recCexec_attests` / `recChained_run_conserves` /
+Every keystone rides only fully-proved lemmas: `recCexec_attests` / `recChained_run_conserves` /
 `recChained_sound` (the verified executor) and `cordial_agreement_via_bft` /
 `cordial_no_conflicting_final_leaders[_from_lace]` (the verified DAG-BFT safety, whose adversary
 assumptions are `BFTModel` *fields*, never axioms). No keystone touches a `…_OPEN` theorem. -/

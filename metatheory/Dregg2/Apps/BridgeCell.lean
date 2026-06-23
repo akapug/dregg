@@ -70,7 +70,7 @@ witness that the factory is a FAITHFUL replacement for the bridge verbs (§DELET
 NEW file only. Imports the escrow factory + the W1 issuer-supply probe (for the bridge-POT exact-ledger
 law `bridgeFinalizeToPot_preserves_exact` + the `bridgeFinalize_breaks_exact` non-vacuity tooth — the
 bridge-pot framing). Does NOT touch any shared mod/import file. `#assert_axioms`-pinned to
-`{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`. Land-before-kill: nothing deleted.
+`{propext, Classical.choice, Quot.sound}`. Land-before-kill: nothing deleted.
 -/
 import Dregg2.Apps.EscrowFactory
 import Dregg2.Substrate.IssuerSupplyProbe

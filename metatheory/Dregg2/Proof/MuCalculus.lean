@@ -18,7 +18,7 @@ environment `ρ : Var → Set Config` for the recursion variables) and **positiv
 `Formula` inductive has NO negation constructor, so every constructor is monotone in every subformula,
 and `bodyHom` (the body of a `μ`/`ν` as a function of the bound variable's slot) is ALWAYS monotone —
 `μ`/`ν` are therefore always well-defined via `OrderHom.lfp`/`gfp`, with no syntactic-positivity side
-condition and no well-foundedness obligation that would tempt a `sorry`. Negation of a STATE predicate
+condition and no well-foundedness obligation. Negation of a STATE predicate
 is still available — embed the complemented set directly as `.atom Pᶜ` — which is all the CTL De Morgan
 duals (`EX_AX_dual`, `EF_EG_dual` in `CTL.lean`) ever need; recursion variables never appear negated,
 which is exactly the positivity the literature requires for `μ`/`ν` to exist.
@@ -27,7 +27,7 @@ ALTERNATIVE (not taken): a fully syntactic μ-calculus WITH a `neg` constructor 
 `Positive`/`even-occurrence` predicate that `μ`/`ν` carry as a proof obligation. That is more faithful
 to the textbook syntax but raises the well-definedness of `lfp`/`gfp` to a real obligation (the body is
 only monotone *given* positivity). The shallow positive embedding proves the same encoding theorems
-with no `sorry`, so we take it; the negation-of-atoms escape hatch loses nothing the metatheory uses.
+without that obligation, so we take it; the negation-of-atoms escape hatch loses nothing the metatheory uses.
 
 ## What is PROVED
 

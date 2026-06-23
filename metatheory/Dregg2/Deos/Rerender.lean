@@ -39,7 +39,7 @@ required ⊆ held`) and prove the functor laws + the snapshot round-trip.
     `Affordance.projectFor_monotone`): the rerender respects the attenuation order, so granting a viewer
     more rights only ever REVEALS buttons.
 
-Discipline: axiom-clean (`#assert_all_clean`), no `sorry`, no `native_decide`. `lake build Dregg2`
+Discipline: axiom-clean (`#assert_all_clean`). `lake build Dregg2`
 green (LOCAL). The rerender is `Dregg2.Deos.Affordance.projectFor` (= the `is_attenuation` filter); the
 functor laws are structural facts about that filter — no new render engine, no new trust.
 -/

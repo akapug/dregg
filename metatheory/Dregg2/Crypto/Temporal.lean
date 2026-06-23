@@ -301,7 +301,7 @@ theorem reference_cascade_nonvacuous :
       ∧ InWindow sampleStmt.lo sampleStmt.hi sampleStmt.t :=
   temporal_registry_cascade (K := refKernel) trivial base sampleStmt 0 (by decide)
 
--- The reference cascade rests only on the three standard kernel axioms — no `sorryAx`, no crypto axiom.
+-- The reference cascade rests only on the three standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
 /-- Non-vacuity of the dial wiring: the floor is `selective`, the dial's bottom notch is the verifier's

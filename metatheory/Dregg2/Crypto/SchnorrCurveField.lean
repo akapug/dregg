@@ -61,8 +61,7 @@ belongs in Lean and only the empirical seed stays a hypothesis.
   solver. EUF of the Schnorr scheme reduces to it (forking lemma) — out of scope; we name it and pin
   the structure beneath it.
 
-`#assert_axioms`-clean (⊆ `{propext, Classical.choice, Quot.sound}`); NO `sorry` / `:= True` /
-`native_decide` / fresh `axiom`. The empirical seeds enter as typeclass instances / hypotheses, not
+`#assert_axioms`-clean (⊆ `{propext, Classical.choice, Quot.sound}`). The empirical seeds enter as typeclass instances / hypotheses, not
 `axiom`-keyword declarations, so they do not trip the hygiene guard — by design.
 -/
 import Mathlib.RingTheory.AdjoinRoot
@@ -437,7 +436,7 @@ theorem toy_dl_not_hard : ¬ SchnorrDLHard toyCurve (1 : ℤ) := by
 /-! ## §5 — Axiom-hygiene tripwires. Every keystone pins exactly the kernel-clean whitelist
 `{propext, Classical.choice, Quot.sound}`. The standing obligations are the NAMED typed primitives —
 `Fact (Irreducible (z^8-11))` and `N.Prime` (finite checks, PARI), and `SchnorrDLHard` (the curve DL
-assumption). No `sorry` / `:= True` / `native_decide` / fresh `axiom`. -/
+assumption). -/
 
 #assert_all_clean [
   field_nonzero_isUnit,

@@ -36,7 +36,7 @@ post-state — the per-cell block (`CellUnsealCellSpec`) AND every one of the 8 
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY through the named
-`Poseidon2SpongeCR` portal (in the generic theorems). No `sorry`/`:= True`/`native_decide`. `fullClause`
+`Poseidon2SpongeCR` portal (in the generic theorems). `fullClause`
 NON-VACUOUS. Read-only imports; owns only its own declarations.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer

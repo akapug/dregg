@@ -37,7 +37,7 @@ says C's conferred authority ⊆ B's held ⊆ A's — by transitivity of the EXI
     the prior hop did not hold, that authority is NOT in the reshared cap's conferred set (a widening
     is darkened, not granted). A reshare cannot manufacture an authority a prior holder lacked.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2` green (LOCAL). NO core-`Auth`/`Cap` edit — every hop is the REAL `Dregg2.Exec.attenuate` and
 every subset is the REAL `capAuthConferred` ⊆; the membrane is a NAMING of iterated kernel attenuation.
 -/

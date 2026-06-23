@@ -732,7 +732,7 @@ def overshotInbox : InboxState := { deliveredWitness := true, refundRecorded := 
 -- composes with the cell-read adjudicator): not well-formed ⇒ acquit regardless of the cell.
 #guard adjudicateFromInbox { receipt := forgedReceipt, claimedOutcome := .dropped, atHeight := 500 } droppedInbox == false
 
-/-! ## §8 — Axiom-hygiene pins (⊆ {propext, Classical.choice, Quot.sound}; NO sorry/native_decide). -/
+/-! ## §8 — Axiom-hygiene pins (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 -- KEYSTONE (a) — accepted-and-dropped is convictable.
 #assert_axioms accepted_and_dropped_is_convictable

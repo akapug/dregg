@@ -52,7 +52,7 @@ its `RelPred` is imported and SUBSUMED, not edited):
 NEW file only. Does NOT edit `RelationalClosure.lean`, `Exec.RelationalCaveat`,
 `Authority.Predicate`, `EffectsState`, or `Dregg2.lean`. Reuses `Exec.fieldOf` (the post-record
 scalar reader) and `RelationalClosure.RelPred` (the affine slice it subsumes). Every keystone
-`#assert_axioms`-pinned — no sorry, no `:= True`.
+`#assert_axioms`-pinned.
 -/
 import Dregg2.Authority.RelationalClosure
 

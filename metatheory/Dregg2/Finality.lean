@@ -11,7 +11,7 @@ synchronized deadline) are deliberately excluded — tiers 1–2 progress with n
 synchrony.
 
 Cheap data (`Tier`, `rank`, `crossTierJoin`) is defined and every theorem in this file is
-proved — NO `sorry` remains. The genuine distributed-agreement obligations live (proved) in
+proved. The genuine distributed-agreement obligations live (proved) in
 the `Dregg2.Distributed.*` modules (`BlocklaceFinality` for the node's computed tau rule,
 `Consensus` for quorum safety) and `Dregg2.Consensus.TauPrefixMonotone` for prefix monotonicity.
 -/

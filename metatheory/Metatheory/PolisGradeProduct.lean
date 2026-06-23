@@ -8,7 +8,7 @@ prove the general fact: **the product of two grade-quantales is a grade-quantale
 so any product of deployed grades (e.g. `Finality.Tier × ℕ`) is automatically a quantale — and the
 graded non-regression theorems lift to it for free.
 
-Pure Lean 4 core (imports `Metatheory.PolisGrade`); no `sorry`.
+Pure Lean 4 core (imports `Metatheory.PolisGrade`).
 -/
 import Metatheory.PolisGrade
 

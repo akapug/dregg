@@ -57,7 +57,7 @@ digest advance, FORCED by the bound record content (whose amount IS the debited 
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY as the named
-`Poseidon2SpongeCR` hypothesis. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only.
+`Poseidon2SpongeCR` hypothesis. Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmit
 import Dregg2.Circuit.Poseidon2Binding

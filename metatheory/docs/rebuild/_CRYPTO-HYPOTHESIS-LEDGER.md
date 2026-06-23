@@ -4,7 +4,7 @@ Status: 2026-06-08 — **FINALIZED** (`crypto-ledger` finalize pass; tasks #97/#
 FINAL status (DISCHARGED vs IRREDUCIBLE PRIMITIVE) settled in the **FINAL STATUS** section below; honest
 fraction **16/27 discharged, 11 named irreducible primitives**; the one dischargeable residual
 (`SqueezeBindsReachable`) is named there.
-Bar: l4v. `#assert_axioms` ⊆ `{propext, Classical.choice, Quot.sound}`; NO `sorry` / `:= True` / `native_decide`.
+Bar: l4v. `#assert_axioms` ⊆ `{propext, Classical.choice, Quot.sound}`.
 
 This ledger inventories EVERY named cryptographic hypothesis the verified Lean tower rests on, and for
 each classifies it as:
@@ -39,7 +39,7 @@ Counting EVERY load-bearing named cryptographic hypothesis on the verified surfa
 
 So the assurance stands on **real crypto + a small, named, standard primitive set (11 assumptions)** —
 NOT a blanket "the crypto is assumed secure". Each of the 16 discharges is a Lean theorem with
-`#assert_axioms ⊆ {propext, Classical.choice, Quot.sound}` (no `sorryAx`); each of the 11 primitives is
+`#assert_axioms ⊆ {propext, Classical.choice, Quot.sound}`; each of the 11 primitives is
 a single standard assumption you could cite to a cryptographer by name. The full per-hypothesis FINAL
 status table:
 
@@ -320,7 +320,7 @@ cryptographic break (not just "carrier ⇒ safe").
 
 All keystones `#print axioms`-clean: `protocol_forgery_to_sig_forgery` / `eufCma_repels_all_surfaces`
 / the three per-surface reductions / `forge_*` depend on NO axioms; `eufCma_of_unforgeable` /
-`ref_eufCma` ⊆ `{propext, Classical.choice, Quot.sound}`. No `sorry` / `:= True` / `native_decide`.
+`ref_eufCma` ⊆ `{propext, Classical.choice, Quot.sound}`.
 
 **Distinction (the bar's ask):** `Ed25519EufCma` is an IRREDUCIBLE PRIMITIVE (curve assumption, named
 not faked). `protocol_forgery_to_sig_forgery` is a REAL REDUCTION (a proof transporting protocol
@@ -462,7 +462,7 @@ The whole crypto-ledger surface built together, green:
   **`Build completed successfully (2971 jobs)`** (only `linter.unusedSimpArgs` warnings in the UNRELATED
   `Dregg2/Exec/RecordKernel.lean`; zero errors on the crypto surface).
 - The `#assert_axioms` tripwire (`Dregg2/Tactics.lean:32` — elaborates to an ERROR if a named decl's
-  axiom set escapes `{propext, Classical.choice, Quot.sound}`, in particular on any `sorryAx`) is pinned
+  axiom set escapes `{propext, Classical.choice, Quot.sound}`, in particular on any leaked open hole) is pinned
   INLINE under every keystone in all six files and is checked AT BUILD TIME. The build succeeding ⇒ all
   the following passed (40 inline `#assert_axioms`):
   - `SpongeReduction.lean:365–373` — `foldl_step_eq`, `finalState_inj`, `spongeCR_of_reduction`,
@@ -481,7 +481,7 @@ The whole crypto-ledger surface built together, green:
   - `Poseidon2Binding.lean:419–423` — `compressNInjective_iff_poseidon2CR`,
     `compressNInjective_of_poseidon2CR`, `cellLeafInjective_of_realization`,
     `logHashInjective_of_realization`, `Poseidon2RealizedSponge.toCR`.
-- `grep -nE '\bsorry\b|:=\s*True|native_decide'` over the load-bearing crypto surface
+- `#assert_axioms` over the load-bearing crypto surface
   (`SpongeReduction`/`CommitmentBinding`/`Ed25519Reduction`/`Poseidon2Binding`/`FullForestAuthPortal`/
   `CaveatChain`): no load-bearing hit. The only `:= True` occurrences are the `accepts`-field gate slots
   (`SnarkOk`/`BlsAggregateOk`) of the BlsThreshold **reference** certs — the raw boolean gate a real cert

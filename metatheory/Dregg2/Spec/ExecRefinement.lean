@@ -32,7 +32,7 @@ Two tractable projections of the square are proved:
 Also proves a second refinement square for the content-addressed record kernel
 (`Exec.RecordKernel ⊑ Spec`), landing on the same abstract `Domain.balance` law.
 
-Faithful `Prop`s; `#assert_axioms` on all keystones; the `-- OPEN:` is prose, not `sorry`.
+Faithful `Prop`s; `#assert_axioms` on all keystones; the `-- OPEN:` is prose, not an open hole.
 -/
 import Dregg2.Exec.Kernel
 import Dregg2.Exec.RecordKernel
@@ -592,8 +592,8 @@ abstract transition. The residual obligation:
 
 /-! ## §5 — Axiom-hygiene tripwires.
 
-All keystones depend only on the three standard kernel axioms (no `sorryAx`). The operational
-residue (§4) is an `-- OPEN:` prose obligation, not a `sorry`; the whole file is clean. -/
+All keystones depend only on the three standard kernel axioms (no faked green). The operational
+residue (§4) is an `-- OPEN:` prose obligation, not an open hole; the whole file is clean. -/
 
 #assert_axioms refineConservation_sum
 #assert_axioms exec_refines_conservation

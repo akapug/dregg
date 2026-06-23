@@ -61,7 +61,7 @@ PER-EFFECT EMISSION onto it:
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY
 as the named `Poseidon2SpongeCR` (via the imported map-op functionality theorems); memory
-consistency is the PROVED `memcheck_sound` import. No `sorry`, no `native_decide`. NEW file;
+consistency is the PROVED `memcheck_sound` import. NEW file;
 imports are read-only.
 -/
 import Dregg2.Circuit.DescriptorIR2

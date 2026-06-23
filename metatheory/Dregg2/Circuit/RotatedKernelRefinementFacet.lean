@@ -65,8 +65,7 @@ genuine residual the commitment cannot certify — named, not laundered. The aut
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named carriers inherited through the
 imported keystones (`StarkSound`, `Poseidon2SpongeCR`, the cap-hash `chipCR`/`Compress1CR`, the
-chip-soundness `ChipTableSound`). No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW
-names only; imports are read-only.
+chip-soundness `ChipTableSound`). NEW names only; imports are read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinement
 import Dregg2.Circuit.Emit.CapOpenEmit

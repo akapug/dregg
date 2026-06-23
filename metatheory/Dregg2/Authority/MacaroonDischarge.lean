@@ -50,8 +50,8 @@ resistance `BindingCR` — a `Prop` carrier in the same discipline (SHA-256 coll
 assumption `crypto::binding_hash` discharges). Neither is proved; the no-replay theorem is the
 REDUCTION onto them. NON-VACUITY: both carriers refuted on a collapsing toy instance.
 
-Pure, computable, `#eval`-able. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound});
-NO `sorry` / `:=True`. The Rust differential is `macaroon/src/discharge_diff.rs`.
+Pure, computable, `#eval`-able. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
+The Rust differential is `macaroon/src/discharge_diff.rs`.
 -/
 import Dregg2.Authority.CaveatChain
 import Dregg2.Tactics

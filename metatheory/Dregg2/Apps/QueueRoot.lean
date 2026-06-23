@@ -106,8 +106,7 @@ deliberately not done here.
 
 l4v bar: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every keystone; crypto
 enters ONLY as the named `RootCR`/`LeafCR`/`LeafNonzero` hypotheses (witnessed TRUE on a
-reference injective root and FALSE on a colliding one — never `True`-shaped); no `sorry`, no
-`:= True`, no `native_decide`. Non-vacuity both polarities, `#guard`-EXECUTED: honest proofs
+reference injective root and FALSE on a colliding one — never `True`-shaped). Non-vacuity both polarities, `#guard`-EXECUTED: honest proofs
 verify and commit; forged entry / tampered post-root / dropped leaf / stale root / zero-padded
 claim (strict) / non-owner all REFUSE.
 -/

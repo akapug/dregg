@@ -266,8 +266,7 @@ def sD0 : RecChainedState :=
 
 /-! ## §8 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms recDelegateCaps_correct
 #assert_axioms recCDelegate_iff_spec

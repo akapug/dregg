@@ -28,7 +28,7 @@ grant/delegation graph as rules:
     viability is now the genuine multi-step consequence closure, the SAME derivation object as the
     cross-vat discharge gate (`PolisAuthDatalog`).
 
-PROVED (all `decide`-checked on concrete grant graphs, no `sorry`, no load-bearing `True`):
+PROVED (all `decide`-checked on concrete grant graphs):
   * `reach_via_delegation_chain` — `b` reaches `read` through a 2-round delegation chain it does NOT
     hold directly (`read ← call ← grant`), with `one_step_insufficient` certifying it is multi-step.
   * `redundant_revocation_keeps_reachD` — revoke a cap off ONE derivation path; still `Derivable` via

@@ -418,7 +418,7 @@ def gnRevoked : RecChainedState :=
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))) == some (105, 7)  --  some (105, 7)
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty pins). Every keystone depends ONLY on the three
-standard kernel axioms `{propext, Classical.choice, Quot.sound}` — no `sorryAx`. (The portal soundness
+standard kernel axioms `{propext, Classical.choice, Quot.sound}`. (The portal soundness
 is a Prop carrier in `FullForestAuth`, never an axiom, so it does not appear.) -/
 
 #assert_axioms execFullForestG_leaf

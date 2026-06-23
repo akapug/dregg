@@ -33,7 +33,7 @@ irreducible BLS/SNARK primitives, DISCHARGED via `Crypto.BlsThreshold`'s `SnarkC
 hypotheses `:= True`. What is PROVED here (pure finite combinatorics, no crypto) is the
 distributed consequence: honest-signer presence and pairwise honest-signer overlap under `|B| ≤ ⌊n/3⌋`.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Differential anchor: `federation/src/lib.rs::{quorum_threshold,fault_tolerance}` (`#guard` golden vectors)
 + `threshold.rs` equal-weight committee semantics. Companion: `EpochReconfig` (reconfig quorum) and
 `CheckpointPrune` (the QC as a checkpoint attestation portal).

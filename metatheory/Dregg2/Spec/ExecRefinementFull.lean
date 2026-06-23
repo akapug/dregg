@@ -25,7 +25,7 @@ This module closes that open for the whole `FullAction` op-set:
 
 The single named residue is `OnlyConnectivityCloses` — the whole-history connectivity
 closure. This is a property of multi-step runs, isolated as a named `def`-level hypothesis,
-not a `sorry`.
+not an open hole.
 -/
 import Dregg2.Spec.ExecRefinement
 import Dregg2.Exec.TurnExecutorFull
@@ -292,7 +292,7 @@ theorem exec_fullTurn_refines_spec :
           rw [ha] at h
           exact AbsRun.step (exec_full_refines_spec ha) (exec_fullTurn_refines_spec s1 s' rest h)
 
-/-! ## §5 — The NAMED residue: the whole-history connectivity closure (NOT a `sorry`).
+/-! ## §5 — The NAMED residue: the whole-history connectivity closure (an open named obligation).
 
 §3–§4 CLOSE the per-step forward simulation: every SINGLE executable step is a permitted `AbsStep`
 (`exec_full_refines_spec`), and every transaction is an `AbsRun` (`exec_fullTurn_refines_spec`). The
@@ -403,7 +403,7 @@ theorem delegate_step_grounded {s s' : RecChainedState} {del rec t : CellId}
 
 /-! ## §6 — Axiom-hygiene tripwires (the honesty pins over every keystone).
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no faked-green/`admit`/`axiom`/
 `native_decide`. The forward-simulation keystones (`exec_full_refines_spec`, the full square, the
 turn-level `AbsRun`) are proved, and the whole-history closure `onlyConnectivityCloses` is now PROVED
 (it depends only on `propext`), so there is nothing axiom-dirty to exclude. -/

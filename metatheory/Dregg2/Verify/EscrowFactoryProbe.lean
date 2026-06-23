@@ -102,7 +102,7 @@ the harder case (cross-slot `head−tail≤cap`) and is probed SECOND per DREGG3
 
 NEW file only. Does NOT touch FpuProbe/IssuerSupplyProbe/IssuerLedger, nor any Metatheory/*.
 Reuses ONLY the proved per-asset move conservation + the SlotCaveat vocabulary. Every keystone
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.RecordKernel
 import Dregg2.Exec.EffectsState

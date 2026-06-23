@@ -54,7 +54,7 @@ to "the canonical value model", and closes the E4 gap:
 
 Standalone (not in the anchor): the KERNEL rotation has LANDED (see §6 STATUS — `AssetId :=
 CellId`, issuer-move verbs live, `reachable_total_zero`); this module remains the forward model for
-the E4/E5/E6 remainders. `#assert_axioms` on every new theorem; no sorry. Builds on the probe +
+the E4/E5/E6 remainders. `#assert_axioms` on every new theorem. Builds on the probe +
 `Exec.ShieldedValue` (both axiom-clean in tree).
 -/
 import Dregg2.Substrate.IssuerSupplyProbe

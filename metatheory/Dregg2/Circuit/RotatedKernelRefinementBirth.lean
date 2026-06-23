@@ -60,7 +60,7 @@ legacy `spawnV3` rungs (`spawn_descriptorRefines_sat`) keep the frozen-root resi
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carrier
 (`compressNInjective` + the injective `accountsLeaf`, the SAME carrier `AccountsCommit`/`ListCommit`
-use). No `sorry`, no `:= True`, no `native_decide`, no fresh axiom. NEW file; all imports read-only.
+use). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementMisc
 import Dregg2.Circuit.AccountsCommit
@@ -492,7 +492,7 @@ witness DIRECTLY, by
 
 Editing `*V3`'s grow-gate breaks `*V3_grow_gate_forces_set_insert`, hence the forced `writesTo`, hence
 `growthDecodes`'s antecedent, hence `*_forced_sat`, hence `*_descriptorRefines_sat` — Class A. The seam is a
-NAMED realizable carrier (a structure field), never a `sorry`: `#assert_axioms`-clean. -/
+NAMED realizable carrier (a structure field), never an assumed hole: `#assert_axioms`-clean. -/
 
 /-- **`CreateCellTraceReadout` — the realizable circuit-witness extraction for createCell (NAMED).**
 The trace-determined part a satisfying `createCellV3` witness supplies, the `WitnessDecodes` class of

@@ -24,7 +24,7 @@
 | **OPENING (digest binding c = compress vDigest salt)** | `bridge/src/lib.rs` (PiBinding in AIR) | `Dregg2/Crypto/Bridge.lean:68-69` (Opens definition) | **(P) PROVED** | Abstract `compress` equation; binding is Layer-A carrier, never invoked in Bridge.lean itself |
 | **STARK verify → relation holds** | `bridge/src/present.rs:3821` (verify oracle) | `Dregg2/Crypto/Bridge.lean:240-247` (bridge_verify_sound) | **(P) DERIVED** | Soundness derived from `bridge_bridge` + STARK `extractable` carrier |
 | **Dial wiring at selective floor** | implicit in `bridge/src/` | `Dregg2/Crypto/Bridge.lean:275-287` (bridgeKindObligation, bridge_dial_wired) | **(P) PROVED** | Bridge.lean §C: commitment + threshold disclosed, observed value hidden |
-| **Atomic swap (lock/mint nonce pairing)** | `plans/midnight-bridge-production.md` (design doc) | `PHASE-BRIDGE.md §5.1` (sorries in BridgeAction algebra) | **(A) ABSTRACT** | BridgeAction structure designed but `bridge_atomic_by_nonce`, `bridge_conservation_cross_chain` theorems in PHASE-BRIDGE.md are `sorry` — never formalized in actual Lean |
+| **Atomic swap (lock/mint nonce pairing)** | `plans/midnight-bridge-production.md` (design doc) | `PHASE-BRIDGE.md §5.1` (open holes in BridgeAction algebra) | **(A) ABSTRACT** | BridgeAction structure designed but `bridge_atomic_by_nonce`, `bridge_conservation_cross_chain` theorems in PHASE-BRIDGE.md are open holes — never formalized in actual Lean |
 | **Dispute oracle (challenge window + slashing)** | `bridge/src/present.rs` (relayer state machine, federation attestation) | `PHASE-BRIDGE.md §5.2` (pseudocode in design doc) | **(A) ABSTRACT** | Design names `DisputeOracle` class but no `.lean` file implements it; Dispute assumption carried as a `Prop` parameter in the verifier |
 | **Foreign-chain finality model** | `bridge/src/midnight_observer.rs:739` (Cardano light client stub) | `PHASE-BRIDGE.md §4.3` (OPEN: "Foreign finality model is OPEN") | **(X) ABSENT** | Cardano/Ethereum consensus NOT formalized; bridge assumes foreign state as a parameter |
 | **Relayer protocol (observe, attest, finalize)** | `bridge/src/present.rs` (federation attestation), `app-framework/src/midnight_bridge.rs` (relayer state machine) | `PHASE-BRIDGE.md §5.3` (pseudocode, not Lean) | **(A) ABSTRACT** | Design doc sketches relayer steps but no formalized state-machine model in Lean |
@@ -79,7 +79,7 @@
 
 - **OPENING (c = compress vDigest salt):** ✅ ABSTRACT but structurally sound. The opening is an uninterpreted equation; its binding/collision-resistance is a Layer-A carrier (`CryptoPrimitives.binding`), never invoked inside Bridge.lean. This is discipline: the seam is named and isolated.
 
-- **Atomic swap (lock/mint with nonce):** ❌ **DESIGN DOC ONLY.** Section 5.1 of `PHASE-BRIDGE.md` sketches the algebra (`BridgeAction` struct, `bridge_atomic_by_nonce` theorem) but these theorems **carry `sorry`** in the doc and are **NOT in any `.lean` file**. The proof sketch says "the federation's agreement on nonce ensures atomicity" but this is informal — a formalized Dispute oracle that enforces the nonce invariant does not exist in the codebase.
+- **Atomic swap (lock/mint with nonce):** ❌ **DESIGN DOC ONLY.** Section 5.1 of `PHASE-BRIDGE.md` sketches the algebra (`BridgeAction` struct, `bridge_atomic_by_nonce` theorem) but these theorems **carry open holes** in the doc and are **NOT in any `.lean` file**. The proof sketch says "the federation's agreement on nonce ensures atomicity" but this is informal — a formalized Dispute oracle that enforces the nonce invariant does not exist in the codebase.
 
 - **Dispute oracle (challenge window, slash-on-wrong):** ❌ **PSEUDOCODE IN DESIGN DOC.** Section 5.2 of `PHASE-BRIDGE.md` gives Rust pseudocode for `DisputeOracle` (challenge_window_blocks, finalized check, is_disputed). No `.lean` file exists; the bridge verifier assumes foreign-chain finality as a bare `Prop` parameter (never discharged).
 
@@ -145,7 +145,7 @@ The four shipped apps (nameservice, identity, subscription, governed-namespace) 
   - `gas_exhaustion_fails_closed` — if totalCost > budget, turn fails to `none` (all-or-nothing).
   - `gas_sufficient_runs` — if budget ≥ totalCost AND turn is otherwise valid, metered result = unmetered `execFullTurn` (pure guard).
   - `gas_conserves` and `gas_preserves_attests` — gas adds no safety loss.
-- **Discipline:** No `axiom`/`sorry`; pure, computable, `#eval`-able.
+- **Discipline:** pure, computable, `#eval`-able.
 
 **Fee Market, Staking, Demurrage: ❌ NOT MODELED**
 - **Fees:** The SDK/coord includes a `fee` field in turns (`coord/src/atomic.rs:50+`) but there is NO Lean model of fee collection, burning, or distribution. Gas schedule is a liveness bound; fee is not modeled.
@@ -222,7 +222,7 @@ ClockDAG is a **peer network of mutual-credit agents**; dregg2 is a **federation
 **TIER 1 — CRITICAL (Blocks Verified End-to-End Bridge)**
 
 1. **Bridge Atomic Swap Algebra** (HIGH EFFORT)
-   - **Gap:** `BridgeAction` structure and `bridge_atomic_by_nonce` theorem in PHASE-BRIDGE.md §5.1 are pseudocode with `sorry`.
+   - **Gap:** `BridgeAction` structure and `bridge_atomic_by_nonce` theorem in PHASE-BRIDGE.md §5.1 are pseudocode with open holes.
    - **Impact:** The bridge's soundness guarantee (Comparison predicate) is proved, but atomicity (the *reason* for cross-chain) is unproved.
    - **Path:** Formalize BridgeAction in `Dregg2/Bridge/BridgeAction.lean`; prove matched nonces prevent double-release; wire Dispute oracle assumption.
    - **Effort:** ~2–3 weeks (proof engineering + reusing Registry machinery).

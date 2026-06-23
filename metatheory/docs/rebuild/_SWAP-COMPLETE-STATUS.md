@@ -24,7 +24,7 @@ whenever `s.lean_producer_enabled` (default ON — opt-OUT via `DREGG_LEAN_PRODU
 `produce_via_lean` (`turn/src/lean_apply.rs:439`) does, for a covered turn:
 
 1. drive the turn through the verified FFI export `dregg_exec_full_forest_auth`
-   (`execFullForestG`, proven sorry-free) and **reconstitute a full
+   (`execFullForestG`, proven) and **reconstitute a full
    `cell::Ledger` from the produced `WireState`** via `wire_state_to_ledger`
    (`lean_apply.rs:224`) — the `WireState → Ledger` extractor that
    `dregg-lean-ffi/src/marshal.rs:37` named as "the biggest gap";

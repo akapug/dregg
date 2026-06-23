@@ -32,7 +32,7 @@ TICK directly, and binds the cap-table grant OFF-row via the universe-A connecto
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR ONLY as `Poseidon2SpongeCR`;
-cap-table digest ONLY as `Function.Injective D`. No `sorry`/`:= True`/`native_decide`/rfl-bridge.
+cap-table digest ONLY as `Function.Injective D`.
 Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer

@@ -217,7 +217,7 @@ end Smoke
 
 /-! ## §7 — Axiom-hygiene tripwires.
 
-Each keystone depends only on `{propext, Classical.choice, Quot.sound}` (no `sorryAx`). -/
+Each keystone depends only on `{propext, Classical.choice, Quot.sound}` (no faked green). -/
 
 #assert_axioms workflow_authz_is_guard
 #assert_axioms workflow_order_is_guard

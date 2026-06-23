@@ -69,7 +69,7 @@ digest), not the per-cell EffectVM/`cellProj` surface transfer/delegate live on.
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the
 whole-function-digest assumption enters ONLY inside the reused `cellUnsealA_full_sound` (its
 `Function.Injective D` hypothesis + the Poseidon-CR `RestIffNoLifecycle`/`logHashInjective` portals), not in
-the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only; this
+the welded conclusion's statement. Imports are read-only; this
 file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt

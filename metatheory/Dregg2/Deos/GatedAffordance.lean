@@ -54,7 +54,7 @@ suffices.
   * `projectGatedFor_state_reactive` — the SAME viewer's projected set CHANGES with state (the surface
     is live: a button enters/leaves the set as the cell transitions) — the projection-level htmx tooth.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2` green (LOCAL). NO core edit — the cap gate is the REAL `Affordance.fireGate`, the state gate the
 REAL `Exec.RecordProgram.admitsCtx`; a gated affordance is their conjunction, nothing more.
 

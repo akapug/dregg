@@ -77,8 +77,8 @@ are the full COD safety story (optimistic over-allocate, tau-resolve back within
 
 Ed25519 spending-certificate signatures (`shared_budget.rs` rebalance reports) are the named crypto
 assumption — a "report" here is a verified report; we model the COUNTING/conservation `rebalance`
-does on verified reports. The Byzantine bound is over the modelled allowance arithmetic. No
-`sorry`/`:=True`/`native_decide`. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
+does on verified reports. The Byzantine bound is over the modelled allowance arithmetic.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 No executor import.
 -/
 import Mathlib.Data.List.Basic

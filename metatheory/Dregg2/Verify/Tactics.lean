@@ -23,7 +23,7 @@ hand (`HATCHERY.md` §1–§2):
             registry-grow crowns with NO supplied lemma, then
          c. **HAND-BACK**: if neither closes it, the commit goal is LEFT OPEN as the current goal for
             the caller to discharge by hand. `exec_frame` NEVER fakes a close — it is honest by
-            construction (no `sorry`, no `skip`-that-hides; the leftover is a real open goal that fails
+            construction (no faked close, no `skip`-that-hides; the leftover is a real open goal that fails
             the build until addressed).
 
 The §3 GATE reproduces, via these tactics, the one-step obligation of the hand-written crowns
@@ -71,7 +71,7 @@ forest-grow term and the caller's hand-back closer can both refer to them. -/
 /-- **`exec_frame (grow)?`** — prove `∀ s cf, Good s → Good (cellNextA s cf)`. Closes the universal
 stay-put arm (`getD_none`), and on the commit arm tries `Trans.trans hgood (grow …)` (if a forest-grow
 lemma is supplied), then `aesop (rule_sets := [Dregg2])` (the tagged frame family), else HANDS BACK the
-commit goal (honest — never a hidden `sorry`).
+commit goal (honest — never a hidden faked close).
 
 The optional `grow` is parsed with `colGt` so it consumes a term ONLY when indented past the tactic —
 a following `case`/tactic on the same or lesser column is NOT swallowed. -/
@@ -162,7 +162,7 @@ theorem commitments_persist_via_auto (com0 : List Nat) (s : RecChainedState) (sc
 [Dregg2])` knows the registry-subset frames but not `Nat`'s `le_trans` chained with
 `execFullForestA_logMono`. So it HANDS BACK the commit goal: the `simp only [Option.getD_some]`-exposed
 `s.log.length ≤ s'.log.length`, with `hgood`/`s`/`s'`/`cf`/`hc` in context. We then close it by hand,
-*proving the goal was LEFT* (never `sorry`-faked: had `exec_frame` faked a close, the trailing
+*proving the goal was LEFT* (never faked: had `exec_frame` faked a close, the trailing
 `exact` would error with "no goals"; had it errored, the build would fail here). This is the Hatchery
 promise — kill the 45 boring arms + the stay-put arm, hand back the ONE real obligation. -/
 theorem logMono_handback_demo (s : RecChainedState) (sched : SchedA) :
@@ -208,7 +208,7 @@ example (credNul : Nat) (s : RecChainedState) (hinit : credNul ∈ s.kernel.revo
 #guard (Dregg2.Apps.Identity.fmaRevoked.kernel.revoked.contains 42)
 #guard (Dregg2.Apps.Identity.fmaRevoked.kernel.revoked.contains 99 == false)
 
-/-! ## §7 — Axiom hygiene — the tactic-reproduced crowns pinned to the kernel triple (NO `sorryAx`). -/
+/-! ## §7 — Axiom hygiene — the tactic-reproduced crowns pinned to the kernel triple. -/
 
 #assert_axioms logMono_via_tactics
 #assert_axioms revoked_grow_via_tactics

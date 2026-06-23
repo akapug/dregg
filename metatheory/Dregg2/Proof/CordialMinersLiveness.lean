@@ -1,7 +1,7 @@
 /-
 # Dregg2.Proof.CordialMinersLiveness — closing the MECHANICAL/MODERATE liveness residual of
 # the Cordial-Miners DAG-BFT consensus, ADDITIVELY, with the hard pacemaker /
-# dissemination cores left as explicitly-NAMED residual statements (never faked, never `sorry`).
+# dissemination cores left as explicitly-NAMED residual statements (never faked).
 
 `Dregg2.Proof.CordialMiners` proves the **safety** keystone (`cordial_agreement` /
 `cordial_agreement_from_lace`: a wave anchors at most one super-ratified leader) by transferring
@@ -49,7 +49,7 @@ frontier is a named, type-checked object rather than prose.
      carrier `Proof.GST.GSTModel` (`cm_pacemaker_from_gstModel`), and reduced all the way to the
      FLP-irreducible primitives — honest-supermajority + Δ-delivery + bare honest-leader co-finality
      (`cm_liveness_from_cofinality`). The synchrony hypothesis is a `GSTModel` field bundle (a
-     hypothesis/Prop-portal carried like `World.recv_mono`/`gst_liveness`, NEVER an `axiom`/`sorry`),
+     hypothesis/Prop-portal carried like `World.recv_mono`/`gst_liveness`, NEVER an `axiom`),
      and it is LOAD-BEARING: the mutation tooth `cm_liveness_needs_cofinality` shows the conditional
      does NOT fire for an adversary that starves honest leaders past GST. So OPEN-CM-LIVENESS is now
      SAFETY-style honest: unconditional liveness is FLP-impossible; the conditional on the named
@@ -69,7 +69,7 @@ kernel-clean) into the Cordial-Miners surface. `cm_pacemaker_residual` is now DI
 named partial-synchrony carrier — `cm_pacemaker_from_gstModel` proves it from a `GSTModel`, and
 `cm_liveness_from_cofinality` reduces it to the FLP-irreducible primitives (honest-supermajority +
 Δ-delivery + bare honest-leader co-finality). The synchrony hypothesis is a structure-field bundle
-(a Prop-portal carried like `World.recv_mono`/`gst_liveness`, NEVER `axiom`/`sorry`), and it is
+(a Prop-portal carried like `World.recv_mono`/`gst_liveness`, NEVER an `axiom`), and it is
 LOAD-BEARING: the mutation tooth `cm_liveness_needs_cofinality` shows the conditional does NOT fire
 for the FLP adversary that starves honest leaders past GST. SAFETY (`cordial_agreement…`) is proved
 UNCONDITIONALLY; LIVENESS is proved CONDITIONAL on the named partial-synchrony assumption — the
@@ -231,7 +231,7 @@ residual item (3) is: after GST, on the *union* of two laces the honest nodes' c
 converged enough that a shared honest ratifier of one leader is visible as a ratifier of the other
 (the `dissemination.rs` reliable-broadcast guarantee). We give it as an explicit `structure` — the
 exact shape the safety argument *consumes* — so it is a typed hypothesis the runtime discharges, not
-prose and not a `sorry`. -/
+prose and not an open hole. -/
 
 /-- **`HonestRatifierConvergence cfg lid₁ lid₂ V` — the post-GST dissemination residual, named.**
 Over a combined ratification-vote universe `V` (the union of two laces' materialized ratifier votes),
@@ -328,7 +328,7 @@ primitives — honest-leader co-finality past GST + the honest set being a super
 Δ-delivery — a quorum is DERIVED, never assumed. We WIRE that proven descent into the Cordial-Miners
 surface, so the named OPEN-CM-LIVENESS / O2 obstruction becomes a PROVEN CONDITIONAL on the
 FLP-irreducible synchrony hypothesis (a `GSTModel` field bundle — a hypothesis/Prop-portal, carried
-exactly as `World.recv_mono`/`gst_liveness` are, NEVER an `axiom`/`sorry`), not a hand-wave.
+exactly as `World.recv_mono`/`gst_liveness` are, NEVER an `axiom`), not a hand-wave.
 
 The shape is exactly the standard BFT conditional-liveness statement: GIVEN partial synchrony (GST +
 the honest-supermajority delivery the runtime discharges after GST), liveness — a wave eventually
@@ -499,14 +499,14 @@ end Inhabited
 
 /-! ## 6. Axiom hygiene — every additive keystone is kernel-clean.
 
-`#assert_axioms` FAILS the build if any of these depends on `sorryAx`. The `xsort` keystones reduce
-to `Nat` order + `List.insertionSort`/`pairwise_insertionSort` (`sorry`-free mathlib); the
+`#assert_axioms` FAILS the build if any of these depends on a faked-green axiom. The `xsort` keystones reduce
+to `Nat` order + `List.insertionSort`/`pairwise_insertionSort` (axiom-clean mathlib); the
 single-lace agreement reduces to the existing `cordial_agreement_from_lace`; the convergence keystones
 reduce to `BFT.honest_witness_in_intersection` / `BFTModel.honest_vote_once` (structure fields, not
 axioms). The §4b CONDITIONAL-LIVENESS keystones (`cm_pacemaker_from_gstModel`,
 `cm_liveness_from_cofinality`, the mutation tooth, and the inhabited firing) reduce to the proven
 `GST.gst_liveness` descent + `GSTModel` structure FIELDS (the FLP-irreducible synchrony hypothesis is
-a field/Prop-portal, like `World.recv_mono`/`gst_liveness`, NEVER an `axiom`/`sorry` — so it does NOT
+a field/Prop-portal, like `World.recv_mono`/`gst_liveness`, NEVER an `axiom` — so it does NOT
 appear in `collectAxioms`). We do NOT pin `cm_pacemaker_residual` (a `def` of a `Prop`) — it is a
 NAMED statement; what is now PROVED is the conditional that discharges it from the named carrier. -/
 

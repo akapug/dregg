@@ -15,7 +15,7 @@ the 14 remaining kernel fields LITERALLY unchanged. `execFullA_heapWriteA_iff_sp
 corner of the triangle, both directions.
 
 ## Axiom hygiene
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No sorry. ADDITIVE: imports the
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. ADDITIVE: imports the
 cell-state-field leaf (whose `SetFieldGuard`/`setFieldCellMap` the register leg reuses verbatim).
 -/
 import Dregg2.Circuit.Spec.cellstatefield

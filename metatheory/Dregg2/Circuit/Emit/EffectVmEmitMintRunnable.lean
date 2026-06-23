@@ -39,7 +39,7 @@ the named, deferred systematic audit wave); it lifts the EXISTING gates to full-
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. The sole crypto carrier is the
 NAMED `Poseidon2SpongeCR` portal, entering ONLY through the generic `runnable_full_sound` / the §4 anti-ghost
-(reused, not re-assumed). No `sorry`, no `:= True`, no `native_decide`. Imports are read-only; this module
+(reused, not re-assumed). Imports are read-only; this module
 owns only its own declarations.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitMint

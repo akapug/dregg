@@ -40,7 +40,7 @@ documentation of the equations the realization satisfies.)
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR enters ONLY as the named
 `CapHashScheme` carrier (`chipAbsorb`/`chipCR`, inherited from `DeployedCapTree`) + the chip-soundness
-`ChipTableSound`. No `sorry`, no `native_decide`, no `:= True`.
+`ChipTableSound`.
 -/
 import Dregg2.Circuit.DescriptorIR2
 import Dregg2.Circuit.DeployedCapTree

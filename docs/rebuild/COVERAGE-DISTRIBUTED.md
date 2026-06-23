@@ -154,7 +154,7 @@ The THREE judgements, kept ORTHOGONAL:
   * the third judgement (I-confluence) — [REFUTED] the linearity⇒I-confluence conflation.
 
 ...the soundness/fidelity/deadlock-freedom THEOREMS are stated as faithful Props
-with `sorry` bodies (each `sorry` = a real obligation; many are `study-choreography`'s
+with open-hole bodies (each open hole = a real obligation; many are `study-choreography`'s
 CONFIRMED-OPEN problems — flagged in the relevant docstrings).
 ```
 
@@ -163,7 +163,7 @@ CONFIRMED-OPEN problems — flagged in the relevant docstrings).
 - No explicit deadlock-freedom proof or analysis.
 
 **Lean status:**
-- Deadlock-freedom: **`sorry` — NOT PROVED.**
+- Deadlock-freedom: **open hole — NOT PROVED.**
 - Global/local type projection: **defined** but fidelity unproven.
 - I-confluence: **conflict explicitly named and flagged as unresolved**.
 
@@ -301,7 +301,7 @@ honest_vote_once : ∀ (v b₁ b₂ : Nat), ¬ Byzantine v →
 3. **Resolve BFT vs. Cordial Miners mismatch** — clarify whether Rust's DAG-based consensus benefits from classical BFT safety or needs a separate argument.
 4. **Formalize Stingray** — new metatheory module for Layer 3 soundness.
 5. **Formalize revocation Merkle tree** — critical security feature must be verified.
-6. **Prove deadlock-freedom** — close `Coordination.lean` `sorry` bodies or name sharp obstructions.
+6. **Prove deadlock-freedom** — close `Coordination.lean` open-hole bodies or name sharp obstructions.
 
 ---
 

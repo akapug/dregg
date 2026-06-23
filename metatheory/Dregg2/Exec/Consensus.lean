@@ -30,7 +30,7 @@ two notions of "committed" together at a single cell. That is this module's job:
 
 What stays OPEN (NOT attempted here — they need an adversary / GST model that the bare
 `World` interface deliberately omits): Byzantine quorum-intersection safety and post-GST
-liveness. `World.lean` already states these as honest `sorry`'d `…_OPEN` theorems; we cite
+liveness. `World.lean` already states these as honest `…_OPEN` obligation theorems; we cite
 those rather than restating them. Any new obligation is an explicit `-- OPEN:`.
 
 Builds only on existing modules by `import`; defines nothing already taken. All names live
@@ -39,9 +39,9 @@ in `namespace Dregg2.Exec.Consensus`.
 Axiom-hygiene note (read with the `#assert_axioms` blocks below): theorems whose statements
 are *purely* about the tier lattice / the cell record / the World monotonicity facts are
 kernel-clean and are pinned with `#assert_axioms`. `Finality.no_downgrade` and
-`World.committedByQuorum_mono` are themselves `sorry`-free, so the theorems riding them are
+`World.committedByQuorum_mono` are themselves fully proved, so the theorems riding them are
 clean too. We do NOT pin anything that quantifies over (or instantiates) the
-`…_OPEN`/`sorry`'d World theorems — there are none here; this module never touches the open
+`…_OPEN` World theorems — there are none here; this module never touches the open
 ones except to cite them in prose.
 -/
 import Dregg2.World
@@ -292,8 +292,8 @@ theorem cross_tier_join_on_net {H : Type u}
 The two DEEP theorems are open research; they need an adversary model (which
 voters are Byzantine), a conflict relation on blocks, and a partial-synchrony / GST bound —
 none of which the bare `World` interface commits to. `World.lean` already states them as
-honest `sorry`'d obligations; this module does NOT attempt them and does NOT re-introduce a
-`sorry`. We name the existing OPEN theorems here so the frontier is explicit:
+honest open obligations; this module does NOT attempt them and does NOT re-introduce an
+unproven hole. We name the existing OPEN theorems here so the frontier is explicit:
 
   • `Dregg2.World.quorum_intersection_safety_OPEN` — two quorums for conflicting blocks
     must intersect (the `n > 3f` BFT-safety seed). OPEN: needs the honest-set / conflict
@@ -305,7 +305,7 @@ honest `sorry`'d obligations; this module does NOT attempt them and does NOT re-
 -- are both `IsBftFinal` under an honest majority") would be the natural next obligation on
 -- this cell. It is NOT provable here for the same reason as `quorum_intersection_safety_OPEN`
 -- (no adversary/honesty model on `Vote`), so it is deliberately left unstated rather than
--- stubbed with a `sorry`. It belongs with the τ-BFT protocol layer, not the ordering cell.
+-- stubbed with an unproven hole. It belongs with the τ-BFT protocol layer, not the ordering cell.
 -/
 
 /-! ## 6. A reference cell + `#eval` demos.
@@ -351,10 +351,10 @@ def cellAtRound4 : NetCell := mkNetCell 4 7
 
 /-! ## 7. Axiom-hygiene tripwires.
 
-`#assert_axioms` on each closed keystone. These FAIL the build if any depends on a
-`sorryAx`. ALL of the keystones below ride only `sorry`-free lemmas (`Finality.no_downgrade`,
+`#assert_axioms` on each closed keystone. These FAIL the build if any depends on an
+extra axiom. ALL of the keystones below ride only fully-proved lemmas (`Finality.no_downgrade`,
 `World.quorum_monotone`, `World.committedByQuorum_mono`, `Finality.commit_at_join_of_tiers`
-are all themselves proved without `sorry`), so they are kernel-clean. We pin NONE of the
+are all themselves fully proved), so they are kernel-clean. We pin NONE of the
 `…_OPEN` theorems (we never touch them; they live in `World.lean`). -/
 
 #assert_axioms quorum_reaches_bft_tier

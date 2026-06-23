@@ -16,7 +16,7 @@ magnesium win is the WIDE commitment now BINDS all 8 roots. The §RECIPE applied
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR only via the generic theorems.
-No `sorry`/`:= True`/`native_decide`. `fullClause` NON-VACUOUS. Read-only imports; owns only itself.
+`fullClause` NON-VACUOUS. Read-only imports; owns only itself.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitSetVK
 import Dregg2.Circuit.Emit.EffectVmFullStateRunnable

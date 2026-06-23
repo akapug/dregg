@@ -645,8 +645,8 @@ theorem exercise_forward_sim {s s' : RecChainedState} {actor target : Label}
 
 /-! ## §9 — Axiom-hygiene tripwires (the honesty pins over every authority-edit keystone).
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. Every per-effect non-amplification + the forward-sim squares are proved. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. Every per-effect
+non-amplification + the forward-sim squares are proved. -/
 
 #assert_axioms introduceStep_factors
 #assert_axioms introduce_conserves
