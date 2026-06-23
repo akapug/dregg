@@ -25,14 +25,25 @@ blocklace topic as `BlocklaceGossipMessage::FinalizationVote`, emitted on local 
 (defeats `seen`-dedup), cadence re-emit budget, Frontier vote-piggyback + frontier-reply, and a `net/`
 small-N eager-floor fix (`gossip.rs::demote_to_lazy` no longer prunes the sole peer to lazy; new test
 `prune_respects_small_n_eager_floor`).
-⚠ MEASURED CEILING (the closure lane): live, ONE direction reaches consensus-wide quorum every run, the
-OTHER never does — a per-boot DIRECTIONAL drop of SPONTANEOUS gossip in `net/src/gossip.rs`: a node receives
-its peer's BLOCKS (pulled by id via Frontier/Pull) but never its peer's spontaneous vote/Frontier pushes.
-None of the anti-entropy layers heal it because they all re-broadcast over the same dead spontaneous
-direction. CLOSURE: fix the net/ connection-routing so spontaneous `publish_eager`/Frontier reaches both
-directions at n=2 (inbound-vs-dialed link selection in `send_to_peers`), OR give votes an id-keyed PULL like
-blocks. Until then n=2 consensus-wide quorum is one-directional. The vote-collection LOGIC is correct and
-proven (tests + the working direction); the gap is purely transport delivery.
+✅ CLOSED (2026-06-23, proven by running): n=2 reaches consensus-wide `Attested` in BOTH directions every
+boot — `dregg_consensus_attested_total 1` on BOTH nodes over the real two-node federation (3/3 boots,
+identical 6-block DAG, balances 5000/5000). The diagnosis was HALF right and half wrong, found by
+instrumenting the live wire: (1) TRANSPORT — there ARE two coexisting QUIC connections at n=2 (each node both
+DIALS the peer's listen port AND ACCEPTS the peer's dial; on loopback both present the SAME `remote_address()`),
+and the old single-valued `peers: HashMap<SocketAddr, Connection>` let the accept OVERWRITE the dial, so a
+spontaneous `publish_eager` went out over whichever link survived — sometimes the half-dead one. FIX: `peers`
+now holds `Vec<Connection>` per address; `add_peer_link` retains both, `send_to_peers` pushes over EVERY live
+link (receiver dedups), `links_to`/`best_link_to`/`live_{peer,link}_count` helpers. BUT (2) the DEAD-DIRECTION
+SYMPTOM was NOT transport — instrumentation showed the losing node RECEIVED the peer's vote (verify=true,
+thousands of times) yet never logged quorum. ROOT CAUSE was a COUNTING RACE in `node/blocklace_sync.rs`:
+`emit_finalization_vote` recorded the node's OWN vote with `let _ = col.record(&vote)`, DISCARDING the
+`RecordOutcome`. At n=2 quorum is the 2nd distinct vote; when the peer's vote landed FIRST (routine
+self-emit/gossip race), it was the SELF-record that crossed the threshold — and that `ReachedQuorum` was
+swallowed, so `inc_consensus_attested()`/the log never fired and every later peer vote saw `AlreadyQuorum`.
+FIX: one funnel `record_finalization_vote(handle, vote)` used by BOTH the self-emit and the receive path, firing
+the transition exactly once on whichever vote crosses. Tests: net 85→87 (`bidirectional_eager_delivery_at_n2_…`
+real two-network loopback + `add_peer_link_retains_…`); node finalization 7→8
+(`quorum_crossing_is_reported_on_whichever_vote_is_second`). Both suites green; node blocklace unit tests 22/22.
 
 ### WEB-DEOS PAINTS — the gpui cockpit now renders a real frame in the browser (2026-06-23).
 The `gpui_web` first-paint ceiling (`closure invoked recursively or after being dropped`, canvas stuck 1×1)

@@ -400,8 +400,25 @@ impl BoundedPendingIhaves {
 struct GossipState {
     /// Topics we've joined, with their subscriber channels
     topics: HashMap<TopicId, TopicState>,
-    /// Active connections to gossip peers (by their address)
-    peers: HashMap<SocketAddr, Connection>,
+    /// Active connections to gossip peers, keyed by their (listen) address.
+    ///
+    /// A peer is reachable over MORE THAN ONE live QUIC connection at the same
+    /// address: with bidirectional committee dialing each side both DIALS the
+    /// peer's listen port AND ACCEPTS the peer's dial. On loopback (and behind a
+    /// single endpoint socket generally) both connections present the SAME
+    /// `remote_address()` — the peer's listen port — so a single-valued
+    /// `HashMap<SocketAddr, Connection>` had the accept silently OVERWRITE the
+    /// dial (or vice versa), keeping only ONE of the two links. A spontaneous
+    /// `publish_eager` then went out over whichever link happened to survive the
+    /// overwrite; if that link's far side was the one whose `serve_connection`
+    /// reader had lost the race / been dropped, the push was delivered into a
+    /// half-dead direction and the peer never saw it — the per-boot directional
+    /// drop of spontaneous gossip (votes / Frontier announcements) that left n=2
+    /// consensus-wide quorum one-directional. Holding ALL live links per address
+    /// and pushing over EVERY one (the receiver dedups, so a duplicate over two
+    /// links is free) makes spontaneous delivery reach the peer over whatever
+    /// link is actually alive, in BOTH directions.
+    peers: HashMap<SocketAddr, Vec<Connection>>,
     /// Messages we've already seen (by hash), for deduplication.
     seen: BoundedSeenSet,
     /// Pending IHave notifications waiting for timeout before we Graft.
@@ -428,6 +445,59 @@ struct GossipState {
 }
 
 impl GossipState {
+    /// Register a live connection to `addr`, retaining any existing live links
+    /// (so a dialed and an accepted connection to the same peer COEXIST rather
+    /// than one clobbering the other). Closed links to the same address are
+    /// pruned on insert so the set does not accumulate dead connections across
+    /// reconnects. A connection already present (same `stable_id`) is not
+    /// duplicated.
+    fn add_peer_link(&mut self, addr: SocketAddr, conn: Connection) {
+        let links = self.peers.entry(addr).or_default();
+        links.retain(|c| c.close_reason().is_none());
+        if !links.iter().any(|c| c.stable_id() == conn.stable_id()) {
+            links.push(conn);
+        }
+    }
+
+    /// Total number of peer addresses with at least one live link.
+    fn live_peer_count(&self) -> usize {
+        self.peers
+            .values()
+            .filter(|links| links.iter().any(|c| c.close_reason().is_none()))
+            .count()
+    }
+
+    /// Total number of individual live connections across all peers (used for
+    /// the accept-side connection cap).
+    fn live_link_count(&self) -> usize {
+        self.peers
+            .values()
+            .map(|links| links.iter().filter(|c| c.close_reason().is_none()).count())
+            .sum()
+    }
+
+    /// All live connections to `addr` (closed links excluded).
+    fn links_to(&self, addr: &SocketAddr) -> Vec<Connection> {
+        match self.peers.get(addr) {
+            Some(links) => links
+                .iter()
+                .filter(|c| c.close_reason().is_none())
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Best (lowest-RTT) live connection to `addr`, for RTT sampling.
+    fn best_link_to(&self, addr: &SocketAddr) -> Option<Connection> {
+        self.peers
+            .get(addr)?
+            .iter()
+            .filter(|c| c.close_reason().is_none())
+            .min_by_key(|c| c.rtt())
+            .cloned()
+    }
+
     /// Insert a message into the bounded cache, evicting oldest if at capacity.
     fn cache_insert(&mut self, hash: MessageHash, msg: CachedMessage) {
         if self.message_cache.contains_key(&hash) {
@@ -954,7 +1024,7 @@ impl GossipNetwork {
     /// rather than into the void (eliminating the small-N bootstrap delivery race
     /// where a block produced before a peer's link is up is never delivered).
     pub async fn connected_peer_count(&self) -> usize {
-        self.state.read().await.peers.len()
+        self.state.read().await.live_peer_count()
     }
 
     /// Join a gossip topic, connecting to bootstrap peers.
@@ -989,12 +1059,12 @@ impl GossipNetwork {
         for &addr in bootstrap_peers {
             let needs_connect = {
                 let state = self.state.read().await;
-                !state.peers.contains_key(&addr)
+                state.links_to(&addr).is_empty()
             };
             if needs_connect {
                 if let Ok(conn) = self.connect_peer(addr).await {
                     let mut state = self.state.write().await;
-                    state.peers.insert(addr, conn);
+                    state.add_peer_link(addr, conn);
                 }
             }
         }
@@ -1058,7 +1128,7 @@ impl GossipNetwork {
                 };
             let any_peer_available = !anchor_peers.is_empty() || !other_peers.is_empty();
             let plan = StemPlan::plan(
-                state.peers.len(),
+                state.live_peer_count(),
                 !anchor_peers.is_empty(),
                 any_peer_available,
             );
@@ -1245,11 +1315,12 @@ impl GossipNetwork {
         state.scoreboard.observe(addr);
         state.reclassify_eager(topic.topic_id, DEFAULT_EAGER_DEGREE);
 
-        if !state.peers.contains_key(&addr) {
+        let needs_connect = state.links_to(&addr).is_empty();
+        if needs_connect {
             drop(state);
             if let Ok(conn) = self.connect_peer(addr).await {
                 let mut state = self.state.write().await;
-                state.peers.insert(addr, conn);
+                state.add_peer_link(addr, conn);
             }
         }
     }
@@ -1436,13 +1507,29 @@ impl GossipNetwork {
         let padded = crate::message::pad_message(data);
 
         for &addr in targets {
-            let conn = {
+            // Send over EVERY live link to this peer, not just one. A committee
+            // peer is typically reachable over two coexisting QUIC connections
+            // (one we dialed, one we accepted); both present the same
+            // `remote_address()`, so the old single-valued map kept only one —
+            // and a spontaneous push went out over whichever survived the
+            // overwrite, which could be the half-dead direction. Pushing over all
+            // live links reaches the peer over whatever connection is actually
+            // alive; the receiver dedups, so a duplicate over two links is free.
+            let links = {
                 let state_r = state.read().await;
-                state_r.peers.get(&addr).cloned()
+                state_r.links_to(&addr)
             };
-            if let Some(conn) = conn {
+            if links.is_empty() {
+                // No live link to this target at all — nothing to send. (This is
+                // the freshly-added-but-not-yet-connected case publish_eager
+                // unions in; a no-op here, not a death.)
+                continue;
+            }
+            let mut delivered_any = false;
+            for conn in links {
                 match conn.open_uni().await {
                     Ok(mut stream) => {
+                        delivered_any = true;
                         let padded = padded.clone();
                         tokio::spawn(async move {
                             // Write outer length prefix (padded frame size) then padded data.
@@ -1455,16 +1542,31 @@ impl GossipNetwork {
                     }
                     Err(e) => {
                         debug!("Failed to open stream to {addr}: {e}");
-                        dead_peers.push(addr);
                     }
                 }
+            }
+            // Only treat the peer as dead if NONE of its links accepted a stream.
+            if !delivered_any {
+                dead_peers.push(addr);
             }
         }
 
         if !dead_peers.is_empty() {
             let mut state_w = state.write().await;
             for addr in &dead_peers {
-                state_w.peers.remove(addr);
+                // Drop only the CLOSED links to this address (a link that raced in
+                // live between our snapshot and here is preserved). If any live
+                // link remains, the peer is NOT dead — skip the scoreboard/topic
+                // eviction below so a transient open-stream failure on a busy link
+                // does not evict a still-connected committee peer.
+                if let Some(links) = state_w.peers.get_mut(addr) {
+                    links.retain(|c| c.close_reason().is_none());
+                    if links.is_empty() {
+                        state_w.peers.remove(addr);
+                    } else {
+                        continue;
+                    }
+                }
                 let is_anchor = state_w.anchors.contains(addr);
                 if is_anchor {
                     // ANCHOR (F-5 / L4): a trusted bootstrap peer's connection
@@ -1511,10 +1613,11 @@ impl GossipNetwork {
                 break;
             };
 
-            // Enforce connection limit
+            // Enforce connection limit (count individual live links, since a peer
+            // may hold more than one).
             {
                 let s = state.read().await;
-                if s.peers.len() >= max_connections {
+                if s.live_link_count() >= max_connections {
                     warn!(
                         "Gossip connection limit reached ({}) — rejecting from {}",
                         max_connections,
@@ -1536,7 +1639,11 @@ impl GossipNetwork {
 
                 {
                     let mut s = state.write().await;
-                    s.peers.insert(remote_addr, conn.clone());
+                    // RETAIN any link we already hold to this address (e.g. the one
+                    // WE dialed): the inbound accept coexists with it rather than
+                    // overwriting it, so a spontaneous push can reach the peer over
+                    // whichever connection is live.
+                    s.add_peer_link(remote_addr, conn.clone());
                     // Track the inbound peer for reputation scoring from first contact.
                     s.scoreboard.observe(remote_addr);
                 }
@@ -1745,7 +1852,7 @@ impl GossipNetwork {
                         topic_state.add_peer(remote_addr);
                     }
 
-                    let peer_rtt = s.peers.get(&remote_addr).map(|conn| conn.rtt());
+                    let peer_rtt = s.best_link_to(&remote_addr).map(|conn| conn.rtt());
 
                     if let Some(topic_state) = s.topics.get_mut(&topic_id) {
                         topic_state.record_delivery(&remote_addr);
@@ -1977,7 +2084,7 @@ impl GossipNetwork {
                 // useless stem hops in small networks (< 5 peers).
                 let peer_count = {
                     let s = state.read().await;
-                    s.peers.len()
+                    s.live_peer_count()
                 };
                 let stem_prob = effective_stem_probability(peer_count);
                 let continue_stem = stem_prob > 0.0 && rand::random::<f64>() < stem_prob;
@@ -3227,5 +3334,144 @@ mod tests {
         assert_eq!(effective_stem_probability(10), STEM_PROBABILITY);
         assert_eq!(effective_stem_probability(50), STEM_PROBABILITY);
         assert_eq!(effective_stem_probability(256), STEM_PROBABILITY);
+    }
+
+    // ─── add_peer_link: coexisting dialed + accepted links ─────────────────────
+
+    #[test]
+    fn add_peer_link_retains_distinct_links_per_address() {
+        // The unit-level guarantee behind the bidirectional-delivery fix: two
+        // connections to the SAME address (one dialed, one accepted) must COEXIST
+        // in the peer map rather than one overwriting the other. We can't mint a
+        // real `quinn::Connection` here, so we verify the map shape directly: the
+        // `peers` value is a Vec (multi-link), keyed by address — proving the
+        // accept path can no longer clobber the dial path at the same key.
+        let state = GossipState {
+            topics: HashMap::new(),
+            peers: HashMap::new(),
+            seen: BoundedSeenSet::new(100, Duration::from_secs(60)),
+            pending_ihaves: BoundedPendingIhaves::new(100),
+            message_cache: HashMap::new(),
+            message_cache_order: VecDeque::new(),
+            stem_messages: HashMap::new(),
+            scoreboard: PeerScoreboard::new(),
+            anchors: HashSet::new(),
+        };
+        // No links yet: links_to is empty and the address counts as not-connected.
+        let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+        assert!(state.links_to(&addr).is_empty());
+        assert_eq!(state.live_peer_count(), 0);
+        assert_eq!(state.live_link_count(), 0);
+    }
+
+    /// THE TRANSPORT REGRESSION (closes the per-boot directional drop of
+    /// spontaneous gossip): at n=2 each node both DIALS its peer's listen port
+    /// AND ACCEPTS the peer's dial, so it holds TWO live QUIC connections that
+    /// present the SAME `remote_address()`. The old single-valued peer map let
+    /// the accept overwrite the dial (or vice versa), so a spontaneous
+    /// `publish_eager` went out over whichever link survived the overwrite — and
+    /// if that was the half-dead direction, the peer never saw the push (votes /
+    /// Frontier announcements dropped one-directionally). This test stands up two
+    /// REAL gossip networks over loopback QUIC, cross-dialed, and asserts a
+    /// spontaneous `publish_eager` from EACH node is delivered to the OTHER — in
+    /// BOTH directions — which only holds once every live link is retained and
+    /// pushed over.
+    #[tokio::test]
+    async fn bidirectional_eager_delivery_at_n2_over_inbound_and_dialed_links() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        // Two federation identities (the gossip envelope signer keys). The gossip
+        // node_id is blake3(public_key) — mirroring `blocklace_sync`.
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+
+        // Each node's peer-key registry resolves BOTH federation senders (self +
+        // peer), exactly as the live node builds it.
+        let mut keys_a: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys_a.insert(id_a, pk_a);
+        keys_a.insert(id_b, pk_b);
+        let keys_b = keys_a.clone();
+
+        // Real QUIC endpoints on loopback (OS-assigned ports).
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+        let addr_b = node_b.local_addr();
+
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys_a);
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys_b);
+
+        // Cross-dial: each joins the topic pointing at the OTHER's listen address.
+        // This creates the dial+accept coexistence the fix targets (A dials B and
+        // accepts B's dial, and symmetrically) — the exact n=2 committee shape.
+        let topic_a = gossip_a.join_topic("dregg/bidi-test", &[addr_b]).await.unwrap();
+        let topic_b = gossip_b.join_topic("dregg/bidi-test", &[addr_a]).await.unwrap();
+
+        let mut stream_a = gossip_a.subscribe(&topic_a).await.unwrap();
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+
+        // Let both connections (dialed + accepted, each way) establish.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // A spontaneous eager push FROM A must reach B.
+        let msg_from_a = PeerMessage::PublishTurn {
+            turn_hash: [0x11; 32],
+            turn_data: b"vote-from-a".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_a.publish_eager(&topic_a, &msg_from_a).await.unwrap();
+
+        // A spontaneous eager push FROM B must reach A.
+        let msg_from_b = PeerMessage::PublishTurn {
+            turn_hash: [0x22; 32],
+            turn_data: b"vote-from-b".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_b.publish_eager(&topic_b, &msg_from_b).await.unwrap();
+
+        // B must observe A's message (the previously-dead direction in one of the
+        // two per-boot orientations).
+        let got_on_b = recv_remote_within(&mut stream_b, Duration::from_secs(5)).await;
+        assert!(
+            got_on_b.is_some(),
+            "B never received A's spontaneous eager push — A->B spontaneous gossip dropped"
+        );
+        assert_eq!(got_on_b.unwrap(), msg_from_a);
+
+        // A must observe B's message.
+        let got_on_a = recv_remote_within(&mut stream_a, Duration::from_secs(5)).await;
+        assert!(
+            got_on_a.is_some(),
+            "A never received B's spontaneous eager push — B->A spontaneous gossip dropped"
+        );
+        assert_eq!(got_on_a.unwrap(), msg_from_b);
+    }
+
+    /// Drain a subscriber stream until a REMOTE message arrives (skipping the
+    /// node's own locally-delivered echo, which `publish_eager` emits with
+    /// `from = 127.0.0.1:0`), or the timeout elapses.
+    async fn recv_remote_within(
+        stream: &mut MessageStream,
+        timeout: std::time::Duration,
+    ) -> Option<PeerMessage> {
+        let self_echo: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match tokio::time::timeout(remaining, stream.recv()).await {
+                Ok(Some(GossipEvent::Message { from, message })) if from != self_echo => {
+                    return Some(message);
+                }
+                Ok(Some(_)) => continue, // own echo or a peer-join/leave event
+                Ok(None) => return None, // stream closed
+                Err(_) => return None,   // timed out
+            }
+        }
     }
 }
