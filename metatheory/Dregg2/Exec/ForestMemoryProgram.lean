@@ -124,11 +124,13 @@ a committed per-asset move pins the post-state `bal := recTransferBal …` and e
 theorem recKExecAsset_factors {k k' : RecordKernelState} {t : Turn} {a : AssetId}
     (h : recKExecAsset k t a = some k') :
     (authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
-        ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts) ∧
+        ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+        ∧ cellLifecycleLive k t.src = true) ∧
       k' = { k with bal := recTransferBal k.bal t.src t.dst a t.amt } := by
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
       ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+      ∧ cellLifecycleLive k t.src = true
   · rw [if_pos hg, Option.some.injEq] at h
     exact ⟨hg, h.symm⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -156,7 +158,7 @@ theorem moveAsset_is_memory_program (C : UCodec) {s s' : RecChainedState} {t : T
           exact ⟨k', rfl, h.symm⟩
     · rw [if_neg hadm] at h; exact absurd h (by simp)
   obtain ⟨k', hk, hpost⟩ := hfac
-  obtain ⟨⟨-, -, -, hne, -, -⟩, hk'⟩ := recKExecAsset_factors hk
+  obtain ⟨⟨-, -, -, hne, -, -, -⟩, hk'⟩ := recKExecAsset_factors hk
   subst hpost
   subst hk'
   funext addr

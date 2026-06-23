@@ -239,7 +239,7 @@ theorem settle_requires_live_target {k : RecordKernelState} {e target : CellId} 
     escrowSettle k e target asset newState = none := by
   unfold escrowSettle recKExecAsset
   rw [if_neg]
-  rintro ⟨_, _, _, _, _, htgt⟩
+  rintro ⟨_, _, _, _, _, htgt, _⟩
   exact hdead htgt
 
 /-- **`release_requires_live_beneficiary` (END-USER D3, release side).** A release whose

@@ -154,6 +154,9 @@ structure TransferEncodeResidual (hash : List ℤ → ℤ)
   guardDistinct : tr.src ≠ tr.dst
   guardLiveSrc : tr.src ∈ pre.kernel.accounts
   guardLiveDst : tr.dst ∈ pre.kernel.accounts
+  -- the SOURCE is lifecycle-LIVE ("Destroyed is terminal" on the SEND side): membership is not
+  -- liveness; a member-but-Destroyed source cannot debit. Commitment-bindable (reads `lifecycle`).
+  guardSrcLifecycleLive : cellLifecycleLive pre.kernel tr.src = true
   guardAccepts : acceptsEffects pre.kernel tr.dst = true
   -- the 16 non-`bal` kernel frame fields + the receipt-log advance (NOT ledger-committed by the
   -- `bal`-only readout).
@@ -231,6 +234,7 @@ def transfer_decodeBridge (hash : List ℤ → ℤ) (S : CommitSurface)
   guardDistinct := res.guardDistinct
   guardLiveSrc := res.guardLiveSrc
   guardLiveDst := res.guardLiveDst
+  guardSrcLifecycleLive := res.guardSrcLifecycleLive
   guardAccepts := res.guardAccepts
   frAccounts := res.frAccounts
   frCell := res.frCell

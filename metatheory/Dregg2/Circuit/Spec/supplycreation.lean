@@ -54,10 +54,13 @@ well is negative-capable, its balance IS −supply). -/
 
 /-- **`mintAdmit`** — the full admissibility guard `recKMintAsset`/`recCMintAsset` checks, as a
 `Prop` (the conjunction in the executor's `if`). ISSUER authority ∧ non-negativity ∧ issuer-well
-liveness ∧ recipient liveness ∧ distinctness. -/
+membership ∧ recipient membership ∧ distinctness ∧ **issuer-well LIFECYCLE-LIVENESS**. The last leg
+is the "Destroyed is terminal" gate: membership (`a ∈ accounts`) is the genesis-order tooth, but a
+cell can be a member AND Destroyed; minting from a Destroyed issuer well is REFUSED
+(`cellLifecycleLive k a` = dregg1's `CellLifecycle::accepts_effects`). -/
 def mintAdmit (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) : Prop :=
   mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
-    ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+    ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true
 
 /-- The truthful receipt a committed `mintA` prepends to the log: the issuer-move row
 `well a → recipient cell` of size `amt` — exactly `recCMintAsset`'s `log` head. -/
@@ -143,6 +146,7 @@ theorem recCMintAsset_iff_spec (st : RecChainedState) (actor cell : CellId) (a :
   unfold recCMintAsset recKMintAsset MintASpec mintAdmit mintReceipt
   by_cases hg : mintAuthorizedB st.kernel.caps actor a = true ∧ 0 ≤ amt
       ∧ a ∈ st.kernel.accounts ∧ cell ∈ st.kernel.accounts ∧ a ≠ cell
+      ∧ cellLifecycleLive st.kernel a = true
   · rw [if_pos hg]
     constructor
     · intro h
@@ -218,7 +222,7 @@ theorem mintA_credit (st : RecChainedState) (actor cell : CellId) (a : AssetId) 
         → st'.kernel.bal c b = st.kernel.bal c b) := by
   have hspec := (execMintA_iff_spec st actor cell a amt st').mp h
   have hbal : st'.kernel.bal = recTransferBal st.kernel.bal a cell a amt := hspec.2.1
-  have hne : a ≠ cell := hspec.1.2.2.2.2
+  have hne : a ≠ cell := hspec.1.2.2.2.2.1
   obtain ⟨hdeb, hcred, hframe⟩ := recTransferBal_mint_correct st.kernel.bal cell a amt hne
   refine ⟨?_, ?_, ?_⟩
   · rw [hbal]; exact hdeb
@@ -282,12 +286,23 @@ theorem mintA_rejects_dead_cell (st : RecChainedState) (actor cell : CellId) (a 
   rw [execFullA_mintA]; unfold recCMintAsset recKMintAsset
   rw [if_neg (by rintro ⟨_, _, _, h, _⟩; exact absurd h hbad)]
 
+/-- **`mintA_rejects_destroyed_issuer` — "Destroyed is terminal" (the lifecycle tooth).** A `mintA`
+whose ISSUER well is a member account but NOT lifecycle-Live (`cellLifecycleLive caps a ≠ true` — e.g.
+a Destroyed or Sealed issuer cell) is REJECTED. Membership alone is insufficient: a Destroyed cell
+cannot mint. This is the property codex flagged as missing — the `acceptsEffects` liveness gate now
+bites at the executor (and so the spec) layer, not merely in the handler wrapper. -/
+theorem mintA_rejects_destroyed_issuer (st : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (hdead : cellLifecycleLive st.kernel a ≠ true) :
+    execFullA st (.mintA actor cell a amt) = none := by
+  rw [execFullA_mintA]; unfold recCMintAsset recKMintAsset
+  rw [if_neg (by rintro ⟨_, _, _, _, _, h⟩; exact absurd h hdead)]
+
 /-- **`mintA_rejects_self_mint`.** A `mintA` into the issuer's own well (`a = cell`) is REJECTED —
 the no-move (the +amt credit and the +amt well-debit would cancel; the kernel refuses instead). -/
 theorem mintA_rejects_self_mint (st : RecChainedState) (actor : CellId) (a : AssetId) (amt : ℤ) :
     execFullA st (.mintA actor a a amt) = none := by
   rw [execFullA_mintA]; unfold recCMintAsset recKMintAsset
-  rw [if_neg (by rintro ⟨_, _, _, _, h⟩; exact absurd rfl h)]
+  rw [if_neg (by rintro ⟨_, _, _, _, h, _⟩; exact absurd rfl h)]
 
 /-- **`mintA_admits_iff` — the executor commits IFF the guard holds.** The clean characterization:
 there is a committed post-state EXACTLY when supply-creation is admissible. -/
@@ -298,6 +313,7 @@ theorem mintA_admits_iff (st : RecChainedState) (actor cell : CellId) (a : Asset
   unfold recCMintAsset recKMintAsset mintAdmit
   by_cases hg : mintAuthorizedB st.kernel.caps actor a = true ∧ 0 ≤ amt
       ∧ a ∈ st.kernel.accounts ∧ cell ∈ st.kernel.accounts ∧ a ≠ cell
+      ∧ cellLifecycleLive st.kernel a = true
   · rw [if_pos hg]; exact ⟨fun _ => hg, fun _ => ⟨_, rfl⟩⟩
   · rw [if_neg hg]
     constructor
@@ -340,6 +356,21 @@ def stM0 : RecChainedState :=
 #guard mintAuthorizedB stM0.kernel.caps 9 0 == true
 #guard mintAuthorizedB stM0.kernel.caps 0 0 == false
 
+/-- The SAME genesis state, but the issuer well (cell 0) has been DESTROYED (`lifecycle 0 = lcDestroyed
+= 3`) — a member account (still in `accounts`) that no longer `acceptsEffects`. -/
+def stMDead : RecChainedState :=
+  { stM0 with kernel := { stM0.kernel with lifecycle := fun c => if c = 0 then 3 else 0 } }
+
+-- The issuer is STILL a member account (membership ≠ liveness):
+#guard decide (0 ∈ stMDead.kernel.accounts)  --  true
+-- ...but it is NOT lifecycle-live (Destroyed):
+#guard cellLifecycleLive stMDead.kernel 0 == false
+-- so the OTHERWISE-VALID privileged mint (authorized, non-negative, members, distinct) is REFUSED
+-- — "Destroyed is terminal" at the executor layer (codex's mutation: was `some`, now `none`):
+#guard decide ((execFullA stMDead (.mintA 9 1 0 50)).isNone)  --  true
+-- the SAME mint over the LIVE issuer (stM0) commits, confirming the gate is the lifecycle, nothing else:
+#guard (execFullA stM0 (.mintA 9 1 0 50)).isSome  --  true
+
 /-! ## §8 — Axiom-hygiene tripwires.
 
 Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
@@ -358,6 +389,7 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 #assert_axioms mintA_rejects_negative
 #assert_axioms mintA_rejects_dead_issuer
 #assert_axioms mintA_rejects_dead_cell
+#assert_axioms mintA_rejects_destroyed_issuer
 #assert_axioms mintA_rejects_self_mint
 #assert_axioms mintA_admits_iff
 

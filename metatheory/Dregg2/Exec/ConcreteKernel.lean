@@ -132,6 +132,9 @@ definitional bridge the squares rewrite by. -/
 @[simp] theorem toAbstract_caps (cs : ConcreteKernelState) :
     (toAbstract cs).caps = cs.caps := rfl
 
+@[simp] theorem toAbstract_cellLifecycleLive (cs : ConcreteKernelState) (c : CellId) :
+    cellLifecycleLive (toAbstract cs) c = (cs.lifecycle c == 0) := rfl
+
 /-! ## §3 — The CONCRETE operations over the efficient maps.
 
 `concreteTransfer` debits `src` and credits `dst` in `cellMap` with two `insert`s (O(1)-ish each);
@@ -284,7 +287,8 @@ def concreteTransferAsset (cs : ConcreteKernelState) (turn : Turn) (a : AssetId)
     Option ConcreteKernelState :=
   if authorizedB cs.caps turn = true ∧ 0 ≤ turn.amt
       ∧ turn.amt ≤ cs.balMap.getD (turn.src, a) 0
-      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ cs.accounts ∧ turn.dst ∈ cs.accounts then
+      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ cs.accounts ∧ turn.dst ∈ cs.accounts
+      ∧ (cs.lifecycle turn.src == 0) = true then
     let oldSrc := cs.balMap.getD (turn.src, a) 0
     let oldDst := cs.balMap.getD (turn.dst, a) 0
     some { cs with
@@ -344,12 +348,13 @@ theorem toAbstract_concreteTransferAsset (cs : ConcreteKernelState) (turn : Turn
       = recKExecAsset (toAbstract cs) turn a := by
   unfold concreteTransferAsset recKExecAsset
   -- the abstract gate's reads rewrite to the concrete state's structural fields.
-  simp only [toAbstract_caps, toAbstract_accounts, toAbstract_bal]
+  simp only [toAbstract_caps, toAbstract_accounts, toAbstract_bal, toAbstract_cellLifecycleLive]
   by_cases hg : authorizedB cs.caps turn = true ∧ 0 ≤ turn.amt
       ∧ turn.amt ≤ cs.balMap.getD (turn.src, a) 0
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ cs.accounts ∧ turn.dst ∈ cs.accounts
+      ∧ (cs.lifecycle turn.src == 0) = true
   · rw [if_pos hg, if_pos hg]
-    obtain ⟨_, _, _, hne, _, _⟩ := hg
+    obtain ⟨_, _, _, hne, _, _, _⟩ := hg
     -- both sides are `some _`; reduce to the `bal` field and apply the ledger square.
     simp only [Option.map_some]
     congr 1

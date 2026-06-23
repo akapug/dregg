@@ -429,7 +429,7 @@ theorem unify_burn (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) 
   refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal cell a = s.kernel.bal cell a - amt
   rw [hspec.2.1]
-  exact (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2).1
+  exact (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).1
 
 /-- **`unify_burn_well` — THE WELL LEG (W1).** The SAME committed burn, projected onto the ISSUER's
 well `(a, a)`, satisfies the frozen-nonce spec with the NEGATED amount: the well RISES by exactly
@@ -441,7 +441,7 @@ theorem unify_burn_well (s s' : RecChainedState) (actor cell : CellId) (a : Asse
   refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   show s'.kernel.bal a a = s.kernel.bal a a - (-amt)
   rw [hspec.2.1]
-  have := (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2).2.1
+  have := (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).2.1
   omega
 
 /-- **`unify_burn_exec` — same, stated against the executor directly.** A committed

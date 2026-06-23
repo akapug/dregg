@@ -214,6 +214,7 @@ theorem applyLeg_caps (k k' : RecordKernelState) (l : Leg) (h : applyLeg k l = s
   unfold applyLeg recKExecAsset at h
   by_cases hg : authorizedB k.caps l.turn = true ∧ 0 ≤ l.turn.amt ∧ l.turn.amt ≤ k.bal l.turn.src l.asset
       ∧ l.turn.src ≠ l.turn.dst ∧ l.turn.src ∈ k.accounts ∧ l.turn.dst ∈ k.accounts
+      ∧ cellLifecycleLive k l.turn.src = true
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; rw [← h]; exact ⟨rfl, rfl⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
 

@@ -161,7 +161,7 @@ theorem mint_circuit_pins_intent
   -- the INDEPENDENT bridge: intent-composition = recTransferBal (an equality of two functions).
   exact pin_intent_of_bridge hsound
     (intentMove_eq_transferBal s.kernel.bal args.a args.cell args.a args.amt
-      hspec.1.2.2.2.2).symm
+      hspec.1.2.2.2.2.1).symm
 
 /-- **THEOREM (mint ANTI-GHOST at the circuit level).** A witness whose post-`bal` is NOT the intent
 credit does NOT verify — the contrapositive of soundness. Tampering ANY ledger entry away from the
@@ -195,7 +195,7 @@ theorem mint_intent_is_circuit_acceptable
     (recCMintAsset_iff_spec s args.actor args.cell args.a args.amt s').mp hcommit
   exact ⟨hspec, pin_intent_of_bridge hspec.2.1
     (intentMove_eq_transferBal s.kernel.bal args.a args.cell args.a args.amt
-      hspec.1.2.2.2.2).symm⟩
+      hspec.1.2.2.2.2.1).symm⟩
 
 /-! ## §2 — TRANSFER (balance-movement): the circuit pins the INTENT debit+credit.
 
@@ -321,7 +321,7 @@ theorem burn_circuit_pins_intent
     burnA_full_sound S D hD hRest hLog s args s' h
   exact pin_intent_of_bridge hspec.2.1
     (intentMove_eq_transferBal s.kernel.bal args.cell args.a args.a args.amt
-      hspec.1.2.2.2.2.2).symm
+      hspec.1.2.2.2.2.2.1).symm
 
 /-- **BURN circuit anti-ghost: a non-intent-move post-`bal` does NOT verify.** -/
 theorem burn_circuit_rejects_wrong_ledger
@@ -352,7 +352,7 @@ theorem bridgeMint_circuit_pins_intent
     bridgeMintA_full_sound S D hD hRest hLog s args s' h
   exact pin_intent_of_bridge hspec.2.1
     (intentMove_eq_transferBal s.kernel.bal args.a args.cell args.a args.value
-      hspec.1.2.2.2.2).symm
+      hspec.1.2.2.2.2.1).symm
 
 /-- **BRIDGE-MINT circuit anti-ghost.** -/
 theorem bridgeMint_circuit_rejects_wrong_ledger

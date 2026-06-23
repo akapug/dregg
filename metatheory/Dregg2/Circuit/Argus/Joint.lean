@@ -217,6 +217,7 @@ theorem argusPar_leg_bal_frame (k k₁ : RecordKernelState) (l : Leg)
   -- the only committing branch is the `some` of the gate; decode it.
   by_cases hg : authorizedB k.caps l.turn = true ∧ 0 ≤ l.turn.amt ∧ l.turn.amt ≤ k.bal l.turn.src l.asset
       ∧ l.turn.src ≠ l.turn.dst ∧ l.turn.src ∈ k.accounts ∧ l.turn.dst ∈ k.accounts
+      ∧ cellLifecycleLive k l.turn.src = true
   · rw [if_pos hg] at h
     rw [Option.some.injEq] at h
     subst h

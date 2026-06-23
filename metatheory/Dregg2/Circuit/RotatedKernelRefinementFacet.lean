@@ -172,6 +172,7 @@ def admitGuardAFacet (fcaps : FacetCaps) (provided : AuthProvided)
     (k : RecordKernelState) (tr : Turn) (a : AssetId) : Prop :=
   authorizedFacetB fcaps provided tr = true ∧ 0 ≤ tr.amt ∧ tr.amt ≤ k.bal tr.src a
     ∧ tr.src ≠ tr.dst ∧ tr.src ∈ k.accounts ∧ tr.dst ∈ k.accounts
+    ∧ cellLifecycleLive k tr.src = true
     ∧ acceptsEffects k tr.dst = true
 
 /-- **`BalanceMovementSpecFacet`** — the FAITHFUL full-state transfer spec, parameterized by the
@@ -208,8 +209,8 @@ theorem balanceMovementSpecFacet_to_toy (fcaps : FacetCaps) (provided : AuthProv
     (h : BalanceMovementSpecFacet fcaps provided st tr a st')
     (htoy : authorizedB st.kernel.caps tr = true) :
     BalanceMovementSpec st tr a st' := by
-  obtain ⟨⟨_, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩ := h
-  exact ⟨⟨htoy, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩
+  obtain ⟨⟨_, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩ := h
+  exact ⟨⟨htoy, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩
 
 /-! ## §3 — the `StateDecode ↔ cap-open` bridge: `TransferAuthoritySource`.
 
@@ -687,11 +688,11 @@ theorem transfer_descriptorRefines_facet (hash : List ℤ → ℤ)
   -- the VALUE leg (debit/credit/availability/frame/log) — REUSED verbatim from the value rung.
   have hval : BalanceMovementSpec pre tr a post :=
     transfer_descriptorRefines hash hside hsat pre post tr a henc
-  obtain ⟨⟨_htoy, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩ := hval
+  obtain ⟨⟨_htoy, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩ := hval
   -- the AUTHORITY leg — FORCED by the CANONICAL cap-open, faithfulness DISCHARGED (no carried `hfaith`).
   have hfaithAuth : authorizedFacetB fcaps .signature tr = true :=
     transferAuthoritySourceCanon_authorizes hash fcaps .signature pre tr hauth
-  exact ⟨⟨hfaithAuth, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩
+  exact ⟨⟨hfaithAuth, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩
 
 set_option maxHeartbeats 800000 in
 /-- **`transfer_descriptorRefines_facet_tierGeneral` (F6) — the FAITHFUL refinement at the GENERAL
@@ -711,10 +712,10 @@ theorem transfer_descriptorRefines_facet_tierGeneral (hash : List ℤ → ℤ)
     BalanceMovementSpecFacet fcaps provided pre tr a post := by
   have hval : BalanceMovementSpec pre tr a post :=
     transfer_descriptorRefines hash hside hsat pre post tr a henc
-  obtain ⟨⟨_htoy, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩ := hval
+  obtain ⟨⟨_htoy, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩ := hval
   have hfaithAuth : authorizedFacetB fcaps provided tr = true :=
     transferAuthoritySourceCanon_authorizes hash fcaps provided pre tr hauth
-  exact ⟨⟨hfaithAuth, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩
+  exact ⟨⟨hfaithAuth, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩
 
 /-- **`transfer_descriptorRefines_facet_rejects_unauthorized` (the faithful authority tooth).** If the
 deployed two-axis gate REJECTS the turn (`authorizedFacetB fcaps .signature tr = false`), then NO
@@ -811,8 +812,8 @@ theorem balanceMovementSpecFacet_owner_admits (fcaps : FacetCaps) (provided : Au
     (howner : tr.actor = tr.src)
     (h : BalanceMovementSpec st tr a st') :
     BalanceMovementSpecFacet fcaps provided st tr a st' := by
-  obtain ⟨⟨_, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩ := h
-  refine ⟨⟨?_, hnn, hav, hne, hls, hld, hacc⟩, hrest⟩
+  obtain ⟨⟨_, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩ := h
+  refine ⟨⟨?_, hnn, hav, hne, hls, hld, hlive, hacc⟩, hrest⟩
   exact authorizedFacetB_owner fcaps provided tr howner
 
 /-! ## §8 — Axiom hygiene. -/

@@ -77,7 +77,7 @@ the chained step `bridgeMintA` dispatches to) checks, as a `Prop`: BRIDGE-issuer
 non-negativity ∧ bridge-well liveness ∧ destination liveness ∧ distinctness. -/
 def inboundMintAdmit (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (value : ℤ) : Prop :=
   mintAuthorizedB k.caps actor a = true ∧ 0 ≤ value
-    ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+    ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true
 
 /-- The truthful receipt a committed `bridgeMintA` prepends to the log: the bridge-well → recipient
 row of size `value`, exactly `recCMintAsset`'s `log` head. Stated HERE so the spec's `log` clause
@@ -158,6 +158,7 @@ theorem recCMintAsset_iff_inboundSpec (st : RecChainedState) (actor cell : CellI
   unfold recCMintAsset recKMintAsset InboundMintSpec inboundMintAdmit inboundMintReceipt
   by_cases hg : mintAuthorizedB st.kernel.caps actor a = true ∧ 0 ≤ value
       ∧ a ∈ st.kernel.accounts ∧ cell ∈ st.kernel.accounts ∧ a ≠ cell
+      ∧ cellLifecycleLive st.kernel a = true
   · rw [if_pos hg]
     constructor
     · intro h
@@ -214,7 +215,7 @@ theorem bridgeMint_credit (st : RecChainedState) (actor cell : CellId) (a : Asse
         → st'.kernel.bal c b = st.kernel.bal c b) := by
   have hspec := (execBridgeMintA_iff_spec st actor cell a value st').mp h
   have hbal : st'.kernel.bal = recTransferBal st.kernel.bal a cell a value := hspec.2.1
-  have hne : a ≠ cell := hspec.1.2.2.2.2
+  have hne : a ≠ cell := hspec.1.2.2.2.2.1
   obtain ⟨hdeb, hcred, hframe⟩ := recTransferBal_inbound_correct st.kernel.bal cell a value hne
   refine ⟨?_, ?_, ?_⟩
   · rw [hbal]; exact hdeb
@@ -274,6 +275,17 @@ theorem bridgeMint_rejects_dead_cell (st : RecChainedState) (actor cell : CellId
   rw [execFullA_bridgeMintA]; unfold recCMintAsset recKMintAsset
   rw [if_neg (by rintro ⟨_, _, _, h, _⟩; exact absurd h hbad)]
 
+/-- **`bridgeMint_rejects_destroyed_bridge` — "Destroyed is terminal" (the lifecycle tooth).** A
+`bridgeMintA` whose BRIDGE cell is a member account but NOT lifecycle-Live
+(`cellLifecycleLive caps a ≠ true` — a Destroyed/Sealed bridge cell) is REJECTED, even with full
+authority/membership: a Destroyed bridge cannot coin bridged value. The `acceptsEffects` liveness
+gate now bites at the executor (and so the spec) layer, matching dregg1's handler enforcement. -/
+theorem bridgeMint_rejects_destroyed_bridge (st : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (value : ℤ) (hdead : cellLifecycleLive st.kernel a ≠ true) :
+    execFullA st (.bridgeMintA actor cell a value) = none := by
+  rw [execFullA_bridgeMintA]; unfold recCMintAsset recKMintAsset
+  rw [if_neg (by rintro ⟨_, _, _, _, _, h⟩; exact absurd h hdead)]
+
 /-- **`bridgeMint_admits_iff` — the executor commits IFF the guard holds.** -/
 theorem bridgeMint_admits_iff (st : RecChainedState) (actor cell : CellId) (a : AssetId) (value : ℤ) :
     (∃ st', execFullA st (.bridgeMintA actor cell a value) = some st')
@@ -282,6 +294,7 @@ theorem bridgeMint_admits_iff (st : RecChainedState) (actor cell : CellId) (a : 
   unfold recCMintAsset recKMintAsset inboundMintAdmit
   by_cases hg : mintAuthorizedB st.kernel.caps actor a = true ∧ 0 ≤ value
       ∧ a ∈ st.kernel.accounts ∧ cell ∈ st.kernel.accounts ∧ a ≠ cell
+      ∧ cellLifecycleLive st.kernel a = true
   · rw [if_pos hg]; exact ⟨fun _ => hg, fun _ => ⟨_, rfl⟩⟩
   · rw [if_neg hg]
     constructor
@@ -322,6 +335,19 @@ def stB0 : RecChainedState :=
 #guard mintAuthorizedB stB0.kernel.caps 9 1 == true
 #guard mintAuthorizedB stB0.kernel.caps 0 1 == false
 
+/-- The SAME genesis state, but the BRIDGE cell (cell 1) has been DESTROYED (`lifecycle 1 = 3`) — a
+member account that no longer `acceptsEffects`. -/
+def stBDead : RecChainedState :=
+  { stB0 with kernel := { stB0.kernel with lifecycle := fun c => if c = 1 then 3 else 0 } }
+
+-- The bridge is STILL a member account (membership ≠ liveness) but NOT lifecycle-live:
+#guard decide (1 ∈ stBDead.kernel.accounts)  --  true
+#guard cellLifecycleLive stBDead.kernel 1 == false
+-- so the OTHERWISE-VALID privileged inbound mint is REFUSED ("Destroyed is terminal"):
+#guard decide ((execFullA stBDead (.bridgeMintA 9 0 1 40)).isNone)  --  true
+-- the SAME inbound mint over the LIVE bridge (stB0) commits:
+#guard (execFullA stB0 (.bridgeMintA 9 0 1 40)).isSome  --  true
+
 /-! ## §8 — Axiom-hygiene tripwires.
 
 Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
@@ -338,6 +364,7 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 #assert_axioms bridgeMint_rejects_negative
 #assert_axioms bridgeMint_rejects_dead_bridge
 #assert_axioms bridgeMint_rejects_dead_cell
+#assert_axioms bridgeMint_rejects_destroyed_bridge
 #assert_axioms bridgeMint_admits_iff
 
 end Dregg2.Circuit.Spec.BridgeInboundMint

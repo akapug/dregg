@@ -424,6 +424,16 @@ the live accounts. This is the conserved quantity — a domain measure over the 
 field (the `Spec.conservedInDomain Domain.balance` shape), NOT the whole `Value`. -/
 def recTotal (k : RecordKernelState) : ℤ := ∑ c ∈ k.accounts, balOf (k.cell c)
 
+/-- **`cellLifecycleLive k c` — the kernel-level lifecycle-LIVENESS predicate.**
+Does cell `c`'s lifecycle admit new effects (a credit/debit landing on it)? `true` only for the Live
+discriminant (`0`); a Sealed (`1`) or Destroyed (`3`) cell is fail-closed REJECTED. This is the
+kernel-twin of `TurnExecutorFull.acceptsEffects`/`EffectsState.cellLive` (both read the SAME `lifecycle`
+side-table and check `== 0`), defined HERE in `RecordKernel` (imported BY `TurnExecutorFull`, so
+kernel-level gates can use it without a cycle). `acceptsEffects k c = cellLifecycleLive k c`
+definitionally (`acceptsEffects_eq_cellLifecycleLive`), so the two are interchangeable. The per-asset
+transfer/mint/burn guards bind it (the source/issuer must be Live — "Destroyed is terminal"). -/
+def cellLifecycleLive (k : RecordKernelState) (c : CellId) : Bool := k.lifecycle c == 0
+
 /-! ## The record-cell transfer: debit/credit the `balance` FIELD. -/
 
 /-- Set the `balance` field of a record cell to `v` (overwriting in place; a non-record value
@@ -599,7 +609,8 @@ NOT `MultiAsset`'s `maAuthorizedB` toy), the amount is non-negative and availabl
 `src ≠ dst`, and both cells are live accounts. Rewrites ONLY the `bal` ledger's `a` column. -/
 def recKExecAsset (k : RecordKernelState) (turn : Turn) (a : AssetId) : Option RecordKernelState :=
   if authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
-      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts then
+      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ cellLifecycleLive k turn.src = true then
     some { k with bal := recTransferBal k.bal turn.src turn.dst a turn.amt }
   else
     none
@@ -648,10 +659,11 @@ theorem recKExecAsset_conserves_per_asset (k k' : RecordKernelState) (turn : Tur
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ cellLifecycleLive k turn.src = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨_, _, _, hne, hsrc, hdst⟩ := hg
+    obtain ⟨_, _, _, hne, hsrc, hdst, _⟩ := hg
     show (∑ c ∈ k.accounts, recTransferBal k.bal turn.src turn.dst a turn.amt c b)
         = ∑ c ∈ k.accounts, k.bal c b
     rcases eq_or_ne b a with hb | hb
@@ -671,6 +683,7 @@ theorem recKExecAsset_authorized (k k' : RecordKernelState) (turn : Turn) (a : A
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ cellLifecycleLive k turn.src = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -983,15 +996,6 @@ against THIS scope. For arms that first need their step def unfolded, do that si
 macro "bal_neutral" : tactic =>
   `(tactic| (simp only [recTotalAsset]; ring))
 
-/-- **`cellLifecycleLive k c` — the kernel-level lifecycle-LIVENESS predicate.**
-Does cell `c`'s lifecycle admit new effects (a credit/debit landing on it)? `true` only for the Live
-discriminant (`0`); a Sealed (`1`) or Destroyed (`3`) cell is fail-closed REJECTED. This is the
-kernel-twin of `TurnExecutorFull.acceptsEffects`/`EffectsState.cellLive` (both read the SAME `lifecycle`
-side-table and check `== 0`), defined HERE in `RecordKernel` (imported BY `TurnExecutorFull`, so
-kernel-level gates can use it without a cycle). `acceptsEffects k c = cellLifecycleLive k c`
-definitionally (`acceptsEffects_eq_cellLifecycleLive`), so the two are interchangeable. -/
-def cellLifecycleLive (k : RecordKernelState) (c : CellId) : Bool := k.lifecycle c == 0
-
 /-! ### §NOTE-CREATE — the grow-only COMMITMENT SET (faithful to dregg1's `apply_note_create`).
 
 dregg1's `apply_note_create` inserts a fresh Pedersen commitment into the off-ledger commitment tree;
@@ -1154,9 +1158,11 @@ theorem recKExecAsset_committed {k k' : RecordKernelState} {t : Turn} {a : Asset
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
       ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+      ∧ cellLifecycleLive k t.src = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
-    exact ⟨hg, h.symm⟩
+    obtain ⟨h1, h2, h3, h4, h5, h6, _⟩ := hg
+    exact ⟨⟨h1, h2, h3, h4, h5, h6⟩, h.symm⟩
   · rw [if_neg hg] at h
     exact absurd h (by simp)
 

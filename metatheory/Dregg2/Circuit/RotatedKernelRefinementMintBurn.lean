@@ -170,6 +170,10 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
   guardLiveCell : cell ∈ pre.kernel.accounts
   guardLiveWell : a ∈ pre.kernel.accounts
   guardDistinct : cell ≠ a
+  -- the issuer well is lifecycle-LIVE ("Destroyed is terminal"): membership (`guardLiveWell`) is NOT
+  -- liveness — a member-but-Destroyed well is refused. COMMITMENT-BINDABLE: it reads `lifecycle`,
+  -- which the deployed record_digest binds (and the `frLifecycle` frame already carries it).
+  guardLifecycleLive : cellLifecycleLive pre.kernel a = true
   -- the 16 non-`bal` kernel frame fields + the receipt-log advance (the full `BurnSpec` frame residual).
   frAccounts : post.kernel.accounts = pre.kernel.accounts
   frCell : post.kernel.cell = pre.kernel.cell
@@ -255,10 +259,10 @@ theorem burn_descriptorRefines (hash : List ℤ → ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
     Spec.SupplyDestruction.BurnSpec pre actor cell a amt post := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · -- BurnGuard: authority / non-neg / AVAILABILITY / live-cell / live-well / distinct.
+  · -- BurnGuard: authority / non-neg / AVAILABILITY / live-cell / live-well / distinct / lifecycle-live.
     exact ⟨henc.guardAuth, henc.guardNonNeg,
       burn_availability_forced hash hside hsat pre post actor cell a amt henc,
-      henc.guardLiveCell, henc.guardLiveWell, henc.guardDistinct⟩
+      henc.guardLiveCell, henc.guardLiveWell, henc.guardDistinct, henc.guardLifecycleLive⟩
   · exact henc.hledgerFrame
   · exact henc.logAdv
   · exact henc.frAccounts
@@ -376,6 +380,10 @@ structure rotatedEncodesMint (hash : List ℤ → ℤ)
   guardLiveWell : a ∈ pre.kernel.accounts
   guardLiveCell : cell ∈ pre.kernel.accounts
   guardDistinct : a ≠ cell
+  -- the issuer (well / bridge) cell is lifecycle-LIVE ("Destroyed is terminal"): a member-but-Destroyed
+  -- issuer is refused. COMMITMENT-BINDABLE: reads `lifecycle` (deployed record_digest binds it; the
+  -- `frLifecycle` frame already carries it).
+  guardLifecycleLive : cellLifecycleLive pre.kernel a = true
   -- the 16 non-`bal` kernel frame fields + the receipt-log advance.
   frAccounts : post.kernel.accounts = pre.kernel.accounts
   frCell : post.kernel.cell = pre.kernel.cell
@@ -426,9 +434,9 @@ theorem mint_descriptorRefines (hash : List ℤ → ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
     Spec.SupplyCreation.MintASpec pre actor cell a amt post := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · -- mintAdmit: authority / non-neg / well-liveness / recipient-liveness / distinctness.
+  · -- mintAdmit: authority / non-neg / well-membership / recipient-membership / distinctness / lifecycle-live.
     exact ⟨henc.guardAuth, henc.guardNonNeg, henc.guardLiveWell, henc.guardLiveCell,
-      henc.guardDistinct⟩
+      henc.guardDistinct, henc.guardLifecycleLive⟩
   · exact henc.hledgerFrame
   · exact henc.logAdv
   · exact henc.frAccounts

@@ -160,6 +160,7 @@ private theorem recKExecAsset_shape {k k' : RecordKernelState} {t : Turn} {a : A
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
       ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+      ∧ cellLifecycleLive k t.src = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     exact h.symm

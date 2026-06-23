@@ -306,6 +306,7 @@ theorem fulfil_advances_state {k k' : RecordKernelState} {e obligor : CellId} {a
           ∧ ({ actor := e, src := e, dst := obligor, amt := k.bal e asset } : Turn).src ≠ ({ actor := e, src := e, dst := obligor, amt := k.bal e asset } : Turn).dst
           ∧ ({ actor := e, src := e, dst := obligor, amt := k.bal e asset } : Turn).src ∈ k1.accounts
           ∧ ({ actor := e, src := e, dst := obligor, amt := k.bal e asset } : Turn).dst ∈ k1.accounts
+          ∧ cellLifecycleLive k1 ({ actor := e, src := e, dst := obligor, amt := k.bal e asset } : Turn).src = true
       · rw [if_pos hmv] at h; simp only [Option.some.injEq] at h; rw [← h]
       · rw [if_neg hmv] at h; exact absurd h (by simp)
     unfold obState
@@ -365,6 +366,9 @@ structure SettleReady (k : RecordKernelState) (e target : CellId) (asset : Asset
   distinct    : e ≠ target
   e_live      : e ∈ k.accounts
   target_live : target ∈ k.accounts
+  /-- The obligation cell's lifecycle admits the bond move out (the `recKExecAsset` SOURCE-liveness
+  gate). The bond settles out of the obligation cell, so the cell must be lifecycle-live. -/
+  e_lifecycle : cellLifecycleLive k e = true
 
 /-- An obligation settle COMMITS whenever the world is `SettleReady`. -/
 theorem obSettle_commits (k : RecordKernelState) (e target : CellId) (asset : AssetId)
@@ -378,13 +382,15 @@ theorem obSettle_commits (k : RecordKernelState) (e target : CellId) (asset : As
   have hacc : k1.accounts = k.accounts := rfl
   have hauth : authorizedB k1.caps { actor := e, src := e, dst := target, amt := k.bal e asset } = true := by
     unfold authorizedB; simp
+  have hlife : cellLifecycleLive k1 e = true := hr.e_lifecycle
   unfold recKExecAsset
   rw [if_pos]
   · exact Option.isSome_some
-  · refine ⟨hauth, hr.held_nonneg, ?_, hr.distinct, ?_, ?_⟩
+  · refine ⟨hauth, hr.held_nonneg, ?_, hr.distinct, ?_, ?_, ?_⟩
     · show k.bal e asset ≤ k1.bal e asset; rw [hbal]
     · show e ∈ k1.accounts; rw [hacc]; exact hr.e_live
     · show target ∈ k1.accounts; rw [hacc]; exact hr.target_live
+    · show cellLifecycleLive k1 e = true; exact hlife
 
 /-- A committed obligation settle DRAINS the bond column to 0 (the bond left exactly — there is no
 second "remaining" slot to keep in sync; the held column IS the single source of truth). The
@@ -405,6 +411,7 @@ theorem obSettle_drains_exactly (k : RecordKernelState) (e target : CellId) (ass
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src ≠ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).dst
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src ∈ k1.accounts
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).dst ∈ k1.accounts
+      ∧ cellLifecycleLive k1 ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src = true
   · rw [if_pos hmv] at h; simp only [Option.some.injEq] at h
     rw [← h]
     show recTransferBal k1.bal e target asset (k.bal e asset) e asset = 0
@@ -450,7 +457,7 @@ theorem settle_requires_live_target {k : RecordKernelState} {e target : CellId} 
     obSettle k e target asset newState = none := by
   unfold obSettle recKExecAsset
   rw [if_neg]
-  rintro ⟨_, _, _, _, _, htgt⟩
+  rintro ⟨_, _, _, _, _, htgt, _⟩
   exact hdead htgt
 
 /-- **`fulfil_requires_live_obligor`.** A fulfilment whose obligor target is not a live
@@ -579,11 +586,13 @@ def obWorld : RecordKernelState :=
 
 /-- The settle-ready bundle for fulfilling obWorld's obligation to obligor 2. -/
 theorem obWorld_fulfil_ready : SettleReady obWorld 0 2 0 :=
-  { held_nonneg := by decide, distinct := by decide, e_live := by decide, target_live := by decide }
+  { held_nonneg := by decide, distinct := by decide, e_live := by decide, target_live := by decide,
+    e_lifecycle := by decide }
 
 /-- The settle-ready bundle for slashing obWorld's obligation to obligee 1. -/
 theorem obWorld_slash_ready : SettleReady obWorld 0 1 0 :=
-  { held_nonneg := by decide, distinct := by decide, e_live := by decide, target_live := by decide }
+  { held_nonneg := by decide, distinct := by decide, e_live := by decide, target_live := by decide,
+    e_lifecycle := by decide }
 
 -- (i) the obligation is OPEN; condition slot 99, deadline slot 77:
 #guard (obState obWorld 0 == sOpen)                                 --  true

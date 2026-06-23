@@ -136,6 +136,7 @@ theorem recKExecAsset_dst_credited (k k' : RecordKernelState) (turn : Turn) (a :
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ Dregg2.Exec.cellLifecycleLive k turn.src = true
   · rw [if_pos hg, Option.some.injEq] at h
     subst h
     show recTransferBal k.bal turn.src turn.dst a turn.amt turn.dst a = _
@@ -150,6 +151,7 @@ theorem recKExecAsset_src_debited (k k' : RecordKernelState) (turn : Turn) (a : 
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ Dregg2.Exec.cellLifecycleLive k turn.src = true
   · rw [if_pos hg, Option.some.injEq] at h
     subst h
     show recTransferBal k.bal turn.src turn.dst a turn.amt turn.src a = _
@@ -165,6 +167,7 @@ theorem recKExecAsset_other_unchanged (k k' : RecordKernelState) (turn : Turn) (
   unfold recKExecAsset at h
   by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ Dregg2.Exec.cellLifecycleLive k turn.src = true
   · rw [if_pos hg, Option.some.injEq] at h
     subst h
     show recTransferBal k.bal turn.src turn.dst a turn.amt d a = _

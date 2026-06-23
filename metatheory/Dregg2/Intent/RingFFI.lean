@@ -35,7 +35,7 @@ set_option linter.dupNamespace false
 namespace Dregg2.Intent.RingFFI
 
 open Dregg2.Exec (RecordKernelState AssetId Turn CellId recKExecAsset recKExec recTotalAsset
-  balOf setBalance setBalance_balOf authorizedB recTransfer recTransferBal)
+  balOf setBalance setBalance_balOf authorizedB recTransfer recTransferBal cellLifecycleLive)
 
 /-- **`projAsset k a` — project the per-asset column `a` onto the scalar `balance` field** the FFI export
 `recKExec` reads. Each live cell's record gets its `balance` field overwritten to `k.bal c a`; `caps` and
@@ -50,6 +50,12 @@ def projAsset (k : RecordKernelState) (a : AssetId) : RecordKernelState :=
 @[simp] theorem projAsset_accounts (k : RecordKernelState) (a : AssetId) :
     (projAsset k a).accounts = k.accounts := rfl
 
+/-- The projection touches only the `cell` field, so it preserves the per-cell lifecycle registry —
+hence the kernel liveness predicate is unchanged. (`recKExecAsset` gates on SOURCE liveness; the export
+runs over the projection, so the two see the SAME liveness verdict.) -/
+@[simp] theorem projAsset_cellLifecycleLive (k : RecordKernelState) (a : AssetId) (c : CellId) :
+    cellLifecycleLive (projAsset k a) c = cellLifecycleLive k c := rfl
+
 /-- Reading the projected `balance` field back yields the `a`-column balance — the write/read law of the
 projection (`setBalance_balOf`). -/
 @[simp] theorem projAsset_balOf (k : RecordKernelState) (a : AssetId) (c : CellId) :
@@ -58,30 +64,56 @@ projection (`setBalance_balOf`). -/
   exact setBalance_balOf _ _
 
 /-- **GATE COINCIDENCE — the verified scalar export's commit-condition for a leg's turn over the
-asset-projected state is EXACTLY the per-asset leg gate.** Both reduce to: authorized over `src`, amount
-non-negative and available IN ASSET `a`, distinct endpoints, both live. So the FFI export accepts a leg
-precisely when the verified per-asset executor does. -/
+asset-projected state, conjoined with the SOURCE-liveness gate, is EXACTLY the per-asset leg gate.** Both
+reduce to: authorized over `src`, amount non-negative and available IN ASSET `a`, distinct endpoints,
+both accounts, and the SOURCE cell live (the `cellLifecycleLive` leg `recKExecAsset` now gates on). The
+projection preserves the lifecycle registry, so the export-over-projection plus the liveness check the
+live path marshals accepts a leg precisely when the verified per-asset executor does. -/
 theorem recKExec_projAsset_gate_iff (k : RecordKernelState) (turn : Turn) (a : AssetId) :
     (authorizedB (projAsset k a).caps turn = true ∧ 0 ≤ turn.amt
         ∧ turn.amt ≤ balOf ((projAsset k a).cell turn.src)
         ∧ turn.src ≠ turn.dst ∧ turn.src ∈ (projAsset k a).accounts
-        ∧ turn.dst ∈ (projAsset k a).accounts)
+        ∧ turn.dst ∈ (projAsset k a).accounts
+        ∧ cellLifecycleLive (projAsset k a) turn.src = true)
       ↔ (authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
-        ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts) := by
-  rw [projAsset_caps, projAsset_accounts, projAsset_balOf]
+        ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+        ∧ cellLifecycleLive k turn.src = true) := by
+  rw [projAsset_caps, projAsset_accounts, projAsset_balOf, projAsset_cellLifecycleLive]
 
-/-- **The FFI export COMMITS a leg iff the per-asset executor does.** A direct corollary of the gate
-coincidence: `recKExec (projAsset k a) turn` returns `some _` exactly when `recKExecAsset k turn a` does.
-The live Rust path reads the export's `ok` bit; this proves that bit is the verified per-asset
-accept/reject — no Rust gate re-derivation, no drift. -/
+/-- **The FFI export, AND the source-liveness check, COMMITS a leg iff the per-asset executor does.**
+The verified per-asset executor `recKExecAsset` now gates on SOURCE liveness (the `cellLifecycleLive`
+leg); the scalar export `recKExec` does not, so the export's `ok` bit alone is the per-asset verdict only
+once the live path also applies the lifecycle check it marshals. This pins exactly that: `recKExecAsset`
+commits iff the export over the projection commits AND the source cell is live — the bit the live Rust
+path computes (`ok && live`) is the verified per-asset accept/reject, no Rust gate re-derivation. -/
 theorem recKExec_projAsset_commits_iff (k : RecordKernelState) (turn : Turn) (a : AssetId) :
-    (recKExec (projAsset k a) turn).isSome = (recKExecAsset k turn a).isSome := by
+    ((recKExec (projAsset k a) turn).isSome && cellLifecycleLive k turn.src)
+      = (recKExecAsset k turn a).isSome := by
   unfold recKExec recKExecAsset
   by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
-  · rw [if_pos ((recKExec_projAsset_gate_iff k turn a).mpr hg), if_pos hg]
-    rfl
-  · rw [if_neg (fun h => hg ((recKExec_projAsset_gate_iff k turn a).mp h)), if_neg hg]
+      ∧ cellLifecycleLive k turn.src = true
+  · -- the full asset gate holds: the export's 6-gate (its first six legs) and liveness both hold.
+    have hge : authorizedB (projAsset k a).caps turn = true ∧ 0 ≤ turn.amt
+        ∧ turn.amt ≤ balOf ((projAsset k a).cell turn.src)
+        ∧ turn.src ≠ turn.dst ∧ turn.src ∈ (projAsset k a).accounts
+        ∧ turn.dst ∈ (projAsset k a).accounts := by
+      rw [projAsset_caps, projAsset_accounts, projAsset_balOf]
+      exact ⟨hg.1, hg.2.1, hg.2.2.1, hg.2.2.2.1, hg.2.2.2.2.1, hg.2.2.2.2.2.1⟩
+    rw [if_pos hg, if_pos hge]
+    simp [hg.2.2.2.2.2.2]
+  · rw [if_neg hg]
+    by_cases he : authorizedB (projAsset k a).caps turn = true ∧ 0 ≤ turn.amt
+        ∧ turn.amt ≤ balOf ((projAsset k a).cell turn.src)
+        ∧ turn.src ≠ turn.dst ∧ turn.src ∈ (projAsset k a).accounts
+        ∧ turn.dst ∈ (projAsset k a).accounts
+    · rw [if_pos he]
+      -- export commits, but the full asset gate failed; the missing leg is source liveness.
+      rw [projAsset_caps, projAsset_accounts, projAsset_balOf] at he
+      by_cases hlive : cellLifecycleLive k turn.src = true
+      · exact absurd ⟨he.1, he.2.1, he.2.2.1, he.2.2.2.1, he.2.2.2.2.1, he.2.2.2.2.2, hlive⟩ hg
+      · rw [Bool.not_eq_true] at hlive; simp [hlive]
+    · rw [if_neg he]; rfl
 
 /-- **COLUMN AGREEMENT — when a leg commits, the export's post-state `balance` field equals the per-asset
 executor's `a`-column.** The verified scalar export, run over the asset-`a` projection, writes back
@@ -91,23 +123,26 @@ on the moved column. The FFI fold's running ledger tracks the verified one with 
 theorem recKExec_projAsset_column_agrees (k k' : RecordKernelState) (turn : Turn) (a : AssetId)
     (h : recKExecAsset k turn a = some k') (c : CellId) :
     balOf (((recKExec (projAsset k a) turn).getD (projAsset k a)).cell c) = k'.bal c a := by
-  -- the leg commits, so its gate holds.
+  -- the leg commits, so its FULL gate holds (incl. the source-liveness leg).
   have hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
-      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts := by
+      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+      ∧ cellLifecycleLive k turn.src = true := by
     unfold recKExecAsset at h
     by_cases hgg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
         ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+        ∧ cellLifecycleLive k turn.src = true
     · exact hgg
     · rw [if_neg hgg] at h; exact absurd h (by simp)
   -- the per-asset post-state `k'` is the `a`-column transfer.
   have hk' : k' = { k with bal := recTransferBal k.bal turn.src turn.dst a turn.amt } := by
     unfold recKExecAsset at h; rw [if_pos hg] at h; exact ((Option.some.injEq _ _).mp h).symm
-  -- the export's gate fires over the projection (gate coincidence).
+  -- the export's (6-leg) gate fires over the projection (the asset gate's first six legs).
   have hge : authorizedB (projAsset k a).caps turn = true ∧ 0 ≤ turn.amt
       ∧ turn.amt ≤ balOf ((projAsset k a).cell turn.src)
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ (projAsset k a).accounts
-      ∧ turn.dst ∈ (projAsset k a).accounts :=
-    (recKExec_projAsset_gate_iff k turn a).mpr hg
+      ∧ turn.dst ∈ (projAsset k a).accounts := by
+    rw [projAsset_caps, projAsset_accounts, projAsset_balOf]
+    exact ⟨hg.1, hg.2.1, hg.2.2.1, hg.2.2.2.1, hg.2.2.2.2.1, hg.2.2.2.2.2.1⟩
   have hexec : recKExec (projAsset k a) turn
       = some { (projAsset k a) with
                 cell := recTransfer (projAsset k a).cell turn.src turn.dst turn.amt } := by
@@ -137,7 +172,8 @@ accept/reject bit and its produced post-column ARE the verified per-asset execut
 intent fulfilled = a verified executor turn" is not a Rust mirror dressed as verified: the Rust fold's
 verdict and ledger ARE the verified `settleRing`'s, leg by leg. -/
 theorem ffi_export_realises_settleRing_leg (k : RecordKernelState) (turn : Turn) (a : AssetId) :
-    (recKExec (projAsset k a) turn).isSome = (recKExecAsset k turn a).isSome ∧
+    ((recKExec (projAsset k a) turn).isSome && cellLifecycleLive k turn.src)
+        = (recKExecAsset k turn a).isSome ∧
       (∀ k', recKExecAsset k turn a = some k' →
         ∀ c, balOf (((recKExec (projAsset k a) turn).getD (projAsset k a)).cell c) = k'.bal c a) :=
   ⟨recKExec_projAsset_commits_iff k turn a,
