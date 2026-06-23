@@ -11,6 +11,14 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### DIRECTIONS RECONSTRUCTION (2026-06-23): the 06-21→06-23 far-seeing arc, recovered.
+`docs/deos/RECONSTRUCTED-DIRECTIONS-2026-06-23.md` — mined the session corpus via `cv` after a
+compaction kept the mechanics but lost the far-seeing. The stake (an agent living in dregg with
+caps+money), the polis/polisware constitution (event-structure+game-semantics home; legitimacy=
+non-regression; knowledge-as-behavior; holes-as-anti-seduction), the rehydratable membrane,
+symbolic-witnessing=n=1, apps-as-cells, the desktop spine, priorities/orderings, constraints, and
+the open-loop ↔ in-flight-lane map. Orient from this doc, not the compaction summary.
+
 
 ### SESSION RESUME — deos resumes the exact image on login (2026-06-22): LANDED · tails.
 The Houyhnhnm orthogonal-persistence wound ("in-session state doesn't survive reboot") is
