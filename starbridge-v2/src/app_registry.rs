@@ -589,10 +589,16 @@ impl AppRegistry {
                 // (`World::turn` → `World::commit_turn`), reusing the app crate's
                 // OWN `*_program()` + `*_effects()`/effect recipe so the World
                 // path fires the SAME verified turn the framework path does —
-                // only the ledger is the cockpit's. (Apps whose first affordance
-                // needs a Merkle-membership witness / sender-bound caveat the
-                // single-custody `World` path cannot carry — identity,
-                // governed-namespace, supply-chain — are NOT wired here; polis
+                // only the ledger is the cockpit's.
+                //
+                // THE SENDER-BOUND TIER (`commit_as`) — supply-chain /
+                // identity / governed-namespace, whose representative affordance
+                // reads the turn's SENDER (`SenderInSlot` / `SenderAuthorized`),
+                // are NOW wired too. The executor derives `ctx.sender` from the
+                // AGENT cell's pubkey (not the `Unchecked` authorization), and the
+                // agent IS the app cell (seeded as `Cell::with_balance(pubkey, …)`),
+                // so seeding the sender slot/root over THAT pubkey + attaching the
+                // single-member membership proof clears the sender clause. (polis
                 // and first-room are not `DeosApp`s. See the module note.)
                 // ───────────────────────────────────────────────────────────
                 AppEntry {
@@ -1451,6 +1457,322 @@ impl AppRegistry {
                         Ok((spine, receipt))
                     },
                 },
+                // ───────────────────────────────────────────────────────────
+                // THE SENDER-BOUND WAVE — affordances that read the turn's
+                // SENDER, committed through `AppWorldSpine::commit_as`.
+                // ───────────────────────────────────────────────────────────
+                AppEntry {
+                    id: "supply-chain-provenance",
+                    name: "Supply-Chain Provenance",
+                    description:
+                        "A custody-chain item (mint → handoff) — the incoming custodian accepts custody, \
+                         advancing the actor-bound baton (the SenderInSlot(CUSTODIAN) tooth bites).",
+                    ctor: starbridge_supply_chain_provenance::item_app,
+                    seed: |exec, _cclerk| {
+                        starbridge_supply_chain_provenance::seed_item(exec, "manufacturer");
+                    },
+                    drive: |app, sub| {
+                        use starbridge_supply_chain_provenance as sc;
+                        sc::fire_accept_custody(
+                            app,
+                            &sc::CUSTODIAN_RIGHTS,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                        )
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_supply_chain_provenance as sc;
+                        let item = app.cells()[0].cell();
+                        // The custodian IS the firing principal (the agent cell's pubkey =
+                        // the executor's `ctx.sender`). Mint the item TO that principal at
+                        // genesis, so `SenderInSlot(CUSTODIAN)` holds on the seeded baton —
+                        // exactly as `mint_effects_signed` binds the signer.
+                        let custodian = app.cipherclerk().public_key().0;
+                        let genesis_event =
+                            sc::custody_event(&sc::GENESIS_PREV, &custodian, 1);
+                        let genesis_link =
+                            sc::link_hash(&sc::GENESIS_PREV, &genesis_event);
+                        // SEED the minted item onto World: `item_program` (the custody policy:
+                        // AnyOf[Immutable, SenderInSlot(CUSTODIAN)] + StrictMonotonic(EPOCH) +
+                        // Monotonic(HEAD) + WriteOnce(links)) + the genesis baseline (CUSTODIAN
+                        // = the firing principal, EPOCH=1, HEAD=1, link_0, TIP).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            item,
+                            custodian,
+                            default_domain_token(),
+                            sc::item_program(),
+                            &[
+                                SeedField {
+                                    slot: sc::CUSTODIAN_SLOT as usize,
+                                    value: custodian,
+                                },
+                                SeedField {
+                                    slot: sc::EPOCH_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                                SeedField {
+                                    slot: sc::link_slot(0),
+                                    value: genesis_link,
+                                },
+                                SeedField {
+                                    slot: sc::HEAD_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                                SeedField {
+                                    slot: sc::TIP_SLOT as usize,
+                                    value: genesis_link,
+                                },
+                            ],
+                        );
+                        // COMMIT `accept_custody` through World, AUTHENTICATED: the incoming
+                        // holder takes the baton FOR ITSELF (CUSTODIAN := the firing principal,
+                        // unchanged value), strictly advances EPOCH 1 → 2, appends link_1
+                        // (WriteOnce), advances HEAD 1 → 2, points TIP. `SenderInSlot(CUSTODIAN)`
+                        // holds because `ctx.sender` == the agent pubkey == the written CUSTODIAN.
+                        // No witness blob needed (the clause reads `ctx.sender` directly).
+                        let receipt = spine.commit_as(
+                            custodian,
+                            "accept_custody",
+                            &sc::CUSTODIAN_RIGHTS,
+                            &sc::CUSTODIAN_RIGHTS,
+                            vec![],
+                            |live| {
+                                let from = live.fields[sc::CUSTODIAN_SLOT as usize];
+                                let prev = live.fields[sc::TIP_SLOT as usize];
+                                let event = sc::custody_event(&from, &custodian, 2);
+                                let link = sc::link_hash(&prev, &event);
+                                vec![
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: item,
+                                        index: sc::CUSTODIAN_SLOT as usize,
+                                        value: custodian,
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: item,
+                                        index: sc::EPOCH_SLOT as usize,
+                                        value: dregg_app_framework::field_from_u64(2),
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: item,
+                                        index: sc::link_slot(1),
+                                        value: link,
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: item,
+                                        index: sc::HEAD_SLOT as usize,
+                                        value: dregg_app_framework::field_from_u64(2),
+                                    },
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: item,
+                                        index: sc::TIP_SLOT as usize,
+                                        value: link,
+                                    },
+                                ]
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "identity",
+                    name: "Identity / Credentials",
+                    description:
+                        "A credential issuer (issue → revoke) — an authorized issuer issues one credential, \
+                         advancing the issuance sequence (the SenderAuthorized membership tooth bites).",
+                    ctor: starbridge_identity::identity_app,
+                    seed: |exec, cclerk| {
+                        starbridge_identity::seed_issuer(exec, cclerk, &starbridge_identity::kyc_schema());
+                    },
+                    drive: |app, sub| {
+                        use starbridge_identity as id;
+                        id::fire_issue(app, &id::ISSUER_RIGHTS, sub.cipherclerk(), sub.executor())
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_identity as id;
+                        let issuer = app.cells()[0].cell();
+                        // The authorized issuer IS the firing principal (agent pubkey =
+                        // ctx.sender). Seed the auth root as the single-member set over THAT
+                        // pubkey; the membership proof over the same pubkey clears
+                        // `SenderAuthorized(PublicRoot { ISSUER_AUTH_ROOT_SLOT })`.
+                        let signer = app.cipherclerk().public_key().0;
+                        let auth_root =
+                            dregg_turn::executor::single_member_authorized_root(&signer);
+                        let schema_hash =
+                            id::schema_commitment(&id::kyc_schema());
+                        // SEED onto World: `issuer_program` (WriteOnce SCHEMA + MonotonicSequence
+                        // ISSUANCE_COUNTER + Monotonic REVOCATION_ROOT + SenderAuthorized) + the
+                        // `seed_issuer` baseline (schema bound, counters 0, auth root = signer).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            issuer,
+                            signer,
+                            default_domain_token(),
+                            id::issuer_program(),
+                            &[
+                                SeedField {
+                                    slot: id::SCHEMA_COMMITMENT_SLOT,
+                                    value: schema_hash,
+                                },
+                                SeedField {
+                                    slot: id::ISSUANCE_COUNTER_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: id::REVOCATION_ROOT_SLOT,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: id::ISSUER_AUTH_ROOT_SLOT,
+                                    value: auth_root,
+                                },
+                            ],
+                        );
+                        // COMMIT `issue` through World, AUTHENTICATED: advance the issuance
+                        // counter +1 off live state (MonotonicSequence holds), CARRYING the
+                        // single-member membership proof so the real MerkleMembership verifier
+                        // admits the authorized signer (the SenderAuthorized tooth).
+                        let witness =
+                            dregg_turn::action::WitnessBlob::merkle_path(
+                                dregg_turn::executor::single_member_membership_proof(&signer),
+                            );
+                        let receipt = spine.commit_as(
+                            signer,
+                            "issue",
+                            &id::ISSUER_RIGHTS,
+                            &id::ISSUER_RIGHTS,
+                            vec![witness],
+                            |live| {
+                                let live_counter =
+                                    field_tail_u64(&live.fields[id::ISSUANCE_COUNTER_SLOT]);
+                                let new_counter = live_counter.saturating_add(1);
+                                vec![
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: issuer,
+                                        index: id::ISSUANCE_COUNTER_SLOT,
+                                        value: dregg_app_framework::field_from_u64(new_counter),
+                                    },
+                                    dregg_app_framework::Effect::EmitEvent {
+                                        cell: issuer,
+                                        event: dregg_app_framework::Event::new(
+                                            dregg_app_framework::symbol("credential-issued"),
+                                            vec![dregg_app_framework::field_from_u64(new_counter)],
+                                        ),
+                                    },
+                                ]
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
+                AppEntry {
+                    id: "governed-namespace",
+                    name: "Governed Namespace",
+                    description:
+                        "A constitutionally-governed route table (propose → vote → commit) — a committee \
+                         member opens a proposal, advancing the pending root (the SenderAuthorized committee tooth bites).",
+                    ctor: starbridge_governed_namespace::governance_app,
+                    seed: |exec, _cclerk| {
+                        use starbridge_governed_namespace as gn;
+                        gn::seed_governance(
+                            exec,
+                            dregg_app_framework::field_from_bytes(b"committee-v0"),
+                            2,
+                            1,
+                            dregg_app_framework::field_from_bytes(b"genesis-route-table-root"),
+                        );
+                    },
+                    drive: |app, sub| {
+                        use starbridge_governed_namespace as gn;
+                        gn::fire_propose(app, &gn::COMMITTEE_RIGHTS, sub.cipherclerk(), sub.executor())
+                    },
+                    #[cfg(feature = "embedded-executor")]
+                    world_drive: |app, world| {
+                        use starbridge_governed_namespace as gn;
+                        let board = app.cells()[0].cell();
+                        // The committee member IS the firing principal (agent pubkey =
+                        // ctx.sender). Seed the committee root as the single-member set over
+                        // THAT pubkey; the membership proof over the same pubkey clears
+                        // `SenderAuthorized(PublicRoot { GOVERNANCE_COMMITTEE_ROOT_SLOT })`.
+                        let signer = app.cipherclerk().public_key().0;
+                        let committee_root =
+                            dregg_turn::executor::single_member_authorized_root(&signer);
+                        let route_table_root =
+                            dregg_app_framework::field_from_bytes(b"genesis-route-table-root");
+                        // SEED onto World: `governance_program` (the Cases program; the
+                        // `propose_table_update` case binds Monotonic(PENDING) + SenderAuthorized)
+                        // + the `seed_governance` baseline (committee root = signer, threshold,
+                        // version=1, route table, PENDING=0).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            board,
+                            signer,
+                            default_domain_token(),
+                            gn::governance_program(),
+                            &[
+                                SeedField {
+                                    slot: gn::GOVERNANCE_COMMITTEE_ROOT_SLOT as usize,
+                                    value: committee_root,
+                                },
+                                SeedField {
+                                    slot: gn::THRESHOLD_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(2),
+                                },
+                                SeedField {
+                                    slot: gn::VERSION_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(1),
+                                },
+                                SeedField {
+                                    slot: gn::ROUTE_TABLE_ROOT_SLOT as usize,
+                                    value: route_table_root,
+                                },
+                                SeedField {
+                                    slot: gn::PENDING_PROPOSAL_ROOT_SLOT as usize,
+                                    value: dregg_app_framework::field_from_u64(0),
+                                },
+                            ],
+                        );
+                        // COMMIT `propose_table_update` through World, AUTHENTICATED: advance
+                        // the pending root past its live value (Monotonic in the propose case),
+                        // CARRYING the single-member membership proof so the real
+                        // MerkleMembership verifier admits the committee member.
+                        let witness =
+                            dregg_turn::action::WitnessBlob::merkle_path(
+                                dregg_turn::executor::single_member_membership_proof(&signer),
+                            );
+                        let receipt = spine.commit_as(
+                            signer,
+                            "propose_table_update",
+                            &gn::COMMITTEE_RIGHTS,
+                            &gn::COMMITTEE_RIGHTS,
+                            vec![witness],
+                            |live| {
+                                let pending = field_tail_u64(
+                                    &live.fields[gn::PENDING_PROPOSAL_ROOT_SLOT as usize],
+                                );
+                                let new_pending =
+                                    dregg_app_framework::field_from_u64(pending.saturating_add(1));
+                                vec![
+                                    dregg_app_framework::Effect::SetField {
+                                        cell: board,
+                                        index: gn::PENDING_PROPOSAL_ROOT_SLOT as usize,
+                                        value: new_pending,
+                                    },
+                                    dregg_app_framework::Effect::EmitEvent {
+                                        cell: board,
+                                        event: dregg_app_framework::Event::new(
+                                            dregg_app_framework::symbol("proposal-opened"),
+                                            vec![new_pending],
+                                        ),
+                                    },
+                                ]
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                },
             ],
         }
     }
@@ -1512,6 +1834,10 @@ mod tests {
             "subscription",
             "swarm-orchestration",
             "tool-access-delegation",
+            // The sender-bound wave.
+            "supply-chain-provenance",
+            "identity",
+            "governed-namespace",
         ] {
             assert!(ids.contains(&id), "{id} is wired into the standard registry");
         }
@@ -1705,6 +2031,49 @@ mod tests {
                 entry.id
             );
             assert!(launched.receipt.action_count >= 1, "{} fired an action", entry.id);
+        }
+    }
+
+    /// **THE SENDER-BOUND PROOF** — the three sender-reading apps launch on World AND
+    /// their committed turn GENUINELY carried the sender. The proof is by REFUTATION:
+    /// the affordance's installed program clause reads `ctx.sender` (supply-chain's
+    /// `SenderInSlot(CUSTODIAN)`, identity's + governed-namespace's `SenderAuthorized`),
+    /// and the executor re-enforces it on commit. If the sender were absent (the bare
+    /// `Unchecked` path with no agent-pubkey sender), the clause would surface
+    /// `MissingContextField` and the turn would be REJECTED. A COMMITTED receipt on
+    /// `World::receipts()` therefore proves the sender clause was SATISFIED — i.e. the
+    /// turn carried the sender the seeded slot/root commits to.
+    #[cfg(feature = "embedded-executor")]
+    #[test]
+    fn the_sender_bound_apps_carry_their_sender_onto_world() {
+        let reg = AppRegistry::standard();
+        for id in ["supply-chain-provenance", "identity", "governed-namespace"] {
+            let world = Rc::new(RefCell::new(World::new()));
+            let receipts_before = world.borrow().receipts().len();
+            let launched = reg
+                .launch_on_world(id, [0xABu8; 32], Rc::clone(&world))
+                .unwrap_or_else(|| panic!("{id} is in the standard registry"))
+                .unwrap_or_else(|e| panic!("{id} commits its sender-bound turn onto World: {e}"));
+            let app_cell = launched.primary_cell();
+
+            // The cell is on the cockpit World ledger.
+            assert!(
+                world.borrow().ledger().get(&app_cell).is_some(),
+                "{id} cell is on the cockpit World ledger"
+            );
+            // ONE receipt landed in World::receipts() — and because the installed program
+            // clause reads ctx.sender, this committed receipt PROVES the sender was carried
+            // (a missing sender would have been a MissingContextField rejection).
+            assert_eq!(
+                world.borrow().receipts().len(),
+                receipts_before + 1,
+                "{id} committed its sender-bound turn (sender clause satisfied ⇒ sender carried)"
+            );
+            assert_eq!(
+                launched.receipt.agent, app_cell,
+                "{id} World receipt is authored by the app cell"
+            );
+            assert!(launched.receipt.action_count >= 1, "{id} fired an action");
         }
     }
 }

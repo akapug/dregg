@@ -45,6 +45,7 @@ use dregg_app_framework::{
     symbol, AuthRequired, CellProgram, Effect, FireExecuteError, Turn, TurnReceipt,
 };
 use dregg_cell::state::FieldElement;
+use dregg_turn::action::WitnessBlob;
 use dregg_types::CellId;
 
 use crate::world::{open_permissions, CommitOutcome, World};
@@ -229,6 +230,93 @@ impl AppWorldSpine {
         let outcome = {
             let mut w = self.world.borrow_mut();
             let turn = self.method_turn(&w, method, produced);
+            w.commit_turn(turn)
+        };
+        match outcome {
+            CommitOutcome::Committed { receipt, .. } => Ok(receipt),
+            CommitOutcome::Rejected { reason, .. } => Err(WorldFireError::World { reason }),
+            CommitOutcome::Queued { .. } => Err(WorldFireError::World {
+                reason: "app turn queued (World is suspended)".to_string(),
+            }),
+        }
+    }
+
+    /// **Commit one AUTHENTICATED affordance fire through the live `World`** — the
+    /// sender-bound path for affordances whose installed `CellProgram` reads the turn's
+    /// SENDER (`SenderInSlot` / `SenderAuthorized` / `SenderMemberOf`).
+    ///
+    /// Identical to [`AppWorldSpine::commit`] in its two teeth (the in-band cap-gate, then
+    /// `World`'s executor re-enforcing the app program), with ONE addition: the action
+    /// carries `witness_blobs` — the membership proof a `SenderAuthorized` clause's
+    /// `MerkleMembership` verifier (or a `BlindedSet`/`ProofBytes` clause) binds and checks.
+    ///
+    /// ## What carries the sender
+    ///
+    /// The cockpit's `World` is single-custody (`Authorization::Unchecked`); it does NOT
+    /// sign turns. But the executor does NOT read the sender from the action's
+    /// `Authorization` for the `CellProgram` re-enforcement — it reads it from the AGENT
+    /// CELL's public key (`turn/src/executor/execute_tree.rs`: `parent_pk_opt = ledger
+    /// .get(parent_cell).public_key()` → `EvalContext.sender`). The agent cell IS the app
+    /// cell ([`Self::app_cell`]), seeded on `World` as `Cell::with_balance(public_key, …)`,
+    /// so `ctx.sender == public_key` — the SAME pubkey the app crates pass to
+    /// `single_member_authorized_root` when seeding the slot root. Hence a `SenderInSlot`
+    /// affordance is satisfied by seeding `slot := public_key`, and a `SenderAuthorized`
+    /// affordance by seeding `slot := single_member_authorized_root(public_key)` and
+    /// attaching `single_member_membership_proof(public_key)` here as a `MerklePath` blob.
+    ///
+    /// `sender` is the principal the slot/root commits to (for the caller's clarity and a
+    /// debug-assert that it matches the live agent pubkey); the executor's `ctx.sender` is
+    /// the agent pubkey regardless, so passing the wrong one cannot forge authority — it
+    /// would simply make the affordance's sender clause REFUSE (fail-closed).
+    pub fn commit_as<F>(
+        &self,
+        sender: [u8; 32],
+        method: &str,
+        held: &AuthRequired,
+        required_rights: &AuthRequired,
+        witness_blobs: Vec<WitnessBlob>,
+        effects: F,
+    ) -> Result<TurnReceipt, WorldFireError>
+    where
+        F: FnOnce(&dregg_cell::state::CellState) -> Vec<Effect>,
+    {
+        // Tooth 1 (CAP): the REAL is_attenuation, in-band. Refused ⇒ nothing committed.
+        if !dregg_cell::is_attenuation(held, required_rights) {
+            return Err(WorldFireError::Gate(FireExecuteError::Gate(
+                dregg_app_framework::FireError::Unauthorized {
+                    affordance: method.to_string(),
+                    required: required_rights.clone(),
+                    held: held.clone(),
+                },
+            )));
+        }
+        let live = self.live_state().ok_or_else(|| WorldFireError::World {
+            reason: "app cell has no live state on the World ledger (was it seeded?)".to_string(),
+        })?;
+        // The executor derives `ctx.sender` from the agent cell's pubkey; assert the caller's
+        // declared `sender` matches it, so a `SenderInSlot`/`SenderAuthorized` seed that
+        // commits a DIFFERENT principal is caught here (rather than as an opaque program
+        // refusal). This binds the seeded root + the proof to the actual signing principal.
+        debug_assert_eq!(
+            self.world
+                .borrow()
+                .ledger()
+                .get(&self.app_cell)
+                .map(|c| *c.public_key()),
+            Some(sender),
+            "commit_as sender must equal the app (agent) cell's public key — the executor's ctx.sender"
+        );
+        let produced = effects(&live);
+        let outcome = {
+            let mut w = self.world.borrow_mut();
+            let mut turn = self.method_turn(&w, method, produced);
+            // Stamp the membership/sender witness onto the (single) root action so the
+            // `SenderAuthorized` evaluator binds it (it requires a UNIQUE MerklePath/
+            // ProofBytes blob). `SenderInSlot` needs no blob (it reads ctx.sender directly),
+            // so an empty `witness_blobs` is fine for that case.
+            if let Some(root) = turn.call_forest.roots.get_mut(0) {
+                root.action.witness_blobs = witness_blobs;
+            }
             w.commit_turn(turn)
         };
         match outcome {

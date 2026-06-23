@@ -3359,6 +3359,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-credentials"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-bridge",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-commit",
+ "dregg-macaroon",
+ "dregg-token",
+ "dregg-trace",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dregg-dfa"
 version = "0.1.0"
 dependencies = [
@@ -13857,6 +13873,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbridge-governed-namespace"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-dfa",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-identity"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-credentials",
+ "dregg-token",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "starbridge-nameservice"
 version = "0.1.0"
 dependencies = [
@@ -13923,6 +13969,20 @@ dependencies = [
  "blake3",
  "dregg-app-framework",
  "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-supply-chain-provenance"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-coord",
+ "dregg-turn",
  "dregg-types",
  "serde",
  "serde_json",
@@ -14015,11 +14075,14 @@ dependencies = [
  "starbridge-compute-exchange",
  "starbridge-escrow-market",
  "starbridge-gallery",
+ "starbridge-governed-namespace",
+ "starbridge-identity",
  "starbridge-nameservice",
  "starbridge-privacy-voting",
  "starbridge-sealed-auction",
  "starbridge-storage-gateway-mandate",
  "starbridge-subscription",
+ "starbridge-supply-chain-provenance",
  "starbridge-swarm-orchestration",
  "starbridge-tool-access-delegation",
  "starbridge-tussle",
