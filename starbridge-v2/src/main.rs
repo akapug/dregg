@@ -29,18 +29,14 @@ use starbridge_v2::client;
 // The embedded engine + reflective model + dynamics live in the library crate
 // (`starbridge_v2::{world, dynamics, reflect}`) so they are `cargo test`-able.
 
+// The gpui presentation plane (`cockpit`, `login`, `views`, `dock`) now lives in
+// the LIBRARY (`starbridge_v2::{cockpit, login, views, dock}`, gpui-gated) so the
+// SAME cockpit renders on EITHER platform — natively here, and in the browser via
+// the `starbridge-v2/web` cdylib on `gpui_web` (see docs/deos/WEB-DEOS.md). The bin
+// reaches them through the library crate; this alias keeps `cockpit::Cockpit` /
+// `login::LoginSurface` paths below unchanged.
 #[cfg(feature = "gpui-ui")]
-mod cockpit;
-// THE LOGIN CEREMONY surface — the boot front door. deos boots into THIS (not the
-// cockpit directly); picking an identity runs the real session ceremony
-// (`starbridge_v2::session`) and swaps the window root to the cockpit, wrapped in
-// the session shell (the logout action). gpui-gated; references `cockpit::Cockpit`.
-#[cfg(feature = "gpui-ui")]
-mod login;
-#[cfg(feature = "gpui-ui")]
-mod views;
-// `views` (the older NodeClient-bound rail components) is also what a future
-// remote-federation panel reuses; it is gpui-gated.
+use starbridge_v2::{cockpit, login};
 
 #[cfg(feature = "embedded-executor")]
 use starbridge_v2::{demo, reflect, world};

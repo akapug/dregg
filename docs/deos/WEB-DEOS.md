@@ -44,12 +44,20 @@ differs:
 
 ```rust
 // native (starbridge-v2/src/main.rs::run_window):
-gpui_platform::application().run(|cx| { cx.open_window(opts, |_, cx| cx.new(...)) });
+gpui_platform::application().run(|cx| {
+    gpui_component::init(cx);
+    cx.open_window(opts, |window, cx| cx.new(|cx| Cockpit::with_node(world, anchors, focus, None, seed)))
+});
 
 // web (starbridge-v2/web/src/cockpit_web.rs::boot_cockpit):
 gpui_platform::web_init();
-gpui_platform::single_threaded_web().run(|cx| { cx.open_window(opts, |_, cx| cx.new(...)) });
+gpui_platform::single_threaded_web().run(|cx| {
+    gpui_component::init(cx);
+    cx.open_window(opts, |window, cx| cx.new(|cx| Cockpit::with_node(world, anchors, focus, None, seed)))
+});
 ```
+
+The two booters now construct the **same** `starbridge_v2::cockpit::Cockpit` over the **same** `World` — the only difference is the platform constructor and that the web boot opens the cockpit directly (the native boot front-doors through the login surface first).
 
 `gpui_platform` is the abstraction seam: `current_platform()` selects
 `MacPlatform`/`WindowsPlatform`/`gpui_linux` on native and
@@ -57,34 +65,63 @@ gpui_platform::single_threaded_web().run(|cx| { cx.open_window(opts, |_, cx| cx.
 `Render` impls — pure `div().child(...)` element trees — are platform-agnostic
 and run unchanged on either.
 
-## The first slice (this change)
+## The full cockpit (this change)
 
 `starbridge-v2/web/src/cockpit_web.rs` (gated `cfg(all(wasm32, feature =
-"gpui-web"))`) is a **real gpui `Render` entity** — `CockpitWeb` — booted on
-`gpui_web`, driving the live `World`:
+"gpui-web"))`) boots the **REAL** `starbridge_v2::cockpit::Cockpit` — the same
+comprehensive master interface the native desktop opens — on `gpui_web`, driving
+the live in-browser `World`:
 
-- A three-column cockpit slice (cell roster · inspector · affordances + receipt
-  log), the same left-rail/center/right shape as the native cockpit, built from
-  `div()` element trees — the genuine gpui renderer, not HTML.
-- It reads the live image through the **same** lib surfaces the native cockpit
-  uses: `reflect::reflect_cell`, `InspectAct::build`, `inspect_act::send`. A
-  click on an affordance fires a **real cap-gated turn through the verified
-  executor in-tab** and shows the receipt (`computrons_used`, `action_count`)
-  or the in-band refusal.
-- The wasm entrypoint `boot_cockpit()` (wasm-bindgen) seeds `world::demo_world`
-  (the same image the native cockpit + atlas use), boots a single-threaded web
-  gpui app, opens a window (creating the WebGPU canvas), and mounts the view.
+- The full cockpit element tree: the dock + the surface set + the
+  **gpui-component widget library** (the text `Input`/`Button`/list set), not a
+  reduced web-only view and not the JSON/atlas skin. It is the exact same
+  `Cockpit::with_node(world, anchors, focus, None, seed)` the native `run_window`
+  constructs (`node_url = None`, the data plane is the in-tab executor; the demo
+  `seed` fills the image in live off the first-paint path).
+- It drives the live image through the embedded executor: every affordance click
+  is a **real cap-gated turn through the verified executor in-tab** (the
+  `World::commit_turn` seam), with the post-state re-reflected on the next frame —
+  the same mechanism as native.
+- The wasm entrypoint `boot_cockpit()` (wasm-bindgen) seeds `world::demo_genesis`
+  (the at-rest genesis image + the deferred demo seed, the same the native cockpit
+  boots), boots a single-threaded web gpui app, registers the cockpit fonts
+  (Lilex + IBM Plex) and calls `gpui_component::init(cx)` (the widget globals —
+  exactly as native boot does), opens a window (creating the WebGPU canvas), and
+  mounts the cockpit.
 
-**What it proves:** the gpui presentation plane renders to a browser canvas over
-the in-browser verified data plane — the load-bearing path for web deos. It is a
-genuine slice of the cockpit (HOME survey + inspector + act), not a separate
-HTML page.
+**What it proves:** the full gpui presentation plane — dock, surfaces,
+gpui-component widgets and all — renders to a browser canvas over the in-browser
+verified data plane. One renderer, one cockpit, two platforms.
 
-**What it is not (yet):** it is not the full `cockpit::Cockpit` (28 surfaces,
-the dock/pane engine, the gpui-component widget set). See "Distance to full
-parity" below — the blocker is architectural (module placement + a few
-native-only widget/resource deps), not a question of whether gpui runs on the
-web. It does.
+### The module lift (what made it reachable)
+
+`cockpit`, `views` (and the `dock` engine they reach) were binary-private `mod`s
+in `starbridge-v2/src/main.rs` — a separate cdylib (the `web/` crate) could not
+name `cockpit::Cockpit`. They now live in the **library** behind a gpui-gated
+`pub mod` (`#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))] pub mod
+cockpit;` in `src/lib.rs`). This is a pure module-placement change — no cockpit
+internal logic moved. Three supporting moves:
+
+- `extern crate self as starbridge_v2;` in `lib.rs` (gpui-gated) so the cockpit's
+  many `starbridge_v2::dock` / `starbridge_v2::world` / … self-references resolve
+  unchanged now that they live *inside* the crate that used to be their dependency.
+- `main.rs` reaches the lifted modules through `use starbridge_v2::{cockpit,
+  login};`, leaving every `cockpit::Cockpit` / `login::LoginSurface` path in the
+  bin untouched.
+- `replay::replay_panel` (a gpui element the cockpit places) was gated on
+  `gpui-ui` ALONE; widened to the union gate so the web build sees it too.
+
+`login` is the one lifted module gated `gpui-ui`-ONLY (native), not the union: it
+drives the DURABLE-session-image path (`session::{open_session_world,
+session_base_dir}` + `LoginManager::logout_durable`, all `cfg(not(wasm32))`
+filesystem code). The web boot mounts `Cockpit` directly — the in-tab image is
+ephemeral — so it never needs the login front door. (If a web login front door is
+wanted later, its ceremony minus the durable-image persistence wasm-compiles; the
+gate would widen then.)
+
+The native build is unaffected (`cargo check --features native-full` green; the
+cockpit/views/dock gate is the union `any(gpui-ui, gpui-web)`, native-full enables
+`gpui-ui`).
 
 ## The build story
 
@@ -97,8 +134,19 @@ cargo build --target wasm32-unknown-unknown -p starbridge-web --features gpui-we
 The default build (`cargo build --target wasm32-unknown-unknown -p
 starbridge-web`, no features) is unchanged — it produces the gpui-free `WebImage`
 atlas skin. `gpui-web` is **purely additive**: it turns on a new
-`starbridge-v2/gpui-web` feature (gpui + gpui_platform, NO native sub-features)
-plus the gpui crates in the web crate, and compiles in `cockpit_web`.
+`starbridge-v2/gpui-web` feature (gpui + gpui_platform + gpui-component, NO native
+sub-features) plus the gpui crates in the web crate, and compiles in `cockpit_web`.
+
+**Verified.** The `gpui-web` build is GREEN (`Finished dev profile`): the full
+`starbridge-v2` lib (the lifted cockpit + gpui-component widget tree) AND the
+`starbridge-web` cdylib (the `boot_cockpit` mount of the real `Cockpit`) both
+compile to `wasm32-unknown-unknown`. The debug artifact is large (debuginfo-
+dominated, ~1.1G raw / ~86M with debuginfo stripped); the shippable size is the
+release build through `wasm-opt` (the gpui-free skin's release wasm is ~9M — the
+gpui cockpit's release+opt figure lands in that order of magnitude once bundled).
+gpui-component compiles with `default-features = false` (its tree-sitter syntax
+grammars are all opt-in features, none enabled) — no native font/clipboard/
+tree-sitter leaf force-pulls onto the wasm path.
 
 ### The minimal feature set (what's ON / what's deliberately OFF)
 
@@ -143,44 +191,46 @@ Servo is the lone native-only holdout.
 
 ## Distance to full parity (honest)
 
-The first slice renders a real cockpit slice. The gap to the *full*
-`cockpit::Cockpit` in-browser is **architectural, not foundational**:
+The full `cockpit::Cockpit` now renders in-browser. Two of the three former
+blockers are CLOSED; the remaining gap is the native-resource backends:
 
-1. **`cockpit::Cockpit` is binary-private.** It lives in
-   `starbridge-v2/src/main.rs` as `mod cockpit` (gated `gpui-ui`), not in the
-   library, so a separate `cdylib` (the `web/` crate) cannot reach it. To render
-   the *actual* `Cockpit` on web, the cockpit module (and `login`, `views`) must
-   move into the library behind a gpui-gated `pub mod`, OR a wasm `cdylib`
-   entrypoint must be added to the `starbridge-v2` crate itself. Either is a
-   module-placement change; neither changes cockpit internals. (This slice
-   deliberately did not touch the cockpit `.rs` files.)
-2. **gpui-component on wasm.** The full cockpit uses `gpui-component` (text
-   `Input`, `Button`, the shadcn-style widget set). The first slice uses plain
-   gpui (`div()` trees) to avoid pulling that crate's dep tree onto wasm before
-   it is checked. gpui-component is gpui-native UI, so it *should* build to
-   wasm; the open task is to compile it for wasm32 (verify no tree-sitter /
-   native-font / clipboard-native leaf is force-pulled) and call
-   `gpui_component::init(cx)` at web boot exactly as native does.
+1. **`cockpit::Cockpit` is binary-private.** ✅ CLOSED. `cockpit`/`login`/`views`
+   were lifted from `main.rs` into the library behind a gpui-gated `pub mod`
+   (the union gate `any(gpui-ui, gpui-web)`), with `extern crate self as
+   starbridge_v2` so their self-references resolve unchanged. No cockpit
+   internals moved. The `web/` cdylib now names `Cockpit` directly.
+2. **gpui-component on wasm.** ✅ COMPILES. The vendored `gpui-component` (text
+   `Input`, `Button`, the shadcn-style set) builds to `wasm32-unknown-unknown`
+   with `default-features = false` (its tree-sitter syntax grammars are all
+   opt-in features, none enabled). `gpui_component::init(cx)` is called at web
+   boot exactly as native does.
 3. **The native-resource backends** (terminal PTY, editor Fs, web-shell servo) —
-   each needs its wire per the app map. The UI for terminal/editor/chat is
-   already gpui and web-ready; the backends are the work.
+   each needs its wire per the app map. These surfaces are feature-gated OFF the
+   web build (`dev-surfaces`/`web-shell` are not in the `gpui-web` feature), so
+   the cockpit shell + its in-browser surfaces render; the dev-loop surfaces
+   that need a native resource are dark until their backend is wired. The UI for
+   terminal/editor/chat is already gpui and web-ready; the backends are the work.
 
-None of these is "can gpui run in the browser" — that is settled (`gpui_web` is
-a complete platform and this slice boots on it). The remaining work is **lift the
-cockpit module to lib-reachable**, **wasm-check gpui-component**, and **wire the
-three native-resource backends** (websocket / Fs / wasm-SDK), with servo noted
-as the single native-only surface.
+None of these is "can gpui run in the browser" — that is settled (`gpui_web` is a
+complete platform and the full cockpit boots on it). The remaining work is
+**wire the three native-resource backends** (websocket / Fs / wasm-SDK), with
+servo noted as the single native-only surface.
 
 ## Files
 
-- `starbridge-v2/web/src/cockpit_web.rs` — the first-slice gpui cockpit view +
-  the `boot_cockpit` wasm entrypoint.
+- `starbridge-v2/web/src/cockpit_web.rs` — the `boot_cockpit` wasm entrypoint
+  that mounts the REAL `starbridge_v2::cockpit::Cockpit` on `gpui_web`.
 - `starbridge-v2/web/src/lib.rs` — declares `cockpit_web` (gated) alongside the
   existing `WebImage` atlas skin.
 - `starbridge-v2/web/Cargo.toml` — the `gpui-web` feature (additive; pulls gpui +
-  gpui_platform + `starbridge-v2/gpui-web`).
+  gpui_platform + gpui-component + web-sys + `starbridge-v2/gpui-web`).
 - `starbridge-v2/Cargo.toml` — the `gpui-web` feature on the main crate (gpui +
-  gpui_platform without native sub-features; web-shell/dev-surfaces/
-  render-capture/live-node off).
+  gpui_platform + gpui-component without native sub-features; web-shell/
+  dev-surfaces/render-capture/live-node off).
+- `starbridge-v2/src/lib.rs` — the lifted `pub mod cockpit; pub mod login; pub
+  mod views;` (+ `dock`), gpui-gated `any(gpui-ui, gpui-web)`, and `extern crate
+  self as starbridge_v2`.
+- `starbridge-v2/src/main.rs` — `use starbridge_v2::{cockpit, login};` (the bin
+  reaches the now-lib modules).
 - `starbridge-v2/web/cockpit_gpui.html` — boots the wasm bundle and calls
   `boot_cockpit()`.

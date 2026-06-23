@@ -25,6 +25,14 @@
 //! The wire-contract client (`client`/`model`) lives in the binary crate for
 //! the remote-node + `sel4-thin` paths.
 
+// THE SELF-ALIAS — `cockpit`/`login`/`views` (lifted here from the bin so the web
+// cdylib can reach the real `Cockpit`) reach their sibling lib modules by the crate
+// name (`starbridge_v2::dock`, `starbridge_v2::world`, …) exactly as they did when
+// they were bin modules depending on the library. Aliasing self to that name keeps
+// every such path resolving WITHOUT editing the cockpit's internals.
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
+extern crate self as starbridge_v2;
+
 // The wire-contract DATA MODEL (`GET /status`, `/api/cells`, `/api/events/stream`
 // receipt events, the `POST /turn/submit` request shape). Pure serde structs (no
 // reqwest, no gpui), so they compile in BOTH builds and are `cargo test`-able —
@@ -110,6 +118,15 @@ pub mod doc_editor;
 // embedded executor. gpui-free, `cargo test`-able (pure flow model, like `web_cells`).
 #[cfg(feature = "embedded-executor")]
 pub mod powerbox;
+
+// DREGG-MUD — the first slice of a decentralized multi-user world: a room is a
+// cell, an inhabitant is a cap-rooted session, an item is a capability, an action
+// is a verified turn. `Room`/`Inhabitant`/`Item` over the REAL world+powerbox; the
+// load-bearing test proves "two players, one picks up an item, the other can't dupe
+// it" (capability conservation). gpui-free, `cargo test`-able. See
+// `docs/deos/DREGG-MUD.md`.
+#[cfg(feature = "embedded-executor")]
+pub mod mud;
 
 // SHARED CONFINED FORK WITH GRADUATED CONSENT — "invite someone to my computer":
 // a `World::fork` handed to another principal, confined (firmament sandbox) so they
@@ -517,9 +534,32 @@ pub use distributed_timetravel::{
 #[cfg(feature = "embedded-executor")]
 pub use two_image_firmament::{run_two_image_firmament, TwoImageOutcome, TwoImageRefusal};
 
-// THE COCKPIT DOCK ENGINE — Zed's resizable-split + dock engine, vendored-and-
-// adapted (gpui-only, no `workspace`/`project`/collab). Hosts cockpit surfaces in
-// resizable/splittable/dockable panes. Not yet wired into `cockpit.rs`; see
-// `dock::` for the migration note. gpui-gated (it builds an `Element` tree).
-#[cfg(feature = "gpui-ui")]
+// THE GPUI PRESENTATION PLANE — the cockpit + login + dock element trees, lifted
+// into the LIBRARY so they render on EITHER gpui platform:
+//   * native (`gpui-ui`) — the `starbridge-v2` bin opens a window (`main.rs`).
+//   * web (`gpui-web`) — the `starbridge-v2/web` cdylib boots `cockpit::Cockpit`
+//     on `gpui_web` (wasm32 + WebGPU canvas), driving the SAME in-browser `World`.
+// One renderer, one cockpit, two platforms (see docs/deos/WEB-DEOS.md). These
+// modules build a pure gpui `Element` tree (`div().child(...)`), platform-agnostic;
+// the gate is the union of the two gpui feature paths. (The native-only surface
+// backends they reach — dev-surfaces' deos-zed/deos-terminal, web-shell's servo —
+// are each independently feature-gated INSIDE these modules, OFF on the web path.)
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 pub mod dock;
+
+// THE COCKPIT — the comprehensive visual master interface (the dock + the 28
+// surfaces + the gpui-component widget set), rendering the live embedded `World`.
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
+pub mod cockpit;
+// THE LOGIN CEREMONY surface — the boot front door; picking an identity runs the
+// real session ceremony (`crate::session`) and swaps the window root to the cockpit.
+// `gpui-ui` ONLY (native): the login surface drives the DURABLE-session-image path
+// (`session::{open_session_world, session_base_dir}` + `LoginManager::logout_durable`),
+// all `cfg(not(wasm32))` filesystem code. The web boot mounts `Cockpit` directly
+// (the in-tab image is ephemeral), so it never needs the login front door.
+#[cfg(feature = "gpui-ui")]
+pub mod login;
+// The older NodeClient-bound rail components + the shared theme/pill/section_title
+// helpers `cockpit`/`login` reuse. gpui-gated.
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
+pub mod views;

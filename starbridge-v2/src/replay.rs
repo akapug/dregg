@@ -789,7 +789,7 @@ fn short(bytes: &[u8]) -> String {
 // (which is private to the binary), so the library stays swarm-safe. The main
 // loop calls `replay_panel(&model)` and places the returned element.
 
-#[cfg(feature = "gpui-ui")]
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 mod palette {
     use gpui::{rgb, Hsla};
     pub fn panel() -> Hsla {
@@ -829,7 +829,7 @@ mod palette {
 /// this element. Click handlers (scrub/fork buttons) belong to the cockpit; this
 /// fn is the read-only presentation so the library stays free of the cockpit's
 /// `Context<Cockpit>` type.
-#[cfg(feature = "gpui-ui")]
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
     use gpui::{div, px, ParentElement, Styled};
     use palette as p;
