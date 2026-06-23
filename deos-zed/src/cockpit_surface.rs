@@ -40,11 +40,22 @@ use crate::fs::Fs;
 
 /// A mounted editor: the editor entity + a side file tree, addressable by a
 /// stable surface id. Hand this to `starbridge-v2`'s `CockpitSurface` impl.
+///
+/// When built firmament-backed ([`EditorSurface::firmament`]) the surface also
+/// keeps the TYPED `Arc<FirmamentFs>` handle so the host can read the live
+/// receipt log (the `N saves · on-ledger` chrome reflects REAL `TurnReceipt`s,
+/// not a disk write). The `Arc<dyn Fs>` the editor + tree hold is the SAME
+/// object — one ledger, one save path.
 #[derive(Clone)]
 pub struct EditorSurface {
     id: u64,
     editor: Entity<Editor>,
     tree: Arc<FileTree>,
+    /// The typed firmament handle, when this surface is firmament-backed. Lets
+    /// the host surface the live receipt count (the real on-ledger save count)
+    /// rather than re-deriving it from the gpui-side document patch history.
+    #[cfg(feature = "firmament")]
+    firmament: Option<Arc<crate::fs::FirmamentFs>>,
 }
 
 impl EditorSurface {
@@ -60,13 +71,94 @@ impl EditorSurface {
     ) -> Self {
         let editor = cx.new(|cx| Editor::new(fs.clone(), window, cx));
         let tree = Arc::new(FileTree::new(fs, root, cx));
-        Self { id, editor, tree }
+        Self {
+            id,
+            editor,
+            tree,
+            #[cfg(feature = "firmament")]
+            firmament: None,
+        }
     }
 
     /// Wrap an already-built editor entity (e.g. one the host opened a file in)
     /// with a file tree.
     pub fn from_editor(id: u64, editor: Entity<Editor>, tree: Arc<FileTree>) -> Self {
-        Self { id, editor, tree }
+        Self {
+            id,
+            editor,
+            tree,
+            #[cfg(feature = "firmament")]
+            firmament: None,
+        }
+    }
+
+    /// **Build a FIRMAMENT-BACKED editor surface** — the cockpit-default mount:
+    /// the editor edits SOVEREIGN CELLS over an in-process `Ledger` +
+    /// `TurnExecutor`, and every save is a real cap-gated `SetField` turn leaving
+    /// a verifiable [`TurnReceipt`](dregg_turn::TurnReceipt). No disk is touched.
+    ///
+    /// The mount seeds a small project of file-cells (`files`: `(path, content)`),
+    /// grants the editor the per-file edit caps, opens the FIRST file THROUGH THE
+    /// EDITOR's own `open()` (so the buffer the user sees is the cell's committed
+    /// content, decoded from its `fields_map`), and roots the file tree at
+    /// `root` over the SAME firmament fs (the left rail browses the cells, not
+    /// disk). The returned surface keeps the typed `FirmamentFs` so the host can
+    /// read the live receipt log.
+    ///
+    /// This is the honest first mount: a PER-EDITOR firmament fs (its own ledger).
+    /// A host with a live cockpit `World`/executor it wants edits to land on can
+    /// instead hand a pre-mounted `Arc<dyn Fs>` to [`EditorSurface::new`] once a
+    /// `FirmamentFs::over(ledger, executor)` constructor exists; until then this
+    /// is the genuine, receipt-producing default.
+    #[cfg(feature = "firmament")]
+    pub fn firmament(
+        id: u64,
+        root: PathBuf,
+        files: &[(&str, &str)],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
+        let firm = Arc::new(crate::fs::FirmamentFs::new());
+        for (path, content) in files {
+            firm.seed_file(*path, content)?;
+        }
+        let fs: Arc<dyn Fs> = firm.clone();
+
+        // Open the first seeded file THROUGH the editor's real `open()` path so
+        // the buffer is the cell's decoded content (not a seeded in-memory
+        // string) — the SAME code path the running pane uses on a tree click.
+        let first = files.first().map(|(p, _)| PathBuf::from(*p));
+        let editor = cx.new(|cx| {
+            let mut ed = Editor::new(fs.clone(), window, cx);
+            if let Some(path) = first {
+                if let Err(e) = ed.open(path, window, cx) {
+                    eprintln!("firmament editor: could not open seed cell: {e:#}");
+                }
+            }
+            ed
+        });
+        let tree = Arc::new(FileTree::new(fs, root, cx));
+        Ok(Self {
+            id,
+            editor,
+            tree,
+            firmament: Some(firm),
+        })
+    }
+
+    /// The typed firmament handle, if this surface is firmament-backed — lets the
+    /// host read the live on-ledger save count / last receipt.
+    #[cfg(feature = "firmament")]
+    pub fn firmament_fs(&self) -> Option<&Arc<crate::fs::FirmamentFs>> {
+        self.firmament.as_ref()
+    }
+
+    /// The number of real `TurnReceipt`s the firmament ledger has recorded (the
+    /// genuine on-ledger save count), or `None` if this surface is not
+    /// firmament-backed.
+    #[cfg(feature = "firmament")]
+    pub fn receipt_count(&self) -> Option<usize> {
+        self.firmament.as_ref().map(|f| f.receipt_count())
     }
 
     /// Build a SEEDED editor surface: an editor whose buffer is filled in-memory
@@ -91,7 +183,13 @@ impl EditorSurface {
             ed
         });
         let tree = Arc::new(FileTree::new(fs, root, cx));
-        Self { id, editor, tree }
+        Self {
+            id,
+            editor,
+            tree,
+            #[cfg(feature = "firmament")]
+            firmament: None,
+        }
     }
 
     /// The underlying editor entity, for host-side open/save calls.

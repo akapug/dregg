@@ -217,6 +217,19 @@ impl Editor {
         self.input.read(cx).value().to_string()
     }
 
+    /// Replace the buffer text programmatically (a host- or test-driven edit),
+    /// marking the document dirty. The next [`Editor::save`] commits this exact
+    /// content through the [`Fs`] seam — with `FirmamentFs`, a receipted turn.
+    /// This is the same buffer mutation a keystroke makes, without the input
+    /// event loop, so a headless harness can drive the real save path.
+    pub fn set_text(&mut self, content: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| {
+            state.set_value(content.to_string(), window, cx);
+        });
+        self.dirty = true;
+        cx.notify();
+    }
+
     /// Open a file through the [`Fs`] seam: load its content, set the
     /// highlighter language from the extension, and replace the buffer. Returns
     /// any load error so callers can surface it.
@@ -308,10 +321,21 @@ impl Editor {
                     .and_then(|n| n.to_str())
                     .unwrap_or("file")
                     .to_string();
-                self.status = SharedString::from(format!(
-                    "saved {name} ({} bytes) — {patches} patches",
-                    content.len()
-                ));
+                // If the backend records receipted saves (FirmamentFs), surface
+                // the REAL on-ledger receipt count — the save was a genuine
+                // cap-gated turn, and the status reflects the ledger truth. A
+                // plain RealFs reports no count, so we fall back to the document
+                // patch history.
+                self.status = match self.fs.save_count() {
+                    Some(n) => SharedString::from(format!(
+                        "saved {name} ({} bytes) — {n} saves · on-ledger",
+                        content.len()
+                    )),
+                    None => SharedString::from(format!(
+                        "saved {name} ({} bytes) — {patches} patches",
+                        content.len()
+                    )),
+                };
                 cx.notify();
                 Ok(())
             }

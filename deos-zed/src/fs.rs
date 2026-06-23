@@ -75,6 +75,16 @@ pub trait Fs: Send + Sync + 'static {
     /// A short human label for which backing store is in use (shown in the
     /// editor's status line so the firmament swap is VISIBLE to the user).
     fn backend_label(&self) -> &'static str;
+
+    /// The number of RECEIPTED saves this backend has recorded, if it has a
+    /// notion of one. `RealFs` returns `None` (a disk write leaves no receipt);
+    /// `FirmamentFs` returns its real on-ledger receipt count so the editor's
+    /// status line can read the GENUINE `N saves · on-ledger` rather than the
+    /// gpui-side document patch history. Default `None` keeps every other `Fs`
+    /// impl unaffected.
+    fn save_count(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// The real, on-disk filesystem via `std::fs`. The default backing store today.

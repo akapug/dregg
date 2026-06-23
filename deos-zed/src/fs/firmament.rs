@@ -550,6 +550,14 @@ mod live {
         fn backend_label(&self) -> &'static str {
             "FirmamentFs (cell=file, save=receipted turn)"
         }
+
+        fn save_count(&self) -> Option<usize> {
+            // The genuine on-ledger receipt count — each is a finalized
+            // `TurnReceipt`. The editor's status line reads THIS, so its
+            // `N saves · on-ledger` is the real ledger truth, not the gpui-side
+            // patch history.
+            Some(self.receipt_count())
+        }
     }
 
     #[cfg(test)]

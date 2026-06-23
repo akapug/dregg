@@ -137,7 +137,18 @@ native-full = ["embedded-executor", "gpui-ui", "live-node", "render-capture", "w
 # dev loop: edit deos's own repos in deos-zed, run cargo/git in deos-terminal,
 # all INSIDE deos). Pulls the deos-zed + deos-terminal crates (own workspaces,
 # same gpui fork @407a6ff so one gpui resolves). gpui-ui-gated via dock/mod.rs.
-dev-surfaces = ["dep:deos-zed", "dep:deos-terminal", "dep:deos-hermes", "dep:deos-matrix"]
+# Enables `firmament` so the editor pane edits sovereign cells (saves = receipted
+# turns), not disk — the cockpit editor is firmament-backed by default.
+dev-surfaces = ["dep:deos-zed", "dep:deos-terminal", "dep:deos-hermes", "dep:deos-matrix", "firmament"]
+
+# firmament — the cockpit editor pane edits SOVEREIGN CELLS over an in-process
+# `Ledger` + `TurnExecutor`, and every save is a real cap-gated `SetField` turn
+# leaving a verifiable `TurnReceipt` (NOT a disk write). Forwards to deos-zed's
+# `firmament` feature (the live `FirmamentFs` impl over the same verified spine
+# `World` wraps). `dock/editor_surface.rs`'s `EditorPane::new` routes to the
+# firmament-backed mount when this is on. Rides `dev-surfaces` so the default
+# cockpit build carries it; turning it off gives the disk (RealFs) editor pane.
+firmament = ["deos-zed/firmament"]
 
 # The LIVE-NODE connection — the real HTTP+SSE link to a running dregg node
 # (`NodeClient::Http` + the `/api/events/stream` reader). Pulls `reqwest` (its
@@ -276,6 +287,9 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "blocking"], optional = true }
 hex = "0.4"
 anyhow = "1"
+# Derives `std::error::Error` for the membrane error enum in `shared_fork.rs`
+# (same major as the workspace's other crates, e.g. deos-matrix).
+thiserror = "2"
 # Used by the embedded `World` for the image-commitment root + cell snapshots.
 blake3 = "1"
 postcard = { version = "1", features = ["use-std"] }
