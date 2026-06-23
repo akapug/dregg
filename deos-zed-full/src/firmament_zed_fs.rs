@@ -58,18 +58,21 @@ use git::repository::GitRepository;
 use rope::Rope;
 use text::LineEnding;
 
-// deos-zed's gpui-free cell-ledger fs and its *synchronous* fs trait.
-use deos_zed::fs::Fs as CellFs;
-use deos_zed::FirmamentFs as CellFirmamentFs;
+// The `Send + Sync` cell-ledger fs over deos-zed's verified `OwnedSpine`. (Zed's
+// `Fs` trait is `Send + Sync`; deos-zed's own `FirmamentFs` is `Rc`-based — it
+// shares the cockpit's `Rc<RefCell<World>>` — so it is `!Send`. `SyncCellFs`
+// keeps the same verified turn semantics behind an `Arc<Mutex<OwnedSpine>>`.)
+use crate::sync_cell_fs::SyncCellFs;
 
 /// The cell-ledger-backed Zed filesystem.
 ///
-/// Holds deos-zed's [`FirmamentFs`](deos_zed::FirmamentFs) (the in-process
-/// `Ledger` + `TurnExecutor`) and adapts its synchronous cell ops to Zed's async
-/// [`fs::Fs`] trait. Hand an `Arc<FirmamentZedFs>` to a Zed `Project` and the
-/// whole editor sees the cell-ledger as its filesystem.
+/// Holds a [`SyncCellFs`] (deos-zed's verified `OwnedSpine` — the in-process
+/// `Ledger` + `TurnExecutor` — behind a `Send + Sync` `Mutex`) and adapts its
+/// synchronous cell ops to Zed's async [`fs::Fs`] trait. Hand an
+/// `Arc<FirmamentZedFs>` to a Zed `Project` and the whole editor (and every
+/// panel) sees the cell-ledger as its filesystem.
 pub struct FirmamentZedFs {
-    cell: CellFirmamentFs,
+    cell: SyncCellFs,
 }
 
 impl FirmamentZedFs {
@@ -77,13 +80,13 @@ impl FirmamentZedFs {
     /// author cell). Seed files with [`FirmamentZedFs::seed_file`].
     pub fn new() -> Self {
         FirmamentZedFs {
-            cell: CellFirmamentFs::new(),
+            cell: SyncCellFs::new(),
         }
     }
 
     /// Wrap an already-mounted cell fs (e.g. one a deos image handed over with
     /// files pre-seeded).
-    pub fn with_cell_fs(cell: CellFirmamentFs) -> Self {
+    pub fn with_cell_fs(cell: SyncCellFs) -> Self {
         FirmamentZedFs { cell }
     }
 
@@ -107,12 +110,12 @@ impl FirmamentZedFs {
     }
 
     /// Borrow the underlying cell fs (for receipt/cell introspection in tests).
-    pub fn cell_fs(&self) -> &CellFirmamentFs {
+    pub fn cell_fs(&self) -> &SyncCellFs {
         &self.cell
     }
 
     fn cell_metadata(&self, path: &Path) -> Option<Metadata> {
-        let md = self.cell.metadata(path).ok()?;
+        let md = self.cell.metadata(path)?;
         Some(Metadata {
             inode: 0,
             mtime: MTime::from_seconds_and_nanos(0, 0),
@@ -158,7 +161,7 @@ impl Fs for FirmamentZedFs {
     }
 
     async fn create_file(&self, path: &Path, options: CreateOptions) -> Result<()> {
-        let exists = self.cell.metadata(path).is_ok();
+        let exists = self.cell.metadata(path).is_some();
         if exists {
             if options.ignore_if_exists {
                 return Ok(());
@@ -286,8 +289,8 @@ impl Fs for FirmamentZedFs {
         &self,
         path: &Path,
     ) -> Result<Pin<Box<dyn Send + Stream<Item = Result<PathBuf>>>>> {
-        let entries = self.cell.read_dir(path)?;
-        let paths: Vec<Result<PathBuf>> = entries.into_iter().map(|e| Ok(e.path)).collect();
+        let entries = self.cell.read_dir(path);
+        let paths: Vec<Result<PathBuf>> = entries.into_iter().map(|(p, _is_dir)| Ok(p)).collect();
         Ok(Box::pin(stream::iter(paths)))
     }
 
