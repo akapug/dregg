@@ -7996,8 +7996,6 @@ dependencies = [
 [[package]]
 name = "servo-paint"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d0a4a54c85d0d196aa3e2a1802b2b3cfe9b599a05bc32004138a798af2842a3"
 dependencies = [
  "bitflags 2.13.0",
  "crossbeam-channel",
@@ -8135,6 +8133,7 @@ dependencies = [
  "servo",
  "servo-paint-api",
  "starbridge-web-surface",
+ "surfman",
  "swgl",
  "url",
  "webrender_api",

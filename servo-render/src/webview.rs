@@ -21,8 +21,16 @@
 //!    as an [`RgbaFrame`] — the SAME type `present_frame` carries to the compositor.
 //!
 //! This is API-correct against the published trait + the `winit_minimal` upstream
-//! embed example. It has NOT been run end-to-end (the `mozjs` build is the gate);
-//! when that build is green this is the real page→glass path, no stand-in.
+//! embed example, and it RUNS end-to-end: a real Servo `WebView` lays out + paints a
+//! `data:` page into the SWGL framebuffer, captured to a PNG and carried through the
+//! genuine compositor-PD gate (the test
+//! [`tests::first_real_render_data_page_through_the_compositor_gate`]). Two things made
+//! the real engine paint into our SWGL context: [`ServoSwglContext::connection`] hands
+//! servo-paint a real surfman software `Connection` (its WebGL bookkeeping `.expect()`s
+//! one — see that method), and the vendored `servo-paint` fork
+//! (`servo-render/vendor/servo-paint/`, `[patch.crates-io]`) sets
+//! `WebRenderOptions { clear_caches_with_quads: false }` so WebRender's cache clear does
+//! not issue a depth-`GL_ALWAYS` quad SWGL's `DepthFunc` asserts on.
 //!
 //! ## The one real trait-shape divergence (HONEST)
 //!
@@ -129,6 +137,35 @@ impl ServoRenderingContext for ServoSwglContext {
     fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
         use crate::swgl_context::RenderingContext as _;
         self.inner.gleam_gl_api()
+    }
+
+    /// **THE SURFMAN-CEILING BREAK.** servo-paint's `register_rendering_context`
+    /// (`paint.rs:236-238`) UNCONDITIONALLY does
+    /// `rendering_context.connection().expect("Failed to get connection")` then
+    /// `connection.create_adapter()`, storing the pair in a per-painter
+    /// `PainterSurfmanDetails { connection, adapter }` map keyed by `PainterId`. That
+    /// map is the WebGL-canvas plumbing (`SwapChains<WebGLContextId, surfman::Device>`):
+    /// it is touched ONLY when a page allocates a WebGL canvas surface. The
+    /// trait-default `connection() -> None` therefore panics at registration BEFORE
+    /// any page paints, even for a page that draws no WebGL.
+    ///
+    /// We hand back a REAL surfman software `Connection`. `Connection::new()` opens the
+    /// default display connection (CGL on macOS / EGL+gbm or X11 on Linux) — a
+    /// *connection handle*, NOT a window or a GPU surface; no framebuffer is allocated
+    /// here. servo-paint's `create_adapter()` then succeeds against it. SWGL still does
+    /// ALL the page rasterization through `gleam_gl_api()` (the `swgl::Context` IS the
+    /// `gleam::gl::Gl` WebRender's `Renderer` draws into our `Vec<u8>`); the surfman
+    /// connection's device is only ever instantiated for a WebGL canvas, which our
+    /// pages do not contain. This is the genuine
+    /// `RenderingContext::connection()` of servo's own `SoftwareRenderingContext`
+    /// (`Connection::new()` — `rendering_context.rs:312`), minus the surface bind we
+    /// do not need because SWGL owns the default framebuffer.
+    ///
+    /// Returns `None` only if the host has no display connection at all (a truly
+    /// headless box with no CGL/EGL) — in which case the page cannot paint and the
+    /// `.expect()` would (correctly) report the absent display, not a SWGL gap.
+    fn connection(&self) -> Option<surfman::Connection> {
+        surfman::Connection::new().ok()
     }
 
     fn glow_gl_api(&self) -> Arc<glow::Context> {
@@ -429,6 +466,29 @@ pub fn render_url_to_frame_netcap(
     height: u32,
     max_spins: usize,
 ) -> (Option<RgbaFrame>, Option<ConnectOutcome>) {
+    // The real engine. Headless: we drive `spin_event_loop` ourselves. Servo's
+    // process-global options/prefs (`servo_config::opts`) are a `OnceCell` set ONCE
+    // per process by `ServoBuilder::build`, so at most one `Servo` exists per process;
+    // [`render_url_on_servo`] renders additional pages on this same engine.
+    let servo = ServoBuilder::default()
+        .event_loop_waker(Box::new(HeadlessWaker))
+        .build();
+    render_url_on_servo(&servo, url, surface, width, height, max_spins)
+}
+
+/// Render `url` to a frame on an ALREADY-BUILT [`Servo`] engine — the per-page leg of
+/// [`render_url_to_frame_netcap`], factored out so several pages can be rendered on
+/// ONE engine (Servo's `servo_config::opts` is a process-global `OnceCell`, so the
+/// engine is built at most once per process; a test that wants both a box page and a
+/// text page drives them through the same `servo`).
+pub fn render_url_on_servo(
+    servo: &servo::Servo,
+    url: &str,
+    surface: SurfaceCapability,
+    width: u32,
+    height: u32,
+    max_spins: usize,
+) -> (Option<RgbaFrame>, Option<ConnectOutcome>) {
     use crate::swgl_context::RenderingContext as _;
 
     let Ok(parsed) = Url::parse(url) else {
@@ -440,11 +500,6 @@ pub fn render_url_to_frame_netcap(
     let rendering_context = Rc::new(ServoSwglContext::new(width, height));
     let _ = ServoRenderingContext::make_current(&*rendering_context);
 
-    // The real engine. Headless: we drive `spin_event_loop` ourselves.
-    let servo = ServoBuilder::default()
-        .event_loop_waker(Box::new(HeadlessWaker))
-        .build();
-
     // The delegate IS the cap gate — every fetch/navigation discharges `surface` AND
     // routes the connect decision through the audited netlayer connector. Seed the
     // navigated origin (+ the surface's fetch allowlist) as reachable peers so a
@@ -455,20 +510,34 @@ pub fn render_url_to_frame_netcap(
     }
     let delegate = build_cap_gate(surface, &seed);
 
-    let webview = WebViewBuilder::new(&servo, rendering_context.clone())
+    let webview = WebViewBuilder::new(servo, rendering_context.clone())
         .url(parsed)
         .delegate(delegate.clone())
         .build();
 
     // Pump servo's actor threads until the page is loaded AND a frame is ready,
-    // bounded so a non-painting page cannot hang the caller.
+    // bounded so a non-painting page cannot hang the caller. Servo is multi-threaded
+    // (constellation / script / layout / paint run on their OWN threads); a tight
+    // `spin_event_loop` busy-loop completes in microseconds and out-runs the page
+    // load+layout+paint that is happening asynchronously on those threads. The
+    // upstream `winit_minimal` example is naturally paced by waiting on OS events
+    // between spins. Here, headless, we pace it ourselves with a short yield so the
+    // worker threads make progress between embedder spins.
     let mut spins = 0;
     while spins < max_spins {
         servo.spin_event_loop();
         if delegate.load_complete.get() && delegate.frame_ready.get() {
             break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(1));
         spins += 1;
+    }
+
+    // Give the freshly-loaded page a few extra paced spins so its WebRender scene
+    // (display list → built frame) is fully ready before the final embedder paint.
+    for _ in 0..16 {
+        servo.spin_event_loop();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 
     // Ask the WebView to paint the (now-loaded) page into the SWGL back buffer,
@@ -499,6 +568,78 @@ mod tests {
 
     use crate::compositor_seam::{present_frame, FramePresentation};
 
+    /// Encode an RGBA8 buffer (`w*h*4` bytes, row-major) to PNG bytes (8-bit,
+    /// color-type 6 = RGBA), using only STORED (uncompressed) deflate blocks so it
+    /// needs no compressor — the SAME self-contained encoder `tests/swgl_render_to_png.rs`
+    /// uses (CRC-32 over each chunk, Adler-32 over the zlib payload), inlined here so the
+    /// real-page render writes its proof PNG with ZERO added dependency.
+    fn png_encode_rgba8(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc: u32 = 0xFFFF_FFFF;
+            for &b in bytes {
+                crc ^= b as u32;
+                for _ in 0..8 {
+                    let mask = (crc & 1).wrapping_neg();
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+                }
+            }
+            !crc
+        }
+        fn adler32(bytes: &[u8]) -> u32 {
+            const MOD: u32 = 65521;
+            let (mut a, mut b) = (1u32, 0u32);
+            for &x in bytes {
+                a = (a + x as u32) % MOD;
+                b = (b + a) % MOD;
+            }
+            (b << 16) | a
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let mut typed = Vec::with_capacity(4 + data.len());
+            typed.extend_from_slice(kind);
+            typed.extend_from_slice(data);
+            out.extend_from_slice(&typed);
+            out.extend_from_slice(&crc32(&typed).to_be_bytes());
+        }
+        // Filtered scanlines: a filter-type byte 0 (None) per row, then the RGBA bytes.
+        // SWGL/WebRender render with the GL bottom-left origin, so framebuffer row 0 is
+        // the BOTTOM of the image; servo's own `read_framebuffer_to_image`
+        // (`rendering_context.rs`) flips vertically for exactly this reason. We do the
+        // same here so the captured PNG is upright (row 0 = top): emit source row
+        // `h-1-y` for output row `y`.
+        let row_bytes = (w * 4) as usize;
+        let mut raw = Vec::with_capacity((h * (1 + w * 4)) as usize);
+        for y in 0..h {
+            raw.push(0);
+            let src = ((h - 1 - y) * w * 4) as usize;
+            raw.extend_from_slice(&rgba[src..src + row_bytes]);
+        }
+        // zlib with STORED blocks.
+        let mut z = vec![0x78u8, 0x01];
+        let mut off = 0usize;
+        while off < raw.len() {
+            let take = (raw.len() - off).min(0xFFFF);
+            let bfinal = if off + take >= raw.len() { 1u8 } else { 0u8 };
+            z.push(bfinal);
+            z.extend_from_slice(&(take as u16).to_le_bytes());
+            z.extend_from_slice(&(!(take as u16)).to_le_bytes());
+            z.extend_from_slice(&raw[off..off + take]);
+            off += take;
+        }
+        z.extend_from_slice(&adler32(&raw).to_be_bytes());
+
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&w.to_be_bytes());
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // depth 8, RGBA, deflate, adaptive filter, no interlace
+        chunk(&mut png, b"IHDR", &ihdr);
+        chunk(&mut png, b"IDAT", &z);
+        chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
     /// **THE FIRST REAL RENDER (Stage-A step 3, never previously executed): a real
     /// Servo `WebView` rasterizes a page into a SWGL `RgbaFrame`, which then lands on
     /// the compositor-PD's glass through the genuine T1/T2/T3 gate.**
@@ -520,48 +661,97 @@ mod tests {
     /// engine in between. The frame is bounded by `max_spins` so a non-painting page
     /// cannot hang the test.
     ///
-    /// ⚠ `#[ignore]` — REFUTED against published `servo-paint 0.1.0`: its WebRender
-    /// `Painter::new` is HARDWIRED to surfman — it calls
+    /// ✅ **SURFMAN CEILING BROKEN (2026-06-23).** Previously `#[ignore]`d: servo-paint
+    /// `0.1.0`'s `register_rendering_context` (`paint.rs:236-238`) unconditionally does
     /// `rendering_context.connection().expect("Failed to get connection")` then
-    /// `create_adapter()` and keys its `SwapChains<WebGLContextId, surfman::Device>` by
-    /// a surfman `Device`. Our SWGL-only `ServoSwglContext` returns the trait-default
-    /// `connection() -> None`, so the real WebView panics at `paint.rs:238` BEFORE any
-    /// page paints. The `gleam_gl_api()`/SWGL path is NOT a connection-free render path
-    /// in the published crate; making the real engine paint a page needs a surfman
-    /// software-`Connection` (or a fork of `servo-paint` to a SWGL render path) — the
-    /// multi-day pole, not this pass. The SWGL *pixel* path is real and green
-    /// (`tests/swgl_render_to_png.rs` paints real geometry); what is NOT real is
-    /// driving servo's HTML layout into it. Left runnable-on-demand (`--ignored`) so the
-    /// surfman ceiling is reproducible, not hidden.
+    /// `connection.create_adapter()`, storing the pair in a per-painter
+    /// `PainterSurfmanDetails` map (the WebGL-canvas `SwapChains<_, surfman::Device>`
+    /// plumbing). A SWGL-only context returning the trait-default `connection() -> None`
+    /// panicked there BEFORE any page painted. The break:
+    /// [`ServoSwglContext::connection`] now returns a REAL surfman software
+    /// `Connection` (`Connection::new()` — the default display connection, NO window /
+    /// GPU surface), so registration succeeds; SWGL still does ALL the page
+    /// rasterization through `gleam_gl_api()`, and the surfman device is only ever
+    /// instantiated for a WebGL canvas (none here). This test now RUNS: the real engine
+    /// lays the page out and paints it into the SWGL framebuffer, and the test asserts
+    /// the frame carries genuine multi-color laid-out content (not a uniform clear) and
+    /// writes it to a PNG.
     #[test]
-    #[ignore = "published servo-paint Painter is surfman-hardwired; a SWGL-only RenderingContext panics at paint.rs:238 (connection() == None). Needs a surfman software Connection or a servo-paint SWGL fork."]
     fn first_real_render_data_page_through_the_compositor_gate() {
         // An in-memory HTML page — no network, no filesystem; the engine lays it out
-        // and paints it into our SWGL framebuffer. A solid background so the rendered
-        // pixels are deterministic enough to bind to a digest.
-        const PAGE: &str =
-            "data:text/html,<html><body style='margin:0;background:%23ff0000'>\
-             <h1>dregg</h1></body></html>";
-        const W: u32 = 64;
-        const H: u32 = 48;
+        // and paints it into our SWGL framebuffer. Two distinct laid-out regions so the
+        // captured frame PROVES real layout happened (a clear-to-color stand-in could
+        // never produce two colors at known positions): a blue page background with a
+        // centered yellow block in normal flow. `%23` is the URL-escaped `#` of a hex
+        // color inside the `data:` URL.
+        const PAGE: &str = "data:text/html,\
+            <html><body style='margin:0;background:%230000ff'>\
+            <div style='margin:40px auto;width:160px;height:120px;background:%23ffff00'>\
+            </div></body></html>";
+        const W: u32 = 240;
+        const H: u32 = 200;
 
         let presenter = cell_seed(11);
         // The wildcard root surface authority — the `data:` page's null origin is
         // permitted; the cap that authorizes the surface is the cap that presents.
         let surface = SurfaceCapability::root(presenter, AuthRequired::Either);
 
-        // THE NEVER-EXECUTED STEP: drive the real Servo engine to rasterize the page.
-        // Serialized on the process-wide SWGL current-context lock (SWGL's `ctx` is a
-        // global) for the whole engine-drive → readback sequence.
+        // THE STAGE-A STEP-3 PAYOFF, now executed: drive the real Servo engine to
+        // rasterize the page. Serialized on the process-wide SWGL current-context lock
+        // (SWGL's `ctx` is a global) for the whole engine-drive → readback sequence.
+        // We build ONE engine and render BOTH this box page and the text page on it
+        // (`render_glyph_page`), because Servo's `servo_config::opts` is a process-wide
+        // `OnceCell` set once per process — at most one `Servo` may exist per process.
         let frame = crate::swgl_context::with_gl(|| {
-            render_url_to_frame(PAGE, surface, W, H, 4096)
-        })
-        .expect("the real Servo WebView produced a frame for the data: page");
+            let servo = servo::ServoBuilder::default()
+                .event_loop_waker(Box::new(super::HeadlessWaker))
+                .build();
+            let box_frame =
+                super::render_url_on_servo(&servo, PAGE, surface, W, H, 4096).0
+                    .expect("the real Servo WebView produced a frame for the data: page");
+            // SECOND page on the SAME engine: a text page, proving glyph layout.
+            render_glyph_page(&servo);
+            box_frame
+        });
 
         // It is a REAL RGBA8 frame of the requested size.
         assert_eq!(frame.width, W);
         assert_eq!(frame.height, H);
         assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "real RGBA8, 4 bytes/pixel");
+
+        // ── PROVE it is genuine laid-out PAGE content, not an empty/uniform buffer ──
+        // The page has two CSS-positioned regions; a real layout+paint produces BOTH
+        // the blue background and the yellow block. Count distinct colors and confirm
+        // the frame is non-trivial. (A bare clear or an unpainted buffer is one color.)
+        let mut distinct = std::collections::BTreeSet::new();
+        for i in 0..(frame.width * frame.height) as usize {
+            let p = &frame.bytes[i * 4..i * 4 + 4];
+            distinct.insert([p[0], p[1], p[2], p[3]]);
+            if distinct.len() > 8 {
+                break;
+            }
+        }
+        assert!(
+            distinct.len() >= 2,
+            "the rendered page is non-trivial (≥2 distinct colors = real layout, not a uniform clear); got {} distinct color(s)",
+            distinct.len()
+        );
+
+        // ── write the captured PNG artifact (the load-bearing proof-of-render) ──
+        let out_path = std::env::var("WEB_RENDER_PNG_OUT").unwrap_or_else(|_| {
+            let mut p = std::env::temp_dir();
+            p.push("servo_real_page_render.png");
+            p.to_string_lossy().into_owned()
+        });
+        let png = png_encode_rgba8(frame.width, frame.height, &frame.bytes);
+        std::fs::write(&out_path, &png).expect("write the rendered-page PNG");
+        let png_len = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+        assert!(png_len > 100, "the captured PNG is substantial, got {png_len} bytes");
+        println!(
+            "WEB_RENDER_PNG_WRITTEN path={out_path} bytes={png_len} dims={W}x{H} \
+             distinct_colors={} page='data: blue bg + yellow block (real servo layout)'",
+            distinct.len()
+        );
 
         // Carry the real page's pixels through the GENUINE compositor gate.
         let scene = Scene {
@@ -596,6 +786,81 @@ mod tests {
             compositor.framebuffer_snapshot()[3],
             (frame.content_digest() & 0xFF) as u8,
             "the real Servo-rendered page composited to the glass through the gate"
+        );
+    }
+
+    /// **A REAL PAGE WITH TEXT — proving the engine lays out + rasterizes GLYPHS, not
+    /// just CSS boxes.** Renders a `data:` page with a white background and black
+    /// heading text on the GIVEN engine (`servo` — the same one the box page used,
+    /// since at most one `Servo` exists per process). A real font shaping + glyph
+    /// raster produces black antialiased text pixels over white — so the captured frame
+    /// contains MANY distinct colors (the antialiasing gradient between black glyph and
+    /// white background), which a box-only or clear-to-color render never produces. This
+    /// is the "text from the HTML" half of the deliverable's bar. The PNG is written
+    /// next to the box render's. Called (not `#[test]`) from the engine-owning test so
+    /// it shares the single process-global Servo.
+    fn render_glyph_page(servo: &servo::Servo) {
+        // Large dark heading on white — the glyph edges antialias, yielding gray
+        // intermediates between #000 and #fff that ONLY a real glyph raster produces.
+        const PAGE: &str = "data:text/html,\
+            <html><body style='margin:0;background:%23ffffff'>\
+            <h1 style='margin:20px;font-size:48px;color:%23000000'>dregg</h1>\
+            </body></html>";
+        const W: u32 = 320;
+        const H: u32 = 120;
+
+        let presenter = cell_seed(11);
+        let surface = SurfaceCapability::root(presenter, AuthRequired::Either);
+
+        let frame = super::render_url_on_servo(servo, PAGE, surface, W, H, 4096).0
+            .expect("the real Servo WebView produced a frame for the text page");
+
+        assert_eq!(frame.width, W);
+        assert_eq!(frame.height, H);
+
+        // Count distinct colors AND look for both near-white (background) and dark
+        // (glyph ink) plus an antialiasing intermediate (a gray that is neither).
+        let mut distinct = std::collections::BTreeSet::new();
+        let mut has_white = false;
+        let mut has_dark = false;
+        let mut has_intermediate = false;
+        for i in 0..(frame.width * frame.height) as usize {
+            let p = &frame.bytes[i * 4..i * 4 + 4];
+            distinct.insert([p[0], p[1], p[2], p[3]]);
+            let lum = p[0] as u32 + p[1] as u32 + p[2] as u32;
+            if lum >= 3 * 250 {
+                has_white = true;
+            } else if lum <= 3 * 40 {
+                has_dark = true;
+            } else {
+                has_intermediate = true;
+            }
+        }
+        assert!(has_white, "the page background (white) is present");
+        assert!(has_dark, "glyph ink (near-black) is present — real text was rasterized");
+        assert!(
+            has_intermediate,
+            "antialiased glyph edges (gray intermediates) are present — a box/clear render \
+             has no intermediates; only a real font glyph raster does"
+        );
+        assert!(
+            distinct.len() >= 8,
+            "real antialiased text yields many distinct colors; got {}",
+            distinct.len()
+        );
+
+        let out_path = std::env::var("WEB_RENDER_TEXT_PNG_OUT").unwrap_or_else(|_| {
+            let mut p = std::env::temp_dir();
+            p.push("servo_real_text_render.png");
+            p.to_string_lossy().into_owned()
+        });
+        let png = png_encode_rgba8(frame.width, frame.height, &frame.bytes);
+        std::fs::write(&out_path, &png).expect("write the rendered text-page PNG");
+        let png_len = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+        println!(
+            "WEB_RENDER_TEXT_PNG_WRITTEN path={out_path} bytes={png_len} dims={W}x{H} \
+             distinct_colors={} page='data: white bg + black <h1>dregg</h1> (real glyph layout)'",
+            distinct.len()
         );
     }
 
