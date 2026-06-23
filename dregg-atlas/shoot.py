@@ -1,13 +1,24 @@
 """Screenshot every cockpit surface for the UI-atlas pillar, via the dregg-mcp
 `screenshot` tool (the real gpui Cockpit bake at 1280x832). Writes the PNGs to
-screenshots/ and a surfaces.json manifest (tab, file, size, explainer) the
-site-builder ingests.
+screenshots/ and a surfaces.json manifest the site-builder ingests.
+
+The surface roster is the canonical census in `surfaces.py` (grounded in the
+cockpit's `Tab` enum + the dock dev panes). Each surface is baked by its declared
+path:
+  bake='tab'      → screenshot tab=<render_tab>     (the per-surface bake)
+  bake='showcase' → the --render-showcase composite (the full cockpit dock)
+
+If the MCP `screenshot` tool isn't available (the headless-render binary isn't
+built), shoot.py still emits the manifest (sans PNGs) so build.py can render the
+surface atlas pages + data; a later shoot.py fills the screenshots. Regenerable:
+  python3 crawl.py && python3 shoot.py && python3 build.py
 """
 import json
 import os
 import sys
 
 from mcp_client import Mcp
+from surfaces import SURFACES
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SHOTS = os.path.join(ROOT, "screenshots")
@@ -15,59 +26,64 @@ DATA = os.path.join(ROOT, "data")
 os.makedirs(SHOTS, exist_ok=True)
 os.makedirs(DATA, exist_ok=True)
 
-# The 28 cockpit surfaces (Tab::label, normalized) with a first-principles blurb.
-SURFACES = [
-    ("home", "The at-rest landing — what the live verified image IS, in prose, with its headline stats."),
-    ("inspector", "The moldable inspector (Registry · Spotter · Halo): every object's seven presentation faces; the inspector is itself inspectable."),
-    ("inspect-act", "The inspect→act loop: a cell's reflected state on the left, the messages it understands on the right, each with its cap badge; firing one commits a real turn."),
-    ("graph", "The ocap delegation graph — cells as nodes, capability grants as directed edges, laid out by multi-hop delegation depth."),
-    ("web-of-cells", "The cells as a navigable web — the distributed-attestation view of the image."),
-    ("objects", "The object browser — every protocol object by kind."),
-    ("proofs", "The STARK/verification axis — the proof status of turns."),
-    ("debugger", "Step + explain a turn against the live world — the time-aware debugger."),
-    ("replay", "Deterministic replay / time-travel over the canonical history."),
-    ("workspace", "The DOIT/PRINTIT evaluator — a Smalltalk-style workspace over the live image."),
-    ("wonder", "The AOL-wonder direct-manipulation surface — click around and absorb, no comprehension required."),
-    ("lanes", "The moldable-inspector gadgets (L2–L10): predicate/turn/cap/token construction."),
-    ("powerbox", "The capability powerbox — granting/brokering authority."),
-    ("links-here", "What-links-here — the inbound reference graph for the focused object."),
-    ("organs", "The organ survey — the image's specialized verified-program cells."),
-    ("cipherclerk", "The sovereign cipherclerk vault — HD-derived identities, macaroon signing."),
-    ("editor", "The conserving forest editor — build a turn, validate it, commit."),
-    ("composer", "The predicate/caveat composer."),
-    ("simulate", "Simulate a turn against a fork before committing."),
-    ("agent", "The agent surface — autonomous loops over the image."),
-    ("swarm", "The swarm orchestration surface."),
-    ("shell", "The command shell over the image."),
-    ("terminal", "The terminal surface."),
-    ("buffer", "The text buffer surface."),
-    ("trust", "The trust panel — identity, guardians, the K-of-N recovery threshold, the KEL timeline."),
-    ("docs", "The document lens — the Pijul-shaped patch-theory document object."),
-    ("time", "The time/history scrubber."),
-    ("share", "The sharing/membrane surface."),
-]
+
+def manifest_entry(sid, label, bake, deep, blurb, png=None, size=None):
+    """One surface record — stable id + the hypermedia fields the site links over."""
+    return {
+        "id": "surface:" + sid,
+        "tab": sid,                     # the atlas page slug (back-compat key)
+        "label": label,
+        "bake": bake,
+        "deep": deep,                   # the explainer-section slug
+        "explainer": blurb,
+        "file": os.path.basename(png) if png else None,
+        "size": size,
+    }
 
 
 def main():
-    m = Mcp()
+    no_mcp = "--no-mcp" in sys.argv or os.environ.get("ATLAS_NO_MCP")
+    m = None if no_mcp else Mcp()
     manifest = []
+    captured = 0
     try:
-        for tab, blurb in SURFACES:
-            out = os.path.join(SHOTS, tab)
-            try:
-                res = m.call("screenshot", out=out, size="1280x832", tab=tab)
-                png = res.get("png", "")
-                if png and os.path.exists(png):
-                    manifest.append({"tab": tab, "file": os.path.basename(png), "size": res.get("size"), "explainer": blurb})
-                    print(f"  shot {tab} -> {os.path.basename(png)}", file=sys.stderr)
-                else:
-                    print(f"  MISS {tab}: {res}", file=sys.stderr)
-            except Exception as e:
-                print(f"  ERR {tab}: {e}", file=sys.stderr)
+        for (sid, render_tab, label, bake, deep, blurb) in SURFACES:
+            png = None
+            size = None
+            # reuse a prior bake if present (so the gallery stays populated when a
+            # full re-shoot isn't possible — the new MCP only needs to fill the new
+            # surfaces). A fresh MCP bake below overwrites it.
+            prior = os.path.join(SHOTS, sid + ".png")
+            if os.path.exists(prior):
+                png = prior
+            if m is not None:
+                out = os.path.join(SHOTS, sid)
+                try:
+                    if bake == "showcase":
+                        # the composite full-cockpit bake (the dock workspace).
+                        res = m.call("screenshot", out=out, size="1600x1000")
+                    else:
+                        res = m.call("screenshot", out=out, size="1280x832", tab=render_tab)
+                    p = res.get("png", "")
+                    if p and os.path.exists(p):
+                        png, size = p, res.get("size")
+                        captured += 1
+                        print(f"  shot {sid} -> {os.path.basename(p)}", file=sys.stderr)
+                    else:
+                        print(f"  MISS {sid}: {res}", file=sys.stderr)
+                except Exception as e:
+                    print(f"  ERR {sid}: {e}", file=sys.stderr)
+            manifest.append(manifest_entry(sid, label, bake, deep, blurb, png, size))
         json.dump(manifest, open(os.path.join(DATA, "surfaces.json"), "w"), indent=2)
-        print(f"surfaces: {len(manifest)}/{len(SURFACES)} captured", file=sys.stderr)
+        if m is None:
+            print(f"surfaces: {len(manifest)} cataloged (NO MCP — manifest only, no PNGs). "
+                  f"Build the headless-render binary then re-run shoot.py to fill screenshots.",
+                  file=sys.stderr)
+        else:
+            print(f"surfaces: {captured}/{len(manifest)} captured", file=sys.stderr)
     finally:
-        m.close()
+        if m is not None:
+            m.close()
 
 
 if __name__ == "__main__":

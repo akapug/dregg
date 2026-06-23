@@ -8,7 +8,7 @@
 <tr><td class=k>peek</td><td>EmitEvent <span class=muted>(Signature)</span></td><td><span class=ok>● may send</span></td></tr>
 <tr><td class=k>touch</td><td>IncrementNonce <span class=muted>(Signature)</span></td><td><span class=ok>● may send</span></td></tr>
 <tr><td class=k>write</td><td>SetField(slot 1) <span class=muted>(Either)</span></td><td><span class=ok>● may send</span></td></tr>
-<tr><td class=k>grant</td><td>GrantCapability <span class=muted>(None)</span></td><td><span class=no>○ refused</span></td></tr>
+<tr><td class=k>grant</td><td>GrantCapability <span class=muted>(None)</span></td><td><span class=ok>● may send</span></td></tr>
 </table><h3>Presentation faces</h3>
 <div class=face><h4>raw-fields · Cell State</h4>
 <table>
@@ -35,7 +35,7 @@
 </div>
 <div class=face><h4>provenance · Receipt Lineage</h4>
 <table>
-<tr><td class=k>@2</td><td>receipt 6cf9be…93c7 · 1 action(s) · 0 computrons</td></tr>
+<tr><td class=k>@2</td><td>receipt f6841f…dcf4 · 1 action(s) · 0 computrons</td></tr>
 </table>
 </div>
 <div class=face><h4>graph · ocap Graph</h4>
@@ -46,8 +46,8 @@
 </div>
 <div class=face><h4>domain-visual · Lifecycle</h4>
 <div class=prose>{
- &quot;shape&quot;: &quot;state-machine&quot;,
  &quot;current&quot;: &quot;Live&quot;,
+ &quot;shape&quot;: &quot;state-machine&quot;,
  &quot;states&quot;: [
   {
    &quot;name&quot;: &quot;Live&quot;,
