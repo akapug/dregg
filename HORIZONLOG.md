@@ -44,8 +44,11 @@ genesis). `--render-self-hosting-full` bake (screenshot `self-hosting-loop-full.
 all three: save → real `SetField` turn (receipts 5→6 on-ledger) · cell v2 content dual-written to
 `<dir>/main.rs` · a live `sh` PTY ran `rustc main.rs -o prog && ./prog` → printed `v2`, `cat main.rs` shows
 v2. Edit-a-source-file-inside-deos → receipted-save → disk-mirror → toolchain-compiles-the-edit, RUNS. (Cell
-= receipted source of truth; disk = derived read-mirror.) Residual: editor pane body renders dark headless
-(gpui-component `InputState` quirk — cosmetic; loop proven by terminal+receipts).
+= receipted source of truth; disk = derived read-mirror.) EDITOR-GLYPH residual CLOSED `60a2d36f`: the
+dark body was `size_full` (height:100%) collapsing to ~0 when the editor sat in a single flex ROW (the
+self-hosting bake) → `InputState` computed an empty visible-line range. Fix = `flex_1().min_h(0)` (no fork
+change); the real buffer now paints. Re-baked PNGs (`self-hosting-loop{,-full}.png`) show the editor with
+line-numbered syntax-highlighted code (`fn main(){ println!("v2") }`) beside the terminal that compiled it.
 
 ### CONFINED HERMES AGENT LOOP — RUNS, receipted, by running (2026-06-23).
 `7c58e4da` (`deos-hermes`). 18 green incl. the consolidated `agent_loop_acceptance` (5-prompt session,
