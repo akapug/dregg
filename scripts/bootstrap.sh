@@ -103,14 +103,19 @@ fi
 # ── 5. verify: Rust calls the proved Lean kernel for real ───────────────────
 step "Verification: cargo builds the FFI crate and the smoke binary round-trips the kernel"
 CHECK_LOG="$(mktemp)"
-if ! ( cd "$ROOT" && cargo build -p dregg-lean-ffi 2>&1 | tee "$CHECK_LOG" ); then
-  die "cargo build -p dregg-lean-ffi failed — see output above."
+# NOTE: the verification MUST pass `--features lean-lib` — that feature is what
+# links `libdregg_lean.a` (without it the crate builds the degraded "marshal-only"
+# path, and the smoke binary `dregg-lean-ffi` has `required-features = ["lean-lib"]`
+# so it won't even be selected). Omitting the flag here false-fails a kernel that
+# is in fact linkable (the Lunar Town Council Fork-B finding, 2026-06-22).
+if ! ( cd "$ROOT" && cargo build -p dregg-lean-ffi --features lean-lib 2>&1 | tee "$CHECK_LOG" ); then
+  die "cargo build -p dregg-lean-ffi --features lean-lib failed — see output above."
 fi
 if grep -q "marshal-only" "$CHECK_LOG"; then
   die "the FFI crate still built MARSHAL-ONLY (the Lean kernel is not linked).
   Read the cargo warnings above — they name the exact missing piece."
 fi
-( cd "$ROOT" && cargo run -q -p dregg-lean-ffi --bin dregg-lean-ffi ) \
+( cd "$ROOT" && cargo run -q -p dregg-lean-ffi --features lean-lib --bin dregg-lean-ffi ) \
   || die "the FFI smoke binary failed — the linked Lean kernel did not round-trip."
 
 step "DONE. The verified Lean executor is linked and answering."
