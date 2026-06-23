@@ -27,27 +27,30 @@
 //!    reach returns [`ConnectOutcome::RefusedByTransport`] (the transport's own
 //!    refusal, distinct from the cap's).
 //!
-//! ## How deep this binding goes (HONEST — the seam, named not laundered)
+//! ## How deep this binding goes (the forbidden-scheme ceiling, now BROKEN)
 //!
-//! Servo's HTTP(S) bytes themselves ride servo's INTERNAL `net` crate (hyper). Servo
-//! forbids registering an embedder `ProtocolHandler` for `http`/`https`
-//! (`servo-net`'s `FORBIDDEN_SCHEMES = ["http", "https", "chrome", "about"]`), so the
-//! embedder cannot replace the http socket without forking servo's `net` crate — that
-//! fork is out of one pass's reach. What this connector binds, at the depth the
-//! embedder API allows, is:
+//! Servo's `net` crate USED to forbid registering an embedder `ProtocolHandler` for
+//! `http`/`https` (`FORBIDDEN_SCHEMES = ["http", "https", "chrome", "about"]`), so the
+//! embedder could bind only the *connect decision* here, never the http(s) bytes —
+//! those rode servo's internal hyper. The vendored `servo-net` fork
+//! (`servo-render/vendor/servo-net`, `[patch.crates-io]`) removes http/https from
+//! `FORBIDDEN_SCHEMES` and makes `scheme_fetch` consult an embedder handler FIRST for
+//! those schemes. So there are now TWO cap-gated bindings:
 //!
-//!   * **the connect/authority decision → `Netlayer::dial`**: every fetch the
-//!     [`CapGate`](crate::webview) admits is routed through THIS connector first, so
-//!     the audited netlayer session is the thing that opens (or refuses) for the
-//!     origin — and a cap-denied origin is refused *at `dial`'s doorstep*, before any
-//!     socket. The bytes-on-the-wire for http(s) remain servo's internal hyper path
-//!     (the forbidden-scheme ceiling, stated exactly), but the *reachability* of an
-//!     origin is now the netlayer's to grant, gated by the cap.
+//!   * **this connector — the connect/authority decision → `Netlayer::dial`**: every
+//!     fetch the [`CapGate`](crate::webview) delegate admits is routed through THIS
+//!     connector, so a cap-denied origin is refused *at `dial`'s doorstep* before any
+//!     socket, and the *reachability* of an origin is the netlayer's to grant.
+//!   * **[`crate::netcap_http::CapGatedHttpHandler`] — the http(s) BYTE socket**: the
+//!     embedder `ProtocolHandler` the fork lets us register. It runs the SAME cap
+//!     decision (a cap-denied origin returns a network error, no byte socket opens),
+//!     then for a cap-admitted origin opens a REAL TCP socket and fetches the bytes —
+//!     servo lays them out, SWGL rasterizes. The byte socket is the embedder's, NOT
+//!     servo's hyper. (Plain `http://`; `https://`/TLS is the named sub-ceiling in
+//!     that module.)
 //!
 //! A `dregg://` (cell) fetch — which the web-of-cells surface drives, never an
-//! ambient socket — would ride this connector end-to-end (no forbidden-scheme
-//! ceiling, since it is not http). For http(s) the connector is the audited
-//! connect-decision wire in front of servo's byte path. The status line
+//! ambient socket — rides this connector end-to-end. The status line
 //! ([`ConnectOutcome::status_line`]) tells the truth about which of the three an
 //! origin hit: dialed through the netlayer, refused by the cap, or unreachable by the
 //! transport.

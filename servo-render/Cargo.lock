@@ -7885,8 +7885,6 @@ dependencies = [
 [[package]]
 name = "servo-net"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c577079bb3ef21a4fd7bb36f452aa63b25882e2a7726276cea47ea577d224721"
 dependencies = [
  "async-compression",
  "async-recursion",
@@ -8129,6 +8127,7 @@ dependencies = [
  "dregg-firmament",
  "gleam",
  "glow",
+ "http 1.4.2",
  "image",
  "servo",
  "servo-paint-api",

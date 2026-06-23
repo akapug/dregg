@@ -68,6 +68,12 @@ libservo = [
     "dep:dpi",
     "dep:image",
     "dep:glow",
+    # The `http` crate the cap-gated http protocol handler builds its response
+    # `Content-Type` header with (`http::header::HeaderValue` / `CONTENT_TYPE` into
+    # servo's `Response.headers: HeaderMap`). The SAME `http 1.4` servo-net pins, so
+    # the `HeaderMap` types UNIFY (a second `http` would make our header a different
+    # type than servo's `Response.headers`). See `src/netcap_http.rs`.
+    "dep:http",
     # The `surfman::Connection` the real `RenderingContext::connection()` returns.
     # servo-paint's `register_rendering_context` (`paint.rs:236`) UNCONDITIONALLY
     # calls `rendering_context.connection().expect("Failed to get connection")` then
@@ -174,6 +180,10 @@ glow = { version = "0.16", optional = true }
 # the EXACT version servo 0.1.x resolves (`surfman 0.11`) so our `Connection` IS the
 # same type servo-paint stores in its `PainterSurfmanDetails`.
 surfman = { version = "0.11", optional = true }
+# The `http` crate for the cap-gated http handler's response `Content-Type` header
+# (`HeaderValue` / `CONTENT_TYPE`). Pinned to servo-net's `http 1.4` so the
+# `HeaderMap` unifies with servo's `Response.headers`. Only linked on libservo.
+http = { version = "1.4", optional = true }
 
 [dev-dependencies]
 # (tests live inline + in tests/)
@@ -211,6 +221,24 @@ ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "
 # applies to THIS standalone workspace (`servo-render`); reverts once servo-paint
 # carries a SWGL `RenderingContext` path upstream.
 servo-paint = { path = "vendor/servo-paint" }
+
+# THE servo-net FORBIDDEN-SCHEMES FORK — a vendored copy of published `servo-net
+# 0.1.0` (registry-normalized source; ALL deps are the SAME crates.io pins, so it
+# unifies with servo 0.1.x's own `net` copy) with a SINGLE behavioural change
+# across two files (see `vendor/servo-net/Cargo.toml`):
+#   * `protocols/mod.rs` — `FORBIDDEN_SCHEMES` no longer contains `http`/`https`,
+#     so an embedder CAN register a `ProtocolHandler` for them (it stayed blocking
+#     `chrome`/`about`, the servo-internal pseudo-schemes).
+#   * `fetch/methods.rs::scheme_fetch` — for `http`/`https`, an embedder-registered
+#     handler in the `ProtocolRegistry` is consulted FIRST; only when NO embedder
+#     handler is registered does the built-in `http_fetch` (servo's internal hyper)
+#     run. THIS is the real http(s) interception point: a cap-gated embedder
+#     handler (`netcap_http::CapGatedHttpHandler`) now owns the http(s) byte socket,
+#     routing the connect decision through the net-cap gate (`Netlayer::dial`) and
+#     fetching the bytes over a real cap-gated socket, instead of servo's hyper.
+# Only applies to THIS standalone workspace (`servo-render`); reverts to the
+# registry crate once servo carries an embedder http(s) hook upstream.
+servo-net = { path = "vendor/servo-net" }
 
 # THE stylo FORK PATCH — stylo's `ToCss` derive (`stylo_derive`) emits a `to_css`
 # body whose `?` operators rely on an implicit `From` into `core::fmt::Error`. On

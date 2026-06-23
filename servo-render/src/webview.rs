@@ -247,7 +247,10 @@ use starbridge_web_surface::{
 use dregg_captp::netlayer::{InProcessFabric, InProcessNetlayer};
 
 use crate::netcap_connector::{block_on, ConnectOutcome, NetcapConnector};
+use crate::netcap_http::{CapGatedHttpHandler, SharedHttpHandler};
 use crate::swgl_context::RgbaFrame;
+
+use servo::protocol_handler::ProtocolRegistry;
 
 /// **The real `WebViewDelegate` that IS the cap gate** (the `// LIBSERVO SEAM` made
 /// good). Servo calls *out* to this at every authority point; each callback
@@ -271,9 +274,10 @@ struct CapGate {
     /// origin's *reachability* is the netlayer's to grant (gated by the held cap), not
     /// an ambient OS socket's. A cap-denied origin is refused at the connector before
     /// any `dial`; a cap-admitted origin's connection IS a real audited
-    /// [`dregg_captp::netlayer::NetSession`]. (For http(s) the bytes-leg remains
-    /// servo's internal hyper path — the forbidden-scheme ceiling, see the module +
-    /// `netcap_connector` docs; the *connect decision* is bound here.)
+    /// [`dregg_captp::netlayer::NetSession`]. (This delegate binds the *connect
+    /// decision*; the http(s) BYTE socket is now owned by the cap-gated
+    /// [`crate::netcap_http::CapGatedHttpHandler`] the vendored `servo-net` fork lets
+    /// us register — the forbidden-scheme ceiling is broken, see that module.)
     connector: NetcapConnector<InProcessNetlayer>,
     /// The net-cap outcomes this gate produced, newest last — the audit/status trail
     /// the headless render surfaces ([`render_url_to_frame`] returns the last one).
@@ -474,6 +478,109 @@ pub fn render_url_to_frame_netcap(
         .event_loop_waker(Box::new(HeadlessWaker))
         .build();
     render_url_on_servo(&servo, url, surface, width, height, max_spins)
+}
+
+/// **THE HTTP(S) PAYOFF: rasterize a REAL `http://` page through the cap-gated byte
+/// socket.**
+///
+/// This is the function the forbidden-scheme fork makes possible. It:
+///
+/// 1. builds a [`CapGatedHttpHandler`] for `surface` (the cap discharged at the byte
+///    socket) and registers it in a [`ProtocolRegistry`] for `http` AND `https` —
+///    now permitted, because the vendored `servo-net` fork removed http/https from
+///    `FORBIDDEN_SCHEMES` and makes `scheme_fetch` consult an embedder handler first;
+/// 2. builds a real `Servo` with that registry (`ServoBuilder::protocol_registry`),
+///    so the engine routes http(s) loads through OUR handler instead of its hyper;
+/// 3. renders `url` through [`render_url_on_servo`] into the SWGL framebuffer — the
+///    handler runs the cap gate at the socket, fetches the bytes over a real
+///    cap-gated TCP socket, hands them to servo, servo lays them out, SWGL rasters.
+///
+/// Returns the rendered [`RgbaFrame`], the handler (for audit readback — which
+/// origins were dialed/refused, what bytes were fetched), and the navigation's last
+/// net-cap [`ConnectOutcome`].
+/// A real `Servo` engine whose `http`/`https` loads are routed through ONE
+/// cap-gated [`CapGatedHttpHandler`] (registered in the engine's `ProtocolRegistry`,
+/// permitted by the `servo-net` fork). Because `servo_config::opts` is a
+/// process-wide `OnceCell`, at most one engine exists per process; this holds that
+/// engine + its one handler so SEVERAL pages (different surfaces) render on it via
+/// [`Self::render`], each [`CapGatedHttpHandler::reconfigure`]-ing the held cap.
+pub struct CapGatedHttpEngine {
+    servo: servo::Servo,
+    handler: std::sync::Arc<CapGatedHttpHandler>,
+}
+
+impl CapGatedHttpEngine {
+    /// Build the one-per-process engine with the cap-gated http handler registered
+    /// for http AND https (both permitted by the fork). The handler starts pointed at
+    /// `initial_surface`/`initial_seeds`; [`Self::render`] re-points it per page.
+    pub fn new(initial_surface: SurfaceCapability, initial_seeds: &[String]) -> Self {
+        let handler = std::sync::Arc::new(CapGatedHttpHandler::new(
+            initial_surface,
+            initial_seeds,
+        ));
+        let shared = SharedHttpHandler(handler.clone());
+
+        // Register it for BOTH http and https (the fork permits both). servo's
+        // `scheme_fetch` consults this handler first for those schemes.
+        let mut registry = ProtocolRegistry::default();
+        registry
+            .register("http", shared.clone())
+            .expect("the servo-net fork permits registering an http handler (FORBIDDEN_SCHEMES loosened)");
+        registry
+            .register("https", shared)
+            .expect("the servo-net fork permits registering an https handler (FORBIDDEN_SCHEMES loosened)");
+
+        let servo = ServoBuilder::default()
+            .event_loop_waker(Box::new(HeadlessWaker))
+            .protocol_registry(registry)
+            .build();
+        CapGatedHttpEngine { servo, handler }
+    }
+
+    /// The shared cap-gated http handler (for audit readback: outcomes, last fetch).
+    pub fn handler(&self) -> &std::sync::Arc<CapGatedHttpHandler> {
+        &self.handler
+    }
+
+    /// Re-point the handler at `surface`/`seed_origins`, then render `url` on this
+    /// engine. The handler runs the cap gate at the byte socket; a cap-admitted
+    /// origin's bytes are fetched over a real cap-gated TCP socket, laid out by servo,
+    /// rasterized by SWGL. Returns the frame + the delegate's last net-cap outcome
+    /// (the handler's own outcomes are read via [`Self::handler`]).
+    pub fn render(
+        &self,
+        url: &str,
+        surface: SurfaceCapability,
+        seed_origins: &[String],
+        width: u32,
+        height: u32,
+        max_spins: usize,
+    ) -> (Option<RgbaFrame>, Option<ConnectOutcome>) {
+        self.handler.reconfigure(surface.clone(), seed_origins);
+        render_url_on_servo(&self.servo, url, surface, width, height, max_spins)
+    }
+}
+
+/// **THE HTTP(S) PAYOFF (single-shot).** Build a fresh [`CapGatedHttpEngine`] and
+/// render ONE http(s) page through the cap gate. Convenient when the process renders
+/// exactly one page; to render several (different surfaces), build ONE
+/// [`CapGatedHttpEngine`] and call [`CapGatedHttpEngine::render`] per page (servo's
+/// opts is a process `OnceCell`, so only one engine may exist per process).
+pub fn render_http_url_to_frame(
+    url: &str,
+    surface: SurfaceCapability,
+    seed_origins: &[String],
+    width: u32,
+    height: u32,
+    max_spins: usize,
+) -> (
+    Option<RgbaFrame>,
+    std::sync::Arc<CapGatedHttpHandler>,
+    Option<ConnectOutcome>,
+) {
+    let engine = CapGatedHttpEngine::new(surface.clone(), seed_origins);
+    let (frame, outcome) = engine.render(url, surface, seed_origins, width, height, max_spins);
+    (frame, engine.handler.clone(), outcome)
 }
 
 /// Render `url` to a frame on an ALREADY-BUILT [`Servo`] engine — the per-page leg of
