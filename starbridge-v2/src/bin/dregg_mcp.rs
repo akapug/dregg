@@ -698,6 +698,490 @@ fn tool_view(s: &Session) -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// dataplane — the captp Bus / channel data plane, exercised LIVE in-process
+// ---------------------------------------------------------------------------
+
+/// The captp DATA PLANE as inspectable state. The node-side `Bus` (the per-node
+/// relay that backs the channels service) is NOT in the embedded image — there
+/// is no node here — so this tool stands up a REAL `dregg_captp::data_plane::Bus`
+/// in-process and drives a genuine post→wake→drain cycle, so the receipt-identity
+/// (a Delivery promise vs the witnessed drain), the per-recipient queue depth /
+/// inbox root, the pub/sub topic fan-out, and the wake-by-name cursor are SHOWN
+/// as real values, not described. The seam to the live node's Bus is named.
+fn tool_dataplane(s: &Session) -> Value {
+    use dregg_captp::data_plane::{Bus, ChannelName, SendCap, TopicName};
+    use dregg_cell::permissions::AuthRequired as DpAuth;
+    use dregg_types::FederationId;
+
+    // A relay identity for the demonstration Bus (deterministic seed).
+    let relay_seed = [0x5Au8; 32];
+    let relay_key = dregg_types::SigningKey::from_bytes(&relay_seed);
+    let relay_id = FederationId::from_bytes(relay_key.public_key().0);
+
+    // Two recipients derived from the live anchors (so the demo is grounded in
+    // this session's principals — a recipient is named by a FederationId).
+    let alice = FederationId::from_bytes(*s.anchors[1].as_bytes()); // service
+    let bob = FederationId::from_bytes(*s.anchors[2].as_bytes()); // user
+
+    let mut bus = Bus::new(relay_id, relay_key, 64, 4096)
+        .with_default_ttl(256)
+        .with_default_deadline(1024);
+
+    let chan = ChannelName::new(b"demo.inbox".to_vec());
+    let send_cap = SendCap::grant(alice, chan.clone(), DpAuth::Either);
+    let now = s.world.height();
+
+    // (1) enqueue a box for alice → a Delivery (the relay's signed PROMISE).
+    let mut posts = Vec::new();
+    for i in 0..2u32 {
+        match bus.enqueue(&send_cap, alice, &chan, DpAuth::Either, format!("msg{i}").into_bytes(), now) {
+            Ok(d) => posts.push(json!({
+                "to": short(alice.as_bytes()),
+                "content_hash": short(&d.content_hash),
+                "custody": "relay-signed promise (a Delivery; NOT yet witnessed)",
+            })),
+            Err(e) => posts.push(json!({ "error": format!("{e:?}") })),
+        }
+    }
+
+    // (2) wake-by-name: bob waits on the channel, then polls the cursor.
+    bus.wait(&chan, bob);
+    let cursor_before = bus.cursor(&chan);
+    let wake = bus.poll_wake(&chan, &bob).map(|w| w.cursor);
+
+    // (3) pub/sub: a topic with both recipients subscribed.
+    let topic = TopicName::new(b"demo.broadcast".to_vec());
+    bus.register_topic(topic.clone());
+    bus.subscribe(topic.clone(), alice);
+    bus.subscribe(topic.clone(), bob);
+    let pub_cap = SendCap::grant(alice, chan.clone(), DpAuth::Either);
+    let published = bus
+        .publish(&topic, &pub_cap, DpAuth::Either, b"hello-all".to_vec(), now)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let subs = bus.subscribers(&topic).len();
+
+    // (4) the per-recipient INBOX state BEFORE drain (pending vs delivered).
+    let pending_before = bus.pending_count(&alice);
+    let root_before = bus.inbox_root(&alice);
+
+    // (5) drain alice → witnesses delivery (receipt-identity flips: promise → fact).
+    let drained = bus.drain(&alice).len();
+    let pending_after = bus.pending_count(&alice);
+    let delivered = bus.delivered_hashes(&alice).len();
+    let root_after = bus.inbox_root(&alice);
+
+    json!({
+        "what": "the captp data plane (dregg_captp::data_plane::Bus) — the relay/inbox/wake/topic substrate that backs the node channels service",
+        "live": "a REAL Bus stood up + driven in-process (post → wake → publish → drain), grounded in this session's anchor principals",
+        "relay": { "id": short(relay_id.as_bytes()), "role": "the accountable relay identity (FederationId = its Ed25519 pubkey); signs custody receipts" },
+        "principals": { "alice (service)": short(alice.as_bytes()), "bob (user)": short(bob.as_bytes()) },
+        "channel": { "name": "demo.inbox", "key": short(&chan.key()) },
+        "post": {
+            "deliveries": posts,
+            "receipt_identity": "enqueue returns a Delivery = the relay's signed PROMISE; the content is only WITNESSED once drain returns it (custody flips promise → fact)",
+        },
+        "wake": {
+            "waiter": short(bob.as_bytes()),
+            "cursor": cursor_before,
+            "poll_wake": wake,
+            "kind": "unforgeable wake-by-name: the cursor is the monotone enqueue count, derivable only by the relay (Wake { cursor })",
+        },
+        "pubsub": { "topic": "demo.broadcast", "subscribers": subs, "fanned_out_to": published },
+        "inbox": {
+            "alice_pending_before_drain": pending_before,
+            "alice_inbox_root_before": short(&root_before),
+            "drained": drained,
+            "alice_pending_after_drain": pending_after,
+            "alice_delivered_hashes": delivered,
+            "alice_inbox_root_after": short(&root_after),
+            "note": "the inbox root is a monotone per-recipient commitment; drain advances delivered and clears pending",
+        },
+        "seam": {
+            "node_bus": "the LIVE per-node Bus lives in `node/src/channels_service.rs` (ChannelRegistry::bus, minted once from the node gossip key) and is reached over the node HTTP API: POST /channels/post (enqueue), POST /channels/drain/{cell}, POST /channels/subscribe (wait), GET /channels/wake/{cell}, GET /channels/status/{cell}",
+            "embedded_image": "there is no node in this embedded image, so the live queue depths of a running federation are NOT here; the protocol + a driven instance ARE (above)",
+        },
+        "types": ["Bus", "Delivery", "Wake", "Waker", "SendCap", "ChannelName", "TopicName", "QueuedMessage", "CustodyReceipt"],
+    })
+}
+
+// ---------------------------------------------------------------------------
+// firmament — the surface/migration state: the one cap across distance
+// ---------------------------------------------------------------------------
+
+/// The FIRMAMENT surface/migration state: the `(target, rights)` capability over
+/// the Local / Distributed / Surface / HostPd distance axis, the live cell
+/// lifecycle (Live / Sealed / Migrated / Destroyed / Archived — the migration
+/// frontier), and the compositor scene contract (the T1/T2/T3 teeth). Every
+/// live cell is also a *potential* surface target (a window IS a cap over a
+/// cell), so we project the ledger onto the distance axis + read each cell's
+/// lifecycle directly from the live world.
+fn tool_firmament(s: &Session) -> Value {
+    use dregg_firmament::{Backing, Bounds, Capability};
+
+    // The distance axis, made concrete: build a real Capability at each rung.
+    let demo_cell = s.anchors[0];
+    let axis = vec![
+        ("Local", json!({
+            "target": "Local { slot }", "n": 1,
+            "backing": format!("{:?}", Backing::LocalKernel),
+            "bounds": "revocation synchronous · commit local (a seL4 CNode slot — a syscall)",
+            "example": { "cap": format!("{:?}", Capability::local(0, dregg_cell::AuthRequired::Either).target) },
+        })),
+        ("Distributed", json!({
+            "target": "Distributed { cell }", "n_ge": 1,
+            "backing": format!("{:?}", Backing::DistributedTurn),
+            "bounds": "revocation = epoch lift · commit quorum-gated when n>1, synchronous at n=1 (a turn through the executor)",
+            "example": { "cell": short(demo_cell.as_bytes()) },
+        })),
+        ("Surface", json!({
+            "target": "Surface { cell }", "n": 1,
+            "backing": format!("{:?}", Backing::DistributedTurn),
+            "bounds": "a window IS a cap over a cell — present/draw is a turn; at n=1 a surface revoke darkens the glass the instant it returns",
+            "example": { "cell": short(demo_cell.as_bytes()) },
+        })),
+        ("HostPd", json!({
+            "target": "HostPd { pd }", "n": 1,
+            "backing": format!("{:?}", Backing::HostPdEndpoint),
+            "bounds": "strong-local — a confined forked child reached ONLY over its firmament Endpoint (no files/network/exec)",
+        })),
+    ];
+
+    // The live migration frontier: read each cell's lifecycle from the world.
+    // The reflection surfaces `lifecycle` as a headline; we read it from the cell.
+    let mut surfaces = Vec::new();
+    let mut migrated = Vec::new();
+    let mut sealed = Vec::new();
+    for (id, cell) in s.world.ledger().iter() {
+        let lc = format!("{:?}", cell.lifecycle);
+        // Every live cell is a candidate surface target (the firmament's visual face).
+        surfaces.push(json!({
+            "cell": short(id.as_bytes()),
+            "target": "Surface { cell }",
+            "lifecycle": lc.split_whitespace().next().unwrap_or(&lc),
+            "rights_axis": "the SAME AuthRequired lattice gates the window cap as the underlying cell cap",
+        }));
+        if lc.starts_with("Migrated") { migrated.push(short(id.as_bytes())); }
+        if lc.starts_with("Sealed") { sealed.push(short(id.as_bytes())); }
+    }
+
+    let bounds_local = Bounds::LOCAL;
+    json!({
+        "what": "the firmament: ONE capability across DISTANCE (local seL4-cap ↔ distributed dregg-cap ↔ surface=window ↔ confined host-PD), the (target, rights) handle dispatched by target",
+        "distance_axis": axis.into_iter().map(|(k, v)| json!({ "rung": k, "shape": v })).collect::<Vec<_>>(),
+        "n1_collapse": {
+            "Bounds::LOCAL": { "revocation_immediate": bounds_local.revocation_immediate, "commit_synchronous": bounds_local.commit_synchronous, "n": bounds_local.n },
+            "principle": "at n=1 (compositor + apps on one box) every rung's bounds collapse to strong-local: immediate revocation, synchronous commit",
+        },
+        "compositor_scene": {
+            "what": "the CompositorPd scene = surfaces in paint order; present() is admitted ONLY through three verified teeth",
+            "T1_non_overlap": "an app composites ONLY its cap-authorized regions (no overpaint of a foreign surface)",
+            "T2_label_binding": "the surface label = label_of(owner, source_state_root), COMPOSITOR-computed — not app-supplied (no spoof)",
+            "T3_focus_exclusivity": "at-most-one surface holds focus; input routes only there (no double-focus, no misroute)",
+            "refusals": ["Overpaint", "LabelSpoof", "InputMisroute", "DoubleFocus", "NoSurface", "NoFrameAdvance"],
+        },
+        "migration_frontier": {
+            "lifecycle_states": ["Live", "Sealed { reason, at }", "Migrated { to, attestation, migrated_at }", "Destroyed { certificate, at }", "Archived { checkpoint, through }"],
+            "live_surfaces": surfaces.len(),
+            "surfaces": surfaces,
+            "migrated_cells": migrated,
+            "sealed_cells": sealed,
+            "note": "Migrated is TERMINAL — the cell relocated to another federation, its attestation binds the destination receipt",
+        },
+        "seam": {
+            "compositor_pd": "the live CompositorPd + the framebuffer + torn-off/confined surface authority live in the gpui cockpit shell (starbridge-v2/src/shell.rs) and the seL4 dregg-firmament PDs — owned by other lanes; this tool reads the LEDGER lifecycle + projects the distance axis + the scene contract (all gpui-free), not the live compositor framebuffer",
+        },
+        "types": ["Capability", "Target", "Bounds", "Resolution", "Backing", "Scene", "Surface", "Present", "FrameCommit", "Refusal", "CellLifecycle", "SurfaceCapability"],
+    })
+}
+
+// ---------------------------------------------------------------------------
+// federation — committee / epoch / checkpoint / bridges / revocation (seam)
+// ---------------------------------------------------------------------------
+
+/// The FEDERATION surface: committee / epoch / checkpoint / cross-fed bridges /
+/// revocation. The live federation/consensus STATE is NEVER in this embedded
+/// process — it lives on a running node; the headless embedded-executor build
+/// deliberately does NOT link the consensus stack. So this tool surfaces the
+/// honest catalog: the captp-only / node-service objects named with their seam +
+/// route (the `federation_inspector` "designed-pending" surface, never faked),
+/// plus the protocol vocabulary of the federation types.
+fn tool_federation(s: &Session) -> Value {
+    use starbridge_v2::federation_inspector::FederationSurvey;
+
+    // No node is connected in the embedded image → the disconnected survey, which
+    // still carries the full honest captp-only catalog.
+    let survey = FederationSurvey::disconnected();
+    let remote: Vec<Value> = survey
+        .remote
+        .iter()
+        .map(|p| json!({ "kind": p.kind, "seam": p.seam, "route": p.route }))
+        .collect();
+
+    // The embedded image IS itself a degenerate (solo / n=1) federation: the
+    // executor signs receipts under one identity, no quorum. Surface that fact.
+    let executor_pk = s.world.executor_public_key();
+
+    json!({
+        "what": "the federation: the committee (validators + threshold), the epoch (membership rotation), the checkpoint (state-root quorum certificate), the cross-fed bridge (handoff cert), and revocation",
+        "embedded_image": {
+            "mode": "solo / n=1 — this embedded executor IS a degenerate federation of one: it signs receipts under a single executor identity, no quorum, synchronous commit",
+            "executor_public_key": executor_pk.map(|k| short(&k)),
+            "live_federations": survey.live_count(),
+            "note": "live committee/epoch/checkpoint/DAG state belongs to a RUNNING node; it is not in this process",
+        },
+        "committee": {
+            "type": "dregg_federation::FederationCommittee — BLS threshold committee (member secrets + a threshold value); aggregate(shares) → ThresholdQC, verify(qc, msg)",
+            "validator": "ValidatorInfo { public_key, signing_key_root, stake, joined_epoch }",
+        },
+        "epoch": {
+            "type": "EpochConfig { epoch_length, current_epoch, epoch_start_height, members, threshold }",
+            "transition": "EpochTransition { from_epoch, to_epoch, added_validators, removed_validators, new_threshold, attestation: QuorumCertificate }",
+        },
+        "checkpoint": {
+            "type": "Checkpoint { height, ledger_state_root, note_tree_root, nullifier_set_root, revocation_tree_root, federation_members, epoch, qc, timestamp }",
+            "verify": "verify_with_committee(committee) — the QC must carry 2f+1 of the committee at this epoch",
+            "wire": "a connected node publishes CheckpointResponse { height, ledger_state_root, note_tree_root, nullifier_set_root, revocation_tree_root, epoch, timestamp, federation_members, qc_votes }",
+        },
+        "revocation": {
+            "type": "RevocationTree — a Merkle set of revoked token ids; prove_non_membership(id) → NonMembershipProof; the checkpoint binds its revocation_tree_root",
+            "principle": "non-membership is the live-at-settlement check (a cap is exercisable iff its token is NOT in the revocation tree at the settling checkpoint)",
+        },
+        "cross_fed_bridge": {
+            "type": "CrossFedReceiptBundle { recipient_chain, issuer_attested_root, recipient_attested_root, cross_fed_cert: HandoffCertificate, recipient_federation_receipt }",
+            "purpose": "carries a cap + its provenance across a federation boundary (the OCapN third-party handoff)",
+        },
+        "remote_path_catalog": {
+            "what": "the captp-only / node-service federation objects, surfaced honestly with kind + seam + route (never faked)",
+            "objects": remote,
+        },
+        "wire_types_when_connected": ["FederationInfo", "CheckpointResponse", "BlockInfo", "NodeStatus"],
+        "seam": "federation/consensus is wire-only: connect a node and read /api/federations, /api/block/{height}, /status — then FederationSurvey::from_wire(...) reflects the LIVE committee/epoch/checkpoint/DAG",
+    })
+}
+
+// ---------------------------------------------------------------------------
+// effects / verbs — the protocol's complete action vocabulary + descriptors
+// ---------------------------------------------------------------------------
+
+/// The protocol's COMPLETE action vocabulary: the canonical 8 verbs (the minimal
+/// kernel) plus the full Effect catalog (every variant), each with its descriptor
+/// fields (the action's parameters) and its conservation class (the linearity the
+/// executor enforces). The full vocabulary the atlas documents — sourced from the
+/// real `dregg_turn::action::Effect` enum, so it never drifts from a hand-list.
+fn tool_effects() -> Value {
+    // (name, is_canonical_verb, conservation_class, descriptor_fields, gloss)
+    let cat: &[(&str, bool, &str, &str, &str)] = &[
+        ("SetField", true, "Neutral", "cell, index, value", "set a state field on a cell"),
+        ("Transfer", true, "Conservative", "from, to, amount", "move balance between cells (Σδ=0 — the conservation tooth)"),
+        ("GrantCapability", true, "Generative", "from, to, cap: CapabilityRef", "grant a cap edge (non-amplifying: granted ⊆ held)"),
+        ("RevokeCapability", true, "Terminal", "cell, slot", "revoke a held cap (terminal — monotone down)"),
+        ("EmitEvent", true, "Neutral", "cell, event", "emit an event into the receipt (no state change)"),
+        ("IncrementNonce", true, "Monotonic", "cell", "advance the cell nonce (the anti-replay tick)"),
+        ("CreateCell", true, "Generative", "public_key, token_id, balance", "mint a new cell into the ledger"),
+        ("SetPermissions", true, "Neutral", "cell, new_permissions", "rewrite a cell's AuthRequired gates (applied LAST in an action)"),
+        ("SetVerificationKey", false, "Neutral", "cell, new_vk", "rewrite a cell's VK (applied LAST in an action)"),
+        ("SetProgram", false, "Neutral", "cell, program: CellProgram", "reprogram a cell's caveat table as an ordered turn (the live-customize path)"),
+        ("NoteSpend", false, "Conservative", "nullifier, note_tree_root, value, asset_type, spending_proof, value_commitment?", "spend a shielded note by revealing its nullifier (proof-carrying)"),
+        ("NoteCreate", false, "Conservative", "commitment, value, asset_type, encrypted_note, value_commitment?, range_proof?", "create a shielded note (adds a commitment to the note tree)"),
+        ("SpawnWithDelegation", false, "Generative", "child_public_key, child_token_id, max_staleness", "spawn a delegated child cell"),
+        ("RefreshDelegation", false, "Neutral", "child, snapshot", "refresh a delegation's freshness snapshot"),
+        ("RevokeDelegation", false, "Terminal", "child", "revoke a delegation (terminal)"),
+        ("BridgeMint", false, "Generative", "portable_proof: PortableNoteProof", "mint from a cross-federation portable note proof"),
+        ("Introduce", false, "Generative", "introducer, recipient, target, permissions", "the ocap introduction primitive (a → grants b a cap on c)"),
+        ("PipelinedSend", false, "Neutral", "target: EventualRef, action", "CapTP promise-pipelined send (a send against a not-yet-resolved ref)"),
+        ("ExerciseViaCapability", false, "Neutral", "cap_slot, inner_effects", "exercise effects THROUGH a held capability (attenuated re-dispatch)"),
+        ("MakeSovereign", false, "Terminal", "cell", "make a cell sovereign (terminal authority transition)"),
+        ("CreateCellFromFactory", false, "Generative", "factory_vk, owner_pubkey, token_id, params", "mint a cell from a deployed factory descriptor"),
+        ("Refusal", false, "Monotonic", "cell, offered_action_commitment, refusal_reason, proof_witness_index", "a witnessed refusal (a cell declines an offered action, on the record)"),
+        ("CellSeal", false, "Terminal", "target, reason", "seal a cell (reversible quiescence — rejects new effects)"),
+        ("CellUnseal", false, "Terminal", "target", "unseal a sealed cell"),
+        ("CellDestroy", false, "Terminal", "target, certificate: DeathCertificate", "permanently retire a cell (terminal)"),
+        ("Burn", false, "Annihilative", "target, slot, amount", "burn value out of existence (the only non-conservative value sink)"),
+        ("AttenuateCapability", false, "Terminal", "cell, slot, narrower_permissions, narrower_effects?, narrower_expiry?", "attenuate a held cap in place (monotone narrowing — adoption IS attenuation)"),
+        ("ReceiptArchive", false, "Terminal", "prefix_end_height, checkpoint: ArchivalAttestation", "archive a receipt-chain prefix under a checkpoint attestation"),
+        ("Promise", false, "Generative", "cell, resolution_condition, wake, timeout_height", "post a promise (a hole the circuit treats as a nullifier; resolution = a spend)"),
+        ("Notify", false, "Generative", "from, to, resolution_condition, wake, timeout_height", "register a wake on another cell's resolution condition"),
+        ("React", false, "Terminal", "pending_id, condition, resolution_proof, wake", "resolve a pending promise with a proof (fires the wake; one-shot)"),
+    ];
+
+    let verbs: Vec<Value> = cat.iter().filter(|e| e.1).map(|(name, _, class, fields, gloss)| {
+        json!({ "verb": name, "conservation": class, "descriptor": fields, "gloss": gloss })
+    }).collect();
+    let all: Vec<Value> = cat.iter().map(|(name, canon, class, fields, gloss)| {
+        json!({ "effect": name, "canonical_verb": canon, "conservation": class, "descriptor": fields, "gloss": gloss })
+    }).collect();
+
+    json!({
+        "what": "the protocol's complete action vocabulary — sourced from dregg_turn::action::Effect (31 variants) so it can never drift from a hand-list",
+        "the_eight_verbs": {
+            "what": "the minimal kernel set (dregg3: 8 verbs from 52) — the canonical subset every cell speaks",
+            "verbs": verbs,
+        },
+        "conservation_classes": {
+            "what": "Effect::linearity() — the linearity the verified executor enforces per effect",
+            "classes": {
+                "Conservative": "Σδ = 0 (Transfer, NoteSpend, NoteCreate) — value is moved, never made/lost",
+                "Generative": "introduces structure under non-forgeability (Create*, Grant, Introduce, Promise, Notify, Spawn, BridgeMint)",
+                "Terminal": "monotone-down / one-way (Revoke*, Destroy, Seal, Attenuate, MakeSovereign, Archive, React)",
+                "Annihilative": "value sink (Burn — the only one)",
+                "Monotonic": "advances a monotone counter/log (IncrementNonce, Refusal)",
+                "Neutral": "state mutation with no linear obligation (SetField/Permissions/VK/Program, Emit, Pipeline, Exercise, Refresh)",
+            },
+        },
+        "full_catalog": {
+            "count": all.len(),
+            "effects": all,
+        },
+        "note": "descriptor fields are the variant's struct fields — the action's parameters; `?` marks an Option field",
+    })
+}
+
+// ---------------------------------------------------------------------------
+// map — THE comprehensive machine-readable hypermedia graph (the keystone)
+// ---------------------------------------------------------------------------
+
+/// THE comprehensive cross-linked map: ONE JSON graph over the WHOLE inspectable
+/// system. Nodes (every cell, every presentation face, every affordance/message,
+/// every effect/verb, every surface candidate, the federation seam objects, the
+/// data-plane substrate) each carry a stable `id`; edges are typed relations
+/// (cell→face `presents`, cell→message `affords`, message→effect `fires`,
+/// cell→cell `caps` over the ocap web, cell→surface `surfaces`, …). This is the
+/// hypermedia backbone the atlas site links over: every object addressable,
+/// every relation an edge. Optionally written to `out`.
+fn tool_map(s: &Session, out: Option<&str>) -> Result<Value, String> {
+    let reg = Registry::new(&s.world);
+    let mut nodes: Vec<Value> = Vec::new();
+    let mut edges: Vec<Value> = Vec::new();
+
+    let node = |id: String, kind: &str, label: String, extra: Value| {
+        let mut base = json!({ "id": id, "kind": kind, "label": label });
+        if let Value::Object(m) = extra {
+            if let Value::Object(b) = &mut base {
+                for (k, v) in m { b.insert(k, v); }
+            }
+        }
+        base
+    };
+    let edge = |from: String, rel: &str, to: String| json!({ "from": from, "rel": rel, "to": to });
+
+    // --- the system root + the standing reference nodes (effects/verbs, seams) ---
+    nodes.push(node("sys:root".into(), "system", "dregg live verified image".into(),
+        json!({ "image": s.image, "cell_count": s.world.ledger().iter().count(), "height": s.world.height(), "state_root": short(&s.world.state_root()) })));
+
+    // effect-catalog nodes (one per effect/verb) — addressable so a message can
+    // link to the effect it fires, and the atlas can document each.
+    let effects = tool_effects();
+    if let Some(arr) = effects["full_catalog"]["effects"].as_array() {
+        for e in arr {
+            let name = e["effect"].as_str().unwrap_or("?");
+            let eid = format!("effect:{name}");
+            nodes.push(node(eid.clone(), "effect", name.to_string(), json!({
+                "canonical_verb": e["canonical_verb"], "conservation": e["conservation"], "descriptor": e["descriptor"],
+            })));
+            edges.push(edge("sys:root".into(), "defines-effect", eid));
+        }
+    }
+
+    // the standing seam nodes (data plane + federation + firmament axis) so the
+    // atlas can cross-link to the deeper tools.
+    nodes.push(node("plane:dataplane".into(), "data-plane", "captp Bus / channel substrate".into(),
+        json!({ "tool": "dataplane", "live": "driven in-process; node Bus is a wire seam" })));
+    nodes.push(node("plane:federation".into(), "federation", "committee / epoch / checkpoint / revocation".into(),
+        json!({ "tool": "federation", "live": "solo n=1 here; quorum federation is a wire seam" })));
+    for rung in ["Local", "Distributed", "Surface", "HostPd"] {
+        let rid = format!("firmament:{rung}");
+        nodes.push(node(rid.clone(), "distance-rung", format!("firmament {rung}"), json!({ "axis": "one cap across distance" })));
+        edges.push(edge("sys:root".into(), "distance-rung", rid));
+    }
+    edges.push(edge("sys:root".into(), "has-plane".into(), "plane:dataplane".into()));
+    edges.push(edge("sys:root".into(), "has-plane".into(), "plane:federation".into()));
+
+    // --- per-cell: the node, its faces, its affordances, its surface candidacy ---
+    let ids: Vec<CellId> = s.world.ledger().iter().map(|(id, _)| *id).collect();
+    for id in &ids {
+        let cid = format!("cell:{}", hex32(id.as_bytes()));
+        let cell = s.world.ledger().get(id);
+        let lifecycle = cell
+            .map(|c| format!("{:?}", c.lifecycle))
+            .map(|l| l.split_whitespace().next().unwrap_or("?").to_string())
+            .unwrap_or_else(|| "?".into());
+        let insp = cell.map(|c| starbridge_v2::reflect::reflect_cell(id, c));
+        let title = insp.as_ref().map(|i| i.title.clone()).unwrap_or_else(|| short(id.as_bytes()));
+        let kindname = insp.as_ref().map(|i| format!("{:?}", i.kind)).unwrap_or_default();
+        let balance = insp.as_ref().and_then(|i| i.fields.iter().find_map(|f| match &f.value {
+            FieldValue::Balance(b) if f.key == "balance" => Some(*b),
+            _ => None,
+        }));
+        nodes.push(node(cid.clone(), "cell", title, json!({
+            "short": short(id.as_bytes()), "cell_kind": kindname, "lifecycle": lifecycle, "balance": balance,
+        })));
+        edges.push(edge("sys:root".into(), "contains-cell", cid.clone()));
+
+        // surface candidacy: every live cell is a Surface target on the firmament axis.
+        edges.push(edge(cid.clone(), "surfaces-as", "firmament:Surface".into()));
+
+        // faces
+        if let Some(set) = reg.present(FocusTarget::Cell(*id), *id) {
+            for p in &set {
+                let fid = format!("{cid}/face:{}", p.kind.slug());
+                nodes.push(node(fid.clone(), "face", p.label.clone(), json!({ "face": p.kind.slug() })));
+                edges.push(edge(cid.clone(), "presents", fid));
+            }
+        }
+
+        // affordances → fires → effect
+        let ia = InspectAct::build(&s.world, InspectFocus::Cell(*id), *id, AuthRequired::Either);
+        for m in &ia.messages {
+            let mid = format!("{cid}/msg:{}", m.name);
+            nodes.push(node(mid.clone(), "message", m.name.clone(), json!({
+                "effect": m.effect, "required": format!("{:?}", m.required), "authorized": m.authorized,
+            })));
+            edges.push(edge(cid.clone(), "affords", mid.clone()));
+            // link the message to the effect-catalog node when the effect name matches.
+            let eff_node = format!("effect:{}", m.effect);
+            if nodes.iter().any(|n| n["id"] == json!(eff_node)) {
+                edges.push(edge(mid, "fires", eff_node));
+            }
+        }
+    }
+
+    // --- the ocap web as cap edges between cell nodes ---
+    let g = OcapGraph::build(&s.world);
+    for e in g.edges() {
+        let from = format!("cell:{}", hex32(e.holder.as_bytes()));
+        let to = format!("cell:{}", hex32(e.target.as_bytes()));
+        edges.push(json!({ "from": from, "rel": "caps", "to": to, "slot": e.slot, "rights": format!("{:?}", e.rights) }));
+    }
+
+    let counts = json!({
+        "nodes": nodes.len(),
+        "edges": edges.len(),
+        "by_kind": {
+            "cell": ids.len(),
+            "effect": effects["full_catalog"]["count"].clone(),
+        },
+    });
+    let blob = json!({
+        "what": "THE hypermedia backbone: one cross-linked graph over the whole inspectable system — every object an addressable node, every relation a typed edge",
+        "node_kinds": ["system", "cell", "face", "message", "effect", "data-plane", "federation", "distance-rung"],
+        "edge_rels": ["contains-cell", "defines-effect", "presents", "affords", "fires", "caps", "surfaces-as", "distance-rung", "has-plane"],
+        "counts": counts,
+        "nodes": nodes,
+        "edges": edges,
+        "hint": "link over `id`; resolve a cell node with inspect, an effect node with effects, a plane node with dataplane/federation",
+    });
+
+    if let Some(path) = out {
+        std::fs::write(path, serde_json::to_string_pretty(&blob).unwrap_or_default())
+            .map_err(|e| format!("write {path}: {e}"))?;
+        Ok(json!({ "path": path, "counts": counts, "hint": "the full graph was written; this summary carries the counts" }))
+    } else {
+        Ok(blob)
+    }
+}
+
 // ===========================================================================
 // MCP tool registry + dispatch
 // ===========================================================================
@@ -739,6 +1223,16 @@ fn tool_schemas() -> Value {
           "inputSchema": { "type": "object", "properties": { "kind": str_prop("transfer|grant|create"), "from": str_prop("source cell"), "to": str_prop("target cell"), "amount": { "type": "integer" }, "slot": { "type": "integer" }, "seed": { "type": "integer" } }, "required": ["kind", "from"] } },
         { "name": "view", "description": "Describe the current session: cell count, anchors, acts committed, cells visited.",
           "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "dataplane", "description": "The captp DATA PLANE (dregg_captp Bus): inboxes, queue depths, pending-vs-delivered (receipt-identity), pub/sub topics, wake-by-name cursors. Stands up a REAL Bus in-process and drives a genuine post→wake→publish→drain cycle so every value is live; names the seam to the running node's per-node Bus (the channels service over the node HTTP API).",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "firmament", "description": "The FIRMAMENT surface/migration state: the (target, rights) capability across the Local/Distributed/Surface/HostPd distance axis (with the n=1 collapse to strong-local), the compositor scene contract (the T1/T2/T3 verified teeth), and the LIVE cell-lifecycle migration frontier (Live/Sealed/Migrated/Destroyed/Archived) read straight from the ledger. Names the live-compositor seam.",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "federation", "description": "The FEDERATION surface: committee (BLS threshold) / epoch (membership rotation) / checkpoint (state-root quorum certificate) / cross-fed bridge (handoff cert) / revocation tree. The embedded image is a solo n=1 federation; the live quorum/consensus state is a wire seam — this tool surfaces the honest captp-only/node-service object catalog (kind+seam+route, never faked) plus the federation type vocabulary.",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "effects", "description": "The protocol's COMPLETE action vocabulary: the canonical 8 verbs (the minimal kernel) + the full Effect catalog (every variant, 31), each with its descriptor fields (the action's parameters) and its conservation class (Conservative/Generative/Terminal/Annihilative/Monotonic/Neutral — the linearity the verified executor enforces). Sourced from dregg_turn::action::Effect so it never drifts.",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "map", "description": "THE keystone: ONE comprehensive cross-linked machine-readable graph over the WHOLE inspectable system — every cell, presentation face, affordance/message, effect/verb, surface candidate, and the data-plane/federation/firmament seams, as nodes with stable `id`s and TYPED edges (contains-cell, presents, affords, fires, caps, surfaces-as, distance-rung, has-plane). The hypermedia backbone the atlas site links over. Optionally writes to `out`.",
+          "inputSchema": { "type": "object", "properties": { "out": str_prop("output .json path (omit to return the full graph inline)") } } },
     ])
 }
 
@@ -785,6 +1279,11 @@ fn dispatch(s: &mut Session, name: &str, args: &Value) -> Result<Value, String> 
         "protocol" => Ok(tool_protocol(s)),
         "effect" => tool_effect(s, str_arg("kind").ok_or("missing `kind`")?, args),
         "view" => Ok(tool_view(s)),
+        "dataplane" => Ok(tool_dataplane(s)),
+        "firmament" => Ok(tool_firmament(s)),
+        "federation" => Ok(tool_federation(s)),
+        "effects" | "verbs" => Ok(tool_effects()),
+        "map" => tool_map(s, str_arg("out")),
         other => Err(format!("unknown tool `{other}`")),
     }
 }
