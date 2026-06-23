@@ -214,7 +214,7 @@ fn seed_build_archive(seed: &Path, build: &Path) {
 /// one Dregg2 object actually changed or the archive lacks Dregg2 members. `rerun-if-changed` is
 /// emitted by the caller for the source tree + toolchain marker, so a genuine no-op cargo build does
 /// not even re-enter this function.
-fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &Path) {
+fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &Path, seed: &Path) {
     // (1) Refresh the Lean `:c` facets. `lake build` is incremental; building the FFI module pulls
     // in (and emits `:c` for) its whole Dregg2 transitive closure.
     let inc = sysroot.join("include");
@@ -248,10 +248,30 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
     match lake_status {
         Ok(s) if s.success() => {}
         Ok(s) => {
+            // `lake build` FAILED. When this happens the metatheory `.lake/build/ir` tree is NOT
+            // guaranteed internally coherent: some modules' `:c` facets are freshly re-emitted while
+            // others (the ones whose module elaboration aborted — e.g. a WIP proof regression tripping
+            // an `#assert_axioms` hygiene gate) keep their STALE `.c` or have none at all. Splicing
+            // that partial fresh set over the seed produces a torn archive whose cross-module
+            // SPECIALIZATIONS don't resolve: a freshly-recompiled `Dregg2_Exec_Handler.o` references
+            // `_lp_…_TurnExecutorFull_*` specialized symbols that the un-rebuilt `TurnExecutorFull.o`
+            // never emitted → `Undefined symbols` at the final link of every downstream binary
+            // (dregg-node included). The git-tracked SEED archive is, by construction, a coherent
+            // linkable set. So on a `lake build` failure we DISCARD any prior (possibly incoherent)
+            // working archive and restore the consistent seed, then skip the recompile/splice
+            // entirely. The node links the known-good verified kernel; an in-progress metatheory
+            // proof regression no longer blocks the node from running.
             println!(
                 "cargo:warning=dregg-lean-ffi: `lake build` of the FFI + gate modules exited {s} — \
-                 using whatever `:c` facets already exist; the spliced archive may be stale."
+                 the metatheory IR tree may be incoherent (a module failed to elaborate). Restoring \
+                 the git-tracked consistent seed archive and NOT splicing a partial fresh set (a torn \
+                 splice would fail to link). To pick up fresh Lean changes, make `lake build \
+                 Dregg2.Exec.FFI` green in metatheory/ and rebuild."
             );
+            // Force the working archive back to the seed (overwrite any prior incoherent splice).
+            let _ = std::fs::remove_file(archive);
+            seed_build_archive(seed, archive);
+            return;
         }
         Err(e) => {
             println!(
@@ -1144,7 +1164,9 @@ fn main() {
         );
 
         match &sysroot_opt {
-            Some(sysroot) => build_dregg2_archive(meta, sysroot, &build_archive, &out_dir),
+            Some(sysroot) => {
+                build_dregg2_archive(meta, sysroot, &build_archive, &out_dir, &seed_archive)
+            }
             None => println!(
                 "cargo:warning=dregg-lean-ffi: cannot resolve the Lean sysroot (no \
                  DREGG_LEAN_SYSROOT and `lake env` failed in metatheory/) — skipping the archive \
