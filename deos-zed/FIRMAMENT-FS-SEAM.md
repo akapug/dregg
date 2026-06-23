@@ -82,17 +82,33 @@ A path like `/proj/src/main.rs` resolves component-by-component through
 This is the whole point of the seam. It upgrades "the editor wrote a file" from
 an unwitnessed side effect into a **witnessed, attenuable, receipted turn**.
 
-## Why FirmamentFs is a stub today
+## FirmamentFs is real — behind the `firmament` feature
 
-`src/fs/firmament.rs` implements the trait but every method returns a clear
-"needs a live executor handle + mounted root `DirectoryCell` cap from the host
-deos image" error. Those handles come from the host (starbridge-v2's `World`),
-not from deos-zed standalone — deos-zed deliberately has no dependency on the
-executor crates so it stays buildable and demoable on its own. The constructor
-takes those handles as opaque parameters precisely so the seam is *shaped*: when
-the host wires the real `DirectoryCap` + `ExecutorHandle`, the four method bodies
-in `firmament.rs` are filled against the live executor and **that file is the
-only thing that changes**.
+`src/fs/firmament.rs` now ships a LIVE impl: build with `--features firmament`
+and `FirmamentFs` owns an in-process `dregg_cell::Ledger` + `dregg_turn::TurnExecutor`
+(the SAME verified spine starbridge-v2's `World` wraps). A file is a cell; a
+`save` is a real cap-gated `SetField` turn driven through the executor, leaving a
+genuine `TurnReceipt`. The feature is OFF by default so the `RealFs` build stays
+light and the lean / standalone builds never link the Lean archive — with the
+feature off, the same file compiles a stub whose methods return a clear "rebuild
+with `--features firmament`" error (so the trait is satisfied either way).
+
+What is real vs. sketched in the first slice:
+
+- **Real:** `load`/`save`/`read_dir`/`metadata` over cells; `save` is a genuine
+  executor turn (cap-gated, journaled, finalized — `pre_state_hash != post_state_hash`,
+  a chained `TurnReceipt` per save, in-band refusal when the editor lacks the
+  file's edit cap); content round-trips through the ledger's committed `fields_map`
+  (the same overflow map dregg-doc's `ExecutorDrivenDoc` uses), so the file cell's
+  `fields_root` — which the canonical state commitment absorbs — commits to the
+  content a light client can trust.
+- **Sketched (first slice):** the path → cell namespace is an in-memory flat
+  `BTreeMap<PathBuf, CellId>` (the simpler alternative this doc named), not yet
+  `rbg`'s richer `DirectoryCell` name→cap map; and the host-handoff (a deos image
+  handing `FirmamentFs` its own mounted root + shared executor) is the next wire.
+
+Proof: `cargo test --features firmament` (unit + `tests/firmament_fs.rs`) and
+`cargo run --features firmament --bin demo -- --firmament`.
 
 ## How the host wires it
 

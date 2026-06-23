@@ -72,6 +72,93 @@ fn verify() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Headless proof that SAVE IS A TURN: drive a [`FirmamentFs`] directly — seed a
+/// file as a cell, load it from the ledger, edit + save (a real cap-gated turn
+/// producing a `TurnReceipt`), then re-load and assert the content round-trips
+/// through the LEDGER, not disk. Exits 0 on success. The `firmament` feature must
+/// be built in (`cargo run --bin demo --features firmament -- --firmament`).
+#[cfg(feature = "firmament")]
+fn verify_firmament() -> anyhow::Result<()> {
+    use deos_zed::fs::FirmamentFs;
+
+    let fs = FirmamentFs::new();
+    let path = PathBuf::from("/proj/src/main.rs");
+
+    let original = "fn main() {\n    println!(\"before\");\n}\n";
+    let edited = "fn main() {\n    println!(\"AFTER — this save is a receipted turn\");\n}\n";
+
+    // 1. Seed the file AS A CELL (genesis): a file IS a cell on the ledger.
+    let file = fs.seed_file(&path, original)?;
+    println!(
+        "seeded   {} -> cell {} ({} bytes, genesis)",
+        path.display(),
+        hex8(file.0),
+        original.len()
+    );
+
+    // 2. Load it back — read from the CELL's committed content, not disk.
+    let loaded = fs.load(&path)?;
+    anyhow::ensure!(loaded == original, "load did not round-trip the seeded cell");
+    println!("loaded   {} bytes from the ledger — matches seed", loaded.len());
+    anyhow::ensure!(fs.receipt_count() == 0, "a seed is genesis, not a turn");
+
+    // 3. Save the edited buffer — THIS IS A TURN: a cap-gated SetField over the
+    //    file cell, driven through the real executor, leaving a receipt.
+    fs.save(&path, edited)?;
+    let receipt = fs
+        .last_receipt()
+        .ok_or_else(|| anyhow::anyhow!("no receipt produced"))?;
+    println!(
+        "saved    edited buffer AS A TURN — receipt {} (agent {}, {} action(s), state {} -> {})",
+        hex8(receipt.receipt_hash()),
+        hex8(receipt.agent.0),
+        receipt.action_count,
+        hex8(receipt.pre_state_hash),
+        hex8(receipt.post_state_hash),
+    );
+    anyhow::ensure!(fs.receipt_count() == 1, "the save produced exactly one receipt");
+    anyhow::ensure!(receipt.agent == fs.editor_id(), "the editor is the turn's agent");
+    anyhow::ensure!(
+        receipt.pre_state_hash != receipt.post_state_hash,
+        "the save must move the ledger state (the edit landed on-ledger)"
+    );
+
+    // 4. Re-load — the edited content comes BACK FROM THE LEDGER (the cell's
+    //    committed map the turn wrote), an independent witness that the save's
+    //    bytes are the ledger's, not a disk side-effect.
+    let reloaded = fs.load(&path)?;
+    anyhow::ensure!(
+        reloaded == edited,
+        "ledger content did not match the edited buffer!\n--- ledger ---\n{reloaded}\n--- expected ---\n{edited}"
+    );
+    anyhow::ensure!(reloaded != original, "ledger content did not change from the original");
+    println!(
+        "VERIFIED ledger content changed: re-load == edited buffer (read from the cell, NOT disk)"
+    );
+
+    // 5. read_dir + metadata through the seam (the file-tree path over cells).
+    let entries = fs.read_dir(std::path::Path::new("/proj/src"))?;
+    anyhow::ensure!(
+        entries.iter().any(|e| e.path == path),
+        "read_dir did not list the file cell"
+    );
+    let md = fs.metadata(&path)?;
+    anyhow::ensure!(!md.is_dir && md.len as usize == edited.len(), "metadata wrong");
+    println!(
+        "VERIFIED read_dir lists the file cell; metadata len={} is_dir={}",
+        md.len, md.is_dir
+    );
+
+    println!("\nALL CHECKS PASSED — a file is a cell, and a SAVE is a receipted dregg turn.");
+    Ok(())
+}
+
+/// Short hex of a 32-byte id/hash for legible demo output.
+#[cfg(feature = "firmament")]
+fn hex8(b: [u8; 32]) -> String {
+    b[..4].iter().map(|x| format!("{x:02x}")).collect()
+}
+
 /// Seed a real sample file so the screenshot shows syntax-highlighted code (not an
 /// empty buffer). We copy this very demo's source so the capture is a real,
 /// multi-line, rust-highlighted file. Returns `(root_dir, file_to_open)`.
@@ -95,9 +182,11 @@ fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let mut screenshot_out: Option<PathBuf> = None;
     let mut headless = false;
+    let mut firmament = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--verify" | "--headless" => headless = true,
+            "--firmament" => firmament = true,
             "--screenshot" => {
                 screenshot_out = Some(PathBuf::from(
                     args.next()
@@ -117,6 +206,20 @@ fn main() -> anyhow::Result<()> {
         {
             let _ = out;
             anyhow::bail!("built without the `screenshot` feature; rebuild with --features screenshot");
+        }
+    }
+
+    if firmament {
+        #[cfg(feature = "firmament")]
+        {
+            return verify_firmament();
+        }
+        #[cfg(not(feature = "firmament"))]
+        {
+            anyhow::bail!(
+                "built without the `firmament` feature; rebuild with \
+                 `--features firmament` for the save-is-a-turn proof"
+            );
         }
     }
 
