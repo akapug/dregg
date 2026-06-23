@@ -68,6 +68,18 @@ deos-zed = { path = "../deos-zed", default-features = false, features = ["firmam
 # a SyncCellFs), matching deos-zed's own native `dregg-cell` (default features).
 dregg-cell = { path = "../cell" }
 
+# THE DOCUMENT-VCS CORE — dregg-doc's Pijul-shaped patch theory. A per-path `Doc`
+# history is the cell-ledger's change history at LINE granularity: each edit is a
+# patch (a "commit"), `blame()` attributes each line to its authoring patch
+# (stable across moves), and `rope_diff`/`History::replay_to` derive a two-patch
+# diff + time-travel. This is the real substrate the cell-ledger git surface
+# (`src/cell_git.rs`) renders into Zed's `git::GitRepository` types — NOT a host
+# `.git`. dregg-doc is its OWN workspace (a standalone path dep, like
+# servo-render/pg-dregg), pulled with the `rope` feature OFF (we bridge to Zed's
+# `rope::Rope` via `.to_string()` at the trait boundary, so dregg-doc's String
+# core suffices — no `ropey` version pin to unify).
+dregg-doc = { path = "../dregg-doc" }
+
 # THE SEAM: Zed's `fs::Fs` trait — pulled at the SAME zed fork rev gpui comes
 # from. FirmamentZedFs implements this trait over the cell-ledger.
 fs = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
@@ -77,6 +89,12 @@ rope = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f
 text = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
 util = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
 futures = "0.3"
+# Match the zed `git` crate's `async-channel`/`smallvec` (its `GitRepository`
+# trait names `async_channel::Sender` in `initial_graph_data`/`search_commits`
+# and `smallvec::SmallVec` in `InitialGraphCommitData::parents`). Same versions
+# the zed workspace pins, so the types unify with the git crate's.
+async-channel = "2.5.0"
+smallvec = { version = "1.6", features = ["union", "const_new"] }
 smol = "2"
 async-tar = "0.5.1"
 collections = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }

@@ -30,6 +30,16 @@ pub use sync_cell_fs::SyncCellFs;
 pub mod firmament_zed_fs;
 pub use firmament_zed_fs::FirmamentZedFs;
 
+/// The GIT SURFACE over the cell-ledger: a [`git::repository::GitRepository`]
+/// whose change history, status, blame, and diffs are derived from the dregg
+/// **receipt chain** (each save = a verified turn = a "commit") and the
+/// **dregg-doc patch theory** (each edit = a Pijul-shaped patch; blame is correct
+/// by construction) — NOT a host `.git`. This is the real substrate Zed's
+/// `git_ui` panel renders. ALWAYS built (it needs only the base `git`/`rope`/
+/// `text`/`gpui` deps + `dregg-doc`, no editor graph).
+pub mod cell_git;
+pub use cell_git::CellLedgerGit;
+
 // Re-export Zed's `fs::Fs` trait so callers can treat `FirmamentZedFs` as an
 // `Arc<dyn fs::Fs>` without depending on the zed `fs` crate directly.
 pub use fs;
