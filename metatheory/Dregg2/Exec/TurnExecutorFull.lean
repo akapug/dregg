@@ -960,7 +960,9 @@ def spawnChainA (s : RecChainedState) (actor child target : CellId) : Option Rec
               if l = child then [heldCapTo s.kernel.caps actor target] else s.kernel.caps l
                            delegate := fun c => if c = child then some actor else s.kernel.delegate c
                            delegations := fun c => if c = child then s.kernel.caps actor
-                                                   else s.kernel.delegations c } }
+                                                   else s.kernel.delegations c
+                           delegationEpochAt := fun c => if c = child then s.kernel.delegationEpoch actor
+                                                         else s.kernel.delegationEpochAt c } }
     | none => none
   else
     none
@@ -978,7 +980,9 @@ theorem spawnChainA_factors {s s' : RecChainedState} {actor child target : CellI
             if l = child then [heldCapTo s.kernel.caps actor target] else s.kernel.caps l
                          delegate := fun c => if c = child then some actor else s.kernel.delegate c
                          delegations := fun c => if c = child then s.kernel.caps actor
-                                                 else s.kernel.delegations c } } := by
+                                                 else s.kernel.delegations c
+                         delegationEpochAt := fun c => if c = child then s.kernel.delegationEpoch actor
+                                                       else s.kernel.delegationEpochAt c } } := by
   unfold spawnChainA at h
   by_cases hg : (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true ∧
       target ∈ s.kernel.accounts
@@ -1054,7 +1058,9 @@ theorem spawnGrant_recTotalAsset (k : RecordKernelState) (actor child : CellId) 
     (b : AssetId) :
     recTotalAsset { k with caps := fun l => if l = child then cap :: k.caps l else k.caps l
                            delegate := fun c => if c = child then some actor else k.delegate c
-                           delegations := fun c => if c = child then k.caps actor else k.delegations c } b
+                           delegations := fun c => if c = child then k.caps actor else k.delegations c
+                           delegationEpochAt := fun c => if c = child then k.delegationEpoch actor
+                                                         else k.delegationEpochAt c } b
       = recTotalAsset k b := rfl
 
 /-- **`spawnChainA_neutral`.** A committed spawn leaves `recTotalAsset` UNCHANGED for EVERY asset:
@@ -1103,6 +1109,39 @@ theorem spawnChainA_parent_snapshot {s s' : RecChainedState} {actor child target
   obtain ⟨_, _, _, hs'⟩ := spawnChainA_factors h
   subst hs'
   simp only [if_true, true_and, if_pos]
+
+/-- **`spawnChainA_stamps_epoch` — THE BIRTH FRESHNESS STAMP.** A committed spawn stamps the child's
+`delegationEpochAt` with the spawner-parent's CURRENT `delegationEpoch`. The child is born EXACTLY at the
+parent's epoch — so it is NOT stale at birth even when the parent's epoch is nonzero (the codex bug: an
+unstamped child stayed at the `0` default and was instantly stale under a nonzero-epoch parent). -/
+theorem spawnChainA_stamps_epoch {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    s'.kernel.delegationEpochAt child = s.kernel.delegationEpoch actor := by
+  obtain ⟨_, _, _, hs'⟩ := spawnChainA_factors h
+  subst hs'
+  show (if child = child then s.kernel.delegationEpoch actor else s.kernel.delegationEpochAt child)
+      = s.kernel.delegationEpoch actor
+  rw [if_pos rfl]
+
+/-- **`spawnChainA_fresh_at_birth` — THE MUTATION-CONFIRM (fresh pole).** A freshly-spawned child is NOT
+stale (`delegationStale s'.kernel child = false`), even under a nonzero-epoch parent: its stamp EQUALS
+the parent's current epoch (the spawner `actor`, which IS the child's parent), so the strict `<` test
+fails. The codex mutation (leaving the stamp at the `0` default) made this `true` under a nonzero parent;
+the stamp REFUTES it. -/
+theorem spawnChainA_fresh_at_birth {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    delegationStale s'.kernel child = false := by
+  have hpar : s'.kernel.delegate child = some actor := (spawnChainA_parent_snapshot h).1
+  have hstamp : s'.kernel.delegationEpochAt child = s.kernel.delegationEpoch actor :=
+    spawnChainA_stamps_epoch h
+  -- the parent of `child` in the post-state is `actor`; its post-epoch is unchanged by spawn (the
+  -- override touches no `delegationEpoch`, and the create leg `bornEmptyCellSlots` frames it).
+  have hpe : s'.kernel.delegationEpoch actor = s.kernel.delegationEpoch actor := by
+    obtain ⟨s1, _, hc, hs'⟩ := spawnChainA_factors h
+    obtain ⟨_, _, hs1⟩ := createCellChainA_factors hc
+    subst hs'; subst hs1; rfl
+  simp only [delegationStale, hpar, hstamp, hpe]
+  exact decide_eq_false (by omega)
 
 /-- **`spawnChainA_chainlink`.** A committed spawn extends the receipt chain by EXACTLY the
 child's (balance-`0`) creation row (the cap grant edits only `caps`, not the log). -/
@@ -1903,36 +1942,43 @@ child`). bal-NEUTRAL (edits only the `delegations` side-table). -/
 def parentClist (k : RecordKernelState) (child : CellId) : List Cap :=
   match k.delegate child with | some p => k.caps p | none => []
 
+/-- The parent's CURRENT `delegationEpoch`, or `0` if the child has no parent (the epoch re-stamp source:
+a refresh stamps the child's `delegationEpochAt` with this so the freshly-refreshed child is NOT stale). -/
+def parentEpoch (k : RecordKernelState) (child : CellId) : Nat :=
+  match k.delegate child with | some p => k.delegationEpoch p | none => 0
+
 /-- **Chained refreshDelegation** (`apply_refresh_delegation`, `apply.rs:2991`). FAIL-CLOSED on: the
 self-authority gate (`stateAuthB actor child`, dregg1's self-only `action_target == child`), AND the
 child having a parent (`delegate child ≠ none` — dregg1's `delegate.ok_or_else`,
 `apply.rs:3004`). On commit, OVERWRITE `delegations child` with a FRESH snapshot of the parent's CURRENT
 `caps` (`parentClist`) and extend the chain. bal-NEUTRAL.
 
-⚑ SCOPED RESIDUAL (the freshness-RESTORE epoch re-stamp): dregg1's refresh ALSO re-stamps the child's
-`DelegatedRef.delegation_epoch` with the parent's current `delegationEpoch` (`apply.rs:3024`). The Lean
-kernel now CARRIES `delegationEpochAt`, and the REVOKE path models the epoch bump + freshness (see
-`AuthTurn.lean §3.EPOCH`); the refresh-side re-stamp is a SEPARATE follow-up because the
-`refreshDelegationA`/`spawnA` CIRCUIT instances (`Inst/refreshDelegationA.lean`, `Inst/spawnA.lean`) are
-single/quint-component `funcComponent` descriptors that would need a 6th component to BIND the
-`delegationEpochAt` move. Refresh therefore leaves `delegationEpochAt` frozen for now (a still-authorized
-child re-syncs by re-snapshotting `delegations`; the epoch-tag refresh is the deferred binding). -/
+⚑ THE FRESHNESS-RESTORE EPOCH RE-STAMP: dregg1's refresh ALSO re-stamps the child's
+`DelegatedRef.delegation_epoch` with the parent's CURRENT `delegationEpoch` (`apply.rs:3024`). A
+still-authorized child re-syncs BOTH its `delegations` snapshot AND its `delegationEpochAt` stamp, so a
+refresh under a NONZERO-epoch parent leaves the child FRESH (`delegationStale child = false`) — not stale
+at re-sync. The parent of `child` is `delegate child`; `parentEpoch` reads its current `delegationEpoch`
+(0 if no parent — but the guard forces `delegate child ≠ none`). bal-NEUTRAL. -/
 def refreshDelegationChainA (s : RecChainedState) (actor child : CellId) : Option RecChainedState :=
   if stateAuthB s.kernel.caps actor child = true ∧ (s.kernel.delegate child).isSome = true then
     some { kernel := { s.kernel with
                         delegations := fun c => if c = child then parentClist s.kernel child
-                                                else s.kernel.delegations c },
+                                                else s.kernel.delegations c,
+                        delegationEpochAt := fun c => if c = child then parentEpoch s.kernel child
+                                                      else s.kernel.delegationEpochAt c },
            log    := { actor := actor, src := child, dst := child, amt := 0 } :: s.log }
   else none
 
 /-- **`refreshDelegationChainA` factors.** A committed refresh was self-authorized over a child
-with a parent and snapshotted the parent's CURRENT c-list. -/
+with a parent and snapshotted the parent's CURRENT c-list AND re-stamped the child's epoch tag. -/
 theorem refreshDelegationChainA_factors {s s' : RecChainedState} {actor child : CellId}
     (h : refreshDelegationChainA s actor child = some s') :
     (stateAuthB s.kernel.caps actor child = true ∧ (s.kernel.delegate child).isSome = true) ∧
       s' = { kernel := { s.kernel with
                           delegations := fun c => if c = child then parentClist s.kernel child
-                                                  else s.kernel.delegations c },
+                                                  else s.kernel.delegations c,
+                          delegationEpochAt := fun c => if c = child then parentEpoch s.kernel child
+                                                        else s.kernel.delegationEpochAt c },
              log := { actor := actor, src := child, dst := child, amt := 0 } :: s.log } := by
   unfold refreshDelegationChainA at h
   by_cases hg : stateAuthB s.kernel.caps actor child = true ∧ (s.kernel.delegate child).isSome = true
@@ -1962,6 +2008,35 @@ theorem refreshDelegationChainA_balNeutral {s s' : RecChainedState} {actor child
     (h : refreshDelegationChainA s actor child = some s') (b : AssetId) :
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'; rfl
+
+/-- **`refreshDelegationChainA_restamps_epoch` — THE FRESHNESS-RESTORE STAMP.** A committed refresh
+re-stamps the child's `delegationEpochAt` with the parent's CURRENT `delegationEpoch` (`parentEpoch`).
+The still-authorized child re-syncs its epoch tag to the live parent epoch. -/
+theorem refreshDelegationChainA_restamps_epoch {s s' : RecChainedState} {actor child : CellId}
+    (h : refreshDelegationChainA s actor child = some s') :
+    s'.kernel.delegationEpochAt child = parentEpoch s.kernel child := by
+  obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h; subst hs'
+  show (if child = child then parentEpoch s.kernel child else s.kernel.delegationEpochAt child)
+      = parentEpoch s.kernel child
+  rw [if_pos rfl]
+
+/-- **`refreshDelegationChainA_fresh` — THE MUTATION-CONFIRM (fresh pole).** After a committed refresh of
+a child with parent `p`, the child is NOT stale (`delegationStale s'.kernel child = false`): its stamp is
+re-synced to `delegationEpoch p`, so the strict `<` freshness test fails. A refresh that left the stamp
+behind (the un-restamped post) would be stale under a parent whose epoch advanced. -/
+theorem refreshDelegationChainA_fresh {s s' : RecChainedState} {actor child p : CellId}
+    (h : refreshDelegationChainA s actor child = some s') (hp : s.kernel.delegate child = some p) :
+    delegationStale s'.kernel child = false := by
+  obtain ⟨_, hs'⟩ := refreshDelegationChainA_factors h
+  have hstamp : s'.kernel.delegationEpochAt child = parentEpoch s.kernel child :=
+    refreshDelegationChainA_restamps_epoch h
+  -- refresh frames `delegate` and `delegationEpoch`, so the post parent pointer + epoch read pre.
+  have hdel : s'.kernel.delegate child = some p := by subst hs'; exact hp
+  have hpe : s'.kernel.delegationEpoch p = s.kernel.delegationEpoch p := by subst hs'; rfl
+  have hpar : parentEpoch s.kernel child = s.kernel.delegationEpoch p := by
+    simp only [parentEpoch, hp]
+  simp only [delegationStale, hdel, hstamp, hpar, hpe]
+  exact decide_eq_false (by omega)
 
 /-! ### §MA-meta — the zero-amount metadata receipt row.
 
@@ -4166,6 +4241,8 @@ theorem execFullTurnA_each_attests :
 #assert_axioms spawnChainA_grounds
 #assert_axioms spawnChainA_provenance
 #assert_axioms spawnChainA_parent_snapshot
+#assert_axioms spawnChainA_stamps_epoch
+#assert_axioms spawnChainA_fresh_at_birth
 #assert_axioms spawnChainA_chainlink
 #assert_axioms execFullA_bridgeMintA_authorized
 #assert_axioms execFullA_bridgeMintA_unauthorized_fails
@@ -4181,6 +4258,8 @@ theorem execFullTurnA_each_attests :
 #assert_axioms cellDestroyChainA_terminal_rejects
 #assert_axioms refreshDelegationChainA_noParent_rejects
 #assert_axioms refreshDelegationChainA_snapshots_parent
+#assert_axioms refreshDelegationChainA_restamps_epoch
+#assert_axioms refreshDelegationChainA_fresh
 #assert_axioms execFullA_cellSealA_authorized
 #assert_axioms execFullA_refreshDelegationA_authorized
 

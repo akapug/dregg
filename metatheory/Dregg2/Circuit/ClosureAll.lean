@@ -338,6 +338,7 @@ theorem refreshDelegation_closedLog
     (fun hadv => by
       show fullActionStep pre (.refreshDelegationA actor child) post
       simp only [fullActionStep]
+      -- the decode forces the STRENGTHENED `RefreshDelegationFullSpec` (child re-synced FRESH).
       exact Dregg2.Circuit.RotatedKernelRefinementCapFamily.refreshDelegation_descriptorRefines
         Scap pre post actor child (logNeeds hadv))
 
@@ -1153,6 +1154,7 @@ theorem refreshDelegation_closedLog_sat
       obtain ⟨henc, anc⟩ := logNeeds hadv
       show fullActionStep pre (.refreshDelegationA actor child) post
       simp only [fullActionStep]
+      -- the deleg-write-forced decode forces the STRENGTHENED `RefreshDelegationFullSpec`.
       exact (Dregg2.Circuit.RotatedKernelRefinementCapFamily.refreshDelegation_descriptorRefines_capOpenSat
         Scap pre post actor child hash minit mfin maddrs t hsat henc anc).1)
 
@@ -1338,6 +1340,7 @@ theorem spawn_closedLog_sat
     (fun hadv => by
       show fullActionStep pre (.spawnA actor child target) post
       simp only [fullActionStep]
+      -- the Class-A readout now forces the STRENGTHENED `SpawnFullSpec` (born child FRESH).
       exact Dregg2.Circuit.RotatedKernelRefinementBirth.spawnWrite_descriptorRefines_capOpenSat
         hash hsat pre post actor child target (logNeeds hadv))
 

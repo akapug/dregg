@@ -61,7 +61,7 @@ open Dregg2.Circuit.DeployedCapTree.CapHashScheme (MembersAt)
 open Dregg2.Circuit.SortedTreeNonMembership (keyOf SpineCommits keysOf sortedInsert)
 open Dregg2.Circuit.CapTreeUpdate (capInsert_sound)
 open Dregg2.Circuit.Spec.AccountGrowth
-  (SpawnSpec spawnAdmit spawnCapsMap spawnDelegateMap spawnDelegationsMap)
+  (SpawnSpec SpawnFullSpec spawnAdmit spawnCapsMap spawnDelegateMap spawnDelegationsMap)
 open Dregg2.Circuit.RotatedKernelRefinementBirth (spawn_accounts_forced spawnGenuineEncodes)
 open Dregg2.Circuit.StateCommit (compressNInjective)
 
@@ -135,7 +135,7 @@ theorem spawn_descriptorRefines_handoff {State : Type} (S : CapHashScheme State)
     (compressN : List ℤ → ℤ) (hN : compressNInjective compressN)
     (pre post : RecChainedState) (actor child target : CellId)
     (henc : spawnHandoffEncodes S compressN pre post actor child target) :
-    SpawnSpec pre actor child target post :=
+    SpawnFullSpec pre actor child target post :=
   Dregg2.Circuit.RotatedKernelRefinementBirth.spawn_descriptorRefines
     compressN hN pre post actor child target henc.birth
 

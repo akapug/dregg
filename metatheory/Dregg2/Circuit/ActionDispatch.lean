@@ -211,7 +211,7 @@ mutual
     | .createCellFromFactoryA actor newCell vk =>
         CreateFromFactorySpec st actor newCell vk st'
     | .spawnA actor child target =>
-        SpawnSpec st actor child target st'
+        SpawnFullSpec st actor child target st'
     | .bridgeMintA actor cell a value =>
         MintASpec st actor cell a value st'
     | .noteSpendA nf actor spendProof =>
@@ -235,7 +235,7 @@ mutual
     | .cellDestroyA actor cell certHash =>
         CellDestroySpec st actor cell certHash st'
     | .refreshDelegationA actor child =>
-        RefreshDelegationSpec st actor child st'
+        RefreshDelegationFullSpec st actor child st'
     | .heapWriteA actor target addr v newRoot =>
         HeapWriteSpec st actor target addr v newRoot st'
 

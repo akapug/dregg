@@ -80,7 +80,8 @@ open Dregg2.Circuit.Spec.AuthorityAttenuation
 open Dregg2.Circuit.Spec.AuthorityRevocation
   (RevokeSpec removeEdgeCaps execFullA_revoke_iff_spec)
 open Dregg2.Circuit.Spec.RefreshDelegation
-  (RefreshDelegationSpec RefreshDelegationGuard refreshDelegationsMap refreshDelegationReceipt)
+  (RefreshDelegationSpec RefreshDelegationFullSpec RefreshDelegationGuard refreshDelegationsMap
+   refreshEpochAtMap refreshDelegationReceipt)
 open Dregg2.Circuit.DescriptorIR2 (VmTrace Satisfied2 envAt opensTo writesTo)
 open Dregg2.Circuit.Emit.EffectVmEmit (prmCol sbCol saCol EFFECT_VM_WIDTH)
 open Dregg2.Circuit.Emit.EffectVmEmit.state (CAP_ROOT)
@@ -471,7 +472,11 @@ structure RefreshDelegationCapsTreeEncodes {State : Type} (S : CapHashScheme Sta
   frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
   frDelegate : post.kernel.delegate = pre.kernel.delegate
   frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
-  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  -- ⚑ THE NAMED REFRESH-EPOCH-STAMP RESIDUAL: the child's `delegationEpochAt` is RE-STAMPED to the
+  -- parent's current epoch (`refreshEpochAtMap`), not framed unchanged. The delegations-tree update gate
+  -- forces the snapshot; the epoch re-stamp rides off-row, commitment-bound via record_digest — carried
+  -- here as a Prop (a trace-fill identity), never an axiom. So the freshly-refreshed child is NOT stale.
+  epochStampResidual : post.kernel.delegationEpochAt = refreshEpochAtMap pre.kernel child
   frHeaps : post.kernel.heaps = pre.kernel.heaps
 
 /-- **`refreshDelegation_forces_keyset_preserved` — the UPDATE-AT-KEY is FORCED (key set preserved).** -/
@@ -487,11 +492,11 @@ tree is FORCED (key set preserved); the `refreshDelegationsMap` overwrite is the
 theorem refreshDelegation_descriptorRefines {State : Type} (S : CapHashScheme State)
     (pre post : RecChainedState) (actor child : CellId)
     (henc : RefreshDelegationCapsTreeEncodes S pre post actor child) :
-    RefreshDelegationSpec pre actor child post :=
+    RefreshDelegationFullSpec pre actor child post :=
   ⟨henc.guard, henc.delegationsMove, henc.logAdv,
    henc.frAccounts, henc.frCell, henc.frCaps, henc.frNullifiers, henc.frRevoked,
    henc.frCommitments, henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle,
-   henc.frDeathCert, henc.frDelegate, henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps⟩
+   henc.frDeathCert, henc.frDelegate, henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps⟩
 
 /-- **`refreshDelegation_execFullA` — the refinement against the executor arm.** -/
 theorem refreshDelegation_execFullA {State : Type} (S : CapHashScheme State)
@@ -1078,7 +1083,7 @@ theorem refreshDelegation_descriptorRefines_sat {State : Type} (S : CapHashSchem
     (hsat : Satisfied2 hash refreshDelegationWriteV3 mi mf ma tr)
     (henc : RefreshDelegationCapsTreeEncodes S pre post actor child)
     (anc : RefreshDelegationWriteAnchor S pre post actor child hash mi mf ma tr henc) :
-    RefreshDelegationSpec pre actor child post
+    RefreshDelegationFullSpec pre actor child post
     ∧ writesTo hash henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot := by
@@ -1110,7 +1115,7 @@ theorem refreshDelegation_descriptorRefines_capOpenSat {State : Type} (S : CapHa
     (hsat : Satisfied2 hash refreshDelegationWriteCapOpenV3 mi mf ma tr)
     (henc : RefreshDelegationCapsTreeEncodes S pre post actor child)
     (anc : RefreshDelegationWriteAnchor S pre post actor child hash mi mf ma tr henc) :
-    RefreshDelegationSpec pre actor child post
+    RefreshDelegationFullSpec pre actor child post
     ∧ writesTo hash henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=

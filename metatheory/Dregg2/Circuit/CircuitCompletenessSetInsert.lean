@@ -111,7 +111,7 @@ open Dregg2.Circuit.Spec.NoteNullifier (NoteSpendSpec noteSpendGuard noteSpendRe
 open Dregg2.Circuit.Spec.NoteCommitment (NoteCreateASpec noteCreateReceipt)
 open Dregg2.Circuit.Spec.AccountGrowth
   (CreateCellSpec createCellAdmit createReceipt bornEmptyAt
-   SpawnSpec spawnAdmit spawnCapsMap spawnDelegateMap spawnDelegationsMap)
+   SpawnSpec SpawnFullSpec spawnAdmit spawnCapsMap spawnDelegateMap spawnDelegationsMap)
 open Dregg2.Circuit.Spec.FactoryCreation
   (CreateFromFactorySpec factoryAdmit factoryReceipt factoryPostCell factoryPostCaveats
    factoryBornCell factoryBornCaveats)
@@ -530,7 +530,7 @@ insert gate from the accounts floor; guard / born-empty residuals / cap-handoff 
 def spawn_spawnHandoffEncodes_construct {State : Type} (S : CapHashScheme State)
     (compressN : List ℤ → ℤ)
     (pre post : RecChainedState) (actor child target : CellId)
-    (hspec : SpawnSpec pre actor child target post)
+    (hspec : SpawnFullSpec pre actor child target post)
     (accProver : AccountsInsertRootProver compressN pre.kernel post.kernel child)
     (handoff : SpawnHandoffInsertProver S) :
     spawnHandoffEncodes S compressN pre post actor child target where
@@ -554,7 +554,7 @@ def spawn_spawnHandoffEncodes_construct {State : Type} (S : CapHashScheme State)
       frCommitments := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.1
       frFactories := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
       frDelegationEpoch := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-      frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+      epochStampResidual := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
       frHeaps := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
   oldRoot := handoff.oldRoot
   newRoot := handoff.newRoot
@@ -599,14 +599,14 @@ the commitment is CONSTRUCTED (`stateDecode_construct`). -/
 theorem spawn_descriptorComplete {State : Type} (S : CommitSurface) (CapS : CapHashScheme State)
     (compressN : List ℤ → ℤ) (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
     (buildWitness : ∀ (pre post : RecChainedState) (actor child target : CellId) (turn : BoundaryTurn),
-      SpawnSpec pre actor child target post →
+      SpawnFullSpec pre actor child target post →
       Σ' (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
         Satisfied2 hash d minit mfin maddrs t ×'
         (tracePublishedCommit t = commitOf S pre post turn) ×'
         AccountsInsertRootProver compressN pre.kernel post.kernel child ×'
         SpawnHandoffInsertProver CapS)
     (pre post : RecChainedState) (actor child target : CellId) (turn : BoundaryTurn)
-    (hspec : SpawnSpec pre actor child target post)
+    (hspec : SpawnFullSpec pre actor child target post)
     (hpreWF : AccountsWF pre.kernel) (hpostWF : AccountsWF post.kernel) :
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
       Satisfied2 hash d minit mfin maddrs t ∧

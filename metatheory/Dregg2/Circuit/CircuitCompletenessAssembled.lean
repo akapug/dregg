@@ -269,7 +269,7 @@ theorem dispatchArm_createCellFromFactory (pre post : RecChainedState)
 theorem dispatchArm_spawn (pre post : RecChainedState)
     (h : kstepAll 19 pre post) :
     ∃ (actor child target : CellId),
-      Dregg2.Circuit.Spec.AccountGrowth.SpawnSpec pre actor child target post := by
+      Dregg2.Circuit.Spec.AccountGrowth.SpawnFullSpec pre actor child target post := by
   obtain ⟨fa, htag, hstep⟩ := h
   cases fa <;> simp only [actionTag] at htag <;>
     first | (rw [fullActionStep] at hstep; exact ⟨_, _, _, hstep⟩) | omega
@@ -657,7 +657,7 @@ insert survives only as the SEPARATE `spawn_descriptorComplete_handoff_genuine` 
 theorem descriptorComplete_spawn
     (S : CommitSurface) (hash : List ℤ → ℤ)
     (buildWitness : ∀ (pre post : RecChainedState) (actor child target : CellId) (turn : BoundaryTurn),
-      Dregg2.Circuit.Spec.AccountGrowth.SpawnSpec pre actor child target post →
+      Dregg2.Circuit.Spec.AccountGrowth.SpawnFullSpec pre actor child target post →
       ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
         Satisfied2 hash (Rfix 19) minit mfin maddrs t ∧
         tracePublishedCommit t = commitOf S pre post turn) :

@@ -35,7 +35,7 @@ open Dregg2.Circuit.FloorsNonVacuousWave (readoutTrace readoutTrace_rows_len rea
 open Dregg2.Circuit.RotatedKernelRefinementBirth
   (CreateCellTraceReadout CreateFromFactoryTraceReadout SpawnTraceReadout)
 open Dregg2.Circuit.Spec.AccountGrowth
-  (createReceipt bornEmptyAt spawnCapsMap spawnDelegateMap spawnDelegationsMap)
+  (createReceipt bornEmptyAt spawnCapsMap spawnDelegateMap spawnDelegationsMap spawnEpochAtMap)
 open Dregg2.Circuit.Spec.FactoryCreation
   (factoryReceipt factoryPostCell factoryPostCaveats factoryBornCell factoryBornCaveats)
 open Dregg2.Exec (RecChainedState RecordKernelState FactoryEntry findFactory mintAuthorizedB)
@@ -199,7 +199,8 @@ def spawnPost : RecChainedState :=
       bal := fun c a => if c = 1 then 0 else spawnPre.kernel.bal c a
       caps := spawnCapsMap spawnPre.kernel 9 1 0
       delegate := spawnDelegateMap spawnPre.kernel 9 1
-      delegations := spawnDelegationsMap spawnPre.kernel 9 1 },
+      delegations := spawnDelegationsMap spawnPre.kernel 9 1
+      delegationEpochAt := spawnEpochAtMap spawnPre.kernel 9 1 },
     log := createReceipt 9 1 :: spawnPre.log }
 
 /-- **`SpawnTraceReadout` is INHABITED.** -/
@@ -228,7 +229,7 @@ def spawn_readout :
   frCommitments := rfl
   frFactories := rfl
   frDelegationEpoch := rfl
-  frDelegationEpochAt := rfl
+  epochStampResidual := rfl
   frHeaps := rfl
 
 theorem spawn_readout_inhabited :

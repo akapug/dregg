@@ -321,13 +321,32 @@ theorem createCell_circuit_refines_exec (S : Surface2) (LE : CellId → ℤ) (cN
 #assert_axioms createCell_spec_refines_circuit
 #assert_axioms createCell_circuit_refines_exec
 
-/-! ## §5 — SpawnA diamond (circuit ⟺ SpawnSpec ⟺ execFullA). -/
+/-! ## §5 — SpawnA diamond (circuit ⟺ Spawn(Full)Spec ⟺ execFullA).
+
+The deployed quint `spawnE` descriptor FREEZES `delegationEpochAt` (its RestFrame; cf. `apex_iff_spawnSpec`'s
+`hDEA` clause), so the deployed circuit alone proves the FROZEN `SpawnSpec`. The FAITHFUL executor STAMPS
+the child's epoch at birth, meeting the STRENGTHENED `SpawnFullSpec`. The stamp the frozen-face descriptor
+does not yet WRITE-GATE-force is carried as the NAMED `SpawnEpochStampResidual` (commitment-bound via the
+`record_digest`, which folds the delegation snapshot), conjoined onto the deployed step — exactly the
+triangle-B `RevokeDelegationEpochResidual` pattern. -/
 
 def spawnExecStep (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   execFullA s (.spawnA args.actor args.child args.target) = some s'
 
+/-- The deployed-quint frozen-face spec (`delegationEpochAt` UNCHANGED) — what the deployed circuit binds. -/
 def spawnSpecStep (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   SpawnSpec s args.actor args.child args.target s'
+
+/-- The STRENGTHENED faithful spec (`delegationEpochAt` STAMPED at birth) — what the executor meets. -/
+def spawnFullSpecStep (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
+  SpawnFullSpec s args.actor args.child args.target s'
+
+/-- **`SpawnEpochStampResidual`** — the NAMED birth-epoch-stamp residual the deployed descriptor binds in the
+commitment (`record_digest` folds the child's delegation snapshot) but does not yet WRITE-GATE-force (the
+v1 frozen `delegationEpochAt` face): the child's `delegationEpochAt` stamped with the spawner-parent's
+CURRENT `delegationEpoch` (`spawnEpochAtMap`). Carried as a Prop (a trace-fill identity), never an axiom. -/
+def SpawnEpochStampResidual (s : RecChainedState) (actor child : CellId) (s' : RecChainedState) : Prop :=
+  s'.kernel.delegationEpochAt = spawnEpochAtMap s.kernel actor child
 
 def spawnCircuitStep (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
@@ -339,8 +358,21 @@ def spawnCircuitStep (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ
   satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
     (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s')
 
+/-- **`spawnFullCircuitStep`** — the deployed `spawnCircuitStep` (the frozen-face quint, forced) CONJOINED
+with the NAMED `SpawnEpochStampResidual` (the birth stamp, commitment-bound, write-gate residual). The
+FAITHFUL circuit-side relation for `.spawnA`. -/
+def spawnFullCircuitStep (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
+    (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
+    (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
+    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
+  spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s'
+    ∧ SpawnEpochStampResidual s args.actor args.child s'
+
 theorem spawn_exec_equiv_spec (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) :
-    spawnExecStep s args s' ↔ spawnSpecStep s args s' :=
+    spawnExecStep s args s' ↔ spawnFullSpecStep s args s' :=
   spawnChainA_iff_spec s args.actor args.child args.target s'
 
 theorem spawnRestFrameEncodes (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
@@ -353,6 +385,8 @@ theorem spawnRestFrameEncodes (S : Surface2) (LE : CellId → ℤ) (cN : List �
     RestFrameEncodes2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) :=
   fun k k' h => (hRest k k').mpr h
 
+/-- **Deployed circuit ⟹ FROZEN `SpawnSpec`.** The deployed quint binds the frozen face (delegationEpochAt
+unchanged) — this is what `spawnA_full_sound` proves. The faithful stamp is the SEPARATE residual below. -/
 theorem spawn_circuit_refines_spec (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
@@ -364,6 +398,31 @@ theorem spawn_circuit_refines_spec (S : Surface2) (LE : CellId → ℤ) (cN : Li
     (h : spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
     spawnSpecStep s args s' :=
   spawnA_full_sound S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog s args s' h
+
+/-- **`spawn_full_circuit_refines_spec` — the FAITHFUL refinement (deployed quint + residual ⟹
+`SpawnFullSpec`).** From the deployed `spawnCircuitStep` (forcing the frozen `SpawnSpec` — accounts +
+born-empty + cap/delegate/delegations handoff + the eighteen frame clauses, MINUS the now-superseded
+`delegationEpochAt` frame) PLUS the NAMED `SpawnEpochStampResidual`, the STRENGTHENED `SpawnFullSpec`
+holds (the child is stamped FRESH at birth). A forge that skips the stamp cannot satisfy the residual. -/
+theorem spawn_full_circuit_refines_spec (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+    (hN : compressNInjective cN) (hLE : listLeafInjective LE)
+    (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
+    (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
+    (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
+    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
+    (h : spawnFullCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
+    spawnFullSpecStep s args s' := by
+  obtain ⟨hcirc, hstamp⟩ := h
+  have hspec : SpawnSpec s args.actor args.child args.target s' :=
+    spawn_circuit_refines_spec S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog
+      s args s' hcirc
+  -- the frozen `SpawnSpec` gives every clause except the (superseded) `delegationEpochAt` frame; the
+  -- residual supplies the stamp. Repackage into `SpawnFullSpec`.
+  obtain ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5,
+         hde, _hdea, hhp⟩ := hspec
+  exact ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5, hde, hstamp, hhp⟩
 
 theorem spawn_spec_refines_circuit (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
@@ -380,7 +439,15 @@ theorem spawn_spec_refines_circuit (S : Surface2) (LE : CellId → ℤ) (cN : Li
     (spawnGuardEncodes LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s'
     ((apex_iff_spawnSpec LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s').mpr h)
 
-theorem spawn_circuit_refines_exec (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+-- (No `spawnFullSpec ⟹ spawnFullCircuitStep` reverse: the deployed quint FREEZES `delegationEpochAt`
+-- (its RestFrame), so a STAMPED faithful post-state cannot satisfy the deployed circuit — exactly the
+-- residual gap. Closing it is the moving-face descriptor cutover, NOT a completeness theorem here. The
+-- frozen-face completeness `spawn_spec_refines_circuit` (over the frozen `SpawnSpec`) is the live one.
+-- This mirrors triangle B, which provides ONLY `revokeDelegation_circuit_refines_spec` (soundness).)
+
+/-- **`spawn_full_circuit_refines_exec` — the FAITHFUL circuit ⟹ executor.** The deployed quint + the
+birth-stamp residual force a genuine committed spawn (with the fresh-at-birth child). -/
+theorem spawn_full_circuit_refines_exec (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
@@ -388,16 +455,17 @@ theorem spawn_circuit_refines_exec (S : Surface2) (LE : CellId → ℤ) (cN : Li
     (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
-    (h : spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
+    (h : spawnFullCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
     spawnExecStep s args s' :=
   (spawn_exec_equiv_spec s args s').mpr
-    (spawn_circuit_refines_spec S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog
+    (spawn_full_circuit_refines_spec S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog
       s args s' h)
 
 #assert_axioms spawn_exec_equiv_spec
 #assert_axioms spawn_circuit_refines_spec
+#assert_axioms spawn_full_circuit_refines_spec
 #assert_axioms spawn_spec_refines_circuit
-#assert_axioms spawn_circuit_refines_exec
+#assert_axioms spawn_full_circuit_refines_exec
 
 /-! ## §6 — Transfer diamond (circuit ⟺ BalanceMovementSpec ⟺ execFullA). -/
 

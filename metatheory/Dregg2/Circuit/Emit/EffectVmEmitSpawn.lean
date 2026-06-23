@@ -306,7 +306,7 @@ child's conserved balance. A committed `SpawnSpec` makes the projected child pos
 (spawnCapsMap …)` and the child post-balance `0` (born-empty) — the two column values the descriptor
 pins. -/
 
-open Dregg2.Circuit.Spec.AccountGrowth (SpawnSpec spawnCapsMap execSpawnA_iff_spec)
+open Dregg2.Circuit.Spec.AccountGrowth (SpawnSpec SpawnFullSpec spawnCapsMap execSpawnA_iff_spec)
 
 /-- **`capRootProj D k`** — the EffectVM `cap_root` column value for kernel state `k`: `D k.caps`. -/
 def capRootProj (D : Caps → ℤ) (k : RecordKernelState) : ℤ := D k.caps
@@ -324,9 +324,9 @@ pins. So `SpawnChildSpec`'s `cap_root` clause IS universe-A's `caps`-clause, pro
 column. -/
 theorem unify_spawn_caps (D : Caps → ℤ)
     (s : RecChainedState) (actor child target : CellId) (s' : RecChainedState)
-    (hspec : SpawnSpec s actor child target s') :
+    (hspec : SpawnFullSpec s actor child target s') :
     capRootProj D s'.kernel = spawnCapDigestNew D s.kernel actor child target := by
-  -- SpawnSpec's caps clause is `s'.kernel.caps = spawnCapsMap s.kernel actor child target`.
+  -- SpawnFullSpec's caps clause is `s'.kernel.caps = spawnCapsMap s.kernel actor child target`.
   obtain ⟨_, _, _, _, _, _, _, hcaps, _⟩ := hspec
   show D s'.kernel.caps = D (spawnCapsMap s.kernel actor child target)
   rw [hcaps]
@@ -336,9 +336,9 @@ is born-empty (`cell child = default`), so the projected child balance is `balOf
 column value the descriptor's `gBalLoZero` gate pins. So `SpawnChildSpec`'s `balLo = 0` clause IS
 universe-A's born-empty `cell child = default` clause, projected to the balance column. -/
 theorem unify_spawn_balance (s : RecChainedState) (actor child target : CellId) (s' : RecChainedState)
-    (hspec : SpawnSpec s actor child target s') :
+    (hspec : SpawnFullSpec s actor child target s') :
     balProj s'.kernel child = 0 := by
-  -- SpawnSpec's cell clause is `s'.kernel.cell = fun c => if c = child then default else …`.
+  -- SpawnFullSpec's cell clause is `s'.kernel.cell = fun c => if c = child then default else …`.
   obtain ⟨_, _, hcell, _⟩ := hspec
   show balOf (s'.kernel.cell child) = 0
   rw [hcell]

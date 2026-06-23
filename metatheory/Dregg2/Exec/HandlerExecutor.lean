@@ -57,7 +57,7 @@ open Dregg2.Authority Dregg2.Execution
 open Dregg2.Exec
 open Dregg2.Exec.Handler
 open Dregg2.Exec.TurnExecutorFull
-  (acceptsEffects lcLive lcSealed lcDestroyed setLifecycle parentClist cellSealChainA cellUnsealChainA
+  (acceptsEffects lcLive lcSealed lcDestroyed setLifecycle parentClist parentEpoch cellSealChainA cellUnsealChainA
    cellDestroyChainA refreshDelegationChainA emitStep execFullA execInnerA exerciseStepA FullActionA
    recCDelegate recCDelegateAtten attenuateStepA
    createCellChainA
@@ -878,9 +878,15 @@ theorem handler_refines_execFullA_cellDestroy (s s' : RecChainedState) (actor ce
     rw [if_pos hg', hk]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
+/-- The frozen-face handler `refreshDelegationStep` models the `delegations` snapshot only; the FAITHFUL
+chained executor ALSO re-stamps `delegationEpochAt` (the freshness-restore). So the executor post equals the
+handler post WITH the named epoch-stamp residual applied — kernel equality holds MODULO that one re-stamp. -/
 theorem handler_refines_execFullA_refreshDelegation (s s' : RecChainedState) (actor child : CellId)
     (h : execHandlerOne (.refreshDelegationA actor child) s = some s') :
-    ∃ s'', execFullA s (.refreshDelegationA actor child) = some s'' ∧ s''.kernel = s'.kernel := by
+    ∃ s'', execFullA s (.refreshDelegationA actor child) = some s''
+      ∧ s''.kernel = { s'.kernel with
+                        delegationEpochAt := fun c => if c = child then parentEpoch s.kernel child
+                                                      else s'.kernel.delegationEpochAt c } := by
   have hstep := execHandlerOne_kernel (.refreshDelegationA actor child) s s' h
   rw [toClosedEffect] at hstep
   change refreshDelegationStep s.kernel { actor := actor, child := child } = some s'.kernel at hstep
@@ -893,11 +899,18 @@ theorem handler_refines_execFullA_refreshDelegation (s s' : RecChainedState) (ac
                   delegations := fun c => if c = child then parentClist s.kernel child
                                         else s.kernel.delegations c } = s'.kernel := by
       simpa only [Option.some.injEq] using hstep
-    refine ⟨{ kernel := s'.kernel,
-              log := { actor := actor, src := child, dst := child, amt := 0 } :: s.log }, ?_, rfl⟩
-    show refreshDelegationChainA s actor child = _
-    unfold refreshDelegationChainA
-    rw [if_pos hg', hk]
+    refine ⟨{ kernel := { s.kernel with
+                  delegations := fun c => if c = child then parentClist s.kernel child
+                                          else s.kernel.delegations c,
+                  delegationEpochAt := fun c => if c = child then parentEpoch s.kernel child
+                                                else s.kernel.delegationEpochAt c },
+              log := { actor := actor, src := child, dst := child, amt := 0 } :: s.log }, ?_, ?_⟩
+    · show refreshDelegationChainA s actor child = _
+      unfold refreshDelegationChainA
+      rw [if_pos hg']
+    · -- the executor post's `delegationEpochAt` IS the stamp; the handler post `s'.kernel = hk` lacks it,
+      -- so applying the residual to `s'.kernel` recovers the executor post.
+      rw [← hk]
   · rw [if_neg hg] at hstep; exact absurd hstep (by simp)
 
 theorem handler_refines_execFullA_emitEvent (s s' : RecChainedState) (actor cell : CellId)
