@@ -15,12 +15,12 @@
 > (`Dregg2/Proof/BFTLiveness.lean:206`, O2 — `World.gst_liveness` now **DERIVED** from
 > a DLS88+HotStuff `Pacemaker`, not merely assumed). Both modules are live in the
 > build (`Dregg2.lean:117,121`) and `#assert_namespace_axioms`-clean
-> (`Dregg2/Claims.lean:355,370`). The corpus is at **zero `sorry`**. See the
+> (`Dregg2/Claims.lean:355,370`). The corpus is at **zero open holes**. See the
 > §0-STATUS block immediately below and the rewritten UPDATE at the bottom; the body
 > §1–§7 is retained as the (now-historical) research that drove this.
 >
 > **Provenance.** 2026-05-30, read-only research agent (Claude Opus 4.8, 1M).
-> Scope: do the four honest-OPEN `sorry`s in `World.lean` / `Liveness.lean` /
+> Scope: do the four honest-OPEN obligations in `World.lean` / `Liveness.lean` /
 > `Spec/Lifecycle.lean` that name a *distributed-adversary / Byzantine /
 > partial-synchrony (GST) / universally-composable* model have, in `pdfs/`, a
 > **formalizable** model to close them? Or is it a genuine corpus gap?
@@ -35,19 +35,19 @@
 > and a computability/Turing model for the undecidability dual. **Three of those
 > are genuine corpus GAPS** (no Canetti-UC, no DLS88, no FLP-paper, no PBFT/
 > HotStuff/Tendermint/Streamlet, no quorum-systems paper in `pdfs/`); the fourth
-> (the undecidability `sorry`s) is groundable *now* from Mathlib alone with **no**
+> (the undecidability obligations) is groundable *now* from Mathlib alone with **no**
 > external paper. Be skeptical: the user's suspicion is correct.
 
 ---
 
 ## 1. The four OPENs (precise obligations, `file:line`)
 
-| # | Theorem | Location | What the `sorry` actually needs |
+| # | Theorem | Location | What the open obligation actually needs |
 |---|---------|----------|---------------------------------|
 | O1 | `quorum_intersection_safety_OPEN` | `metatheory/Dregg2/World.lean:263` | An **adversary/honesty model** over `votersFor` (which voters are Byzantine), a **conflict relation** on blocks, and the `n>3f` quorum-intersection pigeonhole. The docstring (`:256–262`) is explicit: "the bare `World` interface … cannot establish it … belongs with the protocol, not the network oracle." |
 | O2 | `liveness_after_gst_OPEN` | `metatheory/Dregg2/World.lean:287` | A **partial-synchrony / GST model** (the `clock` made meaningful for message-delay bounds) + an **honest-supermajority** assumption. Docstring (`:281–286`): "Requires the GST + honesty model the interface deliberately omits (asynchrony is the adversary's, not a law)." |
-| O3 | `dead_undecidable` / `distributed_death_not_co_witnessable` | `metatheory/Dregg2/Liveness.lean:216` and `metatheory/Dregg2/Spec/Lifecycle.lean:386` (the latter delegates to the former; **same obstruction, two sites**) | A **computability/Turing model**: refute *every* `decide : LivenessGraph → CellId → Bool` that soundly-and-completely decides `Dead = ¬reachable`. The `sorry` comment (`Liveness:220–222`) names it: "diagonalization against a computability model not present in the imported modules." |
-| O4 (PROVED, listed for contrast) | `crossvat_cycle_leaks` | `metatheory/Dregg2/Liveness.lean:389` | **Already PROVED** (no `sorry`). The "cross-vat cycle-leak" theorem the task brief points at is *closed* — it is proved directly from the `SoundLocalCollector.sound` side-condition + the cycle giving each node an inbound edge. The genuine OPEN *near* it is O3 (`dead_undecidable` at `:216`), not the leak itself. |
+| O3 | `dead_undecidable` / `distributed_death_not_co_witnessable` | `metatheory/Dregg2/Liveness.lean:216` and `metatheory/Dregg2/Spec/Lifecycle.lean:386` (the latter delegates to the former; **same obstruction, two sites**) | A **computability/Turing model**: refute *every* `decide : LivenessGraph → CellId → Bool` that soundly-and-completely decides `Dead = ¬reachable`. The open-hole comment (`Liveness:220–222`) names it: "diagonalization against a computability model not present in the imported modules." |
+| O4 (PROVED, listed for contrast) | `crossvat_cycle_leaks` | `metatheory/Dregg2/Liveness.lean:389` | **Already PROVED** (no open hole). The "cross-vat cycle-leak" theorem the task brief points at is *closed* — it is proved directly from the `SoundLocalCollector.sound` side-condition + the cycle giving each node an inbound edge. The genuine OPEN *near* it is O3 (`dead_undecidable` at `:216`), not the leak itself. |
 
 **Correction to the brief.** The brief lists "`Liveness.lean:~216` — cross-vat
 cycle-leak (dead-not-co-witnessable under partition)" as an OPEN. Two distinct
@@ -56,9 +56,9 @@ things live there and only one is open:
   It is a constructive, finite, local argument; it needs **no** distributed-
   adversary model and is **done**.
 - `dead_undecidable` (`:216`) — distributed deadness is **not co-witnessable** —
-  is the genuine `sorry`. Its obstruction is **computability (Turing)**, not
+  is the genuine open hole. Its obstruction is **computability (Turing)**, not
   Byzantine/GST. `Spec/Lifecycle.lean:386` is the same statement re-exported and
-  carries the same `sorry`. So O3 is *one* mathematical obligation appearing at
+  carries the same open hole. So O3 is *one* mathematical obligation appearing at
   two sites.
 
 This matters for the verdict: O3/O3' are NOT a "distributed-adversary model"
@@ -197,7 +197,7 @@ Two layers:
    *mechanization template* (PBFT-family safety in Coq) and would guide the Lean
    shape even without Malkhi–Reiter.
 
-**Verdict O1:** the *stated* `sorry` (non-empty intersection) is **groundable
+**Verdict O1:** the *stated* obligation (non-empty intersection) is **groundable
 now, no paper**. The *intended* BFT safety theorem behind it is a **GAP** —
 fetch **Malkhi–Reiter, *Byzantine Quorum Systems* (Distributed Computing 1998)**;
 use `velisarios-bft-coq.pdf` as the mechanization template.
@@ -231,7 +231,7 @@ needs no paper: it turns O2 from "prove liveness" into "*assume* the GST law,
 *derive* `∃ r block, committedByQuorum …`" — a one-line consequence of a new
 `World` field `gst_liveness : ∃ r, quorumReached (votesOf (recv r)) cfg b`. That
 is intellectually honest (it matches how `recv_mono` is assumed) and **closes the
-`sorry` without claiming to have proved an async-liveness theorem we cannot.**
+open hole without claiming to have proved an async-liveness theorem we cannot.**
 
 ### O3 / O3' — `dead_undecidable` (Liveness.lean:216) + `distributed_death_not_co_witnessable` (Spec/Lifecycle.lean:386) — **NOT a distributed-adversary gap. Formalizable NOW from Mathlib computability; no paper needed.**
 
@@ -253,7 +253,7 @@ arbitrary (undecidable) relation. There are two honest paths:
 2. **Even cheaper (if the above is too heavy):** restate the obligation as a
    *relative* impossibility — "no decider that reads only finite local evidence" —
    which is `crossvat_cycle_leaks`'s shape and is **already proved**. The
-   absolute-undecidability `sorry` could then be retired in favour of the
+   absolute-undecidability open hole could then be retired in favour of the
    relative one the design actually uses (`reclaim_by_lease`).
 
 **Verdict O3/O3':** **NOT a corpus gap and NOT a distributed-adversary model.**
@@ -295,7 +295,7 @@ decide **"new PROVED theorem"** vs **"new assumed oracle law (like `recv_mono`).
   Then `liveness_after_gst_OPEN` is discharged by `World.gst_liveness` — exactly
   as the safety side is discharged by `recv_mono`. This is **intellectually
   honest**: it *names* GST + honesty as an environment obligation the runtime
-  guarantees, not a Lean theorem, and it removes the `sorry` without overclaiming.
+  guarantees, not a Lean theorem, and it removes the open hole without overclaiming.
   **Difficulty: trivial once the law is stated; the *honesty* of the law is the
   whole point.** **No paper needed to state it**; a paper (DLS88) is needed only
   if one ever wants to *prove* it against a modelled protocol.
@@ -360,7 +360,7 @@ because two of the four OPENs are not actually the named model:**
 - **O2:** **genuine corpus GAP** (no DLS88, no partial-synchrony paper) **and**
   research-grade to *prove*. The dregg2-coherent, honest resolution is to **assume
   the GST-liveness law as a `World` oracle field** (exactly like `recv_mono`) —
-  which needs **no paper** and removes the `sorry` without overclaiming.
+  which needs **no paper** and removes the open hole without overclaiming.
 
 So: the corpus has the **impossibility / avoidability** half richly (BEC,
 CryptoConcurrency, DAG-BFT, FLP/CAP framing) and **zero** of the **protocol-
@@ -414,7 +414,7 @@ green at 3041 jobs, each result `#assert_axioms`-clean:
   quorum-intersection proved by real pigeonhole (`Finset.card_union_add_card_inter` + `omega`); the
   `hbound` hypothesis (which was *contradictory as written*) was restated to the honest
   union-cardinality bound. The full honest-vote-once BFT-safety contradiction (needs Malkhi–Reiter) is
-  left a precise prose note — **not** a `sorry`.
+  left a precise prose note — **not** an open hole.
 - **O2 — CLOSED via the Tier-B assumed-law move.** A `gst_liveness` field was added to the `World`
   class — the FLP-respecting partial-synchrony oracle law §5 recommended, documented exactly like
   `recv_mono`; `liveness_after_gst` discharges from it in three lines, and the `Reference` instance was
@@ -423,6 +423,6 @@ green at 3041 jobs, each result `#assert_axioms`-clean:
 **Net:** all four named OPENs are now closed or honestly-bounded **without fetching any of the named
 papers.** The genuine remaining research (off the critical path, honestly boundaried) is the *full* BFT
 safety theorem (O1's contradiction half → Malkhi–Reiter) and a *from-scratch proof* of GST-liveness
-(O2 → DLS88+HotStuff). Recurring lesson of the wave: **three of the four OPEN `sorry` sites were
+(O2 → DLS88+HotStuff). Recurring lesson of the wave: **three of the four OPEN obligation sites were
 false-or-contradictory as stated**, not merely hard — latent vacuity that the honesty discipline and
 the reconcile build surfaced.

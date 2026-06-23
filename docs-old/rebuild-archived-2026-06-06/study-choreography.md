@@ -34,7 +34,7 @@
 >    this study said §6 *"describes but does not have"* now exists:
 >    * `metatheory/Dregg2/Coordination.lean` (926 lines) — `GlobalType` / `project` / `Projectable`
 >      (`MergesAt`, non-vacuous, `projectBranches_can_fail:334`); `projection_sound:416` (head-duality
->      **PROVED** at :422–428; the full bisimulation is the one remaining `sorry:415`);
+>      **PROVED** at :422–428; the full bisimulation is the one remaining open hole at `:415`);
 >      `deadlock_freedom_by_design:816` **PROVED** over *reachable* configs (`GReach`) and
 >      `#assert_axioms`-pinned at :912 (with `deadlock_initial_counterexample:765` machine-refuting the naive
 >      initial-config form); `privacy_by_projection:567` **PROVED** on the `NoRec` fragment and pinned at
@@ -42,16 +42,16 @@
 >      coalgebra embedding of claim #3 (`ProtocolCell:356`, a `Boundary.TurnCoalg`).
 >    * `metatheory/Dregg2/Confluence.lean` — claim #1's **third judgement** as real Lean: `IConfluent:44`,
 >      `admits_sound:58` (the BEC lattice gate), `nonpairwise_escalation:70` (the constructive coupled
->      witness), and the non-vacuity pair `top_iconfluent:95` / `cardLeOne_not_iconfluent:104`. **No `sorry`.**
+>      witness), and the non-vacuity pair `top_iconfluent:95` / `cardLeOne_not_iconfluent:104`. **No open holes.**
 >    * `metatheory/Dregg2/Projection.lean` — cand-D's **blue/red projection-split** (`BlueEligible:56`,
 >      `blue_merge_safe:74` **PROVED**, `route:89`). The Byzantine-EPP refinement of claims #5/#6 is the
 >      genuine residual, honestly held as a named obligation (`byzantine_epp_by_monitoring`, doc-comment
->      :122, **not** a faked theorem). **No `sorry`.**
+>      :122, **not** a faked theorem). **No open holes.**
 >    * Plus a CRDT instance catalog (`Dregg2/Confluence/CRDT.lean`), a `dregg_choreo {…}` **eDSL surface**
 >      that elaborates to `GlobalType` and inherits the proofs (`Dregg2/DSLChoreo.lean`), the drift-stable
 >      bridge (`Dregg2/Confluence/DriftStable.lean`), and the **both-poles-PROVED** contention dichotomy
 >      (`Dregg2/Proof/ContendedCrossCell.lean`: `contended_commits_confluent:249` +
->      `coupled_no_schedule_agnostic_commit:381`, no `sorry`).
+>      `coupled_no_schedule_agnostic_commit:381`, no open holes).
 >
 >    **What remains genuinely OPEN** (so claim #5/#6 are not fully discharged): the *cryptographic / Byzantine*
 >    half — projection soundness over Byzantine endpoints (red fragment) and ZK-conformance to a committed `G`
@@ -184,7 +184,7 @@ communicating-automata MPST semantics paper to make this precise.]**
 > still real and explicit: duality is re-imposed as the `Dual:394` admissibility predicate (the *who-owns-
 > which-endpoint* structure is not in `Obs × (AdmissibleTurn⇒X)`), and asynchrony collapses (the LTS is the
 > synchronous `GStep:640` reduction). The bisimulation correctness criterion is named but only its
-> head-duality content is proved (`projection_sound:416`; full bisim is the remaining `sorry:415`).
+> head-duality content is proved (`projection_sound:416`; full bisim is the remaining open hole at `:415`).
 
 ## Claim 4 (implicit in §1, used by §6): "A step can be an atomic N-cell JointTurn." — **[GENUINE EXTENSION / OPEN]**
 

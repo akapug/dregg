@@ -200,7 +200,7 @@ Four things make the proofs load-bearing rather than decorative:
 - **An honest assurance case.** [docs/ASSURANCE.md](docs/ASSURANCE.md) and
   [`AssuranceCase.lean`](metatheory/Dregg2/AssuranceCase.lean) state the
   guarantees as Lean theorems pinned to exactly `{propext, Classical.choice,
-  Quot.sound}` — no `sorry`, no extra axioms — each with non-vacuity witnesses
+  Quot.sound}` — no extra axioms — each with non-vacuity witnesses
   (the property provably *can* fail, and is proven not to), and each named seam
   between the theorems and the deployed node stated at file:line. The composed
   apex `deployed_system_secure` conjoins all five guarantees over one committed

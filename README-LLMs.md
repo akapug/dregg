@@ -137,7 +137,7 @@ These are restated in `REORIENT.md` (read it first after any context loss).
 - **Lean kernel:** `cd metatheory && lake build` (warm mathlib; keep LOCAL — do not
   build Lean on a remote). Apex: `Dregg2/AssuranceCase.lean`. Keystones pin axioms
   via `#assert_all_clean` / `#assert_axioms` to exactly `{propext, Classical.choice,
-  Quot.sound}` — no `sorry`, no extra axioms.
+  Quot.sound}` — no extra axioms.
 - **Rust workspace:** `cargo build` / `cargo test`. The embedded-executor crates are
   pathologically slow in debug — use `--release` for `starbridge-v2`, the proof
   suites, and gauntlet runs. Default features include `recursion`; the

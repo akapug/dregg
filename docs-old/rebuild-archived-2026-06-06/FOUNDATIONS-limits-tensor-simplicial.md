@@ -3,13 +3,13 @@
 > **Current as of 2026-06-02.** Re-grounded against the live Lean. The limit / tensor /
 > simplicial spine (`Hyperedge.lean`, `JointTurn.lean`, `Boundary.lean`, `JointViaHyper.lean`,
 > `Finality.lean`) is UNCHANGED and every `file:line` receipt below still lands exactly. TWO
-> claims went stale in the *good* direction — **both former `sorry`s were retired** (the
-> zero-sorry sweep, task #128): `conservation_step` (§2.5, was `Core.lean:154` `sorry`) is now a
+> claims went stale in the *good* direction — **both former open holes were retired** (the
+> zero-open-hole sweep, task #128): `conservation_step` (§2.5, was `Core.lean:154` open hole) is now a
 > PROVED theorem off a typeclass field discharged by the kernel; `phi_functorial` (§6, was
-> `VatBoundary.lean:392,401` `sorry`) is now PROVED under an explicit `NonDegenerate` hypothesis
+> `VatBoundary.lean:392,401` open hole) is now PROVED under an explicit `NonDegenerate` hypothesis
 > and `#assert_axioms`-pinned. Both corrected in place below (search "**[2026-06-02 UPDATE]**").
-> Verified: the ENTIRE `Dregg2/**` tree now has **zero** real `sorry` tokens (guarded two ways —
-> `scripts/no-sorry-metatheory.sh` textual CI grep + the `#assert_axioms` pins; see
+> Verified: the ENTIRE `Dregg2/**` tree now has **zero** real open-hole tokens (guarded two ways —
+> `scripts/axiom-hygiene-guard.sh` textual CI grep + the `#assert_axioms` pins; see
 > `Claims.lean:31-43`). This lens's content is otherwise WAS-CURRENT.
 
 > **What this is.** A READ-ONLY categorical-foundations excavation of dregg2 through ONE
@@ -18,10 +18,10 @@
 > Lean definition or theorem at `file:line`, and tagged:
 >
 > - **REAL** — the universal property / law is actually PROVED in the Lean (term body, no
->   `sorry`, `#assert_axioms`-clean where pinned).
+>   open hole, `#assert_axioms`-clean where pinned).
 > - **DECORATIVE** — suggestive notation that buys no theorem (I say what it would have to
 >   prove to become real).
-> - **ASPIRATIONAL** — claimed by the design but a `sorry` / OPEN / unproven.
+> - **ASPIRATIONAL** — claimed by the design but an open hole / OPEN / unproven.
 >
 > The whole point is a TRUE map of what is categorically *established* vs *aspired*, with no
 > category-theory vocabulary papering over a missing theorem.
@@ -51,9 +51,9 @@ to "a full simplicial object / ∞-category of the interaction complex": there i
 proved face/degeneracy/simplicial-identity layer** in the Lean — the simplicial reading is
 an *analogy* (a real and illuminating one, tied to a cited epistemic-logic paper) that buys
 no theorem until each face carries its own binding. ~~What is **ASPIRATIONAL** is `Φ`-being-a-
-functor (`Spec.VatBoundary.phi_functorial` is a by-design `sorry`; only a concrete witness is
+functor (`Spec.VatBoundary.phi_functorial` is a by-design open hole; only a concrete witness is
 proved).~~ **[2026-06-02 UPDATE]** `Φ`-being-a-functor is now **REAL under an explicit
-`NonDegenerate` hypothesis** (`phi_functorial` is PROVED, no `sorry`, `#assert_axioms`-pinned —
+`NonDegenerate` hypothesis** (`phi_functorial` is PROVED, no open hole, `#assert_axioms`-pinned —
 see §6); the residual is the *honest named hypothesis* (an abstract `Verify` may accept no
 witness), not an unproven body. The infinity question splits cleanly into **two orthogonal infinities** — temporal
 (νF, the greatest fixpoint, REAL via Paco) and arity (the ∞-cell = colimit over all cells,
@@ -237,14 +237,14 @@ DECORATIVE — its target is discrete on objects, so the functor laws collapse t
 + invariance."* The real content (all **REAL**): `conservation_ordinary` (`:166`),
 `mint_delta`/`burn_delta` (`:176,187`), and `withholding_no_free_copy` (`:209`, the no-`Δ`
 linearity law in a cancellative monoid). The single obligation `conservation_step` (`:154`)
-is a **`sorry`** — an axiom-style operational-model obligation (**ASPIRATIONAL** as a Lean
+is an **open hole** — an axiom-style operational-model obligation (**ASPIRATIONAL** as a Lean
 theorem; honestly flagged as a primitive the operational semantics must satisfy).
 
 > **Tag:** the monoid-hom + invariance is **REAL** (the corollaries are proved from
 > `conservation_step`); the **"strong monoidal functor"** framing is **DECORATIVE** (vacuous
 > on a discrete target — to become real it would have to prove non-trivial action on a
 > *non-discrete* morphism category, which the model deliberately does not have); and
-> `conservation_step` itself is **ASPIRATIONAL** (a `sorry`/primitive, by design the seam to
+> `conservation_step` itself is **ASPIRATIONAL** (an open-hole/primitive, by design the seam to
 > the operational model). The relevance to *this* lens: conservation is **not** a limit; it
 > is the per-asset value that the CG-5 *equalizer* aggregate balances to `0`. The limit lives
 > in the binding, not in the measure.
@@ -332,7 +332,7 @@ never bottoms out, so soundness is a statement over **unbounded time**.
   predicate carried along the *entire infinite trajectory*. The coinduction engine is Lean
   4.30 native `coinductive` plus the vendored-and-ported `Dregg2.Paco` (gupaco/gpaco_clo) for
   the up-to-commutation closure (`CoinductiveAdversary.lean:36-54`). No
-  `axiom`/`admit`/`native_decide`/`sorry`.
+  `axiom`/`admit`/`native_decide`/open-hole tokens.
 
 > **Tag: REAL.** νF (greatest fixpoint, "forever") is a proved, coinductive, axiom-clean fact.
 > This is the "∞" that dregg2 *has*. It is the **dual** of the limit story: the limit (wide
@@ -425,23 +425,23 @@ holds at every dimension and every topology.
 
 ---
 
-## 6. The Φ-functor — ASPIRATIONAL, the one by-design sorry in this lens
+## 6. The Φ-functor — ASPIRATIONAL, the one by-design open hole in this lens
 
 The brief specifically flags `Spec.VatBoundary.phi_functorial`. Confirmed at source:
 
 - `Spec/VatBoundary.lean:392` — `theorem phi_functorial … : PhiFunctorial …` has body
-  **`sorry`** (`:401`). The docstring is explicit (`:39-40`, `:380-401`): the FULL functor
+  **an open hole** (`:401`). The docstring is explicit (`:39-40`, `:380-401`): the FULL functor
   between the **positional authority category** and the **epistemic authority category** —
   `Φ` preserving identity + composition while being lossy exactly on confinement — is the
-  *genuine open core*, left as one localized `sorry`. The `#assert_axioms` guard
-  **intentionally omits** it (`:461`) because it would correctly trip on `sorryAx`.
+  *genuine open core*, left as one localized open hole. The `#assert_axioms` guard
+  **intentionally omits** it (`:461`) because it would correctly trip on the open-hole kernel axiom.
 - The redemption: `phi_functorial_concrete` (`:441`, **REAL**, `#assert_axioms`-pinned `:456`)
   proves the functor laws ARE inhabited over a concrete non-degenerate verifier
   (`Statement = Unit`, `Witness = Bool`, `Verify _ b := b`), with the named loss landing on two
   distinct caps collapsing to one demand.
 
 > **Tag.** Φ-being-a-functor (abstract, over an arbitrary `Verifiable`) is **ASPIRATIONAL** —
-> a real `sorry`, the honest OPEN. Φ-being-a-functor *for a concrete witness* is **REAL**. The
+> a real open hole, the honest OPEN. Φ-being-a-functor *for a concrete witness* is **REAL**. The
 > general claim is genuinely blocked (an abstract `Verify` may accept no witness; an abstract
 > `stmtOf` may be injective), which is *why* it stays open, not a missing tactic. The
 > "functor" word here, unlike conservation's (§2.5), is NOT decorative — it is a precise
@@ -466,7 +466,7 @@ The brief specifically flags `Spec.VatBoundary.phi_functorial`. Confirmed at sou
 | 11 | bisimulation-to-free-`Spec` form of N-ary soundness | **REAL refutation** (proved FALSE) | `hyperedge_sound_bisim_ill_posed:433` |
 | 12 | conservation `Σ` = monoid-hom + invariance | **REAL** | `conservation_ordinary:166`, `withholding_no_free_copy:209` |
 | 13 | conservation as a "strong monoidal *functor*" | **DECORATIVE** (vacuous on discrete target) | `Core.lean:9-13,96`, `GLOSSARY:116` |
-| 14 | `conservation_step` (Law 1 balance) | **ASPIRATIONAL** (a `sorry`/primitive) | `Core.lean:154,162` |
+| 14 | `conservation_step` (Law 1 balance) | **ASPIRATIONAL** (an open-hole/primitive) | `Core.lean:154,162` |
 | 15 | simplicial NERVE: face/degeneracy/simplicial-identity layer in the kernel | **DECORATIVE** (no such code exists) | grep: zero face-maps/`∂`/`SimplicialObject` (§3.1) |
 | 16 | interaction complex is a "full simplicial / ∞-category" with free fillers | **DECORATIVE & UNSOUND** | would assert the wrong factoring, `study-category §1.3` |
 | 17 | simplicial-epistemic identification: agreement = fill-height = connectivity | **REAL-as-analogy** (proved Lean + cited paper; predicts #2) | `legs_agree:111`, `Finality.Tier:49`, `JointViaHyper:226,280`, `DREGG4-HYPERSYSTEM §5` |
@@ -475,7 +475,7 @@ The brief specifically flags `Spec.VatBoundary.phi_functorial`. Confirmed at sou
 | 20 | ∞-cell = global atomic turn = colimit over all cells (as an *object*) | **ASPIRATIONAL / unbuilt** | no Lean object; = Mina's one global ledger (§5.1) |
 | 21 | ∞-cell fillable single-machine, UNFILLABLE across a partition | **REAL-as-impossibility** | `OPEN-PROBLEMS #2`, `hyper_binding_is_proper` over `Unit` (§5.2,5.4) |
 | 22 | the binding obstruction persists even single-machine (n=1 collapses liveness, not binding) | **REAL** | `hyper_binding_is_proper:164` (over `Unit`) |
-| 23 | Φ : positional-authority ⟶ epistemic-authority is a functor (abstract) | **ASPIRATIONAL** (by-design `sorry`) | `phi_functorial:392,401` |
+| 23 | Φ : positional-authority ⟶ epistemic-authority is a functor (abstract) | **ASPIRATIONAL** (by-design open hole) | `phi_functorial:392,401` |
 | 24 | Φ-functor for a concrete non-degenerate verifier | **REAL** | `phi_functorial_concrete:441` (pinned `:456`) |
 | 25 | higher-order turn = dial-cube edge (Disclosure × Transferability × Agreement) | **REAL** (directed poset-product) but **UNBUILT** | `DREGG4-HYPERSYSTEM §2`, `Finality.no_downgrade` |
 

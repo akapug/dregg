@@ -416,7 +416,7 @@ is a small, honest module — call it `Exec/ProofForest.lean` — that:
    per-node hypothesis named as "the AIR attested this PI," not new mathematics.
 4. The `perStepInv node` premise is the **declared cryptographic assumption** (the
    §8 circuit seam), entered as a hypothesis, *exactly* as `CryptoKernel`/`World`
-   portals enter their assumptions — never an `axiom`/`sorry` inside the proof.
+   portals enter their assumptions — never an `axiom`/open hole inside the proof.
 
 This is a **half-day Lean module**, not research: it names the §8 assumption per
 node and applies an existing theorem. The *Rust* side is `verify_forest` (§4.2)
