@@ -67,7 +67,13 @@ guarantee" becomes "which adapter."
 (each routes its verified gates through a `verified_gate` seam; the Lean impls live in
 `dregg-exec-lean::distributed_gates`, installed by the node via `register_distributed_gates`;
 their `no-lean-link` features are deleted). seL4 verifier-PD is Lean-free *structurally* now.
-◻ `dregg-circuit-{verify,prove}` (prover cascade) · ◻ sdk core-gates → dep the real crates
-· ◻ tail (zkvm, threshold-sig, starbridge embedded-executor)
+· ✅ **prover cascade** — `circuit` → `dregg-circuit` (verifier-level floor, recursion-free) +
+`dregg-circuit-prove` (the recursion-closed cluster + 3 prove-only p3 crates). The `prover`
+feature + its 11-crate forward are dead; provers dep `dregg-circuit-prove`, verify-only dep
+`dregg-circuit`. **The weak v1 `EffectVmAir` floor is RETIRED** — strong v2 `verify_vm_descriptor2`
+is now the only verify path (no silent downgrade).
+◻ **sdk** core-gates → needs the `CapTpHost` seam (lift `captp_client` off `AgentCipherclerk` — an
+API change; awaiting ember's nod) · ◻ tail (zkvm, threshold-sig, starbridge embedded-executor — small)
 
-~4 cuts + a tail. Finishable. Then the FFI ladder (post-reorg).
+**The major poison is killed**: crypto, the whole no-lean-link flagship, chain-mock, AND the prover
+cascade. Remaining: sdk (one API-change seam, ember-gated) + a small tail. Then the FFI ladder.
