@@ -98,6 +98,18 @@ green (the once-`#[ignore]`d render test RUNS). PNGs: `servo_real_page_render.pn
 CSS box measured 160×120) + `servo_real_text_render.png` ("dregg" as 212-color antialiased glyphs — SEEN).
 Remainder: http(s) bytes still ride servo's hyper (needs a `net` fork); the servo-paint fork reverts when
 upstream carries a SWGL `RenderingContext`.
+### FEDERATION RECONNECT/RETRY — robust late-join, by running (2026-06-23).
+`1f5d3303` (`node/src/blocklace_sync.rs` + `net/src/gossip.rs`). `spawn_peer_prober` wires
+`RequestBackoff` into the dial path → re-dials unconnected peers on capped exponential backoff (clears +
+nudges a frontier on reconnect). Also fixed a deeper pathology: a bounded 3s initial dial
+(`connect_peer_bounded`) so a down-at-boot peer no longer stalls startup on the ~30s QUIC idle timeout.
+PROVEN: in-process (A joins DOWN B → dial fails → B up → prober reconnects → bidirectional delivery) +
+REAL two-process late-join (A boots w/ B down, no stall; B joins late; both DAGs converge dag_height 3 /
+latest_height 1; turn block CONSENSUS-WIDE Attested votes=2 on BOTH; balance 5000 both). net 88/88, node
+246/246. SEAM: discovery-bootstrap skipped (needs authenticated gossip-of-peers wire msg — larger than the
+reconnect core); same-node drop-and-return on abrupt kill hits a pre-existing store-integrity guard
+(persistence correctly refusing a torn-crash divergent ledger — not this lane's path).
+
 ### MULTIPLAYER MEMBRANE — the killer primitive, DEMONSTRATED by running (2026-06-23).
 `2bdb6ed2` (`shared_fork.rs`). ONE minted `MembraneFrustum` (the screenshot-of-the-moment, a cap-bounded
 `World::fork` cull) → carried over the postcard wire shape (the `MembraneEnvelope.snapshot` bytes) →
