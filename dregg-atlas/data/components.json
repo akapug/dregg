@@ -1,0 +1,1327 @@
+{
+  "meta": {
+    "catalog_count": 59,
+    "used_in_deos": 2,
+    "kinds": {
+      "action": 4,
+      "input": 9,
+      "display": 11,
+      "feedback": 5,
+      "container": 10,
+      "navigation": 8,
+      "overlay": 6,
+      "data": 6
+    },
+    "source_crate": "~/dev/gpui-component/crates/ui/src",
+    "cockpit_tree": "starbridge-v2/src/cockpit",
+    "note": "catalog = the gpui-component widget set (the visual building blocks); used_in_deos is a LIVE grep of the cockpit \u2014 re-run to refresh. The cockpit drives a focused set directly (Button \u00b7 Input) over its own dock (Pane/PaneGroup, modeled on gpui-component's Dock); the rest of the palette is available + documented here."
+  },
+  "components": [
+    {
+      "id": "component:button",
+      "name": "Button",
+      "module": "button",
+      "kind": "action",
+      "group": "action",
+      "what": "A clickable action element \u2014 the workhorse verb control.",
+      "summary": "A clickable action element \u2014 the workhorse verb control.",
+      "variants": [
+        "Primary",
+        "Secondary",
+        "Danger",
+        "Warning",
+        "Success",
+        "Info",
+        "Ghost",
+        "Link",
+        "Text",
+        "Outline",
+        "compact",
+        "sizes (xs/sm/md/lg)",
+        "icon",
+        "loading"
+      ],
+      "used_in_deos": true,
+      "used_files": [
+        "helpers.rs",
+        "mod.rs"
+      ],
+      "use_counts": {
+        "helpers.rs": 13,
+        "mod.rs": 4
+      },
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/button"
+    },
+    {
+      "id": "component:buttongroup",
+      "name": "ButtonGroup",
+      "module": "button",
+      "kind": "action",
+      "group": "action",
+      "what": "A connected group of related buttons with single/multiple selection.",
+      "summary": "A connected group of related buttons with single/multiple selection.",
+      "variants": [
+        "horizontal/vertical",
+        "single/multiple select"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/button"
+    },
+    {
+      "id": "component:toggle",
+      "name": "Toggle",
+      "module": "button",
+      "kind": "action",
+      "group": "action",
+      "what": "A button that toggles between pressed and unpressed states.",
+      "summary": "A button that toggles between pressed and unpressed states.",
+      "variants": [
+        "Ghost",
+        "Outline",
+        "sizes"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/button"
+    },
+    {
+      "id": "component:dropdownbutton",
+      "name": "DropdownButton",
+      "module": "button",
+      "kind": "action",
+      "group": "action",
+      "what": "A button carrying a dropdown menu.",
+      "summary": "A button carrying a dropdown menu.",
+      "variants": [
+        "custom menu",
+        "anchor"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/button"
+    },
+    {
+      "id": "component:input",
+      "name": "Input",
+      "module": "input",
+      "kind": "input",
+      "group": "input",
+      "what": "A text input field \u2014 single-line, password, or multiline, with prefix/suffix.",
+      "summary": "A text input field \u2014 single-line, password, or multiline, with prefix/suffix.",
+      "variants": [
+        "password",
+        "multiline",
+        "prefix/suffix",
+        "cleanable",
+        "mask toggle"
+      ],
+      "used_in_deos": true,
+      "used_files": [
+        "mod.rs",
+        "panels_webshell.rs"
+      ],
+      "use_counts": {
+        "panels_webshell.rs": 11,
+        "mod.rs": 5
+      },
+      "used_surfaces": [
+        "webshell"
+      ],
+      "surfaces": [
+        "webshell"
+      ],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/input"
+    },
+    {
+      "id": "component:checkbox",
+      "name": "Checkbox",
+      "module": "checkbox",
+      "kind": "input",
+      "group": "input",
+      "what": "A binary input for selecting/deselecting an option.",
+      "summary": "A binary input for selecting/deselecting an option.",
+      "variants": [
+        "label",
+        "sizes",
+        "disabled",
+        "tooltip"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/checkbox"
+    },
+    {
+      "id": "component:radio",
+      "name": "Radio",
+      "module": "radio",
+      "kind": "input",
+      "group": "input",
+      "what": "A single-choice control for mutually-exclusive options (usually grouped).",
+      "summary": "A single-choice control for mutually-exclusive options (usually grouped).",
+      "variants": [
+        "label",
+        "disabled",
+        "sizes"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/radio"
+    },
+    {
+      "id": "component:switch",
+      "name": "Switch",
+      "module": "switch",
+      "kind": "input",
+      "group": "input",
+      "what": "A toggle for switching between two states.",
+      "summary": "A toggle for switching between two states.",
+      "variants": [
+        "label placement",
+        "color",
+        "sizes",
+        "disabled"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/switch"
+    },
+    {
+      "id": "component:slider",
+      "name": "Slider",
+      "module": "slider",
+      "kind": "input",
+      "group": "input",
+      "what": "Select a value or range along an axis.",
+      "summary": "Select a value or range along an axis.",
+      "variants": [
+        "single/range",
+        "min/max",
+        "step",
+        "continuous/release"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/slider"
+    },
+    {
+      "id": "component:select",
+      "name": "Select",
+      "module": "select",
+      "kind": "input",
+      "group": "input",
+      "what": "A searchable dropdown selecting from a list (SearchableList-backed).",
+      "summary": "A searchable dropdown selecting from a list (SearchableList-backed).",
+      "variants": [
+        "cleanable",
+        "placeholder",
+        "icons"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/select"
+    },
+    {
+      "id": "component:combobox",
+      "name": "Combobox",
+      "module": "combobox",
+      "kind": "input",
+      "group": "input",
+      "what": "A searchable, filterable dropdown of options.",
+      "summary": "A searchable, filterable dropdown of options.",
+      "variants": [
+        "cleanable",
+        "placeholder"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/combobox"
+    },
+    {
+      "id": "component:colorpicker",
+      "name": "ColorPicker",
+      "module": "color_picker",
+      "kind": "input",
+      "group": "input",
+      "what": "Pick a color via HSL sliders + palettes.",
+      "summary": "Pick a color via HSL sliders + palettes.",
+      "variants": [
+        "presets",
+        "HSLA"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/color_picker"
+    },
+    {
+      "id": "component:rating",
+      "name": "Rating",
+      "module": "rating",
+      "kind": "input",
+      "group": "input",
+      "what": "A star-based rating control (display or collect).",
+      "summary": "A star-based rating control (display or collect).",
+      "variants": [
+        "max stars",
+        "color",
+        "disabled"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/rating"
+    },
+    {
+      "id": "component:label",
+      "name": "Label",
+      "module": "label",
+      "kind": "display",
+      "group": "display",
+      "what": "A text label with optional secondary text, masking, and match highlighting.",
+      "summary": "A text label with optional secondary text, masking, and match highlighting.",
+      "variants": [
+        "secondary",
+        "masked",
+        "highlight"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/label"
+    },
+    {
+      "id": "component:link",
+      "name": "Link",
+      "module": "link",
+      "kind": "display",
+      "group": "display",
+      "what": "A hyperlink element (HTML <a> analogue).",
+      "summary": "A hyperlink element (HTML <a> analogue).",
+      "variants": [
+        "href",
+        "disabled"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/link"
+    },
+    {
+      "id": "component:text-textview",
+      "name": "Text / TextView",
+      "module": "text",
+      "kind": "display",
+      "group": "display",
+      "what": "Rich text rendering \u2014 markdown / HTML / styled text, selectable + scrollable.",
+      "summary": "Rich text rendering \u2014 markdown / HTML / styled text, selectable + scrollable.",
+      "variants": [
+        "Markdown",
+        "HTML",
+        "selectable",
+        "code-block actions"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/text"
+    },
+    {
+      "id": "component:highlighter",
+      "name": "Highlighter",
+      "module": "highlighter",
+      "kind": "display",
+      "group": "display",
+      "what": "Code syntax highlighting (tree-sitter; WASM stub).",
+      "summary": "Code syntax highlighting (tree-sitter; WASM stub).",
+      "variants": [
+        "language detect"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/highlighter"
+    },
+    {
+      "id": "component:kbd",
+      "name": "Kbd",
+      "module": "kbd",
+      "kind": "display",
+      "group": "display",
+      "what": "Render a keybinding in platform-specific format.",
+      "summary": "Render a keybinding in platform-specific format.",
+      "variants": [
+        "outline",
+        "action-bound"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/kbd"
+    },
+    {
+      "id": "component:badge",
+      "name": "Badge",
+      "module": "badge",
+      "kind": "display",
+      "group": "display",
+      "what": "A small count / dot / icon indicator on another element.",
+      "summary": "A small count / dot / icon indicator on another element.",
+      "variants": [
+        "number (max)",
+        "dot",
+        "icon"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/badge"
+    },
+    {
+      "id": "component:tag",
+      "name": "Tag",
+      "module": "tag",
+      "kind": "display",
+      "group": "display",
+      "what": "A small categorizing label.",
+      "summary": "A small categorizing label.",
+      "variants": [
+        "Primary",
+        "Secondary",
+        "Danger",
+        "Success",
+        "Warning",
+        "Info",
+        "outline"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/tag"
+    },
+    {
+      "id": "component:avatar-avatargroup",
+      "name": "Avatar / AvatarGroup",
+      "module": "avatar",
+      "kind": "display",
+      "group": "display",
+      "what": "A user avatar (image or initials); the group is a compact stack.",
+      "summary": "A user avatar (image or initials); the group is a compact stack.",
+      "variants": [
+        "image",
+        "initials",
+        "group limit",
+        "sizes"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/avatar"
+    },
+    {
+      "id": "component:icon",
+      "name": "Icon",
+      "module": "icon",
+      "kind": "display",
+      "group": "display",
+      "what": "An icon element (the shared icon set).",
+      "summary": "An icon element (the shared icon set).",
+      "variants": [
+        "sized",
+        "colored"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/icon"
+    },
+    {
+      "id": "component:descriptionlist",
+      "name": "DescriptionList",
+      "module": "description_list",
+      "kind": "display",
+      "group": "display",
+      "what": "Label-value pairs for metadata display.",
+      "summary": "Label-value pairs for metadata display.",
+      "variants": [
+        "vertical/horizontal",
+        "bordered",
+        "columns"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/description_list"
+    },
+    {
+      "id": "component:separator",
+      "name": "Separator",
+      "module": "separator",
+      "kind": "display",
+      "group": "display",
+      "what": "A horizontal / vertical divider line.",
+      "summary": "A horizontal / vertical divider line.",
+      "variants": [
+        "Solid",
+        "Dashed",
+        "labeled"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/separator"
+    },
+    {
+      "id": "component:skeleton",
+      "name": "Skeleton",
+      "module": "skeleton",
+      "kind": "feedback",
+      "group": "feedback",
+      "what": "An animated loading placeholder.",
+      "summary": "An animated loading placeholder.",
+      "variants": [
+        "primary/secondary"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/skeleton"
+    },
+    {
+      "id": "component:spinner",
+      "name": "Spinner",
+      "module": "spinner",
+      "kind": "feedback",
+      "group": "feedback",
+      "what": "A rotating loading indicator.",
+      "summary": "A rotating loading indicator.",
+      "variants": [
+        "icon",
+        "color",
+        "speed",
+        "sizes"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/spinner"
+    },
+    {
+      "id": "component:progress-progresscircle",
+      "name": "Progress / ProgressCircle",
+      "module": "progress",
+      "kind": "feedback",
+      "group": "feedback",
+      "what": "A linear or circular progress indicator.",
+      "summary": "A linear or circular progress indicator.",
+      "variants": [
+        "indeterminate",
+        "color",
+        "0-100"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/progress"
+    },
+    {
+      "id": "component:alert",
+      "name": "Alert",
+      "module": "alert",
+      "kind": "feedback",
+      "group": "feedback",
+      "what": "A message box for important information.",
+      "summary": "A message box for important information.",
+      "variants": [
+        "Info",
+        "Success",
+        "Warning",
+        "Error",
+        "banner"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/alert"
+    },
+    {
+      "id": "component:notification",
+      "name": "Notification",
+      "module": "notification",
+      "kind": "feedback",
+      "group": "feedback",
+      "what": "A temporary message in a notification area.",
+      "summary": "A temporary message in a notification area.",
+      "variants": [
+        "Info",
+        "Success",
+        "Warning",
+        "Error",
+        "auto-hide",
+        "actions"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/notification"
+    },
+    {
+      "id": "component:accordion",
+      "name": "Accordion",
+      "module": "accordion",
+      "kind": "container",
+      "group": "container",
+      "what": "Expandable / collapsible sections.",
+      "summary": "Expandable / collapsible sections.",
+      "variants": [
+        "multiple",
+        "bordered",
+        "sizes"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/accordion"
+    },
+    {
+      "id": "component:collapsible",
+      "name": "Collapsible",
+      "module": "collapsible",
+      "kind": "container",
+      "group": "container",
+      "what": "An interactive expand/collapse element.",
+      "summary": "An interactive expand/collapse element.",
+      "variants": [
+        "open/closed"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/collapsible"
+    },
+    {
+      "id": "component:groupbox",
+      "name": "GroupBox",
+      "module": "group_box",
+      "kind": "container",
+      "group": "container",
+      "what": "A styled container with an optional title.",
+      "summary": "A styled container with an optional title.",
+      "variants": [
+        "Normal",
+        "Fill",
+        "Outline"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/group_box"
+    },
+    {
+      "id": "component:card",
+      "name": "Card",
+      "module": "card",
+      "kind": "container",
+      "group": "container",
+      "what": "A bordered content card.",
+      "summary": "A bordered content card.",
+      "variants": [
+        "padded",
+        "bordered"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/card"
+    },
+    {
+      "id": "component:form-field",
+      "name": "Form / Field",
+      "module": "form",
+      "kind": "container",
+      "group": "container",
+      "what": "A container organizing form fields.",
+      "summary": "A container organizing form fields.",
+      "variants": [
+        "horizontal/vertical",
+        "label width",
+        "multi-column"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/form"
+    },
+    {
+      "id": "component:settings",
+      "name": "Settings",
+      "module": "setting",
+      "kind": "container",
+      "group": "container",
+      "what": "A settings panel with sidebar navigation.",
+      "summary": "A settings panel with sidebar navigation.",
+      "variants": [
+        "multi-page",
+        "groups"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/setting"
+    },
+    {
+      "id": "component:sidebar",
+      "name": "Sidebar",
+      "module": "sidebar",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "A collapsible sidebar navigation.",
+      "summary": "A collapsible sidebar navigation.",
+      "variants": [
+        "Icon",
+        "Offcanvas",
+        "groups",
+        "header/footer"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/sidebar"
+    },
+    {
+      "id": "component:dock",
+      "name": "Dock",
+      "module": "dock",
+      "kind": "container",
+      "group": "container",
+      "what": "A fixed edge-anchored panel container (left/right/bottom/center), resizable + tabbed \u2014 the dock the cockpit's paned workspace is modeled on.",
+      "summary": "A fixed edge-anchored panel container (left/right/bottom/center), resizable + tabbed \u2014 the dock the cockpit's paned workspace is modeled on.",
+      "variants": [
+        "Left",
+        "Right",
+        "Bottom",
+        "Center",
+        "resizable",
+        "collapsible"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/dock"
+    },
+    {
+      "id": "component:resizablepanelgroup",
+      "name": "ResizablePanelGroup",
+      "module": "resizable",
+      "kind": "container",
+      "group": "container",
+      "what": "Panels separated by draggable handles.",
+      "summary": "Panels separated by draggable handles.",
+      "variants": [
+        "horizontal/vertical",
+        "initial sizes"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/resizable"
+    },
+    {
+      "id": "component:statusbar",
+      "name": "StatusBar",
+      "module": "status_bar",
+      "kind": "container",
+      "group": "container",
+      "what": "A bottom bar with left/center/right regions.",
+      "summary": "A bottom bar with left/center/right regions.",
+      "variants": [
+        "3 regions"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/status_bar"
+    },
+    {
+      "id": "component:titlebar",
+      "name": "TitleBar",
+      "module": "title_bar",
+      "kind": "container",
+      "group": "container",
+      "what": "The window title bar.",
+      "summary": "The window title bar.",
+      "variants": [
+        "custom controls"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/title_bar"
+    },
+    {
+      "id": "component:tabbar-tab",
+      "name": "TabBar / Tab",
+      "module": "tab",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "A tabbed interface for switching content sections.",
+      "summary": "A tabbed interface for switching content sections.",
+      "variants": [
+        "Tab",
+        "Outline",
+        "Pill",
+        "Segmented",
+        "Underline",
+        "scroll"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/tab"
+    },
+    {
+      "id": "component:breadcrumb",
+      "name": "Breadcrumb",
+      "module": "breadcrumb",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "Hierarchy location trail.",
+      "summary": "Hierarchy location trail.",
+      "variants": [
+        "disabled items",
+        "click handlers"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/breadcrumb"
+    },
+    {
+      "id": "component:pagination",
+      "name": "Pagination",
+      "module": "pagination",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "Page-number navigation for paginated content.",
+      "summary": "Page-number navigation for paginated content.",
+      "variants": [
+        "compact",
+        "prev/next"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/pagination"
+    },
+    {
+      "id": "component:stepper",
+      "name": "Stepper",
+      "module": "stepper",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "A step-by-step progress indicator.",
+      "summary": "A step-by-step progress indicator.",
+      "variants": [
+        "horizontal/vertical",
+        "clickable steps"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/stepper"
+    },
+    {
+      "id": "component:menu-popupmenu-contextmenu",
+      "name": "Menu / PopupMenu / ContextMenu",
+      "module": "menu",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "A popup menu of contextual actions.",
+      "summary": "A popup menu of contextual actions.",
+      "variants": [
+        "separator",
+        "submenu",
+        "checkable",
+        "icons",
+        "AppMenuBar"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/menu"
+    },
+    {
+      "id": "component:nativemenu",
+      "name": "NativeMenu",
+      "module": "native_menu",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "An OS-native popup menu rendered outside window bounds.",
+      "summary": "An OS-native popup menu rendered outside window bounds.",
+      "variants": [
+        "actions",
+        "checked"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/native_menu"
+    },
+    {
+      "id": "component:tree",
+      "name": "Tree",
+      "module": "tree",
+      "kind": "navigation",
+      "group": "navigation",
+      "what": "A hierarchical list of tree-structured data.",
+      "summary": "A hierarchical list of tree-structured data.",
+      "variants": [
+        "expand/collapse",
+        "nested",
+        "depth"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/tree"
+    },
+    {
+      "id": "component:dialog-alertdialog",
+      "name": "Dialog / AlertDialog",
+      "module": "dialog",
+      "kind": "overlay",
+      "group": "overlay",
+      "what": "A modal dialog overlay for focused interaction.",
+      "summary": "A modal dialog overlay for focused interaction.",
+      "variants": [
+        "title/content/footer",
+        "overlay-closable",
+        "AlertDialog"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/dialog"
+    },
+    {
+      "id": "component:sheet",
+      "name": "Sheet",
+      "module": "sheet",
+      "kind": "overlay",
+      "group": "overlay",
+      "what": "A panel sliding in from a window edge.",
+      "summary": "A panel sliding in from a window edge.",
+      "variants": [
+        "Left",
+        "Right",
+        "Bottom",
+        "Center",
+        "resizable"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/sheet"
+    },
+    {
+      "id": "component:popover",
+      "name": "Popover",
+      "module": "popover",
+      "kind": "overlay",
+      "group": "overlay",
+      "what": "A floating panel triggered by a click.",
+      "summary": "A floating panel triggered by a click.",
+      "variants": [
+        "anchor",
+        "overlay-closable"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/popover"
+    },
+    {
+      "id": "component:hovercard",
+      "name": "HoverCard",
+      "module": "hover_card",
+      "kind": "overlay",
+      "group": "overlay",
+      "what": "A popover shown on hover with a delay.",
+      "summary": "A popover shown on hover with a delay.",
+      "variants": [
+        "anchor",
+        "delays"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/hover_card"
+    },
+    {
+      "id": "component:tooltip",
+      "name": "Tooltip",
+      "module": "tooltip",
+      "kind": "overlay",
+      "group": "overlay",
+      "what": "Helper text on hover, with optional keybinding.",
+      "summary": "Helper text on hover, with optional keybinding.",
+      "variants": [
+        "text/custom",
+        "action"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/tooltip"
+    },
+    {
+      "id": "component:clipboard",
+      "name": "Clipboard",
+      "module": "clipboard",
+      "kind": "overlay",
+      "group": "overlay",
+      "what": "A copy-to-clipboard utility control.",
+      "summary": "A copy-to-clipboard utility control.",
+      "variants": [
+        "static/dynamic",
+        "callback"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/clipboard"
+    },
+    {
+      "id": "component:list",
+      "name": "List",
+      "module": "list",
+      "kind": "data",
+      "group": "data",
+      "what": "A virtual-scrolling, searchable, selectable list.",
+      "summary": "A virtual-scrolling, searchable, selectable list.",
+      "variants": [
+        "searchable",
+        "selectable",
+        "scrollbar"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/list"
+    },
+    {
+      "id": "component:table-datatable",
+      "name": "Table / DataTable",
+      "module": "table",
+      "kind": "data",
+      "group": "data",
+      "what": "A table for tabular data \u2014 stateless Table or virtual-scrolling DataTable.",
+      "summary": "A table for tabular data \u2014 stateless Table or virtual-scrolling DataTable.",
+      "variants": [
+        "sizes",
+        "cell align",
+        "columns",
+        "virtual"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/table"
+    },
+    {
+      "id": "component:virtuallist",
+      "name": "VirtualList",
+      "module": "virtual_list",
+      "kind": "data",
+      "group": "data",
+      "what": "A performant renderer for large datasets via virtual scrolling.",
+      "summary": "A performant renderer for large datasets via virtual scrolling.",
+      "variants": [
+        "horizontal/vertical"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/virtual_list"
+    },
+    {
+      "id": "component:scrollbar-scrollable",
+      "name": "Scrollbar / Scrollable",
+      "module": "scroll",
+      "kind": "data",
+      "group": "data",
+      "what": "A custom scrollbar + a wrapper adding scrollbars to elements.",
+      "summary": "A custom scrollbar + a wrapper adding scrollbars to elements.",
+      "variants": [
+        "Scrolling",
+        "Hover",
+        "Always",
+        "h/v axis"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/scroll"
+    },
+    {
+      "id": "component:charts",
+      "name": "Charts",
+      "module": "chart",
+      "kind": "data",
+      "group": "data",
+      "what": "Bar / Line / Area / Pie / Candlestick chart visualizations.",
+      "summary": "Bar / Line / Area / Pie / Candlestick chart visualizations.",
+      "variants": [
+        "Bar",
+        "Line",
+        "Area",
+        "Pie/donut",
+        "Candlestick"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/chart"
+    },
+    {
+      "id": "component:plot",
+      "name": "Plot",
+      "module": "plot",
+      "kind": "data",
+      "group": "data",
+      "what": "The base framework (axis/grid/scale/shape) for building custom charts.",
+      "summary": "The base framework (axis/grid/scale/shape) for building custom charts.",
+      "variants": [
+        "axis",
+        "grid",
+        "scale",
+        "shape"
+      ],
+      "used_in_deos": false,
+      "used_files": [],
+      "use_counts": {},
+      "used_surfaces": [],
+      "surfaces": [],
+      "verbs": [],
+      "source": "~/dev/gpui-component/crates/ui/src/plot"
+    }
+  ],
+  "edges": [
+    {
+      "from": "component:button",
+      "to": "file:helpers.rs",
+      "type": "used_in_file",
+      "count": 13
+    },
+    {
+      "from": "component:button",
+      "to": "file:mod.rs",
+      "type": "used_in_file",
+      "count": 4
+    },
+    {
+      "from": "component:input",
+      "to": "file:panels_webshell.rs",
+      "type": "used_in_file",
+      "count": 11
+    },
+    {
+      "from": "component:input",
+      "to": "file:mod.rs",
+      "type": "used_in_file",
+      "count": 5
+    },
+    {
+      "from": "component:input",
+      "to": "surface:webshell",
+      "type": "renders_on_surface"
+    },
+    {
+      "from": "component:dock",
+      "to": "surface:dock-workspace",
+      "type": "modeled_by_local_dock",
+      "note": "starbridge-v2/src/dock/{pane,pane_group}.rs forks gpui-component's Dock into the cockpit's resizable editor/terminal/chat/agent workspace."
+    }
+  ]
+}

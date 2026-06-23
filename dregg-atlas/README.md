@@ -26,13 +26,22 @@ data is inlined). Seven views:
   the Anomalies page.)
 - **Ocap Web** — cells + the capability grants between them; click a cell for its
   seven presentation faces.
-- **UI Atlas** — all 28 cockpit surfaces screenshotted, each with a
-  first-principles, code-grounded explainer (click a card → its full page).
+- **Surfaces** — every cockpit surface screenshotted (the `Tab` enum's 30 surfaces
+  plus the dock dev panes), each with a first-principles, code-grounded explainer
+  and the components it is built from (click a card → its full page).
+- **Components** — the gpui-component widget pillar: the visual building blocks the
+  cockpit is built from. Each widget names what it is, its variants, and the
+  surfaces that render it; the catalog marks which are *used live in the cockpit
+  today* (a live grep of the cockpit tree) vs *available* in the palette.
 - **Protocol** — the deep reference: the thesis, the eight verbs, the four
   substances + conservation, the AuthRequired lattice, the refusal taxonomy, the
   receipt structure.
-- **Anomalies** — bugs and inconsistencies the crawl surfaced.
 - **About** — what this is and how it was built.
+
+The four pillars — Game Tree, Ocap Web, Surfaces, Components — plus the Atlas Web,
+the cross-linked hypermedia map over every object (cell · surface · component ·
+effect · verb · state) with a ⌘K spotter. Every object carries a stable id and
+typed edges, so anything cross-links to anything.
 
 ## Regenerate it from the live system
 
@@ -43,8 +52,10 @@ cd dregg-atlas
 ( cd ../starbridge-v2 && cargo build --release --features native-full --bin dregg-mcp \
                        && cargo build --release --features headless-render --bin starbridge-v2 )
 
-python3 crawl.py    # walk the protocol state-space (DFS, snapshot/restore backtracking)
-python3 shoot.py    # screenshot the 28 cockpit surfaces
+python3 crawl.py    # walk the protocol state-space + emit the hypermap (MCP `map`
+                    # tool merged in) + the components pillar (a source grep)
+python3 shoot.py    # screenshot every cockpit surface (the surfaces.py census;
+                    # --no-mcp emits the manifest only, for a later screenshot pass)
 # the UI tree: BFS-walk the cockpit's UI state-space, screenshot each state
 ( cd ../starbridge-v2 && ZED_OFFSCREEN_PREFER_CPU=1 \
   ATLAS_UI_NODES=260 target/release/starbridge-v2 --explore-ui ../dregg-atlas/ui-explore )
@@ -66,11 +77,23 @@ Tunables (env): `ATLAS_DEPTH` (game-tree depth, default 4), `ATLAS_NODES` /
   grant) PLUS a cross-cell transfer between every ordered pair (value flow +
   conservation). Bounded by depth + node/edge caps; every bound is logged so a
   truncation is never mistaken for completeness.
+- `surfaces.py` — the canonical SURFACE CENSUS (the single source of truth): the
+  cockpit's 30 `Tab`s + the dock dev panes, each with its MCP screenshot tab name,
+  bake path (`tab` vs `showcase`), explainer-section slug, and blurb. Imported by
+  both `shoot.py` and `build.py`.
 - `shoot.py` — drives the MCP `screenshot` tool (the real gpui Cockpit bake) over
-  all 28 surfaces.
+  every surface in the census. Reuses a prior PNG when a re-bake isn't possible, so
+  a new MCP only needs to fill the new surfaces.
+- `components.py` — the COMPONENTS pillar emitter: a curated catalog of the
+  gpui-component widget set (name · what-it-is · variants · module) joined with a
+  LIVE grep of `starbridge-v2/src/cockpit/` so the "used in deos / on which surface"
+  edges are never stale. Emits `data/components.json` with stable ids + typed edges.
+- `crawl.py`'s hypermap — synthesizes a cross-linked typed graph (cell → face →
+  affordance → effect → ocap-edge) AND merges the MCP `map` tool's authoritative
+  backbone when present → `data/hypermap.json`.
 - `build.py` + `tmpl/` — the site-builder: cytoscape.js + dagre for the graphs,
   the explainers parsed from `explainers/*.md`, the static pages cross-linked to
-  the SPA.
+  the SPA (including a static `pages/components.html`).
 
 The honest scope: the game tree is exhaustive *over the crawled move set* (the
 self-affordance vocabulary + cross-cell transfers) up to the depth bound — not

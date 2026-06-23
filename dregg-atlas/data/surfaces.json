@@ -1,188 +1,302 @@
 [
   {
+    "id": "surface:home",
     "tab": "home",
+    "label": "HOME",
+    "bake": "tab",
+    "deep": "home",
+    "explainer": "The at-rest landing \u2014 the warm front door of the live verified image; names the running system reflectively (executor \u00b7 cells \u00b7 receipts \u00b7 organs) with live counts read off the real ledger.",
     "file": "home.png",
-    "size": "1280x832",
-    "explainer": "The at-rest landing \u2014 what the live verified image IS, in prose, with its headline stats."
+    "size": "1280x832"
   },
   {
+    "id": "surface:inspector",
     "tab": "inspector",
+    "label": "INSPECTOR",
+    "bake": "tab",
+    "deep": "inspector",
+    "explainer": "The moldable inspector (Registry \u00b7 Spotter \u00b7 Halo): every object's presentation faces as a sub-tab strip; the inspector is itself inspectable.",
     "file": "inspector.png",
-    "size": "1280x832",
-    "explainer": "The moldable inspector (Registry \u00b7 Spotter \u00b7 Halo): every object's seven presentation faces; the inspector is itself inspectable."
+    "size": "1280x832"
   },
   {
+    "id": "surface:inspect-act",
     "tab": "inspect-act",
+    "label": "INSPECT-ACT",
+    "bake": "tab",
+    "deep": "inspect-act",
+    "explainer": "The Smalltalk inspect\u2192act\u2192inspect loop: a cell's reflected state plus the messages it understands, each with a cap badge; firing one commits a real turn.",
     "file": "inspect-act.png",
-    "size": "1280x832",
-    "explainer": "The inspect\u2192act loop: a cell's reflected state on the left, the messages it understands on the right, each with its cap badge; firing one commits a real turn."
+    "size": "1280x832"
   },
   {
-    "tab": "graph",
-    "file": "graph.png",
-    "size": "1280x832",
-    "explainer": "The ocap delegation graph \u2014 cells as nodes, capability grants as directed edges, laid out by multi-hop delegation depth."
-  },
-  {
-    "tab": "web-of-cells",
-    "file": "web-of-cells.png",
-    "size": "1280x832",
-    "explainer": "The cells as a navigable web \u2014 the distributed-attestation view of the image."
-  },
-  {
-    "tab": "objects",
-    "file": "objects.png",
-    "size": "1280x832",
-    "explainer": "The object browser \u2014 every protocol object by kind."
-  },
-  {
-    "tab": "proofs",
-    "file": "proofs.png",
-    "size": "1280x832",
-    "explainer": "The STARK/verification axis \u2014 the proof status of turns."
-  },
-  {
-    "tab": "debugger",
-    "file": "debugger.png",
-    "size": "1280x832",
-    "explainer": "Step + explain a turn against the live world \u2014 the time-aware debugger."
-  },
-  {
-    "tab": "replay",
-    "file": "replay.png",
-    "size": "1280x832",
-    "explainer": "Deterministic replay / time-travel over the canonical history."
-  },
-  {
+    "id": "surface:workspace",
     "tab": "workspace",
+    "label": "WORKSPACE",
+    "bake": "tab",
+    "deep": "workspace",
+    "explainer": "The doIt / printIt / inspectIt evaluator \u2014 compose an intent, evaluate it in a forked throwaway world (predict, never mutate), then commit-or-discard.",
     "file": "workspace.png",
-    "size": "1280x832",
-    "explainer": "The DOIT/PRINTIT evaluator \u2014 a Smalltalk-style workspace over the live image."
+    "size": "1280x832"
   },
   {
+    "id": "surface:wonder",
     "tab": "wonder",
+    "label": "WONDER",
+    "bake": "tab",
+    "deep": "wonder",
+    "explainer": "The AOL-wonder front door \u2014 every cell a pokeable glowing object (glow = real recent activity) with direct-manipulation halos (inspect / grab / explain).",
     "file": "wonder.png",
-    "size": "1280x832",
-    "explainer": "The AOL-wonder direct-manipulation surface \u2014 click around and absorb, no comprehension required."
+    "size": "1280x832"
   },
   {
+    "id": "surface:lanes",
     "tab": "lanes",
+    "label": "LANES",
+    "bake": "tab",
+    "deep": "lanes",
+    "explainer": "The moldable-inspector gadgets made reachable: the predicate composer (caveat language), the turn builder, the attenuation dial, the macaroon token loop.",
     "file": "lanes.png",
-    "size": "1280x832",
-    "explainer": "The moldable-inspector gadgets (L2\u2013L10): predicate/turn/cap/token construction."
+    "size": "1280x832"
   },
   {
-    "tab": "powerbox",
-    "file": "powerbox.png",
-    "size": "1280x832",
-    "explainer": "The capability powerbox \u2014 granting/brokering authority."
+    "id": "surface:objects",
+    "tab": "objects",
+    "label": "OBJECTS",
+    "bake": "tab",
+    "deep": "objects",
+    "explainer": "The object browser around the accounting axes \u2014 cell lifecycle, turn proofs, nullifiers \u2014 a direct reflection of the live ledger + receipt log.",
+    "file": "objects.png",
+    "size": "1280x832"
   },
   {
+    "id": "surface:graph",
+    "tab": "graph",
+    "label": "GRAPH",
+    "bake": "tab",
+    "deep": "graph",
+    "explainer": "The whole-image ocap delegation graph \u2014 cells as nodes, capability grants as directed edges, laid out by multi-hop delegation depth (the blast radius).",
+    "file": "graph.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:web-of-cells",
+    "tab": "web-of-cells",
+    "label": "WEB-OF-CELLS",
+    "bake": "tab",
+    "deep": "web-of-cells",
+    "explainer": "The cockpit as a native browser of the dregg:// docuverse \u2014 attested cross-cell reads with ledger-drawn origin chrome and the per-viewer affordance membrane.",
+    "file": "web-of-cells.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:links-here",
     "tab": "links-here",
+    "label": "WHAT-LINKS-HERE",
+    "bake": "tab",
+    "deep": "links-here",
+    "explainer": "Ted Nelson's two-way link navigable: the real Backlinks witness-graph (who transcludes ME), projected through the viewer's membrane (link fog-of-war).",
     "file": "links-here.png",
-    "size": "1280x832",
-    "explainer": "What-links-here \u2014 the inbound reference graph for the focused object."
+    "size": "1280x832"
   },
   {
-    "tab": "organs",
-    "file": "organs.png",
-    "size": "1280x832",
-    "explainer": "The organ survey \u2014 the image's specialized verified-program cells."
+    "id": "surface:powerbox",
+    "tab": "powerbox",
+    "label": "POWERBOX",
+    "bake": "tab",
+    "deep": "powerbox",
+    "explainer": "CapDesk's trusted designation flow \u2014 a confined app requests authority; the trusted powerbox presents a picker of what the USER holds and mints an attenuated cap into the app's c-list via a real grant turn.",
+    "file": "powerbox.png",
+    "size": "1280x832"
   },
   {
-    "tab": "cipherclerk",
-    "file": "cipherclerk.png",
-    "size": "1280x832",
-    "explainer": "The sovereign cipherclerk vault \u2014 HD-derived identities, macaroon signing."
+    "id": "surface:proofs",
+    "tab": "proofs",
+    "label": "PROOFS",
+    "bake": "tab",
+    "deep": "proofs",
+    "explainer": "The proof-attach + STARK verification board \u2014 each committed turn's verification tier and the attach/verify route.",
+    "file": "proofs.png",
+    "size": "1280x832"
   },
   {
-    "tab": "editor",
-    "file": "editor.png",
-    "size": "1280x832",
-    "explainer": "The conserving forest editor \u2014 build a turn, validate it, commit."
+    "id": "surface:debugger",
+    "tab": "debugger",
+    "label": "DEBUGGER",
+    "bake": "tab",
+    "deep": "debugger",
+    "explainer": "Step + explain a turn against the live world \u2014 the time-aware debugger.",
+    "file": "debugger.png",
+    "size": "1280x832"
   },
   {
-    "tab": "composer",
-    "file": "composer.png",
-    "size": "1280x832",
-    "explainer": "The predicate/caveat composer."
+    "id": "surface:replay",
+    "tab": "replay",
+    "label": "REPLAY",
+    "bake": "tab",
+    "deep": "replay",
+    "explainer": "Deterministic replay / time-travel over the canonical witnessed history.",
+    "file": "replay.png",
+    "size": "1280x832"
   },
   {
-    "tab": "simulate",
-    "file": "simulate.png",
-    "size": "1280x832",
-    "explainer": "Simulate a turn against a fork before committing."
-  },
-  {
-    "tab": "agent",
-    "file": "agent.png",
-    "size": "1280x832",
-    "explainer": "The agent surface \u2014 autonomous loops over the image."
-  },
-  {
-    "tab": "swarm",
-    "file": "swarm.png",
-    "size": "1280x832",
-    "explainer": "The swarm orchestration surface."
-  },
-  {
-    "tab": "shell",
-    "file": "shell.png",
-    "size": "1280x832",
-    "explainer": "The command shell over the image."
-  },
-  {
-    "tab": "terminal",
-    "file": "terminal.png",
-    "size": "1280x832",
-    "explainer": "The terminal surface."
-  },
-  {
-    "tab": "buffer",
-    "file": "buffer.png",
-    "size": "1280x832",
-    "explainer": "The text buffer surface."
-  },
-  {
-    "tab": "trust",
-    "file": "trust.png",
-    "size": "1280x832",
-    "explainer": "The trust panel \u2014 identity, guardians, the K-of-N recovery threshold, the KEL timeline."
-  },
-  {
-    "tab": "docs",
-    "file": "docs.png",
-    "size": "1280x832",
-    "explainer": "The document lens \u2014 the Pijul-shaped patch-theory document object."
-  },
-  {
+    "id": "surface:time",
     "tab": "time",
+    "label": "\u23f3 TIME",
+    "bake": "tab",
+    "deep": "time",
+    "explainer": "The temporal cockpit \u2014 time-travel + suspend + fractal meta-debug as one panel: the rewind scrubber re-derives any past point (root-verified), \u23f8 suspends the real loop (M5 gate), the metastack climbs a reflective tower over the world.",
     "file": "time.png",
-    "size": "1280x832",
-    "explainer": "The time/history scrubber."
+    "size": "1280x832"
   },
   {
+    "id": "surface:cipherclerk",
+    "tab": "cipherclerk",
+    "label": "CIPHERCLERK",
+    "bake": "tab",
+    "deep": "cipherclerk",
+    "explainer": "The sovereign cipherclerk vault \u2014 HD-derived identities, macaroon signing.",
+    "file": "cipherclerk.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:trust",
+    "tab": "trust",
+    "label": "\u26b7 TRUST",
+    "bake": "tab",
+    "deep": "trust",
+    "explainer": "The human-layer 'you cannot lose your own OS' face \u2014 your devices, your guardians-as-faces with the K-of-N threshold drawn, the KEL rotation timeline, and the ask-your-guardians recovery quorum gauge.",
+    "file": "trust.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:editor",
+    "tab": "editor",
+    "label": "EDITOR",
+    "bake": "tab",
+    "deep": "editor",
+    "explainer": "The conserving forest editor \u2014 build a turn, validate it (\u03a3\u03b4=0), commit.",
+    "file": "editor.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:composer",
+    "tab": "composer",
+    "label": "COMPOSER",
+    "bake": "tab",
+    "deep": "composer",
+    "explainer": "The predicate / caveat composer \u2014 the attenuable proof-carrying caveat language.",
+    "file": "composer.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:simulate",
+    "tab": "simulate",
+    "label": "SIMULATE",
+    "bake": "tab",
+    "deep": "simulate",
+    "explainer": "The what-if intent composer \u2014 predict a turn's consequences in a forked throwaway world (the real executor over a deep copy), then commit the identical turn for real; the live world is untouched until commit.",
+    "file": "simulate.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:docs",
+    "tab": "docs",
+    "label": "\ud83d\udcc4 DOCS",
+    "bake": "tab",
+    "deep": "docs",
+    "explainer": "The dreggverse document language as a surface \u2014 a document IS a cell, an edit IS a cap-gated turn; a CONFLICT is a first-class state (two live alternatives, each tagged with its provenance receipt, with a one-click resolving patch).",
+    "file": "docs.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:share",
     "tab": "share",
+    "label": "\u2933 SHARE",
+    "bake": "tab",
+    "deep": "share",
+    "explainer": "The share-with-attenuation pre-send editor \u2014 cull the frustum (which lenses are shared), pare the authority (an amplifying choice is refused in-band), verify the per-viewer membrane preview, and share a revocable rehydratable artifact.",
     "file": "share.png",
-    "size": "1280x832",
-    "explainer": "The sharing/membrane surface."
+    "size": "1280x832"
   },
   {
-    "tab": "deos-chat",
-    "file": "deos-chat.png",
-    "size": "1280x832",
-    "explainer": "The deos Matrix chat \u2014 the social layer over the dregg world. Rooms are cells; a message can CARRY A REHYDRATABLE MEMBRANE (a cap-bounded fork of the world the recipient drives live, then stitches back fail-closed via branch-and-stitch). Reactions, replies, edits/redactions-as-state, person-trust badges. Built on matrix-rust-sdk + gpui-component."
+    "id": "surface:agent",
+    "tab": "agent",
+    "label": "AGENT",
+    "bake": "tab",
+    "deep": "agent",
+    "explainer": "The agent surface \u2014 an autonomous loop over the image, confined to the ACP\u2194ToolGateway seam (every tool-call a cap-gated, witnessed turn).",
+    "file": "agent.png",
+    "size": "1280x832"
   },
   {
-    "tab": "deos-editor",
-    "file": "deos-editor.png",
-    "size": "1100x720",
-    "explainer": "The deos code editor (deos-zed) \u2014 a rope-backed, syntax-highlighting editor over the Fs trait (FirmamentFs seam: a file is a cell, a save is a receipted turn). The buffer IS a document-language document: editing accrues verifiable patches, so the durable form is the patch history, not flat bytes."
+    "id": "surface:swarm",
+    "tab": "swarm",
+    "label": "SWARM",
+    "bake": "tab",
+    "deep": "swarm",
+    "explainer": "The swarm orchestration surface \u2014 N agent panes as confined Surface cells, coordinating via the notify-edge inbox (EmitEvent \u2192 NotifyEdge \u2192 async drain).",
+    "file": "swarm.png",
+    "size": "1280x832"
   },
   {
-    "tab": "deos-docviewer",
-    "file": "deos-docviewer.png",
-    "size": "900x680",
-    "explainer": "The document viewer \u2014 a merged document's blame timeline (per-author attribution) and CONFLICT OBJECTS as first-class cards: two pens at one tail show both alternatives + authorship, never a <<<<<< text wound. The branch-and-stitch pushout merge made legible."
+    "id": "surface:shell",
+    "tab": "shell",
+    "label": "SHELL",
+    "bake": "tab",
+    "deep": "shell",
+    "explainer": "The cap-first command shell over the image \u2014 the cockpit's own trusted root.",
+    "file": "shell.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:webshell",
+    "tab": "webshell",
+    "label": "\ud83c\udf10 WEB-SHELL",
+    "bake": "tab",
+    "deep": "webshell",
+    "explainer": "A general http(s):// browser surface (distinct from web-of-cells): a real gpui-component URL bar (Enter-to-go), back/forward/reload, and a content tile rendered through the Servo SWGL pipeline behind the net-cap allowlist; fail-closed (a cap refusal shows in-band, the tile never silently blanks).",
+    "file": "webshell.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:devtools",
+    "tab": "devtools",
+    "label": "\u2699 DEVTOOLS",
+    "bake": "tab",
+    "deep": "devtools",
+    "explainer": "Firebug for a verified OS \u2014 one tab, three inspector sub-tabs: NETWORK (the data plane: deliveries / inboxes / wakes / notify-edges), LOG/RECEIPTS (the blocklace + receipt timeline console), FEDERATION (committee \u00b7 epoch \u00b7 checkpoint \u00b7 bridges \u00b7 revocation).",
+    "file": "devtools.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:buffer",
+    "tab": "buffer",
+    "label": "BUFFER",
+    "bake": "tab",
+    "deep": "buffer",
+    "explainer": "The IDE's EDITOR pane \u2014 a text buffer as a cap-confined Surface cell (A1); the editor half of the \u2318K real PTY/editor split.",
+    "file": "buffer.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:terminal",
+    "tab": "terminal",
+    "label": "TERMINAL",
+    "bake": "tab",
+    "deep": "terminal",
+    "explainer": "The IDE's TERMINAL pane \u2014 a command surface as a cap-confined Surface cell (A1), home of the ADOS tool-call seam (a real PTY).",
+    "file": "terminal.png",
+    "size": "1280x832"
+  },
+  {
+    "id": "surface:dock-workspace",
+    "tab": "dock-workspace",
+    "label": "DOCK WORKSPACE",
+    "bake": "showcase",
+    "deep": "dock-workspace",
+    "explainer": "The self-hosting cockpit dock \u2014 editor + terminal + chat + agent as resizable dock panes (PaneGroup / Pane), the desktop epoch's self-hosting cockpit. Baked via the showcase composite (the full cockpit, not a single tab).",
+    "file": "dock-workspace.png",
+    "size": "1600x1000"
   }
 ]

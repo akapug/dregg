@@ -1,0 +1,145 @@
+"""THE SURFACE CENSUS — the single source of truth for every cockpit surface the
+atlas bakes + explains.
+
+Grounded in the live cockpit's `Tab` enum (starbridge-v2/src/cockpit/mod.rs) — its
+30 tabs — PLUS the dock workspace's dev panes (editor / terminal / chat / agent),
+which are not `Tab`s but cap-confined Surface cells inside the paned workspace.
+
+The screenshot `tab` name is the cockpit's own label normalized exactly the way
+`Cockpit::select_tab_named` normalizes (ascii-alphanumeric, lowercased). That is
+the string the MCP `screenshot` tool / `--render-tab` resolves. We carry it as
+`render_tab`; `id` is the stable atlas id; `explainer` is the first-principles
+blurb the gallery + the static page show; `deep` (a slug) links the long-form
+explainer section; `bake` selects the render path (per-tab vs showcase).
+"""
+
+# (id, render_tab, label, bake, deep_slug, explainer)
+#   render_tab — normalized name `select_tab_named` matches (label, alnum-lower).
+#                None ⇒ no live tab (a dev pane / composite); bake via 'showcase'.
+#   bake       — 'tab'      : screenshot with tab=render_tab (the per-surface bake)
+#                'showcase' : the --render-showcase composite (no single tab)
+SURFACES = [
+    # ---- the landing + reflective core -----------------------------------
+    ("home", "home", "HOME", "tab", "home",
+     "The at-rest landing — the warm front door of the live verified image; "
+     "names the running system reflectively (executor · cells · receipts · organs) "
+     "with live counts read off the real ledger."),
+    ("inspector", "inspector", "INSPECTOR", "tab", "inspector",
+     "The moldable inspector (Registry · Spotter · Halo): every object's presentation "
+     "faces as a sub-tab strip; the inspector is itself inspectable."),
+    ("inspect-act", "inspectact", "INSPECT-ACT", "tab", "inspect-act",
+     "The Smalltalk inspect→act→inspect loop: a cell's reflected state plus the "
+     "messages it understands, each with a cap badge; firing one commits a real turn."),
+    ("workspace", "workspace", "WORKSPACE", "tab", "workspace",
+     "The doIt / printIt / inspectIt evaluator — compose an intent, evaluate it in a "
+     "forked throwaway world (predict, never mutate), then commit-or-discard."),
+    ("wonder", "wonder", "WONDER", "tab", "wonder",
+     "The AOL-wonder front door — every cell a pokeable glowing object (glow = real "
+     "recent activity) with direct-manipulation halos (inspect / grab / explain)."),
+    ("lanes", "lanes", "LANES", "tab", "lanes",
+     "The moldable-inspector gadgets made reachable: the predicate composer (caveat "
+     "language), the turn builder, the attenuation dial, the macaroon token loop."),
+    ("objects", "objects", "OBJECTS", "tab", "objects",
+     "The object browser around the accounting axes — cell lifecycle, turn proofs, "
+     "nullifiers — a direct reflection of the live ledger + receipt log."),
+
+    # ---- the graph / ocap / link surfaces --------------------------------
+    ("graph", "graph", "GRAPH", "tab", "graph",
+     "The whole-image ocap delegation graph — cells as nodes, capability grants as "
+     "directed edges, laid out by multi-hop delegation depth (the blast radius)."),
+    ("web-of-cells", "webofcells", "WEB-OF-CELLS", "tab", "web-of-cells",
+     "The cockpit as a native browser of the dregg:// docuverse — attested cross-cell "
+     "reads with ledger-drawn origin chrome and the per-viewer affordance membrane."),
+    ("links-here", "whatlinkshere", "WHAT-LINKS-HERE", "tab", "links-here",
+     "Ted Nelson's two-way link navigable: the real Backlinks witness-graph (who "
+     "transcludes ME), projected through the viewer's membrane (link fog-of-war)."),
+    ("powerbox", "powerbox", "POWERBOX", "tab", "powerbox",
+     "CapDesk's trusted designation flow — a confined app requests authority; the "
+     "trusted powerbox presents a picker of what the USER holds and mints an "
+     "attenuated cap into the app's c-list via a real grant turn."),
+
+    # ---- the proof / time / replay axis ----------------------------------
+    ("proofs", "proofs", "PROOFS", "tab", "proofs",
+     "The proof-attach + STARK verification board — each committed turn's verification "
+     "tier and the attach/verify route."),
+    ("debugger", "debugger", "DEBUGGER", "tab", "debugger",
+     "Step + explain a turn against the live world — the time-aware debugger."),
+    ("replay", "replay", "REPLAY", "tab", "replay",
+     "Deterministic replay / time-travel over the canonical witnessed history."),
+    ("time", "time", "⏳ TIME", "tab", "time",
+     "The temporal cockpit — time-travel + suspend + fractal meta-debug as one panel: "
+     "the rewind scrubber re-derives any past point (root-verified), ⏸ suspends the "
+     "real loop (M5 gate), the metastack climbs a reflective tower over the world."),
+
+    # ---- identity / vault / trust ----------------------------------------
+    ("cipherclerk", "cipherclerk", "CIPHERCLERK", "tab", "cipherclerk",
+     "The sovereign cipherclerk vault — HD-derived identities, macaroon signing."),
+    ("trust", "trust", "⚷ TRUST", "tab", "trust",
+     "The human-layer 'you cannot lose your own OS' face — your devices, your "
+     "guardians-as-faces with the K-of-N threshold drawn, the KEL rotation timeline, "
+     "and the ask-your-guardians recovery quorum gauge."),
+
+    # ---- authoring / share / docs ----------------------------------------
+    ("editor", "editor", "EDITOR", "tab", "editor",
+     "The conserving forest editor — build a turn, validate it (Σδ=0), commit."),
+    ("composer", "composer", "COMPOSER", "tab", "composer",
+     "The predicate / caveat composer — the attenuable proof-carrying caveat language."),
+    ("simulate", "simulate", "SIMULATE", "tab", "simulate",
+     "The what-if intent composer — predict a turn's consequences in a forked "
+     "throwaway world (the real executor over a deep copy), then commit the identical "
+     "turn for real; the live world is untouched until commit."),
+    ("docs", "docs", "📄 DOCS", "tab", "docs",
+     "The dreggverse document language as a surface — a document IS a cell, an edit IS "
+     "a cap-gated turn; a CONFLICT is a first-class state (two live alternatives, each "
+     "tagged with its provenance receipt, with a one-click resolving patch)."),
+    ("share", "share", "⤳ SHARE", "tab", "share",
+     "The share-with-attenuation pre-send editor — cull the frustum (which lenses are "
+     "shared), pare the authority (an amplifying choice is refused in-band), verify the "
+     "per-viewer membrane preview, and share a revocable rehydratable artifact."),
+
+    # ---- the agentic surfaces --------------------------------------------
+    ("agent", "agent", "AGENT", "tab", "agent",
+     "The agent surface — an autonomous loop over the image, confined to the "
+     "ACP↔ToolGateway seam (every tool-call a cap-gated, witnessed turn)."),
+    ("swarm", "swarm", "SWARM", "tab", "swarm",
+     "The swarm orchestration surface — N agent panes as confined Surface cells, "
+     "coordinating via the notify-edge inbox (EmitEvent → NotifyEdge → async drain)."),
+    ("shell", "shell", "SHELL", "tab", "shell",
+     "The cap-first command shell over the image — the cockpit's own trusted root."),
+
+    # ---- the browsers + devtools -----------------------------------------
+    ("webshell", "webshell", "🌐 WEB-SHELL", "tab", "webshell",
+     "A general http(s):// browser surface (distinct from web-of-cells): a real "
+     "gpui-component URL bar (Enter-to-go), back/forward/reload, and a content tile "
+     "rendered through the Servo SWGL pipeline behind the net-cap allowlist; "
+     "fail-closed (a cap refusal shows in-band, the tile never silently blanks)."),
+    ("devtools", "devtools", "⚙ DEVTOOLS", "tab", "devtools",
+     "Firebug for a verified OS — one tab, three inspector sub-tabs: NETWORK (the data "
+     "plane: deliveries / inboxes / wakes / notify-edges), LOG/RECEIPTS (the blocklace "
+     "+ receipt timeline console), FEDERATION (committee · epoch · checkpoint · "
+     "bridges · revocation)."),
+
+    # ---- the IDE dock panes (Surface cells inside the paned workspace) ----
+    # These are NOT Tab variants; they are cap-confined Surface cells living in the
+    # dock (PaneGroup/Pane). The atlas bakes them via the showcase composite (the
+    # workspace dock is what the showcase renders) and via the Buffer/Terminal tabs.
+    ("buffer", "buffer", "BUFFER", "tab", "buffer",
+     "The IDE's EDITOR pane — a text buffer as a cap-confined Surface cell (A1); the "
+     "editor half of the ⌘K real PTY/editor split."),
+    ("terminal", "terminal", "TERMINAL", "tab", "terminal",
+     "The IDE's TERMINAL pane — a command surface as a cap-confined Surface cell (A1), "
+     "home of the ADOS tool-call seam (a real PTY)."),
+    ("dock-workspace", None, "DOCK WORKSPACE", "showcase", "dock-workspace",
+     "The self-hosting cockpit dock — editor + terminal + chat + agent as resizable "
+     "dock panes (PaneGroup / Pane), the desktop epoch's self-hosting cockpit. Baked "
+     "via the showcase composite (the full cockpit, not a single tab)."),
+]
+
+
+def render_tab_for(s):
+    """The MCP `screenshot` tab arg for a surface tuple (None ⇒ showcase bake)."""
+    return s[1]
+
+
+def by_id():
+    return {s[0]: s for s in SURFACES}
