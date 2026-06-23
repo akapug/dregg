@@ -51,9 +51,24 @@ structure OpenFront where
 -- facet front is discharged (`ExerciseInnerTurn.exercise_r4_facet_mask`); only the
 -- ORTHOGONAL inner-turn fold remains, carried as an explicit `hinner` hypothesis there.
 def openFronts : List OpenFront := [
-  -- Wave 7: spawn/factory metadata beyond born-empty createCell core
+  -- Wave 7: spawn/factory metadata beyond the born-empty createCell core.
+  -- RESIDUAL (precise): the handler dispatch (`HandlerExecutor.toClosedEffect`) maps BOTH `spawnA` and
+  -- `createCellFromFactoryA` onto the born-empty `createCellH` effect — `spawnA` DROPS its `target`
+  -- (`.spawnA actor child _target => spawnEffect actor child`) and `createCellFromFactoryA` DROPS its
+  -- `vk`. So `handler_refines_execFullA_{spawn,createCellFromFactory}` prove kernel-agreement only
+  -- against `execFullA (.createCellA …)` (the shared account-growth core), NOT against the full
+  -- chained effect. UNVERIFIED by the handler refinement:
+  --   • spawn delegation handoff — `spawnChainA`'s parent-cap gate (`confersEdgeTo target` ∧
+  --     `target ∈ accounts`) and the writes it commits: `caps child := [heldCapTo … actor target]`
+  --     plus the `delegate`/`delegations` snapshots (the least-amplifying authority copy);
+  --   • factory install — `createCellFromFactoryChainA`'s factory gates (found ∧ `conforms` ∧ `0 ≤ vk`)
+  --     and the writes it commits: the `factoryVkField` slot, `installInitialFields`, and `slotCaveats`.
+  -- WHY OPEN (not closeable here): the handler MUST first model these writes for a refinement to exist;
+  -- closing requires aligning the handler dispatch in `HandlerExecutor`, an Exec-executor change (owned
+  -- elsewhere), not a proof over the present born-empty handler. Honest residual, narrowed to the cap
+  -- handoff + factory-field install — the account-growth core IS proven.
   ⟨"spawn_factory_metadata", .w7_spawn_metadata, some "spawnA",
-    "spawnChainA/createCellFromFactoryChainA metadata beyond createCellH core"⟩
+    "handler maps spawnA/createCellFromFactoryA to born-empty createCellH (drops target/vk): spawnChainA's parent-cap handoff (caps/delegate/delegations) and createCellFromFactoryChainA's factory install (factoryVkField/initialFields/slotCaveats) are UNVERIFIED by the handler refinement; only the createCellA account-growth core is proven"⟩
 ]
 
 def countOpenFronts : Nat := openFronts.length
@@ -107,10 +122,12 @@ theorem portal_exercise_r4_facet_mask (actor target : CellId) (inner : List Full
 
 end HolePortals
 
--- The frontier has exactly TWO GENUINELY-open handler fronts (drift-free: `countOpenFronts`
+-- The frontier has exactly ONE GENUINELY-open handler front (drift-free: `countOpenFronts`
 -- IS `openFronts.length`, so this catches any future add/remove). Non-vacuity: the registry is
 -- non-empty (open work remains) yet bounded. Down from 3 — the R4 facet-mask front is now CLOSED
--- (the facet mask is enforced on `execFullA`, the canonical semantics; `portal_exercise_r4_facet_mask`).
+-- (the facet mask is enforced on `execFullA`, the canonical semantics; `portal_exercise_r4_facet_mask`),
+-- and the `exercise_inner_turn_witness` fold front is CLOSED (`portal_exercise_inner_turn`). Only the
+-- `spawn_factory_metadata` delegation/factory-install front remains.
 #guard countOpenFronts == openFronts.length
 #guard countOpenFronts == 1
 #guard ¬ openFronts.isEmpty
