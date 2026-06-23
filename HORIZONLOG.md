@@ -11,6 +11,18 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### MIGRATE VERB (Local→HostPd) — authority half LANDED; live-transport re-home is the seam (2026-06-23).
+`86ad3049`. `migrate(&SurfaceCapability, &MigrationTarget) -> Result<SurfaceCapability, MigrateError>`
+(`starbridge-v2/src/dock/migrate.rs`) relocates a surface cap along the firmament distance axis,
+identity-preserving (same `SurfaceId`/cell), re-minting at `Target::HostPd`. Gate = structural
+attenuation (`granted ⊆ held` via `dregg_firmament::is_attenuation`; widening → `MigrateError::Widening`),
+non-vacuous at both lattice extremes. Tear-off now tested (logic + headless-gpui window cycle: tear →
+idempotent re-tear → pop, identity preserved). 6/6 pass. SEAM = the live transport re-home: spawn/select
+the confined child PD (registered `HostPdId` over a control socket, `--features process-pd`) and re-point
+`Shell::present`/`route_input` at that PD's firmament Endpoint — the cap migrates today; the GLASS follows
+when the compositor binds the re-homed cap to the child Endpoint. (This is the network-portable-process /
+robigalia vision; n>1 leg later.)
+
 ### REAL NODE RUNS + COCKPIT ATTACHES — LANDED, verified by running (2026-06-23).
 `7eba16ee` + `docs/deos/DEV-NODE-RUNBOOK.md`. `dregg-node init && run --enable-faucet` serves a
 live `/status` (`state_producer:lean`, `lean_producer:true`, 21 covered effects, `consensus_live`)
