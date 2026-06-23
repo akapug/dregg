@@ -49,6 +49,15 @@ cockpit-surface = []
 # is blocked. Mirrors starbridge-v2's `render-capture` (render_cockpit_headless).
 # On by default so `cargo run --bin demo -- --screenshot <out.png>` just works.
 screenshot = ["dep:image", "dep:gpui_wgpu", "gpui_wgpu/test-support", "gpui_platform/test-support"]
+# THE FIRMAMENT FS — the document-substrate ride: a file IS a cell, a SAVE IS a
+# receipted dregg turn (NOT just RealFs bytes on disk). OFF by default so the
+# RealFs build stays light and the lean/standalone builds are unaffected: this
+# feature pulls the REAL embedded executor (`dregg-turn`/`dregg-cell`/`dregg-types`)
+# — the same Lean-linked verified spine starbridge-v2's `World` wraps. With it on,
+# `FirmamentFs` (src/fs/firmament.rs) is a live `Fs` impl over an in-process
+# `Ledger` + `TurnExecutor`; `cargo build`/`cargo test` WITHOUT it keep `RealFs`
+# the only backing store. See FIRMAMENT-FS-SEAM.md.
+firmament = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-types"]
 
 [dependencies]
 anyhow = "1"
@@ -76,6 +85,19 @@ dregg-doc = { path = "../dregg-doc", features = ["rope"] }
 # the same type on both sides, no stringify).
 ropey = "2.0.0-beta.1"
 
+# THE EMBEDDED VERIFIED EXECUTOR (gated on `firmament`). The SAME Lean-linked
+# spine starbridge-v2's `World` wraps: `dregg_turn::TurnExecutor` over a
+# `dregg_cell::Ledger`. `FirmamentFs` runs a file SAVE as a real cap-gated turn
+# through these, getting a genuine `TurnReceipt`. Path-deps the SAME `../turn`/
+# `../cell`/`../types` the rest of the workspace uses (one resolved instance);
+# default features stay ON so the verified producer path compiles. OFF unless the
+# `firmament` feature is on, so the RealFs / lean / standalone builds never link
+# the Lean archive. The `[patch]` block below replicates the transitive proof-dep
+# overrides the executor link needs (this is its own workspace).
+dregg-turn = { path = "../turn", optional = true }
+dregg-cell = { path = "../cell", optional = true }
+dregg-types = { path = "../types", optional = true }
+
 # Same gpui fork rev as starbridge-v2/Cargo.toml and gpui-component/Cargo.toml so
 # the whole graph resolves to ONE gpui. See the workspace-comment above.
 gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
@@ -96,3 +118,22 @@ gpui-component-assets = { path = "../../gpui-component/crates/assets" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 pathfinder_simd = { path = "../starbridge-v2/vendor/pathfinder_simd" }
+# The embedded executor (`firmament` feature) pulls `dregg-turn` → `dregg-circuit`,
+# whose proof dep tree needs the SAME `ark-serialize` `serde_with`-feature fork the
+# main + starbridge-v2 workspaces patch in. deos-zed is its own workspace, so we
+# replicate it so the transitive proof deps resolve identically (no effect when the
+# `firmament` feature is off — these crates are simply absent from the graph then).
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+# THE PLONKY3-RECURSION FORK PATCH — load-bearing for the `firmament` feature's
+# executor link. `dregg-circuit` (transitive via `dregg-turn`) references the
+# recursion-fork-only `NativeBatchStark` variant the pinned git rev does NOT carry
+# (it lives only in the local fork checkout). Mirrors starbridge-v2/Cargo.toml's
+# block; the four fork crates point at the SAME local fork checkout the root +
+# starbridge-v2 do (`../../plonky3-recursion`, relative to this manifest).
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../../plonky3-recursion/recursion" }
+p3-circuit = { path = "../../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
