@@ -68,6 +68,8 @@ pub mod cockpit_surface;
 pub mod confined;
 pub mod grant_registry;
 pub mod mandate;
+#[cfg(feature = "js-agent")]
+pub mod run_js;
 pub mod mock_peer;
 #[cfg(feature = "screenshot")]
 pub mod screenshot;
@@ -87,3 +89,5 @@ pub use grant_registry::{GrantRegistry, MandateKey};
 pub use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken, ToolGrant};
 pub use mandate::{Mandate, MandateRow};
 pub use mock_peer::{MockHermesPeer, ScriptedCall};
+#[cfg(feature = "js-agent")]
+pub use run_js::{RunJsError, RunJsOutcome, RunJsTool};

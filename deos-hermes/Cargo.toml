@@ -101,6 +101,16 @@ dregg-firmament = { path = "../sel4/dregg-firmament", features = [
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# ── THE HANDS (deos-js), gated behind `js-agent` ──
+# The confined agent's `run_js` tool runs deos-js (real SpiderMonkey via mozjs)
+# bound to the agent's `held` authority. deos-js pulls the multi-GB mozjs
+# SpiderMonkey C++ build, so it is OPTIONAL and OFF by default: the workspace
+# default `cargo build`/`cargo test` stays mozjs-free (deos-hermes is a normal
+# workspace member). The `run_js` path + its test run ONLY under
+# `--features js-agent`. deos-js is its OWN workspace (in the repo-root
+# `exclude`); cargo resolves it under THIS workspace's `[patch]` tables.
+deos-js = { path = "../deos-js", optional = true }
+
 # ── the agent dock cockpit surface (gpui), gated behind `cockpit-surface` ──
 # Same gpui fork rev as starbridge-v2 / deos-zed / gpui-component so the WHOLE
 # graph resolves to ONE gpui — the `Entity`/`Window` types are byte-identical to
@@ -121,6 +131,11 @@ anyhow = { version = "1", optional = true }
 
 [features]
 default = []
+# THE HANDS — the confined agent's `run_js` tool. Pulls deos-js (real
+# SpiderMonkey) so a Hermes agent can crawl + drive the cockpit as the
+# operator's co-pilot, every fire a cap-gated verified turn under the agent's
+# `held`. OFF by default (the mozjs elephant stays out of the default build).
+js-agent = ["dep:deos-js"]
 # THE AGENT DOCK COCKPIT SURFACE — the gpui `CockpitSurface` that mounts the
 # confined Hermes agent into starbridge-v2's moldable-inspector dock: a chat
 # pane (streamed agent text), the tool-call ledger (each receipt / refusal), and
