@@ -2125,13 +2125,7 @@ mod crash_recovery_overlay_tests {
         // not the stale 100 a strict insert_cell would keep.
         let seed = 0x5a;
         let tmp = tempfile::tempdir().expect("tempdir");
-        seed_store_with_overlay(
-            tmp.path(),
-            seed,
-            100,
-            999,
-            converged_root(seed, 999),
-        );
+        seed_store_with_overlay(tmp.path(), seed, 100, 999, converged_root(seed, 999));
 
         let key_bytes = [0x11u8; 32];
         let state = NodeState::with_cclerk(tmp.path(), vec![], key_bytes)
@@ -2180,13 +2174,7 @@ mod crash_recovery_overlay_tests {
         // the fail-closed Err is reached only on genuine divergence, not always).
         let seed = 0x77;
         let tmp = tempfile::tempdir().expect("tempdir");
-        seed_store_with_overlay(
-            tmp.path(),
-            seed,
-            7,
-            42,
-            converged_root(seed, 42),
-        );
+        seed_store_with_overlay(tmp.path(), seed, 7, 42, converged_root(seed, 42));
 
         let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
             .expect("a converging recovery must start normally");

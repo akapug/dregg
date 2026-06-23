@@ -29,7 +29,8 @@ fn bench_prove_full_turn(c: &mut Criterion) {
     for (name, rt) in rotated_turns() {
         group.bench_function(name, |b| {
             b.iter(|| {
-                let proof = prove_full_turn(black_box(&rt.witness)).expect("honest turn must prove");
+                let proof =
+                    prove_full_turn(black_box(&rt.witness)).expect("honest turn must prove");
                 black_box(proof);
             });
         });

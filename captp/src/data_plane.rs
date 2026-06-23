@@ -262,7 +262,12 @@ impl Delivery {
         root: [u8; 32],
         refund_recorded: bool,
     ) -> InboxState {
-        InboxState::from_dequeue(&self.receipt, delivered_content_hashes, root, refund_recorded)
+        InboxState::from_dequeue(
+            &self.receipt,
+            delivered_content_hashes,
+            root,
+            refund_recorded,
+        )
     }
 }
 
@@ -725,13 +730,26 @@ mod tests {
 
         // B registers to be woken by name.
         bus.wait(&name, b);
-        assert!(bus.poll_wake(&name, &b).is_none(), "no wake before any enqueue");
+        assert!(
+            bus.poll_wake(&name, &b).is_none(),
+            "no wake before any enqueue"
+        );
 
         // A enqueues work to B's inbox; gets a signed delivery promise.
         let delivery = bus
-            .enqueue(&cap, b, &name, AuthRequired::Signature, b"do-the-thing".to_vec(), 10)
+            .enqueue(
+                &cap,
+                b,
+                &name,
+                AuthRequired::Signature,
+                b"do-the-thing".to_vec(),
+                10,
+            )
             .expect("authorized enqueue admitted");
-        assert!(delivery.receipt.sig_verifies(), "receipt is a real signature");
+        assert!(
+            delivery.receipt.sig_verifies(),
+            "receipt is a real signature"
+        );
 
         // B is WOKEN by name (the cursor advanced — an unforgeable fact).
         let wake = bus.poll_wake(&name, &b).expect("B is woken on enqueue");
@@ -771,7 +789,10 @@ mod tests {
 
         // B acknowledges the wake; no further wake until the next enqueue.
         bus.acknowledge_wake(&name, b, wake.cursor);
-        assert!(bus.poll_wake(&name, &b).is_none(), "wake consumed after ack");
+        assert!(
+            bus.poll_wake(&name, &b).is_none(),
+            "wake consumed after ack"
+        );
     }
 
     // ── (2) RECEIPT-IDENTITY, the convict polarity: never drained ⇒ convictable ──
@@ -783,7 +804,14 @@ mod tests {
         let cap = inbox_cap(b, &name);
 
         let delivery = bus
-            .enqueue(&cap, b, &name, AuthRequired::Signature, b"unhandled-work".to_vec(), 10)
+            .enqueue(
+                &cap,
+                b,
+                &name,
+                AuthRequired::Signature,
+                b"unhandled-work".to_vec(),
+                10,
+            )
             .unwrap();
 
         // Never drained: NOT handled, and past the deadline the relay is CONVICTABLE
@@ -827,14 +855,23 @@ mod tests {
         // Publish once → fans to all 5, each a real enqueue + receipt.
         let cap = SendCap::grant(subs[0], name.clone(), AuthRequired::Signature);
         let deliveries = bus
-            .publish(&topic, &cap, AuthRequired::Signature, b"storm-incoming".to_vec(), 7)
+            .publish(
+                &topic,
+                &cap,
+                AuthRequired::Signature,
+                b"storm-incoming".to_vec(),
+                7,
+            )
             .unwrap();
         assert_eq!(deliveries.len(), 5, "fan-out reached every subscriber");
 
         // Every subscriber is woken and can drain a real copy, each receipt verifies.
         for (sub, delivery) in &deliveries {
             assert!(delivery.receipt.sig_verifies());
-            assert!(bus.poll_wake(&name, sub).is_some(), "subscriber woken on publish");
+            assert!(
+                bus.poll_wake(&name, sub).is_some(),
+                "subscriber woken on publish"
+            );
             assert_eq!(bus.pending_count(sub), 1);
             let drained = bus.drain(sub);
             assert_eq!(drained.len(), 1);
@@ -865,28 +902,58 @@ mod tests {
 
         // RECEIPT-IDENTITY: a refused send leaves NO phantom work — nothing queued,
         // no cursor tick, no receipt.
-        assert_eq!(bus.pending_count(&b), 0, "nothing queued for a refused send");
-        assert_eq!(bus.cursor(&name), 0, "no wake cursor tick for a refused send");
+        assert_eq!(
+            bus.pending_count(&b),
+            0,
+            "nothing queued for a refused send"
+        );
+        assert_eq!(
+            bus.cursor(&name),
+            0,
+            "no wake cursor tick for a refused send"
+        );
 
         // Wrong channel name is also refused.
         let other = ChannelName::new(b"someone-else/inbox");
         let wrong_chan = bus.enqueue(&cap, b, &other, AuthRequired::Signature, b"x".to_vec(), 1);
-        assert!(matches!(wrong_chan, Err(DataPlaneError::Unauthorized { .. })));
+        assert!(matches!(
+            wrong_chan,
+            Err(DataPlaneError::Unauthorized { .. })
+        ));
 
         // A REVOKED cap admits nothing (channel-level revocation).
         let mut revoked = cap.clone();
         revoked.revoke();
-        let after_revoke =
-            bus.enqueue(&revoked, b, &name, AuthRequired::Signature, b"y".to_vec(), 1);
-        assert!(matches!(after_revoke, Err(DataPlaneError::Unauthorized { .. })));
+        let after_revoke = bus.enqueue(
+            &revoked,
+            b,
+            &name,
+            AuthRequired::Signature,
+            b"y".to_vec(),
+            1,
+        );
+        assert!(matches!(
+            after_revoke,
+            Err(DataPlaneError::Unauthorized { .. })
+        ));
         assert_eq!(bus.pending_count(&b), 0);
 
         // A correctly-attenuated (narrower) send IS admitted: the attenuate path is
         // not vacuously closed.
         let narrower = SendCap::grant(b, name.clone(), AuthRequired::Either);
         // Either grant admits a narrower Signature offer.
-        let ok = bus.enqueue(&narrower, b, &name, AuthRequired::Signature, b"ok".to_vec(), 1);
-        assert!(ok.is_ok(), "a within-grant send is admitted (gate not vacuous)");
+        let ok = bus.enqueue(
+            &narrower,
+            b,
+            &name,
+            AuthRequired::Signature,
+            b"ok".to_vec(),
+            1,
+        );
+        assert!(
+            ok.is_ok(),
+            "a within-grant send is admitted (gate not vacuous)"
+        );
         assert_eq!(bus.cursor(&name), 1);
     }
 
@@ -898,12 +965,20 @@ mod tests {
         let either = SendCap::grant(b, name.clone(), AuthRequired::Either);
 
         // Narrowing Either → Signature succeeds.
-        let narrowed = either.attenuate(AuthRequired::Signature).expect("narrowing allowed");
+        let narrowed = either
+            .attenuate(AuthRequired::Signature)
+            .expect("narrowing allowed");
         assert_eq!(narrowed.grant, AuthRequired::Signature);
 
         // Trying to widen Signature → Either (or None) FAILS (no amplification).
-        assert!(narrowed.attenuate(AuthRequired::Either).is_none(), "cannot widen back");
-        assert!(narrowed.attenuate(AuthRequired::None).is_none(), "cannot widen to None");
+        assert!(
+            narrowed.attenuate(AuthRequired::Either).is_none(),
+            "cannot widen back"
+        );
+        assert!(
+            narrowed.attenuate(AuthRequired::None).is_none(),
+            "cannot widen to None"
+        );
 
         // An attenuated cap still admits within its narrowed grant.
         assert!(narrowed.admits(&b, &name, &AuthRequired::Signature));
@@ -926,7 +1001,8 @@ mod tests {
 
         // An enqueue (the ONLY way the cursor moves) produces exactly one wake step.
         let cap = inbox_cap(b, &name);
-        bus.enqueue(&cap, b, &name, AuthRequired::Signature, b"m".to_vec(), 1).unwrap();
+        bus.enqueue(&cap, b, &name, AuthRequired::Signature, b"m".to_vec(), 1)
+            .unwrap();
         assert_eq!(bus.cursor(&name), 1);
         assert_eq!(bus.poll_wake(&name, &b).unwrap().cursor, 1);
     }
@@ -942,18 +1018,43 @@ mod tests {
 
         // First enqueue: the box's causal_sequence and the cursor a waiter sees
         // are BOTH 1 (no off-by-one between the queued sequence and the wake).
-        bus.enqueue(&cap, b, &name, AuthRequired::Signature, b"first".to_vec(), 1)
-            .unwrap();
-        assert_eq!(bus.cursor(&name), 1, "the wake cursor is 1 after one enqueue");
+        bus.enqueue(
+            &cap,
+            b,
+            &name,
+            AuthRequired::Signature,
+            b"first".to_vec(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            bus.cursor(&name),
+            1,
+            "the wake cursor is 1 after one enqueue"
+        );
         let wake = bus.poll_wake(&name, &b).expect("woken");
         assert_eq!(wake.cursor, 1);
 
         // Enqueue twice more, then drain and read the queued sequences directly:
         // they must be exactly 1,2,3 — the same numbers the cursor reports.
-        bus.enqueue(&cap, b, &name, AuthRequired::Signature, b"second".to_vec(), 1)
-            .unwrap();
-        bus.enqueue(&cap, b, &name, AuthRequired::Signature, b"third".to_vec(), 1)
-            .unwrap();
+        bus.enqueue(
+            &cap,
+            b,
+            &name,
+            AuthRequired::Signature,
+            b"second".to_vec(),
+            1,
+        )
+        .unwrap();
+        bus.enqueue(
+            &cap,
+            b,
+            &name,
+            AuthRequired::Signature,
+            b"third".to_vec(),
+            1,
+        )
+        .unwrap();
         assert_eq!(bus.cursor(&name), 3);
         let drained = bus.drain(&b);
         let seqs: Vec<u64> = drained.iter().map(|m| m.causal_sequence).collect();
@@ -974,7 +1075,8 @@ mod tests {
         bus.wait(&name, b);
 
         for i in 0..3 {
-            bus.enqueue(&cap, b, &name, AuthRequired::Signature, vec![i], 1).unwrap();
+            bus.enqueue(&cap, b, &name, AuthRequired::Signature, vec![i], 1)
+                .unwrap();
         }
         // A single poll reflects the live cursor (3), not three separate signals —
         // the waiter drains all pending work in one wake (spool semantics).
@@ -984,7 +1086,8 @@ mod tests {
         // After ack at 3, no further wake until a new enqueue.
         bus.acknowledge_wake(&name, b, 3);
         assert!(bus.poll_wake(&name, &b).is_none());
-        bus.enqueue(&cap, b, &name, AuthRequired::Signature, vec![9], 1).unwrap();
+        bus.enqueue(&cap, b, &name, AuthRequired::Signature, vec![9], 1)
+            .unwrap();
         assert_eq!(bus.poll_wake(&name, &b).unwrap().cursor, 4);
     }
 
@@ -1016,7 +1119,10 @@ mod tests {
             bus.wait(&name, s);
         }
         assert_eq!(bus.subscribers(&topic).len(), 2);
-        assert!(bus.poll_wake(&name, &sub_a).is_none(), "no wake before any publish");
+        assert!(
+            bus.poll_wake(&name, &sub_a).is_none(),
+            "no wake before any publish"
+        );
 
         // The producer holds a Signature-grant publish cap into this topic channel.
         let cap = SendCap::grant(sub_a, name.clone(), AuthRequired::Signature);
@@ -1031,8 +1137,16 @@ mod tests {
             matches!(refused, Err(DataPlaneError::Unauthorized { .. })),
             "(b) an over-authorized (None ⊋ Signature) send is refused at the seam"
         );
-        assert_eq!(bus.pending_count(&sub_a), before, "(b) nothing queued for a refused send");
-        assert_eq!(bus.cursor(&name), cursor_before, "(b) no cursor tick for a refused send");
+        assert_eq!(
+            bus.pending_count(&sub_a),
+            before,
+            "(b) nothing queued for a refused send"
+        );
+        assert_eq!(
+            bus.cursor(&name),
+            cursor_before,
+            "(b) no cursor tick for a refused send"
+        );
 
         // ── PRODUCE: three ordered publishes fan to BOTH subscribers (6 deliveries).
         // Keep each subscriber's receipts in publish order to check causal sequence.
@@ -1040,7 +1154,13 @@ mod tests {
         let mut recv: HashMap<FederationId, Vec<Delivery>> = HashMap::new();
         for (i, p) in payloads.iter().enumerate() {
             let deliveries = bus
-                .publish(&topic, &cap, AuthRequired::Signature, p.to_vec(), 100 + i as u64)
+                .publish(
+                    &topic,
+                    &cap,
+                    AuthRequired::Signature,
+                    p.to_vec(),
+                    100 + i as u64,
+                )
                 .expect("authorized publish fans out");
             assert_eq!(deliveries.len(), 2, "each publish reaches both subscribers");
             for (sub, d) in deliveries {
@@ -1056,10 +1176,16 @@ mod tests {
             let mut forged = recv[&sub_a][0].receipt.clone();
             assert!(forged.sig_verifies(), "the pristine receipt verifies");
             forged.content_hash[0] ^= 0xFF;
-            assert!(!forged.sig_verifies(), "(a) a tampered content_hash breaks the signature");
+            assert!(
+                !forged.sig_verifies(),
+                "(a) a tampered content_hash breaks the signature"
+            );
             let mut forged_root = recv[&sub_a][0].receipt.clone();
             forged_root.new_root[0] ^= 0xFF;
-            assert!(!forged_root.sig_verifies(), "(a) a tampered root breaks the signature");
+            assert!(
+                !forged_root.sig_verifies(),
+                "(a) a tampered root breaks the signature"
+            );
         }
 
         // ── (a) ROOT-CHAINING: each subscriber's receipts chain old_root→new_root
@@ -1072,7 +1198,10 @@ mod tests {
                     w[0].receipt.new_root, w[1].receipt.old_root,
                     "(a) the custody chain links: each enqueue's new_root is the next's old_root"
                 );
-                assert_ne!(w[0].receipt.new_root, w[1].receipt.new_root, "(a) the root advances");
+                assert_ne!(
+                    w[0].receipt.new_root, w[1].receipt.new_root,
+                    "(a) the root advances"
+                );
             }
             assert_eq!(
                 chain.last().unwrap().receipt.new_root,
@@ -1089,7 +1218,11 @@ mod tests {
                 6,
                 "(c) the cursor reflects all 6 admitted enqueues (3 publishes × 2 subs)"
             );
-            assert_eq!(bus.pending_count(&sub), 3, "(c) three boxes queued for {sub:?}");
+            assert_eq!(
+                bus.pending_count(&sub),
+                3,
+                "(c) three boxes queued for {sub:?}"
+            );
         }
 
         // ── (d) DRAIN LOCKSTEP: hand boxes out ONE at a time. The order is FIFO
@@ -1112,9 +1245,16 @@ mod tests {
             );
             // (d) NO DOUBLE-DELIVERY: the inbox is empty; a re-drain yields nothing,
             // and the witness log holds exactly the three distinct boxes once each.
-            assert!(bus.drain_one(&sub).is_none(), "(d) no double-delivery past empty");
+            assert!(
+                bus.drain_one(&sub).is_none(),
+                "(d) no double-delivery past empty"
+            );
             let witnessed = bus.delivered_hashes(&sub);
-            assert_eq!(witnessed.len(), 3, "(d) exactly three boxes witnessed (no dup)");
+            assert_eq!(
+                witnessed.len(),
+                3,
+                "(d) exactly three boxes witnessed (no dup)"
+            );
             // Every held receipt is now handled (the witness, not the promise).
             for d in &recv[&sub] {
                 assert!(

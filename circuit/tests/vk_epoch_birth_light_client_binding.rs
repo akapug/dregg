@@ -134,8 +134,8 @@ fn refused(
 ///   * NEGATIVE #1 (forged after-root): a bumped AFTER `cells_root` (commit recomputed) is UNSAT.
 ///   * NEGATIVE #2 (frozen after-root): AFTER `cells_root` == BEFORE (no growth) is UNSAT.
 fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label: &str) {
-    let resolved =
-        rotated_descriptor_name_for_effect(&effect).expect("birth effect is a rotated cohort member");
+    let resolved = rotated_descriptor_name_for_effect(&effect)
+        .expect("birth effect is a rotated cohort member");
     assert_eq!(resolved, name, "{label}: expected rotated descriptor name");
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated birth descriptor parses");
@@ -157,18 +157,34 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
     let nullifier_root = [0u8; 32];
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32]];
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = empty_caveat_manifest();
     let mem_boundary = MemBoundaryWitness::default();
 
     // A non-empty BEFORE accounts set (distinct from the new-cell key — the `.absent` precondition).
     let before_accounts = vec![
-        HeapLeaf { addr: BabyBear::new(0xAA01), value: BabyBear::new(0xAA01) },
-        HeapLeaf { addr: BabyBear::new(0xAA02), value: BabyBear::new(0xAA02) },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
     ];
     let (trace, dpis, map_heaps) = generate_rotated_create_cell_trace_with_accounts_tree(
         &st,
@@ -180,7 +196,11 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
     )
     .expect("accounts-tree grow-gate wiring must produce a deployment-real birth trace");
     assert_eq!(trace[0].len(), ROT_WIDTH, "rotated trace width");
-    assert_eq!(dpis.len(), 47, "{label}: birth rotated PI is 47 (new-cell-key slot appended)");
+    assert_eq!(
+        dpis.len(),
+        47,
+        "{label}: birth rotated PI is 47 (new-cell-key slot appended)"
+    );
 
     // ANTI-VACUITY: the grow-gate GENUINELY moved limb 0 (the AFTER accounts root differs from the
     // BEFORE root — the set actually grew; the close is not over a frozen column).
@@ -197,7 +217,8 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
     );
     // The published new-cell-key pin (PI 46) IS the create-row key column (the effect param).
     assert_eq!(
-        dpis[46], trace[0][PARAM_BASE + key_col],
+        dpis[46],
+        trace[0][PARAM_BASE + key_col],
         "{label}: PI 46 = the create row's new-cell key (param[{key_col}])"
     );
 

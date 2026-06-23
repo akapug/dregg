@@ -63,15 +63,15 @@ use dregg_cell::blueprint::{
 };
 use dregg_cell::factory::{FactoryCreationParams, canonical_program_vk};
 use dregg_cell::{CellId, Ledger};
+use dregg_sdk::factories::ADOPT_TURN_FEE;
 use dregg_sdk_net::channels::{
     Roster, SealedEpochKey, anchor_token_id, channel_token_id, epoch_step_effects, open_effects,
     roster_root, seal_epoch_key_to_roster,
 };
-use dregg_sdk::factories::ADOPT_TURN_FEE;
 use dregg_turn::Effect;
 
-use dregg_captp::data_plane::{Bus, ChannelName, DataPlaneError, Delivery, SendCap};
 use dregg_captp::FederationId;
+use dregg_captp::data_plane::{Bus, ChannelName, DataPlaneError, Delivery, SendCap};
 use dregg_cell::AuthRequired;
 
 use crate::state::{NodeState, NodeStateInner};
@@ -1354,10 +1354,10 @@ async fn get_wake(
 ) -> Result<Json<WakeResponse>, ChannelRefusal> {
     let s = state.read().await;
     let channel = parse_channel(&cell)?;
-    let waiter = FederationId(
-        hex_decode_32(&q.waiter)
-            .ok_or_else(|| ChannelRefusal::BadRequest(format!("malformed waiter id: {}", q.waiter)))?,
-    );
+    let waiter =
+        FederationId(hex_decode_32(&q.waiter).ok_or_else(|| {
+            ChannelRefusal::BadRequest(format!("malformed waiter id: {}", q.waiter))
+        })?);
     let name = bus_channel_name(channel);
     let bus = s
         .channels
@@ -1824,12 +1824,21 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "post: {posted}");
-        let content_hash = posted["delivery"]["content_hash"].as_str().unwrap().to_string();
+        let content_hash = posted["delivery"]["content_hash"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(!content_hash.is_empty(), "the post returns a content hash");
         assert_eq!(posted["delivery"]["inbox_owner"], channel_hex);
         let sig = posted["delivery"]["signature"].as_str().unwrap();
-        assert!(sig.chars().any(|c| c != '0'), "the receipt carries a real signature");
-        assert_eq!(posted["pending"], 1, "queued: one box pending, not yet handled");
+        assert!(
+            sig.chars().any(|c| c != '0'),
+            "the receipt carries a real signature"
+        );
+        assert_eq!(
+            posted["pending"], 1,
+            "queued: one box pending, not yet handled"
+        );
 
         // The receipt VERIFIES: reconstruct it from the wire and check the
         // relay's Ed25519 signature (the unforgeable custody promise).
@@ -1871,7 +1880,10 @@ mod tests {
         assert_eq!(drained_boxes.len(), 1, "one box left the queue");
         assert_eq!(drained_boxes[0]["ciphertext"], "deadbeefcafef00d");
         assert_eq!(drained_boxes[0]["content_hash"], content_hash);
-        assert_eq!(drained["pending"], 0, "handled: nothing pending after drain");
+        assert_eq!(
+            drained["pending"], 0,
+            "handled: nothing pending after drain"
+        );
         assert!(
             drained["delivered"]
                 .as_array()
@@ -1923,15 +1935,28 @@ mod tests {
             )
             .await;
             assert_eq!(status, StatusCode::OK, "post: {posted}");
-            content_hashes.push(posted["delivery"]["content_hash"].as_str().unwrap().to_string());
+            content_hashes.push(
+                posted["delivery"]["content_hash"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
         }
 
         // Two boxes queued on the Bus, NONE witnessed yet (queued ≠ handled).
         {
             let s = state.read().await;
             let bus = s.channels.bus().expect("bus exists");
-            assert_eq!(bus.pending_count(&recipient), 2, "two boxes queued before delivery");
-            assert_eq!(bus.delivered_hashes(&recipient).len(), 0, "none witnessed yet");
+            assert_eq!(
+                bus.pending_count(&recipient),
+                2,
+                "two boxes queued before delivery"
+            );
+            assert_eq!(
+                bus.delivered_hashes(&recipient).len(),
+                0,
+                "none witnessed yet"
+            );
         }
 
         // Open the live SSE stream and pull exactly the two delivered events. The
@@ -1959,7 +1984,10 @@ mod tests {
                 Err(_) => break, // timeout: stream parked (all ring messages delivered)
             }
         }
-        assert_eq!(delivered, 2, "both ciphertexts were delivered over the live SSE wire");
+        assert_eq!(
+            delivered, 2,
+            "both ciphertexts were delivered over the live SSE wire"
+        );
 
         // Give the drain-on-deliver writes a moment to settle, then assert: the Bus
         // inbox is DRAINED (bounded — it did not accumulate) and BOTH content hashes
@@ -2018,7 +2046,11 @@ mod tests {
         );
         // No phantom work: nothing queued, no cursor tick, no receipt.
         assert_eq!(bus.pending_count(&recipient), before, "nothing queued");
-        assert_eq!(bus.cursor(&name), cursor_before, "no wake tick for a refused send");
+        assert_eq!(
+            bus.cursor(&name),
+            cursor_before,
+            "no wake tick for a refused send"
+        );
 
         // A within-grant (Signature) send IS admitted — the gate is not vacuous.
         let ok = bus.enqueue(
@@ -2066,13 +2098,28 @@ mod tests {
             let bus = inner.channels.ensure_bus(relay_key);
             let cursor_before = bus.cursor(&name);
             let cap = bus_send_cap(channel);
-            let refused = bus.enqueue(&cap, recipient, &name, AuthRequired::None, b"forge".to_vec(), 1);
+            let refused = bus.enqueue(
+                &cap,
+                recipient,
+                &name,
+                AuthRequired::None,
+                b"forge".to_vec(),
+                1,
+            );
             assert!(
                 matches!(refused, Err(DataPlaneError::Unauthorized { .. })),
                 "(b) an over-authorized enqueue is refused at the node Bus seam"
             );
-            assert_eq!(bus.pending_count(&recipient), 0, "(b) nothing queued for a refused send");
-            assert_eq!(bus.cursor(&name), cursor_before, "(b) no cursor tick for a refused send");
+            assert_eq!(
+                bus.pending_count(&recipient),
+                0,
+                "(b) nothing queued for a refused send"
+            );
+            assert_eq!(
+                bus.cursor(&name),
+                cursor_before,
+                "(b) no cursor tick for a refused send"
+            );
         }
 
         // ── PRODUCE: three current-epoch POSTs — three real Bus::enqueues. Capture
@@ -2095,7 +2142,10 @@ mod tests {
             let d = &posted["delivery"];
             // ── (a) RECEIPT-IDENTITY: a real (non-zero) signature on every receipt.
             let sig = d["signature"].as_str().unwrap();
-            assert!(sig.chars().any(|c| c != '0'), "(a) the receipt carries a real signature");
+            assert!(
+                sig.chars().any(|c| c != '0'),
+                "(a) the receipt carries a real signature"
+            );
             content_hashes.push(d["content_hash"].as_str().unwrap().to_string());
             receipts.push((
                 d["old_root"].as_str().unwrap().to_string(),
@@ -2105,7 +2155,10 @@ mod tests {
 
         // ── (a) ROOT-CHAINING: the three receipts chain old→new across the posts.
         for w in receipts.windows(2) {
-            assert_eq!(w[0].1, w[1].0, "(a) each post's new_root is the next post's old_root");
+            assert_eq!(
+                w[0].1, w[1].0,
+                "(a) each post's new_root is the next post's old_root"
+            );
             assert_ne!(w[0].1, w[1].1, "(a) the custody root advances per post");
         }
 
@@ -2114,8 +2167,16 @@ mod tests {
         {
             let s = state.read().await;
             let bus = s.channels.bus().expect("bus exists");
-            assert_eq!(bus.pending_count(&recipient), 3, "(d) three boxes queued before delivery");
-            assert_eq!(bus.delivered_hashes(&recipient).len(), 0, "none witnessed yet");
+            assert_eq!(
+                bus.pending_count(&recipient),
+                3,
+                "(d) three boxes queued before delivery"
+            );
+            assert_eq!(
+                bus.delivered_hashes(&recipient).len(),
+                0,
+                "none witnessed yet"
+            );
         }
 
         // ── (c) ORDERED DELIVERY to ≥2 subscribers: open TWO live SSE streams. Each
@@ -2150,8 +2211,16 @@ mod tests {
 
         let sub_a = drain_three_in_order(&state, &channel_hex).await;
         let sub_b = drain_three_in_order(&state, &channel_hex).await;
-        assert_eq!(sub_a, vec![0, 1, 2], "(c) subscriber A received seq 0,1,2 in order");
-        assert_eq!(sub_b, vec![0, 1, 2], "(c) subscriber B received seq 0,1,2 in order");
+        assert_eq!(
+            sub_a,
+            vec![0, 1, 2],
+            "(c) subscriber A received seq 0,1,2 in order"
+        );
+        assert_eq!(
+            sub_b,
+            vec![0, 1, 2],
+            "(c) subscriber B received seq 0,1,2 in order"
+        );
 
         // ── (d) DRAIN LOCKSTEP + NO DOUBLE-WITNESS: live SSE delivery drained the
         // Bus inbox box-for-box, so it is BOUNDED (pending back to 0, not a parallel
@@ -2166,7 +2235,11 @@ mod tests {
             "(d) live SSE delivery drained the Bus inbox in lockstep (no backlog)"
         );
         let witnessed = bus.delivered_hashes(&recipient);
-        assert_eq!(witnessed.len(), 3, "(d) exactly three boxes witnessed (no double-delivery)");
+        assert_eq!(
+            witnessed.len(),
+            3,
+            "(d) exactly three boxes witnessed (no double-delivery)"
+        );
         for h in &content_hashes {
             assert!(
                 witnessed.iter().any(|w| hex_encode(w) == *h),

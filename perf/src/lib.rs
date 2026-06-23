@@ -166,8 +166,20 @@ pub fn rotated_transfer_turn(balance: u64, amount: u64) -> RotatedTurn {
     let mut ctx_ledger = Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-    let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-    let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+    let before_w = rw::produce(
+        &before_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ctx_ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
 
     let rotation = RotationTurnWitness::for_effects(before_w, after_w, &vm_effects);
 
@@ -682,15 +694,10 @@ pub fn prove_cohort(
 ) -> dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig> {
     use dregg_circuit::descriptor_ir2::{prove_vm_descriptor2, prove_vm_descriptor2_umem};
     match &c.umem_boundary {
-        Some(b) => prove_vm_descriptor2_umem(
-            &c.desc,
-            &c.trace,
-            &c.pis,
-            &c.mem_boundary,
-            &c.map_heaps,
-            b,
-        )
-        .expect("cohort umem proves"),
+        Some(b) => {
+            prove_vm_descriptor2_umem(&c.desc, &c.trace, &c.pis, &c.mem_boundary, &c.map_heaps, b)
+                .expect("cohort umem proves")
+        }
         None => prove_vm_descriptor2(&c.desc, &c.trace, &c.pis, &c.mem_boundary, &c.map_heaps)
             .expect("cohort proves"),
     }
@@ -706,7 +713,9 @@ pub fn prove_cohort(
 
 /// N distinct child digests to fold — the leaves a bundle aggregates.
 pub fn fold_digests(n: usize) -> Vec<BabyBear> {
-    (0..n).map(|i| BabyBear::new(0x1000_0000 + i as u32)).collect()
+    (0..n)
+        .map(|i| BabyBear::new(0x1000_0000 + i as u32))
+        .collect()
 }
 
 /// The fold fan-out ladder: SMOKE folds 2 leaves; FULL folds 2/8/32/128 (the

@@ -199,7 +199,10 @@ async fn export(
     ctx.kv("Delegator", &abbrev_hex(&hex::encode(public_key), 8, 4));
     ctx.kv_dim(
         "Federation",
-        &format!("{} ({fed_source})", abbrev_hex(&hex::encode(federation_id), 8, 4)),
+        &format!(
+            "{} ({fed_source})",
+            abbrev_hex(&hex::encode(federation_id), 8, 4)
+        ),
     );
     eprintln!();
     ctx.info("Sturdy reference (share out-of-band to grant access):");
@@ -220,7 +223,11 @@ async fn export(
     Ok(())
 }
 
-async fn enliven(_cfg: &Config, ctx: &Context, uri: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn enliven(
+    _cfg: &Config,
+    ctx: &Context,
+    uri: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Parse the canonical sturdy reference exported by `cap export`:
     // dregg://<fed-b58>/<cell-b58>/<swiss-b58> (captp DreggUri format). This is
     // the round-trip of the exporter — it resolves the URI back to the
@@ -418,8 +425,8 @@ mod bearer {
 
     /// Decode a 64-hex-char cell id into 32 bytes.
     pub fn decode_cell_id(hex_str: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
-        let bytes = hex::decode(hex_str.trim())
-            .map_err(|e| format!("cell id is not valid hex: {e}"))?;
+        let bytes =
+            hex::decode(hex_str.trim()).map_err(|e| format!("cell id is not valid hex: {e}"))?;
         if bytes.len() != 32 {
             return Err(format!(
                 "cell id must be 32 bytes (64 hex chars), got {} bytes",
@@ -741,7 +748,10 @@ mod tests {
         // (e) substituted bearer key.
         let mut b = BearerCapProof::sign(&sk, pk, [0x22u8; 32], Permissions::Signature, 1000, &fed);
         b.bearer_pk[0] ^= 0xFF;
-        assert!(!b.verify_signature(&fed), "substituted bearer key must reject");
+        assert!(
+            !b.verify_signature(&fed),
+            "substituted bearer key must reject"
+        );
 
         // (f) flipped signature bit.
         let mut s = BearerCapProof::sign(&sk, pk, [0x22u8; 32], Permissions::Signature, 1000, &fed);
@@ -753,7 +763,10 @@ mod tests {
         let other_pk = other.verifying_key().to_bytes();
         let mut w = BearerCapProof::sign(&sk, pk, [0x22u8; 32], Permissions::Signature, 1000, &fed);
         w.delegator_pk = other_pk; // pk no longer matches the signature
-        assert!(!w.verify_signature(&fed), "delegator-key mismatch must reject");
+        assert!(
+            !w.verify_signature(&fed),
+            "delegator-key mismatch must reject"
+        );
     }
 
     /// The portable proof JSON is the exact node wire shape: numeric byte
@@ -763,8 +776,14 @@ mod tests {
     #[test]
     fn node_json_shape_is_canonical() {
         let (sk, pk) = test_key();
-        let proof =
-            BearerCapProof::sign(&sk, pk, [0x22u8; 32], Permissions::Signature, 1000, &[0u8; 32]);
+        let proof = BearerCapProof::sign(
+            &sk,
+            pk,
+            [0x22u8; 32],
+            Permissions::Signature,
+            1000,
+            &[0u8; 32],
+        );
         let j = proof.to_node_json();
 
         assert_eq!(j["permissions"], "Signature");
@@ -850,10 +869,7 @@ mod tests {
     #[test]
     fn permissions_parse_and_render() {
         assert_eq!(Permissions::parse(None).unwrap(), Permissions::Signature);
-        assert_eq!(
-            Permissions::parse(Some("none")).unwrap(),
-            Permissions::None
-        );
+        assert_eq!(Permissions::parse(Some("none")).unwrap(), Permissions::None);
         assert_eq!(
             Permissions::parse(Some("EITHER")).unwrap(),
             Permissions::Either

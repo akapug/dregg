@@ -863,8 +863,7 @@ pub const CSE2_FP_LANE1_COL: usize = CSE2_COMMIT_COL + 1;
 pub const CSE2_COMMIT_LANE1_COL: usize =
     CSE2_FP_LANE1_COL + (crate::descriptor_ir2::CHIP_OUT_LANES - 1);
 /// CG-5 v2 total trace width (mirrors `Cse.WIDTH = 24`): chain cols + 2·7 chip lane cols.
-pub const CSE2_WIDTH: usize =
-    CSE2_COMMIT_LANE1_COL + (crate::descriptor_ir2::CHIP_OUT_LANES - 1);
+pub const CSE2_WIDTH: usize = CSE2_COMMIT_LANE1_COL + (crate::descriptor_ir2::CHIP_OUT_LANES - 1);
 
 /// CG-5 v2 public input: the commitment seed (`commit_in[0]`, fixed at 0).
 pub const CSE2_PI_COMMIT_SEED: usize = 0;
@@ -883,7 +882,12 @@ pub const CSE2_PI_COUNT: usize = 2;
 /// Phase B-GATE: fill a cross-side row's chip lane columns. The fingerprint absorb is arity-4 over
 /// the 4-felt edge id; the commitment absorb is arity-2 over `[commit_in, fp]`. Lanes 1..7 are the
 /// genuine permutation lanes (`chip_absorb_lanes`), so both 17-wide chip lookups match.
-fn cse2_fill_lanes(row: &mut [BabyBear], edge_id: &[BabyBear; 4], commit_in: BabyBear, fp: BabyBear) {
+fn cse2_fill_lanes(
+    row: &mut [BabyBear],
+    edge_id: &[BabyBear; 4],
+    commit_in: BabyBear,
+    fp: BabyBear,
+) {
     let fp_lanes = crate::descriptor_ir2::chip_absorb_lanes(4, edge_id);
     let commit_lanes = crate::descriptor_ir2::chip_absorb_lanes(2, &[commit_in, fp]);
     let n = crate::descriptor_ir2::CHIP_OUT_LANES - 1;
@@ -1223,7 +1227,10 @@ mod tests {
         let d = cross_side_existence_descriptor();
         assert_eq!(d.name, CROSS_SIDE_EXISTENCE_DESCRIPTOR_NAME);
         assert_eq!(d.trace_width, CSE2_WIDTH);
-        assert_eq!(d.trace_width, 24, "Phase B-GATE: 10 chain cols + 2·7 chip lane cols");
+        assert_eq!(
+            d.trace_width, 24,
+            "Phase B-GATE: 10 chain cols + 2·7 chip lane cols"
+        );
         assert_eq!(d.public_input_count, CSE2_PI_COUNT);
         assert_eq!(
             d.public_input_count, 2,
@@ -1267,7 +1274,10 @@ mod tests {
         let d = bundle_tree_fold_descriptor();
         assert_eq!(d.name, BUNDLE_TREE_FOLD_DESCRIPTOR_NAME);
         assert_eq!(d.trace_width, FOLD_WIDTH);
-        assert_eq!(d.trace_width, 10, "Phase B-GATE: 3 chain cols + 7 chip lane cols");
+        assert_eq!(
+            d.trace_width, 10,
+            "Phase B-GATE: 3 chain cols + 7 chip lane cols"
+        );
         assert_eq!(d.public_input_count, FOLD_PI_COUNT);
         assert_eq!(d.public_input_count, 2);
         assert_eq!(d.tables.len(), 1, "one declared table");

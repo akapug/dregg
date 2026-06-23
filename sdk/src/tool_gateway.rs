@@ -75,8 +75,8 @@
 
 use std::collections::VecDeque;
 
-use dregg_cell::program::{field_from_u64, CellProgram, StateConstraint};
 use dregg_cell::CellId;
+use dregg_cell::program::{CellProgram, StateConstraint, field_from_u64};
 use dregg_token::Attenuation;
 use dregg_turn::{
     Effect, PendingTurnRegistry, ResolutionCondition, ResolutionOutcome, TurnReceipt,
@@ -136,11 +136,7 @@ pub struct ToolGrant {
 /// 4. sane prior count — `0 <= old`;
 /// 5. RATE — `new <= g.rate_limit`.
 pub fn deleg_admit(g: &ToolGrant, now: i64, tool: i64, old: i64, new: i64) -> bool {
-    tool == g.tool_id
-        && now <= g.deadline
-        && new == old + 1
-        && 0 <= old
-        && new <= g.rate_limit
+    tool == g.tool_id && now <= g.deadline && new == old + 1 && 0 <= old && new <= g.rate_limit
 }
 
 /// The mandate cell program installed on the worker cell — the executor-side
@@ -520,7 +516,9 @@ impl ToolGateway {
         // §1 — IN-BAND admission (the byte-faithful Lean `delegAdmit` mirror).
         // Fail-closed, naming the leg that bit. NO turn is submitted on refusal.
         if !deleg_admit(&self.grant, now, tool, old, new) {
-            return Err(ToolCallError::Refused(self.diagnose_refusal(tool, now, old)));
+            return Err(ToolCallError::Refused(
+                self.diagnose_refusal(tool, now, old),
+            ));
         }
 
         // §2 — the metered write: advance the rate counter `c → c+1`. The
@@ -578,7 +576,9 @@ impl ToolGateway {
         // §1 — IN-BAND admission, the SAME gate as the inline path. NO enqueue,
         // no reservation on refusal (the anti-ghost tooth at the on-ramp).
         if !deleg_admit(&self.grant, now, tool, old, new) {
-            return Err(ToolCallError::Refused(self.diagnose_refusal(tool, now, old)));
+            return Err(ToolCallError::Refused(
+                self.diagnose_refusal(tool, now, old),
+            ));
         }
 
         // RESERVE the counter slot: the admitted call now owns `old → new`, so a
@@ -606,8 +606,12 @@ impl ToolGateway {
         // inbox toward the executor. The condition is AwaitHeight(now): the executor's
         // drive_executor pass resolves it (mirroring how a node drives a registry
         // entry to a real receipt), and await_routed dependents cascade off it.
-        self.pending
-            .submit_pending_at(routed_turn, ResolutionCondition::AwaitHeight(now.max(0) as u64), u64::MAX, now.max(0) as u64);
+        self.pending.submit_pending_at(
+            routed_turn,
+            ResolutionCondition::AwaitHeight(now.max(0) as u64),
+            u64::MAX,
+            now.max(0) as u64,
+        );
         self.inbox.push_back(RoutedWork {
             routed_hash,
             new_count: new,
@@ -671,8 +675,13 @@ impl ToolGateway {
                         item.routed_hash,
                         ResolutionOutcome::Resolved(tool_receipt.receipt.clone()),
                     );
-                    self.results
-                        .insert(item.routed_hash, Ok(RoutedResult { tool_receipt, delivery }));
+                    self.results.insert(
+                        item.routed_hash,
+                        Ok(RoutedResult {
+                            tool_receipt,
+                            delivery,
+                        }),
+                    );
                 }
                 Err(e) => {
                     // BROKEN ROUTE: release the reserved counter slot (the executor
@@ -749,7 +758,9 @@ impl ToolGateway {
     /// The turn carries the worker's method-scoped credential; the executor reruns
     /// this same shape at drain time via [`SubAgent::execute_method`].
     fn build_routed_turn(&self, reserved_count: i64, effects: Vec<Effect>) -> dregg_turn::Turn {
-        use crate::raw::{symbol, Action, Authorization, CallForest, CommitmentMode, DelegationMode};
+        use crate::raw::{
+            Action, Authorization, CallForest, CommitmentMode, DelegationMode, symbol,
+        };
         let action = Action {
             target: self.worker_cell,
             method: symbol(&self.grant.tool_method),
@@ -798,8 +809,7 @@ impl ToolGateway {
     /// the dependent stays pending until its dependency's drain resolves), reusing
     /// the verified registry's cascading resolution.
     pub fn await_routed(&mut self, handle: &RoutedHandle, on: [u8; 32]) {
-        self.pending
-            .register_dependent(on, handle.routed_hash);
+        self.pending.register_dependent(on, handle.routed_hash);
     }
 
     /// Decide which mandate leg refused a call (for the [`GatewayRefusal`]). Only
@@ -853,16 +863,28 @@ mod tests {
         // The three legal advances (in-scope tool 77, in-time now 50, 1..3 <= 3):
         assert!(deleg_admit(&g, 50, 77, 0, 1), "invocation 1 admitted");
         assert!(deleg_admit(&g, 50, 77, 1, 2), "invocation 2 admitted");
-        assert!(deleg_admit(&g, 50, 77, 2, 3), "invocation 3 admitted (the last)");
+        assert!(
+            deleg_admit(&g, 50, 77, 2, 3),
+            "invocation 3 admitted (the last)"
+        );
 
         // The TEETH (each negated conjunct), matching the Lean `== false` guards:
-        assert!(!deleg_admit(&g, 50, 77, 3, 4), "invocation 4 over-rate (4 > 3)");
+        assert!(
+            !deleg_admit(&g, 50, 77, 3, 4),
+            "invocation 4 over-rate (4 > 3)"
+        );
         assert!(!deleg_admit(&g, 50, 99, 0, 1), "out-of-scope tool 99");
-        assert!(!deleg_admit(&g, 101, 77, 0, 1), "past-deadline now 101 > 100");
+        assert!(
+            !deleg_admit(&g, 101, 77, 0, 1),
+            "past-deadline now 101 > 100"
+        );
 
         // Non-single-step and negative-old also fail closed (the increment +
         // sane-prior conjuncts):
-        assert!(!deleg_admit(&g, 50, 77, 0, 2), "not a single-step increment");
+        assert!(
+            !deleg_admit(&g, 50, 77, 0, 2),
+            "not a single-step increment"
+        );
         assert!(!deleg_admit(&g, 50, 77, -1, 0), "negative prior count");
     }
 

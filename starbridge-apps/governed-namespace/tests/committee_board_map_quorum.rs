@@ -121,7 +121,9 @@ fn target_table() -> dregg_dfa::RouteTable {
 
 /// Read a map field through the committed-map accessor.
 fn map_field(executor: &EmbeddedExecutor, board: CellId, key: u64) -> Option<[u8; 32]> {
-    executor.cell_state(board).and_then(|s| s.get_field_ext(key))
+    executor
+        .cell_state(board)
+        .and_then(|s| s.get_field_ext(key))
 }
 
 /// The board cell's canonical state commitment — the value the receipt's
@@ -238,7 +240,10 @@ fn committee_board_subquorum_swap_rejected_by_executor() {
     // Swap with 2 < 3 distinct ⇒ the EXECUTOR rejects.
     let table = target_table();
     let commit = build_committee_commit_action(&cipherclerk, board, &table, 1);
-    assert_rejected(executor.submit_action(&cipherclerk, commit), "sub-quorum swap");
+    assert_rejected(
+        executor.submit_action(&cipherclerk, commit),
+        "sub-quorum swap",
+    );
 
     // The board is unchanged.
     let post = executor.cell_state(board).expect("board state");
@@ -345,7 +350,10 @@ fn committee_board_map_vote_is_bound_by_the_commitment_anti_ghost() {
     // 8th/16th fixed field). Tamper member 4's committed vote directly in the
     // ledger (a malicious re-write to a different value).
     let tamper_key = member_vote_key(MEMBERS - 1);
-    assert!(tamper_key > 16, "tampering a >16 (map) field, key {tamper_key}");
+    assert!(
+        tamper_key > 16,
+        "tampering a >16 (map) field, key {tamper_key}"
+    );
     executor.with_ledger_mut(|ledger| {
         let cell = ledger.get_mut(&board).expect("board cell");
         assert!(cell.state.set_field_ext(tamper_key, field_from_u64(7)));
@@ -365,6 +373,12 @@ fn committee_board_map_vote_is_bound_by_the_commitment_anti_ghost() {
         cell.state.reseal_fields_root();
     });
     let dropped = state_commitment(&executor, board);
-    assert_ne!(bound, dropped, "dropping a map vote flips the commitment too");
-    assert_ne!(tampered, dropped, "tamper and drop are distinct commitments");
+    assert_ne!(
+        bound, dropped,
+        "dropping a map vote flips the commitment too"
+    );
+    assert_ne!(
+        tampered, dropped,
+        "tamper and drop are distinct commitments"
+    );
 }

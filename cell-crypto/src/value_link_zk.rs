@@ -74,10 +74,10 @@
 //! full-disclosure [`crate::value_commitment::verify_value_link`]).
 
 use crate::value_commitment::{ValueCommitment, randomness_generator, value_generator};
-use dregg_circuit::field::BabyBear;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
+use dregg_circuit::field::BabyBear;
 
 /// Sample a uniformly random Ristretto scalar (64-byte wide reduction).
 fn random_scalar() -> Scalar {
@@ -541,8 +541,7 @@ pub fn prove_zk_leaf_leg_link(
     let value_leg = ValueCommitment::commit(value, r_value);
     let vb_pi = value_binding_pi_bytes(value_binding);
     let delta_r = r_value - r_link;
-    let equal_message =
-        prove_zk_value_link(&value_leg, &link_leg, &delta_r, &vb_pi, message);
+    let equal_message = prove_zk_value_link(&value_leg, &link_leg, &delta_r, &vb_pi, message);
     (
         value_leg,
         ZkLeafLegLink {
@@ -692,14 +691,22 @@ mod tests {
             asset_type: BabyBear::new(1),
             owner: BabyBear::new(7),
             randomness,
-            key: [BabyBear::new(11), BabyBear::new(13), BabyBear::new(17), BabyBear::new(19)],
+            key: [
+                BabyBear::new(11),
+                BabyBear::new(13),
+                BabyBear::new(17),
+                BabyBear::new(19),
+            ],
             siblings: vec![],
             positions: vec![],
         };
         let vb_circuit = w.value_binding();
         // The cell-side re-derivation MUST equal the circuit's published felt.
         let vb_cell = value_link_binding(value, randomness);
-        assert_eq!(vb_circuit, vb_cell, "cell re-derivation must match the STARK PI");
+        assert_eq!(
+            vb_circuit, vb_cell,
+            "cell re-derivation must match the STARK PI"
+        );
         (value, vb_circuit)
     }
 
@@ -740,7 +747,10 @@ mod tests {
     fn link_leg_binding_bound_to_real_felt() {
         let (value, vb_a) = real_leaf(555, 100);
         let (_v2, vb_b) = real_leaf(555, 200); // same value, DIFFERENT randomness → different felt
-        assert_ne!(vb_a, vb_b, "different randomness must give a different binding felt");
+        assert_ne!(
+            vb_a, vb_b,
+            "different randomness must give a different binding felt"
+        );
         let r_link = scalar(23);
         let (link_leg, proof) = prove_link_leg_binding(value, &r_link, vb_a, b"tx");
         assert_eq!(

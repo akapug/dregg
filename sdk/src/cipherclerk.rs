@@ -21,8 +21,10 @@ use zeroize::{Zeroize, Zeroizing};
 
 use dregg_bridge::{BridgePredicateProof, BridgePresentationProof, Predicate};
 use dregg_cell::note::NoteCommitment;
-use dregg_cell_crypto::stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress};
 use dregg_cell::{Cell, CellId};
+use dregg_cell_crypto::stealth::{
+    StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaAddress,
+};
 use dregg_circuit::BabyBear;
 use dregg_circuit::IvcProof;
 use dregg_circuit::PredicateType;
@@ -4991,8 +4993,7 @@ impl AgentCipherclerk {
         // trace shape until the bilateral-aggregator rotation (cutover C4).
         #[cfg(feature = "prover")]
         {
-            let proven =
-                self.prove_sovereign_turn_rotated(cell_id, effects, fee, block_height)?;
+            let proven = self.prove_sovereign_turn_rotated(cell_id, effects, fee, block_height)?;
             Ok(proven.turn)
         }
         #[cfg(not(feature = "prover"))]
@@ -5320,8 +5321,10 @@ impl AgentCipherclerk {
         // alone); the fee generator subtracts the fee as a column override + commitment recompute,
         // and the proof's gate FORCES `after.bal_lo = before − transfer − fee`, so an underclaimed
         // fee is UNSAT. The BEFORE block stays pre-fee (OLD_COMMIT binds the pre-fee state).
-        let is_fee_transfer =
-            matches!(vm_effects.as_slice(), [dregg_circuit::effect_vm::Effect::Transfer { .. }]);
+        let is_fee_transfer = matches!(
+            vm_effects.as_slice(),
+            [dregg_circuit::effect_vm::Effect::Transfer { .. }]
+        );
         if is_fee_transfer && fee > 0 {
             after_cell
                 .state
@@ -5360,8 +5363,20 @@ impl AgentCipherclerk {
         let mut ctx_ledger = dregg_cell::Ledger::new();
         let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-        let before_w = rw::produce(&before_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-        let after_w = rw::produce(&after_cell, &ctx_ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+        let before_w = rw::produce(
+            &before_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_hashes,
+        );
 
         // THE REFUSAL `fields_root` WRITE-GATE CONTEXT (the light-client close's deployed prover wire).
         // A Refusal lead's `refusalVmDescriptor2R24` carries an in-circuit `.write` map-op forcing
@@ -5373,30 +5388,29 @@ impl AgentCipherclerk {
         // thread the real BEFORE leaves so the HONEST refusal proves on the deployed path. (The witness
         // carries the `fields_root` DIGEST limb only, NOT the leaf set — mirrors the NoteSpend
         // `before_nullifiers` plumbing.)
-        let refusal_fields: Option<(Vec<dregg_circuit::heap_root::HeapLeaf>, BabyBear)> =
-            if matches!(
-                vm_effects.first(),
-                Some(dregg_circuit::effect_vm::Effect::Refusal { .. })
-            ) {
-                let before_leaves =
-                    dregg_cell::state::fields_root_leaves(&before_cell.state.fields_map);
-                let audit_bytes = after_cell
-                    .state
-                    .fields_map
-                    .get(&dregg_cell::state::REFUSAL_AUDIT_EXT_KEY)
-                    .copied()
-                    .ok_or_else(|| {
-                        SdkError::InvalidWitness(
-                            "refusal after-cell carries no audit slot in fields_map — apply_refusal \
+        let refusal_fields: Option<(Vec<dregg_circuit::heap_root::HeapLeaf>, BabyBear)> = if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::Refusal { .. })
+        ) {
+            let before_leaves =
+                dregg_cell::state::fields_root_leaves(&before_cell.state.fields_map);
+            let audit_bytes = after_cell
+                .state
+                .fields_map
+                .get(&dregg_cell::state::REFUSAL_AUDIT_EXT_KEY)
+                .copied()
+                .ok_or_else(|| {
+                    SdkError::InvalidWitness(
+                        "refusal after-cell carries no audit slot in fields_map — apply_refusal \
                              did not write REFUSAL_AUDIT_EXT_KEY (the `.write` gate has no value)"
-                                .into(),
-                        )
-                    })?;
-                let audit_value = dregg_circuit::cap_root::fold_bytes32(&audit_bytes);
-                Some((before_leaves, audit_value))
-            } else {
-                None
-            };
+                            .into(),
+                    )
+                })?;
+            let audit_value = dregg_circuit::cap_root::fold_bytes32(&audit_bytes);
+            Some((before_leaves, audit_value))
+        } else {
+            None
+        };
 
         // 5. Bridge the producer witnesses into the circuit generator's block witnesses.
         //    Carry the per-cell asset class (the fold of the before-cell's token_id) so the
@@ -5458,7 +5472,9 @@ impl AgentCipherclerk {
                     &caveat,
                     &[],
                 )
-                .map_err(|e| SdkError::InvalidWitness(format!("wide note-spend trace generation: {e}")))?;
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide note-spend trace generation: {e}"))
+                })?;
             (t, d)
         } else if matches!(
             vm_effects.first(),
@@ -5489,11 +5505,14 @@ impl AgentCipherclerk {
             // `prove_effect_vm_rotated_wide` below (which re-derives the SAME trace + wide PIs), or the
             // bound 16 wide PIs would not match `public_inputs[n_pi-16..]`. The genuine fields-tree write
             // is threaded so the honest refusal proves; an empty tree would be UNSAT against the gate.
-            let (leaves, audit_value) = refusal_fields.as_ref().map(|(l, a)| (l.as_slice(), *a)).ok_or_else(|| {
-                SdkError::InvalidWitness(
-                    "refusal precompute: missing fields-tree context (refusal_fields)".into(),
-                )
-            })?;
+            let (leaves, audit_value) = refusal_fields
+                .as_ref()
+                .map(|(l, a)| (l.as_slice(), *a))
+                .ok_or_else(|| {
+                    SdkError::InvalidWitness(
+                        "refusal precompute: missing fields-tree context (refusal_fields)".into(),
+                    )
+                })?;
             let (t, d, _heaps) =
                 dregg_circuit::effect_vm::trace_rotated::generate_rotated_refusal_wide(
                     &initial_vm_state,
@@ -5504,7 +5523,9 @@ impl AgentCipherclerk {
                     leaves,
                     audit_value,
                 )
-                .map_err(|e| SdkError::InvalidWitness(format!("wide refusal trace generation: {e}")))?;
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide refusal trace generation: {e}"))
+                })?;
             (t, d)
         } else if matches!(
             vm_effects.first(),
@@ -5528,7 +5549,9 @@ impl AgentCipherclerk {
                 &after_bw,
                 &caveat,
             )
-            .map_err(|e| SdkError::InvalidWitness(format!("wide record-pin trace generation: {e}")))?
+            .map_err(|e| {
+                SdkError::InvalidWitness(format!("wide record-pin trace generation: {e}"))
+            })?
         } else if matches!(
             vm_effects.first(),
             Some(dregg_circuit::effect_vm::Effect::CreateCell { .. })
@@ -5568,7 +5591,9 @@ impl AgentCipherclerk {
                     &[],
                 )
                 .map_err(|e| {
-                    SdkError::InvalidWitness(format!("wide create-from-factory trace generation: {e}"))
+                    SdkError::InvalidWitness(format!(
+                        "wide create-from-factory trace generation: {e}"
+                    ))
                 })?;
             (t, d)
         } else if matches!(
@@ -5810,7 +5835,10 @@ impl AgentCipherclerk {
             )));
         }
         let runs = crate::full_turn_proof::split_into_cohort_runs(&vm_effects);
-        debug_assert!(runs.len() > 1, "the dispatcher only routes multi-cohort turns here");
+        debug_assert!(
+            runs.len() > 1,
+            "the dispatcher only routes multi-cohort turns here"
+        );
 
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
@@ -5828,14 +5856,20 @@ impl AgentCipherclerk {
             rw::apply_effect_to_cell(&mut full_after_cell, cell_id, effect, block_height);
             if let Effect::Transfer { from, to, amount } = effect {
                 if from == cell_id {
-                    full_after_cell
-                        .state
-                        .set_balance(full_after_cell.state.balance().saturating_sub(*amount as i64));
+                    full_after_cell.state.set_balance(
+                        full_after_cell
+                            .state
+                            .balance()
+                            .saturating_sub(*amount as i64),
+                    );
                 }
                 if to == cell_id {
-                    full_after_cell
-                        .state
-                        .set_balance(full_after_cell.state.balance().saturating_add(*amount as i64));
+                    full_after_cell.state.set_balance(
+                        full_after_cell
+                            .state
+                            .balance()
+                            .saturating_add(*amount as i64),
+                    );
                 }
             }
         }
@@ -5914,7 +5948,11 @@ impl AgentCipherclerk {
                 .map_err(|_| SdkError::InvalidWitness("cohort leg: short wide PI vector".into()))?;
             let proof_bytes = postcard::to_allocvec(&proof)
                 .map_err(|e| SdkError::Wire(format!("cohort leg proof serialize: {e}")))?;
-            legs.push(SovereignCohortLeg { proof_bytes, before8, after8 });
+            legs.push(SovereignCohortLeg {
+                proof_bytes,
+                before8,
+                after8,
+            });
             last_after8 = after8;
 
             // Thread s_k → s_{k+1} off the generator's own STATE_AFTER columns (the SAME threading the
@@ -6913,7 +6951,6 @@ impl AgentCipherclerk {
 
         Ok(turn)
     }
-
 }
 
 /// A note detected as belonging to this cipherclerk during stealth scanning.
@@ -9022,8 +9059,8 @@ mod tests {
     #[test]
     fn narrowed_authority_emits_granted_le_held_both_polarities() {
         use dregg_cell::{
-            is_facet_attenuation, EFFECT_ALL, EFFECT_EMIT_EVENT, EFFECT_GRANT_CAPABILITY,
-            EFFECT_SET_FIELD, EFFECT_TRANSFER,
+            EFFECT_ALL, EFFECT_EMIT_EVENT, EFFECT_GRANT_CAPABILITY, EFFECT_SET_FIELD,
+            EFFECT_TRANSFER, is_facet_attenuation,
         };
 
         let mut cclerk = AgentCipherclerk::new();
@@ -9089,7 +9126,10 @@ mod tests {
         );
         // Concretely: {SetField,EmitEvent} & {Transfer,Grant} = ∅ (no shared bits) — the widening
         // bought NOTHING past the parent (and named nothing the parent held in common).
-        assert_eq!(clipped, 0, "disjoint widening clips to the empty mask, not the wider ask");
+        assert_eq!(
+            clipped, 0,
+            "disjoint widening clips to the empty mask, not the wider ask"
+        );
     }
 }
 

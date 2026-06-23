@@ -327,7 +327,11 @@ impl Sub for BabyBear {
         let b = rhs.0;
         if a < BABYBEAR_P && b < BABYBEAR_P {
             let (d, borrow) = a.overflowing_sub(b);
-            Self(if borrow { d.wrapping_add(BABYBEAR_P) } else { d })
+            Self(if borrow {
+                d.wrapping_add(BABYBEAR_P)
+            } else {
+                d
+            })
         } else {
             // Non-canonical fallback: reproduce the old u64 expression exactly.
             let diff = a as u64 + BABYBEAR_P as u64 - b as u64;
@@ -589,7 +593,10 @@ mod tests {
         };
         // mul corner: u64::MAX is the absolute worst case for the estimate.
         let worst = count_iters(u64::MAX);
-        assert!(worst <= 4, "Barrett loop ran {worst} times on u64::MAX (too many)");
+        assert!(
+            worst <= 4,
+            "Barrett loop ran {worst} times on u64::MAX (too many)"
+        );
         // (P-1)^2, the largest real product.
         assert!(count_iters((p - 1) * (p - 1)) <= 4);
         // add range corner.

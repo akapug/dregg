@@ -17,11 +17,18 @@ SCRATCH executable: `lake env lean --run EmitWideRegistryProbe.lean`.
 import Dregg2.Circuit.Emit.CapOpenEmit
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
-open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpenWide)
+open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpenWide v3RegistryCapOpenWriteWide)
 
 def main : IO Unit := do
   -- the 45 wide members, one `key\tname\tjson` line each (key = the live registry key, mirroring
   -- `rotation-v3-staged-registry.tsv` so the Rust roundtrips look the wide member up by its
   -- familiar key `burnVmDescriptor2R24` etc.).
   for (key, d) in v3RegistryCapOpenWide do
+    IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
+  -- the 10 WRITE-bearing cap-open tail members (`v3RegistryCapOpenWriteWide`, §10) — the
+  -- `…WriteCapOpenVmDescriptor2R24` wrappers + the authority-only `spawnCapOpen` + `exerciseCapOpen`,
+  -- each made 8-felt-wide via the SAME proven `wideAppend host bb (bb+51)`. These are the
+  -- capability-gated WRITE turns' wide twins (the residual ~31-bit waist closed), looked up by the
+  -- LIVE `V3_STAGED_REGISTRY_TSV` keys (so `cap_open_key_has_wide_twin` finds them).
+  for (key, d) in v3RegistryCapOpenWriteWide do
     IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"

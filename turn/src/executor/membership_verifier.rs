@@ -1253,7 +1253,9 @@ impl WitnessedPredicateVerifier for ThresholdSigVerifier {
         let message: &[u8] = match input {
             // The executor's custom-auth seam supplies `AuthContext` (message +
             // cell pre-state); this verifier only needs the message.
-            PredicateInput::AuthContext { signing_message, .. } => signing_message,
+            PredicateInput::AuthContext {
+                signing_message, ..
+            } => signing_message,
             PredicateInput::SigningMessage(m) => m,
             PredicateInput::Bytes(b) => b,
             other => {
@@ -1846,7 +1848,12 @@ mod tests {
     /// bytes, and the honest public inputs.
     fn route_proof(
         symbols: &[u32],
-    ) -> (Arc<ProgramRegistry>, [u8; 32], Vec<u8>, Vec<dregg_circuit::field::BabyBear>) {
+    ) -> (
+        Arc<ProgramRegistry>,
+        [u8; 32],
+        Vec<u8>,
+        Vec<dregg_circuit::field::BabyBear>,
+    ) {
         let transitions = router_transitions();
         let descriptor = dfa_routing_descriptor("dregg-dfa-routing-v1", &transitions);
         let program = CellProgram::new(descriptor, 1);
@@ -1854,8 +1861,8 @@ mod tests {
         let vk_hash = programs.deploy(program).unwrap();
         let programs = Arc::new(programs);
 
-        let (witness, public_inputs) = build_routing_witness(&transitions, 0, symbols)
-            .expect("router accepts this input");
+        let (witness, public_inputs) =
+            build_routing_witness(&transitions, 0, symbols).expect("router accepts this input");
         let num_rows = witness.get("current_state").map(|v| v.len()).unwrap();
         let wire = prove_dfa_transition(&programs, &vk_hash, &witness, num_rows, &public_inputs)
             .expect("routing proof wire builds");

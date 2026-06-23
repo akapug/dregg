@@ -374,7 +374,9 @@ impl From<&OwnedNote> for CommittedNoteInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dregg_cell_crypto::{FullConservationProof, ValueCommitment, verify_conservation_with_range};
+    use dregg_cell_crypto::{
+        FullConservationProof, ValueCommitment, verify_conservation_with_range,
+    };
 
     /// Deterministic scalar for testing.
     fn test_scalar(seed: u8) -> Scalar {
@@ -488,18 +490,20 @@ mod tests {
                     value_commitment: Some(vc_bytes),
                     ..
                 } => {
-                    let vc =
-                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
-                            .unwrap();
+                    let vc = ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(
+                        *vc_bytes,
+                    ))
+                    .unwrap();
                     input_vcs.push(vc);
                 }
                 Effect::NoteCreate {
                     value_commitment: Some(vc_bytes),
                     ..
                 } => {
-                    let vc =
-                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
-                            .unwrap();
+                    let vc = ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(
+                        *vc_bytes,
+                    ))
+                    .unwrap();
                     output_vcs.push(vc);
                 }
                 _ => {}
@@ -557,18 +561,20 @@ mod tests {
                     value_commitment: Some(vc_bytes),
                     ..
                 } => {
-                    let vc =
-                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
-                            .unwrap();
+                    let vc = ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(
+                        *vc_bytes,
+                    ))
+                    .unwrap();
                     input_vcs.push(vc);
                 }
                 Effect::NoteCreate {
                     value_commitment: Some(vc_bytes),
                     ..
                 } => {
-                    let vc =
-                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
-                            .unwrap();
+                    let vc = ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(
+                        *vc_bytes,
+                    ))
+                    .unwrap();
                     output_vcs.push(vc);
                 }
                 _ => {}
@@ -749,18 +755,20 @@ mod tests {
                     value_commitment: Some(vc_bytes),
                     ..
                 } => {
-                    let vc =
-                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
-                            .unwrap();
+                    let vc = ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(
+                        *vc_bytes,
+                    ))
+                    .unwrap();
                     input_vcs.push(vc);
                 }
                 Effect::NoteCreate {
                     value_commitment: Some(vc_bytes),
                     ..
                 } => {
-                    let vc =
-                        ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(*vc_bytes))
-                            .unwrap();
+                    let vc = ValueCommitment::from_bytes(&dregg_cell_crypto::ValueCommitmentBytes(
+                        *vc_bytes,
+                    ))
+                    .unwrap();
                     output_vcs.push(vc);
                 }
                 _ => {}

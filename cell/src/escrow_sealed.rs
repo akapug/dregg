@@ -186,7 +186,11 @@ pub struct Leg {
 impl Leg {
     /// A leg in which `party` locks `amount` of `asset`.
     pub fn new(party: CellId, asset: CellId, amount: i64) -> Self {
-        Leg { party, asset, amount }
+        Leg {
+            party,
+            asset,
+            amount,
+        }
     }
     /// Does this leg conform to the terms' requirement for `side`? (Right party,
     /// right asset, AND at least the required amount.) This is the conformance
@@ -215,7 +219,11 @@ pub struct LegRequirement {
 impl LegRequirement {
     /// Require `party` to lock at least `min_amount` of `asset`.
     pub fn new(party: CellId, asset: CellId, min_amount: i64) -> Self {
-        LegRequirement { party, asset, min_amount }
+        LegRequirement {
+            party,
+            asset,
+            min_amount,
+        }
     }
 }
 
@@ -316,10 +324,15 @@ impl std::fmt::Display for EscrowError {
         match self {
             EscrowError::NotAnEscrow => write!(f, "cell carries no escrow binding"),
             EscrowError::TermsMismatch => write!(f, "supplied terms do not match the bound escrow"),
-            EscrowError::LegNonConforming(s) => write!(f, "leg {s:?} does not conform to the terms"),
+            EscrowError::LegNonConforming(s) => {
+                write!(f, "leg {s:?} does not conform to the terms")
+            }
             EscrowError::LegNotDeposited(s) => write!(f, "leg {s:?} is not deposited"),
             EscrowError::LegAlreadyConsumed(s) => {
-                write!(f, "leg {s:?} already consumed (one-shot): cannot be claimed twice")
+                write!(
+                    f,
+                    "leg {s:?} already consumed (one-shot): cannot be claimed twice"
+                )
             }
             EscrowError::NoConformingOwnDeposit => write!(
                 f,
@@ -327,9 +340,14 @@ impl std::fmt::Display for EscrowError {
             ),
             EscrowError::WrongClaimant => write!(f, "claimant is not the owner of its own leg"),
             EscrowError::OverClaim { claimed, locked } => {
-                write!(f, "over-claim: claims {claimed} but leg only locks {locked}")
+                write!(
+                    f,
+                    "over-claim: claims {claimed} but leg only locks {locked}"
+                )
             }
-            EscrowError::NotYourLeg(s) => write!(f, "leg {s:?} can only be reclaimed by its depositor"),
+            EscrowError::NotYourLeg(s) => {
+                write!(f, "leg {s:?} can only be reclaimed by its depositor")
+            }
         }
     }
 }
@@ -370,7 +388,12 @@ pub fn open_escrow(cell: &mut Cell, terms: &EscrowTerms) {
 ///
 /// On success the cell's commitment binds the locked leg's amount and a
 /// `Deposited` status. A light client sees value has entered the escrow.
-pub fn deposit_leg(cell: &mut Cell, terms: &EscrowTerms, side: Side, leg: &Leg) -> Result<(), EscrowError> {
+pub fn deposit_leg(
+    cell: &mut Cell,
+    terms: &EscrowTerms,
+    side: Side,
+    leg: &Leg,
+) -> Result<(), EscrowError> {
     let view = EscrowState::read(cell)?;
     if view.terms_digest != terms.digest() {
         return Err(EscrowError::TermsMismatch);
@@ -386,7 +409,11 @@ pub fn deposit_leg(cell: &mut Cell, terms: &EscrowTerms, side: Side, leg: &Leg) 
     }
     let st = &mut cell.state;
     st.set_heap(ESCROW_COLL, side.amount_key(), encode_i64(leg.amount));
-    st.set_heap(ESCROW_COLL, side.status_key(), LegStatus::Deposited.to_felt());
+    st.set_heap(
+        ESCROW_COLL,
+        side.status_key(),
+        LegStatus::Deposited.to_felt(),
+    );
     Ok(())
 }
 
@@ -584,8 +611,11 @@ pub fn reclaim_leg(
         LegStatus::Consumed => return Err(EscrowError::LegAlreadyConsumed(side)),
     }
     let amount = view.amount(side);
-    cell.state
-        .set_heap(ESCROW_COLL, side.status_key(), LegStatus::Consumed.to_felt());
+    cell.state.set_heap(
+        ESCROW_COLL,
+        side.status_key(),
+        LegStatus::Consumed.to_felt(),
+    );
     Ok(amount)
 }
 
@@ -744,7 +774,11 @@ mod tests {
             own_leg: leg_b(),
             claimed_value: 100,
         };
-        assert_eq!(live.check_claim(&terms, &claim), Ok(100), "pre-settle claim is live");
+        assert_eq!(
+            live.check_claim(&terms, &claim),
+            Ok(100),
+            "pre-settle claim is live"
+        );
 
         // Settle (consumes both legs).
         settle(&mut cell, &terms).unwrap();
@@ -869,7 +903,10 @@ mod tests {
             view.check_claim(&other_terms, &claim),
             Err(EscrowError::TermsMismatch)
         );
-        assert_eq!(settle(&mut cell, &other_terms), Err(EscrowError::TermsMismatch));
+        assert_eq!(
+            settle(&mut cell, &other_terms),
+            Err(EscrowError::TermsMismatch)
+        );
     }
 
     /// Settlement before BOTH legs are present is refused (no half-open trade).
@@ -880,7 +917,10 @@ mod tests {
         open_escrow(&mut cell, &terms);
         deposit_leg(&mut cell, &terms, Side::A, &leg_a()).unwrap();
         // Only A is in; B has not deposited.
-        assert_eq!(settle(&mut cell, &terms), Err(EscrowError::LegNotDeposited(Side::B)));
+        assert_eq!(
+            settle(&mut cell, &terms),
+            Err(EscrowError::LegNotDeposited(Side::B))
+        );
     }
 
     /// A non-owner cannot present someone else's identity as its own leg's party
@@ -901,7 +941,10 @@ mod tests {
             own_leg: leg_b(),
             claimed_value: 100,
         };
-        assert_eq!(view.check_claim(&terms, &claim), Err(EscrowError::WrongClaimant));
+        assert_eq!(
+            view.check_claim(&terms, &claim),
+            Err(EscrowError::WrongClaimant)
+        );
     }
 
     /// A leg presented with the wrong asset does not conform (you cannot satisfy

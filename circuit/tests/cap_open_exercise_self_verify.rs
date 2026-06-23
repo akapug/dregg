@@ -37,8 +37,8 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::trace_rotated::{
     CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, FACET_MASK_HI, RotatedBlockWitness,
-    SIGNATURE_AUTH_TAG, WRITE_MASK_LO, generate_rotated_effect_vm_trace,
-    transfer_caveat_manifest, widen_to_cap_open,
+    SIGNATURE_AUTH_TAG, WRITE_MASK_LO, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
+    widen_to_cap_open,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
@@ -115,8 +115,20 @@ fn build_exercise_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
 
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = transfer_caveat_manifest();
     let (trace, pis) = generate_rotated_effect_vm_trace(
@@ -139,13 +151,13 @@ fn exercise_cap_open_witness() -> CapOpenWitness {
     // breadstuff]. mask_lo == EFFECT_TRANSFER (bit 1 = EFF_EXERCISE) ⇒ the cap permits exercise;
     // auth_tag == Signature (decoded tier); target == src (the conferred edge — the hold-gate).
     let chosen: [BabyBear; 7] = [
-        BabyBear::new(0xEEC15E),               // slot_hash
-        BabyBear::new(5_555),                  // target (== src)
-        BabyBear::new(SIGNATURE_AUTH_TAG),     // auth_tag (Signature tier)
-        BabyBear::new(WRITE_MASK_LO),          // mask_lo (== EFFECT_TRANSFER = 2, bit 1 set)
-        BabyBear::new(FACET_MASK_HI),          // mask_hi (== 0)
-        BabyBear::new(0x00FF_FFFF),            // expiry
-        BabyBear::new(77),                     // breadstuff
+        BabyBear::new(0xEEC15E),           // slot_hash
+        BabyBear::new(5_555),              // target (== src)
+        BabyBear::new(SIGNATURE_AUTH_TAG), // auth_tag (Signature tier)
+        BabyBear::new(WRITE_MASK_LO),      // mask_lo (== EFFECT_TRANSFER = 2, bit 1 set)
+        BabyBear::new(FACET_MASK_HI),      // mask_hi (== 0)
+        BabyBear::new(0x00FF_FFFF),        // expiry
+        BabyBear::new(77),                 // breadstuff
     ];
     let other: [BabyBear; 7] = [
         BabyBear::new(0xBEEF),
@@ -166,8 +178,14 @@ fn exercise_cap_open_witness() -> CapOpenWitness {
 fn cap_open_exercise_witness_and_appendix_are_genuine() {
     let desc = parse_vm_descriptor2(reg_json(EXERCISE_CAP_OPEN_KEY))
         .expect("exercise cap-open descriptor parses");
-    assert_eq!(desc.trace_width, CAP_OPEN_WIDTH, "exercise cap-open width = CAP_OPEN_WIDTH");
-    assert_eq!(desc.public_input_count, 46, "exercise cap-open carries the rotated 46 PIs");
+    assert_eq!(
+        desc.trace_width, CAP_OPEN_WIDTH,
+        "exercise cap-open width = CAP_OPEN_WIDTH"
+    );
+    assert_eq!(
+        desc.public_input_count, 46,
+        "exercise cap-open carries the rotated 46 PIs"
+    );
 
     let (mut trace, pis) = build_exercise_base();
     assert_eq!(pis.len(), 46);
@@ -178,7 +196,10 @@ fn cap_open_exercise_witness_and_appendix_are_genuine() {
         w.cap_root,
         "the witness path must recompose the committed cap_root (absorb-node fold)"
     );
-    assert_eq!(w.src, w.leaf[1], "src must equal the leaf target (the exercise hold-gate edge)");
+    assert_eq!(
+        w.src, w.leaf[1],
+        "src must equal the leaf target (the exercise hold-gate edge)"
+    );
     assert_eq!(
         w.leaf[3],
         BabyBear::new(WRITE_MASK_LO),
@@ -186,7 +207,11 @@ fn cap_open_exercise_witness_and_appendix_are_genuine() {
     );
 
     widen_to_cap_open(&mut trace, &w).expect("widen to cap-open");
-    assert_eq!(trace[0].len(), CAP_OPEN_WIDTH, "cap-open trace widened to CAP_OPEN_WIDTH");
+    assert_eq!(
+        trace[0].len(),
+        CAP_OPEN_WIDTH,
+        "cap-open trace widened to CAP_OPEN_WIDTH"
+    );
     assert_eq!(trace[0][CAP_OPEN_BASE + 56], w.cap_root, "cap_root column");
     assert_eq!(trace[0][CAP_OPEN_BASE + 57], w.src, "src column");
     assert_eq!(
@@ -223,8 +248,13 @@ fn cap_open_exercise_authority_forge_rejected_at_witness() {
             BabyBear::new(77),
         ];
         let other: [BabyBear; 7] = [
-            BabyBear::new(0xBEEF), BabyBear::new(321), BabyBear::new(1),
-            BabyBear::new(1), BabyBear::new(0), BabyBear::new(9), BabyBear::new(0),
+            BabyBear::new(0xBEEF),
+            BabyBear::new(321),
+            BabyBear::new(1),
+            BabyBear::new(1),
+            BabyBear::new(0),
+            BabyBear::new(9),
+            BabyBear::new(0),
         ];
         let res = CapOpenWitness::build(&[other, no_exercise_facet], 1);
         assert!(
@@ -239,7 +269,11 @@ fn cap_open_exercise_authority_forge_rejected_at_witness() {
     // root (the rootPinGate the descriptor binds REJECTS it).
     {
         let mut w = exercise_cap_open_witness();
-        assert_eq!(w.recomposes(), w.cap_root, "the genuine held cap recomposes its committed root");
+        assert_eq!(
+            w.recomposes(),
+            w.cap_root,
+            "the genuine held cap recomposes its committed root"
+        );
         w.siblings[0] += BabyBear::ONE; // forge the level-0 sibling (a cap not in the c-list)
         assert_ne!(
             w.recomposes(),

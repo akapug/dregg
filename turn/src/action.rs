@@ -5,11 +5,11 @@
 //! preconditions, and produces effects.
 
 use dregg_cell::lifecycle::{ArchivalAttestation, DeathCertificate};
-use dregg_cell_crypto::note_bridge::PortableNoteProof;
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::predicate::WitnessedPredicate;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{CapabilityRef, CellId, NoteCommitment, Nullifier, Preconditions};
+use dregg_cell_crypto::note_bridge::PortableNoteProof;
 #[allow(unused_imports)]
 use dregg_cell_crypto::{ValueCommitment, ValueCommitmentBytes};
 use serde::{Deserialize, Serialize};
@@ -542,9 +542,7 @@ pub enum DelegationProofData {
 /// `TurnExecutor::bytes32_to_babybear` (`executor/proof_verify.rs`). Kept here
 /// so the bearer-cap STARK public-input layout has ONE definition that both the
 /// in-ledger executor arm and the Ledger-free inspector/wasm verifier share.
-fn stark_delegation_bytes32_to_babybear(
-    bytes: &[u8; 32],
-) -> Vec<dregg_circuit::field::BabyBear> {
+fn stark_delegation_bytes32_to_babybear(bytes: &[u8; 32]) -> Vec<dregg_circuit::field::BabyBear> {
     use dregg_circuit::field::{BABYBEAR_P, BabyBear};
     let mut result = Vec::with_capacity(8);
     for chunk in bytes.chunks(4) {
@@ -2300,7 +2298,10 @@ impl Effect {
                 resolution_condition,
                 ..
             } => {
-                32 + 32 + 32 + 8 + postcard::to_allocvec(resolution_condition).map_or(0, |b| b.len())
+                32 + 32
+                    + 32
+                    + 8
+                    + postcard::to_allocvec(resolution_condition).map_or(0, |b| b.len())
             }
             Effect::React {
                 condition,

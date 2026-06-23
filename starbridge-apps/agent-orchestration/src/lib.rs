@@ -1058,14 +1058,16 @@ pub fn seed_board(executor: &EmbeddedExecutor, budget: u64, lead: &str) -> u64 {
     executor.install_program(board, coordinator_program());
     executor.with_ledger_mut(|ledger| {
         if let Some(cell) = ledger.get_mut(&board) {
-            cell.state.set_field(LEAD_SLOT as usize, identity_field(lead));
+            cell.state
+                .set_field(LEAD_SLOT as usize, identity_field(lead));
             cell.state
                 .set_field(BUDGET_SLOT as usize, field_from_u64(budget));
-            cell.state.set_field(SPENT_A_SLOT as usize, field_from_u64(0));
-            cell.state.set_field(SPENT_B_SLOT as usize, field_from_u64(0));
-            // EPOCH >= 1 ⇒ the board is OPEN ⇒ the gated `worker_step` button lights.
             cell.state
-                .set_field(EPOCH_SLOT as usize, field_from_u64(1));
+                .set_field(SPENT_A_SLOT as usize, field_from_u64(0));
+            cell.state
+                .set_field(SPENT_B_SLOT as usize, field_from_u64(0));
+            // EPOCH >= 1 ⇒ the board is OPEN ⇒ the gated `worker_step` button lights.
+            cell.state.set_field(EPOCH_SLOT as usize, field_from_u64(1));
         }
     });
     budget

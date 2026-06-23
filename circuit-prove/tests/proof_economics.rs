@@ -18,14 +18,14 @@ use std::time::Instant;
 use dregg_circuit::effect_vm::{CellState, Effect, generate_effect_vm_trace, sel};
 use dregg_circuit::effect_vm_descriptors::descriptor_for_selector;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit_prove::ivc_turn_chain::{
-    FinalizedTurn, prove_turn_chain_recursive, verify_turn_chain_recursive,
-};
-use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
 use dregg_circuit::lean_descriptor_air::{
     EffectVmDescriptorAir, descriptor_recursion_matrix, parse_vm_descriptor,
 };
 use dregg_circuit::plonky3_prover::{DreggStarkConfig, create_config_with_fri, to_p3};
+use dregg_circuit_prove::ivc_turn_chain::{
+    FinalizedTurn, prove_turn_chain_recursive, verify_turn_chain_recursive,
+};
+use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
 use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_batch_stark::{ProverData, StarkInstance, prove_batch, verify_batch};

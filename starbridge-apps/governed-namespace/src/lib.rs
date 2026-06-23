@@ -1438,9 +1438,8 @@ pub mod committee_board {
         // distinct thresholds get distinct factories and the same board is
         // re-derivable by any party — no separate postcard dep needed.
         let child_vk = canonical_program_vk(&program);
-        let mut hasher = blake3::Hasher::new_derive_key(
-            "dregg-governed-namespace:committee-board-factory v1",
-        );
+        let mut hasher =
+            blake3::Hasher::new_derive_key("dregg-governed-namespace:committee-board-factory v1");
         hasher.update(&child_vk);
         let factory_vk = *hasher.finalize().as_bytes();
         FactoryDescriptor {
@@ -1509,7 +1508,10 @@ pub mod committee_board {
             },
             Effect::EmitEvent {
                 cell: namespace_cell,
-                event: Event::new(symbol("table-committed"), vec![new_root, field_from_u64(new_version)]),
+                event: Event::new(
+                    symbol("table-committed"),
+                    vec![new_root, field_from_u64(new_version)],
+                ),
             },
         ];
         cipherclerk.make_action(namespace_cell, "commit_table_update", effects)

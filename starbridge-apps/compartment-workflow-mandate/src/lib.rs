@@ -912,8 +912,13 @@ mod tests {
     #[test]
     fn advance_action_carries_set_field_and_emit_event() {
         let cipherclerk = test_cipherclerk();
-        let action =
-            build_advance_step_action(&cipherclerk, test_cell(), 0, officer_label(), WorkflowPhase::Review);
+        let action = build_advance_step_action(
+            &cipherclerk,
+            test_cell(),
+            0,
+            officer_label(),
+            WorkflowPhase::Review,
+        );
         // cursor + actor clearance + step compartment + event.
         assert_eq!(action.effects.len(), 4);
         assert!(matches!(
@@ -934,8 +939,13 @@ mod tests {
     #[test]
     fn advance_action_carries_real_signature() {
         let cipherclerk = test_cipherclerk();
-        let action =
-            build_advance_step_action(&cipherclerk, test_cell(), 1, officer_label(), WorkflowPhase::Redact);
+        let action = build_advance_step_action(
+            &cipherclerk,
+            test_cell(),
+            1,
+            officer_label(),
+            WorkflowPhase::Redact,
+        );
         match action.authorization {
             Authorization::Signature(a, b) => {
                 assert!(a != [0u8; 32] || b != [0u8; 32]);

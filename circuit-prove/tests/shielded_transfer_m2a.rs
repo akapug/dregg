@@ -29,12 +29,12 @@ use dregg_circuit_prove::shielded::{
     ShieldedValueLeg,
 };
 
+use curve25519_dalek::scalar::Scalar;
 use dregg_cell_crypto::value_commitment::{
     BulletproofRangeProof, FullConservationError, ValueCommitment, ValueLinkError,
     prove_conservation, scalar_from_blinding_bytes, verify_conservation,
     verify_full_conservation_bytes, verify_value_link,
 };
-use curve25519_dalek::scalar::Scalar;
 
 const ASSET: u64 = 1;
 
@@ -84,8 +84,7 @@ fn make_input(
         positions,
     };
 
-    let commitment =
-        ValueCommitment::commit(amount as u64, &scalar_from_blinding_bytes(&blinding));
+    let commitment = ValueCommitment::commit(amount as u64, &scalar_from_blinding_bytes(&blinding));
 
     ShieldedTransferWitness {
         spend,
@@ -259,8 +258,14 @@ fn negative_output_value_wraps_and_is_caught_by_range_proof() {
     };
 
     let output_legs = vec![
-        ShieldedValueLeg { asset_type: ASSET, commitment_bytes: out_big.to_bytes().0 },
-        ShieldedValueLeg { asset_type: ASSET, commitment_bytes: out_neg.to_bytes().0 },
+        ShieldedValueLeg {
+            asset_type: ASSET,
+            commitment_bytes: out_big.to_bytes().0,
+        },
+        ShieldedValueLeg {
+            asset_type: ASSET,
+            commitment_bytes: out_neg.to_bytes().0,
+        },
     ];
 
     // The attacker CANNOT make a valid range proof for `out_neg`'s wrapped value
@@ -271,8 +276,7 @@ fn negative_output_value_wraps_and_is_caught_by_range_proof() {
     // proof for value 0 with `bo_neg` (the most plausible forgery) and check it
     // still fails.
     let forged_neg_rp = range_proof_bytes(0, &bo_neg);
-    let output_range_proofs =
-        vec![range_proof_bytes(amount + steal, &bo_big), forged_neg_rp];
+    let output_range_proofs = vec![range_proof_bytes(amount + steal, &bo_big), forged_neg_rp];
 
     let transfer = dregg_circuit_prove::shielded::transfer_from_witnesses(
         merkle_root,
@@ -283,18 +287,31 @@ fn negative_output_value_wraps_and_is_caught_by_range_proof() {
     .expect("STARK proofs build even for an inflating transfer (caught at value verify)");
 
     // STARK side + range-proof shape are both fine — the attack is value-side only.
-    transfer.verify_stark_side().expect("STARK membership still verifies");
-    transfer.check_range_proof_shape().expect("shape ok: 2 outputs, 2 range proofs");
+    transfer
+        .verify_stark_side()
+        .expect("STARK membership still verifies");
+    transfer
+        .check_range_proof_shape()
+        .expect("shape ok: 2 outputs, 2 range proofs");
 
     // The Schnorr conservation proof BALANCES (the group sum is commit(amount)).
     let excess = scalar_from_blinding_bytes(&in_blinding)
         - (scalar_from_blinding_bytes(&bo_big) + scalar_from_blinding_bytes(&bo_neg));
     let msg = transfer.transfer_message();
-    let conservation =
-        prove_conservation(&[in_c.clone()], &[out_big.clone(), out_neg.clone()], &excess, &msg);
+    let conservation = prove_conservation(
+        &[in_c.clone()],
+        &[out_big.clone(), out_neg.clone()],
+        &excess,
+        &msg,
+    );
     // Demonstrate the hole the range proof closes: conservation ALONE accepts.
-    verify_conservation(&[in_c.clone()], &[out_big.clone(), out_neg.clone()], &conservation, &msg)
-        .expect("conservation alone is FOOLED by the wrapped-negative output (the hole)");
+    verify_conservation(
+        &[in_c.clone()],
+        &[out_big.clone(), out_neg.clone()],
+        &conservation,
+        &msg,
+    )
+    .expect("conservation alone is FOOLED by the wrapped-negative output (the hole)");
 
     // The FULL verifier (conservation + range) REJECTS — the range proof bites.
     let res = verify_full_conservation_bytes(
@@ -307,7 +324,10 @@ fn negative_output_value_wraps_and_is_caught_by_range_proof() {
     assert!(
         matches!(
             res,
-            Err(FullConservationError::RangeProofFailed { output_index: 1, .. })
+            Err(FullConservationError::RangeProofFailed {
+                output_index: 1,
+                ..
+            })
         ),
         "the wrapped-negative output must be REJECTED by its range proof, got {res:?}"
     );
@@ -324,7 +344,10 @@ fn missing_output_range_proof_rejects() {
     let w = make_input(11, amount as u32, in_blinding, 0xABCD, 4);
     let merkle_root = w.spend.merkle_root();
     let out_c = ValueCommitment::commit(amount, &scalar_from_blinding_bytes(&bo));
-    let output_legs = vec![ShieldedValueLeg { asset_type: ASSET, commitment_bytes: out_c.to_bytes().0 }];
+    let output_legs = vec![ShieldedValueLeg {
+        asset_type: ASSET,
+        commitment_bytes: out_c.to_bytes().0,
+    }];
 
     // Build with the proof present (valid), then strip it to model the attack.
     let mut transfer = dregg_circuit_prove::shielded::transfer_from_witnesses(
@@ -338,7 +361,13 @@ fn missing_output_range_proof_rejects() {
 
     let res = transfer.check_range_proof_shape();
     assert!(
-        matches!(res, Err(ShieldedError::RangeProofCountMismatch { outputs: 1, range_proofs: 0 })),
+        matches!(
+            res,
+            Err(ShieldedError::RangeProofCountMismatch {
+                outputs: 1,
+                range_proofs: 0
+            })
+        ),
         "a transfer dropping an output's range proof must reject structurally, got {res:?}"
     );
 }
@@ -370,9 +399,13 @@ fn duplicate_nullifier_in_transfer_rejects() {
     }];
 
     let out_rps = vec![range_proof_bytes((2 * amount) as u64, &[9u8; 32])];
-    let transfer =
-        dregg_circuit_prove::shielded::transfer_from_witnesses(merkle_root, &[w1, w2], out_leg, out_rps)
-            .expect("STARK proofs build even for a double-spend (caught at verify)");
+    let transfer = dregg_circuit_prove::shielded::transfer_from_witnesses(
+        merkle_root,
+        &[w1, w2],
+        out_leg,
+        out_rps,
+    )
+    .expect("STARK proofs build even for a double-spend (caught at verify)");
 
     let res = transfer.verify_stark_side();
     assert!(
@@ -383,7 +416,8 @@ fn duplicate_nullifier_in_transfer_rejects() {
 
 #[test]
 fn no_inputs_rejects() {
-    let res = dregg_circuit_prove::shielded::transfer_from_witnesses(BabyBear::ZERO, &[], vec![], vec![]);
+    let res =
+        dregg_circuit_prove::shielded::transfer_from_witnesses(BabyBear::ZERO, &[], vec![], vec![]);
     assert!(matches!(res, Err(ShieldedError::NoInputs)));
 }
 
@@ -424,7 +458,9 @@ fn leaf_leg_value_link_matches_verifies_mismatch_rejects() {
         output_range_proofs,
     )
     .expect("build");
-    transfer.verify_stark_side().expect("STARK side (incl. C7 value-binding PI) verifies");
+    transfer
+        .verify_stark_side()
+        .expect("STARK side (incl. C7 value-binding PI) verifies");
 
     let value_binding = transfer.inputs[0].value_binding;
 
@@ -445,10 +481,9 @@ fn leaf_leg_value_link_matches_verifies_mismatch_rejects() {
     // inflated leg, and an opening matching the inflated leg does NOT reproduce the
     // STARK binding. We exhibit both failing branches.
     let inflated = 2_000_000u64;
-    let inflated_leg =
-        ValueCommitment::commit(inflated, &scalar_from_blinding_bytes(&in_blinding))
-            .to_bytes()
-            .0;
+    let inflated_leg = ValueCommitment::commit(inflated, &scalar_from_blinding_bytes(&in_blinding))
+        .to_bytes()
+        .0;
     // Branch A: keep the STARK-consistent opening (value=amount) → leg mismatch.
     let res_a = verify_value_link(
         value_binding,

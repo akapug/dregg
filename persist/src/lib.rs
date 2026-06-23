@@ -51,8 +51,8 @@ pub use blocklace_store::BlocklaceMeta;
 pub use commit_log::{CommitRecord, IndexAuditReport};
 pub use federation::StoredAttestedRoot;
 pub use image_builder::{
-    build_image, verify_image, BuildError, CellSpec, ImageArtifact, ImageAttestation, ImageFacts,
-    ImageManifest, VerifyError,
+    BuildError, CellSpec, ImageArtifact, ImageAttestation, ImageFacts, ImageManifest, VerifyError,
+    build_image, verify_image,
 };
 pub use ledger_store::LedgerCheckpoint;
 pub use note_tree::{NoteTree, PersistentNullifierSet};

@@ -79,14 +79,12 @@
 //! the same precise fork follow-up (thread `table_public_inputs` up the tree +
 //! host-check the circuit public vector).
 
-
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing as _;
 use p3_recursion::ProveNextLayerParams;
 use p3_recursion::build_and_prove_next_layer;
 use p3_recursion::{BatchOnly, RecursionInput, RecursionOutput};
 
-use dregg_circuit::field::BabyBear;
 use crate::joint_turn_aggregation::{
     DescriptorParticipant, JointAggError, JointTurnAggregationAir, verify_descriptor_participant,
 };
@@ -95,6 +93,7 @@ use crate::plonky3_recursion_impl::recursive::{
     prove_inner_for_air_with_config, recursion_vk_fingerprint, verify_inner_for_air_with_config,
     verify_recursive_batch_proof_with_config,
 };
+use dregg_circuit::field::BabyBear;
 
 const D: usize = 4;
 

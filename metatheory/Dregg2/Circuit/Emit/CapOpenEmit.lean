@@ -1394,4 +1394,142 @@ theorem v3RegistryCapOpenWide_transferEff_is_wideAppend :
 
 end CapOpenWideAntiLaundering
 
+/-! ## §10 — `v3RegistryCapOpenWriteWide`: the WRITE-bearing cap-open tail made 8-felt-wide.
+
+§9 (`v3RegistryCapOpenWide`) closed the 45 emit-source members (the cohort + the AUTHORITY-READ / `-eff`
+/ fee tail at positions 36..44) to the 8-felt commit. But `EmitRotationV3.lean` ALSO emits a SECOND tail
+PAST those 45 — the WRITE-BEARING cap-open wrappers (`…WriteCapOpenVmDescriptor2R24` — the cap-tree /
+DELEG-tree write FORCED on the rotated AFTER limb), the AUTHORITY-ONLY `spawnCapOpenVmDescriptor2R24`,
+and the `exerciseCapOpenVmDescriptor2R24` read leg — into the LIVE 1-felt `V3_STAGED_REGISTRY_TSV`. Those
+descriptors had NO wide twin, so a capability-gated WRITE turn (a delegate/introduce/revoke/refresh/
+spawn-via-cap) still bound the ~31-bit 1-felt commit on the light-client surface — the residual waist.
+
+This section closes it. Every WRITE-cap host is a GATED host EXACTLY like the §9 crown members: the
+write base (`v3OfWithCapWrite face …`, or the frozen `v3Of`) lays the BEFORE/AFTER limbs at the v1 FACE
+`traceWidth` (`bb`, the SAME `STATE_BEFORE_BASE` weld the crown rides), and `effCapOpenV3` appends the
+210-col membership crown PAST it — the cap-tree write is a `map_op` (a constraint, NOT a trace column),
+so the host width is the SAME 819 the crown members carry. So the SAME `wideAppend member bb (bb+51)`
+wraps each — the carriers land past the crown, re-absorbing the SAME 37 limbs + iroot at `bb`; the
+host's gates + the cap-tree write `map_op` carry UNCHANGED (`wideAppend` preserves the host's whole
+map/mem log — `wideAppend_mapLog`/`_memLog`). The two faithfulness obligations lift through the GENERIC
+keystones verbatim. ADDITIVE: a NEW def + its fold soundness; `v3RegistryCapOpen` / the crown wide / the
+live wire are UNTOUCHED.
+
+### §10.1 — the WRITE-cap tail members (key, host descriptor, face `bb`)
+
+Each member is `wideAppend host bb (bb+51)` with `bb` = the underlying v1 FACE `traceWidth`:
+
+  * the 7 `…WriteCapOpenV3` wrappers all ride the moving `attenuateVmDescriptorGenuineNoRecomputeTick`
+    face (`v3OfWithCapWrite` of it) — `bb = attenuateVmDescriptorGenuineNoRecomputeTick.traceWidth`;
+  * `spawnWriteCapOpenV3` (the cap-handoff INSERT) + `spawnCapOpenV3` (the frozen authority-only leg)
+    ride the `spawnActorVmDescriptor` face — `bb = spawnActorVmDescriptor.traceWidth`;
+  * `exerciseCapOpenV3` (the frozen exercise read leg) rides the `exerciseVmDescriptor` face. -/
+
+/-- The matched `(key, host, bb)` table for the WRITE-bearing cap-open tail: the LIVE
+`V3_STAGED_REGISTRY_TSV` key, the host descriptor, and its underlying v1 FACE `traceWidth` `bb`.
+`v3RegistryCapOpenWriteWide` is the `wideAppend host bb (bb+51)` map over THIS table, so the structural
+witness `_is_wideAppend` reads off by `getElem_map`. -/
+def v3RegistryCapOpenWriteWideTable : List (String × EffectVmDescriptor2 × Nat) :=
+  let attenW := Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick.traceWidth
+  let spawnW := Dregg2.Circuit.Emit.EffectVmEmitSpawn.spawnActorVmDescriptor.traceWidth
+  let exW    := Dregg2.Circuit.Emit.EffectVmEmitExercise.exerciseVmDescriptor.traceWidth
+  [ ("delegateWriteCapOpenVmDescriptor2R24", delegateWriteCapOpenV3, attenW)
+  , ("introduceWriteCapOpenVmDescriptor2R24", introduceWriteCapOpenV3, attenW)
+  , ("delegateAttenWriteCapOpenVmDescriptor2R24", delegateAttenWriteCapOpenV3, attenW)
+  , ("revokeDelegationWriteCapOpenVmDescriptor2R24", revokeDelegationWriteCapOpenV3, attenW)
+  , ("revokeCapabilityWriteCapOpenVmDescriptor2R24", revokeCapabilityWriteCapOpenV3, attenW)
+  , ("refreshDelegationWriteCapOpenVmDescriptor2R24", refreshDelegationWriteCapOpenV3, attenW)
+  , ("grantCapWriteCapOpenVmDescriptor2R24", grantCapWriteCapOpenV3, attenW)
+  , ("spawnWriteCapOpenVmDescriptor2R24", spawnWriteCapOpenV3, spawnW)
+  , ("spawnCapOpenVmDescriptor2R24", spawnCapOpenV3, spawnW)
+  , ("exerciseCapOpenVmDescriptor2R24", exerciseCapOpenV3, exW) ]
+
+/-- The WRITE-bearing cap-open tail, each member `(key, wideAppend host bb (bb+51))` at its face `bb`.
+The keys are the LIVE `V3_STAGED_REGISTRY_TSV` keys `EmitRotationV3.lean` emits, so the Rust roundtrip
++ `cap_open_key_has_wide_twin` look the wide member up by the SAME key. -/
+def v3RegistryCapOpenWriteWide : List (String × EffectVmDescriptor2) :=
+  v3RegistryCapOpenWriteWideTable.map
+    (fun e => (e.1, Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend e.2.1 e.2.2 (e.2.2 + 51)))
+
+theorem v3RegistryCapOpenWriteWide_length : v3RegistryCapOpenWriteWide.length = 10 := by
+  simp [v3RegistryCapOpenWriteWide, v3RegistryCapOpenWriteWideTable]
+#guard v3RegistryCapOpenWriteWide.length == 10
+#guard v3RegistryCapOpenWriteWideTable.length == 10
+
+/-- Each `v3RegistryCapOpenWriteWide` entry IS a `wideAppend` of its aligned host at its real `bb`. The
+structural witness the fold soundness consumes (the entry's host `h` is the WRITE-cap member, `bb` the
+underlying v1 FACE width — `STATE_BEFORE_BASE`, exactly the §9 crown shape). -/
+theorem v3RegistryCapOpenWriteWide_is_wideAppend :
+    ∀ (i : Nat) (hi : i < v3RegistryCapOpenWriteWide.length),
+      ∃ (h : EffectVmDescriptor2) (bb : Nat),
+        v3RegistryCapOpenWriteWide[i].2
+          = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 51) := by
+  intro i hi
+  have hlen : v3RegistryCapOpenWriteWide.length = v3RegistryCapOpenWriteWideTable.length := by
+    simp [v3RegistryCapOpenWriteWide]
+  rw [hlen] at hi
+  refine ⟨(v3RegistryCapOpenWriteWideTable[i]'hi).2.1, (v3RegistryCapOpenWriteWideTable[i]'hi).2.2, ?_⟩
+  simp only [v3RegistryCapOpenWriteWide, List.getElem_map]
+
+/-- **`v3RegistryCapOpenWriteWide_sound` — THE GATE-SURVIVAL FOLD over the WRITE-cap tail.** Every wide
+WRITE-cap entry preserves its host member's gates AND its cap-tree write `map_op`: a `Satisfied2` witness
+of the wide entry is a `Satisfied2` of the underlying host `h` with its two 1-felt `STATE_COMMIT` PI pins
+RETIRED (`dropLegacyCommitPins1`), so EVERY soundness theorem `h` carries (the membership crown's facet
+gates AND the cap-tree write — which is a `map_op`, NOT a commit pin) holds of the wide witness unchanged.
+The wide block is a CONJUNCTION appended past the host. -/
+theorem v3RegistryCapOpenWriteWide_sound (hash : List ℤ → ℤ)
+    (i : Nat) (hi : i < v3RegistryCapOpenWriteWide.length)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hsat : Satisfied2 hash v3RegistryCapOpenWriteWide[i].2 minit mfin maddrs t) :
+    ∃ (h : EffectVmDescriptor2) (bb : Nat),
+      Satisfied2 hash
+        (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.dropLegacyCommitPins1 h bb (bb + 51))
+        minit mfin maddrs t := by
+  obtain ⟨h, bb, heq⟩ := v3RegistryCapOpenWriteWide_is_wideAppend i hi
+  refine ⟨h, bb, ?_⟩
+  rw [heq] at hsat
+  exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 51)
+    minit mfin maddrs t hsat
+
+/-- **`v3RegistryCapOpenWriteWide_binds` — THE 8-FELT BINDING FOLD over the WRITE-cap tail.** Every wide
+WRITE-cap entry's published 8-felt BEFORE/AFTER commits BIND: two `Satisfied2` witnesses of the SAME wide
+entry publishing the same 8-felt BEFORE/AFTER commits agree on the WHOLE before/after 37-limb list +
+iroot — the genuine ~124-bit binding via `wireCommitR8_binds`, member-by-member over the WRITE-cap tail.
+So a capability-gated WRITE turn binds the FULL ~124-bit commit, NOT the ~31-bit 1-felt waist. -/
+theorem v3RegistryCapOpenWriteWide_binds (hash : List ℤ → ℤ) (permW : List ℤ → List ℤ)
+    (hCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)
+    (i : Nat) (hi : i < v3RegistryCapOpenWriteWide.length)
+    (h : EffectVmDescriptor2) (bb : Nat)
+    (heq : v3RegistryCapOpenWriteWide[i].2
+        = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 51))
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
+    (hchipN : ChipTableSoundN permW (t.tf .poseidon2))
+    (hchipN' : ChipTableSoundN permW (t'.tf .poseidon2))
+    (hsat : Satisfied2 hash v3RegistryCapOpenWriteWide[i].2 minit mfin maddrs t)
+    (hsat' : Satisfied2 hash v3RegistryCapOpenWriteWide[i].2 minit' mfin' maddrs' t')
+    (a b : Nat) (ha : a < t.rows.length) (hb : b < t'.rows.length)
+    (hfirst : (a == 0) = true) (hfirst' : (b == 0) = true)
+    (k l : Nat) (hk : k < t.rows.length) (hl : l < t'.rows.length)
+    (hlast : (k + 1 == t.rows.length) = true) (hlast' : (l + 1 == t'.rows.length) = true)
+    (hpubBefore : ∀ m, m < 8 →
+      (envAt t a).pub (h.piCount + m) = (envAt t' b).pub (h.piCount + m))
+    (hpubAfter : ∀ m, m < 8 →
+      (envAt t k).pub (h.piCount + 8 + m) = (envAt t' l).pub (h.piCount + 8 + m)) :
+    (preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
+      ∧ (envAt t a).loc (bb + 37) = (envAt t' b).loc (bb + 37))
+    ∧ (preLimbsWide (bb + 51) (envAt t k).loc = preLimbsWide (bb + 51) (envAt t' l).loc
+      ∧ (envAt t k).loc (bb + 51 + 37) = (envAt t' l).loc (bb + 51 + 37)) := by
+  rw [heq] at hsat hsat'
+  exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_binds_published
+    hash permW hCR hW h bb (bb + 51)
+    minit mfin maddrs t minit' mfin' maddrs' t' hchipN hchipN' hsat hsat'
+    a b ha hb hfirst hfirst' k l hk hl hlast hlast' hpubBefore hpubAfter
+
+#assert_axioms v3RegistryCapOpenWriteWide_is_wideAppend
+#assert_axioms v3RegistryCapOpenWriteWide_sound
+#assert_axioms v3RegistryCapOpenWriteWide_binds
+#assert_axioms v3RegistryCapOpenWriteWide_length
+
 end Dregg2.Circuit.Emit.CapOpenEmit

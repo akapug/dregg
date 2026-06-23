@@ -46,7 +46,11 @@ use starbridge_polis::large_council::{
 
 /// A runtime whose agent cell carries the large-council program, plus the
 /// charter. `members` are field-element identities (the distinctness keys).
-fn harness(domain: &str, members: usize, threshold: u64) -> (AgentRuntime, CellId, LargeCouncilCharter) {
+fn harness(
+    domain: &str,
+    members: usize,
+    threshold: u64,
+) -> (AgentRuntime, CellId, LargeCouncilCharter) {
     let runtime = AgentRuntime::new_simple(AgentCipherclerk::new(), domain);
     let cell = runtime.cell_id();
     // Member identities: distinct nonzero field elements (1..=members).
@@ -215,7 +219,9 @@ fn large_council_5_members_3of5_full_lifecycle_through_executor() {
 
     // Certify — the dynamic-N quorum gate sees 3 distinct YES in the map ⇒ the
     // flag-arming turn COMMITS. The receipt's post_state_hash binds the map.
-    let receipt = runtime.execute(certify(cell)).expect("certify must commit (3 >= 3)");
+    let receipt = runtime
+        .execute(certify(cell))
+        .expect("certify must commit (3 >= 3)");
     assert_eq!(
         slot_of(&runtime, cell, STATE_SLOT),
         field_from_u64(STATE_APPROVED),
@@ -255,8 +261,12 @@ fn large_council_subquorum_certify_rejected_by_executor() {
         .expect("propose");
 
     // Only TWO distinct members approve.
-    runtime.execute(cast_approval(cell, &charter, 0)).expect("approve 0");
-    runtime.execute(cast_approval(cell, &charter, 1)).expect("approve 1");
+    runtime
+        .execute(cast_approval(cell, &charter, 0))
+        .expect("approve 0");
+    runtime
+        .execute(cast_approval(cell, &charter, 1))
+        .expect("approve 1");
 
     // Certify with 2 < 3 distinct ⇒ the EXECUTOR rejects.
     assert_program_violation(runtime.execute(certify(cell)), "sub-quorum certify");
@@ -267,8 +277,12 @@ fn large_council_subquorum_certify_rejected_by_executor() {
     );
 
     // The third distinct approval then lets certification commit.
-    runtime.execute(cast_approval(cell, &charter, 2)).expect("approve 2");
-    runtime.execute(certify(cell)).expect("certify commits at 3 distinct");
+    runtime
+        .execute(cast_approval(cell, &charter, 2))
+        .expect("approve 2");
+    runtime
+        .execute(certify(cell))
+        .expect("certify commits at 3 distinct");
     assert_eq!(
         slot_of(&runtime, cell, STATE_SLOT),
         field_from_u64(STATE_APPROVED),
@@ -324,7 +338,9 @@ fn large_council_map_approval_is_bound_by_the_commitment_anti_ghost() {
         .execute(propose(cell, &charter, *blake3::hash(b"act").as_bytes()))
         .expect("propose");
     for i in 0..3 {
-        runtime.execute(cast_approval(cell, &charter, i)).expect("approve");
+        runtime
+            .execute(cast_approval(cell, &charter, i))
+            .expect("approve");
     }
     let committed = runtime.execute(certify(cell)).expect("certify");
     let bound = committed.post_state_hash;
@@ -339,7 +355,10 @@ fn large_council_map_approval_is_bound_by_the_commitment_anti_ghost() {
     {
         let mut ledger = runtime.ledger().lock().unwrap();
         let c = ledger.get_mut(&cell).expect("cell");
-        assert!(c.state.set_field_ext(charter.member_vote_key(2), field_from_u64(7)));
+        assert!(
+            c.state
+                .set_field_ext(charter.member_vote_key(2), field_from_u64(7))
+        );
     }
     let tampered = state_commitment(&runtime, cell);
     assert_ne!(
@@ -357,6 +376,12 @@ fn large_council_map_approval_is_bound_by_the_commitment_anti_ghost() {
         c.state.reseal_fields_root();
     }
     let dropped = state_commitment(&runtime, cell);
-    assert_ne!(bound, dropped, "dropping a map approval flips the commitment too");
-    assert_ne!(tampered, dropped, "tamper and drop are distinct commitments");
+    assert_ne!(
+        bound, dropped,
+        "dropping a map approval flips the commitment too"
+    );
+    assert_ne!(
+        tampered, dropped,
+        "tamper and drop are distinct commitments"
+    );
 }

@@ -9885,7 +9885,9 @@ mod authorization_custom_tests {
             _proof_bytes: &[u8],
         ) -> Result<(), WitnessedPredicateError> {
             let bytes: &[u8] = match input {
-                PredicateInput::AuthContext { signing_message, .. } => signing_message,
+                PredicateInput::AuthContext {
+                    signing_message, ..
+                } => signing_message,
                 PredicateInput::SigningMessage(bytes) => bytes,
                 _ => {
                     return Err(WitnessedPredicateError::InputShapeMismatch {

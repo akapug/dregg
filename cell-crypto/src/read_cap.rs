@@ -49,7 +49,7 @@
 //! - **ZK-private cells (M2)** — state-as-all-commitments with a hiding-STARK
 //!   transition proof — are the deeper, VK-affecting rung. NOT here.
 
-use crate::note_encryption::{decrypt_note, encrypt_note_to, NoteDecryptError, NotePlaintext};
+use crate::note_encryption::{NoteDecryptError, NotePlaintext, decrypt_note, encrypt_note_to};
 use dregg_cell::state::{CellState, FieldVisibility, STATE_SLOTS};
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -160,7 +160,9 @@ impl Drop for ViewKey {
 
 impl core::fmt::Debug for ViewKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ViewKey").field("root", &"<redacted>").finish()
+        f.debug_struct("ViewKey")
+            .field("root", &"<redacted>")
+            .finish()
     }
 }
 
@@ -608,14 +610,20 @@ mod tests {
         );
         // …and both DO open the slot they share (the cap is non-vacuous: it
         // genuinely opens what it covers).
-        assert_eq!(wide.open_slot(3, &enc.slots[&3]).map(|o| o.value), Ok(fe(30)));
+        assert_eq!(
+            wide.open_slot(3, &enc.slots[&3]).map(|o| o.value),
+            Ok(fe(30))
+        );
         assert_eq!(
             narrow.open_slot(3, &enc.slots[&3]).map(|o| o.value),
             Ok(fe(30))
         );
         // The bulk `open` confirms the slot-set difference: wide opens {3,5},
         // narrow opens {3}.
-        assert_eq!(wide.open(&enc.slots).keys().copied().collect::<Vec<_>>(), vec![3, 5]);
+        assert_eq!(
+            wide.open(&enc.slots).keys().copied().collect::<Vec<_>>(),
+            vec![3, 5]
+        );
         assert_eq!(
             narrow.open(&enc.slots).keys().copied().collect::<Vec<_>>(),
             vec![3]

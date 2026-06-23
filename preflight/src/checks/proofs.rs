@@ -325,7 +325,8 @@ fn check_stark_tampered_rejected() -> Result<(), String> {
         federation_root_bytes,
         federation_root_bb,
     );
-    let root_token = MacaroonToken::mint(issuer_key, b"tamper-kid", "compute.dregg.fg-goose.online");
+    let root_token =
+        MacaroonToken::mint(issuer_key, b"tamper-kid", "compute.dregg.fg-goose.online");
     builder.set_root_token(root_token);
 
     let att = Attenuation {

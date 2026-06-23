@@ -401,7 +401,10 @@ fn the_get_clearance_check_consults_the_stored_graph_root() {
     );
     let msg = format!("{:?}", refused.unwrap_err()).to_lowercase();
     assert!(
-        msg.contains("root") || msg.contains("commit") || msg.contains("clearance") || msg.contains("program"),
+        msg.contains("root")
+            || msg.contains("commit")
+            || msg.contains("clearance")
+            || msg.contains("program"),
         "the executor refuses on the stored-root mismatch, got: {msg}"
     );
 }

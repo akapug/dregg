@@ -63,7 +63,6 @@ use dregg_circuit::descriptor_ir2::{
     prove_vm_descriptor2, verify_vm_descriptor2,
 };
 // (verify_vm_descriptor2 is used by the makeSovereign FORCED-ON-WIRE positive tooth.)
-use dregg_circuit::lean_descriptor_air::VmConstraint;
 use dregg_circuit::effect_vm::columns::PARAM_BASE;
 use dregg_circuit::effect_vm::trace_rotated::{
     AFTER_BASE, B_AUTHORITY_DIGEST, B_MODE, ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest,
@@ -74,6 +73,7 @@ use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::HeapLeaf;
+use dregg_circuit::lean_descriptor_air::VmConstraint;
 use dregg_turn::rotation_witness as rw;
 
 /// Resolve a rotated descriptor JSON by registry key from the committed staged TSV.
@@ -198,8 +198,20 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
     let after_cell = producer_cell(balance, 1);
     let mut ledger = Ledger::new();
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let before_w = rw::produce(&before_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
-    let after_w = rw::produce(&after_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
 
     let caveat = empty_caveat_manifest();
     let (trace, dpis) = generate_rotated_effect_vm_trace(
@@ -232,9 +244,16 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
     let mut forged_after_cell = producer_cell(balance, 1);
     forged_after_cell.permissions = Permissions::zkapp(); // a DISTINCT committed authority residue
     let mut forged_ledger = Ledger::new();
-    forged_ledger.insert_cell(forged_after_cell.clone()).unwrap();
-    let forged_after_w =
-        rw::produce(&forged_after_cell, &forged_ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
+    forged_ledger
+        .insert_cell(forged_after_cell.clone())
+        .unwrap();
+    let forged_after_w = rw::produce(
+        &forged_after_cell,
+        &forged_ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
     assert_ne!(
         forged_after_w.state_commit, after_w.state_commit,
         "{name}: the forged committed-limb post publishes a DIFFERENT commit (anti-vacuity)"
@@ -300,7 +319,10 @@ fn pipelinedsend_state_binds_hash_is_residual_anchor_disabled() {
     let effect = Effect::PipelinedSend { send_hash };
     let (proved, state_rejected, hash_accepted) =
         no_cell_write_audit(effect, "pipelinedSendVmDescriptor2R24");
-    assert!(proved, "pipelinedSend: honest passthrough proves + verifies");
+    assert!(
+        proved,
+        "pipelinedSend: honest passthrough proves + verifies"
+    );
     assert!(
         state_rejected,
         "pipelinedSend: a forged AFTER state is UNSAT — the state/commit IS bound on-wire (the \
@@ -377,13 +399,33 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     after_cell.mode = CellMode::Sovereign;
     let mut ledger = Ledger::new();
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let before_w = rw::produce(&before_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
-    let after_w = rw::produce(&after_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
 
     // ANTI-VACUITY: the mode genuinely moves the committed mode + authority-digest limbs and the
     // published commit — the data the record pin binds DOES move.
-    assert_eq!(after_w.pre_limbs[B_MODE], BabyBear::ONE, "post mode limb = Sovereign(1)");
-    assert_eq!(before_w.pre_limbs[B_MODE], BabyBear::ZERO, "pre mode limb = Hosted(0)");
+    assert_eq!(
+        after_w.pre_limbs[B_MODE],
+        BabyBear::ONE,
+        "post mode limb = Sovereign(1)"
+    );
+    assert_eq!(
+        before_w.pre_limbs[B_MODE],
+        BabyBear::ZERO,
+        "pre mode limb = Hosted(0)"
+    );
     assert_ne!(
         before_w.pre_limbs[B_AUTHORITY_DIGEST], after_w.pre_limbs[B_AUTHORITY_DIGEST],
         "the authority-digest limb moves (the mode byte folds into it)"
@@ -404,7 +446,8 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     .expect("live rotated generator produces a makeSovereign trace");
     let last = &trace[trace.len() - 1];
     assert_eq!(
-        last[AFTER_BASE + B_MODE], BabyBear::ONE,
+        last[AFTER_BASE + B_MODE],
+        BabyBear::ONE,
         "the AFTER block's committed mode limb is Sovereign(1)"
     );
 
@@ -442,8 +485,13 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     forged_after.permissions = Permissions::zkapp(); // a DISTINCT committed authority residue
     let mut forged_ledger = Ledger::new();
     forged_ledger.insert_cell(forged_after.clone()).unwrap();
-    let forged_after_w =
-        rw::produce(&forged_after, &forged_ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
+    let forged_after_w = rw::produce(
+        &forged_after,
+        &forged_ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
     assert_ne!(
         forged_after_w.pre_limbs[B_AUTHORITY_DIGEST], after_w.pre_limbs[B_AUTHORITY_DIGEST],
         "the forged post-cell carries a DISTINCT authority-digest limb (anti-vacuity)"
@@ -472,7 +520,13 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     );
 
     assert!(
-        refused(&desc, &forged_trace, &forged_dpis, &mem_boundary, &map_heaps),
+        refused(
+            &desc,
+            &forged_trace,
+            &forged_dpis,
+            &mem_boundary,
+            &map_heaps
+        ),
         "SOUNDNESS (light-client unfoolable, anchor-disabled): a post-cell forged to differ in its \
          committed authority residue — committed AFTER authority-digest != the published record \
          pin — MUST be UNSAT through prove/verify ALONE; the in-circuit makeSovereign record pin \
@@ -553,8 +607,20 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     let after_cell = producer_cell(balance, 1); // a SetField bumps the nonce
     let mut ledger = Ledger::new();
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let before_w = rw::produce(&before_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
-    let after_w = rw::produce(&after_cell, &ledger, &NULL_ROOT, &COMMIT_ROOT, &receipt_log());
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &NULL_ROOT,
+        &COMMIT_ROOT,
+        &receipt_log(),
+    );
     let caveat = empty_caveat_manifest();
     let slot = 4u32;
     let prev_value = BabyBear::new(0);
@@ -568,12 +634,18 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         prev_value,
     )
     .expect("setFieldDyn base producer");
-    assert_eq!(dpis.len(), desc.public_input_count, "dpis length matches the 47-PI descriptor");
+    assert_eq!(
+        dpis.len(),
+        desc.public_input_count,
+        "dpis length matches the 47-PI descriptor"
+    );
 
     // THE PROVABILITY GATE: the honest dynamic-field write PROVES + light-client VERIFIES against the
     // DEPLOYED 581-wide descriptor — no catch_unwind. The residual is CLOSED.
-    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &[])
-        .unwrap_or_else(|e| panic!("setFieldDyn must PROVE against its deployed descriptor (581): {e}"));
+    let proof =
+        prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &[]).unwrap_or_else(|e| {
+            panic!("setFieldDyn must PROVE against its deployed descriptor (581): {e}")
+        });
     verify_vm_descriptor2(&desc, &proof, &dpis)
         .unwrap_or_else(|e| panic!("setFieldDyn proof must light-client VERIFY: {e}"));
 

@@ -371,6 +371,20 @@ impl TurnExecutor {
         to: &CellId,
         amount: u64,
     ) -> Result<(), (TurnError, Vec<usize>)> {
+        // KERNEL ALIGNMENT: the verified kernel REJECTS a self-transfer
+        // (`Dregg2.Exec.RecordKernel.recKExecAsset` requires `src ≠ dst`,
+        // returning `none`). Without this guard Rust commits a self-move as a
+        // balance no-op that still charges fee + ticks nonce + emits a receipt —
+        // a turn Lean rolls back, i.e. a rejection-parity asymmetry (Rust accepts
+        // what the verified kernel refuses).
+        if from == to {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!("self-transfer rejected: src == dst ({from})"),
+                },
+                path.to_vec(),
+            ));
+        }
         if from != action_target {
             self.check_cross_cell_permission(
                 ledger,
@@ -2732,9 +2746,7 @@ impl TurnExecutor {
 #[cfg(test)]
 mod react_executor_tests {
     use super::*;
-    use crate::action::{
-        Action, Authorization, CommitmentMode, DelegationMode, Effect,
-    };
+    use crate::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect};
     use crate::conditional::{ConditionProof, ProofCondition};
     use crate::forest::CallForest;
     use crate::pending::ResolutionCondition;
@@ -2809,9 +2821,7 @@ mod react_executor_tests {
     //    note_nullifiers gate (the same double-spend gate NoteSpend rides). ──
     #[test]
     fn react_through_executor_spends_once_and_rejects_react_twice() {
-        let executor = crate::executor::TurnExecutor::new(
-            crate::executor::ComputronCosts::zero(),
-        );
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
         let cell = react_cell();
         let wake = wake_turn(cell, 0);
         let pending_id = Nullifier(wake.hash());
@@ -2837,7 +2847,11 @@ mod react_executor_tests {
             "one live hole after notify"
         );
         assert!(
-            !executor.note_nullifiers.lock().unwrap().contains(&pending_id),
+            !executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&pending_id),
             "hole id not yet spent"
         );
 
@@ -2848,7 +2862,11 @@ mod react_executor_tests {
             .apply_effect(&react, &mut ledger, &[1], &cell, &cell, &mut journal1)
             .expect("a genuine react resolves once");
         assert!(
-            executor.note_nullifiers.lock().unwrap().contains(&pending_id),
+            executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&pending_id),
             "the hole id is now SPENT in the production nullifier set (the grow-gate step)"
         );
         assert_eq!(
@@ -2861,8 +2879,7 @@ mod react_executor_tests {
         // This is the genuine double-spend refusal — NOT an unconditional Err:
         // the executor finds pending_id already in note_nullifiers and refuses.
         let mut journal2 = LedgerJournal::new();
-        let twice =
-            executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut journal2);
+        let twice = executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut journal2);
         let (err, _) = twice.expect_err("react-twice MUST be rejected by the nullifier gate");
         match err {
             TurnError::InvalidEffect { reason } => assert!(
@@ -2872,7 +2889,13 @@ mod react_executor_tests {
             other => panic!("expected InvalidEffect double-spend, got {other:?}"),
         }
         // The nullifier set still holds exactly the one spend.
-        assert!(executor.note_nullifiers.lock().unwrap().contains(&pending_id));
+        assert!(
+            executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&pending_id)
+        );
     }
 
     // ── A REPLAYED pending_id (a fresh React carrying the SAME hole id, even
@@ -2880,9 +2903,7 @@ mod react_executor_tests {
     //    the nullifier layer, not merely by registry removal. ──
     #[test]
     fn replayed_pending_id_refused_by_nullifier_gate() {
-        let executor = crate::executor::TurnExecutor::new(
-            crate::executor::ComputronCosts::zero(),
-        );
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
         let cell = react_cell();
         let wake = wake_turn(cell, 0);
         let pending_id = Nullifier(wake.hash());
@@ -2895,7 +2916,13 @@ mod react_executor_tests {
         executor
             .apply_effect(&react, &mut ledger, &[0], &cell, &cell, &mut j1)
             .expect("first react spends the hole id");
-        assert!(executor.note_nullifiers.lock().unwrap().contains(&pending_id));
+        assert!(
+            executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&pending_id)
+        );
 
         // RE-NOTIFY the same hole (a fresh live registry entry with the same id),
         // then REACT again. The registry-removal tooth is bypassed (the hole is
@@ -2915,8 +2942,7 @@ mod react_executor_tests {
         assert_eq!(executor.reactive_registry.lock().unwrap().len(), 1);
 
         let mut j2 = LedgerJournal::new();
-        let replay =
-            executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut j2);
+        let replay = executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut j2);
         let (err, _) = replay.expect_err("a replayed pending_id MUST be refused");
         assert!(
             matches!(err, TurnError::InvalidEffect { reason } if reason.contains("double-spend")),
@@ -2929,9 +2955,7 @@ mod react_executor_tests {
     //    claiming to resolve another). ──
     #[test]
     fn react_with_mismatched_wake_refused() {
-        let executor = crate::executor::TurnExecutor::new(
-            crate::executor::ComputronCosts::zero(),
-        );
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
         let cell = react_cell();
         let wake = wake_turn(cell, 0);
         let other = wake_turn(cell, 999); // a DIFFERENT turn (different nonce)
@@ -2967,9 +2991,7 @@ mod react_executor_tests {
     //    is NOT inserted into the nullifier set on a failed react. ──
     #[test]
     fn wrong_proof_refused_spends_nothing() {
-        let executor = crate::executor::TurnExecutor::new(
-            crate::executor::ComputronCosts::zero(),
-        );
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
         let cell = react_cell();
         let wake = wake_turn(cell, 0);
         let pending_id = Nullifier(wake.hash());
@@ -2985,7 +3007,11 @@ mod react_executor_tests {
             "a wrong proof is refused"
         );
         assert!(
-            !executor.note_nullifiers.lock().unwrap().contains(&pending_id),
+            !executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&pending_id),
             "fail-closed: a refused react inserts no nullifier"
         );
 
@@ -2997,7 +3023,13 @@ mod react_executor_tests {
         executor
             .apply_effect(&good_react, &mut ledger, &[1], &cell, &cell, &mut journal2)
             .expect("the genuine proof discharges the hole");
-        assert!(executor.note_nullifiers.lock().unwrap().contains(&pending_id));
+        assert!(
+            executor
+                .note_nullifiers
+                .lock()
+                .unwrap()
+                .contains(&pending_id)
+        );
     }
 }
 

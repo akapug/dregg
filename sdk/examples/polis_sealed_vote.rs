@@ -48,10 +48,22 @@ fn main() {
     // ── 1. The eligible citizens + the 3-of-5 tally council ─────────────────
     // choice 0 = "fund parks", choice 1 = "fund transit".
     let roll = [
-        Citizen { name: "Ada",   secret: [0x10; 32] },
-        Citizen { name: "Bao",   secret: [0x20; 32] },
-        Citizen { name: "Cyra",  secret: [0x30; 32] },
-        Citizen { name: "Dmitri", secret: [0x40; 32] },
+        Citizen {
+            name: "Ada",
+            secret: [0x10; 32],
+        },
+        Citizen {
+            name: "Bao",
+            secret: [0x20; 32],
+        },
+        Citizen {
+            name: "Cyra",
+            secret: [0x30; 32],
+        },
+        Citizen {
+            name: "Dmitri",
+            secret: [0x40; 32],
+        },
     ];
     let choices = [0u32, 1, 0, 1]; // a deliberate 2–2 tie
 
@@ -65,8 +77,14 @@ fn main() {
     let council = Council::genesis(5, 3, [0x51; 32]).expect("genesis DKG");
     println!("tally council        : 3-of-5 (genesis DKG, no party holds f(0))");
     let mut election = PolisElection::new(council, election_label, roster);
-    println!("election label       : {}", String::from_utf8_lossy(election_label));
-    println!("eligible roster      : {} citizens (by H(secret) commitment)", roll.len());
+    println!(
+        "election label       : {}",
+        String::from_utf8_lossy(election_label)
+    );
+    println!(
+        "eligible roster      : {} citizens (by H(secret) commitment)",
+        roll.len()
+    );
     println!("mode                 : UNLINKABLE roster-gated sealed ballots\n");
 
     // ── 2. An INELIGIBLE voter is refused at cast (the roster tooth) ────────
@@ -131,7 +149,10 @@ fn main() {
         // produced AFTER the ballots sealed, so no voter could aim the tie.
         let mut beacon = BeaconCell::genesis(5, 3, 1, [0xBE; 32]).expect("beacon genesis");
         let tick = beacon.tick().expect("beacon tick");
-        assert!(beacon.anchor().verify_beacon(&tick.output), "light-client verifies the draw");
+        assert!(
+            beacon.anchor().verify_beacon(&tick.output),
+            "light-client verifies the draw"
+        );
         let mut draw = BeaconDraw::new(&tick.randomness());
         let winner = draw.draw(2).expect("draw from {0,1}");
         let names = ["fund parks", "fund transit"];
@@ -139,7 +160,10 @@ fn main() {
             "  beacon randomness  : {}… (light-client-verified against genesis anchor)",
             hex8(&tick.randomness())
         );
-        println!("  tie-break winner   : choice {winner} ({})", names[winner as usize]);
+        println!(
+            "  tie-break winner   : choice {winner} ({})",
+            names[winner as usize]
+        );
     } else if parks > transit {
         println!("\nwinner               : choice 0 (fund parks)");
     } else {
@@ -167,17 +191,23 @@ fn main() {
             submission: forged.submission, // seal binds 0xAB…
             nullifier: valid_nullifier,    // public claim: a valid token
         };
-        attacked.collect_unlinkable(attack).expect("dedup passes (public token valid)");
+        attacked
+            .collect_unlinkable(attack)
+            .expect("dedup passes (public token valid)");
         attacked.close().expect("close");
         match attacked.tally(&[0, 1, 2]) {
             Err(GovernanceError::NullifierMismatch) => {
-                println!("\nballot substitution  : REJECTED (sealed nullifier ≠ claimed token; choice 999 never counts) ✓")
+                println!(
+                    "\nballot substitution  : REJECTED (sealed nullifier ≠ claimed token; choice 999 never counts) ✓"
+                )
             }
             other => panic!("expected NullifierMismatch, got {other:?}"),
         }
     }
 
-    println!("\nall sealed-governance teeth fail-closed; the tally is provable from the opened ballots.");
+    println!(
+        "\nall sealed-governance teeth fail-closed; the tally is provable from the opened ballots."
+    );
 }
 
 /// First 4 bytes of a 32-byte value as hex, for a compact demo printout.

@@ -391,10 +391,7 @@ fn run_refine(args: &[String]) -> ExitCode {
             &verdict,
             as_json,
             "intent-conformance",
-            &format!(
-                "PLAN `{}` ≤ᶠ INTENT `{}`",
-                positionals[1], positionals[0]
-            ),
+            &format!("PLAN `{}` ≤ᶠ INTENT `{}`", positionals[1], positionals[0]),
             "the lowered deployment stays within the declared intent envelope (it fires only \
              effects the intent authorized)",
             "the lowered deployment EXCEEDS its declared intent — it fires an effect the intent \
@@ -415,10 +412,7 @@ fn run_refine(args: &[String]) -> ExitCode {
             &verdict,
             as_json,
             "safe-upgrade",
-            &format!(
-                "NEW `{}` ≤ᶠ OLD `{}`",
-                positionals[1], positionals[0]
-            ),
+            &format!("NEW `{}` ≤ᶠ OLD `{}`", positionals[1], positionals[0]),
             "the new deployment only NARROWS (or matches) the running one — every effect it can \
              perform, the running deployment already could; safe to roll forward",
             "the new deployment WIDENS the running one — it introduces behavior the running \

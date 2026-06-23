@@ -360,7 +360,11 @@ impl OpenableFieldsTree {
 /// re-indexing insert) — the discipline the in-circuit insertion gate's
 /// single-shared-path requires. This is the openable representation a cell with
 /// the refusal-audit slot reserved carries.
-pub fn with_reserved(mut entries: Vec<FieldsLeaf>, reserved_keys: &[u64], depth: usize) -> OpenableFieldsTree {
+pub fn with_reserved(
+    mut entries: Vec<FieldsLeaf>,
+    reserved_keys: &[u64],
+    depth: usize,
+) -> OpenableFieldsTree {
     use std::collections::HashSet;
     let present: HashSet<u32> = entries.iter().map(|l| l.key_hash.as_u32()).collect();
     let mut seen: HashSet<u32> = HashSet::new();
@@ -502,11 +506,22 @@ mod tests {
         // hash[key,0] leaf at a stable position), NOT the empty-padding ZERO.
         assert_eq!(
             w.old_leaf_digest,
-            FieldsLeaf { key_hash: field_key_hash(REFUSAL_AUDIT_EXT_KEY), value: BabyBear::ZERO }.digest(),
+            FieldsLeaf {
+                key_hash: field_key_hash(REFUSAL_AUDIT_EXT_KEY),
+                value: BabyBear::ZERO
+            }
+            .digest(),
             "reserved slot: old leaf is the value-ZERO leaf"
         );
-        assert_eq!(w.pre_root, pre.root(), "old leaf folds to the genuine pre-root");
-        assert!(w.is_genuine_insertion(), "the two folds ride ONE shared path");
+        assert_eq!(
+            w.pre_root,
+            pre.root(),
+            "old leaf folds to the genuine pre-root"
+        );
+        assert!(
+            w.is_genuine_insertion(),
+            "the two folds ride ONE shared path"
+        );
 
         // The post_root is the canonical POSITION-STABLE rebuild (one leaf moved,
         // no re-index) — what the verifier independently reconstructs.
@@ -517,7 +532,10 @@ mod tests {
             w.post_root, canonical_post,
             "the in-circuit-derived post_root IS the position-stable value update"
         );
-        assert_ne!(w.post_root, w.pre_root, "writing the audit value moves the root");
+        assert_ne!(
+            w.post_root, w.pre_root,
+            "writing the audit value moves the root"
+        );
     }
 
     /// Overwriting a PRESENT key (refusal re-fires): the old leaf digest is the
@@ -538,7 +556,10 @@ mod tests {
         );
         assert_eq!(w.pre_root, pre.root());
         assert!(w.is_genuine_insertion());
-        assert_ne!(w.post_root, w.pre_root, "overwriting the value moves the root");
+        assert_ne!(
+            w.post_root, w.pre_root,
+            "overwriting the value moves the root"
+        );
     }
 
     /// THE TOOTH (Rust witness layer): a forged post_root (not the genuine
@@ -567,7 +588,10 @@ mod tests {
         let audit = [0x5Au8; 32];
         let a = refusal_audit_value(&audit);
         let b = refusal_audit_value(&audit);
-        assert_eq!(a, b, "the audit fold is deterministic from the public bytes");
+        assert_eq!(
+            a, b,
+            "the audit fold is deterministic from the public bytes"
+        );
         let other = refusal_audit_value(&[0x5Bu8; 32]);
         assert_ne!(a, other, "distinct audits fold to distinct values");
     }
@@ -606,7 +630,8 @@ mod tests {
         // post-cell needed; the verifier reconstructs it from pre + public audit.
         assert_eq!(
             w.post_root,
-            pre.with_value_at(REFUSAL_AUDIT_EXT_KEY, refusal_audit_value(&audit)).unwrap()
+            pre.with_value_at(REFUSAL_AUDIT_EXT_KEY, refusal_audit_value(&audit))
+                .unwrap()
         );
     }
 }

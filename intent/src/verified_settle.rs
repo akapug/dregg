@@ -512,8 +512,9 @@ pub mod ffi {
         k: &VerifiedLedger,
         leg: &VerifiedLeg,
     ) -> Result<(Vec<(u8, i128)>, bool), VerifiedSettleError> {
-        let gate = crate::verified_gate::gate()
-            .ok_or_else(|| VerifiedSettleError::FfiUnavailable("no verified gate registered".into()))?;
+        let gate = crate::verified_gate::gate().ok_or_else(|| {
+            VerifiedSettleError::FfiUnavailable("no verified gate registered".into())
+        })?;
         let input = encode_leg_input(k, leg);
         let out = gate
             .record_kernel_step(&input)

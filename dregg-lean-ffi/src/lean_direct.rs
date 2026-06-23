@@ -25,9 +25,7 @@
 //! (`cfg(dregg_direct_present)`, set by build.rs). When absent the public entry returns `Err` and the
 //! caller falls back to the JSON path.
 
-use crate::marshal::{
-    Auth, Cap, WForest, WireAuth, WireCaveat, WireHostCtx, WireState, WireValue,
-};
+use crate::marshal::{Auth, Cap, WForest, WireAuth, WireCaveat, WireHostCtx, WireState, WireValue};
 use crate::{ShadowState, ShadowVerdict, TurnStatus};
 
 /// Whether the no-copy direct boundary is available in this build (the archive exported
@@ -124,8 +122,15 @@ mod imp {
         fn dregg_d_cellnats_cons(cell: u64, val: u64, xs: Obj) -> Obj;
 
         fn dregg_d_mk_wstate(
-            cells: Obj, caps: Obj, bal: Obj, nullifiers: Obj, commitments: Obj, revoked: Obj,
-            lifecycle: Obj, death_cert: Obj, delegate: Obj,
+            cells: Obj,
+            caps: Obj,
+            bal: Obj,
+            nullifiers: Obj,
+            commitments: Obj,
+            revoked: Obj,
+            lifecycle: Obj,
+            death_cert: Obj,
+            delegate: Obj,
         ) -> Obj;
 
         fn dregg_d_auth_signature(pk: u64, sig: u64) -> Obj;
@@ -184,15 +189,32 @@ mod imp {
         fn dregg_d_childlist_cons(x: Obj, xs: Obj) -> Obj;
 
         fn dregg_d_mk_wturn(
-            agent: u64, nonce: u64, fee: Obj, valid_until: u64, block_height: u64, prev_hash: u64,
+            agent: u64,
+            nonce: u64,
+            fee: Obj,
+            valid_until: u64,
+            block_height: u64,
+            prev_hash: u64,
             root: Obj,
         ) -> Obj;
         fn dregg_d_mk_whostctx(
-            now: u64, block_height: u64, frozen: Obj, stored_head: u64, budget: u64,
+            now: u64,
+            block_height: u64,
+            frozen: Obj,
+            stored_head: u64,
+            budget: u64,
         ) -> Obj;
 
         // ---- the executor (takes the three built values; returns a WStatusResult) ----
         fn dregg_exec_full_forest_auth_direct(host: Obj, state: Obj, turn: Obj) -> Obj;
+
+        // ---- MEASUREMENT-ONLY exports (additive; see FFIDirect.lean §MEASUREMENT) ----
+        // The bare cross-into-Lean floor: takes the same `WState` and returns it (no exec).
+        fn dregg_ffi_identity(state: Obj) -> Obj;
+        // `execDirect` with monotonic-clock fences between its 4 sub-phases (prints to stderr only
+        // under DREGG_LEAN_PROFILE=1). Pure-typed (runs its IO internally via `unsafeIO`), so the ABI
+        // is the SAME `WStatusResult` ctor as `execDirect` — no `world` token to thread.
+        fn dregg_exec_full_forest_auth_direct_profiled(host: Obj, state: Obj, turn: Obj) -> Obj;
 
         // ---- the READER family (project the result + post-state to scalars) ----
         fn dregg_d_res_status(r: Obj) -> u64;
@@ -251,7 +273,9 @@ mod imp {
     /// string (the reader handed us an owned ref). Caller passes an OWNED `Obj` (consumes it).
     unsafe fn read_owned_string(s: Obj) -> String {
         let cstr = dregg_rt_string_cstr(s);
-        let out = std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned();
+        let out = std::ffi::CStr::from_ptr(cstr)
+            .to_string_lossy()
+            .into_owned();
         dregg_rt_dec(s);
         out
     }
@@ -271,7 +295,11 @@ mod imp {
         let mag = i.unsigned_abs();
         // The wire/kernel ints are <= u64 magnitude; clamp defensively (a value beyond u64 would be a
         // marshalling bug the JSON path would also mis-handle). The builder takes a u64 magnitude.
-        let mag_u64 = if mag > u64::MAX as u128 { u64::MAX } else { mag as u64 };
+        let mag_u64 = if mag > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            mag as u64
+        };
         dregg_d_int_of_u64(mag_u64, neg as u8)
     }
 
@@ -281,7 +309,11 @@ mod imp {
         dregg_rt_inc(i);
         let mag = dregg_d_int_mag(i); // consumes one ref (the inc'd one)
         let neg = dregg_d_int_neg(i) != 0; // consumes the original ref
-        if neg { -(mag as i128) } else { mag as i128 }
+        if neg {
+            -(mag as i128)
+        } else {
+            mag as i128
+        }
     }
 
     // ---- list builders (Auth / Cap / Value-fields / AuthW / caveat / action / child) ----
@@ -329,35 +361,49 @@ mod imp {
 
     unsafe fn build_auth_w(a: &WireAuth) -> Obj {
         match a {
-            WireAuth::Signature { pubkey, sig } => {
-                dregg_d_auth_signature(digest_low(pubkey), *sig)
-            }
-            WireAuth::Proof { vk, proof, bound_action, bound_resource } => {
-                dregg_d_auth_proof(digest_low(vk), *proof, *bound_action, *bound_resource)
-            }
+            WireAuth::Signature { pubkey, sig } => dregg_d_auth_signature(digest_low(pubkey), *sig),
+            WireAuth::Proof {
+                vk,
+                proof,
+                bound_action,
+                bound_resource,
+            } => dregg_d_auth_proof(digest_low(vk), *proof, *bound_action, *bound_resource),
             WireAuth::Breadstuff { token } => dregg_d_auth_breadstuff(*token),
-            WireAuth::Bearer { deleg_msg, deleg_sig, stark } => {
-                dregg_d_auth_bearer(digest_low(deleg_msg), *deleg_sig, *stark as u8)
-            }
+            WireAuth::Bearer {
+                deleg_msg,
+                deleg_sig,
+                stark,
+            } => dregg_d_auth_bearer(digest_low(deleg_msg), *deleg_sig, *stark as u8),
             WireAuth::Unchecked => dregg_d_auth_unchecked,
-            WireAuth::CapTpDelivered { intro_msg, sender_msg, intro_sig, sender_sig } => {
-                dregg_d_auth_captp(
-                    digest_low(intro_msg), digest_low(sender_msg), *intro_sig, *sender_sig,
-                )
-            }
+            WireAuth::CapTpDelivered {
+                intro_msg,
+                sender_msg,
+                intro_sig,
+                sender_sig,
+            } => dregg_d_auth_captp(
+                digest_low(intro_msg),
+                digest_low(sender_msg),
+                *intro_sig,
+                *sender_sig,
+            ),
             WireAuth::Custom { kind_stmt, proof } => {
                 dregg_d_auth_custom(digest_low(kind_stmt), *proof)
             }
-            WireAuth::OneOf { candidates, proof_index } => {
+            WireAuth::OneOf {
+                candidates,
+                proof_index,
+            } => {
                 let mut acc = dregg_d_authwlist_nil;
                 for c in candidates.iter().rev() {
                     acc = dregg_d_authwlist_cons(build_auth_w(c), acc);
                 }
                 dregg_d_auth_oneof(acc, *proof_index)
             }
-            WireAuth::Stealth { one_time_pk, ephemeral_pk, sig } => {
-                dregg_d_auth_stealth(digest_low(one_time_pk), digest_low(ephemeral_pk), *sig)
-            }
+            WireAuth::Stealth {
+                one_time_pk,
+                ephemeral_pk,
+                sig,
+            } => dregg_d_auth_stealth(digest_low(one_time_pk), digest_low(ephemeral_pk), *sig),
             WireAuth::Token { issuer_key, sig } => dregg_d_auth_token(digest_low(issuer_key), *sig),
         }
     }
@@ -389,35 +435,72 @@ mod imp {
     unsafe fn build_action(a: &crate::marshal::WireAction) -> Obj {
         use crate::marshal::WireAction as A;
         match a {
-            A::Balance { actor, src, dst, amt, asset } => {
-                dregg_d_act_balance(*actor, *src, *dst, mk_int(*amt), *asset)
-            }
-            A::Delegate { delegator, recipient, t } => dregg_d_act_delegate(*delegator, *recipient, *t),
+            A::Balance {
+                actor,
+                src,
+                dst,
+                amt,
+                asset,
+            } => dregg_d_act_balance(*actor, *src, *dst, mk_int(*amt), *asset),
+            A::Delegate {
+                delegator,
+                recipient,
+                t,
+            } => dregg_d_act_delegate(*delegator, *recipient, *t),
             A::Revoke { holder, t } => dregg_d_act_revoke(*holder, *t),
-            A::Mint { actor, cell, asset, amt } => dregg_d_act_mint(*actor, *cell, *asset, mk_int(*amt)),
-            A::Burn { actor, cell, asset, amt } => dregg_d_act_burn(*actor, *cell, *asset, mk_int(*amt)),
-            A::SetField { actor, cell, field, v } => {
-                dregg_d_act_setfield(*actor, *cell, mk_string(field), mk_int(*v))
+            A::Mint {
+                actor,
+                cell,
+                asset,
+                amt,
+            } => dregg_d_act_mint(*actor, *cell, *asset, mk_int(*amt)),
+            A::Burn {
+                actor,
+                cell,
+                asset,
+                amt,
+            } => dregg_d_act_burn(*actor, *cell, *asset, mk_int(*amt)),
+            A::SetField {
+                actor,
+                cell,
+                field,
+                v,
+            } => dregg_d_act_setfield(*actor, *cell, mk_string(field), mk_int(*v)),
+            A::Emit {
+                actor,
+                cell,
+                topic,
+                data,
+            } => dregg_d_act_emit(*actor, *cell, mk_int(*topic), mk_int(*data)),
+            A::IncNonce {
+                actor,
+                cell,
+                new_nonce,
+            } => dregg_d_act_incnonce(*actor, *cell, mk_int(*new_nonce)),
+            A::SetPerms { actor, cell, perms } => {
+                dregg_d_act_setperms(*actor, *cell, mk_int(*perms))
             }
-            A::Emit { actor, cell, topic, data } => {
-                dregg_d_act_emit(*actor, *cell, mk_int(*topic), mk_int(*data))
-            }
-            A::IncNonce { actor, cell, new_nonce } => {
-                dregg_d_act_incnonce(*actor, *cell, mk_int(*new_nonce))
-            }
-            A::SetPerms { actor, cell, perms } => dregg_d_act_setperms(*actor, *cell, mk_int(*perms)),
             A::SetVk { actor, cell, vk } => dregg_d_act_setvk(*actor, *cell, mk_int(*vk)),
-            A::Introduce { introducer, recipient, target } => {
-                dregg_d_act_introduce(*introducer, *recipient, *target)
-            }
-            A::DelegateAtten { delegator, recipient, target, keep } => {
-                dregg_d_act_delatten(*delegator, *recipient, *target, build_auth_list(keep))
-            }
+            A::Introduce {
+                introducer,
+                recipient,
+                target,
+            } => dregg_d_act_introduce(*introducer, *recipient, *target),
+            A::DelegateAtten {
+                delegator,
+                recipient,
+                target,
+                keep,
+            } => dregg_d_act_delatten(*delegator, *recipient, *target, build_auth_list(keep)),
             A::Attenuate { actor, idx, keep } => {
                 dregg_d_act_atten(*actor, *idx, build_auth_list(keep))
             }
             A::RevokeDelegation { holder, target } => dregg_d_act_revdel(*holder, *target),
-            A::Exercise { actor, target, inner } => {
+            A::Exercise {
+                actor,
+                target,
+                inner,
+            } => {
                 let mut acc = dregg_d_actlist_nil;
                 for ia in inner.iter().rev() {
                     acc = dregg_d_actlist_cons(build_action(ia), acc);
@@ -425,28 +508,53 @@ mod imp {
                 dregg_d_act_exercise(*actor, *target, acc)
             }
             A::CreateCell { actor, new_cell } => dregg_d_act_createcell(*actor, *new_cell),
-            A::CreateCellFromFactory { actor, new_cell, vk } => {
-                dregg_d_act_createcellfactory(*actor, *new_cell, mk_int(*vk))
-            }
-            A::Spawn { actor, child, target } => dregg_d_act_spawn(*actor, *child, *target),
-            A::BridgeMint { actor, cell, asset, value } => {
-                dregg_d_act_bmint(*actor, *cell, *asset, mk_int(*value))
-            }
-            A::NoteSpend { nf, actor, spend_proof } => {
-                dregg_d_act_nspend(*nf, *actor, *spend_proof as u8)
-            }
+            A::CreateCellFromFactory {
+                actor,
+                new_cell,
+                vk,
+            } => dregg_d_act_createcellfactory(*actor, *new_cell, mk_int(*vk)),
+            A::Spawn {
+                actor,
+                child,
+                target,
+            } => dregg_d_act_spawn(*actor, *child, *target),
+            A::BridgeMint {
+                actor,
+                cell,
+                asset,
+                value,
+            } => dregg_d_act_bmint(*actor, *cell, *asset, mk_int(*value)),
+            A::NoteSpend {
+                nf,
+                actor,
+                spend_proof,
+            } => dregg_d_act_nspend(*nf, *actor, *spend_proof as u8),
             A::NoteCreate { cm, actor } => dregg_d_act_ncreate(*cm, *actor),
             A::MakeSovereign { actor, cell } => dregg_d_act_sov(*actor, *cell),
             A::Refusal { actor, cell } => dregg_d_act_refusal(*actor, *cell),
             A::ReceiptArchive { actor, cell } => dregg_d_act_rarchive(*actor, *cell),
             A::CellSeal { actor, cell } => dregg_d_act_cseal(*actor, *cell),
             A::CellUnseal { actor, cell } => dregg_d_act_cunseal(*actor, *cell),
-            A::CellDestroy { actor, cell, cert_hash } => dregg_d_act_cdestroy(*actor, *cell, *cert_hash),
+            A::CellDestroy {
+                actor,
+                cell,
+                cert_hash,
+            } => dregg_d_act_cdestroy(*actor, *cell, *cert_hash),
             A::RefreshDelegation { actor, child } => dregg_d_act_rdel(*actor, *child),
             A::PipelinedSend { actor } => dregg_d_act_psend(*actor),
-            A::HeapWrite { actor, target, addr, value, new_root } => {
-                dregg_d_act_hwrite(*actor, *target, mk_int(*addr), mk_int(*value), mk_int(*new_root))
-            }
+            A::HeapWrite {
+                actor,
+                target,
+                addr,
+                value,
+                new_root,
+            } => dregg_d_act_hwrite(
+                *actor,
+                *target,
+                mk_int(*addr),
+                mk_int(*value),
+                mk_int(*new_root),
+            ),
         }
     }
 
@@ -457,7 +565,10 @@ mod imp {
         let mut kids = dregg_d_childlist_nil;
         for c in f.children.iter().rev() {
             let child = dregg_d_mk_wchild(
-                c.holder, build_auth_list(&c.keep), build_cap(&c.parent_cap), build_forest(&c.sub),
+                c.holder,
+                build_auth_list(&c.keep),
+                build_cap(&c.parent_cap),
+                build_forest(&c.sub),
             );
             kids = dregg_d_childlist_cons(child, kids);
         }
@@ -484,7 +595,15 @@ mod imp {
         let death_cert = build_cellnats(&s.death_cert);
         let delegate = build_cellnats(&s.delegate);
         dregg_d_mk_wstate(
-            cells, caps, bal, nullifiers, commitments, revoked, lifecycle, death_cert, delegate,
+            cells,
+            caps,
+            bal,
+            nullifiers,
+            commitments,
+            revoked,
+            lifecycle,
+            death_cert,
+            delegate,
         )
     }
 
@@ -503,7 +622,6 @@ mod imp {
         }
         acc
     }
-
 
     // ---- readers ----
 
@@ -567,8 +685,14 @@ mod imp {
 
     fn auth_of_u8(t: u8) -> Auth {
         match t {
-            0 => Auth::Read, 1 => Auth::Write, 2 => Auth::Grant, 3 => Auth::Call,
-            4 => Auth::Reply, 5 => Auth::Reset, 6 => Auth::Control, _ => Auth::Notify,
+            0 => Auth::Read,
+            1 => Auth::Write,
+            2 => Auth::Grant,
+            3 => Auth::Call,
+            4 => Auth::Reply,
+            5 => Auth::Reset,
+            6 => Auth::Control,
+            _ => Auth::Notify,
         }
     }
 
@@ -599,11 +723,20 @@ mod imp {
 
     unsafe fn read_post_state(w: Obj) -> WireState {
         // cells
-        let cells_o = { dregg_rt_inc(w); dregg_d_st_cells(w) };
-        let n = { dregg_rt_inc(cells_o); dregg_d_cells_len(cells_o) };
+        let cells_o = {
+            dregg_rt_inc(w);
+            dregg_d_st_cells(w)
+        };
+        let n = {
+            dregg_rt_inc(cells_o);
+            dregg_d_cells_len(cells_o)
+        };
         let mut cells = Vec::with_capacity(n as usize);
         for i in 0..n {
-            let id = { dregg_rt_inc(cells_o); dregg_d_cells_id(cells_o, i) };
+            let id = {
+                dregg_rt_inc(cells_o);
+                dregg_d_cells_id(cells_o, i)
+            };
             let v = {
                 dregg_rt_inc(cells_o);
                 let o = dregg_d_cells_val(cells_o, i);
@@ -616,13 +749,28 @@ mod imp {
         dregg_rt_dec(cells_o);
 
         // caps
-        let caps_o = { dregg_rt_inc(w); dregg_d_st_caps(w) };
-        let cn = { dregg_rt_inc(caps_o); dregg_d_caps_len(caps_o) };
+        let caps_o = {
+            dregg_rt_inc(w);
+            dregg_d_st_caps(w)
+        };
+        let cn = {
+            dregg_rt_inc(caps_o);
+            dregg_d_caps_len(caps_o)
+        };
         let mut caps = Vec::with_capacity(cn as usize);
         for i in 0..cn {
-            let h = { dregg_rt_inc(caps_o); dregg_d_caps_holder(caps_o, i) };
-            let cl_o = { dregg_rt_inc(caps_o); dregg_d_caps_clist(caps_o, i) };
-            let cll = { dregg_rt_inc(cl_o); dregg_d_caplist_len(cl_o) };
+            let h = {
+                dregg_rt_inc(caps_o);
+                dregg_d_caps_holder(caps_o, i)
+            };
+            let cl_o = {
+                dregg_rt_inc(caps_o);
+                dregg_d_caps_clist(caps_o, i)
+            };
+            let cll = {
+                dregg_rt_inc(cl_o);
+                dregg_d_caplist_len(cl_o)
+            };
             let mut cl = Vec::with_capacity(cll as usize);
             for j in 0..cll {
                 dregg_rt_inc(cl_o);
@@ -636,12 +784,24 @@ mod imp {
         dregg_rt_dec(caps_o);
 
         // bal
-        let bal_o = { dregg_rt_inc(w); dregg_d_st_bal(w) };
-        let bn = { dregg_rt_inc(bal_o); dregg_d_bal_len(bal_o) };
+        let bal_o = {
+            dregg_rt_inc(w);
+            dregg_d_st_bal(w)
+        };
+        let bn = {
+            dregg_rt_inc(bal_o);
+            dregg_d_bal_len(bal_o)
+        };
         let mut bal = Vec::with_capacity(bn as usize);
         for i in 0..bn {
-            let cell = { dregg_rt_inc(bal_o); dregg_d_bal_cell(bal_o, i) };
-            let asset = { dregg_rt_inc(bal_o); dregg_d_bal_asset(bal_o, i) };
+            let cell = {
+                dregg_rt_inc(bal_o);
+                dregg_d_bal_cell(bal_o, i)
+            };
+            let asset = {
+                dregg_rt_inc(bal_o);
+                dregg_d_bal_asset(bal_o, i)
+            };
             let amt = {
                 dregg_rt_inc(bal_o);
                 read_owned_int(dregg_d_bal_amt(bal_o, i))
@@ -658,12 +818,29 @@ mod imp {
         let delegate = read_cellnats_field(w, StField::Delegate);
 
         WireState {
-            cells, caps, bal, escrows: vec![], nullifiers, commitments,
-            queues: vec![], swiss: vec![], revoked, lifecycle, death_cert, delegate,
+            cells,
+            caps,
+            bal,
+            escrows: vec![],
+            nullifiers,
+            commitments,
+            queues: vec![],
+            swiss: vec![],
+            revoked,
+            lifecycle,
+            death_cert,
+            delegate,
         }
     }
 
-    enum StField { Nullifiers, Commitments, Revoked, Lifecycle, DeathCert, Delegate }
+    enum StField {
+        Nullifiers,
+        Commitments,
+        Revoked,
+        Lifecycle,
+        DeathCert,
+        Delegate,
+    }
 
     unsafe fn read_nat_list_field(w: Obj, f: StField) -> Vec<u64> {
         let o = {
@@ -675,7 +852,10 @@ mod imp {
                 _ => unreachable!(),
             }
         };
-        let n = { dregg_rt_inc(o); dregg_d_natlist_len(o) };
+        let n = {
+            dregg_rt_inc(o);
+            dregg_d_natlist_len(o)
+        };
         let mut out = Vec::with_capacity(n as usize);
         for i in 0..n {
             dregg_rt_inc(o);
@@ -695,11 +875,20 @@ mod imp {
                 _ => unreachable!(),
             }
         };
-        let n = { dregg_rt_inc(o); dregg_d_cellnats_len(o) };
+        let n = {
+            dregg_rt_inc(o);
+            dregg_d_cellnats_len(o)
+        };
         let mut out = Vec::with_capacity(n as usize);
         for i in 0..n {
-            let c = { dregg_rt_inc(o); dregg_d_cellnats_cell(o, i) };
-            let v = { dregg_rt_inc(o); dregg_d_cellnats_val(o, i) };
+            let c = {
+                dregg_rt_inc(o);
+                dregg_d_cellnats_cell(o, i)
+            };
+            let v = {
+                dregg_rt_inc(o);
+                dregg_d_cellnats_val(o, i)
+            };
             out.push((c, v));
         }
         dregg_rt_dec(o);
@@ -710,21 +899,37 @@ mod imp {
     /// contract); no object escapes the call; the result is fully drained before its refs are
     /// dropped. Returns the decoded [`ShadowState`] (verdict + post-state), matching the JSON path.
     pub(super) fn run_direct(
-        host: &WireHostCtx, state: &WireState, turn_root: &WForest, turn: &WireTurnHdr,
+        host: &WireHostCtx,
+        state: &WireState,
+        turn_root: &WForest,
+        turn: &WireTurnHdr,
     ) -> ShadowState {
         unsafe {
             let dbg = std::env::var("DREGG_DIRECT_DEBUG").as_deref() == Ok("1");
-            macro_rules! step { ($s:expr) => { if dbg { eprintln!("[direct] {}", $s); } } }
+            macro_rules! step {
+                ($s:expr) => {
+                    if dbg {
+                        eprintln!("[direct] {}", $s);
+                    }
+                };
+            }
             // Env-gated sub-phase profiler: times (b) IN tree construction, (c) the execDirect call,
             // (d)+(e) reading the OUT tree back into the WireState mirror. Off (zero cost) unless
             // DREGG_FFI_PROFILE=1. Phase (a) "build the Rust mirror" is measured at the call site in
             // exec-lean (`ledger_to_wire_state`), since this fn already receives the mirror.
             let prof = std::env::var("DREGG_FFI_PROFILE").as_deref() == Ok("1");
-            let t_in0 = if prof { Some(std::time::Instant::now()) } else { None };
+            let t_in0 = if prof {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
             step!("build host");
             // Build the three boundary values (owned).
             let host_o = dregg_d_mk_whostctx(
-                host.now, host.block_height, build_nat_list(&host.frozen), host.stored_head,
+                host.now,
+                host.block_height,
+                build_nat_list(&host.frozen),
+                host.stored_head,
                 host.budget,
             );
             step!("build state");
@@ -733,21 +938,43 @@ mod imp {
             let root_o = build_forest(turn_root);
             step!("build turn");
             let turn_o = dregg_d_mk_wturn(
-                turn.agent, turn.nonce, mk_int(turn.fee), turn.valid_until, turn.block_height,
-                turn.prev_low, root_o,
+                turn.agent,
+                turn.nonce,
+                mk_int(turn.fee),
+                turn.valid_until,
+                turn.block_height,
+                turn.prev_low,
+                root_o,
             );
-            let t_exec0 = if prof { Some(std::time::Instant::now()) } else { None };
+            let t_exec0 = if prof {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
 
             step!("exec");
             // Run the IDENTICAL proved executor on the built values (consumes host_o/state_o/turn_o).
             let res = dregg_exec_full_forest_auth_direct(host_o, state_o, turn_o);
             step!("read result");
-            let t_read0 = if prof { Some(std::time::Instant::now()) } else { None };
+            let t_read0 = if prof {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
 
             // Drain the WHOLE result while it is still alive (no escaping GC object).
-            let status_code = { dregg_rt_inc(res); dregg_d_res_status(res) };
-            let loglen = { dregg_rt_inc(res); dregg_d_res_loglen(res) };
-            let post_o = { dregg_rt_inc(res); dregg_d_res_state(res) };
+            let status_code = {
+                dregg_rt_inc(res);
+                dregg_d_res_status(res)
+            };
+            let loglen = {
+                dregg_rt_inc(res);
+                dregg_d_res_loglen(res)
+            };
+            let post_o = {
+                dregg_rt_inc(res);
+                dregg_d_res_state(res)
+            };
             let post = read_post_state(post_o);
             dregg_rt_dec(post_o);
             dregg_rt_dec(res);
@@ -769,7 +996,105 @@ mod imp {
             };
             let committed = status_code == 2;
             ShadowState {
-                verdict: ShadowVerdict { committed, loglen, status, divergence_note: None },
+                verdict: ShadowVerdict {
+                    committed,
+                    loglen,
+                    status,
+                    divergence_note: None,
+                },
+                state: post,
+            }
+        }
+    }
+
+    /// MEASUREMENT: time `iters` round trips through the BARE identity export
+    /// (`dregg_ffi_identity`) — build the same `WState` once, then loop: inc the built object,
+    /// call across into Lean (which hands it straight back), and dec the returned ref. Returns the
+    /// median per-call seconds. This isolates the pure cross-into-Lean + region/refcount cost with
+    /// NO executor work. Single-threaded (the ST contract); the built `WState` is reused across
+    /// iters (its construction is NOT timed — only the boundary crossing is).
+    pub(super) fn identity_floor_median(state: &WireState, iters: u32) -> f64 {
+        unsafe {
+            let state_o = build_state(state);
+            // warm (lazy first-call init must not contaminate)
+            for _ in 0..3 {
+                dregg_rt_inc(state_o);
+                let r = dregg_ffi_identity(state_o);
+                dregg_rt_dec(r);
+            }
+            let mut samples = Vec::with_capacity(iters as usize);
+            for _ in 0..iters {
+                let t0 = std::time::Instant::now();
+                dregg_rt_inc(state_o);
+                let r = dregg_ffi_identity(state_o);
+                core::hint::black_box(r);
+                dregg_rt_dec(r);
+                samples.push(t0.elapsed().as_secs_f64());
+            }
+            dregg_rt_dec(state_o);
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            samples[samples.len() / 2]
+        }
+    }
+
+    /// MEASUREMENT: run the PROFILED executor export once on freshly-built boundary values. The Lean
+    /// side prints its per-phase `DREGG_LEAN_PROFILE` line (when that env var is `1`) and returns the
+    /// identical `WStatusResult`, which we drain exactly like `run_direct` (so the call is faithful).
+    /// Used by the bench under a profiling loop; not on the production path.
+    pub(super) fn run_direct_profiled(
+        host: &WireHostCtx,
+        state: &WireState,
+        turn_root: &WForest,
+        turn: &WireTurnHdr,
+    ) -> ShadowState {
+        unsafe {
+            let host_o = dregg_d_mk_whostctx(
+                host.now,
+                host.block_height,
+                build_nat_list(&host.frozen),
+                host.stored_head,
+                host.budget,
+            );
+            let state_o = build_state(state);
+            let root_o = build_forest(turn_root);
+            let turn_o = dregg_d_mk_wturn(
+                turn.agent,
+                turn.nonce,
+                mk_int(turn.fee),
+                turn.valid_until,
+                turn.block_height,
+                turn.prev_low,
+                root_o,
+            );
+            let res = dregg_exec_full_forest_auth_direct_profiled(host_o, state_o, turn_o);
+            let status_code = {
+                dregg_rt_inc(res);
+                dregg_d_res_status(res)
+            };
+            let loglen = {
+                dregg_rt_inc(res);
+                dregg_d_res_loglen(res)
+            };
+            let post_o = {
+                dregg_rt_inc(res);
+                dregg_d_res_state(res)
+            };
+            let post = read_post_state(post_o);
+            dregg_rt_dec(post_o);
+            dregg_rt_dec(res);
+            let status = match status_code {
+                2 => Some(TurnStatus::BodyCommitted),
+                1 => Some(TurnStatus::PrologueCommittedBodyFailed),
+                _ => Some(TurnStatus::Rejected),
+            };
+            let committed = status_code == 2;
+            ShadowState {
+                verdict: ShadowVerdict {
+                    committed,
+                    loglen,
+                    status,
+                    divergence_note: None,
+                },
                 state: post,
             }
         }
@@ -794,7 +1119,10 @@ pub struct WireTurnHdr {
 /// the caller falls back to the JSON path.
 #[cfg(dregg_direct_present)]
 pub fn shadow_exec_direct(
-    host: &WireHostCtx, state: &WireState, turn_root: &WForest, turn: &WireTurnHdr,
+    host: &WireHostCtx,
+    state: &WireState,
+    turn_root: &WForest,
+    turn: &WireTurnHdr,
 ) -> Result<ShadowState, String> {
     crate::lean_available()
         .then_some(())
@@ -804,8 +1132,56 @@ pub fn shadow_exec_direct(
 
 #[cfg(not(dregg_direct_present))]
 pub fn shadow_exec_direct(
-    _host: &WireHostCtx, _state: &WireState, _turn_root: &WForest, _turn: &WireTurnHdr,
+    _host: &WireHostCtx,
+    _state: &WireState,
+    _turn_root: &WForest,
+    _turn: &WireTurnHdr,
 ) -> Result<ShadowState, String> {
-    Err("dregg_exec_full_forest_auth_direct not exported by the linked archive (rebuild to enable)"
-        .into())
+    Err(
+        "dregg_exec_full_forest_auth_direct not exported by the linked archive (rebuild to enable)"
+            .into(),
+    )
+}
+
+/// MEASUREMENT-ONLY: median per-call seconds of the BARE FFI-into-Lean floor (`dregg_ffi_identity`)
+/// over `iters` crossings on the same built `WState`. Isolates the pure cross-into-Lean +
+/// region/refcount cost (no executor work). For `perf/benches/lean_ffi_turn.rs`. `Err` if the
+/// archive lacks the export or the runtime is uninitialised.
+#[cfg(dregg_direct_present)]
+pub fn identity_floor_median(state: &WireState, iters: u32) -> Result<f64, String> {
+    crate::lean_available()
+        .then_some(())
+        .ok_or_else(|| "lean runtime not initialised".to_string())?;
+    Ok(imp::identity_floor_median(state, iters))
+}
+
+#[cfg(not(dregg_direct_present))]
+pub fn identity_floor_median(_state: &WireState, _iters: u32) -> Result<f64, String> {
+    Err("dregg_ffi_identity not exported by the linked archive (rebuild to enable)".into())
+}
+
+/// MEASUREMENT-ONLY: run the PROFILED executor export once (Lean prints its per-phase
+/// `DREGG_LEAN_PROFILE` line when that env var is `1`); returns the same `ShadowState` the
+/// production path would. For `perf/benches/lean_ffi_turn.rs`.
+#[cfg(dregg_direct_present)]
+pub fn shadow_exec_direct_profiled(
+    host: &WireHostCtx,
+    state: &WireState,
+    turn_root: &WForest,
+    turn: &WireTurnHdr,
+) -> Result<ShadowState, String> {
+    crate::lean_available()
+        .then_some(())
+        .ok_or_else(|| "lean runtime not initialised".to_string())?;
+    Ok(imp::run_direct_profiled(host, state, turn_root, turn))
+}
+
+#[cfg(not(dregg_direct_present))]
+pub fn shadow_exec_direct_profiled(
+    _host: &WireHostCtx,
+    _state: &WireState,
+    _turn_root: &WForest,
+    _turn: &WireTurnHdr,
+) -> Result<ShadowState, String> {
+    Err("dregg_exec_full_forest_auth_direct_profiled not exported by the linked archive".into())
 }

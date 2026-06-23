@@ -81,6 +81,7 @@ pub mod sse;
 pub mod state_machine;
 pub mod trustless;
 pub mod validation;
+pub mod verified_gate;
 /// Route the LIVE ring settlement through the VERIFIED Lean executor.
 ///
 /// A fulfilled intent's lowered `SealedTurn` is folded — leg by leg — through the real
@@ -92,7 +93,6 @@ pub mod validation;
 /// default native build (Lean unconditional) additionally arms the REAL FFI ([`verified_settle::ffi`]) that
 /// routes each leg through the linked Lean archive.
 pub mod verified_settle;
-pub mod verified_gate;
 pub use verified_gate::{IntentVerifiedGate, register_intent_verified_gate};
 
 use serde::{Deserialize, Serialize};

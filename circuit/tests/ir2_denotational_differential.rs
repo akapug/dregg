@@ -286,7 +286,13 @@ fn mem_log(d: &Descriptor2, t: &VmTraceC) -> Vec<MemTraceOp> {
 
 /// Lean `opRow` = `[addr,value,prev_value,prev_serial,kind]`.
 fn op_row(op: &MemTraceOp) -> Vec<i128> {
-    vec![op.addr, op.val, op.prev_val, op.prev_serial, kind_code(op.kind)]
+    vec![
+        op.addr,
+        op.val,
+        op.prev_val,
+        op.prev_serial,
+        kind_code(op.kind),
+    ]
 }
 
 /// Lean `mapLog` = every row's guarded `MapOp.rowAt` (`[root,key,value,op,new_root]`).
@@ -796,10 +802,10 @@ fn real_eval_accepts(d: &Descriptor2, t: &VmTraceC) -> Option<bool> {
 
 use dregg_circuit::descriptor_ir2::{
     LookupSpec, MapKind as RealMapKind, MapOpSpec, MemBoundaryWitness, MemKind as RealMemKind,
-    MemOpSpec, TableDef2, TableSem, TID_P2, TID_RANGE as REAL_TID_RANGE,
+    MemOpSpec, TID_P2, TID_RANGE as REAL_TID_RANGE, TableDef2, TableSem,
 };
 use dregg_circuit::field::BabyBear as Bb;
-use dregg_circuit::heap_root::{CanonicalHeapTree, HeapLeaf, HEAP_TREE_DEPTH};
+use dregg_circuit::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
 
 fn bb(v: i128) -> Bb {
     Bb::new(v as u32)
@@ -1150,7 +1156,10 @@ fn gen_case(
                 r[STATE_BEFORE_BASE] = 42; // both forced; continuity holds across windows
                 rows.push(r);
             }
-            let mut t = VmTraceC { rows, tf: empty_tf() };
+            let mut t = VmTraceC {
+                rows,
+                tf: empty_tf(),
+            };
             let mut intended_accept = true;
             if !target_accept {
                 intended_accept = false;
@@ -1231,10 +1240,11 @@ fn gen_case(
             let key = (rng.next_u64() % BOUND_V as u64) as i128;
             let digest = (rng.next_u64() % BOUND_V as u64) as i128;
             let mut tf = empty_tf();
-            tf.insert(TID_CAP, vec![vec![7, key, digest], vec![7, key + 1, digest + 1]]);
-            let rows: Vec<Row> = (0..n_rows)
-                .map(|_| vec![key, digest])
-                .collect();
+            tf.insert(
+                TID_CAP,
+                vec![vec![7, key, digest], vec![7, key + 1, digest + 1]],
+            );
+            let rows: Vec<Row> = (0..n_rows).map(|_| vec![key, digest]).collect();
             let mut t = VmTraceC { rows, tf };
             let mut intended_accept = true;
             if !target_accept {
@@ -1293,18 +1303,25 @@ fn gen_case(
             let init = 7i128;
             let written = 9i128;
             let row: Row = vec![addr, written, init, 0, written, written, 1];
-            let base_t = VmTraceC { rows: vec![row.clone()], tf: Default::default() };
+            let base_t = VmTraceC {
+                rows: vec![row.clone()],
+                tf: Default::default(),
+            };
             let log = mem_log(&d, &base_t);
             let mem_table: Table = log.iter().map(op_row).collect();
             let mut tf = std::collections::HashMap::new();
             tf.insert(TID_RANGE, range_rows(4));
             tf.insert(TID_MEMORY, mem_table);
             tf.insert(TID_MAPOPS, Vec::new());
-            let mut t = VmTraceC { rows: vec![row], tf };
+            let mut t = VmTraceC {
+                rows: vec![row],
+                tf,
+            };
             let minit = Box::new(move |a: i128| if a == addr { init } else { 0 })
                 as Box<dyn Fn(i128) -> i128>;
-            let mut mfin = Box::new(move |a: i128| if a == addr { (written, 2i128) } else { (0, 0) })
-                as Box<dyn Fn(i128) -> (i128, i128)>;
+            let mut mfin =
+                Box::new(move |a: i128| if a == addr { (written, 2i128) } else { (0, 0) })
+                    as Box<dyn Fn(i128) -> (i128, i128)>;
             let maddrs = vec![addr];
             let mut intended_accept = true;
             if !target_accept {
@@ -1312,13 +1329,21 @@ fn gen_case(
                 match rng.below(3) {
                     0 => {
                         // mem balance: claim a final value the log doesn't produce.
-                        mfin = Box::new(move |a: i128| if a == addr { (99i128, 2i128) } else { (0, 0) });
+                        mfin = Box::new(
+                            move |a: i128| if a == addr { (99i128, 2i128) } else { (0, 0) },
+                        );
                         cov.forge_mem_balance += 1;
                     }
                     1 => {
                         // mem discipline: a read returning a value != its claimed prev.
                         t.rows[0][4] = 8; // read value 8 ≠ prev_value 9
-                        let nlog = mem_log(&d, &VmTraceC { rows: t.rows.clone(), tf: Default::default() });
+                        let nlog = mem_log(
+                            &d,
+                            &VmTraceC {
+                                rows: t.rows.clone(),
+                                tf: Default::default(),
+                            },
+                        );
                         t.tf.insert(TID_MEMORY, nlog.iter().map(op_row).collect());
                         cov.forge_mem_discipline += 1;
                     }
@@ -1354,11 +1379,17 @@ fn gen_case(
                 })],
             };
             let row: Row = vec![100, 7, 42, 200];
-            let base_t = VmTraceC { rows: vec![row.clone()], tf: Default::default() };
+            let base_t = VmTraceC {
+                rows: vec![row.clone()],
+                tf: Default::default(),
+            };
             let mut tf = std::collections::HashMap::new();
             tf.insert(TID_MAPOPS, map_log(&d, &base_t));
             tf.insert(TID_MEMORY, Vec::new());
-            let mut t = VmTraceC { rows: vec![row], tf };
+            let mut t = VmTraceC {
+                rows: vec![row],
+                tf,
+            };
             let mut op = Openings::default();
             op.writes.insert((100, 7, 42, 200));
             let mut intended_accept = true;
@@ -1367,7 +1398,13 @@ fn gen_case(
                 if rng.bool() {
                     // forge the opening: new_root no writesTo supports.
                     t.rows[0][3] = 201;
-                    let nlog = map_log(&d, &VmTraceC { rows: t.rows.clone(), tf: Default::default() });
+                    let nlog = map_log(
+                        &d,
+                        &VmTraceC {
+                            rows: t.rows.clone(),
+                            tf: Default::default(),
+                        },
+                    );
                     t.tf.insert(TID_MAPOPS, nlog);
                     cov.forge_map_opening += 1;
                 } else {
@@ -1401,11 +1438,17 @@ fn gen_case(
                 })],
             };
             let row: Row = vec![100, 7, 42, 100]; // new_root == root
-            let base_t = VmTraceC { rows: vec![row.clone()], tf: Default::default() };
+            let base_t = VmTraceC {
+                rows: vec![row.clone()],
+                tf: Default::default(),
+            };
             let mut tf = std::collections::HashMap::new();
             tf.insert(TID_MAPOPS, map_log(&d, &base_t));
             tf.insert(TID_MEMORY, Vec::new());
-            let mut t = VmTraceC { rows: vec![row], tf };
+            let mut t = VmTraceC {
+                rows: vec![row],
+                tf,
+            };
             let mut op = Openings::default();
             op.members.insert((100, 7, 42));
             let mut intended_accept = true;
@@ -1413,7 +1456,13 @@ fn gen_case(
                 intended_accept = false;
                 // forge the read value (no member supports it).
                 t.rows[0][2] = 43;
-                let nlog = map_log(&d, &VmTraceC { rows: t.rows.clone(), tf: Default::default() });
+                let nlog = map_log(
+                    &d,
+                    &VmTraceC {
+                        rows: t.rows.clone(),
+                        tf: Default::default(),
+                    },
+                );
                 t.tf.insert(TID_MAPOPS, nlog);
                 cov.forge_map_opening += 1;
             }
@@ -1442,11 +1491,17 @@ fn gen_case(
                 })],
             };
             let row: Row = vec![100, 9, 0, 100]; // key 9 absent under root 100
-            let base_t = VmTraceC { rows: vec![row.clone()], tf: Default::default() };
+            let base_t = VmTraceC {
+                rows: vec![row.clone()],
+                tf: Default::default(),
+            };
             let mut tf = std::collections::HashMap::new();
             tf.insert(TID_MAPOPS, map_log(&d, &base_t));
             tf.insert(TID_MEMORY, Vec::new());
-            let mut t = VmTraceC { rows: vec![row], tf };
+            let mut t = VmTraceC {
+                rows: vec![row],
+                tf,
+            };
             let mut op = Openings::default();
             op.absents.insert((100, 9));
             let mut intended_accept = true;
@@ -1454,7 +1509,13 @@ fn gen_case(
                 intended_accept = false;
                 // claim a key absent that the absents oracle does not support.
                 t.rows[0][1] = 7;
-                let nlog = map_log(&d, &VmTraceC { rows: t.rows.clone(), tf: Default::default() });
+                let nlog = map_log(
+                    &d,
+                    &VmTraceC {
+                        rows: t.rows.clone(),
+                        tf: Default::default(),
+                    },
+                );
                 t.tf.insert(TID_MAPOPS, nlog);
                 cov.forge_map_opening += 1;
             }
@@ -1476,9 +1537,15 @@ fn gen_case(
             let body = WinExpr::Add(
                 Box::new(WinExpr::Add(
                     Box::new(WinExpr::Nxt(1)),
-                    Box::new(WinExpr::Mul(Box::new(WinExpr::Const(-1)), Box::new(WinExpr::Loc(1)))),
+                    Box::new(WinExpr::Mul(
+                        Box::new(WinExpr::Const(-1)),
+                        Box::new(WinExpr::Loc(1)),
+                    )),
                 )),
-                Box::new(WinExpr::Mul(Box::new(WinExpr::Const(-1)), Box::new(WinExpr::Nxt(0)))),
+                Box::new(WinExpr::Mul(
+                    Box::new(WinExpr::Const(-1)),
+                    Box::new(WinExpr::Nxt(0)),
+                )),
             );
             let d = Descriptor2 {
                 constraints: vec![Constraint::WindowGate(WindowC {
@@ -1490,13 +1557,20 @@ fn gen_case(
             let mut rows: Vec<Row> = Vec::new();
             let mut cum = (rng.next_u64() % BOUND_V as u64) as i128;
             for i in 0..n_rows {
-                let contrib = if i == 0 { 0 } else { (rng.next_u64() % 16) as i128 };
+                let contrib = if i == 0 {
+                    0
+                } else {
+                    (rng.next_u64() % 16) as i128
+                };
                 if i > 0 {
                     cum += contrib;
                 }
                 rows.push(vec![contrib, cum]);
             }
-            let mut t = VmTraceC { rows, tf: empty_tf() };
+            let mut t = VmTraceC {
+                rows,
+                tf: empty_tf(),
+            };
             let mut intended_accept = true;
             if !target_accept && n_rows >= 2 {
                 intended_accept = false;
@@ -1521,7 +1595,10 @@ fn gen_case(
             // body = Loc(0) - Loc(1): a per-row equality, bound on every row (incl. last).
             let body = WinExpr::Add(
                 Box::new(WinExpr::Loc(0)),
-                Box::new(WinExpr::Mul(Box::new(WinExpr::Const(-1)), Box::new(WinExpr::Loc(1)))),
+                Box::new(WinExpr::Mul(
+                    Box::new(WinExpr::Const(-1)),
+                    Box::new(WinExpr::Loc(1)),
+                )),
             );
             let d = Descriptor2 {
                 constraints: vec![Constraint::WindowGate(WindowC {
@@ -1531,7 +1608,10 @@ fn gen_case(
             };
             let val = (rng.next_u64() % BOUND_V as u64) as i128;
             let rows: Vec<Row> = (0..n_rows).map(|_| vec![val, val]).collect();
-            let mut t = VmTraceC { rows, tf: empty_tf() };
+            let mut t = VmTraceC {
+                rows,
+                tf: empty_tf(),
+            };
             let mut intended_accept = true;
             if !target_accept {
                 intended_accept = false;
@@ -1612,7 +1692,8 @@ fn faithfulness_guard_eval_enforces_satisfied2() {
                 }
                 for _ in 0..VALUE_WITNESSES {
                     seed = seed.wrapping_add(1);
-                    let mut rng = Rng::new(seed.wrapping_mul(0x1234_5678_9ABC_DEF1).wrapping_add(1));
+                    let mut rng =
+                        Rng::new(seed.wrapping_mul(0x1234_5678_9ABC_DEF1).wrapping_add(1));
                     let case = gen_case(&mut rng, arm, h, polarity_accept, &mut cov);
                     cov.cases += 1;
                     match h {
@@ -1806,27 +1887,45 @@ fn arm_name(a: ArmChoice) -> &'static str {
 fn enumerator_catches_gate_on_one_row_divergence() {
     // a single-row trace with a BROKEN gate body (col0 != col1).
     let d = Descriptor2 {
-        constraints: vec![Constraint::Gate(LeanExpr::Add(Box::new(v(0)), Box::new(neg(v(1)))))],
+        constraints: vec![Constraint::Gate(LeanExpr::Add(
+            Box::new(v(0)),
+            Box::new(neg(v(1))),
+        ))],
     };
     let row: Row = vec![5, 6]; // col0=5 != col1=6 — the gate body = -1 ≠ 0
-    let t = VmTraceC { rows: vec![row], tf: empty_tf() };
+    let t = VmTraceC {
+        rows: vec![row],
+        tf: empty_tf(),
+    };
     let no_op = Openings::default();
     let zi = |_: i128| 0i128;
     let zf = |_: i128| (0i128, 0i128);
 
     // the DEPLOYED AIR: the gate is on the wrap (only) row, `when_transition` skips it ⇒ ACCEPT.
     let air = eval_enforces(&d, &t, &no_op, &zi, &zf, &[]);
-    assert!(air, "the deployed eval does NOT bind a gate on a 1-row trace (when_transition empty)");
+    assert!(
+        air,
+        "the deployed eval does NOT bind a gate on a 1-row trace (when_transition empty)"
+    );
 
     // the LIVE leg-#1 denotation ALSO skips the wrap row ⇒ ACCEPT (the fix).
     let den_live = denote_satisfied2(&d, &t, &no_op, &zi, &zf, &[], LegSemantics::Live);
-    assert!(den_live, "the LIVE leg-#1 denotation skips the gate on the wrap row (matches eval)");
-    assert_eq!(air, den_live, "LIVE: eval and denotation AGREE on the 1-row gate (leg-#1 faithful)");
+    assert!(
+        den_live,
+        "the LIVE leg-#1 denotation skips the gate on the wrap row (matches eval)"
+    );
+    assert_eq!(
+        air, den_live,
+        "LIVE: eval and denotation AGREE on the 1-row gate (leg-#1 faithful)"
+    );
 
     // the PRE-leg-#1 denotation enforces the gate on the only row ⇒ REJECT — a DRIFT the
     // guard catches. This is the structural divergence the faithfulness guard exists to flag.
     let den_pre = denote_satisfied2(&d, &t, &no_op, &zi, &zf, &[], LegSemantics::PreLeg1);
-    assert!(!den_pre, "the PRE-leg-#1 denotation REJECTS the broken gate on the only row");
+    assert!(
+        !den_pre,
+        "the PRE-leg-#1 denotation REJECTS the broken gate on the only row"
+    );
     assert_ne!(
         air, den_pre,
         "THE GUARD CATCHES IT: under the pre-leg-#1 semantics, eval (accept) and the \
@@ -1853,7 +1952,10 @@ fn enumerator_catches_forged_chip_membership_divergence() {
     let mut tf = empty_tf();
     tf.insert(TID_CAP, vec![vec![7, 3, 999]]); // one committed cap leaf
     let forged: Row = vec![3, 1234]; // digest 1234 ∉ the committed table
-    let t = VmTraceC { rows: vec![forged], tf };
+    let t = VmTraceC {
+        rows: vec![forged],
+        tf,
+    };
     let no_op = Openings::default();
     let zi = |_: i128| 0i128;
     let zf = |_: i128| (0i128, 0i128);
@@ -1861,9 +1963,15 @@ fn enumerator_catches_forged_chip_membership_divergence() {
     // both real oracles REJECT the forged membership (the live faithfulness).
     let air = eval_enforces(&d, &t, &no_op, &zi, &zf, &[]);
     let den = denote_satisfied2(&d, &t, &no_op, &zi, &zf, &[], LegSemantics::Live);
-    assert!(!air, "the deployed eval rejects a lookup tuple no table row provides");
+    assert!(
+        !air,
+        "the deployed eval rejects a lookup tuple no table row provides"
+    );
     assert!(!den, "the denotation rejects a lookup tuple ∉ the table");
-    assert_eq!(air, den, "eval and denotation AGREE: a forged cap leaf is rejected by both");
+    assert_eq!(
+        air, den,
+        "eval and denotation AGREE: a forged cap leaf is rejected by both"
+    );
 
     // a BROKEN transcription that drops the membership check (models a missing receive)
     // would ACCEPT — the guard catches that as a disagreement against the denotation.
@@ -1886,10 +1994,25 @@ fn enumerator_catches_forged_chip_membership_divergence() {
 fn pinned_against_lean_goldens() {
     // Lean golden A: `[⟨write,1,9,5,0⟩, ⟨read,1,9,9,1⟩]` is Disciplined.
     let log = vec![
-        MemTraceOp { kind: Kind::Write, addr: 1, val: 9, prev_val: 5, prev_serial: 0 },
-        MemTraceOp { kind: Kind::Read, addr: 1, val: 9, prev_val: 9, prev_serial: 1 },
+        MemTraceOp {
+            kind: Kind::Write,
+            addr: 1,
+            val: 9,
+            prev_val: 5,
+            prev_serial: 0,
+        },
+        MemTraceOp {
+            kind: Kind::Read,
+            addr: 1,
+            val: 9,
+            prev_val: 9,
+            prev_serial: 1,
+        },
     ];
-    assert!(disciplined(&log), "Lean golden: the write-then-read log is Disciplined");
+    assert!(
+        disciplined(&log),
+        "Lean golden: the write-then-read log is Disciplined"
+    );
 
     // Lean golden B: it MemChecks against minit=5, mfin(1)=(9,2), [1].
     let minit = |_: i128| 5i128;
@@ -1900,7 +2023,13 @@ fn pinned_against_lean_goldens() {
     );
 
     // Lean golden D: the bare `[⟨read,1,7,7,0⟩]` is INCONSISTENT against init 5.
-    let bad_log = vec![MemTraceOp { kind: Kind::Read, addr: 1, val: 7, prev_val: 7, prev_serial: 0 }];
+    let bad_log = vec![MemTraceOp {
+        kind: Kind::Read,
+        addr: 1,
+        val: 7,
+        prev_val: 7,
+        prev_serial: 0,
+    }];
     let mfin_any = |_: i128| (7i128, 1i128);
     assert!(
         !mem_check(&minit, &mfin_any, &[1], &bad_log),
@@ -1962,7 +2091,10 @@ fn tf_of(range: Table, memory: Table, mapops: Table, cap: Table) -> VmTraceC {
     tf.insert(TID_MEMORY, memory);
     tf.insert(TID_MAPOPS, mapops);
     tf.insert(TID_CAP, cap);
-    VmTraceC { rows: Vec::new(), tf }
+    VmTraceC {
+        rows: Vec::new(),
+        tf,
+    }
 }
 
 /// One mirror case: the descriptor, rows, tables, openings, boundary, and the verdict the
@@ -2017,19 +2149,33 @@ fn pinned_against_decideSatisfied2_goldens() {
         })],
     };
     let lr_cs = || Descriptor2 {
-        constraints: vec![Constraint::Lookup(LookupC { table: TID_RANGE, tuple: vec![v(0)] })],
+        constraints: vec![Constraint::Lookup(LookupC {
+            table: TID_RANGE,
+            tuple: vec![v(0)],
+        })],
     };
 
     // mem transfer: addr 5, init 7, write 9 over (7,0), read 9 over (9,1) ⇒ final (9,2).
     let mem_cs = || Descriptor2 {
         constraints: vec![
-            Constraint::Lookup(LookupC { table: TID_RANGE, tuple: vec![v(0)] }),
+            Constraint::Lookup(LookupC {
+                table: TID_RANGE,
+                tuple: vec![v(0)],
+            }),
             Constraint::MemOp(MemOpC {
-                guard: k(1), addr: v(0), value: v(1), prev_value: v(2), prev_serial: v(3),
+                guard: k(1),
+                addr: v(0),
+                value: v(1),
+                prev_value: v(2),
+                prev_serial: v(3),
                 kind: Kind::Write,
             }),
             Constraint::MemOp(MemOpC {
-                guard: k(1), addr: v(0), value: v(4), prev_value: v(5), prev_serial: v(6),
+                guard: k(1),
+                addr: v(0),
+                value: v(4),
+                prev_value: v(5),
+                prev_serial: v(6),
                 kind: Kind::Read,
             }),
         ],
@@ -2038,24 +2184,44 @@ fn pinned_against_decideSatisfied2_goldens() {
     let mem_minit =
         || Box::new(|a: i128| if a == 5 { 7i128 } else { 0i128 }) as Box<dyn Fn(i128) -> i128>;
     let mem_mfin = || {
-        Box::new(|a: i128| if a == 5 { (9i128, 2i128) } else { (0i128, 0i128) })
-            as Box<dyn Fn(i128) -> (i128, i128)>
+        Box::new(|a: i128| {
+            if a == 5 {
+                (9i128, 2i128)
+            } else {
+                (0i128, 0i128)
+            }
+        }) as Box<dyn Fn(i128) -> (i128, i128)>
     };
 
     // map-op descriptors.
     let mw_cs = || Descriptor2 {
         constraints: vec![Constraint::MapOp(MapOpC {
-            guard: k(1), root: v(0), key: v(1), value: v(2), new_root: v(3), op: MapKind::Write,
+            guard: k(1),
+            root: v(0),
+            key: v(1),
+            value: v(2),
+            new_root: v(3),
+            op: MapKind::Write,
         })],
     };
     let mr_cs = || Descriptor2 {
         constraints: vec![Constraint::MapOp(MapOpC {
-            guard: k(1), root: v(0), key: v(1), value: v(2), new_root: v(3), op: MapKind::Read,
+            guard: k(1),
+            root: v(0),
+            key: v(1),
+            value: v(2),
+            new_root: v(3),
+            op: MapKind::Read,
         })],
     };
     let ma_cs = || Descriptor2 {
         constraints: vec![Constraint::MapOp(MapOpC {
-            guard: k(1), root: v(0), key: v(1), value: k(0), new_root: v(3), op: MapKind::Absent,
+            guard: k(1),
+            root: v(0),
+            key: v(1),
+            value: k(0),
+            new_root: v(3),
+            op: MapKind::Absent,
         })],
     };
     let mw_op = || {
@@ -2081,9 +2247,15 @@ fn pinned_against_decideSatisfied2_goldens() {
             body: WinExpr::Add(
                 Box::new(WinExpr::Add(
                     Box::new(WinExpr::Nxt(1)),
-                    Box::new(WinExpr::Mul(Box::new(WinExpr::Const(-1)), Box::new(WinExpr::Loc(1)))),
+                    Box::new(WinExpr::Mul(
+                        Box::new(WinExpr::Const(-1)),
+                        Box::new(WinExpr::Loc(1)),
+                    )),
                 )),
-                Box::new(WinExpr::Mul(Box::new(WinExpr::Const(-1)), Box::new(WinExpr::Nxt(0)))),
+                Box::new(WinExpr::Mul(
+                    Box::new(WinExpr::Const(-1)),
+                    Box::new(WinExpr::Nxt(0)),
+                )),
             ),
             on_transition: true,
         })],
@@ -2093,7 +2265,10 @@ fn pinned_against_decideSatisfied2_goldens() {
             // body = Loc(0) - Loc(1).
             body: WinExpr::Add(
                 Box::new(WinExpr::Loc(0)),
-                Box::new(WinExpr::Mul(Box::new(WinExpr::Const(-1)), Box::new(WinExpr::Loc(1)))),
+                Box::new(WinExpr::Mul(
+                    Box::new(WinExpr::Const(-1)),
+                    Box::new(WinExpr::Loc(1)),
+                )),
             ),
             on_transition: false,
         })],
@@ -2101,54 +2276,405 @@ fn pinned_against_decideSatisfied2_goldens() {
 
     let cases: Vec<MirrorCase> = vec![
         // ---- gate + transition ----
-        MirrorCase { desc: gt_cs(), rows: vec![gt_row(7, 7), gt_row(7, 7)], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: gt_cs(), rows: vec![gt_row(7, 8), gt_row(7, 7)], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
-        MirrorCase { desc: gt_cs(), rows: vec![gt_row(7, 7), gt_forge_trans.clone()], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
-        MirrorCase { desc: gt_cs(), rows: vec![gt_row(5, 6)], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
+        MirrorCase {
+            desc: gt_cs(),
+            rows: vec![gt_row(7, 7), gt_row(7, 7)],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: gt_cs(),
+            rows: vec![gt_row(7, 8), gt_row(7, 7)],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
+        MirrorCase {
+            desc: gt_cs(),
+            rows: vec![gt_row(7, 7), gt_forge_trans.clone()],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
+        MirrorCase {
+            desc: gt_cs(),
+            rows: vec![gt_row(5, 6)],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
         // ---- lookup range [0,16) ----
-        MirrorCase { desc: lr_cs(), rows: vec![vec![9]], range: range_rows(4), memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: lr_cs(), rows: vec![vec![9], vec![9]], range: range_rows(4), memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: lr_cs(), rows: vec![vec![9], vec![9], vec![9]], range: range_rows(4), memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: lr_cs(), rows: vec![vec![9], vec![16], vec![9]], range: range_rows(4), memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
+        MirrorCase {
+            desc: lr_cs(),
+            rows: vec![vec![9]],
+            range: range_rows(4),
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: lr_cs(),
+            rows: vec![vec![9], vec![9]],
+            range: range_rows(4),
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: lr_cs(),
+            rows: vec![vec![9], vec![9], vec![9]],
+            range: range_rows(4),
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: lr_cs(),
+            rows: vec![vec![9], vec![16], vec![9]],
+            range: range_rows(4),
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
         // ---- lookup generic (cap table) ----
-        MirrorCase { desc: lg_cs(), rows: vec![vec![11, 22]], range: vec![], memory: vec![], mapops: vec![], cap: cap_tbl.clone(), op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: lg_cs(), rows: vec![vec![11, 1256]], range: vec![], memory: vec![], mapops: vec![], cap: cap_tbl.clone(), op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
+        MirrorCase {
+            desc: lg_cs(),
+            rows: vec![vec![11, 22]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: cap_tbl.clone(),
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: lg_cs(),
+            rows: vec![vec![11, 1256]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: cap_tbl.clone(),
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
         // ---- mem transfer ----
-        MirrorCase { desc: mem_cs(), rows: vec![vec![5, 9, 7, 0, 9, 9, 1]], range: range_rows(4), memory: mem_table.clone(), mapops: vec![], cap: vec![], op: no(), minit: mem_minit(), mfin: mem_mfin(), maddrs: vec![5], lean_verdict: true },
-        MirrorCase { desc: mem_cs(), rows: vec![vec![5, 9, 7, 0, 9, 9, 1]], range: range_rows(4), memory: mem_table.clone(), mapops: vec![], cap: vec![], op: no(), minit: mem_minit(), mfin: Box::new(|a: i128| if a == 5 { (99, 2) } else { (0, 0) }), maddrs: vec![5], lean_verdict: false },
-        MirrorCase { desc: mem_cs(), rows: vec![vec![5, 9, 7, 0, 8, 9, 1]], range: range_rows(4), memory: vec![vec![5, 9, 7, 0, 1], vec![5, 8, 9, 1, 0]], mapops: vec![], cap: vec![], op: no(), minit: mem_minit(), mfin: mem_mfin(), maddrs: vec![5], lean_verdict: false },
-        MirrorCase { desc: mem_cs(), rows: vec![vec![5, 9, 7, 0, 9, 9, 1]], range: range_rows(4), memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: mem_minit(), mfin: mem_mfin(), maddrs: vec![5], lean_verdict: false },
+        MirrorCase {
+            desc: mem_cs(),
+            rows: vec![vec![5, 9, 7, 0, 9, 9, 1]],
+            range: range_rows(4),
+            memory: mem_table.clone(),
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: mem_minit(),
+            mfin: mem_mfin(),
+            maddrs: vec![5],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: mem_cs(),
+            rows: vec![vec![5, 9, 7, 0, 9, 9, 1]],
+            range: range_rows(4),
+            memory: mem_table.clone(),
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: mem_minit(),
+            mfin: Box::new(|a: i128| if a == 5 { (99, 2) } else { (0, 0) }),
+            maddrs: vec![5],
+            lean_verdict: false,
+        },
+        MirrorCase {
+            desc: mem_cs(),
+            rows: vec![vec![5, 9, 7, 0, 8, 9, 1]],
+            range: range_rows(4),
+            memory: vec![vec![5, 9, 7, 0, 1], vec![5, 8, 9, 1, 0]],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: mem_minit(),
+            mfin: mem_mfin(),
+            maddrs: vec![5],
+            lean_verdict: false,
+        },
+        MirrorCase {
+            desc: mem_cs(),
+            rows: vec![vec![5, 9, 7, 0, 9, 9, 1]],
+            range: range_rows(4),
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: mem_minit(),
+            mfin: mem_mfin(),
+            maddrs: vec![5],
+            lean_verdict: false,
+        },
         // ---- map write ----
-        MirrorCase { desc: mw_cs(), rows: vec![vec![100, 7, 42, 200]], range: vec![], memory: vec![], mapops: vec![vec![100, 7, 42, 1, 200]], cap: vec![], op: mw_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: mw_cs(), rows: vec![vec![100, 7, 42, 201]], range: vec![], memory: vec![], mapops: vec![vec![100, 7, 42, 1, 201]], cap: vec![], op: mw_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
-        MirrorCase { desc: mw_cs(), rows: vec![vec![100, 7, 42, 200]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: mw_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
+        MirrorCase {
+            desc: mw_cs(),
+            rows: vec![vec![100, 7, 42, 200]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![vec![100, 7, 42, 1, 200]],
+            cap: vec![],
+            op: mw_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: mw_cs(),
+            rows: vec![vec![100, 7, 42, 201]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![vec![100, 7, 42, 1, 201]],
+            cap: vec![],
+            op: mw_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
+        MirrorCase {
+            desc: mw_cs(),
+            rows: vec![vec![100, 7, 42, 200]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: mw_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
         // ---- map read ----
-        MirrorCase { desc: mr_cs(), rows: vec![vec![100, 7, 42, 100]], range: vec![], memory: vec![], mapops: vec![vec![100, 7, 42, 0, 100]], cap: vec![], op: mr_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: mr_cs(), rows: vec![vec![100, 7, 43, 100]], range: vec![], memory: vec![], mapops: vec![vec![100, 7, 43, 0, 100]], cap: vec![], op: mr_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
+        MirrorCase {
+            desc: mr_cs(),
+            rows: vec![vec![100, 7, 42, 100]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![vec![100, 7, 42, 0, 100]],
+            cap: vec![],
+            op: mr_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: mr_cs(),
+            rows: vec![vec![100, 7, 43, 100]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![vec![100, 7, 43, 0, 100]],
+            cap: vec![],
+            op: mr_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
         // ---- map absent ----
-        MirrorCase { desc: ma_cs(), rows: vec![vec![100, 9, 0, 100]], range: vec![], memory: vec![], mapops: vec![vec![100, 9, 0, 2, 100]], cap: vec![], op: ma_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: ma_cs(), rows: vec![vec![100, 7, 0, 100]], range: vec![], memory: vec![], mapops: vec![vec![100, 7, 0, 2, 100]], cap: vec![], op: ma_op(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
+        MirrorCase {
+            desc: ma_cs(),
+            rows: vec![vec![100, 9, 0, 100]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![vec![100, 9, 0, 2, 100]],
+            cap: vec![],
+            op: ma_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: ma_cs(),
+            rows: vec![vec![100, 7, 0, 100]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![vec![100, 7, 0, 2, 100]],
+            cap: vec![],
+            op: ma_op(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
         // ---- window transition ----
-        MirrorCase { desc: wt_cs(), rows: vec![vec![0, 5], vec![3, 8], vec![4, 12]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: wt_cs(), rows: vec![vec![0, 5], vec![3, 9], vec![4, 13]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
-        MirrorCase { desc: wt_cs(), rows: vec![vec![0, 5]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
+        MirrorCase {
+            desc: wt_cs(),
+            rows: vec![vec![0, 5], vec![3, 8], vec![4, 12]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: wt_cs(),
+            rows: vec![vec![0, 5], vec![3, 9], vec![4, 13]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
+        MirrorCase {
+            desc: wt_cs(),
+            rows: vec![vec![0, 5]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
         // ---- window every-row ----
-        MirrorCase { desc: we_cs(), rows: vec![vec![5, 5]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: we_cs(), rows: vec![vec![5, 5], vec![5, 5]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: we_cs(), rows: vec![vec![5, 5], vec![5, 5], vec![5, 5]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: true },
-        MirrorCase { desc: we_cs(), rows: vec![vec![5, 5], vec![5, 5], vec![5, 6]], range: vec![], memory: vec![], mapops: vec![], cap: vec![], op: no(), minit: zi(), mfin: zf(), maddrs: vec![], lean_verdict: false },
+        MirrorCase {
+            desc: we_cs(),
+            rows: vec![vec![5, 5]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: we_cs(),
+            rows: vec![vec![5, 5], vec![5, 5]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: we_cs(),
+            rows: vec![vec![5, 5], vec![5, 5], vec![5, 5]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: true,
+        },
+        MirrorCase {
+            desc: we_cs(),
+            rows: vec![vec![5, 5], vec![5, 5], vec![5, 6]],
+            range: vec![],
+            memory: vec![],
+            mapops: vec![],
+            cap: vec![],
+            op: no(),
+            minit: zi(),
+            mfin: zf(),
+            maddrs: vec![],
+            lean_verdict: false,
+        },
     ];
 
     let mut accepts = 0usize;
     let mut rejects = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
     for (i, c) in cases.iter().enumerate() {
-        let mut t = tf_of(c.range.clone(), c.memory.clone(), c.mapops.clone(), c.cap.clone());
+        let mut t = tf_of(
+            c.range.clone(),
+            c.memory.clone(),
+            c.mapops.clone(),
+            c.cap.clone(),
+        );
         t.rows = c.rows.clone();
         let den = denote_satisfied2(
-            &c.desc, &t, &c.op, &*c.minit, &*c.mfin, &c.maddrs, LegSemantics::Live,
+            &c.desc,
+            &t,
+            &c.op,
+            &*c.minit,
+            &*c.mfin,
+            &c.maddrs,
+            LegSemantics::Live,
         );
-        if c.lean_verdict { accepts += 1 } else { rejects += 1 }
+        if c.lean_verdict {
+            accepts += 1
+        } else {
+            rejects += 1
+        }
         if den != c.lean_verdict {
             mismatches.push(format!(
                 "case {i}: kernel decideSatisfied2 #guard = {} but Rust denote_satisfied2 = {den}",
@@ -2165,7 +2691,10 @@ fn pinned_against_decideSatisfied2_goldens() {
         mismatches.join("\n")
     );
     // non-vacuity: the pin separates accept from reject (a constantly-true mirror is useless).
-    assert!(accepts > 0 && rejects > 0, "the kernel-decider pin must carry BOTH polarities");
+    assert!(
+        accepts > 0 && rejects > 0,
+        "the kernel-decider pin must carry BOTH polarities"
+    );
     eprintln!(
         "KERNEL-DECIDER PIN PASS: {} cases ({accepts} accept, {rejects} reject) — Rust \
          denote_satisfied2 ≡ kernel-proven decideSatisfied2 goldens, case-for-case.",
@@ -2306,8 +2835,14 @@ fn bus_corpus() -> Vec<BusCase> {
         let key = bb(100);
         let val = bb(77);
         let leaves = vec![
-            HeapLeaf { addr: key, value: val },
-            HeapLeaf { addr: bb(200), value: bb(88) },
+            HeapLeaf {
+                addr: key,
+                value: val,
+            },
+            HeapLeaf {
+                addr: bb(200),
+                value: bb(88),
+            },
         ];
         let tree = CanonicalHeapTree::new(leaves.clone(), HEAP_TREE_DEPTH);
         let root = tree.root();
@@ -2338,13 +2873,22 @@ fn bus_corpus() -> Vec<BusCase> {
         let old_val = bb(77);
         let new_val = bb(123);
         let leaves = vec![
-            HeapLeaf { addr: key, value: old_val },
-            HeapLeaf { addr: bb(200), value: bb(88) },
+            HeapLeaf {
+                addr: key,
+                value: old_val,
+            },
+            HeapLeaf {
+                addr: bb(200),
+                value: bb(88),
+            },
         ];
         let tree = CanonicalHeapTree::new(leaves.clone(), HEAP_TREE_DEPTH);
         let root = tree.root();
         let w = tree
-            .update_witness(HeapLeaf { addr: key, value: new_val })
+            .update_witness(HeapLeaf {
+                addr: key,
+                value: new_val,
+            })
             .expect("present key has an update witness");
         let new_root = w.new_root;
         // accept: [root, key, new_val, genuine new_root].
@@ -2373,8 +2917,14 @@ fn bus_corpus() -> Vec<BusCase> {
         let present_key = bb(100);
         let absent_key = bb(150); // between 100 and 200 — bracketed by the two real leaves.
         let leaves = vec![
-            HeapLeaf { addr: present_key, value: bb(77) },
-            HeapLeaf { addr: bb(200), value: bb(88) },
+            HeapLeaf {
+                addr: present_key,
+                value: bb(77),
+            },
+            HeapLeaf {
+                addr: bb(200),
+                value: bb(88),
+            },
         ];
         let tree = CanonicalHeapTree::new(leaves.clone(), HEAP_TREE_DEPTH);
         let root = tree.root();

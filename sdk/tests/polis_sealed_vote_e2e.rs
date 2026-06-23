@@ -166,7 +166,10 @@ fn nullifiers_are_one_way_and_per_election() {
     let secret = [0x10; 32];
     let here = eligibility_nullifier(&secret, b"polis:election-A");
     let there = eligibility_nullifier(&secret, b"polis:election-B");
-    assert_ne!(here, there, "same voter, different elections ⇒ different nullifiers");
+    assert_ne!(
+        here, there,
+        "same voter, different elections ⇒ different nullifiers"
+    );
     // The nullifier is not the secret (one-way blake3).
     assert_ne!(here, secret);
 }
@@ -212,7 +215,12 @@ fn beacon_sortition_breaks_a_tie_deterministically() {
     let mut election = fresh_election(0x05);
     let committee = election.committee().clone();
     let label = election.label().to_vec();
-    for (secret, choice) in [([1u8; 32], 0u32), ([2u8; 32], 1), ([3u8; 32], 0), ([4u8; 32], 1)] {
+    for (secret, choice) in [
+        ([1u8; 32], 0u32),
+        ([2u8; 32], 1),
+        ([3u8; 32], 0),
+        ([4u8; 32], 1),
+    ] {
         let nullifier = eligibility_nullifier(&secret, &label);
         election
             .collect_unlinkable(seal_unlinkable_ballot(
@@ -233,10 +241,16 @@ fn beacon_sortition_breaks_a_tie_deterministically() {
     // anchor, so the tie-break is not the council's say-so.
     let mut beacon = BeaconCell::genesis(5, 3, 1, [0xBE; 32]).unwrap();
     let tick = beacon.tick().unwrap();
-    assert!(beacon.anchor().verify_beacon(&tick.output), "draw is light-client-verified");
+    assert!(
+        beacon.anchor().verify_beacon(&tick.output),
+        "draw is light-client-verified"
+    );
 
     let winner1 = BeaconDraw::new(&tick.randomness()).draw(2).unwrap();
     let winner2 = BeaconDraw::new(&tick.randomness()).draw(2).unwrap();
-    assert_eq!(winner1, winner2, "same draw ⇒ same winner (deterministic, any verifier agrees)");
+    assert_eq!(
+        winner1, winner2,
+        "same draw ⇒ same winner (deterministic, any verifier agrees)"
+    );
     assert!(winner1 < 2, "the tie-break resolves to a real choice");
 }

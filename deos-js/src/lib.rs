@@ -26,12 +26,14 @@
 //!   that confers no authority — cap-bounded and attested, *not* omniscient.
 
 pub mod applet;
+pub mod attach;
 pub mod js;
 pub mod portable;
 pub mod program_doc;
 pub mod reflect_binding;
 
 pub use applet::{Affordance, Applet, CellModel, FireError, Transclusion, TranscludeError};
-pub use js::JsRuntime;
+pub use attach::{AttachedApplet, WorldSink};
+pub use js::{JsRuntime, JsTarget};
 pub use portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 pub use program_doc::{GadgetCite, ProgramSource, TranscludedFragment};

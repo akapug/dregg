@@ -106,8 +106,20 @@ fn build_attenuate_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
 
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = empty_caveat_manifest();
     let (mut trace, pis) = generate_rotated_effect_vm_trace(
@@ -120,8 +132,8 @@ fn build_attenuate_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     .expect("rotated AttenuateCapability base trace must generate");
     // Wire the attenuate phase-B bindings the bare generator does not carry (nonce passthrough +
     // cap-root advance binding); returns the corrected 46-PI vector.
-    let dpis = patch_attenuate_base_for_cap_open(&mut trace, &pis)
-        .expect("attenuate base phase-B wiring");
+    let dpis =
+        patch_attenuate_base_for_cap_open(&mut trace, &pis).expect("attenuate base phase-B wiring");
     (trace, dpis)
 }
 
@@ -134,13 +146,13 @@ fn cap_open_witness() -> CapOpenWitness {
     // EFFECT_TRANSFER (the transferFacetGate), mask_hi == 0 (the facetHiGate); target == src
     // (the targetBind).
     let chosen: [BabyBear; 7] = [
-        BabyBear::new(0xA11CE),                // slot_hash
-        BabyBear::new(7_777),                  // target (== src)
-        BabyBear::new(SIGNATURE_AUTH_TAG),     // auth_tag (== 1, Signature tier)
-        BabyBear::new(WRITE_MASK_LO),          // mask_lo (== EFFECT_TRANSFER = 2)
-        BabyBear::new(FACET_MASK_HI),          // mask_hi (== 0)
-        BabyBear::new(0x00FF_FFFF),            // expiry
-        BabyBear::new(42),                     // breadstuff
+        BabyBear::new(0xA11CE),            // slot_hash
+        BabyBear::new(7_777),              // target (== src)
+        BabyBear::new(SIGNATURE_AUTH_TAG), // auth_tag (== 1, Signature tier)
+        BabyBear::new(WRITE_MASK_LO),      // mask_lo (== EFFECT_TRANSFER = 2)
+        BabyBear::new(FACET_MASK_HI),      // mask_hi (== 0)
+        BabyBear::new(0x00FF_FFFF),        // expiry
+        BabyBear::new(42),                 // breadstuff
     ];
     // A second (distinct, non-write) leaf to make the c-list non-trivial.
     let other: [BabyBear; 7] = [
@@ -164,7 +176,10 @@ fn cap_open_witness() -> CapOpenWitness {
 fn cap_open_witness_and_appendix_are_genuine() {
     let desc = parse_vm_descriptor2(reg_json(CAP_OPEN_KEY)).expect("cap-open descriptor parses");
     assert_eq!(desc.trace_width, CAP_OPEN_WIDTH, "cap-open width");
-    assert_eq!(desc.public_input_count, 46, "cap-open carries the rotated 46 PIs");
+    assert_eq!(
+        desc.public_input_count, 46,
+        "cap-open carries the rotated 46 PIs"
+    );
 
     let (mut trace, pis) = build_attenuate_base();
     assert_eq!(pis.len(), 46);
@@ -175,7 +190,10 @@ fn cap_open_witness_and_appendix_are_genuine() {
         w.cap_root,
         "the witness path must recompose the committed cap_root (absorb-node fold)"
     );
-    assert_eq!(w.src, w.leaf[1], "src must equal the leaf target (targetBind)");
+    assert_eq!(
+        w.src, w.leaf[1],
+        "src must equal the leaf target (targetBind)"
+    );
     assert_eq!(
         w.leaf[3],
         BabyBear::new(WRITE_MASK_LO),
@@ -390,9 +408,7 @@ fn cap_open_attenuate_foreign_selector_row_is_unsat() {
 #[test]
 fn cap_open_wide_proves_verifies_and_executor_anchors() {
     use dregg_circuit::descriptor_ir2::verify_vm_descriptor2;
-    use dregg_circuit::effect_vm::trace_rotated::{
-        BEFORE_BASE, append_wide_carriers_cap_open,
-    };
+    use dregg_circuit::effect_vm::trace_rotated::{BEFORE_BASE, append_wide_carriers_cap_open};
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 
     // The wide cap-open descriptor (key `attenuateCapOpenEffVmDescriptor2R24`, width 1026 / PI 54).
@@ -412,7 +428,10 @@ fn cap_open_wide_proves_verifies_and_executor_anchors() {
     let host_width = CAP_OPEN_WIDTH; // 818
     let wide_width = host_width + 208; // 1026
     assert_eq!(desc.trace_width, wide_width, "cap-open wide width 1026");
-    assert_eq!(desc.public_input_count, 62, "cap-open wide 62 PIs (46 + 16)");
+    assert_eq!(
+        desc.public_input_count, 62,
+        "cap-open wide 62 PIs (46 + 16)"
+    );
 
     // The genuine cap-open base trace (818-wide) + 46 PIs.
     let (mut trace, pis) = build_attenuate_base();
@@ -430,8 +449,10 @@ fn cap_open_wide_proves_verifies_and_executor_anchors() {
     let before_commit_base = host_width + 8 * 12; // 914
     for j in 0..8 {
         assert_eq!(
-            dpis[46 + j], trace[0][before_commit_base + j],
-            "cap-open wide PI {} = BEFORE 8-felt commit felt {j}", 46 + j
+            dpis[46 + j],
+            trace[0][before_commit_base + j],
+            "cap-open wide PI {} = BEFORE 8-felt commit felt {j}",
+            46 + j
         );
     }
 

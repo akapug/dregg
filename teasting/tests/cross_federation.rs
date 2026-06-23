@@ -6,11 +6,11 @@
 use std::collections::HashSet;
 
 use dregg_cell::note::{NoteCommitment, Nullifier};
+use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_cell_crypto::note_bridge::{
     BridgedNullifierSet, PendingBridgeSet, create_portable_note, initiate_bridge,
     verify_portable_note,
 };
-use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_teasting::agent::SimAgent;
 use dregg_teasting::federation::{drive_to_finalization, dual_federation};
 use dregg_token::RevocationRegistry;

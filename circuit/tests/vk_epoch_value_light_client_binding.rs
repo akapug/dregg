@@ -125,7 +125,12 @@ fn refused(
 /// post-state `(balance, nonce, fields)` is the self-consistent post-cell the light client would
 /// accept on the wire. Mirrors `trace.rs` (V1 commit + bit-decomp) and `trace_rotated.rs::fill_block`
 /// (rotated AFTER chain), so the recompute is byte-identical to the live generator.
-fn recompute_after_commitment(row: &mut [BabyBear], balance: u64, nonce: u32, fields: &[BabyBear; 8]) {
+fn recompute_after_commitment(
+    row: &mut [BabyBear],
+    balance: u64,
+    nonce: u32,
+    fields: &[BabyBear; 8],
+) {
     // (a) V1 AFTER state columns: balance limbs / nonce / fields.
     let lo = (balance & 0x3FFF_FFFF) as u32;
     let hi = (balance >> 30) as u32;
@@ -140,8 +145,7 @@ fn recompute_after_commitment(row: &mut [BabyBear], balance: u64, nonce: u32, fi
     let hi64 = balance >> 30;
     for i in 0..BAL_LIMB_BITS {
         row[AUX_BASE + aux_off::NEW_BAL_LO_BIT_BASE + i] = BabyBear::new((lo >> i) & 1);
-        row[AUX_BASE + aux_off::NEW_BAL_HI_BIT_BASE + i] =
-            BabyBear::new(((hi64 >> i) & 1) as u32);
+        row[AUX_BASE + aux_off::NEW_BAL_HI_BIT_BASE + i] = BabyBear::new(((hi64 >> i) & 1) as u32);
     }
 
     // (c) V1 GROUP-4 commitment: the three intermediates + the absorbed record-digest → STATE_COMMIT.
@@ -197,32 +201,25 @@ fn recompute_passthrough_row(
     // BEFORE columns mirror AFTER for a passthrough row.
     let lo = (balance & 0x3FFF_FFFF) as u32;
     let hi = (balance >> 30) as u32;
-    row[STATE_BEFORE_BASE + state::BALANCE_LO] =
-        BabyBear::new(lo);
-    row[STATE_BEFORE_BASE + state::BALANCE_HI] =
-        BabyBear::new(hi);
+    row[STATE_BEFORE_BASE + state::BALANCE_LO] = BabyBear::new(lo);
+    row[STATE_BEFORE_BASE + state::BALANCE_HI] = BabyBear::new(hi);
     row[STATE_BEFORE_BASE + state::NONCE] = BabyBear::new(nonce);
     for (i, f) in fields.iter().enumerate() {
         row[STATE_BEFORE_BASE + state::FIELD_BASE + i] = *f;
     }
-    let cap_root =
-        row[STATE_BEFORE_BASE + state::CAP_ROOT];
+    let cap_root = row[STATE_BEFORE_BASE + state::CAP_ROOT];
     let record_digest = row[AUX_BASE + aux_off::STATE_RECORD_DIGEST];
     row[STATE_BEFORE_BASE + state::STATE_COMMIT] =
         CellState::compute_commitment(balance, nonce, fields, cap_root, record_digest);
     // Also re-run the rotated BEFORE block weld so its STATE_COMMIT chain matches.
     let base = dregg_circuit::effect_vm::trace_rotated::BEFORE_BASE;
-    row[base + 1] =
-        row[STATE_BEFORE_BASE + state::BALANCE_LO];
+    row[base + 1] = row[STATE_BEFORE_BASE + state::BALANCE_LO];
     row[base + 2] = row[STATE_BEFORE_BASE + state::NONCE];
-    row[base + 3] =
-        row[STATE_BEFORE_BASE + state::BALANCE_HI];
+    row[base + 3] = row[STATE_BEFORE_BASE + state::BALANCE_HI];
     for i in 0..8 {
-        row[base + 4 + i] =
-            row[STATE_BEFORE_BASE + state::FIELD_BASE + i];
+        row[base + 4 + i] = row[STATE_BEFORE_BASE + state::FIELD_BASE + i];
     }
-    row[base + B_CAP_ROOT] =
-        row[STATE_BEFORE_BASE + state::CAP_ROOT];
+    row[base + B_CAP_ROOT] = row[STATE_BEFORE_BASE + state::CAP_ROOT];
     let mut d = hash_many(&[row[base], row[base + 1], row[base + 2], row[base + 3]]);
     let mut chain = 0usize;
     row[base + B_CHAIN_BASE + chain] = d;
@@ -283,14 +280,13 @@ struct Honest {
     map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>,
 }
 
-fn build_honest(
-    before_bal: i64,
-    effect: Effect,
-    after_cell: Cell,
-    expect_name: &str,
-) -> Honest {
-    let name = rotated_descriptor_name_for_effect(&effect).expect("VALUE effect is a cohort member");
-    assert_eq!(name, expect_name, "resolver routes to the committed descriptor");
+fn build_honest(before_bal: i64, effect: Effect, after_cell: Cell, expect_name: &str) -> Honest {
+    let name =
+        rotated_descriptor_name_for_effect(&effect).expect("VALUE effect is a cohort member");
+    assert_eq!(
+        name, expect_name,
+        "resolver routes to the committed descriptor"
+    );
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name)).expect("descriptor parses");
 
     let st = CellState::new(before_bal as u64, 0);
@@ -303,10 +299,20 @@ fn build_honest(
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
 
     let caveat = empty_caveat_manifest();
     let (trace, dpis) = generate_rotated_effect_vm_trace(
@@ -365,7 +371,15 @@ fn forge_post_state(
     }
     let mut dpis = h.dpis.clone();
     let last = trace[n - 1].clone();
-    patch_post_state_dpis(&mut dpis, &last, fbalance, fnonce, ffields, cap_root, record_digest);
+    patch_post_state_dpis(
+        &mut dpis,
+        &last,
+        fbalance,
+        fnonce,
+        ffields,
+        cap_root,
+        record_digest,
+    );
     (trace, dpis)
 }
 
@@ -378,9 +392,8 @@ fn assert_balance_effect(h: Honest, forged_balance: u64, label: &str) {
     );
 
     // POSITIVE TOOTH (no downgrade).
-    let proof =
-        prove_vm_descriptor2(&h.desc, &h.trace, &h.dpis, &h.mem_boundary, &h.map_heaps)
-            .unwrap_or_else(|e| panic!("{label}: NO DOWNGRADE — honest turn must prove: {e:?}"));
+    let proof = prove_vm_descriptor2(&h.desc, &h.trace, &h.dpis, &h.mem_boundary, &h.map_heaps)
+        .unwrap_or_else(|e| panic!("{label}: NO DOWNGRADE — honest turn must prove: {e:?}"));
     verify_vm_descriptor2(&h.desc, &proof, &h.dpis)
         .unwrap_or_else(|e| panic!("{label}: NO DOWNGRADE — honest proof must verify: {e:?}"));
 
@@ -415,7 +428,10 @@ fn transfer_forced_on_wire_rejects_forged_balance_anchor_disabled() {
     let amount: u64 = 250;
     let h = build_honest(
         before,
-        Effect::Transfer { amount, direction: 1 },
+        Effect::Transfer {
+            amount,
+            direction: 1,
+        },
         producer_cell(before - amount as i64, 0),
         "transferVmDescriptor2R24",
     );
@@ -435,7 +451,10 @@ fn mint_in_transfer_forced_on_wire_rejects_forged_balance_anchor_disabled() {
     let amount: u64 = 777;
     let h = build_honest(
         before,
-        Effect::Transfer { amount, direction: 0 },
+        Effect::Transfer {
+            amount,
+            direction: 0,
+        },
         producer_cell(before + amount as i64, 0),
         "transferVmDescriptor2R24",
     );
@@ -523,7 +542,10 @@ fn setfield_forced_on_wire_rejects_forged_field_anchor_disabled() {
 
     let h = build_honest(
         before,
-        Effect::SetField { field_idx, value: new_value },
+        Effect::SetField {
+            field_idx,
+            value: new_value,
+        },
         after_cell,
         "setFieldVmDescriptor2-3R24",
     );
@@ -535,9 +557,8 @@ fn setfield_forced_on_wire_rejects_forged_field_anchor_disabled() {
     );
 
     // POSITIVE TOOTH.
-    let proof =
-        prove_vm_descriptor2(&h.desc, &h.trace, &h.dpis, &h.mem_boundary, &h.map_heaps)
-            .expect("setField: NO DOWNGRADE — honest field write must prove");
+    let proof = prove_vm_descriptor2(&h.desc, &h.trace, &h.dpis, &h.mem_boundary, &h.map_heaps)
+        .expect("setField: NO DOWNGRADE — honest field write must prove");
     verify_vm_descriptor2(&h.desc, &proof, &h.dpis)
         .expect("setField: NO DOWNGRADE — honest proof must verify");
 
@@ -588,9 +609,8 @@ fn incrementnonce_forced_on_wire_rejects_forged_nonce_anchor_disabled() {
     assert_eq!(honest_nonce, 1, "honest: post nonce ticked to 1");
 
     // POSITIVE TOOTH.
-    let proof =
-        prove_vm_descriptor2(&h.desc, &h.trace, &h.dpis, &h.mem_boundary, &h.map_heaps)
-            .expect("incrementNonce: NO DOWNGRADE — honest bump must prove");
+    let proof = prove_vm_descriptor2(&h.desc, &h.trace, &h.dpis, &h.mem_boundary, &h.map_heaps)
+        .expect("incrementNonce: NO DOWNGRADE — honest bump must prove");
     verify_vm_descriptor2(&h.desc, &proof, &h.dpis)
         .expect("incrementNonce: NO DOWNGRADE — honest proof must verify");
 
@@ -634,7 +654,10 @@ fn forge_machinery_is_faithful_identity_recompute_still_proves() {
     let amount: u64 = 250;
     let h = build_honest(
         before,
-        Effect::Transfer { amount, direction: 1 },
+        Effect::Transfer {
+            amount,
+            direction: 1,
+        },
         producer_cell(before - amount as i64, 0),
         "transferVmDescriptor2R24",
     );
@@ -657,7 +680,9 @@ fn forge_machinery_is_faithful_identity_recompute_still_proves() {
 
     // And it STILL proves + verifies — so a reject elsewhere is the FORGED column, not the helper.
     let proof = prove_vm_descriptor2(&h.desc, &id_trace, &id_dpis, &h.mem_boundary, &h.map_heaps)
-        .expect("FAITHFULNESS: identity-recomputed honest trace must prove (the helper is faithful)");
+        .expect(
+            "FAITHFULNESS: identity-recomputed honest trace must prove (the helper is faithful)",
+        );
     verify_vm_descriptor2(&h.desc, &proof, &id_dpis)
         .expect("FAITHFULNESS: identity-recomputed honest proof must verify");
 

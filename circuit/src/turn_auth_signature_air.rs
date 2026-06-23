@@ -41,10 +41,10 @@
 //! curve obligation (path a) is the named remaining scale, reported, not laundered.
 
 use crate::field::BabyBear;
-use crate::schnorr_air::{self, col, generate_schnorr_trace, pi, SchnorrVerificationWitness};
+use crate::schnorr_air::{self, SchnorrVerificationWitness, col, generate_schnorr_trace, pi};
 use crate::schnorr_curve::CurvePoint;
 use crate::schnorr_sig::{
-    compute_challenge_from_elements, schnorr_keygen, SchnorrPublicKey, SchnorrSignature,
+    SchnorrPublicKey, SchnorrSignature, compute_challenge_from_elements, schnorr_keygen,
 };
 
 /// A turn-authorization signature descriptor: the agent public key + the signed turn hash,
@@ -84,11 +84,8 @@ pub mod auth_pi {
 /// challenge over `(R, agent_pubkey, turn_hash)` exactly as the signer did, so the in-circuit
 /// `e` is bit-for-bit the value the signature closes against.
 fn witness_of(desc: &TurnAuthSigDescriptor) -> SchnorrVerificationWitness {
-    let challenge = compute_challenge_from_elements(
-        &desc.signature.r,
-        &desc.agent_pubkey.0,
-        &desc.turn_hash,
-    );
+    let challenge =
+        compute_challenge_from_elements(&desc.signature.r, &desc.agent_pubkey.0, &desc.turn_hash);
     SchnorrVerificationWitness {
         pk: desc.agent_pubkey.clone(),
         sig: desc.signature.clone(),
@@ -232,7 +229,7 @@ fn schnorr_sign_prehashed(
     msg_hash: &[BabyBear; 8],
 ) -> SchnorrSignature {
     use crate::schnorr_curve::{
-        scalar_from_bytes, scalar_mul_mod, scalar_sub, scalar_to_bytes, GENERATOR,
+        GENERATOR, scalar_from_bytes, scalar_mul_mod, scalar_sub, scalar_to_bytes,
     };
     // Deterministic nonce from (sk, msg_hash).
     let sk_bytes = scalar_to_bytes(&sk.0);
@@ -460,7 +457,10 @@ mod tests {
             assert_eq!(pis[auth_pi::AGENT_PK_X + i], desc.agent_pubkey.0.x.0[i]);
             assert_eq!(pis[auth_pi::TURN_HASH + i], desc.turn_hash[i]);
         }
-        assert!(!desc.agent_pubkey.0.is_infinity, "agent pubkey is a real point");
+        assert!(
+            !desc.agent_pubkey.0.is_infinity,
+            "agent pubkey is a real point"
+        );
         let _ = CurvePoint::INFINITY;
     }
 }

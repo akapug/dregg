@@ -41,15 +41,9 @@ fn crawl_reads_four_substances() {
     let inspectable = deos_reflect::reflect_cell(&treasury_id, c);
 
     // value substance
-    assert!(inspectable
-        .fields
-        .iter()
-        .any(|f| f.key == "balance"));
+    assert!(inspectable.fields.iter().any(|f| f.key == "balance"));
     // authority substance — the granted cap shows as a CapEdge
-    assert!(inspectable
-        .fields
-        .iter()
-        .any(|f| f.key.starts_with("cap[")));
+    assert!(inspectable.fields.iter().any(|f| f.key.starts_with("cap[")));
     // evidence substance
     assert!(inspectable.fields.iter().any(|f| f.key == "lifecycle"));
     assert_eq!(inspectable.kind, deos_reflect::ObjectKind::Cell);
@@ -78,7 +72,10 @@ fn frustum_is_cap_bounded() {
     // The treasury's frustum: it observes itself + the leaf it holds a cap over.
     let treasury_view = Frustum::project(&ledger, treasury_id);
     assert!(treasury_view.can_observe(&treasury_id));
-    assert!(treasury_view.can_observe(&leaf_id), "holds a cap path to the leaf");
+    assert!(
+        treasury_view.can_observe(&leaf_id),
+        "holds a cap path to the leaf"
+    );
     assert_eq!(treasury_view.visible_count(), 2);
     assert!(treasury_view.reflect(&leaf_id).is_some());
 
@@ -115,7 +112,11 @@ fn affordance_surface_projects_per_viewer() {
         .declare(Affordance::new(
             "admin",
             AuthRequired::Proof,
-            Effect::SetField { cell: leaf_id, index: 0, value: [0u8; 32] },
+            Effect::SetField {
+                cell: leaf_id,
+                index: 0,
+                value: [0u8; 32],
+            },
         ));
 
     // A holder of `Proof` sees BOTH (Proof satisfies Proof; None is open to all).
@@ -140,7 +141,10 @@ fn present_emits_the_moldable_faces() {
     let faces = reflected.present(&ledger, &[]);
 
     let kinds: Vec<PresentationKind> = faces.iter().map(|p| p.kind).collect();
-    assert!(kinds.contains(&PresentationKind::RawFields), "the mandatory floor");
+    assert!(
+        kinds.contains(&PresentationKind::RawFields),
+        "the mandatory floor"
+    );
     assert!(kinds.contains(&PresentationKind::Graph));
     assert!(kinds.contains(&PresentationKind::DomainVisual));
     assert!(kinds.contains(&PresentationKind::Provenance));

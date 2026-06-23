@@ -14,7 +14,6 @@
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
-
 use std::collections::HashMap;
 
 use dregg_cell::permissions::AuthRequired;

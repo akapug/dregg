@@ -24,18 +24,17 @@
 //!
 //! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
 
-
 use std::collections::HashMap;
 
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{Cell, CellId, Ledger, NoteCommitment, Permissions, VerificationKey};
-use dregg_turn::action::{Event, RefusalReason};
 use dregg_exec_lean::lean_apply::{self, execute_via_lean};
 use dregg_exec_lean::lean_shadow::{
     self, ShadowHostCtx, producer_mappable_effects, producer_root_agreeing_effects,
     producer_root_gap_effects,
 };
+use dregg_turn::action::{Event, RefusalReason};
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, ProofCondition,
     TurnExecutor, turn::Turn,
@@ -829,8 +828,9 @@ fn refusal_round_trips_audit_field_closed() {
     // committing refusal needs a present non-action witness (`single_refusal_turn` carries one).
     let (pre, a_id) = one_open_cell();
     let turn = single_refusal_turn(a_id, a_id, 0, [3u8; 32], RefusalReason::Declined);
-    diff(pre, turn, &[a_id])
-        .expect("Refusal must round-trip (the audit field + nonce bump now match across producers)");
+    diff(pre, turn, &[a_id]).expect(
+        "Refusal must round-trip (the audit field + nonce bump now match across producers)",
+    );
     assert!(lean_shadow::producer_root_agreeing_effects().contains(&"Refusal"));
     assert!(!lean_shadow::producer_root_gap_effects().contains(&"Refusal"));
 }

@@ -76,7 +76,8 @@ fn make_binding_proof(action: &str, resource: &str, vk: &[u8]) -> Vec<u8> {
 fn adversarial_token_lifecycle_forgery() {
     // --- Step 1: Mint root token ---
     let issuer_key = test_key("issuer-lifecycle");
-    let root_token = MacaroonToken::mint(issuer_key, b"lifecycle-kid", "auth.dregg.fg-goose.online");
+    let root_token =
+        MacaroonToken::mint(issuer_key, b"lifecycle-kid", "auth.dregg.fg-goose.online");
 
     // --- Step 2: Attenuate (restrict to compute/read, expiry) ---
     let att = Attenuation {
@@ -101,14 +102,16 @@ fn adversarial_token_lifecycle_forgery() {
     // --- Step 4: TAMPER with the HMAC chain (use wrong key) ---
     // Mint with a DIFFERENT key, then try to verify with the original key.
     let wrong_key = test_key("wrong-issuer");
-    let forged_root = MacaroonToken::mint(wrong_key, b"lifecycle-kid", "auth.dregg.fg-goose.online");
+    let forged_root =
+        MacaroonToken::mint(wrong_key, b"lifecycle-kid", "auth.dregg.fg-goose.online");
     let forged_attenuated = forged_root.attenuate(&att).unwrap();
 
     // The forged token cannot verify against the original issuer's key.
     // Construct a new token object with the ORIGINAL key but the forged inner.
     // Since MacaroonToken encapsulates the key, the cleanest forgery test is:
     // verify that a token minted with key A, when verified by someone expecting key B, fails.
-    let wrong_key_token = MacaroonToken::mint(wrong_key, b"lifecycle-kid", "auth.dregg.fg-goose.online");
+    let wrong_key_token =
+        MacaroonToken::mint(wrong_key, b"lifecycle-kid", "auth.dregg.fg-goose.online");
     let wrong_attenuated = wrong_key_token.attenuate(&att).unwrap();
 
     // Encode and decode with the WRONG key to simulate HMAC chain mismatch.

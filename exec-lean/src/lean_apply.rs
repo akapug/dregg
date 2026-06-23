@@ -85,8 +85,8 @@ use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger, Permissions, VerificationKey};
 use dregg_lean_ffi::marshal::{Cap, WireState, WireValue};
 
-use dregg_turn::TurnResult;
 use dregg_turn::ShadowHostCtx;
+use dregg_turn::TurnResult;
 use dregg_turn::action::Effect;
 use dregg_turn::executor::TurnExecutor;
 use dregg_turn::forest::CallTree;
@@ -423,10 +423,9 @@ fn collect_state_ops(turn: &Turn, seal_height: u64, refresh_now: u64) -> Vec<Sta
                 }
                 // ReceiptArchive (`checkpoint.cell_id == action target`). `apply_receipt_archive`
                 // transitions the cell to `Archived` from the turn-supplied attestation.
-                Effect::ReceiptArchive {
-                    checkpoint,
-                    ..
-                } if checkpoint.cell_id == action_target => {
+                Effect::ReceiptArchive { checkpoint, .. }
+                    if checkpoint.cell_id == action_target =>
+                {
                     out.push(StateOp::ReceiptArchive {
                         cell: action_target,
                         attestation: checkpoint.clone(),
@@ -1170,12 +1169,24 @@ pub fn execute_via_lean(
         return Err(ExtractError::Ineligible);
     }
     let prof = std::env::var("DREGG_FFI_PROFILE").as_deref() == Ok("1");
-    let t0 = if prof { Some(std::time::Instant::now()) } else { None };
+    let t0 = if prof {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let pre = lean_shadow::build_pre_ledger(turn, pre_ledger);
-    let t1 = if prof { Some(std::time::Instant::now()) } else { None };
+    let t1 = if prof {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let shadow_state =
         lean_shadow::run_shadow_state(turn, &pre, host).map_err(ExtractError::Ffi)?;
-    let t2 = if prof { Some(std::time::Instant::now()) } else { None };
+    let t2 = if prof {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     let inv = invert_id_map(&pre.id_map);
     let committed = shadow_state.verdict.committed;
     // The deterministic cap mutations this turn performs (Grant/Introduce/Attenuate). An
@@ -1204,6 +1215,24 @@ pub fn execute_via_lean(
         );
     }
     Ok((ledger, committed))
+}
+
+/// MEASUREMENT-ONLY: attribute the fixed per-call verified-executor cost (the FFI-optimization
+/// decision input). Builds the pre-ledger + wire values exactly as `execute_via_lean` does, then
+/// times the bare FFI-into-Lean identity floor and runs the profiled executor `iters` times (which
+/// prints per-sub-phase `DREGG_LEAN_PROFILE` ns lines to stderr). Returns the identity-floor median
+/// seconds. `Err(Ineligible)` if the turn is not marshallable. Off the production path.
+pub fn profile_lean_phases(
+    turn: &Turn,
+    pre_ledger: &Ledger,
+    host: &ShadowHostCtx,
+    iters: u32,
+) -> Result<f64, ExtractError> {
+    if !lean_shadow::forest_is_marshallable(turn) {
+        return Err(ExtractError::Ineligible);
+    }
+    let pre = lean_shadow::build_pre_ledger(turn, pre_ledger);
+    lean_shadow::profile_lean_phases(turn, &pre, host, iters).map_err(ExtractError::Ffi)
 }
 
 /// Outer-phase profile accumulator (seconds), gated on `DREGG_FFI_PROFILE=1`: (build_pre_ledger,

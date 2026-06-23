@@ -25,11 +25,11 @@
 //! Pedersen half (`dregg_cell_crypto::value_commitment::verify_full_conservation_bytes`),
 //! composed downstream.
 
-use dregg_circuit::dsl::dsl_p3_air::{DslZkProof, prove_dsl_zk, verify_dsl_zk};
-use dregg_circuit::field::BabyBear;
 use crate::shielded::spend_circuit::{
     ShieldedSpendWitness, generate_shielded_spend_trace, pi, shielded_spend_circuit,
 };
+use dregg_circuit::dsl::dsl_p3_air::{DslZkProof, prove_dsl_zk, verify_dsl_zk};
+use dregg_circuit::field::BabyBear;
 
 /// One value-commitment leg of a shielded transfer: the asset type (still public
 /// in the single-asset M2-a toehold) and the opaque 32-byte compressed Pedersen
@@ -154,10 +154,7 @@ impl ShieldedTransfer {
         for i in 0..self.inputs.len() {
             for j in (i + 1)..self.inputs.len() {
                 if self.inputs[i].nullifier == self.inputs[j].nullifier {
-                    return Err(ShieldedError::DuplicateNullifier {
-                        a: i,
-                        b: j,
-                    });
+                    return Err(ShieldedError::DuplicateNullifier { a: i, b: j });
                 }
             }
         }
@@ -229,7 +226,10 @@ impl ShieldedTransfer {
     /// The output value commitments, in order, for the downstream range/conservation
     /// verifier (`[u8; 32]` compressed Ristretto encodings).
     pub fn output_commitment_bytes(&self) -> Vec<[u8; 32]> {
-        self.output_legs.iter().map(|l| l.commitment_bytes).collect()
+        self.output_legs
+            .iter()
+            .map(|l| l.commitment_bytes)
+            .collect()
     }
 
     /// The input value commitments, in order, for the downstream conservation
@@ -258,8 +258,9 @@ pub fn prove_shielded_input(
 ) -> Result<ShieldedInputProof, ShieldedError> {
     let circuit = shielded_spend_circuit();
     let (trace, pis) = generate_shielded_spend_trace(&witness.spend);
-    let proof = prove_dsl_zk(&circuit, &trace, &pis)
-        .map_err(|e| ShieldedError::ProveFailed { reason: format!("{e}") })?;
+    let proof = prove_dsl_zk(&circuit, &trace, &pis).map_err(|e| ShieldedError::ProveFailed {
+        reason: format!("{e}"),
+    })?;
     Ok(ShieldedInputProof {
         nullifier: pis[pi::NULLIFIER],
         value_binding: pis[pi::VALUE_BINDING],
@@ -318,10 +319,7 @@ pub enum ShieldedError {
     /// The number of output range proofs does not equal the number of output
     /// legs — some output would escape the `[0, 2^64)` bound (the negative-value
     /// inflation hole). The shielded transfer is structurally rejected.
-    RangeProofCountMismatch {
-        outputs: usize,
-        range_proofs: usize,
-    },
+    RangeProofCountMismatch { outputs: usize, range_proofs: usize },
 }
 
 impl core::fmt::Display for ShieldedError {
@@ -334,10 +332,7 @@ impl core::fmt::Display for ShieldedError {
             Self::InputProofRejected {
                 input_index,
                 reason,
-            } => write!(
-                f,
-                "shielded input {input_index} proof rejected: {reason}"
-            ),
+            } => write!(f, "shielded input {input_index} proof rejected: {reason}"),
             Self::DuplicateNullifier { a, b } => write!(
                 f,
                 "shielded inputs {a} and {b} share a nullifier (double-spend)"

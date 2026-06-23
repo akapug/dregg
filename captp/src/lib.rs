@@ -95,6 +95,7 @@ pub mod sturdy;
 pub mod uri;
 pub mod verified_gate;
 
+pub use data_plane::{Bus, ChannelName, DataPlaneError, Delivery, SendCap, TopicName, Wake, Waker};
 pub use gc::{DropMessage, DropResult, ExportGcManager, ImportGcManager, SessionId};
 pub use handoff::{
     HandoffAcceptance, HandoffCertificate, HandoffError, HandoffPresentation, validate_handoff,
@@ -111,9 +112,6 @@ pub use ocapn::{
 pub use pipeline::{
     BrokenPromiseNotification, CrossFedPipelineBridge, PipelineError, PipelinePromiseState,
     PipelineRegistry, PipelineResultValue, PipelineWireMessage, PipelinedAction, PipelinedMessage,
-};
-pub use data_plane::{
-    Bus, ChannelName, DataPlaneError, Delivery, SendCap, TopicName, Wake, Waker,
 };
 pub use session::CapSession;
 pub use store_forward::{

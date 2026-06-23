@@ -12,7 +12,7 @@
 //! same the executor's cap-gate and `deos-js`'s applet already speak), so the
 //! projection is reusable over the substance, not the cockpit window stack.
 
-use dregg_cell::{is_attenuation, AuthRequired};
+use dregg_cell::{AuthRequired, is_attenuation};
 use dregg_turn::action::Effect;
 use dregg_types::CellId;
 
@@ -32,7 +32,11 @@ pub struct Affordance {
 
 impl Affordance {
     pub fn new(name: impl Into<String>, required: AuthRequired, effect_template: Effect) -> Self {
-        Affordance { name: name.into(), required, effect_template }
+        Affordance {
+            name: name.into(),
+            required,
+            effect_template,
+        }
     }
 
     /// **THE CAP-GATE** — is this affordance authorized for a holder of `held`?
@@ -66,7 +70,10 @@ pub struct AffordanceSurface {
 
 impl AffordanceSurface {
     pub fn new(cell: CellId) -> Self {
-        AffordanceSurface { cell, affordances: Vec::new() }
+        AffordanceSurface {
+            cell,
+            affordances: Vec::new(),
+        }
     }
 
     /// Declare an affordance (replacing any prior one of the same name).
@@ -89,12 +96,18 @@ impl AffordanceSurface {
     /// **PROJECT FOR A VIEWER** — the cap-gated set the holder of `held` may see/fire.
     /// The frustum's affordance half: a weaker viewer receives a strictly smaller set.
     pub fn project_for(&self, held: &AuthRequired) -> Vec<&Affordance> {
-        self.affordances.iter().filter(|a| a.authorized_for(held)).collect()
+        self.affordances
+            .iter()
+            .filter(|a| a.authorized_for(held))
+            .collect()
     }
 
     /// The names the holder of `held` may see/fire (the projected surface, by name).
     pub fn visible_names(&self, held: &AuthRequired) -> Vec<String> {
-        self.project_for(held).into_iter().map(|a| a.name.clone()).collect()
+        self.project_for(held)
+            .into_iter()
+            .map(|a| a.name.clone())
+            .collect()
     }
 }
 
@@ -102,31 +115,59 @@ impl AffordanceSurface {
 /// not `PartialEq`) — its variant + the principal cell(s) it acts on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EffectSummary {
-    SetField { cell: CellId, index: usize },
-    Transfer { from: CellId, to: CellId, amount: u64 },
-    GrantCapability { from: CellId, to: CellId },
-    RevokeCapability { cell: CellId, slot: u32 },
-    EmitEvent { cell: CellId },
-    IncrementNonce { cell: CellId },
-    Other { tag: &'static str },
+    SetField {
+        cell: CellId,
+        index: usize,
+    },
+    Transfer {
+        from: CellId,
+        to: CellId,
+        amount: u64,
+    },
+    GrantCapability {
+        from: CellId,
+        to: CellId,
+    },
+    RevokeCapability {
+        cell: CellId,
+        slot: u32,
+    },
+    EmitEvent {
+        cell: CellId,
+    },
+    IncrementNonce {
+        cell: CellId,
+    },
+    Other {
+        tag: &'static str,
+    },
 }
 
 impl EffectSummary {
     pub fn of(effect: &Effect) -> EffectSummary {
         match effect {
-            Effect::SetField { cell, index, .. } => EffectSummary::SetField { cell: *cell, index: *index },
-            Effect::Transfer { from, to, amount } => {
-                EffectSummary::Transfer { from: *from, to: *to, amount: *amount }
-            }
-            Effect::GrantCapability { from, to, .. } => {
-                EffectSummary::GrantCapability { from: *from, to: *to }
-            }
-            Effect::RevokeCapability { cell, slot } => {
-                EffectSummary::RevokeCapability { cell: *cell, slot: *slot }
-            }
+            Effect::SetField { cell, index, .. } => EffectSummary::SetField {
+                cell: *cell,
+                index: *index,
+            },
+            Effect::Transfer { from, to, amount } => EffectSummary::Transfer {
+                from: *from,
+                to: *to,
+                amount: *amount,
+            },
+            Effect::GrantCapability { from, to, .. } => EffectSummary::GrantCapability {
+                from: *from,
+                to: *to,
+            },
+            Effect::RevokeCapability { cell, slot } => EffectSummary::RevokeCapability {
+                cell: *cell,
+                slot: *slot,
+            },
             Effect::EmitEvent { cell, .. } => EffectSummary::EmitEvent { cell: *cell },
             Effect::IncrementNonce { cell } => EffectSummary::IncrementNonce { cell: *cell },
-            other => EffectSummary::Other { tag: effect_variant_tag(other) },
+            other => EffectSummary::Other {
+                tag: effect_variant_tag(other),
+            },
         }
     }
 }

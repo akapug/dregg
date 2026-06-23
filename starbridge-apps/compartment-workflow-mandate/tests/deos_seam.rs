@@ -100,8 +100,14 @@ fn an_operator_advances_a_step_through_the_gated_fire_a_real_verified_turn() {
     // advances the cursor 0 -> 1. The executor RE-ENFORCES the workflow program:
     // `MonotonicSequence(STEP_CURSOR)` holds (0 -> 1, exact +1) and
     // `FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)` holds (1 <= 3). A real verified turn.
-    let receipt = fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor)
-        .expect("an operator advances (caps ∧ state ∧ monotonic-sequence ∧ lte-terminal all pass)");
+    let receipt = fire_advance_step(
+        &app,
+        &AuthRequired::None,
+        officer_label(),
+        &cclerk,
+        &executor,
+    )
+    .expect("an operator advances (caps ∧ state ∧ monotonic-sequence ∧ lte-terminal all pass)");
     assert_ne!(
         receipt.turn_hash, [0u8; 32],
         "a real verified turn through the executor"
@@ -136,8 +142,14 @@ fn advancing_to_the_terminal_darkens_advance_step() {
 
     // Drive the cursor to the terminal: 0 -> 1 -> 2 -> 3 (three real verified fires).
     for expect in 1..=3u64 {
-        let receipt = fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor)
-            .unwrap_or_else(|e| panic!("advance to cursor {expect} should commit, got {e:?}"));
+        let receipt = fire_advance_step(
+            &app,
+            &AuthRequired::None,
+            officer_label(),
+            &cclerk,
+            &executor,
+        )
+        .unwrap_or_else(|e| panic!("advance to cursor {expect} should commit, got {e:?}"));
         assert_ne!(receipt.turn_hash, [0u8; 32]);
         let state = executor.cell_state(cclerk.cell_id()).unwrap();
         assert_eq!(
@@ -157,7 +169,13 @@ fn advancing_to_the_terminal_darkens_advance_step() {
 
     // ...and a fire AT the terminal is refused IN-BAND at the STATE tooth (anti-ghost) —
     // nothing submitted, the cursor holds at 3.
-    let refused = fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor);
+    let refused = fire_advance_step(
+        &app,
+        &AuthRequired::None,
+        officer_label(),
+        &cclerk,
+        &executor,
+    );
     assert!(
         matches!(
             refused,
@@ -184,8 +202,13 @@ fn an_observer_below_the_operator_tier_cannot_advance_the_cap_tooth_bites_in_ban
     // An OBSERVER (Signature) firing `advance_step` (requires None/operator): the CAP tooth
     // refuses IN-BAND — `is_attenuation(Signature, None)` is false (None ⊄ Signature).
     // Nothing is submitted (anti-ghost). An auditor can read the cursor but cannot drive it.
-    let refused =
-        fire_advance_step(&app, &AuthRequired::Signature, officer_label(), &cclerk, &executor);
+    let refused = fire_advance_step(
+        &app,
+        &AuthRequired::Signature,
+        officer_label(),
+        &cclerk,
+        &executor,
+    );
     assert!(
         matches!(
             refused,
@@ -266,8 +289,14 @@ fn the_executor_re_enforces_a_skip_ahead_advance_is_refused() {
     let cell = cclerk.cell_id();
 
     // One honest step: 0 -> 1.
-    fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor)
-        .expect("first advance commits (0 -> 1)");
+    fire_advance_step(
+        &app,
+        &AuthRequired::None,
+        officer_label(),
+        &cclerk,
+        &executor,
+    )
+    .expect("first advance commits (0 -> 1)");
 
     // A SKIP-AHEAD: cursor 1 -> 3 (should be 2). MonotonicSequence refuses. Officer +
     // a valid box (sign) so ONLY the MonotonicSequence tooth bites (skip isolated).
@@ -314,8 +343,14 @@ fn the_executor_re_enforces_an_advance_past_the_terminal_is_refused() {
 
     // Drive 0 -> 1 -> 2 -> 3 through honest fires (each a real +1).
     for _ in 0..3 {
-        fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor)
-            .expect("honest advance commits");
+        fire_advance_step(
+            &app,
+            &AuthRequired::None,
+            officer_label(),
+            &cclerk,
+            &executor,
+        )
+        .expect("honest advance commits");
     }
     let state = executor.cell_state(cell).unwrap();
     assert_eq!(
@@ -449,14 +484,23 @@ fn the_clearance_check_consults_the_stored_graph_root() {
     // Even a fully-cleared OFFICER's review advance (0 -> 1) is refused — the stored root
     // does not match the graph the constraint walks. This proves the slot is LOAD-BEARING
     // (the floor scaffold ignored CLEARANCE_GRAPH_ROOT_SLOT entirely).
-    let refused = fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor);
+    let refused = fire_advance_step(
+        &app,
+        &AuthRequired::None,
+        officer_label(),
+        &cclerk,
+        &executor,
+    );
     assert!(
         refused.is_err(),
         "a wrong stored graph root must fail closed even for an officer, got {refused:?}"
     );
     let msg = format!("{:?}", refused.unwrap_err()).to_lowercase();
     assert!(
-        msg.contains("root") || msg.contains("commit") || msg.contains("clearance") || msg.contains("program"),
+        msg.contains("root")
+            || msg.contains("commit")
+            || msg.contains("clearance")
+            || msg.contains("program"),
         "the executor refuses on the stored-root mismatch, got: {msg}"
     );
     // Anti-ghost: nothing committed (cursor holds 0).
@@ -487,8 +531,14 @@ fn register_deos_mounts_the_seeded_surface_into_the_context() {
 
     // The seeded mandate is at cursor 0 with a charter terminal, so an operator can advance
     // through the mounted surface immediately (the seam is closed + live).
-    let receipt = fire_advance_step(&app, &AuthRequired::None, officer_label(), &cclerk, &executor)
-        .expect("the mounted, seeded surface advances a step (the promotion is live)");
+    let receipt = fire_advance_step(
+        &app,
+        &AuthRequired::None,
+        officer_label(),
+        &cclerk,
+        &executor,
+    )
+    .expect("the mounted, seeded surface advances a step (the promotion is live)");
     assert_ne!(receipt.turn_hash, [0u8; 32]);
 
     // The cursor advanced 0 -> 1 (the step committed through the live surface).

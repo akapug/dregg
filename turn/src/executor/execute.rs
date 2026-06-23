@@ -273,6 +273,14 @@ impl TurnExecutor {
     }
 
     fn execute_without_shadow(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
+        // MEASUREMENT-ONLY (`DREGG_TURN_PROFILE=1`): per-turn phase fences. When off,
+        // `prof` is false and every `accum` below is skipped (no atomic writes).
+        let prof = super::turn_profile::enabled();
+        if prof {
+            super::turn_profile::count_turn();
+        }
+        let _pt0 = std::time::Instant::now(); // `validate` phase start.
+
         // cap Phase C: a fresh turn starts with an empty consumed-capability
         // buffer (a prior REJECTED turn may have captured witnesses at its
         // auth sites before failing; they must not leak into this receipt).
@@ -419,16 +427,24 @@ impl TurnExecutor {
         // state commitment — so it always materializes the real root (a witness
         // gate is never deferred; only the classical-path witness is).
         let symbolic_defer = self.is_symbolic() && turn.execution_proof.is_none();
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::validate, _pt0);
+        }
+        let _pt_root = std::time::Instant::now();
         let pre_state_hash = if symbolic_defer {
             crate::collapse::DEFERRED_STATE_HASH
         } else {
             ledger.root()
         };
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::pre_root, _pt_root);
+        }
 
         // =====================================================================
         // PHASE 1: Commit fee + nonce (NEVER rolled back).
         // This prevents DoS via expensive-but-failing turns that never pay.
         // =====================================================================
+        let _pt_p1 = std::time::Instant::now();
         {
             let agent = ledger.get_mut(&turn.agent).unwrap();
             // Ordinary debit (fee-coverage was checked above; a false return
@@ -907,6 +923,14 @@ impl TurnExecutor {
         let mut all_effects_hashes: Vec<[u8; 32]> = Vec::new();
         let mut excess: i64 = 0; // Mina-style excess: must be zero at turn end.
 
+        // Everything from PHASE 1 start through here (incl. sovereign-witness /
+        // binding-sweep gates, trivial for the classical forest path) is the
+        // `phase1` accumulator; the forest walk below is the `forest` accumulator.
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::phase1, _pt_p1);
+        }
+        let _pt_forest = std::time::Instant::now();
+
         for (root_idx, root_tree) in turn.call_forest.roots.iter().enumerate() {
             let result = self.execute_tree(
                 root_tree,
@@ -951,6 +975,11 @@ impl TurnExecutor {
                 };
             }
         }
+
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::forest, _pt_forest);
+        }
+        let _pt_post = std::time::Instant::now();
 
         // Check total cost against fee.
         if computrons_used > turn.fee {
@@ -1165,11 +1194,19 @@ impl TurnExecutor {
         // real `post_state_hash`. (`symbolic_defer` was computed at the
         // pre-state above; the forest path is never proof-carrying, so it is
         // simply `self.is_symbolic()` here.)
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::post, _pt_post);
+        }
+        let _pt_postroot = std::time::Instant::now();
         let post_state_hash = if symbolic_defer {
             crate::collapse::DEFERRED_STATE_HASH
         } else {
             ledger.root()
         };
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::post_root, _pt_postroot);
+        }
+        let _pt_receipt = std::time::Instant::now();
         let effects_hash = self.compute_effects_hash(&all_effects_hashes);
 
         // Compute turn hash.
@@ -1238,6 +1275,10 @@ impl TurnExecutor {
 
         // P0-3: record the new chain-head for this agent.
         self.record_receipt_hash(turn.agent, receipt.receipt_hash());
+
+        if prof {
+            super::turn_profile::accum(super::turn_profile::Phase::receipt, _pt_receipt);
+        }
 
         TurnResult::Committed {
             ledger_delta: delta,

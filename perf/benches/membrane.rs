@@ -80,7 +80,10 @@ fn stitch_inputs(docs: CellId) -> (Stitch, Vec<BranchCap>) {
     let mut branch = DocGraph::default();
     branch.atoms.insert(1, Atom::Alive);
     branch.atoms.insert(2, Atom::Alive); // the branch's discovery
-    let conferred = vec![BranchCap { target, debit_reach: false }];
+    let conferred = vec![BranchCap {
+        target,
+        debit_reach: false,
+    }];
     let settlement_held = conferred.clone();
     (
         Stitch {

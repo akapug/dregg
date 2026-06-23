@@ -96,22 +96,16 @@ pub use escrow_sealed::{
     Claim, EscrowError, EscrowState, EscrowTerms as SealedEscrowTerms, Leg, LegRequirement,
     LegStatus, Side as EscrowSide, deposit_leg, is_escrow, open_escrow, reclaim_leg, settle,
 };
-pub use obligation_standing::{
-    Discharge, ObligationError as StandingObligationError, ObligationState as StandingObligationState,
-    ObligationTerms as StandingObligationTerms, discharge, is_obligation, open_obligation,
-};
 pub use facet::{
     EFFECT_ALL, EFFECT_ATTENUATE_CAPABILITY, EFFECT_BRIDGE_OPS, EFFECT_BURN, EFFECT_CAPTP_OPS,
     EFFECT_CREATE_CELL, EFFECT_DELEGATION_OPS, EFFECT_EMIT_EVENT, EFFECT_ESCROW_OPS,
     EFFECT_GRANT_CAPABILITY, EFFECT_INCREMENT_NONCE, EFFECT_INTRODUCE, EFFECT_LIFECYCLE_OPS,
-    EFFECT_NOTE_CREATE, EFFECT_NOTE_SPEND, EFFECT_OBLIGATION_OPS, EFFECT_QUEUE_OPS, EFFECT_REACTIVE_OPS,
-    EFFECT_REFUSAL,
-    EFFECT_REVOKE_CAPABILITY, EFFECT_SEAL_OPS, EFFECT_SET_FIELD, EFFECT_SET_PERMISSIONS,
-    EFFECT_SET_PROGRAM, EFFECT_SET_VERIFICATION_KEY, EFFECT_SOVEREIGN_OPS, EFFECT_TRANSFER,
-    EffectContext, EffectMask,
-    ExtendedFacet, FACET_ADMIN, FACET_DELEGATOR, FACET_READ_ONLY, FACET_STATE_WRITER,
-    FACET_TRANSFER_ONLY, FacetBuilder, FacetConstraint, FacetViolation, is_effect_permitted,
-    is_facet_attenuation,
+    EFFECT_NOTE_CREATE, EFFECT_NOTE_SPEND, EFFECT_OBLIGATION_OPS, EFFECT_QUEUE_OPS,
+    EFFECT_REACTIVE_OPS, EFFECT_REFUSAL, EFFECT_REVOKE_CAPABILITY, EFFECT_SEAL_OPS,
+    EFFECT_SET_FIELD, EFFECT_SET_PERMISSIONS, EFFECT_SET_PROGRAM, EFFECT_SET_VERIFICATION_KEY,
+    EFFECT_SOVEREIGN_OPS, EFFECT_TRANSFER, EffectContext, EffectMask, ExtendedFacet, FACET_ADMIN,
+    FACET_DELEGATOR, FACET_READ_ONLY, FACET_STATE_WRITER, FACET_TRANSFER_ONLY, FacetBuilder,
+    FacetConstraint, FacetViolation, is_effect_permitted, is_facet_attenuation,
 };
 pub use factory::{
     CapGrant, CapTarget, CapTemplate, ChildVkStrategy, FactoryCreationParams, FactoryDescriptor,
@@ -126,11 +120,16 @@ pub use lifecycle::{
     ArchivalAttestation, CellLifecycle, DeathCertificate, DeathReason, LifecycleTransitionError,
 };
 pub use membrane::{
-    compose_both, CompositionPolicy, HeldFacet, Membrane, MembraneCap, MembraneError, Presentation,
-    SealedMembrane,
+    CompositionPolicy, HeldFacet, Membrane, MembraneCap, MembraneError, Presentation,
+    SealedMembrane, compose_both,
 };
 pub use note::{Note, NoteBatcher, NoteCommitment, NoteError, Nullifier, PositionedNote};
 pub use nullifier_set::{MerkleMembershipProof, NonMembershipProof, NullifierSet};
+pub use obligation_standing::{
+    Discharge, ObligationError as StandingObligationError,
+    ObligationState as StandingObligationState, ObligationTerms as StandingObligationTerms,
+    discharge, is_obligation, open_obligation,
+};
 pub use permissions::{Action, AuthKind, AuthRequired, Permissions};
 #[allow(deprecated)]
 pub use preconditions::PreconditionClause;
@@ -161,7 +160,7 @@ pub use state::{
 pub use unilateral::{UnilateralAttestation, UnilateralAttestationKind};
 pub use vault::{
     Claim as VaultClaim, ClaimOutcome as VaultClaimOutcome, Condition as VaultCondition,
-    VaultError, VaultState, VaultTerms, claim as claim_vault, is_claimable_at as vault_claimable_at,
-    is_vault, open_vault,
+    VaultError, VaultState, VaultTerms, claim as claim_vault,
+    is_claimable_at as vault_claimable_at, is_vault, open_vault,
 };
 pub use vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};

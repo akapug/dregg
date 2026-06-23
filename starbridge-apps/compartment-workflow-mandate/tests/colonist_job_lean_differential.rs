@@ -51,7 +51,13 @@ fn job_advance_admits_matches_lean_corpus() {
 /// not a tautology any vector satisfies).
 #[test]
 fn corpus_is_both_polarity() {
-    assert!(JOB_LEAN_DECISIONS.contains(&true), "has a genuine-admit witness");
-    assert!(JOB_LEAN_DECISIONS.contains(&false), "has a cheat-reject witness");
+    assert!(
+        JOB_LEAN_DECISIONS.contains(&true),
+        "has a genuine-admit witness"
+    );
+    assert!(
+        JOB_LEAN_DECISIONS.contains(&false),
+        "has a cheat-reject witness"
+    );
     assert_eq!(JOB_LEAN_DECISIONS.len(), 12, "3 specs × 4 cursors");
 }

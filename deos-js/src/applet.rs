@@ -70,6 +70,26 @@ pub struct CellModel {
 }
 
 impl CellModel {
+    /// Project a cell's live state off a ledger into a model (the positions of the
+    /// polynomial functor). The SAME read [`Applet::model`] makes; shared with the
+    /// [`crate::attach::AttachedApplet`] so the attach path reads the live World's
+    /// cells identically.
+    pub fn from_ledger(ledger: &dregg_cell::Ledger, cell_id: &CellId) -> Self {
+        let mut fields = BTreeMap::new();
+        let mut nonce = 0;
+        if let Some(cell) = ledger.get(cell_id) {
+            for slot in 0..dregg_cell::state::STATE_SLOTS {
+                if let Some(fe) = cell.state.get_field(slot) {
+                    if *fe != [0u8; 32] {
+                        fields.insert(slot, *fe);
+                    }
+                }
+            }
+            nonce = cell.state.nonce();
+        }
+        CellModel { fields, nonce }
+    }
+
     /// Read a model field as a raw element.
     pub fn field(&self, slot: Slot) -> FieldElement {
         self.fields.get(&slot).copied().unwrap_or([0u8; 32])
@@ -331,25 +351,7 @@ impl Applet {
     /// A witnessed read of the live model off the embedded ledger (the SAME read the
     /// inspector makes). The positions of the polynomial functor.
     pub fn model(&self) -> CellModel {
-        let cell = self
-            .engine
-            .ledger()
-            .get(&self.cell)
-            .expect("applet cell present on its own ledger");
-        // Project the cell's fixed state slots into the model map. (STATE_SLOTS is the
-        // bounded fixed-field array; the spike's counter/todo live in low slots.)
-        let mut fields = BTreeMap::new();
-        for slot in 0..dregg_cell::state::STATE_SLOTS {
-            if let Some(fe) = cell.state.get_field(slot) {
-                if *fe != [0u8; 32] {
-                    fields.insert(slot, *fe);
-                }
-            }
-        }
-        CellModel {
-            fields,
-            nonce: cell.state.nonce(),
-        }
+        CellModel::from_ledger(self.engine.ledger(), &self.cell)
     }
 
     /// Witnessed read of one model field as a u64.

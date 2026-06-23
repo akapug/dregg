@@ -195,7 +195,13 @@ pub fn maybe_shadow_turn(
             // genuine eval-agreement check (not a commit-bit coincidence). Otherwise the post-state
             // root cannot byte-match by construction, so we honestly fall back to the commit bit.
             let agreement = compare_post_state(
-                turn, &pre, &host, &shadow_state, lean_committed, rust_committed, rust_post_root,
+                turn,
+                &pre,
+                &host,
+                &shadow_state,
+                lean_committed,
+                rust_committed,
+                rust_post_root,
             );
             log_shadow_outcome(turn, &kinds, lean_committed, rust_committed, agreement);
             Some(lean_committed)
@@ -1487,6 +1493,65 @@ pub(crate) fn run_shadow_state(
     Ok(json_state)
 }
 
+/// MEASUREMENT-ONLY: attribute the fixed per-call cost of the verified executor. Builds the SAME
+/// wire values `run_shadow_state` builds, then (1) times the bare FFI-into-Lean floor over `iters`
+/// crossings (`dregg_ffi_identity`), and (2) runs the PROFILED executor export under
+/// `DREGG_LEAN_PROFILE=1` for `iters` calls (each prints a per-sub-phase ns line to stderr the
+/// bench aggregates). Returns the identity-floor median seconds. Off the production path; called
+/// only by `perf/benches/lean_ffi_turn.rs`.
+pub fn profile_lean_phases(
+    turn: &Turn,
+    pre: &ShadowPreLedger,
+    host: &ShadowHostCtx,
+    iters: u32,
+) -> Result<f64, String> {
+    let block_height = host.block_height;
+    let wire_state = ledger_to_wire_state(pre)?;
+    let wire_turn = turn_to_wire_turn(turn, pre, host)?;
+    let frozen_nats: Vec<u64> = host
+        .frozen
+        .iter()
+        .filter_map(|c| pre.id_map.get(c).copied())
+        .collect();
+    let stored_head_nat = host.stored_head.map(|h| bytes32_to_nat(&h)).unwrap_or(0);
+    let host_wire = dregg_lean_ffi::marshal::WireHostCtx {
+        now: block_height,
+        block_height,
+        frozen: frozen_nats,
+        stored_head: stored_head_nat,
+        budget: host.budget,
+    };
+    let direct_hdr = dregg_lean_ffi::WireTurnHdr {
+        agent: wire_turn.agent,
+        nonce: wire_turn.nonce,
+        fee: wire_turn.fee,
+        valid_until: wire_turn.valid_until,
+        block_height: wire_turn.block_height,
+        prev_low: u64::from_be_bytes(wire_turn.prev_hash.0[24..32].try_into().unwrap()),
+    };
+
+    // (1) the bare identity floor (median over `iters` crossings on the built WState).
+    let id_floor = dregg_lean_ffi::identity_floor_median(&wire_state, iters)?;
+
+    // (2) the profiled executor: warm once, then `iters` calls — each prints its DREGG_LEAN_PROFILE
+    // ns line, which the bench aggregates from stderr. (Returns the same ShadowState faithfully.)
+    let _ = dregg_lean_ffi::shadow_exec_direct_profiled(
+        &host_wire,
+        &wire_state,
+        &wire_turn.root,
+        &direct_hdr,
+    )?;
+    for _ in 0..iters {
+        std::hint::black_box(dregg_lean_ffi::shadow_exec_direct_profiled(
+            &host_wire,
+            &wire_state,
+            &wire_turn.root,
+            &direct_hdr,
+        )?);
+    }
+    Ok(id_floor)
+}
+
 fn ledger_to_wire_state(
     pre: &ShadowPreLedger,
 ) -> Result<dregg_lean_ffi::marshal::WireState, String> {
@@ -1945,20 +2010,23 @@ fn sig_echo_wire(
     sig_ctx: &SigCtx,
     position: usize,
 ) -> dregg_lean_ffi::marshal::WireAuth {
-    use dregg_turn::action::CommitmentMode;
     use dregg_lean_ffi::marshal::{Digest, WireAuth};
+    use dregg_turn::action::CommitmentMode;
 
     // Recompute the EXACT signing message the executor's `verify_ed25519_signature` checks.
     let message = match action.commitment_mode {
-        CommitmentMode::Partial => dregg_turn::executor::TurnExecutor::compute_partial_signing_message(
-            action,
-            position,
-            &sig_ctx.federation_id,
-            sig_ctx.turn_nonce,
-        ),
-        CommitmentMode::Full => {
-            dregg_turn::executor::TurnExecutor::compute_signing_message(action, &sig_ctx.federation_id)
+        CommitmentMode::Partial => {
+            dregg_turn::executor::TurnExecutor::compute_partial_signing_message(
+                action,
+                position,
+                &sig_ctx.federation_id,
+                sig_ctx.turn_nonce,
+            )
         }
+        CommitmentMode::Full => dregg_turn::executor::TurnExecutor::compute_signing_message(
+            action,
+            &sig_ctx.federation_id,
+        ),
     };
 
     let mut sig_bytes = [0u8; 64];
@@ -2131,10 +2199,12 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
         } => {
             let chain_nat = bytes32_to_nat(&token_chain_hash(encoded, discharges));
             match key_ref {
-                dregg_turn::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => WireAuth::Token {
-                    issuer_key: Digest::from_bytes(*issuer_pubkey),
-                    sig: chain_nat,
-                },
+                dregg_turn::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => {
+                    WireAuth::Token {
+                        issuer_key: Digest::from_bytes(*issuer_pubkey),
+                        sig: chain_nat,
+                    }
+                }
                 dregg_turn::action::TokenKeyRef::CellScopedMacaroon { cell } => WireAuth::Custom {
                     kind_stmt: Digest::from_bytes(cell.0),
                     proof: chain_nat,
@@ -2307,8 +2377,8 @@ mod producer_coverage_tests {
 #[cfg(test)]
 mod auth_shape_marshal_tests {
     use super::*;
-    use dregg_turn::action::{Action, Authorization, DelegationProofData, TokenKeyRef};
     use dregg_cell::preconditions::{CellStatePrecondition, Preconditions};
+    use dregg_turn::action::{Action, Authorization, DelegationProofData, TokenKeyRef};
 
     fn bare_action(target: CellId, auth: Authorization, pre: Preconditions) -> Action {
         Action {
@@ -2422,9 +2492,9 @@ mod auth_shape_marshal_tests {
     /// could share.
     #[test]
     fn bearer_wire_is_full_sig_sensitive() {
-        use dregg_turn::action::BearerCapProof;
         use dregg_cell::AuthRequired;
         use dregg_lean_ffi::marshal::WireAuth;
+        use dregg_turn::action::BearerCapProof;
         let mk = |sig: [u8; 64]| {
             auth_to_wire(&Authorization::Bearer(BearerCapProof {
                 target: CellId([5u8; 32]),

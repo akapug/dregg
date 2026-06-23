@@ -112,7 +112,11 @@ impl OcapGraph {
             })
             .collect();
 
-        OcapGraph { nodes, edges, adjacency }
+        OcapGraph {
+            nodes,
+            edges,
+            adjacency,
+        }
     }
 
     /// All nodes (cells), id-sorted.
@@ -188,8 +192,12 @@ impl OcapGraph {
             }
         }
         let max_depth = depth.values().copied().max().unwrap_or(0);
-        let mut layers: Vec<GraphLayer> =
-            (0..=max_depth).map(|d| GraphLayer { depth: d, cells: Vec::new() }).collect();
+        let mut layers: Vec<GraphLayer> = (0..=max_depth)
+            .map(|d| GraphLayer {
+                depth: d,
+                cells: Vec::new(),
+            })
+            .collect();
         let mut by_depth: Vec<Vec<CellId>> = vec![Vec::new(); max_depth + 1];
         for (cell, d) in &depth {
             by_depth[*d].push(*cell);
@@ -235,7 +243,11 @@ impl OcapGraph {
         for e in &self.edges {
             targeted.insert(e.target);
         }
-        self.nodes.iter().map(|n| n.cell).filter(|c| !targeted.contains(c)).collect()
+        self.nodes
+            .iter()
+            .map(|n| n.cell)
+            .filter(|c| !targeted.contains(c))
+            .collect()
     }
 }
 

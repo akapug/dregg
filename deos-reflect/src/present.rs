@@ -19,7 +19,7 @@ use dregg_turn::turn::TurnReceipt;
 use dregg_types::CellId;
 
 use crate::graph::{GraphEdge, GraphNode, OcapGraph};
-use crate::substance::{reflect_cell, short_hex, Inspectable};
+use crate::substance::{Inspectable, reflect_cell, short_hex};
 
 /// Which of the seven moldable lenses a [`Presentation`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +128,10 @@ pub struct ReflectedCell {
 impl ReflectedCell {
     /// Snapshot a cell off the ledger, if present.
     pub fn from_ledger(ledger: &Ledger, id: CellId) -> Option<Self> {
-        ledger.get(&id).map(|c| ReflectedCell { id, cell: c.clone() })
+        ledger.get(&id).map(|c| ReflectedCell {
+            id,
+            cell: c.clone(),
+        })
     }
 
     /// **The moldable multiplicity** — every face this cell presents, given the live
@@ -173,12 +176,20 @@ impl ReflectedCell {
             keep.insert(e.holder);
             edges.push(e.clone());
         }
-        let nodes: Vec<GraphNode> =
-            g.nodes().iter().filter(|n| keep.contains(&n.cell)).cloned().collect();
+        let nodes: Vec<GraphNode> = g
+            .nodes()
+            .iter()
+            .filter(|n| keep.contains(&n.cell))
+            .cloned()
+            .collect();
         Presentation {
             kind: PresentationKind::Graph,
             label: "ocap Graph".into(),
-            body: PresentationBody::Graph(GraphView { nodes, edges, focus: Some(self.id) }),
+            body: PresentationBody::Graph(GraphView {
+                nodes,
+                edges,
+                focus: Some(self.id),
+            }),
             search_text: format!("ocap graph {}", short_hex(self.id.as_bytes())),
         }
     }
@@ -189,7 +200,10 @@ impl ReflectedCell {
             kind: PresentationKind::DomainVisual,
             label: "Lifecycle".into(),
             body: PresentationBody::StateMachine(lifecycle_state_machine(&self.cell)),
-            search_text: format!("lifecycle {}", crate::substance::lifecycle_label(&self.cell)),
+            search_text: format!(
+                "lifecycle {}",
+                crate::substance::lifecycle_label(&self.cell)
+            ),
         }
     }
 
@@ -221,18 +235,53 @@ impl ReflectedCell {
 pub fn lifecycle_state_machine(cell: &Cell) -> StateMachineView {
     use dregg_cell::lifecycle::CellLifecycle;
     let states = vec![
-        SmState { name: "Live".into(), terminal: false },
-        SmState { name: "Sealed".into(), terminal: false },
-        SmState { name: "Destroyed".into(), terminal: true },
-        SmState { name: "Migrated".into(), terminal: true },
-        SmState { name: "Archived".into(), terminal: false },
+        SmState {
+            name: "Live".into(),
+            terminal: false,
+        },
+        SmState {
+            name: "Sealed".into(),
+            terminal: false,
+        },
+        SmState {
+            name: "Destroyed".into(),
+            terminal: true,
+        },
+        SmState {
+            name: "Migrated".into(),
+            terminal: true,
+        },
+        SmState {
+            name: "Archived".into(),
+            terminal: false,
+        },
     ];
     let transitions = vec![
-        SmTransition { from: "Live".into(), to: "Sealed".into(), verb: "Seal".into() },
-        SmTransition { from: "Sealed".into(), to: "Live".into(), verb: "Unseal".into() },
-        SmTransition { from: "Live".into(), to: "Destroyed".into(), verb: "Destroy".into() },
-        SmTransition { from: "Live".into(), to: "Migrated".into(), verb: "Migrate".into() },
-        SmTransition { from: "Live".into(), to: "Archived".into(), verb: "Archive".into() },
+        SmTransition {
+            from: "Live".into(),
+            to: "Sealed".into(),
+            verb: "Seal".into(),
+        },
+        SmTransition {
+            from: "Sealed".into(),
+            to: "Live".into(),
+            verb: "Unseal".into(),
+        },
+        SmTransition {
+            from: "Live".into(),
+            to: "Destroyed".into(),
+            verb: "Destroy".into(),
+        },
+        SmTransition {
+            from: "Live".into(),
+            to: "Migrated".into(),
+            verb: "Migrate".into(),
+        },
+        SmTransition {
+            from: "Live".into(),
+            to: "Archived".into(),
+            verb: "Archive".into(),
+        },
     ];
     let current = match cell.lifecycle {
         CellLifecycle::Live => "Live",
@@ -242,5 +291,9 @@ pub fn lifecycle_state_machine(cell: &Cell) -> StateMachineView {
         CellLifecycle::Archived { .. } => "Archived",
     }
     .to_string();
-    StateMachineView { states, transitions, current }
+    StateMachineView {
+        states,
+        transitions,
+        current,
+    }
 }

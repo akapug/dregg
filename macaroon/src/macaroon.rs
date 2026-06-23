@@ -433,7 +433,11 @@ mod tests {
     #[test]
     fn test_attenuation_and_verify() {
         let root_key = crypto::random_key();
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
 
         // Add caveats
         let c1 = TestCaveat {
@@ -456,7 +460,11 @@ mod tests {
     fn test_wrong_key_fails() {
         let root_key = crypto::random_key();
         let wrong_key = crypto::random_key();
-        let mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
 
         assert!(mac.verify(&wrong_key, &[]).is_err());
     }
@@ -464,7 +472,11 @@ mod tests {
     #[test]
     fn test_tampered_caveat_fails() {
         let root_key = crypto::random_key();
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
 
         mac.add_first_party(&TestCaveat {
             key: "app".into(),
@@ -486,7 +498,11 @@ mod tests {
     #[test]
     fn test_removed_caveat_fails() {
         let root_key = crypto::random_key();
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
 
         mac.add_first_party(&TestCaveat {
             key: "app".into(),
@@ -508,7 +524,11 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_roundtrip() {
         let root_key = crypto::random_key();
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
         mac.add_first_party(&TestCaveat {
             key: "app".into(),
             value: "test".into(),
@@ -529,7 +549,11 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip() {
         let root_key = crypto::random_key();
-        let mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
 
         let encoded = mac.encode().unwrap();
         assert!(encoded.starts_with("em2_"));
@@ -545,13 +569,21 @@ mod tests {
         let shared_key = crypto::random_key();
 
         // 1. Create root macaroon with 3P caveat
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
         mac.add_first_party(&TestCaveat {
             key: "org".into(),
             value: "dregg".into(),
         });
-        mac.add_third_party("https://auth.dregg.fg-goose.online", &shared_key, CaveatSet::new())
-            .unwrap();
+        mac.add_third_party(
+            "https://auth.dregg.fg-goose.online",
+            &shared_key,
+            CaveatSet::new(),
+        )
+        .unwrap();
 
         // 2. Extract ticket from 3P caveat
         let tp_caveats = mac.caveats.third_party_caveats();
@@ -563,8 +595,12 @@ mod tests {
         let mut dk = [0u8; 32];
         dk.copy_from_slice(&wire_ticket.discharge_key);
 
-        let mut discharge =
-            create_discharge(tp.ticket.clone(), &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+        let mut discharge = create_discharge(
+            tp.ticket.clone(),
+            &dk,
+            "https://auth.dregg.fg-goose.online".into(),
+            &[],
+        );
 
         // 4. Bind discharge to root
         mac.bind_discharge(&mut discharge);
@@ -582,9 +618,17 @@ mod tests {
         let root_key = crypto::random_key();
         let shared_key = crypto::random_key();
 
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
-        mac.add_third_party("https://auth.dregg.fg-goose.online", &shared_key, CaveatSet::new())
-            .unwrap();
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
+        mac.add_third_party(
+            "https://auth.dregg.fg-goose.online",
+            &shared_key,
+            CaveatSet::new(),
+        )
+        .unwrap();
 
         let tp_caveats = mac.caveats.third_party_caveats();
         let tp = ThirdPartyCaveat::decode_body(&tp_caveats[0].body).unwrap();
@@ -593,8 +637,12 @@ mod tests {
         dk.copy_from_slice(&wire_ticket.discharge_key);
 
         // Create discharge WITHOUT binding (empty discharge, just the key)
-        let discharge =
-            create_discharge(tp.ticket.clone(), &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+        let discharge = create_discharge(
+            tp.ticket.clone(),
+            &dk,
+            "https://auth.dregg.fg-goose.online".into(),
+            &[],
+        );
 
         // Must be rejected — unbound discharges are never allowed
         assert!(mac.verify(&root_key, &[discharge]).is_err());
@@ -606,9 +654,17 @@ mod tests {
         let root_key = crypto::random_key();
         let shared_key = crypto::random_key();
 
-        let mut mac = Macaroon::new(&root_key, b"kid-1".to_vec(), "https://dregg.fg-goose.online".into());
-        mac.add_third_party("https://auth.dregg.fg-goose.online", &shared_key, CaveatSet::new())
-            .unwrap();
+        let mut mac = Macaroon::new(
+            &root_key,
+            b"kid-1".to_vec(),
+            "https://dregg.fg-goose.online".into(),
+        );
+        mac.add_third_party(
+            "https://auth.dregg.fg-goose.online",
+            &shared_key,
+            CaveatSet::new(),
+        )
+        .unwrap();
 
         let tp_caveats = mac.caveats.third_party_caveats();
         let tp = ThirdPartyCaveat::decode_body(&tp_caveats[0].body).unwrap();
@@ -616,8 +672,12 @@ mod tests {
         let mut dk = [0u8; 32];
         dk.copy_from_slice(&wire_ticket.discharge_key);
 
-        let mut discharge =
-            create_discharge(tp.ticket.clone(), &dk, "https://auth.dregg.fg-goose.online".into(), &[]);
+        let mut discharge = create_discharge(
+            tp.ticket.clone(),
+            &dk,
+            "https://auth.dregg.fg-goose.online".into(),
+            &[],
+        );
 
         // Bind the discharge to the root — this should make it valid
         mac.bind_discharge(&mut discharge);

@@ -560,8 +560,8 @@ mod tests {
             .is_ok()
         });
         match verdict {
-            Err(_) => {}            // panic = rejection = fine
-            Ok(false) => {}         // produced a proof that does NOT verify = rejection = fine
+            Err(_) => {}    // panic = rejection = fine
+            Ok(false) => {} // produced a proof that does NOT verify = rejection = fine
             Ok(true) => panic!(
                 "FORGE: a membership proof for the wrong leaf path verified against a witness \
                  committed to real_root — a soundness break"

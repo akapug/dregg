@@ -46,29 +46,54 @@ fn record(i: u64, height: u64, agent: &str, effects: Vec<EffectSummary>) -> Rece
 /// revocation can retract a row), which is exactly what the CALM grade flags.
 fn history() -> Vec<ReceiptRecord> {
     vec![
-        record(0, 1, "org42", vec![EffectSummary::Created {
-            agent: "org42".into(),
-            cell: "doc-a".into(),
-        }]),
-        record(1, 2, "org42", vec![EffectSummary::Granted {
-            from: "org42".into(),
-            to: "alice".into(),
-            cap: "read-doc-a".into(),
-        }]),
-        record(2, 3, "org42", vec![EffectSummary::Granted {
-            from: "org42".into(),
-            to: "bob".into(),
-            cap: "read-doc-b".into(),
-        }]),
-        record(3, 4, "org99", vec![EffectSummary::Granted {
-            from: "org99".into(),
-            to: "carol".into(),
-            cap: "read-doc-c".into(),
-        }]),
+        record(
+            0,
+            1,
+            "org42",
+            vec![EffectSummary::Created {
+                agent: "org42".into(),
+                cell: "doc-a".into(),
+            }],
+        ),
+        record(
+            1,
+            2,
+            "org42",
+            vec![EffectSummary::Granted {
+                from: "org42".into(),
+                to: "alice".into(),
+                cap: "read-doc-a".into(),
+            }],
+        ),
+        record(
+            2,
+            3,
+            "org42",
+            vec![EffectSummary::Granted {
+                from: "org42".into(),
+                to: "bob".into(),
+                cap: "read-doc-b".into(),
+            }],
+        ),
+        record(
+            3,
+            4,
+            "org99",
+            vec![EffectSummary::Granted {
+                from: "org99".into(),
+                to: "carol".into(),
+                cap: "read-doc-c".into(),
+            }],
+        ),
         // bob's cap is later revoked — the finalized-dependent retraction.
-        record(4, 5, "org42", vec![EffectSummary::Revoked {
-            cap: "read-doc-b".into(),
-        }]),
+        record(
+            4,
+            5,
+            "org42",
+            vec![EffectSummary::Revoked {
+                cap: "read-doc-b".into(),
+            }],
+        ),
     ]
 }
 
@@ -88,7 +113,12 @@ fn whole_log_slice(receipts: &[ReceiptRecord]) -> (AttestedSlice, [u8; 32]) {
     let (_vals, opening) = m.open_range(0, hi);
     let slice = AttestedSlice {
         receipts: receipts.to_vec(),
-        cert: RangeCertificate { root, lo: 0, hi, opening },
+        cert: RangeCertificate {
+            root,
+            lo: 0,
+            hi,
+            opening,
+        },
     };
     (slice, root)
 }
@@ -97,7 +127,15 @@ fn whole_log_slice(receipts: &[ReceiptRecord]) -> (AttestedSlice, [u8; 32]) {
 /// `granted(_, Holder, Cap, _) ∧ ¬revoked(Cap, _)`.
 fn caps_currently_held() -> Query {
     Query::new()
-        .atom(Pred::Granted, vec![Term::Wild, Term::var("Holder"), Term::var("Cap"), Term::Wild])
+        .atom(
+            Pred::Granted,
+            vec![
+                Term::Wild,
+                Term::var("Holder"),
+                Term::var("Cap"),
+                Term::Wild,
+            ],
+        )
         .not_atom(Pred::Revoked, vec![Term::var("Cap"), Term::Wild])
 }
 
@@ -128,7 +166,10 @@ fn attested_read_returns_rows_with_a_verifying_certificate() {
     assert_eq!(holders.len(), 2, "exactly two caps are currently held");
     assert!(holders.contains(&"alice".to_string()));
     assert!(holders.contains(&"carol".to_string()));
-    assert!(!holders.contains(&"bob".to_string()), "bob's revoked cap must be pruned");
+    assert!(
+        !holders.contains(&"bob".to_string()),
+        "bob's revoked cap must be pruned"
+    );
 }
 
 #[test]
@@ -147,12 +188,20 @@ fn the_calm_grade_flags_the_finalized_dependence() {
     );
     // The freshness frontier is the max height of the certified slice (height 5,
     // the revocation receipt): the answer is correct AS OF height 5.
-    assert_eq!(ans.fresh_as_of, 5, "the answer is fresh as of the revocation height");
+    assert_eq!(
+        ans.fresh_as_of, 5,
+        "the answer is fresh as of the revocation height"
+    );
 
     // A purely-positive query (no negation) is MONOTONE — its rows are final.
     let ever_granted = Query::new().atom(
         Pred::Granted,
-        vec![Term::Wild, Term::var("Holder"), Term::var("Cap"), Term::Wild],
+        vec![
+            Term::Wild,
+            Term::var("Holder"),
+            Term::var("Cap"),
+            Term::Wild,
+        ],
     );
     let (slice2, _r2) = whole_log_slice(&receipts);
     let mono = answer_whole_log(slice2, ever_granted).unwrap();
@@ -189,7 +238,12 @@ fn a_server_that_omits_a_row_is_caught() {
     let (_vals, opening) = m.open_range(0, 4);
     let tampered_slice = AttestedSlice {
         receipts: tampered,
-        cert: RangeCertificate { root: trusted_root, lo: 0, hi: 4, opening },
+        cert: RangeCertificate {
+            root: trusted_root,
+            lo: 0,
+            hi: 4,
+            opening,
+        },
     };
     let bad = answer_whole_log(tampered_slice, caps_currently_held()).unwrap();
     assert!(

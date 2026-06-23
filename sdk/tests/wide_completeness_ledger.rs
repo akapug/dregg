@@ -136,7 +136,11 @@ fn create_cell_proves_on_deployed_wide_path() {
     );
 
     let desc = wide_desc("createCellVmDescriptor2R24");
-    assert_eq!(producer_dpis.len(), desc.public_input_count, "wide createCell PI count");
+    assert_eq!(
+        producer_dpis.len(),
+        desc.public_input_count,
+        "wide createCell PI count"
+    );
 
     // -- VERIFY LEG (the deployed light-client verifier): the minted proof VERIFIES against its
     //    published wide PIs. This is the prove-through: a light client running nothing but
@@ -183,10 +187,20 @@ fn prove_through_deployed(
     let receipt_hashes: Vec<[u8; 32]> = vec![];
     let mut ledger = Ledger::new();
     let _ = ledger.insert_cell(before_cell.clone());
-    let before_w =
-        rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_hashes);
-    let after_w =
-        rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_hashes);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_hashes,
+    );
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
         balance as u64,
         before_cell.state.nonce() as u32,
@@ -195,7 +209,13 @@ fn prove_through_deployed(
     );
     let caveat = dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest();
     prove_effect_vm_rotated_wide(
-        &initial_vm_state, effects, &before_w, &after_w, &caveat, None, None,
+        &initial_vm_state,
+        effects,
+        &before_w,
+        &after_w,
+        &caveat,
+        None,
+        None,
     )
     .unwrap_or_else(|e| {
         panic!("DEPLOYED PROVE-THROUGH ({domain:?}) must prove on the wide path: {e}")
@@ -207,13 +227,20 @@ fn prove_through_deployed(
 /// BEFORE commit (non-vacuity: the effect's genuine write is bound, not a frozen passthrough).
 fn assert_verifies_and_nonvacuous(
     key: &str,
-    proof: &dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+    proof: &dregg_circuit::descriptor_ir2::Ir2BatchProof<
+        dregg_circuit::descriptor_ir2::DreggStarkConfig,
+    >,
     dpis: &[BabyBear],
 ) {
     let desc = wide_desc(key);
-    assert_eq!(dpis.len(), desc.public_input_count, "{key} wide PI count matches descriptor");
-    verify_vm_descriptor2(&desc, proof, dpis)
-        .unwrap_or_else(|e| panic!("the honest wide {key} proof VERIFIES against its published PIs: {e}"));
+    assert_eq!(
+        dpis.len(),
+        desc.public_input_count,
+        "{key} wide PI count matches descriptor"
+    );
+    verify_vm_descriptor2(&desc, proof, dpis).unwrap_or_else(|e| {
+        panic!("the honest wide {key} proof VERIFIES against its published PIs: {e}")
+    });
     let wide_base = desc.public_input_count - 16;
     let before8 = &dpis[wide_base..wide_base + 8];
     let after8 = &dpis[wide_base + 8..wide_base + 16];
@@ -256,7 +283,9 @@ fn create_cell_from_factory_proves_on_deployed_wide_path() {
 fn spawn_proves_on_deployed_wide_path() {
     // The born child's key (param0 = spawn_hash[0]) MUST be non-zero (empty-tree sentinel collision).
     let spawn_id = BabyBear::new(0x5BA1);
-    let effects = vec![VmEffect::SpawnWithDelegation { spawn_hash: [spawn_id; 8] }];
+    let effects = vec![VmEffect::SpawnWithDelegation {
+        spawn_hash: [spawn_id; 8],
+    }];
     let (proof, dpis) = prove_through_deployed(b"ledger-spawn-domain", &effects);
     assert_verifies_and_nonvacuous("spawnVmDescriptor2R24", &proof, &dpis);
     eprintln!(
@@ -276,7 +305,10 @@ fn spawn_proves_on_deployed_wide_path() {
 fn set_field_dyn_proves_on_deployed_wide_path() {
     // field_idx 11 (>= 8) is the OVERFLOW write → setFieldDynVmDescriptor2R24; the in-circuit slot is
     // 11 % 8 = 3 (the 8-cell Blum overflow memory address).
-    let effects = vec![VmEffect::SetField { field_idx: 11, value: BabyBear::new(0x5E7F) }];
+    let effects = vec![VmEffect::SetField {
+        field_idx: 11,
+        value: BabyBear::new(0x5E7F),
+    }];
     let (proof, dpis) = prove_through_deployed(b"ledger-setfielddyn-domain", &effects);
     assert_verifies_and_nonvacuous("setFieldDynVmDescriptor2R24", &proof, &dpis);
     eprintln!(
@@ -303,12 +335,12 @@ fn set_field_dyn_proves_on_deployed_wide_path() {
 /// verifying STARK.
 #[test]
 fn custom_proves_on_deployed_wide_path() {
-    use dregg_circuit_prove::custom_proof_bind::{
-        BoundCustomProof, ProofBindError, prove_custom_program, verify_bound_custom_proof,
-    };
     use dregg_circuit::dsl::circuit::{
         CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
         ProgramRegistry,
+    };
+    use dregg_circuit_prove::custom_proof_bind::{
+        BoundCustomProof, ProofBindError, prove_custom_program, verify_bound_custom_proof,
     };
     use std::collections::HashMap;
 
@@ -319,19 +351,47 @@ fn custom_proves_on_deployed_wide_path() {
         trace_width: 4,
         max_degree: 2,
         columns: vec![
-            ColumnDef { name: "old".into(), index: 0, kind: ColumnKind::Value },
-            ColumnDef { name: "amt".into(), index: 1, kind: ColumnKind::Value },
-            ColumnDef { name: "new".into(), index: 2, kind: ColumnKind::Value },
-            ColumnDef { name: "dir".into(), index: 3, kind: ColumnKind::Binary },
+            ColumnDef {
+                name: "old".into(),
+                index: 0,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "amt".into(),
+                index: 1,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "new".into(),
+                index: 2,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "dir".into(),
+                index: 3,
+                kind: ColumnKind::Binary,
+            },
         ],
         constraints: vec![
             ConstraintExpr::Binary { col: 3 },
             ConstraintExpr::Polynomial {
                 terms: vec![
-                    PolyTerm { coeff: BabyBear::ONE, col_indices: vec![2] },
-                    PolyTerm { coeff: p_minus_1, col_indices: vec![0] },
-                    PolyTerm { coeff: p_minus_1, col_indices: vec![1] },
-                    PolyTerm { coeff: BabyBear::new(2), col_indices: vec![3, 1] },
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![2],
+                    },
+                    PolyTerm {
+                        coeff: p_minus_1,
+                        col_indices: vec![0],
+                    },
+                    PolyTerm {
+                        coeff: p_minus_1,
+                        col_indices: vec![1],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(2),
+                        col_indices: vec![3, 1],
+                    },
                 ],
             },
         ],
@@ -341,7 +401,9 @@ fn custom_proves_on_deployed_wide_path() {
     };
     let program = CellProgram::new(descriptor, 1);
     let mut registry = ProgramRegistry::new();
-    registry.deploy(program.clone()).expect("demo program deploys");
+    registry
+        .deploy(program.clone())
+        .expect("demo program deploys");
 
     let rows = 4usize;
     let mut witness: HashMap<String, Vec<BabyBear>> = HashMap::new();
@@ -372,8 +434,9 @@ fn custom_proves_on_deployed_wide_path() {
     // ── The on-wire threading: a custom Turn carries the genuine sub-proof so the light client can run
     //    the recursion. Confirm the projection round-trips back to a verifying bound proof.
     let wire = bound_to_wire_and_back(&bound);
-    verify_bound_custom_proof(&registry, &wire)
-        .expect("the wire-threaded sub-proof (Turn::with_custom_program_proofs projection) verifies");
+    verify_bound_custom_proof(&registry, &wire).expect(
+        "the wire-threaded sub-proof (Turn::with_custom_program_proofs projection) verifies",
+    );
 
     // ── NEGATIVE POLE: a FORGED sub-proof is REJECTED by the deployed engine (the wide receipt's
     //    `proof_bind` MEANS "the bound proof verified").
@@ -448,7 +511,9 @@ fn probe_wide(
     need: &WideNeed,
 ) -> Result<
     (
-        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
         Vec<BabyBear>,
     ),
     String,
@@ -493,8 +558,7 @@ fn probe_wide(
                     .get(&dregg_cell::state::REFUSAL_AUDIT_EXT_KEY)
                     .copied()
                     .expect("a refused cell carries the audit slot in fields_map");
-                let before_leaves =
-                    dregg_cell::state::fields_root_leaves(&before.state.fields_map);
+                let before_leaves = dregg_cell::state::fields_root_leaves(&before.state.fields_map);
                 let audit_value = dregg_circuit::cap_root::fold_bytes32(&audit_bytes);
                 Some((before_leaves, audit_value))
             } else {
@@ -510,8 +574,20 @@ fn probe_wide(
 
     let mut ledger = Ledger::new();
     let _ = ledger.insert_cell(before_cell.clone());
-    let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &[]);
-    let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &[]);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &[],
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &[],
+    );
     let initial = CellState::with_capability_root_and_record_digest(
         100_000u64,
         before_cell.state.nonce() as u32,
@@ -550,7 +626,14 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
     let z8 = [BabyBear::new(0); 8];
     vec![
         // ── value family ──────────────────────────────────────────────────────────────────────
-        ("transfer", vec![VmEffect::Transfer { amount: 100, direction: 1 }], WideNeed::Plain),
+        (
+            "transfer",
+            vec![VmEffect::Transfer {
+                amount: 100,
+                direction: 1,
+            }],
+            WideNeed::Plain,
+        ),
         (
             "burn",
             vec![VmEffect::Burn {
@@ -570,19 +653,54 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
             WideNeed::Plain,
         ),
         // ── field family ──────────────────────────────────────────────────────────────────────
-        ("setField", vec![VmEffect::SetField { field_idx: 3, value: BabyBear::new(0x5E70) }], WideNeed::Plain),
-        ("setFieldDyn", vec![VmEffect::SetField { field_idx: 11, value: BabyBear::new(0x5E7F) }], WideNeed::Plain),
-        // ── bookkeeping family ────────────────────────────────────────────────────────────────
-        ("incrementNonce", vec![VmEffect::IncrementNonce], WideNeed::Plain),
         (
-            "emitEvent",
-            vec![VmEffect::EmitEvent { topic_hash: h8(b"topic"), payload_hash: h8(b"payload") }],
+            "setField",
+            vec![VmEffect::SetField {
+                field_idx: 3,
+                value: BabyBear::new(0x5E70),
+            }],
             WideNeed::Plain,
         ),
-        ("makeSovereign", vec![VmEffect::MakeSovereign], WideNeed::Plain),
-        ("pipelinedSend", vec![VmEffect::PipelinedSend { send_hash: z8 }], WideNeed::Plain),
+        (
+            "setFieldDyn",
+            vec![VmEffect::SetField {
+                field_idx: 11,
+                value: BabyBear::new(0x5E7F),
+            }],
+            WideNeed::Plain,
+        ),
+        // ── bookkeeping family ────────────────────────────────────────────────────────────────
+        (
+            "incrementNonce",
+            vec![VmEffect::IncrementNonce],
+            WideNeed::Plain,
+        ),
+        (
+            "emitEvent",
+            vec![VmEffect::EmitEvent {
+                topic_hash: h8(b"topic"),
+                payload_hash: h8(b"payload"),
+            }],
+            WideNeed::Plain,
+        ),
+        (
+            "makeSovereign",
+            vec![VmEffect::MakeSovereign],
+            WideNeed::Plain,
+        ),
+        (
+            "pipelinedSend",
+            vec![VmEffect::PipelinedSend { send_hash: z8 }],
+            WideNeed::Plain,
+        ),
         // ── birth / accounts-grow family ──────────────────────────────────────────────────────
-        ("createCell", vec![VmEffect::CreateCell { create_hash: h8(b"new-cell") }], WideNeed::Plain),
+        (
+            "createCell",
+            vec![VmEffect::CreateCell {
+                create_hash: h8(b"new-cell"),
+            }],
+            WideNeed::Plain,
+        ),
         (
             "createCellFromFactory",
             vec![VmEffect::CreateCellFromFactory {
@@ -593,13 +711,18 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
         ),
         (
             "spawnWithDelegation",
-            vec![VmEffect::SpawnWithDelegation { spawn_hash: [BabyBear::new(0x5BA1); 8] }],
+            vec![VmEffect::SpawnWithDelegation {
+                spawn_hash: [BabyBear::new(0x5BA1); 8],
+            }],
             WideNeed::Plain,
         ),
         // ── note family ───────────────────────────────────────────────────────────────────────
         (
             "noteSpend",
-            vec![VmEffect::NoteSpend { nullifier: BabyBear::new(0x57E1), value: 700 }],
+            vec![VmEffect::NoteSpend {
+                nullifier: BabyBear::new(0x57E1),
+                value: 700,
+            }],
             // An HONEST spend reveals a FRESH nullifier — it must be ABSENT from the BEFORE nullifier
             // set (the in-circuit `.absent` freshness op refuses a re-spend). So the BEFORE set is
             // EMPTY; the grow-gate `.insert` then grows it by this fresh nullifier.
@@ -607,7 +730,10 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
         ),
         (
             "noteCreate",
-            vec![VmEffect::NoteCreate { commitment: BabyBear::new(0xC0EE), value: 300 }],
+            vec![VmEffect::NoteCreate {
+                commitment: BabyBear::new(0xC0EE),
+                value: 300,
+            }],
             WideNeed::Plain,
         ),
         // ── record-pin / lifecycle family (the AFTER limb is a GENUINE move; the kernel effect is
@@ -629,8 +755,9 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
                     &dregg_cell::vk_v2::VkComponents {
                         program_bytes: b"wide-ledger-vk-program",
                         air_fingerprint: [0x11; 32],
-                        verifier_fingerprint:
-                            dregg_cell::vk_v2::VerifierFingerprint::SourceHash([0x22; 32]),
+                        verifier_fingerprint: dregg_cell::vk_v2::VerifierFingerprint::SourceHash(
+                            [0x22; 32],
+                        ),
                         proving_system_id: dregg_cell::vk_v2::ProvingSystemId::Plonky3BabyBearFri {
                             p3_rev: "wide-ledger",
                         },
@@ -649,7 +776,9 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
         (
             "cellUnseal",
             vec![],
-            WideNeed::RecordPin(Box::new(|cell| dregg_turn::Effect::CellUnseal { target: cell })),
+            WideNeed::RecordPin(Box::new(|cell| dregg_turn::Effect::CellUnseal {
+                target: cell,
+            })),
         ),
         (
             "cellDestroy",
@@ -693,7 +822,10 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
         // ── recursion-bound family ────────────────────────────────────────────────────────────
         (
             "custom",
-            vec![VmEffect::Custom { program_vk_hash: h8(b"custom-vk"), proof_commitment: [BabyBear::new(0xC0); 4] }],
+            vec![VmEffect::Custom {
+                program_vk_hash: h8(b"custom-vk"),
+                proof_commitment: [BabyBear::new(0xC0); 4],
+            }],
             WideNeed::Plain,
         ),
         // ── cap-write family whose AFTER cap-root is a MAP-OP write (the in-circuit cap-tree open).
@@ -714,19 +846,41 @@ fn all_wide_cases() -> Vec<(&'static str, Vec<VmEffect>, WideNeed)> {
         ),
         (
             "revokeCapability",
-            vec![VmEffect::RevokeCapability { slot_hash: [BabyBear::new(0x4E); 8], phase_b: None }],
+            vec![VmEffect::RevokeCapability {
+                slot_hash: [BabyBear::new(0x4E); 8],
+                phase_b: None,
+            }],
             WideNeed::Plain,
         ),
         // revokeDelegation/refreshDelegation/introduce DO prove on the bare wide path (their wide
         // descriptors are passthrough/transfer-shape members that need no cap-tree heap witness).
-        ("revokeDelegation", vec![VmEffect::RevokeDelegation { child_hash: h8(b"revoke-child") }], WideNeed::Plain),
         (
-            "refreshDelegation",
-            vec![VmEffect::RefreshDelegation { child_hash: h8(b"refresh-child"), snapshot_value: h8(b"snapshot") }],
+            "revokeDelegation",
+            vec![VmEffect::RevokeDelegation {
+                child_hash: h8(b"revoke-child"),
+            }],
             WideNeed::Plain,
         ),
-        ("introduce", vec![VmEffect::Introduce { intro_hash: h8(b"intro") }], WideNeed::Plain),
-        ("exerciseViaCapability", vec![VmEffect::ExerciseViaCapability { exercise_hash: z8 }], WideNeed::Plain),
+        (
+            "refreshDelegation",
+            vec![VmEffect::RefreshDelegation {
+                child_hash: h8(b"refresh-child"),
+                snapshot_value: h8(b"snapshot"),
+            }],
+            WideNeed::Plain,
+        ),
+        (
+            "introduce",
+            vec![VmEffect::Introduce {
+                intro_hash: h8(b"intro"),
+            }],
+            WideNeed::Plain,
+        ),
+        (
+            "exerciseViaCapability",
+            vec![VmEffect::ExerciseViaCapability { exercise_hash: z8 }],
+            WideNeed::Plain,
+        ),
     ]
 }
 
@@ -743,10 +897,13 @@ fn case(label: &str) -> (&'static str, Vec<VmEffect>, WideNeed) {
 /// (the AFTER 8-felt commit MOVED off BEFORE). `desc_key` is its wide descriptor registry key.
 fn prove_through_and_check(label: &str, desc_key: &str) {
     let (_, effects, need) = case(label);
-    let (proof, dpis) = probe_wide(label.as_bytes(), &effects, &need)
-        .unwrap_or_else(|e| panic!("DEPLOYED {label} PROVE-THROUGH must prove on the wide path: {e}"));
+    let (proof, dpis) = probe_wide(label.as_bytes(), &effects, &need).unwrap_or_else(|e| {
+        panic!("DEPLOYED {label} PROVE-THROUGH must prove on the wide path: {e}")
+    });
     assert_verifies_and_nonvacuous(desc_key, &proof, &dpis);
-    eprintln!("DEPLOYED {label} PROVE-THROUGH GREEN: proves + verifies on the wide path ({desc_key}).");
+    eprintln!(
+        "DEPLOYED {label} PROVE-THROUGH GREEN: proves + verifies on the wide path ({desc_key})."
+    );
 }
 
 /// **THE value-family PROVE-THROUGHS (burn / bridgeMint).** An honest burn / bridge-mint sovereign
@@ -886,7 +1043,10 @@ fn provability_scoreboard_deployed_wide_path() {
         .map(|(l, _)| *l)
         .chain(std::iter::once("grantCapability"))
         .collect();
-    eprintln!("UNPROVABLE-ON-WIDE ({}): {unprovable_labels:?}", unprovable_labels.len());
+    eprintln!(
+        "UNPROVABLE-ON-WIDE ({}): {unprovable_labels:?}",
+        unprovable_labels.len()
+    );
     for (l, r) in &unprovable {
         eprintln!("    UNPROVABLE-ON-WIDE {l}: {r}");
     }
@@ -929,8 +1089,11 @@ fn provability_scoreboard_deployed_wide_path() {
         "introduce",
         "exerciseViaCapability",
     ];
-    let missing: Vec<&str> =
-        must_prove_on_wide.iter().copied().filter(|l| !provable.contains(l)).collect();
+    let missing: Vec<&str> = must_prove_on_wide
+        .iter()
+        .copied()
+        .filter(|l| !provable.contains(l))
+        .collect();
     assert!(
         missing.is_empty(),
         "WIDE-PATH REGRESSION: these wide-native effects MUST prove on the deployed wide path but \
@@ -1066,13 +1229,13 @@ fn custom_descriptor_carries_proof_bind_residual_named() {
 /// the SDK's dependency on `dregg-circuit`, both poles, NO catch_unwind.
 #[test]
 fn custom_proof_bind_honest_verifies_forged_rejected() {
-    use dregg_circuit_prove::custom_proof_bind::{
-        ClaimedProofBind, ProofBindError, custom_proof_pi_commitment, prove_custom_program,
-        verify_bound_custom_proof, verify_proof_bind,
-    };
     use dregg_circuit::dsl::circuit::{
         CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
         ProgramRegistry,
+    };
+    use dregg_circuit_prove::custom_proof_bind::{
+        ClaimedProofBind, ProofBindError, custom_proof_pi_commitment, prove_custom_program,
+        verify_bound_custom_proof, verify_proof_bind,
     };
     use std::collections::HashMap;
 
@@ -1084,19 +1247,47 @@ fn custom_proof_bind_honest_verifies_forged_rejected() {
         trace_width: 4,
         max_degree: 2,
         columns: vec![
-            ColumnDef { name: "old".into(), index: 0, kind: ColumnKind::Value },
-            ColumnDef { name: "amt".into(), index: 1, kind: ColumnKind::Value },
-            ColumnDef { name: "new".into(), index: 2, kind: ColumnKind::Value },
-            ColumnDef { name: "dir".into(), index: 3, kind: ColumnKind::Binary },
+            ColumnDef {
+                name: "old".into(),
+                index: 0,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "amt".into(),
+                index: 1,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "new".into(),
+                index: 2,
+                kind: ColumnKind::Value,
+            },
+            ColumnDef {
+                name: "dir".into(),
+                index: 3,
+                kind: ColumnKind::Binary,
+            },
         ],
         constraints: vec![
             ConstraintExpr::Binary { col: 3 },
             ConstraintExpr::Polynomial {
                 terms: vec![
-                    PolyTerm { coeff: BabyBear::ONE, col_indices: vec![2] },
-                    PolyTerm { coeff: p_minus_1, col_indices: vec![0] },
-                    PolyTerm { coeff: p_minus_1, col_indices: vec![1] },
-                    PolyTerm { coeff: BabyBear::new(2), col_indices: vec![3, 1] },
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![2],
+                    },
+                    PolyTerm {
+                        coeff: p_minus_1,
+                        col_indices: vec![0],
+                    },
+                    PolyTerm {
+                        coeff: p_minus_1,
+                        col_indices: vec![1],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::new(2),
+                        col_indices: vec![3, 1],
+                    },
                 ],
             },
         ],
@@ -1106,7 +1297,9 @@ fn custom_proof_bind_honest_verifies_forged_rejected() {
     };
     let program = CellProgram::new(descriptor, 1);
     let mut registry = ProgramRegistry::new();
-    registry.deploy(program.clone()).expect("demo program deploys");
+    registry
+        .deploy(program.clone())
+        .expect("demo program deploys");
 
     let rows = 4usize;
     let mut witness: HashMap<String, Vec<BabyBear>> = HashMap::new();
@@ -1140,8 +1333,13 @@ fn custom_proof_bind_honest_verifies_forged_rejected() {
         vk_hash: bound.vk_hash_felts(),
         commitment: custom_proof_pi_commitment(&[BabyBear::new(99), BabyBear::new(99)]),
     };
-    let err = verify_proof_bind(&registry, &bound.proof_bytes, &bound.public_inputs, &claimed_bad_commit)
-        .expect_err("a MISMATCHED commitment MUST be rejected");
+    let err = verify_proof_bind(
+        &registry,
+        &bound.proof_bytes,
+        &bound.public_inputs,
+        &claimed_bad_commit,
+    )
+    .expect_err("a MISMATCHED commitment MUST be rejected");
     assert!(
         matches!(err, ProofBindError::CommitmentMismatch { .. }),
         "swapped commitment must fail the commit-binding step, got {err:?}"
@@ -1152,8 +1350,13 @@ fn custom_proof_bind_honest_verifies_forged_rejected() {
         vk_hash: [BabyBear::new(0xDEAD); 8],
         commitment: bound.proof_commitment(),
     };
-    let err = verify_proof_bind(&registry, &bound.proof_bytes, &bound.public_inputs, &claimed_bad_vk)
-        .expect_err("an UNKNOWN VK MUST be rejected");
+    let err = verify_proof_bind(
+        &registry,
+        &bound.proof_bytes,
+        &bound.public_inputs,
+        &claimed_bad_vk,
+    )
+    .expect_err("an UNKNOWN VK MUST be rejected");
     assert!(
         matches!(err, ProofBindError::UnknownProgram { .. }),
         "unknown VK must fail closed, got {err:?}"

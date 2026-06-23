@@ -37,4 +37,4 @@ pub use graph::{GraphEdge, GraphLayer, GraphNode, OcapGraph};
 pub use present::{
     Presentation, PresentationBody, PresentationKind, ReflectedCell, StateMachineView, TimelineView,
 };
-pub use substance::{reflect_cell, short_hex, Field, FieldValue, Inspectable, ObjectKind};
+pub use substance::{Field, FieldValue, Inspectable, ObjectKind, reflect_cell, short_hex};

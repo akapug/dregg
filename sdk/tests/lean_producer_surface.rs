@@ -35,9 +35,9 @@ use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 // genesis/plumbing escape hatch — see `dregg_sdk::raw`): this test exercises
 // the producer's ownership-authority arm, which deliberately presents no
 // credential.
+use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
 use dregg_sdk::raw::{self, CallForest, Turn};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, Effect};
-use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
 use dregg_turn::{ComputronCosts, TurnExecutor};
 
 /// All-`None` permissions so authority is by ownership (the sealed-raw

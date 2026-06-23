@@ -16,9 +16,9 @@ use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation_b
 use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_cell::program::{CellProgram, StateConstraint, field_from_u64};
-use dregg_cell_crypto::seal::test_seal_pair;
 use dregg_cell::state::CellState;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+use dregg_cell_crypto::seal::test_seal_pair;
 use dregg_circuit::BabyBear;
 use dregg_circuit::poseidon2;
 use dregg_circuit::stark::{MerkleStarkAir, generate_merkle_trace, proof_to_bytes, prove, verify};

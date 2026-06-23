@@ -278,17 +278,28 @@ pub enum AllowanceError {
 impl std::fmt::Display for AllowanceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AllowanceError::NotAnAllowance => write!(f, "cell carries no rate-limited allowance binding"),
-            AllowanceError::TermsMismatch => write!(f, "supplied terms do not match the bound allowance"),
+            AllowanceError::NotAnAllowance => {
+                write!(f, "cell carries no rate-limited allowance binding")
+            }
+            AllowanceError::TermsMismatch => {
+                write!(f, "supplied terms do not match the bound allowance")
+            }
             AllowanceError::IllFormedTerms => write!(f, "allowance terms are not well-formed"),
             AllowanceError::NonPositiveAmount { amount } => {
                 write!(f, "spend amount must be positive, got {amount}")
             }
-            AllowanceError::StaleEpoch { committed_epoch, spend_epoch } => write!(
+            AllowanceError::StaleEpoch {
+                committed_epoch,
+                spend_epoch,
+            } => write!(
                 f,
                 "stale epoch: spend lands in epoch {spend_epoch} but the cursor is at {committed_epoch}"
             ),
-            AllowanceError::ExceedsCeiling { spent, amount, limit } => write!(
+            AllowanceError::ExceedsCeiling {
+                spent,
+                amount,
+                limit,
+            } => write!(
                 f,
                 "over-limit: {spent} already spent + {amount} requested exceeds the per-epoch ceiling {limit}"
             ),
@@ -389,7 +400,9 @@ impl AllowanceState {
             return Err(AllowanceError::TermsMismatch);
         }
         if step.amount <= 0 {
-            return Err(AllowanceError::NonPositiveAmount { amount: step.amount });
+            return Err(AllowanceError::NonPositiveAmount {
+                amount: step.amount,
+            });
         }
         // The epoch is DERIVED from the spend's block, not taken on trust. An
         // early reset is therefore structurally impossible: you cannot refill by
@@ -416,9 +429,7 @@ impl AllowanceState {
         };
 
         // THE CEILING: spent + amount must not exceed the per-epoch limit.
-        let post = spent_baseline
-            .checked_add(step.amount)
-            .unwrap_or(i64::MAX);
+        let post = spent_baseline.checked_add(step.amount).unwrap_or(i64::MAX);
         if post > terms.limit_per_epoch {
             return Err(AllowanceError::ExceedsCeiling {
                 spent: spent_baseline,
@@ -494,7 +505,9 @@ pub fn remaining_at(state: &AllowanceState, terms: &AllowanceTerms, at_block: i6
 /// Whether a cell carries a rate-limited allowance binding (a terms digest in
 /// its reserved heap collection). A plain cell returns `false`.
 pub fn is_allowance(cell: &Cell) -> bool {
-    cell.state.get_heap(ALLOWANCE_COLL, KEY_TERMS_DIGEST).is_some()
+    cell.state
+        .get_heap(ALLOWANCE_COLL, KEY_TERMS_DIGEST)
+        .is_some()
 }
 
 #[cfg(test)]
@@ -529,8 +542,15 @@ mod tests {
         assert!(is_allowance(&cell));
 
         // epoch 0 spans [10_000, 11_000). Spend 40 at block 10_500.
-        let moved = spend(&mut cell, &terms, &Spend { amount: 40, at_block: 10_500 })
-            .expect("in-budget spend must accept");
+        let moved = spend(
+            &mut cell,
+            &terms,
+            &Spend {
+                amount: 40,
+                at_block: 10_500,
+            },
+        )
+        .expect("in-budget spend must accept");
         assert_eq!(moved, 40);
 
         let view = AllowanceState::read(&cell).unwrap();
@@ -539,11 +559,25 @@ mod tests {
         assert_eq!(view.spent_total, 40);
 
         // A second spend of 50 (40 + 50 = 90 <= 100) still fits this epoch.
-        assert_eq!(spend(&mut cell, &terms, &Spend { amount: 50, at_block: 10_600 }), Ok(50));
+        assert_eq!(
+            spend(
+                &mut cell,
+                &terms,
+                &Spend {
+                    amount: 50,
+                    at_block: 10_600
+                }
+            ),
+            Ok(50)
+        );
         let view = AllowanceState::read(&cell).unwrap();
         assert_eq!(view.spent_this_epoch, 90);
         assert_eq!(view.spent_total, 90);
-        assert_eq!(remaining_at(&view, &terms, 10_700), 10, "10 of the ceiling remains");
+        assert_eq!(
+            remaining_at(&view, &terms, 10_700),
+            10,
+            "10 of the ceiling remains"
+        );
     }
 
     /// The whole allowance is bound into the canonical commitment: spending
@@ -555,7 +589,15 @@ mod tests {
         let mut cell = allowance_cell();
         open_allowance(&mut cell, &terms).unwrap();
         let before = cell.state_commitment();
-        spend(&mut cell, &terms, &Spend { amount: 40, at_block: 10_500 }).unwrap();
+        spend(
+            &mut cell,
+            &terms,
+            &Spend {
+                amount: 40,
+                at_block: 10_500,
+            },
+        )
+        .unwrap();
         let after = cell.state_commitment();
         assert_ne!(before, after, "spending re-seals the commitment");
     }
@@ -574,25 +616,64 @@ mod tests {
         let mut cell = allowance_cell();
         open_allowance(&mut cell, &terms).unwrap();
         // spend 90 of the 100 ceiling in epoch 0.
-        spend(&mut cell, &terms, &Spend { amount: 90, at_block: 10_500 }).unwrap();
+        spend(
+            &mut cell,
+            &terms,
+            &Spend {
+                amount: 90,
+                at_block: 10_500,
+            },
+        )
+        .unwrap();
 
         let view = AllowanceState::read(&cell).unwrap();
         // honest: exactly the remaining 10 WOULD accept (non-vacuity).
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 10, at_block: 10_600 }),
-            Ok(SpendOutcome { epoch: 0, spent_this_epoch: 100, amount: 10 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 10,
+                    at_block: 10_600
+                }
+            ),
+            Ok(SpendOutcome {
+                epoch: 0,
+                spent_this_epoch: 100,
+                amount: 10
+            }),
             "spending exactly the remaining budget is live"
         );
         // over-limit: 90 + 20 = 110 > 100.
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 20, at_block: 10_600 }),
-            Err(AllowanceError::ExceedsCeiling { spent: 90, amount: 20, limit: 100 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 20,
+                    at_block: 10_600
+                }
+            ),
+            Err(AllowanceError::ExceedsCeiling {
+                spent: 90,
+                amount: 20,
+                limit: 100
+            }),
             "cannot spend past the per-epoch ceiling"
         );
         // the mutating path refuses too, leaving the counter at 90.
         assert_eq!(
-            spend(&mut cell, &terms, &Spend { amount: 20, at_block: 10_600 }),
-            Err(AllowanceError::ExceedsCeiling { spent: 90, amount: 20, limit: 100 })
+            spend(
+                &mut cell,
+                &terms,
+                &Spend {
+                    amount: 20,
+                    at_block: 10_600
+                }
+            ),
+            Err(AllowanceError::ExceedsCeiling {
+                spent: 90,
+                amount: 20,
+                limit: 100
+            })
         );
         assert_eq!(AllowanceState::read(&cell).unwrap().spent_this_epoch, 90);
     }
@@ -612,15 +693,33 @@ mod tests {
         let mut cell = allowance_cell();
         open_allowance(&mut cell, &terms).unwrap();
         // genuinely spend 95 of the 100 ceiling.
-        spend(&mut cell, &terms, &Spend { amount: 95, at_block: 10_500 }).unwrap();
+        spend(
+            &mut cell,
+            &terms,
+            &Spend {
+                amount: 95,
+                at_block: 10_500,
+            },
+        )
+        .unwrap();
 
         // The GENUINE committed state: a further 50-spend is over the ceiling and
         // is rejected (95 + 50 = 145 > 100). This is the spend the forge wants.
         let genuine = AllowanceState::read(&cell).unwrap();
         assert_eq!(genuine.spent_this_epoch, 95);
         assert_eq!(
-            genuine.check_spend(&terms, &Spend { amount: 50, at_block: 10_600 }),
-            Err(AllowanceError::ExceedsCeiling { spent: 95, amount: 50, limit: 100 }),
+            genuine.check_spend(
+                &terms,
+                &Spend {
+                    amount: 50,
+                    at_block: 10_600
+                }
+            ),
+            Err(AllowanceError::ExceedsCeiling {
+                spent: 95,
+                amount: 50,
+                limit: 100
+            }),
             "the genuine committed counter rejects the over-spend"
         );
 
@@ -667,7 +766,15 @@ mod tests {
         let mut cell = allowance_cell();
         open_allowance(&mut cell, &terms).unwrap();
         // exhaust the full ceiling in epoch 0.
-        spend(&mut cell, &terms, &Spend { amount: 100, at_block: 10_100 }).unwrap();
+        spend(
+            &mut cell,
+            &terms,
+            &Spend {
+                amount: 100,
+                at_block: 10_100,
+            },
+        )
+        .unwrap();
 
         let view = AllowanceState::read(&cell).unwrap();
         assert_eq!(view.spent_this_epoch, 100);
@@ -676,22 +783,52 @@ mod tests {
         // ceiling rejects any further spend — you cannot "reset early".
         assert_eq!(terms.epoch_of(10_900), 0);
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 1, at_block: 10_900 }),
-            Err(AllowanceError::ExceedsCeiling { spent: 100, amount: 1, limit: 100 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 1,
+                    at_block: 10_900
+                }
+            ),
+            Err(AllowanceError::ExceedsCeiling {
+                spent: 100,
+                amount: 1,
+                limit: 100
+            }),
             "the budget does not refill until the epoch boundary is genuinely crossed"
         );
         // Even the last block of epoch 0 (10_999) does not refill.
         assert_eq!(terms.epoch_of(10_999), 0);
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 1, at_block: 10_999 }),
-            Err(AllowanceError::ExceedsCeiling { spent: 100, amount: 1, limit: 100 })
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 1,
+                    at_block: 10_999
+                }
+            ),
+            Err(AllowanceError::ExceedsCeiling {
+                spent: 100,
+                amount: 1,
+                limit: 100
+            })
         );
         // The FIRST block of epoch 1 (11_000) genuinely refills (the honest
         // rollover — non-vacuity: the same check now ACCEPTS).
         assert_eq!(terms.epoch_of(11_000), 1);
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 1, at_block: 11_000 }),
-            Ok(SpendOutcome { epoch: 1, spent_this_epoch: 1, amount: 1 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 1,
+                    at_block: 11_000
+                }
+            ),
+            Ok(SpendOutcome {
+                epoch: 1,
+                spent_this_epoch: 1,
+                amount: 1
+            }),
             "the genuine boundary crossing refills the budget"
         );
     }
@@ -710,21 +847,48 @@ mod tests {
         open_allowance(&mut cell, &terms).unwrap();
 
         // Spend in epoch 2 (block 12_500, epoch_of == 2): cursor advances to 2.
-        spend(&mut cell, &terms, &Spend { amount: 30, at_block: 12_500 }).unwrap();
+        spend(
+            &mut cell,
+            &terms,
+            &Spend {
+                amount: 30,
+                at_block: 12_500,
+            },
+        )
+        .unwrap();
         let view = AllowanceState::read(&cell).unwrap();
         assert_eq!(view.current_epoch, 2);
 
         // honest: a spend in the current epoch 2 WOULD accept (non-vacuity).
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 30, at_block: 12_600 }),
-            Ok(SpendOutcome { epoch: 2, spent_this_epoch: 60, amount: 30 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 30,
+                    at_block: 12_600
+                }
+            ),
+            Ok(SpendOutcome {
+                epoch: 2,
+                spent_this_epoch: 60,
+                amount: 30
+            }),
             "a current-epoch spend is live"
         );
         // backdated: block 10_500 is epoch 0 < cursor 2 → stale.
         assert_eq!(terms.epoch_of(10_500), 0);
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 30, at_block: 10_500 }),
-            Err(AllowanceError::StaleEpoch { committed_epoch: 2, spend_epoch: 0 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 30,
+                    at_block: 10_500
+                }
+            ),
+            Err(AllowanceError::StaleEpoch {
+                committed_epoch: 2,
+                spend_epoch: 0
+            }),
             "cannot backdate a spend into a closed epoch to reuse its headroom"
         );
     }
@@ -741,15 +905,43 @@ mod tests {
         open_allowance(&mut cell, &terms).unwrap();
 
         // exhaust epoch 0.
-        assert_eq!(spend(&mut cell, &terms, &Spend { amount: 100, at_block: 10_500 }), Ok(100));
+        assert_eq!(
+            spend(
+                &mut cell,
+                &terms,
+                &Spend {
+                    amount: 100,
+                    at_block: 10_500
+                }
+            ),
+            Ok(100)
+        );
         let v0 = AllowanceState::read(&cell).unwrap();
         assert_eq!(v0.current_epoch, 0);
         assert_eq!(v0.spent_this_epoch, 100);
-        assert_eq!(remaining_at(&v0, &terms, 10_600), 0, "epoch 0 budget is exhausted");
+        assert_eq!(
+            remaining_at(&v0, &terms, 10_600),
+            0,
+            "epoch 0 budget is exhausted"
+        );
 
         // epoch 1 (block 11_200): budget refilled, full 100 available again.
-        assert_eq!(remaining_at(&v0, &terms, 11_200), 100, "epoch 1 refills the ceiling");
-        assert_eq!(spend(&mut cell, &terms, &Spend { amount: 100, at_block: 11_200 }), Ok(100));
+        assert_eq!(
+            remaining_at(&v0, &terms, 11_200),
+            100,
+            "epoch 1 refills the ceiling"
+        );
+        assert_eq!(
+            spend(
+                &mut cell,
+                &terms,
+                &Spend {
+                    amount: 100,
+                    at_block: 11_200
+                }
+            ),
+            Ok(100)
+        );
         let v1 = AllowanceState::read(&cell).unwrap();
         assert_eq!(v1.current_epoch, 1, "cursor advanced to epoch 1");
         assert_eq!(v1.spent_this_epoch, 100, "reset to 0 then spent 100");
@@ -770,7 +962,13 @@ mod tests {
         let other = AllowanceTerms::new(cid(1), cid(9), 999, 1000, 10_000);
         let view = AllowanceState::read(&cell).unwrap();
         assert_eq!(
-            view.check_spend(&other, &Spend { amount: 500, at_block: 10_500 }),
+            view.check_spend(
+                &other,
+                &Spend {
+                    amount: 500,
+                    at_block: 10_500
+                }
+            ),
             Err(AllowanceError::TermsMismatch),
             "cannot spend under a forged higher ceiling"
         );
@@ -785,11 +983,23 @@ mod tests {
         open_allowance(&mut cell, &terms).unwrap();
         let view = AllowanceState::read(&cell).unwrap();
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: 0, at_block: 10_500 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: 0,
+                    at_block: 10_500
+                }
+            ),
             Err(AllowanceError::NonPositiveAmount { amount: 0 })
         );
         assert_eq!(
-            view.check_spend(&terms, &Spend { amount: -5, at_block: 10_500 }),
+            view.check_spend(
+                &terms,
+                &Spend {
+                    amount: -5,
+                    at_block: 10_500
+                }
+            ),
             Err(AllowanceError::NonPositiveAmount { amount: -5 })
         );
     }
@@ -799,12 +1009,18 @@ mod tests {
     fn ill_formed_terms_are_rejected() {
         let mut cell = allowance_cell();
         assert_eq!(
-            open_allowance(&mut cell, &AllowanceTerms::new(cid(1), cid(9), 0, 1000, 10_000)),
+            open_allowance(
+                &mut cell,
+                &AllowanceTerms::new(cid(1), cid(9), 0, 1000, 10_000)
+            ),
             Err(AllowanceError::IllFormedTerms),
             "zero ceiling is ill-formed"
         );
         assert_eq!(
-            open_allowance(&mut cell, &AllowanceTerms::new(cid(1), cid(9), 100, 0, 10_000)),
+            open_allowance(
+                &mut cell,
+                &AllowanceTerms::new(cid(1), cid(9), 100, 0, 10_000)
+            ),
             Err(AllowanceError::IllFormedTerms),
             "zero epoch length is ill-formed"
         );
@@ -814,7 +1030,10 @@ mod tests {
     #[test]
     fn non_allowance_cell_is_rejected() {
         let cell = allowance_cell();
-        assert_eq!(AllowanceState::read(&cell), Err(AllowanceError::NotAnAllowance));
+        assert_eq!(
+            AllowanceState::read(&cell),
+            Err(AllowanceError::NotAnAllowance)
+        );
     }
 
     /// `epoch_of` is the schedule's ground truth: 0 before start, then one more
@@ -822,10 +1041,22 @@ mod tests {
     #[test]
     fn epoch_of_is_correct() {
         let terms = sample_terms(); // start 10_000, epoch_length 1000
-        assert_eq!(terms.epoch_of(9_999), 0, "before start is epoch 0 pre-history");
+        assert_eq!(
+            terms.epoch_of(9_999),
+            0,
+            "before start is epoch 0 pre-history"
+        );
         assert_eq!(terms.epoch_of(10_000), 0, "epoch 0 begins exactly at start");
-        assert_eq!(terms.epoch_of(10_999), 0, "still epoch 0 just before the boundary");
-        assert_eq!(terms.epoch_of(11_000), 1, "epoch 1 begins at start + epoch_length");
+        assert_eq!(
+            terms.epoch_of(10_999),
+            0,
+            "still epoch 0 just before the boundary"
+        );
+        assert_eq!(
+            terms.epoch_of(11_000),
+            1,
+            "epoch 1 begins at start + epoch_length"
+        );
         assert_eq!(terms.epoch_of(12_500), 2, "epoch 2 at start + 2.5 epochs");
     }
 

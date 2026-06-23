@@ -263,8 +263,14 @@ mod tests {
         assert_eq!(d.trace_width, 5);
         assert_eq!(d.public_input_count, CCC_PI_COUNT);
         assert_eq!(d.public_input_count, 1);
-        assert!(d.tables.is_empty(), "pure row-window AIR: no committed tables");
-        assert!(d.ranges.is_empty(), "v2 assembly requires the legacy range carrier empty");
+        assert!(
+            d.tables.is_empty(),
+            "pure row-window AIR: no committed tables"
+        );
+        assert!(
+            d.ranges.is_empty(),
+            "v2 assembly requires the legacy range carrier empty"
+        );
         assert_eq!(d.constraints.len(), 8, "the Lean #guard pins 8 constraints");
         let window_gates = d
             .constraints
@@ -277,7 +283,10 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, VmConstraint2::Lookup(_)))
             .count();
-        assert_eq!(chip_lookups, 0, "no chip lookups: the signed delta IS the contribution");
+        assert_eq!(
+            chip_lookups, 0,
+            "no chip lookups: the signed delta IS the contribution"
+        );
     }
 
     /// The signed-balance pre-flight: an honest transfer (A −10, B +10) balances to ZERO; the
@@ -312,7 +321,11 @@ mod tests {
         // pool debits −989 — modeled here as the single declared supply row that pairs the +999.
         // The honest accounting: the +999 credit to B is matched by a −10 from A and a −989 supply
         // burn (the issuer's disclosed Annihilative row balancing the minted credit).
-        let conserving = vec![delta(7, 10, false), delta(7, 999, true), delta(7, 989, false)];
+        let conserving = vec![
+            delta(7, 10, false),
+            delta(7, 999, true),
+            delta(7, 989, false),
+        ];
         assert_eq!(
             cross_cell_balance(&conserving),
             0,
@@ -351,7 +364,10 @@ mod tests {
     fn forged_mint_turn_is_unsat() {
         let forged = vec![delta(7, 10, false), delta(7, 999, true)];
         let (forged_trace, forged_pi) = build_cross_cell_conservation_trace(&forged);
-        assert_ne!(forged_trace.last().unwrap()[CCC_BALANCE_COL], BabyBear::ZERO);
+        assert_ne!(
+            forged_trace.last().unwrap()[CCC_BALANCE_COL],
+            BabyBear::ZERO
+        );
 
         // The unbalanced trace violates the `balance[last] == 0` boundary. The prover may reject up
         // front (the debug batch prover panics on an unsatisfiable trace) — caught here — or, if it
@@ -360,7 +376,8 @@ mod tests {
             prove_cross_cell_conservation(&forged_trace, &forged_pi)
         }));
         match proved {
-            Err(_) => { /* prover panicked on the unsatisfiable trace — the forgery is rejected */ }
+            Err(_) => { /* prover panicked on the unsatisfiable trace — the forgery is rejected */
+            }
             Ok(Err(_)) => { /* prover returned Err — also a rejection */ }
             Ok(Ok(proof)) => {
                 assert!(
@@ -373,8 +390,7 @@ mod tests {
         // The honest counterpart proves + verifies (non-vacuity: the gate accepts honest turns).
         let honest = vec![delta(7, 10, false), delta(7, 10, true)];
         let (htrace, hpi) = build_cross_cell_conservation_trace(&honest);
-        let hproof = prove_cross_cell_conservation(&htrace, &hpi)
-            .expect("honest turn must prove");
+        let hproof = prove_cross_cell_conservation(&htrace, &hpi).expect("honest turn must prove");
         verify_cross_cell_conservation(&hproof, &hpi).expect("honest turn must verify");
     }
 }

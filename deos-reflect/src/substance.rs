@@ -29,12 +29,21 @@ pub enum FieldValue {
     /// A 32-byte hash (receipt/turn/state-commit) — provenance, navigable.
     Hash([u8; 32]),
     /// A capability edge (this object → target), the ocap-graph primitive.
-    CapEdge { target: [u8; 32], slot: u32 },
+    CapEdge {
+        target: [u8; 32],
+        slot: u32,
+    },
     /// A REVEALED (public) field slot's raw contents.
-    FieldSlot { index: usize, hex: String },
+    FieldSlot {
+        index: usize,
+        hex: String,
+    },
     /// A COMMITTED field slot: the holder disclosed only the commitment hash, never
     /// the value. The attested-read redaction made visible.
-    CommittedSlot { index: usize, commitment: [u8; 32] },
+    CommittedSlot {
+        index: usize,
+        commitment: [u8; 32],
+    },
 }
 
 /// One labeled field of a reflected object.
@@ -46,22 +55,40 @@ pub struct Field {
 
 impl Field {
     pub fn text(key: impl Into<String>, v: impl Into<String>) -> Self {
-        Field { key: key.into(), value: FieldValue::Text(v.into()) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Text(v.into()),
+        }
     }
     pub fn balance(key: impl Into<String>, v: i64) -> Self {
-        Field { key: key.into(), value: FieldValue::Balance(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Balance(v),
+        }
     }
     pub fn count(key: impl Into<String>, v: u64) -> Self {
-        Field { key: key.into(), value: FieldValue::Count(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Count(v),
+        }
     }
     pub fn boolean(key: impl Into<String>, v: bool) -> Self {
-        Field { key: key.into(), value: FieldValue::Bool(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Bool(v),
+        }
     }
     pub fn id(key: impl Into<String>, v: [u8; 32]) -> Self {
-        Field { key: key.into(), value: FieldValue::Id(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Id(v),
+        }
     }
     pub fn hash(key: impl Into<String>, v: [u8; 32]) -> Self {
-        Field { key: key.into(), value: FieldValue::Hash(v) }
+        Field {
+            key: key.into(),
+            value: FieldValue::Hash(v),
+        }
     }
 }
 
@@ -117,7 +144,10 @@ pub fn reflect_cell(id: &CellId, cell: &Cell) -> Inspectable {
     for cap in cell.capabilities.iter() {
         fields.push(Field {
             key: format!("cap[{}]", cap.slot),
-            value: FieldValue::CapEdge { target: *cap.target.as_bytes(), slot: cap.slot },
+            value: FieldValue::CapEdge {
+                target: *cap.target.as_bytes(),
+                slot: cap.slot,
+            },
         });
     }
     // state — the field slots, read PUBLICLY (attested redaction). Only non-trivial
@@ -127,13 +157,19 @@ pub fn reflect_cell(id: &CellId, cell: &Cell) -> Inspectable {
             Some(PublicFieldView::Revealed(fe)) if fe.iter().any(|b| *b != 0) => {
                 fields.push(Field {
                     key: format!("state[{i}]"),
-                    value: FieldValue::FieldSlot { index: i, hex: hex_encode(&fe) },
+                    value: FieldValue::FieldSlot {
+                        index: i,
+                        hex: hex_encode(&fe),
+                    },
                 });
             }
             Some(PublicFieldView::Committed(commitment)) => {
                 fields.push(Field {
                     key: format!("state[{i}]"),
-                    value: FieldValue::CommittedSlot { index: i, commitment },
+                    value: FieldValue::CommittedSlot {
+                        index: i,
+                        commitment,
+                    },
                 });
             }
             _ => {}

@@ -338,7 +338,9 @@ fn emit_p3_requirement(
             };
             let mut out = emit_p3_range_check(diff_col, bits_start, RANGE_CHECK_BITS, &diff_def);
             // Operand range-checks close the wrap-around (see OPERAND_RANGE_BITS).
-            out.extend(emit_p3_operand_range_checks(layout, aux_idx, left_col, right_col));
+            out.extend(emit_p3_operand_range_checks(
+                layout, aux_idx, left_col, right_col,
+            ));
             out
         }
         RequirementKind::GreaterEqual { left, right } => {
@@ -356,7 +358,9 @@ fn emit_p3_requirement(
                 }
             };
             let mut out = emit_p3_range_check(diff_col, bits_start, RANGE_CHECK_BITS, &diff_def);
-            out.extend(emit_p3_operand_range_checks(layout, aux_idx, left_col, right_col));
+            out.extend(emit_p3_operand_range_checks(
+                layout, aux_idx, left_col, right_col,
+            ));
             out
         }
         RequirementKind::Equal { left, right } => {

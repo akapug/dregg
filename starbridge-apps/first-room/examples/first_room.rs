@@ -34,7 +34,10 @@ fn main() {
             }
         }
         if inh.paid > 0 {
-            println!("│   💰 PAID: {} (the conserved reward, released on completion)", inh.paid);
+            println!(
+                "│   💰 PAID: {} (the conserved reward, released on completion)",
+                inh.paid
+            );
         }
         if !inh.refusals.is_empty() {
             println!("│   ── in-room refusals (the anti-ghost tooth, surfaced) ──");
@@ -58,12 +61,20 @@ fn main() {
     }
     println!();
     println!("  job done                          : {}", t.job_done);
-    println!("  PAID (released, conserving)       : {}  (== escrowed: {})", t.paid, t.paid == t.funded_reward && t.conserved);
+    println!(
+        "  PAID (released, conserving)       : {}  (== escrowed: {})",
+        t.paid,
+        t.paid == t.funded_reward && t.conserved
+    );
     println!();
 
     println!("── THE TRY-TO-CHEAT BATTERY (each REFUSED in-band) ──────────────────────");
     for c in &t.cheats {
-        let mark = if c.provably_refused() { "REFUSED ✓" } else { "!!! NOT REFUSED !!!" };
+        let mark = if c.provably_refused() {
+            "REFUSED ✓"
+        } else {
+            "!!! NOT REFUSED !!!"
+        };
         println!("  [{}]  {}", mark, c.class.label());
         println!("        tooth: {}", c.class.tooth());
         println!("        why:   {}", c.reason);

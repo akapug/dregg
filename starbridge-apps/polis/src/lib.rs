@@ -891,9 +891,7 @@ pub mod council {
 /// `Always` invariants arm without the quorum gate.
 pub mod large_council {
     use super::*;
-    use dregg_cell::program::{
-        CollPred, ElemPredAtom, TransitionCase, TransitionGuard,
-    };
+    use dregg_cell::program::{CollPred, ElemPredAtom, TransitionCase, TransitionGuard};
 
     /// First user-map key the approval collection starts at — the map TAIL
     /// (`>= STATE_SLOTS`), so the run lives wholly in the committed `fields_map`

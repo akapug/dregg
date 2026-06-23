@@ -315,12 +315,14 @@ impl BlockConservation {
         for asset in self.groups_by_asset().keys() {
             let asset_felt = BabyBear::new(*asset);
             let pi = vec![asset_felt];
-            let proof = proofs.get(asset).ok_or_else(|| {
-                BlockConservationError::AssetProofRejected {
-                    asset: asset_felt,
-                    reason: "block carries no per-asset conservation proof for this asset".into(),
-                }
-            })?;
+            let proof =
+                proofs
+                    .get(asset)
+                    .ok_or_else(|| BlockConservationError::AssetProofRejected {
+                        asset: asset_felt,
+                        reason: "block carries no per-asset conservation proof for this asset"
+                            .into(),
+                    })?;
             verify_cross_cell_conservation(proof, &pi).map_err(|e| {
                 BlockConservationError::AssetProofRejected {
                     asset: asset_felt,
@@ -360,7 +362,11 @@ mod tests {
 
         let credit = real_per_cell_transfer_pi(100, 10, 0);
         assert_eq!(credit[pi::NET_DELTA_MAG], BabyBear::new(10));
-        assert_eq!(credit[pi::NET_DELTA_SIGN], BabyBear::ZERO, "credit sign = 0");
+        assert_eq!(
+            credit[pi::NET_DELTA_SIGN],
+            BabyBear::ZERO,
+            "credit sign = 0"
+        );
     }
 
     /// THE REAL MULTI-CELL TOOTH (pre-flight half). A BLOCK built from TWO REAL per-cell transfer
@@ -405,7 +411,10 @@ mod tests {
             "forged A−10,B+999 (no declared mint) nets to +989"
         );
         match block.check() {
-            Err(BlockConservationError::AssetImbalanced { asset: a, imbalance }) => {
+            Err(BlockConservationError::AssetImbalanced {
+                asset: a,
+                imbalance,
+            }) => {
                 assert_eq!(a, asset);
                 assert_eq!(imbalance, 989);
             }
@@ -494,9 +503,8 @@ mod tests {
                 PerCellContribution::from_proof_pi(asset, &real_per_cell_transfer_pi(0, 999, 0))
                     .unwrap(),
             );
-        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            forged.prove_and_verify()
-        }));
+        let rejected =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| forged.prove_and_verify()));
         match rejected {
             // The pre-flight gate / Err path: the forged block is rejected before/at proving.
             Ok(Err(BlockConservationError::AssetImbalanced { imbalance, .. })) => {

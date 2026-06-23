@@ -176,11 +176,9 @@ impl TurnExecutor {
             }
         })?;
 
-        let proof: dregg_cell_crypto::ConservationProof =
-            postcard::from_bytes(proof_bytes).map_err(|e| {
-                TurnError::CommittedConservationFailed {
-                    reason: format!("failed to deserialize conservation_proof: {e}"),
-                }
+        let proof: dregg_cell_crypto::ConservationProof = postcard::from_bytes(proof_bytes)
+            .map_err(|e| TurnError::CommittedConservationFailed {
+                reason: format!("failed to deserialize conservation_proof: {e}"),
             })?;
 
         let mut input_commitments: Vec<ValueCommitment> = Vec::new();

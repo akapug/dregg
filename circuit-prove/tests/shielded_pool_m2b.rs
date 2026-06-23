@@ -34,13 +34,13 @@ use dregg_circuit_prove::shielded::{
     prove_pool_transfer,
 };
 
+use curve25519_dalek::scalar::Scalar;
 use dregg_cell_crypto::value_commitment::{
     AssetEqualityError, BulletproofRangeProof, FullConservationError, ValueCommitment,
     prove_asset_conservation, prove_asset_equality_with_message, prove_conservation,
     scalar_from_blinding_bytes, verify_asset_conservation, verify_asset_equality_with_message,
     verify_full_conservation_bytes,
 };
-use curve25519_dalek::scalar::Scalar;
 
 /// A Bulletproof range proof over the VALUE-ONLY projection of an output. The
 /// pool's asset-hiding leg is `v·V + at·H_asset + r·R`; the 64-bit Bulletproof
@@ -111,7 +111,8 @@ fn make_pool_input(
 /// An output asset-hiding leg + the underlying ValueCommitment (so a caller can
 /// drive the asset-conservation proof, which needs the commitments themselves).
 fn make_output(value: u64, asset: u64, blinding: [u8; 32]) -> (HiddenAssetLeg, ValueCommitment) {
-    let c = ValueCommitment::commit_hidden_asset(value, asset, &scalar_from_blinding_bytes(&blinding));
+    let c =
+        ValueCommitment::commit_hidden_asset(value, asset, &scalar_from_blinding_bytes(&blinding));
     (HiddenAssetLeg::new(c.to_bytes().0), c)
 }
 
@@ -280,7 +281,10 @@ fn same_asset_split_verifies_with_equality_proof() {
         merkle_root,
         &[w],
         vec![out1, out2],
-        vec![pool_range_proof_bytes(600, &bo1), pool_range_proof_bytes(400, &bo2)],
+        vec![
+            pool_range_proof_bytes(600, &bo1),
+            pool_range_proof_bytes(400, &bo2),
+        ],
         PoolBalanceMode::EqualCount, // forced to Unequal by the builder (1 in, 2 out)
     )
     .expect("prove split pool transfer STARK side");
@@ -288,7 +292,9 @@ fn same_asset_split_verifies_with_equality_proof() {
         .check_range_proof_shape()
         .expect("split outputs each carry a range proof");
 
-    transfer.verify_stark_side().expect("split STARK side verifies");
+    transfer
+        .verify_stark_side()
+        .expect("split STARK side verifies");
     assert!(
         transfer.requires_asset_equality(),
         "a 1->2 split must require the asset-equality argument"
@@ -311,7 +317,10 @@ fn same_asset_split_verifies_with_equality_proof() {
     // Value conservation: the V-component balances (1000 == 600+400). We verify
     // it on value-only commitments so the asset-tag-sum mismatch of a split does
     // not block the value check (asset equality already pinned the asset).
-    let vin = vec![ValueCommitment::commit(1_000, &scalar_from_blinding_bytes(&bi))];
+    let vin = vec![ValueCommitment::commit(
+        1_000,
+        &scalar_from_blinding_bytes(&bi),
+    )];
     let vout = vec![
         ValueCommitment::commit(600, &scalar_from_blinding_bytes(&bo1)),
         ValueCommitment::commit(400, &scalar_from_blinding_bytes(&bo2)),
@@ -336,7 +345,8 @@ fn mixed_asset_split_rejects() {
     let bo1 = [7u8; 32];
     let bo2 = [9u8; 32];
 
-    let in_c = ValueCommitment::commit_hidden_asset(1_000, asset_a, &scalar_from_blinding_bytes(&bi));
+    let in_c =
+        ValueCommitment::commit_hidden_asset(1_000, asset_a, &scalar_from_blinding_bytes(&bi));
     let out1_c =
         ValueCommitment::commit_hidden_asset(600, asset_a, &scalar_from_blinding_bytes(&bo1));
     // Forged: different asset on the second output.
@@ -355,7 +365,10 @@ fn mixed_asset_split_rejects() {
     let eq = prove_asset_equality_with_message(&all, asset_a, &values, &blindings, msg);
     let res = verify_asset_equality_with_message(&all, &eq, msg);
     assert!(
-        matches!(res, Err(AssetEqualityError::VerificationFailed { leg_index: 2 })),
+        matches!(
+            res,
+            Err(AssetEqualityError::VerificationFailed { leg_index: 2 })
+        ),
         "a mixed-asset split (asset-type forgery on leg 2) must REJECT, got {res:?}"
     );
 }
@@ -423,7 +436,13 @@ fn duplicate_nullifier_rejects() {
 
 #[test]
 fn no_inputs_rejects() {
-    let res = prove_pool_transfer(BabyBear::ZERO, &[], vec![], vec![], PoolBalanceMode::EqualCount);
+    let res = prove_pool_transfer(
+        BabyBear::ZERO,
+        &[],
+        vec![],
+        vec![],
+        PoolBalanceMode::EqualCount,
+    );
     assert!(matches!(res, Err(ShieldedError::NoInputs)));
 }
 
@@ -461,8 +480,12 @@ fn pool_negative_output_value_caught_by_range_proof() {
     let msg = b"pool-wrapped-negative";
     let v_excess = scalar_from_blinding_bytes(&bi)
         - (scalar_from_blinding_bytes(&bo_big) + scalar_from_blinding_bytes(&bo_neg));
-    let v_conservation =
-        prove_conservation(&[vc_in.clone()], &[vc_big.clone(), vc_neg.clone()], &v_excess, msg);
+    let v_conservation = prove_conservation(
+        &[vc_in.clone()],
+        &[vc_big.clone(), vc_neg.clone()],
+        &v_excess,
+        msg,
+    );
 
     // The hole: value-conservation ALONE accepts the wrapped-negative output
     // (the group sum is commit(v_in)).
@@ -491,7 +514,10 @@ fn pool_negative_output_value_caught_by_range_proof() {
     assert!(
         matches!(
             res,
-            Err(FullConservationError::RangeProofFailed { output_index: 1, .. })
+            Err(FullConservationError::RangeProofFailed {
+                output_index: 1,
+                ..
+            })
         ),
         "the pool's wrapped-negative output must be REJECTED by its range proof, got {res:?}"
     );

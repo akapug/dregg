@@ -1471,8 +1471,11 @@ mod tests {
         // so the reject below is provably caused by the forged COUNTS felt.
         let a_honest = fabricate_rotated_wr(&turn, &alice);
         let b_honest = fabricate_rotated_wr(&turn, &bob);
-        WitnessedReceipt::verify_bilateral_chain(&vec![(alice, &a_honest), (bob, &b_honest)], &turn)
-            .expect("honest rotated WRs must pass the cross-check before tamper");
+        WitnessedReceipt::verify_bilateral_chain(
+            &vec![(alice, &a_honest), (bob, &b_honest)],
+            &turn,
+        )
+        .expect("honest rotated WRs must pass the cross-check before tamper");
 
         let mut a_rot = fabricate_rotated_wr(&turn, &alice);
         let b_rot = fabricate_rotated_wr(&turn, &bob);
@@ -1502,8 +1505,11 @@ mod tests {
         // stripping the only schedule source (not a setup error).
         let a_honest = fabricate_rotated_wr(&turn, &alice);
         let b_honest = fabricate_rotated_wr(&turn, &bob);
-        WitnessedReceipt::verify_bilateral_chain(&vec![(alice, &a_honest), (bob, &b_honest)], &turn)
-            .expect("rotated WRs WITH native schedule must pass before stripping it");
+        WitnessedReceipt::verify_bilateral_chain(
+            &vec![(alice, &a_honest), (bob, &b_honest)],
+            &turn,
+        )
+        .expect("rotated WRs WITH native schedule must pass before stripping it");
 
         let mut a_rot = fabricate_rotated_wr(&turn, &alice);
         a_rot.bilateral_schedule = None; // strip the only schedule source

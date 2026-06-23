@@ -26,7 +26,9 @@ use dregg_app_framework::{
     FederationId, Interaction, InteractionLog, RehydrateError, Rehydration,
 };
 
-use starbridge_compartment_workflow_mandate::{charter_clearance_root, seed_workflow, workflow_app};
+use starbridge_compartment_workflow_mandate::{
+    charter_clearance_root, seed_workflow, workflow_app,
+};
 
 fn agent() -> (AppCipherclerk, EmbeddedExecutor) {
     let cclerk = AppCipherclerk::new(AgentCipherclerk::new(), [0x3c; 32]);

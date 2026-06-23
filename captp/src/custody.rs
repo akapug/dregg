@@ -182,7 +182,8 @@ impl CustodyReceipt {
     /// `relay` secret key can make this return `true` (Ed25519 EUF-CMA, by `ed25519-dalek`
     /// `verify_strict`). A forged receipt (no relay key) yields `false`.
     pub fn sig_verifies(&self) -> bool {
-        self.relay_pubkey().verify(&self.preimage(), &self.signature)
+        self.relay_pubkey()
+            .verify(&self.preimage(), &self.signature)
     }
 }
 
@@ -573,7 +574,10 @@ mod tests {
             claimed_outcome: CustodyOutcome::Dropped,
             at_height: accept_by - 1,
         };
-        assert!(!early.well_formed(), "a premature dispute is not well-formed");
+        assert!(
+            !early.well_formed(),
+            "a premature dispute is not well-formed"
+        );
         assert!(!early.adjudicate(CustodyOutcome::Dropped));
     }
 
@@ -688,7 +692,10 @@ mod tests {
         let v3 = adjudicate_from_inbox(&claim_refunded, &dropped);
         assert_eq!(v1, v2);
         assert_eq!(v2, v3);
-        assert!(v1, "the cell shows a drop ⇒ all convict regardless of the claim");
+        assert!(
+            v1,
+            "the cell shows a drop ⇒ all convict regardless of the claim"
+        );
     }
 
     #[test]

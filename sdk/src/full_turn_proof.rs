@@ -331,8 +331,9 @@ impl RotationTurnWitness {
         before_nullifiers: Option<&[BabyBear]>,
     ) -> Result<([BabyBear; 8], [BabyBear; 8]), SdkError> {
         use dregg_circuit::effect_vm::trace_rotated::{
-            RotatedBlockWitness, generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
-            generate_rotated_record_pin_wide, generate_rotated_transfer_shape_wide,
+            RotatedBlockWitness, generate_rotated_note_create_wide,
+            generate_rotated_note_spend_wide, generate_rotated_record_pin_wide,
+            generate_rotated_transfer_shape_wide,
         };
         use dregg_circuit::heap_root::HeapLeaf;
         let runs = split_into_cohort_runs(effects);
@@ -354,88 +355,113 @@ impl RotationTurnWitness {
         // Generate-only a single wide cohort leg, returning its (before8, after8) PI-tail commits.
         // Mirrors `prove_cohort_run_chain`'s normal-effect branch (transfer-shape / record-pin
         // families — the cohorts the chained wide producer mints); the wide commit PIs are the LAST 16.
-        let leg_commits = |s_k: &CellState,
-                           run_effects: &[VmEffectKind],
-                           after_block: &RotatedBlockWitness,
-                           caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest|
-         -> Result<([BabyBear; 8], [BabyBear; 8]), SdkError> {
-            use dregg_circuit::effect_vm::Effect as E;
-            let lead = run_effects.first().ok_or_else(|| {
-                SdkError::InvalidWitness("wide_commit_anchors: empty cohort run".into())
-            })?;
-            // Route the SAME families `prove_effect_vm_rotated_wide` routes for the chained full-turn
-            // path: NoteSpend → the limb-26 grow-gate; NoteCreate → the limb-27 grow-gate; the
-            // record-pin family → record-pin; everything else → transfer-shape. (CreateCell / spawn /
-            // factory / setFieldDyn / custom are NOT on the SDK chained full-turn path — they fail
-            // closed with a precise NAMED error, matching the producer's own coverage.)
-            let dpis = if matches!(lead, E::NoteSpend { .. }) {
-                let leaves: Vec<HeapLeaf> = before_nullifiers
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
-                    .collect();
-                let (_t, d, _h) =
-                    generate_rotated_note_spend_wide(s_k, run_effects, &before, after_block, caveat, &leaves)
-                        .map_err(|e| {
-                            SdkError::InvalidWitness(format!("wide_commit_anchors note-spend: {e}"))
-                        })?;
-                d
-            } else if matches!(lead, E::NoteCreate { .. }) {
-                let (_t, d, _h) =
-                    generate_rotated_note_create_wide(s_k, run_effects, &before, after_block, caveat, &[])
-                        .map_err(|e| {
-                            SdkError::InvalidWitness(format!("wide_commit_anchors note-create: {e}"))
-                        })?;
-                d
-            } else if matches!(
-                lead,
-                E::SetPermissions { .. }
-                    | E::SetVerificationKey { .. }
-                    | E::CellSeal { .. }
-                    | E::CellUnseal { .. }
-                    | E::CellDestroy { .. }
-                    | E::ReceiptArchive { .. }
-                    | E::Refusal { .. }
-                    | E::MakeSovereign
-            ) {
-                let (_t, d) =
-                    generate_rotated_record_pin_wide(s_k, run_effects, &before, after_block, caveat)
-                        .map_err(|e| {
-                            SdkError::InvalidWitness(format!("wide_commit_anchors record-pin: {e}"))
-                        })?;
-                d
-            } else if matches!(
-                lead,
-                E::CreateCell { .. }
-                    | E::CreateCellFromFactory { .. }
-                    | E::SpawnWithDelegation { .. }
-                    | E::Custom { .. }
-            ) || matches!(lead, E::SetField { field_idx, .. } if *field_idx >= 8)
-            {
-                return Err(SdkError::InvalidWitness(format!(
-                    "wide_commit_anchors: lead effect {lead:?} routes a distinct-geometry wide producer \
+        let leg_commits =
+            |s_k: &CellState,
+             run_effects: &[VmEffectKind],
+             after_block: &RotatedBlockWitness,
+             caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest|
+             -> Result<([BabyBear; 8], [BabyBear; 8]), SdkError> {
+                use dregg_circuit::effect_vm::Effect as E;
+                let lead = run_effects.first().ok_or_else(|| {
+                    SdkError::InvalidWitness("wide_commit_anchors: empty cohort run".into())
+                })?;
+                // Route the SAME families `prove_effect_vm_rotated_wide` routes for the chained full-turn
+                // path: NoteSpend → the limb-26 grow-gate; NoteCreate → the limb-27 grow-gate; the
+                // record-pin family → record-pin; everything else → transfer-shape. (CreateCell / spawn /
+                // factory / setFieldDyn / custom are NOT on the SDK chained full-turn path — they fail
+                // closed with a precise NAMED error, matching the producer's own coverage.)
+                let dpis = if matches!(lead, E::NoteSpend { .. }) {
+                    let leaves: Vec<HeapLeaf> = before_nullifiers
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(|nf| HeapLeaf {
+                            addr: *nf,
+                            value: BabyBear::new(1),
+                        })
+                        .collect();
+                    let (_t, d, _h) = generate_rotated_note_spend_wide(
+                        s_k,
+                        run_effects,
+                        &before,
+                        after_block,
+                        caveat,
+                        &leaves,
+                    )
+                    .map_err(|e| {
+                        SdkError::InvalidWitness(format!("wide_commit_anchors note-spend: {e}"))
+                    })?;
+                    d
+                } else if matches!(lead, E::NoteCreate { .. }) {
+                    let (_t, d, _h) = generate_rotated_note_create_wide(
+                        s_k,
+                        run_effects,
+                        &before,
+                        after_block,
+                        caveat,
+                        &[],
+                    )
+                    .map_err(|e| {
+                        SdkError::InvalidWitness(format!("wide_commit_anchors note-create: {e}"))
+                    })?;
+                    d
+                } else if matches!(
+                    lead,
+                    E::SetPermissions { .. }
+                        | E::SetVerificationKey { .. }
+                        | E::CellSeal { .. }
+                        | E::CellUnseal { .. }
+                        | E::CellDestroy { .. }
+                        | E::ReceiptArchive { .. }
+                        | E::Refusal { .. }
+                        | E::MakeSovereign
+                ) {
+                    let (_t, d) = generate_rotated_record_pin_wide(
+                        s_k,
+                        run_effects,
+                        &before,
+                        after_block,
+                        caveat,
+                    )
+                    .map_err(|e| {
+                        SdkError::InvalidWitness(format!("wide_commit_anchors record-pin: {e}"))
+                    })?;
+                    d
+                } else if matches!(
+                    lead,
+                    E::CreateCell { .. }
+                        | E::CreateCellFromFactory { .. }
+                        | E::SpawnWithDelegation { .. }
+                        | E::Custom { .. }
+                ) || matches!(lead, E::SetField { field_idx, .. } if *field_idx >= 8)
+                {
+                    return Err(SdkError::InvalidWitness(format!(
+                        "wide_commit_anchors: lead effect {lead:?} routes a distinct-geometry wide producer \
                      (grow-gate / V1Face) not on the SDK chained full-turn path; thread its anchor \
                      explicitly (NAMED residual)"
-                )));
-            } else {
-                let (_t, d) = generate_rotated_transfer_shape_wide(
-                    s_k, run_effects, &before, after_block, caveat,
-                )
-                .map_err(|e| {
-                    SdkError::InvalidWitness(format!("wide_commit_anchors transfer-shape: {e}"))
-                })?;
-                d
+                    )));
+                } else {
+                    let (_t, d) = generate_rotated_transfer_shape_wide(
+                        s_k,
+                        run_effects,
+                        &before,
+                        after_block,
+                        caveat,
+                    )
+                    .map_err(|e| {
+                        SdkError::InvalidWitness(format!("wide_commit_anchors transfer-shape: {e}"))
+                    })?;
+                    d
+                };
+                let n = dpis.len();
+                if n < 16 {
+                    return Err(SdkError::InvalidWitness(
+                        "wide_commit_anchors: short wide PI vector".into(),
+                    ));
+                }
+                let b8: [BabyBear; 8] = dpis[n - 16..n - 8].try_into().expect("len 8");
+                let a8: [BabyBear; 8] = dpis[n - 8..n].try_into().expect("len 8");
+                Ok((b8, a8))
             };
-            let n = dpis.len();
-            if n < 16 {
-                return Err(SdkError::InvalidWitness(
-                    "wide_commit_anchors: short wide PI vector".into(),
-                ));
-            }
-            let b8: [BabyBear; 8] = dpis[n - 16..n - 8].try_into().expect("len 8");
-            let a8: [BabyBear; 8] = dpis[n - 8..n].try_into().expect("len 8");
-            Ok((b8, a8))
-        };
 
         let mut s_k = initial_state.clone();
         let mut first_before8: Option<[BabyBear; 8]> = None;
@@ -770,7 +796,14 @@ pub fn prove_effect_vm_rotated_ir2(
     // The standalone wrapper carries NO nullifier-set context; a NoteSpend turn proved through it
     // would have an EMPTY before nullifier tree (the grow-gate forces an insert into the empty
     // accumulator). The chained path (`prove_cohort_run_chain`) threads the real freshness leaves.
-    prove_effect_vm_rotated_ir2_with_caveat(initial_state, effects, before_w, after_w, &caveat, None)
+    prove_effect_vm_rotated_ir2_with_caveat(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        &caveat,
+        None,
+    )
 }
 
 /// Re-derive the rotated 38-PI vector for a turn (the same `dpis` the rotated prover binds).
@@ -796,16 +829,27 @@ fn rotated_effect_pi_for(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
     // NoteSpend re-derives through the nullifier-tree wiring so the OLD/NEW commit PIs (moved by
     // the limb-26 grow-gate) match the proven dpis.
-    if matches!(effects.first(), Some(dregg_circuit::effect_vm::Effect::NoteSpend { .. })) {
+    if matches!(
+        effects.first(),
+        Some(dregg_circuit::effect_vm::Effect::NoteSpend { .. })
+    ) {
         use dregg_circuit::effect_vm::trace_rotated::generate_rotated_note_spend_trace_with_nullifier_tree;
         use dregg_circuit::heap_root::HeapLeaf;
         let leaves: Vec<HeapLeaf> = before_nullifiers
             .unwrap_or(&[])
             .iter()
-            .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
+            .map(|nf| HeapLeaf {
+                addr: *nf,
+                value: BabyBear::new(1),
+            })
             .collect();
         let (_t, dpis, _mh) = generate_rotated_note_spend_trace_with_nullifier_tree(
-            initial_state, effects, &before, &after, &rot.caveat, &leaves,
+            initial_state,
+            effects,
+            &before,
+            &after,
+            &rot.caveat,
+            &leaves,
         )
         .map_err(|e| SdkError::InvalidWitness(format!("rotated note-spend PI re-derive: {e}")))?;
         return Ok(dpis);
@@ -910,16 +954,30 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
         let leaves: Vec<HeapLeaf> = before_nullifiers
             .unwrap_or(&[])
             .iter()
-            .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
+            .map(|nf| HeapLeaf {
+                addr: *nf,
+                value: BabyBear::new(1),
+            })
             .collect();
         let (trace, dpis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
-            initial_state, effects, &before, &after, caveat, &leaves,
+            initial_state,
+            effects,
+            &before,
+            &after,
+            caveat,
+            &leaves,
         )
         .map_err(|e| {
             SdkError::InvalidWitness(format!("rotated note-spend grow-gate generation: {e}"))
         })?;
-        return prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &map_heaps)
-            .map_err(|e| SdkError::InvalidWitness(format!("rotated note-spend IR-v2 proof: {e}")));
+        return prove_vm_descriptor2(
+            &desc,
+            &trace,
+            &dpis,
+            &MemBoundaryWitness::default(),
+            &map_heaps,
+        )
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated note-spend IR-v2 proof: {e}")));
     }
 
     // LIVE-generate the 311-column rotated trace + 38-PI vector.
@@ -952,7 +1010,9 @@ pub fn prove_effect_vm_rotated_wide(
     refusal_fields: Option<(&[dregg_circuit::heap_root::HeapLeaf], BabyBear)>,
 ) -> Result<
     (
-        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
         Vec<BabyBear>,
     ),
     SdkError,
@@ -1018,37 +1078,38 @@ pub fn prove_effect_vm_rotated_wide(
     // cohort lead routes through the transfer-shape wide producer (the bare-38-PI carrier). (The other
     // grow-gate families — noteCreate/createCell/factory/spawn — extend identically when the sovereign
     // producer routes them; transfer + noteSpend are the live sovereign leads.)
-    let (mut trace, mut dpis, mut map_heaps) =
-        if matches!(lead, dregg_circuit::effect_vm::Effect::NoteSpend { .. }) {
-            use dregg_circuit::heap_root::HeapLeaf;
-            let leaves: Vec<HeapLeaf> = before_nullifiers
-                .unwrap_or(&[])
-                .iter()
-                .map(|nf| HeapLeaf { addr: *nf, value: BabyBear::new(1) })
-                .collect();
-            generate_rotated_note_spend_wide(
-                initial_state, effects, &before, &after, caveat, &leaves,
-            )
+    let (mut trace, mut dpis, mut map_heaps) = if matches!(
+        lead,
+        dregg_circuit::effect_vm::Effect::NoteSpend { .. }
+    ) {
+        use dregg_circuit::heap_root::HeapLeaf;
+        let leaves: Vec<HeapLeaf> = before_nullifiers
+            .unwrap_or(&[])
+            .iter()
+            .map(|nf| HeapLeaf {
+                addr: *nf,
+                value: BabyBear::new(1),
+            })
+            .collect();
+        generate_rotated_note_spend_wide(initial_state, effects, &before, &after, caveat, &leaves)
             .map_err(|e| SdkError::InvalidWitness(format!("wide note-spend generation: {e}")))?
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::NoteCreate { .. }) {
-            // NoteCreate routes through the COMMITMENTS-SET grow-gate wide producer (the limb-27
-            // accumulator) — the append-only twin of note-spend. The before-commitments set is the
-            // openable sorted-Poseidon2 tree the `.insert` op forces against; this standalone wrapper
-            // threads no commitments-set context, so the empty set is the grow-gate's BEFORE.
-            generate_rotated_note_create_wide(
-                initial_state, effects, &before, &after, caveat, &[],
-            )
+    } else if matches!(lead, dregg_circuit::effect_vm::Effect::NoteCreate { .. }) {
+        // NoteCreate routes through the COMMITMENTS-SET grow-gate wide producer (the limb-27
+        // accumulator) — the append-only twin of note-spend. The before-commitments set is the
+        // openable sorted-Poseidon2 tree the `.insert` op forces against; this standalone wrapper
+        // threads no commitments-set context, so the empty set is the grow-gate's BEFORE.
+        generate_rotated_note_create_wide(initial_state, effects, &before, &after, caveat, &[])
             .map_err(|e| SdkError::InvalidWitness(format!("wide note-create generation: {e}")))?
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::Refusal { .. }) {
-            // REFUSAL routes through the `fields_root` WRITE-gate wide producer (the limb-36
-            // accumulator) — the LIGHT-CLIENT close: `refusalVmDescriptor2R24` now carries an in-circuit
-            // `.write` map-op forcing `after_fields_root == write(before_fields_root, REFUSAL_AUDIT_KEY →
-            // audit_felt)`. The record-pin generator with an EMPTY `map_heaps` is UNSAT against that gate
-            // (the honest refusal would fail-close); the caller threads the BEFORE-cell's fields-tree
-            // leaf set + the audit felt so the genuine sorted write opens. (Exemplar: the NoteSpend leg
-            // above — the witness carries the digest limb only, NOT the leaf set, so the caller supplies
-            // it.) Without `refusal_fields`, the deployed prover cannot mint an honest refusal.
-            let (leaves, audit_value) = refusal_fields.ok_or_else(|| {
+    } else if matches!(lead, dregg_circuit::effect_vm::Effect::Refusal { .. }) {
+        // REFUSAL routes through the `fields_root` WRITE-gate wide producer (the limb-36
+        // accumulator) — the LIGHT-CLIENT close: `refusalVmDescriptor2R24` now carries an in-circuit
+        // `.write` map-op forcing `after_fields_root == write(before_fields_root, REFUSAL_AUDIT_KEY →
+        // audit_felt)`. The record-pin generator with an EMPTY `map_heaps` is UNSAT against that gate
+        // (the honest refusal would fail-close); the caller threads the BEFORE-cell's fields-tree
+        // leaf set + the audit felt so the genuine sorted write opens. (Exemplar: the NoteSpend leg
+        // above — the witness carries the digest limb only, NOT the leaf set, so the caller supplies
+        // it.) Without `refusal_fields`, the deployed prover cannot mint an honest refusal.
+        let (leaves, audit_value) = refusal_fields.ok_or_else(|| {
                 SdkError::InvalidWitness(
                     "wide refusal prover: a Refusal lead requires `refusal_fields` (the BEFORE-cell \
                      fields-tree leaf set + the audit felt) to satisfy the in-circuit `fields_root` \
@@ -1056,96 +1117,114 @@ pub fn prove_effect_vm_rotated_wide(
                         .into(),
                 )
             })?;
-            generate_rotated_refusal_wide(
-                initial_state, effects, &before, &after, caveat, leaves, audit_value,
-            )
-            .map_err(|e| SdkError::InvalidWitness(format!("wide refusal generation: {e}")))?
-        } else if matches!(
-            lead,
-            dregg_circuit::effect_vm::Effect::SetPermissions { .. }
-                | dregg_circuit::effect_vm::Effect::SetVerificationKey { .. }
-                | dregg_circuit::effect_vm::Effect::CellSeal { .. }
-                | dregg_circuit::effect_vm::Effect::CellUnseal { .. }
-                | dregg_circuit::effect_vm::Effect::CellDestroy { .. }
-                | dregg_circuit::effect_vm::Effect::ReceiptArchive { .. }
-                | dregg_circuit::effect_vm::Effect::MakeSovereign
-        ) {
-            // The record-pin family carries the 39-PI base (record/lifecycle pin at PI 38).
-            // MakeSovereign joins: its record pin welds the AFTER authority-digest limb (which folds
-            // the flipped mode byte) — see `record_pin_offset`.
-            let (t, d) = generate_rotated_record_pin_wide(
-                initial_state, effects, &before, &after, caveat,
-            )
-            .map_err(|e| SdkError::InvalidWitness(format!("wide record-pin generation: {e}")))?;
-            (t, d, vec![])
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::CreateCell { .. }) {
-            // createCell routes through the ACCOUNTS-SET grow-gate wide producer (the limb-0
-            // accumulator) — the sibling of note-create's commitments-set grow-gate. The new cell's
-            // commitment is inserted into the BEFORE accounts tree; the `.write` map-op forces the
-            // AFTER accounts-root (limb 0) to be the genuine sorted insert, so the createCell wide
-            // descriptor (which carries the extra grow-gate PI the transfer-shape cohort lacks) is
-            // SAT. This standalone wrapper threads no accounts-set context, so the empty set is the
-            // grow-gate's BEFORE (the live sovereign producer threads the real accounts set), exactly
-            // as note-create above. WITHOUT this route createCell fell through to the transfer-shape
-            // producer (bare-38-PI) and was UNSAT (PI-count mismatch) — i.e. NOT PROVABLE.
-            generate_rotated_create_cell_wide(
-                initial_state, effects, &before, &after, caveat, &[],
-            )
+        generate_rotated_refusal_wide(
+            initial_state,
+            effects,
+            &before,
+            &after,
+            caveat,
+            leaves,
+            audit_value,
+        )
+        .map_err(|e| SdkError::InvalidWitness(format!("wide refusal generation: {e}")))?
+    } else if matches!(
+        lead,
+        dregg_circuit::effect_vm::Effect::SetPermissions { .. }
+            | dregg_circuit::effect_vm::Effect::SetVerificationKey { .. }
+            | dregg_circuit::effect_vm::Effect::CellSeal { .. }
+            | dregg_circuit::effect_vm::Effect::CellUnseal { .. }
+            | dregg_circuit::effect_vm::Effect::CellDestroy { .. }
+            | dregg_circuit::effect_vm::Effect::ReceiptArchive { .. }
+            | dregg_circuit::effect_vm::Effect::MakeSovereign
+    ) {
+        // The record-pin family carries the 39-PI base (record/lifecycle pin at PI 38).
+        // MakeSovereign joins: its record pin welds the AFTER authority-digest limb (which folds
+        // the flipped mode byte) — see `record_pin_offset`.
+        let (t, d) =
+            generate_rotated_record_pin_wide(initial_state, effects, &before, &after, caveat)
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("wide record-pin generation: {e}"))
+                })?;
+        (t, d, vec![])
+    } else if matches!(lead, dregg_circuit::effect_vm::Effect::CreateCell { .. }) {
+        // createCell routes through the ACCOUNTS-SET grow-gate wide producer (the limb-0
+        // accumulator) — the sibling of note-create's commitments-set grow-gate. The new cell's
+        // commitment is inserted into the BEFORE accounts tree; the `.write` map-op forces the
+        // AFTER accounts-root (limb 0) to be the genuine sorted insert, so the createCell wide
+        // descriptor (which carries the extra grow-gate PI the transfer-shape cohort lacks) is
+        // SAT. This standalone wrapper threads no accounts-set context, so the empty set is the
+        // grow-gate's BEFORE (the live sovereign producer threads the real accounts set), exactly
+        // as note-create above. WITHOUT this route createCell fell through to the transfer-shape
+        // producer (bare-38-PI) and was UNSAT (PI-count mismatch) — i.e. NOT PROVABLE.
+        generate_rotated_create_cell_wide(initial_state, effects, &before, &after, caveat, &[])
             .map_err(|e| SdkError::InvalidWitness(format!("wide create-cell generation: {e}")))?
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::CreateCellFromFactory { .. }) {
-            // createCellFromFactory routes through the FACTORY accounts-set grow-gate wide producer
-            // (`factoryVmDescriptor2R24`, root limb 0) — the same accounts birth-insert createCell
-            // carries, only the new-cell key column differs (param1 = child_vk_derived for factory).
-            // Without this route createCellFromFactory fell through to the transfer-shape producer
-            // (bare-38-PI) and was UNSAT vs the factory wide descriptor's extra grow-gate PI. The
-            // standalone wrapper threads no accounts-set context, so the empty set is the grow-gate's
-            // BEFORE (mirrors createCell); the live sovereign producer threads the real accounts set.
-            generate_rotated_create_from_factory_wide(
-                initial_state, effects, &before, &after, caveat, &[],
-            )
-            .map_err(|e| SdkError::InvalidWitness(format!("wide create-from-factory generation: {e}")))?
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::SpawnWithDelegation { .. }) {
-            // spawn's BIRTH/accounts-grow leg routes through the spawn accounts-set grow-gate wide
-            // producer (`spawnVmDescriptor2R24`, root limb 0 — the born child id grown into the cells
-            // set). The wide spawn descriptor carries ONLY the accounts birth grow-gate (NO cap-tree
-            // map_op — the parent→child cap-handoff is the SEPARATE cap-open path's job, already
-            // wired). Without this route spawn fell through to the transfer-shape producer and was
-            // UNSAT vs the spawn wide descriptor's grow-gate PI. Empty BEFORE accounts = the standalone
-            // grow-gate BEFORE (mirrors createCell); the live sovereign producer threads the real set.
-            generate_rotated_spawn_wide(
-                initial_state, effects, &before, &after, caveat, &[],
-            )
+    } else if matches!(
+        lead,
+        dregg_circuit::effect_vm::Effect::CreateCellFromFactory { .. }
+    ) {
+        // createCellFromFactory routes through the FACTORY accounts-set grow-gate wide producer
+        // (`factoryVmDescriptor2R24`, root limb 0) — the same accounts birth-insert createCell
+        // carries, only the new-cell key column differs (param1 = child_vk_derived for factory).
+        // Without this route createCellFromFactory fell through to the transfer-shape producer
+        // (bare-38-PI) and was UNSAT vs the factory wide descriptor's extra grow-gate PI. The
+        // standalone wrapper threads no accounts-set context, so the empty set is the grow-gate's
+        // BEFORE (mirrors createCell); the live sovereign producer threads the real accounts set.
+        generate_rotated_create_from_factory_wide(
+            initial_state,
+            effects,
+            &before,
+            &after,
+            caveat,
+            &[],
+        )
+        .map_err(|e| {
+            SdkError::InvalidWitness(format!("wide create-from-factory generation: {e}"))
+        })?
+    } else if matches!(
+        lead,
+        dregg_circuit::effect_vm::Effect::SpawnWithDelegation { .. }
+    ) {
+        // spawn's BIRTH/accounts-grow leg routes through the spawn accounts-set grow-gate wide
+        // producer (`spawnVmDescriptor2R24`, root limb 0 — the born child id grown into the cells
+        // set). The wide spawn descriptor carries ONLY the accounts birth grow-gate (NO cap-tree
+        // map_op — the parent→child cap-handoff is the SEPARATE cap-open path's job, already
+        // wired). Without this route spawn fell through to the transfer-shape producer and was
+        // UNSAT vs the spawn wide descriptor's grow-gate PI. Empty BEFORE accounts = the standalone
+        // grow-gate BEFORE (mirrors createCell); the live sovereign producer threads the real set.
+        generate_rotated_spawn_wide(initial_state, effects, &before, &after, caveat, &[])
             .map_err(|e| SdkError::InvalidWitness(format!("wide spawn generation: {e}")))?
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::SetField { field_idx, .. } if *field_idx >= 8) {
-            // setFieldDyn (the overflow `SetField { field_idx >= 8 }`) is the ONE effect whose witness
-            // is a `MemBoundaryWitness`, NOT a `map_heaps`, AND whose trace is the DISTINCT 581-wide
-            // V1Face geometry the transfer-shape generator cannot lay. Produce empty placeholders here;
-            // the dedicated block below generates the real trace/PIs + the mem-boundary and overrides
-            // these. (Routing it through the transfer-shape fallthrough would be UNSAT and wasteful.)
-            (Vec::new(), Vec::new(), Vec::new())
-        } else if matches!(lead, dregg_circuit::effect_vm::Effect::Custom { .. }) {
-            // custom routes through the DISTINCT 789-wide `customVmDescriptor2R24` member (host 581 +
-            // 208 carriers — the same V1Face host width as setFieldDyn, but a Custom row, NO Blum
-            // memory / grow-gate leg). BEFORE: Custom fell through to the transfer-shape producer
-            // (816-wide), UNSAT vs the 789-wide custom descriptor — so a custom turn minted NO wide
-            // receipt (the last liveness gap). AFTER routing it to `generate_rotated_custom_wide`: the
-            // Custom row's `(vk, commit)` columns (68 / 72) carry the genuine bound sub-proof's binding
-            // the descriptor's `proof_bind` op pins, and the row proves + light-client-verifies. The
-            // program-correctness recursion is the SDK-reachable `custom_proof_bind` engine (threaded
-            // via `Turn.custom_program_proofs`), NOT a row-local poly. The `Effect::Custom`'s
-            // `(program_vk_hash, proof_commitment)` MUST be a verifying `BoundCustomProof`'s exposed
-            // binding (`bound.vk_hash_felts()` / `bound.proof_commitment()`) for the wide receipt to
-            // bind the genuine sub-proof.
-            generate_rotated_custom_wide(initial_state, effects, &before, &after, caveat)
-                .map(|(t, d)| (t, d, vec![]))
-                .map_err(|e| SdkError::InvalidWitness(format!("wide custom generation: {e}")))?
-        } else {
-            let (t, d) = generate_rotated_transfer_shape_wide(
-                initial_state, effects, &before, &after, caveat,
-            )
-            .map_err(|e| SdkError::InvalidWitness(format!("wide transfer-shape generation: {e}")))?;
-            (t, d, vec![])
-        };
+    } else if matches!(lead, dregg_circuit::effect_vm::Effect::SetField { field_idx, .. } if *field_idx >= 8)
+    {
+        // setFieldDyn (the overflow `SetField { field_idx >= 8 }`) is the ONE effect whose witness
+        // is a `MemBoundaryWitness`, NOT a `map_heaps`, AND whose trace is the DISTINCT 581-wide
+        // V1Face geometry the transfer-shape generator cannot lay. Produce empty placeholders here;
+        // the dedicated block below generates the real trace/PIs + the mem-boundary and overrides
+        // these. (Routing it through the transfer-shape fallthrough would be UNSAT and wasteful.)
+        (Vec::new(), Vec::new(), Vec::new())
+    } else if matches!(lead, dregg_circuit::effect_vm::Effect::Custom { .. }) {
+        // custom routes through the DISTINCT 789-wide `customVmDescriptor2R24` member (host 581 +
+        // 208 carriers — the same V1Face host width as setFieldDyn, but a Custom row, NO Blum
+        // memory / grow-gate leg). BEFORE: Custom fell through to the transfer-shape producer
+        // (816-wide), UNSAT vs the 789-wide custom descriptor — so a custom turn minted NO wide
+        // receipt (the last liveness gap). AFTER routing it to `generate_rotated_custom_wide`: the
+        // Custom row's `(vk, commit)` columns (68 / 72) carry the genuine bound sub-proof's binding
+        // the descriptor's `proof_bind` op pins, and the row proves + light-client-verifies. The
+        // program-correctness recursion is the SDK-reachable `custom_proof_bind` engine (threaded
+        // via `Turn.custom_program_proofs`), NOT a row-local poly. The `Effect::Custom`'s
+        // `(program_vk_hash, proof_commitment)` MUST be a verifying `BoundCustomProof`'s exposed
+        // binding (`bound.vk_hash_felts()` / `bound.proof_commitment()`) for the wide receipt to
+        // bind the genuine sub-proof.
+        generate_rotated_custom_wide(initial_state, effects, &before, &after, caveat)
+            .map(|(t, d)| (t, d, vec![]))
+            .map_err(|e| SdkError::InvalidWitness(format!("wide custom generation: {e}")))?
+    } else {
+        let (t, d) =
+            generate_rotated_transfer_shape_wide(initial_state, effects, &before, &after, caveat)
+                .map_err(|e| {
+                SdkError::InvalidWitness(format!("wide transfer-shape generation: {e}"))
+            })?;
+        (t, d, vec![])
+    };
 
     // setFieldDyn carries a DISTINCT geometry (the 581-wide V1Face / 789-wide member): the overflow
     // `SetField { field_idx >= 8 }` routes to `setFieldDynVmDescriptor2R24` and its Blum linear-memory
@@ -1159,7 +1238,12 @@ pub fn prove_effect_vm_rotated_wide(
         if *field_idx >= 8 {
             let slot = field_idx % 8;
             let (t, d, mb) = generate_rotated_set_field_dyn_wide(
-                initial_state, &before, &after, caveat, slot, BabyBear::new(0),
+                initial_state,
+                &before,
+                &after,
+                caveat,
+                slot,
+                BabyBear::new(0),
             )
             .map_err(|e| SdkError::InvalidWitness(format!("wide set-field-dyn generation: {e}")))?;
             // setFieldDyn's witness is the mem-boundary, NOT map_heaps; override the trace/PIs the
@@ -1199,7 +1283,9 @@ pub fn prove_effect_vm_rotated_wide_with_fee(
     fee: u64,
 ) -> Result<
     (
-        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
         Vec<BabyBear>,
     ),
     SdkError,
@@ -1219,7 +1305,13 @@ pub fn prove_effect_vm_rotated_wide_with_fee(
     // Non-Transfer leads carry no fee-in-proof descriptor — defer to the unfee'd wide prover.
     if !matches!(lead, dregg_circuit::effect_vm::Effect::Transfer { .. }) {
         return prove_effect_vm_rotated_wide(
-            initial_state, effects, before_w, after_w, caveat, None, None,
+            initial_state,
+            effects,
+            before_w,
+            after_w,
+            caveat,
+            None,
+            None,
         );
     }
     let name = rotated_descriptor_name_for_effect_fee(lead).ok_or_else(|| {
@@ -1263,7 +1355,12 @@ pub fn prove_effect_vm_rotated_wide_with_fee(
         .map_err(|e| SdkError::InvalidWitness(format!("wide fee after-witness: {e}")))?;
 
     let (trace, dpis) = generate_rotated_transfer_shape_with_fee_wide(
-        initial_state, effects, &before, &after, caveat, fee,
+        initial_state,
+        effects,
+        &before,
+        &after,
+        caveat,
+        fee,
     )
     .map_err(|e| SdkError::InvalidWitness(format!("wide fee trace generation: {e}")))?;
 
@@ -1355,9 +1452,15 @@ pub fn prove_effect_vm_rotated_ir2_with_fee(
     let after = bridge(after_w)
         .map_err(|e| SdkError::InvalidWitness(format!("rotated fee after-witness: {e}")))?;
 
-    let (trace, dpis) =
-        generate_rotated_effect_vm_trace_with_fee(initial_state, effects, &before, &after, caveat, fee)
-            .map_err(|e| SdkError::InvalidWitness(format!("rotated fee trace generation: {e}")))?;
+    let (trace, dpis) = generate_rotated_effect_vm_trace_with_fee(
+        initial_state,
+        effects,
+        &before,
+        &after,
+        caveat,
+        fee,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("rotated fee trace generation: {e}")))?;
 
     prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &[])
         .map_err(|e| SdkError::InvalidWitness(format!("rotated fee IR-v2 proof: {e}")))
@@ -1435,9 +1538,8 @@ struct CapOpenRoute {
 /// submask wrapper, where a grant exceeding held would be UNSAT.
 #[cfg(feature = "prover")]
 fn is_attenuated_grant(w: &dregg_circuit::effect_vm::AttenuateWitness) -> bool {
-    let full = |lo: BabyBear, hi: BabyBear| -> u64 {
-        (lo.as_u32() as u64) | ((hi.as_u32() as u64) << 16)
-    };
+    let full =
+        |lo: BabyBear, hi: BabyBear| -> u64 { (lo.as_u32() as u64) | ((hi.as_u32() as u64) << 16) };
     let held = full(w.held.mask_lo, w.held.mask_hi);
     let granted = full(w.granted.mask_lo, w.granted.mask_hi);
     // STRICT submask: every granted bit is held, and the grant drops at least one held bit.
@@ -1510,7 +1612,11 @@ fn cap_open_route_for_run(run_effects: &[VmEffectKind]) -> Option<CapOpenRoute> 
         // (`is_attenuated_grant`) — the conferred cap NARROWS the delegator's authority. That selects the
         // submask wrapper (which forces the `keep ⊑ held` lookup over cols 73/72) instead of the plain
         // `delegateWriteCapOpen`. A non-narrowing grant (same/relocated rights) stays the plain wrapper.
-        [VmEffectKind::GrantCapability { phase_b: Some(w), .. }] if is_attenuated_grant(w) => {
+        [
+            VmEffectKind::GrantCapability {
+                phase_b: Some(w), ..
+            },
+        ] if is_attenuated_grant(w) => {
             Some(CapOpenRoute {
                 key: "grantCapCapOpenVmDescriptor2R24",
                 eff_bit: EFFECT_GRANT_CAPABILITY,
@@ -1717,9 +1823,12 @@ fn cap_insert_payload_for(
         [VmEffectKind::Introduce { intro_hash }] => Some((intro_hash[0], intro_hash[1])),
         // delegateAtten (an attenuated grant carried as AttenuateCapability over the grant base): the
         // narrowed cap is `narrower_commitment[0]` holding the narrowed mask `narrower_commitment[1]`.
-        [VmEffectKind::AttenuateCapability { narrower_commitment, .. }] => {
-            Some((narrower_commitment[0], narrower_commitment[1]))
-        }
+        [
+            VmEffectKind::AttenuateCapability {
+                narrower_commitment,
+                ..
+            },
+        ] => Some((narrower_commitment[0], narrower_commitment[1])),
         // refreshDelegation (the DELEG-tree UPDATE-AT-KEY): an in-place re-arm of a SPECIFIC child's
         // delegation snapshot. The genuine move REBINDS the membership-opened present key
         // (`cap.leaf.slot_hash`, the anchor) to the GENUINE refreshed snapshot the effect now carries
@@ -1727,7 +1836,12 @@ fn cap_insert_payload_for(
         // c-list and refuses a forged value at apply). The bridge ignores this tuple's KEY and rebinds at
         // the anchor; the VALUE (the snapshot felt) is the KEEP_MASK the `Update` map_op writes — so the
         // on-the-wire post-DELEG-root binds the SPECIFIC snapshot, not the reflexive held-mask re-arm.
-        [VmEffectKind::RefreshDelegation { child_hash, snapshot_value }] => {
+        [
+            VmEffectKind::RefreshDelegation {
+                child_hash,
+                snapshot_value,
+            },
+        ] => {
             let _ = child_hash; // child binds via effects_hash + params[0]; the anchor key is the membership-opened slot_hash
             Some((cap.leaf.slot_hash, snapshot_value[0]))
         }
@@ -1805,7 +1919,9 @@ fn prove_effect_vm_cap_open_attenuate(
     cap: &CapMembershipWitness,
 ) -> Result<
     (
-        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
         Vec<BabyBear>,
     ),
     SdkError,
@@ -1833,7 +1949,16 @@ fn prove_effect_vm_cap_open_attenuate(
             dregg_circuit::effect_vm::trace_rotated::WRITE_MASK_LO,
         )),
     };
-    prove_effect_vm_cap_open(initial_state, effects, before_w, after_w, cap, &route, None, false)
+    prove_effect_vm_cap_open(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        cap,
+        &route,
+        None,
+        false,
+    )
 }
 
 /// Look up a cap-open descriptor JSON by its registry key from the staged rotated registry. The
@@ -1869,20 +1994,24 @@ fn cap_open_vk_hash_by_key(key: &str) -> Result<[u8; 32], SdkError> {
 }
 
 /// THE WIDE CAP-OPEN FLAG-DAY: does this cap-open effective key have a PROVEN wide twin in
-/// `WIDE_REGISTRY_STAGED_TSV` (the Lean `v3RegistryCapOpenWide` authority-crown tail)? True for the 8
-/// AUTHORITY-CROWN cap-open members (`delegate/introduce/grantCap/revoke/refresh/revokeCapability
-/// CapOpen` + `transferCapOpenEff` + `attenuateCapOpenEff`); FALSE for the WRITE-bearing wrappers
-/// (`…WriteCapOpen…`), the turn-bound (`transferCapOpenTB`), and `spawnCapOpen` — those descriptors are
-/// NOT in the proven wide registry (their wide twin needs the Lean emit+proof first), so they stay on
-/// the 1-felt V3 route (the named residual). The wide lift is `append_wide_carriers_cap_open` over the
-/// SAME cap-open trace (the host constraints / membership crown carry UNCHANGED; the 8-felt carriers
-/// re-absorb the SAME limbs), so an authority-crown cap turn binds the full ~124-bit commit.
+/// `WIDE_REGISTRY_STAGED_TSV` (the Lean `v3RegistryCapOpenWide` authority crown + the §10
+/// `v3RegistryCapOpenWriteWide` WRITE tail)? True for the 8 AUTHORITY-CROWN members
+/// (`delegate/introduce/grantCap/revoke/refresh/revokeCapability CapOpen` + `transferCapOpenEff` +
+/// `attenuateCapOpenEff`) AND the 10 WRITE-bearing tail members (`…WriteCapOpenVmDescriptor2R24` +
+/// `spawnCapOpen` + `exerciseCapOpen`) — every cap-open host (819) is a gated host wide-wrapped by the
+/// SAME proven `wideAppend host bb (bb+51)`, geometry-identical to the crown (the cap-tree write is a
+/// `map_op`, not a column, so the host width is unchanged). FALSE only for the turn-bound
+/// (`transferCapOpenTB`) — its `effCapOpenV3TB` host carries TWO extra turn-identity columns at a
+/// DIFFERENT (821-col) width, so `append_wide_carriers_cap_open`'s `CAP_OPEN_WIDTH` lift does not accept
+/// it; it has no proven wide twin yet (the named TB residual) and stays on the 1-felt route. Membership
+/// is read STRAIGHT off the proven wide registry, so a key is wide iff its Lean wide twin exists.
 #[cfg(feature = "prover")]
 fn cap_open_key_has_wide_twin(key: &str) -> bool {
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
-    // Only the non-Write, non-TB authority-crown keys. Exclude the Write/TB families explicitly
-    // (they could appear in the wide registry by name in the future; gate on the proven-today set).
-    if key.contains("Write") || key.contains("TB") || key.contains("spawn") {
+    // The TB family has no proven wide twin (its host width differs); exclude it explicitly. Every
+    // OTHER cap-open key (crown AND the §10 WRITE tail) is wide iff it appears in the proven wide
+    // registry — read membership straight off the TSV (the Lean source of truth).
+    if key.contains("TB") {
         return false;
     }
     WIDE_REGISTRY_STAGED_TSV
@@ -1954,7 +2083,9 @@ fn prove_effect_vm_cap_open_transfer(
     cap: &CapMembershipWitness,
 ) -> Result<
     (
-        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
         Vec<BabyBear>,
     ),
     SdkError,
@@ -1977,7 +2108,16 @@ fn prove_effect_vm_cap_open_transfer(
     };
     // The test helper publishes the OWNER arm (no explicit cross-vat identity); the verifier anchors
     // the three turn-identity PIs to the trusted turn in the deployment negative test.
-    prove_effect_vm_cap_open(initial_state, effects, before_w, after_w, cap, &route, None, false)
+    prove_effect_vm_cap_open(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        cap,
+        &route,
+        None,
+        false,
+    )
 }
 
 /// **`prove_effect_vm_cap_open`** (THE GENERIC FAN-OUT PROVER, residual (a)) — prove a single
@@ -2011,7 +2151,9 @@ fn prove_effect_vm_cap_open(
     wide: bool,
 ) -> Result<
     (
-        dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
         Vec<BabyBear>,
     ),
     SdkError,
@@ -2082,31 +2224,37 @@ fn prove_effect_vm_cap_open(
     // heap), and the cap-write base runs OVER it (overriding limb 25 + recomputing the rotated commit,
     // which preserves the limb-0 override). The two map-op heaps are concatenated; the map-op table
     // matches each op to its heap by ROOT (the accounts root for limb 0, the c-list root for limb 25).
-    let spawn_dual_tree =
-        cap_write.is_some() && matches!(effects.first(), Some(VmEffectKind::SpawnWithDelegation { .. }));
-    let (mut trace, pis, accounts_heaps): (Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>) =
-        if spawn_dual_tree {
-            // The genuine spawn producer supplies the actor's BEFORE accounts leaf-set as the cap witness's
-            // accounts witness; here the child key is fresh against the (possibly empty) before-set — the
-            // `.absent` freshness op brackets via the sentinel range, and a re-spawn of an existing cell id
-            // has no bracketing witness and is REFUSED.
-            let before_accounts: Vec<dregg_circuit::heap_root::HeapLeaf> = Vec::new();
-            let (trace, pis, heaps) =
+    let spawn_dual_tree = cap_write.is_some()
+        && matches!(
+            effects.first(),
+            Some(VmEffectKind::SpawnWithDelegation { .. })
+        );
+    let (mut trace, pis, accounts_heaps): (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>,
+    ) = if spawn_dual_tree {
+        // The genuine spawn producer supplies the actor's BEFORE accounts leaf-set as the cap witness's
+        // accounts witness; here the child key is fresh against the (possibly empty) before-set — the
+        // `.absent` freshness op brackets via the sentinel range, and a re-spawn of an existing cell id
+        // has no bracketing witness and is REFUSED.
+        let before_accounts: Vec<dregg_circuit::heap_root::HeapLeaf> = Vec::new();
+        let (trace, pis, heaps) =
                 dregg_circuit::effect_vm::trace_rotated::generate_rotated_create_cell_trace_with_accounts_tree(
                     initial_state, effects, &before, &after, &caveat, &before_accounts,
                 )
                 .map_err(|e| {
                     SdkError::InvalidWitness(format!("cap-open spawn accounts base ({}): {e}", route.key))
                 })?;
-            (trace, pis, heaps)
-        } else {
-            let (trace, pis) =
-                generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, &caveat)
-                    .map_err(|e| {
-                        SdkError::InvalidWitness(format!("cap-open base trace ({}): {e}", route.key))
-                    })?;
-            (trace, pis, Vec::new())
-        };
+        (trace, pis, heaps)
+    } else {
+        let (trace, pis) =
+            generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, &caveat)
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!("cap-open base trace ({}): {e}", route.key))
+                })?;
+        (trace, pis, Vec::new())
+    };
 
     // Attenuate-family bases need the phase-B nonce-FREEZE + cap-root advance wiring; transfer is
     // directly valid (its 38-PI vector is correct as generated). BUT the WRITE-bearing wrappers ALL
@@ -2176,9 +2324,13 @@ fn prove_effect_vm_cap_open(
     // Convert the c-list opening to the trace-column witness FOR the turn's effect-kind bit (fails
     // closed if the cap's facet does not permit the crown facet — the WRITE wrapper's facet when active,
     // else `route.eff_bit`), then widen.
-    let cap_open =
-        CapOpenWitness::from_membership_for(&cap.leaf, &cap.siblings, &cap.directions, crown_eff_bit)
-            .map_err(|e| SdkError::InvalidWitness(format!("cap-open witness ({}): {e}", route.key)))?;
+    let cap_open = CapOpenWitness::from_membership_for(
+        &cap.leaf,
+        &cap.siblings,
+        &cap.directions,
+        crown_eff_bit,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("cap-open witness ({}): {e}", route.key)))?;
 
     // The TURN-BOUND route (#225) widens with TWO extra turn-identity columns (`actor`/`dst`) and
     // extends the dpis with THREE turn-identity PIs (`src`/`actor`/`dst` at 38/39/40). `src` is the
@@ -2191,20 +2343,23 @@ fn prove_effect_vm_cap_open(
             Some(id) => (id.actor, id.dst),
             None => (src, src),
         };
-        widen_to_cap_open_tb(&mut trace, &cap_open, actor, dst)
-            .map_err(|e| SdkError::InvalidWitness(format!("cap-open TB widen ({}): {e}", route.key)))?;
+        widen_to_cap_open_tb(&mut trace, &cap_open, actor, dst).map_err(|e| {
+            SdkError::InvalidWitness(format!("cap-open TB widen ({}): {e}", route.key))
+        })?;
         cap_open_tb_dpis(&dpis, src, actor, dst)
     } else {
-        widen_to_cap_open(&mut trace, &cap_open)
-            .map_err(|e| SdkError::InvalidWitness(format!("cap-open widen ({}): {e}", route.key)))?;
+        widen_to_cap_open(&mut trace, &cap_open).map_err(|e| {
+            SdkError::InvalidWitness(format!("cap-open widen ({}): {e}", route.key))
+        })?;
         if go_wide {
             // THE WIDE LIFT: append the two 13×8 BEFORE/AFTER wide carriers PAST the 210-col cap-open
             // appendix (`append_wide_carriers_cap_open`, the `wideAppend (capOpenHost) bb (bb+51)` twin)
             // and the 16 wide commit PIs. The cap-open host constraints + membership crown carry
             // UNCHANGED; the carriers re-absorb the SAME limbs into the 8-felt commit. The leg now
             // publishes the full ~124-bit commit at its LAST 16 PIs (the wide anchor the verifier binds).
-            append_wide_carriers_cap_open(&mut trace, dpis)
-                .map_err(|e| SdkError::InvalidWitness(format!("cap-open wide carriers ({effective_key}): {e}")))?
+            append_wide_carriers_cap_open(&mut trace, dpis).map_err(|e| {
+                SdkError::InvalidWitness(format!("cap-open wide carriers ({effective_key}): {e}"))
+            })?
         } else {
             dpis
         }
@@ -2213,15 +2368,18 @@ fn prove_effect_vm_cap_open(
     // The map-op witness heaps: the cap-tree c-list (limb 25) ALWAYS, PLUS the accounts leaf-set (limb 0)
     // for the spawn dual-tree descriptor. The map-op table matches each op to its heap by ROOT, so order
     // is irrelevant; concatenating yields one heap per distinct tree the descriptor opens.
-    let all_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = cap_write_heaps
-        .into_iter()
-        .chain(accounts_heaps)
-        .collect();
-    let proof =
-        prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(), &all_heaps)
-            .map_err(|e| {
-                SdkError::InvalidWitness(format!("cap-open IR-v2 proof ({effective_key}): {e}"))
-            })?;
+    let all_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> =
+        cap_write_heaps.into_iter().chain(accounts_heaps).collect();
+    let proof = prove_vm_descriptor2(
+        &desc,
+        &trace,
+        &dpis,
+        &MemBoundaryWitness::default(),
+        &all_heaps,
+    )
+    .map_err(|e| {
+        SdkError::InvalidWitness(format!("cap-open IR-v2 proof ({effective_key}): {e}"))
+    })?;
     Ok((proof, dpis))
 }
 
@@ -2535,7 +2693,14 @@ fn prove_cohort_run_chain(
             let effective_key = cap_open_effective_key(&route, cap);
             let go_wide = cap_open_key_has_wide_twin(effective_key);
             let (proof, dpis) = prove_effect_vm_cap_open(
-                &s_k, run_effects, &rot.before, after_w, cap, &route, cap_turn_identity, go_wide,
+                &s_k,
+                run_effects,
+                &rot.before,
+                after_w,
+                cap,
+                &route,
+                cap_turn_identity,
+                go_wide,
             )?;
             let proof_bytes = postcard::to_allocvec(&proof).map_err(|e| {
                 SdkError::InvalidWitness(format!(
@@ -2580,7 +2745,11 @@ fn prove_cohort_run_chain(
                     "chained rotated wide proof serialize failed (run {k}): {e}"
                 ))
             })?;
-            (proof_bytes, rot_pi, rotated_effect_vm_wide_vk_hash(run_effects)?)
+            (
+                proof_bytes,
+                rot_pi,
+                rotated_effect_vm_wide_vk_hash(run_effects)?,
+            )
         };
         legs.push(AttachedSubProof {
             label: "effect-vm-rotated".into(),
@@ -2654,9 +2823,9 @@ fn is_forbidden_authority_only_cap_write_descriptor(name: &str) -> bool {
             | "refreshDelegationCapOpenVmDescriptor2R24" // RefreshDelegation — the DELEG-tree UPDATE write
                                                          // wrapper proves (`refresh_deleg_write_proves_and_verifies_light_client`);
                                                          // the authority-only route leaves the post-DELEG-root host-trusted
-            | "spawnCapOpenVmDescriptor2R24"             // SpawnWithDelegation — the cap-handoff INSERT write
-                                                         // wrapper proves (`cap_write_spawn_proves_and_verifies_light_client`);
-                                                         // the authority-only route leaves the child cap_root host-trusted (frozen handoff)
+            | "spawnCapOpenVmDescriptor2R24" // SpawnWithDelegation — the cap-handoff INSERT write
+                                             // wrapper proves (`cap_write_spawn_proves_and_verifies_light_client`);
+                                             // the authority-only route leaves the child cap_root host-trusted (frozen handoff)
     )
 }
 
@@ -2664,13 +2833,13 @@ fn is_forbidden_authority_only_cap_write_descriptor(name: &str) -> bool {
 fn is_forbidden_plain_cap_descriptor(name: &str) -> bool {
     is_forbidden_authority_only_cap_write_descriptor(name)
         || matches!(
-        name,
-        "introduceVmDescriptor2R24"        // Introduce         (EFFECT_INTRODUCE)
+            name,
+            "introduceVmDescriptor2R24"        // Introduce         (EFFECT_INTRODUCE)
             | "revokeVmDescriptor2R24"     // RevokeDelegation   (EFFECT_DELEGATION_OPS)
             | "attenuateVmDescriptor2R24"  // AttenuateCapability(EFFECT_ATTENUATE/Transfer-facet)
             | "grantCapVmDescriptor2R24"   // GrantCapability    (EFFECT_GRANT_CAPABILITY)
             | "revokeCapabilityVmDescriptor2R24" // RevokeCapability (EFFECT_REVOKE_CAPABILITY)
-    )
+        )
 }
 
 /// Verify a ROTATED effect-vm sub-proof (the C4 `"effect-vm-rotated"` leg): deserialize the
@@ -2693,14 +2862,16 @@ fn verify_effect_vm_rotated_with_cutover(
     // uniquely-accepting descriptor is the wide member and the leg's 8-felt commit PIs (the LAST 16)
     // are what `verify_full_turn_bound` binds — the ~31-bit waist is GONE for the normal core.
     //
-    // THE NAMED RESIDUAL (cap-open tail): the cap-open producer path
-    // (`prove_effect_vm_cap_open`) still emits the 1-felt V3 cap-open descriptors (the wide twins of
-    // the 11 `…CapOpen…`/`…Write…CapOpen…`/`heapWrite` members are NOT yet in
-    // `WIDE_REGISTRY_STAGED_TSV`). To keep HONEST capability-gated turns verifying (not a
-    // honest-proof-rejecting half-flip), we FALL BACK to the 1-felt `V3_STAGED_REGISTRY_TSV` when no
-    // wide member accepts. A cap-open leg thus still binds its 1-felt commit anchor (the residual
-    // 31-bit waist for cap-gated turns ONLY); `verify_full_turn_bound` discriminates per-leg by the
-    // accepting registry. A forged plain-cap descriptor still hits the AUTHORITY FLOOR below.
+    // THE NAMED RESIDUAL (cap-open tail): the AUTHORITY crown AND the §10 WRITE-bearing cap-open tail
+    // (`…WriteCapOpen…` + `spawnCapOpen` + `exerciseCapOpen`) now have PROVEN wide twins in
+    // `WIDE_REGISTRY_STAGED_TSV`, so an honest capability-gated WRITE turn verifies under its WIDE
+    // member (the full ~124-bit commit). To keep an HONEST leg with NO wide twin verifying (the
+    // turn-bound `transferCapOpenTB`, whose 821-col host has no wide twin yet), we FALL BACK to the
+    // 1-felt `V3_STAGED_REGISTRY_TSV` when no wide member accepts — but ONLY for cap-open keys that
+    // genuinely LACK a wide twin (the fallback filter below). A cap-open key that HAS a wide twin is
+    // filtered OUT of the V3 fallback, so a narrow 1-felt write-cap leg is REJECTED (the reject tooth).
+    // `verify_full_turn_bound` discriminates per-leg by the accepting registry. A forged plain-cap
+    // descriptor still hits the AUTHORITY FLOOR below.
     use dregg_circuit::effect_vm_descriptors::{V3_STAGED_REGISTRY_TSV, WIDE_REGISTRY_STAGED_TSV};
 
     let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(proof_bytes)
@@ -2743,7 +2914,13 @@ fn verify_effect_vm_rotated_with_cutover(
     if bound.is_empty() {
         bound = collect_bound(V3_STAGED_REGISTRY_TSV)
             .into_iter()
-            .filter(|(name, _)| name.contains("CapOpen"))
+            // A V3 cap-open member survives the fallback ONLY if it has NO proven wide twin (the
+            // genuine residual — today the turn-bound `transferCapOpenTB`). A cap-open key that DOES
+            // have a wide twin (the §10 WRITE tail + the authority crown) is FILTERED OUT here: its
+            // honest leg verifies under the WIDE member above, so a 1-felt V3 leg for it is a
+            // wide-dodge and is REJECTED (the reject tooth — a narrow write-cap leg binds no accepted
+            // descriptor ⇒ rejected, forcing the producer onto the ~124-bit wide route).
+            .filter(|(name, _)| name.contains("CapOpen") && !cap_open_key_has_wide_twin(name))
             .collect();
     }
     match bound.as_slice() {
@@ -3742,7 +3919,8 @@ pub fn verify_full_turn_bound(
             let mut nullifier = BabyBear::ZERO;
             for leg in &effect_legs {
                 let leg_nullifier = if leg.label == "effect-vm-rotated" {
-                    if leg_is_note_spend(leg) && leg.sub_public_inputs.len() >= ROT_NULLIFIER_PI_COUNT
+                    if leg_is_note_spend(leg)
+                        && leg.sub_public_inputs.len() >= ROT_NULLIFIER_PI_COUNT
                     {
                         leg.sub_public_inputs[ROT_NULLIFIER_PI]
                     } else {
@@ -4290,7 +4468,10 @@ mod tests {
                 // #225: the LIVE transfer cap-open is the TURN-BOUND descriptor.
                 "transferCapOpenTBVmDescriptor2R24",
                 EFFECT_TRANSFER,
-                vec![VmEffect::Transfer { amount: 1, direction: 1 }],
+                vec![VmEffect::Transfer {
+                    amount: 1,
+                    direction: 1,
+                }],
             ),
             (
                 "attenuateCapOpenEffVmDescriptor2R24",
@@ -4304,17 +4485,24 @@ mod tests {
             (
                 "grantCapCapOpenVmDescriptor2R24",
                 EFFECT_GRANT_CAPABILITY,
-                vec![VmEffect::GrantCapability { cap_entry: [BabyBear::new(3); 8], phase_b: None }],
+                vec![VmEffect::GrantCapability {
+                    cap_entry: [BabyBear::new(3); 8],
+                    phase_b: None,
+                }],
             ),
             (
                 "introduceCapOpenVmDescriptor2R24",
                 EFFECT_INTRODUCE,
-                vec![VmEffect::Introduce { intro_hash: [BabyBear::new(4); 8] }],
+                vec![VmEffect::Introduce {
+                    intro_hash: [BabyBear::new(4); 8],
+                }],
             ),
             (
                 "revokeCapOpenVmDescriptor2R24",
                 EFFECT_DELEGATION_OPS,
-                vec![VmEffect::RevokeDelegation { child_hash: [BabyBear::new(5); 8] }],
+                vec![VmEffect::RevokeDelegation {
+                    child_hash: [BabyBear::new(5); 8],
+                }],
             ),
             (
                 "refreshDelegationCapOpenVmDescriptor2R24",
@@ -4327,7 +4515,10 @@ mod tests {
             (
                 "revokeCapabilityCapOpenVmDescriptor2R24",
                 EFFECT_REVOKE_CAPABILITY,
-                vec![VmEffect::RevokeCapability { slot_hash: [BabyBear::new(6); 8], phase_b: None }],
+                vec![VmEffect::RevokeCapability {
+                    slot_hash: [BabyBear::new(6); 8],
+                    phase_b: None,
+                }],
             ),
         ];
 
@@ -4335,7 +4526,10 @@ mod tests {
             let route = cap_open_route_for_run(effects)
                 .unwrap_or_else(|| panic!("{key}: expected a cap-open route for {effects:?}"));
             assert_eq!(route.key, *key, "{key}: route key mismatch");
-            assert_eq!(route.eff_bit, *eff_bit, "{key}: bound the WRONG effect-kind bit");
+            assert_eq!(
+                route.eff_bit, *eff_bit,
+                "{key}: bound the WRONG effect-kind bit"
+            );
             // each fan-out effect binds its OWN bit — never the transfer bit (unless it IS transfer).
             if *key != "transferCapOpenTBVmDescriptor2R24"
                 && *key != "attenuateCapOpenEffVmDescriptor2R24"
@@ -4359,7 +4553,10 @@ mod tests {
         // NEGATIVE: a multi-effect run is not a single cap-open route (the appendix opens one cap).
         assert!(
             cap_open_route_for_run(&[
-                VmEffect::Transfer { amount: 1, direction: 1 },
+                VmEffect::Transfer {
+                    amount: 1,
+                    direction: 1
+                },
                 VmEffect::RefreshDelegation {
                     child_hash: [BabyBear::new(7); 8],
                     snapshot_value: [BabyBear::new(8); 8],
@@ -4431,8 +4628,14 @@ mod tests {
         // (`0x52 ⊑ 0xFF`). A wrong/absent key fails closed.
         let held_mask = BabyBear::new(0xFF);
         let clist_leaves = vec![
-            dregg_circuit::heap_root::HeapLeaf { addr: chosen[0], value: held_mask }, // held key → broad held mask
-            dregg_circuit::heap_root::HeapLeaf { addr: other[0], value: other[3] },
+            dregg_circuit::heap_root::HeapLeaf {
+                addr: chosen[0],
+                value: held_mask,
+            }, // held key → broad held mask
+            dregg_circuit::heap_root::HeapLeaf {
+                addr: other[0],
+                value: other[3],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: CapLeaf {
@@ -4461,8 +4664,7 @@ mod tests {
 
         let mut pk = [0u8; 32];
         pk[0] = 7;
-        let mut before_cell =
-            dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
         before_cell.permissions = dregg_cell::Permissions {
             send: dregg_cell::AuthRequired::None,
             receive: dregg_cell::AuthRequired::None,
@@ -4481,8 +4683,20 @@ mod tests {
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
 
         // PROVE the cap-open leg (self-verifies internally) and re-verify it through the live
         // verify path with the cap-open vk_hash.
@@ -4559,8 +4773,14 @@ mod tests {
         let open = CapOpenWitness::build(&[other, chosen], 1).expect("cap-open witness builds");
         let held_mask = BabyBear::new(0xFF);
         let clist_leaves = vec![
-            dregg_circuit::heap_root::HeapLeaf { addr: chosen[0], value: held_mask },
-            dregg_circuit::heap_root::HeapLeaf { addr: other[0], value: other[3] },
+            dregg_circuit::heap_root::HeapLeaf {
+                addr: chosen[0],
+                value: held_mask,
+            },
+            dregg_circuit::heap_root::HeapLeaf {
+                addr: other[0],
+                value: other[3],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: CapLeaf {
@@ -4601,8 +4821,20 @@ mod tests {
         let _ = after_cell.state.increment_nonce();
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &[[3u8; 32], [4u8; 32]]);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &[[3u8; 32], [4u8; 32]]);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &[[3u8; 32], [4u8; 32]],
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &[[3u8; 32], [4u8; 32]],
+        );
 
         let route = cap_open_route_for_run(&effects).expect("attenuate is a wired cap-open route");
         let effective_key = cap_open_effective_key(&route, &cap);
@@ -4613,11 +4845,15 @@ mod tests {
         );
 
         // PROVE WIDE: the leg publishes the 8-felt commit at its LAST 16 PIs.
-        let (proof, dpis) =
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None, true)
-                .expect("the WIDE attenuate cap-open leg must prove + self-verify");
+        let (proof, dpis) = prove_effect_vm_cap_open(
+            &initial, &effects, &before_w, &after_w, &cap, &route, None, true,
+        )
+        .expect("the WIDE attenuate cap-open leg must prove + self-verify");
         let n = dpis.len();
-        assert!(n >= 16 + 46, "the WIDE cap-open leg carries the cap-open base PIs + 16 wide commit PIs (got {n})");
+        assert!(
+            n >= 16 + 46,
+            "the WIDE cap-open leg carries the cap-open base PIs + 16 wide commit PIs (got {n})"
+        );
         let proof_bytes = postcard::to_allocvec(&proof).expect("serialize wide cap-open leg");
         let vk_hash = cap_open_wide_vk_hash_by_key(effective_key).expect("wide cap-open vk_hash");
 
@@ -4634,7 +4870,9 @@ mod tests {
             verify_effect_vm_rotated_with_cutover(&proof_bytes, &forged, &vk_hash).is_err(),
             "a forged 8-felt commit PI on the wide cap-open leg MUST be REJECTED (the wide carrier binds it)"
         );
-        eprintln!("WIDE CAP-OPEN GREEN: the attenuate cap-open authority-crown leg binds the 8-felt ~124-bit commit.");
+        eprintln!(
+            "WIDE CAP-OPEN GREEN: the attenuate cap-open authority-crown leg binds the 8-felt ~124-bit commit."
+        );
     }
 
     /// RESIDUAL (b) — the CROSS-VAT Transfer-via-granted-cap routes the TRANSFER cap-open END-TO-END,
@@ -4699,7 +4937,10 @@ mod tests {
         // the TRANSFER base constraints are satisfied; the cap-open appendix rides on top.
         let before_balance: u64 = 1000;
         let initial = CellState::new(before_balance, 0);
-        let effects = vec![VmEffect::Transfer { amount: 100, direction: 1 }];
+        let effects = vec![VmEffect::Transfer {
+            amount: 100,
+            direction: 1,
+        }];
         let rot = rotation_for_initial(&initial, &effects);
         let before_w = rot.before.clone();
         let after_w = rot.after.clone();
@@ -4718,14 +4959,23 @@ mod tests {
         // (EFFECT_GRANT_CAPABILITY = 1<<2 = 4, not EFFECT_TRANSFER = 2) is refused at witness build.
         const EFFECT_GRANT: u32 = 1 << 2;
         let wrong_facet = CapMembershipWitness {
-            leaf: CapLeaf { mask_lo: BabyBear::new(EFFECT_GRANT), ..cap.leaf },
+            leaf: CapLeaf {
+                mask_lo: BabyBear::new(EFFECT_GRANT),
+                ..cap.leaf
+            },
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
         };
         assert!(
-            prove_effect_vm_cap_open_transfer(&initial, &effects, &before_w, &after_w, &wrong_facet)
-                .is_err(),
+            prove_effect_vm_cap_open_transfer(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &wrong_facet
+            )
+            .is_err(),
             "a cap permitting a DIFFERENT effect (grant, not transfer) MUST be refused (fail-closed)"
         );
 
@@ -4772,7 +5022,8 @@ mod tests {
                 transfer_caveat_manifest, widen_to_cap_open_tb,
             };
             // #225: the LIVE transfer cap-open is the TURN-BOUND descriptor (409 wide, 41 PIs).
-            let json = cap_open_descriptor_json_by_key("transferCapOpenTBVmDescriptor2R24").unwrap();
+            let json =
+                cap_open_descriptor_json_by_key("transferCapOpenTBVmDescriptor2R24").unwrap();
             let desc = parse_vm_descriptor2(json).unwrap();
             let before =
                 RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap();
@@ -4887,10 +5138,20 @@ mod tests {
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w =
-            rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-        let after_w =
-            rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
 
         // The revoke route: key `revokeCapOpenVmDescriptor2R24`, eff_bit EFFECT_DELEGATION_OPS,
         // attenuate-family patch.
@@ -4909,9 +5170,10 @@ mod tests {
         // the WRITE wrapper (where the cap-tree REMOVE is on-the-wire-verifiable). The descriptor selected
         // is `revokeCapOpenVmDescriptor2R24` (no write-op) because `cap.clist_leaves` is empty.
         assert!(cap.clist_leaves.is_empty());
-        let (proof, dpis) =
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None, false)
-                .expect("revoke cap-open fan-out leg must prove + self-verify (the proof is VALID)");
+        let (proof, dpis) = prove_effect_vm_cap_open(
+            &initial, &effects, &before_w, &after_w, &cap, &route, None, false,
+        )
+        .expect("revoke cap-open fan-out leg must prove + self-verify (the proof is VALID)");
         let proof_bytes = postcard::to_allocvec(&proof).expect("serialize revoke cap-open leg");
         let vk_hash = cap_open_vk_hash_by_key(route.key).expect("revoke cap-open vk_hash");
         assert!(
@@ -4925,14 +5187,26 @@ mod tests {
         // delegation kind the revoke route binds) is refused at witness build — `from_membership_for`
         // requires mask_lo == route.eff_bit.
         let wrong_facet = CapMembershipWitness {
-            leaf: CapLeaf { mask_lo: BabyBear::new(EFFECT_TRANSFER), ..cap.leaf },
+            leaf: CapLeaf {
+                mask_lo: BabyBear::new(EFFECT_TRANSFER),
+                ..cap.leaf
+            },
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &wrong_facet, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &wrong_facet,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a cap permitting a DIFFERENT effect (transfer, not delegation) MUST be refused (fail-closed)"
         );
 
@@ -5037,8 +5311,10 @@ mod tests {
         // (`V3_STAGED_REGISTRY_TSV`). The registry-availability concern is RESOLVED FAVORABLY — the
         // blocker is the write-witness, NOT a registry gap.
         let json = cap_open_descriptor_json_by_key("revokeDelegationWriteCapOpenVmDescriptor2R24")
-            .expect("the write-bearing wrapper IS in V3_STAGED_REGISTRY_TSV (the registry the SDK \
-                     cap-open route + the light-client verifier both resolve against)");
+            .expect(
+                "the write-bearing wrapper IS in V3_STAGED_REGISTRY_TSV (the registry the SDK \
+                     cap-open route + the light-client verifier both resolve against)",
+            );
         let desc = parse_vm_descriptor2(json).expect("write wrapper descriptor parses");
         // It genuinely carries the cap-tree write op (so it genuinely needs the witness heap).
         assert!(
@@ -5076,8 +5352,7 @@ mod tests {
         }];
         let mut pk = [0u8; 32];
         pk[0] = 7;
-        let mut before_cell =
-            dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
         before_cell.permissions = dregg_cell::Permissions {
             send: dregg_cell::AuthRequired::None,
             receive: dregg_cell::AuthRequired::None,
@@ -5095,10 +5370,20 @@ mod tests {
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w =
-            rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-        let after_w =
-            rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
 
         let cap_w = CapOpenWitness {
             leaf: chosen,
@@ -5129,8 +5414,7 @@ mod tests {
             }
         }
 
-        let before =
-            RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap();
+        let before = RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap();
         let after = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot).unwrap();
         let caveat = empty_caveat_manifest();
         let (mut trace, dpis) =
@@ -5144,7 +5428,7 @@ mod tests {
         // reason the no-op trace built here does not exercise the no-silent-forge property; the GENUINE
         // guardrail (below) needs a REAL cap-root change (213 != 264).
         {
-            use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, BEFORE_BASE, B_CAP_ROOT};
+            use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CAP_ROOT, BEFORE_BASE};
             assert_eq!(
                 trace[0][BEFORE_BASE + B_CAP_ROOT],
                 trace[0][AFTER_BASE + B_CAP_ROOT],
@@ -5165,14 +5449,20 @@ mod tests {
         // the revoked key → the bridge itself refuses); the witness-bearing honest route proves +
         // light-client-verifies in `cap_write_revoke_proves_and_verifies_light_client`.)
         use dregg_circuit::effect_vm::trace_rotated::{
-            generate_rotated_cap_write_base, AFTER_BASE, BEFORE_BASE, B_CAP_ROOT, CapTreeWriteOp,
+            AFTER_BASE, B_CAP_ROOT, BEFORE_BASE, CapTreeWriteOp, generate_rotated_cap_write_base,
         };
         use dregg_circuit::heap_root::HeapLeaf;
 
         let revoked_key = chosen[0]; // the consumed cap's slot_hash (the key the REMOVE targets)
         let clist_leaves = vec![
-            HeapLeaf { addr: revoked_key, value: chosen[1] }, // the revoked cap MUST be present
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: revoked_key,
+                value: chosen[1],
+            }, // the revoked cap MUST be present
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let (mut wtrace, mut wdpis) =
             generate_rotated_effect_vm_trace(&initial, &effects, &before, &after, &caveat).unwrap();
@@ -5195,7 +5485,11 @@ mod tests {
             "the cap-write bridge MUST advance the rotated cap-root (213 != 264) — a genuine REMOVE; \
              else this guardrail would be vacuous (a no-op map_op needs no witness)"
         );
-        assert_eq!(heaps, vec![clist_leaves], "the bridge returns the c-list as the map heap");
+        assert_eq!(
+            heaps,
+            vec![clist_leaves],
+            "the bridge returns the c-list as the map heap"
+        );
 
         widen_to_cap_open(&mut wtrace, &cap_w).unwrap();
 
@@ -5243,8 +5537,9 @@ mod tests {
             MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
         };
         use dregg_circuit::effect_vm::trace_rotated::{
-            generate_rotated_cap_write_base, generate_rotated_effect_vm_trace, empty_caveat_manifest,
-            CapTreeWriteOp, RotatedBlockWitness, AFTER_BASE, BEFORE_BASE, B_CAP_ROOT,
+            AFTER_BASE, B_CAP_ROOT, BEFORE_BASE, CapTreeWriteOp, RotatedBlockWitness,
+            empty_caveat_manifest, generate_rotated_cap_write_base,
+            generate_rotated_effect_vm_trace,
         };
         use dregg_circuit::heap_root::HeapLeaf;
         use dregg_turn::rotation_witness as rw;
@@ -5295,15 +5590,26 @@ mod tests {
         // no witness heap rooted at the BEFORE cap-root the prover CANNOT realize it — it must FAIL CLOSED.
         let narrowed_key = BabyBear::new(0xA77E);
         let clist_leaves = vec![
-            HeapLeaf { addr: narrowed_key, value: BabyBear::new(0xFF) }, // the narrowed slot MUST be present
-            HeapLeaf { addr: BabyBear::new(0xBEEF), value: BabyBear::new(123) },
+            HeapLeaf {
+                addr: narrowed_key,
+                value: BabyBear::new(0xFF),
+            }, // the narrowed slot MUST be present
+            HeapLeaf {
+                addr: BabyBear::new(0xBEEF),
+                value: BabyBear::new(123),
+            },
         ];
         let (mut wtrace, mut wdpis) =
             generate_rotated_effect_vm_trace(&initial, &effects, &before, &after, &caveat).unwrap();
         // A Remove produces a genuine 213 != 264 advance (the detector only needs a real cap-root change to
         // exercise that the descriptor's var-264-binding map_op refuses a witnessless proof).
         let heaps = generate_rotated_cap_write_base(
-            &mut wtrace, &mut wdpis, CapTreeWriteOp::Remove, &clist_leaves, narrowed_key, None,
+            &mut wtrace,
+            &mut wdpis,
+            CapTreeWriteOp::Remove,
+            &clist_leaves,
+            narrowed_key,
+            None,
         )
         .expect("the cap-tree->map_heaps bridge builds the genuine BEFORE/AFTER roots");
         assert_ne!(
@@ -5312,7 +5618,11 @@ mod tests {
             "the cap-write bridge MUST advance the rotated cap-root (213 != 264) — else this guardrail \
              would be vacuous (a no-op map_op needs no witness)"
         );
-        assert_eq!(heaps, vec![clist_leaves], "the bridge returns the c-list as the map heap");
+        assert_eq!(
+            heaps,
+            vec![clist_leaves],
+            "the bridge returns the c-list as the map heap"
+        );
 
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -5348,8 +5658,9 @@ mod tests {
             MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
         };
         use dregg_circuit::effect_vm::trace_rotated::{
-            generate_rotated_cap_write_base, generate_rotated_effect_vm_trace, empty_caveat_manifest,
-            CapTreeWriteOp, RotatedBlockWitness, AFTER_BASE, BEFORE_BASE, B_CAP_ROOT,
+            AFTER_BASE, B_CAP_ROOT, BEFORE_BASE, CapTreeWriteOp, RotatedBlockWitness,
+            empty_caveat_manifest, generate_rotated_cap_write_base,
+            generate_rotated_effect_vm_trace,
         };
         use dregg_circuit::heap_root::HeapLeaf;
         use dregg_turn::rotation_witness as rw;
@@ -5394,13 +5705,24 @@ mod tests {
 
         let revoked_key = BabyBear::new(0x5C);
         let clist_leaves = vec![
-            HeapLeaf { addr: revoked_key, value: BabyBear::new(7) }, // the revoked slot MUST be present
-            HeapLeaf { addr: BabyBear::new(0xBEEF), value: BabyBear::new(123) },
+            HeapLeaf {
+                addr: revoked_key,
+                value: BabyBear::new(7),
+            }, // the revoked slot MUST be present
+            HeapLeaf {
+                addr: BabyBear::new(0xBEEF),
+                value: BabyBear::new(123),
+            },
         ];
         let (mut wtrace, mut wdpis) =
             generate_rotated_effect_vm_trace(&initial, &effects, &before, &after, &caveat).unwrap();
         let heaps = generate_rotated_cap_write_base(
-            &mut wtrace, &mut wdpis, CapTreeWriteOp::Remove, &clist_leaves, revoked_key, None,
+            &mut wtrace,
+            &mut wdpis,
+            CapTreeWriteOp::Remove,
+            &clist_leaves,
+            revoked_key,
+            None,
         )
         .expect("the cap-tree->map_heaps bridge builds the genuine BEFORE/AFTER roots");
         assert_ne!(
@@ -5409,7 +5731,11 @@ mod tests {
             "the cap-write bridge MUST advance the rotated cap-root (213 != 264) — else this guardrail \
              would be vacuous"
         );
-        assert_eq!(heaps, vec![clist_leaves], "the bridge returns the c-list as the map heap");
+        assert_eq!(
+            heaps,
+            vec![clist_leaves],
+            "the bridge returns the c-list as the map heap"
+        );
 
         let prev_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -5456,8 +5782,8 @@ mod tests {
         use dregg_circuit::lean_descriptor_air::LeanExpr;
         let json = cap_open_descriptor_json_by_key("revokeDelegationWriteCapOpenVmDescriptor2R24")
             .expect("the write wrapper is in V3_STAGED_REGISTRY_TSV");
-        let desc =
-            dregg_circuit::descriptor_ir2::parse_vm_descriptor2(json).expect("write wrapper parses");
+        let desc = dregg_circuit::descriptor_ir2::parse_vm_descriptor2(json)
+            .expect("write wrapper parses");
 
         // The AFTER cap-root is now the ROTATED-BLOCK cap-root limb (var 264 = `AFTER_BASE + B_CAP_ROOT`),
         // NOT the v1-state cap-root col 87 (the `264 == 87` weld was dropped, so the cap-root advances on
@@ -5479,7 +5805,9 @@ mod tests {
         let map_op_87_count = desc
             .constraints
             .iter()
-            .filter(|c| matches!(c, VmConstraint2::MapOp(m) if matches!(m.new_root, LeanExpr::Var(87))))
+            .filter(
+                |c| matches!(c, VmConstraint2::MapOp(m) if matches!(m.new_root, LeanExpr::Var(87))),
+            )
             .count();
         assert_eq!(
             map_op_87_count, 0,
@@ -5494,11 +5822,19 @@ mod tests {
         let revoked_key = BabyBear::new(0xDE16A);
         let revoked_value = BabyBear::new(7_777);
         let clist_leaves = vec![
-            HeapLeaf { addr: revoked_key, value: revoked_value },
-            HeapLeaf { addr: BabyBear::new(0xBEEF), value: BabyBear::new(123) },
+            HeapLeaf {
+                addr: revoked_key,
+                value: revoked_value,
+            },
+            HeapLeaf {
+                addr: BabyBear::new(0xBEEF),
+                value: BabyBear::new(123),
+            },
         ];
         let initial = CellState::new(100_000, 0);
-        let effects = vec![VmEffect::RevokeDelegation { child_hash: [BabyBear::new(0x5C); 8] }];
+        let effects = vec![VmEffect::RevokeDelegation {
+            child_hash: [BabyBear::new(0x5C); 8],
+        }];
         let mut pk = [0u8; 32];
         pk[0] = 7;
         let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], 100_000);
@@ -5518,17 +5854,27 @@ mod tests {
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
         let before_w = dregg_turn::rotation_witness::produce(
-            &before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log,
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
         );
         let after_w = dregg_turn::rotation_witness::produce(
-            &after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log,
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
         );
         let before = dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness::new(
-            before_w.pre_limbs.clone(), before_w.iroot,
+            before_w.pre_limbs.clone(),
+            before_w.iroot,
         )
         .unwrap();
         let after = dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness::new(
-            after_w.pre_limbs.clone(), after_w.iroot,
+            after_w.pre_limbs.clone(),
+            after_w.iroot,
         )
         .unwrap();
         let caveat = dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest();
@@ -5538,13 +5884,25 @@ mod tests {
             )
             .unwrap();
         let heaps = dregg_circuit::effect_vm::trace_rotated::generate_rotated_cap_write_base(
-            &mut trace, &mut dpis, CapTreeWriteOp::Remove, &clist_leaves, revoked_key, None,
+            &mut trace,
+            &mut dpis,
+            CapTreeWriteOp::Remove,
+            &clist_leaves,
+            revoked_key,
+            None,
         )
         .expect("the cap-tree->map_heaps bridge builds the genuine BEFORE/AFTER roots");
-        assert_eq!(heaps, vec![clist_leaves.clone()], "the bridge returns the c-list as the map heap");
+        assert_eq!(
+            heaps,
+            vec![clist_leaves.clone()],
+            "the bridge returns the c-list as the map heap"
+        );
 
         // A c-list MISSING the revoked key fails closed (the guardrail — no fabricated post-root).
-        let absent = vec![HeapLeaf { addr: BabyBear::new(0xBEEF), value: BabyBear::new(123) }];
+        let absent = vec![HeapLeaf {
+            addr: BabyBear::new(0xBEEF),
+            value: BabyBear::new(123),
+        }];
         let (mut t2, mut d2) =
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_effect_vm_trace(
                 &initial, &effects, &before, &after, &caveat,
@@ -5552,7 +5910,12 @@ mod tests {
             .unwrap();
         assert!(
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_cap_write_base(
-                &mut t2, &mut d2, CapTreeWriteOp::Remove, &absent, revoked_key, None,
+                &mut t2,
+                &mut d2,
+                CapTreeWriteOp::Remove,
+                &absent,
+                revoked_key,
+                None,
             )
             .is_err(),
             "a c-list MISSING the revoked key MUST fail closed (no fabricated post-cap-root)"
@@ -5627,8 +5990,14 @@ mod tests {
         // value = target (the shape `turn_proving::cap_write_clist_leaves` produces from the real ledger).
         // The revoked cap's slot_hash (0xDE16A) IS present — the REMOVE has a membership witness.
         let clist_leaves = vec![
-            HeapLeaf { addr: chosen[0], value: chosen[1] },
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: chosen[0],
+                value: chosen[1],
+            },
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -5667,7 +6036,10 @@ mod tests {
         // THE RE-POINT IS ON: the revoke route now carries `write: Some((...WriteCapOpen..., Remove))`,
         // and `cap_open_effective_key` selects the WRITE wrapper because the c-list is non-empty.
         let route = cap_open_route_for_run(&effects).expect("revoke is a wired cap-open route");
-        assert!(route.write.is_some(), "the revoke route MUST carry the write wrapper (re-point ON)");
+        assert!(
+            route.write.is_some(),
+            "the revoke route MUST carry the write wrapper (re-point ON)"
+        );
         let effective_key = cap_open_effective_key(&route, &cap);
         assert_eq!(
             effective_key, "revokeDelegationWriteCapOpenVmDescriptor2R24",
@@ -5787,7 +6159,10 @@ mod tests {
         // wrapper's map_op REMOVE has no membership witness for the key → the prover FAILS CLOSED. A wrong
         // post-cap-root CANNOT be proven (no silent forge).
         let forged_clist = vec![
-            HeapLeaf { addr: other[0], value: other[1] }, // only the OTHER cap; the revoked key is ABSENT
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            }, // only the OTHER cap; the revoked key is ABSENT
         ];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -5796,8 +6171,17 @@ mod tests {
             clist_leaves: forged_clist,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forged, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_forged,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a c-list MISSING the revoked key MUST fail closed — a fabricated post-cap-root is NOT provable"
         );
 
@@ -5819,12 +6203,20 @@ mod tests {
             "an empty c-list falls back to the authority-only route"
         );
         let (proof_ao, dpis_ao) = prove_effect_vm_cap_open(
-            &initial, &effects, &before_w, &after_w, &cap_authority_only, &route, None,
+            &initial,
+            &effects,
+            &before_w,
+            &after_w,
+            &cap_authority_only,
+            &route,
+            None,
             false,
         )
         .expect("the authority-only cap-open still PROVES (the membership crown is valid)");
-        let proof_ao_bytes = postcard::to_allocvec(&proof_ao).expect("serialize authority-only leg");
-        let vk_ao = cap_open_vk_hash_by_key("revokeCapOpenVmDescriptor2R24").expect("authority-only vk_hash");
+        let proof_ao_bytes =
+            postcard::to_allocvec(&proof_ao).expect("serialize authority-only leg");
+        let vk_ao = cap_open_vk_hash_by_key("revokeCapOpenVmDescriptor2R24")
+            .expect("authority-only vk_hash");
         assert!(
             verify_effect_vm_rotated_with_cutover(&proof_ao_bytes, &dpis_ao, &vk_ao).is_err(),
             "the AUTHORITY-only revoke cap-open is now light-client-REJECTED (the tooth is ON) — the \
@@ -5896,8 +6288,14 @@ mod tests {
 
         // THE GENUINE c-list — the revoked cap's slot_hash (0xCA9) IS present (the REMOVE has a witness).
         let clist_leaves = vec![
-            HeapLeaf { addr: chosen[0], value: chosen[1] },
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: chosen[0],
+                value: chosen[1],
+            },
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -5935,7 +6333,8 @@ mod tests {
         let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
 
         // THE RE-POINT IS ON: the revokeCapability route now carries `write: Some((...WriteCapOpen..., Remove))`.
-        let route = cap_open_route_for_run(&effects).expect("revokeCapability is a wired cap-open route");
+        let route =
+            cap_open_route_for_run(&effects).expect("revokeCapability is a wired cap-open route");
         assert!(
             route.write.is_some(),
             "the revokeCapability route MUST carry the write wrapper (route-forge close)"
@@ -5966,7 +6365,10 @@ mod tests {
         // wrapper's map_op REMOVE has no membership witness → the prover FAILS CLOSED. A wrong
         // post-cap-root CANNOT be proven (no silent forge — the route-forge antibody).
         let forged_clist = vec![
-            HeapLeaf { addr: other[0], value: other[1] }, // only the OTHER cap; the revoked key is ABSENT
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            }, // only the OTHER cap; the revoked key is ABSENT
         ];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -5975,8 +6377,17 @@ mod tests {
             clist_leaves: forged_clist,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forged, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_forged,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a c-list MISSING the revoked key MUST fail closed — a fabricated post-cap-root is NOT provable"
         );
 
@@ -6000,7 +6411,8 @@ mod tests {
             false,
         )
         .expect("the authority-only revokeCapability cap-open still PROVES (the membership crown is valid)");
-        let proof_ao_bytes = postcard::to_allocvec(&proof_ao).expect("serialize authority-only leg");
+        let proof_ao_bytes =
+            postcard::to_allocvec(&proof_ao).expect("serialize authority-only leg");
         let vk_ao = cap_open_vk_hash_by_key("revokeCapabilityCapOpenVmDescriptor2R24")
             .expect("authority-only vk_hash");
         assert!(
@@ -6087,8 +6499,14 @@ mod tests {
         // THE GENUINE delegations leaf-set — the re-armed child key (0xDE16) IS present (the UPDATE has a
         // membership witness; refresh is an update-at-key, so the key stays present).
         let clist_leaves = vec![
-            HeapLeaf { addr: chosen[0], value: chosen[1] },
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: chosen[0],
+                value: chosen[1],
+            },
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -6107,8 +6525,16 @@ mod tests {
         let mut snapshot_value = [BabyBear::ZERO; 8];
         snapshot_value[0] = genuine_snapshot;
         let effects = vec![VmEffect::RefreshDelegation {
-            child_hash: [chosen[0], BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
-                         BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+            child_hash: [
+                chosen[0],
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ],
             snapshot_value,
         }];
         let mut pk = [0u8; 32];
@@ -6168,8 +6594,8 @@ mod tests {
         // the `Update` map_op rebinds: the KEEP_MASK MUST be the genuine snapshot, confirming the on-the-wire
         // post-DELEG-root binds the specific snapshot the producer claims (a forged snapshot would write a
         // different value → a different effects_hash + post-root, light-client-distinguishable).
-        let (_anchor_key, keep_mask) =
-            cap_insert_payload_for(&effects, &cap).expect("refresh derives a (key, snapshot) payload");
+        let (_anchor_key, keep_mask) = cap_insert_payload_for(&effects, &cap)
+            .expect("refresh derives a (key, snapshot) payload");
         assert_eq!(
             keep_mask, genuine_snapshot,
             "the live lead writes the GENUINE snapshot value (the carried `snapshot_value[0]`), NOT the \
@@ -6186,8 +6612,16 @@ mod tests {
         let mut forged_snapshot_value = [BabyBear::ZERO; 8];
         forged_snapshot_value[0] = BabyBear::new(0xBAD0_F00D);
         let forged_snapshot_effects = vec![VmEffect::RefreshDelegation {
-            child_hash: [chosen[0], BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
-                         BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+            child_hash: [
+                chosen[0],
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ],
             snapshot_value: forged_snapshot_value,
         }];
         let (proof_forge, dpis_forge) = prove_effect_vm_cap_open(
@@ -6198,7 +6632,8 @@ mod tests {
         let proof_forge_bytes =
             postcard::to_allocvec(&proof_forge).expect("serialize forged-snapshot leg");
         assert!(
-            verify_effect_vm_rotated_with_cutover(&proof_forge_bytes, &dpis_forge, &vk_hash).is_err()
+            verify_effect_vm_rotated_with_cutover(&proof_forge_bytes, &dpis_forge, &vk_hash)
+                .is_err()
                 || dpis_forge != dpis,
             "a forged-snapshot refresh binds a DIFFERENT effects_hash / post-DELEG-root than the honest turn — \
              the light client (anchored to the honest effects_hash) cannot be fooled into accepting it as the \
@@ -6209,7 +6644,10 @@ mod tests {
         // wrapper's `Update` map_op has no membership witness → the prover FAILS CLOSED. A wrong
         // post-DELEG-root CANNOT be proven (no silent forge — the DELEG-forge antibody).
         let forged_clist = vec![
-            HeapLeaf { addr: other[0], value: other[1] }, // only the OTHER edge; the re-armed key is ABSENT
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            }, // only the OTHER edge; the re-armed key is ABSENT
         ];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -6218,8 +6656,17 @@ mod tests {
             clist_leaves: forged_clist,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forged, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_forged,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a leaf-set MISSING the re-armed key MUST fail closed — a fabricated post-DELEG-root is NOT provable"
         );
 
@@ -6243,7 +6690,8 @@ mod tests {
             false,
         )
         .expect("the authority-only refreshDelegation cap-open still PROVES (the membership crown is valid)");
-        let proof_ao_bytes = postcard::to_allocvec(&proof_ao).expect("serialize authority-only leg");
+        let proof_ao_bytes =
+            postcard::to_allocvec(&proof_ao).expect("serialize authority-only leg");
         let vk_ao = cap_open_vk_hash_by_key("refreshDelegationCapOpenVmDescriptor2R24")
             .expect("authority-only vk_hash");
         assert!(
@@ -6318,11 +6766,23 @@ mod tests {
         // refuses a present/colliding key). The c-list carries the anchor (present, opened by the crown)
         // and the other held cap; the fresh edge key is NOT among them.
         let (fresh_key, fresh_value) = fresh_edge;
-        assert_ne!(fresh_key, anchor[0], "the fresh edge MUST be distinct from the anchor key");
-        assert_ne!(fresh_key, other[0], "the fresh edge MUST be absent from the c-list");
+        assert_ne!(
+            fresh_key, anchor[0],
+            "the fresh edge MUST be distinct from the anchor key"
+        );
+        assert_ne!(
+            fresh_key, other[0],
+            "the fresh edge MUST be absent from the c-list"
+        );
         let clist_leaves = vec![
-            HeapLeaf { addr: anchor[0], value: anchor[1] },
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: anchor[0],
+                value: anchor[1],
+            },
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&anchor),
@@ -6361,7 +6821,11 @@ mod tests {
         assert!(
             matches!(
                 route.write,
-                Some((_, dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert, _))
+                Some((
+                    _,
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert,
+                    _
+                ))
             ),
             "the grant route MUST carry the INSERT write wrapper"
         );
@@ -6399,7 +6863,10 @@ mod tests {
 
         // FORGE: a c-list MISSING the anchor key — the held-authority `read` op has no membership witness,
         // so the bridge FAILS CLOSED. A fabricated post-cap-root is NOT provable (no silent forge).
-        let forged_clist = vec![HeapLeaf { addr: other[0], value: other[1] }];
+        let forged_clist = vec![HeapLeaf {
+            addr: other[0],
+            value: other[1],
+        }];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&anchor),
             siblings: built.siblings.to_vec(),
@@ -6407,16 +6874,31 @@ mod tests {
             clist_leaves: forged_clist,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forged, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_forged,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a c-list MISSING the anchor key MUST fail closed — a fabricated post-cap-root is NOT provable"
         );
 
         // FORGE 2: a c-list that ALREADY contains the fresh edge key — the sorted `insert_witness` refuses
         // an already-present key, so the bridge FAILS CLOSED (no fabricated post-root for a no-op insert).
         let collide_clist = vec![
-            HeapLeaf { addr: anchor[0], value: anchor[1] },
-            HeapLeaf { addr: fresh_key, value: fresh_value }, // the fresh key is ALREADY present
+            HeapLeaf {
+                addr: anchor[0],
+                value: anchor[1],
+            },
+            HeapLeaf {
+                addr: fresh_key,
+                value: fresh_value,
+            }, // the fresh key is ALREADY present
         ];
         let cap_collide = CapMembershipWitness {
             leaf: leaf_cl(&anchor),
@@ -6425,9 +6907,228 @@ mod tests {
             clist_leaves: collide_clist,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_collide, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_collide,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a c-list ALREADY containing the fresh edge key MUST fail closed (insert refuses a present key)"
+        );
+    }
+
+    /// **THE WIDE WRITE-CAP FLAG-DAY harness (§10 close — no ~31-bit waist for a WRITE-cap turn).** Given
+    /// an INSERT-cap-write effect + its route, this proves the WRITE wrapper WIDE (the 8-felt ~124-bit
+    /// commit appended past the membership crown + the cap-tree write `map_op`), light-client-verifies the
+    /// wide leg, exercises the forge tooth on a wide commit PI, AND fires the REJECT TOOTH: a NARROW
+    /// (1-felt V3) write-cap leg is now REJECTED by the cutover verifier (its wide twin exists, so the V3
+    /// fallback filters it OUT — the producer is forced onto the wide route). Mirrors
+    /// `sovereign_rotated_wide`'s flag-day shape for the WRITE-cap tail.
+    #[cfg(feature = "prover")]
+    fn run_insert_cap_write_wide_flag_day(
+        effect: VmEffect,
+        fresh_edge: (BabyBear, BabyBear),
+        route_eff_bit: u32,
+        expected_write_key: &str,
+    ) {
+        use dregg_circuit::cap_root::CapLeaf;
+        use dregg_circuit::effect_vm::trace_rotated::{
+            CapOpenWitness, FACET_MASK_HI, SIGNATURE_AUTH_TAG,
+        };
+        use dregg_circuit::heap_root::HeapLeaf;
+        use dregg_turn::rotation_witness as rw;
+
+        let anchor: [BabyBear; 7] = [
+            BabyBear::new(0xA0C0),
+            BabyBear::new(7_777),
+            BabyBear::new(SIGNATURE_AUTH_TAG),
+            BabyBear::new(route_eff_bit),
+            BabyBear::new(FACET_MASK_HI),
+            BabyBear::new(0x00FF_FFFF),
+            BabyBear::new(99),
+        ];
+        let other: [BabyBear; 7] = [
+            BabyBear::new(0xBEEF),
+            BabyBear::new(123),
+            BabyBear::new(1),
+            BabyBear::new(route_eff_bit),
+            BabyBear::new(0),
+            BabyBear::new(9),
+            BabyBear::new(0),
+        ];
+        let leaf_cl = |l: &[BabyBear; 7]| CapLeaf {
+            slot_hash: l[0],
+            target: l[1],
+            auth_tag: l[2],
+            mask_lo: l[3],
+            mask_hi: l[4],
+            expiry: l[5],
+            breadstuff: l[6],
+        };
+        let built = CapOpenWitness::build_for(&[other, anchor], 1, route_eff_bit)
+            .expect("cap-open membership path builds for the anchor");
+        let (fresh_key, fresh_value) = fresh_edge;
+        let clist_leaves = vec![
+            HeapLeaf {
+                addr: anchor[0],
+                value: anchor[1],
+            },
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
+        ];
+        let cap = CapMembershipWitness {
+            leaf: leaf_cl(&anchor),
+            siblings: built.siblings.to_vec(),
+            directions: built.directions.to_vec(),
+            clist_leaves: clist_leaves.clone(),
+        };
+
+        let before_balance: u64 = 100_000;
+        let initial = CellState::new(before_balance, 0);
+        let effects = vec![effect];
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        before_cell.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let mut after_cell = before_cell.clone();
+        let _ = after_cell.state.increment_nonce();
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
+        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+
+        let route = cap_open_route_for_run(&effects).expect("a wired cap-open route");
+        let effective_key = cap_open_effective_key(&route, &cap);
+        assert_eq!(
+            effective_key, expected_write_key,
+            "the effective key is the WRITE wrapper"
+        );
+        // THE §10 PRECONDITION: the WRITE wrapper now HAS a proven wide twin (it goes WIDE).
+        assert!(
+            cap_open_key_has_wide_twin(effective_key),
+            "the WRITE-cap key {effective_key} MUST have a proven wide twin (§10 v3RegistryCapOpenWriteWide)"
+        );
+
+        // PROVE WIDE: the WRITE wrapper proves with the 8-felt commit appended past the crown + the
+        // cap-tree write map_op — the honest write-cap turn binds the FULL ~124-bit commit.
+        let (proof_w, dpis_w) =
+            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None, true)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "the WIDE WRITE-cap wrapper ({expected_write_key}) MUST prove — the cap-tree write \
+                         (anchor read + sorted insert) on the rotated cap-root limb PLUS the 8-felt wide \
+                         carriers: {e:?}"
+                    )
+                });
+        let n_w = dpis_w.len();
+        assert!(
+            n_w >= 16,
+            "the WIDE write-cap leg carries the 16 wide commit PIs (got {n_w})"
+        );
+        let proof_w_bytes = postcard::to_allocvec(&proof_w).expect("serialize wide write-cap leg");
+        let vk_w = cap_open_wide_vk_hash_by_key(effective_key).expect("wide write-cap vk_hash");
+        verify_effect_vm_rotated_with_cutover(&proof_w_bytes, &dpis_w, &vk_w).unwrap_or_else(|e| {
+            panic!(
+                "the WIDE WRITE-cap wrapper ({expected_write_key}) MUST light-client-verify (8-felt commit \
+                 bound, cap-tree write on the wire): {e:?}"
+            )
+        });
+
+        // THE FORGE TOOTH on the wide commit: a forged 8-felt commit PI is UNSAT.
+        let mut forged = dpis_w.clone();
+        forged[n_w - 1] = forged[n_w - 1] + BabyBear::new(0x9999);
+        assert!(
+            verify_effect_vm_rotated_with_cutover(&proof_w_bytes, &forged, &vk_w).is_err(),
+            "a forged 8-felt commit PI on the wide write-cap leg MUST be REJECTED (the wide carrier binds it)"
+        );
+
+        // THE REJECT TOOTH (the flag-day's load-bearing half): a NARROW (1-felt V3) write-cap leg is now
+        // REJECTED by the cutover verifier — its wide twin exists, so the V3 fallback FILTERS IT OUT and
+        // the proof verifies under NO accepted descriptor. The producer can no longer dodge the ~124-bit
+        // commit with a 1-felt write-cap leg.
+        let (proof_n, dpis_n) = prove_effect_vm_cap_open(
+            &initial, &effects, &before_w, &after_w, &cap, &route, None, false,
+        )
+        .unwrap_or_else(|e| panic!("the NARROW write-cap leg still PROVES (it is honest): {e:?}"));
+        let proof_n_bytes =
+            postcard::to_allocvec(&proof_n).expect("serialize narrow write-cap leg");
+        let vk_n = cap_open_vk_hash_by_key(effective_key).expect("narrow write-cap vk_hash");
+        assert!(
+            verify_effect_vm_rotated_with_cutover(&proof_n_bytes, &dpis_n, &vk_n).is_err(),
+            "POST-CUTOVER: a NARROW 1-felt write-cap leg ({expected_write_key}) MUST be REJECTED — its wide \
+             twin exists, so the V3 cap-open fallback filters it out (the reject tooth forces the wide route)"
+        );
+        let _ = fresh_key;
+        let _ = fresh_value;
+        eprintln!(
+            "WIDE WRITE-CAP GREEN ({expected_write_key}): the honest leg binds the 8-felt ~124-bit commit; \
+             a narrow 1-felt write-cap leg is REJECTED."
+        );
+    }
+
+    /// **THE WIDE WRITE-CAP FLAG-DAY for delegate (§10).** The `delegateWriteCapOpenVmDescriptor2R24`
+    /// INSERT wrapper now has a proven wide twin: the honest delegate-via-cap turn proves+verifies at the
+    /// 8-felt ~124-bit commit, and a narrow 1-felt delegate write-cap leg is REJECTED post-cutover.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn cap_write_delegate_WIDE_flag_day() {
+        use dregg_circuit::cap_root::CapLeaf;
+        use dregg_circuit::effect_vm::AttenuateWitness;
+        const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
+        let fresh = (BabyBear::new(0xED6E), BabyBear::new(0x0F));
+        let zero_leaf = CapLeaf {
+            slot_hash: BabyBear::ZERO,
+            target: BabyBear::ZERO,
+            auth_tag: BabyBear::ZERO,
+            mask_lo: BabyBear::ZERO,
+            mask_hi: BabyBear::ZERO,
+            expiry: BabyBear::ZERO,
+            breadstuff: BabyBear::ZERO,
+        };
+        let phase_b = AttenuateWitness {
+            held: zero_leaf,
+            granted: zero_leaf,
+            siblings: Vec::new(),
+            directions: Vec::new(),
+            held_tier: 0,
+            granted_tier: 0,
+            held_expiry_height: None,
+            granted_expiry_height: None,
+        };
+        run_insert_cap_write_wide_flag_day(
+            VmEffect::GrantCapability {
+                cap_entry: [
+                    fresh.0,
+                    fresh.1,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+                phase_b: Some(Box::new(phase_b)),
+            },
+            fresh,
+            EFFECT_DELEGATION_OPS,
+            "delegateWriteCapOpenVmDescriptor2R24",
         );
     }
 
@@ -6469,8 +7170,14 @@ mod tests {
         run_insert_cap_write_prove_verify_forge(
             VmEffect::GrantCapability {
                 cap_entry: [
-                    fresh.0, fresh.1, BabyBear::ZERO, BabyBear::ZERO,
-                    BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+                    fresh.0,
+                    fresh.1,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
                 ],
                 phase_b: Some(Box::new(phase_b)),
             },
@@ -6541,8 +7248,14 @@ mod tests {
         // A NON-attenuating grant (no phase-B narrowing) → the plain `delegateWriteCapOpen` wrapper.
         let mk_effect = || VmEffect::GrantCapability {
             cap_entry: [
-                fresh_key, fresh_value, BabyBear::ZERO, BabyBear::ZERO,
-                BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+                fresh_key,
+                fresh_value,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
             ],
             phase_b: Some(Box::new(AttenuateWitness {
                 held: zero_leaf,
@@ -6623,13 +7336,26 @@ mod tests {
             BabyBear::new(9),
             BabyBear::new(0),
         ];
-        assert_ne!(fresh_key, anchor_deleg[0], "the fresh edge MUST be distinct from the anchor key");
-        assert_ne!(fresh_key, other_deleg[0], "the fresh edge MUST be absent from the c-list");
-        let built_deleg = CapOpenWitness::build_for(&[other_deleg, anchor_deleg], 1, EFFECT_DELEGATION_OPS)
-            .expect("the DELEGATION_OPS membership path builds for the anchor");
+        assert_ne!(
+            fresh_key, anchor_deleg[0],
+            "the fresh edge MUST be distinct from the anchor key"
+        );
+        assert_ne!(
+            fresh_key, other_deleg[0],
+            "the fresh edge MUST be absent from the c-list"
+        );
+        let built_deleg =
+            CapOpenWitness::build_for(&[other_deleg, anchor_deleg], 1, EFFECT_DELEGATION_OPS)
+                .expect("the DELEGATION_OPS membership path builds for the anchor");
         let clist_leaves = vec![
-            HeapLeaf { addr: anchor_deleg[0], value: anchor_deleg[1] },
-            HeapLeaf { addr: other_deleg[0], value: other_deleg[1] },
+            HeapLeaf {
+                addr: anchor_deleg[0],
+                value: anchor_deleg[1],
+            },
+            HeapLeaf {
+                addr: other_deleg[0],
+                value: other_deleg[1],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&anchor_deleg),
@@ -6649,14 +7375,16 @@ mod tests {
             "the fresh conferred edge derived from the grant must match the test's expectation"
         );
 
-        let (proof, dpis) =
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None, false)
-                .expect(
-                    "the WRITE-bearing grant cap-open MUST genuinely prove — anchor read + fresh \
+        let (proof, dpis) = prove_effect_vm_cap_open(
+            &initial, &effects, &before_w, &after_w, &cap, &route, None, false,
+        )
+        .expect(
+            "the WRITE-bearing grant cap-open MUST genuinely prove — anchor read + fresh \
                      sorted-INSERT on the rotated cap-root limb (213→264) over the real c-list, \
                      v1-state frozen, nonce ticks",
-                );
-        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize grant write cap-open leg");
+        );
+        let proof_bytes =
+            postcard::to_allocvec(&proof).expect("serialize grant write cap-open leg");
         let vk_hash = cap_open_vk_hash_by_key(effective_key).expect("grant write wrapper vk_hash");
         verify_effect_vm_rotated_with_cutover(&proof_bytes, &dpis, &vk_hash).expect(
             "the WRITE-bearing grant cap-open MUST verify on the light-client path — the genuine \
@@ -6665,7 +7393,10 @@ mod tests {
 
         // ── ARM (2): FORGE. A c-list MISSING the anchor key — the held-authority `read` op has no
         // membership witness, so the bridge FAILS CLOSED. A fabricated post-cap-root is NOT provable.
-        let forged_clist = vec![HeapLeaf { addr: other_deleg[0], value: other_deleg[1] }];
+        let forged_clist = vec![HeapLeaf {
+            addr: other_deleg[0],
+            value: other_deleg[1],
+        }];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&anchor_deleg),
             siblings: built_deleg.siblings.to_vec(),
@@ -6673,8 +7404,17 @@ mod tests {
             clist_leaves: forged_clist,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forged, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_forged,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a c-list MISSING the granter's held-authority anchor MUST fail closed — a fabricated \
              post-cap-root is NOT provable (no silent forge)"
         );
@@ -6684,14 +7424,26 @@ mod tests {
         // requires `mask_lo == eff_bit`).
         const EFFECT_TRANSFER: u32 = 1 << 1;
         let wrong_facet = CapMembershipWitness {
-            leaf: CapLeaf { mask_lo: BabyBear::new(EFFECT_TRANSFER), ..leaf_cl(&anchor_deleg) },
+            leaf: CapLeaf {
+                mask_lo: BabyBear::new(EFFECT_TRANSFER),
+                ..leaf_cl(&anchor_deleg)
+            },
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &wrong_facet, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &wrong_facet,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
             "a held cap permitting a DIFFERENT effect (transfer, not the delegation op the grant write \
              wrapper binds) MUST be refused (fail-closed at the membership crown)"
         );
@@ -6719,8 +7471,9 @@ mod tests {
             BabyBear::new(9),
             BabyBear::new(0),
         ];
-        let built_grant = CapOpenWitness::build_for(&[other_grant, anchor_grant], 1, EFFECT_GRANT_CAPABILITY)
-            .expect("the GRANT_CAPABILITY membership path builds for the anchor");
+        let built_grant =
+            CapOpenWitness::build_for(&[other_grant, anchor_grant], 1, EFFECT_GRANT_CAPABILITY)
+                .expect("the GRANT_CAPABILITY membership path builds for the anchor");
         let cap_authority_only = CapMembershipWitness {
             leaf: leaf_cl(&anchor_grant),
             siblings: built_grant.siblings.to_vec(),
@@ -6737,7 +7490,8 @@ mod tests {
             false,
         )
         .expect("the authority-only grant cap-open still PROVES (the GRANT_CAPABILITY membership crown is valid)");
-        let proof_ao_bytes = postcard::to_allocvec(&proof_ao).expect("serialize authority-only grant leg");
+        let proof_ao_bytes =
+            postcard::to_allocvec(&proof_ao).expect("serialize authority-only grant leg");
         let vk_ao = cap_open_vk_hash_by_key("grantCapCapOpenVmDescriptor2R24")
             .expect("authority-only grant vk_hash");
         assert!(
@@ -6757,8 +7511,14 @@ mod tests {
         run_insert_cap_write_prove_verify_forge(
             VmEffect::Introduce {
                 intro_hash: [
-                    fresh.0, fresh.1, BabyBear::ZERO, BabyBear::ZERO,
-                    BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+                    fresh.0,
+                    fresh.1,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
                 ],
             },
             fresh,
@@ -6786,8 +7546,14 @@ mod tests {
         run_insert_cap_write_prove_verify_forge(
             VmEffect::SpawnWithDelegation {
                 spawn_hash: [
-                    fresh.0, fresh.1, BabyBear::ZERO, BabyBear::ZERO,
-                    BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+                    fresh.0,
+                    fresh.1,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
                 ],
             },
             fresh,
@@ -6891,8 +7657,14 @@ mod tests {
             })
         };
         let fresh = [
-            BabyBear::new(0xED57), BabyBear::new(0x52), BabyBear::ZERO, BabyBear::ZERO,
-            BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+            BabyBear::new(0xED57),
+            BabyBear::new(0x52),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
         ];
 
         // ATTENUATED grant (granted 0x52 ⊊ held 0xFF) → the SUBMASK wrapper.
@@ -6900,12 +7672,16 @@ mod tests {
             cap_entry: fresh,
             phase_b: Some(mk_witness(0xFF, 0x52)),
         }];
-        let route = cap_open_route_for_run(&atten).expect("attenuated grant has a wired cap-open route");
+        let route =
+            cap_open_route_for_run(&atten).expect("attenuated grant has a wired cap-open route");
         assert!(
             matches!(
                 route.write,
-                Some(("delegateAttenWriteCapOpenVmDescriptor2R24",
-                      dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert, _))
+                Some((
+                    "delegateAttenWriteCapOpenVmDescriptor2R24",
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert,
+                    _
+                ))
             ),
             "an ATTENUATED grant (granted ⊊ held) MUST route to the delegateAtten SUBMASK wrapper, got {:?}",
             route.write
@@ -6916,19 +7692,26 @@ mod tests {
             cap_entry: fresh,
             phase_b: Some(mk_witness(0xFF, 0xFF)),
         }];
-        let route_plain = cap_open_route_for_run(&plain).expect("plain grant has a wired cap-open route");
+        let route_plain =
+            cap_open_route_for_run(&plain).expect("plain grant has a wired cap-open route");
         assert!(
             matches!(
                 route_plain.write,
-                Some(("delegateWriteCapOpenVmDescriptor2R24",
-                      dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert, _))
+                Some((
+                    "delegateWriteCapOpenVmDescriptor2R24",
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert,
+                    _
+                ))
             ),
             "a NON-narrowing grant (granted == held) MUST route to the PLAIN delegate wrapper, got {:?}",
             route_plain.write
         );
 
         // A recipient-install grant with no phase-B witness → plain delegate (no attenuation claimed).
-        let no_witness = vec![VmEffect::GrantCapability { cap_entry: fresh, phase_b: None }];
+        let no_witness = vec![VmEffect::GrantCapability {
+            cap_entry: fresh,
+            phase_b: None,
+        }];
         let route_nw = cap_open_route_for_run(&no_witness).expect("no-witness grant route");
         assert!(
             matches!(
@@ -7028,8 +7811,14 @@ mod tests {
         assert_ne!(fresh_key, anchor[0]);
         assert_ne!(fresh_key, other[0]);
         let clist_leaves = vec![
-            HeapLeaf { addr: anchor[0], value: held_mask }, // anchor → broad held mask (HELD_MASK col 72)
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: anchor[0],
+                value: held_mask,
+            }, // anchor → broad held mask (HELD_MASK col 72)
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&anchor),
@@ -7040,15 +7829,22 @@ mod tests {
 
         let effect = VmEffect::GrantCapability {
             cap_entry: [
-                fresh_key, granted_mask, BabyBear::ZERO, BabyBear::ZERO,
-                BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO,
+                fresh_key,
+                granted_mask,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
             ],
             phase_b: Some(Box::new(phase_b)),
         };
         let effects = vec![effect];
 
         // The attenuated grant MUST select the SUBMASK wrapper (not plain delegate).
-        let route = cap_open_route_for_run(&effects).expect("a wired cap-open route for the attenuated grant");
+        let route = cap_open_route_for_run(&effects)
+            .expect("a wired cap-open route for the attenuated grant");
         assert!(
             matches!(
                 route.write,
@@ -7097,8 +7893,10 @@ mod tests {
                          sorted-insert on the rotated cap-root limb (213→264) + `granted 0x52 ⊑ held 0xFF`: {e:?}"
                     )
                 });
-        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize delegateAtten cap-open leg");
-        let vk_hash = cap_open_vk_hash_by_key(effective_key).expect("delegateAtten wrapper vk_hash");
+        let proof_bytes =
+            postcard::to_allocvec(&proof).expect("serialize delegateAtten cap-open leg");
+        let vk_hash =
+            cap_open_vk_hash_by_key(effective_key).expect("delegateAtten wrapper vk_hash");
         verify_effect_vm_rotated_with_cutover(&proof_bytes, &dpis, &vk_hash).unwrap_or_else(|e| {
             panic!(
                 "the delegateAtten submask wrapper MUST verify on the light-client path — the genuine \
@@ -7111,8 +7909,14 @@ mod tests {
         // conferred KEEP_MASK is 0x52 — `0x52 ⊄ 0x0F`, so the `granted ⊑ held` submask lookup is UNSAT.
         let narrow_held = BabyBear::new(0x0F); // the anchor's REAL held authority — narrower than the grant
         let clist_forge = vec![
-            HeapLeaf { addr: anchor[0], value: narrow_held }, // anchor → NARROW held (col 72)
-            HeapLeaf { addr: other[0], value: other[1] },
+            HeapLeaf {
+                addr: anchor[0],
+                value: narrow_held,
+            }, // anchor → NARROW held (col 72)
+            HeapLeaf {
+                addr: other[0],
+                value: other[1],
+            },
         ];
         let cap_forge = CapMembershipWitness {
             leaf: leaf_cl(&anchor),
@@ -7121,8 +7925,10 @@ mod tests {
             clist_leaves: clist_forge,
         };
         assert!(
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap_forge, &route, None, false)
-                .is_err(),
+            prove_effect_vm_cap_open(
+                &initial, &effects, &before_w, &after_w, &cap_forge, &route, None, false
+            )
+            .is_err(),
             "a grant EXCEEDING the held authority (conferred 0x52 ⊄ real held 0x0F) MUST fail closed — \
              the `granted ⊑ held` submask lookup bites (no amplification)"
         );
@@ -7159,10 +7965,20 @@ mod tests {
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w =
-            rw::produce(&before_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
-        let after_w =
-            rw::produce(&after_cell, &ledger, &nullifier_root, &commitments_root, &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+        );
 
         // THE FORGE: prove the cap effect under the PLAIN base descriptor (no cap witness threaded,
         // no membership appendix). This is exactly what a malicious producer does to skip the
@@ -7172,7 +7988,9 @@ mod tests {
         let plain_proof = prove_effect_vm_rotated_ir2_with_caveat(
             &initial, &effects, &before_w, &after_w, &caveat, None,
         )
-        .expect("the plain revoke base leg proves (it is sound for the authority-BLIND descriptor)");
+        .expect(
+            "the plain revoke base leg proves (it is sound for the authority-BLIND descriptor)",
+        );
         let plain_bytes = postcard::to_allocvec(&plain_proof).expect("serialize plain revoke leg");
         // The plain leg's PI vector (the same 38-PI vector the base descriptor declares).
         let run_rot = RotationTurnWitness {
@@ -7187,7 +8005,9 @@ mod tests {
         // CONTROL: the plain proof IS a sound proof of the plain descriptor — it binds it
         // selector-bound. (We confirm the descriptor it would bind is the forbidden plain one.)
         assert_eq!(
-            dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(&effects[0]),
+            dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name_for_effect(
+                &effects[0]
+            ),
             Some("revokeVmDescriptor2R24"),
             "the base resolver routes RevokeDelegation to its plain descriptor (the forge's target)"
         );
@@ -7209,8 +8029,7 @@ mod tests {
         );
         let msg = format!("{}", verdict.unwrap_err());
         assert!(
-            msg.contains("PLAIN cap-effect descriptor")
-                || msg.contains("NO cohort descriptor"),
+            msg.contains("PLAIN cap-effect descriptor") || msg.contains("NO cohort descriptor"),
             "the rejection must close the forge (cap effect under the authority-blind route does not \
              verify — either the AUTHORITY-FLOOR tooth or the wide-cutover NO-descriptor branch), got: {msg}"
         );
@@ -7231,7 +8050,9 @@ mod tests {
         // (`wire_commit_8`), the SAME ~124-bit commits the wide producer publishes at the leg's PI
         // tail. (The retired 1-felt `mono_pi[OLD_COMMIT]` is no longer the bound anchor.)
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let proof = prove_turn_self_sovereign_rotated(&initial, &effects, turn_hash, Some(rot))
             .expect("proof generation should succeed");
 
@@ -7261,7 +8082,9 @@ mod tests {
         let turn_hash = [0xCDu8; 32];
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, _new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, _new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let proof = prove_turn_self_sovereign_rotated(&initial, &effects, turn_hash, Some(rot))
             .expect("proof generation should succeed");
 
@@ -7294,18 +8117,19 @@ mod tests {
         }];
         let turn_hash = [0xEEu8; 32];
         let rot = rotation_for_initial(&cell_a, &effects_a);
-        let proof_a =
-            prove_turn_self_sovereign_rotated(&cell_a, &effects_a, turn_hash, Some(rot))
-                .expect("proof_a should succeed");
+        let proof_a = prove_turn_self_sovereign_rotated(&cell_a, &effects_a, turn_hash, Some(rot))
+            .expect("proof_a should succeed");
 
         // The proof for cell_a's old_commit is cell_a's 8-felt wide commit. cell_b's commitment
         // differs, so verifying with it must fail on old_commitment. (cell_b is a distinct
         // balance/nonce; its rotation witness yields a distinct 8-felt anchor.)
         let rot_b = rotation_for_initial(&cell_b, &effects_a);
-        let (cell_b_commit, _) = rot_b.wide_commit_anchors(&cell_b, &effects_a, None).expect("wide_commit_anchors");
+        let (cell_b_commit, _) = rot_b
+            .wide_commit_anchors(&cell_b, &effects_a, None)
+            .expect("wide_commit_anchors");
         let result = verify_full_turn(
             &proof_a,
-            cell_b_commit,        // WRONG: this is cell_b, not cell_a
+            cell_b_commit,             // WRONG: this is cell_b, not cell_a
             [BabyBear::new(12345); 8], // doesn't matter, should fail on old_commit
         );
         assert!(
@@ -7353,14 +8177,15 @@ mod tests {
         let _ = vmpi::NEW_COMMIT; // (the retired 1-felt slot — no longer the bound anchor)
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, honest_new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, honest_new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         // Forge the WIDE 8-felt post-state commit (the LAST 8 PIs the wide verifier binds).
         let mut forged_new_commit = honest_new_commit;
         forged_new_commit[0] = forged_new_commit[0] + BabyBear::new(1);
 
-        let mut proof =
-            prove_turn_self_sovereign_rotated(&initial, &effects, turn_hash, Some(rot))
-                .expect("honest proof should generate");
+        let mut proof = prove_turn_self_sovereign_rotated(&initial, &effects, turn_hash, Some(rot))
+            .expect("honest proof should generate");
 
         // Tamper the published EffectVM post-state 8-felt commit in the wire proof (the rotated
         // leg's LAST 8 PIs — the wide commit tail).
@@ -7415,7 +8240,9 @@ mod tests {
         let fresh_item = hash_many(&[BabyBear::new(0xBEEF), BabyBear::new(0xCAFE)]);
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
@@ -7470,7 +8297,9 @@ mod tests {
         let fresh_item = hash_many(&[BabyBear::new(0xBEEF), BabyBear::new(0xCAFE)]);
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
@@ -7540,7 +8369,9 @@ mod tests {
         );
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
@@ -7696,8 +8527,7 @@ mod tests {
              (the nullifier-bearing prefix + the 16 wide commit PIs)",
         );
         assert_eq!(
-            eff.sub_public_inputs[ROT_NULLIFIER_PI],
-            nullifier,
+            eff.sub_public_inputs[ROT_NULLIFIER_PI], nullifier,
             "precondition: the spend turn surfaces its nullifier into PI[ROT_NULLIFIER_PI]",
         );
         let _ = vmpi::NOTESPEND_NULLIFIER;
@@ -7814,7 +8644,9 @@ mod tests {
             derivation_authorizing_effects(&effects, capability_fact_hash, narrow_old_commit);
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
@@ -7876,7 +8708,9 @@ mod tests {
 
         // Prove the turn with effects_A but the effects_B-authorizing derivation.
         let rot = rotation_for_initial(&initial, &effects_a);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects_a, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects_a, None)
+            .expect("wide_commit_anchors");
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects_a.clone(),
@@ -7926,7 +8760,9 @@ mod tests {
         let (siblings, positions, _root) = merkle_test_witness(leaf, 4);
 
         let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (old_commit, new_commit) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
@@ -8145,8 +8981,20 @@ mod tests {
         let _ = ctx_ledger.insert_cell(before_cell.clone());
         let nullifier_root = [0u8; 32];
         let commitments_root = [0u8; 32];
-        let before_w = rw::produce(before_cell, &ctx_ledger, &nullifier_root, &commitments_root, receipt_hashes);
-        let after_w = rw::produce(after_cell, &ctx_ledger, &nullifier_root, &commitments_root, receipt_hashes);
+        let before_w = rw::produce(
+            before_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            receipt_hashes,
+        );
+        let after_w = rw::produce(
+            after_cell,
+            &ctx_ledger,
+            &nullifier_root,
+            &commitments_root,
+            receipt_hashes,
+        );
         // The caveat is recomputed per-run inside the chained prover; the manifest stored here is
         // only the single-leg default and is unused by `prove_cohort_run_chain`.
         RotationTurnWitness {
@@ -8273,7 +9121,9 @@ mod tests {
 
         // The FULL composed chained proof proves + verifies against the real pre/post commitments.
         // The WIDE 8-felt chain endpoints come from the rotation witness (leg0.before8 / legN.after8).
-        let (wide_old, wide_new) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (wide_old, wide_new) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
         let _ = (mono_old, mono_new); // the narrow endpoints stay asserted above on the leg PIs
         let proof = prove_turn_self_sovereign_rotated(&initial, &effects, [0x5A; 32], Some(rot))
             .expect("chained composed proof must generate");
@@ -8327,7 +9177,9 @@ mod tests {
             b
         };
         let rot = rotation_witness_for_cells(&before_cell, &after_cell, &[[0x11u8; 32]]);
-        let (wide_old, wide_new) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (wide_old, wide_new) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
 
         let mut proof =
             prove_turn_self_sovereign_rotated(&initial, &effects, [0x5A; 32], Some(rot))
@@ -8391,7 +9243,9 @@ mod tests {
             b
         };
         let rot = rotation_witness_for_cells(&before_cell, &after_cell, &[[0x11u8; 32]]);
-        let (wide_old, wide_new) = rot.wide_commit_anchors(&initial, &effects, None).expect("wide_commit_anchors");
+        let (wide_old, wide_new) = rot
+            .wide_commit_anchors(&initial, &effects, None)
+            .expect("wide_commit_anchors");
 
         // Compose WITH a conservation witness of the correct net (0). The prover's conservation
         // block sums Σ net_delta across the legs and must equal 0.

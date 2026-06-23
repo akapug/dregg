@@ -1802,7 +1802,10 @@ async fn handle_blocklace_message(
 /// consensus-wide Attested, the other never does" symptom (purely a counting
 /// race in the node, independent of transport). Funnelling both records here
 /// fires the transition once regardless of which vote is the threshold-crosser.
-async fn record_finalization_vote(handle: &BlocklaceHandle, vote: &crate::finalization_votes::FinalizationVote) {
+async fn record_finalization_vote(
+    handle: &BlocklaceHandle,
+    vote: &crate::finalization_votes::FinalizationVote,
+) {
     use crate::finalization_votes::RecordOutcome;
     let block_id = vote.block_id;
     let outcome = {
@@ -2829,10 +2832,7 @@ fn spawn_peer_prober(handle: BlocklaceHandle, state: NodeState, interval_ms: u64
             // without every node enumerating every peer.
             handle.share_peer_addrs(&state).await;
 
-            let unconnected = handle
-                .gossip
-                .unconnected_topic_peers(&handle.topic)
-                .await;
+            let unconnected = handle.gossip.unconnected_topic_peers(&handle.topic).await;
             // Drop backoff state for peers that are no longer candidates (they
             // reconnected, or were graylisted) so memory stays bounded and a
             // later re-drop starts fresh.
@@ -3228,15 +3228,14 @@ async fn execute_finalized_turn(
     // earlier effect in the same forest could grant/revoke on the delegator, and
     // the authority the bearer exercised was the pre-execution authority. A turn
     // with no bearer authorization yields an empty map (zero cost on the hot path).
-    let full_turn_delegator_cap_roots: HashMap<dregg_types::CellId, dregg_circuit::field::BabyBear> =
-        if s.full_turn_proving_enabled {
-            crate::turn_proving::delegator_pre_state_cap_roots(
-                &signed_turn.turn.call_forest,
-                &s.ledger,
-            )
-        } else {
-            HashMap::new()
-        };
+    let full_turn_delegator_cap_roots: HashMap<
+        dregg_types::CellId,
+        dregg_circuit::field::BabyBear,
+    > = if s.full_turn_proving_enabled {
+        crate::turn_proving::delegator_pre_state_cap_roots(&signed_turn.turn.call_forest, &s.ledger)
+    } else {
+        HashMap::new()
+    };
 
     // UNIFORM CROSS-NODE APPLICATION: a finalized Transfer must execute the SAME on
     // every node so each emits the same attested root AND the same ledger content.
@@ -5089,10 +5088,11 @@ mod tests {
         let topic = gossip.join_topic(TOPIC_BLOCKLACE, &[]).await.unwrap();
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
         let quorum = dregg_blocklace::supermajority_threshold(participants.len());
-        let blocklace =
-            dregg_blocklace::finality::Blocklace::new(signing_key.clone(), quorum);
-        let constitution = ConstitutionManager::new(Constitution::new(participants.clone(), 60_000));
-        let votes = crate::finalization_votes::VoteCollector::new(participants.iter().copied(), quorum);
+        let blocklace = dregg_blocklace::finality::Blocklace::new(signing_key.clone(), quorum);
+        let constitution =
+            ConstitutionManager::new(Constitution::new(participants.clone(), 60_000));
+        let votes =
+            crate::finalization_votes::VoteCollector::new(participants.iter().copied(), quorum);
         BlocklaceHandle {
             lace: Arc::new(RwLock::new(blocklace)),
             constitution: Arc::new(RwLock::new(constitution)),

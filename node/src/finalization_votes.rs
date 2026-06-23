@@ -195,9 +195,7 @@ impl VoteCollector {
     /// re-broadcasting our OWN vote so an n-member committee emits exactly n
     /// votes per finalized block (no re-emit storm).
     pub fn has_voted(&self, block_id: &BlockId, signer: &[u8; 32]) -> bool {
-        self.votes
-            .get(block_id)
-            .is_some_and(|s| s.contains(signer))
+        self.votes.get(block_id).is_some_and(|s| s.contains(signer))
     }
 
     /// Has this block reached consensus-wide Attested (a quorum of distinct
@@ -331,7 +329,11 @@ mod tests {
         let blk = BlockId([7; 32]);
 
         // A non-member's well-formed vote is rejected and does not count.
-        let outc = col.record(&FinalizationVote::sign(&outsider, blk, FinalityLevel::Ordered));
+        let outc = col.record(&FinalizationVote::sign(
+            &outsider,
+            blk,
+            FinalityLevel::Ordered,
+        ));
         assert_eq!(outc, RecordOutcome::Rejected);
         assert_eq!(col.vote_count(&blk), 0);
 
@@ -431,7 +433,10 @@ mod tests {
         // Case 1: PEER vote first, then SELF vote crosses (the race that broke the
         // live node — the self-record was the threshold-crosser).
         let mut col = VoteCollector::new(committee, quorum);
-        assert_eq!(col.record(&vote_b), RecordOutcome::Counted { distinct_votes: 1 });
+        assert_eq!(
+            col.record(&vote_b),
+            RecordOutcome::Counted { distinct_votes: 1 }
+        );
         assert_eq!(
             col.record(&vote_a),
             RecordOutcome::ReachedQuorum { distinct_votes: 2 },
@@ -446,7 +451,10 @@ mod tests {
         // Case 2: SELF vote first, then PEER vote crosses (the orientation that
         // already worked). The crossing is reported symmetrically.
         let mut col2 = VoteCollector::new([pk(&a), pk(&b)], quorum);
-        assert_eq!(col2.record(&vote_a), RecordOutcome::Counted { distinct_votes: 1 });
+        assert_eq!(
+            col2.record(&vote_a),
+            RecordOutcome::Counted { distinct_votes: 1 }
+        );
         assert_eq!(
             col2.record(&vote_b),
             RecordOutcome::ReachedQuorum { distinct_votes: 2 }

@@ -162,13 +162,6 @@ pub mod poseidon2;
 #[allow(deprecated)]
 pub mod presentation;
 
-/// The OPENABLE `capability_root` descriptor loader (cap-reshape crown #103, the ARGUS linchpin):
-/// the Lean-verified `EffectVmDescriptor` that checks non-amplification (`granted ⊑ held` submask, per
-/// bit) + production-authority (the mint opens the issuer cap from the producer's held-set root)
-/// IN-CIRCUIT. Byte-pinned to `Dregg2.Circuit.Emit.EffectVmEmitCapReshape.capReshapeJson`; parsed by
-/// the running `parse_vm_descriptor` (the prover authors no constraint). Standalone (not in the locked
-/// `effect_vm_descriptors` registry).
-pub mod cap_reshape_descriptor;
 /// The GENUINE-NON-AMP cap-graph descriptor loader (the ARGUS linchpin on the delegation family:
 /// `delegate`/`delegateAtten`/`attenuate`/`introduce`/`revoke`/`refresh`): the Lean-verified
 /// `EffectVmDescriptor` that, on a cap-graph row, RECOMPUTES `cap_root` (`hash[edge_leaf, old_root]`,
@@ -179,6 +172,13 @@ pub mod cap_reshape_descriptor;
 /// `effect_vm_descriptors` registry); ONE JSON serves all six effects (selector→JSON fan-out).
 #[cfg(feature = "plonky3")]
 pub mod cap_delegation_nonamp_descriptor;
+/// The OPENABLE `capability_root` descriptor loader (cap-reshape crown #103, the ARGUS linchpin):
+/// the Lean-verified `EffectVmDescriptor` that checks non-amplification (`granted ⊑ held` submask, per
+/// bit) + production-authority (the mint opens the issuer cap from the producer's held-set root)
+/// IN-CIRCUIT. Byte-pinned to `Dregg2.Circuit.Emit.EffectVmEmitCapReshape.capReshapeJson`; parsed by
+/// the running `parse_vm_descriptor` (the prover authors no constraint). Standalone (not in the locked
+/// `effect_vm_descriptors` registry).
+pub mod cap_reshape_descriptor;
 /// The canonical, openable capability-set commitment: a sorted Poseidon2 binary
 /// Merkle tree over a cell's c-list. The SINGLE source of truth for the
 /// `cap_root` value — `dregg-cell`'s `compute_canonical_capability_root` calls

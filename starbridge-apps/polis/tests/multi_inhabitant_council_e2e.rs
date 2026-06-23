@@ -35,7 +35,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use dregg_cell::{AuthRequired, Cell, CapabilityRef, CellId, field_from_u64};
+use dregg_cell::{AuthRequired, CapabilityRef, Cell, CellId, field_from_u64};
 use dregg_sdk::factories::ADOPT_TURN_FEE;
 use dregg_sdk::polis::{
     CouncilCharter, ProposalState, approve, certify_approval, create_council_proposal,
@@ -117,8 +117,16 @@ fn join(into: &AgentRuntime, name: &'static str, balance: i64) -> Inhabitant {
         name,
         into.ledger().clone(),
     );
-    let cell = Cell::with_balance(agent_pubkey(&rt), *blake3::hash(name.as_bytes()).as_bytes(), balance);
-    assert_eq!(cell.id(), rt.cell_id(), "joined agent cell id must match its key");
+    let cell = Cell::with_balance(
+        agent_pubkey(&rt),
+        *blake3::hash(name.as_bytes()).as_bytes(),
+        balance,
+    );
+    assert_eq!(
+        cell.id(),
+        rt.cell_id(),
+        "joined agent cell id must match its key"
+    );
     into.ledger()
         .lock()
         .unwrap()
@@ -258,11 +266,21 @@ fn multi_inhabitant_council_governs_by_running() {
     // gas to attempt them; the refusal is the program's, not a council action.)
     // =========================================================================
     assert_program_violation(
-        exercise(&alice.runtime, &mallory, plan.cell_id, approve(plan.cell_id, &charter, 0).unwrap()),
+        exercise(
+            &alice.runtime,
+            &mallory,
+            plan.cell_id,
+            approve(plan.cell_id, &charter, 0).unwrap(),
+        ),
         "non-member mallory flipping member 0's approval slot",
     );
     assert_program_violation(
-        exercise(&alice.runtime, &mallory, plan.cell_id, approve(plan.cell_id, &charter, 1).unwrap()),
+        exercise(
+            &alice.runtime,
+            &mallory,
+            plan.cell_id,
+            approve(plan.cell_id, &charter, 1).unwrap(),
+        ),
         "non-member mallory flipping member 1's approval slot",
     );
 
@@ -286,7 +304,9 @@ fn multi_inhabitant_council_governs_by_running() {
 
     // BELOW QUORUM: 1 < M=2. Certification is refused by the AffineLe gate.
     assert_program_violation(
-        alice.runtime.execute_on(plan.cell_id, certify_approval(plan.cell_id)),
+        alice
+            .runtime
+            .execute_on(plan.cell_id, certify_approval(plan.cell_id)),
         "certify with 1 of 2 required votes (below quorum)",
     );
     // The proposal has NOT advanced.
@@ -297,13 +317,20 @@ fn multi_inhabitant_council_governs_by_running() {
     );
 
     // bob casts the SECOND distinct member vote (his own key is the sender).
-    let bob_vote = exercise(&alice.runtime, &bob, plan.cell_id, approve(plan.cell_id, &charter, 1).unwrap())
-        .expect("member 1 (bob) approves his own slot");
+    let bob_vote = exercise(
+        &alice.runtime,
+        &bob,
+        plan.cell_id,
+        approve(plan.cell_id, &charter, 1).unwrap(),
+    )
+    .expect("member 1 (bob) approves his own slot");
 
     // An OPERATOR-relayed vote for carol is refused too: capability possession
     // (alice owns the cell) does not let her cast another member's vote.
     assert_program_violation(
-        alice.runtime.execute_on(plan.cell_id, approve(plan.cell_id, &charter, 2).unwrap()),
+        alice
+            .runtime
+            .execute_on(plan.cell_id, approve(plan.cell_id, &charter, 2).unwrap()),
         "alice relaying carol's vote (sender is alice, not carol)",
     );
 
@@ -320,7 +347,10 @@ fn multi_inhabitant_council_governs_by_running() {
         field_from_u64(STATE_APPROVED),
         "the council ACCEPTED at quorum"
     );
-    assert_eq!(slot_of(&alice.runtime, plan.cell_id, APPROVED_FLAG_SLOT), field_from_u64(1));
+    assert_eq!(
+        slot_of(&alice.runtime, plan.cell_id, APPROVED_FLAG_SLOT),
+        field_from_u64(1)
+    );
 
     // Legibility: read the accepted machine back out of the shared ledger.
     let fields = alice
@@ -334,7 +364,10 @@ fn multi_inhabitant_council_governs_by_running() {
         .fields;
     let status = inspect_council(&charter, &fields);
     assert_eq!(status.state, ProposalState::Approved);
-    assert!(status.members_commit_matches, "the cell publishes its actor-bound charter");
+    assert!(
+        status.members_commit_matches,
+        "the cell publishes its actor-bound charter"
+    );
     assert_eq!(status.approvals, vec![true, true, false]);
     assert_eq!((status.approval_count, status.threshold), (M, M));
     assert!(status.certified);
@@ -380,7 +413,9 @@ fn multi_inhabitant_council_governs_by_running() {
 
     // ── REPORT (printed under `cargo test -- --nocapture`) ──────────────────
     eprintln!("── MULTI-INHABITANT POLIS COUNCIL — governed by running ──");
-    eprintln!("  inhabitants (distinct cap-roots): alice, bob, carol (members) + mallory (non-member subject)");
+    eprintln!(
+        "  inhabitants (distinct cap-roots): alice, bob, carol (members) + mallory (non-member subject)"
+    );
     eprintln!("  council: {N} members, quorum M = {M} (2-of-3, actor-bound)");
     eprintln!(
         "  PROPOSE receipt   : {} (DRAFT->PROPOSED)",
@@ -392,7 +427,10 @@ fn multi_inhabitant_council_governs_by_running() {
         "  CERTIFY receipt   : {} (-> APPROVED at quorum)",
         hex8(certify_receipt.receipt_hash())
     );
-    eprintln!("  EXECUTE receipt   : {}", hex8(execute_receipt.receipt_hash()));
+    eprintln!(
+        "  EXECUTE receipt   : {}",
+        hex8(execute_receipt.receipt_hash())
+    );
     eprintln!("  below-quorum certify: REFUSED (executor ProgramViolation, AffineLe gate)");
     eprintln!("  non-member vote     : REFUSED (executor ProgramViolation, SenderIs clause)");
     eprintln!(

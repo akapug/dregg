@@ -683,7 +683,10 @@ mod tests {
         // (a) pairwise-distinct — catches a laundered `[0]×8` widening.
         for i in 0..8 {
             for j in (i + 1)..8 {
-                assert_ne!(out[i], out[j], "outputs {i} and {j} collide — not 8 distinct felts");
+                assert_ne!(
+                    out[i], out[j],
+                    "outputs {i} and {j} collide — not 8 distinct felts"
+                );
             }
         }
         // and not the degenerate all-zero / all-equal output.
@@ -708,7 +711,10 @@ mod tests {
         let mut hi = input.clone();
         *hi.last_mut().unwrap() += BabyBear::new(1);
         let out_hi = hash_many_8(&hi);
-        assert_ne!(out, out_hi, "a high-position change must move the 8-felt digest");
+        assert_ne!(
+            out, out_hi,
+            "a high-position change must move the 8-felt digest"
+        );
     }
 
     /// **THE 8-FELT CHAIN PRIMITIVE TEETH** (Phase B-ROTATION) — the standalone proofs that
@@ -721,7 +727,10 @@ mod tests {
         let out = single_perm_compress(&ins);
         for i in 0..8 {
             for j in (i + 1)..8 {
-                assert_ne!(out[i], out[j], "compress lanes {i},{j} collide — not 8 distinct felts");
+                assert_ne!(
+                    out[i], out[j],
+                    "compress lanes {i},{j} collide — not 8 distinct felts"
+                );
             }
         }
         // avalanche: flipping ANY one of the 11 inputs moves ALL 8 output lanes.
@@ -730,7 +739,10 @@ mod tests {
             f[k] += BabyBear::new(1);
             let o2 = single_perm_compress(&f);
             for i in 0..8 {
-                assert_ne!(out[i], o2[i], "flipping input {k} left lane {i} fixed — not full-dep");
+                assert_ne!(
+                    out[i], o2[i],
+                    "flipping input {k} left lane {i} fixed — not full-dep"
+                );
             }
         }
     }
@@ -747,13 +759,20 @@ mod tests {
         let mut hi = limbs.clone();
         *hi.last_mut().unwrap() += BabyBear::new(1); // a high-position one-felt change
         let moved = wire_commit_8(&hi, iroot);
-        assert_ne!(base, moved, "a high-limb change must move the 8-felt commitment");
+        assert_ne!(
+            base, moved,
+            "a high-limb change must move the 8-felt commitment"
+        );
         assert!(
             (0..8).any(|i| base[i] != moved[i]),
             "at least one of the 8 committed felts must differ"
         );
         // the iroot is bound too.
-        assert_ne!(base, wire_commit_8(&limbs, BabyBear::new(8)), "iroot is bound");
+        assert_ne!(
+            base,
+            wire_commit_8(&limbs, BabyBear::new(8)),
+            "iroot is bound"
+        );
     }
 
     #[test]
@@ -769,10 +788,16 @@ mod tests {
         let mut early = limbs.clone();
         early[5] += BabyBear::new(1);
         let moved = wire_commit_8(&early, iroot);
-        assert_ne!(base, moved, "an early mid-chain limb change must reach the published commit");
+        assert_ne!(
+            base, moved,
+            "an early mid-chain limb change must reach the published commit"
+        );
         // and avalanche through the whole 8-felt digest (no 31-bit waist that drops bits).
         for i in 0..8 {
-            assert_ne!(base[i], moved[i], "early-limb change left committed felt {i} unchanged");
+            assert_ne!(
+                base[i], moved[i],
+                "early-limb change left committed felt {i} unchanged"
+            );
         }
     }
 
@@ -787,7 +812,11 @@ mod tests {
         for k in 0..37 {
             let mut m = limbs.clone();
             m[k] += BabyBear::new(1);
-            assert_ne!(c, wire_commit_8(&m, iroot), "limb {k} must be bound by the 8-felt commit");
+            assert_ne!(
+                c,
+                wire_commit_8(&m, iroot),
+                "limb {k} must be bound by the 8-felt commit"
+            );
         }
     }
 

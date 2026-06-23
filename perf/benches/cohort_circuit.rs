@@ -50,8 +50,7 @@ fn bench_cohort_verify(c: &mut Criterion) {
     for cohort in cohorts() {
         let proof = prove_cohort(&cohort);
         // Sanity: the cohort proof must verify before it is timed.
-        verify_vm_descriptor2(&cohort.desc, &proof, &cohort.pis)
-            .expect("cohort proof must verify");
+        verify_vm_descriptor2(&cohort.desc, &proof, &cohort.pis).expect("cohort proof must verify");
         group.bench_function(cohort.name, |b| {
             b.iter(|| {
                 verify_vm_descriptor2(black_box(&cohort.desc), black_box(&proof), &cohort.pis)

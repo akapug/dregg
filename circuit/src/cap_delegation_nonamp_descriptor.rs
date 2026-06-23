@@ -147,7 +147,10 @@ mod tests {
             .iter()
             .find(|s| s.digest_col == 102)
             .expect("cap-edge-leaf recompute site (digest col 102) missing");
-        assert_eq!(leaf_site.arity, 4, "edge leaf is hash[holder,target,rights,op]");
+        assert_eq!(
+            leaf_site.arity, 4,
+            "edge leaf is hash[holder,target,rights,op]"
+        );
         assert_eq!(leaf_site.inputs.len(), 4);
         // the advance site: arity 2, digest into col 87 (saCol CAP_ROOT), reading the leaf (102) + the
         // old cap-root column (65 = sbCol CAP_ROOT).
@@ -156,7 +159,10 @@ mod tests {
             .iter()
             .find(|s| s.digest_col == 87)
             .expect("cap-root advance site (digest col 87 = saCol CAP_ROOT) missing");
-        assert_eq!(adv_site.arity, 2, "advance is hash[edge_leaf, old_cap_root]");
+        assert_eq!(
+            adv_site.arity, 2,
+            "advance is hash[edge_leaf, old_cap_root]"
+        );
         assert_eq!(adv_site.inputs.len(), 2);
     }
 }

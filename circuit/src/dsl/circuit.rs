@@ -489,13 +489,8 @@ impl ConstraintExpr {
                 b_values,
                 outputs,
             } => {
-                let expected = eval_table_function(
-                    local[*a_col],
-                    local[*b_col],
-                    a_values,
-                    b_values,
-                    outputs,
-                );
+                let expected =
+                    eval_table_function(local[*a_col], local[*b_col], a_values, b_values, outputs);
                 local[*out_col] - expected
             }
         }
@@ -857,9 +852,7 @@ impl ConstraintExpr {
                 1
             }
             Self::TableFunction {
-                a_values,
-                b_values,
-                ..
+                a_values, b_values, ..
             } => {
                 // P(a,b) = Σ Lᵢ(a)Lⱼ(b) outputsᵢⱼ: degree (|a|-1) in a, (|b|-1) in b.
                 a_values.len().saturating_sub(1) + b_values.len().saturating_sub(1)

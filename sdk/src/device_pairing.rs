@@ -109,7 +109,10 @@ impl PairingAttestation {
     /// existing opening stable). This is what the rotation presents as the new
     /// current set, and whose commitment must equal the pre-committed
     /// `next_keys_digest` preimage.
-    pub fn paired_key_set(current_key_set: &[[u8; 32]], new_device_pubkey: [u8; 32]) -> Vec<[u8; 32]> {
+    pub fn paired_key_set(
+        current_key_set: &[[u8; 32]],
+        new_device_pubkey: [u8; 32],
+    ) -> Vec<[u8; 32]> {
         let mut keys = Vec::with_capacity(current_key_set.len() + 1);
         keys.extend_from_slice(current_key_set);
         keys.push(new_device_pubkey);
@@ -198,7 +201,9 @@ impl WitnessedPredicateVerifier for DevicePairingVerifier {
     }
 
     fn kind(&self) -> WitnessedPredicateKind {
-        WitnessedPredicateKind::Custom { vk_hash: PAIRING_VK }
+        WitnessedPredicateKind::Custom {
+            vk_hash: PAIRING_VK,
+        }
     }
 
     fn verify(
@@ -261,12 +266,12 @@ impl WitnessedPredicateVerifier for DevicePairingVerifier {
                      (no authoritative current-keys commitment to pin against)"
                 .into(),
         })?;
-        let on_chain_current = fields
-            .get(CURRENT_KEYS_COMMIT_SLOT as usize)
-            .ok_or(WitnessedPredicateError::Rejected {
+        let on_chain_current = fields.get(CURRENT_KEYS_COMMIT_SLOT as usize).ok_or(
+            WitnessedPredicateError::Rejected {
                 kind_name: "DevicePairing",
                 reason: "cell pre-state has no current-keys commitment slot".into(),
-            })?;
+            },
+        )?;
         if on_chain_current != commitment {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "DevicePairing",
@@ -276,12 +281,11 @@ impl WitnessedPredicateVerifier for DevicePairingVerifier {
             });
         }
 
-        let att = PairingAttestation::decode(proof_bytes).ok_or(
-            WitnessedPredicateError::Rejected {
+        let att =
+            PairingAttestation::decode(proof_bytes).ok_or(WitnessedPredicateError::Rejected {
                 kind_name: "DevicePairing",
                 reason: "pairing attestation did not decode".into(),
-            },
-        )?;
+            })?;
 
         // (1) The exhibited current key set MUST reproduce the host-pinned
         // commitment. This is what makes the attestor's authority real: the
@@ -318,12 +322,13 @@ impl WitnessedPredicateVerifier for DevicePairingVerifier {
         })?;
         let sig = DalekSignature::from_bytes(&att.signature);
         let signed = PairingAttestation::signed_bytes(signing_message, &att.new_device_pubkey);
-        vk.verify(&signed, &sig).map_err(|_| WitnessedPredicateError::Rejected {
-            kind_name: "DevicePairing",
-            reason: "pairing attestation signature did not verify under the attestor key \
+        vk.verify(&signed, &sig)
+            .map_err(|_| WitnessedPredicateError::Rejected {
+                kind_name: "DevicePairing",
+                reason: "pairing attestation signature did not verify under the attestor key \
                      (forged, wrong device, or wrong turn)"
-                .into(),
-        })?;
+                    .into(),
+            })?;
 
         Ok(())
     }
@@ -370,7 +375,9 @@ pub fn pairing_action(
     let presented = key_set_commitment(&paired);
 
     let predicate = WitnessedPredicate {
-        kind: WitnessedPredicateKind::Custom { vk_hash: PAIRING_VK },
+        kind: WitnessedPredicateKind::Custom {
+            vk_hash: PAIRING_VK,
+        },
         // The host-trusted current key-set commitment — the verifier pins the
         // attestor's exhibited set to exactly this.
         commitment: key_set_commitment(current_key_set),
@@ -565,8 +572,14 @@ mod tests {
             signature: sig,
         };
         let err = DevicePairingVerifier
-            .verify(&commitment, &PredicateInput::SigningMessage(&msg), &att.encode())
-            .expect_err("without cell pre-state the verifier cannot pin the commitment — fail closed");
+            .verify(
+                &commitment,
+                &PredicateInput::SigningMessage(&msg),
+                &att.encode(),
+            )
+            .expect_err(
+                "without cell pre-state the verifier cannot pin the commitment — fail closed",
+            );
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
 
@@ -688,7 +701,10 @@ mod tests {
         let paired = PairingAttestation::paired_key_set(&current, new);
         assert_eq!(paired, vec![[1u8; 32], [2u8; 32], [9u8; 32]]);
         // Position-committed + deterministic.
-        assert_eq!(key_set_commitment(&paired), key_set_commitment(&PairingAttestation::paired_key_set(&current, new)));
+        assert_eq!(
+            key_set_commitment(&paired),
+            key_set_commitment(&PairingAttestation::paired_key_set(&current, new))
+        );
         // Adding the device changes the commitment (the rotation is real).
         assert_ne!(key_set_commitment(&paired), key_set_commitment(&current));
         // next_keys_digest of the paired commitment is the gate preimage relation.

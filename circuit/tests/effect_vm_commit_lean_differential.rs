@@ -61,11 +61,11 @@
 //!      `compute_authority_digest_felt`, and seeding it changes the commitment — the deployed
 //!      P0-2 closure is non-vacuous on a real cell.
 
+use dregg_circuit::CellState;
 use dregg_circuit::cap_root;
 use dregg_circuit::effect_vm::split_u64;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_4_to_1;
-use dregg_circuit::CellState;
 
 /// The Lean `effectVmLimbs` order: `[balLo, balHi, nonce, fields[0..8], cap_root, record_digest]`.
 /// Index 12 (the last) is `record_digest`. This mirrors
@@ -201,8 +201,13 @@ fn differential_residue_free_noop() {
         "empty_record_digest must be ZERO (the no-op fourth input)"
     );
 
-    let residue_free =
-        CellState::compute_commitment(balance, nonce, &fields, cap_root, cap_root::empty_record_digest());
+    let residue_free = CellState::compute_commitment(
+        balance,
+        nonce,
+        &fields,
+        cap_root,
+        cap_root::empty_record_digest(),
+    );
     // The Lean `legacyEffectVmCommit`: the fourth root input pinned to ZERO.
     let legacy = CellState::compute_commitment(balance, nonce, &fields, cap_root, BabyBear::ZERO);
     assert_eq!(
@@ -217,8 +222,8 @@ fn differential_residue_free_noop() {
 /// abstract `record_digest` stands for).
 #[test]
 fn differential_real_cell_authority_residue_flows() {
-    use dregg_cell::permissions::AuthRequired;
     use dregg_cell::Cell;
+    use dregg_cell::permissions::AuthRequired;
 
     // A residue-free baseline cell (default permissions / no VK).
     let plain = Cell::new([7u8; 32], [11u8; 32]);

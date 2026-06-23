@@ -56,10 +56,12 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::conditional::{
-    resolve_condition, ConditionProof, ConditionalResult, ProofCondition, TrustedRoot,
-    DEFAULT_MAX_ROOT_AGE,
+    ConditionProof, ConditionalResult, DEFAULT_MAX_ROOT_AGE, ProofCondition, TrustedRoot,
+    resolve_condition,
 };
-use crate::pending::{PendingTurnRegistry, ResolutionCondition, ResolutionEvent, ResolutionOutcome};
+use crate::pending::{
+    PendingTurnRegistry, ResolutionCondition, ResolutionEvent, ResolutionOutcome,
+};
 use crate::turn::{Turn, TurnReceipt};
 
 // ─── The first-class reactive-effect ADT ─────────────────────────────────────
@@ -448,7 +450,10 @@ mod tests {
         // The hole is consumed and the proof is now spent (the nullifier grew).
         assert_eq!(coord.pending_count(), 0, "the hole is consumed");
         assert!(!coord.is_live(&pending_id), "the hole is no longer live");
-        assert!(coord.proof_spent(&proof), "the proof is now in the nullifier");
+        assert!(
+            coord.proof_spent(&proof),
+            "the proof is now in the nullifier"
+        );
     }
 
     // ── THE FORGE-DETECTOR: a SECOND react on the same hole is REJECTED ──────
@@ -524,7 +529,10 @@ mod tests {
             "a replayed proof must be refused by the shared nullifier, got {replay:?}"
         );
         // The replay did NOT consume hole 2 (a failed react leaves the hole live).
-        assert!(coord.is_live(&id2), "a refused react does not consume the hole");
+        assert!(
+            coord.is_live(&id2),
+            "a refused react does not consume the hole"
+        );
     }
 
     // ── A WRONG proof is rejected and does NOT consume the hole (fail-closed,
@@ -577,7 +585,10 @@ mod tests {
             matches!(&r, Err(ReactError::ProofRejected { reason, .. }) if reason.contains("expired")),
             "a react past the hole's timeout is refused, got {r:?}"
         );
-        assert!(coord.is_live(&id), "an expired-refused hole stays (until timeout-swept)");
+        assert!(
+            coord.is_live(&id),
+            "an expired-refused hole stays (until timeout-swept)"
+        );
     }
 
     // ── Reacting to a NEVER-NOTIFIED id refuses (no hole to spend). ──

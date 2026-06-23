@@ -152,7 +152,8 @@ fn factory_born_mandate_refuses_rollback_and_anchor_rebind() {
     init_mandate(&exec, &cclerk, mandate);
 
     // Advance to cursor 1 (review done).
-    let advance = build_advance_step_action(&cclerk, mandate, 0, officer_label(), WorkflowPhase::Review);
+    let advance =
+        build_advance_step_action(&cclerk, mandate, 0, officer_label(), WorkflowPhase::Review);
     exec.submit_action(&cclerk, advance)
         .expect("review step must commit");
 
