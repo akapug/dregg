@@ -191,10 +191,14 @@ HTTP NOW WORKS `70d546eb`: forked `servo-net` (removed http/https from `FORBIDDE
 consults an embedder handler first), + `CapGatedHttpHandler` (`netcap_http.rs`) runs the net-cap decision AT
 the socket — cap-denied → 0 bytes, no socket; cap-allowed → a real `TcpStream` HTTP/1.1 GET → servo layout →
 SWGL raster. Proven vs a real local http server (PNG `servo_real_http_render.png` = "dregg over http" fetched
-over a real TCP socket, SEEN). SUB-SEAM: byte leg is plain `http://`; `https://` needs a TLS handshake on the
-same cap-admitted socket (rustls over the `TcpStream`) — bounded, NOT new architecture (gate+registration+
-interception identical; `netcap_http.rs::http_get_over_real_socket` `scheme != "http"` guard). servo-paint
-fork still reverts when upstream carries a SWGL `RenderingContext`.
+over a real TCP socket, SEEN). HTTPS CLOSED `fbb7810f`: for a cap-admitted `https://` origin, after the
+identical cap gate + real `TcpStream` connect, the socket is wrapped in a `rustls::ClientConnection` (SNI),
+HTTP/1.1 GET over the encrypted stream; GENUINE cert validation vs the Mozilla CA set (`webpki-roots`,
+embedder may `trust_extra_root_der` — NOT a danger-accept bypass). Proven vs a real local rustls https server
+(self-signed leaf): cap-denied → no handshake/bytes; cap-allowed → real TLS handshake → 230 bytes → raster →
+PNG `servo_real_https_render.png` ("dregg over https", SEEN). rustls already in-graph (+3 lines lock, 0 new
+crates). SERVO NOW BROWSES REAL PAGES — http + https, cap-gated. (servo-paint fork still reverts when
+upstream carries a SWGL `RenderingContext`.)
 ### FEDERATION RECONNECT/RETRY — robust late-join, by running (2026-06-23).
 `1f5d3303` (`node/src/blocklace_sync.rs` + `net/src/gossip.rs`). `spawn_peer_prober` wires
 `RequestBackoff` into the dial path → re-dials unconnected peers on capped exponential backoff (clears +
