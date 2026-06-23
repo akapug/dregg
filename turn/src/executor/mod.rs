@@ -1426,12 +1426,47 @@ impl TurnExecutor {
         self.issuer_wells.insert(token_id, well);
     }
 
-    /// Resolve the registered ISSUER WELL for a cell's asset (`token_id`),
-    /// or `None` when the asset has no registered well (legacy burn
-    /// semantics).
+    /// Deterministically derive the ISSUER WELL cell for an asset (`token_id`),
+    /// generalizing the genesis default-asset well (`node/src/genesis.rs`) to
+    /// EVERY asset. The well's signing key is a domain-separated derivation
+    /// over the asset, and its id is the ordinary content-addressed
+    /// `CellId::derive_raw(pubkey, token_id)` — so the well is a real signed
+    /// cell in the SAME asset class as its holders (its `token_id` matches), a
+    /// negative-capable `−supply` account.
+    ///
+    /// SUPPLY-MODEL Stage 1 (`docs/SUPPLY-MODEL.md`): this is the lazy
+    /// per-asset well that makes burn a CONSERVING move (holder→well) for any
+    /// asset, not just the registered default — closing the
+    /// non-conserving-`destroy` hole. The genesis well registration (via
+    /// [`register_issuer_well`](Self::register_issuer_well)) still takes
+    /// precedence as an explicit override; this derivation is the fallback for
+    /// assets with no registered well.
+    pub(super) fn derive_issuer_well(token_id: &[u8; 32]) -> ([u8; 32], CellId) {
+        // Domain-separated key over the asset id. Distinct domain from the
+        // genesis devnet well so a lazily-derived well never collides with the
+        // genesis-registered one (which uses `dregg-devnet-issuer-well-key-v1`
+        // over `b"genesis"` and is supplied explicitly via the override map).
+        let well_pubkey = blake3::derive_key("dregg-issuer-well-key-v1", token_id);
+        let well_id = CellId::derive_raw(&well_pubkey, token_id);
+        (well_pubkey, well_id)
+    }
+
+    /// Resolve the ISSUER WELL for a cell's asset (`token_id`): the explicitly
+    /// registered well if one exists (genesis override), else the deterministic
+    /// lazily-derived per-asset well. Returns `None` only when the cell itself
+    /// is absent from the ledger (no asset to resolve).
+    ///
+    /// SUPPLY-MODEL Stage 1: EVERY asset now resolves a well, so a burn is
+    /// always a conserving holder→well move — the bare-debit (`Σδ≠0`) path is
+    /// retired.
     pub(super) fn issuer_well_for(&self, ledger: &Ledger, cell: &CellId) -> Option<CellId> {
         let token_id = *ledger.get(cell)?.token_id();
-        self.issuer_wells.get(&token_id).copied()
+        Some(
+            self.issuer_wells
+                .get(&token_id)
+                .copied()
+                .unwrap_or_else(|| Self::derive_issuer_well(&token_id).1),
+        )
     }
 
     /// Configure epoch-based computron minting to prevent deflationary deadlock.

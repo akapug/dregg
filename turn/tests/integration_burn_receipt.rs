@@ -82,6 +82,15 @@ fn unwrap_receipt(result: TurnResult) -> TurnReceipt {
     }
 }
 
+/// SUPPLY-MODEL Stage 1: the deterministic per-asset ISSUER WELL id for an
+/// asset's `token_id`. Mirrors `TurnExecutor::derive_issuer_well` — a burn now
+/// conserves by moving holder→well, so these tests assert the well carries the
+/// credit (not a non-conserving destroy).
+fn derived_well_id(token_id: &[u8; 32]) -> CellId {
+    let well_pubkey = blake3::derive_key("dregg-issuer-well-key-v1", token_id);
+    CellId::derive_raw(&well_pubkey, token_id)
+}
+
 // ---------------------------------------------------------------------------
 // Test 1 (happy path): Burn reduces balance and sets was_burn = true.
 // ---------------------------------------------------------------------------
@@ -119,6 +128,19 @@ fn burn_reduces_balance_and_sets_was_burn_flag() {
     assert!(
         receipt.was_burn,
         "receipt.was_burn must be true when Effect::Burn was applied"
+    );
+
+    // SUPPLY-MODEL Stage 1 (conservation): the burn is a holder→well MOVE, not
+    // a non-conserving destroy. The per-asset well was lazily created and
+    // credited the burned amount, so holder debit + well credit net to zero.
+    let well_id = derived_well_id(&[0u8; 32]);
+    let well = ledger
+        .get(&well_id)
+        .expect("issuer well must be lazily created on burn");
+    assert_eq!(
+        well.state.balance(),
+        burn_amount as i64,
+        "well must be credited the burned amount (conserving move)"
     );
 }
 
@@ -178,6 +200,12 @@ fn burn_exceeding_balance_rejected_balance_preserved() {
         balance,
         "balance must be preserved on rejection"
     );
+    // SUPPLY-MODEL Stage 1: a rejected burn rolls back fully — no well is left
+    // behind (its lazy creation, if it occurred, was journaled and removed).
+    assert!(
+        ledger.get(&derived_well_id(&[0u8; 32])).is_none(),
+        "no well must persist after a rejected burn"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +239,11 @@ fn burn_non_zero_slot_rejected() {
     );
     // Balance unchanged.
     assert_eq!(ledger.get(&cell_id).unwrap().state.balance(), 500);
+    // SUPPLY-MODEL Stage 1: a slot-rejected burn never reaches the well move.
+    assert!(
+        ledger.get(&derived_well_id(&[0u8; 32])).is_none(),
+        "no well must persist after a rejected burn"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -284,4 +317,13 @@ fn burn_entire_balance_leaves_zero() {
         "balance must be zero after full burn"
     );
     assert!(receipt.was_burn);
+
+    // SUPPLY-MODEL Stage 1 (conservation): the whole balance moved into the
+    // per-asset well; holder (0) + well (balance) net to the pre-burn total.
+    let well_id = derived_well_id(&[0u8; 32]);
+    assert_eq!(
+        ledger.get(&well_id).expect("well created").state.balance(),
+        balance,
+        "well must carry the fully-burned balance (conserving move)"
+    );
 }

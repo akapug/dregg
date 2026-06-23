@@ -1278,12 +1278,14 @@ impl TurnExecutor {
                     *hosted_cell_deltas.entry(*from).or_insert(0) -= *amount as i64;
                     *hosted_cell_deltas.entry(*to).or_insert(0) += *amount as i64;
                 }
-                // Burn debits the target. THE EPOCH §5: when the target's
-                // asset has a registered ISSUER WELL, the burn is a MOVE
-                // target→well (the well is credited back toward zero), so it
-                // contributes ZERO net — `was_burn` stays as the disclosure
-                // bit. Without a registered well, the legacy non-conserving
-                // contribution remains.
+                // Burn debits the target. SUPPLY-MODEL Stage 1: EVERY asset
+                // resolves an ISSUER WELL now (registered override, else the
+                // deterministic per-asset well lazily materialized by
+                // `apply_burn`), so the burn is ALWAYS a MOVE target→well (the
+                // well is credited back toward zero) and contributes ZERO net
+                // — `was_burn` stays as the disclosure bit. The well shares the
+                // target's asset class (same `token_id`), so the debit/credit
+                // net to zero WITHIN the asset (per-asset conservation holds).
                 if let crate::action::Effect::Burn { target, amount, .. } = effect {
                     if target == &action.target {
                         net_delta -= *amount as i64;
@@ -2532,15 +2534,15 @@ mod hardening_tests {
         );
     }
 
-    /// A hosted Burn shifts conservation by `-amount`, so a Burn-only
-    /// mixed-atomic turn fails closed with `ConservationViolation`. The
-    /// test pins that (a) the executor's receipt-input gathering and
-    /// Burn detection still happen along the path (the function
-    /// processes the action through apply_effect before checking
-    /// conservation), and (b) the per-cell net_delta correctly
-    /// accounts for Burn at -100. The committed-receipt happy path with
-    /// `was_burn=true` requires a sovereign-side proof that algebraically
-    /// offsets the burn, which is out of scope for this lane.
+    /// SUPPLY-MODEL Stage 1: a hosted Burn is a CONSERVING holder→well MOVE,
+    /// so a Burn-only mixed-atomic turn now COMMITS (it does NOT fail closed):
+    /// the per-asset ISSUER WELL is lazily materialized and credited the burned
+    /// amount, so the holder debit (−100) and well credit (+100) net to zero
+    /// WITHIN the asset and per-asset conservation holds. The test pins (a) the
+    /// commit, (b) `was_burn=true` on the burn target's receipt (the disclosure
+    /// bit), and (c) the well exists and carries the +100 credit. (Pre-Stage-1
+    /// this turn failed with `PerAssetConservationViolation(-100)` because the
+    /// well-less burn was a non-conserving destroy.)
     #[test]
     fn mixed_atomic_was_burn_reflected_on_burn_target_receipt() {
         let mut ledger = Ledger::new();
@@ -2555,21 +2557,10 @@ mod hardening_tests {
         ledger.insert_cell(victim).unwrap();
 
         let executor = TurnExecutor::new(ComputronCosts::zero());
-        // To balance conservation (sovereign+hosted must sum to zero), we
-        // emit a second hosted action that credits a third cell with the
-        // burned amount via Transfer... but Burn is non-conservation, so
-        // the executor MUST detect that and surface ConservationViolation
-        // unless we balance it. Realistically, Burn turns are not
-        // conservation-zero -- the receipt's `was_burn` bit is the
-        // disclosure that supply did not balance. We construct a single-
-        // action hosted-only turn that contains the Burn and expect
-        // ConservationViolation to fire AFTER the per-cell pre/post
-        // snapshots have already been computed; this proves the receipt-
-        // input gathering and Burn detection are correctly wired.
-        // (The committed-receipt path requires conservation to hold, which
-        // is the correct shape for a multi-party atomic; Burn outside a
-        // sovereign-cell algebraic accounting is intentionally outside
-        // the mixed-atomic happy-path.)
+        // SUPPLY-MODEL Stage 1: a single-action hosted Burn now CONSERVES — the
+        // burned value moves holder→well (the per-asset well lazily
+        // materialized), so this turn commits with per-asset Σδ=0. No balancing
+        // sovereign side is needed.
         let burn_action = Action {
             target: victim_id,
             method: [0u8; 32],
@@ -2594,20 +2585,37 @@ mod hardening_tests {
             hosted_actions: vec![burn_action],
         };
         let r = executor.execute_mixed_atomic(&mixed, &mut ledger);
-        // Conservation MUST violate because Burn removes 100 with no
-        // matching credit. The audit point is that the receipt-input
-        // capture happens BEFORE the conservation check, so the in-flight
-        // hosted_was_burn calculation is exercised and the per-cell
-        // (delta = -100) is computed. The receipts themselves are not
-        // returned on failure (the function rolls back). This test pins
-        // the failure shape and the delta accounting.
-        // The per-asset conservation cutover (AssetId := issuer-cell, every asset's
-        // sum is identically zero) surfaces a Burn's missing supply as a per-asset
-        // imbalance, not the old scalar ConservationViolation.
+        // The conserving burn COMMITS. The receipt-input capture computed the
+        // burn target's pre/post snapshots and flipped `was_burn`; the per-asset
+        // conservation gate passed because the lazily-created well absorbed the
+        // −100 as +100 within the asset.
+        let result = r.expect("conserving burn must commit");
+        let burn_receipt = result
+            .receipts
+            .iter()
+            .find(|rc| rc.agent == victim_id)
+            .expect("a receipt for the burn target");
         assert!(
-            matches!(r, Err(AtomicTurnError::PerAssetConservationViolation { imbalance, .. }) if imbalance == -100),
-            "expected PerAssetConservationViolation(imbalance -100) from a 100-token Burn, got: {:?}",
-            r
+            burn_receipt.was_burn,
+            "the burn target's receipt must carry was_burn=true"
+        );
+
+        // Conservation: the holder was debited 100 and the per-asset well was
+        // lazily created carrying the +100 credit (the default asset's well).
+        assert_eq!(
+            ledger.get(&victim_id).unwrap().state.balance(),
+            5_000 - 100,
+            "holder debited by the burn amount"
+        );
+        let (_pk, well_id) = TurnExecutor::derive_issuer_well(&[0u8; 32]);
+        assert_eq!(
+            ledger
+                .get(&well_id)
+                .expect("issuer well created")
+                .state
+                .balance(),
+            100,
+            "the per-asset well carries the burned amount (conserving move)"
         );
     }
 

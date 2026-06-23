@@ -238,10 +238,12 @@ fn two_open(bal_a: i64, bal_b: i64) -> (Ledger, CellId, CellId) {
 fn build_corpus() -> Vec<Case> {
     let mut cases: Vec<Case> = Vec::new();
 
-    // ── (2) Non-conserving burn, no issuer well ──────────────────────────────────────────────
-    // A Burn on cell A's balance slot, no registered issuer well, A holds NO mint/burn cap.
-    // Lean's `.burnA` requires the return-to-well move (mintAuthorizedB); apply.rs commits on
-    // ownership. Suspected ASYMMETRY-Rust-accepts.
+    // ── (2) Permissionless self-burn, no mint cap (AUTHORITY asymmetry) ───────────────────────
+    // A Burn on cell A's balance slot, A holds NO mint/burn cap. SUPPLY-MODEL Stage 1: apply.rs
+    // now executes this as a CONSERVING holder→well move (per-asset well lazily derived), so the
+    // conservation half is closed. The remaining asymmetry is AUTHORITY: Rust accepts the
+    // permissionless self-redeem; Lean's `.burnA` gates on `mintAuthorizedB`. ASYMMETRY-Rust-
+    // accepts (SAFE direction), closes in Stage 3.
     {
         let (l, a, _b) = two_open(100, 5);
         cases.push(Case {
@@ -723,12 +725,19 @@ fn rejection_parity_differential() {
     // SAFE operational direction — the verified kernel is STRICTER, so under the authority-inversion
     // the Lean verdict vetoes the Rust commit) and hard-fails ONLY on a NEW, uncharacterised hole.
     //
-    //   * `burn-no-well` — `Effect::Burn` on an owned cell with no issuer well and no mint cap.
-    //     apply.rs (`apply.rs` burn arm) commits a Σδ≠0 scalar destroy on ownership alone. The
-    //     verified `execBurn` (Dregg2/Exec/Generators.lean:55) gates the burn on
-    //     `mintAuthorizedB k.caps actor cell = true`; a cap-less scalar burn fails that gate (empty
-    //     c-list) ⇒ the verified kernel REFUSES. (Same model difference the `rust_lean_divergence_finder`
-    //     `Burn` allowlist documents; closes when the W1 issuer-well migration lands in apply.rs.)
+    //   * `burn-no-well` — `Effect::Burn` on an owned cell with no mint cap. The remaining
+    //     asymmetry is PURELY AUTHORITY now (SUPPLY-MODEL Stage 1, docs/SUPPLY-MODEL.md):
+    //       - CONSERVATION half CLOSED — apply.rs no longer commits a Σδ≠0 scalar destroy. EVERY
+    //         asset resolves a per-asset issuer well (lazily derived if unregistered), so the burn
+    //         is a CONSERVING holder→well MOVE (per-turn Σδ=0). The "no issuer well" precondition
+    //         this case named no longer exists.
+    //       - AUTHORITY half OPEN until Stage 3 — Rust still ACCEPTS the self-burn on ownership
+    //         (permissionless self-redeem, the ratified Stage-1 policy), while the verified
+    //         `execBurn` (Dregg2/Exec/Generators.lean:55) gates on `mintAuthorizedB k.caps actor
+    //         cell = true`; a cap-less burn fails that gate (empty c-list) ⇒ Lean REFUSES. This is
+    //         the SAFE direction (Lean stricter) and is the same divergence the
+    //         `rust_lean_divergence_finder` `Burn` allowlist documents. It closes in Stage 3 (Lean
+    //         authority split: self-redeem = holder-permissioned, mint = mint-cap-gated).
     //   * `self-transfer` — FIXED (apply.rs `apply_transfer` now rejects `from == to`, aligning with
     //     `Dregg2/Exec/RecordKernel.lean:495`); now AGREE-both-reject, no longer a hole. Removed from
     //     the allowlist (kept here as a record of the closed asymmetry).
