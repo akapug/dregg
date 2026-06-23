@@ -129,6 +129,18 @@ impl CellLifecycle {
     pub fn is_destroyed(&self) -> bool {
         matches!(self, CellLifecycle::Destroyed { .. })
     }
+
+    /// Whether the cell is *exactly* [`Self::Live`] (lifecycle discriminant
+    /// `0`). The verified-kernel predicate (`Dregg2.Exec.RecordKernel.
+    /// cellLifecycleLive` / `Dregg2.Exec.EffectsState.cellLive` /
+    /// `acceptsEffects`) is Live-ONLY — it does NOT admit [`Self::Archived`]
+    /// the way [`Self::accepts_effects`] does. Every state-mutating effect's
+    /// per-cell liveness gate (transfer source/dest, set-field/-permissions/
+    /// -vk/-program target, increment-nonce target, mint/burn issuer well)
+    /// must use THIS predicate to match Lean per-arm, not `accepts_effects`.
+    pub fn is_live(&self) -> bool {
+        matches!(self, CellLifecycle::Live)
+    }
 }
 
 /// A federation-attested artifact recording a cell's permanent retirement.
