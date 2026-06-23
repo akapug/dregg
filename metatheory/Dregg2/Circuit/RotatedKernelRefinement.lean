@@ -249,6 +249,10 @@ structure rotatedEncodes (hash : List ℤ → ℤ)
   guardDistinct : tr.src ≠ tr.dst
   guardLiveSrc : tr.src ∈ pre.kernel.accounts
   guardLiveDst : tr.dst ∈ pre.kernel.accounts
+  -- the SOURCE is lifecycle-LIVE ("Destroyed is terminal" on the SEND side): membership (`guardLiveSrc`)
+  -- is NOT liveness — a member-but-Destroyed source cannot debit. COMMITMENT-BINDABLE: reads
+  -- `lifecycle` (the `frLifecycle` frame already carries it; deployed record_digest binds it).
+  guardSrcLifecycleLive : cellLifecycleLive pre.kernel tr.src = true
   guardAccepts : acceptsEffects pre.kernel tr.dst = true
   -- the 16 non-`bal` kernel frame fields + the receipt-log advance (the full `BalanceMovementSpec`
   -- frame residual).
@@ -382,10 +386,11 @@ theorem transfer_descriptorRefines (hash : List ℤ → ℤ)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
     BalanceMovementSpec pre tr a post := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · -- admitGuardA: authority/non-neg/AVAILABILITY/distinct/live-src/live-dst/accepts.
+  · -- admitGuardA: authority/non-neg/AVAILABILITY/distinct/live-src/live-dst/src-lifecycle/accepts.
     exact ⟨henc.guardAuth, henc.guardNonNeg,
       availability_forced hash hside hsat pre post tr a henc,
-      henc.guardDistinct, henc.guardLiveSrc, henc.guardLiveDst, henc.guardAccepts⟩
+      henc.guardDistinct, henc.guardLiveSrc, henc.guardLiveDst,
+      henc.guardSrcLifecycleLive, henc.guardAccepts⟩
   · -- the post-`bal` ledger is the debit/credit movement (the decode's `hledgerFrame`).
     exact henc.hledgerFrame
   · exact henc.logAdv

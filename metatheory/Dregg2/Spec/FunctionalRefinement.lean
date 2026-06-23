@@ -219,6 +219,7 @@ def mintGate (k : RecordKernelState) (a : SupplyArgs) : Prop :=
   acceptsEffects k a.cell = true ∧
   mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
     ∧ a.asset ∈ k.accounts ∧ a.cell ∈ k.accounts ∧ a.asset ≠ a.cell
+    ∧ cellLifecycleLive k a.asset = true
 
 /-- The burn gate: issuer authority PLUS availability at the HOLDER (you cannot burn more than the
 holder holds; only the issuer WELL is negative-capable) + liveness + distinctness. -/
@@ -226,6 +227,7 @@ def burnGate (k : RecordKernelState) (a : SupplyArgs) : Prop :=
   acceptsEffects k a.cell = true ∧
   mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt ∧ a.amt ≤ k.bal a.cell a.asset ∧
   a.cell ∈ k.accounts ∧ a.asset ∈ k.accounts ∧ a.cell ≠ a.asset
+    ∧ cellLifecycleLive k a.asset = true
 
 /-- **THE MINT TRIANGLE (FULL BICONDITIONAL).** `mintStep k a = some k'` IFF the mint gate
 holds AND `k' = mintSpec k a`. The `→` is output-uniqueness (a commit pins the unique intent
@@ -240,14 +242,15 @@ theorem mint_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
     · rw [if_pos hadm] at h
       by_cases hg : mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
           ∧ a.asset ∈ k.accounts ∧ a.cell ∈ k.accounts ∧ a.asset ≠ a.cell
+          ∧ cellLifecycleLive k a.asset = true
       · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-        obtain ⟨hauth, hamt, hiss, hacc, hne⟩ := hg
-        refine ⟨⟨hadm, hauth, hamt, hiss, hacc, hne⟩, ?_⟩
+        obtain ⟨hauth, hamt, hiss, hacc, hne, hlive⟩ := hg
+        refine ⟨⟨hadm, hauth, hamt, hiss, hacc, hne, hlive⟩, ?_⟩
         rw [← h, intentMove_eq_transferBal k.bal a.asset a.cell a.asset a.amt hne]
       · rw [if_neg hg] at h; exact absurd h (by simp)
     · rw [if_neg hadm] at h; exact absurd h (by simp)
-  · rintro ⟨⟨hadm, hauth, hamt, hiss, hacc, hne⟩, hk⟩
-    rw [if_pos hadm, if_pos ⟨hauth, hamt, hiss, hacc, hne⟩, hk,
+  · rintro ⟨⟨hadm, hauth, hamt, hiss, hacc, hne, hlive⟩, hk⟩
+    rw [if_pos hadm, if_pos ⟨hauth, hamt, hiss, hacc, hne, hlive⟩, hk,
         intentMove_eq_transferBal k.bal a.asset a.cell a.asset a.amt hne]
 
 /-- **ANTI-GHOST TOOTH (mint).** Any candidate `k'' ≠ mintSpec k a` is REJECTED — a mint
@@ -271,15 +274,15 @@ theorem burn_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
     · rw [if_pos hadm] at h
       by_cases hg : mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
           ∧ a.amt ≤ k.bal a.cell a.asset ∧ a.cell ∈ k.accounts ∧ a.asset ∈ k.accounts
-          ∧ a.cell ≠ a.asset
+          ∧ a.cell ≠ a.asset ∧ cellLifecycleLive k a.asset = true
       · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
-        obtain ⟨hauth, hamt, havail, hacc, hiss, hne⟩ := hg
-        refine ⟨⟨hadm, hauth, hamt, havail, hacc, hiss, hne⟩, ?_⟩
+        obtain ⟨hauth, hamt, havail, hacc, hiss, hne, hlive⟩ := hg
+        refine ⟨⟨hadm, hauth, hamt, havail, hacc, hiss, hne, hlive⟩, ?_⟩
         rw [← h, intentMove_eq_transferBal k.bal a.cell a.asset a.asset a.amt hne]
       · rw [if_neg hg] at h; exact absurd h (by simp)
     · rw [if_neg hadm] at h; exact absurd h (by simp)
-  · rintro ⟨⟨hadm, hauth, hamt, havail, hacc, hiss, hne⟩, hk⟩
-    rw [if_pos hadm, if_pos ⟨hauth, hamt, havail, hacc, hiss, hne⟩, hk,
+  · rintro ⟨⟨hadm, hauth, hamt, havail, hacc, hiss, hne, hlive⟩, hk⟩
+    rw [if_pos hadm, if_pos ⟨hauth, hamt, havail, hacc, hiss, hne, hlive⟩, hk,
         intentMove_eq_transferBal k.bal a.cell a.asset a.asset a.amt hne]
 
 /-- **ANTI-GHOST TOOTH (burn).** Any candidate `k'' ≠ burnSpec k a` is REJECTED. -/

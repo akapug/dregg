@@ -736,7 +736,8 @@ recipient goes positive, and `Σ_c bal c a` is UNCHANGED — exactly zero stays 
 def recKMintAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
   if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
-      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell then
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+      ∧ cellLifecycleLive k a = true then
     some { k with bal := recTransferBal k.bal a cell a amt }
   else none
 
@@ -748,7 +749,8 @@ WELL waives availability) + liveness + distinctness. -/
 def recKBurnAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
   if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a then
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+      ∧ cellLifecycleLive k a = true then
     some { k with bal := recTransferBal k.bal cell a a amt }
   else none
 
@@ -762,11 +764,11 @@ theorem recKMintAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a 
     recTotalAsset k' b = recTotalAsset k b := by
   unfold recKMintAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
-      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨-, -, hiss, hcell, hne⟩ := hg
+    obtain ⟨-, -, hiss, hcell, hne, -⟩ := hg
     rcases eq_or_ne b a with rfl | hb
     · show (∑ c ∈ k.accounts, recTransferBal k.bal b cell b amt c b)
           = ∑ c ∈ k.accounts, k.bal c b
@@ -784,11 +786,11 @@ theorem recKBurnAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a 
     recTotalAsset k' b = recTotalAsset k b := by
   unfold recKBurnAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨-, -, -, hcell, hiss, hne⟩ := hg
+    obtain ⟨-, -, -, hcell, hiss, hne, -⟩ := hg
     rcases eq_or_ne b a with rfl | hb
     · show (∑ c ∈ k.accounts, recTransferBal k.bal cell b b amt c b)
           = ∑ c ∈ k.accounts, k.bal c b
@@ -837,7 +839,7 @@ theorem recKMintAsset_authorized (k k' : RecordKernelState) (actor cell : CellId
     mintAuthorizedB k.caps actor a = true := by
   unfold recKMintAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
-      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -847,7 +849,7 @@ theorem recKMintAsset_requires_live_issuer (k : RecordKernelState) (actor cell :
     (a : AssetId) (amt : ℤ) (hno : a ∉ k.accounts) :
     recKMintAsset k actor cell a amt = none := by
   unfold recKMintAsset
-  rw [if_neg (by rintro ⟨-, -, hiss, -, -⟩; exact hno hiss)]
+  rw [if_neg (by rintro ⟨-, -, hiss, -, -, -⟩; exact hno hiss)]
 
 /-- A committed mint witnesses its issuer well LIVE (the positive face of the genesis-order
 gate). -/
@@ -855,7 +857,7 @@ theorem recKMintAsset_issuer_live (k k' : RecordKernelState) (actor cell : CellI
     (amt : ℤ) (h : recKMintAsset k actor cell a amt = some k') : a ∈ k.accounts := by
   unfold recKMintAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt
-      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true
   · exact hg.2.2.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -864,7 +866,7 @@ theorem recKBurnAsset_issuer_live (k k' : RecordKernelState) (actor cell : CellI
     (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') : a ∈ k.accounts := by
   unfold recKBurnAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
   · exact hg.2.2.2.2.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -3387,7 +3389,7 @@ theorem recKBurnAsset_authorized (k k' : RecordKernelState) (actor cell : CellId
     mintAuthorizedB k.caps actor a = true := by
   unfold recKBurnAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+      ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 

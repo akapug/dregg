@@ -95,6 +95,8 @@ structure TransferReadoutResidual (hash : List ℤ → ℤ) (t : VmTrace)
   guardDistinct : tr.src ≠ tr.dst
   guardLiveSrc : tr.src ∈ pre.kernel.accounts
   guardLiveDst : tr.dst ∈ pre.kernel.accounts
+  -- the SOURCE is lifecycle-LIVE ("Destroyed is terminal" on the SEND side): membership is not liveness.
+  guardSrcLifecycleLive : cellLifecycleLive pre.kernel tr.src = true
   guardAccepts : acceptsEffects pre.kernel tr.dst = true
   -- the 16 non-`bal` frame fields + the receipt-log advance.
   frAccounts : post.kernel.accounts = pre.kernel.accounts
@@ -160,6 +162,7 @@ def transferTraceReadout_of_residual (hash : List ℤ → ℤ)
   guardDistinct := r.guardDistinct
   guardLiveSrc := r.guardLiveSrc
   guardLiveDst := r.guardLiveDst
+  guardSrcLifecycleLive := r.guardSrcLifecycleLive
   guardAccepts := r.guardAccepts
   frAccounts := r.frAccounts
   frCell := r.frCell

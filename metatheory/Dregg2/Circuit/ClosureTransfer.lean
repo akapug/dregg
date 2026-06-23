@@ -145,6 +145,9 @@ structure TransferTraceReadout (hash : List ℤ → ℤ)
   guardDistinct : tr.src ≠ tr.dst
   guardLiveSrc : tr.src ∈ pre.kernel.accounts
   guardLiveDst : tr.dst ∈ pre.kernel.accounts
+  -- the SOURCE is lifecycle-LIVE ("Destroyed is terminal" on the SEND side): membership is not
+  -- liveness; a member-but-Destroyed source cannot debit. Commitment-bindable (reads `lifecycle`).
+  guardSrcLifecycleLive : cellLifecycleLive pre.kernel tr.src = true
   guardAccepts : acceptsEffects pre.kernel tr.dst = true
   -- the 16 non-`bal` frame fields + the receipt-log advance.
   frAccounts : post.kernel.accounts = pre.kernel.accounts
@@ -234,6 +237,7 @@ def rotatedEncodes_of_floors (hash : List ℤ → ℤ) (S : CommitSurface)
   guardDistinct := rd.guardDistinct
   guardLiveSrc := rd.guardLiveSrc
   guardLiveDst := rd.guardLiveDst
+  guardSrcLifecycleLive := rd.guardSrcLifecycleLive
   guardAccepts := rd.guardAccepts
   frAccounts := rd.frAccounts
   frCell := rd.frCell

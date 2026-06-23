@@ -67,7 +67,8 @@ policy lives in the issuer cell's program, the kernel keeps conservation only). 
 def issuerMoveK (k : RecordKernelState) (actor : CellId) (a : AssetId) (dst : CellId) (amt : ℤ) :
     Option RecordKernelState :=
   if mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt
-      ∧ issuerOf a ∈ k.accounts ∧ dst ∈ k.accounts ∧ issuerOf a ≠ dst then
+      ∧ issuerOf a ∈ k.accounts ∧ dst ∈ k.accounts ∧ issuerOf a ≠ dst
+      ∧ cellLifecycleLive k (issuerOf a) = true then
     some { k with bal := recTransferBal k.bal (issuerOf a) dst a amt }
   else none
 
@@ -79,7 +80,8 @@ shrinks). -/
 def issuerBurnK (k : RecordKernelState) (actor : CellId) (a : AssetId) (src : CellId) (amt : ℤ) :
     Option RecordKernelState :=
   if mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
-      ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a then
+      ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a
+      ∧ cellLifecycleLive k (issuerOf a) = true then
     some { k with bal := recTransferBal k.bal src (issuerOf a) a amt }
   else none
 
@@ -115,10 +117,11 @@ theorem issuerMoveK_preserves_exact {k k' : RecordKernelState} {actor : CellId} 
   unfold issuerMoveK at h
   by_cases hg : mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt
       ∧ issuerOf a ∈ k.accounts ∧ dst ∈ k.accounts ∧ issuerOf a ≠ dst
+      ∧ cellLifecycleLive k (issuerOf a) = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨-, -, hiss, hdst, hne⟩ := hg
+    obtain ⟨-, -, hiss, hdst, hne, -⟩ := hg
     exact transferBal_write_preserves_exact k amt hiss hdst hne hex
   · rw [if_neg hg] at h
     exact absurd h (by simp)
@@ -131,10 +134,11 @@ theorem issuerBurnK_preserves_exact {k k' : RecordKernelState} {actor : CellId} 
   unfold issuerBurnK at h
   by_cases hg : mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
       ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a
+      ∧ cellLifecycleLive k (issuerOf a) = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
     subst h
-    obtain ⟨-, -, -, hsrc, hiss, hne⟩ := hg
+    obtain ⟨-, -, -, hsrc, hiss, hne, -⟩ := hg
     exact transferBal_write_preserves_exact k amt hsrc hiss hne hex
   · rw [if_neg hg] at h
     exact absurd h (by simp)
@@ -149,6 +153,7 @@ theorem issuerMoveK_authorized {k k' : RecordKernelState} {actor : CellId} {a : 
   unfold issuerMoveK at h
   by_cases hg : mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt
       ∧ issuerOf a ∈ k.accounts ∧ dst ∈ k.accounts ∧ issuerOf a ≠ dst
+      ∧ cellLifecycleLive k (issuerOf a) = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -159,6 +164,7 @@ theorem issuerBurnK_authorized {k k' : RecordKernelState} {actor : CellId} {a : 
   unfold issuerBurnK at h
   by_cases hg : mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
       ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a
+      ∧ cellLifecycleLive k (issuerOf a) = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
@@ -170,7 +176,7 @@ theorem issuerMoveK_requires_live_issuer (k : RecordKernelState) (actor : CellId
     (dst : CellId) (amt : ℤ) (hno : issuerOf a ∉ k.accounts) :
     issuerMoveK issuerOf k actor a dst amt = none := by
   unfold issuerMoveK
-  rw [if_neg (by rintro ⟨-, -, hiss, -, -⟩; exact hno hiss)]
+  rw [if_neg (by rintro ⟨-, -, hiss, -, -, -⟩; exact hno hiss)]
 
 /-- **Burn availability, fail-closed.** You cannot burn more than the holder has — the holder leg
 keeps the ordinary availability gate (only the issuer WELL waives it). -/
@@ -178,7 +184,7 @@ theorem issuerBurnK_requires_availability (k : RecordKernelState) (actor : CellI
     (src : CellId) (amt : ℤ) (hover : k.bal src a < amt) :
     issuerBurnK issuerOf k actor a src amt = none := by
   unfold issuerBurnK
-  rw [if_neg (by rintro ⟨-, -, hav, -, -, -⟩; omega)]
+  rw [if_neg (by rintro ⟨-, -, hav, -, -, -, -⟩; omega)]
 
 end Mechanism
 
@@ -348,6 +354,7 @@ theorem issuerMint_pointwise_vs_credit {k kL kI : RecordKernelState} {actor cell
     unfold recKMintAssetIssuer issuerMoveK at hI
     by_cases hg : mintAuthorizedB k.caps actor (issuerSelf a) = true ∧ 0 ≤ amt
         ∧ issuerSelf a ∈ k.accounts ∧ cell ∈ k.accounts ∧ issuerSelf a ≠ cell
+        ∧ cellLifecycleLive k (issuerSelf a) = true
     · rw [if_pos hg] at hI
       simp only [Option.some.injEq] at hI
       exact hI.symm
@@ -358,7 +365,8 @@ theorem issuerMint_pointwise_vs_credit {k kL kI : RecordKernelState} {actor cell
     unfold recKMintAssetIssuer issuerMoveK at hI
     by_cases hg : mintAuthorizedB k.caps actor (issuerSelf a) = true ∧ 0 ≤ amt
         ∧ issuerSelf a ∈ k.accounts ∧ cell ∈ k.accounts ∧ issuerSelf a ≠ cell
-    · exact hg.2.2.2.2
+        ∧ cellLifecycleLive k (issuerSelf a) = true
+    · exact hg.2.2.2.2.1
     · rw [if_neg hg] at hI
       exact absurd hI (by simp)
   intro c b

@@ -303,7 +303,8 @@ def transfer_rotatedEncodes_construct (hash : List ℤ → ℤ)
   guardDistinct := hspec.1.2.2.2.1
   guardLiveSrc  := hspec.1.2.2.2.2.1
   guardLiveDst  := hspec.1.2.2.2.2.2.1
-  guardAccepts  := hspec.1.2.2.2.2.2.2
+  guardSrcLifecycleLive := hspec.1.2.2.2.2.2.2.1
+  guardAccepts  := hspec.1.2.2.2.2.2.2.2
   -- the 16 frame fields + the log advance come from the spec's frame clauses.
   frAccounts          := hspec.2.2.2.1
   frCell              := hspec.2.2.2.2.1

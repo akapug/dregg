@@ -110,8 +110,12 @@ def isFrozen (ctx : AdmCtx) (c : CellId) : Bool := ctx.frozen.contains c
 def admissible (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) : Bool :=
   -- 1. EmptyForest
   h.forestNonEmpty &&
-  -- 2. AgentLive
+  -- 2. AgentLive — the agent cell is a member account AND lifecycle-LIVE (`cellLifecycleLive`, the
+  -- kernel-twin of `acceptsEffects`). Membership alone is NOT liveness: a cell can be a member yet
+  -- Destroyed/Sealed. "Destroyed is terminal" — a Destroyed agent cannot author a turn (dregg1's
+  -- `CellLifecycle::accepts_effects` gate at admission).
   decide (h.agent ∈ s.kernel.accounts) &&
+  cellLifecycleLive s.kernel h.agent &&
   -- 3. Expiry
   (match h.validUntil with | none => true | some vu => decide (admissionClock ctx ≤ vu)) &&
   -- 4. NonceMatch
@@ -198,10 +202,23 @@ theorem admissible_rejects_over_budget (ctx : AdmCtx) (h : TurnHdr) (s : RecChai
   have : decide (h.fee ≤ (ctx.budget : Int)) = false := by simp; omega
   simp [this]
 
-/-- A turn whose agent cell is not a live account is inadmissible. -/
+/-- A turn whose agent cell is not a member account is inadmissible. -/
 theorem admissible_rejects_no_agent (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
     (hgone : h.agent ∉ s.kernel.accounts) : admissible ctx h s = false := by
   simp [admissible, hgone]
+
+/-- **`admissible_rejects_destroyed_agent` — "Destroyed is terminal" at admission.** A turn whose
+agent cell is a member account but NOT lifecycle-Live (`cellLifecycleLive caps agent ≠ true` — a
+Destroyed or Sealed agent) is inadmissible: a Destroyed cell cannot author a turn, even if it is still
+in `accounts`. Membership (`admissible_rejects_no_agent`) is not enough — this is the strictly stronger
+liveness gate codex flagged as missing from the lifecycle/membership conflation. -/
+theorem admissible_rejects_destroyed_agent (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
+    (hdead : cellLifecycleLive s.kernel h.agent ≠ true) : admissible ctx h s = false := by
+  have hf : cellLifecycleLive s.kernel h.agent = false := by
+    cases hb : cellLifecycleLive s.kernel h.agent with
+    | true => exact absurd hb hdead
+    | false => rfl
+  simp [admissible, hf]
 
 /-! ### §3b — Admission extractions: from `admissible = true`, recover each gate's fact.
 
@@ -564,6 +581,7 @@ theorem admissible_append_wellLinked (H : Receipt → Nat) (ctx : AdmCtx) (h : T
 #assert_axioms admissible_rejects_chain_fork
 #assert_axioms admissible_rejects_over_budget
 #assert_axioms admissible_rejects_no_agent
+#assert_axioms admissible_rejects_destroyed_agent
 #assert_axioms admissible_nonceMatch
 #assert_axioms admissible_prevHash_eq_head
 #assert_axioms commitPrologue_nonce

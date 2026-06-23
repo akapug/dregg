@@ -136,7 +136,8 @@ def burn_rotatedEncodesBurn_construct (hash : List ℤ → ℤ)
   guardNonNeg   := hspec.1.2.1
   guardLiveCell := hspec.1.2.2.2.1
   guardLiveWell := hspec.1.2.2.2.2.1
-  guardDistinct := hspec.1.2.2.2.2.2
+  guardDistinct := hspec.1.2.2.2.2.2.1
+  guardLifecycleLive := hspec.1.2.2.2.2.2.2
   -- the 16 frame fields + the log advance come from the spec's frame clauses.
   logAdv              := hspec.2.2.1
   frAccounts          := hspec.2.2.2.1
@@ -164,7 +165,7 @@ theorem burn_descriptorComplete_genuine
     (hspec : BurnSpec pre actor cell a amt post) :
     post.kernel.bal cell a = pre.kernel.bal cell a - amt := by
   rw [hspec.2.1]
-  exact (recBurn_ledger_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2.2).1
+  exact (recBurn_ledger_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).1
 
 /-- **`burn_descriptorComplete_well_genuine` — the dual return-to-well credit tooth.** From `BurnSpec`,
 the issuer well `(a, a)` rises by exactly `amt` (the burned value RETURNS to the well — supply shrinks,
@@ -175,7 +176,7 @@ theorem burn_descriptorComplete_well_genuine
     (hspec : BurnSpec pre actor cell a amt post) :
     post.kernel.bal a a = pre.kernel.bal a a + amt := by
   rw [hspec.2.1]
-  exact (recBurn_ledger_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2.2).2.1
+  exact (recBurn_ledger_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).2.1
 
 /-- **`burn_descriptorComplete` — the burn completeness rung (dual of `burn_descriptorRefines`).** Given,
 per kernel burn step `BurnSpec pre actor cell a amt post`, a realizable prover construction `buildWitness`
@@ -259,7 +260,8 @@ def mint_rotatedEncodesMint_construct (hash : List ℤ → ℤ)
   guardNonNeg   := hspec.1.2.1
   guardLiveWell := hspec.1.2.2.1
   guardLiveCell := hspec.1.2.2.2.1
-  guardDistinct := hspec.1.2.2.2.2
+  guardDistinct := hspec.1.2.2.2.2.1
+  guardLifecycleLive := hspec.1.2.2.2.2.2
   -- the 16 frame fields + the log advance come from the spec's frame clauses.
   logAdv              := hspec.2.2.1
   frAccounts          := hspec.2.2.2.1
@@ -286,7 +288,7 @@ theorem mint_descriptorComplete_genuine
     (hspec : MintASpec pre actor cell a amt post) :
     post.kernel.bal cell a = pre.kernel.bal cell a + amt := by
   rw [hspec.2.1]
-  exact (recTransferBal_mint_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2).2.1
+  exact (recTransferBal_mint_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2.1).2.1
 
 /-- **`mint_descriptorComplete_well_genuine` — the dual well-debit tooth.** From `MintASpec`, the issuer
 well `(a, a)` falls by exactly `amt` (the supply increment is ON the ledger, in the well). With the credit
@@ -297,7 +299,7 @@ theorem mint_descriptorComplete_well_genuine
     (hspec : MintASpec pre actor cell a amt post) :
     post.kernel.bal a a = pre.kernel.bal a a - amt := by
   rw [hspec.2.1]
-  exact (recTransferBal_mint_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2).1
+  exact (recTransferBal_mint_correct pre.kernel.bal cell a amt hspec.1.2.2.2.2.1).1
 
 /-- **`mint_descriptorComplete` — the mint completeness rung (dual of `mint_descriptorRefines`).** From a
 kernel mint step `MintASpec pre actor cell a amt post` + the realizable prover construction, a circuit

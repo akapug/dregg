@@ -300,6 +300,7 @@ private theorem boundUnshield_shape {k k' : RecordKernelState} {nf : Nat} {spent
           { actor := poolOf spent.asset, src := poolOf spent.asset, dst := dst, amt := amt } = true
           ∧ 0 ≤ amt ∧ amt ≤ k₁.bal (poolOf spent.asset) spent.asset
           ∧ poolOf spent.asset ≠ dst ∧ poolOf spent.asset ∈ k₁.accounts ∧ dst ∈ k₁.accounts
+          ∧ cellLifecycleLive k₁ (poolOf spent.asset) = true
       · rw [if_pos hg] at h
         simp only [Option.some.injEq] at h
         refine ⟨k₁, rfl, ?_, hg.2.2.2.1⟩

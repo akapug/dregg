@@ -98,10 +98,10 @@ it term-for-term: a `Bool` `guard` of the EXACT 6 conjuncts, then a `setBal` who
 on the `(src,a)`/`(dst,a)` ledger columns. The contrast with transfer is the move primitive: `setBal`
 (rewrites `bal`) over `recTransferBal` (the asset-indexed debit/credit), NOT `setCell`/`recTransfer`. -/
 
-/-- The balanceA admissibility gate as a `Bool` — exactly `recKExecAsset`'s `if` (the 6 conjuncts: authority
-over `src`, non-negative amount, availability *in asset `a`* on the genuine `bal` ledger, distinctness, and
-both cells live accounts). This is the RAW-kernel gate; the chained `recCexecAsset` adds `acceptsEffects` at
-`t.dst` on top (carried separately in §3). -/
+/-- The balanceA admissibility gate as a `Bool` — exactly `recKExecAsset`'s `if` (the 7 conjuncts: authority
+over `src`, non-negative amount, availability *in asset `a`* on the genuine `bal` ledger, distinctness,
+both cells live accounts, and the SOURCE issuer-liveness gate `cellLifecycleLive`). This is the RAW-kernel
+gate; the chained `recCexecAsset` adds `acceptsEffects` at `t.dst` on top (carried separately in §3). -/
 def balanceAGuard (turn : Turn) (a : AssetId) (k : RecordKernelState) : Bool :=
   authorizedB k.caps turn
     && decide (0 ≤ turn.amt)
@@ -109,6 +109,7 @@ def balanceAGuard (turn : Turn) (a : AssetId) (k : RecordKernelState) : Bool :=
     && decide (turn.src ≠ turn.dst)
     && decide (turn.src ∈ k.accounts)
     && decide (turn.dst ∈ k.accounts)
+    && cellLifecycleLive k turn.src
 
 /-- **The balanceA effect as an IR term: gate, then move the per-asset ledger.** Mirrors `transferStmt`
 (gate, then move) but the move is `setBal` over `recTransferBal` — the asset-indexed debit/credit on the
@@ -120,12 +121,14 @@ def balanceAStmt (turn : Turn) (a : AssetId) : RecStmt :=
 
 /-! ## §2 — The cornerstone: `interp` of the balanceA term IS the kernel step `recKExecAsset`. -/
 
-/-- The balanceA `Bool` gate decodes to `recKExecAsset`'s admissibility proposition (the 6 conjuncts, in the
-SAME order the kernel `if` checks them). The per-asset analog of `transferGuard_iff`. -/
+/-- The balanceA `Bool` gate decodes to `recKExecAsset`'s admissibility proposition (the 7 conjuncts, in the
+SAME order the kernel `if` checks them — the last being the SOURCE issuer-liveness gate). The per-asset analog
+of `transferGuard_iff`. -/
 theorem balanceAGuard_iff (turn : Turn) (a : AssetId) (k : RecordKernelState) :
     balanceAGuard turn a k = true ↔
       (authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
-        ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts) := by
+        ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+        ∧ cellLifecycleLive k turn.src = true) := by
   simp only [balanceAGuard, Bool.and_eq_true, decide_eq_true_eq]
   tauto
 
@@ -410,7 +413,7 @@ theorem debitLeg_matches_executor (t : Turn) (a : AssetId) (k k' : RecordKernelS
   rw [interp_balanceAStmt_eq_recKExecAsset] at hexec
   unfold recKExecAsset at hexec
   by_cases hg : (authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
-      ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts)
+      ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts ∧ cellLifecycleLive k t.src = true)
   · rw [if_pos hg] at hexec
     have hk' : k'.bal = recTransferBal k.bal t.src t.dst a t.amt :=
       (congrArg RecordKernelState.bal (Option.some.inj hexec)).symm
@@ -436,7 +439,7 @@ theorem creditLeg_matches_executor (t : Turn) (a : AssetId) (k k' : RecordKernel
   rw [interp_balanceAStmt_eq_recKExecAsset] at hexec
   unfold recKExecAsset at hexec
   by_cases hg : (authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
-      ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts)
+      ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts ∧ cellLifecycleLive k t.src = true)
   · rw [if_pos hg] at hexec
     have hk' : k'.bal = recTransferBal k.bal t.src t.dst a t.amt :=
       (congrArg RecordKernelState.bal (Option.some.inj hexec)).symm

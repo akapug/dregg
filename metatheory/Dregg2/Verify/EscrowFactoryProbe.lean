@@ -347,6 +347,7 @@ theorem release_advances_state {k k' : RecordKernelState} {e beneficiary : CellI
           ∧ ({ actor := e, src := e, dst := beneficiary, amt := k.bal e asset } : Turn).src ≠ ({ actor := e, src := e, dst := beneficiary, amt := k.bal e asset } : Turn).dst
           ∧ ({ actor := e, src := e, dst := beneficiary, amt := k.bal e asset } : Turn).src ∈ k1.accounts
           ∧ ({ actor := e, src := e, dst := beneficiary, amt := k.bal e asset } : Turn).dst ∈ k1.accounts
+          ∧ cellLifecycleLive k1 ({ actor := e, src := e, dst := beneficiary, amt := k.bal e asset } : Turn).src = true
       · rw [if_pos hmv] at h; simp only [Option.some.injEq] at h; rw [← h]
       · rw [if_neg hmv] at h; exact absurd h (by simp)
     unfold escrowState
@@ -389,6 +390,9 @@ structure SettleReady (k : RecordKernelState) (e target : CellId) (asset : Asset
   distinct    : e ≠ target
   e_live      : e ∈ k.accounts
   target_live : target ∈ k.accounts
+  /-- The escrow cell's lifecycle admits the settle move out (the `recKExecAsset` SOURCE-liveness
+  gate). The held value settles out of the escrow cell, so the cell must be lifecycle-live. -/
+  e_lifecycle : cellLifecycleLive k e = true
 
 /-- A settle COMMITS whenever the world is `SettleReady` (the move's fail-closed guard is
 discharged: `actor = src = e` self-authorizes, the held amount is available by construction). -/
@@ -404,13 +408,15 @@ theorem escrowSettle_commits (k : RecordKernelState) (e target : CellId) (asset 
   -- the escrow cell self-authorizes (actor == src), so authorizedB = true.
   have hauth : authorizedB k1.caps { actor := e, src := e, dst := target, amt := k.bal e asset } = true := by
     unfold authorizedB; simp
+  have hlife : cellLifecycleLive k1 e = true := hr.e_lifecycle
   unfold recKExecAsset
   rw [if_pos]
   · exact Option.isSome_some
-  · refine ⟨hauth, hr.held_nonneg, ?_, hr.distinct, ?_, ?_⟩
+  · refine ⟨hauth, hr.held_nonneg, ?_, hr.distinct, ?_, ?_, ?_⟩
     · show k.bal e asset ≤ k1.bal e asset; rw [hbal]
     · show e ∈ k1.accounts; rw [hacc]; exact hr.e_live
     · show target ∈ k1.accounts; rw [hacc]; exact hr.target_live
+    · show cellLifecycleLive k1 e = true; exact hlife
 
 /-- **`open_escrow_releasable` — KEYSTONE (d), RELEASE side, PROVED.** An OPEN escrow with the
 correct condition witness and a `SettleReady` beneficiary RELEASES (commits) — the value is
@@ -452,7 +458,8 @@ def world0 : RecordKernelState :=
 
 /-- The settle-ready bundle for releasing world0's escrow to beneficiary 1. -/
 theorem world0_release_ready : SettleReady world0 0 1 0 :=
-  { held_nonneg := by decide, distinct := by decide, e_live := by decide, target_live := by decide }
+  { held_nonneg := by decide, distinct := by decide, e_live := by decide, target_live := by decide,
+    e_lifecycle := by decide }
 
 -- (i) the escrow is OPEN and the condition slot is 99:
 #guard (escrowState world0 0 == sOpen)                              --  true
@@ -510,6 +517,7 @@ theorem hard_i_settle_drains_exactly (k : RecordKernelState) (e target : CellId)
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src ≠ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).dst
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src ∈ k1.accounts
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).dst ∈ k1.accounts
+      ∧ cellLifecycleLive k1 ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src = true
   · rw [if_pos hmv] at h; simp only [Option.some.injEq] at h
     rw [← h]
     show recTransferBal k1.bal e target asset (k.bal e asset) e asset = 0
@@ -546,12 +554,13 @@ theorem hard_ii_settle_atomic (k : RecordKernelState) (e target : CellId) (asset
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src ≠ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).dst
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src ∈ k1.accounts
       ∧ ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).dst ∈ k1.accounts
+      ∧ cellLifecycleLive k1 ({ actor := e, src := e, dst := target, amt := k.bal e asset } : Turn).src = true
   · rw [if_pos hmv] at h; simp only [Option.some.injEq] at h
     rw [← h]
     show recTransferBal k1.bal e target asset (k.bal e asset) target asset
        = k.bal target asset + k.bal e asset
     unfold recTransferBal
-    obtain ⟨_, _, _, hne, _, _⟩ := hmv
+    obtain ⟨_, _, _, hne, _, _, _⟩ := hmv
     have hne' : e ≠ target := hne
     rw [if_pos rfl, if_neg (by simpa using fun h => hne' h.symm), if_pos rfl, hbal]
   · rw [if_neg hmv] at h; exact absurd h (by simp)

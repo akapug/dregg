@@ -323,7 +323,7 @@ theorem unify_bridgeMint (s s' : RecChainedState) (actor cell : CellId) (a : Ass
   -- from the `mintAdmit` guard). (Earlier this arm credited via `recBalCredit`; it now issuer-moves.)
   rw [hspec.2.1]
   exact (Dregg2.Circuit.Spec.BalanceMovement.recTransferBal_correct
-    s.kernel.bal a cell a value hspec.1.2.2.2.2).2.1
+    s.kernel.bal a cell a value hspec.1.2.2.2.2.1).2.1
 
 /-- **`unify_bridgeMint_exec` — same, against the executor's `.bridgeMintA` arm directly.** Reading
 through `execBridgeMintA_iff_spec`, a committed `execFullA s (.bridgeMintA actor cell a value) = some s'`

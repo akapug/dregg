@@ -107,6 +107,7 @@ def bridgeMintGuard (actor cell : CellId) (a : AssetId) (value : ℤ) (k : Recor
     && decide (a ∈ k.accounts)
     && decide (cell ∈ k.accounts)
     && decide (a ≠ cell)
+    && cellLifecycleLive k a
 
 /-- The bridgeMint effect as an IR term: gate, then ISSUER-MOVE `value` of asset `a` from the issuer well
 `(a, a)` to the recipient `(cell, a)` (a single `setBal` write of `recTransferBal k.bal a cell a value`).
@@ -128,7 +129,7 @@ conjunction — mint authority over the ISSUER `a` ∧ non-negativity ∧ issuer
 theorem bridgeMintGuard_iff (actor cell : CellId) (a : AssetId) (value : ℤ) (k : RecordKernelState) :
     bridgeMintGuard actor cell a value k = true ↔
       (mintAuthorizedB k.caps actor a = true ∧ 0 ≤ value
-        ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell) := by
+        ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true) := by
   simp only [bridgeMintGuard, Bool.and_eq_true, decide_eq_true_eq]
   tauto
 
@@ -252,9 +253,9 @@ theorem recKMintAsset_proj_balLo {k k' : RecordKernelState} {actor cell : CellId
     (cellProjA k' cell a).balLo = (cellProjA k cell a).balLo + value := by
   unfold recKMintAsset at h
   by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ value
-      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell
+      ∧ a ∈ k.accounts ∧ cell ∈ k.accounts ∧ a ≠ cell ∧ cellLifecycleLive k a = true
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
-    obtain ⟨_, _, _, _, hac⟩ := hg
+    obtain ⟨_, _, _, _, hac, _⟩ := hg
     -- `(cellProjA { k with bal := recTransferBal k.bal a cell a value } cell a).balLo`
     --   = `recTransferBal k.bal a cell a value cell a` = the DST credit `k.bal cell a + value`.
     show recTransferBal k.bal a cell a value cell a = k.bal cell a + value

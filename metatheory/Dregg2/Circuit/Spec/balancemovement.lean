@@ -63,10 +63,15 @@ Exactly the six conjuncts `recKExecAsset` (`RecordKernel.lean:719`) checks befor
 the AVAILABILITY conjunct reads the GENUINE per-asset ledger `k.bal t.src a` — NOT the legacy scalar
 `balOf (k.cell t.src)`. -/
 
-/-- The full per-asset admissibility guard `recKExecAsset` / `recCexecAsset` checks, as a `Prop`. -/
+/-- The full per-asset admissibility guard `recKExecAsset` / `recCexecAsset` checks, as a `Prop`.
+The `acceptsEffects k t.dst` leg is `recCexecAsset`'s OUTER credit-liveness gate (no credit into a
+Destroyed/Sealed recipient); the `cellLifecycleLive k t.src` leg is `recKExecAsset`'s INNER
+SOURCE-liveness gate — a member-but-Destroyed source cannot SEND ("Destroyed is terminal" on the
+debit side, the mirror of the dst gate). -/
 def admitGuardA (k : RecordKernelState) (t : Turn) (a : AssetId) : Prop :=
   authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
     ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+    ∧ cellLifecycleLive k t.src = true
     ∧ acceptsEffects k t.dst = true
 
 /-! ## §2 — the post-`bal` ledger helper, validated DECLARATIVELY.
@@ -146,13 +151,14 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
   by_cases hadm : acceptsEffects st.kernel t.dst
   · by_cases hg : authorizedB st.kernel.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ st.kernel.bal t.src a
         ∧ t.src ≠ t.dst ∧ t.src ∈ st.kernel.accounts ∧ t.dst ∈ st.kernel.accounts
+        ∧ cellLifecycleLive st.kernel t.src = true
     · rw [if_pos hadm, if_pos hg]
       constructor
       · intro h
         simp only [Option.some.injEq] at h
         subst h
-        rcases hg with ⟨ha, hnn, havail, hne, hsrc, hdst⟩
-        exact ⟨⟨ha, hnn, havail, hne, hsrc, hdst, hadm⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+        rcases hg with ⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive⟩
+        exact ⟨⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive, hadm⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
                rfl, rfl, rfl⟩
       · rintro ⟨hguard, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15⟩
         obtain ⟨k', l'⟩ := st'
@@ -164,12 +170,12 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
       constructor
       · intro h; exact absurd h (by simp)
       · rintro ⟨hguard, _⟩
-        rcases hguard with ⟨ha, hnn, havail, hne, hsrc, hdst, _⟩
-        exact absurd ⟨ha, hnn, havail, hne, hsrc, hdst⟩ hg
+        rcases hguard with ⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive, _⟩
+        exact absurd ⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive⟩ hg
   · rw [if_neg hadm]
     constructor
     · intro h; exact absurd h (by simp)
-    · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, hadm'⟩; exact absurd hadm' hadm
+    · rintro ⟨hguard, _⟩; rcases hguard with ⟨_, _, _, _, _, _, _, hadm'⟩; exact absurd hadm' hadm
 
 /-- **`execFullA_balanceA_iff_spec` — the UNIFIED-ACTION executor corner.** The action executor
 `execFullA` dispatches `.balanceA t a` to `recCexecAsset s t a`, so committing the unified action into
@@ -275,6 +281,21 @@ theorem balanceMovement_rejects_sealed_dst (st : RecChainedState) (t : Turn) (a 
   unfold recCexecAsset
   rw [if_neg (by intro h; rw [h] at hbad; cases hbad)]
 
+/-- **`balanceMovement_rejects_destroyed_src` — "Destroyed is terminal" on the SEND side.** A transfer
+out of a member-but-Destroyed SOURCE (`cellLifecycleLive caps t.src ≠ true` — e.g. a Destroyed cell
+still in `accounts`) does NOT commit. The mirror of `rejects_sealed_dst`: just as no credit lands on a
+non-Live recipient, no DEBIT leaves a non-Live source. This is the property codex flagged: previously
+`recKExecAsset` gated only `src ∈ accounts` (membership), so a Destroyed cell could still SEND. -/
+theorem balanceMovement_rejects_destroyed_src (st : RecChainedState) (t : Turn) (a : AssetId)
+    (hbad : cellLifecycleLive st.kernel t.src ≠ true) :
+    execFullA st (.balanceA t a) = none := by
+  show recCexecAsset st t a = none
+  unfold recCexecAsset recKExecAsset
+  by_cases hadm : acceptsEffects st.kernel t.dst
+  · rw [if_pos hadm]
+    rw [if_neg (by rintro ⟨_, _, _, _, _, _, h⟩; exact absurd h hbad)]
+  · rw [if_neg hadm]
+
 /-! ## §6 — Axiom-hygiene tripwires.
 
 Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
@@ -290,5 +311,6 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 #assert_axioms balanceMovement_rejects_self
 #assert_axioms balanceMovement_rejects_dead_src
 #assert_axioms balanceMovement_rejects_sealed_dst
+#assert_axioms balanceMovement_rejects_destroyed_src
 
 end Dregg2.Circuit.Spec.BalanceMovement

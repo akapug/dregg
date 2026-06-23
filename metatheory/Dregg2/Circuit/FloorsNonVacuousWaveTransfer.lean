@@ -185,6 +185,7 @@ def transfer_readout :
   guardDistinct := by show txTurn.src ≠ txTurn.dst; decide
   guardLiveSrc := by show txTurn.src ∈ txPre.kernel.accounts; decide
   guardLiveDst := by show txTurn.dst ∈ txPre.kernel.accounts; decide
+  guardSrcLifecycleLive := by decide
   guardAccepts := by decide
   frAccounts := rfl
   frCell := rfl

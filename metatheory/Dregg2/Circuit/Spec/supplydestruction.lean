@@ -57,7 +57,7 @@ production law's destruction face), non-negativity (no negative-burn value infla
 availability at the HOLDER (no over-burn), holder + issuer-well liveness, and holder ≠ well. -/
 def BurnGuard (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) : Prop :=
   mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-    ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+    ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
 
 /-- The truthful burn receipt the chained executor prepends to the log: the return-to-well row
 `holder cell → well a` of the burned `amt` (W1: an ordinary move, no negative-disclosure fiction). -/
@@ -75,7 +75,7 @@ theorem recKBurnAsset_iff_guard (k : RecordKernelState) (actor cell : CellId) (a
   constructor
   · rintro ⟨k', h⟩
     by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
-        ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
+        ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
     · exact hg
     · rw [if_neg hg] at h; exact absurd h (by simp)
   · intro hg; exact ⟨_, by rw [if_pos hg]⟩
@@ -154,6 +154,7 @@ theorem recCBurnAsset_iff_spec (s : RecChainedState) (actor cell : CellId) (a : 
   unfold recKBurnAsset
   by_cases hg : mintAuthorizedB s.kernel.caps actor a = true ∧ 0 ≤ amt
       ∧ amt ≤ s.kernel.bal cell a ∧ cell ∈ s.kernel.accounts ∧ a ∈ s.kernel.accounts ∧ cell ≠ a
+      ∧ cellLifecycleLive s.kernel a = true
   · rw [if_pos hg]
     simp only [BurnGuard]
     constructor
@@ -195,7 +196,7 @@ theorem recCBurnAsset_debits {s s' : RecChainedState} {actor cell : CellId} {a :
     s'.kernel.bal cell a = s.kernel.bal cell a - amt
     ∧ s'.kernel.bal a a = s.kernel.bal a a + amt := by
   have hspec := (recCBurnAsset_iff_spec s actor cell a amt s').mp h
-  have hne : cell ≠ a := hspec.1.2.2.2.2.2
+  have hne : cell ≠ a := hspec.1.2.2.2.2.2.1
   obtain ⟨hdeb, hwell, _⟩ := recBurn_ledger_correct s.kernel.bal cell a amt hne
   rw [hspec.2.1]
   exact ⟨hdeb, hwell⟩
@@ -207,7 +208,7 @@ theorem recCBurnAsset_other_ledger_untouched {s s' : RecChainedState} {actor cel
     (c : CellId) (b : AssetId) (hcb : ¬ (c = cell ∧ b = a)) (hci : ¬ (c = a ∧ b = a)) :
     s'.kernel.bal c b = s.kernel.bal c b := by
   have hspec := (recCBurnAsset_iff_spec s actor cell a amt s').mp h
-  have hne : cell ≠ a := hspec.1.2.2.2.2.2
+  have hne : cell ≠ a := hspec.1.2.2.2.2.2.1
   rw [hspec.2.1]
   exact (recBurn_ledger_correct s.kernel.bal cell a amt hne).2.2 c b hcb hci
 
@@ -260,10 +261,50 @@ theorem execFullA_burnA_iff_spec (s : RecChainedState) (actor cell : CellId) (a 
   show recCBurnAsset s actor cell a amt = some s' ↔ BurnSpec s actor cell a amt s'
   exact recCBurnAsset_iff_spec s actor cell a amt s'
 
+/-- **`burnA_rejects_destroyed_issuer` — "Destroyed is terminal" (the lifecycle tooth).** A `burnA`
+whose ISSUER well is a member account but NOT lifecycle-Live (`cellLifecycleLive caps a ≠ true` — a
+Destroyed or Sealed issuer cell) is REJECTED, even with full authority/availability/membership.
+Returning supply to a Destroyed well is refused at the executor (and so the spec) layer — the
+property codex flagged as missing (the handler wrapper enforced it; `execFullA`/the spec did not). -/
+theorem burnA_rejects_destroyed_issuer (s : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (hdead : cellLifecycleLive s.kernel a ≠ true) :
+    execFullA s (.burnA actor cell a amt) = none := by
+  show recCBurnAsset s actor cell a amt = none
+  unfold recCBurnAsset recKBurnAsset
+  rw [if_neg (by rintro ⟨_, _, _, _, _, _, h⟩; exact absurd h hdead)]
+
+/-! ## §6b — concrete #guard non-vacuity witnesses (Destroyed-issuer burn refused).
+
+Cell 1 is the burnable holder, cell 0 the issuer well. Actor 9 holds the `node 0` issuer cap; the
+holder holds 30 of asset 0. A Live-issuer burn of 10 commits; the SAME burn over a Destroyed issuer
+(member, but `lifecycle = 3`) is refused — the lifecycle is the only thing that changed. -/
+
+/-- A pre-state: cells {0,1} members, holder cell 1 holds 30 of asset 0, actor 9 holds `node 0`. -/
+def sBurn0 : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun _ => .record [("balance", .int 0)]
+        caps := fun a => if a = 9 then [Dregg2.Authority.Cap.node 0] else []
+        bal := fun c a => if c = 1 ∧ a = 0 then 30 else 0 }
+    log := [] }
+
+/-- The same, but the issuer well (cell 0) is Destroyed (`lifecycle 0 = 3`). -/
+def sBurnDead : RecChainedState :=
+  { sBurn0 with kernel := { sBurn0.kernel with lifecycle := fun c => if c = 0 then 3 else 0 } }
+
+-- A LIVE-issuer burn of 10 of asset 0 (holder 1 → well 0) COMMITS:
+#guard (execFullA sBurn0 (.burnA 9 1 0 10)).isSome  --  true
+-- The issuer is STILL a member account when Destroyed (membership ≠ liveness):
+#guard decide (0 ∈ sBurnDead.kernel.accounts)  --  true
+#guard cellLifecycleLive sBurnDead.kernel 0 == false
+-- ...but the SAME burn over the Destroyed issuer is REFUSED ("Destroyed is terminal"):
+#guard decide ((execFullA sBurnDead (.burnA 9 1 0 10)).isNone)  --  true
+
 /-! ## §7 — Axiom-hygiene tripwires.
 
 Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
+#assert_axioms burnA_rejects_destroyed_issuer
 #assert_axioms recKBurnAsset_iff_guard
 #assert_axioms recBurn_ledger_correct
 #assert_axioms recCBurnAsset_iff_spec
