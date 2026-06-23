@@ -11,6 +11,15 @@ reason.)*
 Last sweep: 2026-06-13 (flagged-items burndown — removed ~14 landed/struck items,
 deduped the DreggDL/sel4/snapshot landings into git history, kept live tails).
 
+### FULL ZED WORKSPACE — nested dirs + real terminal PTY closed (2026-06-23).
+`c25ff6c8` (`deos-zed-full`). Both seams CLOSED: (a) nested-dir expansion — root cause was a real bug
+(every cell reported `inode:0` → Zed's worktree scanner treated nested cells as symlink cycles + stopped
+recursing); fixed with a distinct stable per-path inode → a 2-deep cell tree (`/proj/src/inner/deep.rs`)
+materializes via the real scan + `refresh_entries_for_paths` click-to-expand. (b) a real OS PTY shell opens
+in the docked `TerminalPanel` (Zed's own `add_center_terminal`/`create_terminal_shell`; fed
+`echo deos-cell-terminal`, marker reaches the grid). Save-is-a-turn preserved. (inode-0 = a latent trap for
+any custom `fs::Fs` w/o real inodes — documented.) full-zed test green, bare build green.
+
 ### FULL ZED WORKSPACE over FirmamentFs — RUNS, by running (2026-06-23).
 `333342ab` (`deos-zed-full`). A real `workspace::Workspace` instantiates over a `Project` whose `Fs` IS the
 dregg cell-ledger; Zed's OWN `project_panel` + `outline_panel` + `terminal_panel` `Panel::load`+dock+resolve
