@@ -495,7 +495,9 @@ mod live {
             // Split the disjoint executor/ledger borrows for the call, then drop
             // them before touching the rest of `inner` again.
             let result = {
-                let OwnedInner { executor, ledger, .. } = &mut *inner;
+                let OwnedInner {
+                    executor, ledger, ..
+                } = &mut *inner;
                 executor.execute(&turn, ledger)
             };
             match result {
@@ -773,11 +775,17 @@ mod live {
                 if comps.next().is_some() {
                     // `child` is an intermediate directory (more path remains).
                     if seen_dirs.insert(child.clone()) {
-                        out.push(DirEntry { path: child, is_dir: true });
+                        out.push(DirEntry {
+                            path: child,
+                            is_dir: true,
+                        });
                     }
                 } else {
                     // `child` is a leaf file.
-                    out.push(DirEntry { path: child, is_dir: false });
+                    out.push(DirEntry {
+                        path: child,
+                        is_dir: false,
+                    });
                 }
             }
             Ok(out)
@@ -791,7 +799,11 @@ mod live {
                     .cell(&cell_id)
                     .ok_or_else(|| anyhow!("file cell missing from ledger"))?;
                 let len = decode_content(&cell).map(|s| s.len()).unwrap_or(0) as u64;
-                return Ok(Metadata { is_dir: false, is_symlink: false, len });
+                return Ok(Metadata {
+                    is_dir: false,
+                    is_symlink: false,
+                    len,
+                });
             }
             // A directory iff some entry lives under it.
             let is_dir = self
@@ -800,7 +812,11 @@ mod live {
                 .keys()
                 .any(|p| p.starts_with(path) && p != path);
             if is_dir {
-                Ok(Metadata { is_dir: true, is_symlink: false, len: 0 })
+                Ok(Metadata {
+                    is_dir: true,
+                    is_symlink: false,
+                    len: 0,
+                })
             } else {
                 bail!("no cell mounted at {}", path.display())
             }
@@ -835,14 +851,26 @@ mod live {
             let file = fs.seed_file(&path, original).unwrap();
 
             // load() reads the content FROM THE CELL (not disk).
-            assert_eq!(fs.load(&path).unwrap(), original, "seed round-trips from the cell");
-            assert_eq!(fs.receipt_count(), 0, "a seed is genesis, not a turn — no receipt yet");
+            assert_eq!(
+                fs.load(&path).unwrap(),
+                original,
+                "seed round-trips from the cell"
+            );
+            assert_eq!(
+                fs.receipt_count(),
+                0,
+                "a seed is genesis, not a turn — no receipt yet"
+            );
 
             // save() runs a real cap-gated turn → a genuine receipt.
             fs.save(&path, edited).unwrap();
             assert_eq!(fs.receipt_count(), 1, "the save produced ONE receipt");
             let receipt = fs.last_receipt().expect("a receipt was recorded");
-            assert_eq!(receipt.agent, fs.editor_id(), "the editor is the turn's agent");
+            assert_eq!(
+                receipt.agent,
+                fs.editor_id(),
+                "the editor is the turn's agent"
+            );
             assert_ne!(
                 receipt.pre_state_hash, receipt.post_state_hash,
                 "the save moved the ledger state (the edit landed on-ledger)"
@@ -872,7 +900,9 @@ mod live {
             let file = spine.install_uncapped_file("secret");
             let fs = FirmamentFs::over(spine);
             let path = PathBuf::from("/locked.txt");
-            fs.entries.borrow_mut().insert(path.clone(), Entry { cell: file });
+            fs.entries
+                .borrow_mut()
+                .insert(path.clone(), Entry { cell: file });
             // NB: no capabilities.grant — the editor lacks the file's cap.
 
             // The read still works (a read is authority-checked at the namespace,
@@ -886,7 +916,11 @@ mod live {
                 "save without the edit cap must be refused: {err}"
             );
             // The content is UNTOUCHED — the executor rolled the ledger back.
-            assert_eq!(fs.load(&path).unwrap(), "secret", "a refused save leaves the cell untouched");
+            assert_eq!(
+                fs.load(&path).unwrap(),
+                "secret",
+                "a refused save leaves the cell untouched"
+            );
             assert_eq!(fs.receipt_count(), 0, "no receipt for a refused save");
         }
 

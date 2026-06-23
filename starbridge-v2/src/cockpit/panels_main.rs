@@ -13,7 +13,12 @@ impl Cockpit {
             .p_3()
             .border_b_1()
             .border_color(theme::border())
-            .child(div().text_lg().text_color(theme::text()).child("Starbridge v2"))
+            .child(
+                div()
+                    .text_lg()
+                    .text_color(theme::text())
+                    .child("Starbridge v2"),
+            )
             .child(
                 div()
                     .text_xs()
@@ -40,16 +45,11 @@ impl Cockpit {
                     .text_color(theme::muted())
                     .child(format!("image root: {root}")),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme::muted())
-                    .child(format!(
-                        "{} cells · {} receipts",
-                        w.cell_count(),
-                        w.receipts().len()
-                    )),
-            )
+            .child(div().text_xs().text_color(theme::muted()).child(format!(
+                "{} cells · {} receipts",
+                w.cell_count(),
+                w.receipts().len()
+            )))
             .children(self.live_node_strip())
     }
 
@@ -85,12 +85,18 @@ impl Cockpit {
                             if s.status.healthy { "healthy" } else { "DOWN" },
                             s.status.state_producer
                         ),
-                        if s.status.healthy { theme::good() } else { theme::warn() },
+                        if s.status.healthy {
+                            theme::good()
+                        } else {
+                            theme::warn()
+                        },
                     )
                 }))
-                .children(self.live_snapshot.as_ref().map(|s| {
-                    pill(format!("h{}", s.status.latest_height), theme::accent())
-                })),
+                .children(
+                    self.live_snapshot
+                        .as_ref()
+                        .map(|s| pill(format!("h{}", s.status.latest_height), theme::accent())),
+                ),
         );
         // The LIVE receipt feed: head index + count + resume cursor (the SSE drain).
         let feed = &self.live_feed;
@@ -104,7 +110,10 @@ impl Cockpit {
                 .flex_wrap()
                 .gap_1()
                 .items_center()
-                .child(pill(format!("{} streamed", feed.receipts().len()), theme::good()))
+                .child(pill(
+                    format!("{} streamed", feed.receipts().len()),
+                    theme::good(),
+                ))
                 .child(pill(format!("head {head}"), theme::accent()))
                 .children(
                     feed.resume_cursor()
@@ -141,7 +150,11 @@ impl Cockpit {
             .px_2()
             .py_1()
             .rounded_md()
-            .bg(if selected { theme::panel_hi() } else { theme::panel() })
+            .bg(if selected {
+                theme::panel_hi()
+            } else {
+                theme::panel()
+            })
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -153,20 +166,36 @@ impl Cockpit {
             .child(div().text_color(theme::accent()).child("◆ this image"))
     }
 
-    pub(crate) fn cell_row(&self, id: CellId, cell: &dregg_cell::Cell, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn cell_row(
+        &self,
+        id: CellId,
+        cell: &dregg_cell::Cell,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let selected = matches!(self.selection, Selection::Cell(s) if s == id);
         let bal = cell.state.balance();
         let caps = cell.capabilities.len();
-        let bal_color = if bal < 0 { theme::warn() } else { theme::text() };
+        let bal_color = if bal < 0 {
+            theme::warn()
+        } else {
+            theme::text()
+        };
         div()
-            .id(SharedString::from(format!("cell-{}", reflect::short_hex(id.as_bytes()))))
+            .id(SharedString::from(format!(
+                "cell-{}",
+                reflect::short_hex(id.as_bytes())
+            )))
             .flex()
             .flex_col()
             .gap_0p5()
             .px_2()
             .py_1()
             .rounded_md()
-            .bg(if selected { theme::panel_hi() } else { theme::panel() })
+            .bg(if selected {
+                theme::panel_hi()
+            } else {
+                theme::panel()
+            })
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -179,20 +208,30 @@ impl Cockpit {
                 div()
                     .flex()
                     .justify_between()
-                    .child(div().text_color(theme::text()).child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))))
+                    .child(
+                        div()
+                            .text_color(theme::text())
+                            .child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))),
+                    )
                     .child(div().text_color(bal_color).child(format!("{bal}"))),
             )
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    .child(div().text_xs().text_color(theme::muted()).child(format!("{caps} caps")))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(format!("{caps} caps")),
+                    )
                     .when(cell.delegate.is_some(), |d| {
                         d.child(div().text_xs().text_color(theme::muted()).child("delegate"))
                     })
-                    .when(!matches!(cell.program, dregg_cell::CellProgram::None), |d| {
-                        d.child(div().text_xs().text_color(theme::accent()).child("program"))
-                    }),
+                    .when(
+                        !matches!(cell.program, dregg_cell::CellProgram::None),
+                        |d| d.child(div().text_xs().text_color(theme::accent()).child("program")),
+                    ),
             )
     }
 
@@ -207,11 +246,13 @@ impl Cockpit {
         panel = panel.child(section_title("INSPECTOR · reflective").mb_1());
         match obj {
             Some(obj) => {
+                panel = panel.child(div().text_color(theme::text()).child(obj.title.clone()));
                 panel = panel.child(
-                    div().text_color(theme::text()).child(obj.title.clone()),
-                );
-                panel = panel.child(
-                    div().text_xs().text_color(theme::muted()).mb_2().child(obj.subtitle.clone()),
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .mb_2()
+                        .child(obj.subtitle.clone()),
                 );
                 panel = panel.child(kind_badge(obj.kind));
                 for f in &obj.fields {
@@ -230,7 +271,12 @@ impl Cockpit {
         let mut col = div().flex().flex_col().gap_1().p_2();
         col = col.child(section_title("BLOCKLACE · provenance").mb_1());
         if w.receipts().is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).child("(no receipts yet — run a verb)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("(no receipts yet — run a verb)"),
+            );
         }
         // Most-recent first.
         for (i, r) in w.receipts().iter().enumerate().rev() {
@@ -244,7 +290,11 @@ impl Cockpit {
                     .px_2()
                     .py_0p5()
                     .rounded_md()
-                    .bg(if selected { theme::panel_hi() } else { theme::panel() })
+                    .bg(if selected {
+                        theme::panel_hi()
+                    } else {
+                        theme::panel()
+                    })
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -253,8 +303,18 @@ impl Cockpit {
                             cx.notify();
                         }),
                     )
-                    .child(div().text_xs().text_color(theme::accent()).child(format!("●─ {hash}")))
-                    .child(div().text_xs().text_color(theme::muted()).child(format!("{} eff", r.action_count))),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::accent())
+                            .child(format!("●─ {hash}")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(format!("{} eff", r.action_count)),
+                    ),
             );
         }
         col
@@ -271,13 +331,48 @@ impl Cockpit {
                 "Each verb composes a turn and runs it through the EMBEDDED VERIFIED executor. \
                  Watch the image, receipts, and dynamics update live.",
             ))
-            .child(verb_button(cx, "transfer 1,000 → user", theme::good(), Cockpit::run_demo_transfer))
-            .child(verb_button(cx, "compose multi-action (pay service + user)", theme::good(), Cockpit::run_compose_multi))
-            .child(verb_button(cx, "grant capability (service→user)", theme::accent(), Cockpit::run_demo_grant))
-            .child(verb_button(cx, "create cell (conserves value)", theme::accent(), Cockpit::run_demo_create))
-            .child(verb_button(cx, "seal a fresh cell (lifecycle)", theme::accent(), Cockpit::run_seal))
-            .child(verb_button(cx, "burn 1,000 (supply reduced)", theme::warn(), Cockpit::run_burn))
-            .child(verb_button(cx, "⚠ over-grant (watch it REJECT)", theme::warn(), Cockpit::run_over_grant))
+            .child(verb_button(
+                cx,
+                "transfer 1,000 → user",
+                theme::good(),
+                Cockpit::run_demo_transfer,
+            ))
+            .child(verb_button(
+                cx,
+                "compose multi-action (pay service + user)",
+                theme::good(),
+                Cockpit::run_compose_multi,
+            ))
+            .child(verb_button(
+                cx,
+                "grant capability (service→user)",
+                theme::accent(),
+                Cockpit::run_demo_grant,
+            ))
+            .child(verb_button(
+                cx,
+                "create cell (conserves value)",
+                theme::accent(),
+                Cockpit::run_demo_create,
+            ))
+            .child(verb_button(
+                cx,
+                "seal a fresh cell (lifecycle)",
+                theme::accent(),
+                Cockpit::run_seal,
+            ))
+            .child(verb_button(
+                cx,
+                "burn 1,000 (supply reduced)",
+                theme::warn(),
+                Cockpit::run_burn,
+            ))
+            .child(verb_button(
+                cx,
+                "⚠ over-grant (watch it REJECT)",
+                theme::warn(),
+                Cockpit::run_over_grant,
+            ))
             .child(self.outcome_banner())
     }
 
@@ -287,7 +382,10 @@ impl Cockpit {
     pub(crate) fn simulate_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use starbridge_v2::simulate::SimOutcome;
         let cells = &self.cells;
-        let target = cells.get(self.sim_target_idx).copied().unwrap_or(self.sim_draft.agent);
+        let target = cells
+            .get(self.sim_target_idx)
+            .copied()
+            .unwrap_or(self.sim_draft.agent);
         let palette = self.sim_effect_palette();
         let effect = palette.get(self.sim_effect_idx).cloned();
         let effect_label = effect.as_ref().map(|e| e.label()).unwrap_or_default();
@@ -297,7 +395,14 @@ impl Cockpit {
         let n_effects = self.sim_draft.effect_count();
         let predicted_ok = matches!(self.sim_outcome, Some(SimOutcome::Predicted { .. }));
 
-        let mut col = div().id("cockpit-scroll-body-1").flex().flex_col().gap_2().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-1")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title(
             "SIMULATE · compose any intent · PREDICT before committing",
         ));
@@ -323,7 +428,12 @@ impl Cockpit {
                     theme::accent(),
                     Cockpit::sim_cycle_agent,
                 ))
-                .child(div().text_xs().text_color(theme::muted()).child("· target:"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("· target:"),
+                )
                 .child(cycle_chip(
                     cx,
                     "sim-target",
@@ -331,7 +441,12 @@ impl Cockpit {
                     theme::good(),
                     Cockpit::sim_cycle_target,
                 ))
-                .child(div().text_xs().text_color(theme::muted()).child("· effect:"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("· effect:"),
+                )
                 .child(cycle_chip(
                     cx,
                     "sim-effect",
@@ -346,9 +461,27 @@ impl Cockpit {
                 .flex()
                 .flex_wrap()
                 .gap_1()
-                .child(small_button(cx, "sim-add", "+ add effect", theme::good(), Cockpit::sim_add_effect))
-                .child(small_button(cx, "sim-pop", "− last action", theme::muted(), Cockpit::sim_pop_action))
-                .child(small_button(cx, "sim-clear", "clear draft", theme::muted(), Cockpit::sim_clear)),
+                .child(small_button(
+                    cx,
+                    "sim-add",
+                    "+ add effect",
+                    theme::good(),
+                    Cockpit::sim_add_effect,
+                ))
+                .child(small_button(
+                    cx,
+                    "sim-pop",
+                    "− last action",
+                    theme::muted(),
+                    Cockpit::sim_pop_action,
+                ))
+                .child(small_button(
+                    cx,
+                    "sim-clear",
+                    "clear draft",
+                    theme::muted(),
+                    Cockpit::sim_clear,
+                )),
         );
 
         // --- the draft forest ---
@@ -372,9 +505,10 @@ impl Cockpit {
             .overflow_hidden();
         if self.sim_draft.actions.is_empty() {
             forest_box = forest_box.child(
-                div().text_xs().text_color(theme::muted()).child(
-                    "(empty forest — pick a target + effect and press + add)",
-                ),
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("(empty forest — pick a target + effect and press + add)"),
             );
         } else {
             for (i, a) in self.sim_draft.actions.iter().enumerate() {
@@ -401,7 +535,13 @@ impl Cockpit {
                 .flex()
                 .flex_wrap()
                 .gap_1()
-                .child(small_button(cx, "sim-run", "▶ SIMULATE (predict)", theme::accent(), Cockpit::sim_run))
+                .child(small_button(
+                    cx,
+                    "sim-run",
+                    "▶ SIMULATE (predict)",
+                    theme::accent(),
+                    Cockpit::sim_run,
+                ))
                 .child({
                     // The commit button is enabled (and colored go) only after a
                     // predicted-commit; otherwise it is dimmed + explains itself.
@@ -425,7 +565,14 @@ impl Cockpit {
                 theme::good()
             };
             col = col.child(
-                div().mt_1().p_2().rounded_md().bg(theme::panel()).text_xs().text_color(color).child(b.clone()),
+                div()
+                    .mt_1()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .text_xs()
+                    .text_color(color)
+                    .child(b.clone()),
             );
         }
         col
@@ -471,8 +618,14 @@ impl Cockpit {
                         .items_center()
                         .gap_1()
                         .child(pill("PREDICTED: would COMMIT", theme::good()))
-                        .child(pill(format!("{} action(s)", receipt.action_count), theme::accent()))
-                        .child(pill(format!("{} computrons", receipt.computrons_used), theme::accent()))
+                        .child(pill(
+                            format!("{} action(s)", receipt.action_count),
+                            theme::accent(),
+                        ))
+                        .child(pill(
+                            format!("{} computrons", receipt.computrons_used),
+                            theme::accent(),
+                        ))
                         .child(pill(
                             format!("receipt {}", reflect::short_hex(&receipt.receipt_hash())),
                             theme::muted(),
@@ -484,22 +637,25 @@ impl Cockpit {
                         .flex_wrap()
                         .items_center()
                         .gap_1()
-                        .child(div().text_xs().text_color(theme::muted()).child("predicted image root:"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::muted())
+                                .child("predicted image root:"),
+                        )
                         .child(pill(reflect::short_hex(predicted_root), theme::accent()))
                         .when(*cell_count_delta != 0, |d| {
-                            d.child(pill(
-                                format!("cells {:+}", cell_count_delta),
-                                theme::good(),
-                            ))
+                            d.child(pill(format!("cells {:+}", cell_count_delta), theme::good()))
                         }),
                 );
                 box_ = box_.child(section_title("predicted cell deltas"));
-                if deltas.iter().all(|d| !d.balance_changed() && d.before.is_some()) {
-                    box_ = box_.child(
-                        div().text_xs().text_color(theme::muted()).child(
-                            "(no balance moved — a non-value effect; the receipt above still binds it)",
-                        ),
-                    );
+                if deltas
+                    .iter()
+                    .all(|d| !d.balance_changed() && d.before.is_some())
+                {
+                    box_ = box_.child(div().text_xs().text_color(theme::muted()).child(
+                        "(no balance moved — a non-value effect; the receipt above still binds it)",
+                    ));
                 }
                 for d in deltas {
                     let cell = reflect::short_hex(&d.cell.0);
@@ -510,14 +666,21 @@ impl Cockpit {
                         (Some(b), Some(_)) => format!("· {cell}  unchanged ({b})"),
                         (None, None) => format!("· {cell}  (absent)"),
                     };
-                    let color = if d.balance_changed() { theme::text() } else { theme::muted() };
+                    let color = if d.balance_changed() {
+                        theme::text()
+                    } else {
+                        theme::muted()
+                    };
                     box_ = box_.child(div().text_xs().text_color(color).child(line));
                 }
                 if !events.is_empty() {
                     box_ = box_.child(section_title("predicted dynamics"));
                     for ev in events.iter().take(8) {
                         box_ = box_.child(
-                            div().text_xs().text_color(theme::muted()).child(format!("· {}", ev.label())),
+                            div()
+                                .text_xs()
+                                .text_color(theme::muted())
+                                .child(format!("· {}", ev.label())),
                         );
                     }
                 }
@@ -546,7 +709,10 @@ impl Cockpit {
                         }),
                 );
                 box_ = box_.child(
-                    div().text_xs().text_color(theme::bad()).child(reason.clone()),
+                    div()
+                        .text_xs()
+                        .text_color(theme::bad())
+                        .child(reason.clone()),
                 );
                 box_ = box_.child(div().text_xs().text_color(theme::muted()).child(
                     "this is the live executor's verdict, run one turn ahead — no gas spent, \
@@ -621,8 +787,7 @@ impl Cockpit {
         let ctx = PresentCtx::new(w, focus);
         match self.moldable_lens {
             // Already handled by the Registry/memo spine in the caller.
-            MoldableLens::Cell => Registry::new(w)
-                .present(FocusTarget::Cell(focus), focus),
+            MoldableLens::Cell => Registry::new(w).present(FocusTarget::Cell(focus), focus),
 
             // L4 — the focused cell's FIRST held capability (its c-list head).
             MoldableLens::Capability => {
@@ -631,9 +796,7 @@ impl Cockpit {
             }
 
             // L5 — the focused cell's DEEP reflection.
-            MoldableLens::DeepCell => {
-                DeepCell::from_world(w, focus).map(|d| d.present(&ctx))
-            }
+            MoldableLens::DeepCell => DeepCell::from_world(w, focus).map(|d| d.present(&ctx)),
 
             // L6 — the live receipt chain + (when present) the latest receipt.
             // The chain is always presentable (empty chain ⟹ an empty timeline,

@@ -112,7 +112,9 @@ impl WorldEvent {
     /// A short human label for the activity feed.
     pub fn label(&self) -> String {
         match self {
-            WorldEvent::CellBorn { genesis, balance, .. } => {
+            WorldEvent::CellBorn {
+                genesis, balance, ..
+            } => {
                 if *genesis {
                     format!("cell born (genesis, {balance})")
                 } else {
@@ -135,17 +137,28 @@ impl WorldEvent {
                 format!("balance flowed {sign}{d}")
             }
             WorldEvent::CapabilityGranted { .. } => "capability granted".into(),
-            WorldEvent::CapabilityRevoked { slot, .. } => format!("capability revoked (slot {slot})"),
+            WorldEvent::CapabilityRevoked { slot, .. } => {
+                format!("capability revoked (slot {slot})")
+            }
             WorldEvent::FieldSet { index, .. } => format!("field[{index}] set"),
             WorldEvent::CellMutated { .. } => "cell mutated".into(),
             WorldEvent::CellSealed { .. } => "cell sealed".into(),
             WorldEvent::CellUnsealed { .. } => "cell unsealed".into(),
             WorldEvent::CellDestroyed { .. } => "cell destroyed (terminal)".into(),
             WorldEvent::Burned { amount, .. } => format!("burned {amount} (supply reduced)"),
-            WorldEvent::SurfaceDamaged { region_count, digest, .. } => {
+            WorldEvent::SurfaceDamaged {
+                region_count,
+                digest,
+                ..
+            } => {
                 format!("surface damaged: frame → {digest} ({region_count} region(s) repainted)")
             }
-            WorldEvent::EventEmitted { sender, cell, data_len, .. } => format!(
+            WorldEvent::EventEmitted {
+                sender,
+                cell,
+                data_len,
+                ..
+            } => format!(
                 "event emitted: {} → {} ({data_len}B) [notify edge]",
                 crate::reflect::short_hex(sender.as_bytes()),
                 crate::reflect::short_hex(cell.as_bytes()),

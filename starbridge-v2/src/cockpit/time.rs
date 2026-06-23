@@ -125,8 +125,10 @@ impl Cockpit {
     pub(crate) fn time_metastack_pop(&mut self, cx: &mut Context<Self>) {
         match self.meta_stack.pop() {
             Some(view) => {
-                self.last_outcome =
-                    Some(format!("⊖ popped meta-level {} (descended)", view.level.depth()));
+                self.last_outcome = Some(format!(
+                    "⊖ popped meta-level {} (descended)",
+                    view.level.depth()
+                ));
             }
             None => {
                 self.last_outcome =
@@ -148,7 +150,14 @@ impl Cockpit {
             TimeCockpitModel::build(&w, self.time_cursor, &self.meta_stack)
         };
 
-        let mut col = div().id("cockpit-scroll-body-23").flex().flex_col().gap_2().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-23")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title(
             "⏳ TEMPORAL COCKPIT · time-travel · suspend · fractal meta-debug",
         ));
@@ -169,7 +178,12 @@ impl Cockpit {
                 .border_1()
                 .border_color(badge_color)
                 .bg(badge_bg)
-                .child(div().text_sm().text_color(badge_color).child(model.liveness_badge()))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(badge_color)
+                        .child(model.liveness_badge()),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -177,7 +191,10 @@ impl Cockpit {
                         .child(format!("k{} / head k{}", model.cursor, model.head)),
                 )
                 .child(if model.cursor_verified {
-                    pill(format!("✓ root {}", short_root(&model.cursor_root)), theme::good())
+                    pill(
+                        format!("✓ root {}", short_root(&model.cursor_root)),
+                        theme::good(),
+                    )
                 } else {
                     pill("✗ root UNVERIFIED".to_string(), theme::bad())
                 }),
@@ -199,21 +216,36 @@ impl Cockpit {
                     .border_1()
                     .border_color(theme::warn())
                     .bg(theme::panel_hi())
-                    .child(div().text_sm().text_color(theme::warn()).child("⏸ SUSPENDED"))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(theme::muted())
-                            .child(format!("head FROZEN @h{} · the loop is halted", model.live_height)),
-                    ),
+                            .text_sm()
+                            .text_color(theme::warn())
+                            .child("⏸ SUSPENDED"),
+                    )
+                    .child(div().text_xs().text_color(theme::muted()).child(format!(
+                        "head FROZEN @h{} · the loop is halted",
+                        model.live_height
+                    ))),
             );
             col = col.child(
                 div()
                     .flex()
                     .flex_wrap()
                     .gap_1()
-                    .child(time_button(cx, "time-resume", "▶ RESUME (drain)", theme::good(), Cockpit::time_resume))
-                    .child(time_button(cx, "time-stage", "⊕ stage a turn", theme::accent(), Cockpit::time_stage_demo_turn)),
+                    .child(time_button(
+                        cx,
+                        "time-resume",
+                        "▶ RESUME (drain)",
+                        theme::good(),
+                        Cockpit::time_resume,
+                    ))
+                    .child(time_button(
+                        cx,
+                        "time-stage",
+                        "⊕ stage a turn",
+                        theme::accent(),
+                        Cockpit::time_stage_demo_turn,
+                    )),
             );
             // The staged continuation (the pending queue) — the real partial turn.
             col = col.child(
@@ -221,7 +253,10 @@ impl Cockpit {
                     .text_xs()
                     .text_color(theme::muted())
                     .mt_1()
-                    .child(format!("STAGED CONTINUATION · {} pending turn(s)", model.pending.len())),
+                    .child(format!(
+                        "STAGED CONTINUATION · {} pending turn(s)",
+                        model.pending.len()
+                    )),
             );
             if model.pending.is_empty() {
                 col = col.child(
@@ -233,7 +268,13 @@ impl Cockpit {
                 );
             }
             for line in &model.pending {
-                col = col.child(div().text_xs().text_color(theme::accent()).px_2().child(format!("· {line}")));
+                col = col.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .px_2()
+                        .child(format!("· {line}")),
+                );
             }
         } else {
             // RUNNING — the loop is live; offer the suspend button.
@@ -242,8 +283,19 @@ impl Cockpit {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_xs().text_color(theme::good()).child(format!("● running @h{}", model.live_height)))
-                    .child(time_button(cx, "time-suspend", "⏸ SUSPEND", theme::warn(), Cockpit::time_suspend)),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::good())
+                            .child(format!("● running @h{}", model.live_height)),
+                    )
+                    .child(time_button(
+                        cx,
+                        "time-suspend",
+                        "⏸ SUSPEND",
+                        theme::warn(),
+                        Cockpit::time_suspend,
+                    )),
             );
         }
 
@@ -256,10 +308,34 @@ impl Cockpit {
                 .flex()
                 .flex_wrap()
                 .gap_1()
-                .child(time_button(cx, "time-genesis", "⏮ genesis", theme::muted(), Cockpit::time_to_genesis))
-                .child(time_button(cx, "time-back", "◀ −1 turn", theme::accent(), Cockpit::time_step_back))
-                .child(time_button(cx, "time-fwd", "+1 turn ▶", theme::accent(), Cockpit::time_step_forward))
-                .child(time_button(cx, "time-head", "live head ⏭", theme::good(), Cockpit::time_to_head)),
+                .child(time_button(
+                    cx,
+                    "time-genesis",
+                    "⏮ genesis",
+                    theme::muted(),
+                    Cockpit::time_to_genesis,
+                ))
+                .child(time_button(
+                    cx,
+                    "time-back",
+                    "◀ −1 turn",
+                    theme::accent(),
+                    Cockpit::time_step_back,
+                ))
+                .child(time_button(
+                    cx,
+                    "time-fwd",
+                    "+1 turn ▶",
+                    theme::accent(),
+                    Cockpit::time_step_forward,
+                ))
+                .child(time_button(
+                    cx,
+                    "time-head",
+                    "live head ⏭",
+                    theme::good(),
+                    Cockpit::time_to_head,
+                )),
         );
         // THE UN-TURN FRONTIER — where the rewind can reach, in reversibility terms
         // (the reversibility organ classifies each step; the floor is the latest
@@ -270,7 +346,11 @@ impl Cockpit {
                 div()
                     .text_xs()
                     .mt_1()
-                    .text_color(if floor == 0 { theme::good() } else { theme::warn() })
+                    .text_color(if floor == 0 {
+                        theme::good()
+                    } else {
+                        theme::warn()
+                    })
                     .child(model.undo_floor_badge()),
             );
         }
@@ -316,7 +396,11 @@ impl Cockpit {
                     .px_2()
                     .py_0p5()
                     .rounded_md()
-                    .bg(if at_cursor { theme::panel_hi() } else { theme::panel() })
+                    .bg(if at_cursor {
+                        theme::panel_hi()
+                    } else {
+                        theme::panel()
+                    })
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::border()))
                     .on_mouse_down(
@@ -325,13 +409,18 @@ impl Cockpit {
                             this.time_scrub_to(step, cx);
                         }),
                     )
+                    .child(div().text_xs().text_color(label_color).child(format!(
+                        "{marker} k{step}  {}{}{}",
+                        tick.label,
+                        rev_note,
+                        if is_head { "  ⟵ head (live)" } else { "" }
+                    )))
                     .child(
                         div()
                             .text_xs()
-                            .text_color(label_color)
-                            .child(format!("{marker} k{step}  {}{}{}", tick.label, rev_note, if is_head { "  ⟵ head (live)" } else { "" })),
-                    )
-                    .child(div().text_xs().text_color(theme::muted()).child(short_root(&tick.root))),
+                            .text_color(theme::muted())
+                            .child(short_root(&tick.root)),
+                    ),
             );
         }
         col = col.child(ticks);
@@ -343,7 +432,11 @@ impl Cockpit {
                 .text_xs()
                 .text_color(theme::muted())
                 .mt_1()
-                .child(format!("IMAGE @k{} ({} cells, verified replay)", model.cursor, model.cursor_cells.len())),
+                .child(format!(
+                    "IMAGE @k{} ({} cells, verified replay)",
+                    model.cursor,
+                    model.cursor_cells.len()
+                )),
         );
         if model.cursor_cells.is_empty() && !model.cursor_verified {
             col = col.child(
@@ -360,11 +453,20 @@ impl Cockpit {
                     .flex()
                     .justify_between()
                     .px_2()
-                    .child(div().text_xs().text_color(theme::text()).child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))))
                     .child(
                         div()
                             .text_xs()
-                            .text_color(if *bal < 0 { theme::warn() } else { theme::text() })
+                            .text_color(theme::text())
+                            .child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if *bal < 0 {
+                                theme::warn()
+                            } else {
+                                theme::text()
+                            })
                             .child(format!("{bal} · {caps} caps")),
                     ),
             );
@@ -376,7 +478,12 @@ impl Cockpit {
                     .text_xs()
                     .text_color(theme::muted())
                     .mt_1()
-                    .child(format!("Δ this turn (k{}→k{}) · {} cell(s) changed", model.cursor.saturating_sub(1), model.cursor, diff.len())),
+                    .child(format!(
+                        "Δ this turn (k{}→k{}) · {} cell(s) changed",
+                        model.cursor.saturating_sub(1),
+                        model.cursor,
+                        diff.len()
+                    )),
             );
             for (id, change) in &diff.changes {
                 col = col.child(
@@ -384,7 +491,11 @@ impl Cockpit {
                         .text_xs()
                         .text_color(theme::accent())
                         .px_2()
-                        .child(format!("{} {}", reflect::short_hex(id.as_bytes()), change.label())),
+                        .child(format!(
+                            "{} {}",
+                            reflect::short_hex(id.as_bytes()),
+                            change.label()
+                        )),
                 );
             }
         }
@@ -392,18 +503,36 @@ impl Cockpit {
         // ====================================================================
         // (3) THE METASTACK NAVIGATOR — the fractal meta-debug tower.
         // ====================================================================
-        col = col.child(section_title("⊞ METASTACK · debug the debugger (the reflective tower)").mt_2());
+        col = col
+            .child(section_title("⊞ METASTACK · debug the debugger (the reflective tower)").mt_2());
         col = col.child(
             div()
                 .flex()
                 .flex_wrap()
                 .gap_1()
-                .child(time_button(cx, "meta-push", "⊕ suspend & inspect (climb)", theme::accent(), Cockpit::time_metastack_push))
-                .child(time_button(cx, "meta-pop", "⊖ descend (pop)", theme::muted(), Cockpit::time_metastack_pop)),
+                .child(time_button(
+                    cx,
+                    "meta-push",
+                    "⊕ suspend & inspect (climb)",
+                    theme::accent(),
+                    Cockpit::time_metastack_push,
+                ))
+                .child(time_button(
+                    cx,
+                    "meta-pop",
+                    "⊖ descend (pop)",
+                    theme::muted(),
+                    Cockpit::time_metastack_pop,
+                )),
         );
         // The breadcrumb: BASE → meta¹ → meta² … (the top is the current debugger).
         let mut crumbs = div().flex().flex_wrap().items_center().gap_1().mt_1();
-        crumbs = crumbs.child(div().text_xs().text_color(theme::muted()).child("BASE (the live image)"));
+        crumbs = crumbs.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child("BASE (the live image)"),
+        );
         if model.metastack.is_empty() {
             crumbs = crumbs.child(
                 div()
@@ -413,16 +542,28 @@ impl Cockpit {
             );
         }
         for crumb in &model.metastack {
-            let color = if crumb.is_top { theme::accent() } else { theme::text() };
+            let color = if crumb.is_top {
+                theme::accent()
+            } else {
+                theme::text()
+            };
             crumbs = crumbs.child(div().text_xs().text_color(theme::muted()).child("→"));
             crumbs = crumbs.child(
                 div()
                     .px_2()
                     .py_0p5()
                     .rounded_md()
-                    .bg(if crumb.is_top { theme::panel_hi() } else { theme::panel() })
+                    .bg(if crumb.is_top {
+                        theme::panel_hi()
+                    } else {
+                        theme::panel()
+                    })
                     .border_1()
-                    .border_color(if crumb.is_top { theme::accent() } else { theme::border() })
+                    .border_color(if crumb.is_top {
+                        theme::accent()
+                    } else {
+                        theme::border()
+                    })
                     .text_xs()
                     .text_color(color)
                     .child(format!(

@@ -638,9 +638,20 @@ mod tests {
         let (mut ed, _backing) = editor();
         // Held is Either; paring to Signature is a sound attenuation.
         let out = ed.pare_to("Signature");
-        assert!(out.is_pared(), "Signature ⊆ Either is a sound attenuation: {out:?}");
-        assert_eq!(out, PareOutcome::Pared { rights: AuthRequired::Signature });
-        assert!(ed.verify().sound, "the pare verifies as a sound attenuation");
+        assert!(
+            out.is_pared(),
+            "Signature ⊆ Either is a sound attenuation: {out:?}"
+        );
+        assert_eq!(
+            out,
+            PareOutcome::Pared {
+                rights: AuthRequired::Signature
+            }
+        );
+        assert!(
+            ed.verify().sound,
+            "the pare verifies as a sound attenuation"
+        );
 
         // Now open an editor whose held cap is NARROW (Signature) and try to WIDEN
         // it to Either — the REAL is_attenuation REFUSES it in-band.
@@ -732,7 +743,10 @@ mod tests {
         let b = artifact.rehydrate_for(&surface, &narrow);
         assert_eq!(a, vec!["admin".to_string(), "view".to_string()]);
         assert_eq!(b, vec!["view".to_string()]);
-        assert_ne!(a, b, "the SAME artifact rehydrates differently per viewer (the membrane)");
+        assert_ne!(
+            a, b,
+            "the SAME artifact rehydrates differently per viewer (the membrane)"
+        );
     }
 
     // ── revocation withdraws the right to re-view ───────────────────────────
@@ -773,7 +787,10 @@ mod tests {
         // The snapshot is the captured camera (unchanged).
         assert_eq!(artifact.snapshot.focus, FocusTarget::Cell(backing));
         // The membrane scope is the CULLED set (admin removed).
-        assert_eq!(artifact.affordance_scope.affordance_names, vec!["view".to_string()]);
+        assert_eq!(
+            artifact.affordance_scope.affordance_names,
+            vec!["view".to_string()]
+        );
         // The lenses are the culled frustum (Source + Graph removed).
         assert!(!artifact.lenses.contains(&PresentationKind::Source));
         assert!(!artifact.lenses.contains(&PresentationKind::Graph));

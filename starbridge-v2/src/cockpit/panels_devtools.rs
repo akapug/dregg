@@ -46,8 +46,11 @@ pub(crate) enum DevtoolsSub {
 }
 
 impl DevtoolsSub {
-    pub(crate) const ALL: [DevtoolsSub; 3] =
-        [DevtoolsSub::Network, DevtoolsSub::Log, DevtoolsSub::Federation];
+    pub(crate) const ALL: [DevtoolsSub; 3] = [
+        DevtoolsSub::Network,
+        DevtoolsSub::Log,
+        DevtoolsSub::Federation,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -185,7 +188,11 @@ impl Cockpit {
     /// devtools-typical filters (by kind) without a second focus owner.
     fn devtools_filter_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let q = self.devtools_filter.clone();
-        let active = if q.is_empty() { "all".to_string() } else { q.clone() };
+        let active = if q.is_empty() {
+            "all".to_string()
+        } else {
+            q.clone()
+        };
         div()
             .flex()
             .flex_wrap()
@@ -193,11 +200,41 @@ impl Cockpit {
             .gap_1()
             .child(div().text_xs().text_color(theme::muted()).child("filter:"))
             .child(pill(format!("⌕ {active}"), theme::good()))
-            .child(cycle_chip(cx, "devtools-flt-commit", "committed".to_string(), theme::accent(), Cockpit::devtools_filter_committed))
-            .child(cycle_chip(cx, "devtools-flt-refuse", "refused".to_string(), theme::accent(), Cockpit::devtools_filter_refused))
-            .child(cycle_chip(cx, "devtools-flt-queue", "queued".to_string(), theme::accent(), Cockpit::devtools_filter_queued))
-            .child(cycle_chip(cx, "devtools-flt-emit", "notify".to_string(), theme::accent(), Cockpit::devtools_filter_notify))
-            .child(cycle_chip(cx, "devtools-flt-clear", "✕ clear".to_string(), theme::muted(), Cockpit::devtools_clear_filter))
+            .child(cycle_chip(
+                cx,
+                "devtools-flt-commit",
+                "committed".to_string(),
+                theme::accent(),
+                Cockpit::devtools_filter_committed,
+            ))
+            .child(cycle_chip(
+                cx,
+                "devtools-flt-refuse",
+                "refused".to_string(),
+                theme::accent(),
+                Cockpit::devtools_filter_refused,
+            ))
+            .child(cycle_chip(
+                cx,
+                "devtools-flt-queue",
+                "queued".to_string(),
+                theme::accent(),
+                Cockpit::devtools_filter_queued,
+            ))
+            .child(cycle_chip(
+                cx,
+                "devtools-flt-emit",
+                "notify".to_string(),
+                theme::accent(),
+                Cockpit::devtools_filter_notify,
+            ))
+            .child(cycle_chip(
+                cx,
+                "devtools-flt-clear",
+                "✕ clear".to_string(),
+                theme::muted(),
+                Cockpit::devtools_clear_filter,
+            ))
     }
 
     /// Does this row text pass the current filter (case-insensitive substring)?
@@ -213,18 +250,13 @@ impl Cockpit {
     fn devtools_network(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_1();
-        col = col.child(
-            div()
-                .text_xs()
-                .text_color(theme::muted())
-                .child(
-                    "THE DATA PLANE — each row is a delivery/turn the executor receipted: \
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "THE DATA PLANE — each row is a delivery/turn the executor receipted: \
                      a turn COMMIT (delivered), a QUEUE under suspension (pending), a \
                      REFUSAL (an ocap/verification gate firing), or an EMIT-EVENT notify \
                      edge (the async A2 inbox seam — the live queue traffic). Timing = \
                      computrons; status = the verdict; the receipt is the response.",
-                ),
-        );
+        ));
 
         // The live-node feed strip (the remote data plane), when connected.
         if let Some(ln) = self.live_node.as_ref() {
@@ -238,11 +270,16 @@ impl Cockpit {
                     .mt_1()
                     .child(pill("remote node", theme::warn()))
                     .child(pill(ln.client().describe(), theme::accent()))
-                    .child(pill(format!("{} streamed", feed.receipts().len()), theme::good()))
-                    .children(
-                        feed.latest()
-                            .map(|e| pill(format!("head #{} · {}", e.chain_index, e.finality), theme::accent())),
-                    ),
+                    .child(pill(
+                        format!("{} streamed", feed.receipts().len()),
+                        theme::good(),
+                    ))
+                    .children(feed.latest().map(|e| {
+                        pill(
+                            format!("head #{} · {}", e.chain_index, e.finality),
+                            theme::accent(),
+                        )
+                    })),
             );
         }
 
@@ -281,9 +318,26 @@ impl Cockpit {
                 .pt_1()
                 .border_b_1()
                 .border_color(theme::border())
-                .child(div().text_xs().text_color(theme::muted()).min_w(px(70.)).child("status"))
-                .child(div().text_xs().text_color(theme::muted()).flex_1().child("delivery / turn"))
-                .child(div().text_xs().text_color(theme::muted()).child("timing · response")),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .min_w(px(70.))
+                        .child("status"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .flex_1()
+                        .child("delivery / turn"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("timing · response"),
+                ),
         );
 
         // The rows: the dynamics stream as deliveries, most-recent-first. The data-
@@ -294,7 +348,13 @@ impl Cockpit {
         for (n, ev) in events.iter().enumerate().rev() {
             use starbridge_v2::dynamics::WorldEvent;
             let (status, status_color, line, timing): (&str, Hsla, String, String) = match ev {
-                WorldEvent::TurnCommitted { agent, action_count, computrons, height, .. } => {
+                WorldEvent::TurnCommitted {
+                    agent,
+                    action_count,
+                    computrons,
+                    height,
+                    ..
+                } => {
                     // Pair with the matching receipt (response), walking backwards.
                     rcpt_i = rcpt_i.saturating_sub(1);
                     let resp = receipts
@@ -315,16 +375,27 @@ impl Cockpit {
                 WorldEvent::TurnQueued { agent } => (
                     "pending",
                     theme::warn(),
-                    format!("turn QUEUED (suspended) · {}", reflect::short_hex(agent.as_bytes())),
+                    format!(
+                        "turn QUEUED (suspended) · {}",
+                        reflect::short_hex(agent.as_bytes())
+                    ),
                     "— · awaiting resume".into(),
                 ),
                 WorldEvent::TurnRejected { agent, reason } => (
                     "refused",
                     theme::bad(),
-                    format!("turn REFUSED · {} · {reason}", reflect::short_hex(agent.as_bytes())),
+                    format!(
+                        "turn REFUSED · {} · {reason}",
+                        reflect::short_hex(agent.as_bytes())
+                    ),
                     "— · ocap gate".into(),
                 ),
-                WorldEvent::EventEmitted { sender, cell, data_len, .. } => (
+                WorldEvent::EventEmitted {
+                    sender,
+                    cell,
+                    data_len,
+                    ..
+                } => (
                     "notify",
                     theme::accent(),
                     format!(
@@ -353,7 +424,14 @@ impl Cockpit {
                     .rounded_md()
                     .bg(theme::panel_hi())
                     .child(div().min_w(px(70.)).child(pill(status, status_color)))
-                    .child(div().text_xs().text_color(theme::text()).flex_1().px_2().child(line))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .flex_1()
+                            .px_2()
+                            .child(line),
+                    )
                     .child(div().text_xs().text_color(theme::muted()).child(timing)),
             );
         }
@@ -390,14 +468,12 @@ impl Cockpit {
     fn devtools_log(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_1();
-        col = col.child(
-            div().text_xs().text_color(theme::muted()).child(
-                "THE RECEIPT CONSOLE — every committed turn/receipt as a row \
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "THE RECEIPT CONSOLE — every committed turn/receipt as a row \
                  (agent · effects · finality · post-root). Click a row to DRILL DOWN: \
                  the center inspector opens its full receipt field tree + the \
                  previous-receipt provenance link. The blocklace, as a filterable log.",
-            ),
-        );
+        ));
         col = col.child(self.devtools_filter_bar(cx));
 
         let receipts = w.receipts();
@@ -407,15 +483,25 @@ impl Cockpit {
                 .flex_wrap()
                 .gap_1()
                 .mt_1()
-                .child(pill(format!("{} receipt(s)", receipts.len()), theme::good()))
+                .child(pill(
+                    format!("{} receipt(s)", receipts.len()),
+                    theme::good(),
+                ))
                 .child(pill(format!("h{}", w.height()), theme::accent()))
-                .child(pill(format!("root {}", reflect::short_hex(&w.state_root())), theme::muted())),
+                .child(pill(
+                    format!("root {}", reflect::short_hex(&w.state_root())),
+                    theme::muted(),
+                )),
         );
 
         if receipts.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child(
-                "(no receipts yet — run a verb in the COMPOSER)",
-            ));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .mt_1()
+                    .child("(no receipts yet — run a verb in the COMPOSER)"),
+            );
             return col;
         }
 
@@ -428,9 +514,26 @@ impl Cockpit {
                 .pt_1()
                 .border_b_1()
                 .border_color(theme::border())
-                .child(div().text_xs().text_color(theme::muted()).min_w(px(64.)).child("receipt"))
-                .child(div().text_xs().text_color(theme::muted()).flex_1().child("agent · effects · finality"))
-                .child(div().text_xs().text_color(theme::muted()).child("post-root")),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .min_w(px(64.))
+                        .child("receipt"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .flex_1()
+                        .child("agent · effects · finality"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("post-root"),
+                ),
         );
 
         let mut any = false;
@@ -439,7 +542,11 @@ impl Cockpit {
             let hash = reflect::short_hex(&r.receipt_hash());
             let agent = reflect::short_hex(r.agent.as_bytes());
             let fin = format!("{:?}", r.finality);
-            let status_color = if r.was_burn { theme::warn() } else { theme::good() };
+            let status_color = if r.was_burn {
+                theme::warn()
+            } else {
+                theme::good()
+            };
             let line = format!(
                 "{agent} · {} effect{} · {fin}{}",
                 r.action_count,
@@ -460,7 +567,11 @@ impl Cockpit {
                     .px_2()
                     .py_0p5()
                     .rounded_md()
-                    .bg(if selected { theme::panel_hi() } else { theme::panel() })
+                    .bg(if selected {
+                        theme::panel_hi()
+                    } else {
+                        theme::panel()
+                    })
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -474,7 +585,14 @@ impl Cockpit {
                             .min_w(px(64.))
                             .child(pill(format!("●─ {hash}"), status_color)),
                     )
-                    .child(div().text_xs().text_color(theme::text()).flex_1().px_2().child(line))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .flex_1()
+                            .px_2()
+                            .child(line),
+                    )
                     .child(
                         div()
                             .text_xs()
@@ -484,9 +602,13 @@ impl Cockpit {
             );
         }
         if !any {
-            col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child(
-                "(no receipts match the filter — clear it to see the whole log)",
-            ));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .mt_1()
+                    .child("(no receipts match the filter — clear it to see the whole log)"),
+            );
         }
 
         // The drill-down readout of the SELECTED receipt (the expanded console row).
@@ -507,33 +629,41 @@ impl Cockpit {
                         div()
                             .flex()
                             .justify_between()
-                            .child(div().text_xs().text_color(theme::text()).child(insp.title.clone()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text())
+                                    .child(insp.title.clone()),
+                            )
                             .child(kind_badge(insp.kind)),
                     )
-                    .child(div().text_xs().text_color(theme::muted()).child(insp.subtitle.clone()));
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(insp.subtitle.clone()),
+                    );
                 for f in &insp.fields {
                     detail = detail.child(field_row(f));
                 }
                 // The provenance chain hint (the previous-receipt link).
-                detail = detail.child(
-                    div().text_xs().text_color(theme::muted()).mt_1().child(
-                        match r.previous_receipt_hash {
-                            Some(p) => format!(
-                                "provenance ← previous receipt {} (the agent's chain)",
-                                reflect::short_hex(&p)
-                            ),
-                            None => "provenance: this is the agent's GENESIS receipt (chain root)".into(),
-                        },
-                    ),
-                );
+                detail = detail.child(div().text_xs().text_color(theme::muted()).mt_1().child(
+                    match r.previous_receipt_hash {
+                        Some(p) => format!(
+                            "provenance ← previous receipt {} (the agent's chain)",
+                            reflect::short_hex(&p)
+                        ),
+                        None => {
+                            "provenance: this is the agent's GENESIS receipt (chain root)".into()
+                        }
+                    },
+                ));
                 col = col.child(detail);
             }
         } else {
-            col = col.child(
-                div().text_xs().text_color(theme::muted()).mt_1().child(
-                    "▸ click a receipt row to drill into its full field tree + provenance chain",
-                ),
-            );
+            col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child(
+                "▸ click a receipt row to drill into its full field tree + provenance chain",
+            ));
         }
         col
     }
@@ -545,15 +675,13 @@ impl Cockpit {
     fn devtools_federation(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_1();
-        col = col.child(
-            div().text_xs().text_color(theme::muted()).child(
-                "THE DISTRIBUTION AXIS — this sovereign image among a federation: the \
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "THE DISTRIBUTION AXIS — this sovereign image among a federation: the \
                  committee roster, the current epoch, the checkpoint height + latest \
                  attested root, the cross-fed bridges, and the revocation set. Read from \
                  the live node when connected, else this image's own commitment + the \
                  honest captp-only remote catalog.",
-            ),
-        );
+        ));
 
         // The LIVE federation snapshot (a connected node), when present.
         let live_feds: Vec<starbridge_v2::model::FederationInfo> = self
@@ -563,7 +691,13 @@ impl Cockpit {
             .unwrap_or_default();
 
         if !live_feds.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::good()).mt_1().child("● LIVE federations (wire-backed)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::good())
+                    .mt_1()
+                    .child("● LIVE federations (wire-backed)"),
+            );
             for fed in &live_feds {
                 col = col.child(self.devtools_federation_card(fed));
             }
@@ -580,23 +714,25 @@ impl Cockpit {
                     .child(pill("local · embedded image", theme::accent()))
                     .child(pill("epoch 0 · solo (committee of one)", theme::muted()))
                     .child(pill(format!("checkpoint h{}", w.height()), theme::accent()))
-                    .child(pill(format!("root {}", reflect::short_hex(&w.state_root())), theme::good())),
+                    .child(pill(
+                        format!("root {}", reflect::short_hex(&w.state_root())),
+                        theme::good(),
+                    )),
             );
-            col = col.child(
-                div().text_xs().text_color(theme::muted()).child(
-                    "this image is its OWN sovereign federation (a committee of one); \
+            col = col.child(div().text_xs().text_color(theme::muted()).child(
+                "this image is its OWN sovereign federation (a committee of one); \
                      connect a node with --node <url> to survey a multi-member committee.",
-                ),
-            );
+            ));
 
             // The honest captp-only remote-path catalog (the same survey panels_main
             // surfaces): the cross-fed bridges + the objects reachable only over the
             // remote path, rendered as a field tree — never faked.
             let survey = FederationSurvey::disconnected();
             let remote = survey.remote_presentation();
-            col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child(
-                "cross-fed bridges + remote-path objects (captp-only — honest catalog):",
-            ));
+            col =
+                col.child(div().text_xs().text_color(theme::muted()).mt_2().child(
+                    "cross-fed bridges + remote-path objects (captp-only — honest catalog):",
+                ));
             col = col.child(Self::render_presentation_body(&remote.body));
         }
 
@@ -611,7 +747,12 @@ impl Cockpit {
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(div().text_xs().text_color(theme::muted()).child("revocation set"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("revocation set"),
+                )
                 .child(div().text_xs().text_color(theme::text()).child(
                     "no live revocations on this image (the embedded solo federation \
                      has issued none); a revocation is a real `CapabilityRevoked` turn \
@@ -625,24 +766,28 @@ impl Cockpit {
                 .gap_1()
                 .mt_1()
                 .child(pill("⊕ add member — cap-gated turn (stub)", theme::muted()))
-                .child(pill("⟳ rotate epoch — cap-gated turn (stub)", theme::muted()))
+                .child(pill(
+                    "⟳ rotate epoch — cap-gated turn (stub)",
+                    theme::muted(),
+                ))
                 .child(pill("⊘ revoke cap — cap-gated turn (stub)", theme::muted())),
         );
-        col = col.child(
-            div().text_xs().text_color(theme::muted()).child(
-                "SEAM · the CONFIGURE affordances (add/remove committee member · rotate \
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "SEAM · the CONFIGURE affordances (add/remove committee member · rotate \
                  epoch · revoke) are cap-gated turn STUBS — each lands as a real \
                  authorized turn through the embedded executor (the federation crate's \
                  epoch/checkpoint/revocation types), gated by the held federation \
                  admin cap. View is live; configure is the next wire.",
-            ),
-        );
+        ));
         col
     }
 
     /// One LIVE federation as a devtools card: committee · epoch · threshold ·
     /// checkpoint height · attested root · the member roster.
-    fn devtools_federation_card(&self, fed: &starbridge_v2::model::FederationInfo) -> impl IntoElement {
+    fn devtools_federation_card(
+        &self,
+        fed: &starbridge_v2::model::FederationInfo,
+    ) -> impl IntoElement {
         let mut card = div()
             .flex()
             .flex_col()
@@ -659,30 +804,54 @@ impl Cockpit {
                     .items_center()
                     .child(pill(
                         if fed.is_local { "local" } else { "remote" },
-                        if fed.is_local { theme::good() } else { theme::accent() },
+                        if fed.is_local {
+                            theme::good()
+                        } else {
+                            theme::accent()
+                        },
                     ))
-                    .child(pill(format!("fed {}", reflect::short_hex_hexstr(&fed.federation_id)), theme::accent()))
-                    .child(pill(format!("epoch {}", fed.committee_epoch), theme::muted()))
-                    .child(pill(format!("{}-of-{}", fed.threshold, fed.member_count), theme::warn()))
-                    .child(pill(format!("checkpoint h{}", fed.latest_height), theme::accent())),
+                    .child(pill(
+                        format!("fed {}", reflect::short_hex_hexstr(&fed.federation_id)),
+                        theme::accent(),
+                    ))
+                    .child(pill(
+                        format!("epoch {}", fed.committee_epoch),
+                        theme::muted(),
+                    ))
+                    .child(pill(
+                        format!("{}-of-{}", fed.threshold, fed.member_count),
+                        theme::warn(),
+                    ))
+                    .child(pill(
+                        format!("checkpoint h{}", fed.latest_height),
+                        theme::accent(),
+                    )),
             )
-            .child(
-                div().text_xs().text_color(theme::muted()).child(format!(
+            .child(div().text_xs().text_color(theme::muted()).child(format!(
                     "{} finalized root(s) · latest {}",
                     fed.num_finalized_roots,
                     fed.latest_root
                         .as_ref()
                         .map(|r| reflect::short_hex_hexstr(r))
                         .unwrap_or_else(|| "none".into()),
-                )),
-            );
+                )));
         for (n, m) in fed.members.iter().enumerate() {
             card = card.child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(div().text_xs().text_color(theme::muted()).child(format!("member[{n}]")))
-                    .child(div().text_xs().text_color(theme::text()).child(reflect::short_hex_hexstr(m))),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(format!("member[{n}]")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child(reflect::short_hex_hexstr(m)),
+                    ),
             );
         }
         card

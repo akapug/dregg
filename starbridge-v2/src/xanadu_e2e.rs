@@ -38,9 +38,7 @@
 //!    of cells and returns a [`Demonstration`] report whose every field is a real
 //!    observation of the running organs — the test below asserts the whole braid.
 
-use dregg_doc::{
-    content, merge, AtomId, Author, ConflictRegion, History, Patch, Rendered,
-};
+use dregg_doc::{content, merge, AtomId, Author, ConflictRegion, History, Patch, Rendered};
 
 /// A structured report of what the end-to-end document-language demonstration actually
 /// observed — every field a real read of a running organ, asserted by the test.
@@ -124,8 +122,8 @@ pub fn xanadu_demonstration() -> Demonstration {
     // inserts after the same anchor would instead be an antichain; that is the
     // conflicting case below. The genuinely-disjoint clean case touches non-overlapping
     // parts of the graph.)
-    let alice_branch = Patch::by(alice, [Patch::add(10, " It is audited.", a_amount).1])
-        .apply_to(&base);
+    let alice_branch =
+        Patch::by(alice, [Patch::add(10, " It is audited.", a_amount).1]).apply_to(&base);
     let bob_branch = Patch::by(
         bob,
         [dregg_doc::Op::SetField {
@@ -151,8 +149,8 @@ pub fn xanadu_demonstration() -> Demonstration {
     // other ⇒ the merged graph has a genuine antichain: a first-class CONFLICT STATE
     // carrying both alternatives + their provenance. NOT a silent overwrite; NOT a
     // rejected merge — a stored state the document lives in.
-    let alice_alt = Patch::by(alice, [Patch::add(20, " Spend it wisely.", a_amount).1])
-        .apply_to(&base);
+    let alice_alt =
+        Patch::by(alice, [Patch::add(20, " Spend it wisely.", a_amount).1]).apply_to(&base);
     let bob_alt = Patch::by(bob, [Patch::add(21, " Save it all.", a_amount).1]).apply_to(&base);
     let conflicted = merge(&alice_alt, &bob_alt);
     let conflicted_r: Rendered = content(&conflicted);
@@ -216,11 +214,22 @@ pub fn xanadu_demonstration() -> Demonstration {
     // effect-template on the three-tier rights chain `Signature ⊂ Either ⊂ None`.
     let view_evt = Effect::EmitEvent {
         cell: c_cell,
-        event: Event { topic: [1u8; 32], data: vec![] },
+        event: Event {
+            topic: [1u8; 32],
+            data: vec![],
+        },
     };
     let c_surface = AffordanceSurface::new(c_cell)
-        .declare(CellAffordance::new("view", AuthRequired::Signature, view_evt.clone()))
-        .declare(CellAffordance::new("comment", AuthRequired::Either, view_evt.clone()))
+        .declare(CellAffordance::new(
+            "view",
+            AuthRequired::Signature,
+            view_evt.clone(),
+        ))
+        .declare(CellAffordance::new(
+            "comment",
+            AuthRequired::Either,
+            view_evt.clone(),
+        ))
         .declare(CellAffordance::new("edit", AuthRequired::Either, view_evt));
     // The embed lineage: a strong (Either) authority ceiling over C.
     let lineage = SurfaceCapability::root(c_cell, AuthRequired::Either);
@@ -344,7 +353,11 @@ mod tests {
             "the conflict carries BOTH authors' alternatives (provenance kept): {:?}",
             d.conflict_alternatives
         );
-        let texts: Vec<&str> = d.conflict_alternatives.iter().map(|(_, t)| t.as_str()).collect();
+        let texts: Vec<&str> = d
+            .conflict_alternatives
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect();
         assert!(
             texts.iter().any(|t| t.contains("Spend it wisely"))
                 && texts.iter().any(|t| t.contains("Save it all")),
@@ -364,8 +377,14 @@ mod tests {
         );
 
         // ── STEP 2: transclusion ─────────────────────────────────────────────
-        assert!(d.quote_cites_source, "the quote carries provenance citing cell C");
-        assert!(d.quote_verifies, "the quote's provenance verifies (anti-forge)");
+        assert!(
+            d.quote_cites_source,
+            "the quote carries provenance citing cell C"
+        );
+        assert!(
+            d.quote_verifies,
+            "the quote's provenance verifies (anti-forge)"
+        );
         assert!(
             d.quote_visible_to_capped_reader,
             "a fully-capped reader sees into the quote"
@@ -400,17 +419,30 @@ mod tests {
 
         // An edit is a cap-gated turn (committed, finalized, real receipt).
         let outcome = ed.append("A first sentence. ", DocAuthor::ALICE);
-        assert!(outcome.committed(), "an authorized edit commits as a real turn");
+        assert!(
+            outcome.committed(),
+            "an authorized edit commits as a real turn"
+        );
         assert!(!ed.has_conflict(), "a linear edit history has no conflict");
 
         // Sow a first-class PROSE conflict: two concurrent committed turns after the
         // same tail. The document is honestly conflicted there (a state), clean elsewhere.
         let (a, b) = ed.sow_prose_conflict(" Alice's ending.", " Bob's ending.");
-        assert!(a.committed() && b.committed(), "both alternative edits commit as turns");
-        assert!(ed.has_conflict(), "the concurrent edits produced a first-class conflict");
+        assert!(
+            a.committed() && b.committed(),
+            "both alternative edits commit as turns"
+        );
+        assert!(
+            ed.has_conflict(),
+            "the concurrent edits produced a first-class conflict"
+        );
         let views = ed.conflicts();
         assert_eq!(views.len(), 1, "exactly one conflict region");
-        let names: Vec<&str> = views[0].alternatives.iter().map(|a| a.author_name).collect();
+        let names: Vec<&str> = views[0]
+            .alternatives
+            .iter()
+            .map(|a| a.author_name)
+            .collect();
         assert!(
             names.contains(&"alice") && names.contains(&"bob"),
             "both alternatives are attributed to who wrote them: {names:?}"
@@ -419,11 +451,20 @@ mod tests {
         // RESOLVE by ordering — a real cap-gated turn collapses the antichain.
         let heads: Vec<_> = views[0].alternatives.iter().map(|alt| alt.head).collect();
         let resolved = ed.resolve_prose_order(&heads, DocAuthor::ALICE);
-        assert!(resolved.committed(), "the resolution commits as a real turn");
-        assert!(!ed.has_conflict(), "the resolution collapsed the conflict to a clean doc");
+        assert!(
+            resolved.committed(),
+            "the resolution commits as a real turn"
+        );
+        assert!(
+            !ed.has_conflict(),
+            "the resolution collapsed the conflict to a clean doc"
+        );
 
         // The document is a real cell with a real commitment that moved with the edits.
-        assert!(ed.commitment_matches(), "the document commitment is the real cell state");
+        assert!(
+            ed.commitment_matches(),
+            "the document commitment is the real cell state"
+        );
     }
 
     /// The executor anti-ghost tooth: an editor lacking the per-region edit cap is

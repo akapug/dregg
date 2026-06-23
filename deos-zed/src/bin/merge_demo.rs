@@ -84,16 +84,26 @@ fn print_structure(r: &Rendered) {
 fn verify() -> anyhow::Result<()> {
     let merged = build_merge();
     let r = merged.rendered();
-    println!("merged document structure ({} patches):", merged.history().len());
+    println!(
+        "merged document structure ({} patches):",
+        merged.history().len()
+    );
     print_structure(&r);
 
-    anyhow::ensure!(r.has_conflict(), "the clashing owner line must be a conflict object");
+    anyhow::ensure!(
+        r.has_conflict(),
+        "the clashing owner line must be a conflict object"
+    );
     let conflict = r.conflicts().next().expect("a conflict region");
     anyhow::ensure!(
         conflict.alternatives.len() == 2,
         "two pens at one tail => two alternatives"
     );
-    let authors: Vec<u64> = conflict.alternatives.iter().map(|a| a.provenance.author.0).collect();
+    let authors: Vec<u64> = conflict
+        .alternatives
+        .iter()
+        .map(|a| a.provenance.author.0)
+        .collect();
     anyhow::ensure!(
         authors.contains(&1) && authors.contains(&2),
         "both authors attributed in the conflict object"
@@ -101,9 +111,16 @@ fn verify() -> anyhow::Result<()> {
 
     // The disjoint intro rewrite landed cleanly in the prefix.
     let text = r.to_marked_string();
-    anyhow::ensure!(text.contains("by alice"), "Alice's intro rewrite landed clean in the prefix");
+    anyhow::ensure!(
+        text.contains("by alice"),
+        "Alice's intro rewrite landed clean in the prefix"
+    );
     // The clash is over the status line — both alternatives are in the object.
-    let alts: Vec<&str> = conflict.alternatives.iter().map(|a| a.text.trim_end()).collect();
+    let alts: Vec<&str> = conflict
+        .alternatives
+        .iter()
+        .map(|a| a.text.trim_end())
+        .collect();
     anyhow::ensure!(
         alts.iter().any(|t| t.contains("shipping")) && alts.iter().any(|t| t.contains("blocked")),
         "both status alternatives are in the conflict object"
@@ -124,10 +141,10 @@ fn main() -> anyhow::Result<()> {
         match a.as_str() {
             "--verify" | "--headless" => headless = true,
             "--screenshot" => {
-                screenshot_out = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow::anyhow!("--screenshot needs an <out.png> path"))?,
-                ));
+                screenshot_out =
+                    Some(PathBuf::from(args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--screenshot needs an <out.png> path")
+                    })?));
             }
             _ => {}
         }
@@ -141,7 +158,9 @@ fn main() -> anyhow::Result<()> {
         #[cfg(not(feature = "screenshot"))]
         {
             let _ = out;
-            anyhow::bail!("built without the `screenshot` feature; rebuild with --features screenshot");
+            anyhow::bail!(
+                "built without the `screenshot` feature; rebuild with --features screenshot"
+            );
         }
     }
 
@@ -188,7 +207,10 @@ mod shot {
         fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
             let merged = build_merge();
             let viewer = cx.new(|cx| DocViewer::from_doc(&merged, "Project Plan (merged)", cx));
-            Self { viewer, focus: cx.focus_handle() }
+            Self {
+                viewer,
+                focus: cx.focus_handle(),
+            }
         }
     }
 
@@ -203,9 +225,11 @@ mod shot {
             v_flex()
                 .size_full()
                 .track_focus(&self.focus)
-                .child(TitleBar::new().child(
-                    "deos-zed — two authors merged: blame timeline + the conflict object",
-                ))
+                .child(
+                    TitleBar::new().child(
+                        "deos-zed — two authors merged: blame timeline + the conflict object",
+                    ),
+                )
                 .child(
                     h_flex().flex_1().min_h(px(0.)).child(
                         div()
@@ -254,7 +278,10 @@ mod gui {
         fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
             let merged = build_merge();
             let viewer = cx.new(|cx| DocViewer::from_doc(&merged, "Project Plan (merged)", cx));
-            Self { viewer, focus: cx.focus_handle() }
+            Self {
+                viewer,
+                focus: cx.focus_handle(),
+            }
         }
     }
 
@@ -269,9 +296,11 @@ mod gui {
             v_flex()
                 .size_full()
                 .track_focus(&self.focus)
-                .child(TitleBar::new().child(
-                    "deos-zed — two authors merged: blame timeline + the conflict object",
-                ))
+                .child(
+                    TitleBar::new().child(
+                        "deos-zed — two authors merged: blame timeline + the conflict object",
+                    ),
+                )
                 .child(
                     h_flex().flex_1().min_h(px(0.)).child(
                         div()

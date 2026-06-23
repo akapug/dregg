@@ -51,14 +51,22 @@ fn surfaces_of(scene: &CompositorScene) -> Vec<DesktopSurface> {
 
 /// Project a live cockpit **scene + workspace** into a `dregg_doc` document (the
 /// WELD; delegates to the verified [`desktop::scene_to_doc`]).
-pub fn scene_to_doc(scene: &CompositorScene, workspace: &WorkspaceCell, author: Author) -> DocGraph {
+pub fn scene_to_doc(
+    scene: &CompositorScene,
+    workspace: &WorkspaceCell,
+    author: Author,
+) -> DocGraph {
     desktop::scene_to_doc(&surfaces_of(scene), workspace.active_tab(), author)
 }
 
 /// The REAL desktop commitment (the production sorted-Poseidon2 heap root): two
 /// parties agree they see the same desktop iff this matches; a forged surface
 /// changes it (the anti-forge tooth, inherited from the document).
-pub fn desktop_commit(scene: &CompositorScene, workspace: &WorkspaceCell, author: Author) -> [u8; 32] {
+pub fn desktop_commit(
+    scene: &CompositorScene,
+    workspace: &WorkspaceCell,
+    author: Author,
+) -> [u8; 32] {
     desktop::desktop_commit(&surfaces_of(scene), workspace.active_tab(), author)
 }
 
@@ -109,8 +117,8 @@ pub fn render_desktop(
 
 use dregg_doc::composition::{
     self, content_composed, scene_to_composed, surface_embed_id, workspace_resolver,
-    DesktopSurface as ComposedSurface, LayoutGraph, MapResolver, Op,
-    Rendered as ComposedRendered, Viewer,
+    DesktopSurface as ComposedSurface, LayoutGraph, MapResolver, Op, Rendered as ComposedRendered,
+    Viewer,
 };
 
 /// Reduce the cockpit's 32-byte `dregg_cell::CellId` to the composition crate's
@@ -187,10 +195,7 @@ pub fn full_authority_viewer(scene: &CompositorScene) -> Viewer {
 /// `viewer`'s membrane: in-cap windows render (recursing into their content), an
 /// out-of-cap window DARKENS (the firmament fog-of-war ON the desktop), a window-mirror
 /// cycle is a state. Two operators with different caps see the SAME desktop differently.
-pub fn render_composed(
-    scene: &CompositorScene,
-    viewer: &Viewer,
-) -> ComposedRendered {
+pub fn render_composed(scene: &CompositorScene, viewer: &Viewer) -> ComposedRendered {
     let layout = scene_to_composed_doc(scene, Author(1));
     let resolver = scene_resolver(scene);
     content_composed(&layout, viewer, &resolver)
@@ -263,8 +268,14 @@ mod composed_tests {
             expected,
             "the composed desktop embeds each live window's owner cell in paint order"
         );
-        assert!(!r.has_conflict(), "a single-operator desktop layout is conflict-free");
-        assert!(!r.has_darkened(), "a full-authority operator reads every window");
+        assert!(
+            !r.has_conflict(),
+            "a single-operator desktop layout is conflict-free"
+        );
+        assert!(
+            !r.has_darkened(),
+            "a full-authority operator reads every window"
+        );
         // Each window resolved (the fold recursed into the window's content cell).
         for seg in &r.segments {
             if let Segment::Embedded { resolution, .. } = seg {
@@ -288,17 +299,18 @@ mod composed_tests {
         let resolver = scene_resolver(&scene);
 
         let before = content_composed(&layout, &viewer, &resolver);
-        assert_eq!(before.embedded_cells().len(), 3, "three live windows before");
+        assert_eq!(
+            before.embedded_cells().len(),
+            3,
+            "three live windows before"
+        );
 
         // EDIT: close the focused middle window (an Op::Remove on its embed-atom).
         layout.apply_patch(Author(1), &[close_window_op(&scene.surfaces[1])]);
         let after = content_composed(&layout, &viewer, &resolver);
         assert_eq!(
             after.embedded_cells(),
-            vec![
-                composed_cell_id(&cell(0xA1)),
-                composed_cell_id(&cell(0xC3)),
-            ],
+            vec![composed_cell_id(&cell(0xA1)), composed_cell_id(&cell(0xC3)),],
             "the closed window drops off the desktop; the order conducts through it"
         );
 
@@ -307,7 +319,11 @@ mod composed_tests {
         let c3 = window_embed_id(&scene.surfaces[2]);
         layout.apply_patch(Author(2), &[Op::Order { from: c3, to: a1 }]);
         let reordered = content_composed(&layout, &viewer, &resolver);
-        assert_eq!(reordered.embedded_cells().len(), 2, "the reorder kept both windows");
+        assert_eq!(
+            reordered.embedded_cells().len(),
+            2,
+            "the reorder kept both windows"
+        );
     }
 
     // (NEGATIVE) An OUT-OF-CAP live window DARKENS — the per-viewer membrane through
@@ -318,7 +334,7 @@ mod composed_tests {
     #[test]
     fn an_out_of_cap_live_window_darkens() {
         let scene = three_window_scene(); // windows A1, B2, C3
-        // The operator holds A1 and C3, but NOT B2 (the secret window).
+                                          // The operator holds A1 and C3, but NOT B2 (the secret window).
         let viewer = viewer_over([cell(0xA1), cell(0xC3)]);
         let r = render_composed(&scene, &viewer);
 
@@ -331,7 +347,12 @@ mod composed_tests {
         );
         let secret = composed_cell_id(&cell(0xB2));
         for seg in &r.segments {
-            if let Segment::Embedded { resolved_cell: Some(c), resolution, .. } = seg {
+            if let Segment::Embedded {
+                resolved_cell: Some(c),
+                resolution,
+                ..
+            } = seg
+            {
                 if *c == secret {
                     assert!(
                         matches!(resolution, ChildResolution::Darkened { .. }),
@@ -360,7 +381,10 @@ mod composed_tests {
     #[test]
     fn distinct_windows_do_not_collide_under_the_reduction() {
         assert_ne!(composed_cell_id(&cell(0xA1)), composed_cell_id(&cell(0xB2)));
-        assert_ne!(window_embed_id(&surface(0xA1, 0, false)), window_embed_id(&surface(0xB2, 0, false)));
+        assert_ne!(
+            window_embed_id(&surface(0xA1, 0, false)),
+            window_embed_id(&surface(0xB2, 0, false))
+        );
         // Stable: the same window always projects to the same embed-atom.
         assert_eq!(composed_cell_id(&cell(0xA1)), composed_cell_id(&cell(0xA1)));
     }
@@ -406,12 +430,24 @@ mod tests {
         // commits to a real heap root (the delegation is wired correctly).
         let (scene, ws) = two_surface_scene();
         let root = desktop_commit(&scene, &ws, Author(1));
-        assert_ne!(root, dregg_cell::empty_heap_root(), "a populated live desktop commits non-empty");
+        assert_ne!(
+            root,
+            dregg_cell::empty_heap_root(),
+            "a populated live desktop commits non-empty"
+        );
 
         // The projected document carries the cockpit's tab + focus as fields.
         let doc = scene_to_doc(&scene, &ws, Author(1));
-        assert_eq!(doc.field(FIELD_ACTIVE_TAB)[0].value, "3", "the cockpit's active tab is the field");
-        assert_eq!(doc.field(FIELD_FOCUS).len(), 1, "the focused surface is the focus field");
+        assert_eq!(
+            doc.field(FIELD_ACTIVE_TAB)[0].value,
+            "3",
+            "the cockpit's active tab is the field"
+        );
+        assert_eq!(
+            doc.field(FIELD_FOCUS).len(),
+            1,
+            "the focused surface is the focus field"
+        );
     }
 
     #[test]
@@ -420,6 +456,10 @@ mod tests {
         let honest = desktop_commit(&scene, &ws, Author(1));
         let mut forged = scene.clone();
         forged.surfaces[1].owner = cell(0xFF);
-        assert_ne!(desktop_commit(&forged, &ws, Author(1)), honest, "a forged live surface changes the root");
+        assert_ne!(
+            desktop_commit(&forged, &ws, Author(1)),
+            honest,
+            "a forged live surface changes the root"
+        );
     }
 }

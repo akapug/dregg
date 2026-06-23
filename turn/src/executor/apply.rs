@@ -624,7 +624,8 @@ impl TurnExecutor {
         if !emit_cell.accepts_effects() {
             return Err((
                 TurnError::InvalidEffect {
-                    reason: "EmitEvent target cell does not accept effects (sealed/destroyed)".into(),
+                    reason: "EmitEvent target cell does not accept effects (sealed/destroyed)"
+                        .into(),
                 },
                 path.to_vec(),
             ));
@@ -1710,10 +1711,7 @@ impl TurnExecutor {
                             actor: *actor,
                             target: cap_target,
                             cap_slot,
-                            attempted_effect: format!(
-                                "{:?}",
-                                std::mem::discriminant(inner_effect)
-                            ),
+                            attempted_effect: format!("{:?}", std::mem::discriminant(inner_effect)),
                             allowed_mask: cap.allowed_effects.unwrap_or(0),
                         },
                         path.to_vec(),

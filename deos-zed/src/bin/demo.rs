@@ -43,7 +43,10 @@ fn verify() -> anyhow::Result<()> {
     // 3. Mutate in memory (the editor's rope buffer) and save (this is
     //    Editor::save → fs.save; with FirmamentFs this becomes a receipted turn).
     fs.save(&path, edited)?;
-    println!("saved    edited buffer through fs.save (backend: {})", fs.backend_label());
+    println!(
+        "saved    edited buffer through fs.save (backend: {})",
+        fs.backend_label()
+    );
 
     // 4. Verify the bytes on disk ACTUALLY changed — read with std::fs directly
     //    (NOT the seam) so this is an independent witness, not the seam grading
@@ -53,8 +56,13 @@ fn verify() -> anyhow::Result<()> {
         on_disk == edited,
         "disk content did not match the edited buffer!\n--- on disk ---\n{on_disk}\n--- expected ---\n{edited}"
     );
-    anyhow::ensure!(on_disk != original, "disk content did not change from the original");
-    println!("VERIFIED disk content changed: read-back == edited buffer (independent std::fs witness)");
+    anyhow::ensure!(
+        on_disk != original,
+        "disk content did not change from the original"
+    );
+    println!(
+        "VERIFIED disk content changed: read-back == edited buffer (independent std::fs witness)"
+    );
 
     // 5. read_dir + metadata through the seam (the file-tree path).
     let dir = path.parent().unwrap();
@@ -64,8 +72,14 @@ fn verify() -> anyhow::Result<()> {
         "read_dir did not list the scratch file"
     );
     let md = fs.metadata(&path)?;
-    anyhow::ensure!(!md.is_dir && md.len as usize == edited.len(), "metadata wrong");
-    println!("VERIFIED read_dir lists the file; metadata len={} is_dir={}", md.len, md.is_dir);
+    anyhow::ensure!(
+        !md.is_dir && md.len as usize == edited.len(),
+        "metadata wrong"
+    );
+    println!(
+        "VERIFIED read_dir lists the file; metadata len={} is_dir={}",
+        md.len, md.is_dir
+    );
 
     let _ = std::fs::remove_file(&path);
     println!("\nALL CHECKS PASSED — a real file edits + saves through the Fs seam.");
@@ -98,8 +112,14 @@ fn verify_firmament() -> anyhow::Result<()> {
 
     // 2. Load it back — read from the CELL's committed content, not disk.
     let loaded = fs.load(&path)?;
-    anyhow::ensure!(loaded == original, "load did not round-trip the seeded cell");
-    println!("loaded   {} bytes from the ledger — matches seed", loaded.len());
+    anyhow::ensure!(
+        loaded == original,
+        "load did not round-trip the seeded cell"
+    );
+    println!(
+        "loaded   {} bytes from the ledger — matches seed",
+        loaded.len()
+    );
     anyhow::ensure!(fs.receipt_count() == 0, "a seed is genesis, not a turn");
 
     // 3. Save the edited buffer — THIS IS A TURN: a cap-gated SetField over the
@@ -116,8 +136,14 @@ fn verify_firmament() -> anyhow::Result<()> {
         hex8(receipt.pre_state_hash),
         hex8(receipt.post_state_hash),
     );
-    anyhow::ensure!(fs.receipt_count() == 1, "the save produced exactly one receipt");
-    anyhow::ensure!(receipt.agent == fs.editor_id(), "the editor is the turn's agent");
+    anyhow::ensure!(
+        fs.receipt_count() == 1,
+        "the save produced exactly one receipt"
+    );
+    anyhow::ensure!(
+        receipt.agent == fs.editor_id(),
+        "the editor is the turn's agent"
+    );
     anyhow::ensure!(
         receipt.pre_state_hash != receipt.post_state_hash,
         "the save must move the ledger state (the edit landed on-ledger)"
@@ -131,7 +157,10 @@ fn verify_firmament() -> anyhow::Result<()> {
         reloaded == edited,
         "ledger content did not match the edited buffer!\n--- ledger ---\n{reloaded}\n--- expected ---\n{edited}"
     );
-    anyhow::ensure!(reloaded != original, "ledger content did not change from the original");
+    anyhow::ensure!(
+        reloaded != original,
+        "ledger content did not change from the original"
+    );
     println!(
         "VERIFIED ledger content changed: re-load == edited buffer (read from the cell, NOT disk)"
     );
@@ -143,7 +172,10 @@ fn verify_firmament() -> anyhow::Result<()> {
         "read_dir did not list the file cell"
     );
     let md = fs.metadata(&path)?;
-    anyhow::ensure!(!md.is_dir && md.len as usize == edited.len(), "metadata wrong");
+    anyhow::ensure!(
+        !md.is_dir && md.len as usize == edited.len(),
+        "metadata wrong"
+    );
     println!(
         "VERIFIED read_dir lists the file cell; metadata len={} is_dir={}",
         md.len, md.is_dir
@@ -188,10 +220,10 @@ fn main() -> anyhow::Result<()> {
             "--verify" | "--headless" => headless = true,
             "--firmament" => firmament = true,
             "--screenshot" => {
-                screenshot_out = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow::anyhow!("--screenshot needs an <out.png> path"))?,
-                ));
+                screenshot_out =
+                    Some(PathBuf::from(args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--screenshot needs an <out.png> path")
+                    })?));
             }
             _ => {}
         }
@@ -205,7 +237,9 @@ fn main() -> anyhow::Result<()> {
         #[cfg(not(feature = "screenshot"))]
         {
             let _ = out;
-            anyhow::bail!("built without the `screenshot` feature; rebuild with --features screenshot");
+            anyhow::bail!(
+                "built without the `screenshot` feature; rebuild with --features screenshot"
+            );
         }
     }
 
@@ -279,7 +313,11 @@ mod shot {
             editor.update(cx, |ed, cx| {
                 let _ = ed.open(open, window, cx);
             });
-            Self { editor, tree, focus: cx.focus_handle() }
+            Self {
+                editor,
+                tree,
+                focus: cx.focus_handle(),
+            }
         }
     }
 
@@ -360,7 +398,12 @@ mod gui {
     }
 
     impl DemoApp {
-        fn new(fs: Arc<dyn Fs>, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        fn new(
+            fs: Arc<dyn Fs>,
+            root: PathBuf,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+        ) -> Self {
             let editor = cx.new(|cx| Editor::new(fs.clone(), window, cx));
             let tree = FileTree::new(fs, root, cx);
             // Open the seeded scratch file straight away.
@@ -368,7 +411,11 @@ mod gui {
             editor.update(cx, |ed, cx| {
                 let _ = ed.open(scratch, window, cx);
             });
-            Self { editor, tree, focus: cx.focus_handle() }
+            Self {
+                editor,
+                tree,
+                focus: cx.focus_handle(),
+            }
         }
 
         fn save(&mut self, _: &Save, _window: &mut Window, cx: &mut Context<Self>) {
@@ -387,24 +434,37 @@ mod gui {
     impl Render for DemoApp {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let editor = self.editor.clone();
-            let tree_el = self.tree.render(cx.entity(), move |this: &mut DemoApp, path, window, cx| {
-                this.editor.update(cx, |ed, cx| {
-                    let _ = ed.open(path, window, cx);
-                });
-            }, cx);
+            let tree_el = self.tree.render(
+                cx.entity(),
+                move |this: &mut DemoApp, path, window, cx| {
+                    this.editor.update(cx, |ed, cx| {
+                        let _ = ed.open(path, window, cx);
+                    });
+                },
+                cx,
+            );
 
             v_flex()
                 .size_full()
                 .track_focus(&self.focus)
                 .key_context("DemoApp")
                 .on_action(cx.listener(Self::save))
-                .child(TitleBar::new().child("deos-zed — editor over the Fs seam (Cmd/Ctrl-S saves)"))
+                .child(
+                    TitleBar::new().child("deos-zed — editor over the Fs seam (Cmd/Ctrl-S saves)"),
+                )
                 .child(
                     h_flex()
                         .flex_1()
                         .min_h(px(0.))
                         .child(div().w(px(240.)).h_full().child(tree_el))
-                        .child(div().flex_1().h_full().border_l_1().border_color(cx.theme().border).child(editor)),
+                        .child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .border_l_1()
+                                .border_color(cx.theme().border)
+                                .child(editor),
+                        ),
                 )
         }
     }

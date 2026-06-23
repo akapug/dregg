@@ -136,6 +136,7 @@ deos-hermes = { path = "../deos-hermes", default-features = false, optional = tr
 # rev as the rest of the graph.
 ui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
 
+
 # Replicate the zed fork's [patch.crates-io] table (the subset our graph pulls),
 # same as deos-zed/Cargo.toml carries for gpui. Plus the proof-dep overrides the
 # `firmament` cell backing pulls (deos-zed carries the identical set — see its
@@ -169,6 +170,18 @@ workspace = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828
 # `remote_connection`, so enable its test-support here to turn the arm on.
 remote_connection = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
 
+# THE HEADLESS RENDER PATH for the unified-Workspace PNG bake
+# (`tests/unified_workspace_png_bake.rs`). `gpui_platform::current_headless_renderer`
+# (the offscreen GPU renderer that makes `capture_screenshot` resolve to real
+# pixels) and `gpui::HeadlessAppContext` are both `test-support`-gated — so the
+# bake rides as a `#[test]`, where these dev-deps' test-support is on. `gpui_wgpu`
+# carries the `CosmicTextSystem` (real text shaping); `image` is `RgbaImage::save`
+# (the captured screenshot → PNG). Same zed-fork rev as `gpui`, so the
+# renderer/text types unify with the rest of the graph.
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support", "font-kit"] }
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
+image = { version = "0.25" }
+
 # The `project_over_cells` test only compiles under `--features full-zed` (it
 # `cfg`s its body on it); declared here so cargo knows it exists.
 [[test]]
@@ -181,6 +194,24 @@ path = "tests/project_over_cells.rs"
 [[test]]
 name = "full_workspace_over_cells"
 path = "tests/full_workspace_over_cells.rs"
+
+# THE WHOLE ZED WORKSPACE AS ONE RUNNING THING — a single `workspace::Workspace`
+# over the cell-fs carrying EVERY surface at once: project / outline / terminal /
+# Hermes-agent panels docked + resolvable, git auto-discovered, search deployed,
+# the command palette toggled, a real PTY running, and a save-is-a-turn. The
+# unification of the per-panel proofs. `cfg`-gated on full-zed.
+[[test]]
+name = "unified_workspace_one_running_thing"
+path = "tests/unified_workspace_one_running_thing.rs"
+
+# THE PNG BAKE of the whole unified Workspace — mounts the same one Workspace over
+# the cell-ledger through the REAL headless GPU renderer (offscreen) and writes the
+# resolved gpui Scene to a PNG. A `#[test]` (not `#[gpui::test]`) so the
+# `gpui`/`gpui_platform` `test-support` headless+capture path is on. `cfg`-gated on
+# full-zed. Writes to `$DEOS_UNIFIED_WORKSPACE_PNG` (default a target-dir path).
+[[test]]
+name = "unified_workspace_png_bake"
+path = "tests/unified_workspace_png_bake.rs"
 
 [patch.crates-io]
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }

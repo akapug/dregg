@@ -216,10 +216,26 @@ impl ShowcaseView {
     /// conservation invariant, the Pharo-style live inspector face of the image.
     fn cell_rail(&self) -> impl IntoElement {
         let substances = [
-            ("⛁ value", "the conserved fungible — Σδ=0 every turn", rgb_value()),
-            ("⛃ authority", "production under non-forgeability", rgb_auth()),
-            ("⛂ availability", "fresh-at-settlement liveness", rgb_avail()),
-            ("⛀ knowledge", "attested reads · receipted writes", rgb_know()),
+            (
+                "⛁ value",
+                "the conserved fungible — Σδ=0 every turn",
+                rgb_value(),
+            ),
+            (
+                "⛃ authority",
+                "production under non-forgeability",
+                rgb_auth(),
+            ),
+            (
+                "⛂ availability",
+                "fresh-at-settlement liveness",
+                rgb_avail(),
+            ),
+            (
+                "⛀ knowledge",
+                "attested reads · receipted writes",
+                rgb_know(),
+            ),
         ];
         let mut rail = div()
             .flex()
@@ -370,11 +386,7 @@ impl ShowcaseView {
 
     /// A titled surface frame: a small header strip + the surface body, so each
     /// pane reads as a distinct, labelled window in the layout.
-    fn framed(
-        title: &str,
-        subtitle: &str,
-        body: gpui::AnyElement,
-    ) -> impl IntoElement {
+    fn framed(title: &str, subtitle: &str, body: gpui::AnyElement) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -540,7 +552,12 @@ fn membrane_stat(value: &str, label: &str) -> impl IntoElement {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(value.to_string()),
         )
-        .child(div().text_color(theme::muted()).text_xs().child(label.to_string()))
+        .child(
+            div()
+                .text_color(theme::muted())
+                .text_xs()
+                .child(label.to_string()),
+        )
 }
 
 /// The bottom dock strip — the app shelf, a clean row of the mounted surfaces.
@@ -573,10 +590,22 @@ fn dock_strip() -> impl IntoElement {
                 .px_3()
                 .py_1()
                 .rounded_md()
-                .bg(if active { theme::panel_hi() } else { theme::panel() })
+                .bg(if active {
+                    theme::panel_hi()
+                } else {
+                    theme::panel()
+                })
                 .border_1()
-                .border_color(if active { theme::accent() } else { theme::border() })
-                .text_color(if active { theme::accent() } else { theme::muted() })
+                .border_color(if active {
+                    theme::accent()
+                } else {
+                    theme::border()
+                })
+                .text_color(if active {
+                    theme::accent()
+                } else {
+                    theme::muted()
+                })
                 .text_xs()
                 .child(app.to_string()),
         );

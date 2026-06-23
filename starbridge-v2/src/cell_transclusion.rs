@@ -517,11 +517,20 @@ mod tests {
     fn whole_cell_embed_is_a_verified_finalized_read() {
         let (_web, embed) = embed_of(1, 2);
         // The embed carries provenance: the source ref + a finalized flag.
-        assert!(embed.cite().finalized, "an embedded cell's surface is finalized");
+        assert!(
+            embed.cite().finalized,
+            "an embedded cell's surface is finalized"
+        );
         // The content commitment is the content address of the cited surface root.
-        assert_eq!(embed.cite().content_hash, embed.surface_read.resource.content_hash);
+        assert_eq!(
+            embed.cite().content_hash,
+            embed.surface_read.resource.content_hash
+        );
         // The embed re-verifies (provenance faithful — the surface equals its source).
-        assert!(embed.verify(), "the embed's surface-root provenance chain verifies");
+        assert!(
+            embed.verify(),
+            "the embed's surface-root provenance chain verifies"
+        );
     }
 
     // (1b) ANTI-FORGE — an absent source cell cannot be embedded (no finalized read).
@@ -535,7 +544,9 @@ mod tests {
         assert!(
             matches!(
                 r,
-                Err(WholeCellTransclusionError::Surface(TransclusionError::Fetch(_)))
+                Err(WholeCellTransclusionError::Surface(
+                    TransclusionError::Fetch(_)
+                ))
             ),
             "an absent source cannot be embedded (no finalized read), got {r:?}"
         );
@@ -567,7 +578,11 @@ mod tests {
         assert!(e.is_visible());
         assert_eq!(
             e.visible_affordance_names(),
-            vec!["comment".to_string(), "edit".to_string(), "view".to_string()]
+            vec![
+                "comment".to_string(),
+                "edit".to_string(),
+                "view".to_string()
+            ]
         );
 
         // FOG-OF-WAR: the SAME embed, two readers, DIFFERENT views. The weaker reader's
@@ -628,7 +643,10 @@ mod tests {
         let a = Membrane::new(SurfaceCapability::scoped(
             cid(80),
             AuthRequired::Either,
-            ["https://a.example.com".to_string(), "https://b.example.com".to_string()],
+            [
+                "https://a.example.com".to_string(),
+                "https://b.example.com".to_string(),
+            ],
             std::iter::empty::<PermissionKind>(),
         ));
         // A → B: narrow the embed to {a}. ADMITTED (a strict attenuation).
@@ -652,7 +670,10 @@ mod tests {
             SurfaceCapability::scoped(
                 cid(82),
                 AuthRequired::Either,
-                ["https://a.example.com".to_string(), "https://b.example.com".to_string()],
+                [
+                    "https://a.example.com".to_string(),
+                    "https://b.example.com".to_string(),
+                ],
                 std::iter::empty::<PermissionKind>(),
             ),
         );
@@ -701,7 +722,10 @@ mod tests {
             assert!(ev.is_visible());
             assert_eq!(ev.visible_affordance_names(), vec!["view".to_string()]);
         }
-        assert!(view.full(), "both embeds are visible to the Signature reader");
+        assert!(
+            view.full(),
+            "both embeds are visible to the Signature reader"
+        );
 
         // A tier-2 reader: sees doc-view + doc-edit of the host, and view+comment+edit
         // of each embed — a strictly richer view of the SAME composition.
@@ -716,7 +740,11 @@ mod tests {
         for ev in &eview.embed_views {
             assert_eq!(
                 ev.visible_affordance_names(),
-                vec!["comment".to_string(), "edit".to_string(), "view".to_string()]
+                vec![
+                    "comment".to_string(),
+                    "edit".to_string(),
+                    "view".to_string()
+                ]
             );
         }
 
@@ -732,10 +760,10 @@ mod tests {
     fn a_reader_darkens_one_embed_but_sees_the_rest() {
         let host = cid(21);
         let (_w, normal_embed) = embed_of(21, 32); // Either lineage
-        // The reader holds a `Custom { vk_hash }` identity — INCOMPARABLE with the first
-        // embed's Either lineage (so it darkens), but a valid attenuation of a `None`
-        // (root) lineage (Custom ⊆ None — anything narrows None), so it CAN see the
-        // second. A mixed result: one embed withheld, the rest of the composition usable.
+                                                   // The reader holds a `Custom { vk_hash }` identity — INCOMPARABLE with the first
+                                                   // embed's Either lineage (so it darkens), but a valid attenuation of a `None`
+                                                   // (root) lineage (Custom ⊆ None — anything narrows None), so it CAN see the
+                                                   // second. A mixed result: one embed withheld, the rest of the composition usable.
         let mut web2 = WebOfCells::new(3);
         let uri2 = web2.publish(33, b"<root-lineage cell>", "dregg://root-cell");
         let root_embed = WholeCellTransclusion::embed(

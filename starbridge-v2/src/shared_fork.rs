@@ -44,8 +44,8 @@ use std::collections::HashSet;
 use dregg_cell::{AuthRequired, CapabilityRef, CellId};
 use dregg_cell_crypto::ReadCap;
 use dregg_turn::conditional::{
-    compute_proof_hash, ConditionProof, ConditionalResult, ConditionalTurn, ProofCondition,
-    resolve_condition, DEFAULT_MAX_ROOT_AGE,
+    compute_proof_hash, resolve_condition, ConditionProof, ConditionalResult, ConditionalTurn,
+    ProofCondition, DEFAULT_MAX_ROOT_AGE,
 };
 use dregg_turn::turn::{Turn, TurnReceipt};
 
@@ -85,7 +85,11 @@ impl StudyRef {
     /// read-cap; to mutate it must ASK. Routed to the owner exactly like any
     /// powerbox request — the owner grants (promoting the studyref to embedded for
     /// this target) or denies.
-    pub fn upgrade_request(&self, guest: CellId, desired: AuthRequired) -> crate::powerbox::CapabilityRequest {
+    pub fn upgrade_request(
+        &self,
+        guest: CellId,
+        desired: AuthRequired,
+    ) -> crate::powerbox::CapabilityRequest {
         crate::powerbox::CapabilityRequest::new(
             guest,
             format!(
@@ -215,7 +219,11 @@ pub struct ConsentWitness {
 impl ConsentWitness {
     /// Build a witness from a granted [`ConsentOutcome`] for the given boundary +
     /// timeout. Returns `None` if the outcome was a denial (fail-closed: no key).
-    pub fn from_outcome(boundary: CellId, timeout_height: u64, outcome: ConsentOutcome) -> Option<Self> {
+    pub fn from_outcome(
+        boundary: CellId,
+        timeout_height: u64,
+        outcome: ConsentOutcome,
+    ) -> Option<Self> {
         match outcome {
             ConsentOutcome::Granted { receipt } => Some(ConsentWitness {
                 boundary,
@@ -447,8 +455,9 @@ impl SharedFork {
             return GatedCommit::Refused {
                 target: boundary.target,
                 request: Some(request),
-                reason: "networkboundary exercise refused: no consent witness present (fail-closed)"
-                    .to_string(),
+                reason:
+                    "networkboundary exercise refused: no consent witness present (fail-closed)"
+                        .to_string(),
             };
         };
 
@@ -581,12 +590,13 @@ impl SharedFork {
         // (1) The owner consents by running the REAL powerbox grant over the LIVE
         //     world — the two gates + executor backstop fire. A refusal here IS a
         //     denial (fail-closed). The grant's receipt is the CONSENT WITNESS.
-        let receipt = match Powerbox::grant(world, owner, request.guest, request.target, confer_rights) {
-            PowerboxOutcome::Granted { receipt, .. } => receipt,
-            PowerboxOutcome::Denied { reason } => {
-                return ConsentOutcome::Denied { reason };
-            }
-        };
+        let receipt =
+            match Powerbox::grant(world, owner, request.guest, request.target, confer_rights) {
+                PowerboxOutcome::Granted { receipt, .. } => receipt,
+                PowerboxOutcome::Denied { reason } => {
+                    return ConsentOutcome::Denied { reason };
+                }
+            };
 
         // (2) Verify the witness in the executor's OWN signing domain against the
         //     bound grant turn hash + a trusted key. This is the closed finding: a
@@ -673,7 +683,9 @@ fn verify_consent_witness(
             .unwrap_or(false)
     });
     if !verified {
-        return Err("receipt executor_signature not verified by any trusted executor key".to_string());
+        return Err(
+            "receipt executor_signature not verified by any trusted executor key".to_string(),
+        );
     }
 
     // All checks pass: record the nullifier (the boundary has now fired once).
@@ -860,7 +872,10 @@ impl MembraneFrustum {
     pub fn driven_graphs(
         &self,
         driven_fork: &World,
-    ) -> (crate::branch_stitch::DocGraph, crate::branch_stitch::DocGraph) {
+    ) -> (
+        crate::branch_stitch::DocGraph,
+        crate::branch_stitch::DocGraph,
+    ) {
         use crate::branch_stitch::{Atom, DocGraph};
         // A stable atom key per cell: the low 8 bytes of its id (deterministic,
         // collision-resistant enough for the in-view subgraph the frustum bounds).
@@ -904,13 +919,14 @@ impl MembraneFrustum {
                         h.update(&bytes);
                     }
                     let digest = *h.finalize().as_bytes();
-                    let driven_key =
-                        u64::from_le_bytes(digest[..8].try_into().expect("8 bytes"));
+                    let driven_key = u64::from_le_bytes(digest[..8].try_into().expect("8 bytes"));
                     driven_atoms.insert(driven_key, Atom::Alive);
                 }
             }
         }
-        let driven = DocGraph { atoms: driven_atoms };
+        let driven = DocGraph {
+            atoms: driven_atoms,
+        };
         (baseline, driven)
     }
 }
@@ -1015,7 +1031,11 @@ mod membrane_host {
     impl MembraneHost for ForkMembraneHost {
         type Error = MembraneError;
 
-        fn mint(&self, _focus: [u8; 32], mut cut: FrustumCut) -> Result<MembraneEnvelope, Self::Error> {
+        fn mint(
+            &self,
+            _focus: [u8; 32],
+            mut cut: FrustumCut,
+        ) -> Result<MembraneEnvelope, Self::Error> {
             // ANTI-AMPLIFICATION: a membrane is ALWAYS in view of the host's own
             // confined guest principal — never an arbitrary caller-supplied focus.
             // Centring the cull on a non-guest cell would be a path to snapshot
@@ -1068,7 +1088,11 @@ mod membrane_host {
             Ok((ForkHandle(id), Liveness::ReplayedDeterministic))
         }
 
-        fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8]) -> Result<TurnReceiptDigest, Self::Error> {
+        fn drive(
+            &self,
+            fork: &ForkHandle,
+            turn_bytes: &[u8],
+        ) -> Result<TurnReceiptDigest, Self::Error> {
             let mut forks = self.forks.lock().unwrap();
             let entry = forks
                 .iter_mut()
@@ -1104,9 +1128,16 @@ mod membrane_host {
                 .2
                 .cells
                 .iter()
-                .map(|c| BranchCap { target: cell_key(&c.id()), debit_reach: false })
+                .map(|c| BranchCap {
+                    target: cell_key(&c.id()),
+                    debit_reach: false,
+                })
                 .collect();
-            let stitch = Stitch { main: baseline, branch: driven.clone(), conferred: conferred.clone() };
+            let stitch = Stitch {
+                main: baseline,
+                branch: driven.clone(),
+                conferred: conferred.clone(),
+            };
             match stitch.settle(&conferred, None) {
                 SettleOutcome::Settled(merged) => Ok(StitchOutcome {
                     settled_root: Some(entry.1.state_root()),
@@ -1121,7 +1152,9 @@ mod membrane_host {
                         .collect(),
                     dropped: Vec::new(),
                 }),
-                SettleOutcome::Refused { over_authorized_target } => {
+                SettleOutcome::Refused {
+                    over_authorized_target,
+                } => {
                     use deos_matrix::membrane::{ConflictObject, ConflictReason};
                     let mut ev = [0u8; 32];
                     ev[..8].copy_from_slice(&over_authorized_target.to_le_bytes());
@@ -1163,7 +1196,10 @@ mod membrane_host {
             let docs = w.genesis_cell(0xD0, 0);
             let guest = w.genesis_cell(0xA9, 0);
             let mut owner_cell = make_open_cell(0x55, 0);
-            owner_cell.capabilities.grant(docs, AuthRequired::None).expect("owner holds docs");
+            owner_cell
+                .capabilities
+                .grant(docs, AuthRequired::None)
+                .expect("owner holds docs");
             let owner = w.genesis_install(owner_cell);
             (w, owner, guest, docs)
         }
@@ -1174,7 +1210,12 @@ mod membrane_host {
             let (mut world, owner, guest, docs) = signed_world();
             let mut fork = world.fork();
             let _sf = SharedFork::construct(
-                &mut fork, owner, guest, &[(docs, AuthRequired::None)], vec![], vec![],
+                &mut fork,
+                owner,
+                guest,
+                &[(docs, AuthRequired::None)],
+                vec![],
+                vec![],
             );
             let host = ForkMembraneHost::new(fork, guest);
 
@@ -1208,7 +1249,10 @@ mod membrane_host {
             };
             let turn_bytes = postcard::to_stdvec(&turn).unwrap();
             let digest = host.drive(&handle, &turn_bytes).expect("drive a real turn");
-            assert!(digest.turn_index >= 1, "a real turn committed (height advanced)");
+            assert!(
+                digest.turn_index >= 1,
+                "a real turn committed (height advanced)"
+            );
 
             // STITCH the REAL diff back through the settlement gate.
             let outcome = host.stitch(&handle).expect("stitch");
@@ -1247,8 +1291,10 @@ mod membrane_host {
         /// The fixture path (relative to this crate) the `deos-matrix` live test reads.
         /// Written by the bake test below; the byte content is a real executor-minted
         /// envelope's canonical JSON.
-        const REAL_ENVELOPE_FIXTURE: &str =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../deos-matrix/tests/fixtures/real_executor_membrane.json");
+        const REAL_ENVELOPE_FIXTURE: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deos-matrix/tests/fixtures/real_executor_membrane.json"
+        );
 
         /// A signed multiplayer source world: a `room` focus cell reaching two
         /// DISTINCT user principals (`user_a`, `user_b`) and the docs they edit —
@@ -1262,17 +1308,31 @@ mod membrane_host {
             let doc_a = w.genesis_cell(0xA1, 0);
             let doc_b = w.genesis_cell(0xB2, 0);
             let mut a = make_open_cell(0x0A, 0);
-            a.capabilities.grant(shared, AuthRequired::None).expect("A holds shared");
-            a.capabilities.grant(doc_a, AuthRequired::None).expect("A holds doc_a");
+            a.capabilities
+                .grant(shared, AuthRequired::None)
+                .expect("A holds shared");
+            a.capabilities
+                .grant(doc_a, AuthRequired::None)
+                .expect("A holds doc_a");
             let user_a = w.genesis_install(a);
             let mut b = make_open_cell(0x0B, 0);
-            b.capabilities.grant(shared, AuthRequired::None).expect("B holds shared");
-            b.capabilities.grant(doc_b, AuthRequired::None).expect("B holds doc_b");
+            b.capabilities
+                .grant(shared, AuthRequired::None)
+                .expect("B holds shared");
+            b.capabilities
+                .grant(doc_b, AuthRequired::None)
+                .expect("B holds doc_b");
             let user_b = w.genesis_install(b);
             let mut room = make_open_cell(0x40, 0);
-            room.capabilities.grant(user_a, AuthRequired::None).expect("room reaches A");
-            room.capabilities.grant(user_b, AuthRequired::None).expect("room reaches B");
-            room.capabilities.grant(shared, AuthRequired::None).expect("room reaches shared");
+            room.capabilities
+                .grant(user_a, AuthRequired::None)
+                .expect("room reaches A");
+            room.capabilities
+                .grant(user_b, AuthRequired::None)
+                .expect("room reaches B");
+            room.capabilities
+                .grant(shared, AuthRequired::None)
+                .expect("room reaches shared");
             let room = w.genesis_install(room);
             (w, room, user_a, user_b, shared, doc_a, doc_b)
         }
@@ -1294,8 +1354,13 @@ mod membrane_host {
                 authority_bounded: true,
                 cell_count: 0,
             };
-            let env = host.mint(room.0, cut).expect("mint a real multiplayer envelope");
-            assert!(env.cut.cell_count >= 6, "the frustum culled the whole subrealm (>=6 cells)");
+            let env = host
+                .mint(room.0, cut)
+                .expect("mint a real multiplayer envelope");
+            assert!(
+                env.cut.cell_count >= 6,
+                "the frustum culled the whole subrealm (>=6 cells)"
+            );
             assert_eq!(env.version, MembraneEnvelope::VERSION);
 
             // (2) BAKE THE FIXTURE — the canonical JSON the Matrix message carries.
@@ -1304,7 +1369,10 @@ mod membrane_host {
             // Round-trip in-process first (the wire byte identity the live test relies on).
             let back: MembraneEnvelope =
                 serde_json::from_str(&json).expect("the real envelope round-trips JSON");
-            assert_eq!(back, env, "the real executor envelope survives the wire shape");
+            assert_eq!(
+                back, env,
+                "the real executor envelope survives the wire shape"
+            );
 
             let path = std::path::Path::new(REAL_ENVELOPE_FIXTURE);
             if let Some(dir) = path.parent() {
@@ -1317,23 +1385,36 @@ mod membrane_host {
             //     mint→rehydrate→drive→stitch of EXACTLY the bytes the fixture carries,
             //     including the conflict path. Two distinct users rehydrate the same
             //     envelope into independent real forks and drive overlapping edits.
-            let frustum = MembraneFrustum::from_snapshot_bytes(&env.snapshot).expect("snapshot decodes");
-            assert_eq!(frustum.frustum_root(), env.frustum_root, "fixture root is faithful");
+            let frustum =
+                MembraneFrustum::from_snapshot_bytes(&env.snapshot).expect("snapshot decodes");
+            assert_eq!(
+                frustum.frustum_root(),
+                env.frustum_root,
+                "fixture root is faithful"
+            );
 
             // The baked frustum carries the whole shared subrealm (every principal +
             // doc the cull captured): the fixture IS the single source of truth the
             // live test ships. Confirm each principal/doc is in view before driving.
             let in_view: HashSet<CellId> = frustum.cells.iter().map(|c| c.id()).collect();
             for (label, id) in [
-                ("room", room), ("user_a", user_a), ("user_b", user_b),
-                ("shared", shared), ("doc_a", doc_a), ("doc_b", doc_b),
+                ("room", room),
+                ("user_a", user_a),
+                ("user_b", user_b),
+                ("shared", shared),
+                ("doc_a", doc_a),
+                ("doc_b", doc_b),
             ] {
                 assert!(in_view.contains(&id), "the baked frustum captures {label}");
             }
 
             // Two distinct users rehydrate the SAME envelope into independent real forks.
-            let mut world_a = frustum.rehydrate(env.frustum_root).expect("user A rehydrates");
-            let mut world_b = frustum.rehydrate(env.frustum_root).expect("user B rehydrates");
+            let mut world_a = frustum
+                .rehydrate(env.frustum_root)
+                .expect("user A rehydrates");
+            let mut world_b = frustum
+                .rehydrate(env.frustum_root)
+                .expect("user B rehydrates");
 
             // DRIVE — A and B each commit a REAL verified turn: both write the SHARED
             // cell to DIFFERENT values (the real conflict) plus a private disjoint edit.
@@ -1344,7 +1425,10 @@ mod membrane_host {
                     crate::world::set_field(doc_a, 0, [0x11u8; 32]),
                 ],
             );
-            assert!(world_a.commit_turn(ta).is_committed(), "A drives a real verified turn");
+            assert!(
+                world_a.commit_turn(ta).is_committed(),
+                "A drives a real verified turn"
+            );
             let tb = world_b.turn(
                 user_b,
                 vec![
@@ -1352,7 +1436,10 @@ mod membrane_host {
                     crate::world::set_field(doc_b, 0, [0x22u8; 32]),
                 ],
             );
-            assert!(world_b.commit_turn(tb).is_committed(), "B drives a real verified turn");
+            assert!(
+                world_b.commit_turn(tb).is_committed(),
+                "B drives a real verified turn"
+            );
             assert_ne!(
                 world_a.ledger().get(&shared).unwrap().state.fields[0],
                 world_b.ledger().get(&shared).unwrap().state.fields[0],
@@ -1370,34 +1457,58 @@ mod membrane_host {
                 u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
             };
             let held = vec![
-                BranchCap { target: key(&shared), debit_reach: false },
-                BranchCap { target: key(&doc_a), debit_reach: false },
-                BranchCap { target: key(&doc_b), debit_reach: false },
+                BranchCap {
+                    target: key(&shared),
+                    debit_reach: false,
+                },
+                BranchCap {
+                    target: key(&doc_a),
+                    debit_reach: false,
+                },
+                BranchCap {
+                    target: key(&doc_b),
+                    debit_reach: false,
+                },
             ];
 
             // Clean part: A's real driven diff (disjoint private discovery) folds in.
             let clean = Stitch {
                 main: baseline.clone(),
                 branch: driven_a.clone(),
-                conferred: vec![BranchCap { target: key(&doc_a), debit_reach: false }],
+                conferred: vec![BranchCap {
+                    target: key(&doc_a),
+                    debit_reach: false,
+                }],
             };
             match clean.settle(&held, None) {
                 SettleOutcome::Settled(merged) => {
                     for k in driven_a.atoms.keys() {
-                        assert!(merged.atoms.contains_key(k), "A's real driven atom merged into main");
+                        assert!(
+                            merged.atoms.contains_key(k),
+                            "A's real driven atom merged into main"
+                        );
                     }
                 }
-                other => panic!("the clean in-authority stitch of the REAL diff must settle: {other:?}"),
+                other => {
+                    panic!("the clean in-authority stitch of the REAL diff must settle: {other:?}")
+                }
             }
 
             // CONFLICT part: both wrote `shared` — a value collision settles by the
             // Dead-wins lattice join (transparent, NOT a silent last-writer overwrite).
-            let a_shared = DocGraph { atoms: [(key(&shared), Atom::Alive)].into_iter().collect() };
-            let b_shared = DocGraph { atoms: [(key(&shared), Atom::Dead)].into_iter().collect() };
+            let a_shared = DocGraph {
+                atoms: [(key(&shared), Atom::Alive)].into_iter().collect(),
+            };
+            let b_shared = DocGraph {
+                atoms: [(key(&shared), Atom::Dead)].into_iter().collect(),
+            };
             let conflict = Stitch {
                 main: a_shared.clone(),
                 branch: b_shared.clone(),
-                conferred: vec![BranchCap { target: key(&shared), debit_reach: false }],
+                conferred: vec![BranchCap {
+                    target: key(&shared),
+                    debit_reach: false,
+                }],
             };
             match conflict.settle(&held, None) {
                 SettleOutcome::Settled(g) => {
@@ -1406,9 +1517,14 @@ mod membrane_host {
                         Some(&Atom::Dead),
                         "the overlapping conflict settles by Dead-wins join (a ConflictObject, not a silent clobber)"
                     );
-                    assert!(a_shared.included_in(&g) && b_shared.included_in(&g), "both writes accounted for");
+                    assert!(
+                        a_shared.included_in(&g) && b_shared.included_in(&g),
+                        "both writes accounted for"
+                    );
                 }
-                other => panic!("the conflicting overlap must settle to a transparent join: {other:?}"),
+                other => {
+                    panic!("the conflicting overlap must settle to a transparent join: {other:?}")
+                }
             }
 
             // OVER-AUTHORIZED part: B conferring `doc_a` (which B never held) is a
@@ -1416,17 +1532,34 @@ mod membrane_host {
             let amp = Stitch {
                 main: baseline,
                 branch: driven_b.clone(),
-                conferred: vec![BranchCap { target: key(&doc_a), debit_reach: true }],
+                conferred: vec![BranchCap {
+                    target: key(&doc_a),
+                    debit_reach: true,
+                }],
             };
             let b_held = vec![
-                BranchCap { target: key(&shared), debit_reach: false },
-                BranchCap { target: key(&doc_b), debit_reach: false },
+                BranchCap {
+                    target: key(&shared),
+                    debit_reach: false,
+                },
+                BranchCap {
+                    target: key(&doc_b),
+                    debit_reach: false,
+                },
             ];
             match amp.settle(&b_held, None) {
-                SettleOutcome::Refused { over_authorized_target } => {
-                    assert_eq!(over_authorized_target, key(&doc_a), "B's over-authorized confer is lossy-dropped");
+                SettleOutcome::Refused {
+                    over_authorized_target,
+                } => {
+                    assert_eq!(
+                        over_authorized_target,
+                        key(&doc_a),
+                        "B's over-authorized confer is lossy-dropped"
+                    );
                 }
-                other => panic!("an over-authorized confer must be REFUSED (lossy-drop): {other:?}"),
+                other => {
+                    panic!("an over-authorized confer must be REFUSED (lossy-drop): {other:?}")
+                }
             }
 
             // CONSERVATION (Σδ=0): the drives were pure `SetField`s — the executor
@@ -1434,12 +1567,20 @@ mod membrane_host {
             let baseline_sum: i64 = frustum.cells.iter().map(|c| c.state.balance()).sum();
             assert_eq!(baseline_sum, 0, "the minted subrealm is balance-neutral");
             assert_eq!(
-                world_a.ledger().iter().map(|(_, c)| c.state.balance()).sum::<i64>(),
+                world_a
+                    .ledger()
+                    .iter()
+                    .map(|(_, c)| c.state.balance())
+                    .sum::<i64>(),
                 baseline_sum,
                 "A's drive is conservation-sound (Σδ=0)"
             );
             assert_eq!(
-                world_b.ledger().iter().map(|(_, c)| c.state.balance()).sum::<i64>(),
+                world_b
+                    .ledger()
+                    .iter()
+                    .map(|(_, c)| c.state.balance())
+                    .sum::<i64>(),
                 baseline_sum,
                 "B's drive is conservation-sound (Σδ=0)"
             );
@@ -1529,10 +1670,18 @@ mod membrane_host {
             let env = host
                 .mint(
                     room.0,
-                    FrustumCut { focus_cell: [0u8; 32], max_depth: 3, authority_bounded: true, cell_count: 0 },
+                    FrustumCut {
+                        focus_cell: [0u8; 32],
+                        max_depth: 3,
+                        authority_bounded: true,
+                        cell_count: 0,
+                    },
                 )
                 .expect("the real executor mints the membrane");
-            assert!(env.cut.cell_count >= 6, "a real multiplayer subrealm (>=6 cells)");
+            assert!(
+                env.cut.cell_count >= 6,
+                "a real multiplayer subrealm (>=6 cells)"
+            );
             let root = env.frustum_root;
 
             // Two live Matrix workers — genuinely separate clients/devices/stores,
@@ -1540,26 +1689,49 @@ mod membrane_host {
             let (a, a_thread) = MatrixWorker::spawn().expect("spawn worker A");
             let (b, b_thread) = MatrixWorker::spawn().expect("spawn worker B");
             a.login_password(
-                hs.clone(), tmp_store("A"), "live-A-pass".into(), user_a.clone(), pass_a, "starbridge-membrane-A".into(),
-            ).expect("A logs in");
+                hs.clone(),
+                tmp_store("A"),
+                "live-A-pass".into(),
+                user_a.clone(),
+                pass_a,
+                "starbridge-membrane-A".into(),
+            )
+            .expect("A logs in");
             b.login_password(
-                hs.clone(), tmp_store("B"), "live-B-pass".into(), user_b.clone(), pass_b, "starbridge-membrane-B".into(),
-            ).expect("B logs in");
+                hs.clone(),
+                tmp_store("B"),
+                "live-B-pass".into(),
+                user_b.clone(),
+                pass_b,
+                "starbridge-membrane-B".into(),
+            )
+            .expect("B logs in");
             let uid_b = b.whoami().expect("B has a user id");
 
             // (A→B WIRE) A creates the shared room + invites B; B accepts (real join).
             let room_id = a
-                .create_room(Some("deos membrane loop".into()), Some("the live full loop".into()), vec![uid_b.clone()])
+                .create_room(
+                    Some("deos membrane loop".into()),
+                    Some("the live full loop".into()),
+                    vec![uid_b.clone()],
+                )
                 .expect("A creates the room + invites B");
             let mut joined = false;
             for _ in 0..20 {
                 b.sync_once().expect("B sync for invite");
-                if b.invited_rooms().map(|v| v.iter().any(|r| r.room_id == room_id)).unwrap_or(false) {
-                    b.accept_invite(room_id.clone()).expect("B accepts the invite");
+                if b.invited_rooms()
+                    .map(|v| v.iter().any(|r| r.room_id == room_id))
+                    .unwrap_or(false)
+                {
+                    b.accept_invite(room_id.clone())
+                        .expect("B accepts the invite");
                     joined = true;
                     break;
                 }
-                if b.joined_rooms().map(|v| v.iter().any(|r| r.room_id == room_id)).unwrap_or(false) {
+                if b.joined_rooms()
+                    .map(|v| v.iter().any(|r| r.room_id == room_id))
+                    .unwrap_or(false)
+                {
                     joined = true;
                     break;
                 }
@@ -1593,16 +1765,31 @@ mod membrane_host {
                 .clone()
                 .expect("B extracts the membrane envelope off the wire");
             // The bytes B drives are EXACTLY what arrived over the server (no fixture).
-            assert_eq!(wire_env, env, "the executor membrane arrived A→B byte-intact over the real server");
-            assert_eq!(wire_env.frustum_root, root, "anti-substitution root survived the wire");
-            assert!(wire_env.is_rehydratable(), "B can rehydrate the received envelope");
+            assert_eq!(
+                wire_env, env,
+                "the executor membrane arrived A→B byte-intact over the real server"
+            );
+            assert_eq!(
+                wire_env.frustum_root, root,
+                "anti-substitution root survived the wire"
+            );
+            assert!(
+                wire_env.is_rehydratable(),
+                "B can rehydrate the received envelope"
+            );
 
             // (B REHYDRATES + DRIVES) — B opens the RECEIVED bytes into a real `World`
             // fork (the real executor, in THIS process) and drives a real verified turn.
             let frustum = MembraneFrustum::from_snapshot_bytes(&wire_env.snapshot)
                 .expect("B decodes the received frustum");
-            assert_eq!(frustum.frustum_root(), root, "B's received frustum reproduces the root");
-            let mut b_world = frustum.rehydrate(wire_env.frustum_root).expect("B rehydrates a real fork");
+            assert_eq!(
+                frustum.frustum_root(),
+                root,
+                "B's received frustum reproduces the root"
+            );
+            let mut b_world = frustum
+                .rehydrate(wire_env.frustum_root)
+                .expect("B rehydrates a real fork");
             // B drives a real edit on the shared cell + its own doc (user_b authors it).
             let drive = b_world.turn(
                 user_b_cell,
@@ -1611,26 +1798,51 @@ mod membrane_host {
                     crate::world::set_field(doc_b, 0, [0x22u8; 32]),
                 ],
             );
-            assert!(b_world.commit_turn(drive).is_committed(), "B drives a real verified turn off the wire bytes");
-            assert_eq!(b_world.ledger().get(&shared).unwrap().state.fields[0], [0xBBu8; 32]);
+            assert!(
+                b_world.commit_turn(drive).is_committed(),
+                "B drives a real verified turn off the wire bytes"
+            );
+            assert_eq!(
+                b_world.ledger().get(&shared).unwrap().state.fields[0],
+                [0xBBu8; 32]
+            );
 
             // (B STITCHES) — fold B's real driven diff back through the settlement gate.
             let (baseline, driven) = frustum.driven_graphs(&b_world);
-            assert_ne!(baseline, driven, "B's diff is the REAL driven mutation off the wire");
+            assert_ne!(
+                baseline, driven,
+                "B's diff is the REAL driven mutation off the wire"
+            );
             let key = |id: &CellId| {
                 let bz = id.as_bytes();
                 u64::from_le_bytes([bz[0], bz[1], bz[2], bz[3], bz[4], bz[5], bz[6], bz[7]])
             };
             let held = vec![
-                BranchCap { target: key(&shared), debit_reach: false },
-                BranchCap { target: key(&doc_b), debit_reach: false },
+                BranchCap {
+                    target: key(&shared),
+                    debit_reach: false,
+                },
+                BranchCap {
+                    target: key(&doc_b),
+                    debit_reach: false,
+                },
             ];
             // Clean part: B's real driven diff folds into main (LUB).
-            let clean = Stitch { main: baseline.clone(), branch: driven.clone(), conferred: vec![BranchCap { target: key(&doc_b), debit_reach: false }] };
+            let clean = Stitch {
+                main: baseline.clone(),
+                branch: driven.clone(),
+                conferred: vec![BranchCap {
+                    target: key(&doc_b),
+                    debit_reach: false,
+                }],
+            };
             match clean.settle(&held, None) {
                 SettleOutcome::Settled(merged) => {
                     for k in driven.atoms.keys() {
-                        assert!(merged.atoms.contains_key(k), "B's real driven atom merged into main");
+                        assert!(
+                            merged.atoms.contains_key(k),
+                            "B's real driven atom merged into main"
+                        );
                     }
                 }
                 other => panic!("B's clean in-authority stitch must settle: {other:?}"),
@@ -1638,30 +1850,69 @@ mod membrane_host {
             // Conflict part: A also wrote `shared` (the moment A captured) — the
             // overlap settles by the Dead-wins lattice join (a ConflictObject,
             // transparent, NOT a silent overwrite).
-            let a_shared = DocGraph { atoms: [(key(&shared), Atom::Alive)].into_iter().collect() };
-            let b_shared = DocGraph { atoms: [(key(&shared), Atom::Dead)].into_iter().collect() };
-            let conflict = Stitch { main: a_shared.clone(), branch: b_shared.clone(), conferred: vec![BranchCap { target: key(&shared), debit_reach: false }] };
+            let a_shared = DocGraph {
+                atoms: [(key(&shared), Atom::Alive)].into_iter().collect(),
+            };
+            let b_shared = DocGraph {
+                atoms: [(key(&shared), Atom::Dead)].into_iter().collect(),
+            };
+            let conflict = Stitch {
+                main: a_shared.clone(),
+                branch: b_shared.clone(),
+                conferred: vec![BranchCap {
+                    target: key(&shared),
+                    debit_reach: false,
+                }],
+            };
             match conflict.settle(&held, None) {
                 SettleOutcome::Settled(g) => {
-                    assert_eq!(g.atoms.get(&key(&shared)), Some(&Atom::Dead), "the overlap settles by Dead-wins join (a ConflictObject, not a clobber)");
-                    assert!(a_shared.included_in(&g) && b_shared.included_in(&g), "both writes accounted for");
+                    assert_eq!(
+                        g.atoms.get(&key(&shared)),
+                        Some(&Atom::Dead),
+                        "the overlap settles by Dead-wins join (a ConflictObject, not a clobber)"
+                    );
+                    assert!(
+                        a_shared.included_in(&g) && b_shared.included_in(&g),
+                        "both writes accounted for"
+                    );
                 }
-                other => panic!("the conflicting overlap must settle to a transparent join: {other:?}"),
+                other => {
+                    panic!("the conflicting overlap must settle to a transparent join: {other:?}")
+                }
             }
             // Over-authorized part: B conferring `doc_a` (which B never held) is a
             // lossy-drop, REFUSED — a cap-amplification, not a conjure.
-            let amp = Stitch { main: baseline, branch: driven, conferred: vec![BranchCap { target: key(&doc_a), debit_reach: true }] };
+            let amp = Stitch {
+                main: baseline,
+                branch: driven,
+                conferred: vec![BranchCap {
+                    target: key(&doc_a),
+                    debit_reach: true,
+                }],
+            };
             match amp.settle(&held, None) {
-                SettleOutcome::Refused { over_authorized_target } => {
-                    assert_eq!(over_authorized_target, key(&doc_a), "B's over-authorized confer is lossy-dropped");
+                SettleOutcome::Refused {
+                    over_authorized_target,
+                } => {
+                    assert_eq!(
+                        over_authorized_target,
+                        key(&doc_a),
+                        "B's over-authorized confer is lossy-dropped"
+                    );
                 }
-                other => panic!("an over-authorized confer must be REFUSED (lossy-drop): {other:?}"),
+                other => {
+                    panic!("an over-authorized confer must be REFUSED (lossy-drop): {other:?}")
+                }
             }
             // Σδ=0: B's drive was pure SetField — conservation-sound.
             let baseline_sum: i64 = frustum.cells.iter().map(|c| c.state.balance()).sum();
             assert_eq!(baseline_sum, 0, "the minted subrealm is balance-neutral");
             assert_eq!(
-                b_world.ledger().iter().map(|(_, c)| c.state.balance()).sum::<i64>(),
+                b_world
+                    .ledger()
+                    .iter()
+                    .map(|(_, c)| c.state.balance())
+                    .sum::<i64>(),
                 baseline_sum,
                 "B's drive off the wire is conservation-sound (Σδ=0)"
             );
@@ -1736,20 +1987,35 @@ mod tests {
         assert_eq!(sf.embedded[0].target, docs);
         assert_eq!(sf.embedded[0].cap.permissions, AuthRequired::Signature);
         assert!(
-            fork.ledger().get(&guest).unwrap().capabilities.has_access(&docs),
+            fork.ledger()
+                .get(&guest)
+                .unwrap()
+                .capabilities
+                .has_access(&docs),
             "the guest reaches docs locally in the fork (embedded → no consent)"
         );
 
         // The boundary granted NOTHING — the guest cannot reach peer without consent.
-        assert!(sf.boundary_for(&peer).is_some(), "peer is a networkboundary");
         assert!(
-            !fork.ledger().get(&guest).unwrap().capabilities.has_access(&peer),
+            sf.boundary_for(&peer).is_some(),
+            "peer is a networkboundary"
+        );
+        assert!(
+            !fork
+                .ledger()
+                .get(&guest)
+                .unwrap()
+                .capabilities
+                .has_access(&peer),
             "a networkboundary rides NO cap into the fork (exercise needs consent)"
         );
 
         // The LIVE world is untouched — granting happened only on the fork.
         assert!(
-            world.ledger().get(&guest).map_or(true, |c| !c.capabilities.has_access(&docs)),
+            world
+                .ledger()
+                .get(&guest)
+                .map_or(true, |c| !c.capabilities.has_access(&docs)),
             "forking + granting mutated ONLY the fork, never the live world"
         );
     }
@@ -1770,9 +2036,17 @@ mod tests {
             vec![],
             vec![],
         );
-        assert!(sf.embedded.is_empty(), "an over-amplifying embed is dropped (no amplification)");
         assert!(
-            !fork.ledger().get(&guest).unwrap().capabilities.has_access(&peer),
+            sf.embedded.is_empty(),
+            "an over-amplifying embed is dropped (no amplification)"
+        );
+        assert!(
+            !fork
+                .ledger()
+                .get(&guest)
+                .unwrap()
+                .capabilities
+                .has_access(&peer),
             "the guest got nothing — the powerbox refused the amplifying grant"
         );
     }
@@ -1784,15 +2058,24 @@ mod tests {
         let (_w, _owner, guest, docs, _peer) = fork_world();
         let view_key = dregg_cell_crypto::ViewKey::from_root([7u8; 32]);
         let read_cap = ReadCap::new(docs, dregg_cell_crypto::FieldSet::single(0), view_key);
-        let study = StudyRef { target: docs, read_cap };
+        let study = StudyRef {
+            target: docs,
+            read_cap,
+        };
 
         // The studyref derives the key for its exposed slot (it can inspect) …
-        assert!(study.read_cap.derives(0), "studyref can inspect the exposed slot");
+        assert!(
+            study.read_cap.derives(0),
+            "studyref can inspect the exposed slot"
+        );
         // … and an attempt to EXERCISE raises a write-upgrade request to the owner.
         let req = study.upgrade_request(guest, AuthRequired::Signature);
         assert_eq!(req.app_cell, guest);
         assert_eq!(req.desired_rights, AuthRequired::Signature);
-        assert!(req.reason.contains("upgrade"), "the request names it an upgrade");
+        assert!(
+            req.reason.contains("upgrade"),
+            "the request names it an upgrade"
+        );
     }
 
     #[test]
@@ -1805,10 +2088,15 @@ mod tests {
         // The guest's intended boundary exercise (a stand-in "thing it wants to do
         // over there") wrapped in a pending ConditionalTurn gated on the owner's
         // grant turn hash. Before consent, the turn is purely pending — fail-closed.
-        let intended =
-            world.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
+        let intended = world.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
         let owner_grant_hash = [0xC0u8; 32]; // the hash of the grant the owner WOULD run
-        let boundary = NetworkBoundary { target: peer, ceiling: AuthRequired::Signature };
+        let boundary = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        };
         let request = boundary.consent_request(guest, intended, owner_grant_hash, 0, 100);
 
         assert!(
@@ -1818,8 +2106,14 @@ mod tests {
             ),
             "the boundary condition IS the owner's grant (TurnExecuted bound to its hash)"
         );
-        assert!(!request.pending.is_expired(10), "the pending turn is live, awaiting consent");
-        assert!(request.pending.is_expired(101), "and fail-closes (expires) without consent");
+        assert!(
+            !request.pending.is_expired(10),
+            "the pending turn is live, awaiting consent"
+        );
+        assert!(
+            request.pending.is_expired(101),
+            "and fail-closes (expires) without consent"
+        );
     }
 
     #[test]
@@ -1873,14 +2167,32 @@ mod tests {
 
         // First resolution: the owner's signed consent fires the boundary.
         let r1 = resolve_condition(
-            &condition, &proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut used, &[exec_pub],
+            &condition,
+            &proof,
+            10,
+            100,
+            &[],
+            DEFAULT_MAX_ROOT_AGE,
+            &mut used,
+            &[exec_pub],
         );
-        assert_eq!(r1, ConditionalResult::Resolved, "owner's signed consent resolves the boundary");
+        assert_eq!(
+            r1,
+            ConditionalResult::Resolved,
+            "owner's signed consent resolves the boundary"
+        );
 
         // Replay: the SAME consent cannot fire the boundary twice (one-shot — the
         // proof-hole-is-a-nullifier). This is the linear/one-shot consent property.
         let r2 = resolve_condition(
-            &condition, &proof, 10, 100, &[], DEFAULT_MAX_ROOT_AGE, &mut used, &[exec_pub],
+            &condition,
+            &proof,
+            10,
+            100,
+            &[],
+            DEFAULT_MAX_ROOT_AGE,
+            &mut used,
+            &[exec_pub],
         );
         assert!(
             matches!(r2, ConditionalResult::InvalidProof(_)),
@@ -1894,8 +2206,14 @@ mod tests {
         // held only at Signature; consent at None would amplify), the powerbox
         // refuses → ConsentOutcome::Denied. The boundary did NOT fire.
         let (mut world, owner, guest, _docs, peer) = fork_world();
-        let intended = world.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
-        let boundary = NetworkBoundary { target: peer, ceiling: AuthRequired::None };
+        let intended = world.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
+        let boundary = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::None,
+        };
         let request = boundary.consent_request(guest, intended, [0u8; 32], 0, 100);
 
         let mut used = HashSet::new();
@@ -1908,11 +2226,19 @@ mod tests {
             10,
             &mut used,
         );
-        assert!(!outcome.is_granted(), "an amplifying consent is refused (fail-closed)");
-        assert!(used.is_empty(), "a denied consent records NO nullifier (the boundary never fired)");
+        assert!(
+            !outcome.is_granted(),
+            "an amplifying consent is refused (fail-closed)"
+        );
+        assert!(
+            used.is_empty(),
+            "a denied consent records NO nullifier (the boundary never fired)"
+        );
         match outcome {
             ConsentOutcome::Denied { reason } => assert!(
-                reason.contains("AMPLIFY") || reason.contains("attenuation") || reason.contains("boundary"),
+                reason.contains("AMPLIFY")
+                    || reason.contains("attenuation")
+                    || reason.contains("boundary"),
                 "the denial cites why, got: {reason}"
             ),
             ConsentOutcome::Granted { .. } => panic!("must be denied"),
@@ -1931,8 +2257,14 @@ mod tests {
         let peer = w.genesis_cell(0xBE, 0);
         let guest = w.genesis_cell(0xA9, 0);
         let mut owner_cell = make_open_cell(0x55, 0);
-        owner_cell.capabilities.grant(docs, AuthRequired::None).expect("owner holds docs");
-        owner_cell.capabilities.grant(peer, AuthRequired::Signature).expect("owner holds peer");
+        owner_cell
+            .capabilities
+            .grant(docs, AuthRequired::None)
+            .expect("owner holds docs");
+        owner_cell
+            .capabilities
+            .grant(peer, AuthRequired::Signature)
+            .expect("owner holds peer");
         let owner = w.genesis_install(owner_cell);
         (w, owner, guest, docs, peer, exec_seed)
     }
@@ -1946,18 +2278,30 @@ mod tests {
         // OWN SIGNING DOMAIN (canonical_executor_signed_message) — the wiring the
         // finding asked for, which the generic TurnExecuted arm could not do.
         let (mut world, owner, guest, _docs, peer, _seed) = signed_fork_world();
-        let exec_pub = world.executor_public_key().expect("the world signs its receipts");
+        let exec_pub = world
+            .executor_public_key()
+            .expect("the world signs its receipts");
 
         // The guest's intended boundary exercise, gated on the SPECIFIC grant turn
         // the owner will run. We PREDICT that grant turn's hash via the one shared
         // constructor `Powerbox::grant_turn` (the same turn `grant` commits), so the
         // consent binds to exactly this grant — not a stray receipt.
-        let intended =
-            world.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
-        let grant_turn =
-            crate::powerbox::Powerbox::grant_turn(&world, owner, guest, peer, AuthRequired::Signature);
+        let intended = world.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
+        let grant_turn = crate::powerbox::Powerbox::grant_turn(
+            &world,
+            owner,
+            guest,
+            peer,
+            AuthRequired::Signature,
+        );
         let grant_hash = grant_turn.hash();
-        let boundary = NetworkBoundary { target: peer, ceiling: AuthRequired::Signature };
+        let boundary = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        };
         let request = boundary.consent_request(guest, intended, grant_hash, 0, 100);
 
         let mut used: HashSet<[u8; 32]> = HashSet::new();
@@ -1978,10 +2322,20 @@ mod tests {
         );
         // The witness really is the executor's signed receipt bound to THIS grant.
         if let ConsentOutcome::Granted { receipt } = &outcome {
-            assert_eq!(receipt.turn_hash, grant_hash, "the witness is the bound grant turn's receipt");
-            assert!(receipt.executor_signature.is_some(), "the witness carries a real signature");
+            assert_eq!(
+                receipt.turn_hash, grant_hash,
+                "the witness is the bound grant turn's receipt"
+            );
+            assert!(
+                receipt.executor_signature.is_some(),
+                "the witness carries a real signature"
+            );
         }
-        assert_eq!(used.len(), 1, "the boundary fired once → one nullifier recorded");
+        assert_eq!(
+            used.len(),
+            1,
+            "the boundary fired once → one nullifier recorded"
+        );
 
         // ONE-SHOT: re-presenting the SAME witness (same nullifier set) cannot fire
         // the boundary again — the proof-hole-is-a-nullifier, against the REAL
@@ -2008,13 +2362,22 @@ mod tests {
         // AUTHENTICITY (fail-closed): a receipt bound to the right grant but signed
         // by an UNTRUSTED key (or unsigned) does NOT resolve the boundary.
         let (mut world, owner, guest, _docs, peer, _seed) = signed_fork_world();
-        let intended =
-            world.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
-        let grant_turn =
-            crate::powerbox::Powerbox::grant_turn(&world, owner, guest, peer, AuthRequired::Signature);
-        let request =
-            NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }
-                .consent_request(guest, intended, grant_turn.hash(), 0, 100);
+        let intended = world.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
+        let grant_turn = crate::powerbox::Powerbox::grant_turn(
+            &world,
+            owner,
+            guest,
+            peer,
+            AuthRequired::Signature,
+        );
+        let request = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        }
+        .consent_request(guest, intended, grant_turn.hash(), 0, 100);
 
         // An attacker's key is NOT the world's executor key.
         let attacker_pub = ed25519_dalek::SigningKey::from_bytes(&[0x99; 32])
@@ -2030,8 +2393,14 @@ mod tests {
             10,
             &mut used,
         );
-        assert!(!outcome.is_granted(), "a witness not signed by a trusted key is refused");
-        assert!(used.is_empty(), "no nullifier recorded — the boundary never fired");
+        assert!(
+            !outcome.is_granted(),
+            "a witness not signed by a trusted key is refused"
+        );
+        assert!(
+            used.is_empty(),
+            "no nullifier recorded — the boundary never fired"
+        );
     }
 
     #[test]
@@ -2042,11 +2411,16 @@ mod tests {
         // boundary on a DIFFERENT (wrong) hash, so the binding check refuses.
         let (mut world, owner, guest, _docs, peer, _seed) = signed_fork_world();
         let exec_pub = world.executor_public_key().unwrap();
-        let intended =
-            world.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
+        let intended = world.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
         // Bind the boundary to a hash that is NOT the grant turn's hash.
-        let request = NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }
-            .consent_request(guest, intended, [0xAB; 32], 0, 100);
+        let request = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        }
+        .consent_request(guest, intended, [0xAB; 32], 0, 100);
         let mut used = HashSet::new();
         let outcome = SharedFork::resolve_consent(
             &mut world,
@@ -2057,7 +2431,10 @@ mod tests {
             10,
             &mut used,
         );
-        assert!(!outcome.is_granted(), "a receipt for a DIFFERENT grant cannot fire this boundary");
+        assert!(
+            !outcome.is_granted(),
+            "a receipt for a DIFFERENT grant cannot fire this boundary"
+        );
         assert!(used.is_empty());
     }
 
@@ -2079,14 +2456,23 @@ mod tests {
             vec![],
         );
         assert_eq!(sf.embedded.len(), 1, "docs is embedded");
-        assert!(fork.ledger().get(&guest).unwrap().capabilities.has_access(&docs));
+        assert!(fork
+            .ledger()
+            .get(&guest)
+            .unwrap()
+            .capabilities
+            .has_access(&docs));
 
         // The guest drives a REAL turn over its embedded cap — no consent door.
         let drive = fork.turn(guest, vec![crate::world::set_field(docs, 3, [9u8; 32])]);
         let committed = fork.commit_turn(drive).is_committed();
-        assert!(committed, "the guest exercises the embedded cap locally with no consent");
+        assert!(
+            committed,
+            "the guest exercises the embedded cap locally with no consent"
+        );
         assert_eq!(
-            fork.ledger().get(&docs).unwrap().state.fields[3], [9u8; 32],
+            fork.ledger().get(&docs).unwrap().state.fields[3],
+            [9u8; 32],
             "the embedded exercise really mutated the fork"
         );
     }
@@ -2101,22 +2487,33 @@ mod tests {
         let mut fork = world.fork();
         let view_key = dregg_cell_crypto::ViewKey::from_root([7u8; 32]);
         let read_cap = ReadCap::new(docs, dregg_cell_crypto::FieldSet::single(0), view_key);
-        let study = StudyRef { target: docs, read_cap };
+        let study = StudyRef {
+            target: docs,
+            read_cap,
+        };
 
         let sf = SharedFork::construct(
             &mut fork,
             owner,
             guest,
-            &[],                  // nothing embedded
-            vec![study.clone()],  // docs is a studyref
+            &[],                 // nothing embedded
+            vec![study.clone()], // docs is a studyref
             vec![],
         );
         assert_eq!(sf.studyrefs.len(), 1);
         // INSPECT ok: the studyref derives the key for its exposed slot.
-        assert!(sf.studyrefs[0].read_cap.derives(0), "studyref inspects the exposed slot");
+        assert!(
+            sf.studyrefs[0].read_cap.derives(0),
+            "studyref inspects the exposed slot"
+        );
         // EXERCISE refused: the guest holds NO write cap to docs in the fork c-list.
         assert!(
-            !fork.ledger().get(&guest).unwrap().capabilities.has_access(&docs),
+            !fork
+                .ledger()
+                .get(&guest)
+                .unwrap()
+                .capabilities
+                .has_access(&docs),
             "a studyref grants NO write cap (exercise needs an upgrade)"
         );
         // The exercise path is an upgrade REQUEST routed to the owner (not a turn).
@@ -2135,9 +2532,20 @@ mod tests {
 
     /// Helper: a constructed signed fork with `docs` embedded + `peer` a boundary.
     /// Returns `(world, fork, sf, owner, guest, docs, peer, exec_pub)`.
-    fn gated_fork() -> (World, World, SharedFork, CellId, CellId, CellId, CellId, [u8; 32]) {
+    fn gated_fork() -> (
+        World,
+        World,
+        SharedFork,
+        CellId,
+        CellId,
+        CellId,
+        CellId,
+        [u8; 32],
+    ) {
         let (mut world, owner, guest, docs, peer, _seed) = signed_fork_world();
-        let exec_pub = world.executor_public_key().expect("the world signs receipts");
+        let exec_pub = world
+            .executor_public_key()
+            .expect("the world signs receipts");
         let mut fork = world.fork();
         let sf = SharedFork::construct(
             &mut fork,
@@ -2145,7 +2553,10 @@ mod tests {
             guest,
             &[(docs, AuthRequired::None)], // docs embedded (free local exercise)
             vec![],
-            vec![NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }], // peer gated
+            vec![NetworkBoundary {
+                target: peer,
+                ceiling: AuthRequired::Signature,
+            }], // peer gated
         );
         (world, fork, sf, owner, guest, docs, peer, exec_pub)
     }
@@ -2158,29 +2569,56 @@ mod tests {
         //     and the fork's only commit door refused it, fail-closed.
         let (_world, mut fork, sf, owner, guest, _docs, peer, exec_pub) = gated_fork();
 
-        let pre_nonce = fork.ledger().get(&peer).map(|c| c.state.nonce()).unwrap_or(0);
-        let exercise = fork.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
+        let pre_nonce = fork
+            .ledger()
+            .get(&peer)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
+        let exercise = fork.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
 
         let mut used = HashSet::new();
-        let gated = sf.commit_turn_gated(&mut fork, owner, exercise, None, &[exec_pub], 10, &mut used);
+        let gated =
+            sf.commit_turn_gated(&mut fork, owner, exercise, None, &[exec_pub], 10, &mut used);
 
-        assert!(gated.is_refused(), "a boundary exercise with no consent is REFUSED (fail-closed)");
+        assert!(
+            gated.is_refused(),
+            "a boundary exercise with no consent is REFUSED (fail-closed)"
+        );
         assert!(!gated.is_committed(), "the turn did NOT run");
         match &gated {
-            GatedCommit::Refused { target, request, reason } => {
+            GatedCommit::Refused {
+                target,
+                request,
+                reason,
+            } => {
                 assert_eq!(*target, peer, "the refused exercise names the boundary");
-                assert!(request.is_some(), "the gate hands back the consent REQUEST the owner resolves");
-                assert!(reason.contains("no consent"), "the refusal cites the missing consent: {reason}");
+                assert!(
+                    request.is_some(),
+                    "the gate hands back the consent REQUEST the owner resolves"
+                );
+                assert!(
+                    reason.contains("no consent"),
+                    "the refusal cites the missing consent: {reason}"
+                );
             }
             _ => unreachable!(),
         }
         // The executor never touched `peer` — nothing reached "elsewhere".
         assert_eq!(
-            fork.ledger().get(&peer).map(|c| c.state.nonce()).unwrap_or(0),
+            fork.ledger()
+                .get(&peer)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0),
             pre_nonce,
             "the boundary cell is untouched — the refused exercise had no effect"
         );
-        assert!(used.is_empty(), "no nullifier recorded — the boundary never fired");
+        assert!(
+            used.is_empty(),
+            "no nullifier recorded — the boundary never fired"
+        );
     }
 
     #[test]
@@ -2193,38 +2631,86 @@ mod tests {
         // The owner resolves the consent: a REAL powerbox grant over the LIVE world,
         // bound to the SPECIFIC grant turn (the same `grant_turn` `resolve_consent`
         // runs), producing the signed witness.
-        let intended = fork.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
+        let intended = fork.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
         let grant_turn = Powerbox::grant_turn(&world, owner, guest, peer, AuthRequired::Signature);
-        let request = NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }
-            .consent_request(guest, intended.clone(), grant_turn.hash(), 0, 100);
+        let request = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        }
+        .consent_request(guest, intended.clone(), grant_turn.hash(), 0, 100);
 
         let mut used = HashSet::new();
         let outcome = SharedFork::resolve_consent(
-            &mut world, owner, &request, AuthRequired::Signature, &[exec_pub], 10, &mut used,
+            &mut world,
+            owner,
+            &request,
+            AuthRequired::Signature,
+            &[exec_pub],
+            10,
+            &mut used,
         );
-        assert!(outcome.is_granted(), "the owner's real grant resolves the consent");
+        assert!(
+            outcome.is_granted(),
+            "the owner's real grant resolves the consent"
+        );
         // The resolver already recorded the nullifier; the GATE re-verifies the same
         // witness with a FRESH nullifier set (the fork's own one-shot ledger).
-        let witness = ConsentWitness::from_outcome(peer, 100, outcome).expect("granted → a witness");
+        let witness =
+            ConsentWitness::from_outcome(peer, 100, outcome).expect("granted → a witness");
 
-        let pre_nonce = fork.ledger().get(&peer).map(|c| c.state.nonce()).unwrap_or(0);
+        let pre_nonce = fork
+            .ledger()
+            .get(&peer)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
         let mut fork_used = HashSet::new();
-        let gated = sf.commit_turn_gated(&mut fork, owner, intended, Some(&witness), &[exec_pub], 10, &mut fork_used);
+        let gated = sf.commit_turn_gated(
+            &mut fork,
+            owner,
+            intended,
+            Some(&witness),
+            &[exec_pub],
+            10,
+            &mut fork_used,
+        );
 
-        assert!(gated.is_committed(), "the SAME exercise commits once a valid consent is present");
+        assert!(
+            gated.is_committed(),
+            "the SAME exercise commits once a valid consent is present"
+        );
         match &gated {
-            GatedCommit::Committed { fired_boundary, outcome } => {
-                assert_eq!(*fired_boundary, Some(peer), "the boundary fired (consent opened it)");
-                assert!(outcome.is_committed(), "the executor accepted the now-consented turn");
+            GatedCommit::Committed {
+                fired_boundary,
+                outcome,
+            } => {
+                assert_eq!(
+                    *fired_boundary,
+                    Some(peer),
+                    "the boundary fired (consent opened it)"
+                );
+                assert!(
+                    outcome.is_committed(),
+                    "the executor accepted the now-consented turn"
+                );
             }
             _ => unreachable!(),
         }
         assert_eq!(
-            fork.ledger().get(&peer).map(|c| c.state.nonce()).unwrap_or(0),
+            fork.ledger()
+                .get(&peer)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0),
             pre_nonce + 1,
             "the consented exercise really ran on the fork (nonce advanced)"
         );
-        assert_eq!(fork_used.len(), 1, "the boundary fired exactly once → one nullifier");
+        assert_eq!(
+            fork_used.len(),
+            1,
+            "the boundary fired exactly once → one nullifier"
+        );
     }
 
     #[test]
@@ -2237,7 +2723,10 @@ mod tests {
         let mut used = HashSet::new();
         let gated = sf.commit_turn_gated(&mut fork, owner, drive, None, &[exec_pub], 10, &mut used);
 
-        assert!(gated.is_committed(), "an embedded exercise commits freely (no boundary touched)");
+        assert!(
+            gated.is_committed(),
+            "an embedded exercise commits freely (no boundary touched)"
+        );
         match &gated {
             GatedCommit::Committed { fired_boundary, .. } => {
                 assert_eq!(*fired_boundary, None, "no boundary fired — purely local");
@@ -2245,10 +2734,14 @@ mod tests {
             _ => unreachable!(),
         }
         assert_eq!(
-            fork.ledger().get(&docs).unwrap().state.fields[2], [7u8; 32],
+            fork.ledger().get(&docs).unwrap().state.fields[2],
+            [7u8; 32],
             "the embedded exercise really mutated the fork — ungated"
         );
-        assert!(used.is_empty(), "an embedded exercise records no boundary nullifier");
+        assert!(
+            used.is_empty(),
+            "an embedded exercise records no boundary nullifier"
+        );
     }
 
     #[test]
@@ -2259,23 +2752,48 @@ mod tests {
 
         // Build a real, valid witness once (a genuine grant), to mutate into forgeries.
         let grant_turn = Powerbox::grant_turn(&world, owner, guest, peer, AuthRequired::Signature);
-        let dummy = world.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
-        let req = NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }
-            .consent_request(guest, dummy, grant_turn.hash(), 0, 100);
+        let dummy = world.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
+        let req = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        }
+        .consent_request(guest, dummy, grant_turn.hash(), 0, 100);
         let mut used = HashSet::new();
         let good = ConsentWitness::from_outcome(
-            peer, 100,
-            SharedFork::resolve_consent(&mut world, owner, &req, AuthRequired::Signature, &[exec_pub], 10, &mut used),
-        ).expect("a real witness");
+            peer,
+            100,
+            SharedFork::resolve_consent(
+                &mut world,
+                owner,
+                &req,
+                AuthRequired::Signature,
+                &[exec_pub],
+                10,
+                &mut used,
+            ),
+        )
+        .expect("a real witness");
 
         // Forgery 1: the witness verified under a WRONG trusted key is refused.
         {
             let (_w, mut fork, sf, o, g, _d, p, _ep) = gated_fork();
-            let ex = fork.turn(g, vec![dregg_turn::action::Effect::IncrementNonce { cell: p }]);
-            let attacker = ed25519_dalek::SigningKey::from_bytes(&[0x99; 32]).verifying_key().to_bytes();
+            let ex = fork.turn(
+                g,
+                vec![dregg_turn::action::Effect::IncrementNonce { cell: p }],
+            );
+            let attacker = ed25519_dalek::SigningKey::from_bytes(&[0x99; 32])
+                .verifying_key()
+                .to_bytes();
             let mut u = HashSet::new();
-            let gated = sf.commit_turn_gated(&mut fork, o, ex, Some(&good), &[attacker], 10, &mut u);
-            assert!(gated.is_refused(), "a witness not signed by a trusted key is refused at the gate");
+            let gated =
+                sf.commit_turn_gated(&mut fork, o, ex, Some(&good), &[attacker], 10, &mut u);
+            assert!(
+                gated.is_refused(),
+                "a witness not signed by a trusted key is refused at the gate"
+            );
             assert!(u.is_empty(), "no nullifier — the boundary never fired");
         }
 
@@ -2283,27 +2801,42 @@ mod tests {
         //   the binding tooth refuses it (a stray receipt cannot open the gate).
         {
             let (_w, mut fork, sf, o, g, _d, p, ep) = gated_fork();
-            let ex = fork.turn(g, vec![dregg_turn::action::Effect::IncrementNonce { cell: p }]);
+            let ex = fork.turn(
+                g,
+                vec![dregg_turn::action::Effect::IncrementNonce { cell: p }],
+            );
             let mut wrong = good.clone();
             wrong.receipt.turn_hash = [0xABu8; 32]; // not the signed grant turn
             let mut u = HashSet::new();
             let gated = sf.commit_turn_gated(&mut fork, o, ex, Some(&wrong), &[ep], 10, &mut u);
-            assert!(gated.is_refused(), "a witness for a DIFFERENT grant cannot open the gate");
+            assert!(
+                gated.is_refused(),
+                "a witness for a DIFFERENT grant cannot open the gate"
+            );
             assert!(u.is_empty());
         }
 
         // Forgery 3: a valid witness for the WRONG boundary cannot open THIS boundary.
         {
             let (_w, mut fork, sf, o, g, _d, p, ep) = gated_fork();
-            let ex = fork.turn(g, vec![dregg_turn::action::Effect::IncrementNonce { cell: p }]);
+            let ex = fork.turn(
+                g,
+                vec![dregg_turn::action::Effect::IncrementNonce { cell: p }],
+            );
             let mut other = good.clone();
             other.boundary = CellId([0xEEu8; 32]); // a different boundary target
             let mut u = HashSet::new();
             let gated = sf.commit_turn_gated(&mut fork, o, ex, Some(&other), &[ep], 10, &mut u);
-            assert!(gated.is_refused(), "a witness for another boundary cannot open this one");
+            assert!(
+                gated.is_refused(),
+                "a witness for another boundary cannot open this one"
+            );
             match gated {
                 GatedCommit::Refused { reason, .. } => {
-                    assert!(reason.contains("different boundary"), "names the mismatch: {reason}");
+                    assert!(
+                        reason.contains("different boundary"),
+                        "names the mismatch: {reason}"
+                    );
                 }
                 _ => unreachable!(),
             }
@@ -2318,23 +2851,64 @@ mod tests {
         // proof-hole-is-a-nullifier, enforced by the commit gate itself.
         let (mut world, mut fork, sf, owner, guest, _docs, peer, exec_pub) = gated_fork();
         let grant_turn = Powerbox::grant_turn(&world, owner, guest, peer, AuthRequired::Signature);
-        let ex1 = fork.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
-        let req = NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }
-            .consent_request(guest, ex1.clone(), grant_turn.hash(), 0, 100);
+        let ex1 = fork.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
+        let req = NetworkBoundary {
+            target: peer,
+            ceiling: AuthRequired::Signature,
+        }
+        .consent_request(guest, ex1.clone(), grant_turn.hash(), 0, 100);
         let mut resolve_used = HashSet::new();
         let witness = ConsentWitness::from_outcome(
-            peer, 100,
-            SharedFork::resolve_consent(&mut world, owner, &req, AuthRequired::Signature, &[exec_pub], 10, &mut resolve_used),
-        ).expect("granted");
+            peer,
+            100,
+            SharedFork::resolve_consent(
+                &mut world,
+                owner,
+                &req,
+                AuthRequired::Signature,
+                &[exec_pub],
+                10,
+                &mut resolve_used,
+            ),
+        )
+        .expect("granted");
 
         let mut fork_used = HashSet::new();
-        let first = sf.commit_turn_gated(&mut fork, owner, ex1, Some(&witness), &[exec_pub], 10, &mut fork_used);
-        assert!(first.is_committed(), "the first consented exercise fires the boundary");
+        let first = sf.commit_turn_gated(
+            &mut fork,
+            owner,
+            ex1,
+            Some(&witness),
+            &[exec_pub],
+            10,
+            &mut fork_used,
+        );
+        assert!(
+            first.is_committed(),
+            "the first consented exercise fires the boundary"
+        );
 
         // Replay the SAME witness for a second exercise — refused by the nullifier.
-        let ex2 = fork.turn(guest, vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }]);
-        let second = sf.commit_turn_gated(&mut fork, owner, ex2, Some(&witness), &[exec_pub], 10, &mut fork_used);
-        assert!(second.is_refused(), "re-presenting the SAME consent fires the boundary at most once");
+        let ex2 = fork.turn(
+            guest,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: peer }],
+        );
+        let second = sf.commit_turn_gated(
+            &mut fork,
+            owner,
+            ex2,
+            Some(&witness),
+            &[exec_pub],
+            10,
+            &mut fork_used,
+        );
+        assert!(
+            second.is_refused(),
+            "re-presenting the SAME consent fires the boundary at most once"
+        );
         match second {
             GatedCommit::Refused { reason, .. } => assert!(
                 reason.contains("already used"),
@@ -2342,14 +2916,20 @@ mod tests {
             ),
             _ => unreachable!(),
         }
-        assert_eq!(fork_used.len(), 1, "exactly one nullifier across the two attempts");
+        assert_eq!(
+            fork_used.len(),
+            1,
+            "exactly one nullifier across the two attempts"
+        );
     }
 
     // ── THE ROUND-TRIP: mint → rehydrate → drive → stitch (each property) ─────────
 
     #[test]
     fn mint_rehydrate_drive_stitch_round_trip() {
-        use crate::branch_stitch::{Atom, BranchCap, DocGraph, MainFrontier, Stitch, VirtualBranch};
+        use crate::branch_stitch::{
+            Atom, BranchCap, DocGraph, MainFrontier, Stitch, VirtualBranch,
+        };
         use std::collections::BTreeSet;
 
         // A live world: the owner holds docs (embeddable) + peer (networkboundary).
@@ -2366,7 +2946,10 @@ mod tests {
             guest,
             &[(docs, AuthRequired::Signature)], // embedded, attenuated from None
             vec![],
-            vec![NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }],
+            vec![NetworkBoundary {
+                target: peer,
+                ceiling: AuthRequired::Signature,
+            }],
         );
 
         // (2) REHYDRATE — assert the rehydrated fork holds ONLY the granted subgraph
@@ -2374,16 +2957,32 @@ mod tests {
         //     (boundary), and the LIVE world is untouched (the per-viewer fork is
         //     attenuated, never wider than what was minted).
         assert!(
-            fork.ledger().get(&guest).unwrap().capabilities.has_access(&docs),
+            fork.ledger()
+                .get(&guest)
+                .unwrap()
+                .capabilities
+                .has_access(&docs),
             "rehydrated fork holds the granted (embedded) docs cap"
         );
         assert!(
-            !fork.ledger().get(&guest).unwrap().capabilities.has_access(&peer),
+            !fork
+                .ledger()
+                .get(&guest)
+                .unwrap()
+                .capabilities
+                .has_access(&peer),
             "anti-amplification: the boundary cap did NOT ride into the fork"
         );
-        assert_eq!(sf.embedded[0].cap.permissions, AuthRequired::Signature, "attenuated, not wider");
+        assert_eq!(
+            sf.embedded[0].cap.permissions,
+            AuthRequired::Signature,
+            "attenuated, not wider"
+        );
         assert!(
-            world.ledger().get(&guest).map_or(true, |c| !c.capabilities.has_access(&docs)),
+            world
+                .ledger()
+                .get(&guest)
+                .map_or(true, |c| !c.capabilities.has_access(&docs)),
             "the live world is untouched — minting mutated ONLY the fork"
         );
 
@@ -2391,12 +2990,22 @@ mod tests {
         //     cap (set_field on docs). It commits against the fork's verified
         //     executor; the live world stays diverged-away.
         let drive = fork.turn(guest, vec![crate::world::set_field(docs, 1, [42u8; 32])]);
-        assert!(fork.commit_turn(drive).is_committed(), "the guest drives a real turn on the fork");
-        assert_eq!(fork.ledger().get(&docs).unwrap().state.fields[1], [42u8; 32]);
+        assert!(
+            fork.commit_turn(drive).is_committed(),
+            "the guest drives a real turn on the fork"
+        );
+        assert_eq!(
+            fork.ledger().get(&docs).unwrap().state.fields[1],
+            [42u8; 32]
+        );
         // The live world did NOT see the guest's local mutation (the branch is
         // structurally imaginary to main until stitched).
         assert_ne!(
-            world.ledger().get(&docs).map(|c| c.state.fields[1]).unwrap_or([0u8; 32]),
+            world
+                .ledger()
+                .get(&docs)
+                .map(|c| c.state.fields[1])
+                .unwrap_or([0u8; 32]),
             [42u8; 32],
             "the guest's local work is imaginary to the live world until stitched"
         );
@@ -2415,26 +3024,47 @@ mod tests {
         let branch = VirtualBranch::enter(
             0xA9, // the guest author
             main.clone(),
-            vec![BranchCap { target: docs_key, debit_reach: false }],
+            vec![BranchCap {
+                target: docs_key,
+                debit_reach: false,
+            }],
         );
-        assert!(branch.confined(), "the guest branch reaches no main cell by debit — confined");
+        assert!(
+            branch.confined(),
+            "the guest branch reaches no main cell by debit — confined"
+        );
 
         // (4b) CLEAN STITCH (disjoint/I-confluent): the guest's discovery (a new atom)
         //      merges into main as the pushout (LUB), conferring only authority the
         //      owner DOES hold at settlement (docs).
-        let main_graph = DocGraph { atoms: [(docs_key, Atom::Alive)].into_iter().collect() };
-        let branch_graph =
-            DocGraph { atoms: [(99u64, Atom::Alive)].into_iter().collect() }; // a new discovery
+        let main_graph = DocGraph {
+            atoms: [(docs_key, Atom::Alive)].into_iter().collect(),
+        };
+        let branch_graph = DocGraph {
+            atoms: [(99u64, Atom::Alive)].into_iter().collect(),
+        }; // a new discovery
         let clean = Stitch {
             main: main_graph.clone(),
             branch: branch_graph.clone(),
-            conferred: vec![BranchCap { target: docs_key, debit_reach: false }],
+            conferred: vec![BranchCap {
+                target: docs_key,
+                debit_reach: false,
+            }],
         };
-        let settlement_held = vec![BranchCap { target: docs_key, debit_reach: false }];
+        let settlement_held = vec![BranchCap {
+            target: docs_key,
+            debit_reach: false,
+        }];
         match clean.settle(&settlement_held, None) {
             crate::branch_stitch::SettleOutcome::Settled(merged) => {
-                assert!(merged.atoms.contains_key(&99), "the clean discovery merged into main");
-                assert!(merged.atoms.contains_key(&docs_key), "main's own atom is preserved (LUB)");
+                assert!(
+                    merged.atoms.contains_key(&99),
+                    "the clean discovery merged into main"
+                );
+                assert!(
+                    merged.atoms.contains_key(&docs_key),
+                    "main's own atom is preserved (LUB)"
+                );
             }
             other => panic!("a clean, in-authority stitch must settle: {other:?}"),
         }
@@ -2447,11 +3077,19 @@ mod tests {
         let amp = Stitch {
             main: main_graph,
             branch: branch_graph,
-            conferred: vec![BranchCap { target: peer_key, debit_reach: true }],
+            conferred: vec![BranchCap {
+                target: peer_key,
+                debit_reach: true,
+            }],
         };
         match amp.settle(&settlement_held, Some(&BTreeSet::from([docs_key]))) {
-            crate::branch_stitch::SettleOutcome::Refused { over_authorized_target } => {
-                assert_eq!(over_authorized_target, peer_key, "the stitch drops the over-authorized peer cap");
+            crate::branch_stitch::SettleOutcome::Refused {
+                over_authorized_target,
+            } => {
+                assert_eq!(
+                    over_authorized_target, peer_key,
+                    "the stitch drops the over-authorized peer cap"
+                );
             }
             other => panic!("an over-authorized stitch must be refused: {other:?}"),
         }
@@ -2478,7 +3116,10 @@ mod tests {
             guest,
             &[(docs, AuthRequired::Signature)], // embedded
             vec![],
-            vec![NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }],
+            vec![NetworkBoundary {
+                target: peer,
+                ceiling: AuthRequired::Signature,
+            }],
         );
 
         let frustum = MembraneFrustum::mint(&fork, guest, 3);
@@ -2488,8 +3129,14 @@ mod tests {
         // (embedded, in the guest's c-list) but NOT peer (the boundary withheld no
         // cap, so peer is unreachable from the guest's c-list and culled away).
         let ids: HashSet<CellId> = frustum.cells.iter().map(|c| c.id()).collect();
-        assert!(ids.contains(&guest), "the guest principal is in the frustum");
-        assert!(ids.contains(&docs), "the embedded docs cell is in view (granted into the c-list)");
+        assert!(
+            ids.contains(&guest),
+            "the guest principal is in the frustum"
+        );
+        assert!(
+            ids.contains(&docs),
+            "the embedded docs cell is in view (granted into the c-list)"
+        );
         assert!(
             !ids.contains(&peer),
             "anti-amplification: the boundary cell is NOT in the frustum (unreachable, culled)"
@@ -2498,9 +3145,17 @@ mod tests {
         // (2) SERIALIZE — the frustum rides the wire as postcard bytes (what the
         //     `MembraneEnvelope.snapshot` field carries over Matrix).
         let wire = frustum.to_snapshot_bytes();
-        let back = MembraneFrustum::from_snapshot_bytes(&wire).expect("frustum round-trips the wire");
-        assert_eq!(back, frustum, "the real frustum survives serialization byte-for-byte");
-        assert_eq!(back.frustum_root(), root, "the root is stable across the wire");
+        let back =
+            MembraneFrustum::from_snapshot_bytes(&wire).expect("frustum round-trips the wire");
+        assert_eq!(
+            back, frustum,
+            "the real frustum survives serialization byte-for-byte"
+        );
+        assert_eq!(
+            back.frustum_root(),
+            root,
+            "the root is stable across the wire"
+        );
 
         // (3) REHYDRATE — into a REAL `World` fork (not a mock). Fail-closed on a
         //     substituted snapshot; on success the fork holds EXACTLY the granted
@@ -2531,7 +3186,12 @@ mod tests {
         let (world, owner, guest, docs, _peer, _seed) = signed_fork_world();
         let mut fork = world.fork();
         let _sf = SharedFork::construct(
-            &mut fork, owner, guest, &[(docs, AuthRequired::Signature)], vec![], vec![],
+            &mut fork,
+            owner,
+            guest,
+            &[(docs, AuthRequired::Signature)],
+            vec![],
+            vec![],
         );
         let frustum = MembraneFrustum::mint(&fork, guest, 3);
         let root = frustum.frustum_root();
@@ -2543,7 +3203,10 @@ mod tests {
         // `World` is not `Debug`, so match the `Err` directly (no `unwrap_err`).
         match tampered.rehydrate(root) {
             Err(MembraneError::RootMismatch) => {}
-            other => panic!("a substituted snapshot must be refused (RootMismatch), got Ok/other: {:?}", other.err()),
+            other => panic!(
+                "a substituted snapshot must be refused (RootMismatch), got Ok/other: {:?}",
+                other.err()
+            ),
         }
         // A malformed wire payload is also refused (not trusted as an empty fork).
         assert!(matches!(
@@ -2565,7 +3228,10 @@ mod tests {
             guest,
             &[(docs, AuthRequired::None)], // embed docs at full authority so the guest can write it
             vec![],
-            vec![NetworkBoundary { target: peer, ceiling: AuthRequired::Signature }],
+            vec![NetworkBoundary {
+                target: peer,
+                ceiling: AuthRequired::Signature,
+            }],
         );
         let frustum = MembraneFrustum::mint(&src_fork, guest, 3);
         let root = frustum.frustum_root();
@@ -2575,9 +3241,13 @@ mod tests {
         //     its embedded docs cap. This mutates the real fork's ledger.
         let pre = rehydrated.ledger().get(&docs).unwrap().state.fields[1];
         let drive = rehydrated.turn(guest, vec![crate::world::set_field(docs, 1, [42u8; 32])]);
-        assert!(rehydrated.commit_turn(drive).is_committed(), "the recipient drives a real turn");
+        assert!(
+            rehydrated.commit_turn(drive).is_committed(),
+            "the recipient drives a real turn"
+        );
         assert_eq!(
-            rehydrated.ledger().get(&docs).unwrap().state.fields[1], [42u8; 32],
+            rehydrated.ledger().get(&docs).unwrap().state.fields[1],
+            [42u8; 32],
             "the driven turn really mutated the rehydrated fork"
         );
         assert_ne!(pre, [42u8; 32], "the field genuinely changed");
@@ -2603,15 +3273,24 @@ mod tests {
         let clean = Stitch {
             main: baseline.clone(),
             branch: driven.clone(),
-            conferred: vec![BranchCap { target: docs_key, debit_reach: false }],
+            conferred: vec![BranchCap {
+                target: docs_key,
+                debit_reach: false,
+            }],
         };
-        let settlement_held = vec![BranchCap { target: docs_key, debit_reach: false }];
+        let settlement_held = vec![BranchCap {
+            target: docs_key,
+            debit_reach: false,
+        }];
         match clean.settle(&settlement_held, None) {
             crate::branch_stitch::SettleOutcome::Settled(merged) => {
                 // Every real driven atom is present in the merged main (the LUB
                 // folds the guest's genuine mutation back).
                 for k in driven.atoms.keys() {
-                    assert!(merged.atoms.contains_key(k), "the real driven atom merged into main");
+                    assert!(
+                        merged.atoms.contains_key(k),
+                        "the real driven atom merged into main"
+                    );
                 }
             }
             other => panic!("a clean, in-authority stitch of the REAL diff must settle: {other:?}"),
@@ -2623,11 +3302,19 @@ mod tests {
         let amp = Stitch {
             main: baseline,
             branch: driven,
-            conferred: vec![BranchCap { target: peer_key, debit_reach: true }],
+            conferred: vec![BranchCap {
+                target: peer_key,
+                debit_reach: true,
+            }],
         };
         match amp.settle(&settlement_held, None) {
-            crate::branch_stitch::SettleOutcome::Refused { over_authorized_target } => {
-                assert_eq!(over_authorized_target, peer_key, "the over-authorized peer cap is dropped (lossy)");
+            crate::branch_stitch::SettleOutcome::Refused {
+                over_authorized_target,
+            } => {
+                assert_eq!(
+                    over_authorized_target, peer_key,
+                    "the over-authorized peer cap is dropped (lossy)"
+                );
             }
             other => panic!("an over-authorized stitch must be refused: {other:?}"),
         }
@@ -2670,22 +3357,43 @@ mod tests {
         // identities ⇒ distinct cell ids. Each holds caps to the shared doc + its
         // own private doc (so a turn it authors legitimately reaches them).
         let mut a_cell = make_open_cell(0x0A, 0);
-        a_cell.capabilities.grant(shared, AuthRequired::None).expect("A holds shared");
-        a_cell.capabilities.grant(doc_a, AuthRequired::None).expect("A holds doc_a");
+        a_cell
+            .capabilities
+            .grant(shared, AuthRequired::None)
+            .expect("A holds shared");
+        a_cell
+            .capabilities
+            .grant(doc_a, AuthRequired::None)
+            .expect("A holds doc_a");
         let user_a = w.genesis_install(a_cell);
 
         let mut b_cell = make_open_cell(0x0B, 0);
-        b_cell.capabilities.grant(shared, AuthRequired::None).expect("B holds shared");
-        b_cell.capabilities.grant(doc_b, AuthRequired::None).expect("B holds doc_b");
+        b_cell
+            .capabilities
+            .grant(shared, AuthRequired::None)
+            .expect("B holds shared");
+        b_cell
+            .capabilities
+            .grant(doc_b, AuthRequired::None)
+            .expect("B holds doc_b");
         let user_b = w.genesis_install(b_cell);
 
         // The room/focus cell: reaches both users (and thus, transitively at depth,
         // all the docs). This is the cell the frustum cull is centred on — the
         // "camera position" of the captured moment.
         let mut room_cell = make_open_cell(0x40, 0);
-        room_cell.capabilities.grant(user_a, AuthRequired::None).expect("room reaches A");
-        room_cell.capabilities.grant(user_b, AuthRequired::None).expect("room reaches B");
-        room_cell.capabilities.grant(shared, AuthRequired::None).expect("room reaches shared");
+        room_cell
+            .capabilities
+            .grant(user_a, AuthRequired::None)
+            .expect("room reaches A");
+        room_cell
+            .capabilities
+            .grant(user_b, AuthRequired::None)
+            .expect("room reaches B");
+        room_cell
+            .capabilities
+            .grant(shared, AuthRequired::None)
+            .expect("room reaches shared");
         let room = w.genesis_install(room_cell);
 
         (w, room, user_a, user_b, shared, doc_a, doc_b)
@@ -2698,7 +3406,9 @@ mod tests {
 
     #[test]
     fn multiplayer_one_frustum_two_principals_drive_then_stitch_both() {
-        use crate::branch_stitch::{Atom, BranchCap, DocGraph, MainFrontier, SettleOutcome, Stitch, VirtualBranch};
+        use crate::branch_stitch::{
+            Atom, BranchCap, DocGraph, MainFrontier, SettleOutcome, Stitch, VirtualBranch,
+        };
 
         // ── (1) MINT ONE frustum — the screenshot of the moment ──────────────────
         // Fork the live world (deep-clone of the ledger + the genuine executor) and
@@ -2711,10 +3421,17 @@ mod tests {
 
         let ids: HashSet<CellId> = frustum.cells.iter().map(|c| c.id()).collect();
         for (label, id) in [
-            ("room", room), ("user_a", user_a), ("user_b", user_b),
-            ("shared", shared), ("doc_a", doc_a), ("doc_b", doc_b),
+            ("room", room),
+            ("user_a", user_a),
+            ("user_b", user_b),
+            ("shared", shared),
+            ("doc_a", doc_a),
+            ("doc_b", doc_b),
         ] {
-            assert!(ids.contains(&id), "the frustum captures {label} (the shared subrealm in view)");
+            assert!(
+                ids.contains(&id),
+                "the frustum captures {label} (the shared subrealm in view)"
+            );
         }
 
         // ── (1b) CARRY IT OVER THE deos-matrix WIRE SHAPE ────────────────────────
@@ -2725,16 +3442,27 @@ mod tests {
         // is exactly the bytes that ride the envelope's `snapshot` field).
         let wire = frustum.to_snapshot_bytes();
         let back = MembraneFrustum::from_snapshot_bytes(&wire).expect("frustum survives the wire");
-        assert_eq!(back, frustum, "the SAME frustum reaches both users byte-for-byte");
-        assert_eq!(back.frustum_root(), root, "the anti-substitution root is stable over the wire");
+        assert_eq!(
+            back, frustum,
+            "the SAME frustum reaches both users byte-for-byte"
+        );
+        assert_eq!(
+            back.frustum_root(),
+            root,
+            "the anti-substitution root is stable over the wire"
+        );
 
         // ── (2) REHYDRATE INTO TWO INDEPENDENT REAL WORLDS (anti-substitution) ───
         // Each distinct user principal opens its OWN real `World` fork from the same
         // envelope. The root tooth fires fail-closed on a substituted snapshot; here
         // both rehydrations match the claimed root (the killer multiplayer property:
         // the same captured moment reaches two parties, each verifiably).
-        let mut world_a = back.rehydrate(root).expect("user A rehydrates the shared moment");
-        let mut world_b = back.rehydrate(root).expect("user B rehydrates the shared moment");
+        let mut world_a = back
+            .rehydrate(root)
+            .expect("user A rehydrates the shared moment");
+        let mut world_b = back
+            .rehydrate(root)
+            .expect("user B rehydrates the shared moment");
         assert_eq!(
             MembraneFrustum::mint(&world_a, room, 3).frustum_root(),
             MembraneFrustum::mint(&world_b, room, 3).frustum_root(),
@@ -2754,9 +3482,18 @@ mod tests {
                 crate::world::set_field(doc_a, 0, [0x11u8; 32]),  // A's private edit (disjoint)
             ],
         );
-        assert!(world_a.commit_turn(drive_a).is_committed(), "user A drives a real verified turn");
-        assert_eq!(world_a.ledger().get(&shared).unwrap().state.fields[0], [0xAAu8; 32]);
-        assert_eq!(world_a.ledger().get(&doc_a).unwrap().state.fields[0], [0x11u8; 32]);
+        assert!(
+            world_a.commit_turn(drive_a).is_committed(),
+            "user A drives a real verified turn"
+        );
+        assert_eq!(
+            world_a.ledger().get(&shared).unwrap().state.fields[0],
+            [0xAAu8; 32]
+        );
+        assert_eq!(
+            world_a.ledger().get(&doc_a).unwrap().state.fields[0],
+            [0x11u8; 32]
+        );
 
         // User B: writes the SHARED doc (overlap — divergent value!) AND its private
         // doc_b (clean). Authored by `user_b` — the OTHER distinct principal.
@@ -2767,9 +3504,18 @@ mod tests {
                 crate::world::set_field(doc_b, 0, [0x22u8; 32]),  // B's private edit (disjoint)
             ],
         );
-        assert!(world_b.commit_turn(drive_b).is_committed(), "user B drives a real verified turn");
-        assert_eq!(world_b.ledger().get(&shared).unwrap().state.fields[0], [0xBBu8; 32]);
-        assert_eq!(world_b.ledger().get(&doc_b).unwrap().state.fields[0], [0x22u8; 32]);
+        assert!(
+            world_b.commit_turn(drive_b).is_committed(),
+            "user B drives a real verified turn"
+        );
+        assert_eq!(
+            world_b.ledger().get(&shared).unwrap().state.fields[0],
+            [0xBBu8; 32]
+        );
+        assert_eq!(
+            world_b.ledger().get(&doc_b).unwrap().state.fields[0],
+            [0x22u8; 32]
+        );
 
         // The two users genuinely DIVERGED on the shared cell (the conflict is real,
         // not contrived): A sees 0xAA, B sees 0xBB, in independent forks.
@@ -2782,7 +3528,10 @@ mod tests {
         // ── (4) READ THE TWO REAL DRIVEN DIFFS (not hand-coded atoms) ────────────
         let (baseline_a, driven_a) = frustum.driven_graphs(&world_a);
         let (baseline_b, driven_b) = frustum.driven_graphs(&world_b);
-        assert_eq!(baseline_a, baseline_b, "both diffs are read against the SAME minted baseline");
+        assert_eq!(
+            baseline_a, baseline_b,
+            "both diffs are read against the SAME minted baseline"
+        );
         assert_ne!(baseline_a, driven_a, "A's diff reflects A's REAL mutation");
         assert_ne!(baseline_b, driven_b, "B's diff reflects B's REAL mutation");
 
@@ -2799,56 +3548,123 @@ mod tests {
             mp_cell_key(&user_a),
             main.clone(),
             vec![
-                BranchCap { target: shared_key, debit_reach: false },
-                BranchCap { target: doc_a_key, debit_reach: false },
+                BranchCap {
+                    target: shared_key,
+                    debit_reach: false,
+                },
+                BranchCap {
+                    target: doc_a_key,
+                    debit_reach: false,
+                },
             ],
         );
         let branch_b = VirtualBranch::enter(
             mp_cell_key(&user_b),
             main.clone(),
             vec![
-                BranchCap { target: shared_key, debit_reach: false },
-                BranchCap { target: doc_b_key, debit_reach: false },
+                BranchCap {
+                    target: shared_key,
+                    debit_reach: false,
+                },
+                BranchCap {
+                    target: doc_b_key,
+                    debit_reach: false,
+                },
             ],
         );
-        assert!(branch_a.confined(), "user A's branch reaches no main cell by debit — confined");
-        assert!(branch_b.confined(), "user B's branch reaches no main cell by debit — confined");
+        assert!(
+            branch_a.confined(),
+            "user A's branch reaches no main cell by debit — confined"
+        );
+        assert!(
+            branch_b.confined(),
+            "user B's branch reaches no main cell by debit — confined"
+        );
 
         // (5a) CLEAN MERGE of the NON-OVERLAPPING parts. A's private discovery and
         //      B's private discovery touch disjoint keys, so the pushout (LUB) folds
         //      BOTH in with no loss — I-confluent, the rhizomatic monotone part.
         let main_graph = DocGraph {
-            atoms: [(shared_key, Atom::Alive), (doc_a_key, Atom::Alive), (doc_b_key, Atom::Alive)]
-                .into_iter()
-                .collect(),
+            atoms: [
+                (shared_key, Atom::Alive),
+                (doc_a_key, Atom::Alive),
+                (doc_b_key, Atom::Alive),
+            ]
+            .into_iter()
+            .collect(),
         };
         // A's and B's private discoveries as distinct new atoms (their real driven
         // mutations surfaced at content-keyed atoms by `driven_graphs`).
-        let a_disjoint = DocGraph { atoms: [(0xA1A1u64, Atom::Alive)].into_iter().collect() };
-        let b_disjoint = DocGraph { atoms: [(0xB2B2u64, Atom::Alive)].into_iter().collect() };
+        let a_disjoint = DocGraph {
+            atoms: [(0xA1A1u64, Atom::Alive)].into_iter().collect(),
+        };
+        let b_disjoint = DocGraph {
+            atoms: [(0xB2B2u64, Atom::Alive)].into_iter().collect(),
+        };
         // Stitch A first (disjoint), then B onto A's result (still disjoint) — both fold.
         let settlement_held = vec![
-            BranchCap { target: shared_key, debit_reach: false },
-            BranchCap { target: doc_a_key, debit_reach: false },
-            BranchCap { target: doc_b_key, debit_reach: false },
+            BranchCap {
+                target: shared_key,
+                debit_reach: false,
+            },
+            BranchCap {
+                target: doc_a_key,
+                debit_reach: false,
+            },
+            BranchCap {
+                target: doc_b_key,
+                debit_reach: false,
+            },
         ];
-        let stitch_a = Stitch { main: main_graph.clone(), branch: a_disjoint.clone(), conferred: vec![BranchCap { target: doc_a_key, debit_reach: false }] };
+        let stitch_a = Stitch {
+            main: main_graph.clone(),
+            branch: a_disjoint.clone(),
+            conferred: vec![BranchCap {
+                target: doc_a_key,
+                debit_reach: false,
+            }],
+        };
         let after_a = match stitch_a.settle(&settlement_held, None) {
             SettleOutcome::Settled(g) => g,
             other => panic!("A's clean disjoint stitch must settle: {other:?}"),
         };
-        assert!(after_a.atoms.contains_key(&0xA1A1), "A's private discovery merged (clean)");
-        let stitch_b = Stitch { main: after_a.clone(), branch: b_disjoint.clone(), conferred: vec![BranchCap { target: doc_b_key, debit_reach: false }] };
+        assert!(
+            after_a.atoms.contains_key(&0xA1A1),
+            "A's private discovery merged (clean)"
+        );
+        let stitch_b = Stitch {
+            main: after_a.clone(),
+            branch: b_disjoint.clone(),
+            conferred: vec![BranchCap {
+                target: doc_b_key,
+                debit_reach: false,
+            }],
+        };
         let after_b = match stitch_b.settle(&settlement_held, None) {
             SettleOutcome::Settled(g) => g,
             other => panic!("B's clean disjoint stitch must settle onto A's result: {other:?}"),
         };
-        assert!(after_b.atoms.contains_key(&0xA1A1), "A's discovery survived B's stitch (no clobber)");
-        assert!(after_b.atoms.contains_key(&0xB2B2), "B's private discovery merged (clean) — BOTH users folded");
+        assert!(
+            after_b.atoms.contains_key(&0xA1A1),
+            "A's discovery survived B's stitch (no clobber)"
+        );
+        assert!(
+            after_b.atoms.contains_key(&0xB2B2),
+            "B's private discovery merged (clean) — BOTH users folded"
+        );
         // The pushout legs: nothing main had is lost, nothing either branch found is dropped.
-        assert!(main_graph.included_in(&after_b), "the main leg is included (no silent main loss)");
-        assert!(a_disjoint.included_in(&after_b), "A's branch leg is included");
-        assert!(b_disjoint.included_in(&after_b), "B's branch leg is included");
+        assert!(
+            main_graph.included_in(&after_b),
+            "the main leg is included (no silent main loss)"
+        );
+        assert!(
+            a_disjoint.included_in(&after_b),
+            "A's branch leg is included"
+        );
+        assert!(
+            b_disjoint.included_in(&after_b),
+            "B's branch leg is included"
+        );
 
         // (5b) THE OVERLAPPING (CONFLICT) PART — surfaced/resolved, NOT silently
         //      overwritten. Both A and B wrote the SAME `shared` cell to DIFFERENT
@@ -2856,18 +3672,41 @@ mod tests {
         //      (the conflict is settled by the linear join, transparently — the value
         //      collision is reconciled to the settled tombstone, never a silent
         //      last-writer-wins clobber). The merged graph carries the resolution.
-        let a_shared = DocGraph { atoms: [(shared_key, Atom::Alive)].into_iter().collect() };
-        let b_shared = DocGraph { atoms: [(shared_key, Atom::Dead)].into_iter().collect() }; // B's divergent settle
-        let conflict = Stitch { main: a_shared.clone(), branch: b_shared.clone(), conferred: vec![BranchCap { target: shared_key, debit_reach: false }] };
+        let a_shared = DocGraph {
+            atoms: [(shared_key, Atom::Alive)].into_iter().collect(),
+        };
+        let b_shared = DocGraph {
+            atoms: [(shared_key, Atom::Dead)].into_iter().collect(),
+        }; // B's divergent settle
+        let conflict = Stitch {
+            main: a_shared.clone(),
+            branch: b_shared.clone(),
+            conferred: vec![BranchCap {
+                target: shared_key,
+                debit_reach: false,
+            }],
+        };
         match conflict.settle(&settlement_held, None) {
             SettleOutcome::Settled(g) => {
                 // Dead-wins: the value collision settles to the tombstone — explicit,
                 // not a silent pick. BOTH legs are still represented (the join, not a clobber).
-                assert_eq!(g.atoms.get(&shared_key), Some(&Atom::Dead), "the conflict settles by Dead-wins join (not a silent overwrite)");
-                assert!(a_shared.included_in(&g), "A's shared write is accounted for in the join");
-                assert!(b_shared.included_in(&g), "B's shared write is accounted for in the join");
+                assert_eq!(
+                    g.atoms.get(&shared_key),
+                    Some(&Atom::Dead),
+                    "the conflict settles by Dead-wins join (not a silent overwrite)"
+                );
+                assert!(
+                    a_shared.included_in(&g),
+                    "A's shared write is accounted for in the join"
+                );
+                assert!(
+                    b_shared.included_in(&g),
+                    "B's shared write is accounted for in the join"
+                );
             }
-            other => panic!("the conflicting overlap must settle to a join, transparently: {other:?}"),
+            other => {
+                panic!("the conflicting overlap must settle to a join, transparently: {other:?}")
+            }
         }
 
         // (5c) THE OVER-AUTHORIZED / AMPLIFYING part is LOSSY-DROPPED, not conjured.
@@ -2878,17 +3717,33 @@ mod tests {
         let amp = Stitch {
             main: main_graph.clone(),
             branch: b_disjoint.clone(),
-            conferred: vec![BranchCap { target: doc_a_key, debit_reach: true }], // B did not hold doc_a
+            conferred: vec![BranchCap {
+                target: doc_a_key,
+                debit_reach: true,
+            }], // B did not hold doc_a
         };
         let b_only_held = vec![
-            BranchCap { target: shared_key, debit_reach: false },
-            BranchCap { target: doc_b_key, debit_reach: false },
+            BranchCap {
+                target: shared_key,
+                debit_reach: false,
+            },
+            BranchCap {
+                target: doc_b_key,
+                debit_reach: false,
+            },
         ];
         match amp.settle(&b_only_held, None) {
-            SettleOutcome::Refused { over_authorized_target } => {
-                assert_eq!(over_authorized_target, doc_a_key, "B's over-authorized confer of doc_a is lossy-dropped");
+            SettleOutcome::Refused {
+                over_authorized_target,
+            } => {
+                assert_eq!(
+                    over_authorized_target, doc_a_key,
+                    "B's over-authorized confer of doc_a is lossy-dropped"
+                );
             }
-            other => panic!("an over-authorized confer must be REFUSED (lossy-drop, not conjure): {other:?}"),
+            other => panic!(
+                "an over-authorized confer must be REFUSED (lossy-drop, not conjure): {other:?}"
+            ),
         }
 
         // ── (6) CONSERVATION-SOUND (Σδ=0) + AUTHORITY-SOUND at the settlement tip ─
@@ -2899,16 +3754,34 @@ mod tests {
         // total balance across every cell in both forks is unchanged from the minted
         // baseline (no value conjured or destroyed by the multiplayer drive+stitch).
         let baseline_sum: i64 = frustum.cells.iter().map(|c| c.state.balance()).sum();
-        let sum_a: i64 = world_a.ledger().iter().map(|(_, c)| c.state.balance()).sum();
-        let sum_b: i64 = world_b.ledger().iter().map(|(_, c)| c.state.balance()).sum();
+        let sum_a: i64 = world_a
+            .ledger()
+            .iter()
+            .map(|(_, c)| c.state.balance())
+            .sum();
+        let sum_b: i64 = world_b
+            .ledger()
+            .iter()
+            .map(|(_, c)| c.state.balance())
+            .sum();
         assert_eq!(baseline_sum, 0, "the minted subrealm is balance-neutral");
-        assert_eq!(sum_a, baseline_sum, "user A's drive is conservation-sound (Σδ=0 — no value conjured)");
-        assert_eq!(sum_b, baseline_sum, "user B's drive is conservation-sound (Σδ=0 — no value conjured)");
+        assert_eq!(
+            sum_a, baseline_sum,
+            "user A's drive is conservation-sound (Σδ=0 — no value conjured)"
+        );
+        assert_eq!(
+            sum_b, baseline_sum,
+            "user B's drive is conservation-sound (Σδ=0 — no value conjured)"
+        );
         // Authority-sound: every cap the stitch admitted was in `settlement_held`;
         // the only confer the gate refused was the over-authorized one (5c). The
         // settled merged graph confers nothing wider than what was held at the tip.
         assert!(
-            after_b.atoms.keys().all(|k| *k == 0xA1A1 || *k == 0xB2B2 || *k == shared_key || *k == doc_a_key || *k == doc_b_key),
+            after_b.atoms.keys().all(|k| *k == 0xA1A1
+                || *k == 0xB2B2
+                || *k == shared_key
+                || *k == doc_a_key
+                || *k == doc_b_key),
             "the settled subrealm carries only in-frustum / in-authority atoms (authority-bounded)"
         );
     }

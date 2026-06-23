@@ -28,7 +28,7 @@ use dregg_cell::{Cell, CellId, CellLifecycle, DeathReason};
 use dregg_turn::Inversion;
 
 use crate::presentable::{
-    Presentable, Presentation, PresentationBody, PresentationKind, PresentCtx,
+    PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
 use crate::world::{
@@ -80,10 +80,16 @@ fn reversibility_map(target: CellId, height: u64, world: &World) -> Vec<Reversib
         ("Transfer (value out)", transfer(target, other, 1)),
         ("SetField (a state slot)", set_field(target, 0, fe)),
         ("CellSeal (freeze)", seal(target, "lens")),
-        ("GrantCapability (delegate)", grant_capability(target, other, target, 0)),
+        (
+            "GrantCapability (delegate)",
+            grant_capability(target, other, target, 0),
+        ),
         ("Burn (destroy value)", burn(target, 1)),
         ("RevokeCapability (retract)", revoke_capability(target, 0)),
-        ("CellDestroy (terminal)", destroy(target, height, DeathReason::Voluntary)),
+        (
+            "CellDestroy (terminal)",
+            destroy(target, height, DeathReason::Voluntary),
+        ),
     ];
 
     cases
@@ -91,7 +97,10 @@ fn reversibility_map(target: CellId, height: u64, world: &World) -> Vec<Reversib
         .map(|(change, effect)| {
             let inv = effect.invert(pre);
             let (tier, reversible) = match &inv {
-                Inversion::Clean(_) => ("reversible (clean — a single forward effect)".to_string(), true),
+                Inversion::Clean(_) => (
+                    "reversible (clean — a single forward effect)".to_string(),
+                    true,
+                ),
                 Inversion::Contextual(_) => (
                     "reversible (contextual — needs the held pre-image)".to_string(),
                     true,
@@ -202,7 +211,12 @@ impl Presentable for CellReversibility {
             kind: PresentationKind::Invariant,
             label: "The Un-Turn".to_string(),
             search_text: "un-turn reversibility modulo nonce committed boundary rccs".to_string(),
-            body: PresentationBody::Prose(un_turn_prose(posture, posture_prose, reversible, committed)),
+            body: PresentationBody::Prose(un_turn_prose(
+                posture,
+                posture_prose,
+                reversible,
+                committed,
+            )),
         });
 
         out
@@ -218,9 +232,7 @@ fn un_turn_prose(
 ) -> String {
     let mut s = String::new();
     s.push_str("THE UN-TURN — reversal is itself a cap-gated forward turn, not a bypass.\n\n");
-    s.push_str(&format!(
-        "This cell is {posture}: {posture_prose}.\n\n"
-    ));
+    s.push_str(&format!("This cell is {posture}: {posture_prose}.\n\n"));
     s.push_str(&format!(
         "Of the representative changes to this cell, {reversible} are reversible (clean or \
          contextual) and {committed} are committed (irreversible by design).\n\n"
@@ -277,14 +289,23 @@ mod tests {
         let rows = reversibility_map(id, w.height(), &w);
         // Transfer is clean-reversible; Burn / RevokeCapability / CellDestroy are
         // committed — the real Effect::invert taxonomy, not a transcription.
-        let transfer = rows.iter().find(|r| r.change.starts_with("Transfer")).unwrap();
+        let transfer = rows
+            .iter()
+            .find(|r| r.change.starts_with("Transfer"))
+            .unwrap();
         assert!(transfer.reversible, "transfer reverses (clean)");
         let burn = rows.iter().find(|r| r.change.starts_with("Burn")).unwrap();
         assert!(!burn.reversible, "burn is committed");
         assert!(burn.tier.contains("burned"));
-        let setfield = rows.iter().find(|r| r.change.starts_with("SetField")).unwrap();
+        let setfield = rows
+            .iter()
+            .find(|r| r.change.starts_with("SetField"))
+            .unwrap();
         assert!(setfield.reversible && setfield.tier.contains("contextual"));
-        let destroy = rows.iter().find(|r| r.change.starts_with("CellDestroy")).unwrap();
+        let destroy = rows
+            .iter()
+            .find(|r| r.change.starts_with("CellDestroy"))
+            .unwrap();
         assert!(!destroy.reversible && destroy.tier.contains("terminal"));
     }
 

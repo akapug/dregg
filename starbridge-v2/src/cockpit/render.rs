@@ -47,16 +47,16 @@ impl Render for Cockpit {
         // active-pane decorator (a 2px accent border on the focused pane). Built
         // before the root `div()` so the `&self.pane_group` + `&self.active_pane`
         // borrows don't tangle with the rest of the tree.
-        let right_pane: gpui::AnyElement = match (self.pane_group.as_ref(), self.active_pane.as_ref())
-        {
-            (Some(group), Some(active)) => {
-                let decorator = ActivePaneDecorator::new(active, theme::accent());
-                group.render(&decorator, window, cx).into_any_element()
-            }
-            // Defensive fallback (never on the live path once seeded): the flat
-            // dispatch, so the right pane is never blank.
-            _ => self.workspace(cx),
-        };
+        let right_pane: gpui::AnyElement =
+            match (self.pane_group.as_ref(), self.active_pane.as_ref()) {
+                (Some(group), Some(active)) => {
+                    let decorator = ActivePaneDecorator::new(active, theme::accent());
+                    group.render(&decorator, window, cx).into_any_element()
+                }
+                // Defensive fallback (never on the live path once seeded): the flat
+                // dispatch, so the right pane is never blank.
+                _ => self.workspace(cx),
+            };
 
         let palette_open = self.palette.is_open();
         div()

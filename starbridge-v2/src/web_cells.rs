@@ -465,8 +465,7 @@ impl WebCellsBrowser {
         // real is_attenuation gate.
         let mut affordances = Vec::new();
         let mut affordances_declared = 0;
-        let mut rehydration_badge =
-            Rehydration::ReconstructedApproximate.badge().to_string();
+        let mut rehydration_badge = Rehydration::ReconstructedApproximate.badge().to_string();
         // THE SERVO LAYER: the opened cell's attested page rasterized to a real,
         // cap-gated SWGL frame (feature `servo`). Populated in the opened block.
         #[cfg(feature = "servo")]
@@ -715,7 +714,10 @@ impl WebCellsBrowser {
             self.affordances_declared
         ));
         for a in &self.affordances {
-            out.push(format!("· {} (requires {}) → {}", a.name, a.required, a.effect));
+            out.push(format!(
+                "· {} (requires {}) → {}",
+                a.name, a.required, a.effect
+            ));
         }
         out.push(format!("rehydration: {}", self.rehydration_badge));
         if let Some(t) = &self.transclusion {
@@ -845,7 +847,9 @@ fn effect_label(effect: &Effect) -> String {
         web_aff::EffectSummary::EmitEvent { .. } => "EmitEvent".to_string(),
         web_aff::EffectSummary::GrantCapability { .. } => "GrantCapability".to_string(),
         web_aff::EffectSummary::Transfer { amount, .. } => format!("Transfer({amount})"),
-        web_aff::EffectSummary::RevokeCapability { slot, .. } => format!("RevokeCapability(slot {slot})"),
+        web_aff::EffectSummary::RevokeCapability { slot, .. } => {
+            format!("RevokeCapability(slot {slot})")
+        }
         web_aff::EffectSummary::IncrementNonce { .. } => "IncrementNonce".to_string(),
         web_aff::EffectSummary::Other { tag } => tag.to_string(),
     }
@@ -1004,9 +1008,7 @@ fn build_document(
     //     (a vanished source) is honestly surfaced as no document rather than a faked
     //     render; the expected "viewer lacks authority" case is a DARKENED span, not an
     //     error (the whole point).
-    let rendered = doc
-        .resolve_for(web, &viewer_membrane, &lineage)
-        .ok()?;
+    let rendered = doc.resolve_for(web, &viewer_membrane, &lineage).ok()?;
 
     // (6) Project the resolved spans to gpui-free rows — every field a real read of the
     //     genuine `RenderedSpan` (OWN bytes / verified quote bytes + provenance /
@@ -1023,7 +1025,12 @@ fn build_document(
                 content_commitment: None,
                 provenance_receipt: None,
             },
-            RenderedSpan::Transcluded { bytes, provenance, range, .. } => DocumentSpanRow {
+            RenderedSpan::Transcluded {
+                bytes,
+                provenance,
+                range,
+                ..
+            } => DocumentSpanRow {
                 kind: DocumentSpanKind::Quote,
                 text: String::from_utf8_lossy(bytes).into_owned(),
                 source: Some(provenance.source.to_uri_string()),
@@ -1031,7 +1038,9 @@ fn build_document(
                 content_commitment: Some(reflect::short_hex(&provenance.content_hash)),
                 provenance_receipt: Some(reflect::short_hex(&provenance.receipt_hash)),
             },
-            RenderedSpan::Darkened { provenance, range, .. } => DocumentSpanRow {
+            RenderedSpan::Darkened {
+                provenance, range, ..
+            } => DocumentSpanRow {
                 // A darkened span yields NO source bytes (the viewer gets none it lacks
                 // authority to read) — but its provenance + citation survive.
                 kind: DocumentSpanKind::Darkened,
@@ -1100,15 +1109,28 @@ mod tests {
             world.cell_count(),
             "every live cell is addressable in the web of cells"
         );
-        assert!(!browser.cells.is_empty(), "the demo image has cells to browse");
+        assert!(
+            !browser.cells.is_empty(),
+            "the demo image has cells to browse"
+        );
 
         for row in &browser.cells {
             // Each row is a real dregg:// address (64 hex chars for the cell id).
-            assert!(row.uri.starts_with("dregg://"), "a row is a dregg:// address");
-            assert_eq!(row.uri.len(), "dregg://".len() + 64, "the address is the content-addressed cell id");
+            assert!(
+                row.uri.starts_with("dregg://"),
+                "a row is a dregg:// address"
+            );
+            assert_eq!(
+                row.uri.len(),
+                "dregg://".len() + 64,
+                "the address is the content-addressed cell id"
+            );
             // The full attestation chain VERIFIED — the page is the page the
             // origin committed (content-addressed + receipt-in-stream + quorum).
-            assert!(row.attested, "every browsed cell's attestation chain verifies");
+            assert!(
+                row.attested,
+                "every browsed cell's attestation chain verifies"
+            );
             // The trusted-path chrome is drawn from the LEDGER (a dregg:// badge),
             // never the page.
             assert!(
@@ -1130,9 +1152,16 @@ mod tests {
 
         assert_eq!(browser.opened, opened, "the requested cell is opened");
         // The surface DECLARES four affordances {view, comment, edit, admin}.
-        assert_eq!(browser.affordances_declared, 4, "the surface declares four affordances");
+        assert_eq!(
+            browser.affordances_declared, 4,
+            "the surface declares four affordances"
+        );
 
-        let names: Vec<&str> = browser.affordances.iter().map(|a| a.name.as_str()).collect();
+        let names: Vec<&str> = browser
+            .affordances
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
         // The editor tier is cleared for view/comment/edit …
         assert!(names.contains(&"view"), "editor sees view");
         assert!(names.contains(&"comment"), "editor sees comment");
@@ -1142,7 +1171,11 @@ mod tests {
             !names.contains(&"admin"),
             "the editor tier is ATTENUATED away from admin — it requires the root None tier"
         );
-        assert_eq!(browser.affordances.len(), 3, "editor sees 3 of 4 (admin attenuated)");
+        assert_eq!(
+            browser.affordances.len(),
+            3,
+            "editor sees 3 of 4 (admin attenuated)"
+        );
     }
 
     #[test]
@@ -1175,7 +1208,9 @@ mod tests {
         let (world, anchors) = demo_world();
         let browser = WebCellsBrowser::build(&world, anchors[2], editor_rights(), Some(anchors[0]));
         assert!(
-            browser.rehydration_badge.starts_with("REPLAYED-DETERMINISTIC"),
+            browser
+                .rehydration_badge
+                .starts_with("REPLAYED-DETERMINISTIC"),
             "the attested fetch yields the confined replay liveness-type, got: {}",
             browser.rehydration_badge
         );
@@ -1189,10 +1224,22 @@ mod tests {
         let (world, anchors) = demo_world();
         let browser = WebCellsBrowser::build(&world, anchors[2], editor_rights(), Some(anchors[0]));
         let t = browser.transclusion.expect("≥2 cells → one transclusion");
-        assert_ne!(t.host, t.source, "a transclusion includes a DISTINCT source cell");
-        assert!(t.transcluded_field.len() >= 4, "the transcluded field is a real commitment");
-        assert!(t.provenance_receipt.len() >= 4, "the provenance receipt is real");
-        assert!(t.source_finalized, "the source's attestation finalized (quorum)");
+        assert_ne!(
+            t.host, t.source,
+            "a transclusion includes a DISTINCT source cell"
+        );
+        assert!(
+            t.transcluded_field.len() >= 4,
+            "the transcluded field is a real commitment"
+        );
+        assert!(
+            t.provenance_receipt.len() >= 4,
+            "the provenance receipt is real"
+        );
+        assert!(
+            t.source_finalized,
+            "the source's attestation finalized (quorum)"
+        );
     }
 
     #[test]
@@ -1256,16 +1303,29 @@ mod tests {
         let (world, anchors) = demo_world();
         let browser = WebCellsBrowser::build(&world, anchors[2], editor_rights(), Some(anchors[0]));
         let text = browser.all_text();
-        assert!(text.len() >= 12, "the panel renders many lines of real text, got {}", text.len());
+        assert!(
+            text.len() >= 12,
+            "the panel renders many lines of real text, got {}",
+            text.len()
+        );
         for line in &text {
-            assert!(!line.trim().is_empty(), "every panel line is non-empty real text");
+            assert!(
+                !line.trim().is_empty(),
+                "every panel line is non-empty real text"
+            );
         }
         let blob = text.join("\n");
         // It names the genuine web-of-cells machinery.
         assert!(blob.contains("dregg://"), "names the dregg:// addressing");
         assert!(blob.contains("attested="), "shows the attestation verdict");
-        assert!(blob.to_lowercase().contains("attenuat"), "names the progressive attenuation");
-        assert!(blob.contains("rehydration:"), "names the rehydration liveness-type");
+        assert!(
+            blob.to_lowercase().contains("attenuat"),
+            "names the progressive attenuation"
+        );
+        assert!(
+            blob.contains("rehydration:"),
+            "names the rehydration liveness-type"
+        );
         // It names the servo NEXT layer honestly (integrated vs named-next).
         assert!(blob.contains("servo"), "names the servo next layer");
     }
@@ -1314,7 +1374,10 @@ mod tests {
         let (mut world, _principal, read) = semi_reinteractive_world();
         let plain = SemiReinteractiveTransclusion::read_only(read);
         assert!(plain.is_read_only(), "a plain transclusion is read-only");
-        assert!(plain.granted_affordance.is_none(), "no affordance is granted on a plain quote");
+        assert!(
+            plain.granted_affordance.is_none(),
+            "no affordance is granted on a plain quote"
+        );
 
         let err = WebCellsBrowser::fire_transcluded_affordance(&mut world, &plain, "view")
             .expect_err("a read-only transclusion refuses to fire");
@@ -1403,18 +1466,29 @@ mod tests {
             AuthRequired::Signature,
         )
         .expect_err("the user holds no source authority → the powerbox refuses the upgrade");
-        assert!(still_read_only.is_read_only(), "the quote stays read-only after a refused upgrade");
-        assert!(still_read_only.conferred_rights.is_none(), "no affordance cap was conferred");
+        assert!(
+            still_read_only.is_read_only(),
+            "the quote stays read-only after a refused upgrade"
+        );
+        assert!(
+            still_read_only.conferred_rights.is_none(),
+            "no affordance cap was conferred"
+        );
         assert!(
             reason.contains("mint_needs_held_factory") || reason.contains("does not hold"),
             "the refusal cites the held-authority requirement, got: {reason}"
         );
         // No grant turn ran (a refused upgrade confers nothing).
-        assert_eq!(world.receipts().len(), receipts_before, "a refused upgrade runs no grant turn");
+        assert_eq!(
+            world.receipts().len(),
+            receipts_before,
+            "a refused upgrade runs no grant turn"
+        );
 
         // And firing on the still-read-only quote is refused (no interact unlocked).
         assert!(
-            WebCellsBrowser::fire_transcluded_affordance(&mut world, &still_read_only, "view").is_err(),
+            WebCellsBrowser::fire_transcluded_affordance(&mut world, &still_read_only, "view")
+                .is_err(),
             "a read-only quote (refused upgrade) fires nothing"
         );
     }
@@ -1444,7 +1518,10 @@ mod tests {
         // SPAN 0 + 2 + 4: OWN content, rendered verbatim (no foreign provenance).
         assert_eq!(doc.spans[0].kind, DocumentSpanKind::Own);
         assert_eq!(doc.spans[0].text, "This document quotes ");
-        assert!(doc.spans[0].source.is_none(), "OWN content has no foreign source");
+        assert!(
+            doc.spans[0].source.is_none(),
+            "OWN content has no foreign source"
+        );
         assert_eq!(doc.spans[2].kind, DocumentSpanKind::Own);
         assert_eq!(doc.spans[2].text, " and a darkened ");
         assert_eq!(doc.spans[4].kind, DocumentSpanKind::Own);
@@ -1454,39 +1531,74 @@ mod tests {
         // "PUBLIC paragraph"), with real receipt-pinned provenance. This is the
         // genuine verified cross-cell finalized read (a forged source could not open).
         let quote = &doc.spans[1];
-        assert_eq!(quote.kind, DocumentSpanKind::Quote, "span 1 is a verified quote");
-        assert_eq!(quote.text, "PUBLIC paragraph", "the cited byte range of the public source");
-        assert_eq!(quote.range.as_deref(), Some("4..20"), "the quote shows its cited byte range");
+        assert_eq!(
+            quote.kind,
+            DocumentSpanKind::Quote,
+            "span 1 is a verified quote"
+        );
+        assert_eq!(
+            quote.text, "PUBLIC paragraph",
+            "the cited byte range of the public source"
+        );
+        assert_eq!(
+            quote.range.as_deref(),
+            Some("4..20"),
+            "the quote shows its cited byte range"
+        );
         assert!(
-            quote.source.as_deref().map(|s| s.starts_with("dregg://")).unwrap_or(false),
+            quote
+                .source
+                .as_deref()
+                .map(|s| s.starts_with("dregg://"))
+                .unwrap_or(false),
             "the quote cites a dregg:// source"
         );
         assert!(
-            quote.content_commitment.as_deref().map(|c| c.len() >= 4).unwrap_or(false),
+            quote
+                .content_commitment
+                .as_deref()
+                .map(|c| c.len() >= 4)
+                .unwrap_or(false),
             "the quote carries a real content commitment (datable provenance)"
         );
         assert!(
-            quote.provenance_receipt.as_deref().map(|r| r.len() >= 4).unwrap_or(false),
+            quote
+                .provenance_receipt
+                .as_deref()
+                .map(|r| r.len() >= 4)
+                .unwrap_or(false),
             "the quote carries a real cited receipt"
         );
 
         // SPAN 3: a per-viewer DARKENED span — the restricted source's origin is not in
         // the viewer's fetch-allowlist, so the REAL membrane meet withholds it.
         let dark = &doc.spans[3];
-        assert_eq!(dark.kind, DocumentSpanKind::Darkened, "span 3 darkens for this viewer");
+        assert_eq!(
+            dark.kind,
+            DocumentSpanKind::Darkened,
+            "span 3 darkens for this viewer"
+        );
 
         // BOTH POLARITIES of `full` exercised here (non-vacuous): the document is NOT
         // full (a span darkened) AND it has a genuine quote that DID render (quote_count
         // ≥ 1) — so darkening is selective, not a blanket failure.
-        assert!(!doc.full, "a darkened span ⇒ the document is not fully readable for this viewer");
-        assert_eq!(doc.darkened_count, 1, "exactly the restricted span is darkened");
-        assert_eq!(doc.quote_count, 1, "the public span DID resolve as a real quote");
+        assert!(
+            !doc.full,
+            "a darkened span ⇒ the document is not fully readable for this viewer"
+        );
+        assert_eq!(
+            doc.darkened_count, 1,
+            "exactly the restricted span is darkened"
+        );
+        assert_eq!(
+            doc.quote_count, 1,
+            "the public span DID resolve as a real quote"
+        );
 
         // THE COMPOSED TEXT the viewer sees: OWN content + the public quote, but
         // NOTHING for the darkened span. The honest per-viewer render.
         assert_eq!(
-            doc.composed_text,
-            "This document quotes PUBLIC paragraph and a darkened .",
+            doc.composed_text, "This document quotes PUBLIC paragraph and a darkened .",
             "the composed text carries OWN + the public quote, nothing for the darkened span"
         );
     }
@@ -1515,16 +1627,29 @@ mod tests {
         // …BUT the citation survives: the darkened span keeps its provenance (source +
         // commitment + receipt) — the docuverse skeleton stays visible, only the bytes
         // withheld. This is the both-polarity tooth: present (citation) vs. absent (bytes).
-        assert!(dark.source.is_some(), "the darkened span still cites its source");
         assert!(
-            dark.content_commitment.as_deref().map(|c| c.len() >= 4).unwrap_or(false),
+            dark.source.is_some(),
+            "the darkened span still cites its source"
+        );
+        assert!(
+            dark.content_commitment
+                .as_deref()
+                .map(|c| c.len() >= 4)
+                .unwrap_or(false),
             "the darkened span keeps its content commitment (provenance survives)"
         );
         assert!(
-            dark.provenance_receipt.as_deref().map(|r| r.len() >= 4).unwrap_or(false),
+            dark.provenance_receipt
+                .as_deref()
+                .map(|r| r.len() >= 4)
+                .unwrap_or(false),
             "the darkened span keeps its cited receipt"
         );
-        assert_eq!(dark.range.as_deref(), Some("4..24"), "the darkened span keeps its cited byte range");
+        assert_eq!(
+            dark.range.as_deref(),
+            Some("4..24"),
+            "the darkened span keeps its cited byte range"
+        );
     }
 
     #[test]
@@ -1537,7 +1662,11 @@ mod tests {
         // here we confirm the mechanism, not a constant.)
         let mut web = WebOfCells::new(3);
         let publisher = web.publish(0xE0, b"anchor", "dregg://doc/anchor").cell;
-        let public_src = web.publish(0xD0, b"the PUBLIC paragraph anyone may read", "dregg://doc/public");
+        let public_src = web.publish(
+            0xD0,
+            b"the PUBLIC paragraph anyone may read",
+            "dregg://doc/public",
+        );
         let secret_src = web.publish(0xD1, b"the RESTRICTED paragraph", "dregg://doc/restricted");
 
         let public_origin = doc_span_origin(public_src.cell);
@@ -1561,10 +1690,16 @@ mod tests {
         let rendered = doc
             .resolve_for(&web, &full_viewer, &lineage)
             .expect("the full-authority viewer resolves");
-        assert!(rendered.is_full(), "the full-authority viewer darkens NOTHING");
+        assert!(
+            rendered.is_full(),
+            "the full-authority viewer darkens NOTHING"
+        );
         assert_eq!(rendered.darkened_count(), 0);
         // Both quotes are present (the selective-vs-blanket distinction: same document,
         // a wider viewer reaches the span the cockpit's scoped viewer could not).
-        assert_eq!(rendered.composed_text().unwrap(), "This document quotes PUBLIC paragraph and RESTRICTED");
+        assert_eq!(
+            rendered.composed_text().unwrap(),
+            "This document quotes PUBLIC paragraph and RESTRICTED"
+        );
     }
 }

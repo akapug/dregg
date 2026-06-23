@@ -41,9 +41,12 @@ use crate::applet::{CellModel, FireError, Slot};
 /// The implementor owns the verified executor — every [`commit_turn`](Self::commit_turn)
 /// runs the SAME conservation / ocap / authority gate the live world would.
 pub trait WorldSink {
-    /// The live ledger the reflective crawl walks (the SAME ledger a fire commits
-    /// onto). A witnessed, read-only view.
-    fn ledger(&self) -> &Ledger;
+    /// Read the live ledger the reflective crawl walks (the SAME ledger a fire commits
+    /// onto) by running `f` over a borrow of it. Closure-passing (rather than handing
+    /// back a `&Ledger`) so a host holding the World behind an `Rc<RefCell<World>>`
+    /// can borrow it for exactly the read's duration — the crawl is synchronous, so
+    /// `f` produces its JSON (or whatever) and the borrow ends.
+    fn with_ledger(&self, f: &mut dyn FnMut(&Ledger));
 
     /// Commit ONE verified turn on `agent`'s cell carrying `effects`, named `method`,
     /// against the live verified executor. The host builds the turn with its OWN
@@ -123,10 +126,11 @@ impl AttachedApplet {
         &self.held
     }
 
-    /// The attached World's live ledger (the crawl surface). The SAME ledger a fire
-    /// commits onto — the reflective read is of the REAL cells.
-    pub fn ledger(&self) -> &Ledger {
-        self.sink.ledger()
+    /// Read the attached World's live ledger (the crawl surface) by running `f` over
+    /// it. The SAME ledger a fire commits onto — the reflective read is of the REAL
+    /// cells.
+    pub fn with_ledger(&self, f: &mut dyn FnMut(&Ledger)) {
+        self.sink.with_ledger(f);
     }
 
     /// The registered affordance specs (name + required authority) — the cap-gated
@@ -154,7 +158,11 @@ impl AttachedApplet {
 
     /// A witnessed read of the agent cell's live model off the attached ledger.
     pub fn model(&self) -> CellModel {
-        CellModel::from_ledger(self.sink.ledger(), &self.agent)
+        let mut model = CellModel::from_ledger_empty();
+        let agent = self.agent;
+        self.sink
+            .with_ledger(&mut |l| model = CellModel::from_ledger(l, &agent));
+        model
     }
 
     /// Witnessed read of one model field as a u64 (the scalar shape).

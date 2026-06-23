@@ -26,7 +26,11 @@ fn repo_root() -> PathBuf {
 fn reads_a_real_dregg_source_file_from_within_the_vessel() {
     let root = repo_root();
     let packer = root.join("scripts/pack-dregg-src.sh");
-    assert!(packer.is_file(), "the packer must exist at {}", packer.display());
+    assert!(
+        packer.is_file(),
+        "the packer must exist at {}",
+        packer.display()
+    );
 
     // Pack the REAL source into a carrier in a temp location (the same artifact
     // the AppImage job drops into usr/share/dregg-src/).

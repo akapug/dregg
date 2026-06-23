@@ -461,7 +461,11 @@ mod tests {
         let treasury = w.genesis_cell(0x11, 1_000_000);
         let user = w.genesis_cell(0x33, 5_000);
         for amount in [100u64, 250, 50] {
-            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let nonce = w
+                .ledger()
+                .get(&treasury)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0);
             let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, amount)]);
             assert!(w.commit_turn(t).is_committed(), "durable commit must land");
         }
@@ -505,7 +509,10 @@ mod tests {
         // The rewindable image: History rebuilt → replay to any past step verifies.
         let h = reopened.recorded_turns();
         for k in 0..=h.len() {
-            assert!(h.replay_to(k).is_ok(), "rewind step {k} verifies after reopen");
+            assert!(
+                h.replay_to(k).is_ok(),
+                "rewind step {k} verifies after reopen"
+            );
         }
 
         let _ = std::fs::remove_file(&path);
@@ -518,7 +525,11 @@ mod tests {
         let path = scratch_path();
         let (treasury, user, _root, _cells) = make_durable_image(&path);
         let mut reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS).unwrap();
-        let nonce = reopened.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+        let nonce = reopened
+            .ledger()
+            .get(&treasury)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
         let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 1)]);
         assert!(
             reopened.commit_turn(t).is_committed(),
@@ -551,7 +562,11 @@ mod tests {
             );
             // THEN commit a turn that does NOT mutate the programmed cell's program
             // (a transfer crediting it — its program is unchanged by the credit).
-            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let nonce = w
+                .ledger()
+                .get(&treasury)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0);
             let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
             assert!(w.commit_turn(t).is_committed(), "the turn commits");
             cell_id = user;
@@ -559,7 +574,12 @@ mod tests {
         }
         let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
             .expect("reopen recovers (the setup program is in the pre-turn base)");
-        let prog = reopened.ledger().get(&cell_id).expect("cell restored").program.clone();
+        let prog = reopened
+            .ledger()
+            .get(&cell_id)
+            .expect("cell restored")
+            .program
+            .clone();
         assert_eq!(
             prog,
             CellProgram::Predicate(vec![]),
@@ -586,9 +606,16 @@ mod tests {
                 .expect("fresh open of an empty store");
             let treasury = w.genesis_cell(0x11, 1_000);
             let user = w.genesis_cell(0x33, 0);
-            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let nonce = w
+                .ledger()
+                .get(&treasury)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0);
             let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
-            assert!(w.commit_turn(t).is_committed(), "the mid-session turn commits");
+            assert!(
+                w.commit_turn(t).is_committed(),
+                "the mid-session turn commits"
+            );
             // treasury was TOUCHED by the transfer → the guard refuses the program-set
             // (it would otherwise make the durable image non-reopenable).
             assert!(
@@ -627,14 +654,24 @@ mod tests {
             let treasury = w.genesis_cell(0x11, 1_000);
             let user = w.genesis_cell(0x33, 0);
             // A turn TOUCHES the user cell mid-session (the credit).
-            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let nonce = w
+                .ledger()
+                .get(&treasury)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0);
             let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 100)]);
-            assert!(w.commit_turn(t).is_committed(), "the mid-session turn commits");
+            assert!(
+                w.commit_turn(t).is_committed(),
+                "the mid-session turn commits"
+            );
             // NOW reprogram the ALREADY-TOUCHED cell — but as an ORDERED `SetProgram`
             // turn (self-targeted on the user cell, whose open permissions gate the
             // program install). This is the redirect the genesis-path mutation used
             // to do unsoundly.
-            let prog_turn = w.turn(user, vec![set_program(user, CellProgram::Predicate(vec![]))]);
+            let prog_turn = w.turn(
+                user,
+                vec![set_program(user, CellProgram::Predicate(vec![]))],
+            );
             assert!(
                 w.commit_turn(prog_turn).is_committed(),
                 "the mid-session SetProgram turn commits"
@@ -652,14 +689,21 @@ mod tests {
         let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
             .expect("reopen recovers — the reprogram rode the commit log, in order");
         assert_eq!(
-            reopened.ledger().get(&cell_id).expect("cell restored").program,
+            reopened
+                .ledger()
+                .get(&cell_id)
+                .expect("cell restored")
+                .program,
             CellProgram::Predicate(vec![]),
             "a mid-session SetProgram TURN survives reopen (the category error dissolved)"
         );
         // And the rewindable history replays cleanly at every step.
         let h = reopened.recorded_turns();
         for k in 0..=h.len() {
-            assert!(h.replay_to(k).is_ok(), "rewind step {k} verifies after reopen");
+            assert!(
+                h.replay_to(k).is_ok(),
+                "rewind step {k} verifies after reopen"
+            );
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -674,9 +718,16 @@ mod tests {
             .expect("fresh open of an empty store");
         let treasury = w.genesis_cell(0x11, 1_000);
         let sink = w.genesis_cell(0x33, 0);
-        let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+        let nonce = w
+            .ledger()
+            .get(&treasury)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
         let t = bare_turn(treasury, nonce, vec![transfer(treasury, sink, 100)]);
-        assert!(w.commit_turn(t).is_committed(), "the mid-session turn commits");
+        assert!(
+            w.commit_turn(t).is_committed(),
+            "the mid-session turn commits"
+        );
         // treasury was TOUCHED by the transfer → both genesis-path mutators refuse.
         assert_eq!(
             w.genesis_grant_cap(&treasury, sink),
@@ -708,7 +759,11 @@ mod tests {
             let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS).unwrap();
             let mut fork = reopened.fork();
             assert!(!fork.is_durable(), "a fork MUST be ephemeral");
-            let nonce = fork.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
+            let nonce = fork
+                .ledger()
+                .get(&treasury)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0);
             let t = bare_turn(treasury, nonce, vec![transfer(treasury, user, 999)]);
             assert!(fork.commit_turn(t).is_committed());
             // reopened + fork drop here, releasing the redb handle.

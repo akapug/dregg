@@ -342,11 +342,7 @@ impl BufferCell {
     /// On success the backing cell's digest field = the new content AND its
     /// nonce advances (the revision), and a receipt is appended to the world's
     /// provenance. A refusal changes NOTHING. Returns the new revision.
-    pub fn commit(
-        &self,
-        world: &mut World,
-        cap: &SurfaceCapability,
-    ) -> Result<u64, BufferError> {
+    pub fn commit(&self, world: &mut World, cap: &SurfaceCapability) -> Result<u64, BufferError> {
         // (1) THE BUFFER-CAP GATE — anti cap-confusion + the read-only tooth.
         if cap.surface() != self.surface {
             return Err(BufferError::WrongSurface);
@@ -485,7 +481,11 @@ mod tests {
         let a = BufferDoc::from_text("hello");
         let b = BufferDoc::from_text("world");
         assert_ne!(a.digest(), b.digest(), "different text ⇒ different digest");
-        assert_eq!(a.digest(), BufferDoc::from_text("hello").digest(), "the digest is a function");
+        assert_eq!(
+            a.digest(),
+            BufferDoc::from_text("hello").digest(),
+            "the digest is a function"
+        );
     }
 
     #[test]
@@ -495,7 +495,11 @@ mod tests {
         let (_shell, world, mut buf, _cap) = writable_buffer();
         let h0 = world.height();
         buf.doc_mut().insert("!");
-        assert_eq!(world.height(), h0, "in-memory edits do not advance the ledger");
+        assert_eq!(
+            world.height(),
+            h0,
+            "in-memory edits do not advance the ledger"
+        );
         assert!(buf.doc().text().ends_with('!'));
     }
 
@@ -521,16 +525,28 @@ mod tests {
         assert!(buf.cap_can_write(&cap), "the opener holds the write cap");
 
         // Initially dirty: the cell stores the zero digest, the doc has text.
-        assert!(!buf.is_clean(&world), "a fresh buffer with text is dirty (uncommitted)");
+        assert!(
+            !buf.is_clean(&world),
+            "a fresh buffer with text is dirty (uncommitted)"
+        );
 
         let h0 = world.height();
-        let rev = buf.commit(&mut world, &cap).expect("a writable edit commits");
+        let rev = buf
+            .commit(&mut world, &cap)
+            .expect("a writable edit commits");
         assert!(rev >= 1, "the revision advanced (the backing cell's nonce)");
         assert_eq!(world.height(), h0 + 1, "a real turn was committed");
-        assert_eq!(world.receipts().len(), 1, "a receipt was appended (provenance)");
+        assert_eq!(
+            world.receipts().len(),
+            1,
+            "a receipt was appended (provenance)"
+        );
         // The backing cell now stores the buffer's content digest (the bind).
         assert_eq!(buf.stored_digest(&world), Some(buf.doc().digest()));
-        assert!(buf.is_clean(&world), "after commit the buffer is clean (no unsaved edits)");
+        assert!(
+            buf.is_clean(&world),
+            "after commit the buffer is clean (no unsaved edits)"
+        );
     }
 
     #[test]
@@ -541,7 +557,9 @@ mod tests {
         // Edit the doc + commit again → the revision advances (the receipt chain
         // IS the buffer's edit history).
         buf.doc_mut().insert("\nmore");
-        let rev2 = buf.commit(&mut world, &cap).expect("the second edit commits");
+        let rev2 = buf
+            .commit(&mut world, &cap)
+            .expect("the second edit commits");
         assert!(rev2 > rev1, "each committed edit advances the revision");
         assert_eq!(world.receipts().len(), 2, "two edits → two receipts");
     }
@@ -561,14 +579,21 @@ mod tests {
         // SHARE a READ-ONLY mirror through the A0 shell (a real GrantCapability
         // turn narrows None → Signature). This is the read-only buffer's cap.
         let ro_cap = shell
-            .share(&writable, /*recipient app*/ 0x4E0, AuthRequired::Signature)
+            .share(
+                &writable,
+                /*recipient app*/ 0x4E0,
+                AuthRequired::Signature,
+            )
             .expect("a narrowing (read-only) share commits");
         assert_eq!(ro_cap.rights(), &AuthRequired::Signature);
 
         // The read-only buffer renders into the shared surface.
         let buf = BufferCell::new(ro_cap.surface(), backing, "ro.txt", "frozen text");
         assert!(buf.is_read_only_under(&ro_cap), "the mirror is read-only");
-        assert!(!buf.cap_can_write(&ro_cap), "a read-only mirror cannot write");
+        assert!(
+            !buf.cap_can_write(&ro_cap),
+            "a read-only mirror cannot write"
+        );
 
         let h0 = world.height();
         let r = buf.commit(&mut world, &ro_cap);
@@ -578,7 +603,11 @@ mod tests {
         );
         // Fail-closed: nothing changed (no turn, no receipt).
         assert_eq!(world.height(), h0, "a refused edit commits no turn");
-        assert_eq!(world.receipts().len(), 0, "a refused edit appends no receipt");
+        assert_eq!(
+            world.receipts().len(),
+            0,
+            "a refused edit appends no receipt"
+        );
     }
 
     #[test]
@@ -592,7 +621,10 @@ mod tests {
             dregg_firmament::Capability::surface(buf.backing(), AuthRequired::None),
         );
         let r = buf.commit(&mut world, &foreign);
-        assert!(matches!(r, Err(BufferError::WrongSurface)), "cap confusion refused, got {r:?}");
+        assert!(
+            matches!(r, Err(BufferError::WrongSurface)),
+            "cap confusion refused, got {r:?}"
+        );
     }
 
     // ── THE VIEW: the panel model reflects the AUTHENTICATED buffer state ──
@@ -602,7 +634,10 @@ mod tests {
         let (_shell, mut world, mut buf, cap) = writable_buffer();
         // A writable buffer with uncommitted text: not read-only, dirty.
         let v0 = BufferView::build(&buf, &world, Some(&cap));
-        assert!(!v0.read_only, "the writable buffer is not read-only under its write cap");
+        assert!(
+            !v0.read_only,
+            "the writable buffer is not read-only under its write cap"
+        );
         assert!(!v0.clean, "it has uncommitted edits (dirty)");
         assert_eq!(v0.lines, vec!["hello".to_string(), "world".to_string()]);
         assert!(v0.stored_digest_short.is_some(), "the backing cell is live");
@@ -630,6 +665,9 @@ mod tests {
         let v = BufferView::build(&buf, &world, Some(&cap));
         assert!(!v.backed, "a missing cell is unbacked");
         let r = buf.commit(&mut world, &cap);
-        assert!(matches!(r, Err(BufferError::Unbacked)), "a dangling buffer cannot commit, got {r:?}");
+        assert!(
+            matches!(r, Err(BufferError::Unbacked)),
+            "a dangling buffer cannot commit, got {r:?}"
+        );
     }
 }

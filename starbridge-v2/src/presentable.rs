@@ -322,7 +322,11 @@ impl<'w> PresentCtx<'w> {
     /// real viewer pass it via [`PresentCtx::for_viewer`].
     pub fn new(world: &'w World, viewer: CellId) -> Self {
         let height = world.height();
-        PresentCtx { world, viewer, height }
+        PresentCtx {
+            world,
+            viewer,
+            height,
+        }
     }
 
     /// A context for a specific viewer (the Affordances cap badges divide on it).
@@ -600,8 +604,11 @@ pub struct Halo {
 
 impl Halo {
     /// The universal three commands every object carries (the `wonder.rs` ring).
-    pub const UNIVERSAL: [HaloCommand; 3] =
-        [HaloCommand::Inspect, HaloCommand::Grab, HaloCommand::Explain];
+    pub const UNIVERSAL: [HaloCommand; 3] = [
+        HaloCommand::Inspect,
+        HaloCommand::Grab,
+        HaloCommand::Explain,
+    ];
 
     /// The ring for a given object kind: the universal three plus the per-kind
     /// commands (a receipt gains `VerifyChain`; a capability gains `Attenuate`).
@@ -643,7 +650,10 @@ pub struct ReflectedCell {
 impl ReflectedCell {
     /// Wrap the live cell `id` if it is present in the world's ledger.
     pub fn from_world(world: &World, id: CellId) -> Option<Self> {
-        world.ledger().get(&id).map(|c| ReflectedCell { id, cell: c.clone() })
+        world.ledger().get(&id).map(|c| ReflectedCell {
+            id,
+            cell: c.clone(),
+        })
     }
 }
 
@@ -750,7 +760,11 @@ fn messages_as_inspectable(id: &CellId, ia: &InspectAct) -> Inspectable {
                     "{} · requires {:?} · {}",
                     m.effect,
                     m.required,
-                    if m.authorized { "you may send" } else { "refused: insufficient authority" }
+                    if m.authorized {
+                        "you may send"
+                    } else {
+                        "refused: insufficient authority"
+                    }
                 ),
             )
         })
@@ -811,7 +825,11 @@ fn cell_ocap_view(world: &World, id: &CellId) -> GraphView {
         .filter(|n| node_ids.contains(&n.cell))
         .cloned()
         .collect();
-    GraphView { nodes, edges, focus: Some(*id) }
+    GraphView {
+        nodes,
+        edges,
+        focus: Some(*id),
+    }
 }
 
 /// Build the cell's lifecycle [`StateMachineView`] from the real `CellLifecycle`.
@@ -820,18 +838,53 @@ fn cell_ocap_view(world: &World, id: &CellId) -> GraphView {
 fn lifecycle_state_machine(cell: &Cell) -> StateMachineView {
     use dregg_cell::lifecycle::CellLifecycle;
     let states = vec![
-        SmState { name: "Live".to_string(), terminal: false },
-        SmState { name: "Sealed".to_string(), terminal: false },
-        SmState { name: "Destroyed".to_string(), terminal: true },
-        SmState { name: "Migrated".to_string(), terminal: true },
-        SmState { name: "Archived".to_string(), terminal: false },
+        SmState {
+            name: "Live".to_string(),
+            terminal: false,
+        },
+        SmState {
+            name: "Sealed".to_string(),
+            terminal: false,
+        },
+        SmState {
+            name: "Destroyed".to_string(),
+            terminal: true,
+        },
+        SmState {
+            name: "Migrated".to_string(),
+            terminal: true,
+        },
+        SmState {
+            name: "Archived".to_string(),
+            terminal: false,
+        },
     ];
     let transitions = vec![
-        SmTransition { from: "Live".to_string(), to: "Sealed".to_string(), verb: "Seal".to_string() },
-        SmTransition { from: "Sealed".to_string(), to: "Live".to_string(), verb: "Unseal".to_string() },
-        SmTransition { from: "Live".to_string(), to: "Destroyed".to_string(), verb: "Destroy".to_string() },
-        SmTransition { from: "Live".to_string(), to: "Migrated".to_string(), verb: "Migrate".to_string() },
-        SmTransition { from: "Live".to_string(), to: "Archived".to_string(), verb: "Archive".to_string() },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Sealed".to_string(),
+            verb: "Seal".to_string(),
+        },
+        SmTransition {
+            from: "Sealed".to_string(),
+            to: "Live".to_string(),
+            verb: "Unseal".to_string(),
+        },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Destroyed".to_string(),
+            verb: "Destroy".to_string(),
+        },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Migrated".to_string(),
+            verb: "Migrate".to_string(),
+        },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Archived".to_string(),
+            verb: "Archive".to_string(),
+        },
     ];
     let current = match cell.lifecycle {
         CellLifecycle::Live => "Live",
@@ -841,7 +894,11 @@ fn lifecycle_state_machine(cell: &Cell) -> StateMachineView {
         CellLifecycle::Archived { .. } => "Archived",
     }
     .to_string();
-    StateMachineView { states, transitions, current }
+    StateMachineView {
+        states,
+        transitions,
+        current,
+    }
 }
 
 // ===========================================================================
@@ -917,17 +974,20 @@ impl<'w> Registry<'w> {
     /// Build a registry over the live world (no meta-debug session — the meta arms
     /// resolve to `None`).
     pub fn new(world: &'w World) -> Self {
-        Registry { world, meta_stack: None }
+        Registry {
+            world,
+            meta_stack: None,
+        }
     }
 
     /// Build a registry that ALSO resolves the meta-debug arms through `meta_stack`
     /// — the fractal meta-debug dispatch. A [`FocusTarget::DebugFrame(level)`] looks
     /// the level up here and projects its [`MetaDebugView`](crate::meta_debug::MetaDebugView).
-    pub fn with_meta_stack(
-        world: &'w World,
-        meta_stack: &'w crate::meta_debug::MetaStack,
-    ) -> Self {
-        Registry { world, meta_stack: Some(meta_stack) }
+    pub fn with_meta_stack(world: &'w World, meta_stack: &'w crate::meta_debug::MetaStack) -> Self {
+        Registry {
+            world,
+            meta_stack: Some(meta_stack),
+        }
     }
 
     /// Resolve the meta arms (`DebugFrame`/`World`/`Cockpit`) to a
@@ -1074,7 +1134,10 @@ impl PresentMemo {
     /// Drop a single cell's cached projections (every viewer) — the per-cell
     /// delta invalidation the fold drives.
     pub fn invalidate_cell(&self, cell: CellId) {
-        self.inner.borrow_mut().entries.retain(|(c, _), _| *c != cell);
+        self.inner
+            .borrow_mut()
+            .entries
+            .retain(|(c, _), _| *c != cell);
     }
 
     /// Cap-edge deltas reach OTHER cells' affordance badges (viewer-non-local,
@@ -1212,7 +1275,10 @@ mod tests {
         let refl = ReflectedCell::from_world(&w, treasury).expect("the cell exists");
         let ctx = PresentCtx::new(&w, treasury);
 
-        assert!(refl.has_raw_fields_floor(&ctx), "RawFields is the mandatory floor");
+        assert!(
+            refl.has_raw_fields_floor(&ctx),
+            "RawFields is the mandatory floor"
+        );
 
         let set = refl.present(&ctx);
         let raw = set
@@ -1221,7 +1287,10 @@ mod tests {
             .expect("the floor is present");
         match &raw.body {
             PresentationBody::Fields(i) => {
-                assert!(!i.fields.is_empty(), "the RawFields body is a non-empty field tree");
+                assert!(
+                    !i.fields.is_empty(),
+                    "the RawFields body is a non-empty field tree"
+                );
                 assert!(i.fields.iter().any(|f| f.key == "balance"));
             }
             other => panic!("RawFields must carry a Fields body, got {other:?}"),
@@ -1287,7 +1356,10 @@ mod tests {
         match &dv.body {
             PresentationBody::StateMachine(sm) => {
                 assert_eq!(sm.current, "Live", "a fresh cell is Live");
-                assert!(sm.states.iter().any(|s| s.name == "Destroyed" && s.terminal));
+                assert!(sm
+                    .states
+                    .iter()
+                    .any(|s| s.name == "Destroyed" && s.terminal));
                 assert!(sm.transitions.iter().any(|t| t.verb == "Seal"));
             }
             other => panic!("Lifecycle should carry a StateMachine body, got {other:?}"),
@@ -1330,18 +1402,30 @@ mod tests {
         let ctx = PresentCtx::new(&w, treasury);
         let set = refl.present(&ctx);
 
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => assert!(
-                i.fields.iter().any(|f| matches!(f.value, reflect::FieldValue::Balance(750))),
+                i.fields
+                    .iter()
+                    .any(|f| matches!(f.value, reflect::FieldValue::Balance(750))),
                 "the RawFields balance reflects the committed transfer (750)"
             ),
             _ => unreachable!(),
         }
-        let prov = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let prov = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &prov.body {
             PresentationBody::Timeline(t) => {
-                assert_eq!(t.events.len(), 1, "the authored receipt appears in the lineage");
+                assert_eq!(
+                    t.events.len(),
+                    1,
+                    "the authored receipt appears in the lineage"
+                );
                 assert!(t.events[0].hash.is_some(), "the receipt is navigable");
             }
             _ => unreachable!(),
@@ -1358,7 +1442,10 @@ mod tests {
             .present(FocusTarget::Cell(treasury), treasury)
             .expect("the focused cell resolves");
         assert!(set.iter().any(|p| p.kind == PresentationKind::RawFields));
-        assert_eq!(reg.object_kind(FocusTarget::Cell(treasury)), ObjectKind::Cell);
+        assert_eq!(
+            reg.object_kind(FocusTarget::Cell(treasury)),
+            ObjectKind::Cell
+        );
     }
 
     #[test]
@@ -1381,9 +1468,13 @@ mod tests {
         // and field keys — searching "ocap Graph" finds the graph presentation, and
         // searching "lifecycle" finds the DomainVisual.
         let hits = spotter.search("lifecycle");
-        assert!(!hits.is_empty(), "the spotter finds the lifecycle presentation");
         assert!(
-            hits.iter().any(|h| h.matched_kind == PresentationKind::DomainVisual),
+            !hits.is_empty(),
+            "the spotter finds the lifecycle presentation"
+        );
+        assert!(
+            hits.iter()
+                .any(|h| h.matched_kind == PresentationKind::DomainVisual),
             "a lifecycle query matches the DomainVisual presentation"
         );
         assert_eq!(hits[0].focus, InspectFocus::Cell(treasury));
@@ -1394,7 +1485,9 @@ mod tests {
         let prefix: String = short.chars().take(4).collect();
         let by_id = spotter.search(&prefix);
         assert!(
-            by_id.iter().any(|h| h.focus == InspectFocus::Cell(treasury)),
+            by_id
+                .iter()
+                .any(|h| h.focus == InspectFocus::Cell(treasury)),
             "the spotter finds the cell by its id-derived search_text"
         );
 
@@ -1447,13 +1540,23 @@ mod tests {
     fn the_gadget_field_model_keys_and_validation_are_well_formed() {
         // L1 defines the gadget SHAPE (the field kinds + validation); concrete
         // gadgets are L2/L3. Assert the shape is coherent.
-        let f = GadgetField::U64 { key: "amount".into(), min: 0, max: 1_000 };
+        let f = GadgetField::U64 {
+            key: "amount".into(),
+            min: 0,
+            max: 1_000,
+        };
         assert_eq!(f.key(), "amount");
-        let sub = GadgetField::SubGadget { key: "condition".into(), kind: GadgetKind::Predicate };
+        let sub = GadgetField::SubGadget {
+            key: "condition".into(),
+            kind: GadgetKind::Predicate,
+        };
         assert_eq!(sub.key(), "condition");
 
         assert!(GadgetValidation::Ok.is_ok());
-        assert!(GadgetValidation::Invalid { reason: "empty".into() }.is_fail_closed());
+        assert!(GadgetValidation::Invalid {
+            reason: "empty".into()
+        }
+        .is_fail_closed());
         assert!(!GadgetValidation::Ok.is_fail_closed());
     }
 
@@ -1470,12 +1573,17 @@ mod tests {
         let refl = ReflectedCell::from_world(&w, treasury).unwrap();
         let ctx = PresentCtx::new(&w, treasury);
         let set = refl.present(&ctx);
-        let graph = set.iter().find(|p| p.kind == PresentationKind::Graph).unwrap();
+        let graph = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Graph)
+            .unwrap();
         match &graph.body {
             PresentationBody::Graph(g) => {
                 assert_eq!(g.focus, Some(treasury));
                 assert!(
-                    g.edges.iter().any(|e| e.holder == treasury && e.target == sink),
+                    g.edges
+                        .iter()
+                        .any(|e| e.holder == treasury && e.target == sink),
                     "the real ocap edge treasury → sink is in the focused graph view"
                 );
             }

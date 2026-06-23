@@ -91,3 +91,39 @@ pub async fn load_firmament_panels(
 
     Ok((project_panel, outline_panel, terminal_panel))
 }
+
+/// Load the three FirmamentFs panels (project/outline/terminal) AND dock the
+/// confined-Hermes AGENT panel into one already-built `Workspace` — the full
+/// dock complement of the embedded deos IDE. This is `load_firmament_panels`
+/// plus the agent surface, so a single Workspace instance carries every docked
+/// panel of the embed at once.
+///
+/// The Hermes panel wraps a live [`crate::hermes_panel::HermesPanel`] over the
+/// supplied confined [`HermesSession`](crate::hermes_panel::HermesSession). After
+/// this resolves, `workspace.panel::<T>(cx)` is `Some` for the project, outline,
+/// terminal, AND Hermes panels.
+///
+/// Returns the four docked panel entities for assertion.
+pub async fn load_all_panels(
+    workspace: WeakEntity<Workspace>,
+    session: crate::hermes_panel::HermesSession,
+    session_id: &str,
+    mut cx: AsyncWindowContext,
+) -> Result<(
+    Entity<ProjectPanel>,
+    Entity<OutlinePanel>,
+    Entity<TerminalPanel>,
+    Entity<crate::hermes_panel::HermesPanel>,
+)> {
+    let (project_panel, outline_panel, terminal_panel) =
+        load_firmament_panels(workspace.clone(), cx.clone()).await?;
+
+    // Dock the confined-Hermes agent panel ALONGSIDE the IDE panels — the same
+    // `add_panel` registration, for the agent surface. `add_hermes_panel` builds
+    // the panel over the session's live gateway and inserts it into the dock.
+    let hermes_panel = workspace.update_in(&mut cx, |workspace, window, cx| {
+        crate::hermes_panel::add_hermes_panel(workspace, session, session_id, window, cx)
+    })?;
+
+    Ok((project_panel, outline_panel, terminal_panel, hermes_panel))
+}

@@ -40,12 +40,12 @@ use dregg_turn::action::Effect;
 
 use crate::edit::{self, Verdict};
 use crate::graph::{GraphEdge, GraphNode};
-use crate::reflect::{self, Field, Inspectable, ObjectKind};
-use crate::simulate::{self, EffectKind, IntentDraft};
 use crate::presentable::{
     CommittingGadget, Gadget, GadgetError, GadgetField, GadgetInput, GadgetKind, GadgetValidation,
-    GraphView, Presentable, PresentCtx, Presentation, PresentationBody, PresentationKind,
+    GraphView, PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind,
 };
+use crate::reflect::{self, Field, Inspectable, ObjectKind};
+use crate::simulate::{self, EffectKind, IntentDraft};
 use crate::world::World;
 
 // ===========================================================================
@@ -128,7 +128,10 @@ impl Presentable for TurnDraftView {
         out.push(Presentation {
             kind: PresentationKind::Affordances,
             label: "Effects".to_string(),
-            search_text: format!("effects {}", PresentationBody::Fields(aff.clone()).search_text()),
+            search_text: format!(
+                "effects {}",
+                PresentationBody::Fields(aff.clone()).search_text()
+            ),
             body: PresentationBody::Fields(aff),
         });
 
@@ -167,7 +170,10 @@ fn turn_raw_fields(draft: &IntentDraft) -> Inspectable {
     }
     Inspectable {
         kind: ObjectKind::Cell,
-        title: format!("Turn · agent {}", reflect::short_hex(draft.agent.as_bytes())),
+        title: format!(
+            "Turn · agent {}",
+            reflect::short_hex(draft.agent.as_bytes())
+        ),
         subtitle: format!(
             "{} action(s) · {} effect(s)",
             draft.actions.len(),
@@ -214,13 +220,21 @@ fn forest_graph(draft: &IntentDraft) -> GraphView {
             cell: *c,
             short: reflect::short_hex(c.as_bytes()),
             balance: 0,
-            lifecycle: if *c == draft.agent { "agent".to_string() } else { "target".to_string() },
+            lifecycle: if *c == draft.agent {
+                "agent".to_string()
+            } else {
+                "target".to_string()
+            },
             out_degree: edges.iter().filter(|e| &e.holder == c).count(),
             in_degree: edges.iter().filter(|e| &e.target == c).count(),
         })
         .collect();
 
-    GraphView { nodes, edges, focus: Some(draft.agent) }
+    GraphView {
+        nodes,
+        edges,
+        focus: Some(draft.agent),
+    }
 }
 
 /// A structural forest edge `holder → target` at `slot` (open rights — the draft
@@ -300,7 +314,10 @@ fn effects_as_inspectable(draft: &IntentDraft) -> Inspectable {
     }
     Inspectable {
         kind: ObjectKind::Cell,
-        title: format!("Effects · agent {}", reflect::short_hex(draft.agent.as_bytes())),
+        title: format!(
+            "Effects · agent {}",
+            reflect::short_hex(draft.agent.as_bytes())
+        ),
         subtitle: format!("{} effect(s) across {} action(s)", n, draft.actions.len()),
         fields,
     }
@@ -342,7 +359,11 @@ fn turn_invariant(world: &World, draft: &IntentDraft) -> String {
 fn lower_forest(draft: &IntentDraft, height: u64) -> dregg_turn::forest::CallForest {
     let mut fb = edit::ForestBuilder::new();
     for a in &draft.actions {
-        let effects: Vec<Effect> = a.effects.iter().map(|e| e.to_effect(a.target, height)).collect();
+        let effects: Vec<Effect> = a
+            .effects
+            .iter()
+            .map(|e| e.to_effect(a.target, height))
+            .collect();
         fb.root(edit::ActionBuilder::new(a.target).effects(effects));
     }
     fb.build()
@@ -370,7 +391,9 @@ pub struct CommittingTurnGadget {
 impl CommittingTurnGadget {
     /// A fresh turn builder authorized by `agent`.
     pub fn new(agent: CellId) -> Self {
-        CommittingTurnGadget { draft: IntentDraft::new(agent) }
+        CommittingTurnGadget {
+            draft: IntentDraft::new(agent),
+        }
     }
 
     /// The agent authorizing this turn.
@@ -427,8 +450,13 @@ impl Gadget for CommittingTurnGadget {
     /// per-action effect picker from this shape; L3 fills it.
     fn fields(&self) -> Vec<GadgetField> {
         vec![
-            GadgetField::CellPicker { key: "agent".to_string() },
-            GadgetField::List { key: "actions".to_string(), item: GadgetKind::CallTree },
+            GadgetField::CellPicker {
+                key: "agent".to_string(),
+            },
+            GadgetField::List {
+                key: "actions".to_string(),
+                item: GadgetKind::CallTree,
+            },
         ]
     }
 
@@ -537,8 +565,20 @@ mod tests {
         // real forest: the agent node + both targets + both value edges.
         let (w, treasury, alice, bob) = three_cell_world();
         let mut g = CommittingTurnGadget::new(treasury);
-        g.action_with(treasury, EffectKind::Transfer { to: alice, amount: 100 });
-        g.action_with(treasury, EffectKind::Transfer { to: bob, amount: 200 });
+        g.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: alice,
+                amount: 100,
+            },
+        );
+        g.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: bob,
+                amount: 200,
+            },
+        );
         assert_eq!(g.effect_count(), 2);
 
         let view = g.view();
@@ -558,8 +598,14 @@ mod tests {
                 assert!(gv.nodes.iter().any(|n| n.cell == bob));
                 assert_eq!(gv.focus, Some(treasury), "the agent is the forest root");
                 // The two real value edges treasury→alice and treasury→bob.
-                assert!(gv.edges.iter().any(|e| e.holder == treasury && e.target == alice));
-                assert!(gv.edges.iter().any(|e| e.holder == treasury && e.target == bob));
+                assert!(gv
+                    .edges
+                    .iter()
+                    .any(|e| e.holder == treasury && e.target == alice));
+                assert!(gv
+                    .edges
+                    .iter()
+                    .any(|e| e.holder == treasury && e.target == bob));
             }
             other => panic!("Graph should carry a Graph body, got {other:?}"),
         }
@@ -571,7 +617,13 @@ mod tests {
         // Affordances (effect list) + Invariant (the assurance rail).
         let (w, treasury, alice, _bob) = three_cell_world();
         let mut g = CommittingTurnGadget::new(treasury);
-        g.action_with(treasury, EffectKind::Transfer { to: alice, amount: 100 });
+        g.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: alice,
+                amount: 100,
+            },
+        );
         let view = g.view();
         let ctx = PresentCtx::new(&w, treasury);
         let set = view.present(&ctx);
@@ -590,7 +642,10 @@ mod tests {
         }
 
         // The Source prose names the agent + the effect.
-        let src = set.iter().find(|p| p.kind == PresentationKind::Source).unwrap();
+        let src = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Source)
+            .unwrap();
         match &src.body {
             PresentationBody::Prose(p) => {
                 assert!(p.contains("atomic"), "the source explains atomicity: {p}");
@@ -611,9 +666,18 @@ mod tests {
 
         // (a) A conserving transfer → the Invariant body reports PASS.
         let mut good = CommittingTurnGadget::new(treasury);
-        good.action_with(treasury, EffectKind::Transfer { to: alice, amount: 100 });
+        good.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: alice,
+                amount: 100,
+            },
+        );
         let inv_good = turn_invariant(&w, good.draft());
-        assert!(inv_good.starts_with("PASS"), "a conserving forest passes: {inv_good}");
+        assert!(
+            inv_good.starts_with("PASS"),
+            "a conserving forest passes: {inv_good}"
+        );
 
         // (b) The gadget's own rail companion agrees (the &World-bearing check).
         assert!(good.validate_rail(&w).pass());
@@ -629,14 +693,32 @@ mod tests {
         let (w, treasury, alice, _bob) = three_cell_world();
 
         let mut good = CommittingTurnGadget::new(treasury);
-        good.action_with(treasury, EffectKind::Transfer { to: alice, amount: 250 });
+        good.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: alice,
+                amount: 250,
+            },
+        );
         let out = good.predict(&w);
-        assert!(out.would_commit(), "a conserving transfer is predicted to commit");
+        assert!(
+            out.would_commit(),
+            "a conserving transfer is predicted to commit"
+        );
 
         let mut bad = CommittingTurnGadget::new(treasury);
-        bad.action_with(treasury, EffectKind::Transfer { to: alice, amount: 9_999 });
+        bad.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: alice,
+                amount: 9_999,
+            },
+        );
         let bad_out = bad.predict(&w);
-        assert!(!bad_out.would_commit(), "an overspend is predicted to refuse");
+        assert!(
+            !bad_out.would_commit(),
+            "an overspend is predicted to refuse"
+        );
 
         // The live world is untouched by EITHER prediction.
         assert_eq!(w.ledger().get(&treasury).unwrap().state.balance(), 1_000);
@@ -648,7 +730,10 @@ mod tests {
             SimOutcome::Predicted { receipt, .. } => reflect::short_hex(&receipt.receipt_hash()),
             _ => unreachable!(),
         };
-        assert!(render.contains(&receipt), "the render carries the real predicted receipt");
+        assert!(
+            render.contains(&receipt),
+            "the render carries the real predicted receipt"
+        );
     }
 
     // ── commit advances the world atomically with a real receipt ─────────────
@@ -660,8 +745,20 @@ mod tests {
         // real receipt; the predicted receipt equals the committed one.
         let (mut w, treasury, alice, bob) = three_cell_world();
         let mut g = CommittingTurnGadget::new(treasury);
-        g.action_with(treasury, EffectKind::Transfer { to: alice, amount: 100 });
-        g.action_with(treasury, EffectKind::Transfer { to: bob, amount: 200 });
+        g.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: alice,
+                amount: 100,
+            },
+        );
+        g.action_with(
+            treasury,
+            EffectKind::Transfer {
+                to: bob,
+                amount: 200,
+            },
+        );
 
         let predicted = match g.predict(&w) {
             SimOutcome::Predicted { receipt, .. } => receipt.receipt_hash(),
@@ -674,7 +771,10 @@ mod tests {
             CommitOutcome::Rejected { reason, .. } => panic!("commit rejected: {reason}"),
             CommitOutcome::Queued { .. } => panic!("unexpected queue (world not suspended)"),
         };
-        assert_eq!(predicted, committed, "the predicted receipt equals the committed one");
+        assert_eq!(
+            predicted, committed,
+            "the predicted receipt equals the committed one"
+        );
 
         // The world advanced ATOMICALLY: both transfers landed together.
         assert_eq!(w.ledger().get(&treasury).unwrap().state.balance(), 700);
@@ -705,12 +805,26 @@ mod tests {
         let mut over = CommittingTurnGadget::new(treasury);
         over.action_with(
             treasury,
-            EffectKind::GrantCapability { to: alice, target: alice, slot: 0 },
+            EffectKind::GrantCapability {
+                to: alice,
+                target: alice,
+                slot: 0,
+            },
         );
-        assert!(!over.predict(&w).would_commit(), "an over-grant is predicted to refuse");
+        assert!(
+            !over.predict(&w).would_commit(),
+            "an over-grant is predicted to refuse"
+        );
         let rejected = over.commit(&mut w);
-        assert!(!rejected.is_committed(), "the over-grant is rejected on the live world too");
-        assert_eq!(w.height(), 0, "the live world did not advance on the refused turn");
+        assert!(
+            !rejected.is_committed(),
+            "the over-grant is rejected on the live world too"
+        );
+        assert_eq!(
+            w.height(),
+            0,
+            "the live world did not advance on the refused turn"
+        );
     }
 
     // ── every EffectKind variant is constructible through the one entry ──────
@@ -724,20 +838,37 @@ mod tests {
         // state, lifecycle, and factory effects.
         let (w, treasury, alice, _bob) = three_cell_world();
         let palette = vec![
-            EffectKind::Transfer { to: alice, amount: 1 },
-            EffectKind::GrantCapability { to: alice, target: treasury, slot: 0 },
+            EffectKind::Transfer {
+                to: alice,
+                amount: 1,
+            },
+            EffectKind::GrantCapability {
+                to: alice,
+                target: treasury,
+                slot: 0,
+            },
             EffectKind::RevokeCapability { slot: 0 },
-            EffectKind::EmitEvent { topic: "hello".to_string() },
+            EffectKind::EmitEvent {
+                topic: "hello".to_string(),
+            },
             EffectKind::IncrementNonce,
             EffectKind::CreateCell { seed: 0x9A },
-            EffectKind::SetField { index: 0, value: dregg_cell::field_from_u64(7) },
+            EffectKind::SetField {
+                index: 0,
+                value: dregg_cell::field_from_u64(7),
+            },
             EffectKind::SetPermissionsOpen,
             EffectKind::MakeSovereign,
-            EffectKind::Seal { reason: "pause".to_string() },
+            EffectKind::Seal {
+                reason: "pause".to_string(),
+            },
             EffectKind::Unseal,
             EffectKind::Destroy,
             EffectKind::Burn { amount: 5 },
-            EffectKind::CreateCellFromFactory { factory_vk: [7u8; 32], owner: [9u8; 32] },
+            EffectKind::CreateCellFromFactory {
+                factory_vk: [7u8; 32],
+                owner: [9u8; 32],
+            },
         ];
         let mut g = CommittingTurnGadget::new(treasury);
         let ai = g.add_action(treasury);
@@ -753,8 +884,11 @@ mod tests {
         // The Source prose lists every effect (the operator sees what they built).
         let prose = turn_prose(g.draft());
         for e in &palette {
-            assert!(prose.contains(e.kind_name()) || prose.contains(&e.label()),
-                "the source prose names {}", e.kind_name());
+            assert!(
+                prose.contains(e.kind_name()) || prose.contains(&e.label()),
+                "the source prose names {}",
+                e.kind_name()
+            );
         }
     }
 
@@ -768,16 +902,25 @@ mod tests {
         let mut g = CommittingTurnGadget::new(treasury);
         g.action_with(
             treasury,
-            EffectKind::GrantCapability { to: alice, target: bob, slot: 3 },
+            EffectKind::GrantCapability {
+                to: alice,
+                target: bob,
+                slot: 3,
+            },
         );
         let view = g.view();
         let ctx = PresentCtx::new(&w, treasury);
         let set = view.present(&ctx);
-        let graph = set.iter().find(|p| p.kind == PresentationKind::Graph).unwrap();
+        let graph = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Graph)
+            .unwrap();
         match &graph.body {
             PresentationBody::Graph(gv) => {
                 assert!(
-                    gv.edges.iter().any(|e| e.holder == treasury && e.target == alice),
+                    gv.edges
+                        .iter()
+                        .any(|e| e.holder == treasury && e.target == alice),
                     "the grant hands a cap to the grantee (treasury → alice)"
                 );
                 assert!(

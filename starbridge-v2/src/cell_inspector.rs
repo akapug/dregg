@@ -58,15 +58,15 @@
 //! edit deferred per the touch-only-`cell_inspector.rs` rule (see the report).
 
 use dregg_cell::state::{
-    FieldVisibility, PublicFieldView, STATE_SLOTS, compute_heap_root, empty_heap_root,
+    compute_heap_root, empty_heap_root, FieldVisibility, PublicFieldView, STATE_SLOTS,
 };
 use dregg_cell::{
-    AuthRequired, Cell, CellId, CellLifecycle, CellMode, Permissions,
-    compute_canonical_state_commitment,
+    compute_canonical_state_commitment, AuthRequired, Cell, CellId, CellLifecycle, CellMode,
+    Permissions,
 };
 
 use crate::presentable::{
-    LatticeView, MerkleTreeView, Presentable, PresentCtx, Presentation, PresentationBody,
+    LatticeView, MerkleTreeView, PresentCtx, Presentable, Presentation, PresentationBody,
     PresentationKind, SmState, SmTransition, StateMachineView,
 };
 use crate::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
@@ -94,7 +94,10 @@ pub struct DeepCell {
 impl DeepCell {
     /// Wrap the live cell `id` if it is present in the world's ledger.
     pub fn from_world(world: &World, id: CellId) -> Option<Self> {
-        world.ledger().get(&id).map(|c| DeepCell { id, cell: c.clone() })
+        world.ledger().get(&id).map(|c| DeepCell {
+            id,
+            cell: c.clone(),
+        })
     }
 }
 
@@ -138,10 +141,7 @@ impl Presentable for DeepCell {
         out.push(Presentation {
             kind: PresentationKind::DomainVisual,
             label: "Permissions".to_string(),
-            search_text: format!(
-                "permissions lattice {}",
-                lat.nodes.join(" ")
-            ),
+            search_text: format!("permissions lattice {}", lat.nodes.join(" ")),
             body: PresentationBody::Lattice(lat),
         });
 
@@ -151,7 +151,11 @@ impl Presentable for DeepCell {
         out.push(Presentation {
             kind: PresentationKind::DomainVisual,
             label: "Lifecycle".to_string(),
-            search_text: format!("lifecycle {} {}", sm.current, lifecycle_detail(&self.cell.lifecycle)),
+            search_text: format!(
+                "lifecycle {} {}",
+                sm.current,
+                lifecycle_detail(&self.cell.lifecycle)
+            ),
             body: PresentationBody::StateMachine(sm),
         });
 
@@ -172,7 +176,10 @@ impl Presentable for DeepCell {
         out.push(Presentation {
             kind: PresentationKind::Invariant,
             label: "State Commitment".to_string(),
-            search_text: format!("commitment authority binding {}", reflect::short_hex(&compute_canonical_state_commitment(&self.cell))),
+            search_text: format!(
+                "commitment authority binding {}",
+                reflect::short_hex(&compute_canonical_state_commitment(&self.cell))
+            ),
             body: PresentationBody::Prose(prose),
         });
 
@@ -207,7 +214,10 @@ fn heap_merkle_tree(cell: &Cell) -> MerkleTreeView {
     let committed = st.heap_root;
     let recomputed = compute_heap_root(&st.heap_map);
     let label = if leaves.is_empty() {
-        format!("empty heap (root {})", reflect::short_hex(&empty_heap_root()))
+        format!(
+            "empty heap (root {})",
+            reflect::short_hex(&empty_heap_root())
+        )
     } else if committed == recomputed {
         format!("heap root {}", reflect::short_hex(&committed))
     } else {
@@ -308,12 +318,13 @@ fn permissions_lattice(perms: &Permissions) -> LatticeView {
 
     // The live readout: the cell's STRONGEST gate (the most restrictive action's
     // tier) — what authority the cell demands at its tightest point.
-    let current = actions
-        .iter()
-        .map(|(_, auth)| auth_rank(auth))
-        .max();
+    let current = actions.iter().map(|(_, auth)| auth_rank(auth)).max();
 
-    LatticeView { nodes, edges, current }
+    LatticeView {
+        nodes,
+        edges,
+        current,
+    }
 }
 
 // ===========================================================================
@@ -327,23 +338,62 @@ fn permissions_lattice(perms: &Permissions) -> LatticeView {
 /// migration target) into the `current` readout via [`lifecycle_detail`].
 fn lifecycle_state_machine(lc: &CellLifecycle) -> StateMachineView {
     let states = vec![
-        SmState { name: "Live".to_string(), terminal: false },
-        SmState { name: "Sealed".to_string(), terminal: false },
-        SmState { name: "Destroyed".to_string(), terminal: true },
-        SmState { name: "Migrated".to_string(), terminal: true },
-        SmState { name: "Archived".to_string(), terminal: false },
+        SmState {
+            name: "Live".to_string(),
+            terminal: false,
+        },
+        SmState {
+            name: "Sealed".to_string(),
+            terminal: false,
+        },
+        SmState {
+            name: "Destroyed".to_string(),
+            terminal: true,
+        },
+        SmState {
+            name: "Migrated".to_string(),
+            terminal: true,
+        },
+        SmState {
+            name: "Archived".to_string(),
+            terminal: false,
+        },
     ];
     let transitions = vec![
-        SmTransition { from: "Live".to_string(), to: "Sealed".to_string(), verb: "Seal".to_string() },
-        SmTransition { from: "Sealed".to_string(), to: "Live".to_string(), verb: "Unseal".to_string() },
-        SmTransition { from: "Live".to_string(), to: "Destroyed".to_string(), verb: "Destroy".to_string() },
-        SmTransition { from: "Live".to_string(), to: "Migrated".to_string(), verb: "Migrate".to_string() },
-        SmTransition { from: "Live".to_string(), to: "Archived".to_string(), verb: "Archive".to_string() },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Sealed".to_string(),
+            verb: "Seal".to_string(),
+        },
+        SmTransition {
+            from: "Sealed".to_string(),
+            to: "Live".to_string(),
+            verb: "Unseal".to_string(),
+        },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Destroyed".to_string(),
+            verb: "Destroy".to_string(),
+        },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Migrated".to_string(),
+            verb: "Migrate".to_string(),
+        },
+        SmTransition {
+            from: "Live".to_string(),
+            to: "Archived".to_string(),
+            verb: "Archive".to_string(),
+        },
     ];
     // The current state's NAME plus its payload detail — the deep view's lift
     // over the basic L1 lifecycle (which carries only the bare state name).
     let current = format!("{} {}", lifecycle_name(lc), lifecycle_detail(lc));
-    StateMachineView { states, transitions, current: current.trim().to_string() }
+    StateMachineView {
+        states,
+        transitions,
+        current: current.trim().to_string(),
+    }
 }
 
 /// The bare canonical name of a lifecycle state (matches the SM state names).
@@ -365,23 +415,39 @@ fn lifecycle_name(lc: &CellLifecycle) -> &'static str {
 fn lifecycle_detail(lc: &CellLifecycle) -> String {
     match lc {
         CellLifecycle::Live => String::new(),
-        CellLifecycle::Sealed { reason_hash, sealed_at } => {
-            format!("· sealed at h{sealed_at} · reason {}", reflect::short_hex(reason_hash))
+        CellLifecycle::Sealed {
+            reason_hash,
+            sealed_at,
+        } => {
+            format!(
+                "· sealed at h{sealed_at} · reason {}",
+                reflect::short_hex(reason_hash)
+            )
         }
-        CellLifecycle::Destroyed { death_certificate_hash, destroyed_at } => {
+        CellLifecycle::Destroyed {
+            death_certificate_hash,
+            destroyed_at,
+        } => {
             format!(
                 "· destroyed at h{destroyed_at} · cert {}",
                 reflect::short_hex(death_certificate_hash)
             )
         }
-        CellLifecycle::Migrated { to, attestation, migrated_at } => {
+        CellLifecycle::Migrated {
+            to,
+            attestation,
+            migrated_at,
+        } => {
             format!(
                 "· migrated at h{migrated_at} → {} · attest {}",
                 reflect::short_hex(to.as_bytes()),
                 reflect::short_hex(attestation)
             )
         }
-        CellLifecycle::Archived { checkpoint_hash, archived_through } => {
+        CellLifecycle::Archived {
+            checkpoint_hash,
+            archived_through,
+        } => {
             format!(
                 "· archived through h{archived_through} · checkpoint {}",
                 reflect::short_hex(checkpoint_hash)
@@ -454,7 +520,10 @@ fn field_cartography(id: &CellId, cell: &Cell) -> Inspectable {
     fields.push(Field::hash("system_roots_digest", st.system_roots_digest()));
     fields.push(Field::hash("swiss_table_root", st.swiss_table_root));
     fields.push(Field::hash("refcount_table_root", st.refcount_table_root));
-    fields.push(Field::count("fields_map_entries", st.fields_map.len() as u64));
+    fields.push(Field::count(
+        "fields_map_entries",
+        st.fields_map.len() as u64,
+    ));
     fields.push(Field::count("heap_map_entries", st.heap_map.len() as u64));
 
     // ---- every one of the 16 fixed slots with its visibility + commitment ----
@@ -479,7 +548,10 @@ fn field_cartography(id: &CellId, cell: &Cell) -> Inspectable {
                 if h == [0u8; 32] {
                     format!("[{vis_name}] hidden (commitment stale — re-commit needed)")
                 } else {
-                    format!("[{vis_name}] hidden · commitment {}", reflect::short_hex(&h))
+                    format!(
+                        "[{vis_name}] hidden · commitment {}",
+                        reflect::short_hex(&h)
+                    )
                 }
             }
             None => format!("[{vis_name}] (out of range)"),
@@ -492,7 +564,10 @@ fn field_cartography(id: &CellId, cell: &Cell) -> Inspectable {
 
     Inspectable {
         kind: ObjectKind::Cell,
-        title: format!("Field Cartography · Cell {}", reflect::short_hex(id.as_bytes())),
+        title: format!(
+            "Field Cartography · Cell {}",
+            reflect::short_hex(id.as_bytes())
+        ),
         subtitle: format!(
             "16 slots · {} ext-field(s) · {} heap entr{} · {} mode",
             st.fields_map.len(),
@@ -617,11 +692,29 @@ mod tests {
         let ctx = PresentCtx::new(&w, treasury);
         let set = deep.present(&ctx);
 
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::MerkleTree(_))), "heap MerkleTree");
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::Lattice(_))), "permissions Lattice");
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::StateMachine(_))), "lifecycle SM");
-        assert!(set.iter().any(|p| p.label == "Field Cartography"), "field cartography");
-        assert!(set.iter().any(|p| p.kind == PresentationKind::Invariant), "commitment invariant");
+        assert!(
+            set.iter()
+                .any(|p| matches!(p.body, PresentationBody::MerkleTree(_))),
+            "heap MerkleTree"
+        );
+        assert!(
+            set.iter()
+                .any(|p| matches!(p.body, PresentationBody::Lattice(_))),
+            "permissions Lattice"
+        );
+        assert!(
+            set.iter()
+                .any(|p| matches!(p.body, PresentationBody::StateMachine(_))),
+            "lifecycle SM"
+        );
+        assert!(
+            set.iter().any(|p| p.label == "Field Cartography"),
+            "field cartography"
+        );
+        assert!(
+            set.iter().any(|p| p.kind == PresentationKind::Invariant),
+            "commitment invariant"
+        );
     }
 
     // ── the heap MerkleTree reflects real heap_map entries + root ────────────
@@ -637,7 +730,8 @@ mod tests {
         // Empty heap: no leaves, the fixed empty-heap root.
         {
             let deep = DeepCell::from_world(&w, empty_id).unwrap();
-            let mt = match &deep.present(&PresentCtx::new(&w, empty_id))
+            let mt = match &deep
+                .present(&PresentCtx::new(&w, empty_id))
                 .into_iter()
                 .find(|p| matches!(p.body, PresentationBody::MerkleTree(_)))
                 .unwrap()
@@ -654,13 +748,18 @@ mod tests {
         // compute_heap_root path on the live CellState), then genesis-install it
         // so the live ledger carries the populated heap.
         let mut cell = crate::world::make_open_cell(0x66, 0);
-        let fe = |b: u8| { let mut f = [0u8; 32]; f[31] = b; f };
+        let fe = |b: u8| {
+            let mut f = [0u8; 32];
+            f[31] = b;
+            f
+        };
         assert!(cell.state.set_heap(1, 2, fe(42)));
         assert!(cell.state.set_heap(1, 3, fe(7)));
         let id = w.genesis_install(cell);
 
         let deep = DeepCell::from_world(&w, id).unwrap();
-        let mt = match &deep.present(&PresentCtx::new(&w, id))
+        let mt = match &deep
+            .present(&PresentCtx::new(&w, id))
             .into_iter()
             .find(|p| matches!(p.body, PresentationBody::MerkleTree(_)))
             .unwrap()
@@ -671,7 +770,11 @@ mod tests {
         };
         assert_eq!(mt.leaves.len(), 2, "two heap entries appear as leaves");
         assert!(mt.leaves.iter().any(|l| l.contains("coll 1 · key 2")));
-        assert_ne!(mt.root, empty_heap_root(), "a populated heap moves the root");
+        assert_ne!(
+            mt.root,
+            empty_heap_root(),
+            "a populated heap moves the root"
+        );
         // The view's root is exactly the live committed heap_root, and re-folding
         // the live map agrees (no STALE annotation).
         let live_root = w.ledger().get(&id).unwrap().state.heap_root;
@@ -685,7 +788,11 @@ mod tests {
     fn permissions_lattice_reads_the_real_permissions() {
         // A frozen cell: every gate is Impossible (the strongest rung).
         let lat = permissions_lattice(&Permissions::frozen());
-        assert_eq!(lat.current, Some(3), "frozen cells sit at the Impossible rung");
+        assert_eq!(
+            lat.current,
+            Some(3),
+            "frozen cells sit at the Impossible rung"
+        );
         // The eight actions land on the Impossible node.
         let impossible = &lat.nodes[3];
         assert!(impossible.contains("send=Impossible"));
@@ -694,8 +801,15 @@ mod tests {
         // A default-user cell: receive/access are None (weakest), the rest
         // Signature. The current (strongest) is the Signature/Proof/Custom rung.
         let lat = permissions_lattice(&Permissions::default_user());
-        assert_eq!(lat.current, Some(2), "the strongest default-user gate is Signature");
-        assert!(lat.nodes[0].contains("receive=None"), "receive is None on the weakest rung");
+        assert_eq!(
+            lat.current,
+            Some(2),
+            "the strongest default-user gate is Signature"
+        );
+        assert!(
+            lat.nodes[0].contains("receive=None"),
+            "receive is None on the weakest rung"
+        );
         assert!(lat.nodes[2].contains("send=Signature"));
         // The covering relations chain the four rungs.
         assert_eq!(lat.edges, vec![(0, 1), (1, 2), (2, 3)]);
@@ -708,7 +822,8 @@ mod tests {
         let (w, treasury, _sink) = two_cell_world();
         let deep = DeepCell::from_world(&w, treasury).unwrap();
         let ctx = PresentCtx::new(&w, treasury);
-        let sm = match &deep.present(&ctx)
+        let sm = match &deep
+            .present(&ctx)
             .into_iter()
             .find(|p| matches!(p.body, PresentationBody::StateMachine(_)))
             .unwrap()
@@ -718,7 +833,10 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(sm.current, "Live", "a fresh cell is Live (no payload)");
-        assert!(sm.states.iter().any(|s| s.name == "Destroyed" && s.terminal));
+        assert!(sm
+            .states
+            .iter()
+            .any(|s| s.name == "Destroyed" && s.terminal));
         assert!(sm.transitions.iter().any(|t| t.verb == "Seal"));
     }
 
@@ -731,7 +849,10 @@ mod tests {
             sealed_at: 99,
         });
         assert!(sm.current.starts_with("Sealed"));
-        assert!(sm.current.contains("sealed at h99"), "the seal height is surfaced");
+        assert!(
+            sm.current.contains("sealed at h99"),
+            "the seal height is surfaced"
+        );
     }
 
     // ── every presentation reflects the LIVE ledger (after a real turn) ──────
@@ -768,10 +889,15 @@ mod tests {
         let set = deep.present(&ctx);
 
         // RawFields balance moved to 750.
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => assert!(
-                i.fields.iter().any(|f| matches!(f.value, FieldValue::Balance(750))),
+                i.fields
+                    .iter()
+                    .any(|f| matches!(f.value, FieldValue::Balance(750))),
                 "RawFields balance reflects the committed transfer"
             ),
             _ => unreachable!(),
@@ -781,7 +907,11 @@ mod tests {
         let cart = set.iter().find(|p| p.label == "Field Cartography").unwrap();
         match &cart.body {
             PresentationBody::Fields(i) => {
-                let f5 = i.fields.iter().find(|f| f.key == "field[5]").expect("slot 5 surfaced");
+                let f5 = i
+                    .fields
+                    .iter()
+                    .find(|f| f.key == "field[5]")
+                    .expect("slot 5 surfaced");
                 match &f5.value {
                     FieldValue::Text(t) => assert!(
                         t.contains("public") && !t.contains("zero"),
@@ -795,16 +925,29 @@ mod tests {
 
         // The commitment moved (the transfer + set_field both bind into it).
         let commit_after = compute_canonical_state_commitment(w.ledger().get(&treasury).unwrap());
-        assert_ne!(commit_before, commit_after, "real turns move the canonical commitment");
+        assert_ne!(
+            commit_before, commit_after,
+            "real turns move the canonical commitment"
+        );
 
         // The SINK's deep view reflects its committed seal (the lifecycle SM).
         let sink_deep = DeepCell::from_world(&w, sink).unwrap();
         let sink_set = sink_deep.present(&PresentCtx::new(&w, sink));
-        let sm = sink_set.iter().find(|p| matches!(p.body, PresentationBody::StateMachine(_))).unwrap();
+        let sm = sink_set
+            .iter()
+            .find(|p| matches!(p.body, PresentationBody::StateMachine(_)))
+            .unwrap();
         match &sm.body {
             PresentationBody::StateMachine(s) => {
-                assert!(s.current.starts_with("Sealed"), "the sink committed a real seal: {}", s.current);
-                assert!(s.current.contains("sealed at"), "the seal payload is surfaced");
+                assert!(
+                    s.current.starts_with("Sealed"),
+                    "the sink committed a real seal: {}",
+                    s.current
+                );
+                assert!(
+                    s.current.contains("sealed at"),
+                    "the seal payload is surfaced"
+                );
             }
             _ => unreachable!(),
         }
@@ -815,14 +958,21 @@ mod tests {
         // A seal then unseal round-trips the live lifecycle readout.
         let mut w = World::new();
         let id = w.genesis_cell(0x44, 100);
-        assert!(w.commit_turn(w.turn(id, vec![seal(id, "pause")])).is_committed());
+        assert!(w
+            .commit_turn(w.turn(id, vec![seal(id, "pause")]))
+            .is_committed());
         assert!(w.commit_turn(w.turn(id, vec![unseal(id)])).is_committed());
 
         let deep = DeepCell::from_world(&w, id).unwrap();
         let set = deep.present(&PresentCtx::new(&w, id));
-        let sm = set.iter().find(|p| matches!(p.body, PresentationBody::StateMachine(_))).unwrap();
+        let sm = set
+            .iter()
+            .find(|p| matches!(p.body, PresentationBody::StateMachine(_)))
+            .unwrap();
         match &sm.body {
-            PresentationBody::StateMachine(s) => assert_eq!(s.current, "Live", "unseal returns to Live"),
+            PresentationBody::StateMachine(s) => {
+                assert_eq!(s.current, "Live", "unseal returns to Live")
+            }
             _ => unreachable!(),
         }
     }
@@ -834,7 +984,10 @@ mod tests {
         let (w, treasury, _sink) = two_cell_world();
         let deep = DeepCell::from_world(&w, treasury).unwrap();
         let set = deep.present(&PresentCtx::new(&w, treasury));
-        let inv = set.iter().find(|p| p.kind == PresentationKind::Invariant).unwrap();
+        let inv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Invariant)
+            .unwrap();
         match &inv.body {
             PresentationBody::Prose(p) => {
                 assert!(p.contains("the 8 permission gates"));

@@ -160,12 +160,18 @@ impl SseParser {
     /// Close the current record: parse its accumulated `data` as a receipt event.
     fn dispatch(&mut self) -> Option<SseRecord> {
         let data = std::mem::take(&mut self.cur_data);
-        let id = self.cur_id.take().and_then(|s| s.trim().parse::<u64>().ok());
+        let id = self
+            .cur_id
+            .take()
+            .and_then(|s| s.trim().parse::<u64>().ok());
         // The node tags receipt records `event: receipt`; tolerate a missing
         // event field (default-named records still carry receipt JSON).
         let event_name = self.cur_event.take();
         self.in_record = false;
-        let is_receipt = event_name.as_deref().map(|e| e == "receipt").unwrap_or(true);
+        let is_receipt = event_name
+            .as_deref()
+            .map(|e| e == "receipt")
+            .unwrap_or(true);
         if !is_receipt || data.is_empty() {
             return None;
         }
@@ -249,7 +255,10 @@ impl LiveReflection {
         }
         Inspectable {
             kind: ObjectKind::Receipt,
-            title: format!("Receipt {}", crate::reflect::short_hex(&hex32(&ev.receipt_hash))),
+            title: format!(
+                "Receipt {}",
+                crate::reflect::short_hex(&hex32(&ev.receipt_hash))
+            ),
             subtitle: format!(
                 "live · #{} · h{} · {}",
                 ev.chain_index, ev.height, ev.finality
@@ -414,10 +423,7 @@ mod tests {
     #[test]
     fn sse_parser_decodes_a_single_record() {
         let mut p = SseParser::new();
-        let frame = format!(
-            "event: receipt\nid: 7\ndata: {}\n\n",
-            receipt_json(7, "ab")
-        );
+        let frame = format!("event: receipt\nid: 7\ndata: {}\n\n", receipt_json(7, "ab"));
         let recs = p.push(frame.as_bytes());
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].id, Some(7));
@@ -543,11 +549,17 @@ mod tests {
         let insp = LiveReflection::reflect_cell_entry(&entry);
         assert_eq!(insp.kind, ObjectKind::Cell);
         assert!(insp.fields.iter().any(|f| f.key == "balance"));
-        assert!(insp.fields.iter().any(|f| matches!(f.value, FieldValue::Id(_))));
+        assert!(insp
+            .fields
+            .iter()
+            .any(|f| matches!(f.value, FieldValue::Id(_))));
 
         let receipt = ev(9);
         let rinsp = LiveReflection::reflect_receipt_event(&receipt);
         assert_eq!(rinsp.kind, ObjectKind::Receipt);
-        assert!(rinsp.fields.iter().any(|f| matches!(f.value, FieldValue::Hash(_))));
+        assert!(rinsp
+            .fields
+            .iter()
+            .any(|f| matches!(f.value, FieldValue::Hash(_))));
     }
 }

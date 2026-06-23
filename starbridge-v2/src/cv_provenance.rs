@@ -63,7 +63,7 @@ use std::process::Command;
 use dregg_cell::CellId;
 
 use crate::presentable::{
-    Presentable, PresentCtx, Presentation, PresentationBody, PresentationKind, TimelineEvent,
+    PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind, TimelineEvent,
     TimelineView,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
@@ -249,7 +249,12 @@ impl CvBlame {
             "cv blame produced no provenance for this path".to_string()
         };
 
-        CvBlame { path: path.to_string(), cv_available: true, commits, note }
+        CvBlame {
+            path: path.to_string(),
+            cv_available: true,
+            commits,
+            note,
+        }
     }
 
     /// Every agent session correlated across all commits, best-first (the flat
@@ -286,7 +291,12 @@ fn parse_commit_line(s: &str) -> CvCommit {
         Some((d, sum)) => (d.to_string(), sum.trim_start().to_string()),
         None => (rest, String::new()),
     };
-    CvCommit { short, date, summary, sessions: Vec::new() }
+    CvCommit {
+        short,
+        date,
+        summary,
+        sessions: Vec::new(),
+    }
 }
 
 /// Parse a session match row:
@@ -394,14 +404,22 @@ impl CvProvenance {
     pub fn dial(cell: CellId, source_path: impl Into<String>) -> Self {
         let source_path = source_path.into();
         let blame = CvBlame::dial(&source_path);
-        CvProvenance { cell, source_path, blame }
+        CvProvenance {
+            cell,
+            source_path,
+            blame,
+        }
     }
 
     /// Build from an already-parsed [`CvBlame`] (the pure path — tests and any
     /// caller that dialed cv once and reuses the result).
     pub fn from_blame(cell: CellId, blame: CvBlame) -> Self {
         let source_path = blame.path.clone();
-        CvProvenance { cell, source_path, blame }
+        CvProvenance {
+            cell,
+            source_path,
+            blame,
+        }
     }
 
     /// The provenance [`TimelineView`]: one event per matched commit→session pair
@@ -442,7 +460,10 @@ impl CvProvenance {
     fn source_prose(&self) -> String {
         let mut s = String::new();
         s.push_str("WHY DOES THIS CELL EXIST? — cv-bridge (ClusterVision provenance)\n\n");
-        s.push_str(&format!("cell      {}\n", reflect::short_hex(self.cell.as_bytes())));
+        s.push_str(&format!(
+            "cell      {}\n",
+            reflect::short_hex(self.cell.as_bytes())
+        ));
         s.push_str(&format!("backed by {}\n", self.source_path));
         s.push_str(&format!(
             "dialed    `cv blame {}`  (subprocess to the cv binary — the read/query face)\n\n",
@@ -494,7 +515,10 @@ impl CvProvenance {
         fields.push(Field::text("status", self.blame.note.clone()));
         Inspectable {
             kind: ObjectKind::Cell,
-            title: format!("Provenance · Cell {}", reflect::short_hex(self.cell.as_bytes())),
+            title: format!(
+                "Provenance · Cell {}",
+                reflect::short_hex(self.cell.as_bytes())
+            ),
             subtitle: format!("cv blame {}", self.source_path),
             fields,
         }
@@ -589,7 +613,11 @@ provenance: 1 of 2 commit(s) matched an agent session
         assert_eq!(c0.short, "0e352e428");
         assert_eq!(c0.date, "2026-06-19");
         assert!(c0.summary.contains("KERNEL BRIDGE"));
-        assert_eq!(c0.sessions.len(), 2, "two correlated sessions under the first commit");
+        assert_eq!(
+            c0.sessions.len(),
+            2,
+            "two correlated sessions under the first commit"
+        );
 
         let s0 = &c0.sessions[0];
         assert_eq!(s0.harness, "claude");
@@ -634,21 +662,45 @@ provenance: 1 of 2 commit(s) matched an agent session
             .expect("the Provenance lens is present");
         match &prov.body {
             PresentationBody::Timeline(t) => {
-                assert_eq!(t.events.len(), 2, "one event per matched commit→session pair");
-                let blob = t.events.iter().map(|e| e.label.clone()).collect::<Vec<_>>().join("\n");
-                assert!(blob.contains("claude a4cfe7cb"), "names the agent + session");
+                assert_eq!(
+                    t.events.len(),
+                    2,
+                    "one event per matched commit→session pair"
+                );
+                let blob = t
+                    .events
+                    .iter()
+                    .map(|e| e.label.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    blob.contains("claude a4cfe7cb"),
+                    "names the agent + session"
+                );
                 assert!(blob.contains("0e352e428"), "names the commit it wrote");
-                assert!(blob.contains("cap-reshape linchpin"), "carries the reasoning excerpt");
+                assert!(
+                    blob.contains("cap-reshape linchpin"),
+                    "carries the reasoning excerpt"
+                );
             }
             other => panic!("Provenance must carry a Timeline, got {other:?}"),
         }
 
         // The Source prose names the dial + the next (witnessed-promotion) rung.
-        let src = set.iter().find(|p| p.kind == PresentationKind::Source).unwrap();
+        let src = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Source)
+            .unwrap();
         match &src.body {
             PresentationBody::Prose(p) => {
-                assert!(p.contains("cv blame circuit/src/lib.rs"), "shows how cv was dialed");
-                assert!(p.contains("witnessed promotion"), "names the next milestone");
+                assert!(
+                    p.contains("cv blame circuit/src/lib.rs"),
+                    "shows how cv was dialed"
+                );
+                assert!(
+                    p.contains("witnessed promotion"),
+                    "names the next milestone"
+                );
             }
             _ => unreachable!(),
         }
@@ -658,27 +710,43 @@ provenance: 1 of 2 commit(s) matched an agent session
     fn degrades_honestly_when_cv_is_absent_never_a_fake() {
         let (w, cell) = ctx_world();
         // The cv-absent path (as if `cv` were not on PATH).
-        let view = CvProvenance::from_blame(cell, CvBlame::unavailable("starbridge-v2/src/world.rs"));
+        let view =
+            CvProvenance::from_blame(cell, CvBlame::unavailable("starbridge-v2/src/world.rs"));
         let ctx = PresentCtx::new(&w, cell);
         let set = view.present(&ctx);
 
         // The timeline is EMPTY (no fabricated events).
-        let prov = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let prov = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &prov.body {
             PresentationBody::Timeline(t) => assert!(t.events.is_empty(), "no fake provenance"),
             _ => unreachable!(),
         }
         // The Source prose says so honestly.
-        let src = set.iter().find(|p| p.kind == PresentationKind::Source).unwrap();
+        let src = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Source)
+            .unwrap();
         match &src.body {
             PresentationBody::Prose(p) => {
-                assert!(p.contains("cv not available on PATH"), "honest cv-absent line");
-                assert!(p.to_lowercase().contains("never a fabricated"), "states it is not faked");
+                assert!(
+                    p.contains("cv not available on PATH"),
+                    "honest cv-absent line"
+                );
+                assert!(
+                    p.to_lowercase().contains("never a fabricated"),
+                    "states it is not faked"
+                );
             }
             _ => unreachable!(),
         }
         // The RawFields floor records cv_available = false.
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         if let PresentationBody::Fields(i) = &raw.body {
             assert!(i.fields.iter().any(|f| f.key == "cv_available"));
         }
@@ -703,11 +771,20 @@ provenance: 0 of 1 commit(s) matched an agent session
 
         let view = CvProvenance::from_blame(cell, blame);
         let set = view.present(&PresentCtx::new(&w, cell));
-        let src = set.iter().find(|p| p.kind == PresentationKind::Source).unwrap();
+        let src = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Source)
+            .unwrap();
         match &src.body {
             PresentationBody::Prose(p) => {
-                assert!(p.contains("correlated no agent session"), "honest empty readout");
-                assert!(!p.contains("witnessed promotion"), "no next-rung pitch when there's no answer");
+                assert!(
+                    p.contains("correlated no agent session"),
+                    "honest empty readout"
+                );
+                assert!(
+                    !p.contains("witnessed promotion"),
+                    "no next-rung pitch when there's no answer"
+                );
             }
             _ => unreachable!(),
         }

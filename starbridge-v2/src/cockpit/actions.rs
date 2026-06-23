@@ -25,7 +25,10 @@ impl Cockpit {
                 .get(&service)
                 .map(|c| c.capabilities.len() as u32)
                 .unwrap_or(0);
-            let turn = w.turn(service, vec![world::grant_capability(service, service, user, slot)]);
+            let turn = w.turn(
+                service,
+                vec![world::grant_capability(service, service, user, slot)],
+            );
             w.commit_turn(turn)
         };
         self.note_outcome(outcome);
@@ -89,7 +92,10 @@ impl Cockpit {
         let outcome = {
             let mut w = self.world.borrow_mut();
             // treasury holds no cap to user → no-amplification rejects this.
-            let turn = w.turn(treasury, vec![world::grant_capability(treasury, treasury, user, 0)]);
+            let turn = w.turn(
+                treasury,
+                vec![world::grant_capability(treasury, treasury, user, 0)],
+            );
             w.commit_turn(turn)
         };
         self.note_outcome(outcome);
@@ -165,7 +171,10 @@ impl Cockpit {
         if cells.is_empty() {
             return;
         }
-        let cur = cells.iter().position(|c| *c == self.sim_draft.agent).unwrap_or(0);
+        let cur = cells
+            .iter()
+            .position(|c| *c == self.sim_draft.agent)
+            .unwrap_or(0);
         let next = cells[(cur + 1) % cells.len()];
         self.sim_draft = starbridge_v2::simulate::IntentDraft::new(next);
         self.sim_outcome = None;
@@ -197,7 +206,10 @@ impl Cockpit {
     pub(crate) fn sim_effect_palette(&self) -> Vec<starbridge_v2::simulate::EffectKind> {
         use starbridge_v2::simulate::EffectKind as E;
         let cells = &self.cells;
-        let target = cells.get(self.sim_target_idx).copied().unwrap_or(self.sim_draft.agent);
+        let target = cells
+            .get(self.sim_target_idx)
+            .copied()
+            .unwrap_or(self.sim_draft.agent);
         // A "peer" distinct from the target where possible (for transfer/grant dests).
         let peer = cells
             .iter()
@@ -205,16 +217,30 @@ impl Cockpit {
             .copied()
             .unwrap_or(target);
         vec![
-            E::Transfer { to: peer, amount: 250 },
-            E::GrantCapability { to: peer, target, slot: 0 },
+            E::Transfer {
+                to: peer,
+                amount: 250,
+            },
+            E::GrantCapability {
+                to: peer,
+                target,
+                slot: 0,
+            },
             E::RevokeCapability { slot: 0 },
-            E::EmitEvent { topic: "what-if".into() },
+            E::EmitEvent {
+                topic: "what-if".into(),
+            },
             E::IncrementNonce,
             E::CreateCell { seed: 0x9A },
-            E::SetField { index: 0, value: [7u8; 32] },
+            E::SetField {
+                index: 0,
+                value: [7u8; 32],
+            },
             E::SetPermissionsOpen,
             E::MakeSovereign,
-            E::Seal { reason: "what-if seal".into() },
+            E::Seal {
+                reason: "what-if seal".into(),
+            },
             E::Unseal,
             E::Destroy,
             E::Burn { amount: 1_000 },
@@ -307,7 +333,10 @@ impl Cockpit {
             // not run, so the prediction is neither confirmed nor refused — it waits
             // on resume. Surface the halt honestly rather than claim an outcome.
             CommitOutcome::Queued { agent } => {
-                format!("QUEUED — world suspended; the staged turn from {} commits on resume", world::short(agent))
+                format!(
+                    "QUEUED — world suspended; the staged turn from {} commits on resume",
+                    world::short(agent)
+                )
             }
         });
         // The committed turn changed the image; also drop the stale prediction (the
@@ -334,7 +363,9 @@ impl Cockpit {
 
     pub(crate) fn run_clerk_attenuate(&mut self, cx: &mut Context<Self>) {
         // Confine alice's dns root to read-only with a far-future expiry.
-        let out = self.clerk.attenuate_latest("alice", "dns", "r", Some(4_000_000_000));
+        let out = self
+            .clerk
+            .attenuate_latest("alice", "dns", "r", Some(4_000_000_000));
         self.clerk_outcome = Some(out);
         cx.notify();
     }
@@ -406,10 +437,17 @@ impl Cockpit {
     pub(crate) fn buffer_readonly_write_demo(&mut self, cx: &mut Context<Self>) {
         let cap = self.editor_buffer_cap.clone();
         // Narrow to a read-only mirror through the real executor (None → Signature).
-        let mirror = match self.shell.share(&cap, /*peer app*/ 0x4E0, dregg_cell::AuthRequired::Signature) {
+        let mirror = match self.shell.share(
+            &cap,
+            /*peer app*/ 0x4E0,
+            dregg_cell::AuthRequired::Signature,
+        ) {
             Ok(m) => m,
             Err(e) => {
-                self.last_outcome = Some(format!("buffer: could not make a read-only mirror — {}", shell_err(&e)));
+                self.last_outcome = Some(format!(
+                    "buffer: could not make a read-only mirror — {}",
+                    shell_err(&e)
+                ));
                 cx.notify();
                 return;
             }
@@ -427,8 +465,13 @@ impl Cockpit {
             ro_buffer.commit(&mut w, &mirror)
         };
         self.last_outcome = Some(match result {
-            Ok(_) => "buffer: read-only write UNEXPECTEDLY committed (should have refused!)".to_string(),
-            Err(e) => format!("buffer: ⚠ read-only write REFUSED — {} (no-amplification at the editor)", e.explain()),
+            Ok(_) => {
+                "buffer: read-only write UNEXPECTEDLY committed (should have refused!)".to_string()
+            }
+            Err(e) => format!(
+                "buffer: ⚠ read-only write REFUSED — {} (no-amplification at the editor)",
+                e.explain()
+            ),
         });
         self.tab = Tab::Buffer;
         cx.notify();
@@ -446,10 +489,19 @@ impl Cockpit {
         let [_treasury, _service, user] = self.anchors;
         let line = {
             let mut w = self.world.borrow_mut();
-            self.terminal.run(&mut w, Command::Transfer { target: user, amount: 100 })
+            self.terminal.run(
+                &mut w,
+                Command::Transfer {
+                    target: user,
+                    amount: 100,
+                },
+            )
         };
         self.last_outcome = Some(match line {
-            Ok(l) => format!("terminal: command COMMITTED — {} (receipt is the output)", l.result),
+            Ok(l) => format!(
+                "terminal: command COMMITTED — {} (receipt is the output)",
+                l.result
+            ),
             Err(e) => format!("terminal: command REFUSED — {}", e.explain()),
         });
         self.refresh_cells();
@@ -464,11 +516,23 @@ impl Cockpit {
         let [treasury, _service, _user] = self.anchors;
         let line = {
             let mut w = self.world.borrow_mut();
-            self.terminal.run(&mut w, Command::Transfer { target: treasury, amount: 1 })
+            self.terminal.run(
+                &mut w,
+                Command::Transfer {
+                    target: treasury,
+                    amount: 1,
+                },
+            )
         };
         self.last_outcome = Some(match line {
-            Ok(_) => "terminal: out-of-mandate command UNEXPECTEDLY committed (should have refused!)".to_string(),
-            Err(e) => format!("terminal: ⚠ command REFUSED — {} (cap-gate, BEFORE any turn)", e.explain()),
+            Ok(_) => {
+                "terminal: out-of-mandate command UNEXPECTEDLY committed (should have refused!)"
+                    .to_string()
+            }
+            Err(e) => format!(
+                "terminal: ⚠ command REFUSED — {} (cap-gate, BEFORE any turn)",
+                e.explain()
+            ),
         });
         self.tab = Tab::Terminal;
         cx.notify();
@@ -484,7 +548,11 @@ impl Cockpit {
         let [_treasury, coord, worker_a] = self.anchors; // service=coord, user=worker-a
         let outcome = {
             let mut w = self.world.borrow_mut();
-            self.swarm.run(&mut w, coord, vec![world::emit_event(worker_a, "task/go", vec![])])
+            self.swarm.run(
+                &mut w,
+                coord,
+                vec![world::emit_event(worker_a, "task/go", vec![])],
+            )
         };
         self.last_outcome = Some(match &outcome {
             Ok(ao) => format!(
@@ -638,5 +706,4 @@ impl Cockpit {
         self.tab = Tab::Swarm;
         cx.notify();
     }
-
 }

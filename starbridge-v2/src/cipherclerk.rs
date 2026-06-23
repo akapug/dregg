@@ -259,15 +259,34 @@ impl Cipherclerk {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClerkOutcome {
     /// A root macaroon was minted on `holder`'s real clerk for `service`.
-    Minted { holder: String, service: String, token_id: String },
+    Minted {
+        holder: String,
+        service: String,
+        token_id: String,
+    },
     /// A held token was attenuated (narrowed) — the new token carries more
     /// caveats than its parent (the narrowing is real, bound in the HMAC chain).
-    Attenuated { holder: String, parent_id: String, token_id: String, caveats_added: usize },
+    Attenuated {
+        holder: String,
+        parent_id: String,
+        token_id: String,
+        caveats_added: usize,
+    },
     /// A recipient-targeted signed delegation envelope was produced + filed.
-    Delegated { from: String, to: String, service: String, envelope: String },
+    Delegated {
+        from: String,
+        to: String,
+        service: String,
+        envelope: String,
+    },
     /// A token was DISCHARGED against an auth request — the real
     /// `AgentCipherclerk::verify_token` verdict (HMAC chain + caveat evaluation).
-    Discharged { holder: String, token_id: String, request: String, authorized: bool },
+    Discharged {
+        holder: String,
+        token_id: String,
+        request: String,
+        authorized: bool,
+    },
     /// The action could not be performed (e.g. no such identity / token; the
     /// real clerk rejected an empty attenuation). Carries the reason.
     Failed { reason: String },
@@ -332,7 +351,9 @@ impl Cipherclerk {
     /// the outcome (and the token now lives in the holder's REAL clerk wallet).
     pub fn mint(&mut self, holder: &str, service: &str) -> ClerkOutcome {
         let Some(id) = self.identity_mut(holder) else {
-            return ClerkOutcome::Failed { reason: format!("no identity '{holder}'") };
+            return ClerkOutcome::Failed {
+                reason: format!("no identity '{holder}'"),
+            };
         };
         // A deterministic per-(identity,service) root key — derived, not random,
         // so the demo is reproducible. (A real deployment supplies the root key
@@ -360,7 +381,9 @@ impl Cipherclerk {
     ) -> ClerkOutcome {
         let restriction = confine(service, mask, not_after);
         let Some(id) = self.identity_mut(holder) else {
-            return ClerkOutcome::Failed { reason: format!("no identity '{holder}'") };
+            return ClerkOutcome::Failed {
+                reason: format!("no identity '{holder}'"),
+            };
         };
         // Find a root token (one that can mint) for this service to attenuate.
         let Some(parent) = id
@@ -372,19 +395,27 @@ impl Cipherclerk {
             .cloned()
         else {
             return ClerkOutcome::Failed {
-                reason: format!("no root token for service '{service}' to attenuate (mint one first)"),
+                reason: format!(
+                    "no root token for service '{service}' to attenuate (mint one first)"
+                ),
             };
         };
         // Count the parent's caveats (decode against its root key) so we can
         // report the genuine narrowing delta.
-        let parent_caveats = parent.decode().map(|d| d.inner().caveats.len()).unwrap_or(0);
+        let parent_caveats = parent
+            .decode()
+            .map(|d| d.inner().caveats.len())
+            .unwrap_or(0);
         match id.clerk.attenuate(&parent, &restriction) {
             Ok(att) => {
                 // The attenuated token's caveats (decode against the SAME root
                 // key the parent used — attenuated tokens hold no root key).
-                let att_caveats = MacaroonToken::from_encoded(att.encoded(), derive_root_key(&id.public_key().0, service))
-                    .map(|d| d.inner().caveats.len())
-                    .unwrap_or(parent_caveats);
+                let att_caveats = MacaroonToken::from_encoded(
+                    att.encoded(),
+                    derive_root_key(&id.public_key().0, service),
+                )
+                .map(|d| d.inner().caveats.len())
+                .unwrap_or(parent_caveats);
                 ClerkOutcome::Attenuated {
                     holder: holder.to_string(),
                     parent_id: parent.id().to_string(),
@@ -392,7 +423,9 @@ impl Cipherclerk {
                     caveats_added: att_caveats.saturating_sub(parent_caveats),
                 }
             }
-            Err(e) => ClerkOutcome::Failed { reason: format!("{e}") },
+            Err(e) => ClerkOutcome::Failed {
+                reason: format!("{e}"),
+            },
         }
     }
 
@@ -400,22 +433,20 @@ impl Cipherclerk {
     /// `to`, narrowing it to `mask`. Produces a REAL signed [`DelegatedToken`]
     /// envelope addressed to `to`'s public key and FILES it in the vault. This
     /// is the clerk's recipient-targeted capability handoff.
-    pub fn delegate_to(
-        &mut self,
-        from: &str,
-        to: &str,
-        service: &str,
-        mask: &str,
-    ) -> ClerkOutcome {
+    pub fn delegate_to(&mut self, from: &str, to: &str, service: &str, mask: &str) -> ClerkOutcome {
         // Resolve the recipient's real public key first (immutable borrow).
         let Some(recipient_pk) = self.identity(to).map(|i| i.public_key()) else {
-            return ClerkOutcome::Failed { reason: format!("no recipient identity '{to}'") };
+            return ClerkOutcome::Failed {
+                reason: format!("no recipient identity '{to}'"),
+            };
         };
         let restriction = confine(service, mask, None);
         // Produce the envelope on `from`'s clerk.
         let envelope = {
             let Some(id) = self.identity_mut(from) else {
-                return ClerkOutcome::Failed { reason: format!("no identity '{from}'") };
+                return ClerkOutcome::Failed {
+                    reason: format!("no identity '{from}'"),
+                };
             };
             let Some(parent) = id
                 .clerk
@@ -426,12 +457,18 @@ impl Cipherclerk {
                 .cloned()
             else {
                 return ClerkOutcome::Failed {
-                    reason: format!("no root token for service '{service}' to delegate (mint one first)"),
+                    reason: format!(
+                        "no root token for service '{service}' to delegate (mint one first)"
+                    ),
                 };
             };
             match id.clerk.delegate(&parent, &recipient_pk, &restriction) {
                 Ok(env) => env,
-                Err(e) => return ClerkOutcome::Failed { reason: format!("{e}") },
+                Err(e) => {
+                    return ClerkOutcome::Failed {
+                        reason: format!("{e}"),
+                    }
+                }
             }
         };
         let env_hash = crate::reflect::short_hex(&envelope.envelope_hash());
@@ -452,7 +489,9 @@ impl Cipherclerk {
     /// expired token is denied. This is the macaroon discharge, end to end.
     pub fn discharge(&self, holder: &str, service: &str, action: &str, now: i64) -> ClerkOutcome {
         let Some(id) = self.identity(holder) else {
-            return ClerkOutcome::Failed { reason: format!("no identity '{holder}'") };
+            return ClerkOutcome::Failed {
+                reason: format!("no identity '{holder}'"),
+            };
         };
         // Prefer the most-recently-minted/attenuated token for the service that
         // can be discharged (root tokens decode against their held root key).
@@ -623,7 +662,10 @@ pub fn reflect_token(tok: &HeldToken) -> Inspectable {
         Err(_) => {
             // Attenuated/delegated tokens hold no root key to decode against;
             // their narrowing is still bound in the encoded HMAC chain.
-            fields.push(Field::text("caveats", "(opaque without root key)".to_string()));
+            fields.push(Field::text(
+                "caveats",
+                "(opaque without root key)".to_string(),
+            ));
         }
     }
     Inspectable {
@@ -649,9 +691,7 @@ pub fn reflect_delegation(rec: &DelegationRecord) -> Inspectable {
         title: format!("Delegation “{}”", rec.label),
         subtitle: format!(
             "{} → {} · service {}",
-            rec.label,
-            rec.recipient,
-            env.service
+            rec.label, rec.recipient, env.service
         ),
         fields: vec![
             Field::text("label", rec.label.clone()),
@@ -678,7 +718,8 @@ pub fn render(clerk: &Cipherclerk) -> CipherclerkPanel {
         .flat_map(|id| id.clerk.tokens().iter())
         .map(reflect_token)
         .collect();
-    let delegations: Vec<Inspectable> = clerk.delegations().iter().map(reflect_delegation).collect();
+    let delegations: Vec<Inspectable> =
+        clerk.delegations().iter().map(reflect_delegation).collect();
     CipherclerkPanel {
         identities,
         tokens,
@@ -767,7 +808,10 @@ mod tests {
         let root = alice.clerk.mint_token(&root_key, "dns");
         assert!(root.can_mint(), "a freshly minted root token can mint");
         assert!(root.can_prove());
-        assert!(root.is_verified(), "locally minted tokens are HMAC-verified");
+        assert!(
+            root.is_verified(),
+            "locally minted tokens are HMAC-verified"
+        );
         let root_decoded = root.decode().expect("root decodes with its root key");
         let root_caveats = root_decoded.inner().caveats.len();
 
@@ -908,10 +952,7 @@ mod tests {
             .iter()
             .any(|f| f.key == "held_tokens"));
         // A token panel surfaces the real authority flags.
-        assert!(panel.tokens[0]
-            .fields
-            .iter()
-            .any(|f| f.key == "can_mint"));
+        assert!(panel.tokens[0].fields.iter().any(|f| f.key == "can_mint"));
         assert!(panel.tokens[0]
             .fields
             .iter()
@@ -932,7 +973,10 @@ mod tests {
         let before = clerk.identity("alice").unwrap().clerk.tokens().len();
 
         let out = clerk.mint("alice", "dns");
-        assert!(matches!(out, ClerkOutcome::Minted { .. }), "mint must succeed: {out:?}");
+        assert!(
+            matches!(out, ClerkOutcome::Minted { .. }),
+            "mint must succeed: {out:?}"
+        );
         // The token now lives in alice's REAL clerk wallet, and it can mint
         // (it is a root) + is locally HMAC-verified.
         let alice = clerk.identity("alice").unwrap();
@@ -969,7 +1013,11 @@ mod tests {
         let alice = clerk.identity("alice").unwrap();
         assert!(alice.clerk.tokens().len() >= 2);
         assert!(
-            alice.clerk.tokens().iter().any(|t| !t.can_mint() && t.service() == "dns"),
+            alice
+                .clerk
+                .tokens()
+                .iter()
+                .any(|t| !t.can_mint() && t.service() == "dns"),
             "an attenuated (non-minting) dns token is present"
         );
     }
@@ -980,7 +1028,10 @@ mod tests {
         clerk.create_identity("alice", DOMAIN, 0xA1);
         // No mint first.
         let out = clerk.attenuate_latest("alice", "dns", "r", None);
-        assert!(matches!(out, ClerkOutcome::Failed { .. }), "no root to attenuate: {out:?}");
+        assert!(
+            matches!(out, ClerkOutcome::Failed { .. }),
+            "no root to attenuate: {out:?}"
+        );
     }
 
     #[test]
@@ -992,7 +1043,10 @@ mod tests {
         let bob_pk = clerk.identity("bob").unwrap().public_key().0;
 
         let out = clerk.delegate_to("alice", "bob", "storage", "r");
-        assert!(matches!(out, ClerkOutcome::Delegated { .. }), "delegate must succeed: {out:?}");
+        assert!(
+            matches!(out, ClerkOutcome::Delegated { .. }),
+            "delegate must succeed: {out:?}"
+        );
         // The envelope was filed in the vault, addressed to bob, signed by alice.
         assert_eq!(clerk.delegations().len(), 1);
         let env = &clerk.delegations()[0].envelope;
@@ -1002,7 +1056,10 @@ mod tests {
             clerk.identity("alice").unwrap().public_key().0,
             "envelope signed by alice"
         );
-        assert!(env.caveat_chain_hash.is_some(), "carries a caveat-chain commitment");
+        assert!(
+            env.caveat_chain_hash.is_some(),
+            "carries a caveat-chain commitment"
+        );
     }
 
     #[test]
@@ -1029,8 +1086,15 @@ mod tests {
 
         let ok = clerk.discharge("alice", "dns", "r", 1_000);
         match ok {
-            ClerkOutcome::Discharged { authorized, request, .. } => {
-                assert!(authorized, "a freshly minted dns root authorizes an atomic 'r' request");
+            ClerkOutcome::Discharged {
+                authorized,
+                request,
+                ..
+            } => {
+                assert!(
+                    authorized,
+                    "a freshly minted dns root authorizes an atomic 'r' request"
+                );
                 assert_eq!(request, "dns/r");
             }
             other => panic!("discharge must run the real verify: {other:?}"),
@@ -1079,7 +1143,11 @@ mod tests {
         );
         // A DIFFERENT service → DENIED (least-privilege).
         assert!(
-            !Cipherclerk::discharge_presented(&att, &service_root, &auth_request("storage", "r", now)),
+            !Cipherclerk::discharge_presented(
+                &att,
+                &service_root,
+                &auth_request("storage", "r", now)
+            ),
             "a dns-confined token denies a 'storage' request"
         );
     }
@@ -1100,12 +1168,20 @@ mod tests {
 
         // Before the not_after instant: authorized.
         assert!(
-            Cipherclerk::discharge_presented(&att, &service_root, &auth_request("dns", "r", 1_700_000_050)),
+            Cipherclerk::discharge_presented(
+                &att,
+                &service_root,
+                &auth_request("dns", "r", 1_700_000_050)
+            ),
             "before expiry, the confined dns/'r' token authorizes"
         );
         // After the not_after instant: the SAME token is denied (expiry bites).
         assert!(
-            !Cipherclerk::discharge_presented(&att, &service_root, &auth_request("dns", "r", 1_700_001_000)),
+            !Cipherclerk::discharge_presented(
+                &att,
+                &service_root,
+                &auth_request("dns", "r", 1_700_001_000)
+            ),
             "after expiry, the token must be denied"
         );
     }
@@ -1127,10 +1203,18 @@ mod tests {
         clerk.create_identity("bob", DOMAIN, 0xB0);
 
         assert!(clerk.mint("alice", "dns").is_ok());
-        assert!(clerk.attenuate_latest("alice", "dns", "r", Some(2_000_000)).is_ok());
+        assert!(clerk
+            .attenuate_latest("alice", "dns", "r", Some(2_000_000))
+            .is_ok());
         assert!(clerk.delegate_to("alice", "bob", "dns", "r").is_ok());
         let discharge = clerk.discharge("alice", "dns", "r", 1_000);
-        assert!(matches!(discharge, ClerkOutcome::Discharged { authorized: true, .. }));
+        assert!(matches!(
+            discharge,
+            ClerkOutcome::Discharged {
+                authorized: true,
+                ..
+            }
+        ));
 
         // The panel renders the resulting real state: alice holds ≥2 tokens, one
         // delegation is filed.

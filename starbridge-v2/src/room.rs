@@ -172,7 +172,10 @@ impl RoomView {
     /// The total count of committed (genuine, on-ledger) actions across all
     /// inhabitants — the room's live activity at a glance.
     pub fn committed_action_count(&self) -> usize {
-        self.inhabitants.iter().map(|i| i.committed_actions.len()).sum()
+        self.inhabitants
+            .iter()
+            .map(|i| i.committed_actions.len())
+            .sum()
     }
 }
 
@@ -334,10 +337,17 @@ mod tests {
         let (w, room, _dweller, _peer) = room_world();
         let view = room.render(&w, 16);
         let inh = &view.inhabitants[0];
-        assert_eq!(inh.committed_actions.len(), 1, "one genuine cap-gated action");
+        assert_eq!(
+            inh.committed_actions.len(),
+            1,
+            "one genuine cap-gated action"
+        );
         let action = &inh.committed_actions[0];
         assert!(action.committed, "it is a genuine committed action");
-        assert!(action.receipt_hash.is_some(), "carrying a real receipt hash");
+        assert!(
+            action.receipt_hash.is_some(),
+            "carrying a real receipt hash"
+        );
         assert!(action.height.is_some(), "and a chain height");
         assert!(
             action.summary.contains("flow"),
@@ -345,7 +355,10 @@ mod tests {
             action.summary
         );
         // No refusal fired — the inhabitant stayed within its mandate.
-        assert!(inh.refusals.is_empty(), "no refusal for a within-mandate action");
+        assert!(
+            inh.refusals.is_empty(),
+            "no refusal for a within-mandate action"
+        );
         assert_eq!(view.committed_action_count(), 1);
     }
 
@@ -392,7 +405,11 @@ mod tests {
             refusal.reason
         );
         // The room's aggregate refusal surface sees it too.
-        assert_eq!(view.refusals().len(), 1, "the room-wide refusal surface shows it");
+        assert_eq!(
+            view.refusals().len(),
+            1,
+            "the room-wide refusal surface shows it"
+        );
         assert_eq!(view.committed_action_count(), 0, "nothing committed");
     }
 
@@ -404,9 +421,15 @@ mod tests {
         // was stopped, both true on the ledger.
         let (mut w, room, dweller, _peer) = room_world();
         let stranger = w.genesis_cell(0x99, 0); // dweller holds NO cap to it
-        // The dweller attempts to grant a cap it does not hold → refused.
-        let bad = w.turn(dweller, vec![grant_capability(dweller, dweller, stranger, 1)]);
-        assert!(!w.commit_turn(bad).is_committed(), "the overreach is refused");
+                                                // The dweller attempts to grant a cap it does not hold → refused.
+        let bad = w.turn(
+            dweller,
+            vec![grant_capability(dweller, dweller, stranger, 1)],
+        );
+        assert!(
+            !w.commit_turn(bad).is_committed(),
+            "the overreach is refused"
+        );
 
         let view = room.render(&w, 16);
         let inh = view.inhabitants.iter().find(|i| i.cell == dweller).unwrap();
@@ -454,6 +477,9 @@ mod tests {
         assert_eq!(view.inhabitants[0].cell, a, "entry order preserved");
         assert_eq!(view.inhabitants[1].cell, b);
         assert_eq!(view.inhabitants[2].cell, c);
-        assert_eq!(view.inhabitants[1].balance, 20, "each carries its live state");
+        assert_eq!(
+            view.inhabitants[1].balance, 20,
+            "each carries its live state"
+        );
     }
 }

@@ -182,7 +182,9 @@ impl TrustlineReflection {
         let holder = (!slot_is_zero(&fields[TL_HOLDER_SLOT as usize]))
             .then(|| CellId::from_bytes(fields[TL_HOLDER_SLOT as usize]));
         let collateral = match slot_u64(&fields[TL_COLLATERAL_SLOT as usize]) {
-            x if x == TL_COLLATERAL_FULL_RESERVE && !slot_is_zero(&fields[TL_COLLATERAL_SLOT as usize]) => {
+            x if x == TL_COLLATERAL_FULL_RESERVE
+                && !slot_is_zero(&fields[TL_COLLATERAL_SLOT as usize]) =>
+            {
                 TrustlineCollateral::FullReserve
             }
             x if x == TL_COLLATERAL_PURE_CREDIT => TrustlineCollateral::PureCredit,
@@ -435,7 +437,13 @@ mod tests {
     /// This is a fixture for the reflection — the real organ cell is born from
     /// the blueprint factory, but the slot ENCODING the panel decodes is the
     /// same, so reflecting a hand-written fixture validates the decode path.
-    fn trustline_fixture(line: u64, drawn: u64, settled: u64, issuer: CellId, holder: CellId) -> (CellId, Cell) {
+    fn trustline_fixture(
+        line: u64,
+        drawn: u64,
+        settled: u64,
+        issuer: CellId,
+        holder: CellId,
+    ) -> (CellId, Cell) {
         let mut cell = crate::world::make_open_cell(0x70, line as i64);
         let id = cell.id();
         cell.state.fields[TL_STATE_SLOT as usize] = field_from_u64(STATE_OPEN);

@@ -154,6 +154,18 @@ native-full = ["embedded-executor", "app-registry", "gpui-ui", "live-node", "ren
 # turns), not disk — the cockpit editor is firmament-backed by default.
 dev-surfaces = ["dep:deos-zed", "dep:deos-terminal", "dep:deos-hermes", "dep:deos-matrix", "firmament"]
 
+# agent-js — THE AGENT'S HANDS ON THE REAL GLASS. Binds the confined agent's
+# `run_js` (deos-js, real SpiderMonkey via mozjs) to the cockpit's LIVE `World`:
+# the agent crawls + drives the operator's ACTUAL cells (or a `world.fork()`),
+# every JS-driven turn a real verified turn on the live ledger, receipted +
+# bounded by the agent's `held` (the cap tooth in deos-js, mounted under the
+# attenuated cap, never root). `src/agent_attach.rs` is the cockpit-side
+# `deos_js::WorldSink` weld; `--render-agent-attach` (main.rs, render-capture)
+# bakes a PNG of the cockpit inspector showing the cell the agent's JS modified.
+# Pulls deos-js's multi-GB mozjs, so it is OFF by default (opt-in for the bake +
+# the attach test). Implies `embedded-executor` (it drives a `World`).
+agent-js = ["embedded-executor", "dep:deos-js"]
+
 # firmament — the cockpit editor pane edits SOVEREIGN CELLS over an in-process
 # `Ledger` + `TurnExecutor`, and every save is a real cap-gated `SetField` turn
 # leaving a verifiable `TurnReceipt` (NOT a disk write). Forwards to deos-zed's
@@ -451,6 +463,12 @@ gpui-component = { path = "../../gpui-component/crates/ui", default-features = f
 # gpui-component (vendored); deos-terminal rides alacritty_terminal.
 deos-zed = { path = "../deos-zed", default-features = false, features = ["cockpit-surface", "highlight-common"], optional = true }
 deos-terminal = { path = "../deos-terminal", features = ["cockpit-surface"], optional = true }
+# THE AGENT'S HANDS (deos-js) bound to the LIVE cockpit World — `agent-js`. Real
+# SpiderMonkey via mozjs; the `WorldSink` weld in `src/agent_attach.rs` runs the
+# agent's JS over a provided `World` (the cockpit's, or a fork). Its OWN workspace
+# (excluded from the root members like deos-hermes), pulling the multi-GB mozjs —
+# so it is OPTIONAL + off the default build. Non-wasm32 (mozjs is native-only).
+deos-js = { path = "../deos-js", optional = true }
 # The CONFINED HERMES AGENT as a dock pane (the ADOS dev-loop made visible): a
 # chat pane + the tool-call ledger (each tool-call a cap-gated RECEIPTED turn or
 # an in-band refusal) + the live mandate inspector. Own workspace, same gpui fork

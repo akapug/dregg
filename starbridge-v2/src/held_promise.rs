@@ -38,7 +38,10 @@ pub struct Slot {
 impl Slot {
     /// A reference to output `output_slot` of staged step `source`.
     pub fn new(source: usize, output_slot: u32) -> Self {
-        Self { source, output_slot }
+        Self {
+            source,
+            output_slot,
+        }
     }
 }
 
@@ -97,7 +100,13 @@ pub struct Hole {
 
 impl Hole {
     /// Create an OPEN hole: the eager shape is fixed, the value is not yet known.
-    pub fn open(field: impl Into<String>, actor: u64, target: u64, slot: Slot, guard: Guard) -> Self {
+    pub fn open(
+        field: impl Into<String>,
+        actor: u64,
+        target: u64,
+        slot: Slot,
+        guard: Guard,
+    ) -> Self {
         Self {
             field: field.into(),
             actor,
@@ -250,7 +259,10 @@ mod tests {
     #[test]
     fn staging_a_hole_makes_it_held_and_not_ready() {
         let mut c = HeldPromise::new();
-        c.stage_hole(demo_hole(Slot::new(0, 0), Guard::InRange { lo: 1, hi: 100 }));
+        c.stage_hole(demo_hole(
+            Slot::new(0, 0),
+            Guard::InRange { lo: 1, hi: 100 },
+        ));
         assert!(!c.is_empty());
         assert!(c.is_held()); // a promise is held
         assert!(!c.is_ready()); // CANNOT drain — the structural fail-closed
@@ -294,7 +306,10 @@ mod tests {
         c.stage_hole(demo_hole(slot.clone(), Guard::InRange { lo: 1, hi: 100 }));
 
         let outcome = c.fill(&slot, 555); // 555 ∉ [1,100] → guard violation
-        assert!(matches!(outcome, FillOutcome::GuardViolation { value: 555, .. }));
+        assert!(matches!(
+            outcome,
+            FillOutcome::GuardViolation { value: 555, .. }
+        ));
         assert!(!outcome.bound());
 
         // Fail-closed: the hole stays OPEN, the continuation stays HELD, CANNOT drain.
@@ -360,7 +375,10 @@ mod tests {
         c.stage_hole(demo_hole(slot.clone(), Guard::AtLeast { threshold: 0 }));
 
         let bogus = Slot::new(9, 9);
-        assert_eq!(c.fill(&bogus, 1), FillOutcome::NoSuchOpenSlot { slot: bogus });
+        assert_eq!(
+            c.fill(&bogus, 1),
+            FillOutcome::NoSuchOpenSlot { slot: bogus }
+        );
         // The real hole is untouched.
         assert_eq!(c.open_hole_count(), 1);
         assert!(c.is_held());
@@ -388,7 +406,13 @@ mod tests {
     fn fill_binds_value_without_mutating_shape() {
         let mut c = HeldPromise::new();
         let slot = Slot::new(3, 1);
-        c.stage_hole(Hole::open("balance", 7, 9, slot.clone(), Guard::InRange { lo: 0, hi: 1000 }));
+        c.stage_hole(Hole::open(
+            "balance",
+            7,
+            9,
+            slot.clone(),
+            Guard::InRange { lo: 0, hi: 1000 },
+        ));
 
         assert_eq!(c.fill(&slot, 500), FillOutcome::Bound);
         let h = &c.holes[0];

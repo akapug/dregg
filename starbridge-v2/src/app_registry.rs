@@ -2033,7 +2033,10 @@ mod tests {
             "identity",
             "governed-namespace",
         ] {
-            assert!(ids.contains(&id), "{id} is wired into the standard registry");
+            assert!(
+                ids.contains(&id),
+                "{id} is wired into the standard registry"
+            );
         }
         // The polis governance layer — a PROGRAM entry (not a `DeosApp`).
         #[cfg(feature = "embedded-executor")]
@@ -2235,7 +2238,11 @@ mod tests {
                 "{} World receipt is authored by the app cell",
                 entry.id
             );
-            assert!(launched.receipt.action_count >= 1, "{} fired an action", entry.id);
+            assert!(
+                launched.receipt.action_count >= 1,
+                "{} fired an action",
+                entry.id
+            );
         }
     }
 

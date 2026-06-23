@@ -60,7 +60,11 @@ pub enum Command {
     Grant { target: CellId, slot: u32 },
     /// `set <index> <value> @ <target>` — write a field on `target` (gated: the
     /// terminal-cell must reach `target`).
-    SetField { target: CellId, index: usize, value: u8 },
+    SetField {
+        target: CellId,
+        index: usize,
+        value: u8,
+    },
     /// `emit <topic> @ <target>` — emit an event on `target` (gated: reach).
     Emit { target: CellId, topic: String },
 }
@@ -91,17 +95,30 @@ impl Command {
     pub fn line(&self) -> String {
         match self {
             Command::Transfer { target, amount } => {
-                format!("transfer {amount} -> {}", crate::reflect::short_hex(target.as_bytes()))
+                format!(
+                    "transfer {amount} -> {}",
+                    crate::reflect::short_hex(target.as_bytes())
+                )
             }
             Command::Grant { target, slot } => {
-                format!("grant slot{slot} -> {}", crate::reflect::short_hex(target.as_bytes()))
+                format!(
+                    "grant slot{slot} -> {}",
+                    crate::reflect::short_hex(target.as_bytes())
+                )
             }
-            Command::SetField { target, index, value } => format!(
+            Command::SetField {
+                target,
+                index,
+                value,
+            } => format!(
                 "set field[{index}]={value} @ {}",
                 crate::reflect::short_hex(target.as_bytes())
             ),
             Command::Emit { target, topic } => {
-                format!("emit '{topic}' @ {}", crate::reflect::short_hex(target.as_bytes()))
+                format!(
+                    "emit '{topic}' @ {}",
+                    crate::reflect::short_hex(target.as_bytes())
+                )
             }
         }
     }
@@ -115,7 +132,11 @@ impl Command {
             // Re-grant the terminal-cell's existing reach to `target` at `slot`
             // (the executor enforces no-amplification: it must hold the cap).
             Command::Grant { target, slot } => world::grant_capability(from, from, *target, *slot),
-            Command::SetField { target, index, value } => {
+            Command::SetField {
+                target,
+                index,
+                value,
+            } => {
                 let mut fe = [0u8; 32];
                 fe[31] = *value;
                 world::set_field(*target, *index, fe)
@@ -316,7 +337,9 @@ impl TerminalCell {
 
         // (1) THE COMMAND CAP-GATE — is the target within the terminal's mandate?
         if !self.is_command_authorized(world, &cmd) {
-            let err = CommandError::OutOfMandate { target: cmd.target() };
+            let err = CommandError::OutOfMandate {
+                target: cmd.target(),
+            };
             self.push_refused(&line_text, &err);
             return Err(err);
         }
@@ -438,7 +461,10 @@ mod tests {
     #[test]
     fn the_command_lowers_to_a_real_effect_and_names_its_target() {
         let t = CellId::from_bytes([7u8; 32]);
-        let cmd = Command::Transfer { target: t, amount: 100 };
+        let cmd = Command::Transfer {
+            target: t,
+            amount: 100,
+        };
         assert_eq!(cmd.target(), t);
         assert_eq!(cmd.verb(), "transfer");
         assert!(cmd.line().contains("transfer 100"));
@@ -454,12 +480,24 @@ mod tests {
         // the prompt).
         let (mut world, mut term, peer, _stranger) = terminal_world();
         assert!(
-            term.is_command_authorized(&world, &Command::Transfer { target: peer, amount: 1 }),
+            term.is_command_authorized(
+                &world,
+                &Command::Transfer {
+                    target: peer,
+                    amount: 1
+                }
+            ),
             "the terminal-cell reaches the peer (its mandate)"
         );
         let h0 = world.height();
         let line = term
-            .run(&mut world, Command::Transfer { target: peer, amount: 1_000 })
+            .run(
+                &mut world,
+                Command::Transfer {
+                    target: peer,
+                    amount: 1_000,
+                },
+            )
             .expect("an in-mandate command commits");
         assert!(line.committed, "the command committed");
         assert!(line.receipt_hash.is_some(), "the output IS a real receipt");
@@ -478,7 +516,14 @@ mod tests {
         let (mut world, mut term, _peer, _stranger) = terminal_world();
         let backing = term.backing();
         let line = term
-            .run(&mut world, Command::SetField { target: backing, index: 3, value: 9 })
+            .run(
+                &mut world,
+                Command::SetField {
+                    target: backing,
+                    index: 3,
+                    value: 9,
+                },
+            )
             .expect("a self-targeting set commits");
         assert!(line.committed);
         assert_eq!(world.ledger().get(&backing).unwrap().state.fields[3][31], 9);
@@ -493,11 +538,23 @@ mod tests {
         // any turn runs (fail-closed — the agent's Bash confined to its mandate).
         let (mut world, mut term, _peer, stranger) = terminal_world();
         assert!(
-            !term.is_command_authorized(&world, &Command::Transfer { target: stranger, amount: 1 }),
+            !term.is_command_authorized(
+                &world,
+                &Command::Transfer {
+                    target: stranger,
+                    amount: 1
+                }
+            ),
             "the terminal-cell does NOT reach the stranger"
         );
         let h0 = world.height();
-        let r = term.run(&mut world, Command::Transfer { target: stranger, amount: 1 });
+        let r = term.run(
+            &mut world,
+            Command::Transfer {
+                target: stranger,
+                amount: 1,
+            },
+        );
         assert!(
             matches!(r, Err(CommandError::OutOfMandate { .. })),
             "an out-of-mandate command must be REFUSED, got {r:?}"
@@ -505,7 +562,11 @@ mod tests {
         // Fail-closed: nothing changed (no turn, no receipt) — but the REFUSAL is
         // recorded in the history (never faked away).
         assert_eq!(world.height(), h0, "a refused command commits no turn");
-        assert_eq!(world.receipts().len(), 0, "a refused command appends no receipt");
+        assert_eq!(
+            world.receipts().len(),
+            0,
+            "a refused command appends no receipt"
+        );
         assert_eq!(term.history().len(), 1, "the refusal is recorded");
         assert!(!term.history()[0].committed, "shown as REFUSED");
         assert!(term.history()[0].result.contains("REFUSED"));
@@ -518,7 +579,13 @@ mod tests {
         // shown as REFUSED with the executor's reason, distinct from out-of-mandate.
         let (mut world, mut term, peer, _stranger) = terminal_world();
         // Transfer MORE than the terminal-cell holds (10_000) → executor rejects.
-        let r = term.run(&mut world, Command::Transfer { target: peer, amount: 1_000_000 });
+        let r = term.run(
+            &mut world,
+            Command::Transfer {
+                target: peer,
+                amount: 1_000_000,
+            },
+        );
         assert!(
             matches!(r, Err(CommandError::ExecutorRejected(_))),
             "an overspend passes the cap-gate but the executor rejects it, got {r:?}"
@@ -533,22 +600,41 @@ mod tests {
     fn the_view_reflects_the_mandate_and_the_committed_output() {
         let (mut world, mut term, peer, stranger) = terminal_world();
         // Run one in-mandate command (commits) + one out-of-mandate (refused).
-        term.run(&mut world, Command::Transfer { target: peer, amount: 100 }).unwrap();
-        let _ = term.run(&mut world, Command::Transfer { target: stranger, amount: 1 });
+        term.run(
+            &mut world,
+            Command::Transfer {
+                target: peer,
+                amount: 100,
+            },
+        )
+        .unwrap();
+        let _ = term.run(
+            &mut world,
+            Command::Transfer {
+                target: stranger,
+                amount: 1,
+            },
+        );
 
         let v = TerminalView::build(&term, &world);
         assert!(v.backed, "the terminal cell is live");
         // The mandate badge includes the peer (reachable) + the backing cell.
         assert!(
-            v.reachable_short.contains(&crate::reflect::short_hex(peer.as_bytes())),
+            v.reachable_short
+                .contains(&crate::reflect::short_hex(peer.as_bytes())),
             "the peer is in the terminal's reachable mandate"
         );
         assert!(
-            !v.reachable_short.contains(&crate::reflect::short_hex(stranger.as_bytes())),
+            !v.reachable_short
+                .contains(&crate::reflect::short_hex(stranger.as_bytes())),
             "the stranger is NOT in the mandate"
         );
         assert_eq!(v.committed_count, 1, "one command committed");
-        assert_eq!(v.lines.len(), 2, "both the commit and the refusal are in the output");
+        assert_eq!(
+            v.lines.len(),
+            2,
+            "both the commit and the refusal are in the output"
+        );
         assert!(v.lines[0].committed && !v.lines[1].committed);
     }
 
@@ -561,7 +647,16 @@ mod tests {
         let mut term = TerminalCell::new(cap.surface(), ghost, "ghost-term");
         let v = TerminalView::build(&term, &world);
         assert!(!v.backed, "a missing backing cell is unbacked");
-        let r = term.run(&mut world, Command::Emit { target: ghost, topic: "hi".into() });
-        assert!(matches!(r, Err(CommandError::Unbacked)), "a dangling terminal refuses, got {r:?}");
+        let r = term.run(
+            &mut world,
+            Command::Emit {
+                target: ghost,
+                topic: "hi".into(),
+            },
+        );
+        assert!(
+            matches!(r, Err(CommandError::Unbacked)),
+            "a dangling terminal refuses, got {r:?}"
+        );
     }
 }

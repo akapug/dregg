@@ -50,8 +50,8 @@ use gpui::{
 use crate::app_registry::AppRegistry;
 use crate::dock::chat_surface::ChatPane;
 use crate::dock::editor_surface::EditorPane;
-use crate::dock::terminal_surface::TerminalPane;
 use crate::dock::surface::CockpitSurface;
+use crate::dock::terminal_surface::TerminalPane;
 use crate::wonder::WonderRoom;
 use crate::world::World;
 
@@ -360,11 +360,7 @@ impl GuestView {
                     .text_color(theme::accent())
                     .text_xs()
                     .child("⌘K")
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .child("summon inspector"),
-                    ),
+                    .child(div().text_color(theme::muted()).child("summon inspector")),
             )
     }
 
@@ -459,15 +455,10 @@ impl GuestView {
                             .font_weight(gpui::FontWeight::BOLD)
                             .child("you are inside deos"),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::muted())
-                            .text_xs()
-                            .child(
-                                "a live, verified, object-capability world. click around — \
+                    .child(div().text_color(theme::muted()).text_xs().child(
+                        "a live, verified, object-capability world. click around — \
                                  every app here is a real surface over the same image.",
-                            ),
-                    ),
+                    )),
             )
             .into_any_element()
     }
@@ -523,12 +514,7 @@ impl GuestView {
                     .bg(theme::panel_hi())
                     .border_1()
                     .border_color(theme::border())
-                    .child(
-                        div()
-                            .text_color(theme::accent())
-                            .text_sm()
-                            .child(g.glyph),
-                    )
+                    .child(div().text_color(theme::accent()).text_sm().child(g.glyph))
                     .child(
                         div()
                             .flex()
@@ -650,15 +636,10 @@ impl GuestView {
                             .child("F11 / Esc to dismiss"),
                     ),
             )
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .text_xs()
-                    .child(format!(
-                        "{} live cells · the same objects, the raw face",
-                        self.inspector_rows.len()
-                    )),
-            );
+            .child(div().text_color(theme::muted()).text_xs().child(format!(
+                "{} live cells · the same objects, the raw face",
+                self.inspector_rows.len()
+            )));
 
         for row in &self.inspector_rows {
             let mut card = div()
@@ -860,16 +841,24 @@ mod tests {
             entries.entries().len(),
             "one gadget card per wired registry app"
         );
-        assert!(!gadgets.is_empty(), "the guest has acquired at least one gadget");
+        assert!(
+            !gadgets.is_empty(),
+            "the guest has acquired at least one gadget"
+        );
         // Each gadget carries the registry entry's REAL name + a non-empty blurb.
         for (g, e) in gadgets.iter().zip(entries.entries().iter()) {
             assert_eq!(g.name, e.name, "the card shows the app's real name");
-            assert!(!g.blurb.trim().is_empty(), "the card shows a real description");
+            assert!(
+                !g.blurb.trim().is_empty(),
+                "the card shows a real description"
+            );
             assert!(!g.glyph.is_empty(), "the card carries a warm glyph");
         }
         // Known apps get warm glyphs (the wonder register), not the fallback mark.
         assert!(
-            gadgets.iter().any(|g| g.name == "Sealed Gallery" && g.glyph == "🖼"),
+            gadgets
+                .iter()
+                .any(|g| g.name == "Sealed Gallery" && g.glyph == "🖼"),
             "the gallery gadget gets its warm glyph"
         );
     }
@@ -879,7 +868,11 @@ mod tests {
         assert_eq!(truncate("short", 64), "short");
         let long = "x".repeat(100);
         let t = truncate(&long, 10);
-        assert_eq!(t.chars().count(), 10, "a long blurb is capped to the card width");
+        assert_eq!(
+            t.chars().count(),
+            10,
+            "a long blurb is capped to the card width"
+        );
         assert!(t.ends_with('…'), "a capped blurb ends with an ellipsis");
     }
 
@@ -887,6 +880,10 @@ mod tests {
     fn glyph_for_known_ids_is_warm_and_unknown_falls_back() {
         assert_eq!(glyph_for("gallery"), "🖼");
         assert_eq!(glyph_for("tussle"), "🥊");
-        assert_eq!(glyph_for("a-brand-new-app-id"), "✦", "unknown ids get the generic gadget mark");
+        assert_eq!(
+            glyph_for("a-brand-new-app-id"),
+            "✦",
+            "unknown ids get the generic gadget mark"
+        );
     }
 }

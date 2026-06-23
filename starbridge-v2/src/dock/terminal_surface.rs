@@ -56,7 +56,11 @@ impl TerminalPane {
     /// headless bake/test can drive it and assert the genuine child-process output
     /// landed in the cell grid. The self-hosting loop's terminal half, made
     /// assertable.
-    pub fn spawn(id: u64, cmd: Option<(String, Vec<String>)>, cx: &mut App) -> anyhow::Result<Self> {
+    pub fn spawn(
+        id: u64,
+        cmd: Option<(String, Vec<String>)>,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
         Ok(TerminalPane(TerminalSurface::spawn(id, cmd, cx)?))
     }
 

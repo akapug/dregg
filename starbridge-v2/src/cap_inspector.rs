@@ -113,7 +113,11 @@ fn auth_lattice_view(held: &AuthRequired) -> LatticeView {
     }
 
     let current = LATTICE_TIERS.iter().position(|t| t == held);
-    LatticeView { nodes, edges, current }
+    LatticeView {
+        nodes,
+        edges,
+        current,
+    }
 }
 
 // ===========================================================================
@@ -151,7 +155,10 @@ impl HeldCapability {
             Some(cell) => cell
                 .capabilities
                 .iter()
-                .map(|cap| HeldCapability { holder, cap: cap.clone() })
+                .map(|cap| HeldCapability {
+                    holder,
+                    cap: cap.clone(),
+                })
                 .collect(),
             None => Vec::new(),
         }
@@ -197,10 +204,7 @@ impl Presentable for HeldCapability {
         out.push(Presentation {
             kind: PresentationKind::Graph,
             label: "Rights Lattice".to_string(),
-            search_text: format!(
-                "rights lattice authority {}",
-                lattice.nodes.join(" ")
-            ),
+            search_text: format!("rights lattice authority {}", lattice.nodes.join(" ")),
             body: PresentationBody::Lattice(lattice),
         });
 
@@ -305,7 +309,11 @@ fn cap_ocap_neighborhood(world: &World, held: &HeldCapability) -> GraphView {
         .filter(|n| node_ids.contains(&n.cell))
         .cloned()
         .collect();
-    GraphView { nodes, edges, focus: Some(holder) }
+    GraphView {
+        nodes,
+        edges,
+        focus: Some(holder),
+    }
 }
 
 /// The cap-crown [`MerkleTreeView`]: the REAL openable `capability_root` over the
@@ -342,10 +350,7 @@ fn cap_crown_view(world: &World, held: &HeldCapability) -> Option<MerkleTreeView
     }
 
     Some(MerkleTreeView {
-        label: format!(
-            "capability_root over {} held cap(s)",
-            caps.len()
-        ),
+        label: format!("capability_root over {} held cap(s)", caps.len()),
         leaves,
         root,
         // The highlighted leaf (this cap's genuine digest). The full opened
@@ -376,10 +381,7 @@ fn nonamp_invariant(held: &HeldCapability) -> Inspectable {
     Inspectable {
         kind: ObjectKind::Capability,
         title: "Non-Amplification (granted ⊆ held)".to_string(),
-        subtitle: format!(
-            "held {} — only ⊆ tiers are conferrable",
-            auth_label(h)
-        ),
+        subtitle: format!("held {} — only ⊆ tiers are conferrable", auth_label(h)),
         fields,
     }
 }
@@ -414,7 +416,10 @@ impl AttenuationDial {
     /// A dial over a held firmament [`Capability`] (the ceiling). The designated
     /// rights start unset — the form is incomplete until a tier is chosen.
     pub fn new(held: Capability) -> Self {
-        AttenuationDial { held, designated: None }
+        AttenuationDial {
+            held,
+            designated: None,
+        }
     }
 
     /// A dial over a [`HeldCapability`] (the c-list entry lifted into the
@@ -463,7 +468,8 @@ impl AttenuationDial {
     ) -> PowerboxOutcome {
         let Some(rights) = self.designated.clone() else {
             return PowerboxOutcome::Denied {
-                reason: "the attenuation dial has no designated rights yet (incomplete)".to_string(),
+                reason: "the attenuation dial has no designated rights yet (incomplete)"
+                    .to_string(),
             };
         };
         if !is_attenuation(&self.held.rights, &rights) {
@@ -557,14 +563,19 @@ impl Gadget for AttenuationDial {
     }
 
     fn build(&self) -> Result<Self::Output, GadgetError> {
-        let rights = self.designated.clone().ok_or_else(|| GadgetError::Incomplete {
-            reason: "no rights tier designated".to_string(),
-        })?;
+        let rights = self
+            .designated
+            .clone()
+            .ok_or_else(|| GadgetError::Incomplete {
+                reason: "no rights tier designated".to_string(),
+            })?;
         // Ride the REAL Capability::attenuate — it gates on is_attenuation and
         // returns None on a widening (the same fail-closed the executor models).
-        self.held.attenuate(rights).ok_or_else(|| GadgetError::Lowering {
-            reason: "the designated rights are not an attenuation of the held cap".to_string(),
-        })
+        self.held
+            .attenuate(rights)
+            .ok_or_else(|| GadgetError::Lowering {
+                reason: "the designated rights are not an attenuation of the held cap".to_string(),
+            })
     }
 }
 
@@ -634,12 +645,21 @@ mod tests {
         assert!(view.nodes.last().unwrap().starts_with("None"));
 
         // The held tier (Either) is marked current.
-        let either_idx = LATTICE_TIERS.iter().position(|t| t == &AuthRequired::Either).unwrap();
+        let either_idx = LATTICE_TIERS
+            .iter()
+            .position(|t| t == &AuthRequired::Either)
+            .unwrap();
         assert_eq!(view.current, Some(either_idx));
 
         // A real covering edge: Signature ⊑ Either (Signature is narrower than Either).
-        let sig_idx = LATTICE_TIERS.iter().position(|t| t == &AuthRequired::Signature).unwrap();
-        let proof_idx = LATTICE_TIERS.iter().position(|t| t == &AuthRequired::Proof).unwrap();
+        let sig_idx = LATTICE_TIERS
+            .iter()
+            .position(|t| t == &AuthRequired::Signature)
+            .unwrap();
+        let proof_idx = LATTICE_TIERS
+            .iter()
+            .position(|t| t == &AuthRequired::Proof)
+            .unwrap();
         assert!(
             view.edges.contains(&(sig_idx, either_idx)),
             "Signature ⊑ Either is a covering edge"
@@ -674,7 +694,10 @@ mod tests {
 
         // Narrow Either → Signature: a real attenuation, validates Ok, builds.
         dial.set("rights", GadgetInput::Variant("Signature".to_string()));
-        assert!(dial.validate().is_ok(), "Signature ⊆ Either is an attenuation");
+        assert!(
+            dial.validate().is_ok(),
+            "Signature ⊆ Either is an attenuation"
+        );
         let narrowed = dial.build().expect("the attenuated cap builds");
         assert_eq!(narrowed.rights, AuthRequired::Signature);
         // The target is preserved (attenuation narrows rights, not the target).
@@ -682,15 +705,20 @@ mod tests {
 
         // Now hold a narrow Signature cap and try to WIDEN it to Either — the REAL
         // is_attenuation refuses it: validation is fail-closed and build() errs.
-        let narrow_held =
-            Capability::distributed(CellId::derive_raw(&[0x11u8; 32], &[0u8; 32]), AuthRequired::Signature);
+        let narrow_held = Capability::distributed(
+            CellId::derive_raw(&[0x11u8; 32], &[0u8; 32]),
+            AuthRequired::Signature,
+        );
         let mut widen = AttenuationDial::new(narrow_held);
         widen.set("rights", GadgetInput::Variant("Either".to_string()));
         assert!(
             widen.validate().is_fail_closed(),
             "Either ⊄ Signature — a widening is refused in-band"
         );
-        assert!(widen.build().is_err(), "the widening cannot build (fail-closed)");
+        assert!(
+            widen.build().is_err(),
+            "the widening cannot build (fail-closed)"
+        );
     }
 
     #[test]
@@ -704,7 +732,10 @@ mod tests {
         dial.set("rights", GadgetInput::Variant("Proof".to_string()));
         let built = dial.build().unwrap();
         let direct = held.attenuate(AuthRequired::Proof).unwrap();
-        assert_eq!(built, direct, "the dial rides the real Capability::attenuate");
+        assert_eq!(
+            built, direct,
+            "the dial rides the real Capability::attenuate"
+        );
     }
 
     // ── the Graph shows real delegation edges ───────────────────────────────
@@ -724,7 +755,9 @@ mod tests {
             PresentationBody::Graph(g) => {
                 assert_eq!(g.focus, Some(holder));
                 assert!(
-                    g.edges.iter().any(|e| e.holder == holder && e.target == sink),
+                    g.edges
+                        .iter()
+                        .any(|e| e.holder == holder && e.target == sink),
                     "the real ocap edge holder → sink is in the neighborhood"
                 );
             }
@@ -816,7 +849,10 @@ mod tests {
         assert_eq!(dial.target_cell(), Some(sink));
 
         let outcome = dial.grant_through_powerbox(&mut w, holder, app);
-        assert!(outcome.is_granted(), "the powerbox minted the attenuated cap: {outcome:?}");
+        assert!(
+            outcome.is_granted(),
+            "the powerbox minted the attenuated cap: {outcome:?}"
+        );
         let conferred = outcome.conferred().unwrap();
         assert_eq!(conferred.app_cell, app);
         assert_eq!(conferred.target, sink);
@@ -826,8 +862,9 @@ mod tests {
         // committed it — not a faked grant).
         let app_held = HeldCapability::all_for(&w, app);
         assert!(
-            app_held.iter().any(|h| h.cap.target == sink
-                && h.cap.permissions == AuthRequired::Signature),
+            app_held
+                .iter()
+                .any(|h| h.cap.target == sink && h.cap.permissions == AuthRequired::Signature),
             "the app holds the granted attenuated cap after the real turn"
         );
     }
@@ -842,8 +879,10 @@ mod tests {
         // a granted cap through the dial first would be circular; instead build the
         // dial directly over a Signature firmament handle to assert the refusal.
         let _ = sink;
-        let narrow =
-            Capability::distributed(CellId::derive_raw(&[0x55u8; 32], &[0u8; 32]), AuthRequired::Signature);
+        let narrow = Capability::distributed(
+            CellId::derive_raw(&[0x55u8; 32], &[0u8; 32]),
+            AuthRequired::Signature,
+        );
         let mut dial = AttenuationDial::new(narrow);
         dial.set("rights", GadgetInput::Variant("Either".to_string()));
         let app = w.genesis_cell(0xC0, 0);

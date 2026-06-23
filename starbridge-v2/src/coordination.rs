@@ -100,7 +100,11 @@ impl NotifyArrow {
             crate::reflect::short_hex(self.from.as_bytes()),
             crate::reflect::short_hex(self.to.as_bytes()),
             hex::encode(&self.topic_hash[..4]),
-            if self.drained { " (drained)" } else { " (pending)" },
+            if self.drained {
+                " (drained)"
+            } else {
+                " (pending)"
+            },
         )
     }
 }
@@ -219,7 +223,10 @@ impl SwarmGraph {
 
     /// The live (pending) notify arrows — the wakes not yet drained.
     pub fn pending_arrows(&self) -> Vec<&NotifyArrow> {
-        self.notify_arrows.iter().filter(|a| a.is_pending()).collect()
+        self.notify_arrows
+            .iter()
+            .filter(|a| a.is_pending())
+            .collect()
     }
 
     /// Whether `holder` CAN reach `target` in the mandate background (a direct
@@ -274,7 +281,11 @@ mod tests {
         let coord = world.genesis_install(coord_cell);
         let swarm = Swarm::new(
             &world,
-            [(coord, "coordinator"), (worker_a, "worker-a"), (worker_b, "worker-b")],
+            [
+                (coord, "coordinator"),
+                (worker_a, "worker-a"),
+                (worker_b, "worker-b"),
+            ],
         );
         (world, swarm, coord, worker_a, worker_b)
     }
@@ -306,8 +317,14 @@ mod tests {
         assert!((g1.nodes[0].x - 0.0).abs() < 1e-5);
         assert!((g1.nodes[0].y - (-1.0)).abs() < 1e-5);
         // Three members are evenly spaced — distinct positions.
-        assert_ne!((g1.nodes[0].x, g1.nodes[0].y), (g1.nodes[1].x, g1.nodes[1].y));
-        assert_ne!((g1.nodes[1].x, g1.nodes[1].y), (g1.nodes[2].x, g1.nodes[2].y));
+        assert_ne!(
+            (g1.nodes[0].x, g1.nodes[0].y),
+            (g1.nodes[1].x, g1.nodes[1].y)
+        );
+        assert_ne!(
+            (g1.nodes[1].x, g1.nodes[1].y),
+            (g1.nodes[2].x, g1.nodes[2].y)
+        );
     }
 
     #[test]
@@ -329,7 +346,12 @@ mod tests {
         // a cap to its target in the live ledger.
         for e in &g.mandate_edges {
             assert!(
-                world.ledger().get(&e.holder).unwrap().capabilities.has_access(&e.target),
+                world
+                    .ledger()
+                    .get(&e.holder)
+                    .unwrap()
+                    .capabilities
+                    .has_access(&e.target),
                 "every mandate edge is a real held capability"
             );
         }
@@ -342,10 +364,18 @@ mod tests {
         // coordinator→worker-a, one coordinator→worker-b, both pending.
         let (mut world, mut swarm, coord, worker_a, worker_b) = swarm_world();
         swarm
-            .run(&mut world, coord, vec![emit_event(worker_a, "task/a", vec![])])
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_a, "task/a", vec![])],
+            )
             .expect("emit to worker-a");
         swarm
-            .run(&mut world, coord, vec![emit_event(worker_b, "task/b", vec![])])
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_b, "task/b", vec![])],
+            )
             .expect("emit to worker-b");
 
         let g = SwarmGraph::build(&swarm, &world);
@@ -353,17 +383,25 @@ mod tests {
         assert_eq!(g.notify_arrows.len(), 2);
         assert_eq!(g.pending_arrows().len(), 2);
         assert!(
-            g.notify_arrows.iter().any(|a| a.from == coord && a.to == worker_a && !a.drained),
+            g.notify_arrows
+                .iter()
+                .any(|a| a.from == coord && a.to == worker_a && !a.drained),
             "an arrow coordinator → worker-a"
         );
         assert!(
-            g.notify_arrows.iter().any(|a| a.from == coord && a.to == worker_b && !a.drained),
+            g.notify_arrows
+                .iter()
+                .any(|a| a.from == coord && a.to == worker_b && !a.drained),
             "an arrow coordinator → worker-b"
         );
         // The arrows match the deposited edges: every arrow's (from, to,
         // topic, receipt) equals a NotifyEdge in the recipient's inbox.
         for arrow in &g.notify_arrows {
-            let recipient = swarm.members().iter().find(|m| m.agent == arrow.to).unwrap();
+            let recipient = swarm
+                .members()
+                .iter()
+                .find(|m| m.agent == arrow.to)
+                .unwrap();
             assert!(
                 recipient.inbox.iter().any(|e| e.from == arrow.from
                     && e.topic_hash == arrow.topic_hash
@@ -385,15 +423,27 @@ mod tests {
         // pending.
         let (mut world, mut swarm, coord, worker_a, _wb) = swarm_world();
         swarm
-            .run(&mut world, coord, vec![emit_event(worker_a, "task/a", vec![])])
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_a, "task/a", vec![])],
+            )
             .expect("emit");
         swarm.drain_notify(&mut world, worker_a).expect("drain");
 
         let g = SwarmGraph::build(&swarm, &world);
         assert_eq!(g.notify_arrows.len(), 1, "the arrow remains in the history");
         assert!(g.notify_arrows[0].drained, "the arrow is marked drained");
-        assert_eq!(g.pending_arrows().len(), 0, "no pending arrows after the drain");
-        assert_eq!(g.node(&worker_a).unwrap().pending_in, 0, "the pending badge cleared");
+        assert_eq!(
+            g.pending_arrows().len(),
+            0,
+            "no pending arrows after the drain"
+        );
+        assert_eq!(
+            g.node(&worker_a).unwrap().pending_in,
+            0,
+            "the pending badge cleared"
+        );
     }
 
     #[test]

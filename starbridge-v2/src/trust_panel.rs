@@ -30,13 +30,13 @@
 //! [`Presentation`]/[`TimelineView`]/[`GaugeView`] verbatim — no parallel
 //! object model.
 
-use dregg_sdk::identity::{IdentityCharter, IdentityState, IdentityStatus, inspect_identity};
+use dregg_sdk::identity::{inspect_identity, IdentityCharter, IdentityState, IdentityStatus};
 use dregg_sdk::polis::CouncilCharter;
 
 use crate::presentable::{
     GaugeView, Presentation, PresentationBody, PresentationKind, TimelineEvent, TimelineView,
 };
-use crate::reflect::{Field, FieldValue, Inspectable, ObjectKind, short_hex};
+use crate::reflect::{short_hex, Field, FieldValue, Inspectable, ObjectKind};
 
 // ===========================================================================
 // §1 — the model: a friendly device, a guardian face, a recovery-in-progress
@@ -60,15 +60,27 @@ pub struct Device {
 impl Device {
     /// A named device with the laptop glyph (the default speaker).
     pub fn laptop(name: impl Into<String>, public_key: [u8; 32]) -> Self {
-        Device { name: name.into(), public_key, glyph: "💻" }
+        Device {
+            name: name.into(),
+            public_key,
+            glyph: "💻",
+        }
     }
     /// A phone device.
     pub fn phone(name: impl Into<String>, public_key: [u8; 32]) -> Self {
-        Device { name: name.into(), public_key, glyph: "📱" }
+        Device {
+            name: name.into(),
+            public_key,
+            glyph: "📱",
+        }
     }
     /// A paper / hardware backup speaker.
     pub fn paper(name: impl Into<String>, public_key: [u8; 32]) -> Self {
-        Device { name: name.into(), public_key, glyph: "📄" }
+        Device {
+            name: name.into(),
+            public_key,
+            glyph: "📄",
+        }
     }
 }
 
@@ -89,11 +101,19 @@ pub struct GuardianFace {
 impl GuardianFace {
     /// A unit-weight guardian named `name` at council member cell `cell`.
     pub fn new(name: impl Into<String>, cell: [u8; 32]) -> Self {
-        GuardianFace { name: name.into(), cell, weight: 1 }
+        GuardianFace {
+            name: name.into(),
+            cell,
+            weight: 1,
+        }
     }
     /// A heavy guardian (e.g. a paper backup *you* hold counts for more).
     pub fn weighted(name: impl Into<String>, cell: [u8; 32], weight: u64) -> Self {
-        GuardianFace { name: name.into(), cell, weight }
+        GuardianFace {
+            name: name.into(),
+            cell,
+            weight,
+        }
     }
 }
 
@@ -343,7 +363,11 @@ impl TrustPanel {
             Field::count("devices", self.devices.len() as u64),
             Field::text(
                 "recovery",
-                format!("any {} of {} guardians", self.threshold, self.guardians.len()),
+                format!(
+                    "any {} of {} guardians",
+                    self.threshold,
+                    self.guardians.len()
+                ),
             ),
             Field::boolean("council_pinned", self.status.council_commit_matches),
             Field::hash("current_keys_commit", self.status.current_keys_commit),
@@ -359,11 +383,7 @@ impl TrustPanel {
         for g in &self.guardians {
             fields.push(Field {
                 key: format!("guardian · {}", g.name),
-                value: FieldValue::Text(format!(
-                    "🛡 {} (weight {})",
-                    short_hex(&g.cell),
-                    g.weight
-                )),
+                value: FieldValue::Text(format!("🛡 {} (weight {})", short_hex(&g.cell), g.weight)),
             });
         }
         Inspectable {
@@ -470,8 +490,8 @@ mod tests {
     use super::*;
     use dregg_cell::CellId;
     use dregg_sdk::identity::{
-        COUNCIL_COMMIT_SLOT, CURRENT_KEYS_COMMIT_SLOT, LAST_ROTATED_AT_SLOT, NEXT_KEYS_DIGEST_SLOT,
-        STATE_ACTIVE, STATE_SLOT, key_set_commitment, next_keys_digest,
+        key_set_commitment, next_keys_digest, COUNCIL_COMMIT_SLOT, CURRENT_KEYS_COMMIT_SLOT,
+        LAST_ROTATED_AT_SLOT, NEXT_KEYS_DIGEST_SLOT, STATE_ACTIVE, STATE_SLOT,
     };
     use dregg_sdk::polis::CouncilCharter;
 
@@ -484,11 +504,12 @@ mod tests {
     /// A genesis'd 3-of-5-guardian identity at height 1_000, holding G0 with G1
     /// pre-committed — the real `inspect_identity` decode shape.
     fn live_panel() -> (TrustPanel, IdentityCharter) {
-        let council = CouncilCharter::new(
-            (1u8..=5).map(|i| CellId::from_bytes([i; 32])).collect(),
-            3,
-        );
-        let charter = IdentityCharter { council: council.clone(), cooling_period: 50 };
+        let council =
+            CouncilCharter::new((1u8..=5).map(|i| CellId::from_bytes([i; 32])).collect(), 3);
+        let charter = IdentityCharter {
+            council: council.clone(),
+            cooling_period: 50,
+        };
 
         let g0 = vec![[0x10u8; 32], [0x11u8; 32]];
         let g1 = vec![[0x20u8; 32], [0x21u8; 32]];
@@ -535,17 +556,35 @@ mod tests {
             FieldValue::Text(t) if t == "any 3 of 5 guardians"
         )));
         // Every device shows up as a friendly face.
-        assert!(card.fields.iter().filter(|f| f.key.starts_with("device · ")).count() == 2);
+        assert!(
+            card.fields
+                .iter()
+                .filter(|f| f.key.starts_with("device · "))
+                .count()
+                == 2
+        );
         // Every guardian shows up as a shield face.
-        assert!(card.fields.iter().filter(|f| f.key.starts_with("guardian · ")).count() == 5);
+        assert!(
+            card.fields
+                .iter()
+                .filter(|f| f.key.starts_with("guardian · "))
+                .count()
+                == 5
+        );
     }
 
     #[test]
     fn the_panel_offers_who_i_am_plus_kel() {
         let (panel, _charter) = live_panel();
         let set = panel.present();
-        assert!(set.iter().any(|p| p.kind == PresentationKind::RawFields), "WHO-I-AM floor");
-        assert!(set.iter().any(|p| p.kind == PresentationKind::Provenance), "the KEL timeline");
+        assert!(
+            set.iter().any(|p| p.kind == PresentationKind::RawFields),
+            "WHO-I-AM floor"
+        );
+        assert!(
+            set.iter().any(|p| p.kind == PresentationKind::Provenance),
+            "the KEL timeline"
+        );
         // No recovery underway → no recovery gauge.
         assert!(!set.iter().any(|p| p.kind == PresentationKind::DomainVisual));
         // The KEL has both the inception and the device-add events.
@@ -562,13 +601,22 @@ mod tests {
         assert_eq!(panel.guardians.len(), 5);
         assert_eq!(panel.threshold, 3);
         let set = panel.present();
-        assert!(set.iter().any(|p| p.kind == PresentationKind::RawFields), "WHO-I-AM floor");
-        assert!(set.iter().any(|p| p.kind == PresentationKind::Provenance), "the KEL");
+        assert!(
+            set.iter().any(|p| p.kind == PresentationKind::RawFields),
+            "WHO-I-AM floor"
+        );
+        assert!(
+            set.iter().any(|p| p.kind == PresentationKind::Provenance),
+            "the KEL"
+        );
         assert!(
             set.iter().any(|p| p.kind == PresentationKind::DomainVisual),
             "the recovery gauge shows (a recovery is underway)"
         );
-        assert!(panel.recovery_gauge().is_some(), "the ask-your-guardians gauge");
+        assert!(
+            panel.recovery_gauge().is_some(),
+            "the ask-your-guardians gauge"
+        );
     }
 
     #[test]
@@ -602,15 +650,16 @@ mod tests {
         assert_eq!(gauge.value, 3, "approved weight");
         assert_eq!(gauge.ceiling, Some(3), "the threshold");
         assert_eq!(gauge.rungs.len(), 5, "one rung per guardian");
-        assert!(panel.present().iter().any(|p| p.kind == PresentationKind::DomainVisual));
+        assert!(panel
+            .present()
+            .iter()
+            .any(|p| p.kind == PresentationKind::DomainVisual));
     }
 
     #[test]
     fn idempotent_approval_and_weighting() {
-        let council = CouncilCharter::new(
-            (1u8..=3).map(|i| CellId::from_bytes([i; 32])).collect(),
-            2,
-        );
+        let council =
+            CouncilCharter::new((1u8..=3).map(|i| CellId::from_bytes([i; 32])).collect(), 2);
         let mut prog = RecoveryProgress::begin(&council, 10);
         // A guardian's signature counts once, even if recorded twice.
         prog.approve(0);

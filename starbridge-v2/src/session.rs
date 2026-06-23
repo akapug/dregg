@@ -315,7 +315,11 @@ impl LoginManager {
             // Seed the root cell deterministically at its derived id so the same
             // key always lands the same cell (mint-on-first-login).
             let cell = make_root_cell(&principal.pubkey);
-            debug_assert_eq!(cell.id(), root_cell, "the root cell IS the content-address of the key");
+            debug_assert_eq!(
+                cell.id(),
+                root_cell,
+                "the root cell IS the content-address of the key"
+            );
             world.genesis_install(cell);
         }
 
@@ -356,7 +360,8 @@ impl LoginManager {
                 }
                 CommitOutcome::Queued { .. } => {
                     return LoginOutcome::Denied {
-                        reason: "world suspended: a session grant queued, not committed".to_string(),
+                        reason: "world suspended: a session grant queued, not committed"
+                            .to_string(),
                     };
                 }
             }
@@ -458,14 +463,18 @@ impl SessionRecord {
     /// Decode from the opaque blob (returns `None` on a corrupt/empty record —
     /// fail-closed: a record that does not decode does NOT resume).
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        postcard::from_bytes::<Encodable>(bytes).ok().map(Into::into)
+        postcard::from_bytes::<Encodable>(bytes)
+            .ok()
+            .map(Into::into)
     }
 
     /// Reconstruct the in-RAM [`Session`] this record describes (no receipts —
     /// they are durable in the image's commit log, not carried in the record).
     pub fn to_session(&self) -> Session {
         Session {
-            principal: Principal { pubkey: self.pubkey },
+            principal: Principal {
+                pubkey: self.pubkey,
+            },
             root_cell: self.root_cell,
             granted: self.granted.clone(),
             receipts: Vec::new(),
@@ -691,7 +700,11 @@ pub fn open_session_world(
     // The deterministic anchor ids — content-addresses of the fixed seeds, the
     // SAME on a fresh provision and on a recovered image.
     let [s_treasury, s_service, s_user] = ANCHOR_SEEDS;
-    let anchors = [anchor_id(s_treasury), anchor_id(s_service), anchor_id(s_user)];
+    let anchors = [
+        anchor_id(s_treasury),
+        anchor_id(s_service),
+        anchor_id(s_user),
+    ];
 
     // FRESH iff the recovered image has no anchor cells yet (an empty store opens
     // to a genesis-empty World). On a relaunch every cell (anchors + the
@@ -745,7 +758,12 @@ pub fn default_user_template(anchors: [CellId; 3]) -> CapTemplate {
     let [_treasury, service, user] = anchors;
     CapTemplate::empty()
         .with(CapEntry::new(user, AuthRequired::None, true, "home"))
-        .with(CapEntry::new(service, AuthRequired::Signature, true, "launcher"))
+        .with(CapEntry::new(
+            service,
+            AuthRequired::Signature,
+            true,
+            "launcher",
+        ))
 }
 
 /// The **agent `CapTemplate`** — the polis payoff. The SAME ceremony as a user,
@@ -806,7 +824,12 @@ impl DemoIdentity {
     /// Construct a demo identity from a fixed dev `label`: derive the 64-byte dev
     /// seed, rebuild the clerk, and take its REAL public key as the identity's
     /// pubkey. The same label always reconstructs the same key (and root cell).
-    fn from_label(name: &'static str, label: &str, kind: IdentityKind, blurb: &'static str) -> Self {
+    fn from_label(
+        name: &'static str,
+        label: &str,
+        kind: IdentityKind,
+        blurb: &'static str,
+    ) -> Self {
         let dev_seed = dev_seed(label);
         let pubkey = AgentCipherclerk::from_seed(dev_seed).public_key().0;
         DemoIdentity {
@@ -936,7 +959,12 @@ mod tests {
     fn user_template(home: CellId, app: CellId) -> CapTemplate {
         CapTemplate::empty()
             .with(CapEntry::new(home, AuthRequired::None, true, "home"))
-            .with(CapEntry::new(app, AuthRequired::Signature, true, "launcher"))
+            .with(CapEntry::new(
+                app,
+                AuthRequired::Signature,
+                true,
+                "launcher",
+            ))
     }
 
     #[test]
@@ -945,7 +973,10 @@ mod tests {
         let pk = [7u8; 32];
 
         // A failed auth yields no principal — nothing downstream can run.
-        assert!(mgr.authenticate(pk, false).is_none(), "failed auth gates login");
+        assert!(
+            mgr.authenticate(pk, false).is_none(),
+            "failed auth gates login"
+        );
 
         // A passing auth yields a principal whose root cell is the deterministic
         // content-address of the key (same key → same cell, every time).
@@ -958,10 +989,18 @@ mod tests {
         );
         // Re-deriving from a fresh principal lands the SAME cell (stateless).
         let p2 = mgr.authenticate(pk, true).unwrap();
-        assert_eq!(p.root_cell(), p2.root_cell(), "the same key re-derives the same root cell");
+        assert_eq!(
+            p.root_cell(),
+            p2.root_cell(),
+            "the same key re-derives the same root cell"
+        );
         // A different key → a different cell.
         let other = mgr.authenticate([9u8; 32], true).unwrap();
-        assert_ne!(p.root_cell(), other.root_cell(), "distinct keys → distinct identity cells");
+        assert_ne!(
+            p.root_cell(),
+            other.root_cell(),
+            "distinct keys → distinct identity cells"
+        );
     }
 
     #[test]
@@ -973,7 +1012,10 @@ mod tests {
         let root = p.root_cell();
 
         // First login: the identity cell does not exist yet.
-        assert!(w.ledger().get(&root).is_none(), "first login: root cell not yet minted");
+        assert!(
+            w.ledger().get(&root).is_none(),
+            "first login: root cell not yet minted"
+        );
         let cells_before = w.cell_count();
 
         let outcome = mgr.login(&mut w, p, &user_template(home, app));
@@ -983,23 +1025,50 @@ mod tests {
         };
 
         // The root cell was minted (a brand-new identity cell).
-        assert_eq!(w.cell_count(), cells_before + 1, "first login mints the identity cell");
+        assert_eq!(
+            w.cell_count(),
+            cells_before + 1,
+            "first login mints the identity cell"
+        );
         assert_eq!(session.root_cell, root);
 
         // The session IS the granted cap-tree: the root cell now reaches BOTH
         // template targets, at the ATTENUATED rights (≤ the system principal's).
         assert!(session.reaches(&w, &home), "the session reaches home");
-        assert!(session.reaches(&w, &app), "the session reaches the launchable app");
+        assert!(
+            session.reaches(&w, &app),
+            "the session reaches the launchable app"
+        );
         assert!(session.is_live(&w), "a freshly logged-in session is live");
 
         let root_cell = w.ledger().get(&root).unwrap();
-        let home_cap = root_cell.capabilities.iter().find(|c| c.target == home).unwrap();
-        let app_cap = root_cell.capabilities.iter().find(|c| c.target == app).unwrap();
-        assert_eq!(home_cap.permissions, AuthRequired::None, "home at the template ceiling");
-        assert_eq!(app_cap.permissions, AuthRequired::Signature, "app at the attenuated tier");
+        let home_cap = root_cell
+            .capabilities
+            .iter()
+            .find(|c| c.target == home)
+            .unwrap();
+        let app_cap = root_cell
+            .capabilities
+            .iter()
+            .find(|c| c.target == app)
+            .unwrap();
+        assert_eq!(
+            home_cap.permissions,
+            AuthRequired::None,
+            "home at the template ceiling"
+        );
+        assert_eq!(
+            app_cap.permissions,
+            AuthRequired::Signature,
+            "app at the attenuated tier"
+        );
 
         // Each grant left a real receipt — the session's verifiable lifecycle.
-        assert_eq!(session.receipts.len(), 2, "one receipt per template entry granted");
+        assert_eq!(
+            session.receipts.len(),
+            2,
+            "one receipt per template entry granted"
+        );
     }
 
     #[test]
@@ -1038,13 +1107,20 @@ mod tests {
         // Returning login (same key): no new cell minted; same root cell.
         let p2 = mgr.authenticate([7u8; 32], true).unwrap();
         let second = mgr.login(&mut w, p2, &user_template(home, app));
-        assert_eq!(second.session().unwrap().root_cell, root, "same key → same identity cell");
+        assert_eq!(
+            second.session().unwrap().root_cell,
+            root,
+            "same key → same identity cell"
+        );
         assert_eq!(
             w.cell_count(),
             cells_after_first,
             "a returning login retrieves the cell, it does not mint a new one"
         );
-        assert!(second.session().unwrap().is_live(&w), "the re-granted session is live again");
+        assert!(
+            second.session().unwrap().is_live(&w),
+            "the re-granted session is live again"
+        );
     }
 
     #[test]
@@ -1080,14 +1156,20 @@ mod tests {
             let turn = w.turn(root, vec![effect]);
             w.commit_turn(turn).is_committed()
         };
-        assert!(exercise(&mut w, live_slot), "a live session can exercise its held cap");
+        assert!(
+            exercise(&mut w, live_slot),
+            "a live session can exercise its held cap"
+        );
 
         // LOGOUT — revoke the session root. (Revoke the original template slots;
         // the test then proves the WHOLE tree is dark for a fresh exercise.)
         mgr.logout(&mut w, &session);
         // Also revoke the slot the live exercise minted, so the root holds nothing
         // reaching `home` at all (logout in the surface revokes the live c-list).
-        let sweep = Effect::RevokeCapability { cell: root, slot: live_slot };
+        let sweep = Effect::RevokeCapability {
+            cell: root,
+            slot: live_slot,
+        };
         let t = w.turn(root, vec![sweep]);
         let _ = w.commit_turn(t);
 
@@ -1122,33 +1204,62 @@ mod tests {
         // A USER identity: full home + launchable app.
         let ember = ids.iter().find(|i| i.name == "ember").unwrap();
         let p = mgr.authenticate(ember.pubkey, true).unwrap();
-        assert_eq!(p.root_cell(), ember.root_cell(), "the picker shows the real root cell");
+        assert_eq!(
+            p.root_cell(),
+            ember.root_cell(),
+            "the picker shows the real root cell"
+        );
         let user_session = match mgr.login(&mut w, p, &ember.template(anchors)) {
             LoginOutcome::Session(s) => s,
             LoginOutcome::Denied { reason } => panic!("user login: {reason}"),
         };
-        assert!(user_session.reaches(&w, &user), "the user reaches their home cell");
-        assert!(user_session.reaches(&w, &service), "the user reaches the launchable app");
+        assert!(
+            user_session.reaches(&w, &user),
+            "the user reaches their home cell"
+        );
+        assert!(
+            user_session.reaches(&w, &service),
+            "the user reaches the launchable app"
+        );
 
         // The AGENT identity: the SAME ceremony, a strictly narrower mandate —
         // ONLY the tool surface, no home cell (the polis controller-blind bound).
-        let hermes = ids.iter().find(|i| i.kind == super::IdentityKind::Agent).unwrap();
+        let hermes = ids
+            .iter()
+            .find(|i| i.kind == super::IdentityKind::Agent)
+            .unwrap();
         let pa = mgr.authenticate(hermes.pubkey, true).unwrap();
         let agent_session = match mgr.login(&mut w, pa, &hermes.template(anchors)) {
             LoginOutcome::Session(s) => s,
             LoginOutcome::Denied { reason } => panic!("agent login: {reason}"),
         };
-        assert!(agent_session.reaches(&w, &service), "the agent reaches its tool surface");
-        assert!(!agent_session.reaches(&w, &user), "the agent gets NO home cell — its mandate is narrower");
+        assert!(
+            agent_session.reaches(&w, &service),
+            "the agent reaches its tool surface"
+        );
+        assert!(
+            !agent_session.reaches(&w, &user),
+            "the agent gets NO home cell — its mandate is narrower"
+        );
         assert_ne!(
             user_session.root_cell, agent_session.root_cell,
             "distinct inhabitants, distinct root cells"
         );
 
         // Logout is the agent kill switch.
-        assert_eq!(mgr.logout(&mut w, &agent_session), 1, "the agent's one cap revoked");
-        assert!(!agent_session.is_live(&w), "the agent session is dark — the kill switch");
-        assert!(user_session.is_live(&w), "the user session is untouched by the agent's logout");
+        assert_eq!(
+            mgr.logout(&mut w, &agent_session),
+            1,
+            "the agent's one cap revoked"
+        );
+        assert!(
+            !agent_session.is_live(&w),
+            "the agent session is dark — the kill switch"
+        );
+        assert!(
+            user_session.is_live(&w),
+            "the user session is untouched by the agent's logout"
+        );
     }
 
     #[test]
@@ -1173,13 +1284,26 @@ mod tests {
         };
 
         // The agent's session reaches ONLY its mandate — not the home cell.
-        assert!(session.reaches(&w, &app), "the agent reaches its tool surface");
-        assert!(!session.reaches(&w, &home), "the agent's session is bounded — no home cell");
+        assert!(
+            session.reaches(&w, &app),
+            "the agent reaches its tool surface"
+        );
+        assert!(
+            !session.reaches(&w, &home),
+            "the agent's session is bounded — no home cell"
+        );
 
         // Logout is the kill switch: revoke the agent's root → its whole ability
         // to act on the desktop goes dark in one turn.
-        assert_eq!(mgr.logout(&mut w, &session), 1, "the agent's one cap revoked");
-        assert!(!session.is_live(&w), "the agent session is dark — the kill switch");
+        assert_eq!(
+            mgr.logout(&mut w, &session),
+            1,
+            "the agent's one cap revoked"
+        );
+        assert!(
+            !session.is_live(&w),
+            "the agent session is dark — the kill switch"
+        );
     }
 
     // =======================================================================
@@ -1207,7 +1331,10 @@ mod tests {
     /// Open a per-user durable session world deterministically at a pinned clock
     /// (so the recovered receipts re-derive bit-identically across reopens). Mirrors
     /// `open_session_world` exactly but pins the test timestamp.
-    fn open_resume(dir: &std::path::Path, principal: &Principal) -> (World, [CellId; 3], LoginManager, bool) {
+    fn open_resume(
+        dir: &std::path::Path,
+        principal: &Principal,
+    ) -> (World, [CellId; 3], LoginManager, bool) {
         let path = session_world_path(dir, principal);
         let _ = std::fs::create_dir_all(dir);
         let mut world = World::open_with_timestamp(&path, ComputronCosts::zero(), RTS)
@@ -1231,11 +1358,21 @@ mod tests {
     fn the_session_record_round_trips_through_postcard() {
         let (mut w, mgr, home, app) = login_world();
         let p = mgr.authenticate([7u8; 32], true).unwrap();
-        let session = mgr.login(&mut w, p, &user_template(home, app)).session().unwrap().clone();
+        let session = mgr
+            .login(&mut w, p, &user_template(home, app))
+            .session()
+            .unwrap()
+            .clone();
         let record = SessionRecord::of(&session);
         let decoded = SessionRecord::decode(&record.encode()).expect("record decodes");
-        assert_eq!(decoded, record, "the session record round-trips byte-exactly");
-        assert!(!decoded.revoked, "a fresh login record is live, not revoked");
+        assert_eq!(
+            decoded, record,
+            "the session record round-trips byte-exactly"
+        );
+        assert!(
+            !decoded.revoked,
+            "a fresh login record is live, not revoked"
+        );
         // The reconstructed session has the same root + c-list (receipts are durable
         // in the commit log, not carried in the record).
         let rebuilt = decoded.to_session();
@@ -1250,7 +1387,9 @@ mod tests {
         // balances + the SESSION CAP-TREE itself — without re-running the grant
         // ceremony. (Not a fresh demo.)
         let dir = scratch_dir();
-        let p = Principal { pubkey: [0xE3u8; 32] };
+        let p = Principal {
+            pubkey: [0xE3u8; 32],
+        };
 
         let (root, treasury_after, user_after, granted_len) = {
             let (mut w, anchors, mgr, fresh) = open_resume(&dir, &p);
@@ -1265,13 +1404,28 @@ mod tests {
                 LoginOutcome::Denied { reason } => panic!("first login: {reason}"),
             };
             assert!(session.is_live(&w), "the session is live after first login");
-            assert_eq!(session.receipts.len(), 2, "first login ran the 2-entry grant ceremony");
+            assert_eq!(
+                session.receipts.len(),
+                2,
+                "first login ran the 2-entry grant ceremony"
+            );
 
             // A SESSION VALUE TURN: treasury → user, a real committed turn dual-written.
             let [treasury, _service, user] = anchors;
-            let nonce = w.ledger().get(&treasury).map(|c| c.state.nonce()).unwrap_or(0);
-            let t = crate::world::bare_turn(treasury, nonce, vec![crate::world::transfer(treasury, user, 1234)]);
-            assert!(w.commit_turn(t).is_committed(), "the session value turn commits + dual-writes");
+            let nonce = w
+                .ledger()
+                .get(&treasury)
+                .map(|c| c.state.nonce())
+                .unwrap_or(0);
+            let t = crate::world::bare_turn(
+                treasury,
+                nonce,
+                vec![crate::world::transfer(treasury, user, 1234)],
+            );
+            assert!(
+                w.commit_turn(t).is_committed(),
+                "the session value turn commits + dual-writes"
+            );
             w.checkpoint_now();
             (
                 session.root_cell,
@@ -1286,7 +1440,10 @@ mod tests {
         // cap-tree included, and `login_resumable` RESUMES (no re-grant ceremony).
         {
             let (mut w, anchors, mgr, fresh) = open_resume(&dir, &p);
-            assert!(!fresh, "the relaunch recovers the existing image (not fresh)");
+            assert!(
+                !fresh,
+                "the relaunch recovers the existing image (not fresh)"
+            );
             let [treasury, _service, user] = anchors;
 
             // The VALUE substrate resumed exactly (the Houyhnhnm property).
@@ -1305,7 +1462,9 @@ mod tests {
             // template targets in the RECOVERED ledger, BEFORE any re-login.
             let recovered_root = w.ledger().get(&root).expect("the root cell resumed");
             assert!(
-                anchors[1..].iter().all(|t| recovered_root.capabilities.has_access(t)),
+                anchors[1..]
+                    .iter()
+                    .all(|t| recovered_root.capabilities.has_access(t)),
                 "the session cap-tree resumed from the durable image"
             );
 
@@ -1316,9 +1475,19 @@ mod tests {
                 LoginOutcome::Session(s) => s,
                 LoginOutcome::Denied { reason } => panic!("resume login: {reason}"),
             };
-            assert!(resumed.receipts.is_empty(), "a RESUMED session ran NO grant ceremony");
-            assert_eq!(resumed.root_cell, root, "the resumed session is the same root");
-            assert_eq!(resumed.granted.len(), granted_len, "the same c-list resumed");
+            assert!(
+                resumed.receipts.is_empty(),
+                "a RESUMED session ran NO grant ceremony"
+            );
+            assert_eq!(
+                resumed.root_cell, root,
+                "the resumed session is the same root"
+            );
+            assert_eq!(
+                resumed.granted.len(),
+                granted_len,
+                "the same c-list resumed"
+            );
             assert!(resumed.is_live(&w), "the resumed session is live");
         }
 
@@ -1332,7 +1501,9 @@ mod tests {
         // are durable) AND the durable record carries REVOKED, so `login_resumable`
         // re-runs the ceremony (a fresh authenticated grant) rather than resuming.
         let dir = scratch_dir();
-        let p = Principal { pubkey: [0x67u8; 32] };
+        let p = Principal {
+            pubkey: [0x67u8; 32],
+        };
 
         // FIRST LOGIN then DURABLE LOGOUT.
         {
@@ -1346,7 +1517,8 @@ mod tests {
             let revoked = mgr.logout_durable(&mut w, &session);
             assert_eq!(revoked, 2, "logout revoked both session caps");
             assert!(!session.is_live(&w), "the cap-tree is dark after logout");
-            let rec = SessionRecord::decode(&w.session_blob().expect("a record was written")).unwrap();
+            let rec =
+                SessionRecord::decode(&w.session_blob().expect("a record was written")).unwrap();
             assert!(rec.revoked, "the durable session record is marked revoked");
             w.checkpoint_now();
         }
@@ -1356,7 +1528,10 @@ mod tests {
         {
             let (mut w, anchors, mgr, _fresh) = open_resume(&dir, &p);
             let rec = SessionRecord::decode(&w.session_blob().unwrap()).unwrap();
-            assert!(rec.revoked, "the revoked record persisted across the reopen");
+            assert!(
+                rec.revoked,
+                "the revoked record persisted across the reopen"
+            );
             // The recovered cap-tree is dark (the durable revokes resumed too).
             let dark = rec.to_session();
             assert!(
@@ -1371,8 +1546,15 @@ mod tests {
                 LoginOutcome::Session(s) => s,
                 LoginOutcome::Denied { reason } => panic!("re-login: {reason}"),
             };
-            assert_eq!(session.receipts.len(), 2, "the re-login re-ran the grant ceremony (not a resume)");
-            assert!(session.is_live(&w), "the freshly re-granted session is live again");
+            assert_eq!(
+                session.receipts.len(),
+                2,
+                "the re-login re-ran the grant ceremony (not a resume)"
+            );
+            assert!(
+                session.is_live(&w),
+                "the freshly re-granted session is live again"
+            );
             let rec2 = SessionRecord::decode(&w.session_blob().unwrap()).unwrap();
             assert!(!rec2.revoked, "the re-login wrote a fresh LIVE record");
         }

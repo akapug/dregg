@@ -48,7 +48,7 @@
 
 use crate::model::{BlockInfo, FederationInfo, NodeStatus};
 use crate::presentable::{
-    GaugeView, LatticeView, Presentable, PresentCtx, Presentation, PresentationBody,
+    GaugeView, LatticeView, PresentCtx, Presentable, Presentation, PresentationBody,
     PresentationKind, TimelineEvent, TimelineView,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
@@ -83,7 +83,11 @@ pub const FINALITY_RUNGS: [&str; 4] = [
 fn finality_ladder(current_rung: Option<usize>) -> LatticeView {
     let nodes: Vec<String> = FINALITY_RUNGS.iter().map(|s| s.to_string()).collect();
     let edges = vec![(0, 1), (1, 2), (2, 3)];
-    LatticeView { nodes, edges, current: current_rung }
+    LatticeView {
+        nodes,
+        edges,
+        current: current_rung,
+    }
 }
 
 // ===========================================================================
@@ -133,7 +137,10 @@ impl FederationView {
             None => fields.push(Field::text("latest_root", "none (no finalized root yet)")),
         }
         for (n, m) in i.members.iter().enumerate() {
-            fields.push(Field::text(format!("member[{n}]"), reflect::short_hex_hexstr(m)));
+            fields.push(Field::text(
+                format!("member[{n}]"),
+                reflect::short_hex_hexstr(m),
+            ));
         }
         Inspectable {
             kind: ObjectKind::Image,
@@ -200,13 +207,19 @@ impl Presentable for FederationView {
             Field::count("latest_height", i.latest_height),
         ];
         match &i.latest_root {
-            Some(r) => iv_fields.push(Field::text("latest_attested_root", reflect::short_hex_hexstr(r))),
+            Some(r) => iv_fields.push(Field::text(
+                "latest_attested_root",
+                reflect::short_hex_hexstr(r),
+            )),
             None => iv_fields.push(Field::text("latest_attested_root", "none")),
         }
         let iv = Inspectable {
             kind: ObjectKind::Proof,
             title: format!("Attested Roots · {}", self.short()),
-            subtitle: format!("{} finalized root(s) · up to h{}", i.num_finalized_roots, i.latest_height),
+            subtitle: format!(
+                "{} finalized root(s) · up to h{}",
+                i.num_finalized_roots, i.latest_height
+            ),
             fields: iv_fields,
         };
         out.push(Presentation {
@@ -329,7 +342,10 @@ impl Presentable for BlocklaceView {
         out.push(Presentation {
             kind: PresentationKind::Provenance,
             label: "Causal Stream".to_string(),
-            search_text: format!("blocklace causal stream {} blocks happened-before", events.len()),
+            search_text: format!(
+                "blocklace causal stream {} blocks happened-before",
+                events.len()
+            ),
             body: PresentationBody::Timeline(TimelineView { events }),
         });
 
@@ -339,7 +355,8 @@ impl Presentable for BlocklaceView {
         out.push(Presentation {
             kind: PresentationKind::DomainVisual,
             label: "Finality Ladder".to_string(),
-            search_text: "finality ladder local bilateral attested ordered common knowledge".to_string(),
+            search_text: "finality ladder local bilateral attested ordered common knowledge"
+                .to_string(),
             body: PresentationBody::Lattice(finality_ladder(None)),
         });
 
@@ -367,7 +384,10 @@ pub struct NodeConsensusView {
 impl NodeConsensusView {
     /// Wrap a `/status` snapshot read from `base_url`.
     pub fn new(base_url: impl Into<String>, status: NodeStatus) -> Self {
-        NodeConsensusView { base_url: base_url.into(), status }
+        NodeConsensusView {
+            base_url: base_url.into(),
+            status,
+        }
     }
 }
 
@@ -403,7 +423,10 @@ impl Presentable for NodeConsensusView {
                 Field::text("state_producer", s.state_producer.clone()),
                 Field::boolean("lean_producer", s.lean_producer),
                 Field::boolean("full_turn_proving", s.full_turn_proving),
-                Field::count("producer_covered_effects", s.producer_covered_effects as u64),
+                Field::count(
+                    "producer_covered_effects",
+                    s.producer_covered_effects as u64,
+                ),
             ],
         };
         out.push(Presentation {
@@ -430,13 +453,19 @@ impl Presentable for NodeConsensusView {
                 Field::text("state_producer", s.state_producer.clone()),
                 Field::boolean("lean_producer", s.lean_producer),
                 Field::boolean("full_turn_proving", s.full_turn_proving),
-                Field::count("producer_covered_effects", s.producer_covered_effects as u64),
+                Field::count(
+                    "producer_covered_effects",
+                    s.producer_covered_effects as u64,
+                ),
             ],
         };
         out.push(Presentation {
             kind: PresentationKind::Invariant,
             label: "Producer Soundness".to_string(),
-            search_text: format!("producer soundness verified {} {}", verified, s.state_producer),
+            search_text: format!(
+                "producer soundness verified {} {}",
+                verified, s.state_producer
+            ),
             body: PresentationBody::Fields(iv),
         });
 
@@ -666,7 +695,11 @@ mod tests {
             .map(|h| BlockInfo {
                 height: h,
                 hash: format!("{h:04x}").repeat(16),
-                creator: if h % 2 == 0 { "11".repeat(32) } else { "22".repeat(32) },
+                creator: if h % 2 == 0 {
+                    "11".repeat(32)
+                } else {
+                    "22".repeat(32)
+                },
                 seq: h,
             })
             .collect()
@@ -697,13 +730,22 @@ mod tests {
         let ctx = dummy_ctx(&w);
 
         let fed = FederationView::new(sample_federation());
-        assert!(fed.has_raw_fields_floor(&ctx), "FederationView has the RawFields floor");
+        assert!(
+            fed.has_raw_fields_floor(&ctx),
+            "FederationView has the RawFields floor"
+        );
 
         let bl = BlocklaceView::new(sample_blocks());
-        assert!(bl.has_raw_fields_floor(&ctx), "BlocklaceView has the RawFields floor");
+        assert!(
+            bl.has_raw_fields_floor(&ctx),
+            "BlocklaceView has the RawFields floor"
+        );
 
         let cons = NodeConsensusView::new("http://node", sample_status());
-        assert!(cons.has_raw_fields_floor(&ctx), "NodeConsensusView has the RawFields floor");
+        assert!(
+            cons.has_raw_fields_floor(&ctx),
+            "NodeConsensusView has the RawFields floor"
+        );
     }
 
     // ── the FederationView offers ≥3 kinds with real wire data ──────────────
@@ -721,7 +763,10 @@ mod tests {
 
         let set = fed.present(&ctx);
         // The RawFields floor carries the real committee roster.
-        let rf = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let rf = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &rf.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "member[0]"));
@@ -732,7 +777,10 @@ mod tests {
         }
 
         // The Quorum gauge reads the real t-of-n threshold.
-        let dv = set.iter().find(|p| p.kind == PresentationKind::DomainVisual).unwrap();
+        let dv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::DomainVisual)
+            .unwrap();
         match &dv.body {
             PresentationBody::Gauge(g) => {
                 assert_eq!(g.value, 3, "threshold");
@@ -751,10 +799,17 @@ mod tests {
         let bl = BlocklaceView::new(sample_blocks());
 
         assert_eq!(bl.dag_height(), 1887);
-        assert_eq!(bl.creator_count(), 2, "two distinct creators in the fixture");
+        assert_eq!(
+            bl.creator_count(),
+            2,
+            "two distinct creators in the fixture"
+        );
 
         let set = bl.present(&ctx);
-        let pv = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let pv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &pv.body {
             PresentationBody::Timeline(t) => {
                 assert_eq!(t.events.len(), 8);
@@ -767,7 +822,10 @@ mod tests {
         }
 
         // The finality ladder is the four monotone rungs.
-        let dv = set.iter().find(|p| p.kind == PresentationKind::DomainVisual).unwrap();
+        let dv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::DomainVisual)
+            .unwrap();
         match &dv.body {
             PresentationBody::Lattice(l) => {
                 assert_eq!(l.nodes, vec!["Local", "Bilateral", "Attested", "Ordered"]);
@@ -787,12 +845,17 @@ mod tests {
         // A lean producer is verified.
         let cons = NodeConsensusView::new("http://node", sample_status());
         let set = cons.present(&ctx);
-        let iv = set.iter().find(|p| p.kind == PresentationKind::Invariant).unwrap();
+        let iv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Invariant)
+            .unwrap();
         match &iv.body {
             PresentationBody::Fields(i) => {
-                assert!(i.fields.iter().any(
-                    |f| f.key == "verified_producer" && matches!(f.value, FieldValue::Bool(true))
-                ));
+                assert!(i
+                    .fields
+                    .iter()
+                    .any(|f| f.key == "verified_producer"
+                        && matches!(f.value, FieldValue::Bool(true))));
             }
             other => panic!("Producer Soundness must carry a Fields body, got {other:?}"),
         }
@@ -803,21 +866,31 @@ mod tests {
         rusty.lean_producer = false;
         let cons2 = NodeConsensusView::new("http://node", rusty);
         let set2 = cons2.present(&ctx);
-        let iv2 = set2.iter().find(|p| p.kind == PresentationKind::Invariant).unwrap();
+        let iv2 = set2
+            .iter()
+            .find(|p| p.kind == PresentationKind::Invariant)
+            .unwrap();
         match &iv2.body {
             PresentationBody::Fields(i) => {
                 assert!(i.subtitle.contains("UNVERIFIED"));
-                assert!(i.fields.iter().any(
-                    |f| f.key == "verified_producer" && matches!(f.value, FieldValue::Bool(false))
-                ));
+                assert!(i
+                    .fields
+                    .iter()
+                    .any(|f| f.key == "verified_producer"
+                        && matches!(f.value, FieldValue::Bool(false))));
             }
             _ => unreachable!(),
         }
 
         // The consensus-live finality ladder sits at Ordered when live, Local when not.
-        let dv = set.iter().find(|p| p.kind == PresentationKind::DomainVisual).unwrap();
+        let dv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::DomainVisual)
+            .unwrap();
         match &dv.body {
-            PresentationBody::Lattice(l) => assert_eq!(l.current, Some(3), "consensus_live ⟹ Ordered"),
+            PresentationBody::Lattice(l) => {
+                assert_eq!(l.current, Some(3), "consensus_live ⟹ Ordered")
+            }
             _ => unreachable!(),
         }
     }
@@ -857,7 +930,11 @@ mod tests {
         assert_eq!(survey.federations.len(), 1);
         assert!(survey.blocklace.is_some());
         assert!(survey.consensus.is_some());
-        assert_eq!(survey.live_count(), 3, "1 federation + blocklace + consensus");
+        assert_eq!(
+            survey.live_count(),
+            3,
+            "1 federation + blocklace + consensus"
+        );
         // The captp-only catalog is always present (honest, never faked).
         assert!(!survey.remote.is_empty());
 
@@ -882,7 +959,10 @@ mod tests {
         assert!(survey.federations.is_empty());
         assert!(survey.blocklace.is_none());
         assert!(survey.consensus.is_none());
-        assert!(!survey.remote.is_empty(), "the honest remote catalog is always present");
+        assert!(
+            !survey.remote.is_empty(),
+            "the honest remote catalog is always present"
+        );
     }
 
     // ── an empty blocklace (consensus not yet running) is honest, not faked ──
@@ -895,7 +975,10 @@ mod tests {
         assert_eq!(bl.dag_height(), 0);
         assert_eq!(bl.creator_count(), 0);
         let set = bl.present(&ctx);
-        let pv = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let pv = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &pv.body {
             PresentationBody::Timeline(t) => assert!(t.events.is_empty(), "no blocks, no events"),
             _ => unreachable!(),

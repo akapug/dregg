@@ -160,7 +160,8 @@ impl Dock {
         if !self.is_open {
             return None;
         }
-        self.active_panel_index.and_then(|ix| self.panel_entries.get(ix))
+        self.active_panel_index
+            .and_then(|ix| self.panel_entries.get(ix))
     }
 
     /// Set the active panel's size along the dock axis (clamped to min). `None`

@@ -29,7 +29,7 @@ use dregg_doc::{
 };
 
 use crate::presentable::{
-    Presentable, Presentation, PresentationBody, PresentationKind, PresentCtx, TimelineEvent,
+    PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind, TimelineEvent,
     TimelineView,
 };
 use crate::reflect::{Field, Inspectable, ObjectKind};
@@ -427,7 +427,8 @@ mod tests {
         assert!(
             cf.fields
                 .iter()
-                .any(|f| f.key == "clean" && matches!(&f.value, crate::reflect::FieldValue::Bool(true))),
+                .any(|f| f.key == "clean"
+                    && matches!(&f.value, crate::reflect::FieldValue::Bool(true))),
             "clean is recorded true"
         );
     }
@@ -438,8 +439,14 @@ mod tests {
         let rendered = content(&doc.graph);
         let prose = commitment_prose(commit(&doc.graph), &rendered);
         assert!(prose.contains("COMMITMENT"));
-        assert!(prose.contains("PROSE") && prose.contains("FIELDS"), "two regimes named");
-        assert!(prose.contains("conflict"), "the conflict binding is described");
+        assert!(
+            prose.contains("PROSE") && prose.contains("FIELDS"),
+            "two regimes named"
+        );
+        assert!(
+            prose.contains("conflict"),
+            "the conflict binding is described"
+        );
     }
 
     /// The REACHABILITY path: source the lens from a LIVE document (the DOCS tab's
@@ -449,9 +456,11 @@ mod tests {
     fn sources_from_a_live_executor_driven_doc() {
         let mut doc = ExecutorDrivenDoc::new(11, 12, true);
         let (a1, op1) = Patch::add(1, "live edit ", dregg_doc::AtomId::ROOT);
-        doc.edit(Patch::by(alice(), [op1])).expect("authorized edit commits");
+        doc.edit(Patch::by(alice(), [op1]))
+            .expect("authorized edit commits");
         let (_a2, op2) = Patch::add(2, "through the executor", a1);
-        doc.edit(Patch::by(alice(), [op2])).expect("authorized edit commits");
+        doc.edit(Patch::by(alice(), [op2]))
+            .expect("authorized edit commits");
 
         let inspection = DocumentInspection::from_doc("live notes", &doc);
         let w = World::new();

@@ -53,7 +53,10 @@ pub struct PortalLine {
 
 impl PortalLine {
     fn new(tone: Tone, text: impl Into<String>) -> Self {
-        Self { text: text.into(), tone }
+        Self {
+            text: text.into(),
+            tone,
+        }
     }
 }
 
@@ -99,7 +102,11 @@ impl LandingPortal {
         // weight" fact, read live from the ledger.
         let total_value: i64 = world.ledger().iter().map(|(_, c)| c.state.balance()).sum();
         // The total capabilities held across the image — the ocap web's size.
-        let total_caps: usize = world.ledger().iter().map(|(_, c)| c.capabilities.len()).sum();
+        let total_caps: usize = world
+            .ledger()
+            .iter()
+            .map(|(_, c)| c.capabilities.len())
+            .sum();
         // The most recent dynamics event — the image's last heartbeat, in words.
         let last_beat = world
             .dynamics()
@@ -291,9 +298,18 @@ mod tests {
         let portal = LandingPortal::build(&world);
 
         // The headline + subtitle + invitation are real, non-empty prose.
-        assert!(!portal.headline.trim().is_empty(), "headline must be real text");
-        assert!(!portal.subtitle.trim().is_empty(), "subtitle must be real text");
-        assert!(!portal.invitation.trim().is_empty(), "invitation must be real text");
+        assert!(
+            !portal.headline.trim().is_empty(),
+            "headline must be real text"
+        );
+        assert!(
+            !portal.subtitle.trim().is_empty(),
+            "subtitle must be real text"
+        );
+        assert!(
+            !portal.invitation.trim().is_empty(),
+            "invitation must be real text"
+        );
 
         // The portal has substantial content — this is the anti-blank guarantee:
         // the rendered HOME tree contains many lines of real text. (If this
@@ -333,8 +349,14 @@ mod tests {
         );
         // It names the receipt nervous system + the ocap no-amplification law +
         // the command palette invitation — the things that make it self-describing.
-        assert!(blob.contains("receipt"), "must name the receipt nervous system");
-        assert!(blob.to_lowercase().contains("capabilit"), "must name capabilities");
+        assert!(
+            blob.contains("receipt"),
+            "must name the receipt nervous system"
+        );
+        assert!(
+            blob.to_lowercase().contains("capabilit"),
+            "must name capabilities"
+        );
         assert!(blob.contains("⌘K"), "must invite the command palette");
     }
 
@@ -352,7 +374,11 @@ mod tests {
         );
         // The demo image boots into a portal with the six titled cards and many
         // lines of real text (a generous floor; the exact count can grow).
-        assert_eq!(portal.sections.len(), 6, "the portal renders six titled cards");
+        assert_eq!(
+            portal.sections.len(),
+            6,
+            "the portal renders six titled cards"
+        );
         assert!(
             portal.line_count() >= 25,
             "the boot view must render many lines of real text (got {})",
@@ -375,7 +401,11 @@ mod tests {
         // content the window builds without the demo turns having run.)
         let (world, _anchors, _seed) = crate::world::demo_genesis();
         // Sanity: this really is the un-seeded image (the thing the window opens on).
-        assert_eq!(world.receipts().len(), 0, "no seed turn has run on the boot image");
+        assert_eq!(
+            world.receipts().len(),
+            0,
+            "no seed turn has run on the boot image"
+        );
         assert_eq!(world.height(), 0);
         assert_eq!(world.cell_count(), 4, "the four genesis cells are present");
 
@@ -384,22 +414,35 @@ mod tests {
         // The boot view is FULL — the six titled cards + many lines of real prose,
         // every line non-empty. (If this were sparse, that is the blank-feeling
         // window we are fixing.)
-        assert_eq!(portal.sections.len(), 6, "all six cards render on the at-rest image");
+        assert_eq!(
+            portal.sections.len(),
+            6,
+            "all six cards render on the at-rest image"
+        );
         assert!(
             portal.line_count() >= 25,
             "the unseeded boot view must already render abundant text (got {})",
             portal.line_count()
         );
         for line in &text {
-            assert!(!line.trim().is_empty(), "every boot-view line must be real text");
+            assert!(
+                !line.trim().is_empty(),
+                "every boot-view line must be real text"
+            );
         }
         // It names the real heart + invites the palette + reports the live (here:
         // zero-turn) numbers honestly — and shows the image's genesis heartbeat
         // (the cells being born), so the boot view is alive, not a static splash.
         let blob = text.join("\n");
-        assert!(blob.contains("TurnExecutor"), "names the real executor at boot");
+        assert!(
+            blob.contains("TurnExecutor"),
+            "names the real executor at boot"
+        );
         assert!(blob.contains("⌘K"), "invites the command palette at boot");
-        assert!(blob.contains("4 live cells"), "reports the at-rest image's real cell count");
+        assert!(
+            blob.contains("4 live cells"),
+            "reports the at-rest image's real cell count"
+        );
         // Zero seed turns have run, so the chain is honestly at height 0 / 0 receipts.
         assert!(
             blob.contains("height h0") && blob.contains("0 receipts"),
@@ -422,7 +465,10 @@ mod tests {
         let before_receipts = world.receipts().len();
 
         let [treasury, _service, user] = anchors;
-        let turn = world.turn(treasury, vec![crate::world::transfer(treasury, user, 1_000)]);
+        let turn = world.turn(
+            treasury,
+            vec![crate::world::transfer(treasury, user, 1_000)],
+        );
         let _ = world.commit_turn(turn);
 
         let after = LandingPortal::build(&world);

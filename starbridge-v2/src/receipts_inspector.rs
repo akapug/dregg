@@ -60,14 +60,14 @@ use dregg_cell::CellId;
 use dregg_turn::turn::{ConsumedCapWitness, TurnReceipt};
 
 use crate::presentable::{
-    GadgetError, GadgetField, GadgetInput, GadgetValidation, Gadget, GraphView, MerkleTreeView,
-    Presentable, PresentCtx, Presentation, PresentationBody, PresentationKind, TimelineEvent,
+    Gadget, GadgetError, GadgetField, GadgetInput, GadgetValidation, GraphView, MerkleTreeView,
+    PresentCtx, Presentable, Presentation, PresentationBody, PresentationKind, TimelineEvent,
     TimelineView, TraceStep, TraceView,
 };
 use crate::reflect::{self, Inspectable, ObjectKind};
 use crate::replay::{Fork, History, ReplayError, StateDiff};
-use dregg_turn::turn::Turn;
 use dregg_cell::Ledger;
+use dregg_turn::turn::Turn;
 
 // ===========================================================================
 // §6.1 — the receipt-index MMR (the faithful local instance)
@@ -145,7 +145,9 @@ impl ReceiptMmr {
     /// Build the MMR over a receipt chain — the leaf values are the real
     /// `receipt_hash()` commitments, in commit order (the dense log).
     pub fn over_receipts(receipts: &[TurnReceipt]) -> Self {
-        ReceiptMmr { values: receipts.iter().map(|r| r.receipt_hash()).collect() }
+        ReceiptMmr {
+            values: receipts.iter().map(|r| r.receipt_hash()).collect(),
+        }
     }
 
     /// Append one receipt commitment. Returns its dense position.
@@ -182,7 +184,10 @@ impl ReceiptMmr {
         let len = self.values.len();
         for height in (0..64u8).rev() {
             if len & (1usize << height) != 0 {
-                out.push(ReceiptMmrPeak { height, hash: self.subtree(start, height) });
+                out.push(ReceiptMmrPeak {
+                    height,
+                    hash: self.subtree(start, height),
+                });
                 start += 1usize << height;
             }
         }
@@ -216,7 +221,11 @@ impl ReceiptMmr {
         let path = self.path_of(pos)?;
         Some((
             self.values[pos as usize],
-            ReceiptMmrOpening { peaks: self.peaks(), pos, path },
+            ReceiptMmrOpening {
+                peaks: self.peaks(),
+                pos,
+                path,
+            },
         ))
     }
 }
@@ -292,7 +301,10 @@ pub fn verify_membership(
         return Err(ReceiptMmrError::RootMismatch);
     }
     if opening.pos >= len {
-        return Err(ReceiptMmrError::OutOfRange { pos: opening.pos, len });
+        return Err(ReceiptMmrError::OutOfRange {
+            pos: opening.pos,
+            len,
+        });
     }
     // (2) locate the covering peak by dense chunking.
     let mut chunk_starts = Vec::with_capacity(opening.peaks.len());
@@ -353,7 +365,9 @@ pub struct ReflectedReceiptChain {
 impl ReflectedReceiptChain {
     /// Snapshot the whole receipt chain off the live world's receipt log.
     pub fn from_world(world: &crate::world::World) -> Self {
-        ReflectedReceiptChain { receipts: world.receipts().to_vec() }
+        ReflectedReceiptChain {
+            receipts: world.receipts().to_vec(),
+        }
     }
 
     /// The chain's provenance [`TimelineView`] — every receipt, in commit order,
@@ -384,8 +398,11 @@ impl ReflectedReceiptChain {
     pub fn linkage_graph(&self) -> GraphView {
         use crate::graph::{GraphEdge, GraphNode};
         // Index receipts by their hash so a back-link resolves to a holder node.
-        let by_hash: std::collections::HashMap<[u8; 32], CellId> =
-            self.receipts.iter().map(|r| (r.receipt_hash(), r.agent)).collect();
+        let by_hash: std::collections::HashMap<[u8; 32], CellId> = self
+            .receipts
+            .iter()
+            .map(|r| (r.receipt_hash(), r.agent))
+            .collect();
         let _ = &by_hash;
 
         // One node per agent that authored a receipt (the chain's principals),
@@ -422,7 +439,11 @@ impl ReflectedReceiptChain {
                 }
             }
         }
-        GraphView { nodes, edges, focus: None }
+        GraphView {
+            nodes,
+            edges,
+            focus: None,
+        }
     }
 
     /// The receipt-index MMR [`MerkleTreeView`]: the receipt commitments are the
@@ -431,7 +452,11 @@ impl ReflectedReceiptChain {
     /// off the real [`ReceiptMmr`].
     pub fn mmr_view(&self) -> MerkleTreeView {
         let mmr = ReceiptMmr::over_receipts(&self.receipts);
-        let leaves: Vec<String> = self.receipts.iter().map(|r| hex::encode(r.receipt_hash())).collect();
+        let leaves: Vec<String> = self
+            .receipts
+            .iter()
+            .map(|r| hex::encode(r.receipt_hash()))
+            .collect();
         let path = if mmr.is_empty() {
             Vec::new()
         } else {
@@ -457,17 +482,21 @@ impl ReflectedReceiptChain {
         for (i, r) in self.receipts.iter().enumerate() {
             let h = r.receipt_hash();
             let link_ok = match (i, r.previous_receipt_hash) {
-                (0, None) => true,           // genesis link: no predecessor.
-                (0, Some(_)) => true,        // an off-strand first receipt (allowed).
+                (0, None) => true,    // genesis link: no predecessor.
+                (0, Some(_)) => true, // an off-strand first receipt (allowed).
                 (i, Some(prev)) => self.receipts[i - 1].receipt_hash() == prev,
-                (_, None) => false,          // a missing back-link mid-chain is a break.
+                (_, None) => false, // a missing back-link mid-chain is a break.
             };
             steps.push(TraceStep {
                 index: i,
                 label: format!(
                     "receipt[{i}] hash {} · back-link {}",
                     short(&h),
-                    if link_ok { "✓ matches predecessor" } else { "✗ BREAK (link mismatch)" }
+                    if link_ok {
+                        "✓ matches predecessor"
+                    } else {
+                        "✗ BREAK (link mismatch)"
+                    }
                 ),
             });
         }
@@ -508,7 +537,12 @@ impl Presentable for ReflectedReceiptChain {
             label: "Receipt Chain".to_string(),
             search_text: format!(
                 "provenance receipt chain {}",
-                timeline.events.iter().map(|e| e.label.as_str()).collect::<Vec<_>>().join(" ")
+                timeline
+                    .events
+                    .iter()
+                    .map(|e| e.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             body: PresentationBody::Timeline(timeline),
         });
@@ -518,7 +552,11 @@ impl Presentable for ReflectedReceiptChain {
         out.push(Presentation {
             kind: PresentationKind::Graph,
             label: "Chain DAG".to_string(),
-            search_text: format!("graph chain dag {} edges {} nodes", graph.edges.len(), graph.nodes.len()),
+            search_text: format!(
+                "graph chain dag {} edges {} nodes",
+                graph.edges.len(),
+                graph.nodes.len()
+            ),
             body: PresentationBody::Graph(graph),
         });
 
@@ -538,7 +576,12 @@ impl Presentable for ReflectedReceiptChain {
             label: "Chain Linkage".to_string(),
             search_text: format!(
                 "trace chain linkage {}",
-                trace.steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>().join(" ")
+                trace
+                    .steps
+                    .iter()
+                    .map(|s| s.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             body: PresentationBody::Trace(trace),
         });
@@ -569,8 +612,16 @@ impl ReflectedReceipt {
             .consumed_capabilities
             .iter()
             .map(|w| match w.recompute_root() {
-                Some(root) => format!("holder {} slot {} → cap-root {root}", short(w.holder.as_bytes()), w.slot),
-                None => format!("holder {} slot {} → (malformed witness)", short(w.holder.as_bytes()), w.slot),
+                Some(root) => format!(
+                    "holder {} slot {} → cap-root {root}",
+                    short(w.holder.as_bytes()),
+                    w.slot
+                ),
+                None => format!(
+                    "holder {} slot {} → (malformed witness)",
+                    short(w.holder.as_bytes()),
+                    w.slot
+                ),
             })
             .collect();
         // The committed cap-root of the first witness (felt → 32 bytes), and its
@@ -578,7 +629,10 @@ impl ReflectedReceipt {
         let (root, path) = match self.receipt.consumed_capabilities.first() {
             Some(w) => (
                 w.cap_root_bytes32(),
-                w.siblings.iter().map(|s| hex::encode(s.to_le_bytes())).collect(),
+                w.siblings
+                    .iter()
+                    .map(|s| hex::encode(s.to_le_bytes()))
+                    .collect(),
             ),
             None => ([0u8; 32], Vec::new()),
         };
@@ -599,19 +653,40 @@ impl ReflectedReceipt {
     pub fn absorb_trace(&self) -> TraceView {
         let r = &self.receipt;
         let mut steps = vec![
-            TraceStep { index: 0, label: format!("absorb turn_hash {}", short(&r.turn_hash)) },
-            TraceStep { index: 1, label: format!("absorb forest_hash {}", short(&r.forest_hash)) },
-            TraceStep { index: 2, label: format!("absorb pre_state {}", short(&r.pre_state_hash)) },
-            TraceStep { index: 3, label: format!("absorb post_state {}", short(&r.post_state_hash)) },
-            TraceStep { index: 4, label: format!("absorb effects_hash {}", short(&r.effects_hash)) },
-            TraceStep { index: 5, label: format!("absorb agent {}", short(r.agent.as_bytes())) },
+            TraceStep {
+                index: 0,
+                label: format!("absorb turn_hash {}", short(&r.turn_hash)),
+            },
+            TraceStep {
+                index: 1,
+                label: format!("absorb forest_hash {}", short(&r.forest_hash)),
+            },
+            TraceStep {
+                index: 2,
+                label: format!("absorb pre_state {}", short(&r.pre_state_hash)),
+            },
+            TraceStep {
+                index: 3,
+                label: format!("absorb post_state {}", short(&r.post_state_hash)),
+            },
+            TraceStep {
+                index: 4,
+                label: format!("absorb effects_hash {}", short(&r.effects_hash)),
+            },
+            TraceStep {
+                index: 5,
+                label: format!("absorb agent {}", short(r.agent.as_bytes())),
+            },
         ];
         match r.previous_receipt_hash {
             Some(prev) => steps.push(TraceStep {
                 index: 6,
                 label: format!("absorb previous_receipt {} (chain link)", short(&prev)),
             }),
-            None => steps.push(TraceStep { index: 6, label: "absorb (no predecessor)".to_string() }),
+            None => steps.push(TraceStep {
+                index: 6,
+                label: "absorb (no predecessor)".to_string(),
+            }),
         }
         steps.push(TraceStep {
             index: 7,
@@ -654,7 +729,12 @@ impl Presentable for ReflectedReceipt {
             label: "Hash Absorb".to_string(),
             search_text: format!(
                 "trace hash absorb {}",
-                trace.steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>().join(" ")
+                trace
+                    .steps
+                    .iter()
+                    .map(|s| s.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             body: PresentationBody::Trace(trace),
         });
@@ -713,7 +793,9 @@ impl Gadget for ChainLinkageVerifier {
     fn set(&mut self, _field: &str, _v: GadgetInput) {}
     fn validate(&self) -> GadgetValidation {
         if self.receipts.is_empty() {
-            GadgetValidation::Invalid { reason: "empty receipt chain".into() }
+            GadgetValidation::Invalid {
+                reason: "empty receipt chain".into(),
+            }
         } else {
             GadgetValidation::Ok
         }
@@ -742,11 +824,18 @@ impl Gadget for ChainLinkageVerifier {
                 }
                 (i, None) => {
                     ok = false;
-                    notes.push(format!("receipt[{i}] {} ✗ missing back-link mid-chain", short(&h)));
+                    notes.push(format!(
+                        "receipt[{i}] {} ✗ missing back-link mid-chain",
+                        short(&h)
+                    ));
                 }
             }
         }
-        Ok(ReceiptVerification { ok, checked: self.receipts.len(), notes })
+        Ok(ReceiptVerification {
+            ok,
+            checked: self.receipts.len(),
+            notes,
+        })
     }
 }
 
@@ -762,7 +851,9 @@ pub struct ConsumedCapVerifier {
 
 impl ConsumedCapVerifier {
     pub fn over_receipt(r: &TurnReceipt) -> Self {
-        ConsumedCapVerifier { witnesses: r.consumed_capabilities.clone() }
+        ConsumedCapVerifier {
+            witnesses: r.consumed_capabilities.clone(),
+        }
     }
 }
 
@@ -800,7 +891,11 @@ impl Gadget for ConsumedCapVerifier {
                 ));
             }
         }
-        Ok(ReceiptVerification { ok, checked: self.witnesses.len(), notes })
+        Ok(ReceiptVerification {
+            ok,
+            checked: self.witnesses.len(),
+            notes,
+        })
     }
 }
 
@@ -831,7 +926,11 @@ impl Gadget for MmrMembershipVerifier {
     type Output = ReceiptVerification;
 
     fn fields(&self) -> Vec<GadgetField> {
-        vec![GadgetField::U64 { key: "position".into(), min: 0, max: self.values.len() as u64 }]
+        vec![GadgetField::U64 {
+            key: "position".into(),
+            min: 0,
+            max: self.values.len() as u64,
+        }]
     }
     fn set(&mut self, field: &str, v: GadgetInput) {
         if field == "position" {
@@ -842,10 +941,16 @@ impl Gadget for MmrMembershipVerifier {
     }
     fn validate(&self) -> GadgetValidation {
         if self.values.is_empty() {
-            GadgetValidation::Invalid { reason: "empty MMR (no receipts)".into() }
+            GadgetValidation::Invalid {
+                reason: "empty MMR (no receipts)".into(),
+            }
         } else if self.pos >= self.values.len() as u64 {
             GadgetValidation::Invalid {
-                reason: format!("position {} out of range (len {})", self.pos, self.values.len()),
+                reason: format!(
+                    "position {} out of range (len {})",
+                    self.pos,
+                    self.values.len()
+                ),
             }
         } else {
             GadgetValidation::Ok
@@ -858,9 +963,9 @@ impl Gadget for MmrMembershipVerifier {
         }
         let mmr = ReceiptMmr::from_values(self.values.clone());
         let root = mmr.root();
-        let (value, opening) = mmr
-            .open(self.pos)
-            .ok_or_else(|| GadgetError::Lowering { reason: "position has no opening".into() })?;
+        let (value, opening) = mmr.open(self.pos).ok_or_else(|| GadgetError::Lowering {
+            reason: "position has no opening".into(),
+        })?;
         match verify_membership(&root, &value, &opening) {
             Ok(len) => Ok(ReceiptVerification {
                 ok: true,
@@ -875,7 +980,10 @@ impl Gadget for MmrMembershipVerifier {
             Err(e) => Ok(ReceiptVerification {
                 ok: false,
                 checked: 1,
-                notes: vec![format!("position {} ✗ membership rejected: {e:?}", self.pos)],
+                notes: vec![format!(
+                    "position {} ✗ membership rejected: {e:?}",
+                    self.pos
+                )],
             }),
         }
     }
@@ -1047,7 +1155,10 @@ mod tests {
         let chain = ReflectedReceiptChain::from_world(&w);
         let ctx = PresentCtx::new(&w, treasury);
         let set = chain.present(&ctx);
-        let prov = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let prov = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &prov.body {
             PresentationBody::Timeline(t) => assert!(t.events.is_empty(), "no receipts yet"),
             other => panic!("Provenance must carry a Timeline, got {other:?}"),
@@ -1063,7 +1174,10 @@ mod tests {
         // each navigable by its real receipt_hash().
         let chain = ReflectedReceiptChain::from_world(&w);
         let set = chain.present(&PresentCtx::new(&w, treasury));
-        let prov = set.iter().find(|p| p.kind == PresentationKind::Provenance).unwrap();
+        let prov = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::Provenance)
+            .unwrap();
         match &prov.body {
             PresentationBody::Timeline(t) => {
                 assert_eq!(t.events.len(), 2, "the two committed receipts appear");
@@ -1088,10 +1202,18 @@ mod tests {
         let set = chain.present(&PresentCtx::new(&w, treasury));
         // RawFields (floor) + Provenance (timeline) + Graph (DAG) + MerkleTree (MMR) + Trace.
         assert!(set.iter().any(|p| p.kind == PresentationKind::RawFields));
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::Timeline(_))));
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::Graph(_))));
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::MerkleTree(_))));
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::Trace(_))));
+        assert!(set
+            .iter()
+            .any(|p| matches!(p.body, PresentationBody::Timeline(_))));
+        assert!(set
+            .iter()
+            .any(|p| matches!(p.body, PresentationBody::Graph(_))));
+        assert!(set
+            .iter()
+            .any(|p| matches!(p.body, PresentationBody::MerkleTree(_))));
+        assert!(set
+            .iter()
+            .any(|p| matches!(p.body, PresentationBody::Trace(_))));
     }
 
     // ── the MMR MerkleTree verifies a REAL receipt's membership ──────────────
@@ -1117,7 +1239,11 @@ mod tests {
         // EVERY real receipt verifies at its own position against the committed root.
         for (pos, r) in receipts.iter().enumerate() {
             let (value, opening) = mmr.open(pos as u64).expect("a real position opens");
-            assert_eq!(value, r.receipt_hash(), "the opened leaf IS the receipt commitment");
+            assert_eq!(
+                value,
+                r.receipt_hash(),
+                "the opened leaf IS the receipt commitment"
+            );
             let len = verify_membership(&root, &value, &opening)
                 .expect("a genuine receipt opens against the committed root");
             assert_eq!(len, 5);
@@ -1131,7 +1257,10 @@ mod tests {
         // Tampering the proven value (a forged commitment) is REJECTED.
         let (mut value, opening) = mmr.open(2).unwrap();
         value[0] ^= 0xff;
-        assert!(verify_membership(&root, &value, &opening).is_err(), "a forged leaf is rejected");
+        assert!(
+            verify_membership(&root, &value, &opening).is_err(),
+            "a forged leaf is rejected"
+        );
 
         // A wrong-position replay of a genuine path is REJECTED (positional bind).
         let (value0, opening0) = mmr.open(0).unwrap();
@@ -1145,11 +1274,17 @@ mod tests {
         // The MerkleTree presentation carries the real root.
         let chain = ReflectedReceiptChain::from_world(&w);
         let set = chain.present(&PresentCtx::new(&w, treasury));
-        let mtv = set.iter().find_map(|p| match &p.body {
-            PresentationBody::MerkleTree(m) => Some(m),
-            _ => None,
-        }).unwrap();
-        assert_eq!(mtv.root, root, "the MMR presentation's root is the real committed root");
+        let mtv = set
+            .iter()
+            .find_map(|p| match &p.body {
+                PresentationBody::MerkleTree(m) => Some(m),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            mtv.root, root,
+            "the MMR presentation's root is the real committed root"
+        );
         assert_eq!(mtv.leaves.len(), 5);
     }
 
@@ -1168,13 +1303,20 @@ mod tests {
         // back-link matches its predecessor (the real dregg-receipt-v3 linkage).
         let trace = chain.linkage_trace();
         assert_eq!(trace.steps.len(), 3);
-        assert!(trace.steps.iter().all(|s| s.label.contains("✓ matches predecessor") || s.index == 0));
+        assert!(trace
+            .steps
+            .iter()
+            .all(|s| s.label.contains("✓ matches predecessor") || s.index == 0));
 
         // The Q-Chain verifier gadget runs the REAL receipt_hash() over the chain.
         let verifier = ChainLinkageVerifier::over(w.receipts().to_vec());
         assert!(verifier.validate().is_ok());
         let result = verifier.build().unwrap();
-        assert!(result.ok, "a genuine chain links cleanly: {:?}", result.notes);
+        assert!(
+            result.ok,
+            "a genuine chain links cleanly: {:?}",
+            result.notes
+        );
         assert_eq!(result.checked, 3);
 
         // TAMPER: corrupt a receipt mid-chain — its recomputed hash changes, so
@@ -1215,19 +1357,30 @@ mod tests {
         // The REAL fold computes the genuine root for this leaf+path.
         let genuine = w.recompute_root().expect("a depth-16 witness recomputes");
         w.cap_root = genuine;
-        assert!(w.verify(), "the genuine leaf+path opens to its recomputed root (real fold)");
+        assert!(
+            w.verify(),
+            "the genuine leaf+path opens to its recomputed root (real fold)"
+        );
 
         // The verifier gadget over a receipt carrying this witness is GREEN.
         let receipt = receipt_with_consumed(vec![w.clone()]);
         let v = ConsumedCapVerifier::over_receipt(&receipt);
         let r = v.build().unwrap();
-        assert!(r.ok, "the real cap-membership fold accepts a genuine witness: {:?}", r.notes);
+        assert!(
+            r.ok,
+            "the real cap-membership fold accepts a genuine witness: {:?}",
+            r.notes
+        );
         assert_eq!(r.checked, 1);
 
         // TAMPER: corrupt a sibling → the recomputed root diverges → verify FAILS.
         let mut bad = w.clone();
         bad.siblings[0] ^= 0xff;
-        let badr = ConsumedCapVerifier { witnesses: vec![bad] }.build().unwrap();
+        let badr = ConsumedCapVerifier {
+            witnesses: vec![bad],
+        }
+        .build()
+        .unwrap();
         assert!(!badr.ok, "a tampered membership path fails the real fold");
 
         // A self-sovereign receipt (no consumed caps) is trivially green.
@@ -1287,16 +1440,26 @@ mod tests {
         assert_eq!(h.step, 9);
         assert!(h.root_verified);
         let svc = h.cells.iter().find(|(id, _, _)| *id == service).unwrap();
-        assert_eq!(svc.1, 251_000, "the head landing reconstructs the real service balance");
+        assert_eq!(
+            svc.1, 251_000,
+            "the head landing reconstructs the real service balance"
+        );
 
         // A mid-history STEP lands verified, and its root is the recorded tooth.
         let mid = tt.land(TimeTravelMotion::Step(4));
         assert!(mid.root_verified);
-        assert_eq!(mid.root, history.root_at(4), "the landing root IS replay.rs's recorded tooth");
+        assert_eq!(
+            mid.root,
+            history.root_at(4),
+            "the landing root IS replay.rs's recorded tooth"
+        );
 
         // Every landing is verified (the root tooth re-derived from genesis).
         for k in 0..=tt.head() {
-            assert!(tt.land(TimeTravelMotion::Step(k)).root_verified, "step {k} must verify");
+            assert!(
+                tt.land(TimeTravelMotion::Step(k)).root_verified,
+                "step {k} must verify"
+            );
         }
 
         let _ = (treasury, user);
@@ -1323,9 +1486,14 @@ mod tests {
         let branch = 2; // 2 genesis steps
         let alt_nonce = tt.replay_to(branch).unwrap().get(&a).unwrap().state.nonce();
         let alt = crate::world::bare_turn(a, alt_nonce, vec![transfer(a, b, 500)]);
-        let fork = tt.fork(branch, alt).expect("fork replays+verifies the branch point");
+        let fork = tt
+            .fork(branch, alt)
+            .expect("fork replays+verifies the branch point");
         assert!(fork.outcome.is_committed());
-        assert!(fork.diverged(), "a different turn diverges from the mainline");
+        assert!(
+            fork.diverged(),
+            "a different turn diverges from the mainline"
+        );
 
         // The mainline is intact (its recorded head root is unchanged + replays).
         assert_eq!(h.root_at(h.len()), mainline_head);
@@ -1358,7 +1526,10 @@ mod tests {
         let set = receipt.present(&PresentCtx::new(&w, treasury));
 
         // RawFields floor (the genuine reflect_receipt).
-        let raw = set.iter().find(|p| p.kind == PresentationKind::RawFields).unwrap();
+        let raw = set
+            .iter()
+            .find(|p| p.kind == PresentationKind::RawFields)
+            .unwrap();
         match &raw.body {
             PresentationBody::Fields(i) => {
                 assert!(i.fields.iter().any(|f| f.key == "receipt_hash"));
@@ -1367,12 +1538,22 @@ mod tests {
             _ => unreachable!(),
         }
         // The consumed-cap MerkleTree (empty for a plain transfer) + absorb Trace.
-        assert!(set.iter().any(|p| matches!(p.body, PresentationBody::MerkleTree(_))));
-        let trace = set.iter().find_map(|p| match &p.body {
-            PresentationBody::Trace(t) => Some(t),
-            _ => None,
-        }).unwrap();
+        assert!(set
+            .iter()
+            .any(|p| matches!(p.body, PresentationBody::MerkleTree(_))));
+        let trace = set
+            .iter()
+            .find_map(|p| match &p.body {
+                PresentationBody::Trace(t) => Some(t),
+                _ => None,
+            })
+            .unwrap();
         // The absorb trace ends at the real receipt_hash.
-        assert!(trace.steps.last().unwrap().label.contains(&short(&w.receipts()[0].receipt_hash())));
+        assert!(trace
+            .steps
+            .last()
+            .unwrap()
+            .label
+            .contains(&short(&w.receipts()[0].receipt_hash())));
     }
 }

@@ -3,7 +3,6 @@
 use super::*;
 
 impl Cockpit {
-
     /// Select the active tab by (case-insensitive) name — matched against each
     /// [`Tab::label`] with separators/symbols stripped (so `"inspector"`,
     /// `"inspect-act"`, `"web-of-cells"`, `"proofs"` all resolve). Used by the
@@ -42,22 +41,35 @@ impl Cockpit {
         // Seed the debugger with a demo turn (treasury → user transfer) that
         // the operator can step + explain against the live world.
         let [treasury, service, user] = anchors;
-        let debug_turn = world.borrow().turn(treasury, vec![world::transfer(treasury, user, 1_000)]);
+        let debug_turn = world
+            .borrow()
+            .turn(treasury, vec![world::transfer(treasury, user, 1_000)]);
 
         // Seed the cipherclerk vault with two real HD-derived identities.
         let mut clerk = cipherclerk::Cipherclerk::new();
-        clerk.add_identity(cipherclerk::Identity::from_byte("alice", "dregg/cockpit", 0x01));
-        clerk.add_identity(cipherclerk::Identity::from_byte("bob", "dregg/cockpit", 0x02));
+        clerk.add_identity(cipherclerk::Identity::from_byte(
+            "alice",
+            "dregg/cockpit",
+            0x01,
+        ));
+        clerk.add_identity(cipherclerk::Identity::from_byte(
+            "bob",
+            "dregg/cockpit",
+            0x02,
+        ));
 
         // Seed the editor with a conserving demo forest already validated.
         let mut editor = edit::EditorState::default();
         editor.set_artifact("Transfer 250 treasury→user (1 root, conserving)");
         {
             let mut fb = edit::ForestBuilder::new();
-            fb.root(
-                edit::ActionBuilder::new(treasury)
-                    .effect(dregg_turn::action::Effect::Transfer { from: treasury, to: user, amount: 250 }),
-            );
+            fb.root(edit::ActionBuilder::new(treasury).effect(
+                dregg_turn::action::Effect::Transfer {
+                    from: treasury,
+                    to: user,
+                    amount: 250,
+                },
+            ));
             editor.set_verdict(edit::validate(fb.forest()));
         }
 
@@ -179,7 +191,10 @@ impl Cockpit {
         // turn lands a `CommitRecord` so a durable cockpit image reproduces it.
         {
             let mut w = world.borrow_mut();
-            let t = w.turn(service, vec![world::grant_capability(service, user, service, 0)]);
+            let t = w.turn(
+                service,
+                vec![world::grant_capability(service, user, service, 0)],
+            );
             let _ = w.commit_turn(t);
         }
         // …and reaching `treasury` too (same self-grant shape), so the WEB-OF-CELLS ⚡
@@ -189,7 +204,10 @@ impl Cockpit {
         // any source the user does not hold — `mint_needs_held_factory`).
         {
             let mut w = world.borrow_mut();
-            let t = w.turn(treasury, vec![world::grant_capability(treasury, user, treasury, 0)]);
+            let t = w.turn(
+                treasury,
+                vec![world::grant_capability(treasury, user, treasury, 0)],
+            );
             let _ = w.commit_turn(t);
         }
 
@@ -214,7 +232,10 @@ impl Cockpit {
                 [
                     (service, "coordinator"),
                     (user, "worker-a"),
-                    (treasury, "worker-b (unreachable — the confinement boundary)"),
+                    (
+                        treasury,
+                        "worker-b (unreachable — the confinement boundary)",
+                    ),
                 ],
             )
         };
@@ -549,5 +570,4 @@ impl Cockpit {
     }
 
     // --- the verbs (each runs the REAL embedded executor) -------------------
-
 }

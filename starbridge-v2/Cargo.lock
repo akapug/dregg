@@ -2812,6 +2812,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "deos-js"
+version = "0.1.0"
+dependencies = [
+ "deos-reflect",
+ "dregg-cell",
+ "dregg-doc",
+ "dregg-sdk",
+ "dregg-turn",
+ "dregg-types",
+ "mozjs",
+ "postcard",
+ "serde",
+ "serde_json",
+ "starbridge-web-surface",
+]
+
+[[package]]
 name = "deos-matrix"
 version = "0.1.0"
 dependencies = [
@@ -2840,6 +2857,15 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "deos-reflect"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
 ]
 
 [[package]]
@@ -14061,6 +14087,7 @@ dependencies = [
  "blake3",
  "clear_on_drop",
  "deos-hermes",
+ "deos-js",
  "deos-matrix",
  "deos-terminal",
  "deos-web-cells",

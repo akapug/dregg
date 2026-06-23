@@ -15,13 +15,19 @@
 //! renderer + no-system-fonts text). Run with:
 //!   cargo test --features "firmament screenshot" --test firmament_pane
 
-#![cfg(all(feature = "firmament", feature = "cockpit-surface", feature = "screenshot"))]
+#![cfg(all(
+    feature = "firmament",
+    feature = "cockpit-surface",
+    feature = "screenshot"
+))]
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{px, size, AppContext as _, HeadlessAppContext, IntoElement, PlatformTextSystem, Render};
+use gpui::{
+    px, size, AppContext as _, HeadlessAppContext, IntoElement, PlatformTextSystem, Render,
+};
 use gpui_wgpu::CosmicTextSystem;
 
 use std::rc::Rc;
@@ -121,10 +127,18 @@ fn cockpit_editor_pane_save_is_a_receipted_turn_through_the_pane() {
         .update(&mut cx, |holder, _window, cx| {
             let surface = &holder.surface;
 
-            assert_eq!(surface.receipt_count(), Some(1), "the save produced ONE receipt");
+            assert_eq!(
+                surface.receipt_count(),
+                Some(1),
+                "the save produced ONE receipt"
+            );
             let firm: &Arc<FirmamentFs> = surface.firmament_fs().expect("firmament-backed");
             let receipt = firm.last_receipt().expect("a receipt was recorded");
-            assert_eq!(receipt.agent, firm.editor_id(), "the editor cell is the turn's agent");
+            assert_eq!(
+                receipt.agent,
+                firm.editor_id(),
+                "the editor cell is the turn's agent"
+            );
             assert_ne!(
                 receipt.pre_state_hash, receipt.post_state_hash,
                 "the edit moved the ledger state (the save landed on-ledger)"
@@ -197,7 +211,11 @@ fn editor_pane_save_lands_on_the_shared_ledger_a_second_reader_inspects() {
     // NOT pre-seed, so there is exactly ONE file cell at `path`.
     let firm: Arc<FirmamentFs> = Arc::new(FirmamentFs::over(spine.clone()));
 
-    assert_eq!(inspector.receipt_count(), 0, "no saves yet on the shared ledger");
+    assert_eq!(
+        inspector.receipt_count(),
+        0,
+        "no saves yet on the shared ledger"
+    );
     let balance_before_seed = inspector.total_balance();
 
     // Build the editor surface over the shared-spine fs — the EXACT pane shape
@@ -224,9 +242,13 @@ fn editor_pane_save_lands_on_the_shared_ledger_a_second_reader_inspects() {
 
     // Learn the file cell the (single) seed installed on the shared ledger, and
     // confirm the inspector reads its genesis content off that SAME ledger.
-    let file = firm.cell_for(Path::new(path)).expect("the seed installed a file cell");
+    let file = firm
+        .cell_for(Path::new(path))
+        .expect("the seed installed a file cell");
     {
-        let cell = inspector.cell(&file).expect("the seeded cell is on the shared ledger");
+        let cell = inspector
+            .cell(&file)
+            .expect("the seeded cell is on the shared ledger");
         let content = deos_zed::fs::host_decode_content(&cell).expect("decode");
         assert_eq!(content, seed, "the inspector reads the genesis content");
     }
@@ -240,7 +262,8 @@ fn editor_pane_save_lands_on_the_shared_ledger_a_second_reader_inspects() {
             let editor = holder.surface.editor().clone();
             editor.update(cx, |ed, cx| {
                 ed.set_text(edited, window, cx);
-                ed.save(cx).expect("save commits a turn on the shared ledger");
+                ed.save(cx)
+                    .expect("save commits a turn on the shared ledger");
             });
         })
         .unwrap();
@@ -256,14 +279,22 @@ fn editor_pane_save_lands_on_the_shared_ledger_a_second_reader_inspects() {
         1,
         "the inspector sees the save as a new on-ledger receipt"
     );
-    let receipt = inspector.last_receipt().expect("the inspector sees the receipt");
-    assert_eq!(receipt.agent, inspector.editor_id(), "the editor cell is the agent");
+    let receipt = inspector
+        .last_receipt()
+        .expect("the inspector sees the receipt");
+    assert_eq!(
+        receipt.agent,
+        inspector.editor_id(),
+        "the editor cell is the agent"
+    );
     assert_ne!(
         receipt.pre_state_hash, receipt.post_state_hash,
         "the save moved the shared ledger's state"
     );
 
-    let cell = inspector.cell(&file).expect("the file cell is on the shared ledger");
+    let cell = inspector
+        .cell(&file)
+        .expect("the file cell is on the shared ledger");
     let content = deos_zed::fs::host_decode_content(&cell).expect("decode the cell");
     assert_eq!(
         content, edited,

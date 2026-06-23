@@ -93,13 +93,9 @@ impl Cockpit {
                 self.open_dev_pane_deferred(cx, Cockpit::open_terminal_pane)
             }
             #[cfg(feature = "dev-surfaces")]
-            CommandId::OpenEditorPane => {
-                self.open_dev_pane_deferred(cx, Cockpit::open_editor_pane)
-            }
+            CommandId::OpenEditorPane => self.open_dev_pane_deferred(cx, Cockpit::open_editor_pane),
             #[cfg(feature = "dev-surfaces")]
-            CommandId::OpenAgentPane => {
-                self.open_dev_pane_deferred(cx, Cockpit::open_agent_pane)
-            }
+            CommandId::OpenAgentPane => self.open_dev_pane_deferred(cx, Cockpit::open_agent_pane),
             #[cfg(not(feature = "dev-surfaces"))]
             CommandId::OpenTerminalPane | CommandId::OpenEditorPane | CommandId::OpenAgentPane => {}
 
@@ -315,7 +311,10 @@ impl Cockpit {
                 // Jump the inspector to the new receipt.
                 let idx = self.world.borrow().receipts().len().saturating_sub(1);
                 self.selection = Selection::Receipt(idx);
-                format!("committed · receipt {}", reflect::short_hex(&receipt.receipt_hash()))
+                format!(
+                    "committed · receipt {}",
+                    reflect::short_hex(&receipt.receipt_hash())
+                )
             }
             CommitOutcome::Rejected { reason, .. } => format!("REJECTED by executor: {reason}"),
             // Suspended: the turn was staged in the pending queue, not run. The
@@ -327,5 +326,4 @@ impl Cockpit {
     }
 
     // --- panels --------------------------------------------------------------
-
 }

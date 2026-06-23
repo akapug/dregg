@@ -507,7 +507,10 @@ pub struct Swarm {
 impl Swarm {
     /// Boot a swarm over `members` (a list of `(cell, name)` pairs). The cells
     /// must already exist in `world` (genesis-installed or earlier turns).
-    pub fn new(world: &World, members: impl IntoIterator<Item = (CellId, impl Into<String>)>) -> Self {
+    pub fn new(
+        world: &World,
+        members: impl IntoIterator<Item = (CellId, impl Into<String>)>,
+    ) -> Self {
         let mut swarm = Swarm {
             members: Vec::new(),
             index: HashMap::new(),
@@ -625,7 +628,10 @@ impl Swarm {
                         .map(|c| c.capabilities.has_access(&target))
                         .unwrap_or(false);
                     if !has_cap {
-                        return Err(SwarmError::OutOfMandate { member: agent, target });
+                        return Err(SwarmError::OutOfMandate {
+                            member: agent,
+                            target,
+                        });
                     }
                 }
             }
@@ -811,7 +817,10 @@ impl Swarm {
                     summary: format!("REFUSED — {reason}"),
                 };
                 self.action_log.push(ao.clone());
-                Err(SwarmError::ExecutorRejected { member: agent, reason })
+                Err(SwarmError::ExecutorRejected {
+                    member: agent,
+                    reason,
+                })
             }
             // The world is suspended (meta-debug): the member's turn staged, did not
             // commit. Surfaced as an executor rejection (fail-closed).
@@ -828,7 +837,10 @@ impl Swarm {
                     summary: format!("REFUSED — {reason}"),
                 };
                 self.action_log.push(ao.clone());
-                Err(SwarmError::ExecutorRejected { member: agent, reason })
+                Err(SwarmError::ExecutorRejected {
+                    member: agent,
+                    reason,
+                })
             }
         }
     }
@@ -870,10 +882,7 @@ impl Swarm {
     /// The surface capability a member holds over its pane (if bound). This is
     /// the REAL firmament cap — the cockpit presents it to the shell's cap-gated
     /// ops, so the discipline is demonstrated, not bypassed.
-    pub fn member_surface_cap(
-        &self,
-        agent: &CellId,
-    ) -> Option<&crate::surface::SurfaceCapability> {
+    pub fn member_surface_cap(&self, agent: &CellId) -> Option<&crate::surface::SurfaceCapability> {
         self.index
             .get(agent)
             .and_then(|&idx| self.members[idx].surface_cap.as_ref())
@@ -928,7 +937,10 @@ impl Swarm {
                             .map(|c| c.capabilities.has_access(&t))
                             .unwrap_or(false);
                         if !has_cap {
-                            return Err(SwarmError::OutOfMandate { member: agent, target: t });
+                            return Err(SwarmError::OutOfMandate {
+                                member: agent,
+                                target: t,
+                            });
                         }
                     }
                 }
@@ -1090,7 +1102,10 @@ impl Swarm {
                     summary: format!("ATOMIC bundle REFUSED — {reason}"),
                 };
                 self.action_log.push(ao.clone());
-                Err(SwarmError::ExecutorRejected { member: agent, reason })
+                Err(SwarmError::ExecutorRejected {
+                    member: agent,
+                    reason,
+                })
             }
             // The world is suspended (meta-debug): the bundle staged, did not commit.
             CommitOutcome::Queued { .. } => {
@@ -1106,7 +1121,10 @@ impl Swarm {
                     summary: format!("ATOMIC bundle REFUSED — {reason}"),
                 };
                 self.action_log.push(ao.clone());
-                Err(SwarmError::ExecutorRejected { member: agent, reason })
+                Err(SwarmError::ExecutorRejected {
+                    member: agent,
+                    reason,
+                })
             }
         }
     }
@@ -1196,9 +1214,10 @@ impl Swarm {
 
                 Ok(drain_receipt)
             }
-            CommitOutcome::Rejected { reason, .. } => {
-                Err(SwarmError::ExecutorRejected { member: agent, reason })
-            }
+            CommitOutcome::Rejected { reason, .. } => Err(SwarmError::ExecutorRejected {
+                member: agent,
+                reason,
+            }),
             // The world is suspended (meta-debug): the drain turn staged, not run.
             CommitOutcome::Queued { .. } => Err(SwarmError::ExecutorRejected {
                 member: agent,
@@ -1215,7 +1234,11 @@ impl Swarm {
             if let Some(c) = world.ledger().get(&m.agent) {
                 m.balance = c.state.balance();
             }
-            m.action_count = world.receipts().iter().filter(|r| r.agent == m.agent).count();
+            m.action_count = world
+                .receipts()
+                .iter()
+                .filter(|r| r.agent == m.agent)
+                .count();
         }
     }
 
@@ -1579,10 +1602,16 @@ mod tests {
             .run(&mut world, coord, vec![transfer(coord, worker_a, 500)])
             .expect("in-mandate transfer must commit");
         assert!(outcome.committed);
-        assert!(outcome.receipt_hash.is_some(), "a committed action has a receipt");
+        assert!(
+            outcome.receipt_hash.is_some(),
+            "a committed action has a receipt"
+        );
         assert_eq!(world.height(), h0 + 1, "a real turn was committed");
         // The value actually moved (not a mock).
-        assert_eq!(world.ledger().get(&worker_a).unwrap().state.balance(), 5_500);
+        assert_eq!(
+            world.ledger().get(&worker_a).unwrap().state.balance(),
+            5_500
+        );
         // The action log grows.
         assert_eq!(swarm.action_log().len(), 1);
         assert!(swarm.action_log()[0].committed);
@@ -1630,9 +1659,21 @@ mod tests {
             .expect("emit event to in-mandate target must commit");
         assert!(outcome.committed);
         // worker_a has a pending notification.
-        let member_a = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
-        assert_eq!(member_a.pending_notify_count(), 1, "worker_a has one pending wake");
-        assert_eq!(outcome.notify_edges.len(), 1, "one notify edge was deposited");
+        let member_a = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
+        assert_eq!(
+            member_a.pending_notify_count(),
+            1,
+            "worker_a has one pending wake"
+        );
+        assert_eq!(
+            outcome.notify_edges.len(),
+            1,
+            "one notify edge was deposited"
+        );
         // The edge carries the sender's receipt hash (the provenance link).
         let (recipient, edge) = &outcome.notify_edges[0];
         assert_eq!(*recipient, worker_a);
@@ -1690,7 +1731,11 @@ mod tests {
             vec![(worker_a, task_done)],
             "the refused wake is recorded as (recipient, topic)"
         );
-        let member_a = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        let member_a = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert_eq!(
             member_a.pending_notify_count(),
             0,
@@ -1716,7 +1761,11 @@ mod tests {
             admitted.notify_refused.is_empty(),
             "an in-mask wake refuses nothing"
         );
-        let member_a = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        let member_a = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert_eq!(
             member_a.pending_notify_count(),
             1,
@@ -1736,7 +1785,11 @@ mod tests {
 
         // Open by default: worker_a admits BOTH topics (mask = u64::MAX).
         {
-            let m = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+            let m = swarm
+                .members()
+                .iter()
+                .find(|m| m.agent == worker_a)
+                .unwrap();
             assert!(m.admits_wake(&task_start), "open grant admits task/start");
             assert!(m.admits_wake(&task_done), "open grant admits task/done");
         }
@@ -1744,7 +1797,11 @@ mod tests {
         // Narrow to {task_start}: now task/done is OUTSIDE the mask.
         assert!(swarm.restrict_member_notify(&worker_a, &[task_start]));
         {
-            let m = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+            let m = swarm
+                .members()
+                .iter()
+                .find(|m| m.agent == worker_a)
+                .unwrap();
             assert!(m.admits_wake(&task_start), "still admits the kept topic");
             assert!(
                 !m.admits_wake(&task_done),
@@ -1758,7 +1815,11 @@ mod tests {
             !swarm.restrict_member_notify(&worker_a, &[task_start, task_done]),
             "a widening attenuation must be refused"
         );
-        let m = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        let m = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert!(
             !m.admits_wake(&task_done),
             "after the refused widening, task/done is STILL refused (grant unchanged)"
@@ -1772,16 +1833,27 @@ mod tests {
         // emit — it has its own receipt, its own height, its own provenance.
         let (mut world, mut swarm, coord, worker_a, _) = swarm_world();
         swarm
-            .run(&mut world, coord, vec![emit_event(worker_a, "task/start", vec![])])
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_a, "task/start", vec![])],
+            )
             .expect("emit must commit");
         let h_before_drain = world.height();
         let drain_receipt = swarm
             .drain_notify(&mut world, worker_a)
             .expect("drain must commit");
         // The drain is a distinct committed turn at a later height.
-        assert!(world.height() > h_before_drain, "drain is a separate committed turn");
+        assert!(
+            world.height() > h_before_drain,
+            "drain is a separate committed turn"
+        );
         // The inbox entry is now drained.
-        let member_a = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        let member_a = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert_eq!(member_a.pending_notify_count(), 0, "inbox drained");
         let drained = member_a.inbox.iter().find(|n| n.drained).unwrap();
         assert_eq!(
@@ -1856,20 +1928,29 @@ mod tests {
         let (mut world, mut swarm, coord, worker_a, _worker_b) = swarm_world();
         // Coordinator sends value + emits a wake to worker_a.
         swarm
-            .run(&mut world, coord, vec![
-                transfer(coord, worker_a, 200),
-                emit_event(worker_a, "task/go", vec![]),
-            ])
+            .run(
+                &mut world,
+                coord,
+                vec![
+                    transfer(coord, worker_a, 200),
+                    emit_event(worker_a, "task/go", vec![]),
+                ],
+            )
             .expect("combined action must commit");
         // worker_a drains the notification.
-        swarm.drain_notify(&mut world, worker_a).expect("drain must commit");
+        swarm
+            .drain_notify(&mut world, worker_a)
+            .expect("drain must commit");
 
         let view = SwarmView::build(&swarm, &world);
         // Three members in the view.
         assert_eq!(view.members.len(), 3);
         // coordinator took its combined transfer+wake action.
         let coord_view = view.members.iter().find(|m| m.agent == coord).unwrap();
-        assert!(coord_view.action_count >= 1, "coordinator took at least one action");
+        assert!(
+            coord_view.action_count >= 1,
+            "coordinator took at least one action"
+        );
         // worker_a drained the notification.
         let wa_view = view.members.iter().find(|m| m.agent == worker_a).unwrap();
         assert_eq!(wa_view.pending_notify, 0, "worker_a drained its inbox");
@@ -1899,12 +1980,27 @@ mod tests {
             )
             .expect("the atomic bundle must commit");
         assert!(outcome.committed);
-        assert_eq!(world.height(), h0 + 1, "ONE turn committed for the whole bundle");
+        assert_eq!(
+            world.height(),
+            h0 + 1,
+            "ONE turn committed for the whole bundle"
+        );
         // The transfer landed.
-        assert_eq!(world.ledger().get(&worker_a).unwrap().state.balance(), 5_500);
+        assert_eq!(
+            world.ledger().get(&worker_a).unwrap().state.balance(),
+            5_500
+        );
         // The bundled wake reached worker_b's inbox.
-        let mb = swarm.members().iter().find(|m| m.agent == worker_b).unwrap();
-        assert_eq!(mb.pending_notify_count(), 1, "the bundled emit woke worker_b");
+        let mb = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_b)
+            .unwrap();
+        assert_eq!(
+            mb.pending_notify_count(),
+            1,
+            "the bundled emit woke worker_b"
+        );
         // ONE receipt for the whole bundle.
         assert_eq!(outcome.notify_edges.len(), 1);
         assert!(outcome.summary.contains("ATOMIC"));
@@ -1924,14 +2020,20 @@ mod tests {
                 (coord, vec![transfer(coord, worker_b, 1_000_000)]), // overspends
             ],
         );
-        assert!(matches!(r, Err(SwarmError::ExecutorRejected { .. })), "{r:?}");
+        assert!(
+            matches!(r, Err(SwarmError::ExecutorRejected { .. })),
+            "{r:?}"
+        );
         // Atomicity: the first transfer did NOT land.
         assert_eq!(
             world.ledger().get(&coord).unwrap().state.balance(),
             coord_before,
             "no partial effect — the whole atomic bundle rolled back"
         );
-        assert_eq!(world.ledger().get(&worker_a).unwrap().state.balance(), 5_000);
+        assert_eq!(
+            world.ledger().get(&worker_a).unwrap().state.balance(),
+            5_000
+        );
     }
 
     #[test]
@@ -1950,7 +2052,11 @@ mod tests {
             matches!(r, Err(SwarmError::OutOfMandate { target, .. }) if target == stranger),
             "{r:?}"
         );
-        assert_eq!(world.height(), 0, "no turn committed (out-of-mandate, fail-closed)");
+        assert_eq!(
+            world.height(),
+            0,
+            "no turn committed (out-of-mandate, fail-closed)"
+        );
     }
 
     // ── PER-MEMBER SURFACE CAPABILITY: each pane a cap-confined Surface ──────
@@ -1967,11 +2073,18 @@ mod tests {
 
         // Bind the coordinator + worker_a to panes.
         let coord_surface = swarm.bind_surface(&mut shell, coord).expect("bind coord");
-        let wa_surface = swarm.bind_surface(&mut shell, worker_a).expect("bind worker_a");
-        assert_ne!(coord_surface, wa_surface, "distinct panes get distinct surfaces");
+        let wa_surface = swarm
+            .bind_surface(&mut shell, worker_a)
+            .expect("bind worker_a");
+        assert_ne!(
+            coord_surface, wa_surface,
+            "distinct panes get distinct surfaces"
+        );
 
         // The members now hold their REAL surface caps.
-        let coord_cap = swarm.member_surface_cap(&coord).expect("coord holds its cap");
+        let coord_cap = swarm
+            .member_surface_cap(&coord)
+            .expect("coord holds its cap");
         assert_eq!(coord_cap.surface(), coord_surface);
         // The cap authenticates against the shell (it is the genuine authority).
         assert!(shell.validates(coord_cap), "the member's cap authenticates");
@@ -1982,7 +2095,11 @@ mod tests {
         assert_eq!(shell.focused(), Some(coord_surface));
 
         // worker_a holds its own pane cap (distinct authority).
-        let wa_member = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        let wa_member = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert!(wa_member.has_surface(), "worker_a is bound to a pane");
     }
 
@@ -1991,18 +2108,38 @@ mod tests {
         let (mut world, mut swarm, coord, worker_a, _) = swarm_world();
         // Two consecutive emits to worker_a.
         swarm
-            .run(&mut world, coord, vec![emit_event(worker_a, "task/1", vec![])])
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_a, "task/1", vec![])],
+            )
             .expect("first emit");
         swarm
-            .run(&mut world, coord, vec![emit_event(worker_a, "task/2", vec![])])
+            .run(
+                &mut world,
+                coord,
+                vec![emit_event(worker_a, "task/2", vec![])],
+            )
             .expect("second emit");
-        let m = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        let m = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert_eq!(m.pending_notify_count(), 2, "both wakes are pending");
         assert_eq!(swarm.total_pending(), 2);
         // Drain them one at a time (oldest first — rposition picks the oldest).
-        swarm.drain_notify(&mut world, worker_a).expect("first drain");
-        swarm.drain_notify(&mut world, worker_a).expect("second drain");
-        let m = swarm.members().iter().find(|m| m.agent == worker_a).unwrap();
+        swarm
+            .drain_notify(&mut world, worker_a)
+            .expect("first drain");
+        swarm
+            .drain_notify(&mut world, worker_a)
+            .expect("second drain");
+        let m = swarm
+            .members()
+            .iter()
+            .find(|m| m.agent == worker_a)
+            .unwrap();
         assert_eq!(m.pending_notify_count(), 0, "inbox fully drained");
     }
 
@@ -2039,7 +2176,11 @@ mod tests {
         let coord = world.genesis_install(coord_cell);
         let swarm = Swarm::new(
             &world,
-            [(coord, "coordinator"), (worker_a, "worker-a"), (worker_b, "worker-b")],
+            [
+                (coord, "coordinator"),
+                (worker_a, "worker-a"),
+                (worker_b, "worker-b"),
+            ],
         );
         (world, swarm, coord, worker_a, worker_b)
     }
@@ -2058,13 +2199,19 @@ mod tests {
             .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
             .expect("transfer commits in the metered world");
         assert!(o1.committed);
-        assert!(o1.computrons > 0, "the metered world meters a non-zero cost");
+        assert!(
+            o1.computrons > 0,
+            "the metered world meters a non-zero cost"
+        );
         // The same dispatch meters the same cost (determinism — the meter is a real
         // accounting of the production cost model, not noise).
         let o2 = swarm
             .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
             .expect("second transfer commits");
-        assert_eq!(o1.computrons, o2.computrons, "metering is deterministic per dispatch");
+        assert_eq!(
+            o1.computrons, o2.computrons,
+            "metering is deterministic per dispatch"
+        );
     }
 
     #[test]
@@ -2089,7 +2236,10 @@ mod tests {
             o1.computrons,
             "spent grows by the metered computrons"
         );
-        assert!(o1.computrons > 0, "the metered cost is non-zero (non-vacuous)");
+        assert!(
+            o1.computrons > 0,
+            "the metered cost is non-zero (non-vacuous)"
+        );
 
         // A second dispatch accumulates: spent == sum of the two metered costs.
         let o2 = swarm
@@ -2130,7 +2280,12 @@ mod tests {
         let r = swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]);
         // The dispatch is refused with the budget error.
         match r {
-            Err(SwarmError::BudgetExhausted { member, spent, ceiling, .. }) => {
+            Err(SwarmError::BudgetExhausted {
+                member,
+                spent,
+                ceiling,
+                ..
+            }) => {
                 assert_eq!(member, coord);
                 assert_eq!(spent, spent_after_one);
                 assert_eq!(ceiling, spent_after_one);
@@ -2138,7 +2293,11 @@ mod tests {
             other => panic!("expected BudgetExhausted, got {other:?}"),
         }
         // FAIL-CLOSED: no turn committed — the height did not advance.
-        assert_eq!(world.height(), h_before, "no height advance on a budget breach");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "no height advance on a budget breach"
+        );
         // The spend did NOT change (the refused dispatch metered nothing).
         assert_eq!(swarm.member_budget(&coord).unwrap().spent, spent_after_one);
         // The refusal is RECORDED in the action log (a record, not a silent drop).
@@ -2184,7 +2343,11 @@ mod tests {
             .expect("coord dispatch commits");
         // worker_a spends on ITSELF (a self SetField — always in-mandate, metered).
         let ow = swarm
-            .run(&mut world, worker_a, vec![crate::world::set_field(worker_a, 3, [1u8; 32])])
+            .run(
+                &mut world,
+                worker_a,
+                vec![crate::world::set_field(worker_a, 3, [1u8; 32])],
+            )
             .expect("worker_a self-action commits");
 
         let agg = swarm.swarm_budget();
@@ -2210,18 +2373,36 @@ mod tests {
         // The pure meter arithmetic (the UI pre-check helpers): an unbounded meter
         // never breaches; a bounded one breaches strictly past the ceiling, admits
         // landing EXACTLY on it, and reports headroom + exhaustion correctly.
-        let unbounded = BudgetMeter { spent: 1_000, ceiling: None };
-        assert!(!unbounded.would_breach(u64::MAX), "unbounded never breaches");
+        let unbounded = BudgetMeter {
+            spent: 1_000,
+            ceiling: None,
+        };
+        assert!(
+            !unbounded.would_breach(u64::MAX),
+            "unbounded never breaches"
+        );
         assert_eq!(unbounded.headroom(), None);
         assert!(!unbounded.is_exhausted());
 
-        let bounded = BudgetMeter { spent: 80, ceiling: Some(100) };
+        let bounded = BudgetMeter {
+            spent: 80,
+            ceiling: Some(100),
+        };
         assert_eq!(bounded.headroom(), Some(20));
         assert!(!bounded.is_exhausted(), "80 < 100");
-        assert!(!bounded.would_breach(20), "lands exactly on the ceiling — admitted");
-        assert!(bounded.would_breach(21), "strictly past the ceiling — breaches");
+        assert!(
+            !bounded.would_breach(20),
+            "lands exactly on the ceiling — admitted"
+        );
+        assert!(
+            bounded.would_breach(21),
+            "strictly past the ceiling — breaches"
+        );
 
-        let at_ceiling = BudgetMeter { spent: 100, ceiling: Some(100) };
+        let at_ceiling = BudgetMeter {
+            spent: 100,
+            ceiling: Some(100),
+        };
         assert!(at_ceiling.is_exhausted(), "spent == ceiling is exhausted");
         assert_eq!(at_ceiling.headroom(), Some(0));
         assert!(at_ceiling.would_breach(1));
@@ -2244,8 +2425,15 @@ mod tests {
             coord,
             vec![(coord, vec![transfer(coord, worker_b, 1)])],
         );
-        assert!(matches!(r, Err(SwarmError::BudgetExhausted { .. })), "{r:?}");
-        assert_eq!(world.height(), h_before, "no atomic turn committed on a breach");
+        assert!(
+            matches!(r, Err(SwarmError::BudgetExhausted { .. })),
+            "{r:?}"
+        );
+        assert_eq!(
+            world.height(),
+            h_before,
+            "no atomic turn committed on a breach"
+        );
     }
 
     // ── N9: THE STINGRAY CEILING WELD (the verified shared budget) ───────────
@@ -2276,7 +2464,11 @@ mod tests {
             .expect("coord dispatch 2 commits");
         // worker_a acts on itself (a metered self SetField — always in-mandate).
         let ow = swarm
-            .run(&mut world, worker_a, vec![crate::world::set_field(worker_a, 3, [1u8; 32])])
+            .run(
+                &mut world,
+                worker_a,
+                vec![crate::world::set_field(worker_a, 3, [1u8; 32])],
+            )
             .expect("worker_a self-action commits");
 
         // CONSERVATION: the shared pool's conserved total is EXACTLY the sum of
@@ -2320,7 +2512,10 @@ mod tests {
             .run(&mut world, coord, vec![transfer(coord, worker_a, 100)])
             .expect("the first dispatch (declared fee == ceiling) commits");
         assert!(o1.computrons > 0, "non-vacuous metered draw");
-        assert!(o1.computrons <= fee, "the metered cost is within the declared fee");
+        assert!(
+            o1.computrons <= fee,
+            "the metered cost is within the declared fee"
+        );
         assert_eq!(
             swarm.stingray_budget().unwrap().total_drawn(),
             o1.computrons,
@@ -2334,16 +2529,31 @@ mod tests {
         let log_before = swarm.action_log().len();
         let r = swarm.run(&mut world, coord, vec![transfer(coord, worker_a, 100)]);
         match r {
-            Err(SwarmError::PoolExhausted { member, drawn, ceiling, would_be }) => {
+            Err(SwarmError::PoolExhausted {
+                member,
+                drawn,
+                ceiling,
+                would_be,
+            }) => {
                 assert_eq!(member, coord);
-                assert_eq!(drawn, drawn_before, "the pool's conserved total before the refusal");
+                assert_eq!(
+                    drawn, drawn_before,
+                    "the pool's conserved total before the refusal"
+                );
                 assert_eq!(ceiling, fee, "the pool ceiling B");
-                assert!(would_be > ceiling, "the draw would have breached B (drawn + declared fee > B)");
+                assert!(
+                    would_be > ceiling,
+                    "the draw would have breached B (drawn + declared fee > B)"
+                );
             }
             other => panic!("expected PoolExhausted, got {other:?}"),
         }
         // FAIL-CLOSED: no turn committed, the counter UNMOVED (the gate held).
-        assert_eq!(world.height(), h_before, "no height advance on a shared-pool breach");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "no height advance on a shared-pool breach"
+        );
         assert_eq!(
             swarm.stingray_budget().unwrap().total_drawn(),
             drawn_before,
@@ -2351,7 +2561,12 @@ mod tests {
         );
         // The refusal is RECORDED (a record, not a silent drop).
         assert_eq!(swarm.action_log().len(), log_before + 1);
-        assert!(swarm.action_log().last().unwrap().summary.contains("SHARED POOL EXHAUSTED"));
+        assert!(swarm
+            .action_log()
+            .last()
+            .unwrap()
+            .summary
+            .contains("SHARED POOL EXHAUSTED"));
     }
 
     #[test]
@@ -2366,7 +2581,10 @@ mod tests {
             .expect("dispatch commits");
 
         let view = swarm.stingray_view().expect("a pool is attached");
-        assert_eq!(view.total_drawn, o.computrons, "the view reads the counter's total_spent");
+        assert_eq!(
+            view.total_drawn, o.computrons,
+            "the view reads the counter's total_spent"
+        );
         assert_eq!(view.ceiling, 50_000);
         assert_eq!(view.remaining, 50_000 - o.computrons);
         assert!(!view.exhausted);
@@ -2377,8 +2595,15 @@ mod tests {
             "the aggregate reflects the counter, never a re-summation"
         );
         // And the pool exposes the SDK-shaped slice (the seam to set_budget_gate).
-        let slice = swarm.stingray_budget().unwrap().sdk_slice().expect("the slice exists");
-        assert_eq!(slice.spent, o.computrons, "the SDK slice's spent matches the pool");
+        let slice = swarm
+            .stingray_budget()
+            .unwrap()
+            .sdk_slice()
+            .expect("the slice exists");
+        assert_eq!(
+            slice.spent, o.computrons,
+            "the SDK slice's spent matches the pool"
+        );
     }
 
     #[test]
@@ -2402,7 +2627,11 @@ mod tests {
             vec![(coord, vec![transfer(coord, worker_b, 1)])],
         );
         assert!(matches!(r, Err(SwarmError::PoolExhausted { .. })), "{r:?}");
-        assert_eq!(world.height(), h_before, "no atomic turn committed on a shared-pool breach");
+        assert_eq!(
+            world.height(),
+            h_before,
+            "no atomic turn committed on a shared-pool breach"
+        );
     }
 
     #[test]

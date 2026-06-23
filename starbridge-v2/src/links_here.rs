@@ -141,12 +141,7 @@ impl LinksHerePanel {
     /// This is the single source of the panel's content — the cockpit renders exactly
     /// these rows, so the `cargo test` that asserts they are real + cited + per-viewer
     /// proves the rendered tree shows the real what-links-here.
-    pub fn build(
-        world: &World,
-        focus: CellId,
-        viewer_rights: AuthRequired,
-        depth: usize,
-    ) -> Self {
+    pub fn build(world: &World, focus: CellId, viewer_rights: AuthRequired, depth: usize) -> Self {
         // Build a REAL witness-graph from the live image: publish each World cell as a
         // dregg:// page into one WebOfCells, then resolve a genuine transclusion of the
         // NEXT cell from each cell (a ring), recording each into the real Backlinks.
@@ -376,13 +371,20 @@ fn build_witness_graph(world: &World) -> Graph {
             // The observer recorded is the PAGE cell of the observing World cell (so the
             // graph is wholly in page-cell space, consistent with how `observe` keys the
             // source). We map back to World cells when building the rows.
-            let observer_page = *page_of_world.get(observer_world).expect("observer published");
+            let observer_page = *page_of_world
+                .get(observer_world)
+                .expect("observer published");
             if let Ok(field) = TranscludedField::include(&web, source_uri) {
                 links.observe(observer_page, &field);
             }
         }
     }
-    Graph { links, uris, page_of_world, world_of_page }
+    Graph {
+        links,
+        uris,
+        page_of_world,
+        world_of_page,
+    }
 }
 
 /// The page body a `dregg://` cell serves (the attested content the receipt + quorum
@@ -414,7 +416,10 @@ fn uri_string_for(uris: &[(CellId, DreggUri)], cell: CellId) -> String {
 /// Walks the SAME edges the viewer sees, so the depth tag is faithful to the
 /// projection (a fogged edge contributes no hop). Uses the projected graph's own
 /// `observers_of` so it never reaches past what the membrane admitted.
-fn hop_distances(graph: &DreggverseGraph, focus: CellId) -> std::collections::BTreeMap<CellId, usize> {
+fn hop_distances(
+    graph: &DreggverseGraph,
+    focus: CellId,
+) -> std::collections::BTreeMap<CellId, usize> {
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
     let mut dist: BTreeMap<CellId, usize> = BTreeMap::new();
     let mut seen: BTreeSet<CellId> = BTreeSet::new();
@@ -468,8 +473,14 @@ mod tests {
         let focus = anchors[1]; // the "service" cell
         let panel = LinksHerePanel::build(&world, focus, editor_rights(), 2);
 
-        assert_eq!(panel.focus, focus, "the panel is rooted at the focused cell");
-        assert!(panel.focus_uri.starts_with("dregg://"), "the focus has a dregg:// identity");
+        assert_eq!(
+            panel.focus, focus,
+            "the panel is rooted at the focused cell"
+        );
+        assert!(
+            panel.focus_uri.starts_with("dregg://"),
+            "the focus has a dregg:// identity"
+        );
         // An authorized (Either) viewer clears the gated focus lineage → sees backlinks.
         assert!(
             !panel.is_empty(),
@@ -477,7 +488,10 @@ mod tests {
         );
         for b in &panel.backlinks {
             // Each backlink is a real dregg:// address (64 hex chars for the cell id).
-            assert!(b.observer_uri.starts_with("dregg://"), "an observer is a dregg:// address");
+            assert!(
+                b.observer_uri.starts_with("dregg://"),
+                "an observer is a dregg:// address"
+            );
             assert_eq!(
                 b.observer_uri.len(),
                 "dregg://".len() + 64,
@@ -486,8 +500,14 @@ mod tests {
             // The backlink carries its cited receipt + content commitment — a
             // verifiable fact, not a bare pointer.
             assert!(b.receipt_hash.len() >= 4, "the cited receipt is real");
-            assert!(b.content_hash.len() >= 4, "the observed content commitment is real");
-            assert!(b.hops >= 1 && b.hops <= panel.depth, "the hop tag is within the depth bound");
+            assert!(
+                b.content_hash.len() >= 4,
+                "the observed content commitment is real"
+            );
+            assert!(
+                b.hops >= 1 && b.hops <= panel.depth,
+                "the hop tag is within the depth bound"
+            );
         }
     }
 
@@ -505,7 +525,10 @@ mod tests {
         let authorized = LinksHerePanel::build(&world, focus, AuthRequired::None, 2);
         let fogged = LinksHerePanel::build(&world, focus, AuthRequired::Signature, 2);
 
-        assert!(panel_has_focus_backlink(&authorized, focus), "the root viewer sees the focus's direct backlink");
+        assert!(
+            panel_has_focus_backlink(&authorized, focus),
+            "the root viewer sees the focus's direct backlink"
+        );
         // The fogged (incomparable Signature) viewer sees the focus's DIRECT backlinks
         // omitted: the gate is on `focus`, so its observers are fogged for an
         // incomparable viewer.
@@ -524,7 +547,10 @@ mod tests {
             authorized.total_link_count, fogged.total_link_count,
             "the god's-eye docuverse is the same; only the per-viewer projection differs"
         );
-        assert!(fogged.fogged_count() >= 1, "the incomparable viewer has ≥1 fogged backlink");
+        assert!(
+            fogged.fogged_count() >= 1,
+            "the incomparable viewer has ≥1 fogged backlink"
+        );
     }
 
     #[test]
@@ -536,16 +562,38 @@ mod tests {
         let (world, anchors) = ring_world();
         let panel = LinksHerePanel::build(&world, anchors[1], editor_rights(), 2);
         let text = panel.all_text();
-        assert!(text.len() >= 4, "the panel renders several lines of real text, got {}", text.len());
+        assert!(
+            text.len() >= 4,
+            "the panel renders several lines of real text, got {}",
+            text.len()
+        );
         for line in &text {
-            assert!(!line.trim().is_empty(), "every panel line is non-empty real text");
+            assert!(
+                !line.trim().is_empty(),
+                "every panel line is non-empty real text"
+            );
         }
         let blob = text.join("\n");
-        assert!(blob.contains("what links here"), "names the what-links-here question");
-        assert!(blob.contains("dregg://"), "names the dregg:// backlink addressing");
-        assert!(blob.contains("receipt"), "shows the cited receipt (the verifiable fact)");
-        assert!(blob.contains("commitment"), "shows the observed content commitment");
-        assert!(blob.to_lowercase().contains("fog") || blob.contains("of"), "surfaces the per-viewer fog/visible-of-total");
+        assert!(
+            blob.contains("what links here"),
+            "names the what-links-here question"
+        );
+        assert!(
+            blob.contains("dregg://"),
+            "names the dregg:// backlink addressing"
+        );
+        assert!(
+            blob.contains("receipt"),
+            "shows the cited receipt (the verifiable fact)"
+        );
+        assert!(
+            blob.contains("commitment"),
+            "shows the observed content commitment"
+        );
+        assert!(
+            blob.to_lowercase().contains("fog") || blob.contains("of"),
+            "surfaces the per-viewer fog/visible-of-total"
+        );
     }
 
     #[test]
@@ -576,11 +624,17 @@ mod tests {
         let mut world = World::new();
         let lonely = world.genesis_cell(0x01, 0);
         let panel = LinksHerePanel::build(&world, lonely, AuthRequired::None, 3);
-        assert!(panel.is_empty(), "a cell nobody transcludes has no backlinks");
+        assert!(
+            panel.is_empty(),
+            "a cell nobody transcludes has no backlinks"
+        );
         assert_eq!(panel.total_link_count, 0, "the god's-eye map is also empty");
         // The text is still non-blank — it renders an honest "no backlinks" line.
         let blob = panel.all_text().join("\n");
-        assert!(blob.contains("no backlinks"), "an empty readout renders an honest line, not a blank");
+        assert!(
+            blob.contains("no backlinks"),
+            "an empty readout renders an honest line, not a blank"
+        );
     }
 
     /// Does `panel` contain a backlink whose SOURCE is the focus (a direct backlink of

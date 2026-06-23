@@ -25,9 +25,7 @@
 //! gpui-free + `cargo test`-able: this is the simulation HEART; the cockpit's
 //! panel ([`crate::cockpit`]) is a thin view over it.
 
-use dregg_cell::{
-    lifecycle::DeathReason, AuthRequired, CellId, FieldElement, Permissions,
-};
+use dregg_cell::{lifecycle::DeathReason, AuthRequired, CellId, FieldElement, Permissions};
 use dregg_turn::{
     action::Effect,
     turn::{Turn, TurnReceipt},
@@ -60,7 +58,11 @@ pub enum EffectKind {
     /// Grant `to` a capability reaching `target` at `slot` (the ocap edge; the
     /// executor's no-amplification rule gates it — you can only grant what you
     /// hold).
-    GrantCapability { to: CellId, target: CellId, slot: u32 },
+    GrantCapability {
+        to: CellId,
+        target: CellId,
+        slot: u32,
+    },
     /// Revoke the capability at `slot` on the acting cell.
     RevokeCapability { slot: u32 },
     /// Emit an event with `topic` (BLAKE3'd to the 32-byte symbol) on the cell.
@@ -85,7 +87,10 @@ pub enum EffectKind {
     /// Provably reduce the acting cell's balance by `amount`, no credited dest.
     Burn { amount: u64 },
     /// Birth a child cell from a deployed factory `factory_vk` with `owner` pubkey.
-    CreateCellFromFactory { factory_vk: [u8; 32], owner: [u8; 32] },
+    CreateCellFromFactory {
+        factory_vk: [u8; 32],
+        owner: [u8; 32],
+    },
 }
 
 impl EffectKind {
@@ -223,13 +228,19 @@ pub struct IntentDraft {
 impl IntentDraft {
     /// A fresh draft from `agent` with no actions yet.
     pub fn new(agent: CellId) -> Self {
-        IntentDraft { agent, actions: Vec::new() }
+        IntentDraft {
+            agent,
+            actions: Vec::new(),
+        }
     }
 
     /// Append a new action acting on `target` (with no effects yet). Returns its
     /// index so the caller can hang effects on it.
     pub fn add_action(&mut self, target: CellId) -> usize {
-        self.actions.push(DraftAction { target, effects: Vec::new() });
+        self.actions.push(DraftAction {
+            target,
+            effects: Vec::new(),
+        });
         self.actions.len() - 1
     }
 
@@ -269,7 +280,10 @@ impl IntentDraft {
             .map(|a| {
                 (
                     a.target,
-                    a.effects.iter().map(|e| e.to_effect(a.target, height)).collect(),
+                    a.effects
+                        .iter()
+                        .map(|e| e.to_effect(a.target, height))
+                        .collect(),
                 )
             })
             .collect();
@@ -282,8 +296,11 @@ impl IntentDraft {
     fn build_forest(&self, height: u64) -> dregg_turn::forest::CallForest {
         let mut fb = edit::ForestBuilder::new();
         for a in &self.actions {
-            let effects: Vec<Effect> =
-                a.effects.iter().map(|e| e.to_effect(a.target, height)).collect();
+            let effects: Vec<Effect> = a
+                .effects
+                .iter()
+                .map(|e| e.to_effect(a.target, height))
+                .collect();
             fb.root(edit::ActionBuilder::new(a.target).effects(effects));
         }
         fb.build()
@@ -445,8 +462,7 @@ pub fn simulate(world: &World, draft: &IntentDraft) -> SimOutcome {
             // A factory/create birth lands a cell whose id the turn didn't name —
             // surface any NEW ledger cell (post minus the cells we already listed)
             // as a birth delta so the panel shows the new cell appearing.
-            let known: std::collections::HashSet<CellId> =
-                deltas.iter().map(|d| d.cell).collect();
+            let known: std::collections::HashSet<CellId> = deltas.iter().map(|d| d.cell).collect();
             for (id, cell) in fork.ledger().iter() {
                 if !known.contains(id) && world.ledger().get(id).is_none() {
                     deltas.push(CellDelta {
@@ -649,7 +665,10 @@ mod tests {
         draft.add_effect(ai, EffectKind::Transfer { to: b, amount: 250 });
 
         let out = simulate(&w, &draft);
-        assert!(out.would_commit(), "a conserving transfer must be predicted to commit");
+        assert!(
+            out.would_commit(),
+            "a conserving transfer must be predicted to commit"
+        );
 
         // THE LIVE WORLD IS UNTOUCHED — the whole point of a what-if.
         assert_eq!(w.ledger().get(&a).unwrap().state.balance(), 1_000);
@@ -659,7 +678,12 @@ mod tests {
 
         // The PREDICTION carries a REAL receipt + the per-cell deltas.
         match out {
-            SimOutcome::Predicted { receipt, deltas, predicted_root, .. } => {
+            SimOutcome::Predicted {
+                receipt,
+                deltas,
+                predicted_root,
+                ..
+            } => {
                 assert_eq!(receipt.action_count, 1);
                 let da = deltas.iter().find(|d| d.cell == a).unwrap();
                 let db = deltas.iter().find(|d| d.cell == b).unwrap();
@@ -667,7 +691,11 @@ mod tests {
                 assert_eq!(da.after, Some(750), "a would drop to 750");
                 assert_eq!(db.before, Some(0));
                 assert_eq!(db.after, Some(250), "b would rise to 250");
-                assert_ne!(predicted_root, w.state_root(), "the predicted image root moved");
+                assert_ne!(
+                    predicted_root,
+                    w.state_root(),
+                    "the predicted image root moved"
+                );
             }
             SimOutcome::Refused { reason, .. } => panic!("unexpected refusal: {reason}"),
         }
@@ -680,8 +708,7 @@ mod tests {
         // same pinned timestamp).
         const TS: i64 = 1_700_000_000;
         let mk = || {
-            let mut w =
-                World::with_costs_and_timestamp(dregg_turn::ComputronCosts::zero(), TS);
+            let mut w = World::with_costs_and_timestamp(dregg_turn::ComputronCosts::zero(), TS);
             let a = w.genesis_cell(1, 1_000);
             let b = w.genesis_cell(2, 0);
             (w, a, b)
@@ -701,7 +728,10 @@ mod tests {
             CommitOutcome::Rejected { reason, .. } => panic!("real reject: {reason}"),
             CommitOutcome::Queued { .. } => panic!("unexpected queue (world not suspended)"),
         };
-        assert_eq!(predicted, real, "the predicted receipt must equal the real commit's");
+        assert_eq!(
+            predicted, real,
+            "the predicted receipt must equal the real commit's"
+        );
         // And the live world now reflects the committed turn.
         assert_eq!(w.ledger().get(&b).unwrap().state.balance(), 250);
         assert_eq!(w.height(), 1);
@@ -713,13 +743,29 @@ mod tests {
         let mut draft = IntentDraft::new(a);
         let ai = draft.add_action(a);
         // a holds 1_000; ask to move 5_000 — the executor must refuse.
-        draft.add_effect(ai, EffectKind::Transfer { to: b, amount: 5_000 });
+        draft.add_effect(
+            ai,
+            EffectKind::Transfer {
+                to: b,
+                amount: 5_000,
+            },
+        );
 
         let out = simulate(&w, &draft);
-        assert!(!out.would_commit(), "an overspend must be predicted to REFUSE");
+        assert!(
+            !out.would_commit(),
+            "an overspend must be predicted to REFUSE"
+        );
         match out {
-            SimOutcome::Refused { reason, static_refusal, .. } => {
-                assert!(!static_refusal, "overspend is a DYNAMIC refusal (the fork's executor)");
+            SimOutcome::Refused {
+                reason,
+                static_refusal,
+                ..
+            } => {
+                assert!(
+                    !static_refusal,
+                    "overspend is a DYNAMIC refusal (the fork's executor)"
+                );
                 assert!(!reason.is_empty(), "the executor's reason is surfaced");
             }
             SimOutcome::Predicted { .. } => panic!("overspend should not be predicted to commit"),
@@ -736,10 +782,20 @@ mod tests {
         let (w, a, b) = two_cell_world();
         let mut draft = IntentDraft::new(a);
         let ai = draft.add_action(a);
-        draft.add_effect(ai, EffectKind::GrantCapability { to: a, target: b, slot: 0 });
+        draft.add_effect(
+            ai,
+            EffectKind::GrantCapability {
+                to: a,
+                target: b,
+                slot: 0,
+            },
+        );
 
         let out = simulate(&w, &draft);
-        assert!(!out.would_commit(), "an over-grant must be predicted to refuse");
+        assert!(
+            !out.would_commit(),
+            "an over-grant must be predicted to refuse"
+        );
         assert_eq!(w.height(), 0, "the live world is untouched");
     }
 
@@ -770,9 +826,16 @@ mod tests {
         draft.add_effect(ai, EffectKind::CreateCell { seed: 0x9A });
 
         let out = simulate(&w, &draft);
-        assert!(out.would_commit(), "a create-cell must be predicted to commit");
+        assert!(
+            out.would_commit(),
+            "a create-cell must be predicted to commit"
+        );
         match out {
-            SimOutcome::Predicted { cell_count_delta, deltas, .. } => {
+            SimOutcome::Predicted {
+                cell_count_delta,
+                deltas,
+                ..
+            } => {
                 assert_eq!(cell_count_delta, 1, "the image would gain one cell");
                 // The birth appears as a `before: None` delta.
                 assert!(
@@ -802,11 +865,22 @@ mod tests {
 
         let out = simulate(&w, &draft);
         match out {
-            SimOutcome::Predicted { receipt, deltas, .. } => {
+            SimOutcome::Predicted {
+                receipt, deltas, ..
+            } => {
                 assert_eq!(receipt.action_count, 2, "two sibling actions in one turn");
-                assert_eq!(deltas.iter().find(|d| d.cell == b).unwrap().after, Some(100));
-                assert_eq!(deltas.iter().find(|d| d.cell == c).unwrap().after, Some(200));
-                assert_eq!(deltas.iter().find(|d| d.cell == a).unwrap().after, Some(700));
+                assert_eq!(
+                    deltas.iter().find(|d| d.cell == b).unwrap().after,
+                    Some(100)
+                );
+                assert_eq!(
+                    deltas.iter().find(|d| d.cell == c).unwrap().after,
+                    Some(200)
+                );
+                assert_eq!(
+                    deltas.iter().find(|d| d.cell == a).unwrap().after,
+                    Some(700)
+                );
             }
             SimOutcome::Refused { reason, .. } => panic!("unexpected refusal: {reason}"),
         }
@@ -824,10 +898,19 @@ mod tests {
 
         let mut draft = IntentDraft::new(id);
         let ai = draft.add_action(id);
-        draft.add_effect(ai, EffectKind::SetField { index: 0, value: field_from_u64(7) });
+        draft.add_effect(
+            ai,
+            EffectKind::SetField {
+                index: 0,
+                value: field_from_u64(7),
+            },
+        );
 
         let out = simulate(&w, &draft);
-        assert!(!out.would_commit(), "the deployed Immutable program must refuse the write in the fork");
+        assert!(
+            !out.would_commit(),
+            "the deployed Immutable program must refuse the write in the fork"
+        );
         assert_eq!(w.height(), 0);
     }
 
@@ -875,24 +958,45 @@ mod tests {
             SimOutcome::Refused { reason, .. } => panic!("good intent refused: {reason}"),
         };
         let good_render = render_outcome(&good_out);
-        assert!(good_render.contains("would COMMIT"), "render shows the predicted-commit");
+        assert!(
+            good_render.contains("would COMMIT"),
+            "render shows the predicted-commit"
+        );
         assert!(
             good_render.contains(&real_receipt),
             "render must carry the REAL predicted receipt hash: {good_render}"
         );
         // The predicted post-state deltas are in the content (a → 750, b → 250).
-        assert!(good_render.contains("750"), "render shows a's predicted post-balance");
-        assert!(good_render.contains("250"), "render shows b's predicted post-balance");
+        assert!(
+            good_render.contains("750"),
+            "render shows a's predicted post-balance"
+        );
+        assert!(
+            good_render.contains("250"),
+            "render shows b's predicted post-balance"
+        );
 
         // (2) A BAD intent (overspend) → the rendered content carries a REAL
         //     refusal with the executor's reason, BEFORE anything commits.
         let mut bad = IntentDraft::new(a);
         let bi = bad.add_action(a);
-        bad.add_effect(bi, EffectKind::Transfer { to: b, amount: 9_999 });
+        bad.add_effect(
+            bi,
+            EffectKind::Transfer {
+                to: b,
+                amount: 9_999,
+            },
+        );
         let bad_out = simulate(&w, &bad);
-        assert!(!bad_out.would_commit(), "the overspend must be predicted to refuse");
+        assert!(
+            !bad_out.would_commit(),
+            "the overspend must be predicted to refuse"
+        );
         let bad_render = render_outcome(&bad_out);
-        assert!(bad_render.contains("REFUSED"), "render shows the refusal: {bad_render}");
+        assert!(
+            bad_render.contains("REFUSED"),
+            "render shows the refusal: {bad_render}"
+        );
         assert!(
             bad_render.contains("reason:"),
             "render carries the executor's reason: {bad_render}"

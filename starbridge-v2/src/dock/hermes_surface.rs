@@ -50,7 +50,9 @@ impl AgentPane {
     /// receipted turn, budgets depleting turn-over-turn). This is what ⌘K → "Open
     /// Agent pane" gives — the real ADOS sidebar, not a snapshot.
     pub fn interactive(id: u64, session_id: &str, window: &mut Window, cx: &mut App) -> Self {
-        AgentPane(HermesDockSurface::new_interactive(id, session_id, window, cx))
+        AgentPane(HermesDockSurface::new_interactive(
+            id, session_id, window, cx,
+        ))
     }
 
     /// Build a DEMO agent pane: seed a self-contained [`AgentDockModel`] from a

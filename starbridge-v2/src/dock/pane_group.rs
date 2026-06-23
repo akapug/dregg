@@ -27,8 +27,8 @@ use gpui::{
     IntoElement, Pixels, Point, StyleRefinement, Window,
 };
 
-use super::pane::Pane;
 use self::element::pane_axis;
+use super::pane::Pane;
 
 pub const HANDLE_HITBOX_SIZE: f32 = 4.0;
 const HORIZONTAL_MIN_SIZE: f32 = 80.;
@@ -482,7 +482,8 @@ impl PaneAxis {
     ) -> Option<bool> {
         let container_size = self
             .bounding_boxes
-            .lock().unwrap()
+            .lock()
+            .unwrap()
             .iter()
             .filter_map(|e| *e)
             .reduce(|acc, e| acc.union(&e))
@@ -622,8 +623,8 @@ impl PaneAxis {
         let bounding_boxes = self.bounding_boxes.lock().unwrap();
 
         for (idx, member) in self.members.iter().enumerate() {
-            if let Some(coordinates) = bounding_boxes[idx]
-                .filter(|coordinates| coordinates.contains(&coordinate))
+            if let Some(coordinates) =
+                bounding_boxes[idx].filter(|coordinates| coordinates.contains(&coordinate))
             {
                 let _ = coordinates;
                 return match member {
@@ -1098,11 +1099,9 @@ mod element {
                 let (divider_bounds, child_bounds, hitbox) = {
                     let child = &layout.children[ix];
                     match child.handle.as_ref() {
-                        Some(handle) => (
-                            handle.divider_bounds,
-                            child.bounds,
-                            handle.hitbox.clone(),
-                        ),
+                        Some(handle) => {
+                            (handle.divider_bounds, child.bounds, handle.hitbox.clone())
+                        }
                         None => continue,
                     }
                 };

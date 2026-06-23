@@ -90,7 +90,11 @@ impl RecordedStep {
     pub fn label(&self) -> String {
         match self {
             RecordedStep::Genesis { cell } => {
-                format!("genesis · cell {} ({})", short(cell.id().as_bytes()), cell.state.balance())
+                format!(
+                    "genesis · cell {} ({})",
+                    short(cell.id().as_bytes()),
+                    cell.state.balance()
+                )
             }
             RecordedStep::Committed { receipt, .. } => format!(
                 "turn · agent {} · {} actions",
@@ -148,7 +152,12 @@ impl History {
     pub fn with_costs(timestamp: i64, costs: ComputronCosts) -> Self {
         let mut roots = Vec::new();
         roots.push(Ledger::new().root()); // root after 0 steps (the empty ledger)
-        History { steps: Vec::new(), roots, timestamp, costs }
+        History {
+            steps: Vec::new(),
+            roots,
+            timestamp,
+            costs,
+        }
     }
 
     /// The recording executor: an executor metering at the history's pinned costs
@@ -246,7 +255,10 @@ impl History {
     /// executor over a fresh ledger.
     pub fn replay_to(&self, k: usize) -> Result<Ledger, ReplayError> {
         if k > self.steps.len() {
-            return Err(ReplayError::OutOfRange { step: k, len: self.steps.len() });
+            return Err(ReplayError::OutOfRange {
+                step: k,
+                len: self.steps.len(),
+            });
         }
         let mut ledger = Ledger::new();
         let executor = self.fresh_executor();
@@ -309,10 +321,16 @@ impl History {
         checkpoint_step: usize,
     ) -> Result<Ledger, ReplayError> {
         if k > self.steps.len() {
-            return Err(ReplayError::OutOfRange { step: k, len: self.steps.len() });
+            return Err(ReplayError::OutOfRange {
+                step: k,
+                len: self.steps.len(),
+            });
         }
         if checkpoint_step > k {
-            return Err(ReplayError::OutOfRange { step: checkpoint_step, len: k });
+            return Err(ReplayError::OutOfRange {
+                step: checkpoint_step,
+                len: k,
+            });
         }
         // The checkpoint half: reconstruct (and verify) the ledger AT the
         // checkpoint step. A fresh executor whose chain-head table we re-prime
@@ -374,15 +392,18 @@ impl History {
                 executor.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
                 ForkOutcome::Committed { receipt }
             }
-            TurnResult::Rejected { reason, at_action } => {
-                ForkOutcome::Rejected { reason: format!("{reason:?}"), at_action }
-            }
-            TurnResult::Expired => {
-                ForkOutcome::Rejected { reason: "conditional turn expired".into(), at_action: vec![] }
-            }
-            TurnResult::Pending => {
-                ForkOutcome::Rejected { reason: "conditional turn pending".into(), at_action: vec![] }
-            }
+            TurnResult::Rejected { reason, at_action } => ForkOutcome::Rejected {
+                reason: format!("{reason:?}"),
+                at_action,
+            },
+            TurnResult::Expired => ForkOutcome::Rejected {
+                reason: "conditional turn expired".into(),
+                at_action: vec![],
+            },
+            TurnResult::Pending => ForkOutcome::Rejected {
+                reason: "conditional turn pending".into(),
+                at_action: vec![],
+            },
         };
 
         let fork_root = fork_ledger.root();
@@ -543,7 +564,10 @@ pub fn diff_ledgers(a: &Ledger, b: &Ledger) -> StateDiff {
         match am.get(idb) {
             None => changes.push((
                 CellId::from_bytes(*idb),
-                CellChange::Created { balance: cb.state.balance(), caps: cb.capabilities.len() },
+                CellChange::Created {
+                    balance: cb.state.balance(),
+                    caps: cb.capabilities.len(),
+                },
             )),
             Some(ca) => {
                 let fields_changed = ca.state.fields != cb.state.fields;
@@ -573,7 +597,10 @@ pub fn diff_ledgers(a: &Ledger, b: &Ledger) -> StateDiff {
         if !bm.contains_key(ida) {
             changes.push((
                 CellId::from_bytes(*ida),
-                CellChange::Removed { balance: ca.state.balance(), caps: ca.capabilities.len() },
+                CellChange::Removed {
+                    balance: ca.state.balance(),
+                    caps: ca.capabilities.len(),
+                },
             ));
         }
     }
@@ -588,8 +615,13 @@ pub fn diff_ledgers(a: &Ledger, b: &Ledger) -> StateDiff {
 /// What happened when the fork's alternate turn ran on the branch.
 #[derive(Clone)]
 pub enum ForkOutcome {
-    Committed { receipt: TurnReceipt },
-    Rejected { reason: String, at_action: Vec<usize> },
+    Committed {
+        receipt: TurnReceipt,
+    },
+    Rejected {
+        reason: String,
+        at_action: Vec<usize>,
+    },
 }
 
 impl ForkOutcome {
@@ -631,10 +663,17 @@ pub enum ReplayError {
     /// anti-substitution failure (fail-closed). If this fires on honest history
     /// it indicates a determinism bug; on tampered history it is the tooth
     /// catching the tamper.
-    RootMismatch { step: usize, got: [u8; 32], want: [u8; 32] },
+    RootMismatch {
+        step: usize,
+        got: [u8; 32],
+        want: [u8; 32],
+    },
     /// A recorded turn that committed when first run did NOT commit on replay —
     /// the executor behaved nondeterministically (a real bug if it ever fires).
-    NondeterministicReplay { expected_receipt: [u8; 32], got: String },
+    NondeterministicReplay {
+        expected_receipt: [u8; 32],
+        got: String,
+    },
 }
 
 impl std::fmt::Display for ReplayError {
@@ -773,7 +812,13 @@ impl ReplayPanelModel {
             divergence: f.divergence.clone(),
         });
 
-        ReplayPanelModel { timeline, cursor, cursor_state, diff_from_prev, fork }
+        ReplayPanelModel {
+            timeline,
+            cursor,
+            cursor_state,
+            diff_from_prev,
+            fork,
+        }
     }
 }
 
@@ -860,7 +905,12 @@ pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
                     div()
                         .text_xs()
                         .text_color(if at_cursor { p::accent() } else { p::muted() })
-                        .child(format!("{} k{}  {}", if at_cursor { "▸" } else { "·" }, entry.step, entry.label)),
+                        .child(format!(
+                            "{} k{}  {}",
+                            if at_cursor { "▸" } else { "·" },
+                            entry.step,
+                            entry.label
+                        )),
                 )
                 .child(
                     div()
@@ -875,20 +925,20 @@ pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
     // The verified state at the cursor.
     let cs = &model.cursor_state;
     col = col.child(
-        div()
-            .mt_2()
-            .flex()
-            .gap_2()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(if cs.root_verified { p::good() } else { p::bad() })
-                    .child(if cs.root_verified {
-                        format!("✓ root verified @k{} {}", cs.step, short(&cs.root))
-                    } else {
-                        format!("✗ root UNVERIFIED @k{}", cs.step)
-                    }),
-            ),
+        div().mt_2().flex().gap_2().child(
+            div()
+                .text_xs()
+                .text_color(if cs.root_verified {
+                    p::good()
+                } else {
+                    p::bad()
+                })
+                .child(if cs.root_verified {
+                    format!("✓ root verified @k{} {}", cs.step, short(&cs.root))
+                } else {
+                    format!("✗ root UNVERIFIED @k{}", cs.step)
+                }),
+        ),
     );
     let mut state_col = div().flex().flex_col().gap_0p5().mt_1();
     for (id, bal, caps) in &cs.cells {
@@ -916,12 +966,12 @@ pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
     // The diff from the previous step.
     if let Some(diff) = &model.diff_from_prev {
         let mut diff_col = div().flex().flex_col().gap_0p5().mt_2();
-        diff_col = diff_col.child(
-            div()
-                .text_xs()
-                .text_color(p::muted())
-                .child(format!("DIFF k{}→k{} ({} changed)", cs.step.saturating_sub(1), cs.step, diff.len())),
-        );
+        diff_col = diff_col.child(div().text_xs().text_color(p::muted()).child(format!(
+            "DIFF k{}→k{} ({} changed)",
+            cs.step.saturating_sub(1),
+            cs.step,
+            diff.len()
+        )));
         for (id, change) in &diff.changes {
             diff_col = diff_col.child(
                 div()
@@ -947,28 +997,31 @@ pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
             .border_1()
             .border_color(p::border())
             .bg(p::panel());
-        fork_col = fork_col.child(
-            div().text_xs().text_color(color).child(format!(
-                "FORK @k{} · {} · {}",
-                fork.branch_step,
-                if fork.committed { "committed" } else { "rejected" },
-                if fork.diverged { "DIVERGED from mainline" } else { "no divergence" },
-            )),
-        );
-        fork_col = fork_col.child(
-            div()
-                .text_xs()
-                .text_color(p::muted())
-                .child(format!("fork root {}  vs mainline {}", short(&fork.fork_root), short(&fork.mainline_root))),
-        );
+        fork_col = fork_col.child(div().text_xs().text_color(color).child(format!(
+            "FORK @k{} · {} · {}",
+            fork.branch_step,
+            if fork.committed {
+                "committed"
+            } else {
+                "rejected"
+            },
+            if fork.diverged {
+                "DIVERGED from mainline"
+            } else {
+                "no divergence"
+            },
+        )));
+        fork_col = fork_col.child(div().text_xs().text_color(p::muted()).child(format!(
+            "fork root {}  vs mainline {}",
+            short(&fork.fork_root),
+            short(&fork.mainline_root)
+        )));
         for (id, change) in &fork.divergence.changes {
-            fork_col = fork_col.child(
-                div()
-                    .text_xs()
-                    .text_color(p::warn())
-                    .px_2()
-                    .child(format!("{} {}", short(id.as_bytes()), change.label())),
-            );
+            fork_col = fork_col.child(div().text_xs().text_color(p::warn()).px_2().child(format!(
+                "{} {}",
+                short(id.as_bytes()),
+                change.label()
+            )));
         }
         col = col.child(fork_col);
     }
@@ -988,9 +1041,7 @@ pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
 ///
 /// Deterministic timestamp so replay is bit-exact (no wall-clock).
 pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
-    use crate::world::{
-        grant_capability, make_open_cell, set_field, transfer,
-    };
+    use crate::world::{grant_capability, make_open_cell, set_field, transfer};
     use dregg_cell::AuthRequired;
 
     let mut history = History::new(1_700_000_000);
@@ -1017,11 +1068,23 @@ pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
     // Five real turns through the embedded executor (same as demo_world).
     let nonce = |l: &Ledger, a: &CellId| l.get(a).map(|c| c.state.nonce()).unwrap_or(0);
 
-    let t1 = crate::world::bare_turn(treasury, nonce(&ledger, &treasury), vec![transfer(treasury, service, 250_000)]);
+    let t1 = crate::world::bare_turn(
+        treasury,
+        nonce(&ledger, &treasury),
+        vec![transfer(treasury, service, 250_000)],
+    );
     history.record_commit(&executor, &mut ledger, t1);
-    let t2 = crate::world::bare_turn(treasury, nonce(&ledger, &treasury), vec![transfer(treasury, user, 50_000)]);
+    let t2 = crate::world::bare_turn(
+        treasury,
+        nonce(&ledger, &treasury),
+        vec![transfer(treasury, user, 50_000)],
+    );
     history.record_commit(&executor, &mut ledger, t2);
-    let t3 = crate::world::bare_turn(user, nonce(&ledger, &user), vec![transfer(user, service, 1_000)]);
+    let t3 = crate::world::bare_turn(
+        user,
+        nonce(&ledger, &user),
+        vec![transfer(user, service, 1_000)],
+    );
     history.record_commit(&executor, &mut ledger, t3);
     let t4 = crate::world::bare_turn(
         service,
@@ -1029,7 +1092,11 @@ pub fn demo_history() -> (History, Ledger, [CellId; 3]) {
         vec![grant_capability(service, service, user, user_cap_slot + 1)],
     );
     history.record_commit(&executor, &mut ledger, t4);
-    let t5 = crate::world::bare_turn(service, nonce(&ledger, &service), vec![set_field(service, 0, [7u8; 32])]);
+    let t5 = crate::world::bare_turn(
+        service,
+        nonce(&ledger, &service),
+        vec![set_field(service, 0, [7u8; 32])],
+    );
     history.record_commit(&executor, &mut ledger, t5);
 
     (history, ledger, [treasury, service, user])
@@ -1153,13 +1220,24 @@ mod tests {
         // Step 3 corresponds to "after the first turn" (2 genesis + 1 turn).
         let alt_nonce = h.replay_to(3).unwrap().get(&a).unwrap().state.nonce();
         let alt = bare_turn(a, alt_nonce, vec![transfer(a, b, 777)]);
-        let fork = h.fork_at(3, alt).expect("fork must replay+verify the branch point");
+        let fork = h
+            .fork_at(3, alt)
+            .expect("fork must replay+verify the branch point");
 
-        assert!(fork.outcome.is_committed(), "the alt transfer should commit");
-        assert!(fork.diverged(), "a different turn must diverge from the mainline");
+        assert!(
+            fork.outcome.is_committed(),
+            "the alt transfer should commit"
+        );
+        assert!(
+            fork.diverged(),
+            "a different turn must diverge from the mainline"
+        );
         // The divergence names the changed cells (a and b both moved differently).
         let ids = fork.divergence.changed_ids();
-        assert!(ids.contains(&a) || ids.contains(&b), "the fork's diff lists the moved cells");
+        assert!(
+            ids.contains(&a) || ids.contains(&b),
+            "the fork's diff lists the moved cells"
+        );
 
         // MAINLINE INTACT: the history's recorded roots are unchanged, and a
         // fresh replay still lands on the same head root.
@@ -1177,7 +1255,10 @@ mod tests {
         let same = bare_turn(a, nonce, vec![transfer(a, b, 50)]);
         let fork = h.fork_at(3, same).unwrap();
         assert!(fork.outcome.is_committed());
-        assert_eq!(fork.fork_root, fork.mainline_root, "replaying the same turn must match the mainline");
+        assert_eq!(
+            fork.fork_root, fork.mainline_root,
+            "replaying the same turn must match the mainline"
+        );
         assert!(!fork.diverged(), "identical turn → no divergence");
     }
 
@@ -1196,10 +1277,24 @@ mod tests {
         // a went 1000→900, b went 0→100.
         for (id, change) in &d.changes {
             if *id == a {
-                assert!(matches!(change, CellChange::Changed { balance_before: 1000, balance_after: 900, .. }));
+                assert!(matches!(
+                    change,
+                    CellChange::Changed {
+                        balance_before: 1000,
+                        balance_after: 900,
+                        ..
+                    }
+                ));
             }
             if *id == b {
-                assert!(matches!(change, CellChange::Changed { balance_before: 0, balance_after: 100, .. }));
+                assert!(matches!(
+                    change,
+                    CellChange::Changed {
+                        balance_before: 0,
+                        balance_after: 100,
+                        ..
+                    }
+                ));
             }
         }
     }
@@ -1208,7 +1303,10 @@ mod tests {
     fn diff_of_a_step_to_itself_is_empty() {
         let (h, _l, _a, _b) = fixture();
         for k in 0..=h.len() {
-            assert!(h.diff(k, k).unwrap().is_empty(), "step {k} vs itself is empty");
+            assert!(
+                h.diff(k, k).unwrap().is_empty(),
+                "step {k} vs itself is empty"
+            );
         }
     }
 
@@ -1249,7 +1347,10 @@ mod tests {
         // Put the cursor mid-history.
         let model = ReplayPanelModel::build(&h, 5, None);
         assert_eq!(model.cursor, 5);
-        assert!(model.cursor_state.root_verified, "cursor reconstruction must verify");
+        assert!(
+            model.cursor_state.root_verified,
+            "cursor reconstruction must verify"
+        );
         assert_eq!(model.cursor_state.root, h.root_at(5));
         // The timeline has one entry per landing (len+1).
         assert_eq!(model.timeline.len(), h.len() + 1);

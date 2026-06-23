@@ -280,8 +280,7 @@ impl NodeClient {
                     "amount": 0u64,
                     "public_key": public_key_hex,
                 });
-                let resp: serde_json::Value =
-                    http_post_json(base_url, "/api/faucet", None, &body)?;
+                let resp: serde_json::Value = http_post_json(base_url, "/api/faucet", None, &body)?;
                 Ok(resp
                     .get("success")
                     .and_then(serde_json::Value::as_bool)
@@ -578,10 +577,8 @@ impl LiveNode {
     pub fn sync(&self) -> anyhow::Result<LiveSnapshot> {
         let status = self.client.status()?;
         let cells = self.client.cells()?;
-        let status_view = crate::live_node::LiveReflection::reflect_status(
-            &self.client.describe(),
-            &status,
-        );
+        let status_view =
+            crate::live_node::LiveReflection::reflect_status(&self.client.describe(), &status);
         let cell_views = cells
             .iter()
             .map(crate::live_node::LiveReflection::reflect_cell_entry)

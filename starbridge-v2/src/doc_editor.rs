@@ -43,9 +43,9 @@
 
 use dregg_cell::CellId;
 use dregg_doc::{
-    Alternative, Author, ConflictRegion, ExecutorDrivenDoc, Op, Patch, RegionResolutions, Regime,
-    Rendered, ResolutionChoice, Segment, content, resolutions, resolve_connect_by, resolve_field,
-    resolve_keep_in, walk_atoms, AtomId,
+    content, resolutions, resolve_connect_by, resolve_field, resolve_keep_in, walk_atoms,
+    Alternative, AtomId, Author, ConflictRegion, ExecutorDrivenDoc, Op, Patch, Regime,
+    RegionResolutions, Rendered, ResolutionChoice, Segment,
 };
 use dregg_turn::TurnError;
 
@@ -63,7 +63,10 @@ pub struct DocAuthor {
 
 impl DocAuthor {
     /// The two demo co-authors whose concurrent edits sow a first-class conflict.
-    pub const ALICE: DocAuthor = DocAuthor { id: 1, name: "alice" };
+    pub const ALICE: DocAuthor = DocAuthor {
+        id: 1,
+        name: "alice",
+    };
     pub const BOB: DocAuthor = DocAuthor { id: 2, name: "bob" };
 
     fn author(self) -> Author {
@@ -123,7 +126,13 @@ impl EditOutcome {
     /// True iff the edit was refused by the per-region cap gate (the security
     /// refusal, not a no-op).
     pub fn unauthorized(&self) -> bool {
-        matches!(self, EditOutcome::Refused { unauthorized: true, .. })
+        matches!(
+            self,
+            EditOutcome::Refused {
+                unauthorized: true,
+                ..
+            }
+        )
     }
 
     /// A one-line banner for the panel.
@@ -141,7 +150,10 @@ impl EditOutcome {
                 if *finalized { "FINAL" } else { "tentative" },
                 hex8(receipt_hash),
             ),
-            EditOutcome::Refused { reason, unauthorized } => {
+            EditOutcome::Refused {
+                reason,
+                unauthorized,
+            } => {
                 if *unauthorized {
                     format!("⛔ REFUSED in-band (the anti-ghost tooth): {reason}")
                 } else {
@@ -376,7 +388,10 @@ impl DocEditor {
         let fork = self.tail_atom();
         let (_ida, op_a) = Patch::add(seed_for(alt_a, fork), alt_a, fork);
         let (_idb, op_b) = Patch::add(seed_for(alt_b, fork).wrapping_add(0x9E37), alt_b, fork);
-        let a = self.commit_edit(Patch::by(DocAuthor::ALICE.author(), [op_a]), DocAuthor::ALICE);
+        let a = self.commit_edit(
+            Patch::by(DocAuthor::ALICE.author(), [op_a]),
+            DocAuthor::ALICE,
+        );
         let b = self.commit_edit(Patch::by(DocAuthor::BOB.author(), [op_b]), DocAuthor::BOB);
         (a, b)
     }
@@ -485,7 +500,11 @@ impl DocEditor {
     /// [`ResolutionChoice::patch`] (from [`Self::conflict_views`]) and runs it
     /// through the real executor, collapsing the conflict and leaving a receipt.
     /// An unauthorized resolver is refused in-band (the same anti-ghost tooth).
-    pub fn resolve_choice(&mut self, choice: &ResolutionChoice, resolver: DocAuthor) -> EditOutcome {
+    pub fn resolve_choice(
+        &mut self,
+        choice: &ResolutionChoice,
+        resolver: DocAuthor,
+    ) -> EditOutcome {
         self.commit_edit(choice.patch.clone(), resolver)
     }
 
@@ -592,7 +611,10 @@ fn refusal(e: TurnError) -> EditOutcome {
         TurnError::EmptyForest => "no change to commit".to_string(),
         other => format!("{other:?}"),
     };
-    EditOutcome::Refused { reason, unauthorized }
+    EditOutcome::Refused {
+        reason,
+        unauthorized,
+    }
 }
 
 /// A deterministic atom seed from the content + anchor (so repeated content at
@@ -623,12 +645,24 @@ mod tests {
         let mut ed = DocEditor::new();
         let pre = ed.commitment();
         let out = ed.append("hello world. ", DocAuthor::ALICE);
-        assert!(out.committed(), "the authorized edit committed: {}", out.banner());
-        if let EditOutcome::Committed { finalized, post_state, .. } = out {
+        assert!(
+            out.committed(),
+            "the authorized edit committed: {}",
+            out.banner()
+        );
+        if let EditOutcome::Committed {
+            finalized,
+            post_state,
+            ..
+        } = out
+        {
             assert!(finalized, "driving the real executor finalizes the receipt");
             assert_ne!(post_state, pre, "the edit moved the commitment");
         }
-        assert!(ed.commitment_matches(), "the seam is closed: commitment == projection");
+        assert!(
+            ed.commitment_matches(),
+            "the seam is closed: commitment == projection"
+        );
         assert!(ed.clean_text().contains("hello world."));
     }
 
@@ -636,9 +670,16 @@ mod tests {
     fn an_unauthorized_region_edit_is_refused_in_band() {
         let mut ed = DocEditor::new();
         let out = ed.attempt_unauthorized("forbidden ", DocAuthor::BOB);
-        assert!(out.unauthorized(), "refused by the per-region cap gate: {}", out.banner());
+        assert!(
+            out.unauthorized(),
+            "refused by the per-region cap gate: {}",
+            out.banner()
+        );
         match out {
-            EditOutcome::Refused { unauthorized, reason } => {
+            EditOutcome::Refused {
+                unauthorized,
+                reason,
+            } => {
                 assert!(unauthorized);
                 assert!(reason.contains("CapabilityNotHeld"), "{reason}");
             }
@@ -650,8 +691,14 @@ mod tests {
     fn a_prose_conflict_renders_both_alternatives_with_provenance() {
         let mut ed = DocEditor::new();
         let (a, b) = ed.sow_prose_conflict("Cats are best. ", "Dogs are best. ");
-        assert!(a.committed() && b.committed(), "both alternatives committed");
-        assert!(ed.has_conflict(), "the document is living in a conflict state");
+        assert!(
+            a.committed() && b.committed(),
+            "both alternatives committed"
+        );
+        assert!(
+            ed.has_conflict(),
+            "the document is living in a conflict state"
+        );
 
         let conflicts = ed.conflicts();
         assert_eq!(conflicts.len(), 1, "exactly one conflict region");
@@ -661,7 +708,10 @@ mod tests {
 
         // Each alternative is attributed to WHO WROTE IT (a fact) + a real receipt.
         let names: Vec<&str> = c.alternatives.iter().map(|a| a.author_name).collect();
-        assert!(names.contains(&"alice") && names.contains(&"bob"), "{names:?}");
+        assert!(
+            names.contains(&"alice") && names.contains(&"bob"),
+            "{names:?}"
+        );
         for alt in &c.alternatives {
             assert!(
                 alt.receipt_hash.is_some(),
@@ -670,7 +720,10 @@ mod tests {
         }
 
         // The clean prefix is still usable WHILE the conflict stands.
-        assert!(ed.clean_text().contains("patch"), "the rest of the doc is clean + usable");
+        assert!(
+            ed.clean_text().contains("patch"),
+            "the rest of the doc is clean + usable"
+        );
     }
 
     #[test]
@@ -685,8 +738,15 @@ mod tests {
         let keep = heads[0];
         let drop: Vec<AtomId> = heads[1..].to_vec();
         let out = ed.resolve_prose_keep(keep, &drop, DocAuthor::ALICE);
-        assert!(out.committed(), "the resolution committed as a turn: {}", out.banner());
-        assert!(!ed.has_conflict(), "the conflict collapsed to a single walk");
+        assert!(
+            out.committed(),
+            "the resolution committed as a turn: {}",
+            out.banner()
+        );
+        assert!(
+            !ed.has_conflict(),
+            "the conflict collapsed to a single walk"
+        );
         assert!(ed.commitment_matches());
     }
 
@@ -698,7 +758,10 @@ mod tests {
         let heads: Vec<AtomId> = c.alternatives.iter().map(|a| a.head).collect();
         let out = ed.resolve_prose_order(&heads, DocAuthor::ALICE);
         assert!(out.committed(), "{}", out.banner());
-        assert!(!ed.has_conflict(), "ordering collapsed the antichain (both kept)");
+        assert!(
+            !ed.has_conflict(),
+            "ordering collapsed the antichain (both kept)"
+        );
     }
 
     #[test]
@@ -712,7 +775,10 @@ mod tests {
             .find(|c| c.regime == Regime::Field)
             .expect("a field clash");
         assert_eq!(field.field.as_deref(), Some("title"));
-        assert!(field.needs_consensus, "a field authority/conservation clash may need consensus");
+        assert!(
+            field.needs_consensus,
+            "a field authority/conservation clash may need consensus"
+        );
         assert_eq!(field.alternatives.len(), 2, "both clashing values survive");
 
         let out = ed.resolve_field_choose("title", "Cats", DocAuthor::ALICE);
@@ -737,15 +803,25 @@ mod tests {
         // both alternatives shown, attributed.
         assert_eq!(c.view.alternatives.len(), 2);
         let names: Vec<&str> = c.view.alternatives.iter().map(|a| a.author_name).collect();
-        assert!(names.contains(&"alice") && names.contains(&"bob"), "{names:?}");
+        assert!(
+            names.contains(&"alice") && names.contains(&"bob"),
+            "{names:?}"
+        );
         // a keep-each + order menu is offered, and a keep-all default exists.
         assert!(!c.choices.is_empty(), "resolution choices offered");
-        assert!(c.keep_all_choice().is_some(), "a keep-both default is armed");
+        assert!(
+            c.keep_all_choice().is_some(),
+            "a keep-both default is armed"
+        );
 
         // pick the keep-all (order) choice and commit it as a real cap-gated turn.
         let choice = c.keep_all_choice().unwrap().clone();
         let out = ed.resolve_choice(&choice, DocAuthor::ALICE);
-        assert!(out.committed(), "the one-click resolution committed: {}", out.banner());
+        assert!(
+            out.committed(),
+            "the one-click resolution committed: {}",
+            out.banner()
+        );
         assert!(!ed.has_conflict(), "the conflict collapsed");
         assert!(ed.commitment_matches());
     }
@@ -760,7 +836,11 @@ mod tests {
             .find(|c| c.view.regime == Regime::Field)
             .expect("a field conflict inline");
         // one choose per distinct value.
-        assert!(field.choices.len() >= 2, "a choose per value: {:?}", field.choices.len());
+        assert!(
+            field.choices.len() >= 2,
+            "a choose per value: {:?}",
+            field.choices.len()
+        );
         let choice = field.choices[0].clone();
         let out = ed.resolve_choice(&choice, DocAuthor::ALICE);
         assert!(out.committed(), "{}", out.banner());
@@ -774,7 +854,10 @@ mod tests {
     fn a_clean_document_has_no_inline_conflicts() {
         let ed = DocEditor::new();
         assert!(!ed.has_conflict());
-        assert!(ed.conflict_views(DocAuthor::ALICE).is_empty(), "nothing to resolve");
+        assert!(
+            ed.conflict_views(DocAuthor::ALICE).is_empty(),
+            "nothing to resolve"
+        );
     }
 
     #[test]
@@ -782,6 +865,9 @@ mod tests {
         let ed = DocEditor::new();
         // The region cell and editor cell are distinct real substrate identities.
         assert_ne!(ed.region_id(), ed.editor_id());
-        assert!(ed.commitment_matches(), "commitment == projection from genesis");
+        assert!(
+            ed.commitment_matches(),
+            "commitment == projection from genesis"
+        );
     }
 }

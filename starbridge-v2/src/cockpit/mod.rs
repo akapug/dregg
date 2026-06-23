@@ -46,32 +46,32 @@ pub(crate) use gpui_component::{Selectable, Sizable};
 // tabs as `TabSurface`s (the adapter below). Splitting a pane puts two surfaces
 // side-by-side behind the draggable `PaneAxisElement` divider.
 pub(crate) use starbridge_v2::dock::{
-    ActivePaneDecorator, CockpitSurface, Pane, PaneGroup, SplitDirection, SurfaceId as DockSurfaceId,
-    WindowRegistry,
+    ActivePaneDecorator, CockpitSurface, Pane, PaneGroup, SplitDirection,
+    SurfaceId as DockSurfaceId, WindowRegistry,
 };
 
 pub(crate) use crate::views::{pill, section_title, theme};
 pub(crate) use starbridge_v2::dynamics;
+pub(crate) use starbridge_v2::meta_debug::MetaStack;
 pub(crate) use starbridge_v2::palette::{Category, CommandId, CommandPalette};
 pub(crate) use starbridge_v2::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
 pub(crate) use starbridge_v2::shell::{Scene, Shell};
 pub(crate) use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
-pub(crate) use starbridge_v2::world::{self, CommitOutcome, ResumeMode, World};
-pub(crate) use starbridge_v2::meta_debug::MetaStack;
 pub(crate) use starbridge_v2::time_travel::TimeCockpitModel;
 pub(crate) use starbridge_v2::ui_snapshot::{Liveness, UiSnapshot};
+pub(crate) use starbridge_v2::world::{self, CommitOutcome, ResumeMode, World};
 // THE ⤳ SHARE surface — the frustum / snapshot editor (cull + pare + verify + share).
 pub(crate) use starbridge_v2::affordance::{AffordanceSurface, CellAffordance};
 pub(crate) use starbridge_v2::snapshot_editor::{
     recipient_window_cap, PareOutcome, ShareError, SnapshotEditor,
 };
 // The L1 PRESENTATION SPINE + the moldable inspector framework primitives.
+pub(crate) use starbridge_v2::cv_provenance::CvProvenance;
 pub(crate) use starbridge_v2::presentable::{
     FocusTarget, GaugeView, GraphView, Halo, LatticeView, MerkleTreeView, PresentCtx, PresentMemo,
     Presentable, Presentation, PresentationBody, PresentationKind, Registry, Spotter, SpotterHit,
     StateMachineView, TimelineView, TraceView,
 };
-pub(crate) use starbridge_v2::cv_provenance::CvProvenance;
 // The newer inspector LANES (L4–L10) — each a real `Presentable` over a live
 // protocol object. The moldable inspector reaches them through its lens-family
 // picker, projecting each through the SAME generic `render_presentation_body`.
@@ -83,13 +83,13 @@ pub(crate) use starbridge_v2::settlement_inspector::SettlementFamily;
 pub(crate) use starbridge_v2::token_inspector::InspectedToken;
 // The standalone moldable surfaces + the lane gadgets — each drives its real model
 // methods (validate→predict→commit), surfacing refusals as features.
-pub(crate) use starbridge_v2::inspect_act::{InspectAct, InspectFocus, SendResult};
-pub(crate) use starbridge_v2::workspace::Workspace;
-pub(crate) use starbridge_v2::wonder::WonderRoom;
-pub(crate) use starbridge_v2::predicate_composer::{self, Atom, Composite, PredicateComposer};
-pub(crate) use starbridge_v2::turn_builder::CommittingTurnGadget;
 pub(crate) use starbridge_v2::cap_inspector::{AttenuationDial, HeldCapability};
+pub(crate) use starbridge_v2::inspect_act::{InspectAct, InspectFocus, SendResult};
+pub(crate) use starbridge_v2::predicate_composer::{self, Atom, Composite, PredicateComposer};
 pub(crate) use starbridge_v2::token_inspector::TokenLoopGadget;
+pub(crate) use starbridge_v2::turn_builder::CommittingTurnGadget;
+pub(crate) use starbridge_v2::wonder::WonderRoom;
+pub(crate) use starbridge_v2::workspace::Workspace;
 pub(crate) use starbridge_v2::{Gadget, GadgetInput};
 // The feature panels — wired in as tabs of the master interface.
 pub(crate) use starbridge_v2::{cipherclerk, debug, edit, replay};
@@ -194,7 +194,10 @@ impl MoldableLens {
 
     /// The next family in the cycle (the picker chip's click).
     fn next(self) -> MoldableLens {
-        let i = MoldableLens::ALL.iter().position(|l| *l == self).unwrap_or(0);
+        let i = MoldableLens::ALL
+            .iter()
+            .position(|l| *l == self)
+            .unwrap_or(0);
         MoldableLens::ALL[(i + 1) % MoldableLens::ALL.len()]
     }
 }
@@ -484,7 +487,11 @@ struct TabSurface {
 
 impl TabSurface {
     fn new(tab: Tab, cockpit: WeakEntity<Cockpit>, focus: FocusHandle) -> Self {
-        Self { tab, cockpit, focus }
+        Self {
+            tab,
+            cockpit,
+            focus,
+        }
     }
 }
 
@@ -729,8 +736,7 @@ pub struct Cockpit {
     /// holds an attenuated affordance cap reaching the source). The panel then shows
     /// the INTERACTIVE state + a fire button. `None` = the quote is still read-only
     /// (the default — a verified quote is free; interacting needs a powerbox grant).
-    web_cells_upgraded:
-        Option<starbridge_v2::web_cells::SemiReinteractiveTransclusion>,
+    web_cells_upgraded: Option<starbridge_v2::web_cells::SemiReinteractiveTransclusion>,
     /// The last transclusion-upgrade / transcluded-fire outcome banner (a REAL
     /// powerbox grant-turn verdict, or the in-band read-only/over-wide refusal).
     web_cells_transclusion_outcome: Option<String>,
@@ -980,15 +986,25 @@ pub struct Cockpit {
 #[derive(Clone, Copy, Debug)]
 pub enum NavAction {
     Tab(usize),
-    CycleFocus, CycleLens, ToggleReflexive, CyclePresent,
+    CycleFocus,
+    CycleLens,
+    ToggleReflexive,
+    CyclePresent,
     CycleInspectFocus,
-    CycleSimTarget, CycleSimEffect,
+    CycleSimTarget,
+    CycleSimEffect,
     SetLane(usize),
-    ToggleWebViewer, OpenWebCell,
-    CycleLinksDepth, ToggleLinksViewer, CycleLinksFocus,
+    ToggleWebViewer,
+    OpenWebCell,
+    CycleLinksDepth,
+    ToggleLinksViewer,
+    CycleLinksFocus,
     CyclePowerboxConfer,
     ToggleSharePreview,
-    ReplayNext, ReplayPrev, TimeNext, TimePrev,
+    ReplayNext,
+    ReplayPrev,
+    TimeNext,
+    TimePrev,
 }
 
 /// A captured snapshot of the cockpit's navigation-relevant UI state — enough to
@@ -1031,19 +1047,18 @@ pub struct CockpitNavState {
 mod helpers;
 pub(crate) use helpers::*;
 
-mod nav;
-mod construct;
 mod actions;
-mod shell_ops;
+mod construct;
 mod dispatch;
-mod panels_main;
+mod docs;
+mod live;
+mod nav;
 mod panels_devtools;
+mod panels_main;
 mod panels_moldable;
-mod panels_workspace;
 mod panels_web;
 mod panels_webshell;
-mod live;
+mod panels_workspace;
 mod render;
+mod shell_ops;
 mod time;
-mod docs;
-

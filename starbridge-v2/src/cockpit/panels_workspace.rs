@@ -3,7 +3,6 @@
 use super::*;
 
 impl Cockpit {
-
     pub(crate) fn dynamics_feed(&self) -> impl IntoElement {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_0p5().p_2();
@@ -17,7 +16,11 @@ impl Cockpit {
             col = col.child(
                 div()
                     .text_xs()
-                    .text_color(if is_reject { theme::bad() } else { theme::muted() })
+                    .text_color(if is_reject {
+                        theme::bad()
+                    } else {
+                        theme::muted()
+                    })
                     .child(format!("· {}", ev.label())),
             );
         }
@@ -33,7 +36,13 @@ impl Cockpit {
     /// edit away should the un-split single-pane base want it back.
     #[allow(dead_code)]
     pub(crate) fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = div().flex().flex_wrap().gap_1().p_2().border_b_1().border_color(theme::border());
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .p_2()
+            .border_b_1()
+            .border_color(theme::border());
         // M3 WIDEN — the active-tab highlight reads the witnessed cell selector too.
         let active_tab = self.active_tab();
         for t in Tab::ALL {
@@ -44,9 +53,17 @@ impl Cockpit {
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .bg(if active { theme::panel_hi() } else { theme::panel() })
+                    .bg(if active {
+                        theme::panel_hi()
+                    } else {
+                        theme::panel()
+                    })
                     .text_xs()
-                    .text_color(if active { theme::accent() } else { theme::muted() })
+                    .text_color(if active {
+                        theme::accent()
+                    } else {
+                        theme::muted()
+                    })
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::border()))
                     .on_mouse_down(
@@ -216,21 +233,13 @@ impl Cockpit {
                         .text_color(theme::accent())
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::border()))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            move |_ev, window, app| {
-                                if let Some(src) = this_pane.upgrade() {
-                                    let _ = weak.update(app, |cockpit, cx| {
-                                        cockpit.split_pane(
-                                            &src,
-                                            SplitDirection::Right,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }
-                            },
-                        )
+                        .on_mouse_down(MouseButton::Left, move |_ev, window, app| {
+                            if let Some(src) = this_pane.upgrade() {
+                                let _ = weak.update(app, |cockpit, cx| {
+                                    cockpit.split_pane(&src, SplitDirection::Right, window, cx);
+                                });
+                            }
+                        })
                         .child("⊞ split"),
                 );
             }
@@ -298,9 +307,17 @@ impl Cockpit {
                         .px_2()
                         .py_1()
                         .rounded_md()
-                        .bg(if is_active { theme::panel_hi() } else { theme::panel() })
+                        .bg(if is_active {
+                            theme::panel_hi()
+                        } else {
+                            theme::panel()
+                        })
                         .text_xs()
-                        .text_color(if is_active { theme::accent() } else { theme::muted() })
+                        .text_color(if is_active {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        })
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::border()))
                         .on_mouse_down(
@@ -468,7 +485,13 @@ impl Cockpit {
                         "open_editor_pane: shared-World mount failed, falling back to \
                          per-editor firmament: {e:#}"
                     );
-                    Box::new(EditorPane::new(id, deos_zed::fs::RealFs::arc(), root, window, cx))
+                    Box::new(EditorPane::new(
+                        id,
+                        deos_zed::fs::RealFs::arc(),
+                        root,
+                        window,
+                        cx,
+                    ))
                 }
             }
         };
@@ -607,9 +630,17 @@ impl Cockpit {
                         .px_2()
                         .py_1()
                         .rounded_md()
-                        .bg(if is_active { theme::panel_hi() } else { theme::panel() })
+                        .bg(if is_active {
+                            theme::panel_hi()
+                        } else {
+                            theme::panel()
+                        })
                         .text_xs()
-                        .text_color(if is_active { theme::accent() } else { theme::muted() })
+                        .text_color(if is_active {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        })
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::border()))
                         .on_mouse_down(
@@ -770,7 +801,8 @@ impl Cockpit {
     /// Whether `tab` is currently torn off into its own window (drives the pane
     /// control's ↗/↩ label so it toggles pop-out ⇄ pop-back).
     pub(crate) fn tab_is_torn_off(&self, tab: Tab) -> bool {
-        self.window_registry.is_torn_off(DockSurfaceId(tab.index() as u64))
+        self.window_registry
+            .is_torn_off(DockSurfaceId(tab.index() as u64))
     }
 
     /// THE HOME panel — the warm LANDING portal (the boot view). Renders the
@@ -796,8 +828,18 @@ impl Cockpit {
             .border_1()
             .border_color(theme::accent())
             .bg(theme::panel())
-            .child(div().text_2xl().text_color(theme::text()).child(portal.headline.clone()))
-            .child(div().text_sm().text_color(theme::muted()).child(portal.subtitle.clone()))
+            .child(
+                div()
+                    .text_2xl()
+                    .text_color(theme::text())
+                    .child(portal.headline.clone()),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(portal.subtitle.clone()),
+            )
             .child(
                 div()
                     .flex()
@@ -808,7 +850,10 @@ impl Cockpit {
                     .child(pill("embedded verified executor", theme::good()))
                     .child(pill(format!("h{}", w.height()), theme::accent()))
                     .child(pill(format!("{} cells", w.cell_count()), theme::accent()))
-                    .child(pill(format!("{} receipts", w.receipts().len()), theme::accent())),
+                    .child(pill(
+                        format!("{} receipts", w.receipts().len()),
+                        theme::accent(),
+                    )),
             );
         drop(w);
 
@@ -872,7 +917,14 @@ impl Cockpit {
         let layout = scene.layout;
         let focused = scene.focused;
 
-        let mut col = div().id("cockpit-scroll-body-8").flex().flex_col().gap_2().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-8")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title("SHELL · cap-first compositor over real cells").mb_1());
         col = col.child(div().text_xs().text_color(theme::muted()).child(
             "Each dregg CELL is a cap-confined SURFACE. Every window op (focus · close · \
@@ -889,18 +941,74 @@ impl Cockpit {
                 .gap_1()
                 .items_center()
                 .child(pill(format!("layout: {}", layout.label()), theme::accent()))
-                .child(pill(format!("{} surfaces", self.shell.surface_count()), theme::good()))
-                .child(pill(format!("console s{}", self.console_surface.as_u64()), theme::warn()))
-                .child(shell_button(cx, "open selected as surface", theme::good(), Cockpit::shell_open_selected))
-                .child(shell_button(cx, "focus front", theme::accent(), Cockpit::shell_focus_front))
-                .child(shell_button(cx, "minimize focused", theme::accent(), Cockpit::shell_minimize_focused))
-                .child(shell_button(cx, "present focused (commits)", theme::good(), Cockpit::shell_present_focused))
-                .child(shell_button(cx, "⚠ overpaint (T1 REJECT)", theme::warn(), Cockpit::shell_overpaint_focused))
-                .child(shell_button(cx, "⚠ input-steal (T3 REJECT)", theme::warn(), Cockpit::shell_input_steal))
-                .child(shell_button(cx, "share (read-only mirror)", theme::good(), Cockpit::shell_share_focused))
-                .child(shell_button(cx, "⚠ over-share (watch it REJECT)", theme::warn(), Cockpit::shell_overshare_focused))
-                .child(shell_button(cx, "close focused", theme::warn(), Cockpit::shell_close_focused))
-                .child(shell_button(cx, "cycle layout", theme::accent(), Cockpit::shell_cycle_layout)),
+                .child(pill(
+                    format!("{} surfaces", self.shell.surface_count()),
+                    theme::good(),
+                ))
+                .child(pill(
+                    format!("console s{}", self.console_surface.as_u64()),
+                    theme::warn(),
+                ))
+                .child(shell_button(
+                    cx,
+                    "open selected as surface",
+                    theme::good(),
+                    Cockpit::shell_open_selected,
+                ))
+                .child(shell_button(
+                    cx,
+                    "focus front",
+                    theme::accent(),
+                    Cockpit::shell_focus_front,
+                ))
+                .child(shell_button(
+                    cx,
+                    "minimize focused",
+                    theme::accent(),
+                    Cockpit::shell_minimize_focused,
+                ))
+                .child(shell_button(
+                    cx,
+                    "present focused (commits)",
+                    theme::good(),
+                    Cockpit::shell_present_focused,
+                ))
+                .child(shell_button(
+                    cx,
+                    "⚠ overpaint (T1 REJECT)",
+                    theme::warn(),
+                    Cockpit::shell_overpaint_focused,
+                ))
+                .child(shell_button(
+                    cx,
+                    "⚠ input-steal (T3 REJECT)",
+                    theme::warn(),
+                    Cockpit::shell_input_steal,
+                ))
+                .child(shell_button(
+                    cx,
+                    "share (read-only mirror)",
+                    theme::good(),
+                    Cockpit::shell_share_focused,
+                ))
+                .child(shell_button(
+                    cx,
+                    "⚠ over-share (watch it REJECT)",
+                    theme::warn(),
+                    Cockpit::shell_overshare_focused,
+                ))
+                .child(shell_button(
+                    cx,
+                    "close focused",
+                    theme::warn(),
+                    Cockpit::shell_close_focused,
+                ))
+                .child(shell_button(
+                    cx,
+                    "cycle layout",
+                    theme::accent(),
+                    Cockpit::shell_cycle_layout,
+                )),
         );
         col = col.child(self.outcome_banner());
         // The verified-scene legend: the three teeth the compositor enforces.
@@ -943,7 +1051,11 @@ impl Cockpit {
             // lifecycle), read fresh from the ledger — never a mock.
             let body = self.surface_body(&item.surface.cell(), &w, is_console);
 
-            let border = if is_focused { theme::accent() } else { theme::border() };
+            let border = if is_focused {
+                theme::accent()
+            } else {
+                theme::border()
+            };
             stack = stack.child(
                 div()
                     .id(SharedString::from(format!("surface-{}", id.as_u64())))
@@ -971,7 +1083,11 @@ impl Cockpit {
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .bg(if is_focused { theme::panel_hi() } else { theme::panel() })
+                            .bg(if is_focused {
+                                theme::panel_hi()
+                            } else {
+                                theme::panel()
+                            })
                             .border_b_1()
                             .border_color(theme::border())
                             .child(
@@ -979,8 +1095,21 @@ impl Cockpit {
                                     .flex()
                                     .gap_2()
                                     .items_center()
-                                    .child(div().text_xs().text_color(if is_console { theme::warn() } else { theme::accent() }).child(if is_console { "◆" } else { "⬡" }))
-                                    .child(div().text_color(theme::text()).child(item.surface.title().to_string()))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(if is_console {
+                                                theme::warn()
+                                            } else {
+                                                theme::accent()
+                                            })
+                                            .child(if is_console { "◆" } else { "⬡" }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(theme::text())
+                                            .child(item.surface.title().to_string()),
+                                    )
                                     .child(pill(badge_label, badge_color)),
                             )
                             .child(
@@ -988,9 +1117,16 @@ impl Cockpit {
                                     .flex()
                                     .gap_1()
                                     .items_center()
-                                    .child(div().text_xs().text_color(theme::muted()).child(format!("z{}", item.surface.z())))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::muted())
+                                            .child(format!("z{}", item.surface.z())),
+                                    )
                                     .when(is_focused, |d| d.child(pill("focused", theme::good())))
-                                    .when(item.surface.is_minimized(), |d| d.child(pill("min", theme::muted())))
+                                    .when(item.surface.is_minimized(), |d| {
+                                        d.child(pill("min", theme::muted()))
+                                    })
                                     .when(!held_cap, |d| d.child(pill("no cap", theme::bad()))),
                             ),
                     )
@@ -1006,7 +1142,11 @@ impl Cockpit {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(if item.identity.backed || is_console { theme::muted() } else { theme::bad() })
+                                    .text_color(if item.identity.backed || is_console {
+                                        theme::muted()
+                                    } else {
+                                        theme::bad()
+                                    })
                                     .child(if is_console {
                                         "trusted-path: system console".to_string()
                                     } else if item.identity.backed {
@@ -1028,7 +1168,12 @@ impl Cockpit {
     /// ledger. For the console it shows the image summary instead (it is the
     /// system's own root, not a single cell's view). Never a mock — this is the
     /// surface "reacting to real turns".
-    pub(crate) fn surface_body(&self, cell: &CellId, w: &World, is_console: bool) -> gpui::AnyElement {
+    pub(crate) fn surface_body(
+        &self,
+        cell: &CellId,
+        w: &World,
+        is_console: bool,
+    ) -> gpui::AnyElement {
         let mut body = div().flex().flex_col().gap_0p5().px_2().py_1();
         if is_console {
             body = body
@@ -1038,44 +1183,80 @@ impl Cockpit {
                     w.height(),
                     w.receipts().len()
                 )))
-                .child(div().text_xs().text_color(theme::accent()).child(format!(
-                    "root {}",
-                    reflect::short_hex(&w.state_root())
-                )));
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::accent())
+                        .child(format!("root {}", reflect::short_hex(&w.state_root()))),
+                );
             return body.into_any_element();
         }
         match w.ledger().get(cell) {
             Some(c) => {
                 let bal = c.state.balance();
-                let bal_color = if bal < 0 { theme::warn() } else { theme::text() };
+                let bal_color = if bal < 0 {
+                    theme::warn()
+                } else {
+                    theme::text()
+                };
                 body = body
                     .child(
                         div()
                             .flex()
                             .justify_between()
                             .child(div().text_xs().text_color(theme::muted()).child("balance"))
-                            .child(div().text_xs().text_color(bal_color).child(format!("{bal}"))),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(bal_color)
+                                    .child(format!("{bal}")),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .justify_between()
                             .child(div().text_xs().text_color(theme::muted()).child("nonce"))
-                            .child(div().text_xs().text_color(theme::text()).child(format!("{}", c.state.nonce()))),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text())
+                                    .child(format!("{}", c.state.nonce())),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .justify_between()
-                            .child(div().text_xs().text_color(theme::muted()).child("capabilities"))
-                            .child(div().text_xs().text_color(theme::text()).child(format!("{}", c.capabilities.len()))),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .child("capabilities"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text())
+                                    .child(format!("{}", c.capabilities.len())),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .justify_between()
-                            .child(div().text_xs().text_color(theme::muted()).child("lifecycle"))
-                            .child(div().text_xs().text_color(theme::text()).child(format!("{:?}", c.lifecycle))),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .child("lifecycle"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text())
+                                    .child(format!("{:?}", c.lifecycle)),
+                            ),
                     );
             }
             None => {
@@ -1101,8 +1282,17 @@ impl Cockpit {
         let w = self.world.borrow();
         let act = self.agent_surface.activity(&w, 24);
 
-        let mut col = div().id("cockpit-scroll-body-9").flex().flex_col().gap_2().p_3().size_full().overflow_y_scroll();
-        col = col.child(section_title("AGENT · the grounded loop (provable activity as a surface)").mb_1());
+        let mut col = div()
+            .id("cockpit-scroll-body-9")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
+        col = col.child(
+            section_title("AGENT · the grounded loop (provable activity as a surface)").mb_1(),
+        );
         col = col.child(div().text_xs().text_color(theme::muted()).child(
             "An agent is an intricate LOOP; dregg grounds the ONE seam that matters — its ACTIONS, \
              at the tool-call/turn boundary — by making every action a cap-gated, RECEIPTED, \
@@ -1112,7 +1302,11 @@ impl Cockpit {
         ));
 
         // The agent header: who it is + its live resources + grounded step count.
-        let backed_color = if act.backed { theme::good() } else { theme::bad() };
+        let backed_color = if act.backed {
+            theme::good()
+        } else {
+            theme::bad()
+        };
         col = col.child(
             div()
                 .flex()
@@ -1125,8 +1319,14 @@ impl Cockpit {
                     backed_color,
                 ))
                 .child(pill(format!("balance {}", act.balance), theme::text()))
-                .child(pill(format!("{} committed turns", act.committed_action_count()), theme::good()))
-                .child(pill(format!("reach {} cell(s)", act.reach()), theme::accent()))
+                .child(pill(
+                    format!("{} committed turns", act.committed_action_count()),
+                    theme::good(),
+                ))
+                .child(pill(
+                    format!("reach {} cell(s)", act.reach()),
+                    theme::accent(),
+                ))
                 .child(pill(format!("nonce {}", act.nonce), theme::muted())),
         );
 
@@ -1158,7 +1358,12 @@ impl Cockpit {
                                 .flex()
                                 .gap_2()
                                 .items_center()
-                                .child(div().text_xs().text_color(theme::muted()).child(format!("slot {}", m.slot)))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::muted())
+                                        .child(format!("slot {}", m.slot)),
+                                )
                                 .child(div().text_xs().text_color(theme::text()).child(format!(
                                     "→ {}",
                                     reflect::short_hex(m.target.as_bytes())
@@ -1172,7 +1377,10 @@ impl Cockpit {
                                 .items_center()
                                 .when(m.faceted, |d| d.child(pill("faceted", theme::accent())))
                                 .when(m.expires_at.is_some(), |d| {
-                                    d.child(pill(format!("expires @{}", m.expires_at.unwrap()), theme::warn()))
+                                    d.child(pill(
+                                        format!("expires @{}", m.expires_at.unwrap()),
+                                        theme::warn(),
+                                    ))
                                 }),
                         ),
                 );
@@ -1211,8 +1419,22 @@ impl Cockpit {
                                 .gap_2()
                                 .items_center()
                                 .child(div().text_xs().text_color(mark_color).child(mark))
-                                .child(div().text_xs().text_color(theme::muted()).child(height_label))
-                                .child(div().text_xs().text_color(if a.committed { theme::text() } else { theme::bad() }).child(a.summary.clone())),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::muted())
+                                        .child(height_label),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if a.committed {
+                                            theme::text()
+                                        } else {
+                                            theme::bad()
+                                        })
+                                        .child(a.summary.clone()),
+                                ),
                         )
                         .child(
                             div()
@@ -1220,10 +1442,15 @@ impl Cockpit {
                                 .gap_1()
                                 .items_center()
                                 .when(a.committed, |d| {
-                                    d.child(div().text_xs().text_color(theme::muted()).child(format!("{} act · {} ⚙", a.action_count, a.computrons)))
+                                    d.child(div().text_xs().text_color(theme::muted()).child(
+                                        format!("{} act · {} ⚙", a.action_count, a.computrons),
+                                    ))
                                 })
                                 .when(a.receipt_hash.is_some(), |d| {
-                                    d.child(pill(reflect::short_hex(&a.receipt_hash.unwrap()), theme::good()))
+                                    d.child(pill(
+                                        reflect::short_hex(&a.receipt_hash.unwrap()),
+                                        theme::good(),
+                                    ))
                                 }),
                         ),
                 );
@@ -1255,7 +1482,12 @@ impl Cockpit {
                             .child(pill(mark, mark_color))
                             .child(div().text_xs().text_color(theme::text()).child(a.verb)),
                     )
-                    .child(div().text_xs().text_color(theme::muted()).child(a.note.clone())),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(a.note.clone()),
+                    ),
             );
         }
         col = col.child(auths);
@@ -1278,8 +1510,17 @@ impl Cockpit {
         let view = SwarmView::build(&self.swarm, &w);
         drop(w);
 
-        let mut col = div().id("cockpit-scroll-body-10").flex().flex_col().gap_2().p_3().size_full().overflow_y_scroll();
-        col = col.child(section_title("SWARM (A2) · multi-agent cap-coordination · notify-edge inbox").mb_1());
+        let mut col = div()
+            .id("cockpit-scroll-body-10")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
+        col = col.child(
+            section_title("SWARM (A2) · multi-agent cap-coordination · notify-edge inbox").mb_1(),
+        );
         col = col.child(div().text_xs().text_color(theme::muted()).child(
             "N agent cells coordinating as confined Surface cells. Every action is a cap-gated, \
              receipted turn at the ONE seam. An EmitEvent deposits a NotifyEdge in the \
@@ -1294,11 +1535,21 @@ impl Cockpit {
                 .flex_wrap()
                 .gap_1()
                 .items_center()
-                .child(pill(format!("{} members", view.members.len()), theme::accent()))
-                .child(pill(format!("{} total actions", view.total_actions), theme::good()))
+                .child(pill(
+                    format!("{} members", view.members.len()),
+                    theme::accent(),
+                ))
+                .child(pill(
+                    format!("{} total actions", view.total_actions),
+                    theme::good(),
+                ))
                 .child(pill(
                     format!("{} pending wakes", view.total_pending),
-                    if view.total_pending > 0 { theme::warn() } else { theme::muted() },
+                    if view.total_pending > 0 {
+                        theme::warn()
+                    } else {
+                        theme::muted()
+                    },
                 )),
         );
 
@@ -1306,8 +1557,16 @@ impl Cockpit {
         col = col.child(section_title("members (cap-confined, mandate-gated)").mt_2());
         let mut members_col = div().flex().flex_col().gap_1();
         for m in &view.members {
-            let backed_color = if m.backed { theme::good() } else { theme::bad() };
-            let inbox_color = if m.pending_notify > 0 { theme::warn() } else { theme::muted() };
+            let backed_color = if m.backed {
+                theme::good()
+            } else {
+                theme::bad()
+            };
+            let inbox_color = if m.pending_notify > 0 {
+                theme::warn()
+            } else {
+                theme::muted()
+            };
             members_col = members_col.child(
                 div()
                     .flex()
@@ -1324,13 +1583,13 @@ impl Cockpit {
                             .items_center()
                             .child(pill(m.name.clone(), theme::accent()))
                             .child(pill(m.short.clone(), theme::muted()))
-                            .child(pill(if m.backed { "live" } else { "UNBACKED" }, backed_color))
+                            .child(pill(
+                                if m.backed { "live" } else { "UNBACKED" },
+                                backed_color,
+                            ))
                             .child(pill(format!("bal {}", m.balance), theme::text()))
                             .child(pill(format!("{} actions", m.action_count), theme::good()))
-                            .child(pill(
-                                format!("{} pending", m.pending_notify),
-                                inbox_color,
-                            )),
+                            .child(pill(format!("{} pending", m.pending_notify), inbox_color)),
                     )
                     .when(!m.inbox.is_empty(), |d| {
                         let mut inbox_div = div().flex().flex_col().gap_0p5().mt_1();
@@ -1350,7 +1609,11 @@ impl Cockpit {
                                     .child(div().text_color(color).child(mark))
                                     .child(
                                         div()
-                                            .text_color(if n.drained { theme::muted() } else { theme::text() })
+                                            .text_color(if n.drained {
+                                                theme::muted()
+                                            } else {
+                                                theme::text()
+                                            })
                                             .child(n.label()),
                                     ),
                             );
@@ -1368,9 +1631,24 @@ impl Cockpit {
                 .flex()
                 .flex_wrap()
                 .gap_1()
-                .child(verb_button(cx, "coordinator emit task/go → worker-a", theme::accent(), Cockpit::swarm_coordinator_emit_a))
-                .child(verb_button(cx, "worker-a DRAIN inbox (own ack turn)", theme::good(), Cockpit::swarm_worker_a_drain))
-                .child(verb_button(cx, "coordinator: transfer + wake (one seam)", theme::warn(), Cockpit::swarm_coordinator_transfer_and_wake)),
+                .child(verb_button(
+                    cx,
+                    "coordinator emit task/go → worker-a",
+                    theme::accent(),
+                    Cockpit::swarm_coordinator_emit_a,
+                ))
+                .child(verb_button(
+                    cx,
+                    "worker-a DRAIN inbox (own ack turn)",
+                    theme::good(),
+                    Cockpit::swarm_worker_a_drain,
+                ))
+                .child(verb_button(
+                    cx,
+                    "coordinator: transfer + wake (one seam)",
+                    theme::warn(),
+                    Cockpit::swarm_coordinator_transfer_and_wake,
+                )),
         );
 
         // ── THE FOUR-SURFACE KILLER DEMO (N5) — the pug-handoff artifact ──────
@@ -1402,7 +1680,11 @@ impl Cockpit {
                 if let Some(v) = demo.swarm().stingray_view() {
                     hdr = hdr.child(pill(
                         format!("budget {}/{} computrons", v.total_drawn, v.ceiling),
-                        if v.exhausted { theme::bad() } else { theme::good() },
+                        if v.exhausted {
+                            theme::bad()
+                        } else {
+                            theme::good()
+                        },
                     ));
                 }
             } else {
@@ -1417,16 +1699,37 @@ impl Cockpit {
                 .flex_wrap()
                 .gap_1()
                 .mt_1()
-                .child(verb_button(cx, "▶ next frame", theme::accent(), Cockpit::killer_demo_advance))
-                .child(verb_button(cx, "⏩ run all (the self-check)", theme::good(), Cockpit::killer_demo_run_all))
-                .child(verb_button(cx, "⚠ over-share at the glass (pixel-layer refusal)", theme::warn(), Cockpit::killer_demo_over_share))
-                .child(verb_button(cx, "↺ reset demo", theme::muted(), Cockpit::killer_demo_reset)),
+                .child(verb_button(
+                    cx,
+                    "▶ next frame",
+                    theme::accent(),
+                    Cockpit::killer_demo_advance,
+                ))
+                .child(verb_button(
+                    cx,
+                    "⏩ run all (the self-check)",
+                    theme::good(),
+                    Cockpit::killer_demo_run_all,
+                ))
+                .child(verb_button(
+                    cx,
+                    "⚠ over-share at the glass (pixel-layer refusal)",
+                    theme::warn(),
+                    Cockpit::killer_demo_over_share,
+                ))
+                .child(verb_button(
+                    cx,
+                    "↺ reset demo",
+                    theme::muted(),
+                    Cockpit::killer_demo_reset,
+                )),
         );
         // The captured frame strip (the four frames + both refusals, as run).
         if self.killer_demo_lines.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child(
-                "press ▶ to run the first frame, or ⏩ to drive the whole script at once.",
-            ));
+            col =
+                col.child(div().text_xs().text_color(theme::muted()).mt_1().child(
+                    "press ▶ to run the first frame, or ⏩ to drive the whole script at once.",
+                ));
         } else {
             let mut strip = div().flex().flex_col().gap_0p5().mt_1();
             for line in &self.killer_demo_lines {
@@ -1434,7 +1737,11 @@ impl Cockpit {
                 // moment; a commit line is neutral. The executor's reason (the
                 // second line, indented) is muted.
                 let is_refusal = line.contains("REFUSED");
-                let color = if is_refusal { theme::warn() } else { theme::text() };
+                let color = if is_refusal {
+                    theme::warn()
+                } else {
+                    theme::text()
+                };
                 for (i, sub) in line.lines().enumerate() {
                     let c = if i == 0 { color } else { theme::muted() };
                     strip = strip.child(
@@ -1452,9 +1759,12 @@ impl Cockpit {
         // Activity feed: recent swarm actions (newest-first).
         col = col.child(section_title("activity feed (executor receipts · notify edges)").mt_2());
         if view.activity.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).child(
-                "no swarm actions yet — use the buttons above to run the first turns.",
-            ));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child("no swarm actions yet — use the buttons above to run the first turns."),
+            );
         } else {
             let mut feed = div().flex().flex_col().gap_0p5();
             for entry in &view.activity {
@@ -1463,7 +1773,10 @@ impl Cockpit {
                 } else {
                     ("✗", theme::bad())
                 };
-                let height_label = entry.height.map(|h| format!("h{h}")).unwrap_or_else(|| "—".to_string());
+                let height_label = entry
+                    .height
+                    .map(|h| format!("h{h}"))
+                    .unwrap_or_else(|| "—".to_string());
                 let receipt_label = entry.receipt_short.as_deref().unwrap_or("—");
                 feed = feed.child(
                     div()
@@ -1480,12 +1793,26 @@ impl Cockpit {
                                 .gap_2()
                                 .items_center()
                                 .child(div().text_xs().text_color(mark_color).child(mark))
-                                .child(div().text_xs().text_color(theme::muted()).child(height_label))
-                                .child(div().text_xs().text_color(theme::accent()).child(entry.member_short.clone()))
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(if entry.committed { theme::text() } else { theme::bad() })
+                                        .text_color(theme::muted())
+                                        .child(height_label),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme::accent())
+                                        .child(entry.member_short.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if entry.committed {
+                                            theme::text()
+                                        } else {
+                                            theme::bad()
+                                        })
                                         .child(entry.summary.clone()),
                                 )
                                 .when(entry.committed, |d| {
@@ -1518,10 +1845,23 @@ impl Cockpit {
         let w = self.world.borrow();
         let panel = debug::render(&w, &self.debug_turn, &self.breakpoints);
 
-        let mut col = div().id("cockpit-scroll-body-11").flex().flex_col().gap_1().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-11")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title("DEBUGGER · step · inspect · explain").mb_1());
         col = col.child(div().text_color(theme::text()).child(panel.title.clone()));
-        col = col.child(div().text_xs().text_color(theme::muted()).mb_2().child(panel.subtitle.clone()));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mb_2()
+                .child(panel.subtitle.clone()),
+        );
 
         // The step list.
         let mut steps = div().flex().flex_col().gap_0p5();
@@ -1544,7 +1884,12 @@ impl Cockpit {
                         s.index,
                         s.label
                     )))
-                    .child(div().text_xs().text_color(theme::muted()).child(format!("Σδ={}", s.conservation_delta))),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(format!("Σδ={}", s.conservation_delta)),
+                    ),
             );
         }
         col = col.child(steps);
@@ -1559,9 +1904,24 @@ impl Cockpit {
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(div().text_xs().text_color(theme::bad()).child(format!("REFUSED · guard: {}", r.guard)))
-                .child(div().text_xs().text_color(theme::text()).child(r.headline.clone()))
-                .child(div().text_xs().text_color(theme::muted()).child(r.detail.clone())),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::bad())
+                        .child(format!("REFUSED · guard: {}", r.guard)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text())
+                        .child(r.headline.clone()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child(r.detail.clone()),
+                ),
             None => div()
                 .mt_2()
                 .p_2()
@@ -1569,7 +1929,10 @@ impl Cockpit {
                 .bg(theme::panel())
                 .text_xs()
                 .text_color(theme::good())
-                .child(format!("COMMITS · final Σδ = {} (conserves)", panel.final_conservation_delta)),
+                .child(format!(
+                    "COMMITS · final Σδ = {} (conserves)",
+                    panel.final_conservation_delta
+                )),
         });
         col
     }
@@ -1593,40 +1956,102 @@ impl Cockpit {
     /// onto the cockpit's shared inspector rows.
     pub(crate) fn cipherclerk_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let panel = cipherclerk::render(&self.clerk);
-        let mut col = div().id("cockpit-scroll-body-12").flex().flex_col().gap_1().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-12")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title("CIPHERCLERK · identities · tokens · delegations").mb_1());
 
         // The REAL macaroon action loop (mint → attenuate → delegate → discharge),
         // each driving `AgentCipherclerk`. Acts on alice (the holder) + bob (the
         // delegatee) over the "dns" service.
-        col = col.child(div().text_xs().text_color(theme::muted()).child("ACTIONS (alice · service 'dns')"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .child("ACTIONS (alice · service 'dns')"),
+        );
         col = col.child(
             div()
                 .flex()
                 .flex_wrap()
                 .gap_1()
-                .child(clerk_button(cx, "mint root", theme::good(), Cockpit::run_clerk_mint))
-                .child(clerk_button(cx, "attenuate → r", theme::accent(), Cockpit::run_clerk_attenuate))
-                .child(clerk_button(cx, "delegate → bob", theme::accent(), Cockpit::run_clerk_delegate))
-                .child(clerk_button(cx, "discharge (verify)", theme::warn(), Cockpit::run_clerk_discharge)),
+                .child(clerk_button(
+                    cx,
+                    "mint root",
+                    theme::good(),
+                    Cockpit::run_clerk_mint,
+                ))
+                .child(clerk_button(
+                    cx,
+                    "attenuate → r",
+                    theme::accent(),
+                    Cockpit::run_clerk_attenuate,
+                ))
+                .child(clerk_button(
+                    cx,
+                    "delegate → bob",
+                    theme::accent(),
+                    Cockpit::run_clerk_delegate,
+                ))
+                .child(clerk_button(
+                    cx,
+                    "discharge (verify)",
+                    theme::warn(),
+                    Cockpit::run_clerk_discharge,
+                )),
         );
         // The real action result banner.
         col = col.child(self.clerk_banner());
 
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("IDENTITIES"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_1()
+                .child("IDENTITIES"),
+        );
         for ins in &panel.identities {
             col = col.child(inspectable_row(ins));
         }
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("HELD TOKENS"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("HELD TOKENS"),
+        );
         if panel.tokens.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(none minted yet)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(none minted yet)"),
+            );
         }
         for ins in &panel.tokens {
             col = col.child(inspectable_row(ins));
         }
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("DELEGATIONS"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("DELEGATIONS"),
+        );
         if panel.delegations.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(none recorded)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(none recorded)"),
+            );
         }
         for ins in &panel.delegations {
             col = col.child(inspectable_row(ins));
@@ -1642,7 +2067,10 @@ impl Cockpit {
             Some(o) => {
                 let denied = matches!(
                     o,
-                    cipherclerk::ClerkOutcome::Discharged { authorized: false, .. }
+                    cipherclerk::ClerkOutcome::Discharged {
+                        authorized: false,
+                        ..
+                    }
                 );
                 let color = if !o.is_ok() || denied {
                     theme::bad()
@@ -1670,11 +2098,24 @@ impl Cockpit {
     /// `reflect` from the live world — never a parallel schema.
     pub(crate) fn objects_panel(&self) -> impl IntoElement {
         let w = self.world.borrow();
-        let mut col = div().id("cockpit-scroll-body-13").flex().flex_col().gap_1().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-13")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title("OBJECTS · proofs · nullifiers · lifecycle").mb_1());
 
         // Lifecycle column: every cell's lifecycle state (the seal/destroy axis).
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_1().child("CELL LIFECYCLE"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_1()
+                .child("CELL LIFECYCLE"),
+        );
         for id in &self.cells {
             if let Some(cell) = w.ledger().get(id) {
                 let (label, color) = lifecycle_badge(&cell.lifecycle);
@@ -1684,16 +2125,33 @@ impl Cockpit {
                         .justify_between()
                         .px_2()
                         .py_0p5()
-                        .child(div().text_xs().text_color(theme::text()).child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::text())
+                                .child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))),
+                        )
                         .child(div().text_xs().text_color(color).child(label)),
                 );
             }
         }
 
         // Proof status + nullifiers for the most recent receipts.
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("TURN PROOFS (most recent)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("TURN PROOFS (most recent)"),
+        );
         if w.receipts().is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(no turns yet)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(no turns yet)"),
+            );
         }
         for r in w.receipts().iter().rev().take(6) {
             let proof = reflect::reflect_proof_status(r);
@@ -1714,23 +2172,44 @@ impl Cockpit {
     pub(crate) fn graph_panel(&self) -> impl IntoElement {
         let w = self.world.borrow();
         let g = starbridge_v2::graph::OcapGraph::build(&w);
-        let mut col = div().id("cockpit-scroll-body-14").flex().flex_col().gap_1().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-14")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title("GRAPH · ocap delegation (multi-hop)").mb_1());
-        col = col.child(
-            div().text_xs().text_color(theme::muted()).child(format!(
-                "{} cells · {} capability edges",
-                g.node_count(),
-                g.edge_count()
-            )),
-        );
+        col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
+            "{} cells · {} capability edges",
+            g.node_count(),
+            g.edge_count()
+        )));
 
         // The EDGES — the literal ocap graph (holder ──rights──▶ target).
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("CAPABILITY EDGES"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("CAPABILITY EDGES"),
+        );
         if g.edge_count() == 0 {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(no capability edges yet)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(no capability edges yet)"),
+            );
         }
         for e in g.edges().iter().take(24) {
-            let deleg = if e.is_delegated() { " · delegated" } else { "" };
+            let deleg = if e.is_delegated() {
+                " · delegated"
+            } else {
+                ""
+            };
             let facet = if e.faceted { " · faceted" } else { "" };
             col = col.child(
                 div()
@@ -1738,13 +2217,11 @@ impl Cockpit {
                     .justify_between()
                     .px_2()
                     .py_0p5()
-                    .child(
-                        div().text_xs().text_color(theme::text()).child(format!(
-                            "⬡ {} ──▶ {}",
-                            reflect::short_hex(e.holder.as_bytes()),
-                            reflect::short_hex(e.target.as_bytes()),
-                        )),
-                    )
+                    .child(div().text_xs().text_color(theme::text()).child(format!(
+                        "⬡ {} ──▶ {}",
+                        reflect::short_hex(e.holder.as_bytes()),
+                        reflect::short_hex(e.target.as_bytes()),
+                    )))
                     .child(
                         div()
                             .text_xs()
@@ -1756,20 +2233,41 @@ impl Cockpit {
 
         // The LAYERED multi-hop layout, rooted on each source cell (no inbound
         // edge — the authority origins), with the transitive blast radius.
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("MULTI-HOP LAYOUT (by delegation depth)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("MULTI-HOP LAYOUT (by delegation depth)"),
+        );
         let roots = g.source_roots();
         if roots.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(no source root — the graph may be cyclic)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(no source root — the graph may be cyclic)"),
+            );
         }
         for root in roots.iter().take(4) {
             let reach = g.reach_count(root);
             col = col.child(
-                div().text_xs().text_color(theme::good()).px_2().mt_1().child(format!(
-                    "root {} · reaches {} cell(s) transitively{}",
-                    reflect::short_hex(root.as_bytes()),
-                    reach,
-                    if g.has_cycle_from(root) { " · ⟳ cyclic" } else { "" },
-                )),
+                div()
+                    .text_xs()
+                    .text_color(theme::good())
+                    .px_2()
+                    .mt_1()
+                    .child(format!(
+                        "root {} · reaches {} cell(s) transitively{}",
+                        reflect::short_hex(root.as_bytes()),
+                        reach,
+                        if g.has_cycle_from(root) {
+                            " · ⟳ cyclic"
+                        } else {
+                            ""
+                        },
+                    )),
             );
             for layer in g.layered_from(root) {
                 if layer.cells.is_empty() {
@@ -1781,11 +2279,11 @@ impl Cockpit {
                     .map(|c| reflect::short_hex(c.as_bytes()))
                     .collect();
                 col = col.child(
-                    div().text_xs().text_color(theme::text()).px_3().child(format!(
-                        "depth {}: {}",
-                        layer.depth,
-                        cells.join(", ")
-                    )),
+                    div()
+                        .text_xs()
+                        .text_color(theme::text())
+                        .px_3()
+                        .child(format!("depth {}: {}", layer.depth, cells.join(", "))),
                 );
             }
         }
@@ -1800,49 +2298,126 @@ impl Cockpit {
     pub(crate) fn organs_panel(&self) -> impl IntoElement {
         let w = self.world.borrow();
         let survey = starbridge_v2::organs::OrganSurvey::build(&w);
-        let mut col = div().id("cockpit-scroll-body-15").flex().flex_col().gap_1().p_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("cockpit-scroll-body-15")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
         col = col.child(section_title("ORGANS · live organ cell-state").mb_1());
-        col = col.child(
-            div().text_xs().text_color(theme::muted()).child(format!(
-                "{} live organ(s) (embed-core) · {} remote-path",
-                survey.live_count(),
-                survey.remote.len()
-            )),
-        );
+        col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
+            "{} live organ(s) (embed-core) · {} remote-path",
+            survey.live_count(),
+            survey.remote.len()
+        )));
 
         // LIVE trustline organs.
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("TRUSTLINES (live)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("TRUSTLINES (live)"),
+        );
         if survey.trustlines.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(no trustline organ in the world)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(no trustline organ in the world)"),
+            );
         }
         for t in &survey.trustlines {
             col = col.child(
-                div().flex().flex_col().px_2().py_0p5()
-                    .child(div().text_xs().text_color(theme::text()).child(format!("⬡ {} (trustline)", t.short)))
-                    .child(div().text_xs().text_color(theme::accent()).child(t.summary())),
+                div()
+                    .flex()
+                    .flex_col()
+                    .px_2()
+                    .py_0p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child(format!("⬡ {} (trustline)", t.short)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::accent())
+                            .child(t.summary()),
+                    ),
             );
         }
 
         // LIVE flash-well organs.
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("FLASH WELLS (live)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("FLASH WELLS (live)"),
+        );
         if survey.flash_wells.is_empty() {
-            col = col.child(div().text_xs().text_color(theme::muted()).px_2().child("(no flash-well organ in the world)"));
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .px_2()
+                    .child("(no flash-well organ in the world)"),
+            );
         }
         for f in &survey.flash_wells {
             col = col.child(
-                div().flex().flex_col().px_2().py_0p5()
-                    .child(div().text_xs().text_color(theme::text()).child(format!("⬡ {} (flash well)", f.short)))
-                    .child(div().text_xs().text_color(theme::accent()).child(f.summary())),
+                div()
+                    .flex()
+                    .flex_col()
+                    .px_2()
+                    .py_0p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text())
+                            .child(format!("⬡ {} (flash well)", f.short)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::accent())
+                            .child(f.summary()),
+                    ),
             );
         }
 
         // REMOTE-PATH organs (honest — kind + seam + route, not faked state).
-        col = col.child(div().text_xs().text_color(theme::muted()).mt_2().child("REMOTE-PATH ORGANS (need a connected node)"));
+        col = col.child(
+            div()
+                .text_xs()
+                .text_color(theme::muted())
+                .mt_2()
+                .child("REMOTE-PATH ORGANS (need a connected node)"),
+        );
         for o in &survey.remote {
             col = col.child(
-                div().flex().flex_col().px_2().py_0p5()
-                    .child(div().text_xs().text_color(theme::warn()).child(format!("⬡ {} — remote-path", o.kind)))
-                    .child(div().text_xs().text_color(theme::muted()).child(o.seam.to_string())),
+                div()
+                    .flex()
+                    .flex_col()
+                    .px_2()
+                    .py_0p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::warn())
+                            .child(format!("⬡ {} — remote-path", o.kind)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::muted())
+                            .child(o.seam.to_string()),
+                    ),
             );
         }
         col

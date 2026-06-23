@@ -309,9 +309,10 @@ impl Compositor {
             return false;
         }
         // (b) `target` is disjoint from every FOREIGN surface's regions:
-        self.scene.surfaces.iter().all(|s| {
-            &s.owner == presenter || target.iter().all(|r| !s.owns_region(*r))
-        })
+        self.scene
+            .surfaces
+            .iter()
+            .all(|s| &s.owner == presenter || target.iter().all(|r| !s.owns_region(*r)))
     }
 
     /// The specific regions of a present that would overpaint (for the refusal
@@ -444,11 +445,7 @@ impl Compositor {
     /// client verifies can only ever reflect a T1∧T2∧T3-respecting scene).
     ///
     /// Returns the recorded [`FrameCommit`] on success, or the tooth that bit.
-    pub fn present(
-        &mut self,
-        presenter: &CellId,
-        p: Present,
-    ) -> Result<FrameCommit, PresentError> {
+    pub fn present(&mut self, presenter: &CellId, p: Present) -> Result<FrameCommit, PresentError> {
         self.scene_admit(presenter, &p)?;
         // Admitted: advance the presenter's surface frame digest + record it.
         if let Some(s) = self
@@ -543,9 +540,21 @@ mod tests {
         // label (the pale ghost can't reuse another cell's label).
         let a = cid(1);
         let b = cid(2);
-        assert_ne!(label_of(&a, 500), label_of(&b, 500), "owner changes the label");
-        assert_ne!(label_of(&a, 500), label_of(&a, 600), "root changes the label");
-        assert_eq!(label_of(&a, 500), label_of(&a, 500), "the binding is a function");
+        assert_ne!(
+            label_of(&a, 500),
+            label_of(&b, 500),
+            "owner changes the label"
+        );
+        assert_ne!(
+            label_of(&a, 500),
+            label_of(&a, 600),
+            "root changes the label"
+        );
+        assert_eq!(
+            label_of(&a, 500),
+            label_of(&a, 500),
+            "the binding is a function"
+        );
     }
 
     #[test]
@@ -553,7 +562,10 @@ mod tests {
         // THE T1 TOOTH: the wallet owns region 10; the browser does NOT.
         let (c, wallet, browser, _chrome) = demo();
         assert!(c.t1_non_overlap(&wallet, &[10]), "wallet owns region 10");
-        assert!(c.t1_non_overlap(&wallet, &[10, 11]), "wallet owns both its regions");
+        assert!(
+            c.t1_non_overlap(&wallet, &[10, 11]),
+            "wallet owns both its regions"
+        );
         assert!(
             !c.t1_non_overlap(&browser, &[10]),
             "the browser overpainting the wallet's region 10 is refused (T1)"
@@ -570,7 +582,10 @@ mod tests {
         // the wallet's label fails.
         let (c, wallet, browser, _chrome) = demo();
         let wallet_label = label_of(&wallet, 500);
-        assert!(c.t2_label_bound(&wallet, 500, wallet_label), "wallet's genuine label binds");
+        assert!(
+            c.t2_label_bound(&wallet, 500, wallet_label),
+            "wallet's genuine label binds"
+        );
         assert!(
             !c.t2_label_bound(&browser, 600, wallet_label),
             "the browser declaring the wallet's label is refused (T2)"
@@ -581,16 +596,25 @@ mod tests {
     fn t3_at_most_one_focus_and_input_routes_only_there() {
         // THE T3 TEETH: exactly one focus holder; input routes only to it.
         let (c, wallet, browser, _chrome) = demo();
-        assert!(c.t3_focus_exclusive(), "the honest scene has at-most-one focus");
+        assert!(
+            c.t3_focus_exclusive(),
+            "the honest scene has at-most-one focus"
+        );
         assert_eq!(c.focus_count(), 1, "exactly one focus holder");
         assert_eq!(c.focus_holder(), Some(wallet), "the wallet holds focus");
-        assert!(c.t3_input_routed(&wallet, true), "the wallet (focus holder) may assert focus");
+        assert!(
+            c.t3_input_routed(&wallet, true),
+            "the wallet (focus holder) may assert focus"
+        );
         assert!(
             !c.t3_input_routed(&browser, true),
             "the non-focused browser asserting focus mis-routes (T3)"
         );
         // A non-input present is vacuously routed (no focus claim).
-        assert!(c.t3_input_routed(&browser, false), "a non-input present is fine");
+        assert!(
+            c.t3_input_routed(&browser, false),
+            "a non-input present is fine"
+        );
     }
 
     #[test]
@@ -630,7 +654,10 @@ mod tests {
             new_digest: 7,
         };
         assert!(
-            matches!(c.scene_admit(&wallet, &honest), Err(PresentError::DoubleFocus { .. })),
+            matches!(
+                c.scene_admit(&wallet, &honest),
+                Err(PresentError::DoubleFocus { .. })
+            ),
             "an ambiguous-input scene rejects every present (T3)"
         );
     }
@@ -651,7 +678,12 @@ mod tests {
         assert_eq!(commit.presenter, wallet);
         assert_eq!(commit.digest, 4242);
         // The frame advanced on the wallet's surface.
-        let s = c.scene().surfaces.iter().find(|s| s.owner == wallet).unwrap();
+        let s = c
+            .scene()
+            .surfaces
+            .iter()
+            .find(|s| s.owner == wallet)
+            .unwrap();
         assert_eq!(s.content_digest, 4242, "the frame digest advanced");
         // The present is recorded in the frame log (provenance).
         assert_eq!(c.frames().len(), 1);
@@ -678,7 +710,10 @@ mod tests {
             new_digest: 999,
         };
         let r = c.present(&browser, attack);
-        assert!(matches!(r, Err(PresentError::Overpaint { .. })), "overpaint refused, got {r:?}");
+        assert!(
+            matches!(r, Err(PresentError::Overpaint { .. })),
+            "overpaint refused, got {r:?}"
+        );
         // Fail-closed: nothing changed (no frame logged, the wallet untouched).
         assert_eq!(c.frames().len(), 0, "a refused present logs no frame");
         let after = c
@@ -688,7 +723,10 @@ mod tests {
             .find(|s| s.owner == wallet)
             .unwrap()
             .content_digest;
-        assert_eq!(before, after, "the wallet's frame is untouched by the refused overpaint");
+        assert_eq!(
+            before, after,
+            "the wallet's frame is untouched by the refused overpaint"
+        );
     }
 
     #[test]
@@ -704,7 +742,10 @@ mod tests {
             new_digest: 321,
         };
         let r = c.present(&browser, spoof);
-        assert!(matches!(r, Err(PresentError::LabelSpoof { .. })), "label-spoof refused, got {r:?}");
+        assert!(
+            matches!(r, Err(PresentError::LabelSpoof { .. })),
+            "label-spoof refused, got {r:?}"
+        );
         assert_eq!(c.frames().len(), 0);
     }
 
@@ -722,7 +763,10 @@ mod tests {
             new_digest: 555,
         };
         let r = c.present(&browser, steal);
-        assert!(matches!(r, Err(PresentError::InputMisroute { .. })), "input-steal refused, got {r:?}");
+        assert!(
+            matches!(r, Err(PresentError::InputMisroute { .. })),
+            "input-steal refused, got {r:?}"
+        );
         assert_eq!(c.frames().len(), 0);
     }
 
@@ -731,9 +775,16 @@ mod tests {
         // THE T3 INPUT GATE: input is delivered only to the focus holder; a
         // misroute to a non-focused cell is refused.
         let (c, wallet, browser, _chrome) = demo();
-        assert_eq!(c.route_input(&wallet), Ok(wallet), "input routes to the focus holder");
+        assert_eq!(
+            c.route_input(&wallet),
+            Ok(wallet),
+            "input routes to the focus holder"
+        );
         assert!(
-            matches!(c.route_input(&browser), Err(PresentError::InputMisroute { .. })),
+            matches!(
+                c.route_input(&browser),
+                Err(PresentError::InputMisroute { .. })
+            ),
             "input to a non-focused cell is refused"
         );
     }
@@ -750,7 +801,10 @@ mod tests {
             claims_focus: true,
             new_digest: 1234, // == the wallet's current digest
         };
-        assert!(matches!(c.present(&wallet, same), Err(PresentError::NoFrameAdvance)));
+        assert!(matches!(
+            c.present(&wallet, same),
+            Err(PresentError::NoFrameAdvance)
+        ));
     }
 
     #[test]
@@ -764,6 +818,9 @@ mod tests {
             claims_focus: false,
             new_digest: 1,
         };
-        assert!(matches!(c.present(&stranger, p), Err(PresentError::NoSurface)));
+        assert!(matches!(
+            c.present(&stranger, p),
+            Err(PresentError::NoSurface)
+        ));
     }
 }

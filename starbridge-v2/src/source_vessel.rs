@@ -159,20 +159,28 @@ impl SourceVessel {
             if !header.entry_type().is_file() {
                 continue;
             }
-            let raw = entry.path().context("decoding a tar entry path")?.into_owned();
+            let raw = entry
+                .path()
+                .context("decoding a tar entry path")?
+                .into_owned();
             // Strip the `dregg-src/` carrier prefix → the natural repo path.
             let rel = match raw.strip_prefix(ARCHIVE_PREFIX) {
                 Ok(p) => p.to_path_buf(),
                 Err(_) => raw,
             };
             let mut bytes = Vec::with_capacity(header.size().unwrap_or(0) as usize);
-            entry.read_to_end(&mut bytes).context("reading a tar entry body")?;
+            entry
+                .read_to_end(&mut bytes)
+                .context("reading a tar entry body")?;
             entries.insert(rel, bytes);
         }
         if entries.is_empty() {
             bail!("source carrier decoded to ZERO files — the vessel would be empty");
         }
-        Ok(SourceVessel { entries, origin: "<reader>".to_string() })
+        Ok(SourceVessel {
+            entries,
+            origin: "<reader>".to_string(),
+        })
     }
 
     /// Normalize a requested path INTO the vessel root, refusing any escape. A

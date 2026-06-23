@@ -49,7 +49,7 @@
 use std::collections::HashMap;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, App, Bounds, Context, Focusable, FocusHandle, IntoElement,
+    div, prelude::*, px, AnyElement, App, Bounds, Context, FocusHandle, Focusable, IntoElement,
     Render, SharedString, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
 };
 
@@ -230,11 +230,7 @@ impl Render for TornOffWindow {
                     .text_xs()
                     .text_color(theme::muted())
                     .child(SharedString::from("↗ torn-off surface"))
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .child(self.label.clone()),
-                    ),
+                    .child(div().text_color(theme::text()).child(self.label.clone())),
             )
             .child(div().flex_1().overflow_hidden().child(body))
     }
@@ -504,7 +500,12 @@ mod tests {
 
             // TEAR OFF: a fresh OS window is minted, keyed by `id` (the identity).
             let h1 = reg
-                .tear_off(id, "the torn-off surface", |_w, _cx| div().into_any_element(), cx)
+                .tear_off(
+                    id,
+                    "the torn-off surface",
+                    |_w, _cx| div().into_any_element(),
+                    cx,
+                )
                 .expect("headless tear-off opens a window");
             assert_eq!(reg.len(), 1);
             assert!(reg.is_torn_off(id));
@@ -513,7 +514,12 @@ mod tests {
             // IDEMPOTENT: a 2nd tear-off of the SAME id does not duplicate — the
             // surface identity is one-window; the same handle comes back.
             let h2 = reg
-                .tear_off(id, "the torn-off surface", |_w, _cx| div().into_any_element(), cx)
+                .tear_off(
+                    id,
+                    "the torn-off surface",
+                    |_w, _cx| div().into_any_element(),
+                    cx,
+                )
                 .expect("re-tear-off re-activates");
             assert_eq!(reg.len(), 1, "no duplicate window for the same surface id");
             assert_eq!(h1, h2, "the same window handle (identity preserved)");
@@ -541,9 +547,7 @@ mod tests {
     mod live_entity {
         use super::*;
         use crate::dock::surface::CockpitSurface;
-        use gpui::{
-            AppContext, Entity, HeadlessAppContext, PlatformTextSystem, Render,
-        };
+        use gpui::{AppContext, Entity, HeadlessAppContext, PlatformTextSystem, Render};
         use gpui_wgpu::CosmicTextSystem;
         use std::borrow::Cow;
         use std::sync::Arc;
@@ -558,7 +562,10 @@ mod tests {
         }
         impl LiveBody {
             fn new(cx: &mut Context<Self>) -> Self {
-                LiveBody { focus: cx.focus_handle(), paints: 0 }
+                LiveBody {
+                    focus: cx.focus_handle(),
+                    paints: 0,
+                }
             }
         }
         impl Focusable for LiveBody {
@@ -569,7 +576,10 @@ mod tests {
         impl Render for LiveBody {
             fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
                 self.paints += 1;
-                div().track_focus(&self.focus).size_full().child(SharedString::from("live"))
+                div()
+                    .track_focus(&self.focus)
+                    .size_full()
+                    .child(SharedString::from("live"))
             }
         }
 
@@ -598,7 +608,10 @@ mod tests {
                 self.body.read(cx).focus.clone()
             }
             fn boxed_clone(&self) -> Box<dyn CockpitSurface> {
-                Box::new(LiveSurface { id: self.id, body: self.body.clone() })
+                Box::new(LiveSurface {
+                    id: self.id,
+                    body: self.body.clone(),
+                })
             }
         }
 
@@ -634,8 +647,10 @@ mod tests {
             // lives only here, as if removed from the dock pane).
             let handle = cx.update(|cx| {
                 let mut reg = WindowRegistry::new();
-                let surface: Box<dyn CockpitSurface> =
-                    Box::new(LiveSurface { id, body: body.clone() });
+                let surface: Box<dyn CockpitSurface> = Box::new(LiveSurface {
+                    id,
+                    body: body.clone(),
+                });
                 let h = reg
                     .tear_off_surface(id, "live editor", surface, cx)
                     .expect("headless move-tear-off opens a window");
@@ -653,7 +668,10 @@ mod tests {
 
             // The body actually painted (the entity is live in the torn-off window).
             let painted = cx.update(|cx| body.read(cx).paints);
-            assert!(painted >= 1, "the moved live entity painted in the torn-off window");
+            assert!(
+                painted >= 1,
+                "the moved live entity painted in the torn-off window"
+            );
         }
 
         /// The MOVE is reversible: `pop_back_taking` hands the moved surface BACK
@@ -669,8 +687,10 @@ mod tests {
 
             let recovered = cx.update(|cx| {
                 let mut reg = WindowRegistry::new();
-                let surface: Box<dyn CockpitSurface> =
-                    Box::new(LiveSurface { id, body: body.clone() });
+                let surface: Box<dyn CockpitSurface> = Box::new(LiveSurface {
+                    id,
+                    body: body.clone(),
+                });
                 reg.tear_off_surface(id, "live editor", surface, cx)
                     .expect("move-tear-off opens a window");
                 assert_eq!(reg.len(), 1);
@@ -678,7 +698,10 @@ mod tests {
                 // POP BACK TAKING: the moved surface comes home (the window owned it,
                 // so it must be handed back — not dropped with the window).
                 let back = reg.pop_back_taking(id, cx);
-                assert!(back.is_some(), "an owned pop-back returns the moved surface");
+                assert!(
+                    back.is_some(),
+                    "an owned pop-back returns the moved surface"
+                );
                 assert_eq!(reg.len(), 0, "the window closed + the entry dropped");
                 assert!(!reg.is_torn_off(id));
                 back.unwrap()
@@ -687,7 +710,11 @@ mod tests {
             // The recovered surface still points at the LIVE entity (it survived the
             // window's destruction — the move was non-destructive of the body).
             cx.update(|cx| {
-                assert_eq!(recovered.item_id(), id, "identity preserved across the move-home");
+                assert_eq!(
+                    recovered.item_id(),
+                    id,
+                    "identity preserved across the move-home"
+                );
                 let _ = body.read(cx); // the entity is still alive (read would panic if dropped)
             });
         }
