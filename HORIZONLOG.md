@@ -37,6 +37,21 @@ screenshots/membrane tested+worked · everything tested. 6-lane swarm + integrat
   D 🔨 membrane/rehydration tested (mint→rehydrate→drive→stitch; graduated rights; consent-signing-domain fix).
   E 🔨 hermes/ados live (ACP↔ToolGateway loop; effects ride the metered turn; per-tool grants + mandate inspector).
   F 🔨 cockpit gpui-component overhaul (buttons/lists→real widgets across panels).
+  G ✅ DEVTOOLS surface ("Firebug for a verified OS") — ONE ⚙ tab, three sub-tab inspectors over the live
+     World (NETWORK = data plane: deliveries/queues/wakes/notify from the dynamics stream + receipt feed,
+     filterable, browser-Network-tab style · LOG/RECEIPTS = blocklace+receipt console, click-to-drill the
+     full reflect_receipt field tree + provenance chain · FEDERATION = committee/epoch/checkpoint/root +
+     captp remote-path catalog, live-node-or-embedded; configure = cap-gated turn stubs). `starbridge-v2/src/
+     cockpit/panels_devtools.rs` + additive wiring (Tab::Devtools, GoDevtools palette/dispatch). Commit 39dd68de.
+     RESIDUE: bin --features native-full does NOT compile RIGHT NOW (sibling circuit-soundness lane moved
+     custom_proof_bind/recursive_witness_bundle → new `circuit-prove` crate; turn/turn.rs:537 + rotation_witness.rs
+     still name `dregg_circuit_prove::*` while it's an OPTIONAL `prover`-gated dep — NOT my territory). My panel +
+     wiring DID compile (the bin reached past `cockpit` to the unrelated login/session+turn breakage). dregg-image
+     MCP screenshot tab=devtools renders via lavapipe but off the STALE pre-commit binary (no ⚙ tab yet). CLOSE:
+     re-screenshot once the circuit/turn lane re-greens the workspace at integration (→7).
+  SEAM (NETWORK tab): the DP-2 data-plane comms API (live inbox queue depth/dequeue cursors, pub/sub topic
+     fan-out, per-session delivery state) is the richer Network source as it lands; today the EventEmitted notify
+     edges ARE the live queue traffic the executor receipts. Wire the queue-depth view when DP-2 merges.
   →7 integration build · →8 atlas refresh (sequential, last).
 ⚠ no-lean-link WATCH: the FFI lane (separate, "doesn't concern us") is mid-refactoring coord/captp's no-lean-link
   feature (working-tree-modified). starbridge-v2:488-496 consume `features=["no-lean-link"]` on dregg-{sdk,coord,
