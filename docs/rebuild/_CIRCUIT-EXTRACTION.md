@@ -30,7 +30,7 @@ amplify from transfer to all 51 effects and to retire the bespoke `EffectVmAir`.
 Each edge is checked, not asserted:
 
 * **intent ⇔ gates** — `EffectVmEmitTransfer.transferVm_faithful` (machine-checked, `#assert_axioms`
-  clean, no `sorry`/`:= True`): on a transfer row the emitted descriptor's per-row gates hold IFF
+  clean): on a transfer row the emitted descriptor's per-row gates hold IFF
   `TransferRowIntent` holds. Anti-ghost (`transferVm_rejects_wrong_balance/_nonce/_output`) +
   the GROUP-4 hash binding (`transferHash_binds`) + boundary pins (`boundaryFirst/Last_pins`) +
   the whole-descriptor corner (`transferVmDescriptor_pins_intent`). Non-vacuity is witnessed:

@@ -92,7 +92,7 @@ under the starving stutter schedule (`Fairness.badSched`) NEVER admits — justn
 hypothesis that separates the two.
 
 Non-vacuity throughout (`#guard` both ways, executed gates); every keystone `#assert_axioms`-pinned
-to {propext, Classical.choice, Quot.sound}. No sorry, no `:= True`.
+to {propext, Classical.choice, Quot.sound}.
 -/
 import Dregg2.Authority.TemporalAlgebra
 import Dregg2.Proof.MuCalculus

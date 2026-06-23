@@ -47,7 +47,7 @@ vacuous; and a heap with the write bit CLEARED fails to fire (the gate is real).
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY via the named
-`Poseidon2SpongeCR` (carried through `CapsEncodes`). No `sorry`, no `:= True`, no `native_decide`.
+`Poseidon2SpongeCR` (carried through `CapsEncodes`).
 NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.DescriptorIR2

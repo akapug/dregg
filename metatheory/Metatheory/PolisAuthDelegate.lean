@@ -20,7 +20,7 @@ So Y's authority is derived from X's facts — pooled, cross-agent. The delivera
   * `delegation_chain_three_agents` — a 3-hop chain X→Y→Z, each delegating onward, Derivable across
     exactly 3 rounds and NOT fewer.
 
-All `decide`-checked, no `sorry`, no load-bearing `True`. This is the genuine multi-agent
+All `decide`-checked, no load-bearing `True`. This is the genuine multi-agent
 knowledge/authority coordination over the real Datalog derivation closure.
 -/
 import Metatheory.PolisDatalog

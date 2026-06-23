@@ -413,7 +413,7 @@ The NESTED call-FOREST residue (`TurnExecutor §9 OPEN`) is CLOSED, fully genera
 --   `Proof/ForestLTS.lean` (`forestApply_cg5_conserves`, the N-ary Σ=0 binding-as-hypothesis). The
 --   forest here is INTRA-cell (every node a `recCexec` balance turn on the one record cell), so its
 --   conservation is DERIVED, not binding-carried; the cross-cell nesting carries the CG-5 binding
---   exactly as `ForestLTS` does, and is left as a documented `-- OPEN:`, NOT a `sorry`/`axiom`.
+--   exactly as `ForestLTS` does, and is left as a documented `-- OPEN:`, not faked or assumed.
 -/
 
 end Dregg2.Exec.Forest

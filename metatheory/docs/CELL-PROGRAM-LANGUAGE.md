@@ -177,6 +177,6 @@ balanceLe 0]`); the two sit side by side on the same resolving transition. The f
 
 Every keystone in the language is axiom-clean — its proof depends only on the three standard kernel
 axioms (`propext`, `Classical.choice`, `Quot.sound`), pinned by `#assert_axioms` / `#assert_all_clean`
-so a leaked `sorry` fails the build. Every atom is proved non-vacuous: it admits a real transition AND
+so a leaked open hole fails the build. Every atom is proved non-vacuous: it admits a real transition AND
 rejects an adversarial one. Conservation is never mistaken for correctness — a sufficient spec, not
 merely a true one.

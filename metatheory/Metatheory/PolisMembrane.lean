@@ -58,7 +58,7 @@ this: if the server lies about its state (`α` mis-reads) or the square fails to
 guarantee does not reach reality. That is the line where verification ends and trust begins, and the
 membrane is exactly where it sits.
 
-No `sorry`, no load-bearing `True`. The concrete instance at the end exhibits a non-trivial membrane
+The concrete instance at the end exhibits a non-trivial membrane
 over the sandbox world and checks both polarities by `decide`.
 -/
 import Metatheory.PolisGovernorTheory

@@ -42,9 +42,9 @@ crown-jewel triangle for a bilateral turn is already built:
   `charter_discharge_sound`.
 
 **The honest gaps relevant here** (already flagged in code):
-- `hole_coordinated_covenant_guard` (`CoordinatedTurnEmit.lean:619`, `sorry`): the
+- `hole_coordinated_covenant_guard` (`CoordinatedTurnEmit.lean:619`, open): the
   covenant φ is enforced by a **single `propBit` column**, not a full polynomial encoding.
-- `coordinated_emitted_refines_execCoordinatedForestG` (line 627, `sorry`): the
+- `coordinated_emitted_refines_execCoordinatedForestG` (line 627, open): the
   `RecordKernelState` lift to the *forest executor* is a Wave-6 front.
 - The circuit is **one bilateral pair, one step**. There is **no aggregation, no
   recursion, and no privacy in the circuit yet** — `encodeCoordinatedTurn` exposes pre/post

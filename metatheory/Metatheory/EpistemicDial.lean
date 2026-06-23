@@ -29,7 +29,7 @@ is an honest `LinearOrder`/`BoundedOrder`. The PROVED keystones are pinned with
 `#assert_axioms` (kernel-clean: only `propext`/`Classical.choice`/`Quot.sound`). The one
 cryptographic residue — that the *order* between positions reflects an actual
 computational indistinguishability — is an honest `-- OPEN:` resting on the `Disclosure`
-separation *parameter*, never an `axiom`/`admit`/`sorry`-alias.
+separation *parameter*, never an `axiom`/`admit`-alias.
 -/
 import Dregg2.Laws
 import Dregg2.Tactics
@@ -601,7 +601,7 @@ merged into this Lean order-law (cf. `ConstructiveKnowledge` §2 / `Dregg2.Bound
 through the `Disclosure` separation *parameter* that `dialDisclosure` instantiates — the
 metatheory says "*if* the notches separate the disclosure order thus, *then* the verifier
 is epistemically confined," and the crypto layer discharges the antecedent. This is the
-legitimate ZK-indistinguishability residue; it is NOT discharged by any `axiom`/`sorry`
+legitimate ZK-indistinguishability residue; it is NOT discharged by any `axiom`/`admit`
 here — it lives, faithfully, as the hypothesis structure of `Disclosure`. -/
 
 end Metatheory

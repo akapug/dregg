@@ -40,7 +40,7 @@ row does NOT. We connect the ONE overlap (the new cell's ECONOMIC block is born-
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem; Poseidon2 CR enters ONLY
-as the named `Poseidon2SpongeCR` hypothesis. No `sorry`, no `:= True`, no `native_decide`. Imports are
+as the named `Poseidon2SpongeCR` hypothesis. Imports are
 read-only (the keystone Sound module + universe-A `accountgrowth` spec).
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

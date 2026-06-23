@@ -93,7 +93,7 @@ SAME as BalanceA): the circuit's `caps` component is a whole-FUNCTION injective 
 `#assert_axioms` on both keystones (`interp_delegateAttenStmt_eq_recKDelegateAtten`,
 `delegateAtten_compile_sound`) ⊆ {propext, Classical.choice, Quot.sound}; the whole-function-digest
 assumption enters ONLY via the reused `delegateAttenA_full_sound`'s `Function.Injective D` hypothesis,
-not in the welded conclusion. No `sorry`, no `:= True`, no `native_decide`, no `rfl`-posing-as-bridge.
+not in the welded conclusion.
 Non-vacuity teeth (§6): the IR term INSTALLS the attenuated cap (observable cap-graph write),
 NARROWS the rights (`{read,write}` → `{read}`, a real subset), REJECTS an
 unconnected delegator (fail-closed), the `checkSubset` gate REJECTS a superset AND an incomparable

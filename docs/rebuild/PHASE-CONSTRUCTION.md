@@ -49,7 +49,7 @@ End-to-end "verified dregg" is the **three-layer refinement tower**, with the cr
    Rust  (running impl, FFI-hosted)            dregg-lean-ffi + the cascade
         with §8 portal obligations discharged by circuits (CryptoKernel/World laws)
 
-The chain is **Spec ⊒ Exec ⊒ Rust**, each link a refinement square, and the §8 crypto/world laws cut out to circuit obligations (the honest `sorry` bucket #1 in README; never Lean's job).
+The chain is **Spec ⊒ Exec ⊒ Rust**, each link a refinement square, and the §8 crypto/world laws cut out to circuit obligations (the honest open-obligation bucket #1 in README; never Lean's job).
 
 **What's proved today (the beachhead):** `Spec/ExecRefinement.lean` proves the **conservation projection** (`exec_refines_conservation`: the kernel's `Σδ` over `Bal=ℤ`, `Domain.balance` IS `Spec.conservedInDomain`) and the **authority projection** (`exec_authz_refines_guard` + `exec_heldcap_is_graph_has`: the decidable cap gate refines `Spec.Guard`/`Spec.Authority.Graph`) of the `Exec ⊑ Spec` square, assembled in `exec_step_refines`. The bottom edge (`Exec ⊒ Rust`) is the FFI + differential. The §8 cut is `Circuit.bridge` (the kernel circuit ↔ `fullStepInv`, both directions, from which `CryptoKernel.verify`'s law is *derived* per SUCCESSOR-ROADMAP).
 
@@ -116,7 +116,7 @@ These are the sibling studies this META roadmap frames. Each must produce a *spe
 
 **Tactics study** — *discharge the VCs.* Must deliver: domain tactics (extending `Dregg2/Tactics.lean`) that close the VCs the VCG emits — the conservation `Finset.sum` cancellations, the Guard `admits` Boolean-algebra rewrites, the authority `confers`/`Graph.has` goals. **Construction needs:** without tactics, every catalog item and every cell program is a bespoke manual proof. Output: a tactic library that makes Phase (ii)/(vi) proofs near-automatic.
 
-**CryptoKernel-overhaul study** — *real §8.* Must deliver: the real field-AIR over `Value` records, the `chainOk`→Poseidon binding, the extraction of `kernelCircuit` to the Rust prover, and the property-test suite that exercises `commit_hom`/`hash_inj`/`recv_mono` hard. **Construction needs:** Phase (iv); it discharges the §8 `sorry` bucket #1 that the whole tower cuts out to circuits. Output: a Rust `CryptoKernel` instance whose laws are empirically certified and whose binding is the circuit obligation.
+**CryptoKernel-overhaul study** — *real §8.* Must deliver: the real field-AIR over `Value` records, the `chainOk`→Poseidon binding, the extraction of `kernelCircuit` to the Rust prover, and the property-test suite that exercises `commit_hom`/`hash_inj`/`recv_mono` hard. **Construction needs:** Phase (iv); it discharges the §8 open-obligation bucket #1 that the whole tower cuts out to circuits. Output: a Rust `CryptoKernel` instance whose laws are empirically certified and whose binding is the circuit obligation.
 
 ---
 
@@ -126,7 +126,7 @@ These are the sibling studies this META roadmap frames. Each must produce a *spe
 - **The operational LTS / full refinement diagram (Phase iii).** The OPEN in `ExecRefinement.lean §4` and `Proof/Refine`. Static projections are proved; the forward-simulation `AbsStep` is not. This is the longest pole and gates the coinductive `Boundary` keystone. **Highest single risk.**
 - **The three-judgement projection split** (I-confluence independent of conservation/ordering; the classifier is NOT the session type — DREGG1-TO-DREGG2 risk #5, `OPEN-PROBLEMS #1`). The Coordination/Projection soundness rests on no paper in the corpus. **Ship `JointTurn` (bilateral) first; treat Coordination as research-grade.**
 - **Cross-disjoint-group atomic+live+partition-tolerant commit is a genuine impossibility** (risk #4). Design around it (restrict to I-confluent, or accept blocking+timeout); do not promise to "fix" it.
-- The deep coinductive/joint opens already classified as honest `sorry` bucket #2 (cross-cell bisimulation, whole-history non-forgeability closure, Byzantine quorum-intersection, GST-liveness) — these need the adversary/GST model.
+- The deep coinductive/joint opens already classified as honest open-obligation bucket #2 (cross-cell bisimulation, whole-history non-forgeability closure, Byzantine quorum-intersection, GST-liveness) — these need the adversary/GST model.
 
 **HARD ENGINEERING (tractable but real):**
 - **The §8 discharge** (Phase iv): real AIR over records, Poseidon binding, prover extraction. `Value.flatten_width` makes it *well-defined*; building it is large.

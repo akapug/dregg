@@ -566,7 +566,7 @@ theorem demo_settle_conserves (k' : RecordKernelState) (a' : Auction Nat)
 
 end Demo
 
-/-! ## 11. Axiom hygiene — every keystone pinned to the kernel + the CR carrier (no `sorry`/`native_decide`). -/
+/-! ## 11. Axiom hygiene — every keystone pinned to the kernel + the CR carrier. -/
 
 #assert_axioms seal_injective
 #assert_axioms reveal_binds_committed

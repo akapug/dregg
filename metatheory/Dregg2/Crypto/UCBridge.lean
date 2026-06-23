@@ -40,7 +40,7 @@ kernel:
      machine-checked one: the two formalisations live in different logics and are not connected
      by a verified translation. It is the residual gap.
 
-This is strictly stronger than a bare Lean `axiom`/`sorry` (which would assert UC on nothing):
+This is strictly stronger than a bare Lean `axiom` or unproved hole (which would assert UC on nothing):
 the obligation is discharged by a real proof in a real UC tool. It is strictly weaker than a
 single-kernel Lean proof: the trust spans two kernels + the transport fidelity.
 
@@ -48,7 +48,7 @@ single-kernel Lean proof: the trust spans two kernels + the transport fidelity.
     isabelle build -d <afp-matching-Isabelle2025-RC3>/thys \
                    -d ~/dev/breadstuffs/uc-crypthol Dregg2_UC
 (exit 0 ⇒ the CryptHOL theorems above are kernel-checked.) The theory file is
-`~/dev/breadstuffs/uc-crypthol/Dregg2_FCom.thy`; it contains no `sorry`/`oops` and references only
+`~/dev/breadstuffs/uc-crypthol/Dregg2_FCom.thy`; it has no unproved holes (no `oops`) and references only
 real, already-proven `Sigma_Commit_Crypto` theorems. CAVEAT: the green build was NOT reproduced on
 the dev machine — the local AFP checkout (`afp-devel`) is an Isabelle-*dev* revision incompatible
 with Isabelle2025-RC3 at the ML/proof-automation level; it needs the RC3-matched AFP. See

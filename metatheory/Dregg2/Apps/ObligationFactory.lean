@@ -78,7 +78,7 @@ Enumerated at the foot (`§DELETION`). NOTHING is deleted here.
 NEW file only. Imports the escrow factory executor + the escrow probe (for the proved per-asset
 move-conservation lift and the `SlotCaveat`/`setField`/`fieldOf` vocabulary). Does NOT edit
 `Dregg2.lean`, any shared mod/import file, or the kernel. Every keystone `#assert_axioms`-pinned
-to `{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`, no `native_decide`.
+to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.RecordKernel
 import Dregg2.Exec.EffectsState

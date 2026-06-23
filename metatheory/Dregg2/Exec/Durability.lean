@@ -376,7 +376,7 @@ def dStep1 : DurableState := durableApply (durableInit fma0) transferCF.1
 #guard ((recoverSynced { snap := recSnapshot fma0, committed := [transferCF.1], torn := transferCF.1 }
         |>.map (fun r => cellObsA r 0))) == some 105  --  some 105
 
-/-! ## Axiom hygiene — every durability keystone pinned to the standard kernel triple (NO `sorryAx`). -/
+/-! ## Axiom hygiene — every durability keystone pinned to the standard kernel triple. -/
 
 #assert_axioms recReplayFrom_append
 #assert_axioms recRestore_snapshot

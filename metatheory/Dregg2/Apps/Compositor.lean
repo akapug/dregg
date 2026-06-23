@@ -73,7 +73,7 @@ ARE verifiable now (a CPU-composited software compositor cell, à la EROS/Nitpic
 the graphics crypto-floor. Direct lineage: EROS Trusted Window System (EWS, Shapiro et al. 2004) and
 Nitpicker (Feske & Helmuth 2005, the ~1,500-LOC small-TCB existence proof).
 
-`#assert_axioms`-clean, no `sorry`, no `:= True`, no `native_decide`. Pure, computable, `#eval`-able.
+`#assert_axioms`-clean. Pure, computable, `#eval`-able.
 NEW file only — touches NO existing app, `VerificationToolkit.lean`, the executor, nor `Dregg2.lean`.
 -/
 import Dregg2.Apps.VerificationToolkit

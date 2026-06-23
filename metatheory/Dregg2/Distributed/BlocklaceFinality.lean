@@ -60,7 +60,7 @@ a lagging validator's late round-2/round-3 blocks grow an already-final wave's c
 MID-PREFIX — which the node's `executed_up_to` index slicing (`blocklace_sync.rs`) does not
 tolerate. See that module's header for the node-side implication.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Distributed.BlocklaceFinality`.
 -/
 import Dregg2.Exec.ConsensusExec

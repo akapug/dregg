@@ -213,8 +213,7 @@ def setVKAEmitted : EmittedDescriptor := emittedEffect setVKAAirName setVKEWire
 
 /-! ## §2 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms setVKGuardLocal
 #assert_axioms setVKGuardDecodes

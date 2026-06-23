@@ -96,7 +96,7 @@ bridge's real content: the guard algebra's interesting modalities are not assemb
 the `^⊥⊥`-closure of its family's one relational observable, and the trivial ones are the
 rectangles. All three negative halves are instances of ONE generic law (`rect_mix_in_biorth`).
 
-No `sorry`, no `:= True`, no `native_decide`; non-vacuity both polarities per closure claim;
+Non-vacuity both polarities per closure claim;
 every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Calculus.BiorthTensor

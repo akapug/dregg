@@ -370,8 +370,7 @@ end ForwardSim
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. Every theorem here is proved. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. Every theorem here is proved. -/
 
 #assert_axioms setNonce_nonceOf
 #assert_axioms setNonce_balOf

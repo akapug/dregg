@@ -214,7 +214,7 @@ discharge (not the underlying turn) is what gates. -/
 /-! ## §5. Axiom-hygiene tripwires — pin each coordinated-discharge keystone kernel-clean.
 
 Each pin elaborates to an error if the keystone depends on any axiom outside
-`{propext, Classical.choice, Quot.sound}` (notably `sorryAx`). The reuse posture means these inherit
+`{propext, Classical.choice, Quot.sound}` (notably an unproven-hole axiom). The reuse posture means these inherit
 `CrossCaveat`'s already-pinned hygiene. -/
 
 #assert_axioms coordinated_discharge_sound

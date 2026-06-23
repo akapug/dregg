@@ -67,7 +67,7 @@ is `skip`, and ALL of the effect's content is in the carried chained leg.
 frame-digest assumptions enter ONLY inside the reused `pipelinedSendA_full_sound` (its
 `compressNInjective`/`cellLeafInjective`/`RestHashIffFrame`/`logHashInjective` portal hypotheses + the
 `AccountsWF` well-formedness preconditions of the v1 framework), not in the welded conclusion's
-statement. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only; this file owns only
+statement. Imports are read-only; this file owns only
 itself. Build: `lake build Dregg2.Circuit.Argus.Effects.PipelinedSend`.
 -/
 import Dregg2.Circuit.Argus.Stmt

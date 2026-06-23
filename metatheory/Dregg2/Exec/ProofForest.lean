@@ -11,7 +11,7 @@ combinatorial fact, fully in Lean). Aggregation slots in later as a pure perform
   * **`ProofNode`** — the public-input projection of one cell-step (`oldCommit`, `newCommit`,
     `effectsHash`, `prevReceipt`, `seq`, `δ` — the `circuit/src/effect_vm/pi.rs` linking surface)
     plus `StepProofValid : Prop`: the §8 assumption "this node's STARK proof verifies." Never an
-    `axiom`/`sorry`; entered as a hypothesis the composition theorem is parametric in.
+    `axiom`; entered as a hypothesis the composition theorem is parametric in.
   * **`Linked`** — the combinatorial chain-link: `newCommit = next.oldCommit` (state continuity),
     receipt-chain pointer, and monotone `seq` (no replay/fork).
   * **`proofForest_sound`** — the main theorem: `(∀ n, StepProofValid) ∧ Linked ⟹
@@ -26,7 +26,7 @@ to whole-forest `StepInv`.
 -- OPEN: the cross-cell proof-forest — where edges cross cells and the link is the CG-5 N-ary
 --   `Σδ = 0` shared-binding — is the natural next slice, packaging `CrossCellForest.lean`'s
 --   `crossForest_attests`. The `δ` surface is already on `ProofNode`; the cross-cell `Linked`
---   would require `∑ δ = 0` over a family. Left as a documented OPEN, not a `sorry`/`axiom`.
+--   would require `∑ δ = 0` over a family. Left as a documented OPEN, not faked or assumed.
 -/
 import Dregg2.Exec.TurnForest
 import Dregg2.Exec.CrossCellForest

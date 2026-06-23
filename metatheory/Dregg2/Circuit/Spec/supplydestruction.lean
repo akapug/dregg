@@ -262,8 +262,7 @@ theorem execFullA_burnA_iff_spec (s : RecChainedState) (actor cell : CellId) (a 
 
 /-! ## §7 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms recKBurnAsset_iff_guard
 #assert_axioms recBurn_ledger_correct

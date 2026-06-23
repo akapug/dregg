@@ -236,7 +236,7 @@ def sub0 : SubState := { head := 2, tail := 1, capacity := 8 }
 -- consumer-safe forever along the alternating schedule (a few indices; the theorem covers ALL n):
 #guard decide (subTraj sub0 (fun n => if n % 2 = 0 then SubOp.pub else SubOp.con) 4).WF  -- true
 
-/-! ## Axiom hygiene — every keystone pinned to the standard kernel triple (NO `sorryAx`). -/
+/-! ## Axiom hygiene — every keystone pinned to the standard kernel triple. -/
 
 -- §A — the faithful slot automaton.
 #assert_axioms publish_preserves_WF

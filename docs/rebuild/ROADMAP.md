@@ -263,7 +263,7 @@ proven; the DAG case is open, `dregg2 §5`).
 ## The metatheory discharge order (`metatheory/`, Lean4, spec-first/grind-up)
 
 Mirrors l4v: Core + Laws first, the boundary law last. Each module is scaffolded with
-`sorry`'d theorems; below is what each `sorry` needs.
+open-hole theorems; below is what each open hole needs.
 
 ### 1. `Core.lean` — the monoid-hom conservation (FIRST)
 - `conservation_ordinary` — needs the `Category`/`MonoidalCategory`/`SymmetricCategory`
@@ -336,7 +336,7 @@ Mirrors l4v: Core + Laws first, the boundary law last. Each module is scaffolded
 *circuit* obligation, discharged separately; the Lean law treats `Verify` as a
 decidable oracle. **NEVER merge crypto-soundness into the Lean law.** The Lean↔Rust
 bridge is backend #8 of `dregg-dsl-differential` (Lean = golden oracle; empirical
-cross-validation over `sorry`'d regions, not certification).
+cross-validation over open-hole regions, not certification).
 
 ---
 
@@ -369,5 +369,5 @@ Metatheory (parallel track):  Core + Laws ─► Authority/Positional ─► Bou
 (`Verify`-as-decidable, the laws, the bisimulation); Rust stays the
 crypto/proving/transport/wasm engine. They are reconciled by **differential testing**
 (`dregg-dsl-differential`), not by certification — empirical cross-validation over the
-`sorry`'d regions. Do NOT reimplement the prover in Lean; do NOT merge crypto-soundness
+open-hole regions. Do NOT reimplement the prover in Lean; do NOT merge crypto-soundness
 into the law.

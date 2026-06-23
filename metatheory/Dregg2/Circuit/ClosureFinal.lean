@@ -55,8 +55,7 @@ rungs are consumed.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. All carriers enter as Prop/Type hypotheses or
-structure fields, never as axioms. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file;
-imports read-only.
+structure fields, never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureFanoutGenuine
 

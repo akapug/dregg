@@ -34,8 +34,7 @@ needs a committed root. The decode carries the receipt advance + the (live-circu
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carriers
-(`compressNInjective` + the injective `auditLeaf`, REUSED from the Lifecycle file). No `sorry`,
-no `:= True`, no `native_decide`, no fresh axiom. NEW file; all imports read-only.
+(`compressNInjective` + the injective `auditLeaf`, REUSED from the Lifecycle file). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementLifecycle
 import Dregg2.Circuit.Spec.cellstatepermissions

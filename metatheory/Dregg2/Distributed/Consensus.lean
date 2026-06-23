@@ -64,7 +64,7 @@ dregg1 actually runs) and the finalization→executor bridge (`Exec.ConsensusExe
    residual / OPEN-CM-LIVENESS), with `leaderless_progress` proving progress FROM that hypothesis
    WITHOUT any leader-election sub-protocol — the sidestep made precise.
 
-## SCOPE (named carried OPENs — NEVER `sorry`/`axiom`/`True`)
+## SCOPE (named carried OPENs — NEVER an `axiom`/`True`/unproven hole)
 
 * `PostGSTProgress` — the post-GST `GSTRound` delivery (gossip convergence) is the genuine
   liveness residual (OPEN-CM-LIVENESS / `BFT.lean`'s O2). Carried as a named hypothesis the
@@ -525,7 +525,7 @@ quorum-formed round. **This is needlessly large**: §6b (below) SHRINKS the name
 already forms" all the way down to the bare partial-synchrony primitives (honest-leader co-finality +
 honest-supermajority + Δ-delivery), and PROVES the protocol-level DAG progress argument on top of
 them, so this coarse premise is *derived* from the minimized carrier (`PostGSTProgress_of_deliveryModel`).
-Kept here as the legacy interface the §6 leaderless theorems consume; never a sorry. -/
+Kept here as the legacy interface the §6 leaderless theorems consume; carried as a named open, not an unproven hole. -/
 def PostGSTProgress [World Msg] (votesOf : List Msg → List Vote)
     (cfg : Finality.Config) (block : Nat) : Prop :=
   ∃ r, Proof.BFT.GSTRound votesOf cfg block r
@@ -535,7 +535,7 @@ named post-GST delivery residual `PostGSTProgress` (the honest supermajority's v
 after GST — gossip convergence), the block IS committed by quorum at SOME round, WITHOUT invoking
 any leader-election / view-synchronization sub-protocol. The proof reads only the DAG quorum
 (`gst_liveness_from_round_model`), exhibiting the Wong 3.6 sidestep concretely: leaderless progress
-needs no leader. The residual is `PostGSTProgress`, named and carried — not a sorry. -/
+needs no leader. The residual is `PostGSTProgress`, named and carried — not an unproven hole. -/
 theorem leaderless_progress [World Msg]
     (votesOf : List Msg → List Vote) (cfg : Finality.Config) (block : Nat)
     (hprog : PostGSTProgress votesOf cfg block) :

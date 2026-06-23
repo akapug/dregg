@@ -515,7 +515,7 @@ def g0 : GovDir := { activeId := 7, pending := none }
 end GovDemo
 
 /-! ## §8 Axiom hygiene — every bind/resolve/unbind law rests ONLY on `{propext, Classical.choice,
-Quot.sound}` (no `sorry`, no `:=True`, no `native_decide`, no extra axiom). -/
+Quot.sound}` (no extra axiom). -/
 
 #assert_axioms get_put_self
 #assert_axioms register_version_monotone

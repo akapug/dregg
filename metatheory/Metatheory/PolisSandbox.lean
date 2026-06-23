@@ -14,7 +14,7 @@ The experiment, proven end-to-end:
     just this one (`governed_prevents_domination` / `sandbox_governed_safe`). The constitution's
     `polis_safety`, instantiated on a live world.
 
-Pure Lean 4 core (imports `Metatheory.Polis`); no `sorry`. Two agents (`Bool`) for the demo; the
+Pure Lean 4 core (imports `Metatheory.Polis`). Two agents (`Bool`) for the demo; the
 shape generalizes to any `Fintype` of agents.
 -/
 import Metatheory.Polis

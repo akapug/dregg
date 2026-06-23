@@ -82,7 +82,7 @@ strength of full-state spec; the surface is named `full-state-SetPermissionsSpec
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the cell-leaf /
 rest-frame Poseidon-CR injectivity assumptions enter ONLY inside the reused `setPermissionsA_full_sound` (its
 `compressNInjective`/`cellLeafInjective`/`RestHashIffFrame`/`logHashInjective` portals + the two `AccountsWF`
-side-conditions), not in the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`.
+side-conditions), not in the welded conclusion's statement.
 Imports are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt

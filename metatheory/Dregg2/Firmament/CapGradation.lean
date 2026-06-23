@@ -61,8 +61,8 @@ another point on the distance parameter" is a THEOREM, not a slogan.
 NON-VACUITY: both polarities are witnessed (a valid attenuation COMMITS; a widening
 REJECTS), at EACH target, via `#guard` teeth that BITE.
 
-Discipline: axiom-clean (`#assert_axioms` at the close), no `sorry`, no `native_decide`
-— `decide` / `#guard` / structural `cases <;> simp` only. `CellId` is the abstract node
+Discipline: axiom-clean (`#assert_axioms` at the close) — `decide` / `#guard` / structural
+`cases <;> simp` only. `CellId` is the abstract node
 identity (NEVER `Nat`), exactly as `Spec.Authority`.
 -/
 import Dregg2.Exec.CapTPConcrete
@@ -584,8 +584,8 @@ SAME narrowing yields the SAME rights (target-agnostic). -/
 
 end Witnesses
 
-/-! ## §10 — Axiom hygiene. Every load-bearing theorem is checked axiom-clean (no
-`sorry`, no extra `axiom`, only the standard `propext`/`Classical.choice`/`Quot.sound`). -/
+/-! ## §10 — Axiom hygiene. Every load-bearing theorem is checked axiom-clean (only the
+standard `propext`/`Classical.choice`/`Quot.sound`). -/
 
 #assert_axioms attenuate_decision_backing_agnostic
 #assert_axioms attenuate_preserves_target

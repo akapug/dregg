@@ -535,8 +535,7 @@ end Teeth
 /-! ###############################################################################
 # Kernel-clean pins (`#assert_axioms`).
 ##################################################################################
-Every keystone is pinned to `{propext, Classical.choice, Quot.sound}`. A `sorryAx` or stray `axiom`
-fails the pin and the build. -/
+Every keystone is pinned to `{propext, Classical.choice, Quot.sound}`. -/
 
 -- §1–§3: the general structure, the total category, and the concrete keystone instance.
 #assert_axioms DreggInstance.F

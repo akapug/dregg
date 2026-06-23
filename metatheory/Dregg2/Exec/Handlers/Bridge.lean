@@ -98,9 +98,8 @@ def br0 : RecordKernelState :=
 /-! ## §7 — Axiom-hygiene pins (every handler keystone rests only on the three kernel axioms).
 
 Pinning each handler def pins its obligation fields transitively (the literal CARRIES the proofs), and the
-lock-authority helper is pinned directly. A `sorryAx` anywhere in the composed lemmas fails the pin AND the
-build — so these pins certify that bridge lock/finalize/cancel/pipelined-send soundness (including the
-`delta < 0` finalize accounting) rests only on the kernel triple. -/
+lock-authority helper is pinned directly — so these pins certify that bridge lock/finalize/cancel/pipelined-send
+soundness (including the `delta < 0` finalize accounting) rests only on the kernel triple. -/
 
 #assert_axioms pipelinedSendA
 

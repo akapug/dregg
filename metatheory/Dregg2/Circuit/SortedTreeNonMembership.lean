@@ -48,8 +48,7 @@ The bracketing itself (`GapOpen.excludes`) is UNCONDITIONAL combinatorics. The t
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carriers
 `DeployedCapTree`/`AttestedQuery` already use (`Compress1CR` via the `CapHashScheme`; the spine↔root
-binding `SpineCommits` is a HYPOTHESIS, never an axiom). No `sorry`, no `native_decide`, no `:= True`,
-no fresh axiom. NEW file; all imports read-only.
+binding `SpineCommits` is a HYPOTHESIS, never an axiom). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.DeployedCapOpen
 import Dregg2.Crypto.NonMembership

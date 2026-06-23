@@ -290,8 +290,7 @@ theorem setVK_rejects_nonlive (s : RecChainedState) (actor cell : CellId) (vk : 
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms setVKCellMap_eq_writeField
 #assert_axioms setVK_cellWrite_correct

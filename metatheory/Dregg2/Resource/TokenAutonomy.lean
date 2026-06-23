@@ -258,7 +258,7 @@ theorem token_is_object_reflection_of_conservation {α : Type u} [DecidableEq α
 
 -- `#assert_axioms foo` (dregg2 `Tactics.lean`) FAILS unless `foo` depends ONLY on the
 -- three kernel axioms `{propext, Classical.choice, Quot.sound}` — in particular it rejects
--- any inherited `sorryAx`. Every keystone is pinned.
+-- any inherited faked-green axiom. Every keystone is pinned.
 #assert_axioms idempotent_of_cancel_eq_one
 #assert_axioms cancellative_no_nontrivial_idempotent
 #assert_axioms no_substitution_of_idempotent

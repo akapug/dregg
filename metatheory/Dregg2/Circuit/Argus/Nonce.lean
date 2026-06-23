@@ -50,8 +50,7 @@ prologue's. There is no divergence — only a correct attribution.
 
 ## Axiom hygiene
 
-`#assert_axioms` on every keystone ⊆ {propext, Classical.choice, Quot.sound}, no `sorryAx`. No `:= True`
-vacuity, no reconcile-by-prose: §2 is a real theorem that the WHOLE-TURN nonce is correct (`+1` exactly),
+`#assert_axioms` on every keystone ⊆ {propext, Classical.choice, Quot.sound}. No reconcile-by-prose: §2 is a real theorem that the WHOLE-TURN nonce is correct (`+1` exactly),
 derived from the two per-effect facts + the prologue tick. Non-vacuity (`#guard`) exhibits a concrete
 turn whose body freezes the cell nonce while the prologue ticks it once. Imports are read-only; this file
 owns only the Argus-namespace nonce reconciliation, REUSING the `Admission` prologue laws (cited).

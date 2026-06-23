@@ -23,7 +23,7 @@ Over THIS instance the coordination phenomena are re-derived as Datalog facts:
   * **KnowReachesD** — viability = `Discharged goal facts`, which by the bridge IS the real
     *multi-step* derivation (`a ← b ← c`), not a single check.
 
-No `sorry`; no load-bearing `True`; the discharge bridge is a proven `↔`; `#eval` runs the gate.
+No load-bearing `True`; the discharge bridge is a proven `↔`; `#eval` runs the gate.
 -/
 import Metatheory.PolisDatalog
 import Dregg2.Laws

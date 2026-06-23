@@ -43,8 +43,7 @@ This module adds that rung, fully ADDITIVELY (`Exec.Value`/`Exec.Program` untouc
 
 LAW #1: emitted from Lean. NEW file only — does NOT edit `Exec.Value`, `Exec.Program`,
 `Authority.QuantifiedPredicate`, `Substrate.Heap`, or `Dregg2.lean`. Reuses `Exec.Value.scalar`
-(the fail-closed named-field reader) and `Exec.Value.field`. Every keystone `#assert_axioms`-pinned —
-no sorry, no `:= True`, no `native_decide`.
+(the fail-closed named-field reader) and `Exec.Value.field`. Every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Exec.Program
 import Dregg2.Tactics

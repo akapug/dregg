@@ -34,7 +34,7 @@ trace, and the remainder"). Held to the svenvs bar — `∀`-opaque inhabitants,
     real temporal capture is OPEN research (connect to `FlowRefine.decideRefines` / the
     Büchi game). No instance is shipped — red is honest.
 
-Pure Lean 4 core; no `import`, no `sorry`, no `:= True` load-bearing. Keystone axiom use is
+Pure Lean 4 core; no `import`, no load-bearing `:= True`. Keystone axiom use is
 printed below (`#print axioms`) — kernel-clean (`propext`/`Classical.choice`/`Quot.sound`).
 -/
 

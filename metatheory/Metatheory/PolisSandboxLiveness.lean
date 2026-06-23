@@ -18,7 +18,7 @@ Contrast (proven, by `decide`): under the MYOPIC governor the very same walk fro
 start strands the victim forever — distance never moves, though "safe" holds throughout. Liveness is a
 property the one-step floor simply cannot deliver.
 
-No `sorry`, no load-bearing `True`. `#eval`/`#guard` assert TRUE props (`decide` tells the truth).
+`#eval`/`#guard` assert TRUE props (`decide` tells the truth).
 -/
 import Metatheory.PolisSandboxAdaptive
 

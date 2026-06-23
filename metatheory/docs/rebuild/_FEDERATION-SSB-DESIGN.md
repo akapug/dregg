@@ -388,7 +388,7 @@ Byzantine-rotation attack meaningful only at n>1.
 (ii) a *real distributed property* proved at n>1, (iii) a *connection to the verified
 executor/state* (`Exec.ConsensusExec` / `RecordKernelState`), and (iv) a *Rust
 differential* (Lean model reproduces the Rust function's output on a concrete
-multi-node trace). `#assert_axioms`-clean; no `sorry`/`:=True`.
+multi-node trace). `#assert_axioms`-clean.
 
 **Sequence of beachheads, building on `BlocklaceFinality.lean`:**
 

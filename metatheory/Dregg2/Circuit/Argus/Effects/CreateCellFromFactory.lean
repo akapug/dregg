@@ -65,7 +65,7 @@ see the SAME `e` the gate validated — matching `createCellFromFactoryChainA`'s
 
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the whole-function /
 digest-injectivity assumptions enter ONLY inside the reused `createCellFromFactoryA_full_sound` (its
-hypotheses), never in the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`.
+hypotheses), never in the welded conclusion's statement.
 Imports are read-only (`Argus/Stmt` for the IR + `Inst/createCellFromFactoryA` for the audited quint
 descriptor; the executor⟺spec corner rides in transitively via the Inst import). This file owns only its
 own declarations.

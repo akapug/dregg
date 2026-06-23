@@ -56,8 +56,7 @@ crypto carriers and one structural domain-separation fact, ALL stated explicitly
 lists ⇒[`chunksOf` flatten-invertible] equal inputs. The crypto content is exactly `CompressionCR` +
 `SqueezeBindsReachable`; `InitStepSeparated`, `chunksOf`, the induction are structural.
 
-l4v bar: every theorem pins `{propext, Classical.choice, Quot.sound}` (`#assert_axioms`); no `sorry`,
-no `:= True`, no `native_decide`.
+l4v bar: every theorem pins `{propext, Classical.choice, Quot.sound}` (`#assert_axioms`).
 -/
 import Dregg2.Circuit.Poseidon2Binding
 import Mathlib.Data.List.Basic

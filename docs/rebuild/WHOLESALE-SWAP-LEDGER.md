@@ -81,7 +81,7 @@ gates, 1 tree property (all-or-nothing), 0 crypto operations.**
    pin integer widths to dregg1 types. (deps: A, B, D, E)
 10. **FILL J [L] — the parse∘encode roundtrip THEOREM** for every production (+ fuel-adequacy lemma),
     which removes the codec from the Lean-side TCB. *LEAF LAYER LANDED* (`metatheory/Dregg2/Exec/CodecRoundtrip.lean`,
-    44 theorems, green, `#assert_axioms`-clean, no-sorry guard passes): the genuinely TCB-critical
+    44 theorems, green, `#assert_axioms`-clean, no-open-hole guard passes): the genuinely TCB-critical
     primitives are PROVED left-inverses — `parseInt`/`parseNat` (BOTH signs, from `Nat`/`Int.repr`'s
     digit structure + the `n < 10^(n+1)` fuel adequacy), the `[u8;32]` **DIGEST field NON-VACUOUSLY**
     (`ofHex32 (toHex32 n) = some (n % 2^256)`, lossless on the FULL 256-bit range — the `2^256`-wrap is
@@ -123,7 +123,7 @@ today the executed turn is crypto-free.*
    (monotone pass-count gate); **kernel-vs-intended-semantics, NEVER vs the buggy dregg1 oracle**
    (matching a buggy oracle launders the bug).
 3. **Completeness gate** — cutover BLOCKED until: 0 ABSENT + 0 STRANDED for all soundness-critical
-   elements; the roundtrip theorem (J) compiles sorry-free; the golden corpus (K) byte-equal in CI;
+   elements; the roundtrip theorem (J) compiles hole-free; the golden corpus (K) byte-equal in CI;
    the §8 portal set is exactly the documented floor with every discharge stated; the preimage
    differential (F) byte-exact green; the full-surface differential at 100%.
 4. **Flip in one go** — replace the bodies of `turn/src/executor/{execute,execute_tree,apply,authorize}.rs`

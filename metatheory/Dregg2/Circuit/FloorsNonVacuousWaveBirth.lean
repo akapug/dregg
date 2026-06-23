@@ -22,7 +22,7 @@ Per readout we build:
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Every field is a CONSTRUCTED term / `rfl` /
-`decide`; no `sorry`, no `:= True`, no `native_decide`, no fresh axiom. NEW file; imports read-only.
+`decide`; no fresh axiom. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.FloorsNonVacuousWave
 import Dregg2.Circuit.RotatedKernelRefinementBirth

@@ -61,7 +61,7 @@ descriptor's connector (`EffectVmEmitBridgeMint §7`, `cellProjA`) projects.
 
 ## Axiom hygiene
 
-`#assert_axioms` on both theorems ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `:= True`
+`#assert_axioms` on both theorems ⊆ {propext, Classical.choice, Quot.sound}. No `:= True`
 vacuity, no weakening-that-just-typechecks: the conclusion is the genuine per-cell agreement the reused
 descriptor soundness proves. Imports are read-only; this file owns only itself and edits no other Argus
 module.

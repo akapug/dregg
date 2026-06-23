@@ -74,8 +74,7 @@ the Argus cornerstones; this module derives no collision-resistance.
 
 ## Axiom hygiene
 
-`#assert_axioms` on the keystones ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `:= True`,
-no vacuity-that-typechecks. §4 exhibits the receipt as an OBSERVABLE function (a tampered Argus output
+`#assert_axioms` on the keystones ⊆ {propext, Classical.choice, Quot.sound}. §4 exhibits the receipt as an OBSERVABLE function (a tampered Argus output
 moves Q; the produced state's receipt is non-trivial). Imports are READ-ONLY; this file owns only its own
 declarations (it imports `Argus/Stmt`, `Argus/Compile`, `CommitmentCrossBind` and edits none).
 -/

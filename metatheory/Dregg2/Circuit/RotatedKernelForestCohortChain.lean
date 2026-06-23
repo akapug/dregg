@@ -54,7 +54,7 @@ so `chainForcesEveryCohort` + the chain fold lands the SAME `execFullTurnA`/`tur
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named carriers inherited through the
 imported keystone (`Poseidon2SpongeCR`, the `CommitSurface` CR fields entering through `descriptorRefines`).
-No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitSoundness
 

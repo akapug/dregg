@@ -35,8 +35,7 @@ circuit-forced through the decode boundary, exactly as setField ties `param1 = v
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every new theorem. No `sorry`, no
-`:= True`, no `native_decide`, no fresh axiom. NEW file; imports are read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every new theorem. NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinement
 import Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce

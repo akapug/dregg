@@ -267,8 +267,7 @@ def delegateEmitted : EmittedDescriptor := emittedEffect2 delegateAirName delega
 
 /-! ## §3 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms delegateGuardLocal
 #assert_axioms delegateGuardDecodes

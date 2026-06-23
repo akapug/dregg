@@ -40,8 +40,7 @@ hypothesis.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Every inhabitation/separation is a
-CONSTRUCTED term or a structural discharge; no `sorry`, no `native_decide` substituting for a real
-proof, no `:= True`, no fresh axiom. NEW file; imports read-only.
+CONSTRUCTED term or a structural discharge, no fresh axiom. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.Satisfied2Faithful
 import Dregg2.Circuit.CircuitCompletenessNonVacuityReal

@@ -55,7 +55,7 @@ is now, by construction, one the verified model finalizes.
 * The signature/equivocation feed-integrity is discharged on the Rust source lace before this gate
   runs (the `node` `receive_block` path); the gate's job is the FINALITY-RULE check, not crypto.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Distributed.FinalityGate`.
 -/
 import Dregg2.Distributed.BlocklaceFinality
@@ -294,7 +294,7 @@ def dregg_tau_order (s : String) : String := tauOrderGate s
 node's Rust decoder mirrors; the `decode ∘ encode = id` round-trip is `#guard`-witnessed on the
 concrete order (`splitOn`/`toString` are `decide`-opaque at general length, the project's TCB-codec
 discipline), and the EXPORT-EQUALITY proof below is stated at the structural `encodeOrderWire` level
-so it is `sorry`-free and order-faithful. -/
+so it is order-faithful. -/
 def decodeOrderWire (s : String) : Option (List BlockId) := do
   let body ← stripReq? "T=" s
   parseNatList? ',' body

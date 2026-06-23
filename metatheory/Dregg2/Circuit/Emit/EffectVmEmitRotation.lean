@@ -40,7 +40,7 @@ until the flag-day regen.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto only as the named
-`Poseidon2SpongeCR` hypothesis. No `sorry`, no `native_decide`. Staged: no live Rust path
+`Poseidon2SpongeCR` hypothesis. Staged: no live Rust path
 consumes these artifacts until the cutover commit (the Rust consumers are recursion-gated
 tests + the drift guards).
 -/

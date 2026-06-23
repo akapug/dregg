@@ -6,7 +6,7 @@
 > `docs/RECOVERED-DESIGNS.md`)
 > — plus the live task ledger (E1–E6 done: full effect catalog executable+proved #98–104,
 > FFI export #95, proof-forest #101/#102, caveat/attestation carry-forward #122/#124,
-> consistency witness #126, zero-sorry+CI #128 in flight).
+> consistency witness #126, no-open-hole+CI #128 in flight).
 >
 > **THE SWAP FRAMING (binding, do NOT violate — repeated because it is the spine of this doc):**
 > deleting dregg1's Rust kernel and routing the node through the Lean FFI is a **MASSIVE
@@ -218,8 +218,8 @@ proved lemmas to a wider dispatch*, not greenfield theory.
   explicit obligations; ideally model the crypto. *Verify-braid: removal-detection negative
   test; Stealth/StarkDelegation mode dispatch. PREREQUISITE-FOR-SWAP (the gate would weaken
   authorization without it). Size: medium. Tasks: relates to #79, #122, #124.*
-- **0.8 zero-sorry + CI guard (#128, in flight):** retire the last by-design sorries + a CI
-  check forbidding `sorry`. *This is itself a verify-braid spine — finish it; it underwrites
+- **0.8 no-open-hole + CI guard (#128, in flight):** retire the last by-design open holes + a CI
+  check forbidding open proof holes. *This is itself a verify-braid spine — finish it; it underwrites
   every other proof claim in the strand.*
 - **DEFERRED to ABOVE-CORE (named, not scheduled into a swap-gating wave):** FILL 8c/8d
   (selective disclosure, multi-show unlinkability wiring — #127 DV-BLINDEDSET), FILL 8f
@@ -466,7 +466,7 @@ in its signature). Only **two crates embed a `TurnExecutor` in-process** — `dr
 | FILL 9 | higher-order handler tier | 0.6 | new | ABOVE-CORE |
 | FILL 10 | distributed conformance (consensus/gossip/Stingray/revocation) | deferred (node-level) | #106 et al. | ABOVE-CORE (CRITICAL for node claim) |
 | FILL 11 | return-projection + fork | deferred | new | ABOVE-CORE |
-| — | zero-sorry + CI guard | 0.8 | #128 | verify-spine |
+| — | no-open-hole + CI guard | 0.8 | #128 | verify-spine |
 | — | FFI export widen + record door | 1.1 | #95 | gate |
 | — | differential ratchet in CI | 1.2 | #95 | **gate (the net)** |
 
@@ -506,9 +506,9 @@ in its signature). Only **two crates embed a `TurnExecutor` in-process** — `dr
 1. **Ready to start the STRAND-A Lean/FFI fills (WAVE 0–1)?** → **YES.** These touch only the
    metatheory + the detached PoC crate. The proved machinery the fills rebind genuinely exists
    (verified: `Program.lean:68,70,120,124` has the `writeOnce`/`monotonic` evaluators;
-   `MultiAsset.lean` has the per-asset template; the sorry-discipline is real — **0 `sorry`
-   tactics** outside doc-comments across `metatheory/Dregg2/`, guarded by `Tactics.lean`'s
-   `#assert_axioms`/`sorryAx` check). Nothing in STRAND A can affect the running node. Go.
+   `MultiAsset.lean` has the per-asset template; the open-hole discipline is real — **0 open proof
+   holes** outside doc-comments across `metatheory/Dregg2/`, guarded by `Tactics.lean`'s
+   axiom-pinning check). Nothing in STRAND A can affect the running node. Go.
 
 2. **Ready to begin the FIRST SAFE REWIRING (WAVE 2, observe-only shadow)?** → **NO, GATED.**
    Not because the step is risky in itself (it is reversible + observe-only by construction) but
@@ -547,7 +547,7 @@ how it labels a few "READY-now" items that actually carry a quiet prerequisite (
 | **0.5** WAL durability honesty | **RELABEL = READY-now; real semantics = NOT-YET** | The two-tier framing is correct and important: `checkpoint_restore_roundtrip` is `= rfl` — a cache-rebuild identity, **not** a durability proof. **Do the relabel immediately** (cheap honesty); the crash/recovery model is Medium-Large and not swap-gating. |
 | **0.6** handler-transformer keystone | **READY-now but ABOVE-CORE** | Pure metatheory, research-grade, **not a swap prerequisite** (correctly so labeled). May resolve negative; the roadmap honestly admits that outcome. Do not let it block the gate. |
 | **0.7** caveat/attestation crypto face | **READY-now (obligations); GATED (real crypto)** | The gap is real: Lean caveats are `Ctx → Bool` and **cannot express caveat *removal*** (the macaroon HMAC-chain tail-compare that detects it). Stating explicit §8 obligations is ready-now; modeling the HMAC chain is larger. **PREREQUISITE-FOR-SWAP** (it is half of deletion-gate criterion 1) — correctly flagged. |
-| **0.8** zero-sorry + CI guard (#128) | **NEARLY DONE — and it is the verify-spine** | Re-verified: the discipline is genuine (0 real `sorry` tactics; `Tactics.lean` `#assert_axioms` guard exists). #128 truly is "retire the last few + add the CI forbid." **Finish it — it underwrites every other proof claim.** |
+| **0.8** no-open-hole + CI guard (#128) | **NEARLY DONE — and it is the verify-spine** | Re-verified: the discipline is genuine (0 real open proof holes; `Tactics.lean` `#assert_axioms` guard exists). #128 truly is "retire the last few + add the CI forbid." **Finish it — it underwrites every other proof claim.** |
 | **1.1** FFI export widen + record door | **GATED-ON WAVE 0** | Honest: "no new theorems, codec + `@[export]`." Verified `dregg_exec_record_turn` does **not** exist yet — so this is real work, and the nameservice pilot genuinely cannot start before it. |
 | **1.2** differential → CI RATCHET | **NOT-YET — and this is the single most important unbuilt thing** | Verified: differential exists (`full_turn_differential.rs`, 41 KB, `N_STRUCTURED=5000`/`N_FUZZ=4000`), archive is **fresh** (`libdregg_lean.a` 05:59 ≥ `FFI.lean` 05:56), framing is **correct** (Rust *reference*, never dregg1). But it is **NOT in CI** and the crate is workspace-detached. **A net not wired to a trigger is a one-shot.** This wave is the gate's load-bearing strand. |
 | **THE SWAP GATE** | **CLOSED. All three crossing conditions currently FALSE.** | (1) ratchet not green-in-CI — it's not in CI at all; (2) WAVE-0 soundness fills not landed; (3) record door doesn't exist. **Do not cross.** |

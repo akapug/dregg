@@ -29,7 +29,7 @@ boundary equation BINDS the agent public key and the signed turn hash, so
   re-introduced. Under it, `turnauth_no_forgery` shows NO forgery verifies: the rightful agent
   authorized the turn. This is the Schnorr analogue of `Ed25519Reduction`'s `Ed25519EufCma`
   discipline; the Ed25519↔Schnorr translation (the deployed turn sig is ed25519) is the named scale
-  obligation reported in the Rust module, NOT a Lean `sorry`.
+  obligation reported in the Rust module, NOT a Lean-level open hole.
 
 - **Non-vacuity teeth.** On `toyCurve` (where DL is provably EASY, `SchnorrCurveField.toy_dl_not_hard`)
   a CONCRETE turn-auth forgery exists (`toy_turnauth_forgery`): a descriptor verifies for a turn hash
@@ -37,8 +37,7 @@ boundary equation BINDS the agent public key and the signed turn hash, so
   boundary the descriptor verifies (`toy_turnauth_verifies`) and a tampered turn hash is rejected
   (`toy_turnauth_rejects_tampered`).
 
-`#assert_all_clean` (⊆ `{propext, Classical.choice, Quot.sound}`); NO `sorry` / `:= True` /
-`native_decide` / fresh `axiom`.
+`#assert_all_clean` (⊆ `{propext, Classical.choice, Quot.sound}`).
 -/
 import Dregg2.Crypto.SchnorrCurveField
 import Dregg2.Tactics
@@ -203,7 +202,7 @@ theorem toy_no_forgery_needs_dl_hard : ¬ SchnorrDLHard toyCurve (1 : ℤ) :=
 
 /-! ## §4 — Axiom-hygiene tripwires. The standing obligations are the NAMED typed primitives:
 `SchnorrCurveField.SchnorrDLHard` (the curve DL assumption) and `ForkingExtractor` (the Schnorr
-forking-lemma extractor over this curve). No `sorry` / `:= True` / `native_decide` / fresh `axiom`. -/
+forking-lemma extractor over this curve). -/
 
 #assert_all_clean [
   turnauth_pins_boundary,

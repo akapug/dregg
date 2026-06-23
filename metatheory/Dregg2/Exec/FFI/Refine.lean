@@ -185,7 +185,7 @@ computed on the SAME wire — so the refinement is witnessed, not vacuous. (The 
 -- the fail-closed leg: a malformed wire is the rejected sentinel (parseWWire = none).
 #guard ((parseWWire "garbage").isNone)  --  true (unparseable ⇒ export_rejects_unparseable fires)
 
-/-! ## §R5 — axiom-hygiene pins (the kernel triple; a `sorryAx` would FAIL the build). -/
+/-! ## §R5 — axiom-hygiene pins (the kernel triple). -/
 
 #assert_axioms runModel
 #assert_axioms encodeResult

@@ -52,8 +52,7 @@ it, flowing to the rung layer with NO free chip/range lever.
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The faithful object is a CONSTRUCTED term:
 the chip-table soundness is a `decide`-checked structural fact over the concrete two-row chip table (every
 row a genuine `chipRowN permOutZ ins`), the range leg is `rangeRows` membership, the per-row gates are the
-genuine `CircuitCompletenessNonVacuityReal` discharge. No `sorry`, no `native_decide`, no `:= True`, no
-fresh axiom. NEW file; imports read-only.
+genuine `CircuitCompletenessNonVacuityReal` discharge. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompletenessNonVacuityReal
 import Dregg2.Circuit.FloorsNonVacuous

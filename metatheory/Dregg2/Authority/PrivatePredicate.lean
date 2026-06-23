@@ -30,8 +30,7 @@ relation holds. Enforcement WITHOUT surveillance.
 
 NEW file only. Reuses `Crypto.Pedersen` (the homomorphism, the kernel), `Authority.Predicate`
 (the witnessed registry — the ZK escape hatch), `RelationalClosure` (the cleartext fragment),
-`Metatheory.EpistemicDial` (the disclosure dial). Every keystone `#assert_axioms`-pinned —
-no sorry, no `:= True`.
+`Metatheory.EpistemicDial` (the disclosure dial). Every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Crypto.Pedersen
 import Dregg2.Authority.Predicate

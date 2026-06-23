@@ -43,7 +43,7 @@ TAMPER-EVIDENT (`replayedDeterministic_replays`). This module advances the OPEN 
     the other two lens laws + the simplicial face/degeneracy structure are ASPIRATIONAL (named in the
     doc, NOT claimed here).
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2.Deos.ReplayMembrane` green (LOCAL). NO core-`Auth`/`Cap`/`Receipt` edit — every theorem is an
 existing kernel proof restated for replay / negotiation, or a pure structural fact about the witness
 trace.

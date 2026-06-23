@@ -2,7 +2,7 @@
 # Dregg2.Exec.HandlerOpenFronts — explicit handler-executor open-front registry (Wave 7+).
 
 POLICY: **no lurking holes**. Every unfinished `handler_refines_execFullA_*` / queue-defer front is
-named here with an explicit `sorry` theorem (or a tracked `HoleStatus`). Silent strengthening gaps
+named here with an explicit open-hole theorem (or a tracked `HoleStatus`). Silent strengthening gaps
 are forbidden — use these portals instead.
 
 Run `#eval countOpenFronts` after each wave to watch the frontier shrink.
@@ -58,7 +58,7 @@ def openFronts : List OpenFront := [
 
 def countOpenFronts : Nat := openFronts.length
 
-/-! ## §2 — explicit sorry portals (re-exported from keystones; FAIL `#assert_axioms` until proved). -/
+/-! ## §2 — explicit open-hole portals (re-exported from keystones; FAIL `#assert_axioms` until proved). -/
 
 section HolePortals
 

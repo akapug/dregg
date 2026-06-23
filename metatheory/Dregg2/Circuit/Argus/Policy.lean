@@ -46,8 +46,7 @@ a **genuine circuit gate** (the reference).
   `constraintToGuard`-style routing names with a concrete circuit-backed `Verifiable` instance — so the
   Bucket-B `witnessed` arm has GENUINE circuit teeth, not an empty oracle placeholder.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`, no `:= True`, no
-vacuity. Imports are READ-ONLY; this file owns only itself.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Imports are READ-ONLY; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Guard
 import Dregg2.Circuit.Emit.EffectVmEmit
@@ -588,7 +587,7 @@ theorem sumGate_demo_iff_predicate :
 Pin every keystone: the enforcement keystone (commit-iff + never-mutates + admits-all + fail-closed),
 the two executor-property lifts, the non-vacuity (memberOf + immutable gating the operation), and the
 WHOLE Bucket-B circuit reference (the gate's circuit meaning, the circuit⟺protocol bridge, the witnessed
-discharge, the satisfier + anti-ghost). Each ⊆ {propext, Classical.choice, Quot.sound}; no `sorryAx`. -/
+discharge, the satisfier + anti-ghost). Each ⊆ {propext, Classical.choice, Quot.sound}. -/
 
 #assert_axioms policyGuarded_eq_seq
 #assert_axioms policyGuarded_commit_iff

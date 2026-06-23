@@ -36,7 +36,7 @@ completeness holds BY CONSTRUCTION. This module is the MMR theory that specializ
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as
 the named `Poseidon2SpongeCR` hypothesis (the one floor) + `EngineSound`'s named fields at the
-bridge — hypotheses, never axioms. No `sorry`. Non-vacuity §7: witnesses TRUE (a complete range
+bridge — hypotheses, never axioms. Non-vacuity §7: witnesses TRUE (a complete range
 answer verifies; the demo forest has the binary-decomposition shape) and FALSE (a skipped position
 is rejected; a substituted/reordered value is rejected; tamper/truncate/extend/reorder each MOVE
 the root). NEW file; all imports read-only.

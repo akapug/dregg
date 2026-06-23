@@ -61,7 +61,7 @@ floor, exactly as every other field's binding is carried).
 floors the apex and state-commit already carry (`Poseidon2SpongeCR`, the `compressInjective`/
 `compressNInjective`/`cellLeafInjective`/`RestHashIffFrame` CR set, `StarkSound`, `ClosedWitness`,
 `logHashInjective`); revocation adds only the topology's `selfDelay` law (already inside `Topology`).
-NEW file; imports are read-only; no `sorry`, no `:= True`, no `native_decide`.
+NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.ClosureFinal
 import Dregg2.Distributed.Revocation

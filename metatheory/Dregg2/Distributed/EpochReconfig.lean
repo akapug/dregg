@@ -62,8 +62,8 @@ prove Ed25519 secure; the quorum theorems are stated relative to it — "a verif
 `old_threshold` signatures THAT PASS `SigValid` under distinct old-member keys." Whether those
 signatures could be FORGED is exactly the EUF-CMA assumption the real Ed25519 discharges.
 
-Pure, computable, `#eval`-able. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound});
-NO `sorry` / `:=True`. The Rust differential is `federation/src/epoch_diff.rs`.
+Pure, computable, `#eval`-able. `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
+The Rust differential is `federation/src/epoch_diff.rs`.
 -/
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Nodup

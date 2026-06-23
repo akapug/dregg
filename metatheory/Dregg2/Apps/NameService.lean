@@ -286,7 +286,7 @@ def afterTransfer : Option RecChainedState :=
 -- The two bindings are DISTINCT registry entries (collision-free):
 #guard decide (nameCommit aliceName aliceOwner ≠ nameCommit aliceName bobOwner)           -- true
 
-/-! ## §6 — Axiom hygiene — every keystone pinned to the three standard kernel axioms (NO `sorryAx`). -/
+/-! ## §6 — Axiom hygiene — every keystone pinned to the three standard kernel axioms. -/
 
 #assert_axioms nameCommit_inj
 #assert_axioms register_commits

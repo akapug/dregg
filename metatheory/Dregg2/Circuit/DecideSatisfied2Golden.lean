@@ -33,7 +33,7 @@ golden pins is the DECIDER VERDICT on the supplied oracle.
 
 ## Axiom hygiene
 
-Pure `#guard` (kernel reduction); no `sorry`, no `native_decide`. NEW file; imports read-only.
+Pure `#guard` (kernel reduction). NEW file; imports read-only.
 -/
 import Dregg2.Circuit.DecideSatisfied2
 

@@ -13,7 +13,7 @@ termination — see `Authority/Positional.lean` and the README §matcher).
 fully-provable `polarity_galois` once the `Predicate`/`Witness` orders are fixed). The
 find/verify soundness *contract* is not provable in-module — it is the external plugin's
 obligation — so it is carried as the `SoundSearchable.find_sound` typeclass FIELD (the
-`CryptoKernel` Prop-portal idiom), NOT a `sorry`; `search_sound` recovers it as a lemma.
+`CryptoKernel` Prop-portal idiom), carried as a named obligation; `search_sound` recovers it as a lemma.
 -/
 import Mathlib.Order.GaloisConnection.Basic
 import Mathlib.Order.Heyting.Basic

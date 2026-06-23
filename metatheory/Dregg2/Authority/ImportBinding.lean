@@ -52,7 +52,7 @@ import `Program`, and neither imports this module).
     yields the source's committed value; the off-value post-state and the lying import both REJECT.
 
 NEW file only. Touches neither `Program` nor `CrossCellImport`. Every keystone `#assert_axioms`-pinned
-to `{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`. The §8 seam (the source chain's
+to `{propext, Classical.choice, Quot.sound}`. The §8 seam (the source chain's
 receipt-digest collision-resistance) is the `HInj`/`HFresh` hypotheses threaded through
 `CrossCellImport.chain_tamper_evident`, never a Lean axiom.
 -/

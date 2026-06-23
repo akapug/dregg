@@ -36,7 +36,7 @@ proves exactly that sentence: the three additive op effects, each modelled as a 
     present, set its status to `.dead`; a MISSING atom is ignored ("you can only delete what some add
     introduced"). Monotone `alive→dead`; a dead atom stays dead.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Deos.DocPatch`. Differential: `dregg-doc/src/{patch,graph}.rs`.
 -/
 import Dregg2.Deos.DocMerge

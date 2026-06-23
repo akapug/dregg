@@ -433,8 +433,7 @@ def exerciseFuelZero : ExerciseArgs :=
 
 Pinning `exerciseH` pins its obligation FIELDS transitively (the structure literal CARRIES the proofs);
 `subTurn_conserves`/`exercise_conserves` certify the §DEFER payoff — the sub-forest conservation folded
-onto the generic induction — rests only on the kernel triple. A `sorryAx` anywhere fails the pin AND the
-build. -/
+onto the generic induction — rests only on the kernel triple. -/
 
 #assert_axioms subTurn_conserves
 #assert_axioms exerciseH

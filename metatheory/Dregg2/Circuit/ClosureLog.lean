@@ -51,8 +51,8 @@ The `.log` advance is now INSIDE the realizable `logHashInjective` carrier — i
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The CR carriers + `logHashInjective` enter
-only as Prop hypotheses (bundled into `StateDecodeLog`/the rung signatures), never as axioms. No
-`sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+only as Prop hypotheses (bundled into `StateDecodeLog`/the rung signatures), never as axioms.
+NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureSurface
 

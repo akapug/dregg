@@ -19,7 +19,7 @@ no-capture synthesis (`grand_no_capture_D`) plus the two refusal lanes
 polis" now holds with viability = the genuine multi-step capability-derivation closure, not a
 disguised single hop.
 
-PROVED (no `sorry`, no load-bearing `True`):
+PROVED (no load-bearing `True`):
   * `grand_no_capture_D` — from ANY legitimate-and-viable start (`groundedFloorD`), for ANY policy /
     target / roster / opaque controller, the grounded floor holds at EVERY tick (`genGov_safe` over
     `PasRefined ∧ AllReachD`).

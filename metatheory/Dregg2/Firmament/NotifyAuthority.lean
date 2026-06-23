@@ -70,7 +70,7 @@ badge OR'd; an out-of-mask signal REFUSES; attenuation to a narrower mask COMMIT
 admits strictly fewer badges; a widening attenuation REFUSES; `Notify ∈` / `SyncSend ∉` a notification
 cap's authority.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` — `decide`
+Discipline: axiom-clean (`#assert_all_clean` at the close) — `decide`
 / `#guard` / `rw`-over-`Nat.and_*` only. `lake build` green (LOCAL). NO core-`Auth` edit; NO felt
 encoder touched. ObjId/badge are `Nat` (the Rust `u64` object id / `u64` badge), as in `SeL4Kernel`.
 -/
@@ -602,8 +602,8 @@ theorem notify_real_binding_no_amplify
 -- the α-image binding: firmament `Notify` ↦ real `notify`:
 #guard (Dregg2.Firmament.SeL4Abstract.alpha .Notify == some Dregg2.Authority.Auth.notify)
 
-/-! ## §6 — Axiom hygiene. Every load-bearing theorem is checked kernel-clean (no `sorry`, no extra
-`axiom`, only the standard `propext`/`Classical.choice`/`Quot.sound`). -/
+/-! ## §6 — Axiom hygiene. Every load-bearing theorem is checked kernel-clean (only the
+standard `propext`/`Classical.choice`/`Quot.sound`). -/
 
 #assert_all_clean [
   maskNarrowerOrEqual_refl,

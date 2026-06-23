@@ -72,8 +72,7 @@ here, not papered.
 
 ## Axiom hygiene
 
-`#assert_axioms` clean (the three kernel axioms only); no `sorry`, no `:= True`, no
-`native_decide`. This file owns ONLY its own declarations and imports the IR + the descriptor
+`#assert_axioms` clean (the three kernel axioms only). This file owns ONLY its own declarations and imports the IR + the descriptor
 layer read-only; it edits no existing file's contents (it ADDS the fold alongside the intact
 structural `compile`).
 -/

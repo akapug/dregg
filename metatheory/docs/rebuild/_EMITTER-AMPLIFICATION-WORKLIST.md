@@ -465,8 +465,8 @@ the row obligation — it does not; the layers are not yet bridged.
 - Transfer beachhead is genuinely non-vacuous: `goodRow_realizes_intent`
   (`EffectVmEmitTransfer.lean:497`) witnesses TRUE, `badRow_rejected` (`:537`)
   witnesses FALSE. EVERY new effect MUST ship both.
-- `#assert_axioms` on all transfer theorems (`:551-561`) — no `sorry`/`axiom`/
-  `native_decide` below the abstract crypto carrier. Hold this bar.
+- `#assert_axioms` on all transfer theorems (`:551-561`) — kernel axioms only
+  below the abstract crypto carrier. Hold this bar.
 - The hash carrier is abstract `hash : List ℤ → ℤ` (`EffectVmEmit.lean:231`) — never
   an in-Lean algebraic hash. The Rust side uses the genuine `poseidon2_permute_expr`
   gadget (`lean_descriptor_air.rs:1431`). Keep this separation.

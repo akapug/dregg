@@ -38,7 +38,7 @@ We import `Authority/Blocklace.lean` and `Distributed/BlocklaceFinality.lean` RE
 connection (a cell's own append-only log IS a strand) is stated as a hypothesis-level remark, not
 an import.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Pure, computable, `#guard`-checked non-vacuity. Verified with
 `lake build Dregg2.Distributed.StrandIntegrity`.
 -/

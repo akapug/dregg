@@ -57,7 +57,7 @@ old `payload`-carrying model needed to prove `atomJoin` commutative.
     (grow-only liveness survives merge) vs `field_not_iconfluent` (a single-valued field clashes —
     a constructed pair whose merge holds two values at one name).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Deos.DocMerge`. Differential: `dregg-doc/src/{merge,graph,content,atom}.rs`.
 -/
 import Dregg2.Confluence

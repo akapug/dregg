@@ -245,8 +245,7 @@ def st0 : RecChainedState :=
 
 /-! ## §9 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms emitStep_correct
 #assert_axioms recKernel_ext

@@ -23,7 +23,7 @@ Proven end-to-end, reusing `PolisGrade` (`comp = +`, the max-plus rent quantale)
   * `graded_holds_for_every_attacker` — and it holds for EVERY controller, not just this politician
     (verify the cage, not the animal).
 
-Pure Lean 4 core (imports `Metatheory.PolisGrade`); `ℕ` + `omega`; no `sorry`.
+Pure Lean 4 core (imports `Metatheory.PolisGrade`); `ℕ` + `omega`.
 -/
 import Metatheory.PolisGrade
 

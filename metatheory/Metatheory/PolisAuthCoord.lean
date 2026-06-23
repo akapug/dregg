@@ -28,7 +28,7 @@ Two coordination phenomena, both grounded in the discharge algebra (NOT a toy wo
 Honest scope (see end of file): the coalition is modelled with a concrete two-fact predicate algebra
 (`KnowReq` over a `FactSet`), a faithful but SMALL fragment of the full Heyting predicate algebra
 `Dregg2.Laws.predicate_heyting`. It exercises the real `Verifiable`/`Discharged` API end-to-end; it
-does not model conjunction/implication of arbitrary admissibility conditions. No `sorry`; no
+does not model conjunction/implication of arbitrary admissibility conditions. No
 load-bearing `True`; `#guard` asserts the runnable facts.
 -/
 import Metatheory.PolisAuthGame

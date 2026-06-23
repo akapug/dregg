@@ -65,8 +65,8 @@ created).
 
 `CertUnforgeable` is the ONE named crypto assumption (Ed25519 EUF-CMA — the curve math lives in
 `ed25519-dalek`, a primitive, NOT a dregg protocol semantic). Everything else — the gate ordering,
-the counting, the epoch monotonicity — is PROVED over the modelled arithmetic. No
-`sorry`/`:=True`/`native_decide`. `#assert_axioms`-clean (the keystones list ONLY
+the counting, the epoch monotonicity — is PROVED over the modelled arithmetic.
+`#assert_axioms`-clean (the keystones list ONLY
 {propext, Classical.choice, Quot.sound} + the explicitly-named `CertUnforgeable` where it is used).
 No executor import.
 -/

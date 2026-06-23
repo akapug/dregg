@@ -569,7 +569,7 @@ theorem relayDifferentialCorpus_drain_fifo :
 
 end Mr
 
-/-! ## §10 — Axiom-hygiene pins (subset {propext, Classical.choice, Quot.sound}; NO sorry). -/
+/-! ## §10 — Axiom-hygiene pins (subset {propext, Classical.choice, Quot.sound}). -/
 
 -- Tooth 1 — the relay cannot read.
 #assert_axioms relayView_erases_plaintext

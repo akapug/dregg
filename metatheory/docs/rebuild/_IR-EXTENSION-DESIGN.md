@@ -285,8 +285,8 @@ the batch-emission step.**
 
 Scanned `Dregg2/Circuit/Emit/` (52 `.lean` files at audit time — the swarm is writing live).
 
-- **NO real `sorry`/`admit`/`sorryAx` leaks found.** A grep for `sorry` matches only **prose**
-  ("sorry-free", "no sorry", `#assert_axioms`); no `:= sorry` / `by sorry` in any emit file.
+- **No real open-hole/`admit`/axiom leaks found.** The only textual matches in the emit files are
+  prose (axiom-hygiene notes) and `#assert_axioms`; no open holes in any emit file.
 - **`EffectVmEmitBridgeLock.lean` does NOT exist** — only **`EffectVmEmitBridgeLockA.lean`** (24 KB,
   canonical). The non-`A` name surfaced once in a directory listing early in this session but is
   **absent now** (the swarm removed/renamed it mid-session). **No BridgeLock/BridgeLockA dupe to

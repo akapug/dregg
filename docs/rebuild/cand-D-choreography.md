@@ -285,7 +285,7 @@ substrate, a new front door.
   to carry conservation + the blue/red split. **And the realization to record:** this theorem
   and `Boundary.boundary_law` are the **same theorem at two altitudes** — `boundary_law` is the
   per-endpoint instance of `epp_correspondence`. The membrane = projection.
-- **`byzantine_epp_by_monitoring`** `[sorry, the open theorem]` — projection is sound over
+- **`byzantine_epp_by_monitoring`** `[open theorem]` — projection is sound over
   Byzantine parties *given* (i) per-endpoint monitoring with blame, and (ii) the blocklace
   equivocation-repelling assumption as a hypothesis (NOT derived — same status as the JointTurn
   binding in `Boundary.lean`). This names §5a/§5c as a premise, honestly.
@@ -303,8 +303,8 @@ Crypto-soundness stays out (the monitor's `Verify` is a decidable oracle; `dregg
 - **`epp_correspondence`** — **BUILT** (`Dregg2/Projection.lean:112`), but **scoped honestly to
   head-duality, NOT the full bisimulation**. It is an explicit alias
   `:= Coordination.projection_sound …` (`Coordination.lean:416`, itself PROVED for head-duality
-  via `simp`, ending the docstring's "full bisimulation … `sorry`" residual as a *comment about
-  what's still aspirational*, not an `axiom`/`admit` in the proof). The proposal's "extends
+  via `simp`, ending the docstring's "full bisimulation … open hole" residual as a *comment about
+  what's still aspirational*, not an `axiom` in the proof). The proposal's "extends
   `deadlock-freedom-by-design` to carry conservation + the blue/red split" is **NOT yet** in this
   theorem. The "same theorem as `boundary_law` at two altitudes" claim is the **intended**
   stronger statement (`Projection.lean:18–22,101–111`), blocked on the operational LTS — see the

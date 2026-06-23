@@ -32,7 +32,7 @@ The full inventory:
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem; crypto enters only as
 the named `Poseidon2SpongeCR` hypothesis + `RecursiveAggregation.EngineSound`'s named fields (both
-hypotheses, never axioms). No `sorry`. Non-vacuity witnessed TRUE (a complete answer verifies) and
+hypotheses, never axioms). Non-vacuity witnessed TRUE (a complete answer verifies) and
 FALSE (a dropped receipt is rejected; a forged gap is invalid; a forged extra receipt is rejected).
 NEW file; all imports read-only.
 -/

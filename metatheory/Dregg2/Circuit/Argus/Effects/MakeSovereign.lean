@@ -95,7 +95,7 @@ explicit hypotheses of the weld (the honest v1-surface cost), so the conclusion 
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the v1 CR /
 digest-injectivity assumptions (`compressNInjective`/`cellLeafInjective`/`RestHashIffFrame`/
 `logHashInjective`) enter ONLY inside the reused `makeSovereignA_full_sound`, not in the welded
-conclusion's statement. No `sorry`, no `:= True`, no `native_decide`. Imports are read-only; this file
+conclusion's statement. Imports are read-only; this file
 owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt

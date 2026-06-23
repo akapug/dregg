@@ -36,8 +36,7 @@ contrast made concrete by `#eval`:
   * `composed_catches_both`        — the composed governor SHIELDS both attacks;
   * `composed_monotone_over_perStep` / `_over_budget` — adding the second eye only GROWS refusals.
 
-Pure Lean 4 core (imports `PolisSandboxGradedGov` + `PolisGovernorTheory`); `ℕ` + `decide`/`omega`;
-no `sorry`, no load-bearing `True`.
+Pure Lean 4 core (imports `PolisSandboxGradedGov` + `PolisGovernorTheory`); `ℕ` + `decide`/`omega`.
 -/
 import Metatheory.PolisSandboxGradedGov
 import Metatheory.PolisGovernorTheory

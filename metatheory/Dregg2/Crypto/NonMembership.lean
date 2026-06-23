@@ -469,7 +469,7 @@ theorem reference_cascade_nonvacuous :
       ∧ ∃ leaves : List Int, NonMember leaves absentStmt.elem :=
   nonmembership_registry_cascade (K := refKernel) trivial base absentStmt 0 (by decide)
 
--- Non-vacuity axiom footprint: rests only on the standard axioms — no `sorryAx`, no crypto axiom.
+-- Non-vacuity axiom footprint: rests only on the standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
 /-- Non-vacuity of the dial wiring: the floor is `acceptanceOnly`, the dial's bottom notch is the

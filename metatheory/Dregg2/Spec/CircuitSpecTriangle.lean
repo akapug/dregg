@@ -46,7 +46,7 @@ INTENT ledger move, written from protocol intent in `FunctionalRefinement` (`int
     a post-state realizing the intent move IS circuit-acceptable — the honest prover can produce a
     verifying witness. Stated through the executor⟺circuit-spec biconditionals
     (`recCMintAsset_iff_spec`, `recCexecAsset_iff_spec`) under the explicit §8 carrier hypotheses
-    (`Surface2`, `RestIffNoBal`, `logHashInjective`, `Function.Injective D`) — never `sorry`.
+    (`Surface2`, `RestIffNoBal`, `logHashInjective`, `Function.Injective D`).
 
 ## The amplification template (§4)
 
@@ -56,7 +56,7 @@ INTENT ledger move, written from protocol intent in `FunctionalRefinement` (`int
 So the remaining ~40 effects grind through mechanically (supply each its `intent*_eq_*` bridge — most
 already exist in `FunctionalRefinement`).
 
-DISCIPLINE: no `sorry`, no `:= True`, no circular restatement. The §8 crypto (the carried
+DISCIPLINE: no `:= True`, no circular restatement. The §8 crypto (the carried
 `Function.Injective D` / `compressNInjective` / `logHashInjective` — the realizable Poseidon
 collision-resistance set) is the legitimate NAMED carrier; everything above it is proved. The
 soundness theorems are NON-VACUOUS: each exhibits (via the anti-ghost) a wrong post-`bal` the circuit
@@ -1201,7 +1201,7 @@ theorem exercise_circuit_pins_intent
 -- DELETED with the queue effect family.
 
 /-! ## §4 — axiom-hygiene tripwires. Every triangle corner rests only on the kernel axioms +
-the §8 carried CR set (no `sorry`/`axiom`/`native_decide`). -/
+the §8 carried CR set (no `axiom`/`native_decide`). -/
 
 #assert_axioms pin_intent_of_bridge
 #assert_axioms mint_circuit_pins_intent

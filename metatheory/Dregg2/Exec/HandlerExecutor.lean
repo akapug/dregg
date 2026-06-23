@@ -1113,8 +1113,7 @@ def teethSealed : RecChainedState :=
 /-! ## §8 — Axiom-hygiene pins (every cutover keystone rests only on the three kernel axioms).
 
 The derived global laws + the strengthening + the executor structure are all pinned to the kernel triple
-(`propext`/`Classical.choice`/`Quot.sound`). A `sorryAx` anywhere in the composed handlers — across all
-seven batches the registry packs — would FAIL these pins (and the build). -/
+(`propext`/`Classical.choice`/`Quot.sound`). -/
 
 #assert_axioms masterRegistry_length
 #assert_axioms execHandlerTurn_conserves

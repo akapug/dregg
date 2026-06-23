@@ -66,7 +66,7 @@ equality of the committed `(bal, caps)` (the Rust uses BLAKE3 commitments — a 
 collision-resistance assumption stands between the two here: the Lean proves the protocol
 LOGIC given that the commitment binds, exactly as `EntangledJoint` proves over `JointId` equality).
 
-Pure, computable, `#eval`/`#guard`-able. No `sorry`, no `native_decide`.
+Pure, computable, `#eval`/`#guard`-able.
 -/
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card

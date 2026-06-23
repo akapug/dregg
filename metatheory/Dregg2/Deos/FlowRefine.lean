@@ -43,8 +43,7 @@ THE PAYOFF (this module, constructive). The ARGUS "refines" bar — *does flow /
 
 LAW #1: the proof is the spec — `decideRefines_iff` IS the specification of the decision procedure.
 Reuses `FlowAlgebra`'s `≤ᶠ` / `Flow.Sim` / `SimFrom` / `IsSim` / `Proc` / `Step` denotation UNCHANGED
-(1 umbrella import; does NOT redefine them). Axiom-clean (`#assert_all_clean`), no `sorry`, no
-`native_decide`. `lake build Dregg2.Deos.FlowRefine` green (LOCAL). Additive: a NEW module, touches NO
+(1 umbrella import; does NOT redefine them). Axiom-clean (`#assert_all_clean`). `lake build Dregg2.Deos.FlowRefine` green (LOCAL). Additive: a NEW module, touches NO
 existing proof.
 -/
 import Dregg2.Deos.FlowAlgebra

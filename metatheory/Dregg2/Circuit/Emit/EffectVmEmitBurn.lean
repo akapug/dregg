@@ -54,8 +54,7 @@ by passthrough gates, and the 4 GROUP-4 hash-sites bind the whole post-state int
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY as
-the NAMED hypothesis `Poseidon2SpongeCR hash`. No `sorry`, no `:= True`, no `native_decide`, no
-`rfl`-posing-as-bridge. Imports are read-only.
+the NAMED hypothesis `Poseidon2SpongeCR hash`. Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding

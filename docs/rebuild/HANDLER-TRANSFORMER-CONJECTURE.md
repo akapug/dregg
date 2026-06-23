@@ -15,7 +15,7 @@
 > **Discipline (ultracode, default-skeptical).** A real discovery is a THEOREM that subsumes
 > the special cases *with teeth* — an unsafe transformer is genuinely rejected. A pretty
 > re-description is shared notation over facts that do not instantiate one definition. OPEN
-> beats a vacuous theorem. No `sorry`/`admit`/`axiom`/`native_decide` is proposed; every cited
+> beats a vacuous theorem. No open hole/`admit`/`axiom`/`native_decide` is proposed; every cited
 > anchor is an existing term-proved, `#assert_axioms`-pinned theorem, cited `file:line`.
 >
 > **Provenance of the skeptical baseline.** `docs/rebuild/FOUNDATIONS-effect-comodel-lens.md`
@@ -490,7 +490,7 @@ fibre) supplies the gluing leg; only after both is the "(HT-fpu) = (HT-glue)" we
 ## 6. VERDICT — adversarial audit of `Dregg2/HandlerTransformer.lean` (2026-05-31)
 
 > **Method.** READ-ONLY. Built the just-written module with REAL-exit capture
-> (`lake env lean Dregg2/HandlerTransformer.lean`: **REAL=0**, no `sorry`/`admit`/`axiom`/
+> (`lake env lean Dregg2/HandlerTransformer.lean`: **REAL=0**, no open hole/`admit`/`axiom`/
 > `native_decide`; the four `#print axioms` keystones land in the whitelist
 > `{propext, Classical.choice, Quot.sound}`; the `#eval` teeth print `true`/`false`).
 > Cross-read every cited source theorem at `file:line` (`Resource.conservation_is_fpu`/`Fpu.trans`,

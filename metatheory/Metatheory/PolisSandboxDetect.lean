@@ -9,7 +9,7 @@ so the detector *classifies* each episode:
   * the governed episode is CLEAR (the bar does not fire) — `governed_not_dominated`.
 Everything `decide`-evaluated end-to-end; the detector is the verified one, not a sandbox special.
 
-Pure Lean 4 core (imports the in-Lean sandbox + the detectors); no `sorry`.
+Pure Lean 4 core (imports the in-Lean sandbox + the detectors).
 -/
 import Metatheory.PolisSandbox
 import Metatheory.PolisViability

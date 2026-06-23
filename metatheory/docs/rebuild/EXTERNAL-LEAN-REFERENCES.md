@@ -11,7 +11,7 @@
 | Temporal logic (CTL, CTL*, μ-calculus) | **Nothing exists** for branching-time; LeanLTL for LTL variants | BUILD-OURSELVES (μ-calc / CTL) on mathlib fixpoints; ADOPT LeanLTL for LTL |
 | Info-flow / noninterference | Nothing ready in Lean 4 | BUILD-OURSELVES on mathlib lattices |
 | Coalgebra / bisimulation / HML | **CSLib** (leanprover/cslib) | ADOPT — HML + bisimulation proven; mu-calc extension deferred but base is there |
-| Cryptography (commitments, ZK, game-based) | **VCVio** (dtumad/VCV-io) | ADOPT with eyes open — Apache-2, mathlib-based, sorry-free per paper |
+| Cryptography (commitments, ZK, game-based) | **VCVio** (dtumad/VCV-io) | ADOPT with eyes open — Apache-2, mathlib-based, no open holes per paper |
 | Liveness / fairness / distributed | **Lentil** (verse-lab/Lentil) for TLA; manual for GST | ADOPT Lentil as scaffold; BUILD-OURSELVES for GST/fairness quantifiers |
 
 ---
@@ -25,7 +25,7 @@
 - **License:** CC BY 4.0 (paper); repo license not determined from remote content — check before importing
 - **Lean version:** Lean 4 (specific toolchain undetermined without local checkout)
 - **What it gives us:** A unifying framework for all *linear-time* temporal logic variants — standard LTL (infinite traces), LTLf (finite traces), and their embeddings into a common trace-based semantics. Allows mixing arbitrary Lean expressions with temporal operators. Proves standard flavors of LTL embed into the framework. Provides automation hooking into Lean's existing tactics. Published at ITP 2025, so peer-reviewed.
-- **TCB verdict:** Paper makes no mention of `sorry` or oracle backends. Automation uses Lean tactics (no SMT/Z3 calls). Appears clean. Verify with `#check_axioms` before shipping.
+- **TCB verdict:** Paper makes no mention of open holes or oracle backends. Automation uses Lean tactics (no SMT/Z3 calls). Appears clean. Verify with `#check_axioms` before shipping.
 - **Gap:** Strictly linear-time. No CTL, CTL*, or μ-calculus. Cannot reason about branching paths, greatest-fixpoint safety + liveness interleaving, or alternating-time properties.
 
 ---
@@ -92,8 +92,8 @@ The only nearby work:
   - `Cslib/Logics/HML/` — Hennessy-Milner Logic: syntax, satisfaction, denotational semantics, **Hennessy-Milner theorem** (bisimilarity = HML-equivalence for image-finite LTS)
   - `Cslib/Logics/Modal/` — modal logic module (details require local checkout)
   - General LTS infrastructure: labelled transition systems, bisimulation, weak bisimulation, simulation, trace equivalence
-- **TCB verdict:** February 2026 paper (arXiv 2602.15409) explicitly states no `sorry` and no custom axioms. Proofs use `grind` tactic. CLEAN.
-- **Note on HML paper (arXiv 2602.15409):** Three major theorems proved sorry-free: (1) satisfaction ≡ denotational semantics, (2) bisimulation invariance, (3) Hennessy-Milner theorem. Mu-calculus / CTL extensions are called out as future work.
+- **TCB verdict:** February 2026 paper (arXiv 2602.15409) explicitly states no open holes and no custom axioms. Proofs use `grind` tactic. CLEAN.
+- **Note on HML paper (arXiv 2602.15409):** Three major theorems proved with no open holes: (1) satisfaction ≡ denotational semantics, (2) bisimulation invariance, (3) Hennessy-Milner theorem. Mu-calculus / CTL extensions are called out as future work.
 - **Gap:** No μ-calculus, no CTL, no temporal operators yet. What exists is the ideal *substrate* for those extensions.
 
 ---
@@ -123,7 +123,7 @@ The only nearby work:
 ### 3e. m4lvin/lean4-pdl — *ADOPT if PDL becomes relevant*
 
 - **URL:** <https://github.com/m4lvin/lean4-pdl>  
-- License: Apache-2.0. Lean 4. Propositional Dynamic Logic with Craig interpolation. Tableau-based, sorry-free per README badge. PDL subsumes basic modal logic and is related to CTL (tree-shaped paths). Not directly CTL or μ-calculus, but the tableau machinery is reusable. Import if we need PDL-based access-control modalities.
+- License: Apache-2.0. Lean 4. Propositional Dynamic Logic with Craig interpolation. Tableau-based, no open holes per README badge. PDL subsumes basic modal logic and is related to CTL (tree-shaped paths). Not directly CTL or μ-calculus, but the tableau machinery is reusable. Import if we need PDL-based access-control modalities.
 
 ---
 
@@ -145,7 +145,7 @@ The only nearby work:
   - Sigma protocols, Fiat-Shamir, Fischlin transforms
   - LatticeCrypto submodule: ML-DSA (Dilithium), ML-KEM (Kyber), Falcon
   - Probability theory and complexity based on / compatible with mathlib
-- **TCB verdict:** Paper states "fully foundational proofs." No mention of sorry, external SMT, or oracle backends. The framework explicitly avoids the rewindability axioms that prior EasyCrypt formalizations required. Check `#check_axioms` on key theorems before shipping. LIKELY CLEAN.
+- **TCB verdict:** Paper states "fully foundational proofs." No mention of open holes, external SMT, or oracle backends. The framework explicitly avoids the rewindability axioms that prior EasyCrypt formalizations required. Check `#check_axioms` on key theorems before shipping. LIKELY CLEAN.
 - **Gap:** No AEAD formalization. No Merkle tree proofs. No general STARK/FRI argument.
 
 ---
@@ -156,7 +156,7 @@ The only nearby work:
 - **Paper:** *CatCrypt: From Rust to Cryptographic Security in Lean* (Bas Spitters, Aarhus)
 - **What it gives us (when available):** SSProve-style state-separating proofs ported to Lean 4; end-to-end Rust-to-Lean pipeline via Hax; 172 protocols formalized; 110 with full pipeline.
 - **TCB concern:** Developed primarily by GenAI with human direction over ~2 months. While "human direction, design and review" is claimed, the velocity (172 protocols in 2 months) warrants extra `#check_axioms` scrutiny before adopting. Repo not yet public.
-- **Recommendation:** WATCH — when repo is released, audit for `sorry` and axiom hygiene before importing.
+- **Recommendation:** WATCH — when repo is released, audit for open holes and axiom hygiene before importing.
 
 ---
 
@@ -165,14 +165,14 @@ The only nearby work:
 - **URL:** <https://github.com/ravst/SymbolicCryptographyLean>
 - **License:** MIT (with Apache-2.0 for VCVio subdir)
 - **What it gives us:** Formalized computational soundness theorem (symbolic indistinguishability → computational indistinguishability) and verified symbolic security of garbled circuits. Builds on VCVio. Accepted to CSF 2026. Useful if we want to reason about our protocol's symbolic security and lift to computational.
-- **TCB verdict:** Builds on VCVio (clean), paper in peer review at CSF 2026. No `sorry` mentioned. Depends on VCVio as oracle substrate.
+- **TCB verdict:** Builds on VCVio (clean), paper in peer review at CSF 2026. No open holes mentioned. Depends on VCVio as oracle substrate.
 
 ---
 
 ### 4d. risc0/risc0-lean4 — *AVOID (research artifact, WIP)*
 
 - **URL:** <https://github.com/risc0/risc0-lean4>
-- License: Apache-2.0. Formalizes SHA2-256, Merkle trees, Baby Bear field, NTT, FRI verification. BUT: README says "research artifacts, should not be used for any purpose." No sorry audit. Trailing the main RISC Zero codebase.
+- License: Apache-2.0. Formalizes SHA2-256, Merkle trees, Baby Bear field, NTT, FRI verification. BUT: README says "research artifacts, should not be used for any purpose." No open-hole audit. Trailing the main RISC Zero codebase.
 - **Note:** Merkle tree formalization here is the closest thing to a Lean 4 Merkle proof we found, but the WIP status is a blocker. Useful as reference for our own build.
 
 ---
@@ -203,7 +203,7 @@ The only nearby work:
 - **License:** Apache-2.0
 - **Lean version:** Lean 4 (100% Lean, 83 commits as of mid-2026)
 - **What it gives us:** Temporal Logic of Actions (TLA/Lamport) formalized in Lean 4, ported from coq-tla. Provides `□` (always), `◇` (eventually), action-enabled predicates, and compositional specs for concurrent/distributed systems. The verse-lab group uses it as scaffolding for their Veil framework (see below). Enables writing distributed protocol specs in a style directly translatable to/from TLA+.
-- **TCB verdict:** No explicit sorry disclosure; repo is small (21 stars) and primarily infrastructure. The verse-lab group is active in verification research (published Rabia, Stellar, Suzuki-Kasami proofs in Veil).
+- **TCB verdict:** No explicit open-hole disclosure; repo is small (21 stars) and primarily infrastructure. The verse-lab group is active in verification research (published Rabia, Stellar, Suzuki-Kasami proofs in Veil).
 - **Gap:** No fairness quantifiers (weak/strong fairness) documented. No GST model. Partial TLA, not TLA+.
 
 ---
@@ -263,12 +263,12 @@ These mathlib modules are the *build-on* substrate for anything we construct our
 ## 7. TCB HYGIENE SUMMARY
 
 **CLEAN (adopt without asterisk):**
-- CSLib (leanprover/cslib) — sorry-free per Feb 2026 paper, Apache-2
+- CSLib (leanprover/cslib) — no open holes per Feb 2026 paper, Apache-2
 - mathlib4 QPF/FixedPoints — mathlib standard
 - VCVio — "fully foundational," no rewindability axioms, Apache-2
 
 **LIKELY CLEAN (verify before shipping):**
-- LeanLTL (UCSCFormalMethods) — ITP-2025 peer reviewed, no mentions of sorry; run `#check_axioms`
+- LeanLTL (UCSCFormalMethods) — ITP-2025 peer reviewed, no mentions of open holes; run `#check_axioms`
 - Lentil (verse-lab) — small, active; run `#check_axioms`
 - SymbolicCryptographyLean — depends on VCVio; CSF-2026 peer reviewed
 

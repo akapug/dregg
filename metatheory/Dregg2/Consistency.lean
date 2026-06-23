@@ -336,7 +336,7 @@ example : @CryptoKernel.collisionHard Crypto.Reference.D Crypto.Reference.P _ cr
 /-! ## §5 — Axiom hygiene.
 
 Every consistency keystone depends only on the three standard kernel axioms
-(`propext`, `Classical.choice`, `Quot.sound`) — no `sorryAx`, no fresh `axiom`. -/
+(`propext`, `Classical.choice`, `Quot.sound`). -/
 
 #assert_axioms discriminatingAnon
 #assert_axioms dregg_consistent

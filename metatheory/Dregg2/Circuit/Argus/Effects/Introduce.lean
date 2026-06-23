@@ -85,7 +85,7 @@ The weld concludes TWO legs, the per-cell surface the cap family lives on:
 
 `#assert_axioms` on both theorems ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR enters ONLY
 via the named `Poseidon2SpongeCR` hypothesis (inside the cited anti-ghost `introduceGenuine_binds_edge`,
-not these theorems). No `sorry`, no `:= True` vacuity, no weakening-that-just-typechecks; non-amplification
+not these theorems). Non-amplification
 is PROVED with teeth, not assumed. This module OWNS only itself; every import is read-only.
 -/
 import Dregg2.Circuit.Argus.Stmt

@@ -9,7 +9,7 @@ for itself. The political outcome is not scripted — it EMERGES from the compet
     capped, and the commons is preserved for the slower agent (`governed_preserves_commons`).
 Governance does not just block one bad move — it changes the EQUILIBRIUM of the competition.
 
-Honest: greedy Lean optimizers, not LLMs; a small fixed pool for a cheap `decide`. No `sorry`.
+Honest: greedy Lean optimizers, not LLMs; a small fixed pool for a cheap `decide`.
 -/
 import Metatheory.Polis
 

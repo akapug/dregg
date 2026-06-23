@@ -451,7 +451,7 @@ the 8 LIVE-path effects that had a graduated v1 wire descriptor through the SAME
 the TSV + SHA + the `n == 34` cover guard + the resolver-coverage tooth are re-pinned green.
 (STEP 1 also REPAIRED `EffectVmEmitEmitEvent.unify_emitEvent`, which had a stale `recKernel_ext`
 arity after `EmitEventSpec` gained the `heaps` frame clause — the descriptor was sound but its
-executor-connector proof leaked `sorryAx`; now axiom-clean and in the live `Dregg2` closure.)
+executor-connector proof leaked an open-hole axiom; now axiom-clean and in the live `Dregg2` closure.)
 
 **THE RESIDUE (two effects, precise obstructions — NOT papered over):** `RevokeCapability`
 (selector 24) has NO graduated v1 descriptor at all (absent from `SELECTOR_DESCRIPTORS`; its

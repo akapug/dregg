@@ -8,7 +8,7 @@ for every ordinary turn. Mint/burn are the only generators allowed to change `Σ
 
 Law 1's per-turn balance cannot be derived from the abstract data alone; it is carried as the
 typeclass field `ConservesStep cons` (the `CryptoKernel`/`World` Prop-portal idiom — an
-explicit, auto-resolved assumption, NOT a `sorry`), and discharged for the executable machine
+explicit, auto-resolved assumption, NOT an unproved hole), and discharged for the executable machine
 in `Exec.StepComplete`. The case-corollaries are proved from that field.
 -/
 import Mathlib.CategoryTheory.Category.Basic

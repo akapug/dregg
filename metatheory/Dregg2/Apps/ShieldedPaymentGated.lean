@@ -308,7 +308,7 @@ def spRevoked : RecChainedState :=
           (fun s => execFullForestG s (spendNode goodCred 9 true))).isSome) == false  --  false (double-spend blocked)
 
 /-! ## §13 — Axiom-hygiene tripwires (the honesty pins). Every keystone depends ONLY on the three
-standard kernel axioms `{propext, Classical.choice, Quot.sound}` — no `sorryAx`. -/
+standard kernel axioms `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms execFullForestG_leaf
 #assert_axioms execFullForestG_spNode

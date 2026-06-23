@@ -46,8 +46,8 @@ NOT confer an edge to `target` cannot derive the hold-gate — the in-circuit op
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named cap-hash carriers inherited
-through `CapOpenEmit` (the `ChipTableSound` chip-soundness, the `Compress1CR`/`chipCR` cap-hash CR). No
-`sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+through `CapOpenEmit` (the `ChipTableSound` chip-soundness, the `Compress1CR`/`chipCR` cap-hash CR).
+NEW file; imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 import Dregg2.Circuit.RotatedKernelRefinementFacet

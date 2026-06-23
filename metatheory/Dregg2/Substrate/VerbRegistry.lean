@@ -25,7 +25,7 @@ exhaustive by the compiler, the kernel-reduction census:
     composition / outcome / prologue artifacts (DREGG3 §2.3: "Exercise is *using* a cap, not a
     verb; refusal is an outcome; nonce is prologue; pipelining is composition").
 
-## What is PROVED here (no `sorry`, no `:= True`, axiom-clean)
+## What is PROVED here (axiom-clean)
 
   1. COMPLETENESS — `classify : EffectTag → Classification` is total and exhaustive (the match
      covers every constructor; the compiler rejects an uncovered tag). `classify_total` witnesses
@@ -54,8 +54,7 @@ NEW file. Self-contained: imports ONLY `Dregg2.Tactics` (for `#assert_axioms`). 
 as data (it does NOT import the heavy executor / factory modules — the registry is a SIGNATURE, not
 an instantiation; the factory PROVENANCE is cross-referenced by name and lives in the factory
 modules themselves). Does NOT touch any shared module, the kernel, or `Metatheory/*`. Every theorem
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no `sorry`, no `:= True`,
-no `native_decide`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Tactics
 

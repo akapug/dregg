@@ -51,8 +51,7 @@ SATISFIABLE — an owner-authorized move exists), the antecedent is non-vacuous.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. `StarkComplete` / `TransferTraceProver`
-enter as named class/structure carriers (the realizable prover floors), never as axioms. No `sorry`,
-no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+enter as named class/structure carriers (the realizable prover floors), never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureFinal
 import Dregg2.Circuit.ClosureTransfer

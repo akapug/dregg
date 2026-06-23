@@ -21,7 +21,7 @@ honest-majority + GST-delivery, not the conclusion.
 
 OPEN (the remaining bridge): coupling `World.rand` to the `BeaconSpace` measure (wiring the
 deterministic oracle to the Bernoulli-per-view law the measure carries) — an interface extension,
-not a sorry. `honest_le_delivered` and `honest_quorum` are carried as fields exactly as
+not an open hole. `honest_le_delivered` and `honest_quorum` are carried as fields exactly as
 `World.recv_mono` and `World.gst_liveness` are, never as axioms.
 
 All assumptions are `Pacemaker` fields.
@@ -210,7 +210,7 @@ example : ∃ (block r : Nat), cfg.threshold ≤
 end Inhabited
 
 /-
-OPEN (named, not a sorry): the operational coupling of `World.rand : Nat → Nat` to the
+OPEN (named, not an open hole): the operational coupling of `World.rand : Nat → Nat` to the
 `BeaconSpace` probability measure — proving that the runtime beacon stream realizes the
 Bernoulli(`h`)-per-view law. Mathlib has `Measure.infinitePi` (used in `BeaconSpaceInterior`),
 but wiring it to `World.rand` needs a `World`-interface extension (a randomness measure, not a
@@ -223,7 +223,7 @@ the strictly-more-primitive `Pacemaker` fields, none of which is the threshold-c
 /-! ## 5. Axiom hygiene — every keystone is kernel-clean.
 
 All theorems reduce to the `Pacemaker` STRUCTURE FIELDS (hypotheses, not `axiom`s) and `BFT.lean`'s
-`gst_liveness_from_round_model` (itself field-free), so none pull in `sorryAx` or any oracle axiom.
+`gst_liveness_from_round_model` (itself field-free), so none pull in any oracle axiom.
 `collectAxioms` sees only the three standard kernel axioms. The synchronization assumptions live
 entirely in `Pacemaker`'s fields, never in `#print axioms`. -/
 #assert_axioms gstRound_obtains

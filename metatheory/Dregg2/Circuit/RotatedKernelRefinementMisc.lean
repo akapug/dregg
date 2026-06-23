@@ -35,8 +35,7 @@
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carriers
 (`compressNInjective` + the injective `auditLeaf`, REUSED from the Lifecycle file) for the two fix
-effects; `pipelinedSend` carries NO crypto carrier (pure live-descriptor). No `sorry`, no `:= True`,
-no `native_decide`, no fresh axiom. NEW file; all imports read-only.
+effects; `pipelinedSend` carries NO crypto carrier (pure live-descriptor). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementPermsVK
 import Dregg2.Circuit.Spec.cellstatefield

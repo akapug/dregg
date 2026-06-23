@@ -65,8 +65,7 @@ answer, not a forced green.
 
 `#assert_axioms` on the capstone theorems ⊆ {propext, Classical.choice, Quot.sound}. The named carriers
 (`StarkComplete`, `Poseidon2SpongeCR`, the `CompletenessWitnesses` prover floors) are HYPOTHESES/instances,
-not axioms — they do not appear in the axiom set. No `sorry`, no `native_decide`, no `:= True`, no fresh
-axiom. NEW file; imports read-only.
+not axioms — they do not appear in the axiom set. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompletenessValue
 import Dregg2.Circuit.CircuitCompletenessRecord

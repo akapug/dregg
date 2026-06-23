@@ -75,8 +75,7 @@ needs (and HAS) its own rung, which we land here too.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. `CapOpenWitness` enters as a NAMED structure
 carrier (the realizable cap-open construction floor), never an axiom — exactly as the soundness
-`EffAuthoritySource` is a named carrier and `StarkComplete` is a named class. No `sorry`, no
-`native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+`EffAuthoritySource` is a named carrier and `StarkComplete` is a named class. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementFacet
 import Dregg2.Circuit.CircuitCompleteness

@@ -72,7 +72,7 @@ VERBATIM — we do NOT re-derive their soundness:
     the projection is honest at the state layer, the crypto advantage bound stays the named portal.
 
 `#assert_axioms` on the keystone (`disclose_hides_private`) ⊆ {propext, Classical.choice, Quot.sound};
-no `sorry`, no `:= True`, no vacuity. Imports are READ-ONLY; this file OWNS only its own declarations
+no vacuity. Imports are READ-ONLY; this file OWNS only its own declarations
 (it does not edit Stmt/Compile/Guard/Turn/Policy/RecordKernel or any Effects/* — it imports them).
 -/
 import Dregg2.Circuit.Argus.Stmt
@@ -457,8 +457,8 @@ theorem disclose_hides_private_has_teeth :
 
 Every keystone — the projection laws (idempotent / hides-private / refinement / GLB), the verified-output
 weld (`trusted` reveals / `private` hides the Argus post-balance), the toolkit ride (`Q ⟹ app_invariant`
-/ reveals-gated-slot), and the non-vacuity teeth — is `{propext, Classical.choice, Quot.sound}`-clean,
-no `sorryAx`. The §8 COMPUTATIONAL hiding portal (the ZK transcript advantage bound) is NOT an axiom
+/ reveals-gated-slot), and the non-vacuity teeth — is `{propext, Classical.choice, Quot.sound}`-clean.
+The §8 COMPUTATIONAL hiding portal (the ZK transcript advantage bound) is NOT an axiom
 these pins would catch — it is the named gap in the header, carried by `Crypto/Primitives.lean`, never
 discharged here. -/
 

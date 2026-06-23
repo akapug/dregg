@@ -261,8 +261,7 @@ def noteSpendAEmitted : EmittedDescriptor := emittedEffect2 noteSpendAAirName no
 
 /-! ## §2 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms noteSpendGuardLocal
 #assert_axioms noteSpendGuardDecodes

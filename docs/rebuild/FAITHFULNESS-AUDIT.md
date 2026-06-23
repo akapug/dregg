@@ -1,7 +1,7 @@
 # FAITHFULNESS / VACUITY AUDIT — this session's Lean corpus
 
 **Scope.** Adversarial, read-only audit of the session's new modules under
-`metatheory/Dregg2/`. Mandate: `#assert_axioms` / "0 sorries" proves *kernel-cleanliness*,
+`metatheory/Dregg2/`. Mandate: `#assert_axioms` / "0 open holes" proves *kernel-cleanliness*,
 NOT *non-vacuity* or *fidelity to dregg1*. This ledger surfaces what the goalsensor and
 `#assert_axioms` cannot see. Nothing was modified.
 
@@ -220,7 +220,7 @@ catalog coloring matches, not effect behavior.
   body never uses it (the conservation comes from `attested`). Documented, but `Linked` is a
   precondition-in-name.
 
-No `sorry`/`axiom`/`native_decide` was found anywhere — kernel-cleanliness is real. The vacuities
+No open holes / `axiom` / `native_decide` was found anywhere — kernel-cleanliness is real. The vacuities
 are all of the "true-but-empty" or "true-but-not-what-the-name-claims" kind, not unsound.
 
 ---

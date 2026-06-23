@@ -33,8 +33,7 @@ The refusal SOUNDNESS lives ONLY in `refusalA_full_sound`.
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR named hypothesis only. No
-`sorry`/`:= True`/`native_decide`. Read-only imports.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR named hypothesis only. Read-only imports.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

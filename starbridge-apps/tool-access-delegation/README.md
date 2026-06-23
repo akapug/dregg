@@ -34,8 +34,7 @@ The Lean side proves, against `Dregg2.Apps.VerificationToolkit.app_commit_iff_ad
 | `invocation_forged_rejected`             | a forged biscuit credential ⇒ the whole gated turn rolls back |
 | `invocation_revoked_rejected`            | a revoked credential (nullifier in the committed registry) ⇒ rolls back |
 
-Every theorem is `#assert_axioms`-clean (only `{propext, Classical.choice, Quot.sound}`), no `sorry`,
-no `:= True`, no `native_decide`.
+Every theorem is `#assert_axioms`-clean (only `{propext, Classical.choice, Quot.sound}`).
 
 ## Two enforcement surfaces, both real, both already in the kernel
 

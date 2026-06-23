@@ -33,7 +33,7 @@ teeth bite.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY as
-the NAMED hypothesis `Poseidon2SpongeCR hash`. No `sorry`, no `:= True`, no `native_decide`. Imports are
+the NAMED hypothesis `Poseidon2SpongeCR hash`. Imports are
 read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer

@@ -44,7 +44,7 @@ reveal (no preimage), a stranded-value resolve (balance still positive), an unde
 * `preimageGate`/`quorum` rest on the §8 crypto portal (the hash binding); the ordering/counting
   and gate laws are proved here. The portal is the named seam (`AuthPortal`, the seL4 floor).
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` —
+Discipline: axiom-clean (`#assert_all_clean` at the close) —
 `decide` / `#guard` / `Exec.Program`-keystone reuse only. `lake build` green (LOCAL).
 -/
 import Dregg2.Exec.Program

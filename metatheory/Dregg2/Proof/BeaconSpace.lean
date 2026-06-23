@@ -370,7 +370,7 @@ end Inhabited
 
 All theorems reduce to `BeaconSpace` structure fields (hypotheses, not axioms) and mathlib lemmas
 (`tendsto_measure_iInter_atTop`, `tendsto_pow_atTop_nhds_zero_of_lt_one`,
-`ENNReal.tendsto_ofReal`); none pull `sorryAx` or any oracle axiom.
+`ENNReal.tendsto_ofReal`); none pull any oracle axiom.
 
 OPEN (non-vacuity interior witness): the canonical `Measure.infinitePi (PMF.bernoulli h).toMeasure`
 witness at `h = 3/4` needs `Mathlib.Probability.ProductMeasure` (`Measure.infinitePi`). The

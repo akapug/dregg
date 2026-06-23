@@ -37,7 +37,7 @@ This module lifts the assurance from "each EFFECT is correct" to "each TURN is c
     with no cross-cell amplification/leakage: `coordinated_turn_joint_triangle` (refines the proved
     bilateral covenant step + conserves the joint total) and the N-ary `crossForest_*` keystones, with
     the distributed residue (the consensus-ordered Σ=0 linearization) carried as an
-    EXPLICITLY NAMED hypothesis (`Σ_node δ = 0`), never `sorry`/`:= True`.
+    EXPLICITLY NAMED hypothesis (`Σ_node δ = 0`), never derived/`:= True`.
 
 Discipline: transparent intent specs (`turnSpecG`/`turnSpec` fold `fullActionStep`, never `executorOp`),
 full biconditionals, every theorem non-vacuous with a real whole-turn anti-ghost tooth,
@@ -332,12 +332,12 @@ the gated whole-turn assurance to the cross-cell layer:
   * **N-ary joint (binding NAMED).** The N-ary cross-cell forest conserves the joint family
     total `Σ_node total (cells node)` GIVEN the consensus-ordered Σ=0 binding `Σ_node δ = 0` — an
     EXPLICITLY NAMED hypothesis (`CrossCellForest.crossForest_conserves`), load-bearing
-    (`crossForest_needs_binding`), NEVER derived/`sorry`/`:= True`. The Granovetter no-amplify law
+    (`crossForest_needs_binding`), NEVER derived/`:= True`. The Granovetter no-amplify law
     holds unconditionally over the whole tree (`crossForest_no_amplify`).
 
 WHAT IS PROVED vs CARRIED. Proved: the bilateral covenant-gated joint step computes the correct joint
 post-state and conserves the joint total (no amplification/leakage), and the N-ary joint conservation
-GIVEN the cross-cell Σ=0. CARRIED (named, not sorry'd): the distributed
+GIVEN the cross-cell Σ=0. CARRIED (named, not derived): the distributed
 consensus-ordered LINEARIZATION that establishes `Σ_node δ = 0` across independently-advancing cells
 (which valid cross-cell history wins under Byzantine ordering) — a SEPARATE consensus obligation
 (`Spec.JointViaHyper.hyperedge_is_validity_not_canonicity`: validity is a decidable proof-property;
@@ -406,7 +406,7 @@ open Dregg2.Exec.StarbridgeGated
 #guard (turnLedgerDeltaAsset ((lowerForestG transferForestG).map Prod.snd) 0) == 0
 
 /-! ## §8 — Axiom-hygiene tripwires. Every whole-turn/cross-cell keystone rests only on the kernel
-axioms (no `sorryAx`); the §8 `AuthPortal.soundness` and cross-cell Σ=0 are NAMED carriers, not laws. -/
+axioms (kernel-triple only); the §8 `AuthPortal.soundness` and cross-cell Σ=0 are NAMED carriers, not laws. -/
 
 #assert_axioms execFullTurnG_iff_turnSpecG
 #assert_axioms execFullTurnG_antighost_linear

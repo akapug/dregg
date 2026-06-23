@@ -41,8 +41,8 @@ constitution's `participants` (and `BlocklaceFinality`'s) are then drawn from th
   ring of other Sybils (only ADMITTED members' vouches count, just as `MembershipSafety` only
   counts `is_participant` votes).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/
-`native_decide`. Pure, computable, `#guard`-checked non-vacuity (a Sybil rejected, a vouched strand
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
+Pure, computable, `#guard`-checked non-vacuity (a Sybil rejected, a vouched strand
 and a bonded strand admitted, a bonded equivocator slashed). Verified with
 `lake build Dregg2.Distributed.StrandAdmission`.
 -/

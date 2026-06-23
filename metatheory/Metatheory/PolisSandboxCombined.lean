@@ -10,7 +10,7 @@ either, so the one governor refuses both. Honest play (work, claim-what-you-earn
 Proven: governance holds ∀ controller (`sandbox_governed_safe`), gentle (`govStep_admits_benign` /
 `_refuses_only_harmful`); a mixed adversary's foreclosure AND laundering both emerge ungoverned and
 are both prevented governed. `#eval` shows it. Scripted agents (not LLMs); 2 agents for a cheap
-`decide`. No `sorry`.
+`decide`.
 -/
 import Metatheory.Polis
 

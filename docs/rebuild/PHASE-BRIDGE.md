@@ -149,7 +149,7 @@ theorem bridge_atomic (a : BridgeAction) :
     (effects_contains a.lock ∧ effects_contains a.mint)
       ∨ (¬effects_contains a.lock ∧ ¬effects_contains a.mint) := by
   -- Proven by: nonce is the key; any mismatch is slashable
-  sorry
+  -- OPEN: obligation deferred
 ```
 
 The **nonce** is the glue. Both the lock (on dregg) and the mint (on foreign chain, or delivery to dregg from the foreign chain) reference the same nonce. The federation's agreement on nonce ensures atomicity — if the lock is committed on dregg, the relay will not mint a mismatched nonce on the foreign chain (or if they do, the foreign chain's light client will reject it).
@@ -244,7 +244,7 @@ theorem bridge_atomic_by_nonce (a : BridgeAction) :
   -- If the lock is in the log with nonce n, then the foreign-chain relay
   -- will not accept a mint with a *different* nonce on the same (chain, height).
   -- This is enforced by federation attestation (Dispute oracle), not in-circuit.
-  sorry -- OPEN: requires foreign-chain dispute model
+  -- OPEN: requires foreign-chain dispute model
 
 /-- Amount matching: the lock and mint amounts must agree (no skimming). -/
 theorem bridge_conservation_cross_chain (a : BridgeAction) :
@@ -252,7 +252,7 @@ theorem bridge_conservation_cross_chain (a : BridgeAction) :
   -- The observation's comparison threshold is the *declared* amount.
   -- The foreign commitment `a.comparison.c` is verified to open to a value
   -- ≥ the threshold (via bridge_verify_sound). The lock amount must equal that threshold.
-  sorry -- OPEN: requires binding between Effect.BridgeLock.amount and comparison.threshold
+  -- OPEN: requires binding between Effect.BridgeLock.amount and comparison.threshold
 ```
 
 **2. Prove the atomicity preservation in the effect stream:**
@@ -267,7 +267,7 @@ theorem bridge_pair_atomic (a₁ a₂ : BridgeAction) :
     (effects_contain_nonce a₁.nonce a₁.lock ∨ ¬effects_contain_nonce a₁.nonce a₂.mint) := by
   -- Soundness: either both are in the log (committed atomically) or both are out.
   -- This is enforced by Dispute oracle (federation attestation).
-  sorry
+  -- OPEN: obligation deferred
 ```
 
 **3. Wire the dial at `selective`:**

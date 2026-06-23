@@ -41,7 +41,7 @@ ONLY as `recKMintAssetLegacy`/`recKBurnAssetLegacy`, the non-vacuity teeth this 
 against the value law. The circuit weld (`Circuit/Spec/supplycreation.lean` etc.) is regenerated
 against the issuer-moves in the same rotation.
 
-`#assert_axioms` on every keystone; no sorry; `#guard` non-vacuity witnesses (the negative well,
+`#assert_axioms` on every keystone; `#guard` non-vacuity witnesses (the negative well,
 the genesis-order fail-close, the legacy break).
 -/
 import Dregg2.Exec.TurnExecutorFull

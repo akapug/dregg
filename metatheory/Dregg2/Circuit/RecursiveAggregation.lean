@@ -41,7 +41,7 @@ the load-bearing content: it is where a real aggregation bug (verify proof-of-st
 step-3's roots; swap a leg; drop a turn) would HAVE to show up, and the proof shows the named
 hypotheses leave no such gap.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`. The named
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). The named
 hypotheses are `structure` FIELDS, not axioms — they appear in the theorem statements, witnessed
 non-vacuously (§5: a realizing instance exists). Verified with
 `lake build Dregg2.Circuit.RecursiveAggregation`.

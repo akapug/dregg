@@ -44,7 +44,7 @@ ledger §7). Concretely:
     bridge-pot CELL restores it (`bridgeFinalizeToPot_preserves_exact`, instantiating
     `escrow_settle_conserves_combined_per_asset`) — the same pot-cell move that killed fee-burn.
 
-Standalone probe: NOT imported by the anchor. `#assert_axioms` on every theorem; no sorry.
+Standalone probe: NOT imported by the anchor. `#assert_axioms` on every theorem.
 -/
 import Dregg2.Circuit.Argus.Turn
 

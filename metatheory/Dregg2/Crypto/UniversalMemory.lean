@@ -46,7 +46,7 @@ intra-proof double-spend read is refused.
 
 Axiom hygiene: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} everywhere. Crypto
 enters ONLY as the named `Poseidon2SpongeCR` hypothesis (the cap-root floor), never as an axiom.
-No `sorry`, no `:= True`, no `native_decide`. Lean/design only — no circuit Rust here.
+Lean/design only — no circuit Rust here.
 -/
 import Dregg2.Crypto.MemoryChecking
 import Dregg2.Substrate.Heap

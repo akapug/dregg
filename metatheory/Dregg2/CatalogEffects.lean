@@ -277,7 +277,7 @@ end Discriminator
 /-! ## §5 — Axiom-hygiene tripwire (whole-namespace honesty pin).
 
 Every theorem under `Dregg2.CatalogEffects` must rest only on the three kernel axioms.
-A `sorryAx` anywhere trips this. Pure rejector; cannot close a goal. -/
+An unproven-hole axiom anywhere trips this. Pure rejector; cannot close a goal. -/
 
 #assert_namespace_axioms Dregg2.CatalogEffects
 

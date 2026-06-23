@@ -21,8 +21,8 @@ The experiment, proven end-to-end:
     progress) and the lock-out is refused (the gate stays passable). The floor holds for the whole
     episode and for EVERY controller (`sandbox_lockin_governed_safe`).
 
-Pure Lean 4 core (imports `Metatheory.PolisSandbox` for the `Move`-style envelope shape). No `sorry`,
-no load-bearing `True`. The detector and the demo are decidable and PROVEN by `decide`, not asserted.
+Pure Lean 4 core (imports `Metatheory.PolisSandbox` for the `Move`-style envelope shape).
+The detector and the demo are decidable and PROVEN by `decide`, not asserted.
 -/
 import Metatheory.PolisSandbox
 

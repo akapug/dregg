@@ -58,8 +58,7 @@ in-circuit FORCING layer the re-point consumes.
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable `CapHashScheme` /
 `SpineCommits` carriers inherited from `DeployedCapTree` / `SortedTreeNonMembership` (the SAME
 single-permutation-call `Compress1CR` floor #4 the commitment tower carries; the spine↔root binding,
-a HYPOTHESIS). No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports
-read-only.
+a HYPOTHESIS). NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CapTreeUpdate
 

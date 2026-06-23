@@ -31,7 +31,7 @@ GETS, with NO re-proof:
 (`§DEMO`): their commit-iff-admit and rejection teeth drop out of `app_commit_iff_admit` /
 `app_violation_rejected` INSTANTIATED, not hand-rolled — proving the toolkit is real and usable.
 
-Pure, computable, `#eval`-able. `#assert_axioms`-clean, no `sorry`, no `:= True`.
+Pure, computable, `#eval`-able. `#assert_axioms`-clean.
 -/
 import Dregg2.Apps.StorageGatewayMandate
 import Dregg2.Apps.CompartmentWorkflowMandate

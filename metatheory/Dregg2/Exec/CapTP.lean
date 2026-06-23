@@ -42,7 +42,7 @@ The handoff certificate's *attestation* (`HandoffCertificate.introducer_signatur
 We carry it as the discharge of a `Spec.Guard`, exactly as `Spec.VatBoundary` and
 `Spec.Await` do. The distributed-GC liveness of exported caps (`gc.rs`) is OPEN
 (it relates to `Exec.CellLiveness`'s cross-vat-cycle impossibility) and is left as a
-documented `-- OPEN:`, NOT a `sorry`/`axiom`.
+documented `-- OPEN:`, NOT an `axiom` or unproven hole.
 -/
 import Dregg2.Spec.Authority
 import Dregg2.Spec.VatBoundary
@@ -408,7 +408,7 @@ and NOT provable here: it relates to `Exec.CellLiveness`'s cross-vat-cycle impos
 (`death_is_timed_out`: death is never *decided*, only lease-timed-out, and a cross-vat
 reference cycle cannot be collectively decided dead by any one vat). A sound distributed-GC
 liveness theorem would need a cross-vat lease/timeout coordination model that the metatheory
-does not yet carry; we leave it as a documented residue rather than a `sorry`/`axiom`.
+does not yet carry; we leave it as a documented residue rather than an `axiom` or unproven hole.
 
   -- OPEN: distributed_gc_liveness — eventual reclamation of unreachable exported caps.
   --   Reason: cross-vat reference cycles cannot be decided dead by one vat (CellLiveness's
@@ -495,7 +495,7 @@ end NonVacuity
 
 /-! ## §6 — Axiom-hygiene tripwires.
 
-Every PROVED keystone depends ONLY on the three standard kernel axioms (no `sorryAx`). The
+Every PROVED keystone depends ONLY on the three standard kernel axioms (no extra axiom). The
 distributed-GC liveness residue (§4) is an `-- OPEN:` comment, NOT a declaration, so it
 cannot trip these pins. -/
 

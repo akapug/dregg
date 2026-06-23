@@ -53,13 +53,13 @@ non-deterministic was never witnessed.
     interaction flips it to `ReconstructedApproximate`; a structurally-invalid attestation is NOT a
     witness (so a forged root does not buy `ReplayedDeterministic`); `Live` when sources reachable.
 
-§8 SEAM (NAMED, not `sorry`'d): the receipt-digest collision-resistance enters `replayedDeterministic_
+§8 SEAM (NAMED, not an unproved hole): the receipt-digest collision-resistance enters `replayedDeterministic_
 replays` as the hypotheses `HInj : Function.Injective H` / `HFresh : ∀ p, H p ≠ genesisSentinel` —
 the SAME `dregg2 §8` oracle `Dregg2.Exec.Receipts.chain_tamper_evident` already names, never a Lean
 axiom. The classifier theorems (the crown `↔`) need NO oracle — they are pure structural facts about
 the log.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build
+Discipline: axiom-clean (`#assert_all_clean` at the close). `lake build
 Dregg2` green (LOCAL).
 -/
 import Dregg2.Exec.Receipt

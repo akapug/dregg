@@ -44,8 +44,7 @@ without weakening the transfer guarantee.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Poseidon2 CR enters ONLY
-as the NAMED `Poseidon2Binding.Poseidon2SpongeCR hash` (task #13's discharged carrier). No `sorry`,
-no `:= True`, no `native_decide`. Imports are read-only; the transfer descriptor / sites are reused,
+as the NAMED `Poseidon2Binding.Poseidon2SpongeCR hash` (task #13's discharged carrier). Imports are read-only; the transfer descriptor / sites are reused,
 never edited.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer

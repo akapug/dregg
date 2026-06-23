@@ -32,7 +32,7 @@ the `--- Program ---` arm) and committed into the opaque authority residue regis
 record-pin family. The CIRCUIT side of this spec⟺circuit triangle is `setProgramV3` (the record-pin
 descriptor) + `RotatedKernelRefinementProgram.setProgram_descriptorRefines_sat`.
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No sorry / native_decide.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}.
 -/
 import Dregg2.Exec.TurnExecutorFull
 

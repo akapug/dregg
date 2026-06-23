@@ -76,7 +76,7 @@ rendezvous round-trips a non-trivial message; a badge-OR of distinct bits accumu
 concrete `CellId := Nat` (here a slot/object id is already `Nat`, matching the Rust `u32`/`u64`) is
 used ONLY for the executable witnesses; it is never load-bearing in a proof.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` — `decide`
+Discipline: axiom-clean (`#assert_all_clean` at the close) — `decide`
 / `#guard` / structural `cases <;> simp` only. `lake build` green (LOCAL).
 -/
 import Dregg2.Exec.CapTPConcrete
@@ -836,8 +836,8 @@ section Witnesses
 
 end Witnesses
 
-/-! ## §11 — Axiom hygiene. Every load-bearing theorem is checked axiom-clean (no `sorry`, no extra
-`axiom`, only the standard `propext`/`Classical.choice`/`Quot.sound`). -/
+/-! ## §11 — Axiom hygiene. Every load-bearing theorem is checked axiom-clean (only the
+standard `propext`/`Classical.choice`/`Quot.sound`). -/
 
 #assert_all_clean [
   mint_child_attenuates_parent,

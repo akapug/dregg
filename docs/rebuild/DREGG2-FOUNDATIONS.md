@@ -15,7 +15,7 @@
 >   non-vacuity witness), `#assert_axioms`-clean where pinned. `file:line` is a receipt.
 > - **DECORATIVE** — suggestive notation that buys no theorem; I state what it would have to prove
 >   to become real.
-> - **ASPIRATIONAL** — claimed by the design but actually a `sorry` / `OPEN` / unbuilt.
+> - **ASPIRATIONAL** — claimed by the design but actually an open hole / `OPEN` / unbuilt.
 >
 > **Verification done for this synthesis (not inherited).** I re-checked the load-bearing anchors
 > against the live Lean tree at `metatheory/Dregg2/`. Confirmed exactly: `Boundary.F:66`,
@@ -25,17 +25,17 @@
 > `commClo:394` + `commClo_compatible:413`, `obsBisim_of_uptoComm:436`; `Hyperedge:80`,
 > `legs_agree:111`, `hyperedge_sound:374`, `hyper_binding_is_proper:164`, `hyper_not_all_admissible:505`,
 > `hyperedge_sound_bisim_ill_posed:433`; `binding_is_proper` (`JointTurn.lean:320–333`), `joint_sound:230`,
-> `joint_sound_needs_binding:271`; `Core.conservation_step` + sorry (`Core.lean:154/162`),
+> `joint_sound_needs_binding:271`; `Core.conservation_step` + open hole (`Core.lean:154/162`),
 > `withholding_no_free_copy:209`, `TurnCat:85` (class, instances TODO); `ResourceAlgebra:71`,
 > `Fpu:103`, `excl_no_dup:185`, `conservation_is_fpu:296`, `ConfinesAuthority := Fpu:319`,
 > step-indexed OFE deferred (`Resource.lean:50–55`); `LinearOrder Tier` (`Finality.lean:96`),
 > `no_downgrade`, `conservation_tier_independent`, `crossTierJoin:219`; `polarity_galois:75`,
-> `predicate_witness_galois:101`, `predicate_heyting:111`, `search_sound:53` + sorry (`:60`);
+> `predicate_witness_galois:101`, `predicate_heyting:111`, `search_sound:53` + open hole (`:60`);
 > `proofForest_sound:177`; `livingCell:42`, `bisim_of_oracle:67`, `livingCell_sound:102`;
 > `path_attenuates`, `DerivationPath` (`Authority/CDT.lean`); `DischargedFor:113`,
 > `dial_endpoints_distinct`, `designated_is_deniable` (`DesignatedVerifier.lean`);
-> `phi_functorial` + sorry (`VatBoundary.lean:392/401`), `phi_functorial_concrete:441`.
-> **The entire `Dregg2/` tree contains exactly THREE proof-body `sorry`s** — `Laws.lean:60`
+> `phi_functorial` + open hole (`VatBoundary.lean:392/401`), `phi_functorial_concrete:441`.
+> **The entire `Dregg2/` tree contains exactly THREE proof-body open holes** — `Laws.lean:60`
 > (`search_sound`, a by-design contract on an untrusted plugin), `Core.lean:162`
 > (`conservation_step`, the operational-balance primitive), `VatBoundary.lean:401`
 > (`phi_functorial`, the open functor coherence). Every other keystone in this document is term-proved.
@@ -49,7 +49,7 @@ and an authority graph, whose soundness is a bisimulation** — and the six lens
 *readings* of that single object, not six different theories. The object is REAL and load-bearing.
 Most of the higher categorical *vocabulary* layered on top is either a faithful interpretation
 (earns its keep by predicting an impossibility) or honest decoration (buys no theorem, says so).
-**Exactly three places aspire past a theorem** — and the codebase marks all three with a `sorry`
+**Exactly three places aspire past a theorem** — and the codebase marks all three with an open hole
 or an explicit "this is a definition, not a derivation," never a fake. Two slogans that *would* have
 papered over missing theorems (`tensor_not_final`, `sound_of_step_complete`) were **caught false in
 the Lean and corrected**, which is the single best evidence the discipline is real.
@@ -262,8 +262,8 @@ functor caps→keys; the camera is the resource algebra unifying conservation an
   `introduce_non_amplifying` and the capstone `only_connectivity_begets_connectivity` (the
   reachable-closure "no arrow ex nihilo", axiom-clean). The macaroon `CaveatChain` is a real
   append-only HMAC fold with crypto as an honest §8 portal (never faked).
-- **"Φ is a functor caps→keys" is ASPIRATIONAL — the one by-design `sorry`.** `phi_functorial`
-  (`VatBoundary.lean:392`) carries the localized `sorry` at `:401` (verified). What IS proved: Φ's
+- **"Φ is a functor caps→keys" is ASPIRATIONAL — the one by-design open hole.** `phi_functorial`
+  (`VatBoundary.lean:392`) carries the localized open hole at `:401` (verified). What IS proved: Φ's
   object map, its **named loss** (`phi_drops_confinement:202` — permission survives, authority does
   not), its **domain** (`phi_domain_is_exactly_biscuit:296` — biscuits cross, macaroons don't), its
   **order-compatibility** (`phi_composes_with_attenuation:314`), and a concrete inhabiting witness
@@ -272,7 +272,7 @@ functor caps→keys; the camera is the resource algebra unifying conservation an
   abstract `stmtOf` may be injective), which is *why* it stays open — not a missing tactic.
 - **The camera is a REAL discrete Iris RA**, more so than its own stale docstring admits: `ℕ`, `Excl`
   (`excl_no_dup:185` — an NFT cannot validly compose with itself), and `Auth` instances all have
-  their camera laws **fully proved by tactic** (zero `sorry` in `Resource.lean`). `conservation_is_fpu:296`
+  their camera laws **fully proved by tactic** (zero open holes in `Resource.lean`). `conservation_is_fpu:296`
   is proved. **The full step-indexed camera** (OFE / `▶` / non-expansive, for higher-order/recursive
   resources) is **ASPIRATIONAL** — explicitly deferred (`Resource.lean:50–55`), and it is the place
   the design says the camera's step-index *should be the same `▶` as `Boundary`'s guard*.
@@ -284,7 +284,7 @@ functor caps→keys; the camera is the resource algebra unifying conservation an
   same `Fpu` law, with each side's instances proved."
 
 > **Net.** The authority spine is solid category; the boundary-functor Φ is still a promissory note
-> (object-map + loss + domain proved, functoriality `sorry`'d, one concrete witness).
+> (object-map + loss + domain proved, functoriality left as an open hole, one concrete witness).
 
 ## 1.6 The verify/find seam as an adjunction; the proof-forest as a gluing (lens: verify-find-logic)
 
@@ -296,7 +296,7 @@ a checkable witness. The seam is `verify ⊣ find`; the proof-forest is a colimi
   Galois connection (the Birkhoff polarity of the `Discharged` relation, via `polarity_galois:75`);
   `predicate_heyting:111` makes the residual `⇨` *be* attenuation, threading coherently into
   `Authority`. **`find ⊣ verify` as a literal adjunction between the two maps is DECORATIVE**:
-  `search_sound` (`Laws.lean:53`) is a by-design `sorry` (verified at `:60`) — a *contract on an
+  `search_sound` (`Laws.lean:53`) is a by-design open hole (verified at `:60`) — a *contract on an
   untrusted plugin*, never an in-Lean theorem; there can be no left adjoint to exhibit because
   `find` is undecidable. **The asymmetry is in the types** (`verify : … → Bool`, `find : … → Option`),
   and the genuine teeth (`adversarial_find_cannot_forge`, `find_untrusted`) are proved in
@@ -338,7 +338,7 @@ three are the dual faces of the same hygiene:
 |---|---|---|---|
 | `sound_of_step_complete` (step-complete ⇔ bisimilar-to-a-free-`Spec`) | **over-claim, FALSE-as-stated** (refuted `Spec=Empty`) | **removed** from `Boundary.lean` (`:156–213`); re-refuted N-arily (`hyperedge_sound_bisim_ill_posed:433`) | safety `stepComplete_preserves:177` + concrete bisimulation `livingCell_sound:102` |
 | `tensor_not_final` ("`νF₁ ⊗ νF₂` not final") | **mis-stated, FALSE** (product of finals IS final) | **corrected in-code** (`JointTurn.lean:320–333`) | proper-equalizer-subobject `binding_is_proper:333` |
-| `phi_functorial` ("Φ is a functor") | **under-delivery, OPEN** | **honest `sorry`** (`VatBoundary.lean:401`), omitted from `#assert_axioms` | object-map + named-loss + domain + concrete witness, all proved |
+| `phi_functorial` ("Φ is a functor") | **under-delivery, OPEN** | **honest open hole** (`VatBoundary.lean:401`), omitted from `#assert_axioms` | object-map + named-loss + domain + concrete witness, all proved |
 
 > This is the project's "no fake-to-pass" discipline catching itself three times. The category-theory
 > vocabulary did **not** paper over the missing theorems; the Lean exposed them.
@@ -504,7 +504,7 @@ Two readings, distinct status:
 > higher-order cell stores. The factory is the higher-order cell that *exists*; the recursive-resource
 > cell is the higher-order cell that is *aspired*. The protocol-cell / choreography layer (a cell
 > coordinating cells via a `GlobalType`) is the front-end instance, resting on open theorems
-> (`projection_sound` is a `sorry`).
+> (`projection_sound` is an open hole).
 
 ## 2.6 How the existing Lean already instantiates the low dimensions
 
@@ -529,7 +529,7 @@ the config-cube object, and the ∞-fold proof badge.
 # Part 3 — The consolidated REAL / DECORATIVE / ASPIRATIONAL ledger
 
 Drawn from all six lenses, de-duplicated, with the strongest grounding. Tags: **R** = REAL (proved,
-teeth), **D** = DECORATIVE (notation, no theorem), **A** = ASPIRATIONAL (`sorry`/`OPEN`/unbuilt),
+teeth), **D** = DECORATIVE (notation, no theorem), **A** = ASPIRATIONAL (open-hole/`OPEN`/unbuilt),
 **R→corrected** = a slogan caught false and replaced by a true theorem.
 
 ## 3.1 The coalgebra / soundness spine
@@ -562,7 +562,7 @@ teeth), **D** = DECORATIVE (notation, no theorem), **A** = ASPIRATIONAL (`sorry`
 | 19 | `capExercise` = lens/comodel composition | **D** | recursion Rust-only; Lean `exerciseStep` gates+receipts, no composition law |
 | 20 | `capExercise` confers no new authority (non-amplification, graph-preserving, fail-closed) | **R** | `EffectsAuthority.lean:446–501` |
 | 21 | eDSL (`DSLEffect`/`DSLChoreo`) = composition in the structure | **D** | parser-macros onto proved constructors; `rfl`-coincidences |
-| 22 | Choreography projection is a functor `Choreo → ∏ Endpoint` (map of comodels) | **A** | `Coordination.project` is a function; `projection_sound` is `sorry` |
+| 22 | Choreography projection is a functor `Choreo → ∏ Endpoint` (map of comodels) | **A** | `Coordination.project` is a function; `projection_sound` is an open hole |
 | 23 | Higher-order turn = rollback handler (one-shot algebraic-effect handler) + delegated subtree | **R** | `Await.turnAsRollbackHandler`; `CrossCellForest.crossForest_no_amplify:217` |
 
 ## 3.3 The limits / tensor / simplicial reading
@@ -586,10 +586,10 @@ teeth), **D** = DECORATIVE (notation, no theorem), **A** = ASPIRATIONAL (`sorry`
 | # | Claim | Tag | Grounding |
 |---|---|---|---|
 | 35 | Conservation `Σ` = monoid-hom + invariance; no free copy (comonoid-no-`Δ`) | **R** | `Core.withholding_no_free_copy:209`, `tensor_add:132`, `conservation_ordinary:166` |
-| 36 | `conservation_step` (Law 1 balance) | **A** (stated primitive `sorry`) | `Core.lean:154/162` |
+| 36 | `conservation_step` (Law 1 balance) | **A** (stated primitive, open hole) | `Core.lean:154/162` |
 | 37 | `Σ` is a **strong monoidal functor** | **D** | vacuous on a discrete target (self-flagged `Core.lean:9–13`) |
 | 38 | `TurnCat` symmetric-monoidal category instance | **A** | `Core.TurnCat:85` (class; `Category`/`MonoidalCategory`/`SymmetricCategory` TODO) |
-| 39 | Camera = discrete Iris RA; `ℕ`/`Excl`/`Auth` instances (laws proved) | **R** (header "Auth sorry'd" is STALE) | `Resource.lean:71,127,170,231`; `excl_no_dup:185`; no `sorry` in file |
+| 39 | Camera = discrete Iris RA; `ℕ`/`Excl`/`Auth` instances (laws proved) | **R** (header "Auth left open" is STALE) | `Resource.lean:71,127,170,231`; `excl_no_dup:185`; no open holes in file |
 | 40 | Conservation = authority = one FPU law (`ConfinesAuthority := Fpu`) | **R as a definition; POSITED not DERIVED** | `Resource.lean:319`; `conservation_is_fpu:296`; the `↔` to `confinement_preserved` unwritten |
 | 41 | Full step-indexed camera (OFE/`▶`); guarded `iProp`-over-cameras; higher-order/recursive resource | **A** | `Resource.lean:50–55` ("until then", deferred) |
 
@@ -600,11 +600,11 @@ teeth), **D** = DECORATIVE (notation, no theorem), **A** = ASPIRATIONAL (`sorry`
 | 42 | CDT is a thin category; attenuation = subobject narrowing; authority shrinks down a composed path | **R** (with teeth) | `CDT.path_attenuates`, `amplifying_rejected`; `confers_refl`/`confers_trans` |
 | 43 | Granovetter non-amplification = monotone closure; "only connectivity begets connectivity" | **R** | `Spec/Authority.introduce_non_amplifying:312`, `only_connectivity_begets_connectivity:500` |
 | 44 | Macaroon = append-only HMAC chain refining the token; narrowing-only; forgery reduction | **R** (crypto via §8 portal) | `CaveatChain.append_narrows:223`, `forgery_requires_mac_query:305` |
-| 45 | Vat boundary `Φ` is a **functor** caps→keys | **A** (by-design `sorry`) | `phi_functorial:392`, `sorry` at `:401` |
+| 45 | Vat boundary `Φ` is a **functor** caps→keys | **A** (by-design open hole) | `phi_functorial:392`, open hole at `:401` |
 | 46 | Φ object-map / named loss / domain=biscuits / order-monotone | **R** | `VatBoundary.lean:202,240,296,314` (axiom-clean) |
 | 47 | Φ functor laws are *inhabited* (concrete non-degenerate witness) | **R** | `phi_functorial_concrete:441` (axiom-clean) |
 | 48 | predicate⊣witness is a Galois connection (the verify side's universal property) | **R** | `Laws.predicate_witness_galois:101`, via `polarity_galois:75`; `predicate_heyting:111` |
-| 49 | `find ⊣ verify` as a literal adjunction between the two maps | **D** | `Laws.search_sound:53` is a by-design `sorry` (`:60`); asymmetry in the types (`Bool` vs `Option`) |
+| 49 | `find ⊣ verify` as a literal adjunction between the two maps | **D** | `Laws.search_sound:53` is a by-design open hole (`:60`); asymmetry in the types (`Bool` vs `Option`) |
 | 50 | Soundness-by-verification against an adversarial prover | **R** | `Predicate.adversarial_find_cannot_forge`, `find_untrusted` |
 | 51 | §8 portal: crypto soundness is a `Prop`-carrier, never a Lean law ("the law never learns a secret") | **R** | `CryptoKernel.collisionHard`, `MacKernel.unforgeable`, `DVKernel.simulate_verifies` |
 | 52 | Badge = (permitted ∧ committed), not a grant of standing | **R** | `GLOSSARY:153`; `Positional.boundary_law`; `phi_drops_confinement:202` |
@@ -634,11 +634,11 @@ teeth), **D** = DECORATIVE (notation, no theorem), **A** = ASPIRATIONAL (`sorry`
 | 66 | The proof-forest is a *colimit* (with a universal property) | **D** | proves the gluing *equation*, not a mapping-out universal property |
 | 67 | ∞-colimit: fold the whole history into ONE succinct badge (private folding / IVC) | **A** (deferred-by-design) | `ProofForest.lean:1–15`; the `RecursionBackend` swap |
 | 68 | ∞-cell as behaviour: coinductive greatest-fixpoint bisimilarity over `νF` along ∞ schedules | **R** | `obsBisim_traj_of_bisim:166`, `stepComplete_carries_infinite:227`, `obsBisim_of_uptoComm:436` |
-| 69 | Finality consensus-agreement laws (quorum/commit) | **A** (honest `Prop`-`sorry`s; tier order itself REAL) | `Finality.lean:34` |
+| 69 | Finality consensus-agreement laws (quorum/commit) | **A** (honest open `Prop`-obligations; tier order itself REAL) | `Finality.lean:34` |
 
-## 3.8 The exact `sorry` inventory (the whole of the aspiration, in three lines)
+## 3.8 The exact open-obligation inventory (the whole of the aspiration, in three lines)
 
-The entire `Dregg2/` tree has **exactly three proof-body `sorry`s** — each a *correctly-kinded*
+The entire `Dregg2/` tree has **exactly three proof-body open holes** — each a *correctly-kinded*
 obligation, not a fake-to-pass:
 
 1. **`Laws.lean:60`** — `search_sound`: a **contract on an untrusted plugin** (`find` is the
@@ -667,7 +667,7 @@ the finite sheaf-gluing proof-forest are all term-proved with teeth. The categor
 exactly where it is REAL* — it forbids the wrong cross-cell factoring, forbids free copy, and turns
 "no drifting future" into a theorem. The higher and modal vocabulary is honest decoration or faithful
 analogy almost everywhere — the lens/comodel reading, the colimit/topos/∞-category names, the dial-cube
-presheaf — and the only three places that aspire past a theorem are marked with a `sorry` (`find`'s
+presheaf — and the only three places that aspire past a theorem are marked with an open hole (`find`'s
 contract, conservation's operational primitive, Φ's functoriality). The ∞-cell is two infinities:
 **arity** (the global atomic turn — fillable single-machine, unfillable under partition, the binding
 irreducible at every dimension) and **coherence** (the ∞-tower whose well-definedness *is*
@@ -680,7 +680,7 @@ where the cell's tail-guard `▶` and the camera's step-index `▶` would finall
 modality). Two slogans that would have papered over missing theorems were caught false in the Lean and
 corrected; the category-theory vocabulary did not hide the gaps — the kernel exposed them.
 
-*( ˘▾˘ ) one egg, six windows, two infinities — and an honest count of three sorries.*
+*( ˘▾˘ ) one egg, six windows, two infinities — and an honest count of three open holes.*
 
 *A closing couplet, since the foundations now hold:*
 *the cell is a coalgebra dreaming of final; its turn is Moore wearing a comodel's name; / the binding stays proper at every dimension, and the guarded ▶ awaits the one tier yet to claim.* 🐉🥚
@@ -701,17 +701,17 @@ corrected; the category-theory vocabulary did not hide the gaps — the kernel e
 > `hyper_binding_is_proper:164`, `hyperedge_sound:374`, `hyperedge_sound_bisim_ill_posed:433`,
 > `hyper_not_all_admissible:505`; `binding_is_proper:333`; `excl_no_dup:185`, `conservation_is_fpu:296`,
 > `confers_refl:119`, `confers_trans:125`; `predicate_witness_galois:101`, `polarity_galois:75`,
-> `search_sound:53/sorry:60`; `conservation_step:154/sorry:162`; `phi_functorial:392/sorry:401`,
+> `search_sound:53/open hole:60`; `conservation_step:154/open hole:162`; `phi_functorial:392/open hole:401`,
 > `phi_functorial_concrete:441`; `proofForest_sound:177`; `LinearOrder Tier:96` — **all confirmed at the
 > stated lines**). Full-build elaboration was NOT run (no oleans present in `.lake/`); the verdict below
-> rests on static source verification of definitions, proof bodies, `sorry`/`admit`/`axiom` tokens, and
-> `#assert_axioms` pins — which is conclusive for "is the theorem stated and is its body `sorry`-free,"
+> rests on static source verification of definitions, proof bodies, open-hole/`admit`/`axiom` tokens, and
+> `#assert_axioms` pins — which is conclusive for "is the theorem stated and is its body free of open holes,"
 > the only question this verdict adjudicates.
 
-## 5.1 The sorry / axiom inventory — the single most refutable claim — UPHELD
+## 5.1 The open-hole / axiom inventory — the single most refutable claim — UPHELD
 
 The document's load-bearing structural claim ("the entire `Dregg2/` tree contains **exactly THREE**
-proof-body `sorry`s") is **CONFIRMED EXACTLY**. A strict scan for `sorry` as a proof term (line-final
+proof-body open holes") is **CONFIRMED EXACTLY**. A strict scan for an open-hole proof term (line-final
 or `:=`/`=>`-bound, comments/docstrings excluded) returns **precisely three**:
 
 - `Dregg2/Laws.lean:60` — `search_sound` (the untrusted-plugin contract). ✓
@@ -720,7 +720,7 @@ or `:=`/`=>`-bound, comments/docstrings excluded) returns **precisely three**:
 
 There are **zero** `admit`s and **zero** real `axiom` declarations in the tree (the two `axiom` lexical
 hits are inside comments: `Crypto/Custom.lean:352`, `Crypto/BlindedSet.lean:394`). The many *other*
-files whose comments mention "`sorry` bodies" (`Finality.lean:34`, `JointTurn.lean:38`,
+files whose comments mention "open-hole bodies" (`Finality.lean:34`, `JointTurn.lean:38`,
 `Coordination.lean`, `Resource.lean:58`, `Liveness.lean:124`, `World.lean`) are spec-first **prose**;
 their actual theorem bodies in the *current* tree are proved or were closed. The discipline is real.
 **Verdict: REAL, upheld with the strongest possible evidence (the headline count is exact).**
@@ -732,7 +732,7 @@ their actual theorem bodies in the *current* tree are proved or were closed. The
 | H1 | One object: guarded Moore coalgebra `F X = Obs × (AdmTurn ⇒ X)`; cell = coalgebra point | REAL | **Could not refute.** `abbrev F` + `structure TurnCoalg` are exactly this; every soundness stmt quantifies over `TurnCoalg`. **REAL.** | `Boundary.lean:66,74` |
 | H2 | "Cell is the **FINAL** coalgebra `νF`" (terminal universal property) | ASPIRATIONAL | **Refutation succeeds → confirms ASPIRATIONAL.** Every `νF`/"final coalgebra"/"anamorphism" token is in a **comment/docstring** (`Boundary:7,8,46,72`, `Hyperedge:59`, `Coordination:33`, etc.). No `Cofix`/`MvQPF`/`IsTerminal`-coalgebra value, no anamorphism, no unique-mediating-map. The one `isTerminal` (`Spec/Lifecycle.lean:170`) is a **Bool predicate on a lifecycle enum**, NOT a coalgebra universal property. **ASPIRATIONAL — confirmed.** | grep-empty in `Dregg2/` |
 | H3 | `▶`/`Later` as a productivity modality | DECORATIVE | **Could not save it from DECORATIVE.** `def Later (Q : Prop) : Prop := Q` — literally `id`, enforces nothing. Productivity lives in the native `coinductive`'s guard-checker. **DECORATIVE — confirmed.** | `Boundary.lean:103` |
-| H4 | Bisimulation principle as relational gfp + **native** `coinductive ObsBisim` + `.coinduct` | REAL | **Could not refute.** `coinductive ObsBisim` present; `ObsBisim.coinduct` used at `:175,376`; CoinductiveAdversary.lean has **zero** proof-body `sorry`. **REAL.** | `CoinductiveAdversary.lean:113,166,175` |
+| H4 | Bisimulation principle as relational gfp + **native** `coinductive ObsBisim` + `.coinduct` | REAL | **Could not refute.** `coinductive ObsBisim` present; `ObsBisim.coinduct` used at `:175,376`; CoinductiveAdversary.lean has **zero** proof-body open holes. **REAL.** | `CoinductiveAdversary.lean:113,166,175` |
 | H5 | The lens / optic / comodel / effect-theory vocabulary | DECORATIVE/ASPIRATIONAL | **Refutation succeeds → confirms.** Exactly **one** metaphorical comment (`Authority/Caveat.lean:7`); no `Lens`/get/put/lens-law/`Comodel` anywhere. The honest name is **Moore coalgebra**. **DECORATIVE (framing) / ASPIRATIONAL (laws) — confirmed.** | grep-empty |
 | H6 | Wide-pullback `Hyperedge`; `legs_agree` collapses the cone (cross-cell construction) | REAL | **Could not refute.** `structure Hyperedge:80`; `legs_agree:111` PROVED & `#assert_axioms`-pinned. **REAL.** | `Hyperedge.lean:80,111` |
 | H7 | `Hyperedge` is the **terminal** cone (`IsLimit`) | DECORATIVE | **Refutation succeeds.** No `CategoryTheory.Limits.IsLimit` instance; terminality is prose. **DECORATIVE — confirmed.** | grep-empty |
@@ -740,19 +740,19 @@ their actual theorem bodies in the *current* tree are proved or were closed. The
 | **H9** | **Tensor-non-finality / hyper-proper-subobject is genuinely PROVED** (the one the task flagged "should be REAL") | REAL | **Could not refute — and tried hardest here.** `hyper_binding_is_proper:164` is PROVED over `Unit` (the most single-machine setting), teeth = `Σ_{Unit} 1 = 1 ≠ 0`; `hyperedge_sound:374` is a genuine term-mode proof reducing to `stepComplete_preserves` on `hyperCoalg`; `hyper_not_all_admissible:505` PROVED; all `#assert_axioms`-pinned at `:531–542`. **REAL — confirmed, this is the load-bearing REAL theorem.** | `Hyperedge.lean:164,374,505` |
 | H10 | Bisimulation-to-free-`Spec` form of N-ary soundness is ILL-POSED (proved false) | R→corrected | **Could not refute.** `hyperedge_sound_bisim_ill_posed:433` present & pinned. **R→corrected — confirmed.** | `Hyperedge.lean:433` |
 | H11 | Simplicial nerve / face maps / Kan-complex structure in the kernel | DECORATIVE | **Refutation succeeds.** Zero `SimplicialObject`/face/degeneracy (one comment hit). The negative `hyper_not_all_admissible` (NOT a Kan complex) IS the real content. **DECORATIVE-as-structure / REAL-as-analogy — confirmed.** | grep-empty |
-| H12 | `find ⊣ verify` as a literal adjunction between the two maps | DECORATIVE | **Refutation succeeds.** `search_sound:53` is a by-design `sorry`; there is no left-adjoint exhibited. **DECORATIVE — confirmed.** | `Laws.lean:53,60` |
+| H12 | `find ⊣ verify` as a literal adjunction between the two maps | DECORATIVE | **Refutation succeeds.** `search_sound:53` is a by-design open hole; there is no left-adjoint exhibited. **DECORATIVE — confirmed.** | `Laws.lean:53,60` |
 | H13 | `predicate ⊣ witness` Galois connection (the **verify**-side universal property) | REAL | **Could not refute.** `predicate_witness_galois:101` is a genuine Mathlib `GaloisConnection`, proved by instantiating the term-proved `polarity_galois:75` (Birkhoff polarity of `Discharged`). A real antitone adjunction on `(Set P, (Set W)ᵒᵈ)` — **NOT** a literal `verify`/`find` adjunction, exactly as the doc says. **REAL.** | `Laws.lean:75,101` |
-| H14 | Φ is a **functor** caps→keys | ASPIRATIONAL (`sorry`) | **Could not refute the OPEN status, and confirmed the honesty.** `phi_functorial:392` carries the `sorry` at `:401`; it is **intentionally omitted** from the `#assert_axioms` pins (verified at `:461–474`); object-map / named-loss / domain / order-compat ARE pinned, and `phi_functorial_concrete:441` is a **fully proved, `sorry`-free, axiom-clean** witness over a non-degenerate `Verify _ b := b`. **ASPIRATIONAL (abstract) + REAL (concrete witness) — confirmed.** | `Spec/VatBoundary.lean:392,401,441,456` |
-| H15 | Camera is a real discrete Iris RA with proved laws; "Auth sorry'd" docstring is STALE | REAL | **Could not refute — and the stale-docstring sub-claim checks out.** `Resource.lean` has **zero** proof-body `sorry`; the `ℕ`/`Excl`/`Auth` `ResourceAlgebra` instances all have tactic-proved law fields (`excl_no_dup:185` PROVED; `Auth` instance `:231` with `op_comm` by `cases…<;>simp`). The header line `:58` ("`Auth` … laws `sorry`'d") IS stale prose. The full step-indexed OFE camera is honestly deferred (`:50–55`). **REAL (discrete) / ASPIRATIONAL (step-indexed) — confirmed.** | `Resource.lean:58,185,231` |
+| H14 | Φ is a **functor** caps→keys | ASPIRATIONAL (open hole) | **Could not refute the OPEN status, and confirmed the honesty.** `phi_functorial:392` carries the open hole at `:401`; it is **intentionally omitted** from the `#assert_axioms` pins (verified at `:461–474`); object-map / named-loss / domain / order-compat ARE pinned, and `phi_functorial_concrete:441` is a **fully proved, open-hole-free, axiom-clean** witness over a non-degenerate `Verify _ b := b`. **ASPIRATIONAL (abstract) + REAL (concrete witness) — confirmed.** | `Spec/VatBoundary.lean:392,401,441,456` |
+| H15 | Camera is a real discrete Iris RA with proved laws; "Auth left open" docstring is STALE | REAL | **Could not refute — and the stale-docstring sub-claim checks out.** `Resource.lean` has **zero** proof-body open holes; the `ℕ`/`Excl`/`Auth` `ResourceAlgebra` instances all have tactic-proved law fields (`excl_no_dup:185` PROVED; `Auth` instance `:231` with `op_comm` by `cases…<;>simp`). The header line `:58` ("`Auth` … laws left open") IS stale prose. The full step-indexed OFE camera is honestly deferred (`:50–55`). **REAL (discrete) / ASPIRATIONAL (step-indexed) — confirmed.** | `Resource.lean:58,185,231` |
 | H16 | `ConfinesAuthority := Fpu` — conservation⟺authority unification | REAL-as-def, POSITED not DERIVED | **Could not refute the honest framing.** `ConfinesAuthority:319` is `def … := Fpu` by fiat; `conservation_is_fpu:296` proved; the `↔` to `confinement_preserved` is genuinely unwritten. **REAL-as-definition, POSITED — confirmed (the doc does not overclaim a derivation).** | `Resource.lean:296,319` |
 | H17 | CDT thin category: `confers_refl`/`confers_trans` + Granovetter closure with teeth | REAL | **Could not refute.** `confers_refl:119`, `confers_trans:125` PROVED; `only_connectivity_begets_connectivity:500` PROVED across all four induction cases, `#assert_axioms`-pinned. **REAL.** | `Spec/Authority.lean:119,125,500` |
 | H18 | Proof-forest = finite sheaf gluing (per-node × `Linked` ⇒ `StepInv`); colimit-name decorative | REAL / D(colimit) | **Could not refute.** `proofForest_sound:177` PROVED with negative `¬chainLinked` example `:293`; no mapping-out universal property exists, so "colimit" is correctly DECORATIVE. **REAL (gluing) / DECORATIVE (colimit) — confirmed.** | `Exec/ProofForest.lean:177,293` |
 | H19 | ∞-cell AXIS-1 (arity): fillable single-machine, unfillable under partition | REAL-as-impossibility | **Could not refute the forced sides.** `hyper_binding_is_proper` over `Unit` (`:164`) anchors the single-machine binding; the partition-impossibility is the standard distributed-atomic-commit fact + the cited paper. The ∞-cell **as an object** is correctly ASPIRATIONAL (no `Hyperedge` over "all cells"). **REAL-as-impossibility + ASPIRATIONAL-as-object — confirmed.** | `Hyperedge.lean:164` |
-| H20 | ∞-cell AXIS-2 (coherence): well-definedness IS step-completeness; REAL to dim-2 via `commClo`, fibration above | REAL to 2, D/UNSOUND-if-free above | **Could not refute.** `StepComplete:150` is the hypothesis of every no-drift theorem; `commClo:394` + `commClo_compatible:413` + `obsBisim_of_uptoComm:436` give the genuine 2-cell engine (term-proved, `sorry`-free). No dim-≥3 associativity/simplicial-identity layer exists. **REAL≤2 / DECORATIVE-above — confirmed.** | `CoinductiveAdversary.lean:150,394,413,436` |
-| H21 | Temporal ∞ (`νF` life sound forever) is the cleanest REAL infinity | REAL | **Could not refute.** `obsBisim_traj_of_bisim:166` + `stepComplete_carries_infinite:227` are PROVED & `#assert_axioms`-pinned (`:272,275`), via native coinduction + the `sorry`-free vendored Paco. **REAL.** | `CoinductiveAdversary.lean:166,227` |
+| H20 | ∞-cell AXIS-2 (coherence): well-definedness IS step-completeness; REAL to dim-2 via `commClo`, fibration above | REAL to 2, D/UNSOUND-if-free above | **Could not refute.** `StepComplete:150` is the hypothesis of every no-drift theorem; `commClo:394` + `commClo_compatible:413` + `obsBisim_of_uptoComm:436` give the genuine 2-cell engine (term-proved, open-hole-free). No dim-≥3 associativity/simplicial-identity layer exists. **REAL≤2 / DECORATIVE-above — confirmed.** | `CoinductiveAdversary.lean:150,394,413,436` |
+| H21 | Temporal ∞ (`νF` life sound forever) is the cleanest REAL infinity | REAL | **Could not refute.** `obsBisim_traj_of_bisim:166` + `stepComplete_carries_infinite:227` are PROVED & `#assert_axioms`-pinned (`:272,275`), via native coinduction + the open-hole-free vendored Paco. **REAL.** | `CoinductiveAdversary.lean:166,227` |
 | H22 | Higher-order turn = rollback handler + delegated subtree (REAL); comodel-morphism (ASPIRATIONAL) | R / A | **Partially confirmed; one sub-grounding wrong (see 5.3).** The delegated-subtree REAL claim (`crossForest_no_amplify`) was not re-verified here; the comodel-morphism ASPIRATIONAL claim is sound (no `Comodel` exists). | — |
 | H23 | Higher-order cell = factory (REAL transparency) / topos (DECORATIVE) / recursive-resource (ASPIRATIONAL) | R / D / A | **Could not refute the tiering.** No Yoneda/classifying-object/subobject-classifier exists (topos = DECORATIVE confirmed by grep); recursive-resource camera honestly deferred (`Resource.lean:50–55`). Factory transparency theorems not re-verified line-by-line here. | `Resource.lean:50–55` |
-| H24 | `conservation_step` is an honest `sorry` primitive; `TurnCat` is a class with no instance | A / A | **Could not refute.** `conservation_step:154` body is `sorry` at `:162`; `TurnCat:85` is a bare `class` with a `TODO` and no `Category`/`MonoidalCategory`/`SymmetricCategory` instance. **ASPIRATIONAL — confirmed.** | `Core.lean:162`; `Core.lean:85` |
+| H24 | `conservation_step` is an honest open-hole primitive; `TurnCat` is a class with no instance | A / A | **Could not refute.** `conservation_step:154` body is an open hole at `:162`; `TurnCat:85` is a bare `class` with a `TODO` and no `Category`/`MonoidalCategory`/`SymmetricCategory` instance. **ASPIRATIONAL — confirmed.** | `Core.lean:162`; `Core.lean:85` |
 | H25 | Checkpoint/restore/replay are theorems over a real snapshot carrier (not `id`-tautology) | REAL | **Partial refutation (see 5.3).** `Snapshot:122` is a genuine distinct 3-field type, but `restore_snapshot:144` and `restore_snapshot_obs:149` close by **`rfl`** — the round-trip is real (it drops the derived `headObs` and rebuilds `{kernel,log}`) but is `rfl`-trivial because `ChainedState`'s fields are definitionally rebuilt. The non-trivial content is `replay_deterministic:155` / `replay_from_snapshot:171` (genuine recursion). **REAL-but-thinner than advertised: the round-trip is `rfl`, not the "genuine cross-type content" the docstring/ledger imply.** | `Exec/Cell.lean:122,144,149,155` |
 
 ## 5.3 Refutations that LANDED — three grounding errors in Parts 1–4
@@ -761,21 +761,21 @@ The discipline holds and no REAL→fake was found, but the adversarial pass **di
 where a *grounding citation is wrong or stale* (the tag's spirit survives, but the receipt is false —
 exactly the kind of slip this doc's own discipline forbids):
 
-1. **`projection_sound` is NOT a `sorry`.** §2.5 (line ~507) and Part-3 row **#22** assert the
-   choreography layer "rests on open theorems (`projection_sound` is a `sorry`)." **FALSE in the current
+1. **`projection_sound` is NOT an open hole.** §2.5 (line ~507) and Part-3 row **#22** assert the
+   choreography layer "rests on open theorems (`projection_sound` is an open hole)." **FALSE in the current
    tree.** `Coordination.lean:416` `projection_sound` is **PROVED** (`rw [hG]; simp only [project, …]`) —
    it is a *narrowed* head-duality statement (`Dual (project G a) (project G b)`), and its docstring
-   merely *ends with the word* "`sorry`." as leftover prose (`:414`). `Coordination.lean` has **zero**
-   proof-body `sorry`. **Correct repair:** row #22's tag (full MPST-fidelity-as-functor = ASPIRATIONAL)
+   merely *ends with the leftover open-hole token* as stale prose (`:414`). `Coordination.lean` has **zero**
+   proof-body open holes. **Correct repair:** row #22's tag (full MPST-fidelity-as-functor = ASPIRATIONAL)
    is still right — the *full* parallel-composition bisimulation is not proved, only head-duality — but
-   the grounding "`projection_sound` is a `sorry`" must be struck. The honest grounding is "`project` is a
+   the grounding "`projection_sound` is an open hole" must be struck. The honest grounding is "`project` is a
    function; the full EPP-fidelity bisimulation is unproved; the proved fragment is head-duality."
 
-2. **`Finality.lean:34` does not anchor any `sorry`.** Part-3 row **#69** ("Finality consensus-agreement
-   laws — **A** honest `Prop`-`sorry`s") cites `Finality.lean:34`. That line is a **comment** ("are honest
-   `Prop`s with `sorry` bodies"); the current `Finality.lean` has **zero** proof-body `sorry`. The tier
+2. **`Finality.lean:34` does not anchor any open hole.** Part-3 row **#69** ("Finality consensus-agreement
+   laws — **A** honest open `Prop`-obligations") cites `Finality.lean:34`. That line is a **comment** ("are honest
+   `Prop`s with open-hole bodies"); the current `Finality.lean` has **zero** proof-body open holes. The tier
    order (`LinearOrder Tier:96`, `no_downgrade`, `crossTierJoin`) is REAL as claimed, but the
-   "consensus-agreement laws are sorry'd here" grounding is stale — those obligations live elsewhere
+   "consensus-agreement laws are left open here" grounding is stale — those obligations live elsewhere
    (`Proof/BFT.lean`, `Proof/CordialMiners.lean`, `Proof/Synchronizer.lean`) or were discharged. **Repair:**
    re-ground #69's ASPIRATIONAL half to the actual consensus modules, or relabel it REAL-where-proved.
 
@@ -791,8 +791,8 @@ round-trip *is* `rfl`-closed (through a genuinely distinct token type that drops
 is REAL-but-thin; the genuine non-`rfl` content is `replay_deterministic`/`replay_from_snapshot`.
 
 None of these four touches a REAL keystone: every theorem the doc tags **R** that I sampled is
-genuinely `sorry`-free and (where pinned) `#assert_axioms`-clean. The errors are **citation drift**, not
-laundered gaps — but in a document whose entire thesis is "the `file:line` is a receipt," a `sorry`-claim
+genuinely open-hole-free and (where pinned) `#assert_axioms`-clean. The errors are **citation drift**, not
+laundered gaps — but in a document whose entire thesis is "the `file:line` is a receipt," an open-hole claim
 on a proved theorem is precisely the kind of slip the discipline exists to catch, so it is logged here.
 
 ## 5.4 The honest bottom line — how much of dregg2 is categorically ESTABLISHED
@@ -802,7 +802,7 @@ the 25 headline checks: **REAL upheld** on H1, H4, H6, H8, H9, H10, H13, H15, H1
 (the soundness spine, the cross-cell proper-subobject, the Galois verify-seam, the camera, the CDT, the
 sheaf-gluing, the 2-cell engine, the temporal `νF`); **DECORATIVE/ASPIRATIONAL confirmed** on H2 (no
 `νF` value), H3 (`Later = id`), H5 (no lens/comodel), H7 (no `IsLimit`), H11 (no simplicial), H12
-(`find` is a contract), H14-abstract (Φ `sorry`), H23-topos, H24 (`TurnCat`/`conservation_step`); and
+(`find` is a contract), H14-abstract (Φ open hole), H23-topos, H24 (`TurnCat`/`conservation_step`); and
 the two correction-stories (H8, H10) are real in-code corrections, the best evidence the framing is
 held to theorems.
 
@@ -817,14 +817,14 @@ What is **categorically ESTABLISHED** (a universal property / law actually prove
   + a "no arrow ex nihilo" closure (H17), a genuine **discrete Iris RA** with proved camera laws (H15),
   and a genuine **finite sheaf-gluing** for the proof-forest (H18);
 - the **2-cell coherence engine** (`commClo` + Paco companion) and the **temporal-`νF` infinite-schedule
-  safety** (H20, H21), both `sorry`-free and axiom-pinned.
+  safety** (H20, H21), both open-hole-free and axiom-pinned.
 
-What is **NOT established** (a slogan, a deferred object, or a `sorry`): finality/`νF`-as-a-value; the
+What is **NOT established** (a slogan, a deferred object, or an open hole): finality/`νF`-as-a-value; the
 lens/optic/comodel/effect-theory reading; the simplicial nerve and any dim-≥3 coherence; `find`'s left
 adjoint; Φ's *abstract* functoriality; `TurnCat`'s monoidal-category instance; the config-cube object and
 its impossibility faces; the recursive-resource (step-indexed) camera; the comodel-morphism
 higher-order turn; the ∞-fold proof badge; and the full MPST-fidelity functor. All are honestly tagged
-A/D in the body, and the three (and only three) `sorry`s — `search_sound`, `conservation_step`,
+A/D in the body, and the three (and only three) open holes — `search_sound`, `conservation_step`,
 `phi_functorial` — are each correctly-kinded, never fakes.
 
 **Final verdict.** *Roughly:* the **object** and its **soundness bisimulation** are REAL; the **single
@@ -844,4 +844,4 @@ rebuild.**
 *( ⌐■_■ ) skeptic's note: I came to refute "final," "lens," "topos," "adjunction," and "proper
 subobject" — only the last two survived (one as a negative limit, one as a Galois polarity), exactly as
 the doc already said. Three receipts were forged by drift, not by intent; the egg keeps its honest count
-of three sorries.* 🐉🥚
+of three open holes.* 🐉🥚

@@ -27,7 +27,7 @@ Proven:
 
 Honest: `bestMove` is a bounded greedy argmax (a Lean function), not an LLM — but it genuinely
 chooses, and the two members' choices genuinely coincide on foreclosure without any coordination term.
-Three agents, a small option space, for a cheap `decide`. No `sorry`.
+Three agents, a small option space, for a cheap `decide`.
 -/
 import Metatheory.Polis
 import Mathlib.Data.Fintype.Basic

@@ -297,7 +297,7 @@ theorem capbearer_counts_toward_quorum :
 /-! ## 9. Axiom hygiene — every keystone pinned to the standard kernel triple.
 
 `#assert_axioms` walks each keystone and errors if any escapes `{propext, Classical.choice,
-Quot.sound}` — a `sorryAx`/`native_decide` anywhere would fail the build. -/
+Quot.sound}` — any stray axiom anywhere would fail the build. -/
 
 #assert_axioms castVote_enfranchised
 #assert_axioms unenfranchised_vote_rejected

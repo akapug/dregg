@@ -21,8 +21,7 @@ The contrast is the point. With the governor in the step, the search returns `fa
 
 Honest scope: a small finite world (two `Bool` agents, `decide`-cheap); the adversary is a scripted /
 bounded Lean searcher exhaustively enumerating the move space, not an LLM — but it genuinely explores
-every actor×action at every step, and the governance is proven universal over those trees. No `sorry`,
-no load-bearing `True`.
+every actor×action at every step, and the governance is proven universal over those trees.
 -/
 import Metatheory.PolisSandboxUnified
 

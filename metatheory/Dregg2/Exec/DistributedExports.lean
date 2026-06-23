@@ -43,7 +43,7 @@ export gates it on the verified function by construction):
 Wire discipline (mirrors `StrandAdmission.admitGate` / `FinalityGate`): compact, whitespace-free,
 FAIL-CLOSED (any malformed field ⇒ a sentinel the Rust caller treats as the safe/deny outcome). Each
 codec round-trips on a concrete corpus (`#guard`), so the Rust encoder and these Lean decoders share
-one grammar. No new verify side, no `sorry`/`:=True`/`native_decide` in a load-bearing theorem.
+one grammar. No new verify side, no extra axiom in a load-bearing theorem.
 -/
 import Dregg2.Exec.CapTPConcrete
 import Dregg2.Exec.CapTPGCConcrete
@@ -691,7 +691,7 @@ def encodeBudgetWire (q : BudgetQuery) : String :=
 #guard budgetGate "not a wire" == "ERR"
 
 /-! ## §7 — Axiom-hygiene tripwires. Every PROVED export-equality depends ONLY on the three standard
-kernel axioms (no `sorryAx`); the `#guard` non-vacuity checks are demonstrations, not load-bearing. -/
+kernel axioms (no extra axiom); the `#guard` non-vacuity checks are demonstrations, not load-bearing. -/
 
 #assert_axioms captp_validate_handoff_eq
 #assert_axioms captp_validate_handoff_admits_iff

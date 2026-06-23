@@ -112,7 +112,7 @@ but `approved`. The worked 3-party review/CI workflow (author submits → review
 approves → CI merges) has biting `#guard` teeth in every corner (`:419`–`:483`):
 authorized∧in-phase fires; the wrong actor's button is dark even in the right phase;
 the right actor's button is dark in the wrong phase. The module is `#assert_all_clean`
-(`:489`) — no `sorry`, no `native_decide`.
+(`:489`).
 
 So the deos rendering of a durable workflow is the genuine kernel surface: the agent
 sees exactly the steps its caps authorize, in the phase the choreography permits.

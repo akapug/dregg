@@ -545,7 +545,7 @@ theorem revoke_is_restrict {G G' : Graph CellId Rights}
 
 /-! ## §7 — Axiom-hygiene tripwires.
 
-Pin the clean keystones: each depends only on the three standard kernel axioms (no `sorryAx`).
+Pin the clean keystones: each depends only on the three standard kernel axioms (no faked green).
 The headline `only_connectivity_begets_connectivity` is included — the attenuate-trace thread
 is closed (the narrowed edge inherits its predecessor's origin witness via `confers_trans`). -/
 
@@ -565,7 +565,7 @@ is closed (the narrowed edge inherits its predecessor's origin witness via `conf
 #assert_axioms amplify_is_gen
 #assert_axioms attenuate_is_restrict
 #assert_axioms revoke_is_restrict
--- This pin errors on `sorryAx`; its passing certifies the whole closure is axiom-clean.
+-- This pin errors on any faked-green axiom; its passing certifies the whole closure is axiom-clean.
 #assert_axioms only_connectivity_begets_connectivity
 
 end Dregg2.Spec

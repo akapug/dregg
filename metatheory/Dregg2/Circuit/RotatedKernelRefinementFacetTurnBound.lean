@@ -70,7 +70,7 @@ cannot see.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the named carriers inherited through the
-imported keystones. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW names only.
+imported keystones. NEW names only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementFacet
 import Dregg2.Circuit.Emit.CapOpenTurnPins

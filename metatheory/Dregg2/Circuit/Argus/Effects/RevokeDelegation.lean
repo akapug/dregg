@@ -79,8 +79,7 @@ This weld lives on the cap family's HONEST boundary, which has THREE layers that
 
 ## Axiom hygiene
 
-`#assert_axioms` on both theorems ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `:= True`
-vacuity, no weakening-that-just-typechecks. Poseidon2 CR enters ONLY via the cited
+`#assert_axioms` on both theorems ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR enters ONLY via the cited
 `revokeGenuine_*`/`unify_revoke` lemmas (their own named hypotheses). Imports are read-only; this file
 owns only itself and edits no other Argus module.
 -/

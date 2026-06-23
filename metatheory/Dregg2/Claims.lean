@@ -20,23 +20,23 @@ beneath it.
 The machine-checked half of `metatheory/CLAIMS.md`. Imports the root `Dregg2` (which
 transitively pulls in every module) and re-pins every keystone the corpus advertises as
 proved/axiom-clean via `#assert_axioms`. A pin fails unless the theorem's full axiom set
-is `{propext, Classical.choice, Quot.sound}` — in particular it fails on any `sorryAx`.
+is `{propext, Classical.choice, Quot.sound}` — in particular it fails on any unproved hole.
 
 This file proves nothing new — it audits:
   * Contents are ONLY `import Dregg2` + `#assert_axioms`/`#assert_namespace_axioms` lines.
-  * No `axiom`/`admit`/`native_decide`/`sorry`.
-  * Keystones that rest on §8 primitives or `sorry`'d operational obligations are NOT pinned
+  * No `axiom`/`admit`/`native_decide`/unproved holes.
+  * Keystones that rest on §8 primitives or open operational obligations are NOT pinned
     here (they would correctly fail). Genuine OPENs are listed in `metatheory/CLAIMS.md`.
   * §8 oracles entering as typeclass parameters/hypotheses (`CryptoKernel`/`World`/`Verifiable`)
     do not appear in `collectAxioms`; theorems depending on them are kernel-clean and pinned.
   * Wrong names cause `unknownConstant` build errors — deliberately.
 
-Two-layer zero-sorry guard:
-  (a) Textual CI grep (`scripts/no-sorry-metatheory.sh`): comprehensive but textual only;
-      runs the whole `lake build` and fails on any `declaration uses 'sorry'` warning.
+Two-layer hole-free guard:
+  (a) Textual CI grep (the metatheory hole-guard script under `scripts/`): comprehensive but textual only;
+      runs the whole `lake build` and fails on any "declaration uses an unproved hole" warning.
       This is the whole-corpus net.
   (b) This ledger (`#assert_axioms` / `#assert_namespace_axioms`): stronger per-claim
-      (follows the full dependency DAG, catches transitively-inherited sorry) but targeted
+      (follows the full dependency DAG, catches a transitively-inherited unproved hole) but targeted
       to its pin list. Not redundant with (a) — each covers what the other cannot.
 -/
 import Dregg2
@@ -187,7 +187,7 @@ a returns-7 plugin cannot). -/
 #assert_axioms Dregg2.Spec.Conditional.temporal_face_is_await_discharge
 
 /-! ## §11 — Spec.VatBoundary: Φ the named-lossy caps↔keys functor. `phi_functorial` is
-proved under the explicit `NonDegenerate` hypothesis (the residual — not a `sorry`);
+proved under the explicit `NonDegenerate` hypothesis (the residual — not an unproved hole);
 `nonDegenerate_concrete` proves the hypothesis is satisfiable. -/
 #assert_axioms Dregg2.Spec.phi_admits_iff_discharged
 #assert_axioms Dregg2.Spec.cross_vat_needs_witness
@@ -205,7 +205,7 @@ proved under the explicit `NonDegenerate` hypothesis (the residual — not a `so
 
 /-! ## §12 — Spec.Coherence: the cross-subsystem weave (guard = authority meet).
 
-OPEN: pins parked pending olean rebuild. `Dregg2.Spec.Coherence` is sorry-free in source
+OPEN: pins parked pending olean rebuild. `Dregg2.Spec.Coherence` is fully proved in source
 and self-pins in its own module, but is not yet in this file's import closure. Re-enable
 once `Dregg2.Spec.Coherence.olean` exists. Listed as proved in `metatheory/CLAIMS.md`. -/
 -- #assert_axioms Dregg2.Spec.guard_is_authority_conferral
@@ -242,7 +242,7 @@ once `Dregg2.Spec.Coherence.olean` exists. Listed as proved in `metatheory/CLAIM
 
 /-! ## §16 — Upgrade: anti-brick set_program (version pin + signature fallback).
 
-The two anti-brick keystones are pinned. The eight Envelope-spine keystones are sorry-free
+The two anti-brick keystones are pinned. The eight Envelope-spine keystones are fully proved
 in source and self-pinned in `Dregg2/Upgrade.lean`, but not yet in this file's closure —
 parked (same reason as §12). Re-enable after rebuild. -/
 #assert_axioms Dregg2.Upgrade.upgrade_never_bricks
@@ -436,7 +436,7 @@ template). `TransferAir` (BabyBear constraint soundness + `transfer_underflow_at
 /-! ## §28 — Executor axis E4–E6 complete: refinement + conditional turns + FFI.
 
 `ExecRefinementFull` (E5): unified `AbsStep` LTS + `exec_full_refines_spec` + full operational
-square; `OnlyConnectivityCloses` is a named hypothesis, not a sorry. `ConditionalTurn` (E4):
+square; `OnlyConnectivityCloses` is a named hypothesis, not an unproved hole. `ConditionalTurn` (E4):
 `execConditionalTurn` (finite Kahn topo-sort + EventualRef slots), EventualRef = `Await.Op.await`.
 E6: `@[export] dregg_exec_full_turn` FFI in `Exec/FFI.lean`. -/
 #assert_namespace_axioms Dregg2.Spec.ExecRefinementFull

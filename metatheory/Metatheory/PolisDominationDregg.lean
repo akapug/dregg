@@ -44,7 +44,7 @@ and the deployed blocklace causal order, whether author `A`'s lawful public cont
 *committed, bounded* recovery path that existed in `A`'s counterfactual absence. The §8 crypto seam
 (hash-injectivity, signature-unforgeability) is untouched.
 
-Pure Lean 4 core over the deployed modules; no `sorry`, no load-bearing `:= True`, no faked green.
+Pure Lean 4 core over the deployed modules.
 -/
 import Metatheory.PolisSelfCompose
 import Metatheory.PolisRecoveryFloor

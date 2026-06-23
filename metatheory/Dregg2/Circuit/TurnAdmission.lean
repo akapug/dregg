@@ -27,7 +27,7 @@ open Dregg2.Exec.TurnExecutorFull
 
 /-- **`turnProofRequired`** — a turn commit requires a whole-turn witness whose step-root fold
 reaches `postRoot` under the abstract `compress` portal, plus a non-trivial auth-chain digest
-(the macaroon caveat-chain column is an explicit Wave-5 sorry). -/
+(the macaroon caveat-chain column is an explicit Wave-5 open hole). -/
 def turnProofRequired (compress : ℤ → ℤ → ℤ) (stepRoot : StepWitness → ℤ)
     (w : TurnWitness) : Prop :=
   turnWitnessSatisfies compress stepRoot w ∧

@@ -84,9 +84,9 @@ echo is why this object fits dregg's metatheory rather than merely sitting besid
 ## 2. The Lean module — `metatheory/Metatheory/CommonSecret.lean`
 
 **Status: GREEN and kernel-clean.** Builds standalone (`lake env lean Metatheory/CommonSecret.lean`,
-0 errors, no `sorry`) and as the globbed `Metatheory` lake target (`lake build Metatheory.CommonSecret`).
+0 errors) and as the globbed `Metatheory` lake target (`lake build Metatheory.CommonSecret`).
 Every keystone is pinned `#assert_axioms` (allow-list: `propext`/`Classical.choice`/`Quot.sound`
-only); `#assert_axioms` *fails the build* on any `sorryAx`, so the green build is the proof of
+only); `#assert_axioms` *fails the build* on any open-hole axiom, so the green build is the proof of
 cleanliness.
 
 It extends `Metatheory.EpistemicConsensus.Frame`. The central structure:
@@ -121,7 +121,7 @@ coalition's pooled view is consistent with every secret value."* This is the **i
 security floor** of the SSS scheme (perfect privacy below `K`). It is carried as a **structural
 field**, the exact analogue of the `Disclosure` separation parameter in `ConstructiveKnowledge` /
 `EpistemicDial`: the metatheory says *if* the scheme is perfectly private below `K`, *then* the
-cliff holds; the crypto layer discharges the antecedent. It is never an `axiom`/`admit`/`sorry`.
+cliff holds; the crypto layer discharges the antecedent. It is never introduced as an `axiom`, `admit`, or open hole.
 
 **Non-vacuity certificate (§5 of the module):** a real **2-of-2 XOR scheme** over `GF(2)`. The
 secret is a bit `s`; two shares `a, b` with `a ⊕ b = s`; a world is `(a, b)`; agent 0 sees only

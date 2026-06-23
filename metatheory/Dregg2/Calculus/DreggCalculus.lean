@@ -5,7 +5,7 @@ This module gives the system a FORMAL CALCULUS. It is NOT new heavy proof — it
 PRESENTATION over types and theorems that ALREADY EXIST, naming precisely the shape of the
 runtime so the whole thing is "easier to reason about" (the goal of the verb-compression and
 coordination-classifier work). Every law here is a POINTER to a landed theorem, or a `def`/`example`
-that typechecks; nothing below is an axiom, a `sorry`, or a `:= True`.
+that typechecks; nothing below is an axiom, an unproven hole, or a `:= True`.
 
 ## THE CLAIM, in one line
 
@@ -55,8 +55,7 @@ Unpacked, against the cited modules:
 NEW file. Imports the landed modules it presents over — it INTRODUCES no new lattice, no new step
 relation, no new guard atom. The `Reduces` relation is `stateStepGuarded` under a name; the modality
 prices are `ConfluenceClassifier.guardKeepsConfluence` under a name. Every theorem
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no `sorry`, no `:= True`,
-no `native_decide`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.EffectsState
 import Dregg2.Exec.EffectsAuthority

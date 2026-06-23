@@ -74,7 +74,7 @@ transcription `eval ≈ decideVm`. (b) is held by a differential battery, layer 
 
 So: VERIFIED that `satisfiedVm` is decided by a tiny total core, with full case-completeness over
 every IR constructor; the Rust transcription of that core is differential-pinned at every layer
-(arm shape · row domain · verdict golden). No `sorry`, no `:= True`, no `native_decide`. The
+(arm shape · row domain · verdict golden). The
 file owns only its own declarations and imports the IR + denotation read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmit
@@ -471,7 +471,7 @@ theorem decideVm_boundaryOnly_off_row_vacuous (hash : List ℤ → ℤ) (i j : N
 
 /-! ## §8 — Module-wide axiom-hygiene pin.
 
-Every theorem under `InterpCore` rests on the three standard kernel axioms only (no `sorryAx`).
+Every theorem under `InterpCore` rests on the three standard kernel axioms only.
 The decider, the case-complete correctness iff, the decidability instance, the residual lemma, and
 the non-vacuity witnesses are all kernel-clean. -/
 #assert_namespace_axioms Dregg2.Circuit.Argus.InterpCore

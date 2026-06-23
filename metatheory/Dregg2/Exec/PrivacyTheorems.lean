@@ -25,7 +25,7 @@ on the primitives those modules already ship:
   replay — is FULLY proved.
 
   **(2) STEALTH FRESHNESS ⇒ UNLINKABILITY** (EIP-5564 / Monero one-time keys), with the crypto as
-  an EXPLICIT named hypothesis (a §8 portal *carrier*, never a `sorry`). The one-time destination
+  an EXPLICIT named hypothesis (a §8 portal *carrier*, a named obligation). The one-time destination
   address is, in the real scheme, `P = H(r·V)·G + S` — a recipient-bound function of the ephemeral
   pubkey `R = r·G`. We name that derivation `deriveOneTime : Digest → Digest` (the §8 DH-to-one-time
   carrier) and prove what is *structurally* true of `Authorization.stealth`:
@@ -207,7 +207,7 @@ obligation that distinct ephemerals can't collude to one address), TWO DISTINCT 
 pubkeys produce DISTINCT one-time addresses. This is the structural precondition of unlinkability:
 two payments to one recipient land on different addresses (no trivial address-reuse linkage). The
 crypto (that `deriveOneTime` is injective / hides the recipient) is the NAMED hypothesis,
-NOT a `sorry`. -/
+carried as an explicit obligation. -/
 theorem fresh_ephemeral_distinct_onetime
     (deriveOneTime : Digest → Digest) (hinj : Function.Injective deriveOneTime)
     {ep ep' : Digest} (hfresh : ep ≠ ep') :

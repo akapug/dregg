@@ -1144,7 +1144,7 @@ witness forests live in `GatedForestCfg.lean` — first-class bundle, not a pinn
 /-! ## §10 — Axiom-hygiene tripwires (the honesty pins over the gated keystones).
 
 Every keystone depends ONLY on the three standard kernel axioms `{propext, Classical.choice,
-Quot.sound}` — no `sorryAx`. The `AuthPortal.soundness` carrier is a Prop FIELD (the §8 discipline),
+Quot.sound}`. The `AuthPortal.soundness` carrier is a Prop FIELD (the §8 discipline),
 NOT an axiom, so it does NOT appear here (the portal is a carrier, the credential leg's soundness is
 the circuit's obligation, never a Lean law). -/
 

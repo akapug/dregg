@@ -65,7 +65,7 @@ heterogeneous effects.
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on `lightclient_unfoolable_circuit_sound_turn`
 + the realizable floors entering as Prop/Type hypotheses (`StarkSound` instance, `Poseidon2SpongeCR`, the
 `S_live` CR fields, `logHashInjective` inside `mkLog`, the `ClosureReadouts` per-step prover-witness
-bundle). No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+bundle). NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureFinal
 

@@ -20,7 +20,7 @@ mechanism is then shown to fire on the SAME real cell ids the moment an edge car
 (`atlas_grant_emits_rule`). The grantor/grantee are distinct by their real hashes
 (`atlas_grantor_grantee_distinct`, via `atomOf_injective`).
 
-No `sorry`, no load-bearing `True`. The cap-state is transcribed from the atlas JSON by hand (Lean
+No load-bearing `True`. The cap-state is transcribed from the atlas JSON by hand (Lean
 cannot parse JSON in-kernel); the ids and edge structure are the file's, verbatim.
 -/
 import Metatheory.PolisAuthLive

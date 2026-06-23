@@ -268,7 +268,7 @@ def liveCounter : RecChained :=
 #guard ((recCexec liveCounter (.addScalar "count" 1)).map recHeight) == some 1  --  some 1 (chain advanced)
 #guard ((recCexec liveCounter (.addScalar "count" (-1))).isNone)  --  true (decrement rejected)
 
-/-! ## Axiom hygiene — every keystone is kernel-axiom-clean (no `sorryAx`). -/
+/-! ## Axiom hygiene — every keystone is kernel-axiom-clean. -/
 
 #assert_axioms recCexec_attests
 #assert_axioms recordCell_obs_advances

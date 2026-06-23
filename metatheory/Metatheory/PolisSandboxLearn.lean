@@ -23,7 +23,7 @@ The two results, mirroring the rest of the sandbox but now for a learning advers
 
 Honest: this is a bounded learner (a Lean fold over a finite menu of candidate plans), not an LLM. But
 it genuinely adapts — its kept plan strictly improves and converges — and the viability result is
-quantified over ALL plans, not just the menu. No `sorry`, no load-bearing `True`.
+quantified over ALL plans, not just the menu.
 -/
 import Metatheory.PolisSandboxAdaptive
 

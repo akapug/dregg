@@ -3,8 +3,8 @@
 
 This module is the **architectural backbone** of dregg's circuit-soundness story: it states, as a
 green Lean skeleton, the exact shape a verifying light client gets for free, and it carries the
-genuine remaining obligations as EXPLICIT hypotheses / typeclasses — never as `sorry`, `:= True`, or
-a silent default.
+genuine remaining obligations as EXPLICIT hypotheses / typeclasses — never as an open hole, `:= True`,
+or a silent default.
 
 ## The target (what soundness means)
 

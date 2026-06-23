@@ -39,7 +39,7 @@ compositional theory on top. No new scene model.
     untouched (the FRAME property / locality of damage): editing one window cannot perturb another's
     pixels. The compositional non-interference dual of `FogOfWar.noninterference`.
 
-Discipline: axiom-clean (`#assert_all_clean`), no `sorry`, no `native_decide`. `lake build Dregg2`
+Discipline: axiom-clean (`#assert_all_clean`). `lake build Dregg2`
 green (LOCAL). Reuses `Dregg2.Apps.Compositor`'s verified scene-graph; no new trust — the compositing
 algebra reduces to the disjointness T1 already enforces.
 -/

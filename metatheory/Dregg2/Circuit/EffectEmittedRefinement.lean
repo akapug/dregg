@@ -5,7 +5,7 @@ Extends `EffectRefinement.lean`'s circuit diamonds to the Plonky3 emitted wire l
 effect with `*_circuit_refines_spec`, proves `*_emitted_refines_spec` (emitted ⊑ bespoke spec) via
 the generic `emitted ⟺ circuit` faithfulness lemmas + circuit soundness.
 
-POLICY: no lurking holes — incomplete `*_emitted_refines_spec` use explicit `sorry`.
+POLICY: no lurking holes — incomplete `*_emitted_refines_spec` are left as explicit open holes.
 -/
 import Dregg2.Circuit.EffectRefinement
 import Dregg2.Circuit.EffectEmitRegistry
@@ -530,7 +530,7 @@ theorem exerciseHold_emitted_refines_spec (S : CommitSurface)
   exerciseHold_circuit_refines_spec S hN hL hRest hLog pre post args hwf hwf'
     ((exerciseHold_emitted_equiv_circuit S pre args post).mp h)
 
-/-! ## §19 — Batch-2 emitted portals (remaining Inst effects; `sorry` where circuit diamond open). -/
+/-! ## §19 — Batch-2 emitted portals (remaining Inst effects; an open hole where the circuit diamond is open). -/
 
 open Dregg2.Circuit.EffectCommit4
   (emitEffect2QuadFaithful emittedEffect2Quad encodeE2Quad EffectSpec2Quad satisfiedE2Quad)

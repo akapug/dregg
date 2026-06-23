@@ -457,8 +457,7 @@ the unknown / non-conforming / negative-vk / stale-id mints are decidably reject
 
 /-! ## §8 — Axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms factoryPostCell_correct
 #assert_axioms factoryPostCaveats_correct

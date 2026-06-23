@@ -13,7 +13,7 @@ This module welds that full-state-on-RUNNABLE result into the Argus library (so 
 only its own declarations and imports the audited runnable module read-only.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; the sole crypto carrier is the NAMED
-`Poseidon2SpongeCR` portal (inside the reused generic theorem). No `sorry` / `:= True` / `native_decide`.
+`Poseidon2SpongeCR` portal (inside the reused generic theorem).
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitMintRunnable
 

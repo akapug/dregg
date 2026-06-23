@@ -17,7 +17,7 @@ the attacker as the controller, where the floor is the leaked principal's author
 floor (`held ⊆ bound`, mirroring `cell/src/capability.rs::is_attenuation` /
 `granted ⊆ held`).
 
-What this file establishes (all kernel-checked, no `sorry`, no `:= True`):
+What this file establishes (all kernel-checked):
 
   * §1 — THE BLAST RADIUS is the **attenuation-closure** of the leaked principal's
     held caps: every cap the attacker can produce is `is_attenuation`-narrower than

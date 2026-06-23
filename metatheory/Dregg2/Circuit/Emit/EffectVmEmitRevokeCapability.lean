@@ -28,8 +28,7 @@ face here pins only the `cap_root` COLUMN MOVE; the in-circuit cap-table opening
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem (inherited from the
-reused `EffectVmEmitAttenuateA` lemmas — no new proof obligation is introduced). No `sorry`, no
-`native_decide`. Imports are read-only.
+reused `EffectVmEmitAttenuateA` lemmas — no new proof obligation is introduced). Imports are read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 

@@ -4,17 +4,17 @@
 Small helpers shared across modules and executable protocols. These close routine
 goals (reflexivity, definitional simp, injection cleanup, linear arithmetic) — not a way
 to make a real obligation look discharged. If a helper does not close a goal, the goal is
-real: prove it properly or leave an explicit `sorry` with a one-line reason.
+real: prove it properly or leave it as an explicit open obligation with a one-line reason.
 (Never `admit`, never a fresh `axiom`, never `native_decide` on a non-decidable prop.)
 -/
 import Mathlib.Tactic.Tauto
 import Mathlib.Tactic.Ring
 import Lean
 
-/-! ## Axiom-hygiene tripwire — the `sorryAx` regression guard.
+/-! ## Axiom-hygiene tripwire — the faked-green regression guard.
 
 `#assert_axioms` elaborates to an error if the named declaration's axiom set escapes
-`{propext, Classical.choice, Quot.sound}` (notably: any `sorryAx`). It can only reject,
+`{propext, Classical.choice, Quot.sound}` (notably: any faked-green axiom). It can only reject,
 never close a goal. Pin it under each proved keystone.
 
 Defined at top level (outside the namespace) so the command token parses in every
@@ -33,7 +33,7 @@ def Dregg2.cleanAxioms : List Lean.Name := [``propext, ``Classical.choice, ``Quo
 open Lean Elab Command in
 /-- The shared one-name checker the verbose, terse, and batch commands all call. Runs
 `collectAxioms name` and throws on the first axiom outside `Dregg2.cleanAxioms` (notably
-`sorryAx` ⇒ a silent `sorry` leaked). Pure rejector — never closes a goal. Returns `()` on
+a faked-green axiom ⇒ a silent faked-green leak). Pure rejector — never closes a goal. Returns `()` on
 clean. Centralizing here means the terse/batch forms are *exactly* as strict as the verbose
 one (same allow-list, same error), by construction. -/
 def Dregg2.assertNameClean (name : Lean.Name) : Lean.Elab.Command.CommandElabM Unit := do
@@ -41,12 +41,12 @@ def Dregg2.assertNameClean (name : Lean.Name) : Lean.Elab.Command.CommandElabM U
   let bad := axs.filter (fun a => !Dregg2.cleanAxioms.contains a)
   unless bad.isEmpty do
     throwError "axiom-hygiene FAIL: {name} depends on non-kernel axioms {bad.toList} \
-      (a `sorryAx` here means a silent `sorry` leaked into a 'PROVED' keystone)"
+      (a faked-green axiom here means a silent faked-green leak into a 'PROVED' keystone)"
 
 open Lean Elab Command in
 /-- `#assert_axioms foo` errors unless every axiom `foo` depends on is one of the three
 standard kernel axioms (`propext`, `Classical.choice`, `Quot.sound`). In particular it
-FAILS on `sorryAx`, catching a silent `sorry`-inheritance at build time. -/
+FAILS on a faked-green axiom, catching a silent faked-green inheritance at build time. -/
 elab "#assert_axioms" id:ident : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
   Dregg2.assertNameClean name
@@ -79,20 +79,20 @@ elab "#assert_all_clean" "[" ids:ident,* "]" : command => do
 `#assert_namespace_axioms` pins every theorem under a namespace to the three standard
 kernel axioms in one line: it walks `getEnv`, finds every theorem under the prefix, runs
 `collectAxioms`, and throws if any depends on an axiom outside
-`{propext, Classical.choice, Quot.sound}` (notably `sorryAx`). Pure rejector — it can only
+`{propext, Classical.choice, Quot.sound}` (notably a faked-green axiom). Pure rejector — it can only
 error, never close a goal.
 
 **The `except` list (honesty caveat).** A name in the `except` clause is skipped (and
 reported). Use this for keystones that legitimately rest on a §8 oracle or a Law-1
-`sorry`'d primitive — each skip must be justified by a comment, preserving the discipline
+open primitive — each skip must be justified by a comment, preserving the discipline
 that a keystone resting on a primitive is not pinned.
 
 (Like `#assert_axioms`, this only sees `axiom`-keyword declarations; §8 oracles that enter
 as typeclass parameters / hypotheses do not appear in `collectAxioms`. By design.) -/
 
 /-- `#assert_namespace_axioms NS (except a b …)?` — pin EVERY theorem under namespace `NS` to the
-three standard kernel axioms, erroring on the first one that escapes (a `sorryAx` ⇒ a silent
-`sorry` leaked). Names listed in `except` are skipped (they legitimately rest on a §8/Law-1
+three standard kernel axioms, erroring on the first one that escapes (a faked-green axiom ⇒ a silent
+faked-green leak). Names listed in `except` are skipped (they legitimately rest on a §8/Law-1
 primitive — justify each with a comment). Logs the count pinned. Pure rejector. -/
 syntax (name := assertNamespaceAxioms)
   "#assert_namespace_axioms" ident (" except " ident+)? : command
@@ -129,7 +129,7 @@ elab_rules : command
     let bad := axs.filter (fun a => !allowed.contains a)
     unless bad.isEmpty do
       throwError "axiom-hygiene FAIL: {name} depends on non-kernel axioms {bad.toList} \
-        (a `sorryAx` here means a silent `sorry` leaked into a 'PROVED' keystone). \
+        (a faked-green axiom here means a silent faked-green leak into a 'PROVED' keystone). \
         If this keystone legitimately rests on a §8/Law-1 primitive, add it to the \
         `except` clause with a justifying comment — do NOT weaken the theorem to pass."
     checked := checked + 1

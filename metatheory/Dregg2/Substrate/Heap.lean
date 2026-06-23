@@ -38,8 +38,7 @@ discipline) is `Dregg2.Substrate.HeapKernel` — this module is executor/state-f
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as
-the named `Poseidon2SpongeCR` hypothesis (the cap-root floor), never as an axiom. No `sorry`,
-no `:= True`, no `native_decide`. NEW file; imports are read-only.
+the named `Poseidon2SpongeCR` hypothesis (the cap-root floor), never as an axiom. NEW file; imports are read-only.
 -/
 import Dregg2.Crypto.NonMembership
 import Dregg2.Circuit.Poseidon2Binding

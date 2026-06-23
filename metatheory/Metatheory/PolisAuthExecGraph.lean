@@ -23,7 +23,7 @@ So:
 
 The reachability is read from the SAME `execGraph` the deployed `authorizedB`/`exec` authorize
 against, and every cap change is a real `recKDelegate`/`recKRevokeTarget` turn of the deployed
-authority executor. No `sorry`, no load-bearing `True`; non-vacuity is `decide`-checked on a concrete
+authority executor. No load-bearing `True`; non-vacuity is `decide`-checked on a concrete
 2-cell graph.
 -/
 import Dregg2.Exec.AuthTurn

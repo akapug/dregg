@@ -23,7 +23,7 @@ The payoffs, all corollaries of the reused kernel:
     failure modes the Boolean composition `combineFloor` had to catch on two axes are now one accumulator.
 
 Reuses `SafetyGame.Game` + kernel machinery on `EWorld` verbatim; the grade arithmetic is the
-`PolisGrade` max-plus quantale (`comp = +`, `unit = 0`). No `sorry`, no load-bearing `True`;
+`PolisGrade` max-plus quantale (`comp = +`, `unit = 0`). No load-bearing `True`;
 `#eval`/`#guard`/`example`s assert TRUE props (`decide` tells the truth).
 -/
 import Metatheory.SafetyGame

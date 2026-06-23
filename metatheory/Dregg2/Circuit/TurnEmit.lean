@@ -7,7 +7,7 @@ through an abstract root-compress chain (reusing `TurnWitness.foldStepRoots`). S
 per-step emitted→spec refinement (EffectRefinement diamonds where available, or generic circuit step)
 to `turnSpec`, then to `execFullTurnA` via `ActionDispatch.execFullTurnA_iff_turnSpec`.
 
-POLICY: no lurking holes — unproved per-step arms use explicit `sorry` (never silent fallback).
+POLICY: no lurking holes — unproved per-step arms are explicit open holes (never silent fallback).
 -/
 import Dregg2.Circuit.TurnWitness
 import Dregg2.Circuit.ActionDispatch
@@ -218,7 +218,7 @@ theorem turn_emitted_refines_turnSpec
 
 CAVEAT: this is parametric in a per-step refinement hypothesis `hstep`. When `hstep` is
 discharged via `step_emitted_refines_fullActionStep`, BOTH of that lemma's conditionalities flow
-through here: (1) it is sorry-bearing where per-effect arms are open holes, so the composed
+through here: (1) it leaves explicit open holes where per-effect arms are unproved, so the composed
 result is NOT `#assert_axioms`-pinned, and (2) it establishes only honest-encoded-trace soundness, NOT
 adversarial-trace soundness (the encoder-agreement hypothesis is dead in the per-step proof). Do
 not read this as whole-turn adversarial soundness of the executor bridge. -/

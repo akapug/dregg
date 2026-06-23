@@ -22,8 +22,8 @@ Chosen instantiation (matches `Polis.polis_safety`'s signature exactly):
   * `pol    := fun w m => worldFloor (stepMove w m)`   (admit iff the move would preserve the floor)
   * `shield := fun _ => ⟨false, .noop⟩`                (the noop move; `stepMove` leaves the world fixed)
 
-Pure Lean 4 core (imports `Metatheory.Polis`, `Metatheory.PolisSandbox`); no `sorry`, no load-bearing
-`True`. `#guard` / `decide` assert TRUE props on the live world.
+Pure Lean 4 core (imports `Metatheory.Polis`, `Metatheory.PolisSandbox`).
+`#guard` / `decide` assert TRUE props on the live world.
 -/
 import Metatheory.Polis
 import Metatheory.PolisSandbox

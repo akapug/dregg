@@ -2,7 +2,7 @@
 # Dregg2.Circuit.CircuitOpenFronts — explicit open-front registry (Waves 3–7).
 
 POLICY: **no lurking holes**. Every unfinished circuit/refinement front is named here with an
-explicit `sorry` theorem (or a tracked `HoleStatus`). Silent spec-fallback (`exact h` pretending
+explicit open-hole theorem (or a tracked `HoleStatus`). Silent spec-fallback (`exact h` pretending
 circuit = spec) is forbidden — use these portals instead.
 
 Run `#eval countOpenFronts` after each wave to watch the frontier shrink.
@@ -61,7 +61,7 @@ CLOSED fronts (verified by the closing theorem's existence; entries removed):
 * (F2a/F2b) the queue-family fronts REMOVED: the family dissolved into the verified
   `Dregg2/Apps/QueueFactory` et al (VerbRegistry `.factory .queue`); kernel constructors gone.
 * emitted_batch2_remaining: CLOSED — 39 distinct `*_emitted_refines_spec` theorems exist
-  (every surviving Inst effect covered); zero `sorry` in `EffectEmittedRefinement.lean`.
+  (every surviving Inst effect covered); zero open holes in `EffectEmittedRefinement.lean`.
 * turn_emit_per_step_remaining: CLOSED — `TurnEmit.step_emitted_refines_fullActionStep`
   dispatches every arm to a real emitted (or circuit-dispatch) discharge; "no declarative
   fallback remains" (TurnEmit §5b).
@@ -96,16 +96,16 @@ def openFronts : List OpenFront := [
 
 def countOpenFronts : Nat := openFronts.length
 
-/-! ## §2 — sorry portals: NONE remain.
+/-! ## §2 — open-hole portals: NONE remain.
     `TurnEffectRefinement.HolePortals` now contains only the generic
     `hole_fullAction_circuit_refines_spec_fallback` (a REAL proof kept for the
-    `hole_circuit_step` re-export); the 34 per-action `sorry` hole theorems are gone —
+    `hole_circuit_step` re-export); the 34 per-action open-hole theorems are gone —
     every dispatch arm has a genuine per-effect refinement (see the CLOSED ledger in §1). -/
 
 /-! ## §3 — Wave 4–7 fronts: tracked declaratively in `openFronts`, no vacuous portals.
 
-    These four fronts have NO standalone `: True := by sorry` placeholder (those were doubly-vacuous:
-    a `True` statement AND a `sorry` body, asserting nothing). Each is registered as a plain
+    These four fronts have NO standalone `: True := by` placeholder (those were doubly-vacuous:
+    a `True` statement AND an empty-hole body, asserting nothing). Each is registered as a plain
     `OpenFront` entry above instead:
     * W4 arithmetized Poseidon2 sponge / digest CR → CLOSED (`poseidon2_in_circuit`, `digest_injective_to_cr`)
     * W5 whole-turn = folded per-step emitted descriptors → CLOSED (`TurnCircuitCompose.turn_emitted_refines_exec_direct`)

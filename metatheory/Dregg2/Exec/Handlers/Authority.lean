@@ -423,9 +423,8 @@ def readOnlyCert : Dregg2.Exec.CapTP.HandoffCert CellId (List Auth) :=
 /-! ## §6 — Axiom-hygiene pins (every handler keystone rests only on the three kernel axioms).
 
 Pinning each handler `def` pins its obligation FIELDS transitively (the structure literal carries the
-proofs), so these pins certify that delegation/revocation soundness rests only on the kernel triple —
-a `sorryAx` anywhere in the composed lemmas would fail the pin (and the build). The non-amplification /
-self-limiting keystones are pinned directly. -/
+proofs), so these pins certify that delegation/revocation soundness rests only on the kernel triple.
+The non-amplification / self-limiting keystones are pinned directly. -/
 
 #assert_axioms capsOnly_recTotalAsset_fixed
 #assert_axioms delegateAttenH

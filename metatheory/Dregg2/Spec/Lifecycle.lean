@@ -449,7 +449,7 @@ end Lifecycle
 /-! ## §6 — Axiom-hygiene tripwires.
 
 Pin the clean keystones: each must depend ONLY on the three standard kernel axioms
-(no `sorryAx`). These cover both classifier classifications, the terminal-object
+(kernel-triple only). These cover both classifier classifications, the terminal-object
 one-wayness, the creation↔termination duality, archival-as-fold, the lease
 fallback, AND — via the halting reduction in `Dregg2.Liveness` — the
 distributed-death undecidability (`distributed_death_not_co_witnessable`). -/

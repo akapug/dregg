@@ -73,8 +73,8 @@ carries (`Stmt.lean §A`) are exactly the shapes a two-side-table effect assembl
 
 ## Axiom hygiene
 
-`#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no
-`:= True` vacuity, no `native_decide`, no weakening-that-just-typechecks: the conclusion is the genuine
+`#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}. No
+`:= True` vacuity, no weakening-that-just-typechecks: the conclusion is the genuine
 full-state agreement the reused dual soundness proves. Imports are read-only; this file owns only itself
 and edits no other Argus module.
 -/

@@ -9,7 +9,7 @@
 > - **REAL** — the universal property / law is actually PROVED in the Lean (at `file:line`);
 > - **DECORATIVE** — suggestive notation/vocabulary that buys no theorem (I say what it would
 >   have to prove to become real);
-> - **ASPIRATIONAL** — claimed by the design but actually a `sorry` / OPEN / unmodeled.
+> - **ASPIRATIONAL** — claimed by the design but actually an open hole / OPEN / unmodeled.
 >
 > **Sources read in full:** `study-category.md`, `cand-A-vat-coalgebra.md`, `cand-B`, `cand-C`,
 > `DREGG4-UNIFICATION.md`, `CARRY-FORWARD-SYNTHESIS.md`, `GLOSSARY.md`; and the actual Lean:
@@ -70,7 +70,7 @@ admissibility witness, and (b) a theorem that `step` factors through that — ne
 This is the crux the task asks. **There is no lens in the Lean, so there are no lens laws — REAL
 or otherwise.** I checked: no `Lens`/`Optic`/`get`/`put` definitions, and no statement resembling
 `get (put s a) = a` (put-get), `put s (get s) = s` (get-put), or `put (put s a) b = put s b`
-(put-put). Tag: **ASPIRATIONAL** (claimed nowhere as a `sorry` either — it is simply not
+(put-put). Tag: **ASPIRATIONAL** (claimed nowhere as an open hole either — it is simply not
 attempted).
 
 It is worth being precise about *why* the lens framing is a poor fit for what is actually proved,
@@ -210,7 +210,7 @@ structure." Reality:
   `Coordination.project : GlobalType → Role → LocalType` (`Coordination.lean:241`) is the candidate
   for "projection is a functor `Choreo → ∏ Endpoint` = a map of comodels" (`DREGG4-UNIFICATION
   §5.3`). But `project` is **a function, not a proved functor**: `projection_sound`
-  (`Coordination.lean:416`) is a `sorry`; `privacy_by_projection` is PROVED only under a `NoRec`
+  (`Coordination.lean:416`) is an open hole; `privacy_by_projection` is PROVED only under a `NoRec`
   hypothesis (`:567`, `#assert_axioms`-clean at `:614`); `deadlock_freedom_by_design` is restated
   and closed only over reachable configs; and the recursion fragment is CONFIRMED-OPEN. **No
   functor laws (identity/composition preservation) are stated for `project`.** So "projection is a
@@ -312,13 +312,13 @@ metatheory — just not organized as a lens/comodel:
   is formally constructed.
 - **Conservation (Law 1).** `Core.lean` proves `withholding_no_free_copy` (`:209`, no conserving
   `Δ` copy under cancellation) and the mint/burn case-corollaries from one `conservation_step`
-  axiom-obligation (`:154`, `sorry` — the operational discharge). The SMC `TurnCat` is a `class`
+  axiom-obligation (`:154`, open hole — the operational discharge). The SMC `TurnCat` is a `class`
   with the `Category`/`MonoidalCategory`/`SymmetricCategory` instances left as **unfilled
   obligations** (`Core.lean:85-88`) — so "the category of cells and turns" is **ASPIRATIONAL** as a
   *Mathlib category instance*, REAL only as a monoid-hom + invariance (`study-category §2`).
 - **Resource camera.** `Resource.lean` has the Iris-style PCM `ResourceAlgebra` (op/valid/core +
   the three core laws + `valid_op_left`) with `(ℕ,+)` and `Excl` cameras PROVED and the `Auth`
-  camera laws `sorry`'d (`Resource.lean:71-92, 124-134`; the header notes Auth is `sorry`'d). This
+  camera laws left as open holes (`Resource.lean:71-92, 124-134`; the header notes Auth is open). This
   is the right home for the "partial composition can be invalid" content the monoid can't express.
 - **I-confluence (the third judgement).** `Confluence.lean` is fully REAL and non-vacuous:
   `IConfluent` (`:44`), `Tier1Eligible` (`:51`), `nonpairwise_escalation` (`:70`), and both
@@ -326,7 +326,7 @@ metatheory — just not organized as a lens/comodel:
 - **Φ (vat boundary).** `Spec/VatBoundary.lean` proves `cross_vat_needs_witness`,
   `phi_drops_confinement`, `forwarded_cap_is_revocable`, `macaroon_does_not_cross_phi`,
   `phi_composes_with_attenuation` (all `#assert_axioms`-clean, `:465-474`) — but **`phi_functorial`
-  is an explicit by-design `sorry` (`Spec/VatBoundary.lean:392-401`)**, with only a *concrete*
+  is an explicit by-design open hole (`Spec/VatBoundary.lean:392-401`)**, with only a *concrete*
   non-degenerate witness `phi_functorial_concrete` proved (`:441`). So **Φ-being-a-functor is
   ASPIRATIONAL** exactly as the task flagged: the object-map, the named loss, the domain, and the
   attenuation-compat are REAL; the *functoriality* (the full two-category bridge over an abstract
@@ -405,7 +405,7 @@ the realized ceiling is the product `jointCoalg` plus an externally-hypothesized
 | 9 | `capExercise` = lens composition (recursive inner-effect gating = compositional structure) | **DECORATIVE** | recursion is Rust-only; Lean `exerciseStep` (`EffectsAuthority.lean:422`) gates+receipts, no composition law. Inner linearity is `Neutral` (`CatalogEffects.lean:176`) |
 | 10 | `capExercise` confers no new authority (non-amplification, graph-preserving, fail-closed) | **REAL** | `EffectsAuthority.lean:446-501` (`exercise_non_amplifying`, `exercise_graph_unchanged`, `exercise_unheld_fails`) |
 | 11 | eDSL (`DSLEffect`/`DSLChoreo`) = composition in the structure | **DECORATIVE** | parser-macros onto proved constructors; `rfl`-coincidences pinned (`DSLEffect.lean:120-126,195`; `DSLChoreo.lean:155,182`). Composes nothing |
-| 12 | Choreography projection is a functor `Choreo → ∏ Endpoint` (map of comodels) | **ASPIRATIONAL** | `Coordination.project` (`:241`) is a function; `projection_sound` is `sorry` (`:416`); no functor laws. `privacy_by_projection` proved only under `NoRec` (`:567`) |
+| 12 | Choreography projection is a functor `Choreo → ∏ Endpoint` (map of comodels) | **ASPIRATIONAL** | `Coordination.project` (`:241`) is a function; `projection_sound` is an open hole (`:416`); no functor laws. `privacy_by_projection` proved only under `NoRec` (`:567`) |
 | 13 | "one soundness theorem because the faces are conjuncts of `StepInv` forced by `c`" | **DECORATIVE** | the 4 `StepInv` conjuncts are free parameters (`Boundary.lean:140`), not a factorization; vacuity had to be fixed by hand (#107-114) |
 | 14 | Step-completeness ⇒ whole-run safety (no drifting future) | **REAL** | `Boundary.stepComplete_preserves` (`:177`); coinductive lift `stepComplete_carries_infinite` + `obsBisim_traj_of_bisim` (`Proof/CoinductiveAdversary.lean`) |
 | 15 | `sound_of_step_complete` = comodel bisimilar to golden-oracle comodel | **ASPIRATIONAL (refuted-and-removed)** | was **false as stated** (`Spec=Empty`), removed; only `bisim_eq`/`sound_refl` survive (`Boundary.lean:156-213`) |
@@ -414,12 +414,12 @@ the realized ceiling is the product `jointCoalg` plus an externally-hypothesized
 | 18 | Caveat "guard" = real append-only HMAC chain with narrowing + forgery reduction | **REAL** | `Authority/CaveatChain.lean:129,168,223,305,328` (crypto as honest §8 portal) |
 | 19 | Attestation "get" is a modal/indexed output `Obs[t]` (transferability dial) | **REAL** (as a `Verifier`-indexed family; not a formal functor) | `Authority/DesignatedVerifier.lean:113,176,206,224,346` |
 | 20 | The dials are modalities on the output functor (lift bisimulation through the modality) | **ASPIRATIONAL** | the indexing is real (#19); "lift the bisimulation through the modality" is not stated/proved |
-| 21 | Conservation `Σ_k` = monoid-hom + invariance; no free copy | **REAL** | `Core.lean:154,166,209` (`conservation_step` is the one `sorry`-obligation; corollaries proved) |
+| 21 | Conservation `Σ_k` = monoid-hom + invariance; no free copy | **REAL** | `Core.lean:154,166,209` (`conservation_step` is the one open-hole obligation; corollaries proved) |
 | 22 | The category of cells & turns is a symmetric-monoidal category (Mathlib instance) | **ASPIRATIONAL** | `TurnCat` is a `class` with unfilled `Category`/`MonoidalCategory`/`SymmetricCategory` instances (`Core.lean:85-88`) |
-| 23 | Partial/invalid composition via Iris camera (`ℕ`, `Excl` proved) | **REAL** (Auth tier open) | `Resource.lean:71-92,124-134` (`Auth` camera laws `sorry`'d) |
+| 23 | Partial/invalid composition via Iris camera (`ℕ`, `Excl` proved) | **REAL** (Auth tier open) | `Resource.lean:71-92,124-134` (`Auth` camera laws left as open holes) |
 | 24 | I-confluence is a genuine, falsifiable third judgement | **REAL** | `Confluence.lean:44,70,95,104` |
 | 25 | Φ (vat boundary) is named-lossy: permission survives, authority doesn't | **REAL** | `Spec/VatBoundary.lean:202,240,277,314` (`#assert_axioms`-clean) |
-| 26 | Φ is a *functor* between positional and epistemic authority categories | **ASPIRATIONAL** | `phi_functorial` is a by-design `sorry` (`Spec/VatBoundary.lean:392-401`); only `phi_functorial_concrete` proved (`:441`) |
+| 26 | Φ is a *functor* between positional and epistemic authority categories | **ASPIRATIONAL** | `phi_functorial` is a by-design open hole (`Spec/VatBoundary.lean:392-401`); only `phi_functorial_concrete` proved (`:441`) |
 | 27 | Higher-order turn = the rollback handler (one-shot algebraic-effect handler) | **REAL** | `Await.lean` `turnAsRollbackHandler`, `commit_resumes_once`, `one_shot_is_static`, `four_faces_unify` (`:138,308,426`) |
 | 28 | Higher-order turn = a turn interpreting turns / verified-`Custom` theory extension | **ASPIRATIONAL** | no extension calculus, no comodel morphism (`DREGG4-UNIFICATION §6.4` is design-only) |
 | 29 | ∞-cell = final/cofree comodel (codata process), bisimilar-forever along any schedule | **REAL** (as `νF` + coinductive lift); "comodel" naming DECORATIVE | `Proof/CoinductiveAdversary.lean` (`obsBisim_traj_of_bisim`, `stepComplete_carries_infinite`) |

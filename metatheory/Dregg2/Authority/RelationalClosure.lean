@@ -48,7 +48,7 @@ This module builds that closure as ONE object:
 NEW file only. Does NOT edit `Exec.RelationalCaveat`, `Authority.Predicate`, `EffectsState`, or
 `Dregg2.lean`. Reuses `Exec.fieldOf` (the post-record scalar reader) and bridges to the live
 `Exec.RelationalCaveat.RelCaveat` so the promotion sits ON the existing surface. Every keystone
-`#assert_axioms`-pinned — no sorry, no `:= True`.
+`#assert_axioms`-pinned.
 -/
 import Dregg2.Exec.RelationalCaveat
 import Dregg2.Authority.Predicate

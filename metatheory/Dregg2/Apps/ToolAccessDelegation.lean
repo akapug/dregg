@@ -67,7 +67,7 @@ the credential-gated forest entry `execFullForestG` (the `dregg_exec_full_forest
 `StarbridgeGated` — so an invocation presented with a FORGED or REVOKED biscuit credential rolls back,
 and a genuine, in-scope token COMMITS. The `#guard`s exercise the full lifecycle on a concrete grant.
 
-`#assert_axioms`-clean, no `sorry`, no `:= True`, no `native_decide`. Pure, computable, `#eval`-able.
+`#assert_axioms`-clean. Pure, computable, `#eval`-able.
 NEW file only — touches NO existing app, `VerificationToolkit.lean`, `GatedForestCfg.lean`, the
 executor, nor `Dregg2.lean`.
 -/

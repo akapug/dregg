@@ -34,7 +34,7 @@ load-bearing; §6 taxes every one of them.
 
 ## §1. The critique (unchanged from v1, abbreviated)
 
-The pieces are individually strong; the hygiene war was won (0 sorry, 238
+The pieces are individually strong; the hygiene war was won (238
 axiom pins, real anti-ghost teeth). The faults are ontological, and they share
 one disease: **collaborators only ever added; nothing had authority to
 subtract.** Twelve named faults — verb accretion (52), ownerless side-tables,

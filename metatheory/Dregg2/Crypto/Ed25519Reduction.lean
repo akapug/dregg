@@ -34,8 +34,7 @@ as a reduction GAME, so the trust boundary is not just "carrier ⇒ protocol-saf
   forged block, an accepted forged token). So the reduction fires in both directions: under the real
   carrier no protocol forgery exists; strip the carrier and one concretely does.
 
-`#assert_axioms`-clean (⊆ `{propext, Classical.choice, Quot.sound}`); NO `sorry` / `:= True` /
-`native_decide`. The sole standing obligation is `Ed25519EufCma` on the Rust `@[extern]`
+`#assert_axioms`-clean (⊆ `{propext, Classical.choice, Quot.sound}`). The sole standing obligation is `Ed25519EufCma` on the Rust `@[extern]`
 `dregg_ed25519_verify` oracle — the named curve assumption.
 -/
 import Dregg2.Crypto.PortalFloor
@@ -303,7 +302,7 @@ end NonVacuity
 
 /-! ## §8 — Axiom-hygiene tripwires. Each keystone pins exactly the whitelist; the sole standing
 obligation is `Ed25519EufCma` on the `@[extern] dregg_ed25519_verify` oracle (the named curve
-assumption). No `sorry` / `:= True` / `native_decide`. -/
+assumption). -/
 
 #assert_axioms eufCma_iff_sound
 #assert_axioms eufCma_of_unforgeable

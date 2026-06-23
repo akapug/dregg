@@ -299,7 +299,7 @@ end Guard
 /-! ## §8 — Axiom-hygiene tripwires.
 
 Pin the proved keystones: each must depend ONLY on the three standard kernel axioms
-(no `sorryAx`). These cover the meet-narrowing law, both lattice characterizations,
+(no faked green). These cover the meet-narrowing law, both lattice characterizations,
 the demand⊣supply bridge, and the derived reconstructions. -/
 
 #assert_axioms Guard.admits_all

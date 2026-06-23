@@ -23,8 +23,7 @@ not secretly empty).
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Every inhabitation is a CONSTRUCTED term; no
-`sorry`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Every inhabitation is a CONSTRUCTED term; no fresh axiom. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.FloorsNonVacuous
 import Dregg2.Circuit.RotatedKernelRefinementCellSeal

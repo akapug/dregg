@@ -273,8 +273,7 @@ def introduceAEmitted : EmittedDescriptor := emittedEffect2 introduceAAirName in
 
 /-! ## §3 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms introduceGuardLocal
 #assert_axioms introduceGuardDecodes

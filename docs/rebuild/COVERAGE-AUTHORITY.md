@@ -44,7 +44,7 @@
 > The Authority *laws* in §1's matrix (attenuation, credential keystone, registry soundness, privacy
 > tiers, the CapTP Lean theorems) were re-checked line-by-line and **remain accurate** (receipts
 > refreshed). The two still-genuine OPEN items are **promise GC liveness** (§3, a `-- OPEN:` comment,
-> not a sorry — confirmed `CapTP.lean:405–412`) and **zkpromise/ConditionalTurn** (task #82, still
+> not an open proof hole — confirmed `CapTP.lean:405–412`) and **zkpromise/ConditionalTurn** (task #82, still
 > `in_progress`). The 85%/15% headline at §7 is now optimistic in dregg2's FAVOUR for authority: the
 > handoff gap (the bulk of the "dangerous 15%") is closed on the Lean side.
 
@@ -123,7 +123,7 @@ CapTP promise pipelining (captp/src/pipeline.rs, gc.rs) creates a graph of promi
 - The guarantees that prevent cross-vat cycles are **not formalized**
 
 **Lean Status:**
-- Exec/CapTP.lean documents the OPEN as a `-- OPEN:` comment, NOT a `sorry`/`axiom`
+- Exec/CapTP.lean documents the OPEN as a `-- OPEN:` comment, NOT an open hole/`axiom`
 - The law is **stated** (no cycle possible), NOT **proved**
 
 **Severity:** **HIGH**  

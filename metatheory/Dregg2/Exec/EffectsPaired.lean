@@ -785,8 +785,8 @@ theorem bridgeCancel_forward_sim {Statement Witness : Type} [Verifiable Statemen
 
 /-! ## §4 — Axiom-hygiene tripwires (the honesty pins over every keystone).
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. The generic spine + every effect's five keystones are proved. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. The generic spine +
+every effect's five keystones are proved. -/
 
 -- The shared bespoke machinery + generic spine:
 #assert_axioms setField'_read

@@ -74,7 +74,7 @@ The bridge is LOAD-BEARING for the linear face — conservation is forced by the
 costume. The coordination grading is HALF-derived: sound through `^⊥`, semantically completed by
 the join, and the CALM-flavored directed-union story is refuted on the deployed lattices.
 
-No `sorry`, no `:= True`, no `native_decide`; every keystone `#assert_axioms`-pinned.
+Every keystone `#assert_axioms`-pinned.
 -/
 import Dregg2.Calculus.Biorthogonality
 import Mathlib.Data.Set.Prod

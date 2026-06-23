@@ -27,7 +27,7 @@ block NATIVE grep-zero). STAYS (NOT grep targets): `EFFECT_VM_WIDTH`, `ACTIVE_BA
 
 ## ⚑ CONVERGENCE RESIDUE (green-the-tree; the checkpoint bundled non-building WIP)
 - DELETE the orphan broken `metatheory/Dregg2/Deos/Flow.lean` (the killed flow-lane's partial — REDUNDANT
-  with `Protocol/Workflow.lean`; never wired into the umbrella; was mid-`sorryAx`).
+  with `Protocol/Workflow.lean`; never wired into the umbrella; was mid-development with open holes).
 - servo scaffold: verify it compiles, then commit (or hold) — don't claim a render it didn't produce.
 - `cargo check --workspace --tests` is RED with ~172 pre-existing dregg3-reduction test-corpus rot
   (protocol-tests/dregg-dsl-tests/test-modules) — the "green the corpus" lane.

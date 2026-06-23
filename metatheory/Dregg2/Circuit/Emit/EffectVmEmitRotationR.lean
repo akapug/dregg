@@ -35,7 +35,7 @@ can be settled by MEASUREMENT instead of vibes:
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto only as the named
-`Poseidon2SpongeCR` hypothesis. No `sorry`, no `native_decide`. STAGED: nothing here rides
+`Poseidon2SpongeCR` hypothesis. STAGED: nothing here rides
 the live wire; the R=24/R=32 artifacts exist to be MEASURED.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotation

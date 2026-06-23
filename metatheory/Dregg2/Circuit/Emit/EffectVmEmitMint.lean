@@ -42,8 +42,8 @@ param1 = 0`, the nonce-tick gate, the frame frozen).
     (= MINT_HASH); the descriptor reads `param1`.
   * `state.RESERVED` not absorbed by any hash-site (inherited transfer-keystone finding).
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR = NAMED hypothesis. No sorry /
-:= True / native_decide / rfl-bridge. Imports read-only.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR = NAMED hypothesis.
+Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding

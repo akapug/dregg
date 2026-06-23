@@ -54,8 +54,7 @@ designation, never the mechanical column reads — exactly the minimal set.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The publish ties enter as Prop
-hypotheses; the column reads are `rfl`. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom.
-NEW file; imports read-only.
+hypotheses; the column reads are `rfl`. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.DescriptorIR2

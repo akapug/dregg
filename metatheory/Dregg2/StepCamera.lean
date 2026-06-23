@@ -45,7 +45,7 @@ decrements are the same decrement.
   (`≡{n}≡` = `=`); the discrete tier of `Resource.lean` is the `n`-collapsed special case.
 * a design note pinning the higher-order obligation that forces all of the above.
 
-Style: spec-first, grind up — faithful Props, `sorry` bodies; data defined where cheap.
+Style: spec-first, grind up — faithful Props, open bodies; data defined where cheap.
 -/
 import Dregg2.Resource
 import Dregg2.Boundary

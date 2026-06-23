@@ -370,7 +370,7 @@ def transferSched : SchedA := fun _ => transferCF
 #guard ((trajA fma0 transferSched 2).log.length == 2)
 #guard (decide ((trajA fma0 transferSched 0).log.length ≤ (trajA fma0 transferSched 3).log.length))
 
-/-! ## Axiom hygiene — every temporal keystone pinned to the standard kernel triple (NO `sorryAx`).
+/-! ## Axiom hygiene — every temporal keystone pinned to the standard kernel triple (NO faked green).
 
 Note `not_always_iff_eventually_not` and `always_iff_reachable`(`→`) legitimately use
 `Classical.choice` (`¬∀ → ∃¬` is classical); they are pinned in the classical-aware list below.

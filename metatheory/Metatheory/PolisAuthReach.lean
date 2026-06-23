@@ -12,7 +12,7 @@ Grounded on the real `Dregg2.Authority.Auth`: `grant` is the delegation authorit
 node-cap authority — holding either lets you derive any authority. `Reaches` is the reachability over
 that derivation; it generalizes the static `Viable` (which is `Derives = refl` only).
 
-No `sorry`; the load-bearing facts are `decide`-checked on a concrete two-path model.
+The load-bearing facts are `decide`-checked on a concrete two-path model.
 -/
 import Metatheory.SafetyGame
 import Metatheory.PolisAuthGame

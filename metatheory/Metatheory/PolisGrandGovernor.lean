@@ -25,8 +25,8 @@ governor, one guarantee, three textures, grounded in the algebra of `combineFloo
 Honest scope: the unified world is small and finite (two `Bool` agents, `decide`-cheap), and each
 named adversary is a scripted / bounded Lean policy, not an LLM. What is genuinely universal is the
 governor: `grand_no_adversary_captures` quantifies over ALL controllers, so the three named
-adversaries are merely the recognizable witnesses that the universal guarantee is non-vacuous. No
-`sorry`, no load-bearing `True`; every concrete claim is `decide`-checked on the live world.
+adversaries are merely the recognizable witnesses that the universal guarantee is non-vacuous.
+Every concrete claim is `decide`-checked on the live world.
 -/
 import Metatheory.PolisSandboxUnified
 import Metatheory.PolisGovernorTheory

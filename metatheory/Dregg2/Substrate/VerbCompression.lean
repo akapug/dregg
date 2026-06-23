@@ -86,8 +86,7 @@ frames), `Exec.Caps`'s REAL rights lattice (`ExecAuth = Finset Auth`, the genuin
 separation theorems are stated against atom CONJUNCTIONS — the deployed guard shape
 (`caveatsAdmit` / `heapAtomsAdmit` are both `.all`). The executor-state bridge (interpreting
 `RecordKernelState` itself into the one map) rides THE ONE ROTATION; this module settles the
-guard-class mathematics that rotation decision needs. No `sorry`, no `:= True`, no
-`native_decide`; every theorem `#assert_axioms`-pinned.
+guard-class mathematics that rotation decision needs. Every theorem `#assert_axioms`-pinned.
 -/
 import Dregg2.Substrate.Heap
 import Dregg2.Substrate.VerbRegistry

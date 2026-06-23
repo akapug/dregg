@@ -8,7 +8,7 @@
 The formal statement lives in `Dregg2/Calculus/DreggCalculus.lean` as a small Lean spec.
 It is **not new heavy proof** — it is a thin *presentation* over types and theorems that
 already exist in the tree. Every law is a pointer to a landed theorem, or a `def`/`example`
-that typechecks. The module is `#assert_axioms`-clean (no `sorry`, no `:= True`).
+that typechecks. The module is `#assert_axioms`-clean.
 
 The headline is the theorem `Dregg2.Calculus.dregg_calculus`: for any committed reduction it
 delivers the three faces below at once.

@@ -67,7 +67,7 @@ confined branch whose main-debit IS refused; `unconfined_branch_can_drain` exhib
 hypothesis is load-bearing. `stitch_pushout_nonvacuous` exhibits a real non-trivial stitch with a
 genuine clash, and `stitch_drop_strict_loss` exhibits a drop that strictly loses (≠ full merge).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Deos.BranchStitch`. Pure; spec-first; staged-additive (no shared
 file edited — the one-line `import Dregg2.Deos.BranchStitch` into `Dregg2/Deos.lean` is REPORTED).
 -/

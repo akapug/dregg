@@ -86,7 +86,7 @@ lifecycle + per-slot caveats). A committed temporal write IS a committed `stateS
 atom list it IS the existing guarded write (`temporalStateStepGuarded_nil_eq`) — nothing regresses.
 
 Pure; computable; `#guard`-witnessed both ways (vesting + auction). Every keystone
-`#assert_axioms`-pinned to {propext, Classical.choice, Quot.sound}. No sorry, no `:= True`.
+`#assert_axioms`-pinned to {propext, Classical.choice, Quot.sound}.
 -/
 import Dregg2.Exec.EffectsState
 import Dregg2.Proof.CTL

@@ -59,7 +59,7 @@ NON-VACUITY both polarities (`#guard` teeth that BITE per organ): a publisher co
 and REFUSES an unheld one; an attenuated subscriber receives a strict SUBSET; a sender delivers a held
 badge and REFUSES an unheld one; an event producer emits a held subject and REFUSES an unheld one.
 
-Axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. `lake build` green
+Axiom-clean (`#assert_all_clean` at the close). `lake build` green
 (LOCAL). WIDE-SAFE: NO core `Auth`, NO circuit, NO felt-encoder, NO VK — runs on the committed Step-1
 `NotifyAuthority` + the existing organ models. Imports `NotifyAuthority` (reuses its body, does not edit
 it); does NOT edit Apps / the kernel / `SwarmSignal` / any Metatheory/*.
@@ -436,8 +436,8 @@ def egSubjectCap : NotifyCap := { target := 9, rights := .signature, badgeMask :
 
 end Witnesses
 
-/-! ## §6 — Axiom hygiene. Every load-bearing weld theorem is checked kernel-clean (no `sorry`, no
-extra `axiom`, only `propext`/`Classical.choice`/`Quot.sound`). -/
+/-! ## §6 — Axiom hygiene. Every load-bearing weld theorem is checked kernel-clean (only
+`propext`/`Classical.choice`/`Quot.sound`). -/
 
 #assert_all_clean [
   pubsubPublish_refuses_unheld_kind,

@@ -42,8 +42,8 @@ forest of caveat-gated field writes is, end-to-end, one memory program. Arms not
 keystone enter as the explicit per-step hypothesis — the residual the critique asks to be named, not
 laundered: `EachStepMemProg` is a Prop the caller must supply, never assumed here.
 
-Axiom hygiene: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} throughout; no `sorry`,
-no `:= True`, no `native_decide`. The composition is pure list algebra over the existing keystones.
+Axiom hygiene: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} throughout.
+The composition is pure list algebra over the existing keystones.
 -/
 import Dregg2.Exec.UniversalBridge
 import Dregg2.Exec.FullForestAuth

@@ -16,7 +16,7 @@
 > CapTP's `handoff_non_amplifying` is **assumed, not enforced** by `validate_handoff`.
 > **None of these gaps gate the CORE swap** — the choreography deadlock-freedom OPEN
 > is *off* the single-cell critical path entirely (and is, in fact, no longer a bare
-> `sorry`). They gate the **cross-cell / federation extension**. There is **zero
+> open hole). They gate the **cross-cell / federation extension**. There is **zero
 > Lean⇄Rust conformance harness for the distributed layer** today (the FFI golden-oracle
 > cascade covers only the scalar/record *kernel*), and that — not any single
 > theorem — is the highest-leverage risk.
@@ -36,7 +36,7 @@
 | C2 | `CapTP.handoff_is_introduce` / Granovetter `connected` (`CapTP.lean:248,276`) | 3-vat introduction: A reaches B, A holds target, target consents — only connectivity begets connectivity. | `HandoffCertificate` flow (`handoff.rs:106–164`); swiss pre-registration at target (`:139`) | sig/trust tests only | **PARTIAL.** The *connectivity* premise (A must be able to deliver the cert to B; A pre-registered the swiss at the target) is realized structurally. But Lean's `connected : G.has introducer recipient` and `holds_target : G introducer held` are **graph facts the Rust never materializes** — there is no capability-graph object in `captp/` against which "A actually holds this" is checked; the swiss entry is self-asserted. Same root cause as C1. |
 | C3 | `CapTP.handoff_forwarder_revocable` / `phi_drops_confinement` (`CapTP.lean:341,356`) | The handed-off cross-vat cap is a **revocable forwarder**: target vat can revoke by ceasing to honor the witness; permission survives, authority does not. | `SwissTable` expiry / `enliven` use-count (`sturdy.rs:159`, `EnlivenError::Expired/ExhaustedUses`); routing token issued per-validate (`handoff.rs:413`) | expiry/exhaustion unit tests (`sturdy.rs:239,264`) | **CONFORMS.** Swiss expiry + max-uses + fresh per-validate routing token IS the revocable-forwarder mechanism: the target stops honoring → the crossed cap fails to admit. Matches `ForwardedRevocable` faithfully. |
 | C4 | `CapTP.pipelining_preserves_seam` (`CapTP.lean:131`) | Resolving a promise delivers the queued call but does **not** discharge its authorization. | `pipeline.rs::resolve_promise` drains queued `PipelinedMessage`s, each carrying `PipelinedAction.authorization` | (none vs Lean) | **CONFORMS in shape** — `resolve_promise` returns the queued message *with* its `authorization` for the executor to re-check; it does not run the auth. The Lean theorem is `Iff.rfl` (delivery only rewrites `targetCell`), so the conformance burden is "the executor re-validates `authorization` after delivery" — a property of the *executor*, not `pipeline.rs`; **unverified-by-test** that the executor actually does. |
-| C5 | `CapTP §4` distributed-GC liveness (`CapTP.lean:405`, an `-- OPEN:`) | Eventual reclamation of unreachable exported caps. | `captp/src/gc.rs` (23 KB) | — | **HONEST OPEN both sides.** Lean leaves it a documented `-- OPEN:` (not a `sorry`); `gc.rs` is refcount + lease-timeout, which is exactly the "death is timed-out, never decided" resolution `OPEN-PROBLEMS.md` adjacent-residual #1 mandates. No conformance obligation — both sides agree it's lease-based. |
+| C5 | `CapTP §4` distributed-GC liveness (`CapTP.lean:405`, an `-- OPEN:`) | Eventual reclamation of unreachable exported caps. | `captp/src/gc.rs` (23 KB) | — | **HONEST OPEN both sides.** Lean leaves it a documented `-- OPEN:` (not an open-hole obligation); `gc.rs` is refcount + lease-timeout, which is exactly the "death is timed-out, never decided" resolution `OPEN-PROBLEMS.md` adjacent-residual #1 mandates. No conformance obligation — both sides agree it's lease-based. |
 | D1 | `DfaRouting.routed_message_followed_accepting_route` (delivery soundness) (`Dregg2/Exec/DfaRouting.lean:139`) | No delivery except along a run ending in an accepting state (`last_accept?` gate). | `Router::classify_inner` (`dfa/src/router.rs`, the `let (accept_state, _) = last_accept?;` gate; `next == DEAD_STATE → break`) | Rust router tests; Lean has fail-closed `Reference` section | **CONFORMS — the cleanest of the four.** The Lean `Delivery.routes` proof-obligation IS `classify_inner`'s `last_accept?` early-return: no accepting state reached ⇒ `None` ⇒ `Unrouted` ⇒ no delivery. DEAD_STATE-breaks-walk = `δ` partiality. |
 | D2 | `DfaRouting.unique_route` (determinism / no-misroute) (`DfaRouting.lean:184`) | Functional `δ` ⇒ a message has a unique route/destination. | flat `transitions[state*256+byte]` table (`router.rs`, single `StateId` per cell) | router tests | **CONFORMS.** The flat single-`StateId`-per-cell table IS `Deterministic` (`δ` functional in `(node,hop)`). |
 | D3 | `DfaRouting.route_authorization` (verify-seam respect) (`DfaRouting.lean:267`) | Cannot route past an unauthorized hop; `GovernedRouter` installs tables behind a governance proof. | `GovernedRouter::update_routes` (`router.rs:669,726`) | router governance tests | **CONFORMS at table-install granularity; PER-HOP guard is Lean-only.** Rust gates *table installation* on a governance proof; the Lean `GuardedDelivery`'s per-hop `RouteAuthorized` is a finer obligation the Rust router does not implement hop-by-hop (it composes with slot caveats elsewhere, per the `dfa/src/lib.rs` "Composition notes"). Finer in Lean, coarser in Rust — not a soundness divergence, a granularity gap. |
@@ -46,7 +46,7 @@
 ## 2. THE choreography deadlock-freedom OPEN — does it gate the CORE swap?
 
 **Sharp verdict: NO. It does not gate the swap of the single-cell turn executor.
-And it is no longer the bare `sorry` the brief assumed.**
+And it is no longer the bare open hole the brief assumed.**
 
 Two findings, both load-bearing.
 
@@ -55,7 +55,7 @@ Two findings, both load-bearing.
 The brief's premise ("`deadlock_free_of_projectable` is STATED-NOT-PROVED") is
 **out of date**. `Dregg2/Coordination.lean:816` carries
 `deadlock_freedom_by_design` as a **genuine theorem** with a real body and
-`#assert_axioms deadlock_freedom_by_design` (`:912`, sorry-free). The honest
+`#assert_axioms deadlock_freedom_by_design` (`:912`, no open holes). The honest
 history is right there in the file:
 
 - The *old* statement — progress over the **initial** projections — was found
@@ -240,7 +240,7 @@ certificate — the same status the kernel already enjoys.
   executor's laws are proved and FFI-cascaded; no blocklace/CapTP/DFA conformance
   gap and no choreography OPEN sits on its path (§2, §3 Tier-0 = empty).
 - **The choreography deadlock-freedom theorem is PROVED** (reachable-config form,
-  `NoRec` fragment, sorry-free; `Coordination.lean:816,912`) — the brief's
+  `NoRec` fragment, no open holes; `Coordination.lean:816,912`) — the brief's
   "stated-not-proved" premise is stale. The remaining coordination opens
   (#1/#2/#3, recursive fragment, full bisimulation) gate the **multi-party
   extension**, not the core.

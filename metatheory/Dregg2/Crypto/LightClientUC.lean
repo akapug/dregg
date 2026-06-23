@@ -42,7 +42,7 @@ third (the part that genuinely lives outside Lean):
   structure (`DynamicUCResidual`) so it is named, not hidden — and we DISCHARGE the cheapest real
   sub-lemma (the static reduction (2)) inside it.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`. Both-polarity
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Both-polarity
 non-vacuity: the floor carriers make the client `Unfoolable` (§4a), and a BROKEN floor (an
 accepts-everything verifier) makes it `Foolable` (§4b) — so `Unfoolable` is a real proposition that the
 floor earns and a forgeable oracle loses.

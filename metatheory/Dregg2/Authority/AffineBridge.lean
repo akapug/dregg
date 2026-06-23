@@ -44,7 +44,7 @@ NEW file only. Imports BOTH `Exec.Program` (for the cell-program `affineSum`/`ev
 `Authority.RelationalClosure` (for the closure `affineSum`/`RelPred`). Touches neither — it sits
 between them. This is a LIGHT module (it does not pull `EffectsState`'s heavy chain into `Program`,
 which would happen were the bridge placed in `Program.lean` itself). Every keystone
-`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`.
+`#assert_axioms`-pinned to `{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.Program
 import Dregg2.Authority.RelationalClosure

@@ -58,8 +58,7 @@ columns to the EffectVM `nullifiers` root via a Merkle/sorted-tree opening (so t
 reads are PROVABLY the committed neighbors, not prover-chosen) — the sorted-tree opening gate that the
 4-arity Poseidon2 hash-site IR still lacks. We state that boundary precisely rather than fake it.
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; no `sorry`, no `:= True`, no
-`native_decide`. Imports are READ-ONLY; this file owns only itself.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Imports are READ-ONLY; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Policy
 import Dregg2.Circuit.Emit.EffectVmEmitNoteSpend
@@ -817,7 +816,7 @@ theorem noteSpend_runnable_full_sound_argus (hash : List ℤ → ℤ)
 
 #assert_axioms noteSpend_runnable_full_sound_argus
 
-/-! ## §9 — Axiom-hygiene tripwires. Each keystone ⊆ {propext, Classical.choice, Quot.sound}; no `sorryAx`. -/
+/-! ## §9 — Axiom-hygiene tripwires. Each keystone ⊆ {propext, Classical.choice, Quot.sound}. -/
 
 -- Executor side:
 #assert_axioms interp_noteSpendStmt_eq_noteSpendNullifier

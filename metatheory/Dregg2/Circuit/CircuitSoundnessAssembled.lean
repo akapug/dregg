@@ -62,8 +62,7 @@ plus the standard crypto/extraction floors — NOT an opaque carried `∀`.
 
 `#assert_axioms` on the capstone theorems ⊆ {propext, Classical.choice, Quot.sound}. The named carriers
 (`StarkSound`, `Poseidon2SpongeCR`, the `CommitSurface` CR fields, `WitnessDecodes`, the
-`EffectDecodeBridge` family) are HYPOTHESES, not axioms — they do not appear in the axiom set. No
-`sorry`, no `native_decide`, no `:= True`, no fresh axiom.
+`EffectDecodeBridge` family) are HYPOTHESES, not axioms — they do not appear in the axiom set.
 -/
 import Dregg2.Circuit.CircuitSoundness
 import Dregg2.Circuit.RotatedKernelRefinementFacet

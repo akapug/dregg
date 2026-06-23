@@ -27,7 +27,7 @@ committed guarded write under the corresponding caveat.
 
 NEW file only. Does NOT edit `RelationalCaveat`/`EffectsState`/`Dregg2.lean` or any Metatheory/*.
 Imports + reuses the proved surface; every result `#assert_axioms`-pinned to
-`{propext, Classical.choice, Quot.sound}` — no sorry, no `:= True`.
+`{propext, Classical.choice, Quot.sound}`.
 -/
 import Dregg2.Exec.RelationalCaveat
 

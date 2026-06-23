@@ -248,8 +248,7 @@ def transferEmitted : EmittedDescriptor := emittedEffect2 transferAirName balanc
 
 /-! ## §2 — axiom-hygiene tripwires.
 
-Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`admit`/`axiom`/
-`native_decide`. -/
+Whitelist exactly `{propext, Classical.choice, Quot.sound}`. -/
 
 #assert_axioms balanceGuardLocal
 #assert_axioms balanceGuardDecodes

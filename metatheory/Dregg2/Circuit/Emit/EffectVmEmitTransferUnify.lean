@@ -71,8 +71,7 @@ of universe-A, transfer leaves the cell's nonce untouched.)
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. No `sorry`, no `:= True`,
-no `native_decide`, no `rfl`-posing-as-bridge. Imports are read-only (`Transfer`, the keystone Sound
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Imports are read-only (`Transfer`, the keystone Sound
 module); this module edits nothing.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound

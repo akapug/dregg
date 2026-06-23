@@ -20,7 +20,7 @@ while admitting all honest play. Contrast, proven:
   * `the_long_move_passes_safety_fails_liveness` — the close passes safety but fails liveness, in one
     line: that gap IS the long game.
 
-Pure Lean 4 core; no `sorry`.
+Pure Lean 4 core.
 -/
 import Metatheory.Polis
 

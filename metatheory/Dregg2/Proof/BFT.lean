@@ -30,7 +30,7 @@ This file adds the adversary/honesty model as an explicit structure (`BFTModel`)
     — reducing the oracle assumption to "honest votes are delivered within Δ after GST".
 
 OPEN (O2 residual): a from-scratch proof that a `GSTRound` eventually obtains (pacemaker /
-view-synchrony); see the `OPEN` block in §4. This is left as a named obstruction, not a sorry.
+view-synchrony); see the `OPEN` block in §4. This is left as a named obstruction, not an open hole.
 
 All adversary assumptions are structure fields.
 -/
@@ -291,7 +291,7 @@ theorem gstRound_of_productivity [World Msg]
   exact ⟨r, hr⟩
 
 /-
-OPEN (O2 residual, not a sorry): a from-scratch proof that a `GSTRound` eventually obtains —
+OPEN (O2 residual, not an open hole): a from-scratch proof that a `GSTRound` eventually obtains —
 the pacemaker / view-synchronization argument. Requires: (i) relating `World.clock` to Δ-bounded
 delivery; (ii) a modeled view automaton with leader rotation and timeouts; (iii) the FLP-respecting
 argument that an honest leader is eventually hit. `World.gst_liveness` remains the assumed oracle
@@ -301,7 +301,7 @@ law; this file reduces its premise to Δ-delivery (not the full conclusion).
 /-! ## 5. Axiom hygiene — every keystone is kernel-clean.
 
 All theorems reduce to `BFTModel` structure fields (hypotheses, not axioms) and `GSTRound` (a
-`def`-as-premise); none pull `sorryAx` or any oracle axiom. -/
+`def`-as-premise); none pull any oracle axiom. -/
 #assert_axioms honest_witness_in_intersection
 #assert_axioms bft_safety
 #assert_axioms bft_agreement

@@ -35,7 +35,7 @@ off-row.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY as the named
-hypothesis. No `sorry`, no `:= True`, no `native_decide`. Read-only imports.
+hypothesis. Read-only imports.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Emit.EffectVmEmitRevokeDelegation

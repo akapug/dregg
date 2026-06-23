@@ -62,7 +62,7 @@ meter blow-out, a forged tier, an impostor sender, and a replayed period.
     program-check time (Rust `old_balance`/`new_balance`); the §8 seam is the kernel balance carrier,
     not a record field. The metering arithmetic is proved here.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide` —
+Discipline: axiom-clean (`#assert_all_clean` at the close) —
 `decide` / `#guard` / `Exec.Program`-keystone reuse only. `lake build` green (LOCAL).
 -/
 import Dregg2.Exec.Program

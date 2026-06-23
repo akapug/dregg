@@ -65,7 +65,7 @@ chained/signed/witness-receipted export is the interop lane (`docs/ORGANS.md:134
 W-organ-3); this module is the kernel-side semantics it exports.
 
 l4v bar: `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto enters ONLY as the
-named `KeySetCR` hypothesis; no `sorry`, no `:= True`, no `native_decide`. Non-vacuity both
+named `KeySetCR` hypothesis. Non-vacuity both
 polarities: honest rotations COMMIT (#guard, executed), forged/uncooled rotations REFUSE.
 -/
 import Dregg2.Exec.EffectsState

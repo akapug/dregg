@@ -44,7 +44,7 @@ existed offline. Teeth both polarities: a real leg verifies (`privLeg_real_verif
 "conjure value out of nothing" leg is rejected by the honest carrier
 (`privLeg_forged_rejected`).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 -/
 import Dregg2.Distributed.EntangledJoint
 import Dregg2.Crypto.PortalFloor

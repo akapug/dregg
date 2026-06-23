@@ -352,7 +352,7 @@ end Evals
 /-! ## §7. Axiom-hygiene pins (`#assert_axioms`).
 
 Each pin elaborates to an error if the keystone depends on any axiom outside
-`{propext, Classical.choice, Quot.sound}` (notably `sorryAx`). -/
+`{propext, Classical.choice, Quot.sound}`. -/
 
 -- §1 conditional drift-stability
 #assert_axioms iconfluent_iff_under_top

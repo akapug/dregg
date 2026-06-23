@@ -60,7 +60,7 @@ dregg's cap-non-amplification (the `AssuranceCase.running_entry_sound` cap-autho
 `AssuranceCase.lean:641`) from it, under EXPLICIT named embedding/relabelling hypotheses — that bundle
 of hypotheses IS the SEL4-DERIVE-NONAMP-BRIDGE assumption.
 
-Discipline: axiom-clean (`#assert_all_clean` at the close), no `sorry`, no `native_decide`. Verified
+Discipline: axiom-clean (`#assert_all_clean` at the close). Verified
 standalone: `lake env lean Dregg2/Firmament/SeL4Abstract.lean`.
 -/
 import Dregg2.Authority.Positional
@@ -602,7 +602,7 @@ theorem dregg_executor_cap_authority_grounded_in_seL4
   rw [B.reflectAuth (Dregg2.Exec.attenuate keep c), B.reflectAuth c]
   exact hmono
 
-/-! ## §6 — Axiom hygiene. Every load-bearing transcription + lemma is kernel-clean (no `sorry`, no
+/-! ## §6 — Axiom hygiene. Every load-bearing transcription + lemma is kernel-clean (no
 extra `axiom` beyond the opaque-`Type`/`opaque`-decl carriers which are NOT `axiom`-keyword decls and
 so don't trip the guard; only `propext`/`Classical.choice`/`Quot.sound`). -/
 

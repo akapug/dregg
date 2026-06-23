@@ -74,7 +74,7 @@ mismatches:
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. All carriers enter as Prop/structure
-fields; no `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports read-only.
+fields; no fresh axiom. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureFinal
 import Dregg2.Distributed.FinalizedLightClient

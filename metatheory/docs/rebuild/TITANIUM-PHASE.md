@@ -40,14 +40,14 @@ of the N descriptions is real). Nothing above Phase 0 is trustworthy until Phase
   for cells/contracts — compiling to the one circuit, with a **compiler-correctness theorem** (source semantics
   ⟹ circuit semantics) — or it is deleted and the single real authoring path is named. No half-maintained DSL.
 - **0.5 · ONE assumption set, ZERO narration.** The trust base is a single, explicit, machine-checked list (§
-  Crown). And purge the cruft: the comments that *narrate* "we don't use sorry / no lurking holes" are deleted —
-  the discipline lives in `#assert_axioms`, not in prose about it, and the prose poisons every `grep sorry`.
+  Crown). And purge the cruft: the comments that *narrate* "we don't use open holes / no lurking holes" are deleted —
+  the discipline lives in `#assert_axioms`, not in prose about it, and the prose poisons every open-hole grep.
 - **0.6 · ONE CI gate.** A single matrix that fails a PR on: Lean not axiom-clean, Rust tests red, Isabelle
-  (`isabelle build`) red, the `DREGG_LEAN_SHADOW_STRICT=1` differential diverging, *or* a `grep sorry` hit that
+  (`isabelle build`) red, the `DREGG_LEAN_SHADOW_STRICT=1` differential diverging, *or* an open-hole grep hit that
   isn't a registered open front. Coherence is enforced, not aspired to.
 
 **Milestone 0 (the gate to everything else):** the repo contains exactly one prover, one circuit source, one
-commit-path executor, one authoring language, one assumption list; `grep -r sorry` returns only registered
+commit-path executor, one authoring language, one assumption list; the open-hole grep returns only registered
 fronts; and the single CI matrix is green.
 
 ---

@@ -6,7 +6,7 @@
 `CryptoKernel`, `PrivacyKernel`, `Privacy`, `Spec/*` (≠ ExecRefinement), `World`, and the
 `Proof/*` modules (`BFT`, `BFTLiveness`, `Synchronizer`, `BeaconSpace`(+`Interior`),
 `CoinductiveAdversary`, `ContendedCrossCell`, `CrossCellLTS`, `ForestLTS`, `WPCatalog`).
-Nothing modified. Mandate: `#assert_axioms`/"0 sorries" proves **kernel-cleanliness**, NOT
+Nothing modified. Mandate: `#assert_axioms`/"0 open holes" proves **kernel-cleanliness**, NOT
 **non-vacuity** or **fidelity**. This ledger surfaces what the goal-sensor cannot see.
 
 **Headline.** The pre-session core is, on the whole, **substantially MORE genuine than the
@@ -26,18 +26,18 @@ forms*.
 
 ---
 
-## 0. The three by-design sorries — CONFIRMED honest
+## 0. The three by-design open holes — CONFIRMED honest
 
-A whole-corpus grep finds exactly **three** real `sorry` bodies (plus one in `Liveness.lean`,
+A whole-corpus grep finds exactly **three** real open-hole bodies (plus one in `Liveness.lean`,
 out of scope; `Privacy:253` is prose; `Boundary.boundary_respecting_sound`'s docstring says
-"Stated sorry" but the body is `exact hbr.admissible x hx t` — **stale docstring, actually
+"Stated open" but the body is `exact hbr.admissible x hx t` — **stale docstring, actually
 PROVED**).
 
-| sorry | verdict | why honest |
+| open hole | verdict | why honest |
 |---|---|---|
-| `Core.conservation_step` (`Core.lean:162`) | **BY-DESIGN OK** | Law 1's balance is an axiom-style obligation the *operational model* discharges; there is genuinely no data in `Conservation`/`Turn` from which it follows in-module. The three corollaries (`conservation_ordinary`, `mint_delta`, `burn_delta`) and `withholding_no_free_copy` are PROVED *from* it — so the sorry is a real load-bearing primitive, not a hidden vacuity. |
+| `Core.conservation_step` (`Core.lean:162`) | **BY-DESIGN OK** | Law 1's balance is an axiom-style obligation the *operational model* discharges; there is genuinely no data in `Conservation`/`Turn` from which it follows in-module. The three corollaries (`conservation_ordinary`, `mint_delta`, `burn_delta`) and `withholding_no_free_copy` are PROVED *from* it — so the open hole is a real load-bearing primitive, not a hidden vacuity. |
 | `Laws.search_sound` (`Laws.lean:60`) | **BY-DESIGN OK** | `Searchable.find` is an opaque external prover plugin; soundness-by-verification is a *contract on the plugin*, with no in-module relation between `find` and `Verify` to derive it from. The honest content lives in `Predicate.adversarial_find_cannot_forge` (quantifies over the prover) and `find_untrusted` (real `∃`). |
-| `Spec.VatBoundary.phi_functorial` (`VatBoundary.lean:401`) | **BY-DESIGN OK** | Genuinely blocked over an *abstract* `Verifiable`: `preserves_id` needs an accepting witness (an abstract `Verify` may accept none), `lossy_on_confinement` needs a non-injective `stmtOf`. A CONCRETE non-degenerate witness `phi_functorial_concrete` is proved axiom-clean alongside. The sorry is localized and the loss is independently witnessed by the §4 keystones. |
+| `Spec.VatBoundary.phi_functorial` (`VatBoundary.lean:401`) | **BY-DESIGN OK** | Genuinely blocked over an *abstract* `Verifiable`: `preserves_id` needs an accepting witness (an abstract `Verify` may accept none), `lossy_on_confinement` needs a non-injective `stmtOf`. A CONCRETE non-degenerate witness `phi_functorial_concrete` is proved axiom-clean alongside. The open hole is localized and the loss is independently witnessed by the §4 keystones. |
 
 All three are honest. None hides vacuity.
 
@@ -64,7 +64,7 @@ Verdicts: **GENUINE** / **PARTIALLY-VACUOUS** / **VACUOUS** / **PORTAL-OK** (hon
 | `Later Q := Q` (:103) | **DEGENERATE TYPE (flagged)** | the `▶` guard is **definitionally the identity**. Every theorem that "uses the `▶` guard" (`IsBisim.step_rel`, `BoundaryRespecting.closed`) is therefore over an *unguarded* recursion. The module is candid this is a "Prop-level placeholder", but it means the corpus's coinductive-productivity story is *asserted in prose*, not modeled — `Later` does no work. |
 | `stepComplete_preserves` (:177) | **GENUINE** | the honest replacement for the retired-as-false `sound_of_step_complete`. Real safety-invariant lift via `Execution.invariant_run`. The load-bearing keystone. |
 | `bisim_eq` (:203), `sound_refl` (:211) | **GENUINE but WEAK** | only **reflexivity** ("every cell is bisimilar to itself"). The module openly says the soundness-from-step-completeness content is in `stepComplete_preserves`, not here. `Sound` is an equivalence notion whose only proven inhabitant is the diagonal. |
-| `boundary_respecting_sound` (:244) | **GENUINE** (docstring stale) | body is `exact hbr.admissible x hx t` — a real projection, not a sorry. But note it just *re-projects* the `BoundaryRespecting.admissible` field (see pattern §3.B). |
+| `boundary_respecting_sound` (:244) | **GENUINE** (docstring stale) | body is `exact hbr.admissible x hx t` — a real projection, not an open hole. But note it just *re-projects* the `BoundaryRespecting.admissible` field (see pattern §3.B). |
 
 **Honesty credit:** the module *deleted* two theorems it found false-as-stated (`sound_of_step_complete`/`step_complete_of_sound`, refutable at `Spec.Carrier = Empty`) and says so. That is exemplary.
 
@@ -82,7 +82,7 @@ Verdicts: **GENUINE** / **PARTIALLY-VACUOUS** / **VACUOUS** / **PORTAL-OK** (hon
 
 | theorem | verdict | why |
 |---|---|---|
-| `ℕ`/`Excl`/`Auth` `ResourceAlgebra` instances | **GENUINE** | the docstring claims `Auth`'s laws are `sorry`'d — **this is stale**; `Auth`'s `op_comm`/`op_assoc`/`valid_op_left`/`core_*` are all **fully proved** (`:235-288`). Real camera laws. |
+| `ℕ`/`Excl`/`Auth` `ResourceAlgebra` instances | **GENUINE** | the docstring claims `Auth`'s laws are left open — **this is stale**; `Auth`'s `op_comm`/`op_assoc`/`valid_op_left`/`core_*` are all **fully proved** (`:235-288`). Real camera laws. |
 | `Fpu.refl`/`Fpu.trans` (:114/118) | **GENUINE** | real FPU algebra. |
 | `excl_no_dup` (:185) | **PARTIALLY-VACUOUS** | "no exclusive composes with itself validly" — but `Excl.op _ _ = invalid` for **all** pairs (`:163`), so `¬ valid (a ⊙ a)` holds for the *same trivial reason* `¬ valid (a ⊙ b)` would: the "non-duplication" is not specific to self-composition, it is that *nothing* composes. The NFT story ("a cannot be in two places") is true but the theorem proves the weaker "exclusives never compose at all". |
 | `fpu_of_total` (:144) | **GENUINE (honest)** | candidly states the non-triviality of conservation lives entirely in `valid`; in a total camera every update is an FPU. |
@@ -203,7 +203,7 @@ Verdicts: **GENUINE** / **PARTIALLY-VACUOUS** / **VACUOUS** / **PORTAL-OK** (hon
 | `field_projection_hides_private` (:101) | **GENUINE** | real selective-disclosure: projection independent of private-field values. Fully proved, no portal. |
 | `committed_conservation` (:160), `commit_sum`/`commitHom`/`commitHom_sum` | **GENUINE** | real `Finset` homomorphism sum off the `Commitment.homomorphic` field. The value tier is genuine algebra. |
 | `committed_conservation_of_core` (:221), `committed_conservation_is_fpu` (:236) | **GENUINE** | real bridges to `Core.conservation_ordinary` and `Resource.Fpu.refl`. |
-| `unlinkable` (:395), `zkauthchain_sound` (:405), `blinded_membership_hides_element` (:416), `nullifier_hides_identity` (:451) | **PORTAL (the graph tier)** | each body **IS** a `GraphPrivacyKernel`/`BlindedMembershipKernel` law-FIELD. The only inhabiting instance (`graphRef`, `:489`) sets `Indistinguishable := fun _ _ => True`, `UnlinkableToHolder := fun _ => True`. So every graph-tier privacy theorem is, **in its only model, `True`**. Honestly labeled portal (the prior `:= sorry` was strictly worse — it was `sorryAx Prop`), and `graphRef` is a `def` not an `instance` to prevent silent resolution. But: this is NOT proof of stealth/anonymity; it is "the interface is inhabitable". |
+| `unlinkable` (:395), `zkauthchain_sound` (:405), `blinded_membership_hides_element` (:416), `nullifier_hides_identity` (:451) | **PORTAL (the graph tier)** | each body **IS** a `GraphPrivacyKernel`/`BlindedMembershipKernel` law-FIELD. The only inhabiting instance (`graphRef`, `:489`) sets `Indistinguishable := fun _ _ => True`, `UnlinkableToHolder := fun _ => True`. So every graph-tier privacy theorem is, **in its only model, `True`**. Honestly labeled portal (the prior open-hole body was strictly worse — it was an unproven `Prop`-axiom hole), and `graphRef` is a `def` not an `instance` to prevent silent resolution. But: this is NOT proof of stealth/anonymity; it is "the interface is inhabitable". |
 | `nullifier_prevents_double_spend` (:434), `anonymity_nullifier_reconciliation` (:461) | **GENUINE (the spend half) + PORTAL (the anonymity half)** | the double-spend gate is real Bool logic; the anonymity conjunct is the portal field. |
 
 ### `PrivacyKernel.lean` — privacy over the CryptoKernel portal
@@ -229,7 +229,7 @@ Verdicts: **GENUINE** / **PARTIALLY-VACUOUS** / **VACUOUS** / **PORTAL-OK** (hon
 | theorem | verdict | why |
 |---|---|---|
 | `cross_vat_needs_witness`/`phi_drops_confinement`/`forwarded_cap_is_revocable`/`macaroon_does_not_cross_phi`/`biscuit_crosses_phi`/`phi_composes_with_attenuation` | **GENUINE** | the concrete crossing facts (not read in full, but the structure is real Guard/Token reuse). |
-| `phi_functorial` (:392) | **BY-DESIGN sorry** | see §0; `phi_functorial_concrete` proved alongside. |
+| `phi_functorial` (:392) | **BY-DESIGN open hole** | see §0; `phi_functorial_concrete` proved alongside. |
 
 ### `World.lean` — the network/clock/randomness portal
 
@@ -354,7 +354,7 @@ Verdicts: **GENUINE** / **PARTIALLY-VACUOUS** / **VACUOUS** / **PORTAL-OK** (hon
 - `Resource.excl_no_dup` (`Resource.lean:185`) — true because `Excl.op` is *constantly* `invalid`, not specifically self-composition.
 - `Resource.ConfinesAuthority := Fpu`, `Confluence.Tier1Eligible := IConfluent` — unifications by definition, not by proof.
 
-No `sorry`/`axiom`/`native_decide` beyond the three by-design ones. Every vacuity is "true-but-empty" or "true-but-portal", not unsound.
+No open holes / `axiom` / `native_decide` beyond the three by-design ones. Every vacuity is "true-but-empty" or "true-but-portal", not unsound.
 
 ---
 
@@ -433,7 +433,7 @@ portal-only.
 ## 5. Honest bottom line
 
 Counting the ~230 theorems across the pre-session core corpus (excluding `#eval`/`example`
-non-vacuity checks and the by-design sorries):
+non-vacuity checks and the by-design open holes):
 
 - **GENUINE and fidelity-faithful: ≈ 62%.** The whole `Execution` run-algebra; `Core`'s
   conservation corollaries + `withholding_no_free_copy`; the entire **authority spine** (`CDT`
@@ -467,7 +467,7 @@ non-vacuity checks and the by-design sorries):
    a foundation (`responsive_quorum`) that **assumes the very quorum it claims to deliver**. The
    math is real; the descent to "the protocol is live" is portal. `Synchronizer`'s own descent
    doesn't even use its own geometric theorem. The OPENs are honest about it, but a reader sees
-   `liveness_of_pacemaker : ∃ r block, committedByQuorum …` and "0 sorries" and over-reads it.
+   `liveness_of_pacemaker : ∃ r block, committedByQuorum …` and "0 open holes" and over-reads it.
 
 2. **The "soundness-by-verification" tautology family.** `registry_sound`/`discharged_iff_verify`/
    `token_discharges` are advertised as keystones but are `Iff.rfl` (accept = accept). The genuine

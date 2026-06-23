@@ -22,7 +22,7 @@ content lives in the framework files; this file only certifies that the deployed
 the `Causal` interface those results consume, so they apply to the real log. The §8 crypto seam
 (hash-injectivity, signature-unforgeability) is untouched, exactly as in `Blocklace.lean`.
 
-Pure Lean 4 core; no `sorry`, no load-bearing `:= True`.
+Pure Lean 4 core.
 -/
 import Metatheory.PolisErase
 import Dregg2.Authority.Blocklace

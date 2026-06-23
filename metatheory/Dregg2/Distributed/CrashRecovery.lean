@@ -93,7 +93,7 @@ closure "same-transaction burn weld" (docs/PERSISTENCE.md; HORIZONLOG `Node / ru
 theorem's `hburn` hypothesis ranges over the durable registry, so it states exactly what
 durable-then-acknowledge guarantees and no more.
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry`/`:=True`/`native_decide`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Pure, computable, `#guard`-checked non-vacuity (incl. a NEG witness). Verified with
 `lake build Dregg2.Distributed.CrashRecovery`.
 Differential: `persist/src/commit_log.rs`, `persist/src/forever_digests.rs`,
@@ -216,7 +216,7 @@ theorem recover_full_checkpoint (genesis : Ledger CellSt) (log : List (Record Ce
   simp [List.flatten, applyWrites]
 
 -- Axiom hygiene: the convergence theorems rest only on the kernel's core axioms
--- (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`, no extra assumptions.
+-- (⊆ {propext, Classical.choice, Quot.sound}); no extra assumptions.
 #assert_axioms applyWrites_append
 #assert_axioms replay_split
 #assert_axioms replay_eq_applyWrites_flatten

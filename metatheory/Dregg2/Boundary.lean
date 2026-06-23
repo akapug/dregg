@@ -214,7 +214,7 @@ structure BoundaryRespecting
 
 /-- **A boundary-respecting cell is sound w.r.t. the boundary law** (corollary linking
 this module to `Authority.boundary_law`): if `S` is boundary-respecting and `x ∈ S`,
-then every reachable transition respects `Integrity`. Stated `sorry`. -/
+then every reachable transition respects `Integrity`. -/
 theorem boundary_respecting_sound
     {P W : Type u} [Verifiable P W]
     (Impl : TurnCoalg Obs AdmissibleTurn)

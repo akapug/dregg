@@ -34,7 +34,7 @@ cap-node hash rides, so the chip-faithful and Merkle-map legs share one permutat
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. No `sorry`, no `native_decide`. The chip /
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The chip /
 range soundness are STRUCTURAL conjuncts (the deployed circuit's own faithfulness), not free levers;
 crypto enters only as the genuine permutation carried by `ChipTableSoundN`. NEW file; imports read-only.
 -/

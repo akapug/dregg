@@ -47,7 +47,6 @@ capacity-tagged `hash_fact` node (the source of the gap) are GONE.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY as the named
 `Compress1CR` floor (the SAME single-permutation-call floor #4 the whole commitment tower carries).
-No `sorry`, no `:= True`, no `native_decide`.
 -/
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Crypto.CommitmentBinding

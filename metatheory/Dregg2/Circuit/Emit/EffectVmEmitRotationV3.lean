@@ -76,7 +76,7 @@ cohort member against the rotated 25+…-limb state block — as ONE parametric 
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; crypto only as the named
-`Poseidon2SpongeCR` hypothesis. No `sorry`, no `native_decide`.
+`Poseidon2SpongeCR` hypothesis.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
 -- The LIVE-PATH (non-v2-cohort) effects whose wire descriptors the flag-day must keep

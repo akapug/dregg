@@ -343,7 +343,7 @@ end Demo
 /-! ## §7 — axiom-hygiene tripwires (the honesty pins over the production-portal keystones).
 
 Every keystone rests ONLY on `{propext, Classical.choice, Quot.sound}` plus its EXPLICIT §8 carrier
-hypothesis — never a hidden `sorry`/`axiom`. The `AuthPortal.soundness` carrier is a `Prop` FIELD
+hypothesis. The `AuthPortal.soundness` carrier is a `Prop` FIELD
 (the conjunction of three §8 carriers), NOT an axiom, so it does not appear here. This DEFINES the
 post-cutover TCB: three primitives ASSUMED on the reachable `Authorization` arms, the dispatch
 VERIFIED. -/

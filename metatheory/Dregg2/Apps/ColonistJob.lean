@@ -28,7 +28,7 @@ needs⊆completed ∧ clearance ∧ in-budget (genuine ✓); a skip-a-prerequisi
 (a hauler attempting the crafting step), and an overspend are each REJECTED (cheat ✗) — absent from
 the baked admit table, so the executor refuses them in-band.
 
-Pure, computable, `#eval`-able. `#assert_axioms`-clean, no `sorry`, no `:= True`.
+Pure, computable, `#eval`-able. `#assert_axioms`-clean.
 -/
 import Dregg2.Apps.VerificationToolkit
 

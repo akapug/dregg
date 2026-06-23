@@ -22,7 +22,7 @@ THE THEOREM: a verifying answer cannot omit a receipt in the queried range.
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as
-the named `Poseidon2SpongeCR` hypothesis (the one floor), never as an axiom. No `sorry`. NEW file;
+the named `Poseidon2SpongeCR` hypothesis (the one floor), never as an axiom. NEW file;
 all imports read-only.
 -/
 import Dregg2.Substrate.Heap

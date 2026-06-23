@@ -3,7 +3,7 @@
 Synthesized 2026-06-08 from the audit + adversarial-verification rounds (R0/R1/R2/R3 +
 two independent VERIFY passes per region). Every cited line below was re-checked against
 source by reading theorem **bodies**, not grep counts. Build was GREEN at synthesis
-(`lake build` Dregg2+Metatheory, ~3828 jobs, no `sorry`/`sorryAx`; the audited soundness
+(`lake build` Dregg2+Metatheory, ~3828 jobs; the audited soundness
 keystones are `#assert_axioms`-pinned and elaborated, so a stray axiom would have failed
 the build).
 
@@ -122,7 +122,7 @@ bar, a doc that names a theorem which does not exist is "vapor," and vapor is br
   (RecordKernel.lean:801), with ZERO HashMap reasoning redone. Plus
   `concreteTransferAsset_no_cross_asset_leak` (cross-asset non-laundering at node grade).
   Build green (919 jobs); all four new theorems `#assert_axioms`-clean
-  (`{propext, Classical.choice, Quot.sound}`, no `sorryAx`). Non-vacuity witnessed BOTH ways
+  (`{propext, Classical.choice, Quot.sound}`). Non-vacuity witnessed BOTH ways
   in §6b (`demoAssetCS`/`demoAssetTurn`): a genuine commit moving asset 0 (100→70, 5→35) with
   asset 1 untouched, AND two fail-closed rejects (over-amount ⇒ `none`, unauthorized actor ⇒
   `none`). Task #14.
@@ -140,7 +140,7 @@ bar, a doc that names a theorem which does not exist is "vapor," and vapor is br
 - **FIX LANDED** (`Dregg2/Exec/CapTPConsentLace.lean` §7.5 + §9.0): the strengthened settlement
   validator now DROPS a detected signed equivocator's consent — the exclusion is part of the gate,
   not a downstream policy hypothesis. New, all `#assert_axioms`-clean (subset
-  `{propext, Classical.choice, Quot.sound}`, no `sorryAx`; axioms verified via `#print axioms`):
+  `{propext, Classical.choice, Quot.sound}`; axioms verified via `#print axioms`):
   - `isRevokeFor` / `partySignedRevoke` — the signed-revoke twin of `isApprovalFor`.
   - `equivocatesSigned B p digest := partySignedConsent && partySignedRevoke` — the DECIDABLE
     signed-fork detector (`p` signed BOTH a valid approve AND a valid revoke over the same digest;
@@ -169,8 +169,8 @@ bar, a doc that names a theorem which does not exist is "vapor," and vapor is br
 
 ### MID-4 — three disjoint state commitments, NO cross-binding theorem — **PARTIALLY RESOLVED; EffectVm-subset widening RESIDUAL (owned/MUST-WAIT)**
 - **Status:** the cross-binding theorem itself is now LANDED in
-  `Dregg2/Circuit/CommitmentCrossBind.lean` (built green this wave, 13 `#assert_axioms` tripwires,
-  no `sorry`/`:=True`/`native_decide`): `stateCommit_binds_cellCommit` ("THE CROWN" — equal circuit
+  `Dregg2/Circuit/CommitmentCrossBind.lean` (built green this wave, 13 `#assert_axioms` tripwires):
+  `stateCommit_binds_cellCommit` ("THE CROWN" — equal circuit
   full-state roots force equal canonical `cellCommit` per touched cell, under a hash-CR portal
   `LeafIsCellCommit`), its executor-side twin `setFieldCommit_binds_cellCommit`,
   `crossbind_circuit_exec_same_state` (circuit ⟺ executor agree on the SAME `RecordKernelState`),
@@ -245,7 +245,7 @@ state-commitment cross-binding theorem is landed (MID-4, `stateCommit_binds_cell
 named hash-CR portal), with only the EffectVm-subset widening left as the owned-task residual.
 All four wave modules — `ConcreteKernel`, `CapTPGCConcrete`, `CommitmentCrossBind`,
 `CapTPConsentLace` — build green and the new keystones are `#assert_axioms`-clean (subset
-`{propext, Classical.choice, Quot.sound}`, no `sorryAx`; named crypto hypotheses witnessed FALSE).
+`{propext, Classical.choice, Quot.sound}`; named crypto hypotheses witnessed FALSE).
 
 The jewels are real and now cover the ground their prose claims, save the one owned residual.
 

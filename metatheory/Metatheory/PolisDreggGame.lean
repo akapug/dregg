@@ -269,8 +269,8 @@ The dregg side of the membrane, in one breath:
 Honest scope: the kernel-level refusal/admission theorems use only `kernel ⊆ floor` and the
 shield definition — they do NOT compute gfp membership for a concrete state (a greatest fixpoint
 over the infinite `KernelState` space; deciding it is out of scope here). The fully RUNNABLE
-governance shown to bite on `exec` is the floor-level one-step shield `genGov_safe` covers. No
-`sorry`, no load-bearing `True`; every `#guard`/`decide` asserts a TRUE proposition.
+governance shown to bite on `exec` is the floor-level one-step shield `genGov_safe` covers.
+Every `#guard`/`decide` asserts a TRUE proposition.
 -/
 
 end Metatheory.PolisDreggGame

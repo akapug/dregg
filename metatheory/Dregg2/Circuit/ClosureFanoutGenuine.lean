@@ -52,8 +52,7 @@ are LOAD-BEARING in the final apex, and the carried set is the per-effect decode
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. All carriers enter as Prop/Type
-hypotheses, never as axioms. No `sorry`, no `native_decide`, no `:= True`, no fresh axiom. NEW file;
-imports read-only.
+hypotheses, never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureTransfer
 

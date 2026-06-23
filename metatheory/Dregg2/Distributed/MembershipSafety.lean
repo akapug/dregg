@@ -80,8 +80,8 @@ single self-vote suffices) is the **scales-to-zero special case**, exhibited in 
 target: the safety theorems are proved for ARBITRARY `n` and the non-vacuity witnesses run at
 `n = 3` and `n = 4` (`n > 1`).
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); NO `sorry` / `:=True` /
-`native_decide`. Verified with `lake build Dregg2.Distributed.MembershipSafety`.
+`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
+Verified with `lake build Dregg2.Distributed.MembershipSafety`.
 -/
 import Dregg2.Distributed.BlocklaceFinality
 

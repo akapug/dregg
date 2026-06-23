@@ -149,11 +149,11 @@ jobs:
 
       # The guard itself: build the corpus and FAIL on ANY `declaration uses
       # \`sorry\`` warning (covers sorry/admit/sorryAx, since admit & sorryAx
-      # emit the same warning). See scripts/no-sorry-metatheory.sh for the
+      # emit the same warning). See scripts/axiom-hygiene-guard.sh for the
       # two-layer design (this textual net + the Claims.lean #assert_axioms
       # ledger). The corpus must remain at ZERO sorry forever.
       - name: Zero-sorry guard
-        run: bash scripts/no-sorry-metatheory.sh
+        run: bash scripts/axiom-hygiene-guard.sh
 
   descriptor-drift:
     name: Descriptor Lean↔JSON drift gate

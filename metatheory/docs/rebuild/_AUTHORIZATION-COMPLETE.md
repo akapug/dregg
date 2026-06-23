@@ -10,7 +10,7 @@ credential is REJECTED and a valid one is ADMITTED, on the SAME live path.
 
 Build/test evidence is at the end. The whole model builds green
 (`lake build` 991 jobs, `#assert_axioms` clean — only `{propext,
-Classical.choice, Quot.sound}`, no `sorryAx`) and the Rust crates + auth tests
+Classical.choice, Quot.sound}`) and the Rust crates + auth tests
 pass.
 
 ---
@@ -222,8 +222,7 @@ credential is admitted out-of-band.
 - `lake build Dregg2.Exec.FullForestAuth Dregg2.Exec.GatedForestCfg
   Dregg2.Authority.Caveat` → **Build completed successfully (991 jobs)**.
 - `GatedForestCfg.lean`: 31 `#assert_axioms` (incl. the 8 new A4 macaroon-chain
-  keystones) replay clean — kernel axioms only, NO `sorryAx`, NO `native_decide`,
-  NO `:= True`.
+  keystones) replay clean — kernel axioms only.
 - `cargo build -p dregg-token -p dregg-node` → exit 0.
 - `cargo test -p dregg-node --bin dregg-node mcp::tests` → the MCP cap-gate
   adversarial suite passes (in-scope admit / over-scope reject / missing reject /

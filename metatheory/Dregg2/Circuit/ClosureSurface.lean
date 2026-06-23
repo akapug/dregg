@@ -75,8 +75,8 @@ The bridge adds NO floor beyond the named Poseidon/Merkle CR set + `StarkSound`:
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The CR carriers enter only through the
-`CommitSurface` fields (hypotheses bundled into `S_live`'s constructor), never as axioms. No `sorry`,
-no `native_decide`, no `:= True`, no fresh axiom. NEW file; imports are read-only.
+`CommitSurface` fields (hypotheses bundled into `S_live`'s constructor), never as axioms.
+NEW file; imports are read-only.
 -/
 import Dregg2.Circuit.TransferDecodeBridge
 import Dregg2.Circuit.RotatedKernelRefinementCellSeal

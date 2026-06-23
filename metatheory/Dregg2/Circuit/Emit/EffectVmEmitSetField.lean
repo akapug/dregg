@@ -45,7 +45,7 @@ the earlier descriptor read the value from `param0`, froze the nonce, and named 
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem; Poseidon2 CR enters
-ONLY as the named `Poseidon2SpongeCR` hypothesis. No `sorry`, no `:= True`, no `native_decide`.
+ONLY as the named `Poseidon2SpongeCR` hypothesis.
 Imports are read-only (the keystone Sound module + the universe-A `cellstatefield` spec).
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer

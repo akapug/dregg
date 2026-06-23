@@ -11,7 +11,7 @@ third, and the domination is *collective* — erasing either member alone leaves
 (`coalition_single_erasure_insufficient`); only erasing the whole coalition restores its exit. That
 is a political form a single-actor model cannot express.
 
-Imports Mathlib only for `Fintype`-decidable `∀ i, …`. No `sorry`.
+Imports Mathlib only for `Fintype`-decidable `∀ i, …`.
 -/
 import Metatheory.Polis
 import Mathlib.Data.Fintype.Basic

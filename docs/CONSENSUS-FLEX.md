@@ -52,9 +52,9 @@ finality path.
 * `conservation_tier_independent` (`:305-309`) — re-tiering a cell cannot change the
   conservation verdict (the two judgements are orthogonal, proved by `rfl`).
 
-Stale-header note (rise-to-meet-the-claim): `Finality.lean:13-14` still says "genuine
-distributed-agreement obligations are honest `Prop`s with `sorry` bodies" — the body
-contains **no** sorry (the obligations were since discharged or restructured). The
+Stale-header note (rise-to-meet-the-claim): `Finality.lean:13-14` still says the genuine
+distributed-agreement obligations are honest `Prop`s with open-hole bodies — the body
+contains **no** open hole (the obligations were since discharged or restructured). The
 header should be corrected.
 
 ### 1.2 The classifier (Lean, proved, runtime-absent)

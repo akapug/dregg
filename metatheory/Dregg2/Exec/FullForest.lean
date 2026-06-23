@@ -824,7 +824,7 @@ general:
 --   Σ=0 binding-carried CG-5; `crossForest_no_amplify`; `crossForest_attests`). This module is the
 --   INTRA-cell (`sameTargetForest`, `DelegationMode::None`) default; the cross-cell axis is routed,
 --   NOT re-proven and NOT baked into `execFullForestA`. Bearer-bypass (`DelegationMode::Bearer`) is
---   scoped OUT for v1 — a documented follow-on, NOT a `sorry`/`axiom`.
+--   scoped OUT for v1 — a documented follow-on, not faked or assumed.
 -/
 
 end Dregg2.Exec.FullForest

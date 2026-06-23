@@ -37,7 +37,7 @@ binding — the two distinct predicates over the deployed
 carrier, plus a non-vacuity model and the shared-machinery / non-collapse record.
 
 Imports the deployed `Dregg2.Proof.CoinductiveAdversary` and the framework
-`Metatheory.PolisCrossCell`; no `sorry`, no `:= True` load-bearing.
+`Metatheory.PolisCrossCell`; no `:= True` load-bearing.
 -/
 import Dregg2.Proof.CoinductiveAdversary
 import Metatheory.PolisCrossCell

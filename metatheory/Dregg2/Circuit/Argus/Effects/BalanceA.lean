@@ -66,7 +66,7 @@ conjunct as an explicit hypothesis, exactly as the kernel layering demands.
 
 `#assert_axioms` on every headline theorem ⊆ {propext, Classical.choice, Quot.sound}; the Poseidon-CR /
 whole-function-digest assumption enters ONLY inside the reused `balanceA_full_sound` (its `Function.Injective D`
-hypothesis), not in the welded conclusion's statement. No `sorry`, no `:= True`, no `native_decide`. Imports
+hypothesis), not in the welded conclusion's statement. Imports
 are read-only; this file owns only itself.
 -/
 import Dregg2.Circuit.Argus.Stmt

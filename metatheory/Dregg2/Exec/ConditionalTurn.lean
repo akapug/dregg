@@ -60,7 +60,7 @@ case is INEXPRESSIBLE — dregg's safe-by-inexpressibility line), and on any fin
 batch the bounded fuel = node-count Kahn iteration is COMPLETE (a finite DAG always has a source;
 `exists_ready_of_acyclic`), so the greatest-fixed-point collapses to the finite least-fixed-point
 (`kahnLoopImpl_more_fuel`: extra/unbounded fuel changes nothing once the loop has converged). No
-`sorry`, no new axiom.
+new axiom.
 
 Verified standalone: `lake env lean Dregg2/Exec/ConditionalTurn.lean`.
 -/

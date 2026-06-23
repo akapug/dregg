@@ -58,8 +58,7 @@ re-proves the faithfulness + anti-ghost over the now-bound root, and connects it
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. Poseidon2 CR ONLY as `Poseidon2SpongeCR`;
 the side-table digest CR ONLY as `Exec.SystemRoots`'s `compressNInjective` carrier (the realizable
-`ListCommit` portal) + universe-A's `Function.Injective D`. No `sorry`/`:= True`/`native_decide`/
-rfl-bridge. Imports read-only.
+`ListCommit` portal) + universe-A's `Function.Injective D`. Imports read-only.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
 import Dregg2.Circuit.Poseidon2Binding

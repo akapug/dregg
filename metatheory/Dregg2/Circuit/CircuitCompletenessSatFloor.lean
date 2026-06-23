@@ -41,8 +41,7 @@ elsewhere.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. `Satisfied2` is CARRIED (the named floor),
-not assumed as an axiom; `stateDecode_construct` is CONSTRUCTIVE. No `sorry`, no `native_decide`, no
-`:= True`, no fresh axiom. NEW file; imports read-only.
+not assumed as an axiom; `stateDecode_construct` is CONSTRUCTIVE. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.CircuitCompleteness
 

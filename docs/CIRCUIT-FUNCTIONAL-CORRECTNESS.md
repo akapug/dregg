@@ -34,7 +34,7 @@ obligations — each explicit, none laundered:
 verifying batch against `vkOfRegistry Rfix` over the full-kernel-binding surface `S_live`
 (`.commit = recStateCommit`), it concludes `∃ pre post, StateDecode ∧ kstepAll pi.effect pre post ∧
 endpoints commit to (pi.pre, pi.post)` — a genuine full kernel+log transition. `#print axioms =
-{propext, Classical.choice, Quot.sound}`; green; no `sorry`/`native_decide`/`:= True`/fresh axiom.
+{propext, Classical.choice, Quot.sound}`; green.
 
 What it carries — ONLY realizable foundations, with every per-effect soundness rung PROVEN and
 load-bearing (the dischargers genuinely call `transfer_closedLog`/`mint_closedLog`/`delegate_closedLog`/…

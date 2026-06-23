@@ -24,8 +24,7 @@ INDEPENDENT full-state program-write spec, `Dregg2.Circuit.Spec.cellstateprogram
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} + the realizable Poseidon-CR carrier
-(`compressNInjective` + `auditLeaf_injective`, REUSED from the refusal rung). No `sorry`, no `:= True`,
-no `native_decide`, no fresh axiom. NEW file; all imports read-only.
+(`compressNInjective` + `auditLeaf_injective`, REUSED from the refusal rung). NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementLifecycle
 import Dregg2.Circuit.Spec.cellstateprogram

@@ -499,7 +499,7 @@ Four findings shape the rebuild target:
    is structurally hard because a face that did nothing fails the *bisimulation-to-oracle* (`Exec/Cell.lean:
    livingCell_sound`:102); the non-amplification is on real rights (`granted ≤ held`,
    `execFullForestA_no_amplify`:251), and the joint obstruction is the corrected proper-subobject fact
-   (`binding_is_proper`:333). The CI guard forbids `sorry`.
+   (`binding_is_proper`:333). The CI guard forbids open holes.
 2. **Fidelity grounding** (`GROUND-AUTH`/`GROUND-STORAGE`): carry the Rust semantics, not a Lean fiction. The
    caveat face carries the real HMAC chain (`Authority/CaveatChain.lean`), real 3P-discharge ciphertext
    (`Authority/ThirdPartyDischarge.lean`), and real selective disclosure (`Authority/SelectiveDisclosure.lean`)
