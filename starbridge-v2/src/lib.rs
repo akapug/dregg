@@ -590,6 +590,14 @@ pub mod cockpit;
 // wrappers (`dev-surfaces`) + gpui. See `--render-showcase` in main.rs.
 #[cfg(all(feature = "gpui-ui", feature = "dev-surfaces"))]
 pub mod showcase;
+// THE GUEST / APP-FORWARD FRONT DOOR — the welcoming, low-verbosity desktop a
+// newcomer lands on: the real app surfaces (browser · editor · terminal · chat) +
+// a launcher-rolodex of acquired gadgets (read off the `AppRegistry`) + a wonder
+// strip, with the dense inspector NOT shown by default but SUMMONABLE (⌘K). The
+// "after you dismiss the inspector" view. Needs the dock surfaces (`dev-surfaces`)
+// + the app registry (`app-registry`) + gpui. See `--render-guest` in main.rs.
+#[cfg(all(feature = "gpui-ui", feature = "dev-surfaces", feature = "app-registry"))]
+pub mod guest;
 // THE SELF-HOSTING LOOP, DEMONSTRATED — both REAL halves in one view: a firmament
 // editor over the live World (a save = a real receipted turn) + a live-PTY
 // terminal running real cargo/git INSIDE deos. The host drives + asserts both
