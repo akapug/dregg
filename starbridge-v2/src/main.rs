@@ -2040,6 +2040,23 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         .unwrap_or_else(|_| "copilot:claude-sonnet-4.5".to_string());
     let mut client = AcpClient::new(transport, session_gateway, 100);
 
+    // THE DEEP-INTEGRATION WIRE — register the dregg confined MCP server as the
+    // model's tool source on `session/new`. When `DEOS_MCP_SERVER_BIN` points at a
+    // `deos-hermes` built with `--features js-agent`, Hermes spawns
+    // `<bin> mcp-server` and the model's ONLY tools are the ones it advertises
+    // (`run_js`, `terminal`) — every tool the model calls (shells included) routes
+    // through the dregg sandbox (cap-gated + receipted; `terminal` execs inside a
+    // confined PD). With the var unset the bake keeps the historical
+    // emit-the-JS-as-an-answer path (still real, but the model reasons in Hermes's
+    // own process). See docs/deos/LOG-A-HERMES-IN.md.
+    if let Ok(mcp_bin) = std::env::var("DEOS_MCP_SERVER_BIN") {
+        client = client.with_dregg_mcp_server("dregg", &mcp_bin, &["mcp-server"], &[]);
+        println!(
+            "live-brain: registered the dregg confined MCP server (`{mcp_bin} mcp-server`) as the \
+             model's tool source — its tools route through the dregg sandbox."
+        );
+    }
+
     // THE TASK. Hermes's own tool registry has no `run_js` (its tools are
     // terminal/write_file/…), and an MCP `run_js` tool's args do not round-trip
     // through the ACP permission seam (only dangerous-command approvals do). So we

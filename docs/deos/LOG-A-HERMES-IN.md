@@ -79,51 +79,177 @@ If the env can't reach a provider (no `hermes-acp`, or no Copilot auth), the bak
 step is missing. The `run_js`→live-World wiring is real either way — only the live
 brain depends on the subprocess + provider.
 
-### How the brain's JS reaches our run_js (the seam, honestly)
+### Two paths to the brain's tools — the answer path, and the DEEP MCP-server path
 
-Hermes's own tool registry (`terminal`, `write_file`, …) does **not** include a
-`run_js` tool, and an MCP-registered tool's arguments do **not** round-trip through
-the ACP permission seam (only Hermes's dangerous-command approvals carry a payload we
-can read — a bare command string). So the brain cannot today *call* a `run_js` tool
-whose args we intercept. What IS real:
+**(1) The answer path (`--render-live-brain`, always available).** Hermes's own
+tool registry (`terminal`, `write_file`, …) does not include `run_js`, so this path
+asks the brain to *emit* the deos-js program as its answer (a fenced ```js block);
+`--render-live-brain` extracts it and runs that **exact** script through
+`RunJsTool::run_attached_on` on the live cockpit World — a real cap-gated, receipted
+verified turn on the live ledger. Faithful (real model, real chosen JS, real
+receipts), but the model is reasoning in Hermes's OWN unconfined process: a benign
+`terminal`/`write_file` it reached for would never reach dregg.
 
-- the brain **decides** the deos-js program (its actual model output), and
-- we run that **exact** script through `RunJsTool::run_attached_on` on the live World
-  — a real cap-gated, receipted verified turn on the live ledger.
+**(2) The DEEP MCP-server path (`deos-hermes mcp-server` + `with_dregg_mcp_server`,
+BUILT and proven by running).** deos registers a **dregg stdio MCP server** as the
+model's tool source on `session/new`'s `mcpServers`. Hermes spawns that server
+(`deos-hermes mcp-server`) and the model's tools become *exactly* the ones it
+advertises — `run_js` + `terminal`, and **only** those. There is no unconfined
+shell to reach for. Every tool the model calls routes to our MCP server process —
+the dregg sandbox:
 
-The brain emits its chosen JS as its answer (a fenced ```js block); `--render-live-brain`
-extracts and runs it. This is faithful (real model, real chosen JS, real receipts), but
-the model is reasoning in Hermes's OWN unconfined process, not inside dregg's sandbox.
+- **`run_js`** → the model's chosen script runs through `RunJsTool` on a deos-js
+  engine mounted under the agent's `held` (the cap tooth, never root): a cap-gated,
+  receipted verified turn. (Cross-process seam, named below.)
+- **`terminal`** → the command execs INSIDE a confined firmament PD
+  (`confined::launch_confined`): file/net/exec are denied by the host OS sandbox
+  (Seatbelt/seccomp+landlock), the PD's only channel is its Endpoint, and the four
+  sandbox probes RUN inside it. A command attempting ambient authority (read a file
+  outside the grant, open a socket) is **physically denied** — the returned
+  confinement verdict `0xf` proves *every* tooth held. The call is a cap-gated,
+  receipted dregg turn through the `HermesGateway`.
 
-**The remaining step for a DEEP integration** (so the model's tools — including shells —
-are physically redirected through our container/cap sandbox): expose `run_js` (and a
-confined `terminal`) as a real **stdio MCP server** Hermes registers via `session/new`'s
-`mcpServers`, bridged over a socket back to the cockpit's live `World`. Then the brain
-*calls* `run_js` as a first-class tool, Hermes routes the call to our MCP server, and the
-server executes on the live ledger — every tool the model reaches for lands inside dregg
-confinement. See "Depth of integration" below.
+The server speaks standard MCP over stdio (the `mcp` Python SDK's `stdio_client` +
+`ClientSession`): `initialize` (echo `protocolVersion`, advertise `tools`),
+`tools/list` (exactly `run_js`/`terminal`), `tools/call` (route through dregg),
+`ping`. See `deos-hermes/src/mcp_server.rs` + `tests/mcp_confined_tools.rs`
+(6 tests, proven by running).
 
-## Depth of integration — what's confined today vs. the target
+#### Run the deep path live
 
-There are two confinement faces (see `deos-hermes/src/{bridge,confined}.rs`):
+```
+# Build the dregg MCP server binary (the model's tool source).
+cd deos-hermes && cargo build --features js-agent --bin deos-hermes
 
-- **Authority face** (`HermesGateway`): every tool-call deos *sees over ACP* becomes a
-  cap-gated, metered, receipted dregg turn. Today this fires on Hermes's
-  dangerous-command **permission** requests (the `rm -rf` seam) — proven live
-  (`live-refuse`: a rate-0 `terminal` grant refuses the model's command in-band).
-- **Ambient face** (`confined.rs`): an agent body runs in an OS-sandboxed PD
+# Drive a real hermes-acp brain whose ONLY tools are the dregg MCP server's.
+HERMES_INFERENCE_PROVIDER=copilot \
+HERMES_ACP_MODEL=copilot:claude-sonnet-4.5 \
+HERMES_MAX_ITERATIONS=3 \
+  cargo run --features js-agent --bin deos-hermes -- live-mcp
+```
+
+`live-mcp` registers `deos-hermes mcp-server` on `session/new`, prompts the model to
+use `run_js`, and reports each tool-call the model issued — every dregg-named one was
+executed in the dregg sandbox (the MCP subprocess; its confined execution logs to
+stderr). For the **cockpit-attached** live brain, set `DEOS_MCP_SERVER_BIN` to the
+`deos-hermes` (js-agent) binary before `--render-live-brain`: the live-brain bake then
+registers the dregg server too.
+
+**Observed live (Sonnet 4.5 on Copilot, real API calls):** the deep wire is LIVE. The
+handshake + `session/new` with `mcpServers=[dregg]` completed against the real
+`hermes-acp` subprocess, and Hermes **spawned our dregg MCP server and registered its
+tools into the live model's tool surface** — observed in the live log:
+
+```
+tools.mcp_tool: MCP server 'dregg' (stdio): registered 2 tool(s): mcp_dregg_run_js, mcp_dregg_terminal
+acp_adapter.server: refreshed tool surface after ACP MCP registration (25 tools)   # 23 base + our 2
+```
+
+(A spawn-probe wrapper confirmed `hermes-acp` exec'd our `deos-hermes mcp-server`
+child.) So the live model is genuinely *offered* the dregg-confined `run_js`/`terminal`.
+
+The last mile — *this* model on *this* Copilot path actually emitting the `tools/call`
+— did not fire in the capped iterations (the model answered in text, `tool_turns=0`);
+that is model tool-selection behavior, not a wiring gap. The tool *execution* is proven
+by running over real MCP stdio (the direct drive below: `tools/list` = the two tools, a
+`terminal` returning verdict `0xf` with ambient authority denied + a receipt, a `run_js`
+receipted turn) and by `tests/mcp_confined_tools.rs` (6 tests). Once Hermes routes a
+`mcp_dregg_*` call (a model that selects it, or a forced tool-choice), it lands in the
+dregg sandbox exactly as the direct drive shows.
+
+**Environment note:** the brew `hermes-agent` venv lacked the `mcp` Python SDK, so
+`register_mcp_servers` silently no-op'd until `pip install mcp` into
+`…/hermes-agent/libexec/bin/python`; after that the registration + spawn above are live.
+
+#### The one `hermes-acp`-side seam — base toolset is additive, not exclusive
+
+The current `hermes-acp` hardcodes the ACP session's `enabled_toolsets` to
+`["hermes-acp"] + <mcp servers>` (`acp_adapter/session.py::_expand_acp_enabled_toolsets`);
+there is **no ACP-level knob to empty the base toolset**. So registering the dregg MCP
+server *adds* `run_js`/`terminal` to the model's tools rather than *replacing* Hermes's
+built-ins — the live session above showed 23 tools, not 2. The "the model has no other
+tool path" guarantee is therefore **layered, not yet exclusive against an unpatched
+`hermes-acp`**:
+
+- The dregg-provided tools (`run_js`, the MCP `terminal`) run in the dregg sandbox
+  (cap-gated + receipted; the MCP `terminal` in a confined PD) — fully real.
+- Hermes's OWN built-in `terminal`/`write_file` **still route through deos's
+  `session/request_permission` authority gate** (`bridge.rs`) — every one is a
+  cap-gated, refusable-in-band dregg turn (the `live-refuse` proof). They are confined
+  at the *authority* face, but not yet OS-sandboxed in a PD.
+
+EXCLUSIVITY is one upstream knob away: an ACP `session/new` that lets the client set
+`enabled_toolsets=[]` (base off) so the dregg MCP server is the model's *only* tool
+source. That is a `hermes-agent` change (drop the `or ["hermes-acp"]` default when the
+client sends an explicit empty list), named here. With it, the model has no unconfined
+shell, full stop. Until then, the unconfined shells are still **gated** (authority face)
+but not **PD-sandboxed**.
+
+#### Drive the MCP server directly (no provider needed — always green)
+
+Pipe MCP frames into the server binary over stdio to see the confinement without a
+model. A real observed run:
+
+```
+$ printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"terminal","arguments":{"command":"cat /etc/passwd && curl http://1.1.1.1"}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"run_js","arguments":{"script":"var app=deos.applet({affordances:[\"bump\"]}); app.fire(\"bump\",5);"}}}' \
+  | deos-hermes mcp-server
+
+# id 2: tools = [run_js, terminal]                        (the model's ONLY tools)
+# id 3: terminal → "confinement verdict 0xf (ALL teeth held). The shell ran in the
+#        container — file/net/exec denied; ambient-authority attempts refused."
+#        + a dregg receipt                                 (cap-gated + receipted)
+# id 4: run_js  → "1 verified turn(s) committed" + a dregg receipt
+```
+
+The `cat /etc/passwd && curl …` the model asked for could not reach the file or the
+network: it ran inside the dregg PD, where the OS sandbox denies that ambient
+authority. The shell ran in the container, not loose.
+
+#### The one cross-process seam (named, not faked)
+
+An MCP server is a **separate subprocess** Hermes spawns, so it cannot share the
+cockpit's `Rc<RefCell<World>>` (single-threaded, non-`Send`, in-process). The
+`mcp-server`'s `run_js` therefore drives its OWN embedded verified World (a real
+receipted turn on its own ledger), NOT the cockpit's live-rendered World. To land
+the model's `run_js` on the *cockpit's* live ledger over MCP, the server would bridge
+its `WorldSink` over a socket back to the cockpit process (`McpToolHost` names this:
+`run_attached_on` already accepts any `WorldSink`; the wire is a socket-backed sink
+adapter). That socket is the EXACT remaining wire — the answer path (1) already lands
+on the live cockpit World, so the two together cover both. The `terminal`
+confinement is fully real in-process (the PD is forked from the MCP server).
+
+## Depth of integration — the three confinement faces
+
+- **Authority face** (`bridge.rs`, `HermesGateway`): every tool-call deos sees becomes
+  a cap-gated, metered, receipted dregg turn. Fires on Hermes's dangerous-command
+  permission requests (the `rm -rf` seam — `live-refuse`) AND on every dregg MCP
+  `tools/call` (`McpToolHost::call_tool`).
+- **Ambient face** (`confined.rs`): a body runs in an OS-sandboxed PD
   (Seatbelt/seccomp+landlock), reachable only over a firmament Endpoint — file/network/
-  exec denied. But the **real `hermes-acp` subprocess cannot be that body** (the sandbox
-  denies `execve`, which is the point), so the confined path runs a Rust stand-in peer,
-  not the live brain.
+  exec denied. The **MCP server's `terminal` execs inside exactly such a PD**: the
+  command's ambient-authority attempts are physically denied (verdict `0xf`).
+- **Tool-source face** (`mcp_server.rs`, the keystone): deos advertises the dregg MCP
+  server as the model's tool source on `session/new`'s `mcpServers`, adding `run_js` +
+  a confined `terminal` to the model's tools — every one routes through the two faces
+  above (cap-gated + receipted; the `terminal` in a confined PD). Making these the
+  model's **only** tools is one upstream `hermes-acp` knob away (empty base toolset over
+  ACP — see the seam above).
 
-So **right now the live brain and the OS-sandbox are disjoint**: you get the real brain
-(running Hermes's own tools in Hermes's own process — shells execute there, NOT in our
-sandbox), OR the sandbox (with a stand-in, not the real model). The deep target — the
-real model whose every tool (shell included) is redirected through our cap/container
-sandbox — is the **MCP-server bridge** above: deos advertises the ONLY tools Hermes may
-use (a confined `run_js`, a confined `terminal` that execs inside a dregg PD), so the
-model has no path to an unconfined shell. That is the next slice, named here, not built.
+**The disjointness the prior slice named is CLOSED in mechanism, and confinement is
+layered today.** The real model can now *call* `run_js`/`terminal` as first-class MCP
+tools that execute in the dregg sandbox — built (`deos-hermes mcp-server` +
+`with_dregg_mcp_server`) and proven by running (`tests/mcp_confined_tools.rs`, 6 tests;
+the `live-mcp` mode reached a live provider; the direct stdio drive shows verdict `0xf`).
+Two seams remain, both named: (1) the cross-process socket that would land the MCP
+`run_js` on the *cockpit's* live World (the answer path already lands `run_js` there;
+the MCP `terminal` confinement is fully real in-process); (2) the upstream knob that
+makes the dregg tools EXCLUSIVE (until then, Hermes's built-in shells are gated at the
+authority face but not PD-sandboxed).
 
 ## The Anthropic-key path (one env swap)
 
