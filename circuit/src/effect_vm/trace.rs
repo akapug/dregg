@@ -67,6 +67,7 @@ pub fn effect_selector(effect: &Effect) -> usize {
         Effect::Introduce { .. } => sel::INTRODUCE,
         Effect::PipelinedSend { .. } => sel::PIPELINED_SEND,
         Effect::BridgeMint { .. } => sel::BRIDGE_MINT,
+        Effect::Mint { .. } => sel::MINT,
         Effect::Burn { .. } => sel::BURN,
         Effect::CellDestroy { .. } => sel::CELL_DESTROY,
         Effect::AttenuateCapability { .. } => sel::ATTENUATE_CAPABILITY,
@@ -715,6 +716,23 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
 
+            Effect::Mint {
+                value_lo,
+                mint_hash,
+                value_full: _,
+            } => {
+                // SUPPLY-MODEL.md Stage 2b: the dedicated supply-mint row is
+                // byte-identical in body to BridgeMint (credit at param1), but
+                // sits on `sel::MINT` (set by `effect_selector`), so it routes
+                // to `supplyMintVmDescriptor2R24` rather than the bridge member.
+                row[PARAM_BASE + 0] = *mint_hash;
+                row[PARAM_BASE + 1] = *value_lo;
+                let value_u64 = value_lo.as_u32() as u64;
+                new_state.balance = new_state.balance.saturating_add(value_u64);
+                net_delta += value_u64 as i64;
+                new_state.nonce += 1;
+            }
+
             Effect::NoteSpend { nullifier, value } => {
                 let (val_lo, val_hi) = split_u64(*value);
                 row[PARAM_BASE + param::NULLIFIER] = *nullifier;
@@ -1253,8 +1271,15 @@ pub fn generate_effect_vm_trace_ext(
     let mint_sum = {
         let mut m: u64 = 0;
         for eff in effects {
-            if let Effect::BridgeMint { value_full, .. } = eff {
-                m = m.wrapping_add(*value_full);
+            // SUPPLY-MODEL.md Stage 2b: both mint-family credits (the portable-proof
+            // BridgeMint and the dedicated supply Mint) attest their FULL u64 here,
+            // so the §6.5 bit-injective binding covers a supply-mint's value too —
+            // not just the 30-bit `value_lo` the per-row arithmetic uses.
+            match eff {
+                Effect::BridgeMint { value_full, .. } | Effect::Mint { value_full, .. } => {
+                    m = m.wrapping_add(*value_full);
+                }
+                _ => {}
             }
         }
         m

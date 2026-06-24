@@ -1161,6 +1161,148 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
     );
 }
 
+/// THE DEDICATED SUPPLY-MINT SELF-VERIFY (SUPPLY-MODEL.md Stage 2b).
+///
+/// The turn-layer `Effect::Mint` fires its OWN selector (`sel::MINT = 14`) and routes to
+/// `supplyMintVmDescriptor2R24` — the SAME proven credit/tick/freeze body as the bridge-mint
+/// member but on a DEDICATED selector. This test drives a real supply-mint VM effect through the
+/// LIVE rotated generator + `prove_vm_descriptor2`, asserts it PROVES + SELF-VERIFIES under
+/// `sel::MINT` (NOT `BRIDGE_MINT`), and that the mint forgery teeth still bite (forged nonce
+/// passthrough / forged credit ⇒ UNSAT). This is the Stage 2b acceptance gate.
+#[test]
+fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
+    use dregg_circuit::effect_vm::columns::sel;
+
+    let mem_boundary = MemBoundaryWitness::default();
+    let map_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = vec![];
+    let refused = |desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+                   t: &Vec<Vec<BabyBear>>,
+                   p: &Vec<BabyBear>|
+     -> bool {
+        // The debug constraint-checker panics (rather than returning Err) on a
+        // violated trace, so catch the unwind — either path means refusal.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_vm_descriptor2(desc, t, p, &mem_boundary, &map_heaps)
+        }));
+        match r {
+            Err(_) => true,
+            Ok(res) => res.is_err(),
+        }
+    };
+
+    // The dedicated supply-mint VM effect: dedicated `sel::MINT`, credit at param1.
+    let mint = Effect::Mint {
+        value_lo: BabyBear::new(30),
+        mint_hash: BabyBear::new(0),
+        value_full: 30,
+    };
+    // The selector resolves to MINT (14), NOT BRIDGE_MINT (40).
+    assert_eq!(
+        dregg_circuit::effect_vm::effect_selector(&mint),
+        sel::MINT,
+        "Effect::Mint must fire the dedicated sel::MINT column, not BRIDGE_MINT"
+    );
+    assert_ne!(sel::MINT, sel::BRIDGE_MINT);
+
+    // It routes to the DEDICATED descriptor, distinct from the bridge member.
+    let name = rotated_descriptor_name_for_effect(&mint)
+        .expect("Effect::Mint is a rotated cohort member (dedicated selector)");
+    assert_eq!(name, "supplyMintVmDescriptor2R24");
+    let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
+        .expect("rotated supply-mint descriptor parses");
+    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width");
+    assert_eq!(
+        desc.public_input_count, 46,
+        "supply-mint is a 46-PI cohort member (same shape as the bridge member)"
+    );
+
+    // A real supply-mint turn: credit bal_lo 100 → 130, the nonce ticks 5 → 6.
+    let before_balance: i64 = 100;
+    let value: i64 = 30;
+    let st = CellState::new(before_balance as u64, 5);
+    let effects = vec![mint];
+
+    let mut ledger = Ledger::new();
+    let before_cell = producer_cell(before_balance, 5);
+    let after_cell = producer_cell(before_balance + value, 6); // credit + nonce TICK
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
+
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+    );
+
+    let caveat = empty_caveat_manifest();
+    let (trace, dpis) = generate_rotated_effect_vm_trace(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &caveat,
+    )
+    .expect("live rotated generator must produce a supply-mint trace + 46 PIs");
+
+    // The active row fires sel::MINT (14), not BRIDGE_MINT (40).
+    assert_eq!(
+        trace[0][sel::MINT],
+        BabyBear::ONE,
+        "the supply-mint active row sets sel::MINT"
+    );
+    assert_eq!(
+        trace[0][sel::BRIDGE_MINT],
+        BabyBear::ZERO,
+        "the supply-mint row does NOT set BRIDGE_MINT"
+    );
+    let r0 = &trace[0];
+    assert_eq!(
+        r0[STATE_AFTER_BASE + state::NONCE] - r0[STATE_BEFORE_BASE + state::NONCE],
+        BabyBear::ONE,
+        "supply-mint row: after_nonce − before_nonce == 1 (the runtime tick)"
+    );
+
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("rotated supply-mint must prove end-to-end under sel::MINT");
+    verify_vm_descriptor2(&desc, &proof, &dpis)
+        .expect("rotated supply-mint proof must verify independently");
+    eprintln!("ROTATED SUPPLY-MINT (R=24, sel::MINT, LIVE-GENERATED) — PROVED + VERIFIED");
+
+    // FORGERY TOOTH 1 (nonce): forged nonce passthrough is UNSAT.
+    {
+        let mut t = trace.clone();
+        for row in t.iter_mut() {
+            row[STATE_AFTER_BASE + state::NONCE] = row[STATE_BEFORE_BASE + state::NONCE];
+        }
+        assert!(
+            refused(&desc, &t, &dpis),
+            "a forged supply-mint nonce passthrough (after == before) MUST be UNSAT"
+        );
+    }
+    // FORGERY TOOTH 2 (credit): forge after-balance so it is NOT before + param1 → UNSAT.
+    {
+        let mut t = trace.clone();
+        for row in t.iter_mut() {
+            row[76 + state::BALANCE_LO] = row[76 + state::BALANCE_LO] + BabyBear::ONE;
+        }
+        assert!(
+            refused(&desc, &t, &dpis),
+            "a supply-mint row whose post-balance ≠ before + param1 (the credit) MUST be UNSAT"
+        );
+    }
+}
+
 /// THE ROTATED WIRE-COMMIT ↔ LEAN DIFFERENTIAL (the ACTUALLY-PUBLISHED commitment).
 ///
 /// The Lean module `Dregg2.Circuit.RotatedCommitDifferential` pins the PUBLISHED rotated

@@ -1578,6 +1578,12 @@ pub fn rotated_descriptor_name(selector: usize) -> Option<&'static str> {
         s if s == sel::TRANSFER => "transferVmDescriptor2R24",
         s if s == sel::BURN => "burnVmDescriptor2R24",
         s if s == sel::BRIDGE_MINT => "mintVmDescriptor2R24",
+        // The DEDICATED supply-mint (SUPPLY-MODEL.md Stage 2b): the turn-layer `Effect::Mint`
+        // fires `sel::MINT` and routes to its OWN descriptor (`supplyMintVmDescriptor2R24` =
+        // `EffectVmEmitRotationV3.supplyMintV3`), the same proven credit/tick/freeze body as the
+        // bridge-mint member but on the dedicated selector — so it proves + self-verifies under its
+        // own slot, not by riding BridgeMint's.
+        s if s == sel::MINT => "supplyMintVmDescriptor2R24",
         s if s == sel::NOTE_SPEND => "noteSpendVmDescriptor2R24",
         s if s == sel::NOTE_CREATE => "noteCreateVmDescriptor2R24",
         s if s == sel::CELL_SEAL => "cellSealVmDescriptor2R24",
@@ -3218,8 +3224,10 @@ mod tests {
             .collect();
         assert_eq!(
             registry.len(),
-            36,
-            "the rotated resolver cohort has 36 members (cap-open + fee-in-proof + heap-write are separately routed)"
+            37,
+            "the rotated resolver cohort has 37 members: the original 36 + the DEDICATED supply-mint \
+             (`supplyMintVmDescriptor2R24`, SUPPLY-MODEL.md Stage 2b — `sel::MINT`-routed); cap-open \
+             + fee-in-proof + heap-write are separately routed"
         );
         // The fee-path resolver reaches the fee descriptor (and falls back to the unfee'd resolver
         // for non-Transfer leads), so the fee-in-proof member is covered by ITS resolver.
@@ -3240,6 +3248,8 @@ mod tests {
             rotated_descriptor_name(super::super::columns::sel::TRANSFER).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::BURN).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::BRIDGE_MINT).unwrap(),
+            // The DEDICATED supply-mint (SUPPLY-MODEL.md Stage 2b) on `sel::MINT`:
+            rotated_descriptor_name(super::super::columns::sel::MINT).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::NOTE_SPEND).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::NOTE_CREATE).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::CELL_SEAL).unwrap(),
@@ -3274,7 +3284,7 @@ mod tests {
         for i in 0..8 {
             reached.insert(rotated_set_field_descriptor_name(i));
         }
-        assert_eq!(reached.len(), 36, "the resolvers reach 36 distinct names");
+        assert_eq!(reached.len(), 37, "the resolvers reach 37 distinct names");
         assert_eq!(
             reached, registry,
             "the resolver names are EXACTLY the rotated registry's members"

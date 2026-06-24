@@ -291,6 +291,22 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                 hasher_inputs.extend_from_slice(&limbs);
             }
 
+            Effect::Mint {
+                value_lo,
+                mint_hash,
+                value_full,
+            } => {
+                // SUPPLY-MODEL.md Stage 2b: the dedicated supply-mint binds under
+                // its OWN domain tag (`sel::MINT = 14`), distinct from BridgeMint's
+                // 40, so the two mints commit to disjoint effects-hash classes — a
+                // supply-mint can never collide with / be replayed as a bridge-mint.
+                hasher_inputs.push(BabyBear::new(14));
+                hasher_inputs.push(*value_lo);
+                hasher_inputs.push(*mint_hash);
+                let limbs = u64_to_4_limbs_16(*value_full);
+                hasher_inputs.extend_from_slice(&limbs);
+            }
+
             Effect::NoteSpend { nullifier, value } => {
                 hasher_inputs.push(BabyBear::new(4));
                 hasher_inputs.push(*nullifier);

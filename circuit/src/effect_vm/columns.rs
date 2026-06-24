@@ -8,7 +8,7 @@
 //! - `aux_off` — NUM_AUX auxiliary witness columns.
 
 /// Total trace width.
-/// Layout: 54 selector columns (29 live + 25 retired-pinned-zero) + 14 state_before
+/// Layout: 54 selector columns (30 live + 24 retired-pinned-zero) + 14 state_before
 /// + 8 params + 14 state_after + 96 aux = 186.
 ///
 /// The aux block decomposes as:
@@ -32,9 +32,11 @@ pub const EFFECT_VM_WIDTH: usize = AUX_BASE + NUM_AUX; // 90 + 98 = 188
 
 /// Number of effect types (selector COLUMNS).
 ///
-/// VERB-LOCKSTEP: 29 effects are LIVE; the 25 factory-dissolved effects
-/// (escrow ×6, obligation ×3, bridge lock/finalize/cancel ×3, queue ×6,
-/// caps-in-slots ×7) no longer exist as `Effect` variants — their selector
+/// VERB-LOCKSTEP: 30 effects are LIVE (29 + the dedicated supply [`sel::MINT`],
+/// SUPPLY-MODEL.md Stage 2b, which repurposed one retired index); the 24
+/// factory-dissolved effects (escrow ×6, obligation ×3, bridge lock/finalize/
+/// cancel ×3, queue ×6, caps-in-slots) no longer exist as `Effect` variants —
+/// their selector
 /// COLUMNS remain in the layout (the frozen verified descriptors emitted by
 /// `Dregg2/Circuit/Emit/*` pin absolute column indices against the 186-wide
 /// trace), and the AIR pins every retired selector to ZERO on every row, so
@@ -108,6 +110,16 @@ pub mod sel {
     /// dispatching cell's state doesn't change (the dispatch is deferred);
     /// passthrough with hash(target ‖ action_hash).
     pub const PIPELINED_SEND: usize = 36;
+    /// Mint: the DEDICATED cap-gated SUPPLY-CREATION verb (SUPPLY-MODEL.md
+    /// Stage 2b). Balance credit at `param1` (mirror BridgeMint's body), but on
+    /// its OWN selector column so a supply-mint proves + self-verifies under a
+    /// dedicated selector rather than riding `BRIDGE_MINT`'s slot. Repurposes
+    /// the dissolved `ExportSturdyRef` retired index (14) — the IR-2 live path
+    /// never pinned that column against any other descriptor, so giving Mint
+    /// this index shifts no absolute column. The Lean twin is
+    /// `EffectVmEmit.sel.MINT` (= 14); the rotated descriptor is
+    /// `supplyMintVmDescriptor2R24` (`EffectVmEmitRotationV3.supplyMintV3`).
+    pub const MINT: usize = 14;
     /// BridgeMint: actor mints tokens carried by a portable proof from
     /// another federation. Balance credit (mirror NoteSpend). The SHIELD verb —
     /// the one bridge variant that survives the lockstep.
@@ -159,9 +171,11 @@ pub mod sel {
     /// regenerates the frozen descriptors against a compacted 29-selector
     /// layout.
     ///
-    /// Index ↔ retired effect:
+    /// Index ↔ retired effect (index 14, the dissolved `ExportSturdyRef`, was
+    /// REPURPOSED for the dedicated supply [`MINT`] selector, SUPPLY-MODEL.md
+    /// Stage 2b — it is no longer pinned to zero):
     ///   6  CreateObligation      7  FulfillObligation   9  SlashObligation
-    ///   10 Seal                  11 Unseal              14 ExportSturdyRef
+    ///   10 Seal                  11 Unseal
     ///   15 EnlivenRef            16 DropRef             17 ValidateHandoff
     ///   18 AllocateQueue         19 EnqueueMessage      20 DequeueMessage
     ///   21 ResizeQueue           22 AtomicQueueTx       23 PipelineStep
@@ -169,9 +183,9 @@ pub mod sel {
     ///   38 BridgeLock            39 CreateCommittedEscrow
     ///   41 BridgeFinalize        42 ReleaseEscrow       43 RefundEscrow
     ///   44 ReleaseCommittedEscrow 45 RefundCommittedEscrow
-    pub const RETIRED_SELECTORS: [usize; 25] = [
-        6, 7, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 28, 33, 37, 38, 39, 41, 42, 43,
-        44, 45,
+    pub const RETIRED_SELECTORS: [usize; 24] = [
+        6, 7, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22, 23, 28, 33, 37, 38, 39, 41, 42, 43, 44,
+        45,
     ];
 }
 

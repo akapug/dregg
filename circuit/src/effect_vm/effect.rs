@@ -253,6 +253,21 @@ pub enum Effect {
         /// Full u64 value (30-bit-trunc fix).
         value_full: u64,
     },
+    /// Mint: the DEDICATED cap-gated SUPPLY-CREATION verb (SUPPLY-MODEL.md
+    /// Stage 2b — the circuit image of the turn-layer `Effect::Mint`). Balance
+    /// credit at `param1` (`value_lo`), exactly mirroring `BridgeMint`'s proven
+    /// body, but fired on the DEDICATED `sel::MINT` selector column so a
+    /// supply-mint proves + self-verifies under its OWN selector rather than
+    /// riding `BridgeMint`'s slot. Routes to `supplyMintVmDescriptor2R24`
+    /// (`EffectVmEmitRotationV3.supplyMintV3`); the selector-gate forgery tooth
+    /// bites a `[Mint, foreign]` trace under that descriptor exactly as it does
+    /// for the bridge-mint member.
+    Mint {
+        value_lo: BabyBear,
+        mint_hash: BabyBear,
+        /// Full u64 value (mirrors `BridgeMint.value_full`).
+        value_full: u64,
+    },
     /// Spend a note (reveal nullifier, credit balance).
     NoteSpend { nullifier: BabyBear, value: u64 },
     /// Create a note (create commitment, debit balance).
