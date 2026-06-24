@@ -172,6 +172,71 @@ impl std::fmt::Display for VerificationKeyIntegrityError {
 
 impl std::error::Error for VerificationKeyIntegrityError {}
 
+/// The cached canonical Merkle-leaf digest of a `Cell`
+/// (`docs/INCREMENTAL-COMMITMENT.md` step 3 — the cell-leaf cache).
+///
+/// ## Why this exists
+///
+/// The federation Merkle leaf for a cell is
+/// [`crate::commitment::compute_canonical_state_commitment`] — a BLAKE3
+/// absorption of the cell's FULL canonical byte serialization (identity +
+/// balance + perms + cap-root + program + lifecycle + fields/heap/side-table
+/// roots). With the sub-roots already cached (cap-root `e0c6bd6f9`,
+/// fields/heap/system roots resealed on write), the residual cost is the
+/// ~1.5µs BLAKE3 absorb itself, paid on EVERY touched cell at `Ledger::root()`
+/// time. This cache stores the finished 32-byte leaf so a turn that touched a
+/// cell once (e.g. one nonce/balance write) re-absorbs nothing on the SECOND
+/// and later `root()` calls until the cell is next mutated.
+///
+/// ## The byte-identity contract (why this is safe)
+///
+/// The cache is read ONLY by `Ledger::hash_cell` (the Merkle-leaf path).
+/// `Cell::state_commitment()` — used off the ledger by sovereign-witness and
+/// migration paths — ALWAYS recomputes fresh and never consults the cache, so a
+/// standalone mutated-via-`pub`-field cell can never serve a stale digest.
+/// Inside the ledger, EVERY path that hands out a `&mut Cell` (or mutates a
+/// cell's fields directly) invalidates this cache via
+/// [`Cell::invalidate_leaf_cache`] BEFORE the mutation is observable — exactly
+/// the conservative `&mut`-boundary discipline the cap-root cache uses for
+/// `iter_mut`. A cache hit is therefore byte-identical to a fresh
+/// `compute_canonical_state_commitment` (pinned by the differential
+/// `leaf_digest_cache_matches_fresh`).
+///
+/// Interior mutability (`Mutex`) gives `Sync` so the lazy fill can run behind
+/// the shared `&Cell` the commitment path holds and a `Cell` stays `Send +
+/// Sync`. NOT serialized (`#[serde(skip)]` ⇒ reconstructs dirty on decode),
+/// NOT part of `PartialEq`/`Eq` (two equal cells with different cache states are
+/// equal), and a `Clone` copies the current cached digest (the cell bytes are
+/// identical, so the leaf is valid for the clone too).
+#[derive(Debug, Default)]
+pub struct LeafDigestCache(std::sync::Mutex<Option<[u8; 32]>>);
+
+impl LeafDigestCache {
+    #[inline]
+    fn load(&self) -> Option<[u8; 32]> {
+        *self.0.lock().expect("leaf-digest cache mutex poisoned")
+    }
+
+    #[inline]
+    fn store(&self, digest: Option<[u8; 32]>) {
+        *self.0.lock().expect("leaf-digest cache mutex poisoned") = digest;
+    }
+}
+
+impl Clone for LeafDigestCache {
+    fn clone(&self) -> Self {
+        LeafDigestCache(std::sync::Mutex::new(self.load()))
+    }
+}
+
+impl PartialEq for LeafDigestCache {
+    fn eq(&self, _other: &Self) -> bool {
+        // The cache is a derived value, not part of the cell's identity.
+        true
+    }
+}
+impl Eq for LeafDigestCache {}
+
 /// A Cell is an isolated agent execution context.
 /// This is the agent-model analog of a Mina zkApp account.
 ///
@@ -224,6 +289,14 @@ pub struct Cell {
     /// lifecycle explicit going forward.
     #[serde(default)]
     pub lifecycle: CellLifecycle,
+    /// Cached canonical Merkle-leaf digest (`docs/INCREMENTAL-COMMITMENT.md`
+    /// step 3). Read ONLY by `Ledger::hash_cell`; invalidated at every ledger
+    /// `&mut`-handoff seam. `#[serde(skip)]` ⇒ reconstructs dirty on decode;
+    /// excluded from `PartialEq`/`Eq`/`Clone`-identity via the
+    /// [`LeafDigestCache`] impls. See that type's docs for the byte-identity
+    /// contract.
+    #[serde(skip)]
+    pub(crate) leaf_cache: LeafDigestCache,
 }
 
 /// Configuration for creating a new cell.
@@ -318,6 +391,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Sovereign,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 
@@ -339,6 +413,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 
@@ -360,6 +435,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 
@@ -425,6 +501,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 
@@ -444,6 +521,7 @@ impl Cell {
             program: config.program.unwrap_or(CellProgram::None),
             mode: config.mode,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 
@@ -497,7 +575,40 @@ impl Cell {
     /// uses `hash_cell`) agree byte-for-byte. See `cell/src/commitment.rs` for
     /// the full hash shape and the audit context (P0-2).
     pub fn state_commitment(&self) -> [u8; 32] {
+        // ALWAYS fresh: this is the off-ledger reader (sovereign-witness,
+        // migration). It never consults `leaf_cache`, so a standalone cell
+        // mutated through its `pub` fields can never serve a stale digest. The
+        // cache is read only by `Ledger::hash_cell`, gated behind the ledger's
+        // `&mut`-handoff invalidation. See [`LeafDigestCache`].
         crate::commitment::compute_canonical_state_commitment(self)
+    }
+
+    /// Mark the cached Merkle-leaf digest dirty
+    /// (`docs/INCREMENTAL-COMMITMENT.md` step 3). Called by EVERY ledger path
+    /// that hands out a `&mut Cell` or mutates a cell's fields directly, BEFORE
+    /// the mutation is observable — the completeness guarantee. Cheap (a single
+    /// `Mutex` store), so calling it unconditionally (even when a mutation turns
+    /// out to be a no-op) is harmless: a dirty cache costs ONE extra BLAKE3 on
+    /// the next `Ledger::hash_cell`, never a wrong leaf.
+    #[inline]
+    pub(crate) fn invalidate_leaf_cache(&self) {
+        self.leaf_cache.store(None);
+    }
+
+    /// The canonical Merkle-leaf digest, consulting + filling the per-cell
+    /// cache. ONLY `Ledger::hash_cell` calls this. On a hit the finished
+    /// 32-byte leaf is returned with no BLAKE3 absorb; on a miss the full
+    /// [`crate::commitment::compute_canonical_state_commitment`] runs and its
+    /// result is stored back. Byte-identical to `state_commitment()` because
+    /// the ledger invalidates the cache at every `&mut`-handoff seam.
+    #[inline]
+    pub(crate) fn cached_leaf_digest(&self) -> [u8; 32] {
+        if let Some(d) = self.leaf_cache.load() {
+            return d;
+        }
+        let d = crate::commitment::compute_canonical_state_commitment(self);
+        self.leaf_cache.store(Some(d));
+        d
     }
 
     /// Verify that `self.id` matches `derive_raw(public_key, token_id)`.
@@ -684,6 +795,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 
@@ -738,6 +850,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            leaf_cache: LeafDigestCache::default(),
         }
     }
 }

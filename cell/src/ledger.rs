@@ -399,9 +399,14 @@ impl Ledger {
     /// form scopes the mutation and runs an integrity check on exit.
     pub fn get_mut(&mut self, id: &CellId) -> Option<&mut Cell> {
         let result = self.cells.get_mut(id);
-        if result.is_some() {
+        if let Some(cell) = &result {
             // VALUE mutation: the leaf set is unchanged, so a batched O(log N)
             // leaf update suffices when the root is next asked for.
+            // INVALIDATE the cell's leaf-digest cache BEFORE handing out the
+            // `&mut` — the caller may write any (even `pub`) field, so the
+            // cached leaf is conservatively dirty (the cell-leaf cache's
+            // `&mut`-boundary completeness rule).
+            cell.invalidate_leaf_cache();
             self.pending.touch_value(*id);
         }
         result
@@ -429,6 +434,9 @@ impl Ledger {
             None => return Err(LedgerError::CellNotFound(*id)),
         };
         let cell = self.cells.get_mut(id).expect("cell present");
+        // INVALIDATE the leaf-digest cache before the closure can mutate any
+        // (even `pub`) field — the cell-leaf cache's `&mut`-boundary rule.
+        cell.invalidate_leaf_cache();
         let result = f(cell);
         if !cell.verify_id_integrity() {
             // Restore and reject.
@@ -476,6 +484,11 @@ impl Ledger {
         if self.cells.contains_key(&id) {
             return Err(LedgerError::CellAlreadyExists(id));
         }
+        // INVALIDATE: an externally-built cell may carry a clone's leaf cache
+        // that is stale if the caller mutated a `pub` field after the clone.
+        // Cheap insurance; a fresh dirty cache only costs ONE BLAKE3 on first
+        // `hash_cell`.
+        cell.invalidate_leaf_cache();
         self.cells.insert(id, cell);
         self.pending.touch_structural(); // a new leaf shifts positions
         Ok(id)
@@ -522,11 +535,18 @@ impl Ledger {
                 }
                 from_cell.state.balance - amt
             };
-            new_cells.get_mut(&from_id).unwrap().state.balance = from_balance;
+            {
+                let from_cell = new_cells.get_mut(&from_id).unwrap();
+                // INVALIDATE: this writes `state.balance` directly (pub field).
+                from_cell.invalidate_leaf_cache();
+                from_cell.state.balance = from_balance;
+            }
 
             let to_cell = new_cells
                 .get_mut(&to_id)
                 .ok_or(LedgerError::TransferDestNotFound(to_id))?;
+            // INVALIDATE: this writes `state.balance` directly (pub field).
+            to_cell.invalidate_leaf_cache();
             to_cell.state.balance = to_cell
                 .state
                 .balance
@@ -660,6 +680,11 @@ impl Ledger {
         delta: &CellStateDelta,
         cell_id: &CellId,
     ) -> Result<(), LedgerError> {
+        // INVALIDATE the leaf-digest cache: this mutates the cell's state /
+        // permissions / capabilities directly through `pub` fields. The cell
+        // was `clone`d into `new_cells` carrying a (valid-for-old-bytes) cache;
+        // clear it so the next `hash_cell` re-absorbs the new bytes.
+        cell.invalidate_leaf_cache();
         // Field updates.
         for &(index, ref value) in &delta.field_updates {
             if index >= STATE_SLOTS {
@@ -780,7 +805,9 @@ impl Ledger {
         self.materialize();
 
         let cell = self.cells.get(id).unwrap();
-        let leaf_hash = Self::hash_cell(cell);
+        // Cached: runs after `materialize()`; the proof leaf must equal the
+        // tree's stored leaf (both via the same cell's cache).
+        let leaf_hash = Self::hash_cell_cached(cell);
 
         // Look up position from stored leaf_positions.
         let pos = *self.leaf_positions.get(&id.0)?;
@@ -834,7 +861,9 @@ impl Ledger {
             None => return,
         };
 
-        let leaf_hash = Self::hash_cell(cell);
+        // Cached: `update_leaf` is the hot per-touched-cell path; the cell's
+        // leaf cache was invalidated at the ledger `&mut`-handoff seam.
+        let leaf_hash = Self::hash_cell_cached(cell);
         self.tree_levels[0][pos] = leaf_hash;
 
         // Walk up the tree recomputing only affected parent nodes.
@@ -884,7 +913,10 @@ impl Ledger {
         let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(sorted_cells.len());
         for (i, (cid, cell)) in sorted_cells.iter().enumerate() {
             self.leaf_positions.insert(cid.0, i);
-            leaves.push(Self::hash_cell(cell));
+            // Cached: a structural rebuild re-hashes ALL cells, but an UNTOUCHED
+            // cell's leaf cache is still valid (it was never invalidated), so
+            // only the genuinely-mutated cells pay the BLAKE3 absorb.
+            leaves.push(Self::hash_cell_cached(cell));
         }
 
         let n_leaves = leaves.len();
@@ -979,7 +1011,26 @@ impl Ledger {
     /// security-relevant fields including full per-capability data inside
     /// `delegation.snapshot`.
     fn hash_cell(cell: &Cell) -> [u8; 32] {
+        // ALWAYS FRESH. This is the cache-UNSAFE entry: it can be called on a
+        // cell that was mutated outside the ledger's invalidation discipline
+        // (the public `hash_cell_canonical` wrapper, the `recompute_root_standalone`
+        // independent re-check). It never consults `leaf_cache`, so it can
+        // never serve a stale leaf. The CACHED path is `hash_cell_cached`,
+        // called ONLY from `update_leaf`/`rebuild_tree`, which run after the
+        // ledger's `&mut`-handoff invalidation seams.
         crate::commitment::compute_canonical_state_commitment(cell)
+    }
+
+    /// The CACHED Merkle-leaf hash (`docs/INCREMENTAL-COMMITMENT.md` step 3).
+    /// Called ONLY by `update_leaf`/`rebuild_tree` — the materialize path that
+    /// runs strictly AFTER the ledger's `&mut`-handoff invalidation seams
+    /// (`get_mut`/`update_with`/`apply_delta`/transfers/migrate-commit), so a
+    /// hit is byte-identical to a fresh `compute_canonical_state_commitment`
+    /// (pinned by the `leaf_digest_cache_matches_fresh` differential). A turn
+    /// that touched a cell once re-absorbs nothing on later `root()` calls
+    /// until the cell is next mutated.
+    fn hash_cell_cached(cell: &Cell) -> [u8; 32] {
+        cell.cached_leaf_digest()
     }
 
     /// Public wrapper for `hash_cell` used by tests that need to verify the
@@ -1319,6 +1370,9 @@ impl Ledger {
         match voucher.target_mode {
             CellMode::Hosted => {
                 let mut installed = cell;
+                // INVALIDATE: mode/lifecycle are overwritten below (pub fields)
+                // and the incoming cell may carry a clone's stale cache.
+                installed.invalidate_leaf_cache();
                 installed.mode = CellMode::Hosted;
                 installed.lifecycle = crate::lifecycle::CellLifecycle::Live;
                 self.cells.insert(id, installed);
@@ -1363,6 +1417,8 @@ impl Ledger {
             .cells
             .get_mut(id)
             .ok_or(MigrationError::SourceNotFound(*id))?;
+        // INVALIDATE the leaf cache: migrate_commit tombstones the lifecycle.
+        cell.invalidate_leaf_cache();
         cell.migrate_commit(&voucher, receipt)?;
         self.migration_locks.remove(id);
         // VALUE mutation (the cell stays at its leaf position; only its state /
