@@ -112,13 +112,8 @@ pub fn build_card_surface(
 
     let pane_applet = shared.clone();
     let pane_tree = tree.clone();
-    let entity = cx.new(|_cx| {
-        CardPane::new(
-            pane_applet,
-            pane_tree,
-            "hyperdreggmedia · counter card",
-        )
-    });
+    let entity =
+        cx.new(|_cx| CardPane::new(pane_applet, pane_tree, "hyperdreggmedia · counter card"));
 
     Ok(CardSurface {
         id: SurfaceId(id),
