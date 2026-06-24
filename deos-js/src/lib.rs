@@ -28,6 +28,7 @@
 pub mod applet;
 pub mod attach;
 pub mod card_editor;
+pub mod inspector_card;
 pub mod js;
 pub mod multi_cell;
 pub mod portable;
@@ -38,6 +39,8 @@ pub mod signals;
 pub use applet::{Affordance, Applet, CellModel, FireError, Transclusion, TranscludeError};
 pub use attach::{AttachedAffordance, AttachedApplet, WorldSink};
 pub use card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
+pub use card_editor::Author;
+pub use inspector_card::{InspectorCard, INSPECTOR_AUTHORSHIP_SLOT};
 pub use js::{set_current_editor, take_current_editor, JsRuntime, JsTarget};
 pub use portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 pub use program_doc::{GadgetCite, ProgramSource, TranscludedFragment};
