@@ -167,6 +167,25 @@ impl Cockpit {
         }
     }
 
+    /// NAVIGATE the docuverse: OPEN `cell` in the WEB-OF-CELLS browser and switch
+    /// there — the docuverse *browses*, not just lists. A transclusion/backlink row
+    /// names a cited cell; clicking it should TAKE you to that cell's live attested
+    /// page (its `dregg://` affordance surface + transcluded field), exactly as
+    /// clicking a `dregg://` link would. This is the one navigation seam the docuverse
+    /// rows wire into: set the browser's opened cell + flip to the WebOfCells tab (the
+    /// `set_tab` selector that witnesses the navigation), and clear any stale powerbox
+    /// upgrade so the freshly-opened cell's transclusion never mismatches a prior grant.
+    pub(crate) fn open_cell_in_browser(&mut self, cell: CellId, cx: &mut Context<Self>) {
+        self.web_cells_opened = Some(cell);
+        self.web_cells_outcome = None;
+        // A different opened cell means a different host/source transclusion — drop any
+        // stale ⚡ upgrade so the interactive state can't outlive the cell it was for
+        // (mirrors the web-of-cells row click's own reset).
+        self.web_cells_upgraded = None;
+        self.web_cells_transclusion_outcome = None;
+        self.set_tab(Tab::WebOfCells, cx);
+    }
+
     pub(crate) fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         // Navigating to SWARM is where the killer demo lives — boot it lazily HERE
         // (on the click), so the metered-world + factory-deploy cost lands on the

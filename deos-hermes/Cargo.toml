@@ -72,6 +72,11 @@ serde_json = "1"
 # `--features js-agent`. deos-js is its OWN workspace (in the repo-root
 # `exclude`); cargo resolves it under THIS workspace's `[patch]` tables.
 deos-js = { path = "../deos-js", optional = true }
+# The card-authoring tool (`create_card`/`edit_card`) attributes each authored
+# view-line to the agent's `dregg_doc::Author` (the blame identity). Direct dep so
+# the tool names the author type without reaching through deos-js's re-exports.
+# Same `js-agent` gate (it only compiles with the card-authoring path).
+dregg-doc = { path = "../dregg-doc", optional = true }
 
 # ── the agent dock cockpit surface (gpui), gated behind `cockpit-surface` ──
 # Same gpui fork rev as starbridge-v2 / deos-zed / gpui-component so the WHOLE
@@ -97,7 +102,7 @@ default = []
 # SpiderMonkey) so a Hermes agent can crawl + drive the cockpit as the
 # operator's co-pilot, every fire a cap-gated verified turn under the agent's
 # `held`. OFF by default (the mozjs elephant stays out of the default build).
-js-agent = ["dep:deos-js"]
+js-agent = ["dep:deos-js", "dep:dregg-doc"]
 # THE AGENT DOCK COCKPIT SURFACE — the gpui `CockpitSurface` that mounts the
 # confined Hermes agent into starbridge-v2's moldable-inspector dock: a chat
 # pane (streamed agent text), the tool-call ledger (each receipt / refusal), and
