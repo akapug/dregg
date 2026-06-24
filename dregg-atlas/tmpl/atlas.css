@@ -75,6 +75,8 @@ td.k{color:var(--muted);width:38%}
 .gallery .galhead{grid-column:1/-1;margin:0 0 -4px}
 .gallery .galhead h2{margin:0;color:var(--accent);font-size:16px}
 .gallery .galhead p{margin:4px 0 0;color:var(--muted)}
+.gallery .galsec{grid-column:1/-1;margin:10px 0 -6px;border-top:1px solid var(--line);padding-top:10px}
+.gallery .galsec h3{margin:0;color:var(--accent);font-size:13px;letter-spacing:.02em}
 .card{border:1px solid var(--line);border-radius:9px;background:var(--bg3);overflow:hidden;
   display:flex;flex-direction:column;transition:.12s}
 .card:hover{border-color:var(--line2);transform:translateY(-2px);

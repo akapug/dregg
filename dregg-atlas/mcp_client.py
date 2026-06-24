@@ -13,7 +13,23 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MCP_BIN = os.path.join(REPO, "starbridge-v2", "target", "release", "dregg-mcp")
+
+
+def _find_mcp_bin():
+    """Locate the dregg-mcp release binary. The workspace was UNIFIED (one root
+    `target/`), so prefer `<repo>/target/release/`; fall back to the historical
+    per-crate `starbridge-v2/target/release/` for older checkouts."""
+    candidates = [
+        os.path.join(REPO, "target", "release", "dregg-mcp"),
+        os.path.join(REPO, "starbridge-v2", "target", "release", "dregg-mcp"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]  # the canonical path (its non-existence drives the build hint)
+
+
+MCP_BIN = _find_mcp_bin()
 
 
 class Mcp:

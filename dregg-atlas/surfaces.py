@@ -2,8 +2,17 @@
 atlas bakes + explains.
 
 Grounded in the live cockpit's `Tab` enum (starbridge-v2/src/cockpit/mod.rs) — its
-30 tabs — PLUS the dock workspace's dev panes (editor / terminal / chat / agent),
-which are not `Tab`s but cap-confined Surface cells inside the paned workspace.
+30 tabs, now re-framed into the FIVE MODES (Inhabit / Author / Dev / Inspect /
+Operate; starbridge-v2/src/cockpit/frame.rs · docs/deos/COCKPIT-UX.md) — PLUS the
+dock workspace's dev panes (editor / terminal / chat / agent), which are not `Tab`s
+but cap-confined Surface cells inside the paned workspace.
+
+THE COHERENT FRAME: every surface is now rendered inside ONE persistent chrome —
+a TOP BAR (identity cell + cap-badge · live ledger clock · ⌘K palette · ⌘J dock),
+a LEFT RAIL of the five modes, a mode SUB-NAV of that mode's surfaces, and a
+collapsible DEV DOCK. So every headless bake below shows the frame; the surface is
+the main pane within it. The `mode` field records which of the five modes a surface
+is re-homed under (the inverse of `CockpitMode::surfaces`).
 
 The screenshot `tab` name is the cockpit's own label normalized exactly the way
 `Cockpit::select_tab_named` normalizes (ascii-alphanumeric, lowercased). That is
@@ -13,20 +22,70 @@ blurb the gallery + the static page show; `deep` (a slug) links the long-form
 explainer section; `bake` selects the render path (per-tab vs showcase).
 """
 
+# The five modes (frame.rs · CockpitMode) and the surfaces re-homed under each — the
+# inverse of `CockpitMode::surfaces`. Used to stamp each surface's `mode` and to
+# explain the rail. (glyph, blurb) mirror `CockpitMode::glyph`/`::blurb`.
+MODES = [
+    ("inhabit", "🏡", "your living world",
+     ["home", "wonder", "objects", "graph"]),
+    ("author", "✎", "make things",
+     ["composer", "docs", "editor", "buffer", "web-of-cells", "links-here", "share"]),
+    ("dev", "⌨", "the IDE",
+     ["terminal", "shell", "devtools", "webshell", "simulate", "lanes"]),
+    ("inspect", "🔍", "understand",
+     ["inspector", "inspect-act", "workspace", "debugger", "replay", "time", "proofs", "organs"]),
+    ("operate", "⚙", "the machinery",
+     ["agent", "swarm", "powerbox", "cipherclerk", "trust"]),
+]
+
+# surface-id -> mode-id (the forward map `Tab::mode`).
+MODE_OF = {sid: m for (m, _g, _b, sids) in MODES for sid in sids}
+# the reflective inspector card IS the Inspect-mode main surface (the `inspector`
+# Tab reborn as a deos-js card), so it belongs to Inspect too. `frame` is the chrome
+# around all modes (not a member of one) and stays unhomed.
+MODE_OF["inspector-card"] = "inspect"
+
 # (id, render_tab, label, bake, deep_slug, explainer)
 #   render_tab — normalized name `select_tab_named` matches (label, alnum-lower).
 #                None ⇒ no live tab (a dev pane / composite); bake via 'showcase'.
 #   bake       — 'tab'      : screenshot with tab=render_tab (the per-surface bake)
 #                'showcase' : the --render-showcase composite (no single tab)
 SURFACES = [
+    # ---- the coherent frame (the persistent chrome around everything) ----
+    # The five-mode frame is not a Tab; it is the chrome every surface renders
+    # inside (frame.rs: top_bar · mode_rail · mode_subnav · dev_dock). We bake it
+    # from the `home` tab (the landing inside the full frame) so the gallery shows
+    # the chrome — the top bar, the five-mode left rail, the mode sub-nav, the dock.
+    ("frame", "home", "THE FRAME · five modes", "tab", "frame",
+     "The coherent cockpit shell — ONE persistent chrome, not 20 doors in a dark "
+     "hallway. A TOP BAR (your identity cell + cap-badge · the live ledger clock · "
+     "the ⌘K palette · the ⌘J dock toggle), a LEFT RAIL of the FIVE MODES (Inhabit · "
+     "Author · Dev · Inspect · Operate — one click switches the whole pane's intent), "
+     "a mode SUB-NAV of that mode's surfaces, and a collapsible DEV DOCK. The 30 "
+     "surfaces are re-homed under the five modes (a total partition — none deleted); "
+     "the rail teaches the shape once. See `frame.rs` · `docs/deos/COCKPIT-UX.md`."),
+
     # ---- the landing + reflective core -----------------------------------
     ("home", "home", "HOME", "tab", "home",
-     "The at-rest landing — the warm front door of the live verified image; "
-     "names the running system reflectively (executor · cells · receipts · organs) "
-     "with live counts read off the real ledger."),
+     "The at-rest landing of the INHABIT mode — the warm front door of the live "
+     "verified image inside the five-mode frame; names the running system "
+     "reflectively (executor · cells · receipts · organs) with live counts read off "
+     "the real ledger."),
     ("inspector", "inspector", "INSPECTOR", "tab", "inspector",
-     "The moldable inspector (Registry · Spotter · Halo): every object's presentation "
-     "faces as a sub-tab strip; the inspector is itself inspectable."),
+     "The moldable inspector (Registry · Spotter · Halo) — the INSPECT mode's primary "
+     "surface: every object's presentation faces as a sub-tab strip; the inspector is "
+     "itself inspectable. With `card-pane` on, this surface is reborn as a LIVE deos-js "
+     "CARD (the reflective inspector — see below)."),
+    ("inspector-card", "inspector", "REFLECTIVE INSPECTOR CARD", "tab", "inspector-card",
+     "THE REFLECTIVE TURN (rung 2): the Inspect-mode main surface reborn as a live "
+     "deos-js CARD. The focused cell's moldable faces are generated into a `CardPane` "
+     "entity over the LIVE `World`; a face's affordance button fires a REAL verified "
+     "turn on the operator's cell and the card re-reads it. The surface that inspects "
+     "the image is itself a card the image renders — the frame becoming yours to "
+     "reshape from within. LAZY: built on first paint, rebuilt when focus moves; "
+     "`#[cfg(all(feature = \"dev-surfaces\", feature = \"card-pane\"))]` "
+     "(`cockpit/mod.rs::InspectorCardMount`, `card_pane.rs`). Baked via the `inspector` "
+     "tab (the card IS the Inspect surface when card-pane is on)."),
     ("inspect-act", "inspectact", "INSPECT-ACT", "tab", "inspect-act",
      "The Smalltalk inspect→act→inspect loop: a cell's reflected state plus the "
      "messages it understands, each with a cap badge; firing one commits a real turn."),

@@ -499,22 +499,51 @@
   }
 
   // ═══ SURFACES (the visual UI atlas) ═════════════════════════════════════
-  function buildGallery() {
-    const g = $("#gallery");
-    if (!surfaces.length) { g.innerHTML = `<p class=muted style="padding:18px">No surface screenshots yet — run shoot.py.</p>`; return; }
-    let h = `<div class=galhead><h2>Surface atlas — ${surfaces.length} cockpit surfaces</h2>
-      <p>Every rendered surface of the live cockpit, shot from the real embedded executor. Click a shot to enlarge; click through for its full explainer + the components it is built from.</p></div>`;
-    h += surfaces.map(s => `
+  // The FIVE MODES (cockpit/frame.rs · CockpitMode) — the coherent frame the
+  // ~30 surfaces are re-homed under. The gallery groups by `surface.mode`.
+  const MODES = [
+    ["inhabit", "🏡 Inhabit", "your living world"],
+    ["author",  "✎ Author",   "make things"],
+    ["dev",     "⌨ Dev",       "the IDE"],
+    ["inspect", "🔍 Inspect",  "understand"],
+    ["operate", "⚙ Operate",   "the machinery"],
+  ];
+  const MODE_LABEL = Object.fromEntries(MODES.map(m => [m[0], m[1]]));
+  function surfaceCard(s) {
+    const reg = REG.get("surface:" + s.tab) || { rel: {} };
+    const modeBadge = s.mode ? `<span class=tag title="${esc(MODE_LABEL[s.mode] || s.mode)}">${esc(MODE_LABEL[s.mode] || s.mode)}</span>` : "";
+    return `
       <div class=card data-card="surface:${esc(s.tab)}">
         ${s.file
           ? `<a class=shot href="screenshots/${esc(s.file)}" data-light="${esc(s.file)}" data-cap="${esc(s.tab)}"><img src="screenshots/${esc(s.file)}" loading=lazy alt="${esc(s.tab)}"></a>`
           : `<div class=noshot>no screenshot yet — run shoot.py</div>`}
-        <div class=cap><b>${esc(s.label || s.tab)}</b> <span class=muted>${esc(s.size || "")}</span>
+        <div class=cap><b>${esc(s.label || s.tab)}</b> <span class=muted>${esc(s.size || "")}</span> ${modeBadge}
           <div class=desc>${esc(s.explainer || "")}</div>
-          ${(REG.get("surface:" + s.tab).rel.component || []).length ? `<div class=relgroup><span class=lbl>components</span><div class=tagrow>${chips(REG.get("surface:" + s.tab).rel.component)}</div></div>` : ""}
+          ${(reg.rel.component || []).length ? `<div class=relgroup><span class=lbl>components</span><div class=tagrow>${chips(reg.rel.component)}</div></div>` : ""}
           <div class=minilink><a href="pages/surfaces/${esc(s.tab)}.html" target=_blank>full explainer →</a> · <a data-go="surface:${esc(s.tab)}">in the web →</a></div>
         </div>
-      </div>`).join("");
+      </div>`;
+  }
+  function buildGallery() {
+    const g = $("#gallery");
+    if (!surfaces.length) { g.innerHTML = `<p class=muted style="padding:18px">No surface screenshots yet — run shoot.py.</p>`; return; }
+    let h = `<div class=galhead><h2>Surface atlas — ${surfaces.length} cockpit surfaces</h2>
+      <p>Every rendered surface of the live cockpit, shot from the real embedded executor — now inside the coherent <b>five-mode frame</b> (a top bar, a left rail of the five modes, a mode sub-nav, a dev dock). Click a shot to enlarge; click through for its full explainer + the components it is built from.</p></div>`;
+    const byTab = Object.fromEntries(surfaces.map(s => [s.tab, s]));
+    const claimed = new Set();
+    // 1) the frame itself (the chrome), then 2) each mode's surfaces, then 3) the rest.
+    if (byTab.frame) { h += `<div class=galsec><h3>The frame · the persistent chrome</h3></div>` + surfaceCard(byTab.frame); claimed.add("frame"); }
+    for (const [mid, mlabel, blurb] of MODES) {
+      const inMode = surfaces.filter(s => s.mode === mid);
+      if (!inMode.length) continue;
+      h += `<div class=galsec><h3>${esc(mlabel)} <span class=muted>· ${esc(blurb)}</span></h3></div>`;
+      h += inMode.map(s => { claimed.add(s.tab); return surfaceCard(s); }).join("");
+    }
+    const rest = surfaces.filter(s => !claimed.has(s.tab));
+    if (rest.length) {
+      h += `<div class=galsec><h3>Beyond the frame <span class=muted>· demonstrations + external bakes</span></h3></div>`;
+      h += rest.map(surfaceCard).join("");
+    }
     g.innerHTML = h;
   }
   function openSurface(tab) {
