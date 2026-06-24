@@ -871,12 +871,23 @@ impl Coordinator {
             .map(|(yes, no, n, thr)| format!("y={yes};n={no};N={n};t={thr}"))
     }
 
-    /// Compute a unique proposal ID.
+    /// Compute a unique proposal ID for THIS coordinator's view of a forest.
     fn compute_proposal_id(&self, forest: &AtomicForest) -> [u8; 32] {
+        Self::proposal_id_for(&forest.hash, &self.node_id)
+    }
+
+    /// Compute the proposal id from `(forest_hash, coordinator)` — the canonical
+    /// binding `H("dregg-coord:proposal" || forest_hash || coordinator)`.
+    ///
+    /// Exposed so a 2PC PARTICIPANT receiving a `ProposeAtomicTurn` can RECOMPUTE
+    /// and verify the coordinator's claimed `proposal_id` (closing the proposal-id
+    /// gap: the participant then signs its vote over the SAME id the coordinator
+    /// will tally against, instead of binding to the bare `forest_hash`).
+    pub fn proposal_id_for(forest_hash: &[u8; 32], coordinator: &[u8; 32]) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"dregg-coord:proposal");
-        hasher.update(&forest.hash);
-        hasher.update(&self.node_id);
+        hasher.update(forest_hash);
+        hasher.update(coordinator);
         *hasher.finalize().as_bytes()
     }
 }
