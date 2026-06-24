@@ -458,6 +458,11 @@ impl Cockpit {
             webshell_live: std::cell::RefCell::new(None),
             #[cfg(feature = "servo")]
             webshell_tile_bounds: std::cell::Cell::new(None),
+            // The page tile's focus handle is seeded lazily on the first paint
+            // (`ensure_webshell_input` has the live `&mut Window`); a click on the
+            // page focuses it and routes keystrokes into the live WebView.
+            #[cfg(feature = "web-shell")]
+            webshell_tile_focus: None,
             // The live inspector card mounts lazily on the first Inspect-surface paint
             // (`ensure_inspector_card` builds it from the focused cell over the World).
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
@@ -473,6 +478,17 @@ impl Cockpit {
             frame_hosted_cards: std::cell::RefCell::new(std::collections::HashSet::new()),
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
             frame_hosted_inspector: std::cell::Cell::new(false),
+            // THE LIVE LAYOUT CELL (rung 3) mounts lazily on the first paint
+            // (`ensure_layout_card` seeds it with `LayoutModel::cockpit_default`, the
+            // serialized mirror of the hardcoded `CockpitMode::surfaces` arrangement). The
+            // rail + sub-navs then READ this cell instead of the hardcoded mode map; a
+            // `move:` affordance reshapes it (receipted, cap-gated).
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            layout_card: None,
+            // MAKE YOUR FIRST CARD — minted on demand by `make_first_card` when a
+            // first-timer clicks the onboarding affordance; `None` until then.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            first_card: None,
         }
     }
 

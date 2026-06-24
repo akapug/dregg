@@ -461,6 +461,15 @@ impl Tab {
             Tab::Editor => "EDITOR",
         }
     }
+
+    /// Resolve a surface label (a [`Tab::label`] string) back to its [`Tab`] — the
+    /// inverse of [`Tab::label`]. How the cockpit maps a layout cell's surface rows
+    /// (the [`deos_js::LayoutModel::surfaces_of`] strings, which ARE these labels)
+    /// back to the renderable `Tab`s. `None` for an unknown label (the layout names
+    /// a surface the cockpit has no tab for — the read-side skips it).
+    pub(crate) fn from_label(label: &str) -> Option<Tab> {
+        Tab::ALL.into_iter().find(|t| t.label() == label)
+    }
 }
 
 /// THE DOCK ADAPTER — one cockpit [`Tab`], wrapped as a dockable
@@ -1016,6 +1025,17 @@ pub struct Cockpit {
     /// the tile has painted once. `Cell` (the recorder runs on the `&self` paint path).
     #[cfg(feature = "servo")]
     webshell_tile_bounds: std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>,
+    /// **THE WEB-SHELL TILE FOCUS HANDLE** — the focus the rendered-page tile holds so
+    /// it can TAKE KEYBOARD INPUT. A click on the page focuses this handle (distinct
+    /// from the URL-bar input's own focus); while it holds focus, the tile's
+    /// `on_key_down` routes each typed character to [`Self::webshell_live_key`] →
+    /// `LiveWebView::apply_input(WebInput::KeyChar)`, so you can TYPE into a web form /
+    /// search box. LAZY (`None` until the first paint seeds it via
+    /// [`Self::ensure_webshell_input`], which has the live `&mut Window` a
+    /// `cx.focus_handle()` wants on the paint path). Gated on `web-shell` (only the
+    /// live build routes keys into the page).
+    #[cfg(feature = "web-shell")]
+    webshell_tile_focus: Option<gpui::FocusHandle>,
     /// **THE LIVE INSPECTOR CARD** (rung 2) — the cockpit's Inspect-mode main surface
     /// reborn as a deos-js card. LAZY: `None` until the Inspect surface first paints,
     /// then built by [`Self::ensure_inspector_card`] from the focused cell's moldable
@@ -1055,6 +1075,45 @@ pub struct Cockpit {
     /// cleared at the top of `render`.
     #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
     frame_hosted_inspector: std::cell::Cell<bool>,
+    /// **THE LIVE LAYOUT CELL** (rung 3) — the cockpit's OWN structure (its mode→surface
+    /// arrangement) as a deos-js [`LayoutCard`](deos_js::LayoutCard), superseding the
+    /// hardcoded [`CockpitMode::surfaces`]/[`CockpitMode::ALL`]/[`Tab::mode`]. The rail
+    /// ([`Self::mode_rail`]) renders [`deos_js::LayoutModel::mode_order`], each mode's
+    /// sub-nav ([`Self::mode_subnav`]) renders [`deos_js::LayoutModel::surfaces_of`]
+    /// (resolving each surface label → `Tab` via [`Tab::from_label`]), and a `Go<Surface>`
+    /// jump's rail highlight ([`Self::active_mode`]) reads [`deos_js::LayoutModel::mode_of`]
+    /// — so the chrome's STRUCTURE is editable DATA, not compiled code. A `move:<SURFACE>`
+    /// affordance dispatches [`deos_js::LayoutCard::reshape`] and the rail re-renders
+    /// (receipted, cap-gated). LAZY: `None` until the first paint, then built by
+    /// [`Self::ensure_layout_card`] (default [`deos_js::LayoutModel::cockpit_default`], which
+    /// mirrors the hardcoded arrangement exactly). `None` on the gpui-free / `card-pane`-off
+    /// build, where the reads degrade to the hardcoded `CockpitMode`/`Tab` fallback.
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    layout_card: Option<deos_js::LayoutCard>,
+    /// **MAKE YOUR FIRST CARD** — the onboarding keystone mount. `None` until a first-timer
+    /// clicks "make your first card →" on the calm first-view, then a real editable starter
+    /// card minted over the LIVE `World` (its substance the stranger's own home cell) by
+    /// [`Self::make_first_card`]. While `Some`, the cockpit shows the dedicated FIRST-CARD
+    /// view ([`Self::first_card_view`]) — the card live, plus two real edit affordances
+    /// ("add a button", "rename the title", each a receipted patch) and the card's own `+1`
+    /// (a real verified turn). "explore everything" dismisses it into the full frame (the
+    /// card stays minted on the ledger). `None` on the gpui-free / `card-pane`-off build.
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    first_card: Option<FirstCardMount>,
+}
+
+/// The cockpit's live mount of the onboarding FIRST CARD — the [`CardPane`] gpui entity
+/// (rendered over the live World) and the [`ModeCardSurface`] holding its editable view
+/// document (the edit-from-within route the onboarding edit affordances drive). Minted by
+/// [`Cockpit::make_first_card`]; hosted by [`Cockpit::first_card_view`].
+#[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+pub(crate) struct FirstCardMount {
+    pub(crate) entity: Entity<starbridge_v2::card_pane::CardPane>,
+    pub(crate) surface: starbridge_v2::dock::card_surface::ModeCardSurface,
+    /// A short, friendly note on the last onboarding gesture (the minted / fired / edited
+    /// outcome), shown under the card so a first-timer SEES that their click did something
+    /// real (a receipt, a patch). Refreshed by each first-card affordance.
+    pub(crate) note: Option<String>,
 }
 
 /// The cockpit's live mount of a [`ModeCard`] as a mode's main-pane surface: the
