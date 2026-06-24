@@ -129,6 +129,23 @@ impl RgbaFrame {
         let h = blake3::hash(&self.bytes);
         u64::from_le_bytes(h.as_bytes()[..8].try_into().expect("blake3 is 32 bytes"))
     }
+
+    /// A **cheap, non-cryptographic change signal** over the frame bytes — for the
+    /// per-input "did the framebuffer change since last frame?" gate, where the FULL
+    /// `blake3` of [`Self::content_digest`] is overkill (its collision-resistance is
+    /// only load-bearing for the compositor's T2 content-address binding, NOT for a
+    /// frame-vs-frame inequality test). This is FNV-1a over the bytes: one multiply +
+    /// xor per byte, no cryptographic permutation. A changed frame almost-certainly
+    /// changes this signal; an identical frame always yields the same one — exactly
+    /// the property a change-detect needs, an order of magnitude cheaper than blake3.
+    pub fn change_signal(&self) -> u64 {
+        let mut h: u64 = 1469598103934665603; // FNV-1a offset
+        for b in &self.bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        h
+    }
 }
 
 /// A faithful LOCAL MIRROR of servo's `paint_api::rendering_context::RenderingContext`
@@ -242,6 +259,7 @@ impl SwglRenderingContext {
     pub fn swgl_context(&self) -> swgl::Context {
         self.swgl
     }
+
 }
 
 impl RenderingContext for SwglRenderingContext {
@@ -259,9 +277,15 @@ impl RenderingContext for SwglRenderingContext {
             return None;
         }
         self.swgl.make_current();
-        // gleam `Gl::read_pixels` — allocates a `Vec<u8>` of w*h*4 and fills it
-        // from the framebuffer. This is the EXACT call servo's
-        // `Framebuffer::read_framebuffer_to_image` makes.
+        // gleam `Gl::read_pixels` — allocates a `Vec<u8>` of w*h*4 and fills it from
+        // the framebuffer. This is the EXACT call servo's
+        // `Framebuffer::read_framebuffer_to_image` makes, and the readback is
+        // LOAD-BEARING beyond a copy: SWGL's `glClear` is a *delayed* clear
+        // (materialized lazily AT readback, not on `finish`) and SWGL's internal
+        // default framebuffer is BGRA — `read_pixels(GL_RGBA, ..)` both RESOLVES the
+        // delayed clear AND swizzles BGRA→RGBA. Borrowing `self.buffer` raw would skip
+        // both (un-materialized zeros + channel-swapped), so this readback is the
+        // correct path, NOT a redundant copy.
         let pixels =
             self.gl
                 .read_pixels(rect.x, rect.y, rect.width, rect.height, RGBA, UNSIGNED_BYTE);

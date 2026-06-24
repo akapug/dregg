@@ -307,15 +307,20 @@ impl Render for AppletView {
         // Reset the bind-id cursor so the Nth `bind` node painted this frame maps to
         // `BindingId(n)` (the same order `bind_plan` registered them in).
         self.render_cursor.set(0);
-        let tree = self.tree.clone();
         // `Context<Self>` derefs to `App`; the node walker reads the theme + applet
         // through `&mut App`.
         let app: &mut App = cx;
+        let background = app.theme().background;
+        let foreground = app.theme().foreground;
+        // Walk the view-tree by BORROW (`&self.tree`) instead of deep-cloning the whole
+        // `ViewNode` every paint — `node` only reads it. `self` is borrowed immutably,
+        // `app` is `cx` (a distinct object), so the borrows don't conflict.
+        let body = self.node(&self.tree, window, app);
         div()
             .size_full()
-            .bg(app.theme().background)
-            .text_color(app.theme().foreground)
-            .child(self.node(&tree, window, app))
+            .bg(background)
+            .text_color(foreground)
+            .child(body)
     }
 }
 

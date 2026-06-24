@@ -161,13 +161,14 @@ impl JsTarget {
             JsTarget::Attached(a) => a.get_view(key).map(|s| s.to_string()),
         }
     }
-    /// The full committed receipts — the Provenance face's lineage. Empty for the
-    /// attach path (the live World owns the full provenance log; the attach tape
-    /// carries hashes only).
-    fn full_receipts(&self) -> Vec<dregg_turn::turn::TurnReceipt> {
+    /// Run `f` over the full committed receipts by BORROW — no `to_vec` clone of the
+    /// whole tape. `present()` reads the lineage per call without copying it; the
+    /// attach path has no in-JS full tape, so `f` sees an empty slice. (The Provenance
+    /// face's lineage; empty for the attach path, whose live World owns the full log.)
+    fn with_full_receipts<R>(&self, f: impl FnOnce(&[dregg_turn::turn::TurnReceipt]) -> R) -> R {
         match self {
-            JsTarget::Embedded(a) => a.full_receipts().to_vec(),
-            JsTarget::Attached(_) => Vec::new(),
+            JsTarget::Embedded(a) => f(a.full_receipts()),
+            JsTarget::Attached(_) => f(&[]),
         }
     }
     /// Snapshot the substance for cheap rewind — only the embedded engine supports
@@ -765,7 +766,9 @@ unsafe fn arg_string(cx: &mut SmContext, raw: mozjs::jsapi::HandleValue) -> Stri
         SCRATCH.with(|sc| *sc.borrow_mut() = s);
     }
     EncodeStringToUTF8(cx, rooted_str.handle().into(), cb);
-    SCRATCH.with(|sc| sc.borrow().clone())
+    // `mem::take` the scratch String out (leaving an empty one behind) rather than
+    // cloning it — the value is consumed by the caller, so the clone was pure waste.
+    SCRATCH.with(|sc| std::mem::take(&mut *sc.borrow_mut()))
 }
 
 /// Pull an i32 out of a JS value argument (the raw handle from `CallArgs::get`).
@@ -1073,13 +1076,16 @@ unsafe extern "C" fn native_present(context: *mut RawJSContext, argc: u32, vp: *
         };
         match reflect_binding::parse_cell_id(&id_hex) {
             Some(id) => {
-                let receipts = applet.full_receipts();
-                let mut out = "null".to_string();
-                applet.with_ledger(&mut |l| {
-                    out = reflect_binding::cell_present_json(l, &id, &receipts)
-                        .unwrap_or_else(|| "null".to_string())
-                });
-                out
+                // Borrow the full receipt tape (no `to_vec` clone of the whole lineage
+                // per present()); the ledger read nests inside that borrow.
+                applet.with_full_receipts(|receipts| {
+                    let mut out = "null".to_string();
+                    applet.with_ledger(&mut |l| {
+                        out = reflect_binding::cell_present_json(l, &id, receipts)
+                            .unwrap_or_else(|| "null".to_string())
+                    });
+                    out
+                })
             }
             None => "null".to_string(),
         }

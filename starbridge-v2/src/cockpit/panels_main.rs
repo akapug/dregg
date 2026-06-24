@@ -276,7 +276,8 @@ impl Cockpit {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_1().p_2();
         col = col.child(section_title("BLOCKLACE · provenance").mb_1());
-        if w.receipts().is_empty() {
+        let total = w.receipts().len();
+        if total == 0 {
             col = col.child(
                 div()
                     .text_xs()
@@ -284,8 +285,24 @@ impl Cockpit {
                     .child("(no receipts yet — run a verb)"),
             );
         }
-        // Most-recent first.
-        for (i, r) in w.receipts().iter().enumerate().rev() {
+        // CAP the rendered rows: the receipt tape is unbounded (every receipt ever),
+        // and `blocklace` rebuilds raw every frame, so rendering the whole tape is
+        // `O(receipts)` `format!`-heavy work per paint. Show only the most-recent
+        // `BLOCKLACE_CAP` rows (true indices preserved via `enumerate().rev().take`),
+        // with an "older" footer when truncated — bounding paint cost regardless of
+        // history depth. (A scroll-virtualized list is the fuller answer; this is the
+        // cheap, correct bound.)
+        const BLOCKLACE_CAP: usize = 200;
+        if total > BLOCKLACE_CAP {
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .child(format!("(+{} older receipts)", total - BLOCKLACE_CAP)),
+            );
+        }
+        // Most-recent first, capped.
+        for (i, r) in w.receipts().iter().enumerate().rev().take(BLOCKLACE_CAP) {
             let selected = matches!(self.selection, Selection::Receipt(s) if s == i);
             let hash = reflect::short_hex(&r.receipt_hash());
             col = col.child(

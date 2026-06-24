@@ -87,8 +87,14 @@ impl TerminalView {
     }
 
     fn on_key_down(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let content = self.terminal.content();
-        let modes = content.key_modes();
+        // The key encoder needs exactly ONE bit (DECCKM app-cursor mode). Read it
+        // straight off the grid lock instead of building a whole `TerminalContent`
+        // snapshot (which clones the entire visible `Vec<RenderCell>`) per keystroke.
+        let modes = if self.terminal.app_cursor_mode() {
+            crate::keymap::Modes::APP_CURSOR
+        } else {
+            crate::keymap::Modes::NONE
+        };
 
         // Keystrokes leave through the transport SEAM (`TerminalTransport::write`)
         // — the same trait the wasm `WsTransport` implements. On native it lands
@@ -196,25 +202,48 @@ impl Render for TerminalView {
 
         let (cell_w, cell_h) = self.cell_size.unwrap_or((px(8.), px(16.)));
 
-        // Bucket cells by row. The grid lines run -history..screen_lines; we only
-        // paint the visible viewport rows 0..screen_lines (display_iter already
-        // yields the viewport after display_offset).
+        // Render straight from the SORTED SPARSE `content.cells` (display_iter yields
+        // them row-major, line then column, already after `display_offset`). We keep
+        // ONE reused per-row buffer of cell BORROWS (`cols` `Option`s) and refill it
+        // for each row — instead of densifying into a `rows × cols` nested `Vec` of
+        // CLONED cells every frame. The buffer's slot is the cell's column; `None` is
+        // a blank. `cell_cursor` walks the sorted cells once across all rows.
         let cols = content.columns.max(1);
         let rows = content.screen_lines.max(1);
-        let mut grid: Vec<Vec<Option<RenderCell>>> = vec![vec![None; cols]; rows];
-        // display_iter lines are absolute grid lines; the topmost visible line is
-        // `-display_offset`. Map line -> row index 0..rows.
-        for cell in &content.cells {
-            let row = cell.line + content.display_offset as i32;
-            if row >= 0 && (row as usize) < rows && cell.column < cols {
-                grid[row as usize][cell.column] = Some(cell.clone());
-            }
-        }
 
         let cursor_row = content.cursor_line + content.display_offset as i32;
+        let off = content.display_offset as i32;
+
+        let mut row_buf: Vec<Option<&RenderCell>> = vec![None; cols];
+        let mut cell_cursor = 0usize;
+        let cells = &content.cells;
 
         let mut row_elems = Vec::with_capacity(rows);
-        for (r, row_cells) in grid.iter().enumerate() {
+        for r in 0..rows {
+            // Refill the reused row buffer from the sparse cells whose mapped row == r.
+            // (Cells are sorted by (line, column); skip any that map before this row,
+            // gather any on this row, stop at the first that maps past it.)
+            for slot in row_buf.iter_mut() {
+                *slot = None;
+            }
+            while cell_cursor < cells.len() {
+                let cell = &cells[cell_cursor];
+                let row = cell.line + off;
+                if row < 0 || (row as usize) < r {
+                    // Maps above the visible viewport / before this row — skip it.
+                    cell_cursor += 1;
+                    continue;
+                }
+                if (row as usize) > r {
+                    break; // belongs to a later row
+                }
+                if cell.column < cols {
+                    row_buf[cell.column] = Some(cell);
+                }
+                cell_cursor += 1;
+            }
+            let row_cells: &[Option<&RenderCell>] = &row_buf;
+
             let mut spans: Vec<gpui::AnyElement> = Vec::new();
             let mut col = 0usize;
             while col < cols {
@@ -302,16 +331,17 @@ impl Render for TerminalView {
 
 /// Collect a maximal run of cells from `col` onward that share the same visual
 /// style, returning the run's text and that shared style. Advances `col`.
-fn collect_run(row: &[Option<RenderCell>], col: &mut usize) -> (String, Rgba, bool, bool, bool) {
+fn collect_run(row: &[Option<&RenderCell>], col: &mut usize) -> (String, Rgba, bool, bool, bool) {
     let start = *col;
-    let style_of = |c: &Option<RenderCell>| -> (Rgba, bool, bool, bool) {
+    let style_of = |c: &Option<&RenderCell>| -> (Rgba, bool, bool, bool) {
         match c {
             Some(cell) => (cell.fg, cell.bold, cell.italic, cell.underline),
             None => (DEFAULT_FG, false, false, false),
         }
     };
     let (fg, bold, italic, underline) = style_of(&row[start]);
-    let mut text = String::new();
+    // Pre-size for the worst case (the rest of the row) — one allocation, no growth.
+    let mut text = String::with_capacity(row.len() - start);
     while *col < row.len() {
         let (f, b, i, u) = style_of(&row[*col]);
         if f != fg || b != bold || i != italic || u != underline {

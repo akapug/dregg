@@ -433,6 +433,14 @@ impl Terminal {
             app_cursor: mode.contains(TermMode::APP_CURSOR),
         }
     }
+
+    /// Whether the terminal is in DECCKM application-cursor mode — the ONE bit
+    /// `on_key_down` needs to encode arrow/nav keys. Reads it straight off the grid
+    /// `Term` lock instead of building a whole [`TerminalContent`] snapshot (which
+    /// allocates the entire `Vec<RenderCell>`) just to ask one boolean.
+    pub fn app_cursor_mode(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::APP_CURSOR)
+    }
 }
 
 impl Drop for Terminal {
