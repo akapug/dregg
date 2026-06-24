@@ -25,12 +25,18 @@
 //!   the cap-bounded frustum), via the gpui-free `deos-reflect`. Reflection is a READ
 //!   that confers no authority — cap-bounded and attested, *not* omniscient.
 
+pub mod agent_card;
 pub mod applet;
 pub mod attach;
 pub mod card_editor;
+pub mod composer_card;
+pub mod dynamics_card;
+pub mod graph_card;
 pub mod inspector_card;
 pub mod js;
+pub mod links_card;
 pub mod multi_cell;
+pub mod objects_card;
 pub mod portable;
 pub mod program_doc;
 pub mod reflect_binding;
@@ -40,7 +46,13 @@ pub use applet::{Affordance, Applet, CellModel, FireError, Transclusion, Transcl
 pub use attach::{AttachedAffordance, AttachedApplet, WorldSink};
 pub use card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
 pub use card_editor::Author;
+pub use agent_card::{AgentAction, AgentCard, MandateEdge, AGENT_NONCE_SLOT};
+pub use composer_card::{ComposedChild, ComposerCard, ComposerViewEdit, Role as ComposerRole};
+pub use dynamics_card::{DynamicsCard, FeedEntry, FEED_LEN_SLOT};
+pub use graph_card::{GraphCard, GraphRow, GRAPH_AUTHORSHIP_SLOT};
 pub use inspector_card::{InspectorCard, INSPECTOR_AUTHORSHIP_SLOT};
+pub use links_card::{BacklinkRow, LinksCard, LINK_COUNT_SLOT};
+pub use objects_card::{ObjectRow, ObjectsCard, OBJECTS_AUTHORSHIP_SLOT};
 pub use js::{set_current_editor, take_current_editor, JsRuntime, JsTarget};
 pub use portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 pub use program_doc::{GadgetCite, ProgramSource, TranscludedFragment};
