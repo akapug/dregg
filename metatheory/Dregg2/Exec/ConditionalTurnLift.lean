@@ -33,25 +33,44 @@ descriptor / `FullActionA` core:
      / `condTurn_dependency_sound` / `condTurn_conserves` transport verbatim onto the apex-vocabulary
      batch: a flowing authority turn gets the SAME guarantees over the SAME executor the apex verifies.
 
-  4. **The HONEST residual (scoped, NOT laundered).** The value-moving ops (`balance/mint/burn`) do
-     NOT lift `rfl`: `execFull .balance` runs the SCALAR `recCexec` (no asset gate, no `acceptsEffects`
-     gate) whereas `execFullA .balanceA` runs the per-asset `recCexecAsset` (asset-scoped balance +
-     a `dst`-liveness gate); `mint`/`burn` differ in the receipt `src/dst` bookkeeping (scalar
-     `recCMint` writes `src=dst=cell`; per-asset `recCMintAsset` writes `src=well`, `dst=cell`). These
-     are RELATED through the `projAsset` projection (`Intent.RingFFI.recKExec_projAsset_commits_iff`),
-     NOT equal — the value fragment's lift is a real (small) campaign over that projection, sized in
-     `docs/WIRE3-CONDITIONALBATCH-LIFT-SCOPE.md`, not an `rfl`. We do not overclaim it here.
+  4. **RUNG B — the VALUE fragment (`balance`) LIFTS through the `projAsset` projection (§VB).** The
+     value-moving `balance` op does NOT lift `rfl`: `execFull .balance` runs the SCALAR `recCexec` over
+     the cell's scalar `balance` FIELD whereas `execFullA .balanceA` runs the per-asset `recCexecAsset`
+     over the per-asset COLUMN (asset-scoped balance + `dst`-`acceptsEffects` + `src`-liveness gates).
+     They are nonetheless THE SAME transition once column `a` is PROJECTED onto the scalar field
+     (`projAssetC` / `Intent.RingFFI.projAsset`): `execFullA_balanceA_commits_iff` proves the apex
+     value arm commits IFF the projected partial-turn arm commits AND both liveness legs hold (through
+     `recKExec_projAsset_commits_iff`); `execFullA_balanceA_column_agrees` proves the apex post-state's
+     `a`-column equals the projected scalar field (through `recKExec_projAsset_column_agrees`). A
+     SINGLETON value node lifts (`execFullTurnA_lift_value_single`). So a value (transfer) op flowing
+     under the apex executor is the partial-turn move on the projected column — light-client-verifiable,
+     proven not assumed. This is a genuine projection/refinement rung (the shape of the open
+     `∀e descriptorRefines`), NOT a crypto floor and NOT an `rfl` (which would be FALSE here).
+
+  5. **The HONEST value residuals (scoped, NOT laundered).** Two value sub-rungs remain OPEN, named
+     precisely (§VB-residual, §VB-composite): (a) `mint`/`burn` do NOT lift through this balance
+     projection — the scalar mint/burn break conservation on the scalar field (disclosed `±amt`) while
+     the apex per-asset mint/burn are conservation-PRESERVING ISSUER-MOVES (`a → cell`) with different
+     receipt rows (scalar `src=dst=cell`; apex `src=well, dst=cell`); their bridge is the per-asset
+     issuer-move descriptor (`recKMintAsset_delta`), a separate sub-rung. (b) The COMPOSITE (multi-step)
+     value lift — threading `projAsset` through the EVOLVING ledger across steps — needs the per-step
+     column-agreement ITERATED into a fold lemma (Rung C). The per-op + single-node refinement is proven
+     here; what is open is its fold + the issuer-move rung. We do not overclaim either.
 
 Pure, additive, `#assert_axioms`-clean. Edits no existing file; does not touch the apex/descriptor.
 Verified standalone: `lake env lean Dregg2/Exec/ConditionalTurnLift.lean`.
 -/
 import Dregg2.Exec.ConditionalTurn
+import Dregg2.Intent.RingFFI
 
 namespace Dregg2.Exec.ConditionalTurnLift
 
 open Dregg2.Exec
+open Dregg2.Exec.TurnExecutor (Action)
 open Dregg2.Exec.TurnExecutorFull
 open Dregg2.Exec.ConditionalTurn
+open Dregg2.Intent.RingFFI (projAsset projAsset_caps projAsset_accounts projAsset_balOf
+  projAsset_cellLifecycleLive recKExec_projAsset_commits_iff recKExec_projAsset_column_agrees)
 
 /-! ## §1 — `FullAction.toA`: the embedding of the partial-turn op-set into the apex `FullActionA`. -/
 
@@ -179,6 +198,232 @@ theorem ledgerDeltaAsset_toA_authority_zero (a : AssetId) (fa : FullAction)
   | mint _ _ _         => simp [FullAction.isAuthority] at hauth
   | burn _ _ _         => simp [FullAction.isAuthority] at hauth
 
+/-! ## §VB — RUNG B: the VALUE fragment (balance) lifts through the `projAsset` projection.
+
+The value-moving `balance` op does NOT lift `rfl` (it changes which ledger the executor reads): the
+partial-turn `execFull (.balance a)` runs the SCALAR `recCexec`/`recKExec` over the cell's scalar
+`balance` FIELD (`balOf (k.cell src)`), whereas the apex `execFullA (.balanceA t a)` runs the per-asset
+`recCexecAsset`/`recKExecAsset` over the per-asset COLUMN `k.bal src a` — and additionally gates on
+`acceptsEffects t.dst` (DST liveness) + `cellLifecycleLive t.src` (SRC liveness).
+
+They are nonetheless THE SAME transition once the per-asset column `a` is PROJECTED onto the scalar
+`balance` field (`projAsset`, the FFI-export bridge `Intent.RingFFI`). We prove this at the chained
+`RecChainedState` level — exactly the executor the apex / partial-turn ride — reusing the proven
+projection keystones `recKExec_projAsset_commits_iff` (gate coincidence + liveness) and
+`recKExec_projAsset_column_agrees` (the moved column agrees). This is a genuine projection/refinement
+rung — the same shape as the open `∀e, descriptorRefines` composition — NOT a new crypto floor and NOT
+an `rfl` (which would be FALSE here). -/
+
+/-- **`projAssetC s a` — the chained-state projection.** Project the kernel's per-asset column `a` onto
+the scalar `balance` field the partial-turn `recCexec` reads (`Intent.RingFFI.projAsset`), carrying the
+receipt chain unchanged. This is the chained state the SCALAR partial-turn value executor runs over so
+that its scalar move equals the apex per-asset move on column `a`. -/
+def projAssetC (s : RecChainedState) (a : AssetId) : RecChainedState :=
+  { kernel := projAsset s.kernel a, log := s.log }
+
+@[simp] theorem projAssetC_log (s : RecChainedState) (a : AssetId) :
+    (projAssetC s a).log = s.log := rfl
+@[simp] theorem projAssetC_kernel (s : RecChainedState) (a : AssetId) :
+    (projAssetC s a).kernel = projAsset s.kernel a := rfl
+
+/-- **`recCexec_isSome_eq` — the chained scalar value step commits iff its kernel step does.** Threading
+the receipt chain never changes the accept/reject bit: `(recCexec s t).isSome = (recKExec s.kernel t).isSome`.
+The chained shadow of the bare kernel gate. -/
+theorem recCexec_isSome_eq (s : RecChainedState) (t : Turn) :
+    (recCexec s t).isSome = (recKExec s.kernel t).isSome := by
+  unfold recCexec; cases recKExec s.kernel t <;> rfl
+
+/-- **`recCexecAsset_isSome_eq` — the chained per-asset value step commits iff its kernel step does AND
+the DST cell accepts effects.** The apex value arm's accept/reject bit factors as `acceptsEffects t.dst`
+(the R1 lifecycle gate at the credit target) AND the per-asset kernel verdict. -/
+theorem recCexecAsset_isSome_eq (s : RecChainedState) (t : Turn) (a : AssetId) :
+    (recCexecAsset s t a).isSome = (acceptsEffects s.kernel t.dst && (recKExecAsset s.kernel t a).isSome) := by
+  unfold recCexecAsset
+  by_cases hd : acceptsEffects s.kernel t.dst = true
+  · rw [hd]; simp only [Bool.true_and]; cases recKExecAsset s.kernel t a <;> rfl
+  · rw [Bool.not_eq_true] at hd; rw [hd]; simp only [Bool.false_and]
+    cases recKExecAsset s.kernel t a <;> rfl
+
+/-- **`execFullA_balanceA_commits_iff` — RUNG B keystone (commit coincidence).** The apex per-asset
+value arm `execFullA (.balanceA t a)` commits EXACTLY when:
+  * the partial-turn SCALAR value arm `execFull (.balance ⟨t⟩)` commits over the asset-`a` PROJECTION
+    of the state (`projAssetC s a`) — the same scalar gate the FFI export runs, AND
+  * the SOURCE cell is live (`cellLifecycleLive t.src` — the per-asset src-liveness gate), AND
+  * the DST cell accepts effects (`acceptsEffects t.dst` — the R1 credit-target lifecycle gate).
+Proved through `recKExec_projAsset_commits_iff` (the FFI gate-coincidence keystone) — the scalar
+export over the projection, conjoined with both liveness legs, IS the per-asset verdict. So a flowing
+value-turn's accept/reject under the apex executor is the partial-turn scalar verdict over the projected
+column — no apex re-derivation. The `act : Action` carrying the move `t` is supplied by the caller; we
+state it for the action whose `.move = t` (`FullAction.balance` of any such action). -/
+theorem execFullA_balanceA_commits_iff (s : RecChainedState) (t : Turn) (a : AssetId)
+    (act : Action) (hact : act.move = t) :
+    (execFullA s (.balanceA t a)).isSome
+      = ((execFull (projAssetC s a) (.balance act)).isSome
+          && cellLifecycleLive s.kernel t.src && acceptsEffects s.kernel t.dst) := by
+  -- LHS: the apex balanceA arm IS recCexecAsset; factor its bit.
+  show (recCexecAsset s t a).isSome = _
+  rw [recCexecAsset_isSome_eq]
+  -- RHS: the partial-turn balance arm IS recCexec over the projection; factor ITS bit.
+  show _ = ((recCexec (projAssetC s a) (act.move)).isSome
+            && cellLifecycleLive s.kernel t.src && acceptsEffects s.kernel t.dst)
+  rw [hact, recCexec_isSome_eq, projAssetC_kernel]
+  -- now both sides are over the kernel bits; the projection keystone closes it.
+  have hk := recKExec_projAsset_commits_iff s.kernel t a
+  -- hk : (recKExec (projAsset s.kernel a) t).isSome && cellLifecycleLive s.kernel t.src
+  --        = (recKExecAsset s.kernel t a).isSome
+  rw [← hk]
+  -- both sides: acceptsEffects t.dst && (export.isSome && live)  vs  (export.isSome && live) && acceptsEffects t.dst
+  cases (recKExec (projAsset s.kernel a) t).isSome <;>
+    cases cellLifecycleLive s.kernel t.src <;>
+    cases acceptsEffects s.kernel t.dst <;> rfl
+
+/-- **`execFullA_balanceA_column_agrees` — RUNG B keystone (the moved column refines).** When the apex
+per-asset value arm commits to `s'`, the post-state's asset-`a` column (`s'.kernel.bal · a`) equals the
+SCALAR `balance` field the partial-turn arm writes over the projection (`balOf ∘ (...).cell`). I.e. the
+apex value move IS the partial-turn value move, read on column `a` — the per-asset ledger the apex
+tracks coincides cell-for-cell with the projected scalar field the partial-turn certifies. Proved
+through `recKExec_projAsset_column_agrees` (the FFI column keystone). -/
+theorem execFullA_balanceA_column_agrees (s s' : RecChainedState) (t : Turn) (a : AssetId)
+    (h : execFullA s (.balanceA t a) = some s') (c : CellId) :
+    s'.kernel.bal c a
+      = balOf (((recKExec (projAsset s.kernel a) t).getD (projAsset s.kernel a)).cell c) := by
+  -- the apex arm committed, so recCexecAsset did; extract the per-asset kernel post-state.
+  have h' : recCexecAsset s t a = some s' := h
+  unfold recCexecAsset at h'
+  by_cases hd : acceptsEffects s.kernel t.dst = true
+  · rw [hd] at h'; simp only [if_true] at h'
+    -- inside: match recKExecAsset s.kernel t a
+    revert h'
+    cases hka : recKExecAsset s.kernel t a with
+    | none => intro h'; simp at h'
+    | some k' =>
+        intro h'
+        simp only [Option.some.injEq] at h'
+        -- s'.kernel = k', so s'.kernel.bal c a = k'.bal c a
+        rw [← h']
+        exact (recKExec_projAsset_column_agrees s.kernel k' t a hka c).symm
+  · rw [Bool.not_eq_true] at hd; rw [hd] at h'; simp at h'
+
+/-- **`balanceA_toA` — the apex lift of a partial-turn balance op at asset `a`.** `FullAction.toA a`
+sends `.balance act ↦ .balanceA act.move a`; recorded here so the value-fragment lift speaks the same
+embedding the authority fragment uses. -/
+theorem balanceA_toA (a : AssetId) (act : Action) :
+    FullAction.toA a (.balance act) = .balanceA act.move a := rfl
+
+/-! ## §VB-batch — a VALUE-ONLY ConditionalBatch node lifts (refines through `projAsset`).
+
+A node all of whose actions are `balance` ops: each one lifts to a `.balanceA` arm that commits exactly
+when its projected scalar arm commits (plus liveness) and whose moved column equals the projected scalar
+field. We record the node-level refinement statement so `condTurn_atomic`/`_dependency_sound` transport
+onto the value fragment too: a flowing VALUE turn's apex execution is, column-by-column, the partial-turn
+execution over the projected ledger. -/
+
+/-- Is a `FullAction` in the VALUE-balance fragment (a `.balance` op)? -/
+def FullAction.isBalanceValue : FullAction → Bool
+  | .balance _ => true
+  | _          => false
+
+/-- **`execFullA_toA_balance_commits_iff` — a balance op's lift commits iff its projected scalar arm
+does (plus liveness).** Phrased on `FullAction.toA a`, so it plugs into `liftNode`/`liftBatchNodes`
+directly. For a `.balance act` op, executing its apex lift `toA a (.balance act)` commits exactly when
+`execFull` of `.balance act` over `projAssetC s a` commits AND both liveness legs hold. -/
+theorem execFullA_toA_balance_commits_iff (s : RecChainedState) (a : AssetId) (act : Action) :
+    (execFullA s (FullAction.toA a (.balance act))).isSome
+      = ((execFull (projAssetC s a) (.balance act)).isSome
+          && cellLifecycleLive s.kernel act.move.src && acceptsEffects s.kernel act.move.dst) := by
+  rw [balanceA_toA]
+  exact execFullA_balanceA_commits_iff s act.move a act rfl
+
+/-- **`execFullA_toA_balance_column_agrees` — a balance op's lift refines on the moved column.** When the
+apex lift of `.balance act` commits to `s'`, the post-state's asset-`a` column equals the partial-turn
+scalar field over the projection. The node-level value-refinement content. -/
+theorem execFullA_toA_balance_column_agrees (s s' : RecChainedState) (a : AssetId) (act : Action)
+    (h : execFullA s (FullAction.toA a (.balance act)) = some s') (c : CellId) :
+    s'.kernel.bal c a
+      = balOf (((recKExec (projAsset s.kernel a) act.move).getD (projAsset s.kernel a)).cell c) := by
+  rw [balanceA_toA] at h
+  exact execFullA_balanceA_column_agrees s s' act.move a h c
+
+/-! ## §VB-residual — the MINT/BURN receipt-row sub-rung (named precisely, NOT laundered).
+
+The remaining two value ops do NOT lift through this `projAsset`-on-`balance` projection, for a SHARP
+reason recorded here so it is a burn-down, not a parking lot:
+
+  * **Semantics divergence.** The scalar `recCMint`/`recCBurn` (partial-turn) CREDIT/DEBIT a single
+    cell's scalar `balance` field and BREAK conservation (the disclosed-`±amt` regime,
+    `mint_regime_disclosed`). The apex per-asset `recCMintAsset`/`recCBurnAsset` are ISSUER-MOVES (W1,
+    `AssetId := CellId`): a conservation-PRESERVING transfer `a → cell` (mint) / `cell → a` (burn) on
+    column `a` (`recKMintAsset_delta` proves `recTotalAsset` UNCHANGED). So the apex supply op is a
+    genuinely DIFFERENT — and stronger (conservation-faithful) — transition than the scalar one; it is
+    NOT `projAsset`(the scalar mint). The right bridge is the per-asset issuer-move's own descriptor
+    (`recKMintAsset_delta` / `recKBurnAsset_delta`), not a balance projection.
+  * **Receipt-row divergence.** The scalar `recCMint` logs `src = dst = cell` (the self-credit fiction);
+    the apex `recCMintAsset` logs the TRUTHFUL issuer-move row `src = a` (the well), `dst = cell`
+    (burn mirror: scalar `src=dst=cell` vs apex `src=cell, dst=a`). So even the receipt chain differs.
+
+Therefore the mint/burn lift is a SEPARATE sub-rung (the per-asset issuer-move refinement), NOT part of
+the balance projection. Rung B closes the BALANCE fragment cleanly (the dominant value op — every
+transfer); the mint/burn issuer-move rung is named here precisely and remains open. We assert the
+non-lift HONESTLY below (the fragment boundary fires). -/
+
+/-- The mint/burn ops are NOT in the balance-value fragment (they do NOT claim the `projAsset` lift —
+their bridge is the issuer-move descriptor, a separate sub-rung). The honest fragment teeth. -/
+theorem mint_not_balanceValue (actor cell : CellId) (amt : ℤ) :
+    FullAction.isBalanceValue (.mint actor cell amt) = false := rfl
+theorem burn_not_balanceValue (actor cell : CellId) (amt : ℤ) :
+    FullAction.isBalanceValue (.burn actor cell amt) = false := rfl
+
+/-! ## §VB-node — a value-only (single-balance-op) ConditionalBatch node lifts, refining per column.
+
+A value-only node is one whose every action is a `.balance` op. The per-action refinement
+(`execFullA_toA_balance_commits_iff` + `_column_agrees`) is the content `condTurn_atomic` /
+`condTurn_dependency_sound` transport onto the value fragment: each lifted node step's apex execution
+commits iff its projected scalar step commits (plus liveness) and moves column `a` exactly as the
+projected scalar field. We record the predicate + the single-op node-lift so the value fragment plugs
+into the same `liftNode` machinery the authority fragment uses. -/
+
+/-- A node is value-only when every action is a `.balance` op. -/
+def NodeBalanceValueOnly (node : Node) : Prop := ∀ fa ∈ node, FullAction.isBalanceValue fa = true
+
+/-- **`execFullTurnA_lift_value_single` — a SINGLETON value node lifts, refining on column `a`.** For a
+one-action value node `[.balance act]`, the apex executor `execFullTurnA` over its lift commits iff the
+projected partial-turn executor commits (plus liveness), and (when it commits) the post-state's `a`-column
+equals the projected scalar field. This is the value-fragment analog of
+`execFullTurnA_lift_authority`'s base case — the per-node value step the conditional-batch fold takes,
+proven to refine the partial-turn step through `projAsset`. (The multi-action / multi-node composite —
+threading `projAsset` through the evolving ledger across steps — is the COMPOSITE residual named in
+§VB-composite below.) -/
+theorem execFullTurnA_lift_value_single (a : AssetId) (act : Action) (s : RecChainedState) :
+    (execFullTurnA s (liftNode a [.balance act])).isSome
+      = ((execFull (projAssetC s a) (.balance act)).isSome
+          && cellLifecycleLive s.kernel act.move.src && acceptsEffects s.kernel act.move.dst) := by
+  -- A singleton lifted node folds to the single apex arm (the tail `[]` returns `some` verbatim), so
+  -- its commit-bit IS the arm's commit-bit; then the per-op keystone closes it.
+  have hfold : (execFullTurnA s (liftNode a [.balance act])).isSome
+      = (execFullA s (FullAction.toA a (.balance act))).isSome := by
+    show (execFullTurnA s [FullAction.toA a (.balance act)]).isSome = _
+    simp only [execFullTurnA]
+    cases execFullA s (FullAction.toA a (.balance act)) <;> rfl
+  rw [hfold, execFullA_toA_balance_commits_iff s a act]
+
+/-! ## §VB-composite — the COMPOSITE residual (Rung C), named precisely.
+
+Rung B closes the value fragment at the OP and SINGLE-NODE level: a balance op's apex execution refines
+its projected scalar execution (commit-iff + moved-column agreement), and a singleton value node lifts.
+What remains for the full flowing-value-turn lift is the COMPOSITE — threading `projAsset` through a
+MULTI-action node / MULTI-node batch as the ledger evolves:
+
+  the projection `projAssetC` is taken at the CURRENT kernel, so after step 1 commits (changing the
+  per-asset ledger's `a` column), the step-2 refinement must be stated against `projAssetC (apex post-
+  state) a` — i.e. a fold lemma `execFullTurnA over (liftNode a node) ≈ (scalar fold over the
+  re-projected state)`. This needs a `recCexec`-fold-commutes-with-projection lemma:
+  `projAsset (recKExecAsset-post) a = recKExec-post (projAsset · a)` on the moved column
+  (the per-step `recKExec_projAsset_column_agrees` ITERATED). That iteration is the composite rung.
+
+This is a genuine open sub-rung (the same shape as the un-assembled `∀e descriptorRefines` composition),
+NOT a hidden gap: the per-step refinement is PROVEN here; what is open is its fold. We do not assert the
+multi-step lift. The mint/burn issuer-move rung (§VB-residual) is the other open value sub-rung. -/
+
 /-! ## §6 — Axiom-hygiene tripwires. -/
 
 #assert_axioms execFullA_toA_delegate
@@ -187,6 +432,13 @@ theorem ledgerDeltaAsset_toA_authority_zero (a : AssetId) (fa : FullAction)
 #assert_axioms execFullTurnA_lift_authority
 #assert_axioms liftBatch_node_agrees
 #assert_axioms ledgerDeltaAsset_toA_authority_zero
+#assert_axioms recCexec_isSome_eq
+#assert_axioms recCexecAsset_isSome_eq
+#assert_axioms execFullA_balanceA_commits_iff
+#assert_axioms execFullA_balanceA_column_agrees
+#assert_axioms execFullA_toA_balance_commits_iff
+#assert_axioms execFullA_toA_balance_column_agrees
+#assert_axioms execFullTurnA_lift_value_single
 
 /-! ## §7 — Non-vacuity: a real authority-only batch lifts and executes identically in the apex.
 
@@ -223,5 +475,65 @@ example : execFullTurnA fs0 (liftNode 7 authNode1) = execFullTurn fs0 authNode1 
 -- rfl lift) — the scoping is honest, the fragment boundary fires:
 #guard (FullAction.isAuthority (.mint 9 0 50)) == false
 #guard (FullAction.isAuthority (.burn 9 0 50)) == false
+
+/-! ## §VB-nonvacuity — a CONCRETE value op lifts, and its `projAsset` projection genuinely matches.
+
+A real per-asset transfer: actor `0` self-authorized (`actor = src`), moving `3` of asset `7` from
+cell `0` (holding `10`) to cell `1`, both Live accounts. The apex `.balanceA` arm COMMITS, and (by the
+Rung-B keystones) the partial-turn scalar arm over the `projAsset`-projection commits with both liveness
+legs, with the post-state's asset-`7` column equal to the projected scalar field — witnessing the value
+lift is NOT vacuous (the projection genuinely tracks the apex per-asset move). -/
+
+/-- A concrete state whose per-asset ledger holds `10` of asset `7` at cell `0`; two Live accounts. -/
+def vbState : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun _ => .record [("balance", .int 0)]
+        caps := fun _ => []
+        bal  := fun c a => if c = 0 ∧ a = 7 then 10 else 0
+        lifecycle := fun _ => 0 }
+    log := [] }
+
+/-- A concrete committing transfer `0 → 1`, amount `3`, asset `7` (actor `0` self-authorized). -/
+def vbTurn : Turn := { actor := 0, src := 0, dst := 1, amt := 3 }
+def vbAct : Action :=
+  { method := 0, effect := Dregg2.CatalogInstances.EffectKind.transfer, move := vbTurn }
+
+-- The apex per-asset value arm COMMITS over `vbState` (authorized self-move, available in asset 7,
+-- distinct live endpoints, dst accepts effects):
+#guard ((execFullA vbState (.balanceA vbTurn 7)).isSome)  --  true
+-- ...and moves the asset-7 column: cell 0 → 7, cell 1 → 3 (a genuine per-asset transfer):
+#guard (((execFullA vbState (.balanceA vbTurn 7)).map (fun s => s.kernel.bal 0 7)).getD 99) == 7
+#guard (((execFullA vbState (.balanceA vbTurn 7)).map (fun s => s.kernel.bal 1 7)).getD 99) == 3
+
+-- THE RUNG-B BRIDGE, on the concrete op: the apex commit-bit EQUALS the projected partial-turn
+-- commit-bit conjoined with both liveness legs (proved via the keystone, not merely evaluated):
+example :
+    (execFullA vbState (.balanceA vbTurn 7)).isSome
+      = ((execFull (projAssetC vbState 7) (.balance vbAct)).isSome
+          && cellLifecycleLive vbState.kernel vbTurn.src
+          && acceptsEffects vbState.kernel vbTurn.dst) :=
+  execFullA_balanceA_commits_iff vbState vbTurn 7 vbAct rfl
+
+-- ...and the moved column refines the projected scalar field at every cell (the column-agreement
+-- keystone, on the concrete committing op):
+example (s' : RecChainedState) (h : execFullA vbState (.balanceA vbTurn 7) = some s') (c : CellId) :
+    s'.kernel.bal c 7
+      = balOf (((recKExec (projAsset vbState.kernel 7) vbTurn).getD (projAsset vbState.kernel 7)).cell c) :=
+  execFullA_balanceA_column_agrees vbState s' vbTurn 7 h c
+
+-- The singleton VALUE node lifts (its apex commit-bit = the projected scalar commit + liveness):
+example :
+    (execFullTurnA vbState (liftNode 7 [.balance vbAct])).isSome
+      = ((execFull (projAssetC vbState 7) (.balance vbAct)).isSome
+          && cellLifecycleLive vbState.kernel vbAct.move.src
+          && acceptsEffects vbState.kernel vbAct.move.dst) :=
+  execFullTurnA_lift_value_single 7 vbAct vbState
+
+-- The HONEST fragment teeth: mint/burn are NOT in the balance-value fragment (their lift is the
+-- separate issuer-move sub-rung, §VB-residual), so the balance projection is not silently overclaimed:
+#guard (FullAction.isBalanceValue (.mint 9 0 50)) == false
+#guard (FullAction.isBalanceValue (.burn 9 0 50)) == false
+#guard (FullAction.isBalanceValue (.balance vbAct)) == true
 
 end Dregg2.Exec.ConditionalTurnLift
