@@ -486,9 +486,12 @@ theorem state_authGraph_unchanged {s s' : RecChainedState} {f : FieldName} {acto
 
 /-! ## §3 — `state_authorized`: a committed Neutral/metadata effect was authorized. -/
 
-/-- **`state_authorized`.** A committed Neutral/Monotonic/Terminal effect implies the
-actor held authority over the `target` (`stateAuthB` true at the pre-state). The regime's
-authorization obligation, reused from the cap gate. -/
+/-- **`state_authorized` — GATE-EXTRACT (not an authority guarantee).** A committed
+Neutral/Monotonic/Terminal effect implies the actor held authority over `target` (`stateAuthB` at the
+pre-state). Re-lists `stateStep`'s own gate (via `stateStep_factors`) — a LOCAL helper for the state
+handler-floors. The GENUINE binding is `Circuit.Spec.CellStateField.setFieldSpec_authorized` (off the
+INDEPENDENT `SetFieldSpec`) and its sibling state-effect specs. -/
+@[gate_projection]
 theorem state_authorized {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
     {v : Value} (h : stateStep s f actor target v = some s') :
     stateAuthB s.kernel.caps actor target = true :=
@@ -801,8 +804,10 @@ theorem guarded_state_authGraph_unchanged {s s' : RecChainedState} {f : FieldNam
     execGraph s'.kernel.caps = execGraph s.kernel.caps :=
   state_authGraph_unchanged (stateStepGuarded_eq h)
 
-/-- **`guarded_state_authorized`.** A committed caveat-gated write implies the actor held
-authority over the target (the authority gate still fires under the caveat gate). -/
+/-- **`guarded_state_authorized` — GATE-EXTRACT (not an authority guarantee).** A committed caveat-gated
+write implies the actor held authority over the target (re-lists `stateStepGuarded`'s gate via
+`state_authorized`). LOCAL helper; the genuine binding is the independent state-effect spec. -/
+@[gate_projection]
 theorem guarded_state_authorized {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
     {n : Int} (h : stateStepGuarded s f actor target n = some s') :
     stateAuthB s.kernel.caps actor target = true :=

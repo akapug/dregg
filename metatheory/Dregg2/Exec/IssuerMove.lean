@@ -149,7 +149,11 @@ theorem issuerBurnK_preserves_exact {k k' : RecordKernelState} {actor : CellId} 
 /-- **The authority gate is over the ISSUER (E2), PROVED.** A committed issuer-mint proves the
 actor held mint authority over the **issuer** cell — NOT the recipient (the legacy gate's target).
 The cutover migrates mint capabilities recipient-shaped → issuer-shaped; this is the theorem the
-migrated capability table must satisfy. -/
+migrated capability table must satisfy.
+
+GATE-EXTRACT (not an authority guarantee): re-lists `issuerMoveK`'s own gate. The genuine
+production-law binding is `Circuit.Spec.SupplyCreation.mintA_authorized` over the independent spec. -/
+@[gate_projection]
 theorem issuerMoveK_authorized {k k' : RecordKernelState} {actor : CellId} {a : AssetId}
     {dst : CellId} {amt : ℤ} (h : issuerMoveK issuerOf k actor a dst amt = some k') :
     mintAuthorizedB k.caps actor (issuerOf a) = true := by
@@ -161,7 +165,11 @@ theorem issuerMoveK_authorized {k k' : RecordKernelState} {actor : CellId} {a : 
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- Burn's authority gate (Stage-3 split): a committed burn witnesses EITHER holder self-redeem
-(`actor = src`) OR issuer authority (`mintAuthorizedB actor (issuerOf a)`). -/
+(`actor = src`) OR issuer authority (`mintAuthorizedB actor (issuerOf a)`).
+
+GATE-EXTRACT (not an authority guarantee): re-lists `issuerBurnK`'s own gate. The genuine binding is
+`Circuit.Spec.SupplyDestruction.recCBurnAsset_authorized` over the independent `BurnSpec`. -/
+@[gate_projection]
 theorem issuerBurnK_authorized {k k' : RecordKernelState} {actor : CellId} {a : AssetId}
     {src : CellId} {amt : ℤ} (h : issuerBurnK issuerOf k actor a src amt = some k') :
     actor = src ∨ mintAuthorizedB k.caps actor (issuerOf a) = true := by

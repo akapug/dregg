@@ -74,6 +74,30 @@ elab "#assert_all_clean" "[" ids:ident,* "]" : command => do
     n := n + 1
   logInfo m!"#assert_all_clean: {n} keystones pinned kernel-clean"
 
+/-! ## `@[gate_projection]` — the gate-EXTRACT marker (NOT an authority guarantee).
+
+A `@[gate_projection]` theorem has the shape `<step> = some _ → <the step def's OWN gate>` and is proved
+by `unfold <step>; exact h.1` (a `by_cases` on the gate conjunction, projecting the held conjunct out of
+the commit). It RE-LISTS the executor's own `if`-guard: it reds on any gate edit (so it pins the gate's
+SHAPE), but in ISOLATION it constrains nothing — proving "the committed step satisfies its own gate" is a
+tautology-in-spirit, not an independent authority fact.
+
+The GENUINE authority binding for an effect is the iff/triangle over an INDEPENDENT spec — e.g.
+`Circuit.Spec.SupplyCreation.mintA_authorized`, derived through `execMintA_iff_spec` over the
+linter-PASS `MintASpec` (`Verify.LoadBearingLint`). A `@[gate_projection]`-tagged lemma is fine as a
+LOCAL helper (handler-floor `auth_gated`, fail-closed plumbing); it must NEVER be cited as a top-level
+authority GUARANTEE. The tag is a documentation marker (no proof power) so a reader/auditor cannot
+mistake a gate-extract for the real binding. -/
+
+/-- The `@[gate_projection]` tag — marks a `<step> = some _ → <own-gate>` gate-EXTRACT (proved
+`unfold; exact h.1`). A documentation marker ONLY: it carries no proof power and gates nothing. Its job
+is to STOP a gate-extract from reading as an authority guarantee — the genuine binding is the
+executor⟺independent-spec iff (see the module note above). -/
+initialize gateProjectionAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `gate_projection
+    "marks a gate-EXTRACT (`step = some _ → its own gate`, `unfold; exact h.1`) — NOT an authority \
+     guarantee; the genuine binding is the executor⟺independent-spec iff"
+
 /-! ## `#assert_namespace_axioms` — module-wide axiom-hygiene pinning.
 
 `#assert_namespace_axioms` pins every theorem under a namespace to the three standard

@@ -90,6 +90,7 @@ import Dregg2.Exec.FullForestAuth          -- the RUNNING ENTRY: execFullForestG
 import Dregg2.Exec.ForestMemoryProgram     -- integrity C(c2): the WHOLE-TURN memory program over the SAME forest (MEDIUM-7/8)
 import Dregg2.Exec.ReachableConservation   -- conservation (W1): Σ=0 as a reachability invariant
 import Dregg2.Exec.IssuerMove              -- conservation (W1): the issuer-move mechanism + the legacy-break tooth
+import Dregg2.Circuit.Spec.supplycreation  -- authority (E2): mintA_authorized — the GENUINE iff over the independent MintASpec
 import Dregg2.Apps.CapSlotFactory          -- freshness (R7): stored-cap retrieval-epoch gate + no-forge-from-storage
 
 namespace Dregg2.AssuranceCase
@@ -137,8 +138,9 @@ authority through exactly these mouths, and each is pinned below —
     round-trip confers nothing beyond the original grant: `CapSlotFactory.no_forge_from_storage`
     (store-mouth held-gated; retrieval = one survivor grant of the SAME payload);
   * PRODUCTION authority (mint) is not a cap-grant at all: it is gated on holding the ISSUER
-    cell's cap (`recKMintAsset_authorized`, pinned under guarantee B) — the constructive
-    production law, never a recipient-shaped grant;
+    cell's cap (`Circuit.Spec.SupplyCreation.mintA_authorized`, pinned under guarantee B — the
+    GENUINE binding: executor⟺spec over the independent `MintASpec`, not a gate-extract) — the
+    constructive production law, never a recipient-shaped grant;
   * cell BIRTH (`createCellA` / factory create) grants the creator a cap to the NEW cell only —
     authority over a previously-nonexistent resource, not amplification of held authority.
 There is no other cap-conferring constructor in `FullActionA`; the wire enum is reconciled
@@ -215,7 +217,9 @@ DAG:
     committed action/transaction conserves EVERY asset exactly (unconditional).
   • `TurnExecutorFull.recKMintAsset_delta` / `recKBurnAsset_delta` — the reshaped supply
     verbs conserve (the issuer-debit and recipient-credit cancel inside the sum); their
-    authority gate targets the ISSUER (`recKMintAsset_authorized` — the production law E2);
+    authority gate targets the ISSUER (`Circuit.Spec.SupplyCreation.mintA_authorized` — the
+    production law E2, derived through `execMintA_iff_spec` over the INDEPENDENT `MintASpec`, not a
+    bare gate-extract);
     `IssuerMove.recKMintAsset_breaks_exact` is the non-vacuity tooth (the LEGACY
     supply-increment law provably breaks the value law — the reshape is a repair).
   • `RecordKernel.recTransferBal_sum_conserve_moved` / `recTransferBal_untouched` — the
@@ -280,7 +284,11 @@ theorem conservation_guarantee_step
 #assert_axioms Dregg2.Exec.TurnExecutorFull.execFullTurnA_conserves_exact
 #assert_axioms Dregg2.Exec.TurnExecutorFull.recKMintAsset_delta
 #assert_axioms Dregg2.Exec.TurnExecutorFull.recKBurnAsset_delta
-#assert_axioms Dregg2.Exec.TurnExecutorFull.recKMintAsset_authorized
+-- the production-authority law E2 (mint is gated on the ISSUER cap), as the GENUINE binding: derived
+-- through `execMintA_iff_spec` over the INDEPENDENT `MintASpec` (linter-PASS: independent + non-vacuous
+-- via `mintA_rejects_unauthorized`), NOT the bare `recKMintAsset_authorized` gate-extract.
+#assert_axioms Dregg2.Circuit.Spec.SupplyCreation.mintA_authorized
+#assert_axioms Dregg2.Circuit.Spec.SupplyCreation.execMintA_iff_spec
 #assert_axioms Dregg2.Exec.TurnExecutorFull.recKMintAsset_requires_live_issuer
 -- the non-vacuity tooth: the LEGACY supply-increment mint provably BREAKS the value law
 -- (so the issuer-move reshape is a repair, not a relabeling):
