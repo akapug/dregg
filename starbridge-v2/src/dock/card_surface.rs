@@ -27,12 +27,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    div, AnyElement, App, AppContext, Entity, FocusHandle, IntoElement, ParentElement,
+    div, AnyElement, App, AppContext, Context, Entity, FocusHandle, IntoElement, ParentElement,
     SharedString, Styled, Window,
 };
 
 use deos_view::ViewNode;
 use dregg_cell::{AuthRequired, CellId};
+
+use deos_js::card_editor::{CardEditor, ViewPatch};
+use deos_js::portable::{AppletManifest, PortableApplet};
+use deos_js::{Author, ViewTree};
 
 use crate::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
 use crate::card_pane::{build_card_over_live, CardPane, SharedAttached};
@@ -276,6 +280,342 @@ impl CockpitSurface for CardSurface {
             entity: self.entity.clone(),
             applet: self.applet.clone(),
             focus: self.focus.clone(),
+        })
+    }
+}
+
+// ===========================================================================
+// THE SIX LANDED CARDS AS THEIR MODE'S MAIN-PANE SURFACE — the same
+// CardPane-over-live-World pattern as the inspector card, now generalized to
+// the other reflective cards (composer / objects / graph / dynamics / agent /
+// links). Each generates its view-tree IN RUST from the live ledger (the
+// card's own public view-builder), bridges it to a `ViewNode`, and hosts it as
+// a `CardPane` over an applet ATTACHED to the cockpit's live World — so a bound
+// row re-reads the operator's real cell and an affordance button fires ONE
+// cap-gated verified turn on that World.
+//
+// AND each mount holds its view as an editable `ViewTree` document (adopted by
+// a `CardEditor`), so a `ViewPatch` (deos.editor/edit_view) re-folds the view +
+// rebuilds the `CardPane` — the surface is reshaped LIVE from within (the view
+// is data, not compiled code; the reshape is a receipted patch, not a recompile).
+// ===========================================================================
+
+/// Which landed card a [`ModeCardSurface`] mounts — the deos-js card that IS a given
+/// cockpit mode's main-pane surface. Each names a `deos_js::*_card` whose view-tree is a
+/// pure function of the live ledger (plus a focus, for the links card).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ModeCard {
+    /// AUTHOR · the composition composer (`deos_js::composer_card`).
+    Composer,
+    /// INHABIT · the object roster (`deos_js::objects_card`).
+    Objects,
+    /// INHABIT · the ocap graph (`deos_js::graph_card`).
+    Graph,
+    /// INHABIT/DEV · the live dynamics feed (`deos_js::dynamics_card`).
+    Dynamics,
+    /// OPERATE · the agent-activity card (`deos_js::agent_card`).
+    Agent,
+    /// AUTHOR · what-links-here (`deos_js::links_card`).
+    Links,
+}
+
+impl ModeCard {
+    /// A short surface title (the card frame chrome).
+    fn title(self) -> &'static str {
+        match self {
+            ModeCard::Composer => "composer · live composition (deos-js card)",
+            ModeCard::Objects => "objects · live cell roster (deos-js card)",
+            ModeCard::Graph => "graph · live ocap web (deos-js card)",
+            ModeCard::Dynamics => "dynamics · live transition feed (deos-js card)",
+            ModeCard::Agent => "agent · live mandate + activity (deos-js card)",
+            ModeCard::Links => "what-links-here · live backlinks (deos-js card)",
+        }
+    }
+
+    /// GENERATE this card's view-tree from the live ledger (the card's OWN public
+    /// view-builder), focused on `focus` where the card is per-cell (links / agent).
+    fn view_tree(self, world: &World, focus: CellId, viewer: &AuthRequired) -> ViewTree {
+        let ledger = world.ledger();
+        match self {
+            ModeCard::Composer => {
+                // The composer authors a document cell; over the cockpit's image we open
+                // it on a host derived from the focused cell and read its (initially empty)
+                // composition's view-tree — the surface a real authoring gesture grows.
+                let host = deos_js::composer_card::ChildCellId(u128::from_le_bytes(
+                    focus.as_bytes()[..16].try_into().unwrap_or([0u8; 16]),
+                ));
+                let card = deos_js::composer_card::ComposerCard::open(
+                    host,
+                    Author(0xC0),
+                    viewer.clone(),
+                    AuthRequired::Signature,
+                );
+                deos_js::composer_card::composer_view(&card)
+            }
+            ModeCard::Objects => deos_js::objects_card::objects_view(ledger),
+            ModeCard::Graph => deos_js::graph_card::graph_view(ledger),
+            ModeCard::Dynamics => {
+                // The feed view over the live image's transitions — read off the cockpit's
+                // own dynamics log (every committed turn lands here), most-recent kept.
+                let entries: Vec<deos_js::FeedEntry> = world
+                    .dynamics()
+                    .all()
+                    .iter()
+                    .filter_map(|ev| match ev {
+                        crate::dynamics::WorldEvent::TurnCommitted { height, agent, .. } => Some(
+                            deos_js::FeedEntry::new(*height, ev.label(), agent.as_bytes()),
+                        ),
+                        _ => None,
+                    })
+                    .collect();
+                deos_js::dynamics_card::feed_view(&entries)
+            }
+            ModeCard::Agent => {
+                // The agent card: the focused cell's mandate (its c-list edges, off the
+                // live ledger) + its recent cap-gated turns (the dynamics rows it authored).
+                let mandate = deos_js::agent_card::read_mandate(ledger, focus);
+                let actions: Vec<deos_js::AgentAction> = world
+                    .dynamics()
+                    .all()
+                    .iter()
+                    .filter_map(|ev| match ev {
+                        crate::dynamics::WorldEvent::TurnCommitted {
+                            height,
+                            agent,
+                            receipt_hash,
+                            ..
+                        } if *agent == focus => {
+                            Some(deos_js::AgentAction::new(*height, ev.label(), receipt_hash))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                deos_js::agent_card::agent_view(&mandate, &actions)
+            }
+            ModeCard::Links => {
+                // What-links-here over the focused cell, across the live image's cells (the
+                // backlink web the viewer is cleared to see — fail-closed per is_attenuation).
+                let cells: Vec<CellId> = ledger.iter().map(|(id, _)| *id).collect();
+                let (backlinks, total) =
+                    deos_js::links_card::build_backlinks(focus, &cells, viewer);
+                deos_js::links_card::links_view(focus, viewer, &backlinks, total)
+            }
+        }
+    }
+}
+
+/// **Mount a landed card as a cockpit mode's main-pane surface** — the generalization of
+/// [`build_inspector_card_surface`] to the other six cards. The view-tree is GENERATED in
+/// Rust from the live ledger ([`ModeCard::view_tree`]), bridged to the renderer's
+/// [`ViewNode`] through the canonical JSON shape, and hosted as a [`CardPane`] over an
+/// applet ATTACHED to the cockpit's live `World` (so a `bind` re-reads the operator's real
+/// cell and an affordance button fires ONE cap-gated verified turn on that World).
+///
+/// The mount also adopts the view as an editable `ViewTree` document (a [`CardEditor`] over
+/// a portable applet seeded with the view-source) so [`ModeCardSurface::edit_view`] can
+/// reshape the surface live (the edit-from-within route — re-fold then rebuild the pane).
+///
+/// `held` is the operator's authority the affordance fires + the view-edits mount under. A
+/// build error is returned for the caller to surface fail-soft (the Rust panel stays).
+#[allow(clippy::result_large_err)]
+pub fn build_mode_card_surface(
+    id: u64,
+    kind: ModeCard,
+    world: Rc<RefCell<World>>,
+    focus: CellId,
+    held: AuthRequired,
+    cx: &mut App,
+) -> Result<ModeCardSurface, String> {
+    // The card's affordance surface over the focused cell: `bump` (Signature — held,
+    // admitted) advances a state slot so a fired button visibly moves a bound row. The
+    // fire commits THROUGH `World::commit_turn` onto the live ledger.
+    let affordances = vec![("bump".to_string(), AuthRequired::Signature)];
+
+    // GENERATE the card's view-tree from the live ledger BEFORE attaching (the builder
+    // reads the World through a shared borrow; the attach takes the `Rc` next).
+    let tree_doc: ViewTree = {
+        let w = world.borrow();
+        kind.view_tree(&w, focus, &held)
+    };
+
+    // Attach an applet to the LIVE cockpit World, focused on `focus` — the card's
+    // substance is the operator's REAL cell; a fire lands on the ledger the inspector reads.
+    let sink = WorldSinkAdapter::live(world);
+    let attached = attach_agent(sink, focus, held.clone(), affordances);
+
+    // Bridge the view-tree into the renderer's `ViewNode` through the canonical JSON shape.
+    let view_json = tree_doc.to_json();
+    let tree: ViewNode = deos_view::parse_view_tree(&view_json)
+        .map_err(|e| format!("{:?} view-tree bridge: {e}", kind))?;
+
+    // Adopt the view as an editable document (the edit-from-within route): a `CardEditor`
+    // over a portable applet seeded with the view-source. `held == edit_authority` so the
+    // reshape is authorized (the operator may reshape their own surface); an unauthorized
+    // hand would be refused in-band by the same `is_attenuation` cap tooth.
+    let manifest = AppletManifest {
+        seed_fields: vec![(AGENT_COUNTER_SLOT, 0u64)],
+        affordances: Vec::new(),
+        held: held.clone(),
+        view_source: view_json,
+    };
+    let card_pk = mode_card_pk(kind, focus);
+    let portable = PortableApplet::mint(card_pk, [0u8; 32], &manifest);
+    let editor = CardEditor::adopt(
+        portable,
+        manifest,
+        Author(0xED),
+        held.clone(),
+        AuthRequired::Signature,
+    );
+
+    // Share the live attached applet so the rendered buttons + the binds both drive the
+    // SAME sovereign cell on the live ledger.
+    let shared: SharedAttached = Rc::new(RefCell::new(attached));
+
+    let pane_applet = shared.clone();
+    let pane_tree = tree.clone();
+    let title = kind.title();
+    let entity = cx.new(|_cx| CardPane::new(pane_applet, pane_tree, title));
+
+    Ok(ModeCardSurface {
+        id: SurfaceId(id),
+        kind,
+        entity,
+        applet: shared,
+        editor: Rc::new(RefCell::new(editor)),
+        focus,
+    })
+}
+
+/// A deterministic provenance pk for a mode card's editable view document, keyed on the
+/// card kind + the focused cell (so two mounts of the same kind over different focuses get
+/// distinct provenance chains, and a rebuild over the same focus is stable).
+fn mode_card_pk(kind: ModeCard, focus: CellId) -> [u8; 32] {
+    let mut pk = [0u8; 32];
+    pk[..32].copy_from_slice(focus.as_bytes());
+    pk[0] ^= match kind {
+        ModeCard::Composer => 0xC0,
+        ModeCard::Objects => 0x0B,
+        ModeCard::Graph => 0x6A,
+        ModeCard::Dynamics => 0xD7,
+        ModeCard::Agent => 0xA9,
+        ModeCard::Links => 0x11,
+    };
+    pk
+}
+
+/// A landed card mounted as a cockpit mode's main-pane surface — the [`CardPane`] gpui
+/// entity (rendered over the live World), the shared live applet (so a fire lands on the
+/// operator's real cell), and the editable view document (a [`CardEditor`], the
+/// edit-from-within route). Held by the cockpit per mounted mode; the entity is hosted as
+/// the mode's surface body.
+pub struct ModeCardSurface {
+    id: SurfaceId,
+    kind: ModeCard,
+    entity: Entity<CardPane>,
+    applet: SharedAttached,
+    /// The editable view document — a `CardEditor` over a portable applet seeded with the
+    /// view-source. A `ViewPatch` re-folds it; the re-folded tree rebuilds the `CardPane`.
+    editor: Rc<RefCell<CardEditor>>,
+    focus: CellId,
+}
+
+impl ModeCardSurface {
+    /// Which card this surface mounts.
+    pub fn kind(&self) -> ModeCard {
+        self.kind
+    }
+
+    /// The focused cell the view-tree was generated over (so the host rebuilds when the
+    /// focus moves — the same discipline as the inspector card).
+    pub fn focus(&self) -> CellId {
+        self.focus
+    }
+
+    /// The shared live applet handle (so the host/test can read the live ledger / receipt
+    /// count after a button fire — the SAME applet the card drives).
+    pub fn applet(&self) -> SharedAttached {
+        self.applet.clone()
+    }
+
+    /// The on-ledger receipt count on the card's live tape (genuine committed turns).
+    pub fn receipt_count(&self) -> usize {
+        self.applet.borrow().receipt_count()
+    }
+
+    /// The [`CardPane`] gpui entity (so the cockpit hosts the card's body directly as the
+    /// mode's main-pane surface — the card-as-surface mount).
+    pub fn entity_handle(&self) -> Entity<CardPane> {
+        self.entity.clone()
+    }
+
+    /// **EDIT THE SURFACE FROM WITHIN — the open seam, now wired.** Route a `ViewPatch`
+    /// (deos.editor/edit_view) through the editable view document: the [`CardEditor`]
+    /// applies the structural gesture as a *receipted patch with blame* (refused in-band
+    /// if `held` does not satisfy the card's `edit_authority`), then the re-folded
+    /// `ViewTree` is bridged to a `ViewNode` and swapped into the live [`CardPane`] — so
+    /// the surface repaints reshaped on the next frame. The live applet (the substance
+    /// binds/fires drive) is untouched; only the view changed. A live `&mut Context` is
+    /// needed to update the entity, so this runs on a cockpit handler.
+    pub fn edit_view<T: 'static>(
+        &self,
+        patch: ViewPatch,
+        cx: &mut Context<T>,
+    ) -> Result<(), String> {
+        let edit = self
+            .editor
+            .borrow_mut()
+            .edit_view(patch)
+            .map_err(|e| format!("edit-from-within refused: {e}"))?;
+        // Re-bridge the re-folded view-tree into the renderer's `ViewNode` and swap it in.
+        let view_json = edit.tree.to_json();
+        let tree: ViewNode = deos_view::parse_view_tree(&view_json)
+            .map_err(|e| format!("reshaped view-tree bridge: {e}"))?;
+        self.entity.update(cx, |card, cx| {
+            card.set_tree(tree);
+            cx.notify();
+        });
+        Ok(())
+    }
+
+    /// The current view-source JSON of the editable document (so a host/test can assert the
+    /// reshape landed in the document, not just the rendered tree).
+    pub fn view_source(&self) -> String {
+        self.editor.borrow().view_source()
+    }
+}
+
+impl CockpitSurface for ModeCardSurface {
+    fn item_id(&self) -> SurfaceId {
+        self.id
+    }
+
+    fn tab_label(&self) -> SharedString {
+        SharedString::from("card")
+    }
+
+    fn render_body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        // Immediate-mode binds re-read the live ledger at render time, so a notify each
+        // frame keeps a bound row current after a fire (mirrors `CardSurface`).
+        self.entity.update(cx, |_card, cx| cx.notify());
+        div()
+            .size_full()
+            .child(self.entity.clone())
+            .into_any_element()
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        cx.focus_handle()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn CockpitSurface> {
+        Box::new(ModeCardSurface {
+            id: self.id,
+            kind: self.kind,
+            entity: self.entity.clone(),
+            applet: self.applet.clone(),
+            editor: self.editor.clone(),
+            focus: self.focus,
         })
     }
 }

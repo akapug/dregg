@@ -330,6 +330,10 @@ fn classify(error: &TurnError) -> (GuardKind, Vec<CellId>) {
         | BridgeLockFailed { .. }
         | BridgeFinalizeFailed { .. }
         | BridgeCancelFailed { .. } => (GuardKind::Other, vec![]),
+        // The admission gate refused the turn WITH a theorem-backed reason (the
+        // "refused with a reason" wire variant) — a fail-closed refusal carrying its
+        // own prose; classified as Other (the reason is surfaced by `headline_for`).
+        AdmissionRefused { .. } => (GuardKind::Other, vec![]),
     }
 }
 

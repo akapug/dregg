@@ -31,6 +31,7 @@
 pub mod captp_client;
 pub mod channels;
 pub mod client;
+pub mod deos_server;
 pub mod discharge;
 pub mod discovery;
 pub mod events;
@@ -58,6 +59,12 @@ pub use names::{
 pub use mailbox::{
     CrankDisposition, CrankOutcome, CrankReport, CustodyReceipt, DeliveredMessage, MailboxCrank,
     MailboxTransport, MailboxTurnIntent, RefusalReason, RelayHttpTransport, seal_intent,
+};
+
+// ── The deos-host private-server client (discover + fire) ────────────────────
+pub use deos_server::{
+    DiscoveredAffordance, FireOutcome, ServerDiscovery, discover_server_affordances,
+    fire_affordance,
 };
 
 // ── Silo client / discharge / discovery / events ─────────────────────────────

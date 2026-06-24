@@ -2422,6 +2422,12 @@ pub async fn get_server_affordances(
         Some(specs) => specs.clone(),
         None => return Err(StatusCode::NOT_FOUND),
     };
+    // The executor's federation id — the binding a client signs its fire action over
+    // (on a solo/unconfigured node this is `blake3(pubkey)`, not the raw `federation_id`).
+    // A remote client cannot derive it, so discovery hands it back: everything needed to
+    // build + sign a fire turn arrives in one round-trip.
+    let executor_federation_id =
+        hex_encode(&crate::executor_setup::federation_id_for_executor(&s));
     drop(s);
 
     // Project per-viewer via the proven attenuation lattice (the deos-reflect surface).
@@ -2448,6 +2454,7 @@ pub async fn get_server_affordances(
         "cell": cell_hex,
         "viewer": q.viewer.unwrap_or_else(|| "none".to_string()),
         "affordances": visible,
+        "executor_federation_id": executor_federation_id,
     })))
 }
 

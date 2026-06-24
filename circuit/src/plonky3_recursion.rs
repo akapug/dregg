@@ -5,8 +5,13 @@
 //! through `circuit-prove/src/ivc_turn_chain.rs` (depth: N turns → one constant-cost
 //! recursive STARK, light-client-consumed by `lightclient/src/lib.rs::verify_history`,
 //! Lean-proven gap-free in `Dregg2/Circuit/RecursiveAggregation.lean`) and
-//! `circuit/src/joint_turn_recursive.rs` (width: N cells → one batch-STARK). This module
-//! has ~no live callers; kept for provenance. Don't mistake it for the frontier.
+//! `circuit/src/joint_turn_recursive.rs` (width: N cells → one batch-STARK). The
+//! `RecursionInput` / `RecursiveProof` / `prove_recursive` hash-chain-aggregation API
+//! below is the dead pre-fork path (its only consumer is the equally-orphaned
+//! `plonky3_verifier_air` → `ivc::recursive_ivc` chain). [`AggregationAir`] itself is
+//! still LIVE — the recursion-engine tests in `circuit-prove` borrow it as a generic
+//! "some AIR" smoke wrap (e.g. the VK-pin negative test, `plonky3_recursion_impl::tests`).
+//! Don't mistake this for the frontier.
 //! See `metatheory/docs/RECURSION-AGGREGATION-CENSUS.md`.
 //!
 //! Recursive proof composition using Plonky3 proofs.

@@ -49,6 +49,25 @@ impl Render for Cockpit {
         // moldable panel can host the cached `CardPane` entity this very frame.
         #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
         self.ensure_inspector_card(cx);
+        // THE SIX LANDED CARDS — build (or rebuild on a focus change) each card that IS a
+        // cockpit mode's main-pane surface, over the live `World`. Built here on the paint
+        // path (entity creation needs a live `&mut Context`), so the `&self` dispatch can
+        // host the prebuilt `CardPane` entity this very frame. The Inhabit dynamics feed
+        // mounts its card alongside; the others mount as their mode's surface body.
+        #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+        {
+            use starbridge_v2::dock::card_surface::ModeCard;
+            for kind in [
+                ModeCard::Composer,
+                ModeCard::Objects,
+                ModeCard::Graph,
+                ModeCard::Dynamics,
+                ModeCard::Agent,
+                ModeCard::Links,
+            ] {
+                self.ensure_mode_card(kind, cx);
+            }
+        }
         // Build the right pane's element: the `PaneGroup` rendered with the
         // active-pane decorator (a 2px accent border on the focused pane). Built
         // before the root `div()` so the `&self.pane_group` + `&self.active_pane`
@@ -112,7 +131,7 @@ impl Render for Cockpit {
                         div()
                             .border_t_1()
                             .border_color(theme::border())
-                            .child(self.dynamics_feed()),
+                            .child(self.dynamics_feed(cx)),
                     ),
             )
             // Center: the reflected object over the blocklace (the inspect context).

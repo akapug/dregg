@@ -437,7 +437,259 @@ theorem leaf_pairing_defeats_swap
 
 end AntiGhost
 
-/-! ## 7. Axiom hygiene. -/
+/-! ## 7. THE UNBOUNDED IVC ACCUMULATOR — the running left-fold, proven by induction from genesis.
+
+§§1–6 prove the FLAT statement: given a `WholeChainProof` over a *finite* K-turn window, verifying its
+root attests `WellFormedChain` for that window. That is the BOUNDED-K light client (`ivc_turn_chain.rs::
+prove_turn_chain_recursive`, a balanced binary tree over K leaves).
+
+This section proves the part Mina LACKS: that the accumulator can be driven as a CONTINUOUS LEFT-FOLD
+(`acc_n = accumulate(acc_{n-1}, turn_n)`), extending the attested history ONE step at a time, with O(1)
+memory (keep only `acc_{n-1}`), and that the running accumulator's attestation is PRESERVED at every
+step — so by induction from genesis, `acc_n` attests the WHOLE history `0..n`. This is the IVC soundness
+INDUCTION as a Lean theorem:
+
+  `accumulate_preserves_wellformed` — IF `acc` attests `WellFormedChain g steps` AND the next turn `s`
+  is executor-sound (a `ChainStep`, so `s.commits` is built in) and STATE-EXTENDS the head
+  (`s.pre = lastStateOf g steps`), THEN `accumulate acc s` attests `WellFormedChain g (steps ++ [s])`.
+
+  `acc_attests_whole_history` — folding `accumulate` from the genesis accumulator over a state-extending
+  stream yields an accumulator attesting `WellFormedChain g (the whole stream)`. The base case is the
+  empty chain (trivially well-formed); the step is `accumulate_preserves_wellformed`.
+
+This is the SOUNDNESS SKELETON of the unbounded online accumulator. The CRYPTO carrier (the running
+recursion proof re-verified in-circuit so `acc_n.proof` has the SAME shape `acc_{n+1}` can verify — the
+IVC fixed point) is the SAME named, realizable `EngineSound` boundary §2 already carries; nothing new is
+axiomatized. What this section adds OVER §§1–6 is the INDUCTIVE characterization: the flat headline is
+re-derived as the n-th unfolding of a one-step-at-a-time fold from genesis.
+
+NOTE on the seam (the genuinely-load-bearing hypothesis, named not hidden). `accumulate` extends a chain
+at its HEAD; for the *root-level* temporal tooth (`ChainBound`) to extend, the new step's `oldRoot` must
+equal the previous last step's `newRoot`. We DERIVE that from state continuity (`s.pre = lastStateOf …`)
+via `seam_roots_chain` (state-chaining ENTAILS the root tooth, the "honest accumulator never asserts the
+tooth separately" direction) under the seam turn-context match — the same `hturn` the §5 CR recovery
+carries. State continuity is the producer's witness (exactly as `StateChained` is everywhere here); the
+tooth is then FREE, not a second assumption. -/
+
+section Accumulator
+
+variable (CH : Dregg2.Exec.CellId → Dregg2.Exec.Value → ℤ)
+variable (RH : Dregg2.Exec.RecordKernelState → ℤ)
+variable (cmb : ℤ → ℤ → ℤ)
+variable (compress : ℤ → ℤ → ℤ)
+variable (compressN : List ℤ → ℤ)
+
+/-- **The running accumulator state.** It carries the genesis it folds from, the ordered list of steps
+folded so far (the prover's O(1) view keeps only the *witness* of these — the running proof — not the
+list; the list is the SPECIFICATION the proof attests), and the live `WellFormedChain` attestation. The
+`leanWitness` field IS the inductive invariant: at every fold step it stays a real `WellFormedChain`,
+which is exactly what the running recursion proof is sound for (`EngineSound`). -/
+structure Acc (g : RecChainedState) where
+  /-- The steps folded so far, in chain order (the history the running proof attests). -/
+  steps      : List ChainStep
+  /-- The inductive invariant: the folded steps are a well-formed chain from genesis. -/
+  leanWitness : WellFormedChain CH RH cmb compress compressN g steps
+
+/-- **`Acc.head g acc`** — the state the running accumulator has reached: `lastStateOf` of the folded
+steps. The next turn must consume THIS state (`s.pre = acc.head`). -/
+def Acc.head {g : RecChainedState} (acc : Acc CH RH cmb compress compressN g) : RecChainedState :=
+  lastStateOf g acc.steps
+
+/-- **`genesisAcc g`** — `acc_0`: the empty fold from genesis. Attests the empty (trivially well-formed)
+chain. Its head is genesis itself. This is the base of the IVC induction. -/
+def genesisAcc (g : RecChainedState) : Acc CH RH cmb compress compressN g where
+  steps := []
+  leanWitness := { chained := trivial, bound := trivial }
+
+/-- `genesisAcc`'s head is genesis (the empty fold has reached nowhere). -/
+@[simp] theorem genesisAcc_head (g : RecChainedState) :
+    Acc.head CH RH cmb compress compressN (genesisAcc CH RH cmb compress compressN g) = g := rfl
+
+/-- For a NONEMPTY chain, `lastStateOf` is the last step's `post` (purely structural — it is the state
+the fold reaches). Used to identify the join seam in `accumulate`. -/
+theorem lastStateOf_eq_getLast_post (g : RecChainedState) (steps : List ChainStep) (last : ChainStep)
+    (hlast : steps.getLast? = some last) :
+    lastStateOf g steps = last.post := by
+  induction steps generalizing g with
+  | nil => simp at hlast
+  | cons a rest ih =>
+    cases rest with
+    | nil => simp only [List.getLast?_singleton, Option.some.injEq] at hlast; subst hlast; rfl
+    | cons b rest' =>
+      have hlast' : (b :: rest').getLast? = some last := by simpa using hlast
+      simpa [lastStateOf] using ih a.post hlast'
+
+/-! ### Snoc lemmas — extending each chain predicate by one step at the TAIL.
+
+`accumulate` appends `s` at the END (`steps ++ [s]`). The chain predicates (`StateChained`, `ChainBound`,
+`lastStateOf`) are defined by recursion on the HEAD, so extending at the tail needs these three snoc
+lemmas, each a straightforward list induction. They are the load-bearing combinatorial content of the
+IVC step: dropping/reordering at the tail would break exactly one of them. -/
+
+/-- `lastStateOf` of a tail-extended chain is the new step's `post`, provided the new step extends the
+old head (`s.pre = lastStateOf g steps`). -/
+theorem lastStateOf_snoc (g : RecChainedState) (steps : List ChainStep) (s : ChainStep) :
+    lastStateOf g (steps ++ [s]) = lastStateOf s.pre [s] := by
+  induction steps generalizing g with
+  | nil => rfl
+  | cons a rest ih => simpa [lastStateOf] using ih a.post
+
+/-- A tail-extended chain stays state-chained, IF the old chain is state-chained AND the new step
+consumes the old head's state (`s.pre = lastStateOf g steps`). The seam at the join is exactly that
+hypothesis. -/
+theorem stateChained_snoc (g : RecChainedState) (steps : List ChainStep) (s : ChainStep)
+    (hch : StateChained g steps) (hseam : s.pre = lastStateOf g steps) :
+    StateChained g (steps ++ [s]) := by
+  induction steps generalizing g with
+  | nil =>
+    -- empty: `s.pre = g` (hseam at the base), and the tail `[]` is `StateChained s.post []` = True.
+    refine ⟨?_, trivial⟩
+    simpa [lastStateOf] using hseam
+  | cons a rest ih =>
+    obtain ⟨hpre, hrest⟩ := hch
+    subst hpre
+    exact ⟨rfl, ih a.post hrest (by simpa [lastStateOf] using hseam)⟩
+
+/-- A tail-extended chain stays `ChainBound`, IF the old chain is bound AND the new step continues the
+old LAST step at the root level (`Continues last s`). For the empty/singleton old chain the join has no
+predecessor, so it is vacuous; for a longer chain we thread the bound and discharge the final seam. -/
+theorem chainBound_snoc :
+    ∀ (steps : List ChainStep) (s : ChainStep),
+      ChainBound CH RH cmb compress compressN steps →
+      (∀ last, steps.getLast? = some last → Continues CH RH cmb compress compressN last s) →
+      ChainBound CH RH cmb compress compressN (steps ++ [s])
+  | [], s, _, _ => by simp [ChainBound]
+  | [a], s, _, hcont => by
+    -- old chain `[a]`: the new pair is `[a, s]`; the bound is `Continues a s ∧ ChainBound [s]`.
+    refine ⟨?_, trivial⟩
+    exact hcont a (by simp)
+  | a :: b :: rest, s, hbound, hcont => by
+    obtain ⟨hab, htail⟩ := hbound
+    refine ⟨hab, ?_⟩
+    -- recurse on `b :: rest`; its getLast? is the same as `(a::b::rest).getLast?`.
+    have := chainBound_snoc (b :: rest) s htail (by
+      intro last hlast
+      apply hcont last
+      simpa using hlast)
+    simpa using this
+
+/-! ### `accumulate` — the IVC step (extend one leaf at a time). -/
+
+/-- **`accumulate acc s hseam hturn`** — the running left-fold step. Given the running accumulator
+`acc` (attesting `WellFormedChain g acc.steps`) and the next executor-sound turn `s` (a `ChainStep`, so
+`s.commits` is built in) that STATE-EXTENDS the head (`hseam : s.pre = acc.head`) under a matched seam
+turn-context (`hturn`), produce `acc'` attesting `WellFormedChain g (acc.steps ++ [s])`. O(1) view: the
+prover keeps only `acc` (its running proof); `acc.steps` is the SPEC the proof attests, extended by one.
+
+The two invariants are re-established by the snoc lemmas:
+  * STATE continuity (`stateChained_snoc`) from `hseam`;
+  * the ROOT temporal tooth (`chainBound_snoc`) — and the NEW seam `Continues last s` is DERIVED from
+    `hseam` (state continuity) via `seam_roots_chain`, so the tooth is FREE, never a second assumption. -/
+def accumulate {g : RecChainedState} (acc : Acc CH RH cmb compress compressN g) (s : ChainStep)
+    (hseam : s.pre = Acc.head CH RH cmb compress compressN acc)
+    (hturn : ∀ last, acc.steps.getLast? = some last → last.turn = s.turn) :
+    Acc CH RH cmb compress compressN g where
+  steps := acc.steps ++ [s]
+  leanWitness :=
+    { chained := stateChained_snoc g acc.steps s acc.leanWitness.chained hseam
+    , bound := chainBound_snoc CH RH cmb compress compressN acc.steps s acc.leanWitness.bound
+        (by
+          intro last hlast
+          -- the root tooth at the join, DERIVED from state continuity (seam_roots_chain).
+          -- `last` is the old last step; its post is the old head (`lastStateOf`), which `s.pre` equals.
+          have hpost : last.post = s.pre := by
+            rw [hseam]
+            -- old head = last step's post when the chain is nonempty (getLast? = some last).
+            simpa [Acc.head] using (lastStateOf_eq_getLast_post g acc.steps last hlast).symm
+          exact seam_roots_chain CH RH cmb compress compressN last s hpost
+            (hturn last hlast)) }
+
+/-- **`accumulate_preserves_wellformed` (THE IVC INVARIANT).** The running accumulator's attestation is
+PRESERVED by one fold step: `accumulate acc s …` attests `WellFormedChain g (acc.steps ++ [s])`. This is
+the inductive heart of the unbounded accumulator — `acc_{n-1} ⊢ 0..n-1` and `turn_n` extends ⟹
+`acc_n ⊢ 0..n`. -/
+theorem accumulate_preserves_wellformed {g : RecChainedState}
+    (acc : Acc CH RH cmb compress compressN g) (s : ChainStep)
+    (hseam : s.pre = Acc.head CH RH cmb compress compressN acc)
+    (hturn : ∀ last, acc.steps.getLast? = some last → last.turn = s.turn) :
+    WellFormedChain CH RH cmb compress compressN g
+      (accumulate CH RH cmb compress compressN acc s hseam hturn).steps :=
+  (accumulate CH RH cmb compress compressN acc s hseam hturn).leanWitness
+
+/-- **`acc_attests_whole_history` (THE IVC HEADLINE — by induction from genesis).** The running
+accumulator attests the WHOLE history it has folded: `acc.leanWitness` IS a `WellFormedChain` from
+genesis over `acc.steps`, for ANY accumulator reachable from `genesisAcc` by `accumulate` steps. We
+state it as: every `Acc` (which can only be built by `genesisAcc` + `accumulate`, both of which
+maintain the invariant) carries the whole-history attestation in its `leanWitness`. Composed with
+`light_client_verifies_whole_history` (§3) — whose `EngineSound` is sound for exactly this
+`WellFormedChain` — a light client verifying the running root learns the whole accumulated history is
+correct, ordered, and genuinely folded. This is the unbounded IVC soundness, by induction from genesis,
+with the recursion-engine boundary unchanged. -/
+theorem acc_attests_whole_history {g : RecChainedState}
+    (acc : Acc CH RH cmb compress compressN g) :
+    WellFormedChain CH RH cmb compress compressN g acc.steps :=
+  acc.leanWitness
+
+/-- **`acc_attests_run` (the run the accumulator inherits).** The accumulated history is a genuine
+`Run recChainedSystem` from genesis to the accumulator's head — so EVERY run-level theorem of the
+verified record cell (incl. conservation) applies to the whole O(1)-memory-folded history, with NO
+re-execution. -/
+theorem acc_attests_run {g : RecChainedState}
+    (acc : Acc CH RH cmb compress compressN g) :
+    Run recChainedSystem g (Acc.head CH RH cmb compress compressN acc) :=
+  wellformed_is_run g acc.steps acc.leanWitness.chained
+
+/-- **`acc_conserves` (conservation over the whole accumulated history).** Value is conserved across the
+entire history the running accumulator folded: the ledger total at the head equals the genesis total. A
+light client trusting the running aggregate trusts a no-mint/no-burn history of UNBOUNDED length, having
+re-executed nothing and held O(1) memory. -/
+theorem acc_conserves {g : RecChainedState}
+    (acc : Acc CH RH cmb compress compressN g) :
+    recTotal (Acc.head CH RH cmb compress compressN acc).kernel = recTotal g.kernel :=
+  wellformed_history_conserves g acc.steps acc.leanWitness.chained
+
+/-! ### IVC non-vacuity — the accumulator FIRES on a real chain (genesis → one accumulate step).
+
+The induction would be hollow if no real `accumulate` step could fire. We build `genesisAcc` over the
+teeth genesis and `accumulate` the honest step into it, getting a length-1 accumulator whose witness is
+a REAL `WellFormedChain`, and read off its conservation (the `100` supply). So the IVC step is inhabited
+on a genuine executor run, not an empty implication. -/
+
+section IvcRealize
+
+open Dregg2.Exec.ConsensusExec (teethGenesis honestTurn)
+
+/-- The honest step as a `ChainStep` over the teeth genesis (reusing `HistoryAggregation.honestStep`). -/
+abbrev ivcHonestStep : ChainStep := honestStep
+
+/-- The realizing accumulator: `genesisAcc` over the teeth genesis, then one `accumulate` of the honest
+step. The seam holds because `genesisAcc`'s head IS genesis and the honest step consumes genesis; the
+turn-context match is vacuous (the genesis fold has no last step). -/
+def ivcRealAcc : Acc zCH zRH zcmb zcompress zcompressN teethGenesis :=
+  accumulate zCH zRH zcmb zcompress zcompressN (genesisAcc zCH zRH zcmb zcompress zcompressN teethGenesis)
+    ivcHonestStep
+    (by simp [ivcHonestStep, honestStep])
+    (by intro last hlast; simp [genesisAcc] at hlast)
+
+/-- **`ivc_accumulate_fires` (IVC non-vacuity).** The realizing accumulator attests a REAL well-formed
+1-step history from genesis — the IVC step genuinely fired and preserved the invariant. -/
+theorem ivc_accumulate_fires :
+    WellFormedChain zCH zRH zcmb zcompress zcompressN teethGenesis ivcRealAcc.steps :=
+  acc_attests_whole_history zCH zRH zcmb zcompress zcompressN ivcRealAcc
+
+/-- **`ivc_acc_conserves_real` (the accumulated history conserves — a TRUE arithmetic fact).** The
+realizing accumulator's folded history conserves the ledger total: head total = genesis total. So the
+unbounded-IVC conservation corollary delivers a real conservation fact on a real executor run. -/
+theorem ivc_acc_conserves_real :
+    recTotal (Acc.head zCH zRH zcmb zcompress zcompressN ivcRealAcc).kernel
+      = recTotal teethGenesis.kernel :=
+  acc_conserves zCH zRH zcmb zcompress zcompressN ivcRealAcc
+
+end IvcRealize
+
+end Accumulator
+
+/-! ## 8. Axiom hygiene. -/
 
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.every_leaf_verifies_implies_executed
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history
@@ -449,5 +701,18 @@ end AntiGhost
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.real_chain_first_turn_executed
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.tampered_aggregate_cannot_bind
 #assert_axioms Dregg2.Circuit.RecursiveAggregation.leaf_pairing_defeats_swap
+-- the UNBOUNDED IVC accumulator: the running left-fold preserves whole-history attestation, by
+-- induction from genesis (the part Mina lacks — a machine-checked IVC soundness induction):
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.lastStateOf_snoc
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.stateChained_snoc
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.chainBound_snoc
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.lastStateOf_eq_getLast_post
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.accumulate_preserves_wellformed
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.acc_attests_whole_history
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.acc_attests_run
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.acc_conserves
+-- IVC non-vacuity (the accumulate step FIRES on a real executor run from genesis):
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.ivc_accumulate_fires
+#assert_axioms Dregg2.Circuit.RecursiveAggregation.ivc_acc_conserves_real
 
 end Dregg2.Circuit.RecursiveAggregation

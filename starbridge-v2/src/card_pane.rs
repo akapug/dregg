@@ -80,6 +80,21 @@ impl CardPane {
         self.applet.clone()
     }
 
+    /// **Replace the rendered view-tree** — the edit-from-within hook. After a
+    /// [`deos_js::card_editor::ViewPatch`] re-folds the card's view document, the
+    /// caller bridges the new tree to a [`ViewNode`] and swaps it in here, so the next
+    /// paint draws the reshaped surface. The live applet (the substance binds/fires
+    /// drive) is untouched — only the view changed (the view is data, not code).
+    pub fn set_tree(&mut self, tree: ViewNode) {
+        self.tree = tree;
+    }
+
+    /// The card's current rendered view-tree (read-only) — so a mount can re-derive
+    /// the surface or assert its shape after a reshape.
+    pub fn tree(&self) -> &ViewNode {
+        &self.tree
+    }
+
     /// Render one view-tree node into a gpui element. Recursive: containers render
     /// their children with the same vocabulary `deos_view::AppletView` uses, but a
     /// `bind` re-reads the LIVE ledger and a `button` fires a LIVE turn.
