@@ -42,6 +42,12 @@ dregg-turn = { path = "../turn", default-features = false }
 # No feature needed: wasm32 simply doesn't pull a Lean impl, so the native-Rust differential decides.
 dregg-coord = { path = "../coord", default-features = false }
 dregg-intent = { path = "../intent", default-features = false }
+# THE REFLECTIVE SUBSTRATE — the cap-bounded, attested read of a cell's four substances
+# (the SAME `ReflectedCell::raw_fields` + `AffordanceSurface` the native cockpit inspector
+# reads). gpui-FREE; its only deps are `dregg-cell`/`dregg-turn`/`dregg-types` — already in
+# this graph — so it is wasm32-safe. `bindings_card`'s `InspectorWorld` reads its own in-tab
+# cell's faces through it and generates the inspector view-tree the web renderer paints.
+deos-reflect = { path = "../deos-reflect", default-features = false }
 dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link", "prover"] }
 # sdk pulls bulletproofs (via cell crypto) — already covered by the
 # clear_on_drop override below, but listing here for grep-ability.
