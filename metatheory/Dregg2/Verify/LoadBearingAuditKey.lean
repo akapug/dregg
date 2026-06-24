@@ -5,9 +5,16 @@ This module imports the linter (`Dregg2.Verify.LoadBearingLint`) and the audited
 runs `#load_bearing_audit_report` on each of the supply/authority specs codex flagged. It is the
 *measurement* deliverable: which specs are genuinely independent + non-vacuous vs gate-copies/vacuous.
 
-The CALIBRATION case is `Dregg2.Spec.execGraph` — the `execGraph_eq_any := rfl` offender: it is
-DEF-EQ to the implementation authority-edge gate (`execGraphGate` below = the exact `.any` body the
-`rfl` proof witnesses). Check #2 MUST flag it; if it doesn't, the linter is broken.
+The linter is exercised by TWO `@[linter_calibration]` negative-calibration fixtures, each ASSERTED to
+FAIL by `#load_bearing_calibration_expect_fail` (which THROWS if a fixture unexpectedly passes — so the
+FAILs are asserted-intended, never a silent FAIL count):
+  * `gateCopyBurnSpec` — calibrates check #1 (boundary): a "spec" that names the executor step
+    `recCBurnAsset`. MUST fail #1.
+  * `Dregg2.Spec.execGraph` — calibrates check #2 (defeq): the `execGraph_eq_any := rfl` offender, DEF-EQ
+    to the implementation authority-edge gate (`execGraphGate` below = the exact `.any` body the `rfl`
+    proof witnesses). MUST fail #2. Its GENUINE counterpart (the independent spec the C-c1 legs attest
+    against) is `Spec.authConnects`.
+If either fixture does NOT fail, the corresponding linter tooth is broken and the module throws.
 -/
 import Dregg2.Verify.LoadBearingLint
 import Dregg2.Circuit.Spec.supplydestruction
@@ -41,7 +48,9 @@ def execGraphGate (caps : Dregg2.Authority.Caps) :
 `gateCopyBurnSpec` is a deliberately BAD "spec" that calls the executor step `recCBurnAsset` directly
 (a `Prop` over the executor's own commit). Check #1 MUST flag it (it references a forbidden step gate).
 If the linter PASSES this, check #1 is toothless — this calibrates the boundary check the way
-`execGraph` calibrates the defeq check. -/
+`execGraph` calibrates the defeq check. Tagged `@[linter_calibration]` so an auditor reads it as the
+DELIBERATE boundary-violator fixture (the FAIL is intended), not real spec debt. -/
+@[linter_calibration]
 def gateCopyBurnSpec (s : Dregg2.Exec.RecChainedState)
     (actor cell : Dregg2.Exec.CellId) (a : Dregg2.Exec.AssetId) (amt : ℤ)
     (s' : Dregg2.Exec.RecChainedState) : Prop :=
@@ -54,8 +63,10 @@ check #2 is genuinely exercised, not `n/a`); `nonvacuous :=` names the witness (
 `_rejects_*` rejection teeth as their non-vacuity witnesses, not a `_nonvacuous` decl).
 `#load_bearing_audit_report` always prints (so the calibration offenders do not abort the module). -/
 
--- ── NEGATIVE CALIBRATION: a gate-copy spec — check #1 MUST FAIL (references recCBurnAsset) ───────
-#load_bearing_audit_report Dregg2.Verify.LoadBearingAuditKey.gateCopyBurnSpec
+-- ── NEGATIVE-CALIBRATION FIXTURE #1 (boundary tooth): a gate-copy spec — ASSERTED to FAIL check #1
+-- (references recCBurnAsset). `#load_bearing_calibration_expect_fail` THROWS if it unexpectedly passes,
+-- so this FAIL is asserted-intended, not a silent entry in the FAIL count.
+#load_bearing_calibration_expect_fail Dregg2.Verify.LoadBearingAuditKey.gateCopyBurnSpec
   gate := Dregg2.Exec.TurnExecutorFull.recCBurnAsset
   nonvacuous := Dregg2.Circuit.Spec.SupplyDestruction.burnA_rejects_destroyed_issuer
 
@@ -96,9 +107,12 @@ check #2 is genuinely exercised, not `n/a`); `nonvacuous :=` names the witness (
   gate := Dregg2.Substrate.HeapKernel.heapStepGuardedW
   nonvacuous := Dregg2.Circuit.Spec.HeapWrite.heapWriteSpec_root_pinned
 
--- ── CALIBRATION: execGraph — the `execGraph_eq_any := rfl` DEF-EQ-TO-GATE offender ──────────────
--- Check #2 MUST FAIL here (defeq to `execGraphGate`). This calibrates the linter.
-#load_bearing_audit_report Dregg2.Spec.execGraph
+-- ── NEGATIVE-CALIBRATION FIXTURE #2 (defeq tooth): execGraph — the `execGraph_eq_any := rfl`
+-- DEF-EQ-TO-GATE offender. ASSERTED to FAIL check #2 (defeq to `execGraphGate`): the command THROWS if
+-- it unexpectedly passes. Its GENUINE counterpart (the independent spec the C-c1 legs attest against)
+-- is `Spec.authConnects`. This + fixture #1 are the intended negative-calibration PAIR.
+#load_bearing_calibration_expect_fail Dregg2.Spec.execGraph
   gate := Dregg2.Verify.LoadBearingAuditKey.execGraphGate
+  genuine := Dregg2.Spec.authConnects
 
 end Dregg2.Verify.LoadBearingAuditKey
