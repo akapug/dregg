@@ -5431,3 +5431,21 @@ HEAD docs this pass; §13 assurance + §15 limitations are verified current (5 g
 spot-verify the back-half prose against `docs/deos/*` + the `Firmament/` and `Deos/` Lean modules, the same way
 §§1-5 were checked here. The freshest markdown content-of-record is `paper2/*.md` (kept in sync on the one
 fabrication fix).
+
+### ⚠ CORRECTION (IVC, 2026-06-24): "unbounded IVC CLOSED / constant-VK perpetual fold" was an OVERCLAIM.
+Commits fc12f23 (fork) + a88590c9 (breadstuffs) overstate it. The MEASURED truth (root-caused by the fork-lever agent,
+validated by real recursion folds):
+- DONE + VALIDATED: the unbounded INCREMENTAL fold VERIFIES end-to-end (incremental_accumulate_verifies_whole_history PASSES
+  pinned, 452s — genesis->t1->t2->t3, O(1) memory, each step re-folds an already-folded proof, light client verifies the
+  whole-history proof); the VK-IDENTITY pin DISCRIMINATES (pinned_fold_rejects_foreign_vk_in_circuit PASSES, 138s — a foreign
+  VK rejected in-circuit/UNSAT). Levers (a) VK-pinned-in-band + (b) table_public_inputs-threaded are in the fork (fc12f233,
+  pushed) + consumed in accumulator.rs. dregg builds green against the pushed rev (CI-correct).
+- NOT DONE (the precise remaining crypto): a TRUE constant-VK perpetual fixed-point. aggregate(A,B)'s preprocessed commitment
+  binds the verifier op-list, which depends on A/B SHAPES — a deeper running proof is larger -> different op-list -> the
+  running VK fingerprint STILL GROWS WITH DEPTH; the pin is applied shape-conditionally. The Mina-Pickles fixed-size-verifier-
+  forever property needs a WRAP step (re-prove each variable-shape running proof to a FIXED shape before re-folding — the
+  wrap/merge two-circuit cycle). That wrap circuit is the named remaining fork work; levers (a)+(b) are its prerequisites.
+  Documented in circuit-prove/src/accumulator.rs module header.
+HONEST verdict vs Mina: more than the earlier hedge (the unbounded fold verifies + a Lean soundness proof Mina lacks), LESS
+than the celebration (not the constant-VK perpetual fixed-point — the wrap remains). The soundness induction (RecursiveAggregation
+.lean acc_attests_whole_history, 0 sorry) stands regardless.
