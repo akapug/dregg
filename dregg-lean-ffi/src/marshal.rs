@@ -751,10 +751,14 @@ fn to_hex32(n: u64) -> String {
 /// this preserves every bit, so a tampered credential digest changes the wire (the gate sees
 /// the difference) instead of silently colliding with all other digests sharing a low u64.
 fn to_hex32_bytes(d: &Digest) -> String {
-    let mut s = String::with_capacity(64);
-    for b in d.0.iter() {
-        s.push_str(&format!("{b:02x}"));
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut buf = [0u8; 64];
+    for (i, b) in d.0.iter().enumerate() {
+        buf[2 * i] = HEX[(b >> 4) as usize];
+        buf[2 * i + 1] = HEX[(b & 0x0f) as usize];
     }
+    // SAFETY-FREE: `buf` holds only ASCII hex digits, so it is valid UTF-8.
+    let s = String::from_utf8(buf.to_vec()).expect("hex digits are valid ASCII");
     debug_assert_eq!(s.len(), 64);
     s
 }
