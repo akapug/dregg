@@ -20,7 +20,7 @@ import sys
 import shutil
 
 from mcp_client import Mcp
-from surfaces import SURFACES
+from surfaces import SURFACES, MODE_OF
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PARENT = os.path.dirname(ROOT)
@@ -42,7 +42,9 @@ EXTERNAL_SOURCES = {
 
 
 def manifest_entry(sid, label, bake, deep, blurb, png=None, size=None):
-    """One surface record — stable id + the hypermedia fields the site links over."""
+    """One surface record — stable id + the hypermedia fields the site links over.
+    `mode` records which of the five frame modes the surface is re-homed under
+    (frame.rs · CockpitMode); None for frame-level / external surfaces with no Tab."""
     return {
         "id": "surface:" + sid,
         "tab": sid,                     # the atlas page slug (back-compat key)
@@ -50,6 +52,7 @@ def manifest_entry(sid, label, bake, deep, blurb, png=None, size=None):
         "bake": bake,
         "deep": deep,                   # the explainer-section slug
         "explainer": blurb,
+        "mode": MODE_OF.get(sid),       # the five-mode home (None ⇒ frame/external)
         "file": os.path.basename(png) if png else None,
         "size": size,
     }

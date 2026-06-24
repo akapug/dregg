@@ -28,7 +28,14 @@ data is inlined). Seven views:
   seven presentation faces.
 - **Surfaces** — every cockpit surface screenshotted (the `Tab` enum's 30 surfaces
   plus the dock dev panes), each with a first-principles, code-grounded explainer
-  and the components it is built from (click a card → its full page).
+  and the components it is built from (click a card → its full page). The surfaces
+  now render inside the **coherent five-mode frame** (`cockpit/frame.rs`,
+  `docs/deos/COCKPIT-UX.md`): a persistent top bar (identity cell + cap-badge · live
+  ledger clock · ⌘K palette · ⌘J dock), a left rail of the five modes — **Inhabit ·
+  Author · Dev · Inspect · Operate** — a mode sub-nav, and a collapsible dev dock.
+  The gallery groups the surfaces by their mode; the Inspect mode's main surface is
+  the **reflective inspector card** (the inspector reborn as a live deos-js card,
+  itself an object the image renders).
 - **Components** — the gpui-component widget pillar: the visual building blocks the
   cockpit is built from. Each widget names what it is, its variants, and the
   surfaces that render it; the catalog marks which are *used live in the cockpit
@@ -48,9 +55,11 @@ typed edges, so anything cross-links to anything.
 ```
 cd dregg-atlas
 
-# 0. build the dregg-mcp harness (once)
-( cd ../starbridge-v2 && cargo build --release --features native-full --bin dregg-mcp \
-                       && cargo build --release --features headless-render --bin starbridge-v2 )
+# 0. build the dregg-mcp harness + the headless-render binary (once). The
+#    workspace is UNIFIED (one root `target/`); mcp_client.py finds the binaries
+#    in `<repo>/target/release/` (falling back to the old per-crate path).
+( cd ../starbridge-v2 && cargo build --release --features native-full \
+                       --bin dregg-mcp --bin starbridge-v2 )
 
 python3 crawl.py    # walk the protocol state-space + emit the hypermap (MCP `map`
                     # tool merged in) + the components pillar (a source grep)
