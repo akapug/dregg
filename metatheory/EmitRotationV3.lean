@@ -96,3 +96,9 @@ def main : IO Unit := do
   -- the EFF_EXERCISE authority appendix (the depth-16 cap-membership crown forcing the exercise hold-gate
   -- `exerciseGuard`'s `confersEdgeTo target` membership in-circuit). The LAST named cap-open residual CLOSED.
   IO.println s!"v3rot\texerciseCapOpenVmDescriptor2R24\t{Dregg2.Circuit.Emit.CapOpenEmit.exerciseCapOpenV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.CapOpenEmit.exerciseCapOpenV3}"
+  -- The DEDICATED SUPPLY-MINT descriptor (`v3RegistryHeap` tail position 54, SUPPLY-MODEL.md Stage
+  -- 2b): the turn-layer `Effect::Mint` proves under its OWN selector (`sel.MINT = 14`) rather than
+  -- riding BridgeMint's slot. Body byte-identical to `mintVmDescriptor2R24` save the appended
+  -- `selectorGate` operand. Emitted so the deployed Rust IR-2 interpreter parses exactly what the
+  -- apex's `Rfix 3 = supplyMintV3` proves.
+  IO.println s!"v3rot\tsupplyMintVmDescriptor2R24\t{Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3}"

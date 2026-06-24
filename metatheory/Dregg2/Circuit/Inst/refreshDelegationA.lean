@@ -39,7 +39,6 @@ def RestIffNoDelegations (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
       ∧ k'.delegationEpoch = k.delegationEpoch
-      ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps)
 
 structure RefreshDelegationArgs where
@@ -74,12 +73,24 @@ theorem refreshDelegationGuardLocal (a b : Assignment) (hab : ∀ w, w < 1 → a
       simp only [Constraint.holds, cBitGuard, vBitGuard, Expr.eval, h0] at hcc ⊢
       exact hcc
 
-def delegationsComponent (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D) :
+/-- **`delegationsComponent`** — the FAITHFUL refresh component binding BOTH touched maps as ONE injective
+product digest: the post `delegations` snapshot AND the post `delegationEpochAt` freshness-restore stamp.
+The expected value reads the parent's CURRENT epoch out of the SAME before-kernel (`refreshEpochAtMap` =
+`parentEpoch k child` = `k.delegationEpoch (delegate child)`), so the digest FORCES
+`post.delegationEpochAt child = parent_epoch` — a genuine cross-cell force at the WHOLE-KERNEL descriptor
+layer (the parent's epoch is a value of the same abstract kernel the descriptor commits over), NOT a
+freely-witnessed param. A forge that snapshots the c-list but leaves the stamp stale FAILS the product
+clause (the `delegationEpochAt` leg disagrees). The product digest `D` is injective on the pair, so both
+legs are pinned. -/
+def delegationsComponent
+    (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D) :
     ActiveComponent RecChainedState RefreshDelegationArgs :=
-  funcComponent (β := CellId → List Cap) (·.delegations) D hD
-    (fun s args => refreshDelegationsMap s.kernel args.child)
+  funcComponent (β := (CellId → List Cap) × (CellId → Nat))
+    (fun k => (k.delegations, k.delegationEpochAt)) D hD
+    (fun s args => (refreshDelegationsMap s.kernel args.child, refreshEpochAtMap s.kernel args.child))
 
-def refreshDelegationE (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D) :
+def refreshDelegationE
+    (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D) :
     EffectSpec2 RecChainedState RefreshDelegationArgs where
   view         := chainView
   active       := delegationsComponent D hD
@@ -91,7 +102,6 @@ def refreshDelegationE (D : (CellId → List Cap) → ℤ) (hD : Function.Inject
       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
       ∧ k'.delegationEpoch = k.delegationEpoch
-      ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps)
   guardGates   := refreshDelegationGuardGates
   guardProp    := refreshDelegationGuardProp
@@ -100,7 +110,8 @@ def refreshDelegationE (D : (CellId → List Cap) → ℤ) (hD : Function.Inject
   guardLocal   := refreshDelegationGuardLocal
   guardWidth_le := by decide
 
-theorem refreshDelegationGuardDecodes (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D) :
+theorem refreshDelegationGuardDecodes (D : (CellId → List Cap) × (CellId → Nat) → ℤ)
+    (hD : Function.Injective D) :
     GuardDecodes2 (refreshDelegationE D hD) := by
   intro s args s' hsat
   change satisfied refreshDelegationGuardGates (refreshDelegationGuardEncode s args s') at hsat
@@ -109,7 +120,8 @@ theorem refreshDelegationGuardDecodes (D : (CellId → List Cap) → ℤ) (hD : 
   simp only [Constraint.holds, cBitGuard, vBitGuard, Expr.eval, refreshDelegationGuardEncode, if_pos] at hg
   exact propBit_eq_one.mp hg
 
-theorem refreshDelegationGuardEncodes (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D) :
+theorem refreshDelegationGuardEncodes (D : (CellId → List Cap) × (CellId → Nat) → ℤ)
+    (hD : Function.Injective D) :
     GuardEncodes2 (refreshDelegationE D hD) := by
   intro s args s' hg
   show satisfied refreshDelegationGuardGates (refreshDelegationGuardEncode s args s')
@@ -119,37 +131,48 @@ theorem refreshDelegationGuardEncodes (D : (CellId → List Cap) → ℤ) (hD : 
   simp only [Constraint.holds, cBitGuard, vBitGuard, Expr.eval, refreshDelegationGuardEncode, if_pos]
   exact propBit_eq_one.mpr hg
 
-theorem refreshDelegationRestFrameDecodes (S : Surface2) (D : (CellId → List Cap) → ℤ)
+theorem refreshDelegationRestFrameDecodes (S : Surface2)
+    (D : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hD : Function.Injective D) (hRest : RestIffNoDelegations S.RH) :
     RestFrameDecodes2 S (refreshDelegationE D hD) := fun k k' h => (hRest k k').mp h
 
-theorem apex_iff_refreshDelegationSpec (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+/-- **`apex_iff_refreshDelegationSpec`** — the deployed refresh apex IS the STRENGTHENED full spec. The
+product component pins `(delegations, delegationEpochAt) = (refreshDelegationsMap, refreshEpochAtMap)`, so
+the FRESHNESS-RESTORE STAMP is now forced (no longer the framed/residual face): the descriptor binds the
+child's epoch tag to the parent's current epoch read off the same before-kernel. -/
+theorem apex_iff_refreshDelegationSpec
+    (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState) :
     (refreshDelegationE D hD).apex s args s' ↔
-      RefreshDelegationSpec s args.actor args.child s' := by
+      RefreshDelegationFullSpec s args.actor args.child s' := by
   show (refreshDelegationGuardProp s args
-        ∧ s'.kernel.delegations = refreshDelegationsMap s.kernel args.child
+        ∧ (s'.kernel.delegations, s'.kernel.delegationEpochAt)
+            = (refreshDelegationsMap s.kernel args.child, refreshEpochAtMap s.kernel args.child)
         ∧ s'.log = refreshDelegationReceipt args.actor args.child :: s.log
         ∧ ((refreshDelegationE D hD).restFrame s.kernel s'.kernel))
-       ↔ RefreshDelegationSpec s args.actor args.child s'
-  unfold RefreshDelegationSpec refreshDelegationGuardProp refreshDelegationE
+       ↔ RefreshDelegationFullSpec s args.actor args.child s'
+  unfold RefreshDelegationFullSpec refreshDelegationGuardProp refreshDelegationE
   constructor
-  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
-      hLif, hDC, hDel, hSB⟩
-    exact ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
-      hLif, hDC, hDel, hSB⟩
-  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
-      hLif, hDC, hDel, hSB⟩
-    exact ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hQ, hSC, hFac,
-      hLif, hDC, hDel, hSB⟩
+  · rintro ⟨hg, hprod, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSC, hFac,
+      hLif, hDC, hDel, hDE, hSB⟩
+    rw [Prod.mk.injEq] at hprod
+    exact ⟨hg, hprod.1, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSC, hFac,
+      hLif, hDC, hDel, hDE, hprod.2, hSB⟩
+  · rintro ⟨hg, hdgs, hlog, hAcc, hCell, hCaps, hNul, hRev, hCom, hBal, hSC, hFac,
+      hLif, hDC, hDel, hDE, hstamp, hSB⟩
+    exact ⟨hg, by rw [Prod.mk.injEq]; exact ⟨hdgs, hstamp⟩, hlog, hAcc, hCell, hCaps, hNul, hRev,
+      hCom, hBal, hSC, hFac, hLif, hDC, hDel, hDE, hSB⟩
 
+/-- **`refreshDelegationA_full_sound`** — the deployed refresh descriptor FORCES the STRENGTHENED
+`RefreshDelegationFullSpec` (the freshness-restore stamp is now WRITE-GATE-forced by the product
+component, no residual). -/
 theorem refreshDelegationA_full_sound
-    (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2) (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (refreshDelegationE D hD)
         (encodeE2 S (refreshDelegationE D hD) s args s')) :
-    RefreshDelegationSpec s args.actor args.child s' := by
+    RefreshDelegationFullSpec s args.actor args.child s' := by
   have hapex : (refreshDelegationE D hD).apex s args s' :=
     effect2_circuit_full_sound S (refreshDelegationE D hD)
       (refreshDelegationRestFrameDecodes S D hD hRest) hLog

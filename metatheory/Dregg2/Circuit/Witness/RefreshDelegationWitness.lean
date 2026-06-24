@@ -8,7 +8,8 @@ Closes the verifiable-execution beachhead for `refreshDelegationA` (the parent-c
 (`kernel.delegations`, a `funcComponent` over `CellId → List Cap`). Reused (not re-proved):
 
   * `Exec.execFullA` — `execFullA s (.refreshDelegationA actor child) = some s'` IS the post-state.
-  * `Spec.RefreshDelegation.refreshDelegation_iff_spec` — executor ⟺ `RefreshDelegationSpec`.
+  * `Spec.RefreshDelegation.RefreshDelegationFullSpec` — the STRENGTHENED spec the strengthened apex
+    targets (the freshness-restore epoch stamp is now product-bound, not framed).
   * `Inst.RefreshDelegationA.{refreshDelegationE, apex_iff_refreshDelegationSpec,
     refreshDelegationA_full_sound}`.
   * `EffectCommit2.{encodeE2, effect2_circuit_full_complete, emittedEffect2}`.
@@ -45,26 +46,28 @@ instance (cs : ConstraintSystem) (a : Assignment) : Decidable (satisfied cs a) :
 
 /-! ## §3 — THE ABSTRACT EXECUTE→PROVE / PROVE→STATE theorems (CR portals carried). -/
 
-variable (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+variable (S : Surface2) (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
 
-/-- **`execute_produces_satisfying_witness`.** A `RefreshDelegationSpec`-satisfying step (the executor's
-corner `refreshDelegation_iff_spec`) makes the v2 full-state witness SATISFY the v2 circuit. -/
+/-- **`execute_produces_satisfying_witness`.** A `RefreshDelegationFullSpec`-satisfying step (the executor's
+corner THROUGH the STRENGTHENED apex, which now also forces the freshness-restore epoch stamp) makes the
+v2 full-state witness SATISFY the v2 circuit. -/
 theorem execute_produces_satisfying_witness
     (hRest : RestIffNoDelegations S.RH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
-    (hspec : RefreshDelegationSpec s args.actor args.child s') :
+    (hspec : RefreshDelegationFullSpec s args.actor args.child s') :
     satisfiedE2 S (refreshDelegationE D hD) (encodeE2 S (refreshDelegationE D hD) s args s') :=
   effect2_circuit_full_complete S (refreshDelegationE D hD)
     (fun k k' h => (hRest k k').mpr h) (refreshDelegationGuardEncodes D hD) s args s'
     ((apex_iff_refreshDelegationSpec D hD s args s').mpr hspec)
 
 /-- **`satisfying_witness_proves_full_state`.** ANY witness satisfying the v2 circuit proves the complete
-declarative `RefreshDelegationSpec`. Reuses `refreshDelegationA_full_sound`. -/
+declarative `RefreshDelegationFullSpec` (the STRENGTHENED spec — the product component now also forces the
+freshness-restore epoch stamp). Reuses `refreshDelegationA_full_sound`. -/
 theorem satisfying_witness_proves_full_state
     (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (refreshDelegationE D hD) (encodeE2 S (refreshDelegationE D hD) s args s')) :
-    RefreshDelegationSpec s args.actor args.child s' :=
+    RefreshDelegationFullSpec s args.actor args.child s' :=
   refreshDelegationA_full_sound S D hD hRest hLog s args s' h
 
 /-! ## §4 — THE EXECUTOR-DERIVED CONCRETE WITNESS (the bytes the Rust prover proves). -/

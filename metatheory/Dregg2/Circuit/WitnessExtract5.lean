@@ -30,7 +30,7 @@ open Dregg2.Circuit.ListCommit (listLeafInjective)
 open Dregg2.Circuit.EffectCommit2 (Surface2)
 open Dregg2.Circuit.EffectCommit5
 open Dregg2.Circuit.BornEmptyCommit (SpawnCreateLeg BornEmptyAuthorityTables)
-open Dregg2.Circuit.Spec.AccountGrowth (SpawnSpec)
+open Dregg2.Circuit.Spec.AccountGrowth (SpawnFullSpec)
 open Dregg2.Authority (Caps Cap)
 open Dregg2.Exec (RecChainedState CellId AssetId Value SlotCaveat)
 open Dregg2.Substrate
@@ -224,22 +224,22 @@ and `createCellFromFactoryA` (accounts + bal + cell + slotCaveats + born-empty a
 
 /-- **`spawnA_extract`** — adversarial extraction for `spawn` (a quint write: account growth, the
 create-leg, AND the full authority handoff — caps/delegate/delegations). A satisfying PI-bound trace
-forces the COMPLETE `SpawnSpec` — a forged spawn (wrong account / leg / caps / delegate / delegations) is
-refuted. -/
+forces the COMPLETE `SpawnFullSpec` — a forged spawn (wrong account / leg / caps / delegate / delegations
+/ birth epoch stamp) is refuted. -/
 theorem spawnA_extract
     (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : Inst.SpawnA.RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : Inst.SpawnA.SpawnArgs) (s' : RecChainedState) (a : Assignment)
     (hsat : satisfiedE2Quint S
       (Inst.SpawnA.spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) a)
     (hPI : PIBindsDigestsQuint S
       (Inst.SpawnA.spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s' a) :
-    SpawnSpec s args.actor args.child args.target s' :=
+    SpawnFullSpec s args.actor args.child args.target s' :=
   (Inst.SpawnA.apex_iff_spawnSpec LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s').mp
     (effect2quint_extract S
       (Inst.SpawnA.spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)

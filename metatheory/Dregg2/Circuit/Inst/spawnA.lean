@@ -51,7 +51,6 @@ def RestIffNoSpawnTouched (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.commitments = k.commitments
       ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
-      ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps)
 
 /-! ## §2 — the `spawnE` quint instance. -/
@@ -112,17 +111,26 @@ def delegateComp (D : (CellId → Option CellId) → ℤ) (hD : Function.Injecti
   funcComponent (β := CellId → Option CellId) (·.delegate) D hD
     (fun s args => spawnDelegateMap s.kernel args.actor args.child)
 
-def delegationsComp (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D) :
+/-- **`delegationsComp`** — the FAITHFUL spawn handoff component binding BOTH touched maps as ONE injective
+product digest: the child's initial `delegations` snapshot AND its birth `delegationEpochAt` stamp. The
+expected value reads the spawner-parent's CURRENT epoch out of the SAME before-kernel (`spawnEpochAtMap` =
+`k.delegationEpoch actor` at the child), so the digest FORCES `post.delegationEpochAt child = parent_epoch`
+— a genuine cross-cell force at the WHOLE-KERNEL descriptor layer (the parent's epoch is a value of the same
+abstract kernel the descriptor commits over), NOT a freely-witnessed param. A forge that births the child
+but leaves the stamp at the `0` default FAILS the product clause (the stamp leg disagrees). -/
+def delegationsComp (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D) :
     ActiveComponent RecChainedState SpawnArgs :=
-  funcComponent (β := CellId → List Cap) (·.delegations) D hD
-    (fun s args => spawnDelegationsMap s.kernel args.actor args.child)
+  funcComponent (β := (CellId → List Cap) × (CellId → Nat))
+    (fun k => (k.delegations, k.delegationEpochAt)) D hD
+    (fun s args => (spawnDelegationsMap s.kernel args.actor args.child,
+                    spawnEpochAtMap s.kernel args.actor args.child))
 
 def spawnE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs) :
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs) :
     EffectSpec2Quint RecChainedState SpawnArgs where
   view         := chainView
   active1      := accountsComp LE cN hN hLE
@@ -136,7 +144,6 @@ def spawnE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
       ∧ k'.commitments = k.commitments
       ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
-      ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps)
   guardGates   := spawnGuardGates
   guardProp    := spawnGuardProp
@@ -150,7 +157,7 @@ instance spawnE_guardDecidable (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) :
     Decidable ((spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs).guardProp s args) := by
   dsimp [spawnE]; infer_instance
@@ -162,7 +169,7 @@ theorem spawnGuardDecodes (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs) :
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs) :
     GuardDecodes2Quint (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) := by
   intro s args s' hsat
   dsimp [spawnE] at hsat
@@ -175,7 +182,7 @@ theorem spawnGuardEncodes (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs) :
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs) :
     GuardEncodes2Quint (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) := by
   intro s args s' hg
   dsimp [spawnE]
@@ -190,7 +197,7 @@ theorem spawnRestFrameDecodes (S : Surface2) (LE : CellId → ℤ) (cN : List �
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) :
     RestFrameDecodes2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) := by
   intro k k' h
@@ -207,72 +214,80 @@ def SpawnCircuitSpec (st : RecChainedState) (actor child target : CellId) (st' :
   ∧ readSpawnCreateLeg st'.kernel = expectedSpawnCreateLeg st.kernel child
   ∧ st'.kernel.caps = spawnCapsMap st.kernel actor child target
   ∧ st'.kernel.delegate = spawnDelegateMap st.kernel actor child
-  ∧ st'.kernel.delegations = spawnDelegationsMap st.kernel actor child
+  -- THE FAITHFUL HANDOFF PRODUCT (delegations snapshot + birth epoch stamp), forced by `active5`.
+  ∧ (st'.kernel.delegations, st'.kernel.delegationEpochAt)
+      = (spawnDelegationsMap st.kernel actor child, spawnEpochAtMap st.kernel actor child)
   ∧ st'.log = createReceipt actor child :: st.log
   ∧ st'.kernel.nullifiers = st.kernel.nullifiers
   ∧ st'.kernel.revoked = st.kernel.revoked
   ∧ st'.kernel.commitments = st.kernel.commitments
   ∧ st'.kernel.factories = st.kernel.factories
   ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
-  ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
   ∧ st'.kernel.heaps = st.kernel.heaps
 
 theorem SpawnSpec_implies_circuitSpec (st : RecChainedState) (actor child target : CellId)
-    (st' : RecChainedState) (h : SpawnSpec st actor child target st') :
+    (st' : RecChainedState) (h : SpawnFullSpec st actor child target st') :
     SpawnCircuitSpec st actor child target st' := by
   obtain ⟨hadmit, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h1, h2, h3, h4, h5,
-      h6⟩ := h
-  refine ⟨hadmit, hacc, ?_, hcaps, hdel, hdgs, hlog, h1, h2, h3, h4, h5, h6⟩
-  have hmeta := (bornEmptyCellMeta_post_iff st.kernel child st'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩
-  exact (spawnCreateLeg_post_iff st.kernel child st'.kernel).mpr ⟨hbal, hmeta⟩
+      hstamp, h6⟩ := h
+  refine ⟨hadmit, hacc, ?_, hcaps, hdel, ?_, hlog, h1, h2, h3, h4, h5, h6⟩
+  · have hmeta := (bornEmptyCellMeta_post_iff st.kernel child st'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩
+    exact (spawnCreateLeg_post_iff st.kernel child st'.kernel).mpr ⟨hbal, hmeta⟩
+  · rw [Prod.mk.injEq]; exact ⟨hdgs, hstamp⟩
 
 theorem apex_iff_spawnCircuitSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) :
     (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs).apex s args s' ↔
       SpawnCircuitSpec s args.actor args.child args.target s' := by
   dsimp only [EffectSpec2Quint.apex, spawnE, accountsComp, spawnCreateLegComp, capsComp, delegateComp,
     delegationsComp, accountsComponent, spawnCreateLegComponent, funcComponent, chainView,
     SpawnCircuitSpec, spawnGuardProp, spawnAdmit, expectedAccounts, readSpawnCreateLeg,
-    expectedSpawnCreateLeg, spawnCapsMap, spawnDelegateMap, spawnDelegationsMap]
+    expectedSpawnCreateLeg, spawnCapsMap, spawnDelegateMap]
   constructor
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
-    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
-    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE⟩
+    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE⟩
+    exact ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE⟩
 
 /-! ### §2c — apex ↔ FULL `SpawnSpec` (executor semantics). -/
 
+/-- **`apex_iff_spawnSpec`** — the deployed spawn apex IS the STRENGTHENED `SpawnFullSpec`. The product
+`active5` pins `(delegations, delegationEpochAt) = (spawnDelegationsMap, spawnEpochAtMap)`, so the BIRTH
+STAMP is forced (no longer the framed/residual face): the child's epoch tag is bound to the spawner-parent's
+current epoch read off the same before-kernel. -/
 theorem apex_iff_spawnSpec (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) :
     (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs).apex s args s' ↔
-      SpawnSpec s args.actor args.child args.target s' := by
+      SpawnFullSpec s args.actor args.child args.target s' := by
   dsimp only [EffectSpec2Quint.apex, spawnE, accountsComp, spawnCreateLegComp, capsComp, delegateComp,
-    delegationsComp, accountsComponent, spawnCreateLegComponent, funcComponent, chainView, SpawnSpec,
+    delegationsComp, accountsComponent, spawnCreateLegComponent, funcComponent, chainView, SpawnFullSpec,
     spawnGuardProp, spawnAdmit, expectedAccounts, readSpawnCreateLeg, expectedSpawnCreateLeg,
-    spawnCapsMap, spawnDelegateMap, spawnDelegationsMap]
+    spawnCapsMap, spawnDelegateMap]
   constructor
-  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
+  · rintro ⟨hg, hacc, hleg, hcaps, hdel, hprod, hlog, hNul, hRev, hCom, hFac, hDE, hHeaps⟩
     obtain ⟨hbal, hmeta⟩ :=
       (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mp hleg
     obtain ⟨hcell, hsc, hlif, hdc⟩ :=
       (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mp hmeta
-    exact ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom,
-      hFac, hDE, hDEA⟩
+    rw [Prod.mk.injEq] at hprod
+    exact ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hprod.1, hlog, hNul, hRev, hCom,
+      hFac, hDE, hprod.2, hHeaps⟩
   · rintro ⟨hg, hacc, hcell, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom,
-      hFac, hDE, hDEA⟩
-    refine ⟨hg, hacc, ?_, hcaps, hdel, hdgs, hlog, hNul, hRev, hCom, hFac, hDE, hDEA⟩
-    exact (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mpr
-      ⟨hbal, (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩⟩
+      hFac, hDE, hstamp, hHeaps⟩
+    refine ⟨hg, hacc, ?_, hcaps, hdel, ?_, hlog, hNul, hRev, hCom, hFac, hDE, hHeaps⟩
+    · exact (spawnCreateLeg_post_iff s.kernel args.child s'.kernel).mpr
+        ⟨hbal, (bornEmptyCellMeta_post_iff s.kernel args.child s'.kernel).mpr ⟨hcell, hsc, hlif, hdc⟩⟩
+    · rw [Prod.mk.injEq]; exact ⟨hdgs, hstamp⟩
 
 /-! ### §2d — THE VALIDATION. -/
 
@@ -282,13 +297,13 @@ theorem spawnA_full_sound
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
         (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
           s args s')) :
-    SpawnSpec s args.actor args.child args.target s' := by
+    SpawnFullSpec s args.actor args.child args.target s' := by
   have hapex :=
     effect2quint_circuit_full_sound S
       (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)

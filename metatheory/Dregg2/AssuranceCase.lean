@@ -366,15 +366,20 @@ for every live effect:
     (transfer/burn/mint/bridgeMint/setField/incrementNonce), `proof_verify.rs` step 6b overrides the
     published limb to `compute_authority_digest_felt`/`lifecycle_felt_cell(trusted post-cell)`, so the
     gate forces `pubPost = digest(stepped pre)`, not `published == published` (both-polarity tests green).
-  • THE NAMED MOVING-FACE RESIDUALS. For three epoch/snapshot moves — `RevokeDelegationEpochResidual`,
-    `SpawnEpochStampResidual`, `RefreshEpochStampResidual` (`Circuit.EffectRefinement` /
-    `EffectRefinementBatch2`) — the commitment BINDS the field (it folds into `record_digest`), the
-    extractor forces the gate, and the executor PERFORMS the move, but the FROZEN v1-face descriptor
-    commitment-binds the `delegationEpochAt` stamp rather than write-gate-forcing it. Each is carried as
-    a fail-closed, data-bearing `Prop` (never an open hole, never an `axiom`); the faithful refinement is
-    proven against it (e.g. `spawn_full_circuit_refines_spec` — the spawn cap HANDOFF itself is forced,
-    only the epoch stamp is residual). The closure is the moving-face descriptor cutover: per-effect
-    circuit engineering on an already-binding commitment, NOT a commitment change.
+  • THE EPOCH/SNAPSHOT MOVES — ALL FORCED (residual era closed). The three epoch/snapshot moves are now
+    write-gate-forced, not carried residuals. `RevokeDelegationEpochResidual` is forced by `epochBumpGate`
+    on the deployed rotated `B_EPOCH = 30` limb (the parent's OWN before→after bump, a within-row force).
+    `SpawnEpochStampResidual` / `RefreshEpochStampResidual` are CROSS-CELL (`child.delegationEpochAt =
+    parent.delegationEpoch`), so they are forced NOT on the deployed single-cell row (which cannot reach
+    the parent's column) but at the ABSTRACT per-effect descriptor (`spawnE`/`refreshDelegationE`, whose
+    `view = chainView` commits over the WHOLE kernel): `delegationEpochAt` is bound in a forced PRODUCT
+    `funcComponent` `(delegations, delegationEpochAt)` whose expected value reads `before.delegationEpoch
+    parent` (`spawnEpochAtMap`/`refreshEpochAtMap`), so the injective product digest FORCES the stamp =
+    parent_epoch — the SAME mechanism the `delegations` map already uses. `spawn_circuit_refines_spec`
+    now yields `SpawnFullSpec` and `refreshDelegation_circuit_refines_spec` yields `RefreshDelegationFullSpec`
+    DIRECTLY; a stale-stamp forge violates the product `postClause` and is UNSAT
+    (`refreshDelegation_full_sat_rejects_stale_stamp`). VK-FREE (no new committed limb; the stamp was
+    already commitment-bound — this moves it from the framed face into the forced component).
 =========================================================================== -/
 
 /-- **`integrity_guarantee` (NOW A REAL STATEMENT — the receipt binds the WHOLE post-state).**

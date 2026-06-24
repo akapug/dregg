@@ -82,7 +82,7 @@ open Dregg2.Authority (Cap)
 open Dregg2.Circuit.EffectCommit2 (Surface2 satisfiedE2 encodeE2)
 open Dregg2.Circuit.StateCommit (logHashInjective compressNInjective)
 open Dregg2.Circuit.Inst.RefreshDelegationA (RefreshDelegationArgs refreshDelegationE refreshDelegationA_full_sound)
-open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationSpec refreshDelegationsMap)
+open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationSpec RefreshDelegationFullSpec refreshDelegationsMap)
 open Dregg2.Exec.SystemRoots
   (SysRoots systemRootsDigest cellCommitS cellCommitS_binds_systemRoots
    systemRootsDigest_binds_pointwise N_SYSTEM_ROOTS)
@@ -317,7 +317,7 @@ from `D k.delegations` to `D (refreshDelegationsMap k child)` (the parent-clist 
 genuine `delegations` content, now an explicit root transition (the move was IR-BLOCKED pre-STAGE-3). -/
 theorem delegRoot_moves_under_spec (D : (CellId → List Cap) → ℤ)
     (s : RecChainedState) (actor child : CellId) (s' : RecChainedState)
-    (hspec : RefreshDelegationSpec s actor child s') :
+    (hspec : RefreshDelegationFullSpec s actor child s') :
     delegRootProj D s'.kernel = D (refreshDelegationsMap s.kernel child) := by
   obtain ⟨_hguard, hdeleg, _⟩ := hspec
   show D s'.kernel.delegations = D (refreshDelegationsMap s.kernel child)
@@ -353,7 +353,7 @@ holds, the projected `cap_root` is FROZEN (`D k'.caps = D k.caps`) — exactly t
 `cap_root` passthrough gate. -/
 theorem unify_refresh_capFreeze (D : (CellId → List Cap) → ℤ)
     (s : RecChainedState) (actor child : CellId) (s' : RecChainedState)
-    (hspec : RefreshDelegationSpec s actor child s') :
+    (hspec : RefreshDelegationFullSpec s actor child s') :
     capRootProj D s'.kernel = capRootProj D s.kernel := by
   obtain ⟨_hguard, _hdeleg, _hlog, _hAcc, _hCell, hcaps, _⟩ := hspec
   show D s'.kernel.caps = D s.kernel.caps
@@ -365,14 +365,16 @@ theorem unify_refresh_capFreeze (D : (CellId → List Cap) → ℤ)
 and (2) the projected `DELEG` system-root MOVES to `D (refreshDelegationsMap …)` — the touched-field
 content, now BOUND (STAGE 3). The conjunction is the FULL-state refresh: caps frozen + delegations moved. -/
 theorem unify_refresh_via_full_sound
-    (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2)
+    (Dp : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDp : Function.Injective Dp)
+    (D : (CellId → List Cap) → ℤ)
     (hRest : Dregg2.Circuit.Inst.RefreshDelegationA.RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
-    (h : satisfiedE2 S (refreshDelegationE D hD) (encodeE2 S (refreshDelegationE D hD) s args s')) :
+    (h : satisfiedE2 S (refreshDelegationE Dp hDp) (encodeE2 S (refreshDelegationE Dp hDp) s args s')) :
     capRootProj D s'.kernel = capRootProj D s.kernel
     ∧ delegRootProj D s'.kernel = D (refreshDelegationsMap s.kernel args.child) := by
-  have hspec := refreshDelegationA_full_sound S D hD hRest hLog s args s' h
+  have hspec := refreshDelegationA_full_sound S Dp hDp hRest hLog s args s' h
   exact ⟨unify_refresh_capFreeze D s args.actor args.child s' hspec,
          delegRoot_moves_under_spec D s args.actor args.child s' hspec⟩
 

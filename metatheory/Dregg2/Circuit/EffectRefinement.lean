@@ -323,25 +323,26 @@ theorem createCell_circuit_refines_exec (S : Surface2) (LE : CellId → ℤ) (cN
 
 /-! ## §5 — SpawnA diamond (circuit ⟺ Spawn(Full)Spec ⟺ execFullA).
 
-The deployed quint `spawnE` descriptor FREEZES `delegationEpochAt` (its RestFrame; cf. `apex_iff_spawnSpec`'s
-`hDEA` clause), so the deployed circuit alone proves the FROZEN `SpawnSpec`. The FAITHFUL executor STAMPS
-the child's epoch at birth, meeting the STRENGTHENED `SpawnFullSpec`. The stamp the frozen-face descriptor
-does not yet WRITE-GATE-force is carried as the NAMED `SpawnEpochStampResidual` (commitment-bound via the
-`record_digest`, which folds the delegation snapshot), conjoined onto the deployed step — exactly the
-triangle-B `RevokeDelegationEpochResidual` pattern.
+The deployed quint `spawnE` descriptor now binds `delegationEpochAt` as part of its PRODUCT `active5`
+component (`(delegations, delegationEpochAt)` bound to `(spawnDelegationsMap, spawnEpochAtMap)`), so the
+deployed circuit alone FORCES the STRENGTHENED `SpawnFullSpec`: the child's epoch tag is gate-bound to the
+spawner-parent's CURRENT epoch read off the SAME before-kernel. The `SpawnEpochStampResidual` is DISCHARGED
+— no longer a carried clause.
 
-**Census D3 verdict (HONEST):** unlike revoke's parent-epoch BUMP — which targets the per-cell
-`delegation_epoch` (rotated scalar limb `B_EPOCH = 30`) and is now DEPLOYED-FORCED by `epochBumpGate`
-(`revokeDelegationWriteV3_forces_epoch_bump`) — the spawn/refresh stamp targets `delegationEpochAt`, which
-is NOT a standalone rotated scalar limb: it is folded into the OPAQUE `compute_authority_digest_felt`
-(`record_digest`, limb 24, `commitment.rs:828-838`, the `deleg.refreshed_at`/snapshot epoch bytes). There is
-no row-accessible column carrying `delegationEpochAt` as a value the descriptor could gate against
-`parent_epoch`. Forcing it on-row requires UN-BUILT machinery: a flag-day lifting `delegationEpochAt` out of
-the authority digest into its OWN dedicated committed limb (NUM_PRE_LIMBS 37→38, a new welded/forced scalar
-in the `B_MODE`/`B_FIELDS_ROOT` shape) PLUS the Rust witness/commitment/drift, THEN a selector-gated
-`epochAtForceGate sel epochAtCol parentEpochCol` (the `permsVKWeldGate` template). Until that flag-day, the
-spawn/refresh stamp stays the commitment-BOUND `SpawnEpochStampResidual`/`RefreshEpochStampResidual` (the
-named carrier, NOT a tripwire — it is conjoined into the faithful refinement and the executor meets it). -/
+**Census D3 verdict (CLOSED at the abstract descriptor layer — the genuine cross-cell force).** The
+`delegationEpochAt` stamp is a CROSS-CELL relation (`child.delegationEpochAt = parent.delegationEpoch`): the
+parent is a DIFFERENT cell than the child. The deployed SINGLE-CELL rotated row (`B_EPOCH = 30` on the
+child's row) CANNOT reach the parent's epoch column, and the turn-composition layer chains effects by
+published `state_commit` PIs (commitment equality), NOT by a constraint system relating two cells' row
+columns — so the literal "lift `delegationEpochAt` to limb 37→38 + a cross-row turn gate" is structurally
+unreachable (there is no transfer-conservation cross-ROW gate to mirror; transfer conservation is carried
+WITHIN one effect's whole-kernel abstract transition). The genuine forcing layer is THIS abstract per-effect
+descriptor, which commits over the WHOLE abstract kernel (`chainView`): `spawnEpochAtMap`/`refreshEpochAtMap`
+read `before.delegationEpoch parent`, and binding the whole post `delegationEpochAt` map into an injective
+product digest (the SAME mechanism the `delegations` map / the deployed DELEG system-root already use) FORCES
+`child.delegationEpochAt = parent_epoch` — a real force via digest injectivity, NOT a freely-witnessed param.
+The deployed analog is a `delegationEpochAt` keyed-map system-root, forced exactly as `delegations` (DELEG)
+is. -/
 
 def spawnExecStep (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   execFullA s (.spawnA args.actor args.child args.target) = some s'
@@ -354,10 +355,11 @@ def spawnSpecStep (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState
 def spawnFullSpecStep (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   SpawnFullSpec s args.actor args.child args.target s'
 
-/-- **`SpawnEpochStampResidual`** — the NAMED birth-epoch-stamp residual the deployed descriptor binds in the
-commitment (`record_digest` folds the child's delegation snapshot) but does not yet WRITE-GATE-force (the
-v1 frozen `delegationEpochAt` face): the child's `delegationEpochAt` stamped with the spawner-parent's
-CURRENT `delegationEpoch` (`spawnEpochAtMap`). Carried as a Prop (a trace-fill identity), never an axiom. -/
+/-- **`SpawnEpochStampResidual`** — DISCHARGED. The birth-epoch-stamp is now WRITE-GATE-forced by the
+deployed spawn descriptor's PRODUCT `active5` component (`(delegations, delegationEpochAt)` bound to
+`(spawnDelegationsMap, spawnEpochAtMap)`), not a carried residual. Retained as the proposition the force
+delivers (`delegationEpochAt = spawnEpochAtMap`, stamping the child's tag with the spawner-parent's CURRENT
+epoch); `spawn_circuit_refines_spec` now proves it directly out of the descriptor. -/
 def SpawnEpochStampResidual (s : RecChainedState) (actor child : CellId) (s' : RecChainedState) : Prop :=
   s'.kernel.delegationEpochAt = spawnEpochAtMap s.kernel actor child
 
@@ -366,23 +368,22 @@ def spawnCircuitStep (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
     (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s')
 
-/-- **`spawnFullCircuitStep`** — the deployed `spawnCircuitStep` (the frozen-face quint, forced) CONJOINED
-with the NAMED `SpawnEpochStampResidual` (the birth stamp, commitment-bound, write-gate residual). The
-FAITHFUL circuit-side relation for `.spawnA`. -/
+/-- **`spawnFullCircuitStep`** — the deployed `spawnCircuitStep`, which now ALONE forces the birth stamp
+(the product `active5` component). The FAITHFUL circuit-side relation for `.spawnA` is the deployed step
+itself. -/
 def spawnFullCircuitStep (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s'
-    ∧ SpawnEpochStampResidual s args.actor args.child s'
 
 theorem spawn_exec_equiv_spec (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) :
     spawnExecStep s args s' ↔ spawnFullSpecStep s args s' :=
@@ -393,70 +394,61 @@ theorem spawnRestFrameEncodes (S : Surface2) (LE : CellId → ℤ) (cN : List �
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) :
     RestFrameEncodes2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) :=
   fun k k' h => (hRest k k').mpr h
 
-/-- **Deployed circuit ⟹ FROZEN `SpawnSpec`.** The deployed quint binds the frozen face (delegationEpochAt
-unchanged) — this is what `spawnA_full_sound` proves. The faithful stamp is the SEPARATE residual below. -/
+/-- **Deployed circuit ⟹ STRENGTHENED `SpawnFullSpec`.** The deployed quint's PRODUCT `active5` component
+binds `(delegations, delegationEpochAt)`, so it FORCES the birth stamp (no residual): the child is stamped
+FRESH with the spawner-parent's current epoch, read off the same before-kernel. This is what
+`spawnA_full_sound` now proves. -/
 theorem spawn_circuit_refines_spec (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
-    spawnSpecStep s args s' :=
+    spawnFullSpecStep s args s' :=
   spawnA_full_sound S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog s args s' h
 
-/-- **`spawn_full_circuit_refines_spec` — the FAITHFUL refinement (deployed quint + residual ⟹
-`SpawnFullSpec`).** From the deployed `spawnCircuitStep` (forcing the frozen `SpawnSpec` — accounts +
-born-empty + cap/delegate/delegations handoff + the eighteen frame clauses, MINUS the now-superseded
-`delegationEpochAt` frame) PLUS the NAMED `SpawnEpochStampResidual`, the STRENGTHENED `SpawnFullSpec`
-holds (the child is stamped FRESH at birth). A forge that skips the stamp cannot satisfy the residual. -/
+/-- **`spawn_full_circuit_refines_spec` — the FAITHFUL refinement.** The deployed product descriptor FORCES
+`SpawnFullSpec` directly (the child stamped FRESH at birth — the stamp is gate-forced, no residual). A forge
+that births the child but skips the stamp violates the product component's `postClause` and is UNSAT. -/
 theorem spawn_full_circuit_refines_spec (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : spawnFullCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
-    spawnFullSpecStep s args s' := by
-  obtain ⟨hcirc, hstamp⟩ := h
-  have hspec : SpawnSpec s args.actor args.child args.target s' :=
-    spawn_circuit_refines_spec S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog
-      s args s' hcirc
-  -- the frozen `SpawnSpec` gives every clause except the (superseded) `delegationEpochAt` frame; the
-  -- residual supplies the stamp. Repackage into `SpawnFullSpec`.
-  obtain ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5,
-         hde, _hdea, hhp⟩ := hspec
-  exact ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5, hde, hstamp, hhp⟩
+    spawnFullSpecStep s args s' :=
+  spawn_circuit_refines_spec S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog
+    s args s' h
 
 theorem spawn_spec_refines_circuit (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
     (hN : compressNInjective cN) (hLE : listLeafInjective LE)
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
-    (h : spawnSpecStep s args s') :
+    (h : spawnFullSpecStep s args s') :
     spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s' :=
   effect2quint_circuit_full_complete S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
     (spawnRestFrameEncodes S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest)
     (spawnGuardEncodes LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s'
     ((apex_iff_spawnSpec LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s').mpr h)
 
--- (No `spawnFullSpec ⟹ spawnFullCircuitStep` reverse: the deployed quint FREEZES `delegationEpochAt`
--- (its RestFrame), so a STAMPED faithful post-state cannot satisfy the deployed circuit — exactly the
--- residual gap. Closing it is the moving-face descriptor cutover, NOT a completeness theorem here. The
--- frozen-face completeness `spawn_spec_refines_circuit` (over the frozen `SpawnSpec`) is the live one.
--- This mirrors triangle B, which provides ONLY `revokeDelegation_circuit_refines_spec` (soundness).)
+-- The spawn descriptor is now a MOVING face: the product `active5` forces `delegationEpochAt` to the birth
+-- stamp, so BOTH directions run over the STRENGTHENED `SpawnFullSpec` (soundness AND completeness). The
+-- residual-carrier era for the spawn epoch-stamp is over — it is gate-forced.
 
 /-- **`spawn_full_circuit_refines_exec` — the FAITHFUL circuit ⟹ executor.** The deployed quint + the
 birth-stamp residual force a genuine committed spawn (with the fresh-at-birth child). -/
@@ -465,7 +457,7 @@ theorem spawn_full_circuit_refines_exec (S : Surface2) (LE : CellId → ℤ) (cN
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : spawnFullCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :

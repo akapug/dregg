@@ -5,8 +5,9 @@ Closes the verifiable-execution beachhead for `spawnA` (coin a fresh child cell:
 born-empty its `bal`/cell-metadata, copy the held parent cap into the child's `caps`, set the child's
 `delegate`/`delegations`), over the v2-QUINT framework (`EffectCommit5`), which touches FIVE non-`cell`
 components at once (accounts, the create-leg, caps, delegate, delegations). Reused: `Exec.execFullA`
-(`.spawnA` arm), `Inst.SpawnA.spawnA_full_sound` (⇒ `SpawnSpec`), `effect2quint_circuit_full_complete`,
-`emittedEffect2Quint`/`emitDescriptorJson`.
+(`.spawnA` arm), `Inst.SpawnA.spawnA_full_sound` (⇒ `SpawnFullSpec`), `effect2quint_circuit_full_complete`,
+`emittedEffect2Quint`/`emitDescriptorJson`. (`spawnA_full_sound` ⇒ `SpawnFullSpec`, the strengthened
+spec carrying the child's `delegationEpochAt` birth stamp.)
 
 The quint circuit is EIGHT gates over an 80-wide trace: guard (`v0 = 1`), rest (66/67), and FIVE
 component-bind gates (68/69, 70/71, 72/73, 74/75, 76/77) + log (78/79). §3 abstract execute→prove +
@@ -50,12 +51,12 @@ variable (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ)
   (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
   (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
   (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-  (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+  (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
 
 theorem execute_produces_satisfying_witness
     (hRest : RestIffNoSpawnTouched S.RH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
-    (hspec : SpawnSpec s args.actor args.child args.target s') :
+    (hspec : SpawnFullSpec s args.actor args.child args.target s') :
     satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
       (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s') :=
   effect2quint_circuit_full_complete S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
@@ -68,7 +69,7 @@ theorem satisfying_witness_proves_full_state
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
         (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s')) :
-    SpawnSpec s args.actor args.child args.target s' :=
+    SpawnFullSpec s args.actor args.child args.target s' :=
   spawnA_full_sound S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog s args s' h
 
 /-! ## §4 — THE EXECUTOR-DERIVED CONCRETE WITNESS (five concrete computable components). -/

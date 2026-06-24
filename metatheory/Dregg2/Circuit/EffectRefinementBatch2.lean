@@ -276,63 +276,66 @@ theorem cellUnseal_circuit_refines_spec (S : Surface2) (DLife : (CellId → Nat)
     CellUnsealSpec s args.actor args.cell s' :=
   cellUnsealA_full_sound S DLife hDLife hRest hLog s args s' h
 
-def refreshDelegationCircuitStep (S : Surface2) (DDgs : (CellId → List Cap) → ℤ)
+def refreshDelegationCircuitStep (S : Surface2) (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDgs : Function.Injective DDgs) (s : RecChainedState) (args : RefreshDelegationArgs)
     (s' : RecChainedState) : Prop :=
   effect2CircuitStep S (refreshDelegationE DDgs hDDgs) s args s'
 
-/-- **Deployed refresh circuit ⟹ FROZEN `RefreshDelegationSpec`.** The deployed `refreshDelegationE`
-func-descriptor binds the frozen face (`delegationEpochAt` unchanged) — what `refreshDelegationA_full_sound`
-proves. The freshness-restore stamp is the SEPARATE residual below. -/
-theorem refreshDelegation_circuit_refines_spec (S : Surface2) (DDgs : (CellId → List Cap) → ℤ)
+/-- **Deployed refresh circuit ⟹ STRENGTHENED `RefreshDelegationFullSpec`.** The deployed
+`refreshDelegationE` func-descriptor now binds a PRODUCT component `(delegations, delegationEpochAt)`, so it
+FORCES the freshness-restore stamp (no residual): the child's epoch tag is bound to the parent's current
+epoch read off the same before-kernel. -/
+theorem refreshDelegation_circuit_refines_spec (S : Surface2)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDgs : Function.Injective DDgs) (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
     (h : refreshDelegationCircuitStep S DDgs hDDgs s args s') :
-    RefreshDelegationSpec s args.actor args.child s' :=
+    RefreshDelegationFullSpec s args.actor args.child s' :=
   refreshDelegationA_full_sound S DDgs hDDgs hRest hLog s args s' h
 
-/-- **`RefreshEpochStampResidual`** — the NAMED freshness-restore epoch-stamp residual the deployed
-descriptor binds in the commitment (`record_digest` folds the child's delegation snapshot) but does not yet
-WRITE-GATE-force (the v1 frozen `delegationEpochAt` face): the child's `delegationEpochAt` re-stamped to the
-parent's CURRENT epoch (`refreshEpochAtMap`). Carried as a Prop, never an axiom.
-
-**Census D3 verdict (HONEST):** like the spawn stamp (`SpawnEpochStampResidual`), the `delegationEpochAt`
-re-stamp targets a value folded into the OPAQUE `record_digest` (limb 24), NOT a standalone rotated scalar
-limb — so it CANNOT be forced by a row gate the way revoke's per-cell `delegation_epoch` BUMP (limb 30) now
-is (`EffectVmEmitRotationV3.revokeDelegationWriteV3_forces_epoch_bump`). On-row forcing needs the same
-un-built flag-day: a dedicated committed `delegationEpochAt` limb + a selector-gated weld to the
-parent-epoch column. Until then this stays the commitment-BOUND carrier conjoined into the faithful
-refinement (the executor meets it). -/
+/-- **`RefreshEpochStampResidual`** — DISCHARGED. The freshness-restore epoch-stamp is now WRITE-GATE-forced
+by the deployed refresh descriptor's PRODUCT component (`(delegations, delegationEpochAt)` bound to
+`(refreshDelegationsMap, refreshEpochAtMap)`), not a carried residual. Retained as the proposition the force
+delivers (`delegationEpochAt = refreshEpochAtMap`, re-stamping the child's tag to the parent's CURRENT
+epoch); `refreshDelegation_circuit_refines_spec` now proves it directly out of the descriptor. -/
 def RefreshEpochStampResidual (s : RecChainedState) (child : CellId) (s' : RecChainedState) : Prop :=
   s'.kernel.delegationEpochAt = refreshEpochAtMap s.kernel child
 
-/-- **`refreshDelegationFullCircuitStep`** — the deployed `refreshDelegationCircuitStep` (frozen face,
-forced) CONJOINED with the NAMED `RefreshEpochStampResidual` (the freshness-restore stamp). The FAITHFUL
-circuit-side relation for `.refreshDelegationA`. -/
-def refreshDelegationFullCircuitStep (S : Surface2) (DDgs : (CellId → List Cap) → ℤ)
+/-- **`refreshDelegationFullCircuitStep`** — the deployed `refreshDelegationCircuitStep`, which now ALONE
+forces the freshness-restore stamp (the product component). The FAITHFUL circuit-side relation for
+`.refreshDelegationA` is the deployed step itself. -/
+def refreshDelegationFullCircuitStep (S : Surface2)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDgs : Function.Injective DDgs) (s : RecChainedState) (args : RefreshDelegationArgs)
     (s' : RecChainedState) : Prop :=
-  refreshDelegationCircuitStep S DDgs hDDgs s args s' ∧ RefreshEpochStampResidual s args.child s'
+  refreshDelegationCircuitStep S DDgs hDDgs s args s'
 
-/-- **`refreshDelegation_full_circuit_refines_spec` — the FAITHFUL refinement (deployed + residual ⟹
-`RefreshDelegationFullSpec`).** From the deployed frozen-face circuit (the delegations snapshot + frame,
-MINUS the now-superseded `delegationEpochAt` frame) PLUS the NAMED `RefreshEpochStampResidual`, the
-STRENGTHENED `RefreshDelegationFullSpec` holds (the child re-syncs FRESH). A refresh that skips the stamp
-cannot satisfy the residual. -/
-theorem refreshDelegation_full_circuit_refines_spec (S : Surface2) (DDgs : (CellId → List Cap) → ℤ)
+/-- **`refreshDelegation_full_circuit_refines_spec` — the FAITHFUL refinement.** The deployed product
+descriptor FORCES `RefreshDelegationFullSpec` directly (the child re-syncs FRESH — the stamp is gate-forced,
+no residual). A refresh that skips the stamp violates the product component's `postClause` and is UNSAT. -/
+theorem refreshDelegation_full_circuit_refines_spec (S : Surface2)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDgs : Function.Injective DDgs) (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
     (h : refreshDelegationFullCircuitStep S DDgs hDDgs s args s') :
-    RefreshDelegationFullSpec s args.actor args.child s' := by
-  obtain ⟨hcirc, hstamp⟩ := h
-  have hspec : RefreshDelegationSpec s args.actor args.child s' :=
-    refreshDelegation_circuit_refines_spec S DDgs hDDgs hRest hLog s args s' hcirc
-  -- frozen `RefreshDelegationSpec` gives every clause except the (superseded) `delegationEpochAt` frame;
-  -- the residual supplies the stamp. Repackage into `RefreshDelegationFullSpec`.
-  obtain ⟨hg, hdgs, hlog, hacc, hcell, hcaps, hnul, hrev, hcom, hbal, hsc, hfac, hlif, hdc, hdel,
-         hde, _hdea, hhp⟩ := hspec
-  exact ⟨hg, hdgs, hlog, hacc, hcell, hcaps, hnul, hrev, hcom, hbal, hsc, hfac, hlif, hdc, hdel,
-         hde, hstamp, hhp⟩
+    RefreshDelegationFullSpec s args.actor args.child s' :=
+  refreshDelegation_circuit_refines_spec S DDgs hDDgs hRest hLog s args s' h
+
+/-- **`refreshDelegation_full_sat_rejects_stale_stamp`** — THE FORGED-FRESHNESS REJECTION (deployed
+mutation-confirm, abstract layer). A claimed refresh post-state whose `delegationEpochAt` is NOT the
+parent-epoch re-stamp (`refreshEpochAtMap` — e.g. the child left STALE at its old tag) violates the product
+component's `postClause` and has NO satisfying witness on the encoded triple: the descriptor REJECTS a
+forged-freshness refresh. -/
+theorem refreshDelegation_full_sat_rejects_stale_stamp (S : Surface2)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
+    (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
+    (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
+    (hstale : s'.kernel.delegationEpochAt ≠ refreshEpochAtMap s.kernel args.child) :
+    ¬ refreshDelegationCircuitStep S DDgs hDDgs s args s' := by
+  intro h
+  have hspec := refreshDelegation_circuit_refines_spec S DDgs hDDgs hRest hLog s args s' h
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hstamp, _⟩ := hspec
+  exact hstale hstamp
 
 /-! ## §3 — dual-component effects. -/
 

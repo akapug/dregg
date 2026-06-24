@@ -808,25 +808,27 @@ theorem cellUnseal_circuit_rejects_wrong_lifecycle
 
 open Dregg2.Circuit.Inst.RefreshDelegationA
   (RefreshDelegationArgs refreshDelegationE refreshDelegationA_full_sound)
-open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationSpec refreshDelegationsMap)
+open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationFullSpec refreshDelegationsMap)
 
 /-- **REFRESH-DELEGATION circuit pins the intent delegations write.** A verifying `refreshDelegationE`
 witness forces the post-`delegations` map to be EXACTLY `refreshDelegationsMap … child` (the child's
 delegation refreshed, every other entry untouched). -/
 theorem refreshDelegation_circuit_pins_intent
-    (S : Surface2) (D : (CellId → List Dregg2.Authority.Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2)
+    (D : (CellId → List Dregg2.Authority.Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (hRest : Dregg2.Circuit.Inst.RefreshDelegationA.RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
     (h : satisfiedE2 S (refreshDelegationE D hD) (encodeE2 S (refreshDelegationE D hD) s args s')) :
     s'.kernel.delegations = refreshDelegationsMap s.kernel args.child := by
-  have hspec : RefreshDelegationSpec s args.actor args.child s' :=
+  have hspec : RefreshDelegationFullSpec s args.actor args.child s' :=
     refreshDelegationA_full_sound S D hD hRest hLog s args s' h
   exact hspec.2.1
 
 /-- **REFRESH-DELEGATION circuit anti-ghost.** -/
 theorem refreshDelegation_circuit_rejects_wrong_delegations
-    (S : Surface2) (D : (CellId → List Dregg2.Authority.Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2)
+    (D : (CellId → List Dregg2.Authority.Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (hRest : Dregg2.Circuit.Inst.RefreshDelegationA.RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
@@ -979,7 +981,7 @@ def intentAccountInsert (accounts : Finset CellId) (cell : CellId) : Finset Cell
 /-! ### §18a — CREATE-CELL: circuit pins the intent account-insert (Triple framework). -/
 
 open Dregg2.Circuit.Inst.CreateCellA (CreateCellArgs createCellE createCellA_full_sound)
-open Dregg2.Circuit.Spec.AccountGrowth (CreateCellSpec SpawnSpec)
+open Dregg2.Circuit.Spec.AccountGrowth (CreateCellSpec SpawnFullSpec)
 
 /-- **CREATE-CELL circuit pins the intent account-insert.** A verifying `createCellE` witness forces
 the post-`accounts` to be EXACTLY `intentAccountInsert … newCell` (the new cell brought to life). -/
@@ -1022,13 +1024,13 @@ theorem spawn_circuit_pins_intent
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Dregg2.Authority.Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Dregg2.Authority.Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : Dregg2.Circuit.Inst.SpawnA.RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : satisfiedE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs)
         (encodeE2Quint S (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) s args s')) :
     s'.kernel.accounts = intentAccountInsert s.kernel.accounts args.child := by
-  have hspec : SpawnSpec s args.actor args.child args.target s' :=
+  have hspec : SpawnFullSpec s args.actor args.child args.target s' :=
     spawnA_full_sound S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog s args s' h
   exact hspec.2.1
 
@@ -1039,7 +1041,7 @@ theorem spawn_circuit_rejects_wrong_accounts
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Dregg2.Authority.Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Dregg2.Authority.Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : Dregg2.Circuit.Inst.SpawnA.RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (hwrong : s'.kernel.accounts ≠ intentAccountInsert s.kernel.accounts args.child) :
