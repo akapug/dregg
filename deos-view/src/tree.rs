@@ -66,9 +66,14 @@ pub struct RawProps {
     pub text: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
-    #[serde(default)]
+    // The JS prelude (`deos.ui.button`) emits the camelCase key `onClick`; deserialize it
+    // by that name (with the snake_case alias kept) so the affordance `{turn, arg}` the
+    // engine produced survives the parse into BOTH renderers — the native `Button`'s
+    // on_click AND the web `<button data-turn data-arg>`. Without the rename the engine's
+    // `onClick` silently dropped to a `{turn:"", arg:0}` default.
+    #[serde(default, rename = "onClick", alias = "on_click")]
     pub on_click: Option<RawOnClick>,
-    #[serde(default, rename = "bindView")]
+    #[serde(default, rename = "bindView", alias = "bind_view")]
     pub bind_view: Option<String>,
     /// For a `bind` node the renderer needs to know WHICH model slot to re-read.
     /// The JS closure isn't serializable, so the applet author tags the bind node's
