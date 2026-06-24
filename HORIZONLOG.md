@@ -193,6 +193,20 @@ docs/RESEARCH-{handler-executor,predicate-language,epoch-cutover}.md (all 3 camp
 source, not harvest). Caveat-AST continuation (fan DreggGrant vocab / wire caveatsAdmit / 3-algebra convergence) +
 epoch flag-day (deferred, 2 of 3 residual-kinds now subsumed as floors) remain as named campaigns.
 
+### SOUNDNESS: per-effect faithfulness FORCED for every effect — the live-path force campaign COMPLETE (2026-06-24).
+The "dangerous-20-40%" campaign (ember: "60-80% built is the WARNING, not reassurance; the unfinished part is where soundness
+lives"). The census's bound-not-forced trio + the handler fronts are all CLOSED by WIRING/PROVING, NOT naming:
+noteSpend adjacency deployed-forced (`c2ad75a9` — the IR2 MapAbsent AIR; the census had mis-ID'd the standalone-AIR mechanism);
+heapWrite sorted-Merkle SPLICE deployed-forced (`6c501fa4` — the built MapOps wired in, WAS a name+tripwire ember caught);
+revoke epoch-bump forced (`6c501fa4` — epochBumpGate, frozen-epoch UNSAT); spawn/refresh birth-stamp forced (`93ca2c1c` —
+the ABSTRACT product funcComponent via digest injectivity: NOT a per-cell limb [vacuous, refused] nor a cross-row turn gate
+[doesn't exist, refused], both mis-scoped-by-me + corrected to the genuine force by the agents); handler frontier EMPTY
+(`f5c356777` — exercise_inner_fold proven + frozenface wired through the chained arms). Per-effect faithfulness is now FORCED
+(the deployed verify REJECTS the forgery), not bound-and-trusted. THE SOUNDNESS FRONTIER IS NOW THE IRREDUCIBLE CRYPTO FLOORS
+(StarkSound / Poseidon2-CR / WitnessDecodes — the TCB every verified system has). The verify-source + don't-launder-vacuity
+discipline (ember-enforced, twice) caught THREE mis-scoped approaches, each corrected to the genuine force. Durable census:
+metatheory/docs/SOUNDNESS-RESIDUAL-CENSUS.md.
+
 ### CIRCUIT-SOUNDNESS pre-codex review — 3 P1/P2 findings RESOLVED + named follow-ups (2026-06-23).
 Own adversarial pass before spending codex credits: single-transition unfoolability SOLID (no forge found). The 3
 findings were all "docs claim more than the artifact" — fixed (`ccee7ea21`): **P1 cross-turn freshness CLOSED BY
