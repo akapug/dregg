@@ -11,6 +11,10 @@ kzg = ["poly-commitment", "ark-ec", "ark-ff", "ark-poly", "ark-bn254", "ark-std"
 [dependencies]
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
+# JSON (de)serialization of the `ErasureChunk` / `AvailabilityManifest` DA bodies
+# the node's `/storage/{manifest,chunk}` routes return — used by the
+# `retrieval::HttpChunkSource` light-client adapter.
+serde_json = "1"
 
 # Vetted pure-Rust k-of-n Reed–Solomon erasure code over GF(2^8)
 # (Vandermonde, the same crate Substrate/parity use). Replaces the former

@@ -57,7 +57,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use dregg_cell::CellId;
+use dregg_storage::availability::{self, AvailabilityManifest};
 use dregg_storage::content::ContentStore;
+use dregg_storage::erasure::ErasureChunk;
 use dregg_storage::quota::SpaceBank;
 use dregg_storage::{ContentHash, QuotaId};
 use dregg_turn::action::{Event, symbol};
@@ -97,6 +99,12 @@ pub struct StorageGatewayConfig {
     pub quota_computrons: u64,
     /// Optional hard byte cap for the per-gateway quota cell.
     pub quota_max_bytes: Option<u64>,
+    /// Erasure chunk size (bytes) for the availability layer (the data-shard
+    /// size; smaller ⇒ more, finer chunks). `DREGG_STORAGE_DA_CHUNK_SIZE`.
+    pub da_chunk_size: usize,
+    /// Erasure expansion factor (`n_total = n_data * expansion`; ≥ 2). With 2,
+    /// any half the chunks suffice to reconstruct. `DREGG_STORAGE_DA_EXPANSION`.
+    pub da_expansion_factor: usize,
 }
 
 impl StorageGatewayConfig {
@@ -119,6 +127,14 @@ impl StorageGatewayConfig {
             allowed_ops: vec![StorageOp::Get, StorageOp::Put, StorageOp::List],
             quota_computrons: 1 << 40,
             quota_max_bytes: None,
+            da_chunk_size: std::env::var("DREGG_STORAGE_DA_CHUNK_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1024),
+            da_expansion_factor: std::env::var("DREGG_STORAGE_DA_EXPANSION")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2),
         }
     }
 }
@@ -149,6 +165,13 @@ pub struct StorageGatewayService {
     /// Object key index (key → blob). `ContentStore` is nameless by design;
     /// the gateway layer owns naming, scoped under the mandate prefix.
     objects: BTreeMap<String, StoredObject>,
+    /// Per-blob availability manifest (the small light-client record). Published
+    /// on PUT so a light client can fetch the manifest, then sample/reconstruct
+    /// from erasure chunks instead of trusting one server's whole-blob bytes.
+    /// The chunks themselves are NOT stored — they are re-derived deterministically
+    /// from the blob on demand (the encoder is a pure function of the bytes), so
+    /// any operator holding the blob can serve any chunk + its Merkle proof.
+    manifests: HashMap<ContentHash, AvailabilityManifest>,
 }
 
 impl StorageGatewayService {
@@ -160,7 +183,22 @@ impl StorageGatewayService {
             store: ContentStore::new(bank),
             quotas: HashMap::new(),
             objects: BTreeMap::new(),
+            manifests: HashMap::new(),
         }
+    }
+
+    /// Re-derive the erasure chunk at `index` for a stored blob, with its Merkle
+    /// proof against the manifest root. Returns `None` if the blob is absent or
+    /// the index is out of range. Deterministic: the encoder is a pure function
+    /// of the bytes, so the chunk + proof are identical to what PUT committed.
+    fn derive_chunk(&self, hash: &ContentHash, index: usize) -> Option<ErasureChunk> {
+        let data = self.store.read(hash)?;
+        let encoder = dregg_storage::erasure::ErasureEncoder::new(
+            self.config.da_chunk_size,
+            self.config.da_expansion_factor,
+        );
+        let chunks = encoder.encode(data);
+        chunks.into_iter().find(|c| c.index == index)
     }
 
     pub fn from_env() -> Self {
@@ -739,6 +777,13 @@ pub fn routes() -> Router<NodeState> {
         .route("/storage/stat/{hash}", get(get_storage_stat))
         .route("/storage/list", get(get_storage_list))
         .route("/storage/quota", get(get_storage_quota))
+        // ── Data-availability plane (k-of-n erasure retrieval) ───────────────
+        // The manifest a light client holds, and the per-chunk fetch (with its
+        // Merkle proof) it samples/reconstructs from. A client fetches chunks
+        // from MULTIPLE such nodes; a single node withholding does not break
+        // retrieval (any n_data of n_total chunks suffice).
+        .route("/storage/manifest/{hash}", get(get_storage_manifest))
+        .route("/storage/chunk/{hash}/{index}", get(get_storage_chunk))
 }
 
 #[derive(Serialize)]
@@ -848,6 +893,20 @@ async fn post_storage_put(
             size,
         },
     );
+
+    // Publish the availability manifest: erasure-encode the committed blob and
+    // hold its small content-addressed manifest, so a light client can fetch the
+    // manifest (`/storage/manifest/{hash}`) then sample/reconstruct from k-of-n
+    // erasure chunks (`/storage/chunk/{hash}/{index}`) — Plane B is no longer
+    // "trust one server's whole-blob bytes". The chunk bytes are re-derived on
+    // demand from the blob, so only the manifest is held.
+    let (manifest, _chunks) = availability::encode_bytes_for_availability(
+        &body,
+        inner.storage_gateway.config.da_chunk_size,
+        inner.storage_gateway.config.da_expansion_factor,
+    );
+    inner.storage_gateway.manifests.insert(stored, manifest);
+
     let volume_spent = admitted.new_spent;
     drop(s);
 
@@ -1049,6 +1108,108 @@ async fn get_storage_quota(
         volume_spent,
         volume_ceiling,
     }))
+}
+
+/// `GET /storage/manifest/{hash}` — the small content-addressed availability
+/// record a light client keeps. GET-class (clearance + debit), but returns only
+/// the manifest (commitments + thresholds), never blob bytes. With the manifest
+/// the client samples availability and reconstructs from k-of-n chunks fetched
+/// from (possibly multiple, possibly untrusted) operators.
+async fn get_storage_manifest(
+    State(state): State<NodeState>,
+    AxumPath(hash_hex): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<AvailabilityManifest>, StorageRefusal> {
+    let mut s = state.write().await;
+    let inner = &mut *s;
+
+    let gateway = resolve_gateway(inner, header_str(&headers, "x-dregg-storage-gateway"))?;
+    require_operator_authority(inner, gateway)?;
+    ensure_gateway_initialized(inner, gateway)?;
+
+    let hash = ContentHash(
+        hex_decode_32(&hash_hex)
+            .ok_or_else(|| StorageRefusal::BadRequest(format!("malformed hash: {hash_hex}")))?,
+    );
+    let key = inner
+        .storage_gateway
+        .key_for_hash(&hash)
+        .unwrap_or_else(|| format!("manifest:{hash_hex}"));
+
+    // GET-class admission (clearance enforced) BEFORE revealing existence.
+    let admitted = admit(
+        inner,
+        gateway,
+        StorageOp::Get,
+        &key,
+        header_str(&headers, "x-dregg-clearance"),
+    )?;
+
+    let manifest = inner
+        .storage_gateway
+        .manifests
+        .get(&hash)
+        .cloned()
+        .ok_or(StorageRefusal::NotFound)?;
+
+    let turn_hash = commit_storage_op(inner, gateway, StorageOp::Get, &key, admitted.new_spent, hash.0)?;
+    drop(s);
+    state.emit(crate::state::NodeEvent::Receipt {
+        hash: hex_encode(&turn_hash),
+    });
+
+    Ok(Json(manifest))
+}
+
+/// `GET /storage/chunk/{hash}/{index}` — one erasure-coded chunk + its Merkle
+/// proof against the manifest root. The chunk is re-derived deterministically
+/// from the stored blob (the encoder is a pure function of the bytes). A light
+/// client fetches `n_data` such chunks (from one or several nodes), verifies
+/// each against the manifest root it holds, and reconstructs. This is the route
+/// that makes a single node's withholding survivable: any `n_data` of `n_total`
+/// chunks — served by any operator holding the blob — reconstruct.
+async fn get_storage_chunk(
+    State(state): State<NodeState>,
+    AxumPath((hash_hex, index)): AxumPath<(String, usize)>,
+    headers: HeaderMap,
+) -> Result<Json<ErasureChunk>, StorageRefusal> {
+    let mut s = state.write().await;
+    let inner = &mut *s;
+
+    let gateway = resolve_gateway(inner, header_str(&headers, "x-dregg-storage-gateway"))?;
+    require_operator_authority(inner, gateway)?;
+    ensure_gateway_initialized(inner, gateway)?;
+
+    let hash = ContentHash(
+        hex_decode_32(&hash_hex)
+            .ok_or_else(|| StorageRefusal::BadRequest(format!("malformed hash: {hash_hex}")))?,
+    );
+    let key = inner
+        .storage_gateway
+        .key_for_hash(&hash)
+        .unwrap_or_else(|| format!("chunk:{hash_hex}:{index}"));
+
+    // GET-class admission (clearance enforced) BEFORE revealing the chunk.
+    let admitted = admit(
+        inner,
+        gateway,
+        StorageOp::Get,
+        &key,
+        header_str(&headers, "x-dregg-clearance"),
+    )?;
+
+    let chunk = inner
+        .storage_gateway
+        .derive_chunk(&hash, index)
+        .ok_or(StorageRefusal::NotFound)?;
+
+    let turn_hash = commit_storage_op(inner, gateway, StorageOp::Get, &key, admitted.new_spent, hash.0)?;
+    drop(s);
+    state.emit(crate::state::NodeEvent::Receipt {
+        hash: hex_encode(&turn_hash),
+    });
+
+    Ok(Json(chunk))
 }
 
 // =============================================================================
@@ -1446,5 +1607,152 @@ mod tests {
         // stat (2) + list (2) + put (5) debits so far.
         let s = state.write().await;
         assert_eq!(gateway_slot_u64(&s, gateway, VOLUME_SPENT_SLOT), 9);
+    }
+
+    // ── DATA-AVAILABILITY PLANE: retrieve k-of-n behind a verified commitment ─
+
+    /// Fetch the manifest for a PUT blob over the route.
+    async fn do_manifest(
+        state: &NodeState,
+        hash_hex: &str,
+    ) -> (StatusCode, Option<AvailabilityManifest>) {
+        let app = routes().with_state(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/storage/manifest/{hash_hex}"))
+                    .method("GET")
+                    .header("x-dregg-clearance", DEFAULT_READ_COMPARTMENT)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let manifest = serde_json::from_slice(&bytes).ok();
+        (status, manifest)
+    }
+
+    /// Fetch one erasure chunk + its proof over the route.
+    async fn do_chunk(
+        state: &NodeState,
+        hash_hex: &str,
+        index: usize,
+    ) -> (StatusCode, Option<ErasureChunk>) {
+        let app = routes().with_state(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/storage/chunk/{hash_hex}/{index}"))
+                    .method("GET")
+                    .header("x-dregg-clearance", DEFAULT_READ_COMPARTMENT)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let chunk = serde_json::from_slice(&bytes).ok();
+        (status, chunk)
+    }
+
+    /// **THE DA BAR (over the HTTP serving path).** PUT a blob; a light client
+    /// fetches its manifest, then retrieves k-of-n erasure chunks over the
+    /// `/storage/chunk` route — WITHHOLDING the first `n_total - n_data` chunks
+    /// (as a malicious/offline node would) — and still reconstructs, with every
+    /// chunk Merkle-verified against the manifest root. Then a FORGED chunk is
+    /// shown to fail its Merkle proof.
+    #[tokio::test]
+    async fn light_client_retrieves_k_of_n_over_the_serving_path() {
+        use dregg_storage::erasure;
+
+        let (state, _gateway, _dir) = seeded_state().await;
+        // A blob large enough to span several chunks (chunk size default 1024;
+        // use a small explicit size by env? — keep default, make blob big).
+        let body: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
+        let (status, json) = do_put(&state, Some("uploads/da.bin"), &body).await;
+        assert_eq!(status, StatusCode::OK, "PUT must succeed: {json}");
+        let hash_hex = json["hash"].as_str().unwrap().to_string();
+
+        // 1. The light client fetches the small manifest.
+        let (status, manifest) = do_manifest(&state, &hash_hex).await;
+        assert_eq!(status, StatusCode::OK);
+        let manifest = manifest.expect("manifest body");
+        assert_eq!(manifest.content_hash.0, *blake3::hash(&body).as_bytes());
+        assert!(manifest.n_total > manifest.n_data, "real redundancy");
+
+        // 2. Retrieval WITH WITHHOLDING: skip the first n_total - n_data chunks
+        // (simulating a node that withholds them); gather the surviving tail.
+        let withheld = manifest.n_total - manifest.n_data;
+        let mut gathered: Vec<ErasureChunk> = Vec::new();
+        for index in withheld..manifest.n_total {
+            let (st, chunk) = do_chunk(&state, &hash_hex, index).await;
+            assert_eq!(st, StatusCode::OK, "chunk {index} served");
+            let chunk = chunk.expect("chunk body");
+            // The light client verifies EVERY chunk against the manifest root it
+            // holds — an operator cannot forge a chunk into this set.
+            assert!(
+                erasure::verify_chunk_against_root(&chunk, &manifest.root),
+                "chunk {index} authenticates against the manifest root"
+            );
+            gathered.push(chunk);
+        }
+        assert_eq!(gathered.len(), manifest.n_data, "exactly k survivors");
+
+        // 3. Reconstruct from the k survivors — content-hash bound.
+        let recovered = availability::reconstruct(&manifest, &gathered)
+            .expect("k-of-n survivors reconstruct the verified blob");
+        assert_eq!(recovered, body, "retrieved bytes == the committed blob");
+
+        // 4. A FORGED chunk (tampered data, recomputed leaf) is rejected by its
+        // Merkle proof against the manifest root — it cannot enter the set.
+        let mut forged = gathered[0].clone();
+        forged.data[0] ^= 0xFF;
+        forged.commitment = erasure::chunk_commitment_dual(&forged.data).blake3;
+        assert!(erasure::verify_chunk(&forged), "integrity passes (recomputed leaf)");
+        assert!(
+            !erasure::verify_chunk_against_root(&forged, &manifest.root),
+            "but Merkle membership against the manifest root REJECTS the forgery"
+        );
+    }
+
+    /// The manifest/chunk routes are GET-class: they enforce read-compartment
+    /// clearance, so an unauthorized fetch is refused (no DA bypass of the gate).
+    #[tokio::test]
+    async fn manifest_and_chunk_routes_enforce_clearance() {
+        let (state, _gateway, _dir) = seeded_state().await;
+        let body = b"clearance-gated availability".repeat(64);
+        let (status, json) = do_put(&state, Some("uploads/gated.bin"), &body).await;
+        assert_eq!(status, StatusCode::OK);
+        let hash_hex = json["hash"].as_str().unwrap().to_string();
+
+        let app = routes().with_state(state.clone());
+        // No clearance header ⇒ FORBIDDEN on the manifest route.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/storage/manifest/{hash_hex}"))
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "manifest needs clearance");
+
+        let app = routes().with_state(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/storage/chunk/{hash_hex}/0"))
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "chunk needs clearance");
     }
 }
