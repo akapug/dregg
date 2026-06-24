@@ -33,6 +33,30 @@ impl Render for Cockpit {
         // can step through wherever you've been (the nav API made navigable).
         self.record_nav();
 
+        // MAKE YOUR FIRST CARD: when a first-timer has just minted their first card
+        // (clicked "make your first card →" on the calm first-view), meet the
+        // dedicated FIRST-CARD view — the real editable card LIVE, its +1 (a real
+        // verified turn), and two edit affordances (each a receipted patch) — INSTEAD
+        // of the full wall. Returned early (before the heavy pane-group setup), the
+        // closed onboarding loop "I'm in → I made a thing." "explore everything"
+        // dismisses it into the full frame; the card stays minted on the ledger.
+        #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+        if self.first_card.is_some() {
+            return div()
+                .id("cockpit-root")
+                .track_focus(&self.focus)
+                .key_context("Cockpit")
+                .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
+                    this.on_key(ev, cx);
+                }))
+                .size_full()
+                .bg(theme::bg())
+                .text_color(theme::text())
+                .font_family("Menlo")
+                .child(self.first_card_view(cx))
+                .into_any_element();
+        }
+
         // FIRST-RUN: a brand-new owner meets the calm, sparse first-view — a warm
         // welcome, a few clickable cells, ONE gentle "try this" — INSTEAD of the
         // full 5-mode wall. Returned early (before the heavy pane-group / web-shell
@@ -81,6 +105,12 @@ impl Render for Cockpit {
         // moldable panel can host the cached `CardPane` entity this very frame.
         #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
         self.ensure_inspector_card(cx);
+        // THE LIVE LAYOUT CELL (rung 3) — seed the cockpit's own structure (its
+        // mode→surface arrangement) as a deos-js layout card, so the rail + sub-navs
+        // below READ it instead of the hardcoded `CockpitMode::surfaces`. Cheap (pure
+        // data, no gpui entity), built once; a `move:` affordance reshapes it in place.
+        #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+        self.ensure_layout_card();
         // THE SIX LANDED CARDS — build (or rebuild on a focus change) each card that IS a
         // cockpit mode's main-pane surface, over the live `World`. Built here on the paint
         // path (entity creation needs a live `&mut Context`), so the `&self` dispatch can
