@@ -16,6 +16,13 @@ impl Cockpit {
                 .collect::<String>()
         };
         let want = norm(name);
+        // The ⌘K palette is an overlay, not a Tab — but the headless bake reaches
+        // surfaces by name (`--render-tab`), so honor "palette" by opening it. This
+        // lets the bake capture the palette (and its now-scrollable result list).
+        if want == "palette" {
+            self.palette.open();
+            return true;
+        }
         for &t in Tab::ALL.iter() {
             if norm(t.label()) == want {
                 self.tab = t;
@@ -308,6 +315,7 @@ impl Cockpit {
             killer_demo_lines: Vec::new(),
             pending_seed,
             palette: CommandPalette::new(),
+            palette_scroll: UniformListScrollHandle::new(),
             focus,
             live_node,
             live_stream,

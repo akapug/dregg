@@ -25,8 +25,9 @@ pub(crate) use std::cell::RefCell;
 pub(crate) use std::rc::Rc;
 
 pub(crate) use gpui::{
-    div, prelude::*, px, AnyElement, App, Context, Entity, FocusHandle, Hsla, IntoElement,
-    KeyDownEvent, MouseButton, ParentElement, Render, SharedString, Styled, WeakEntity, Window,
+    div, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle, Hsla,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, ScrollStrategy, SharedString,
+    Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 
 pub(crate) use dregg_cell::CellId;
@@ -694,6 +695,11 @@ pub struct Cockpit {
     /// it keystrokes and dispatches its selected `CommandId` through the same
     /// `&mut Cockpit` verbs the buttons call.
     palette: CommandPalette,
+    /// Scroll handle for the palette's result list, so keyboard navigation
+    /// (↑/↓) can scroll the highlighted row back into view — the list
+    /// virtualizes over the FULL match set (no fixed cap), so every matched
+    /// command is reachable by mouse-scroll AND by holding arrow-down.
+    palette_scroll: UniformListScrollHandle,
     /// Focus handle for the root, so the cockpit receives key events.
     focus: FocusHandle,
 
