@@ -820,7 +820,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "eef50da1c64b56abff66dd74e6a6c119384ea98b15f34c05c2a96e81458e8e10";
+    "672664762a2276109dfd336aa548b67c8ba33bfe3794948c3f011f4da34131f5";
 
 /// **THE FAITHFUL 8-FELT WIDE TRANSFER descriptor (STAGED-ADDITIVE slice).** The
 /// `v3RegistryWide` transfer member (`wideAppend transferV3 bb (bb+51)`, width 816 / PI 54) —
@@ -1971,7 +1971,7 @@ mod tests {
             }
         }
         assert_eq!(
-            n, 56,
+            n, 57,
             "expected the 36-member rotated cohort (28 v2-graduated + 8 widened) + the 6 fan-out \
              cap-open members (delegate/introduce/grantCap/revoke/refreshDelegation/revokeCapability \
              — each *CapOpenVmDescriptor2R24) + the 2 LIVE effect-general legs \
@@ -1992,7 +1992,11 @@ mod tests {
              exerciseCapOpenVmDescriptor2R24 — `Rfix 16` re-pointed; the FROZEN exercise base + the \
              EFF_EXERCISE depth-16 cap-membership crown forcing the exercise hold-gate \
              `exerciseGuard`'s `confersEdgeTo target` membership in-circuit — the LAST named cap-open \
-             residual CLOSED). \
+             residual CLOSED) + the DEDICATED SUPPLY-MINT (supplyMintVmDescriptor2R24, SUPPLY-MODEL.md \
+             Stage 2b — the turn-layer `Effect::Mint` on its OWN selector `sel::MINT = 14`; the SAME \
+             proven credit/tick/freeze body as mintVmDescriptor2R24 save the appended selectorGate \
+             operand, so it proves + self-verifies under a dedicated selector, not by riding \
+             BridgeMint's). \
              The Signature-pinned capOpenAttenuateV3/transferCapOpenV3 were DELETED (Stage D)."
         );
     }

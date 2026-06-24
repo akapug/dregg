@@ -303,6 +303,31 @@ pub(super) fn convert_turn_effects_to_vm(
                     });
                 }
 
+                Effect::Mint {
+                    target,
+                    slot,
+                    amount,
+                } if target == cell_id => {
+                    // SUPPLY-MODEL.md Stage 2b: the dedicated cap-gated supply-mint
+                    // credits `target`'s balance by `amount` (well → holder). The VM
+                    // effect mirrors BridgeMint's body (credit at param1) but fires
+                    // the dedicated `sel::MINT` selector, routing to
+                    // `supplyMintVmDescriptor2R24`. `mint_hash` binds (target, slot)
+                    // so the prover commits to which (cell, slot) the supply entered.
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update(target.as_bytes());
+                    hasher.update(&slot.to_le_bytes());
+                    let mint_hash_bytes = hasher.finalize();
+                    let value_lo = dregg_circuit::field::BabyBear::new(
+                        (*amount & ((1u64 << 30) - 1)) as u32,
+                    );
+                    vm_effects.push(VmEffect::Mint {
+                        value_lo,
+                        mint_hash: hash_to_bb(mint_hash_bytes.as_bytes()),
+                        value_full: *amount,
+                    });
+                }
+
                 Effect::Introduce {
                     introducer,
                     recipient,

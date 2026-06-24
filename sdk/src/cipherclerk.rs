@@ -6389,6 +6389,28 @@ impl AgentCipherclerk {
                     });
                 }
 
+                // -- Mint (dedicated supply-creation, SUPPLY-MODEL.md Stage 2b) --
+                // MUST match the executor projector (`effect_vm_bridge.rs`)
+                // byte-for-byte (the protocol-tests differential invariant). The
+                // mint_hash binds (target, slot); the credit rides param1; the VM
+                // effect fires `sel::MINT`, routing to supplyMintVmDescriptor2R24.
+                Effect::Mint {
+                    target,
+                    slot,
+                    amount,
+                } if target == cell_id => {
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update(target.as_bytes());
+                    hasher.update(&slot.to_le_bytes());
+                    let mint_hash_bytes = hasher.finalize();
+                    let value_lo = BabyBear::new((amount & ((1u64 << 30) - 1)) as u32);
+                    vm_effects.push(VmEffect::Mint {
+                        value_lo,
+                        mint_hash: hash_to_bb(mint_hash_bytes.as_bytes()),
+                        value_full: *amount,
+                    });
+                }
+
                 // -- Introduce / pipelined send ---------------------------------
                 Effect::Introduce {
                     introducer,
