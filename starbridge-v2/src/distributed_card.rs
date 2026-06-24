@@ -203,7 +203,11 @@ pub fn rehydrate_fork(
 /// first-class [`dregg_doc::ConflictRegion`] (both attributed alternatives live —
 /// never a silent overwrite). An unauthorized recipient's `b_fork` never advanced past
 /// the seed (its edits were refused in-band), so it contributes no patch.
-pub fn stitch_with_fork(a: &CardForkEnvelope, b_card: &SharedCard, b_fork: &CardFork) -> CardStitch {
+pub fn stitch_with_fork(
+    a: &CardForkEnvelope,
+    b_card: &SharedCard,
+    b_fork: &CardFork,
+) -> CardStitch {
     CardStitch::from_sources(
         &a.seed_view_source,
         a.author(),
@@ -286,8 +290,8 @@ impl std::error::Error for DistributedCardError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deos_js::coauthored_card::drive_view;
     use deos_js::ViewPatch;
+    use deos_js::coauthored_card::drive_view;
 
     /// The authoring authority the shared card requires (the broadest — `None`).
     fn authority() -> AuthRequired {
@@ -320,7 +324,8 @@ mod tests {
         // ── B (instance 2): OPEN the envelope (the anti-substitution root tooth admits
         //    the genuine card), REHYDRATE B's OWN live fork over the carried seed, and
         //    drive a DISJOINT edit (add a button — a different node) on B's view doc. ──
-        let env_a = open_envelope(&bytes, root).expect("the root tooth admits the genuine envelope");
+        let env_a =
+            open_envelope(&bytes, root).expect("the root tooth admits the genuine envelope");
         let (b_card, mut b_fork) = rehydrate_fork(&env_a, root, BOB, authority())
             .expect("B rehydrates a real live cap-bounded fork");
         let edit_b = drive_view(
@@ -463,7 +468,11 @@ mod tests {
 
         // (1) GENUINE: the envelope opens and re-derives the claimed root byte-for-byte.
         let env = open_envelope(&bytes, root).expect("the genuine envelope opens");
-        assert_eq!(env.fork_root(), root, "the carried envelope reproduces its root");
+        assert_eq!(
+            env.fork_root(),
+            root,
+            "the carried envelope reproduces its root"
+        );
         // Wire byte-identity: the envelope survives serialize → deserialize intact.
         assert_eq!(
             CardForkEnvelope::from_snapshot_bytes(&bytes).expect("round-trips"),
@@ -475,7 +484,9 @@ mod tests {
         //     against the original root MUST fail-closed (a substituted card is refused
         //     before a single byte is trusted) — the membrane's anti-substitution tooth.
         let mut tampered = env.clone();
-        tampered.driven_view_source.push_str("\n<<bob's sneaky injected node>>");
+        tampered
+            .driven_view_source
+            .push_str("\n<<bob's sneaky injected node>>");
         let tampered_bytes = tampered.to_snapshot_bytes();
         assert!(
             matches!(
@@ -539,7 +550,10 @@ mod tests {
         assert!(!via_envelopes.has_conflict() && !via_fork.has_conflict());
         for stitch in [&via_envelopes, &via_fork] {
             let merged = stitch.marked();
-            assert!(merged.contains("alice's counter"), "A's edit kept: {merged}");
+            assert!(
+                merged.contains("alice's counter"),
+                "A's edit kept: {merged}"
+            );
             assert!(
                 merged.contains("increment") || merged.contains("\"inc\""),
                 "B's edit kept: {merged}"

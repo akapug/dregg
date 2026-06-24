@@ -490,7 +490,10 @@ mod tests {
         assert!(step_admissible(WorkflowVerb::Gather, &HashSet::new()));
         assert!(!step_admissible(WorkflowVerb::Make, &HashSet::new()));
         assert!(step_admissible(WorkflowVerb::Make, &HashSet::from([0])));
-        assert!(step_admissible(WorkflowVerb::Handoff, &HashSet::from([0, 1])));
+        assert!(step_admissible(
+            WorkflowVerb::Handoff,
+            &HashSet::from([0, 1])
+        ));
     }
 
     #[test]

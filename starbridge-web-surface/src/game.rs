@@ -92,8 +92,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use dregg_cell::is_attenuation;
 use dregg_cell::AuthRequired;
+use dregg_cell::is_attenuation;
 use dregg_turn::{Effect, Event};
 use dregg_types::CellId;
 
@@ -1013,19 +1013,19 @@ impl Board {
                     return Some(GameOver {
                         winner: Side::Red,
                         reason: WinReason::Decapitation,
-                    })
+                    });
                 }
                 (true, false) => {
                     return Some(GameOver {
                         winner: Side::Blue,
                         reason: WinReason::Decapitation,
-                    })
+                    });
                 }
                 (false, false) => {
                     return Some(GameOver {
                         winner: Side::Blue,
                         reason: WinReason::Decapitation,
-                    })
+                    });
                 } // both gone: caller-defined; Blue by default
                 (true, true) => {}
             }
@@ -1430,7 +1430,8 @@ impl AgentPlayer {
         // What enemies can the agent SEE (fog applies to the agent too)? A set, so
         // the per-candidate capture-now membership check below is O(log n), not O(n).
         let view = board.project_for(self.side, Rehydration::Live);
-        let visible_enemies: BTreeSet<Coord> = view.visible_enemies().iter().map(|u| u.at).collect();
+        let visible_enemies: BTreeSet<Coord> =
+            view.visible_enemies().iter().map(|u| u.at).collect();
 
         // A capture that is available RIGHT NOW is taken by every policy (a free kill,
         // especially a decapitation, is always worth it).
@@ -1994,10 +1995,12 @@ mod tests {
         let mut board = small_board();
 
         // Initially Blue cannot see Red.
-        assert!(board
-            .project_for(Side::Blue, Rehydration::Live)
-            .visible_enemies()
-            .is_empty());
+        assert!(
+            board
+                .project_for(Side::Blue, Rehydration::Live)
+                .visible_enemies()
+                .is_empty()
+        );
 
         // Manually advance Blue's scout toward Red over several plies (alternating
         // turns; Red passes by re-stating position via a no-move we skip — we just
@@ -2500,17 +2503,23 @@ mod tests {
         let referee = VisionDeck::referee();
         let bmsg = board.vision_signing_message(Side::Blue, Coord::new(0, 0));
         let rmsg = board.vision_signing_message(Side::Red, Coord::new(4, 4));
-        assert!(board
-            .prove_vision(&referee, Side::Blue, Side::Blue, &bmsg)
-            .is_ok());
-        assert!(board
-            .prove_vision(&referee, Side::Red, Side::Red, &rmsg)
-            .is_ok());
+        assert!(
+            board
+                .prove_vision(&referee, Side::Blue, Side::Blue, &bmsg)
+                .is_ok()
+        );
+        assert!(
+            board
+                .prove_vision(&referee, Side::Red, Side::Red, &rmsg)
+                .is_ok()
+        );
         // And the referee can also prove the cross — because it holds both secrets
         // (it is the engine, not a player). A PLAYER deck cannot (tested above).
-        assert!(board
-            .prove_vision(&referee, Side::Blue, Side::Red, &rmsg)
-            .is_ok());
+        assert!(
+            board
+                .prove_vision(&referee, Side::Blue, Side::Red, &rmsg)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2632,9 +2641,11 @@ mod tests {
             "a move onto impassable terrain is never declared"
         );
         // An open adjacent tile IS a legal declared move.
-        assert!(surface
-            .get(&move_name(&unit.name, Coord::new(0, 1)))
-            .is_some());
+        assert!(
+            surface
+                .get(&move_name(&unit.name, Coord::new(0, 1)))
+                .is_some()
+        );
     }
 
     // ── Objectives: capturing a control point is a cap-gated EmitEvent turn. ──

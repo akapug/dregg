@@ -346,7 +346,11 @@ where
     /// verdict deos sends back and a record of what the brain composed (the script + the
     /// receipts the bounded story landed; on an over-reach the receipts are empty and the
     /// in-band refusal rides the record's `js_error`-free `result`).
-    pub fn run_call(&mut self, call: &ToolCallRequest, now: i64) -> (PermissionOutcome, JsRunRecord) {
+    pub fn run_call(
+        &mut self,
+        call: &ToolCallRequest,
+        now: i64,
+    ) -> (PermissionOutcome, JsRunRecord) {
         let sink = (self.sink_factory)();
         let mut record = JsRunRecord {
             tool_call_id: call.tool_call_id.clone(),
@@ -354,9 +358,14 @@ where
             ..Default::default()
         };
 
-        let outcome = self
-            .tool
-            .run_attached_on(&mut self.rt, sink, &mut self.gateway, call, now, &record.script);
+        let outcome = self.tool.run_attached_on(
+            &mut self.rt,
+            sink,
+            &mut self.gateway,
+            call,
+            now,
+            &record.script,
+        );
 
         record.result = outcome.result;
         // The committed legs the brain's compose landed (the multi-cell receipt tape).

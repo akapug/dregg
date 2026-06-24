@@ -195,7 +195,11 @@ impl DreggRuntime {
             .ledger
             .get_mut(&owner_cell)
             .ok_or_else(|| "surface cell vanished".to_string())?;
-        if let Some(slot) = cell.capabilities.lookup_by_target(&owner_cell).map(|c| c.slot) {
+        if let Some(slot) = cell
+            .capabilities
+            .lookup_by_target(&owner_cell)
+            .map(|c| c.slot)
+        {
             cell.capabilities.revoke(slot);
         }
         cell.capabilities.grant(owner_cell, rights);
@@ -403,7 +407,11 @@ impl DreggRuntime {
             Some(c) => c,
             None => return Ok(false),
         };
-        match cell.capabilities.lookup_by_target(&surface_cell).map(|c| c.slot) {
+        match cell
+            .capabilities
+            .lookup_by_target(&surface_cell)
+            .map(|c| c.slot)
+        {
             Some(slot) => Ok(cell.capabilities.revoke(slot)),
             None => Ok(false),
         }
@@ -516,7 +524,9 @@ mod tests {
     #[test]
     fn open_surface_returns_live_identity_from_ledger() {
         let mut rt = rt_with_two_agents();
-        let id = rt.open_surface(0, "either").expect("alice opens her cell as a surface");
+        let id = rt
+            .open_surface(0, "either")
+            .expect("alice opens her cell as a surface");
         // The badge is drawn from the live cell, not a page claim. Alice started
         // at 20_000, paid the 2_000 mint fee for bob AND transferred 5_000 to
         // fund bob → 13_000 live.
@@ -540,7 +550,10 @@ mod tests {
         // ...but presenting at the WIDER None authority exceeds the held mirror
         // — refused by the real is_attenuation direction.
         let wide = rt.present_surface(0, 0, "none").unwrap();
-        assert!(!wide.ok, "a read-only mirror must NOT be able to draw wider");
+        assert!(
+            !wide.ok,
+            "a read-only mirror must NOT be able to draw wider"
+        );
         assert!(wide.reason.contains("exceeds held"));
     }
 
@@ -552,9 +565,19 @@ mod tests {
         // Alice shares a READ-ONLY (Signature) view with Bob — attenuating,
         // commits through the real executor.
         let share = rt.share_surface(0, 1, 0, "signature").unwrap();
-        assert!(share.ok, "an attenuating read-only share must commit: {}", share.reason);
-        assert!(rt.surface_holds_cap(1, 0).unwrap(), "bob holds the shared surface cap");
-        assert_eq!(rt.surface_rights_held(1, 0).unwrap().as_deref(), Some("Signature"));
+        assert!(
+            share.ok,
+            "an attenuating read-only share must commit: {}",
+            share.reason
+        );
+        assert!(
+            rt.surface_holds_cap(1, 0).unwrap(),
+            "bob holds the shared surface cap"
+        );
+        assert_eq!(
+            rt.surface_rights_held(1, 0).unwrap().as_deref(),
+            Some("Signature")
+        );
 
         // Bob can present read-only (he holds Signature)...
         assert!(rt.present_surface(1, 0, "signature").unwrap().ok);
@@ -583,11 +606,20 @@ mod tests {
         // Before revoke: bob can present.
         assert!(rt.present_surface(1, 0, "signature").unwrap().ok);
         // Revoke bob's pane — synchronous at n=1.
-        assert!(rt.revoke_surface(1, 0).unwrap(), "revoke removes the live cap");
-        assert!(!rt.surface_holds_cap(1, 0).unwrap(), "cap dead the instant revoke returns");
+        assert!(
+            rt.revoke_surface(1, 0).unwrap(),
+            "revoke removes the live cap"
+        );
+        assert!(
+            !rt.surface_holds_cap(1, 0).unwrap(),
+            "cap dead the instant revoke returns"
+        );
         // After revoke: present is refused — the glass is dark this frame.
         let after = rt.present_surface(1, 0, "signature").unwrap();
-        assert!(!after.ok, "a revoked window cannot paint even one more frame at n=1");
+        assert!(
+            !after.ok,
+            "a revoked window cannot paint even one more frame at n=1"
+        );
         // Revoking an already-dead cap is a no-op false.
         assert!(!rt.revoke_surface(1, 0).unwrap());
     }

@@ -44,26 +44,26 @@ pub mod program_doc;
 pub mod reflect_binding;
 pub mod signals;
 
-pub use agent_card::{AgentAction, AgentCard, MandateEdge, AGENT_NONCE_SLOT};
+pub use agent_card::{AGENT_NONCE_SLOT, AgentAction, AgentCard, MandateEdge};
 pub use applet::{Affordance, Applet, CellModel, FireError, TranscludeError, Transclusion};
 pub use attach::{
-    mint_id_of, AttachedAffordance, AttachedApplet, AttachedComposer, ComposeError, ComposeStep,
-    LiveComposition, WorldSink,
+    AttachedAffordance, AttachedApplet, AttachedComposer, ComposeError, ComposeStep,
+    LiveComposition, WorldSink, mint_id_of,
 };
-pub use reflect_binding::id_hex;
 pub use card_editor::Author;
 pub use card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
-pub use coauthored_card::{CardFork, CardStitch, SharedCard, COUNT_SLOT};
+pub use coauthored_card::{COUNT_SLOT, CardFork, CardStitch, SharedCard};
 pub use composer_card::{ComposedChild, ComposerCard, ComposerViewEdit, Role as ComposerRole};
-pub use dynamics_card::{DynamicsCard, FeedEntry, FEED_LEN_SLOT};
-pub use graph_card::{GraphCard, GraphRow, GRAPH_AUTHORSHIP_SLOT};
-pub use inspector_card::{InspectorCard, INSPECTOR_AUTHORSHIP_SLOT};
+pub use dynamics_card::{DynamicsCard, FEED_LEN_SLOT, FeedEntry};
+pub use graph_card::{GRAPH_AUTHORSHIP_SLOT, GraphCard, GraphRow};
+pub use inspector_card::{INSPECTOR_AUTHORSHIP_SLOT, InspectorCard};
 pub use js::{
-    set_current_composer, set_current_editor, take_current_composer, take_current_editor,
-    take_last_compose, ComposeOutcome, ComposeRunOutcome, JsRuntime, JsTarget,
+    ComposeOutcome, ComposeRunOutcome, JsRuntime, JsTarget, set_current_composer,
+    set_current_editor, take_current_composer, take_current_editor, take_last_compose,
 };
-pub use layout_card::{LayoutCard, LayoutMode, LayoutModel, LayoutPatch, LAYOUT_AUTHORSHIP_SLOT};
-pub use links_card::{BacklinkRow, LinksCard, LINK_COUNT_SLOT};
-pub use objects_card::{ObjectRow, ObjectsCard, OBJECTS_AUTHORSHIP_SLOT};
+pub use layout_card::{LAYOUT_AUTHORSHIP_SLOT, LayoutCard, LayoutMode, LayoutModel, LayoutPatch};
+pub use links_card::{BacklinkRow, LINK_COUNT_SLOT, LinksCard};
+pub use objects_card::{OBJECTS_AUTHORSHIP_SLOT, ObjectRow, ObjectsCard};
 pub use portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 pub use program_doc::{GadgetCite, ProgramSource, TranscludedFragment};
+pub use reflect_binding::id_hex;

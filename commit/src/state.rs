@@ -87,6 +87,13 @@ impl TokenState {
         self.factset.root()
     }
 
+    /// Read the Merkle root without mutating `self` (so a caller holding a
+    /// `&TokenState` need not clone it just to read the root). Identical to
+    /// [`root`](Self::root).
+    pub fn root_immutable(&self) -> [u8; 32] {
+        self.factset.root_immutable()
+    }
+
     /// Generate a membership proof for a fact.
     pub fn membership_proof(&self, fact: &Fact) -> Option<MerkleProof> {
         self.factset.membership_proof(fact)

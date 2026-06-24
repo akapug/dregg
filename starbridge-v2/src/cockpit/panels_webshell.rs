@@ -439,11 +439,7 @@ impl Cockpit {
     /// A gpui POINTER-MOVE over the tile → a live page pointer move (drives `:hover` /
     /// cursor). Cheap pump — a hover repaint is small; many of these arrive.
     #[cfg(feature = "web-shell")]
-    pub(crate) fn webshell_live_move(
-        &mut self,
-        ev: &gpui::MouseMoveEvent,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn webshell_live_move(&mut self, ev: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
         let Some((x, y)) = self.webshell_local_point(ev.position) else {
             return;
         };
@@ -468,11 +464,7 @@ impl Cockpit {
         key: servo_render::webview::NamedWebKey,
         cx: &mut Context<Self>,
     ) {
-        self.webshell_apply_live_input(
-            servo_render::webview::WebInput::KeyNamed { key },
-            96,
-            cx,
-        );
+        self.webshell_apply_live_input(servo_render::webview::WebInput::KeyNamed { key }, 96, cx);
     }
 
     /// **THE KEY ROUTE — a keystroke on the focused page tile → the live WebView.** The
@@ -895,14 +887,12 @@ impl Cockpit {
                         // tile holds focus. A delivered key is stopped here (it does
                         // not also bubble to the cockpit's `on_key`); a ⌘/Ctrl chord
                         // is left to bubble (so ⌘K / ⌘J / nav still work).
-                        .on_key_down(cx.listener(
-                            |this, ev: &gpui::KeyDownEvent, window, cx| {
-                                if this.webshell_tile_on_key(ev, cx) {
-                                    cx.stop_propagation();
-                                    window.prevent_default();
-                                }
-                            },
-                        ));
+                        .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, window, cx| {
+                            if this.webshell_tile_on_key(ev, cx) {
+                                cx.stop_propagation();
+                                window.prevent_default();
+                            }
+                        }));
                 } else {
                     // Handle not yet seeded (the very first paint): the click still
                     // drives the live page; the focus/key wire arrives next frame once

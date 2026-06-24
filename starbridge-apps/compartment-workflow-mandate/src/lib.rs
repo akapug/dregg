@@ -889,9 +889,21 @@ mod tests {
     fn step_admissible_matches_lean_charter() {
         assert!(step_admissible(0, &HashSet::new(), WorkflowPhase::Review));
         assert!(!step_admissible(1, &HashSet::new(), WorkflowPhase::Redact));
-        assert!(step_admissible(1, &HashSet::from([0]), WorkflowPhase::Redact));
-        assert!(step_admissible(2, &HashSet::from([0, 1]), WorkflowPhase::Sign));
-        assert!(!step_admissible(2, &HashSet::from([0]), WorkflowPhase::Sign));
+        assert!(step_admissible(
+            1,
+            &HashSet::from([0]),
+            WorkflowPhase::Redact
+        ));
+        assert!(step_admissible(
+            2,
+            &HashSet::from([0, 1]),
+            WorkflowPhase::Sign
+        ));
+        assert!(!step_admissible(
+            2,
+            &HashSet::from([0]),
+            WorkflowPhase::Sign
+        ));
     }
 
     #[test]

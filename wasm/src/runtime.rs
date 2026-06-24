@@ -672,9 +672,7 @@ impl DreggRuntime {
     /// Returns `Err` only when the turn is unknown or the proof fails its own
     /// verification (which would indicate a substrate bug, not a sim gap).
     pub fn prove_turn(&mut self, turn_hash: [u8; 32]) -> Result<(), String> {
-        use dregg_circuit::{
-            BabyBear, CellState, Effect as VmEffect, extract_net_delta,
-        };
+        use dregg_circuit::{BabyBear, CellState, Effect as VmEffect, extract_net_delta};
 
         if self.turn_proofs.contains_key(&turn_hash) {
             return Ok(());
@@ -1668,8 +1666,8 @@ impl DreggRuntime {
                 format!("invalid agent index: {agent_idx}"),
             )
         })?;
-        let transition: dregg_cell_crypto::PeerStateTransition = postcard::from_bytes(transition_bytes)
-            .map_err(|e| {
+        let transition: dregg_cell_crypto::PeerStateTransition =
+            postcard::from_bytes(transition_bytes).map_err(|e| {
                 (
                     "DecodeError".to_string(),
                     format!("failed to decode peer transition: {e}"),
@@ -2662,7 +2660,9 @@ impl dregg_cell::WitnessedPredicateVerifier for EdThresholdVerifier {
         use dregg_types::{PublicKey, Signature, verify};
 
         let message = match input {
-            dregg_cell::PredicateInput::AuthContext { signing_message, .. } => *signing_message,
+            dregg_cell::PredicateInput::AuthContext {
+                signing_message, ..
+            } => *signing_message,
             dregg_cell::PredicateInput::SigningMessage(bytes) => *bytes,
             _ => {
                 return Err(E::InputShapeMismatch {

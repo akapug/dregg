@@ -586,7 +586,7 @@ fn run_window(
     seed: world::DemoSeed,
     node_url: Option<String>,
 ) {
-    use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
+    use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
     use gpui_platform::application;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -717,7 +717,7 @@ fn run_window(
 ///     slate.
 #[cfg(feature = "gpui-ui")]
 fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mut gpui::App) {
-    use gpui::{rgb, Hsla};
+    use gpui::{Hsla, rgb};
     use gpui_component::{Theme, ThemeMode};
 
     let mode = if force_dark {
@@ -748,9 +748,9 @@ fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mu
     let muted: Hsla = rgb(0x7d8794).into();
     let accent: Hsla = rgb(0x6cb6ff).into(); // the blue the cockpit accents with
     let on_accent: Hsla = rgb(0x0e1116).into(); // dark text on the bright accent
-                                                // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
-                                                // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
-                                                // matches a hand-rolled status pill exactly.
+    // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
+    // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
+    // matches a hand-rolled status pill exactly.
     let good: Hsla = rgb(0x57d977).into();
     let warn: Hsla = rgb(0xe3b341).into();
     let bad: Hsla = rgb(0xe5534b).into();
@@ -1014,11 +1014,7 @@ fn render_first_card_arg(args: &[String]) -> Option<String> {
 /// Parse the `--render-webshell-live <out>` (or `=<out>`) argument — the output base
 /// path for THE LIVE WEB-SHELL bake (a real page in the cockpit web-shell pane, then
 /// a scroll input causing a re-render). `<out>.before.png` / `<out>.after.png`.
-#[cfg(all(
-    feature = "render-capture",
-    feature = "gpui-ui",
-    feature = "web-shell"
-))]
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "web-shell"))]
 fn render_webshell_live_arg(args: &[String]) -> Option<String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -1301,7 +1297,7 @@ fn serve_ie6_arg(args: &[String]) -> Option<u16> {
 /// the real verified cockpit — server-side state, a round-trip per click.
 #[cfg(feature = "render-capture")]
 fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -1369,7 +1365,9 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
     })?;
 
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    println!("IE6 cockpit server: http://127.0.0.1:{port}/   (the live verified cockpit, for timetravelers)");
+    println!(
+        "IE6 cockpit server: http://127.0.0.1:{port}/   (the live verified cockpit, for timetravelers)"
+    );
 
     fn qget(q: &str, key: &str) -> Option<String> {
         q.split('&').find_map(|kv| {
@@ -1540,7 +1538,7 @@ fn html_escape(s: &str) -> String {
 #[cfg(feature = "render-capture")]
 fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     use cockpit::NavAction;
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -1733,7 +1731,7 @@ fn render_cockpit_headless(
     tab: Option<&str>,
     first_run: bool,
 ) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -1890,9 +1888,9 @@ fn render_cockpit_headless(
 ///    `<out>.png` — the agent's modified field is on the glass.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "agent-js"))]
 fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
+    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter, attach_agent};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -2039,10 +2037,10 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
 ///      differ (the card tracked a real live turn).
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "card-pane"))]
 fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
-    use starbridge_v2::card_pane::{build_card_over_live, CardPane};
+    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter, attach_agent};
+    use starbridge_v2::card_pane::{CardPane, build_card_over_live};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -2217,7 +2215,7 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// verified turn on it, and edited it live — using only the onboarding UI flow.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "card-pane"))]
 fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::agent_attach::AGENT_COUNTER_SLOT;
     use std::borrow::Cow;
@@ -2312,8 +2310,7 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     );
     // The card's OWN tape carries exactly ONE receipt — the +1's verified turn (the
     // cockpit's bookkeeping turns land on other cells, not this card's tape).
-    let card_receipts =
-        cx.update(|app| cockpit.update(app, |c, _cx| c.first_card_receipt_count()));
+    let card_receipts = cx.update(|app| cockpit.update(app, |c, _cx| c.first_card_receipt_count()));
     anyhow::ensure!(
         card_receipts == 1,
         "expected exactly ONE receipt on the first card's tape after the +1, found {card_receipts}"
@@ -2371,7 +2368,7 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// spike uses, now driven through the cockpit's gpui event bridge.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "web-shell"))]
 fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -2425,10 +2422,9 @@ fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()
     cx.run_until_parked();
 
     // 3. The inner Cockpit entity (threaded out above) — drive the LIVE load on it.
-    let cockpit_view = cockpit_slot
-        .borrow()
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("the cockpit view was not captured from the window build"))?;
+    let cockpit_view = cockpit_slot.borrow().clone().ok_or_else(|| {
+        anyhow::anyhow!("the cockpit view was not captured from the window build")
+    })?;
 
     // ── PHASE 1 (THE HEADLINE: KEYBOARD INPUT REACHES THE FOCUSED PAGE) ──
     // Prove a TYPED CHARACTER reaches the focused page and changes it (the focus/key
@@ -2536,7 +2532,11 @@ fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()
          TYPED CHARACTER reached the focused in-page <input> — the page-tile digest changed \
          {tile_digest_before:#x} -> {tile_digest_after:#x} (the focus/key wire delivers \
          keystrokes into the page). Scroll band-flip witness: {}.",
-        if scroll_witness { "also changed" } else { "skipped/flaky (see WARN)" }
+        if scroll_witness {
+            "also changed"
+        } else {
+            "skipped/flaky (see WARN)"
+        }
     );
     Ok(())
 }
@@ -2556,7 +2556,7 @@ fn bake_inspector_over_world(
     w: f32,
     h: f32,
 ) -> anyhow::Result<(u32, u32)> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::sync::Arc;
@@ -2626,7 +2626,7 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         AcpClient, AcpTransport, GrantRegistry, HermesGateway, RunJsTool, ToolCallRequest,
     };
     use dregg_cell::AuthRequired;
-    use starbridge_v2::agent_attach::{WorldSinkAdapter, AGENT_COUNTER_SLOT};
+    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, RwLock};
@@ -2779,7 +2779,9 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     let run = match client.run_prompt_with_model("/tmp", prompt, Some(&model)) {
         Ok(run) => run,
         Err(e) => {
-            println!("live-brain: SKIP — the live loop did not complete the handshake: {e}. BEFORE shot is real.");
+            println!(
+                "live-brain: SKIP — the live loop did not complete the handshake: {e}. BEFORE shot is real."
+            );
             return Ok(());
         }
     };
@@ -2830,8 +2832,17 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         outcome.tool_admitted(),
         outcome.result,
         outcome.fires_committed,
-        outcome.receipts.iter().map(|r| hex::encode(&r[..6])).collect::<Vec<_>>().join(", "),
-        outcome.js_error.as_ref().map(|e| format!("; js_error = {e}")).unwrap_or_default(),
+        outcome
+            .receipts
+            .iter()
+            .map(|r| hex::encode(&r[..6]))
+            .collect::<Vec<_>>()
+            .join(", "),
+        outcome
+            .js_error
+            .as_ref()
+            .map(|e| format!("; js_error = {e}"))
+            .unwrap_or_default(),
     );
 
     // ── 4. The AFTER shot over the SAME live World (first cockpit on it). ────────
@@ -2895,7 +2906,7 @@ fn extract_js_block(text: &str) -> String {
     feature = "dev-surfaces"
 ))]
 fn render_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -2970,7 +2981,7 @@ fn render_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     feature = "app-registry"
 ))]
 fn render_guest_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3079,7 +3090,7 @@ fn render_self_hosting_headless(
     h: f32,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3187,8 +3198,11 @@ fn render_self_hosting_headless(
               (world ledger now {world_receipts} receipts); the buffer was a sovereign CELL, \
               the save a cap-gated SetField turn through the verified executor."
     );
-    println!("  PROOF (b) terminal: live alacritty PTY ran `{} {}` INSIDE deos — grid shows: {term_first:?}",
-             cmd.0, cmd.1.join(" "));
+    println!(
+        "  PROOF (b) terminal: live alacritty PTY ran `{} {}` INSIDE deos — grid shows: {term_first:?}",
+        cmd.0,
+        cmd.1.join(" ")
+    );
     println!(
         "  NOTE (full edit→cargo loop): this bake keeps the editor cell-only (saves are \
               ledger turns) while cargo reads DISK. The FirmamentFs↔disk dual-write that closes \
@@ -3237,7 +3251,7 @@ fn render_unified_boot_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3306,8 +3320,7 @@ fn render_unified_boot_headless(
     // (2) Fire a REAL editor save on the LOCAL ledger, then re-read the NODE's
     // receipt count over the wire — the empirical write-back probe.
     let local_before = window.read_with(&cx, |v, _| v.world_receipt_count())?;
-    let new_content =
-        "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
+    let new_content = "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
          fn main() {\n    println!(\"a save is a verified turn on the local World\");\n}\n";
     let local_after = window.update(&mut cx, |v, window, cx| {
         v.fire_save(new_content, window, cx)
@@ -3465,7 +3478,7 @@ fn render_client_signed_turn_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3628,7 +3641,7 @@ fn render_interactive_node_save_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3722,8 +3735,7 @@ fn render_interactive_node_save_headless(
     // the editor's genuine `save` (the SAME path Cmd-S runs); the save's own callback
     // submits a client-signed turn to the node. This is the interactive path, not a
     // direct `save_to_node` call.
-    let new_content =
-        "// edited interactively in the live --node cockpit editor\nfn main() { println!(\"v2 — on the NODE ledger\"); }\n";
+    let new_content = "// edited interactively in the live --node cockpit editor\nfn main() { println!(\"v2 — on the NODE ledger\"); }\n";
     let _local_after = window.update(&mut cx, |v, window, cx| {
         v.fire_save(new_content, window, cx)
     })??;
@@ -3826,7 +3838,7 @@ fn render_interactive_node_save_headless(
     feature = "embedded-executor"
 ))]
 fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3968,10 +3980,19 @@ fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Resul
         .unwrap_or_else(|| "v2 present in grid (cat main.rs)".to_string());
 
     println!("OK headless SELF-HOSTING-FULL render -> {out}.png ({ww}x{hh}, logical {w}x{h})");
-    println!("  THE FULL SINGLE LOOP RAN: editor edit → receipted turn → disk mirror → terminal toolchain saw it.");
-    println!("  PROOF (receipt): save fired a real cap-gated SetField turn — receipts {before} -> {after} on-ledger.");
-    println!("  PROOF (disk-mirror): the cell's v2 content was dual-written to disk at {} (cell = receipted truth, disk = derived mirror).", disk_file.display());
-    println!("  PROOF (terminal-sees-it): the live sh PTY ran `rustc main.rs && ./prog` over the mirrored file — {prog_line}.");
+    println!(
+        "  THE FULL SINGLE LOOP RAN: editor edit → receipted turn → disk mirror → terminal toolchain saw it."
+    );
+    println!(
+        "  PROOF (receipt): save fired a real cap-gated SetField turn — receipts {before} -> {after} on-ledger."
+    );
+    println!(
+        "  PROOF (disk-mirror): the cell's v2 content was dual-written to disk at {} (cell = receipted truth, disk = derived mirror).",
+        disk_file.display()
+    );
+    println!(
+        "  PROOF (terminal-sees-it): the live sh PTY ran `rustc main.rs && ./prog` over the mirrored file — {prog_line}."
+    );
     println!("  Mirror dir: {dir}");
     Ok(())
 }
@@ -3983,7 +4004,7 @@ fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Resul
 /// system principal over the demo image's anchors and offers the seed identities.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
 fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;

@@ -27,8 +27,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dregg_secrets::EncryptedFileStore;
 use dregg_turn::ComputronCosts;
 use starbridge_v2::session::{
-    agent_template, default_user_template, open_session_world, Challenge, IdentityKeystore,
-    LoginManager, LoginOutcome, Principal, ROOT_TOKEN,
+    Challenge, IdentityKeystore, LoginManager, LoginOutcome, Principal, ROOT_TOKEN, agent_template,
+    default_user_template, open_session_world,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -130,7 +130,10 @@ fn mint_births_a_keypair_a_genesis_cell_and_the_root_capability() {
         "the freshly logged-in session holds its root capability"
     );
     let [_treasury, service, user] = anchors;
-    assert!(session.reaches(&world, &user), "the owner reaches its home cell");
+    assert!(
+        session.reaches(&world, &user),
+        "the owner reaches its home cell"
+    );
     assert!(
         session.reaches(&world, &service),
         "the owner reaches its launchable app"
@@ -172,7 +175,10 @@ fn returning_user_presents_the_key_and_re_derives_the_same_session() {
     // durable image RESUMES the same session.
     {
         let ks = keystore_at(&dir);
-        assert!(ks.has_identity("ember"), "the key persisted across the relaunch");
+        assert!(
+            ks.has_identity("ember"),
+            "the key persisted across the relaunch"
+        );
         let clerk = ks
             .present("ember")
             .expect("load the persisted key")
@@ -201,11 +207,15 @@ fn returning_user_presents_the_key_and_re_derives_the_same_session() {
         );
 
         // RESUME: the same session / c-list comes back (no re-grant ceremony ran).
-        let resumed = match mgr.login_resumable(&mut world, proven, &default_user_template(anchors)) {
+        let resumed = match mgr.login_resumable(&mut world, proven, &default_user_template(anchors))
+        {
             LoginOutcome::Session(s) => s,
             LoginOutcome::Denied { reason } => panic!("resume should succeed: {reason}"),
         };
-        assert_eq!(resumed.root_cell, root, "the resumed session is the same root");
+        assert_eq!(
+            resumed.root_cell, root,
+            "the resumed session is the same root"
+        );
         assert_eq!(
             resumed.granted.len(),
             granted_len,
@@ -287,7 +297,11 @@ fn a_guest_and_an_agent_are_strictly_attenuated_derived_caps() {
     let agent = ks.mint("hermes").expect("mint agent");
 
     // Distinct keys → distinct sovereign worlds (derived, not shared).
-    assert_ne!(owner.pubkey(), guest.pubkey(), "owner and guest are distinct keys");
+    assert_ne!(
+        owner.pubkey(),
+        guest.pubkey(),
+        "owner and guest are distinct keys"
+    );
     assert_ne!(
         owner.root_cell(),
         guest.root_cell(),
@@ -314,7 +328,10 @@ fn a_guest_and_an_agent_are_strictly_attenuated_derived_caps() {
         .expect("owner login")
         .clone();
     assert!(owner_session.reaches(&world, &user), "owner reaches home");
-    assert!(owner_session.reaches(&world, &service), "owner reaches launcher");
+    assert!(
+        owner_session.reaches(&world, &service),
+        "owner reaches launcher"
+    );
 
     // AGENT session: the SAME ceremony, the narrower `agent_template` — ONLY the
     // tool surface, and crucially NO home cell. A strictly-attenuated mandate.

@@ -64,7 +64,11 @@ fn the_default_layout_is_the_cockpit_arrangement_as_data() {
     let mut uniq = all.clone();
     uniq.sort();
     uniq.dedup();
-    assert_eq!(uniq.len(), 30, "a partition — no surface lives in two modes");
+    assert_eq!(
+        uniq.len(),
+        30,
+        "a partition — no surface lives in two modes"
+    );
 
     // The forward map (surface → its mode) — what the cockpit uses to move the rail on a jump.
     assert_eq!(layout.mode_of("HOME").as_deref(), Some("Inhabit"));

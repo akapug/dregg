@@ -822,8 +822,7 @@ fn fused_walk(forest: &CallForest) -> FusedVerdicts {
                     if !parent_caps.is_empty() {
                         let covers_target = parent_caps.iter().any(|p| p.target == cap.target);
                         if covers_target {
-                            let attenuates =
-                                parent_caps.iter().any(|p| cap_attenuates(cap, p));
+                            let attenuates = parent_caps.iter().any(|p| cap_attenuates(cap, p));
                             if !attenuates {
                                 amp_findings.push(Finding {
                                     guarantee: "A (non-amplification)".to_string(),

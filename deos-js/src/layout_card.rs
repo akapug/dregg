@@ -44,10 +44,8 @@ use dregg_doc::{Author, BlameLine};
 use dregg_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 
-use crate::applet::{pack_u64, Affordance, Applet, Slot};
-use crate::card_editor::{
-    ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewTree,
-};
+use crate::applet::{Affordance, Applet, Slot, pack_u64};
+use crate::card_editor::{ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewTree};
 use crate::program_doc::ProgramSource;
 
 /// The heap slot the layout card bumps to leave a provenance receipt for a *structural*
@@ -356,7 +354,13 @@ impl LayoutCard {
         held: AuthRequired,
         edit_authority: AuthRequired,
     ) -> Self {
-        Self::with_model(LayoutModel::cockpit_default(), card_pk, author, held, edit_authority)
+        Self::with_model(
+            LayoutModel::cockpit_default(),
+            card_pk,
+            author,
+            held,
+            edit_authority,
+        )
     }
 
     /// **Open the layout card over an explicit layout model** — for a cockpit that has already
@@ -498,10 +502,7 @@ fn layout_view_for(model: &LayoutModel) -> ViewTree {
                 // cockpit wires to relocating this surface (the `arg`-bearing turn the rung-3
                 // mount dispatches to `LayoutCard::reshape(MoveSurface { .. })`).
                 section.push(ViewTree::Row {
-                    children: vec![
-                        text(surface),
-                        button("move", &format!("move:{surface}"), 1),
-                    ],
+                    children: vec![text(surface), button("move", &format!("move:{surface}"), 1)],
                 });
             }
         }
@@ -575,7 +576,11 @@ mod tests {
 
         // The surfaces partition: 30 total (= the cockpit's `Tab::ALL.len()`), no duplicates.
         let all = layout.all_surfaces();
-        assert_eq!(all.len(), 30, "the five modes' surfaces sum to the full set");
+        assert_eq!(
+            all.len(),
+            30,
+            "the five modes' surfaces sum to the full set"
+        );
         let mut uniq = all.clone();
         uniq.sort();
         uniq.dedup();
@@ -650,11 +655,16 @@ mod tests {
             "OBJECTS was re-homed under Author"
         );
         assert!(
-            !card.layout().surfaces_of("Inhabit").contains(&"OBJECTS".to_string()),
+            !card
+                .layout()
+                .surfaces_of("Inhabit")
+                .contains(&"OBJECTS".to_string()),
             "OBJECTS no longer lives in Inhabit"
         );
         assert!(
-            card.layout().surfaces_of("Author").contains(&"OBJECTS".to_string()),
+            card.layout()
+                .surfaces_of("Author")
+                .contains(&"OBJECTS".to_string()),
             "OBJECTS now lives in Author (the cockpit reads this for the sub-nav)"
         );
 
@@ -730,7 +740,10 @@ mod tests {
         })
         .expect("promote the surface to primary");
         assert_eq!(
-            card.layout().surfaces_of("Operate").first().map(|s| s.as_str()),
+            card.layout()
+                .surfaces_of("Operate")
+                .first()
+                .map(|s| s.as_str()),
             Some("WATCHTOWER"),
             "the surface is now Operate's primary (the cockpit opens it on a rail click)"
         );
@@ -753,14 +766,20 @@ mod tests {
             surface: "GRAPH".into(),
             to_mode: "Inhabit".into(),
         });
-        assert!(matches!(err, Err(EditError::NoOp)), "a no-op move is refused");
+        assert!(
+            matches!(err, Err(EditError::NoOp)),
+            "a no-op move is refused"
+        );
 
         // A move to a non-existent mode is a no-op (the five rooms are fixed).
         let err2 = card.reshape(LayoutPatch::MoveSurface {
             surface: "GRAPH".into(),
             to_mode: "Nowhere".into(),
         });
-        assert!(matches!(err2, Err(EditError::NoOp)), "a move to a phantom mode is refused");
+        assert!(
+            matches!(err2, Err(EditError::NoOp)),
+            "a move to a phantom mode is refused"
+        );
 
         assert_eq!(
             card.card().receipt_count(),

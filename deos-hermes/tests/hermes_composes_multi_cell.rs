@@ -76,7 +76,12 @@ impl EmbeddedWorld {
 
     /// Seed an OPEN, funded cell with the agent's c-list standing over `scope` cells (the
     /// genesis standing a cross-cell write needs — mirrors `MultiCellAuthor::mint`).
-    fn seed_agent(&mut self, pk: [u8; 32], tok: [u8; 32], scope: &[([u8; 32], [u8; 32])]) -> CellId {
+    fn seed_agent(
+        &mut self,
+        pk: [u8; 32],
+        tok: [u8; 32],
+        scope: &[([u8; 32], [u8; 32])],
+    ) -> CellId {
         let agent = CellId::derive_raw(&pk, &tok);
         let mut agent_cell = Cell::with_balance(pk, tok, 1_000_000);
         agent_cell.permissions = open_permissions();
@@ -98,7 +103,10 @@ impl EmbeddedWorld {
     /// real recipient and a foreign-cell over-reach has a real target.
     fn seed_foreign(&mut self, pk: [u8; 32], tok: [u8; 32]) -> CellId {
         let id = CellId::derive_raw(&pk, &tok);
-        let _ = self.engine.ledger_mut().insert_cell(Cell::with_balance(pk, tok, 0));
+        let _ = self
+            .engine
+            .ledger_mut()
+            .insert_cell(Cell::with_balance(pk, tok, 0));
         id
     }
 
@@ -143,7 +151,12 @@ impl WorldSink for EmbeddedSink {
         effects: Vec<Effect>,
     ) -> Result<[u8; 32], String> {
         let mut w = self.world.borrow_mut();
-        let nonce = w.engine.ledger().get(&agent).map(|c| c.state.nonce()).unwrap_or(0);
+        let nonce = w
+            .engine
+            .ledger()
+            .get(&agent)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
         // Build the action carrying the leg's effects, bump the actor's nonce so each leg
         // chains, and commit the verified turn (the SAME shape `multi_cell::commit_step` uses).
         let mut action = ActionBuilder::new_unchecked_for_tests(agent, method, agent);
@@ -282,7 +295,9 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
         collab = collab_hex,
     );
 
-    let sink = Box::new(EmbeddedSink { world: world.clone() });
+    let sink = Box::new(EmbeddedSink {
+        world: world.clone(),
+    });
     let call = ToolCallRequest::new(
         "s",
         "tc-compose-1",
@@ -302,22 +317,50 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
         1,
         "the run_js call is metered — every agent action is receipted, never free"
     );
-    assert!(o.js_error.is_none(), "the compose JS ran cleanly: {:?}", o.js_error);
+    assert!(
+        o.js_error.is_none(),
+        "the compose JS ran cleanly: {:?}",
+        o.js_error
+    );
 
     // THE USEFUL TASK COMMITTED: three legs ⇒ three verified turns on the live World.
     assert!(o.composed(), "the bounded story committed (no over-reach)");
-    assert_eq!(o.committed(), 3, "three legs = three verified turns on the live ledger");
+    assert_eq!(
+        o.committed(),
+        3,
+        "three legs = three verified turns on the live ledger"
+    );
     let compose = o.compose.as_ref().expect("a compose outcome");
-    assert_eq!(compose.receipts.len(), 3, "three real receipts on the live ledger");
-    assert_eq!(compose.minted, vec![notebook], "the notebook cell was minted + reported");
+    assert_eq!(
+        compose.receipts.len(),
+        3,
+        "three real receipts on the live ledger"
+    );
+    assert_eq!(
+        compose.minted,
+        vec![notebook],
+        "the notebook cell was minted + reported"
+    );
     // The witness int confirms the JS saw committed=3, ok=true, minted.length=1.
-    assert_eq!(o.result, Some(311), "JS observed committed=3, ok, one minted cell");
+    assert_eq!(
+        o.result,
+        Some(311),
+        "JS observed committed=3, ok, one minted cell"
+    );
 
     // A RE-READ OFF THE LIVE LEDGER proves the world actually changed:
     let w = world.borrow();
     //   * the notebook cell exists with the seeded title (0xBEEF) + the leg-2 field (7).
-    assert_eq!(w.field_u64(&notebook, TITLE_SLOT), 0xBEEF, "the notebook's title was seeded");
-    assert_eq!(w.field_u64(&notebook, 1), 7, "the leg-2 write landed on the notebook");
+    assert_eq!(
+        w.field_u64(&notebook, TITLE_SLOT),
+        0xBEEF,
+        "the notebook's title was seeded"
+    );
+    assert_eq!(
+        w.field_u64(&notebook, 1),
+        7,
+        "the leg-2 write landed on the notebook"
+    );
     //   * the collaborator now HOLDS a cap over the notebook (the grant landed).
     assert!(
         w.holds_cap_to(&collaborator, &notebook),
@@ -347,7 +390,9 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
         agent = hex::encode(narrow_agent.as_bytes()),
         collab = hex::encode(narrow_collab.as_bytes()),
     );
-    let sink2 = Box::new(EmbeddedSink { world: narrow_world.clone() });
+    let sink2 = Box::new(EmbeddedSink {
+        world: narrow_world.clone(),
+    });
     let call2 = ToolCallRequest::new(
         "s",
         "tc-compose-2",
@@ -356,9 +401,19 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
     );
     let o2 = narrow_tool.run_attached_on(&mut js, sink2, &mut gw, &call2, 51, &over_grant);
 
-    assert!(o2.tool_admitted(), "run_js is still granted (the bound is on the compose)");
-    assert!(!o2.composed(), "the over-reaching grant story did NOT commit");
-    assert_eq!(o2.committed(), 0, "OVER-REACH — nothing committed (no partial leg)");
+    assert!(
+        o2.tool_admitted(),
+        "run_js is still granted (the bound is on the compose)"
+    );
+    assert!(
+        !o2.composed(),
+        "the over-reaching grant story did NOT commit"
+    );
+    assert_eq!(
+        o2.committed(),
+        0,
+        "OVER-REACH — nothing committed (no partial leg)"
+    );
     assert!(
         o2.refusal().is_some_and(|r| r.contains("over-reach")),
         "the over-reach is named in-band: {:?}",
@@ -390,7 +445,9 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
         agent = hex::encode(scoped_agent.as_bytes()),
         foreign = hex::encode(foreign_cell.as_bytes()),
     );
-    let sink3 = Box::new(EmbeddedSink { world: foreign_world.clone() });
+    let sink3 = Box::new(EmbeddedSink {
+        world: foreign_world.clone(),
+    });
     let call3 = ToolCallRequest::new(
         "s",
         "tc-compose-3",
@@ -400,9 +457,14 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
     let o3 = scoped_tool.run_attached_on(&mut js, sink3, &mut gw, &call3, 52, &foreign_touch);
 
     assert!(!o3.composed(), "the foreign-cell story did NOT commit");
-    assert_eq!(o3.committed(), 0, "SCOPE OVER-REACH — nothing committed (no partial leg)");
+    assert_eq!(
+        o3.committed(),
+        0,
+        "SCOPE OVER-REACH — nothing committed (no partial leg)"
+    );
     assert!(
-        o3.refusal().is_some_and(|r| r.contains("scope") || r.contains("over-reach")),
+        o3.refusal()
+            .is_some_and(|r| r.contains("scope") || r.contains("over-reach")),
         "the scope over-reach is named in-band: {:?}",
         o3.refusal()
     );
@@ -473,7 +535,10 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
 
         let mut client = AcpClient::new(peer, session_gw, 10).with_run_js_hook(hands.into_hook());
         let run = client
-            .run_prompt("/tmp", "Stand up a shared notebook and grant my collaborator a cap on it.")
+            .run_prompt(
+                "/tmp",
+                "Stand up a shared notebook and grant my collaborator a cap on it.",
+            )
             .expect("the ACP session drives the run_js compose call");
 
         // The gateway admitted the `run_js` tool-call (the accountability turn).
@@ -503,7 +568,11 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
             "each composed leg left a real receipt over ACP: {:?}",
             rec.receipts
         );
-        assert_eq!(rec.result, Some(2), "the brain's compose observed committed=2");
+        assert_eq!(
+            rec.result,
+            Some(2),
+            "the brain's compose observed committed=2"
+        );
         // The exact JS the brain decided is captured on the record (the auditable body).
         assert!(
             rec.script.contains("deos.compose"),
@@ -513,7 +582,11 @@ fn agent_composes_a_useful_bounded_multi_cell_story_on_the_live_world() {
         // A RE-READ OFF THE LIVE LEDGER: the notebook exists (seeded title 0x1234) and the
         // collaborator holds the granted cap — the shared notebook is real, over the wire.
         let w = live_world.borrow();
-        assert_eq!(w.field_u64(&live_notebook, 0), 0x1234, "the live notebook was seeded over ACP");
+        assert_eq!(
+            w.field_u64(&live_notebook, 0),
+            0x1234,
+            "the live notebook was seeded over ACP"
+        );
         assert!(
             w.holds_cap_to(&live_collab, &live_notebook),
             "the collaborator holds the cap over the notebook — composed end-to-end over ACP"

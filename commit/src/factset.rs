@@ -94,6 +94,13 @@ impl FactSet {
         self.tree.root()
     }
 
+    /// Read the current Merkle root without mutating `self`. Identical to
+    /// [`root`](Self::root); cheap when the tree's root cache is warm (the
+    /// common case after any insert/remove).
+    pub fn root_immutable(&self) -> [u8; 32] {
+        self.tree.root_immutable()
+    }
+
     /// Generate a membership proof for a fact.
     /// Returns None if the fact is not in the set.
     pub fn membership_proof(&self, fact: &Fact) -> Option<MerkleProof> {

@@ -131,6 +131,18 @@ impl MerkleTree {
         root
     }
 
+    /// Read the current root hash without caching. If a cached root is
+    /// present (the common case after any insert/remove, which always
+    /// repopulate the cache) it is returned directly; otherwise the root is
+    /// recomputed without mutating `self`. The returned value is identical to
+    /// [`root`](Self::root).
+    pub fn root_immutable(&self) -> [u8; 32] {
+        if let Some(r) = self.cached_root {
+            return r;
+        }
+        self.compute_root()
+    }
+
     /// Insert a leaf and return the new root.
     pub fn insert(&mut self, leaf_data: &[u8]) -> [u8; 32] {
         let leaf_hash = hash_leaf(leaf_data);

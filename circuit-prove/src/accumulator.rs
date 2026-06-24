@@ -321,9 +321,7 @@ impl Accumulator {
     /// padded to [`WRAP_LOG_CEIL`]); with it OFF they grow. The depth-invariance test compares this
     /// (and [`running_vk_fingerprint`](Self::running_vk_fingerprint)) at depth 2 vs depth 3.
     pub fn running_degree_bits(&self) -> Option<Vec<usize>> {
-        self.running
-            .as_ref()
-            .map(|r| r.0.proof.degree_bits.clone())
+        self.running.as_ref().map(|r| r.0.proof.degree_bits.clone())
     }
 
     /// **THE RUNNING VK FINGERPRINT — the depth-invariance observable.** The full
@@ -338,9 +336,9 @@ impl Accumulator {
     pub fn running_vk_fingerprint(
         &self,
     ) -> Option<crate::plonky3_recursion_impl::recursive::RecursionVk> {
-        self.running.as_ref().map(|r| {
-            crate::plonky3_recursion_impl::recursive::recursion_vk_fingerprint(&r.0)
-        })
+        self.running
+            .as_ref()
+            .map(|r| crate::plonky3_recursion_impl::recursive::recursion_vk_fingerprint(&r.0))
     }
 
     /// **VK-MATERIAL BREAKDOWN PROBE.** A human-readable dump of the SEPARATE components the running
