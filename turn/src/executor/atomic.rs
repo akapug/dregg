@@ -528,6 +528,7 @@ impl TurnExecutor {
         match e {
             E::Transfer { .. } => 0x01,
             E::Burn { .. } => 0x02,
+            E::Mint { .. } => 0x0B,
             E::SetField { .. } => 0x03,
             E::IncrementNonce { .. } => 0x04,
             E::SetVerificationKey { .. } => 0x05,
@@ -1296,6 +1297,23 @@ impl TurnExecutor {
                         *hosted_cell_deltas.entry(well_id).or_insert(0) += *amount as i64;
                         if well_id == action.target {
                             net_delta += *amount as i64;
+                        }
+                    }
+                }
+                // Mint is the DUAL (SUPPLY-MODEL Stage 2a): the issuer WELL is
+                // DEBITED (going more negative) and the recipient is CREDITED, so
+                // the mint is a conserving MOVE well→target contributing ZERO net
+                // within the asset (same per-asset conservation as burn, sign-
+                // flipped). The well shares the target's asset class.
+                if let crate::action::Effect::Mint { target, amount, .. } = effect {
+                    if target == &action.target {
+                        net_delta += *amount as i64;
+                    }
+                    *hosted_cell_deltas.entry(*target).or_insert(0) += *amount as i64;
+                    if let Some(well_id) = self.issuer_well_for(ledger, target) {
+                        *hosted_cell_deltas.entry(well_id).or_insert(0) -= *amount as i64;
+                        if well_id == action.target {
+                            net_delta -= *amount as i64;
                         }
                     }
                 }

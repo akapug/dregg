@@ -395,6 +395,7 @@ pub fn effect_kind(eff: &Effect) -> &'static str {
         Effect::CellUnseal { .. } => "CellUnseal",
         Effect::CellDestroy { .. } => "CellDestroy",
         Effect::Burn { .. } => "Burn",
+        Effect::Mint { .. } => "Mint",
         Effect::AttenuateCapability { .. } => "AttenuateCapability",
         Effect::ReceiptArchive { .. } => "ReceiptArchive",
         #[allow(unreachable_patterns)]
@@ -859,6 +860,11 @@ fn effect_is_mappable(eff: &Effect, id_map: &HashMap<CellId, u64>) -> bool {
         Effect::Burn {
             target, slot: 0, ..
         } => has(target),
+        // Mint: like Burn, ONLY the canonical balance slot (`slot == 0`) is
+        // modelled; other slots are left unmapped (skip rather than mis-encode).
+        Effect::Mint {
+            target, slot: 0, ..
+        } => has(target),
         Effect::RevokeCapability { cell, .. } => has(cell),
         // AttenuateCapability: dregg1 narrows a HELD c-list slot in place (apply.rs requires
         // `cell == actor`). The verified `attenuateStepA actor idx keep` narrows the actor's own
@@ -972,6 +978,7 @@ fn effect_cells(eff: &Effect) -> Vec<CellId> {
         Effect::CellUnseal { target } => vec![*target],
         Effect::CellDestroy { target, .. } => vec![*target],
         Effect::Burn { target, .. } => vec![*target],
+        Effect::Mint { target, .. } => vec![*target],
         Effect::RevokeCapability { cell, .. } => vec![*cell],
         // AttenuateCapability narrows the actor's OWN held slot (`cell == actor`); register the cell.
         Effect::AttenuateCapability { cell, .. } => vec![*cell],
@@ -1214,6 +1221,27 @@ fn effect_to_wire(
             slot: 0,
             amount,
         } => WireAction::Burn {
+            actor,
+            cell: id(target)?,
+            asset: 0,
+            amt: *amount as i128,
+        },
+        // Mint: the cap-gated SUPPLY ENTRY, the dual of Burn (`docs/SUPPLY-MODEL.md`
+        // Stage 2a). The verified `mintH` (`Handlers/StateSupply.lean:90`) runs the
+        // proved issuer-move `recKMintAsset` — `mintAuthorizedB actor asset` (issuer/
+        // node authority) ∧ recipient liveness ∧ `issuerOf a ≠ dst`, moving `amt`
+        // from the asset's negative-capable WELL to the recipient, conserving
+        // `Σ_c bal c a` EXACTLY. As with Burn, the Rust scalar asset has no
+        // conserving image on this wire (asset 0's "issuer" is whatever cell the
+        // snapshot numbered 0), so the verified executor characterises this as a
+        // SAFE-direction divergence under strict mode until the native asset carries
+        // a genesis issuer well. Only the canonical balance slot (`slot == 0`) is
+        // modelled; a non-zero slot is left UNMAPPED so the turn is skipped.
+        Effect::Mint {
+            target,
+            slot: 0,
+            amount,
+        } => WireAction::Mint {
             actor,
             cell: id(target)?,
             asset: 0,
