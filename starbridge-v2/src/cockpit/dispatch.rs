@@ -96,8 +96,25 @@ impl Cockpit {
             CommandId::OpenEditorPane => self.open_dev_pane_deferred(cx, Cockpit::open_editor_pane),
             #[cfg(feature = "dev-surfaces")]
             CommandId::OpenAgentPane => self.open_dev_pane_deferred(cx, Cockpit::open_agent_pane),
+            // The keystone joy-path: a live hyperdreggmedia CARD as a dock pane.
+            // Needs `card-pane` (the `CardPane`/deos-js/deos-view) ON TOP of
+            // `dev-surfaces` (the graft machinery) — same deferred-window open path.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            CommandId::OpenCardPane => self.open_dev_pane_deferred(cx, Cockpit::open_card_pane),
+            // Card command present in the palette but the build lacks `card-pane`
+            // (the deos-js/mozjs renderer): a comprehensive-palette no-op.
+            #[cfg(all(feature = "dev-surfaces", not(feature = "card-pane")))]
+            CommandId::OpenCardPane => {
+                self.last_outcome = Some(
+                    "Open Card needs the `card-pane` build (deos-js + deos-view renderer)".into(),
+                );
+                cx.notify();
+            }
             #[cfg(not(feature = "dev-surfaces"))]
-            CommandId::OpenTerminalPane | CommandId::OpenEditorPane | CommandId::OpenAgentPane => {}
+            CommandId::OpenTerminalPane
+            | CommandId::OpenEditorPane
+            | CommandId::OpenAgentPane
+            | CommandId::OpenCardPane => {}
 
             CommandId::SwarmCoordinatorEmitA => self.swarm_coordinator_emit_a(cx),
             CommandId::SwarmWorkerADrain => self.swarm_worker_a_drain(cx),

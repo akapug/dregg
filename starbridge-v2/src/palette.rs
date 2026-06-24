@@ -116,6 +116,12 @@ pub enum CommandId {
     /// RECEIPTED turn or an in-band refusal) + the live mandate inspector. The
     /// ADOS dev-loop made visible. (A no-op if dev-surfaces is off.)
     OpenAgentPane,
+    /// Open a LIVE CARD pane — a hyperdreggmedia CARD in its own split pane: a
+    /// titled card with a live count (a `bind` re-reading the operator's real cell
+    /// off the live ledger) and a `+1` button that fires ONE cap-gated verified
+    /// turn on that live ledger (a receipt the cell inspector sees). THE keystone
+    /// joy-path surface. (A no-op if the `card-pane`/`dev-surfaces` build is off.)
+    OpenCardPane,
 
     // --- SURFACE MIGRATION (the Local→Surface tear-off) ---
     /// TEAR OFF the active surface into its own OS window — the Local→Surface
@@ -227,6 +233,7 @@ impl CommandId {
             | OpenTerminalPane
             | OpenEditorPane
             | OpenAgentPane
+            | OpenCardPane
             | SwarmCoordinatorEmitA
             | SwarmWorkerADrain
             | SwarmCoordinatorTransferAndWake
@@ -314,6 +321,7 @@ impl CommandId {
             OpenTerminalPane => "Open Terminal pane (live $SHELL on a PTY · build deos inside deos)",
             OpenEditorPane => "Open Editor pane (live deos-zed editor · edit deos inside deos)",
             OpenAgentPane => "Open Agent pane (confined Hermes · tool-call ledger + receipts + mandate inspector)",
+            OpenCardPane => "Open Card (a live hyperdreggmedia card · a +1 button fires a verified turn on the live ledger)",
             ShellOpenSelected => "Shell: open the selected cell as a surface",
             ShellFocusFront => "Shell: focus the front surface (cap-gated)",
             ShellCloseFocused => "Shell: close the focused surface (cap-gated)",
@@ -408,6 +416,7 @@ impl CommandId {
             OpenTerminalPane => "open terminal pane shell pty bash zsh cargo git build dev self-hosting live split console run command spawn",
             OpenEditorPane => "open editor pane code edit deos-zed file source dev self-hosting live split ide author write text",
             OpenAgentPane => "open agent pane hermes confined ai llm tool-call ledger receipt refusal mandate inspector ados dev-loop cap-gated turn dock chat",
+            OpenCardPane => "open card hyperdreggmedia applet view button +1 counter bind live ledger verified turn receipt joy clickable widget deos-js dock pane",
             ShellOpenSelected => "open window surface cell app spawn view",
             ShellFocusFront => "focus raise front bring forward window",
             ShellCloseFocused => "close window surface dismiss",
@@ -539,6 +548,8 @@ pub fn all_commands() -> Vec<Command> {
         OpenTerminalPane,
         OpenEditorPane,
         OpenAgentPane,
+        // the keystone joy-path: a live hyperdreggmedia CARD as a dock pane
+        OpenCardPane,
         // the A2 SWARM surface (multi-agent cap-coordination + notify-edge inbox)
         SwarmCoordinatorEmitA,
         SwarmWorkerADrain,

@@ -77,7 +77,7 @@ default = ["native-full"]
 # native-full pulls the embedded executor (`embedded-executor`) AND the gpui
 # renderer (`gpui-ui`) AND the LIVE-NODE connection (`live-node`, so the master
 # interface can ALSO connect to a remote node/federation). This is the headline build.
-native-full = ["embedded-executor", "app-registry", "gpui-ui", "live-node", "render-capture", "web-shell", "dev-surfaces"]
+native-full = ["embedded-executor", "app-registry", "gpui-ui", "live-node", "render-capture", "web-shell", "dev-surfaces", "card-pane"]
 
 # dev-surfaces — mount the real editor + terminal as dock panes (the self-hosting
 # dev loop: edit deos's own repos in deos-zed, run cargo/git in deos-terminal,
