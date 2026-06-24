@@ -1,3 +1,14 @@
+//! ⚠ STALE / SUPERSEDED (2026-06-24): this is the PRE-FORK hand-rolled approach —
+//! its own steps below concede it is hash-chain *summary*, NOT in-circuit recursive
+//! FRI verification. The live recursion now rides the real `emberian/plonky3-recursion`
+//! fork (`p3_recursion::{build_and_prove_aggregation_layer, build_and_prove_next_layer}`)
+//! through `circuit-prove/src/ivc_turn_chain.rs` (depth: N turns → one constant-cost
+//! recursive STARK, light-client-consumed by `lightclient/src/lib.rs::verify_history`,
+//! Lean-proven gap-free in `Dregg2/Circuit/RecursiveAggregation.lean`) and
+//! `circuit/src/joint_turn_recursive.rs` (width: N cells → one batch-STARK). This module
+//! has ~no live callers; kept for provenance. Don't mistake it for the frontier.
+//! See `metatheory/docs/RECURSION-AGGREGATION-CENSUS.md`.
+//!
 //! Recursive proof composition using Plonky3 proofs.
 //!
 //! Since Plonky3 does not provide a standalone `p3-recursion` crate, this module
