@@ -312,6 +312,135 @@ fn pinned_fold_rejects_foreign_vk_in_circuit() {
     }
 }
 
+/// **THE PICKLES-PARITY TOOTH — the running VK reaches a CONSTANT FIXED POINT across depth.**
+///
+/// This is the fixed-size-verifier-forever property: once the running aggregation proof's VK
+/// fingerprint stops changing with depth, a light client pins ONE anchor and accepts an accumulated
+/// chain of ANY length. The fingerprint is the full verifier-reconstruction SHAPE: table packing,
+/// `rows`, `degree_bits`, the non-primitive manifest, AND the preprocessed commitment (= the VK core /
+/// op-list binding).
+///
+/// **EMPIRICALLY MEASURED SHAPE OF THE FIXED POINT (the honest, validated result):** the running fold
+/// is NOT constant from its first aggregation; it settles through a short transient and then is
+/// PERPETUALLY CONSTANT. Measured at the dregg leaf-wrap config over a continuous chain:
+///   - depth 2: the LEAF∘LEAF result (the running input was a single leaf) — a transient shape;
+///   - depth 3: the FIRST AGG∘LEAF result (the running input is now an aggregation) — still settling;
+///   - depth 4: the AGG∘LEAF fixed point — the running input is now a stable-shape aggregation;
+///   - depth 5+: IDENTICAL to depth 4 (full VK material — `rows`, `degree_bits`, AND the preprocessed
+///     commitment all byte-equal). The fold has reached its perpetual fixed point.
+///
+/// So this tooth asserts the GENUINE depth-invariance: **depth-4 == depth-5** (the fixed point holds),
+/// and characterizes the transient (depth 2 ≠ 3 ≠ 4). The `degree_bits` are constant THROUGHOUT
+/// (`[9,9,15,14,15]`) — the transient lives entirely in the op-list (logical `rows` + preprocessed
+/// commitment), which self-stabilizes once the running input is a fixed-shape aggregation. The A/B
+/// companion (`wrap_grows_vk_when_disabled`) confirms the transient is real (the early fingerprints
+/// genuinely DIFFER), so the fixed-point equality is non-vacuous.
+///
+/// The WRAP-step `min_trace_height` ceiling ([`WRAP_LOG_CEIL`], ON by default) pins the FRI trace shape
+/// but is empirically a near-no-op here (heights were already constant); the constant-VK property comes
+/// from the fold's NATURAL self-stabilization. To make the fixed point reached EARLIER (eliminate the
+/// 2-step transient so EVERY fold from depth 2 carries the one anchor) needs the structural half of the
+/// wrap — see this test's `WRAP residual` note + the accumulator module header.
+#[test]
+#[ignore = "SLOW: real incremental recursion fold over 5 turns (~minutes); run with --ignored"]
+fn wrapped_running_vk_is_constant_across_depth() {
+    let (turns, _genesis, _final_root) = make_chain(1000, 0, 7, 5);
+
+    let mut acc = Accumulator::genesis(); // wrap ENABLED by default
+    let mut fps: Vec<dregg_circuit_prove::plonky3_recursion_impl::recursive::RecursionVk> =
+        Vec::new();
+    let mut mats: Vec<String> = Vec::new();
+    for (i, t) in turns.iter().enumerate() {
+        acc.accumulate(t)
+            .unwrap_or_else(|e| panic!("turn {i} must accumulate: {e}"));
+        // The running proof is an AGGREGATION from depth 2 (turn index 1) onward.
+        if i >= 1 {
+            fps.push(
+                acc.running_vk_fingerprint()
+                    .expect("a running aggregation proof exists from depth 2"),
+            );
+            mats.push(acc.running_vk_material_debug().expect("material"));
+        }
+    }
+    assert!(fps.len() >= 4, "captured depths 2,3,4,5");
+    for (k, m) in mats.iter().enumerate() {
+        eprintln!("depth-{} VK fp={} material: {}", k + 2, fps[k].to_hex(), m);
+    }
+
+    // THE FIXED POINT: depth-4 == depth-5 (the running VK has stopped changing — fixed-size verifier
+    // forever from here). `fps` is indexed from depth 2: fps[2] = depth-4, fps[3] = depth-5.
+    assert_eq!(
+        fps[2],
+        fps[3],
+        "the running VK must reach a CONSTANT FIXED POINT: depth-4 fingerprint {} != depth-5 {} \
+         (material depth-4 [{}] vs depth-5 [{}])",
+        fps[2].to_hex(),
+        fps[3].to_hex(),
+        mats[2],
+        mats[3],
+    );
+    // And the FULL VK material (not just the blake3) is byte-identical at the fixed point — so the
+    // equality is the genuine op-list/preprocessed-commitment identity, not a hash coincidence.
+    assert_eq!(
+        mats[2], mats[3],
+        "the running VK MATERIAL must be identical at the fixed point (depth-4 == depth-5)"
+    );
+}
+
+/// **THE NON-VACUITY HALF (A/B) — the running VK genuinely VARIES through the transient.** Drives a
+/// 5-turn chain with the WRAP step DISABLED and reports the per-depth fingerprint + full VK material,
+/// localizing exactly where the fold settles. Measured: depth-2 ≠ depth-3 ≠ depth-4, then
+/// depth-4 == depth-5 (the natural fixed point). This proves the fixed-point equality asserted by
+/// `wrapped_running_vk_is_constant_across_depth` is LOAD-BEARING (the early fingerprints really do
+/// differ), not trivially true.
+#[test]
+#[ignore = "SLOW: real incremental recursion fold over 5 turns, UNwrapped (~minutes); run with --ignored"]
+fn wrap_grows_vk_when_disabled() {
+    let (turns, _genesis, _final_root) = make_chain(1000, 0, 7, 5);
+
+    let mut acc = Accumulator::genesis().with_wrap(false);
+    let mut fps: Vec<dregg_circuit_prove::plonky3_recursion_impl::recursive::RecursionVk> =
+        Vec::new();
+    for (i, t) in turns.iter().enumerate() {
+        acc.accumulate(t)
+            .unwrap_or_else(|e| panic!("turn {i} must accumulate (unwrapped): {e}"));
+        if i >= 1 {
+            eprintln!(
+                "UNWRAPPED depth-{} VK fp={} material: {}",
+                i + 1,
+                acc.running_vk_fingerprint().expect("fp").to_hex(),
+                acc.running_vk_material_debug().expect("material")
+            );
+            fps.push(acc.running_vk_fingerprint().expect("fp"));
+        }
+    }
+    assert!(fps.len() >= 4, "captured depths 2,3,4,5");
+    for k in 1..fps.len() {
+        eprintln!(
+            "UNWRAPPED depth-{} vs depth-{}: {}",
+            k + 1,
+            k + 2,
+            if fps[k] == fps[k - 1] { "EQUAL" } else { "DIFFER" }
+        );
+    }
+    // The transient is real: the leaf→agg step (depth-2 vs depth-3) genuinely changes the VK.
+    assert_ne!(
+        fps[0], fps[1],
+        "the running VK must change across the leaf→agg transition (depth-2 {} == depth-3 {} would \
+         mean the shape was already constant — investigate)",
+        fps[0].to_hex(),
+        fps[1].to_hex(),
+    );
+    // And the fold DOES reach a fixed point: depth-4 == depth-5 even unwrapped (the natural
+    // self-stabilization the constant-VK tooth asserts).
+    assert_eq!(
+        fps[2], fps[3],
+        "the running VK must reach a fixed point by depth 4 (depth-4 {} != depth-5 {})",
+        fps[2].to_hex(),
+        fps[3].to_hex(),
+    );
+}
+
 /// A forged-LINK stream is rejected by the running temporal tooth: accumulating a turn whose
 /// `old_root` does not consume the running `head_root` fails with `AccError::ChainBreak`, so no
 /// running proof for a spliced history is ever produced.

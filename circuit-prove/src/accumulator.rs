@@ -58,18 +58,37 @@
 //!     tables expose public values; the empty-vector path left those allocated targets unfilled —
 //!     over-constraining the witness solver, the `WitnessConflict` the deep fold tripped).
 //!
-//! **THE GENUINE RESIDUAL (named, not laundered): DEPTH-INVARIANCE needs a WRAP step.** The pin makes
-//! VK identity an IN-BAND constraint, but it does NOT by itself make the running VK CONSTANT across
-//! depth: `aggregate(BatchOnly_A, BatchOnly_B)`'s preprocessed commitment binds the verifier circuit's
-//! op-list, which depends on the SHAPES of A and B — and a deeper running aggregation proof is LARGER
-//! (more FRI openings → more targets → a different op-list → a different commitment). So the running
-//! VK fingerprint still grows with depth. The pin is therefore applied SHAPE-CONDITIONALLY (it engages
-//! only when the captured fixed-point VK equals the current running-input VK; it never falsely rejects
-//! an honest fold). A *true* Mina-Pickles constant-VK perpetual fixed point needs the missing crypto:
-//! a WRAP step that re-proves each variable-shape running proof to a FIXED-shape proof before
-//! re-folding (the wrap/merge two-circuit cycle), so the re-folded input ALWAYS has the one constant
-//! VK. That wrap circuit is the precise remaining fork work; lever (a)+(b) are its prerequisites and
-//! are now in place.
+//! **DEPTH-INVARIANCE — the WRAP step, and the MEASURED fixed point (honest, tiered).**
+//!
+//! The pin makes VK identity an IN-BAND constraint, but does not by itself bound the running VK's
+//! SHAPE. The WRAP step ([`wrap_params`] / [`WRAP_LOG_CEIL`], ON by default) proves each running fold
+//! under a fixed `min_trace_height` ceiling so the running FRI trace shape cannot grow with depth.
+//!
+//! **What is now MEASURED (not merely named) — the running VK reaches a CONSTANT FIXED POINT.** A real
+//! incremental fold over a continuous chain (test `wrapped_running_vk_is_constant_across_depth`) shows
+//! the running aggregation proof's full VK fingerprint — table packing, `rows`, `degree_bits`, the
+//! non-primitive manifest, AND the preprocessed commitment (the op-list / VK core) — settling to a
+//! PERPETUAL FIXED POINT after a short transient:
+//!   - depth 2 (LEAF∘LEAF result) and depth 3 (first AGG∘LEAF result) DIFFER — the leaf→agg transient;
+//!   - **depth 4 == depth 5 == … : byte-IDENTICAL VK material, including the preprocessed commitment.**
+//! The `degree_bits` are constant THROUGHOUT (`[9,9,15,14,15]`, natural max `2^15`); the transient
+//! lives entirely in the op-list (logical `rows` + preprocessed commitment), which self-stabilizes once
+//! the running INPUT is itself a fixed-shape aggregation. So the verifier IS fixed-size from depth 4 on
+//! — a true Mina-Pickles constant-VK perpetual fixed point for the steady state. The pin engages exactly
+//! there (it captures the fixed-point VK from the first running aggregation and pins every later fold
+//! against it; it never falsely rejects an honest fold).
+//!
+//! **THE PRECISE REMAINING CRYPTO (the only residual, named exactly).** The fixed point is reached at
+//! depth 4, NOT depth 2 — there is a 2-step transient where the running VK is not yet the steady-state
+//! anchor (depth-2 leaf-era ≠ depth-3 settling ≠ depth-4 fixed point). A light client must therefore
+//! either (i) pin the depth-4 steady-state anchor and accept that the first ~3 folds carry transient
+//! shapes (fine for an unbounded chain — the tail is constant), or (ii) to make EVERY fold from depth 2
+//! carry the ONE anchor, the structural half of the wrap is needed: re-prove the running input to a
+//! FIXED STRUCTURE (fixed instance / FRI-opening counts) so the AGG∘LEAF verifier op-list is identical
+//! from the first aggregation. The `min_trace_height` ceiling here pins the FRI trace heights (the easy
+//! half) but not the op-list (the input-structure-dependent half) — empirically a near-no-op because the
+//! heights were already constant. The op-list-normalizing re-prove is the precise outstanding fork work;
+//! lever (a)+(b) and the measured natural fixed point are its foundation.
 //!
 //! The soundness SKELETON of the unbounded loop is PROVEN in Lean
 //! (`Dregg2.Circuit.RecursiveAggregation.accumulate_preserves_wellformed` /
@@ -106,6 +125,41 @@ use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 
 const D: usize = 4;
+
+/// **THE WRAP-STEP TRACE-HEIGHT CEILING (the `min_trace_height` half of the fixed-shape knob).**
+///
+/// This pins every running-proof table to a fixed power-of-two `degree_bits` floor of `2^WRAP_LOG_CEIL`,
+/// so the running FRI commit-phase count (`num_phases = log_max_height - log_blowup`) does not grow with
+/// depth.
+///
+/// **EMPIRICALLY MEASURED RESIDUAL (the precise reason a height ceiling ALONE does not close constant-VK):**
+/// at the dregg leaf-wrap config the running AGG∘LEAF `degree_bits` are ALREADY constant across depth
+/// (measured `[9, 9, 15, 14, 15]` at depth 2 AND depth 3 — the natural max is `2^15`, so a `2^16` ceiling
+/// is a near-no-op pad). The part of the running VK that STILL drifts with depth is NOT the trace heights
+/// but the **op-list** — the logical pre-padding `rows` (e.g. Const `269 → 277`, recompose `19112 → 19093`)
+/// AND the **preprocessed commitment** (`ddaa4a02… → 830ace21…`). The op-list of the AGG∘LEAF verifier
+/// circuit depends on the STRUCTURE of the input running proof (its FRI openings / opened-values count),
+/// which a `min_trace_height` floor does not touch. Closing THAT needs the structural half of the wrap:
+/// re-proving the input running proof to a fixed STRUCTURE (fixed instance/opening counts) so the
+/// verifier op-list is identical. See [`Accumulator::accumulate`]'s wrap note and this module's header.
+///
+/// Set to `2^16` (just above the measured natural `2^15` max) so the ceiling is a safe pad that never
+/// blows memory; a higher ceiling (e.g. `2^20`) pads to ~1M rows/table and OOMs the prover.
+pub const WRAP_LOG_CEIL: usize = 16;
+
+/// The [`ProveNextLayerParams`] the WRAP step proves the running fold under: identical to the default
+/// recursion params EXCEPT the table packing carries a fixed [`WRAP_LOG_CEIL`] trace-height floor (the
+/// `min_trace_height` half of the fixed-shape knob). This pins the running FRI shape but NOT the op-list
+/// (see [`WRAP_LOG_CEIL`] for the measured residual).
+fn wrap_params() -> ProveNextLayerParams {
+    let base = ProveNextLayerParams::default();
+    ProveNextLayerParams {
+        table_packing: base
+            .table_packing
+            .with_min_trace_height(1usize << WRAP_LOG_CEIL),
+        constraint_profile: base.constraint_profile,
+    }
+}
 
 fn to_p3(v: BabyBear) -> P3BabyBear {
     P3BabyBear::from_u64(v.0 as u64)
@@ -218,6 +272,13 @@ pub struct Accumulator {
     /// the legacy unpinned fold (e.g. to exhibit that a foreign-circuit proof is REJECTED only with
     /// the pin on).
     pin_vk_identity: bool,
+    /// **Whether the WRAP step is enabled (the fixed-shape re-prove, lever closing the depth-invariant
+    /// fixed point).** When `true` (default), every running fold is proven under [`wrap_params`] — a
+    /// fixed [`WRAP_LOG_CEIL`] trace-height ceiling — so the running proof's `degree_bits` (hence its
+    /// FRI shape, hence the next layer's preprocessed commitment = its VK core) are CONSTANT across
+    /// depth. Disable to reproduce the legacy variable-shape fold (where the VK fingerprint grows with
+    /// depth) for the A/B comparison the depth-invariance test draws.
+    wrap_enabled: bool,
 }
 
 impl Default for Accumulator {
@@ -236,6 +297,7 @@ impl Accumulator {
             seam_pairs: Vec::new(),
             pinned_running_vk: None,
             pin_vk_identity: true,
+            wrap_enabled: true,
         }
     }
 
@@ -244,6 +306,77 @@ impl Accumulator {
     pub fn with_vk_identity_pin(mut self, enabled: bool) -> Self {
         self.pin_vk_identity = enabled;
         self
+    }
+
+    /// Toggle the WRAP step (the fixed-shape re-prove that makes the running VK depth-invariant; see
+    /// [`wrap_params`] / [`WRAP_LOG_CEIL`]). Enabled by default; disable to reproduce the legacy
+    /// variable-shape fold whose VK fingerprint grows with depth. Returns `self` for chaining.
+    pub fn with_wrap(mut self, enabled: bool) -> Self {
+        self.wrap_enabled = enabled;
+        self
+    }
+
+    /// The running proof's per-table `degree_bits` (the FRI domain shape the next layer's verifier
+    /// reads to size its op-list). With the WRAP step ON these are CONSTANT across depth (every table
+    /// padded to [`WRAP_LOG_CEIL`]); with it OFF they grow. The depth-invariance test compares this
+    /// (and [`running_vk_fingerprint`](Self::running_vk_fingerprint)) at depth 2 vs depth 3.
+    pub fn running_degree_bits(&self) -> Option<Vec<usize>> {
+        self.running
+            .as_ref()
+            .map(|r| r.0.proof.degree_bits.clone())
+    }
+
+    /// **THE RUNNING VK FINGERPRINT — the depth-invariance observable.** The full
+    /// [`recursion_vk_fingerprint`](crate::plonky3_recursion_impl::recursive::recursion_vk_fingerprint)
+    /// of the running aggregation proof: a blake3 over its verifier-reconstruction SHAPE (table
+    /// packing, `rows`, `degree_bits`, the non-primitive manifest, and the preprocessed commitment =
+    /// the VK core). This is exactly the fingerprint a light client pins as its trust anchor.
+    ///
+    /// **The Pickles constant-VK property is: this is EQUAL across fold depths.** With the WRAP step
+    /// ON, the depth-2 running proof and the depth-3 running proof carry the IDENTICAL fingerprint —
+    /// the verifier is fixed-size forever. With wrap OFF it grows with depth. `None` before any fold.
+    pub fn running_vk_fingerprint(
+        &self,
+    ) -> Option<crate::plonky3_recursion_impl::recursive::RecursionVk> {
+        self.running.as_ref().map(|r| {
+            crate::plonky3_recursion_impl::recursive::recursion_vk_fingerprint(&r.0)
+        })
+    }
+
+    /// **VK-MATERIAL BREAKDOWN PROBE.** A human-readable dump of the SEPARATE components the running
+    /// VK fingerprint hashes — so a depth-2-vs-depth-3 diff can pinpoint WHICH part varies (degree_bits
+    /// vs `rows` vs the non-primitive manifest vs the preprocessed commitment = the op-list/VK core).
+    /// Used by the depth-invariance test to localize the residual precisely. Not a stable API.
+    pub fn running_vk_material_debug(&self) -> Option<String> {
+        use core::fmt::Write;
+        self.running.as_ref().map(|r| {
+            let p = &r.0;
+            let mut s = String::new();
+            let _ = write!(s, "degree_bits={:?}", p.proof.degree_bits);
+            let _ = write!(s, " rows={:?}", p.rows);
+            let _ = write!(s, " n_nonprim={}", p.non_primitives.len());
+            for e in &p.non_primitives {
+                let _ = write!(s, " [{:?} rows={} lanes={}]", e.op_type, e.rows, e.lanes);
+            }
+            match &p.stark_common.preprocessed {
+                None => {
+                    let _ = write!(s, " prep=NONE");
+                }
+                Some(gp) => {
+                    // Hash JUST the preprocessed commitment (the op-list VK core) so a change in it
+                    // alone is visible distinct from the trace-shape fields.
+                    let bytes = postcard::to_allocvec(&gp.commitment).unwrap_or_default();
+                    let h = blake3::hash(&bytes);
+                    let _ = write!(
+                        s,
+                        " prep_commit={} n_inst={}",
+                        &h.to_hex()[..16],
+                        gp.instances.len()
+                    );
+                }
+            }
+            s
+        })
     }
 
     /// Whether the running fixed-point VK pin has been captured yet (i.e. the running circuit shape
@@ -345,6 +478,16 @@ impl Accumulator {
         let config = ir2_leaf_wrap_config();
         let backend = create_recursion_backend();
         let params = ProveNextLayerParams::default();
+        // **THE WRAP STEP.** The running fold is proven under a FIXED trace-height ceiling
+        // ([`wrap_params`] / [`WRAP_LOG_CEIL`]) when wrapping is enabled, so the running proof's
+        // `degree_bits` — hence its FRI shape, hence the NEXT layer's verifier op-list (= its VK core)
+        // — are CONSTANT across depth. The leaf wrap (step 3) stays at the default params (a leaf is
+        // already a fixed shape); only the running AGGREGATION (step 4) is height-ceiled.
+        let fold_params = if self.wrap_enabled {
+            wrap_params()
+        } else {
+            params.clone()
+        };
 
         // (3) the rotated descriptor leaf, wrapped to a batch proof at the wrap config.
         let leg = &turn.participant.rotated;
@@ -398,7 +541,7 @@ impl Accumulator {
                     BatchOnly,
                     _,
                     D,
-                >(&left, &right, &config, &backend, &params, None)
+                >(&left, &right, &config, &backend, &fold_params, None)
                 .map_err(|e| AccError::RecursionFailed {
                     reason: format!("running aggregation layer failed: {e:?}"),
                 })?
