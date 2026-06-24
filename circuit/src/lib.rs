@@ -235,9 +235,6 @@ pub mod lean_descriptor_air;
 #[cfg(feature = "plonky3")]
 pub mod plonky3_recursion;
 
-#[cfg(feature = "plonky3")]
-pub mod plonky3_verifier_air;
-
 // `plonky3_recursion_impl`, `lean_lookup_air`, `effect_vm_p3_air`, `shielded`,
 // `custom_proof_bind`, `recursive_witness_bundle`, `ivc_turn_chain`,
 // `joint_turn_aggregation`, and `joint_turn_recursive` moved to the
