@@ -583,6 +583,17 @@ pub struct SetPassphraseResponse {
 pub struct IntentSubmitResponse {
     pub intent_id: String,
     pub stored: bool,
+    /// `true` when the submitted intent was *self-fulfillable* and was COMMITTED
+    /// immediately through the verified ledger at submit time (rather than only
+    /// pooled). When `true`, `turn_hash` carries the real committed receipt hash.
+    #[serde(default)]
+    pub committed: bool,
+    /// Hex-encoded `turn_hash` of the committed fulfillment receipt, present iff
+    /// `committed == true`. This is a genuine receipt from
+    /// `execute_fulfillment_flow_verified` (the same verified path `/intents/fulfill`
+    /// drives), NOT a stub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_hash: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3824,6 +3835,67 @@ async fn post_set_passphrase(
     }))
 }
 
+/// Drive a payable intent through the VERIFIED ledger commit, returning the real
+/// [`dregg_turn::TurnReceipt`]. This is the single shared core that both
+/// `POST /intents/fulfill` (with an explicit fulfiller) and `POST /intents`
+/// (inline self-fulfillment at submit time) call — so a submitted self-fulfillable
+/// intent commits through EXACTLY the same path as an operator-driven fulfill,
+/// never a stub.
+///
+/// The payer is the intent's creator (`payer_cell.0 == intent.creator.0`, enforced
+/// by the caller); the recipient is the fulfiller cell. Both cells must be LIVE in
+/// the ledger and distinct, and the intent must carry a non-zero `min_budget`
+/// (the verified value leg) — otherwise the verified executor REFUSES, and the
+/// ledger is untouched (fail-closed, no fallback).
+fn commit_intent_fulfillment_verified(
+    s: &mut crate::state::NodeStateInner,
+    intent: &dregg_intent::Intent,
+    payer_cell: dregg_sdk::CellId,
+    recipient_cell: dregg_sdk::CellId,
+    state_root: u32,
+    state_root_block: u64,
+) -> Result<dregg_turn::TurnReceipt, dregg_intent::fulfillment::FulfillmentError> {
+    let state_root = dregg_circuit::BabyBear::new(state_root);
+
+    // The node's stable per-node intent root key. The minted Trusted-mode macaroon's HMAC
+    // chain is verified against THIS key inside the flow — so the capability grant genuinely
+    // verifies (a real token, not a `[0x01; 4]` stub the verify would reject).
+    let intent_root_key = s.cclerk.derive_symmetric_key("dregg-intent-root-key-v1");
+
+    // Build a REAL Trusted-mode fulfillment: a genuine HMAC-chained attenuated macaroon
+    // bound to the intent's grant. This passes `verify_fulfillment_with_predicates_and_key`
+    // honestly; nothing is laundered.
+    let fulfillment_with_preds = dregg_intent::fulfillment::build_self_fulfillment_trusted(
+        intent,
+        dregg_intent::CommitmentId(recipient_cell.0),
+        intent_root_key,
+        state_root,
+        state_root_block,
+    )?;
+
+    let current_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+
+    // Settle the value leg through the VERIFIED executor edge, supplying the same root key
+    // so the Trusted-mode HMAC verification inside the flow succeeds. Fail-closed: a refused
+    // payment leaves the ledger untouched.
+    dregg_intent::fulfillment::execute_fulfillment_flow_verified_with_key(
+        intent,
+        &fulfillment_with_preds,
+        &mut s.ledger,
+        payer_cell,
+        recipient_cell,
+        current_height,
+        current_height,
+        Some(&intent_root_key),
+    )
+}
+
 async fn post_intent(
     State(state): State<NodeState>,
     Json(raw): Json<serde_json::Value>,
@@ -3849,8 +3921,71 @@ async fn post_intent(
 
     let intent_id_hex = hex_encode(&intent.id);
 
-    // P1 Fix 5: enforce size limit.
-    {
+    // A submitted intent is SELF-FULFILLABLE — and must therefore COMMIT immediately
+    // through the verified ledger rather than rot in the pool — when it names an
+    // explicit fulfiller cell alongside a payable value leg. The fulfiller hint rides
+    // as sibling fields on the submit body (the canonical `Intent` is untouched, so its
+    // content-addressed id is unchanged). When present, we drain it through the SAME
+    // verified path `/intents/fulfill` uses (`commit_intent_fulfillment_verified` →
+    // `execute_fulfillment_flow_verified`) and return the real receipt.
+    //
+    // Absent a fulfiller, the intent is an open offer/need with no counter-leg yet: it
+    // pools (the prior behavior) for a later match-and-fulfill. The pool is no longer a
+    // dead end — a fulfiller (here or via `/intents/fulfill`) drains it to the ledger.
+    let fulfiller_cell: Option<[u8; 32]> = raw
+        .get("fulfiller_cell")
+        .and_then(|v| v.as_str())
+        .and_then(|h| hex_decode(h).ok())
+        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+    let req_state_root: u32 = raw
+        .get("state_root")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(0);
+    let req_state_root_block: u64 = raw
+        .get("state_root_block")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let mut committed = false;
+    let mut committed_turn_hash: Option<String> = None;
+
+    // INLINE SELF-FULFILLMENT (verified, fail-closed). The payer is the intent creator;
+    // the recipient is the named fulfiller. The verified executor enforces distinctness,
+    // liveness, and availability — a refusal leaves the ledger untouched and the intent
+    // simply pools instead of committing.
+    if let Some(fulfiller_bytes) = fulfiller_cell {
+        let payer_cell = dregg_sdk::CellId(intent.creator.0);
+        let recipient_cell = dregg_sdk::CellId(fulfiller_bytes);
+
+        let mut s = state.write().await;
+        if !s.unlocked {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        match commit_intent_fulfillment_verified(
+            &mut s,
+            &intent,
+            payer_cell,
+            recipient_cell,
+            req_state_root,
+            req_state_root_block,
+        ) {
+            Ok(receipt) => {
+                committed = true;
+                committed_turn_hash = Some(hex_encode(&receipt.turn_hash));
+            }
+            Err(e) => {
+                // Fail-closed: a self-fulfillment the verified executor REFUSES is a
+                // hard error to the submitter — we do NOT silently downgrade a payable,
+                // explicitly-targeted intent into a quiet pool entry (that would launder
+                // a rejected commit as a successful submit).
+                tracing::warn!(intent = %intent_id_hex, error = %e, "intent self-fulfillment refused by verified executor");
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            }
+        }
+    } else {
+        // No counter-leg yet — pool for a later match-and-fulfill.
+        // P1 Fix 5: enforce size limit.
         let mut s = state.write().await;
         if s.intent_pool.len() >= MAX_NODE_INTENT_POOL {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
@@ -3864,6 +3999,11 @@ async fn post_intent(
     state.emit(NodeEvent::Intent {
         intent: serde_json::to_value(&intent).unwrap_or_default(),
     });
+    if let Some(ref turn_hash) = committed_turn_hash {
+        state.emit(NodeEvent::Receipt {
+            hash: turn_hash.clone(),
+        });
+    }
 
     // Gossip the intent to federation peers.
     if let Some(gossip) = state.gossip().await {
@@ -3875,7 +4015,9 @@ async fn post_intent(
 
     Ok(Json(IntentSubmitResponse {
         intent_id: intent_id_hex,
-        stored: true,
+        stored: !committed,
+        committed,
+        turn_hash: committed_turn_hash,
     }))
 }
 
@@ -4419,61 +4561,20 @@ async fn post_fulfill_intent(
         }
     };
 
-    // Deserialize the base fulfillment. For now we construct a minimal one from the
-    // request fields since the full Fulfillment struct isn't directly serde-friendly
-    // across the wire. The verification happens inside execute_fulfillment_flow_verified.
-    let state_root = dregg_circuit::BabyBear::new(req.state_root);
-
-    // Build a minimal FulfillmentWithPredicates for the execution flow.
-    // The actual fulfillment proof is already verified by the node in this flow.
-    let base_fulfillment = dregg_intent::fulfillment::Fulfillment {
-        intent_id,
-        fulfiller: dregg_intent::CommitmentId(recipient_bytes),
-        mode: dregg_intent::VerificationMode::Trusted,
-        token_data: Some(vec![0x01; 4]), // Non-empty stub for trusted mode verification.
-        proof: None,
-        granted_actions: intent
-            .matcher
-            .actions
-            .iter()
-            .filter_map(|p| p.action.clone())
-            .collect(),
-        granted_resource: intent
-            .matcher
-            .resource_pattern
-            .clone()
-            .unwrap_or_else(|| "*".to_string()),
-        expiry: Some(intent.expiry),
-    };
-
-    let fulfillment_with_preds = dregg_intent::fulfillment::FulfillmentWithPredicates {
-        base: base_fulfillment,
-        predicate_proofs: vec![], // Predicates already verified by caller in this API path.
-        state_root,
-        state_root_block: req.state_root_block,
-    };
-
-    // Get current height.
-    let current_height = s
-        .store
-        .latest_attested_root()
-        .ok()
-        .flatten()
-        .map(|r| r.height)
-        .unwrap_or(0);
-
-    // Execute the fulfillment payment through the VERIFIED settle path: the value-moving leg
-    // folds through the verified per-asset transition and is cross-checked against the REAL
-    // Lean executor export `dregg_record_kernel_step` (Lean unconditional on native). Fail-closed — a payment the verified executor refuses is REFUSED;
-    // there is no fallback to the legacy `dregg_turn::TurnExecutor`.
-    let result = dregg_intent::fulfillment::execute_fulfillment_flow_verified(
+    // Execute the fulfillment payment through the VERIFIED settle path (the shared core
+    // `commit_intent_fulfillment_verified` → `execute_fulfillment_flow_verified`): the
+    // value-moving leg folds through the verified per-asset transition and is cross-checked
+    // against the REAL Lean executor export `dregg_record_kernel_step` (Lean unconditional on
+    // native). Fail-closed — a payment the verified executor refuses is REFUSED; there is no
+    // fallback to the legacy `dregg_turn::TurnExecutor`. This is the SAME core that inline
+    // self-fulfillment at submit (`POST /intents`) drives.
+    let result = commit_intent_fulfillment_verified(
+        &mut s,
         &intent,
-        &fulfillment_with_preds,
-        &mut s.ledger,
         payer_cell,
         recipient_cell,
-        current_height,
-        current_height,
+        req.state_root,
+        req.state_root_block,
     );
 
     match result {
@@ -8726,5 +8827,174 @@ mod tests {
             std::env::remove_var("DREGG_STATUS_EXPOSE_COUNTS");
         }
         eprintln!("[API CONTROL / F-8] opt-in re-exposes counters (gate is non-vacuous)");
+    }
+
+    // ========================================================================
+    // INTENT SUBMIT → VERIFIED COMMIT (the liquid-frontier weld)
+    //
+    // A submitted intent that names a fulfiller must DRAIN through the verified
+    // ledger at submit time, not rot in the in-memory pool. These tests pin the
+    // end-to-end path `post_intent` → `commit_intent_fulfillment_verified` →
+    // `execute_fulfillment_flow_verified` (the SAME verified core `/intents/fulfill`
+    // drives), and assert the value actually MOVED — a real commit, not a stub.
+    // ========================================================================
+
+    /// Build a funded, unlocked NodeState with a payer (creator) cell and a recipient
+    /// (fulfiller) cell, returning their canonical CellIds.
+    async fn funded_intent_state(
+        payer_balance: i64,
+        recipient_balance: i64,
+    ) -> (NodeState, tempfile::TempDir, CellId, CellId) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+
+        let payer_cell = dregg_cell::Cell::with_balance([0x11u8; 32], [0u8; 32], payer_balance);
+        let recipient_cell =
+            dregg_cell::Cell::with_balance([0x22u8; 32], [0u8; 32], recipient_balance);
+        let payer_id = payer_cell.id();
+        let recipient_id = recipient_cell.id();
+
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(payer_cell)
+                .expect("payer insert must succeed");
+            s.ledger
+                .insert_cell(recipient_cell)
+                .expect("recipient insert must succeed");
+            // The verified fulfillment flow requires an unlocked node (the operator's
+            // cipherclerk gate that signs turns).
+            s.unlocked = true;
+        }
+
+        (state, tmp, payer_id, recipient_id)
+    }
+
+    /// Build a payable `Need` intent whose creator IS the payer cell (the verified flow
+    /// enforces `payer_cell == intent.creator`).
+    fn payable_intent(creator_id: CellId, min_budget: u64) -> dregg_intent::Intent {
+        let spec = dregg_intent::MatchSpec {
+            min_budget: Some(min_budget),
+            ..Default::default()
+        };
+        dregg_intent::Intent::new(
+            dregg_intent::IntentKind::Need,
+            spec,
+            dregg_intent::CommitmentId(creator_id.0),
+            99_999,
+            None,
+        )
+    }
+
+    fn balance_of(s: &crate::state::NodeStateInner, id: &CellId) -> i64 {
+        s.ledger.get(id).map(|c| c.state.balance()).unwrap_or(0)
+    }
+
+    /// THE BAR: a submitted, self-fulfillable intent COMMITS through the verified
+    /// ledger and returns a real receipt — the value actually moves, the pool stays
+    /// empty (no dead-end HashMap entry).
+    #[tokio::test]
+    async fn submitted_intent_commits_through_verified_ledger() {
+        let amount: u64 = 100;
+        let (state, _tmp, payer_id, recipient_id) = funded_intent_state(1_000, 0).await;
+
+        let intent = payable_intent(payer_id, amount);
+        let mut raw = serde_json::to_value(&intent).expect("intent json");
+        // The fulfiller hint rides as a sibling field; the canonical Intent (and thus its
+        // content-addressed id) is untouched.
+        raw["fulfiller_cell"] = serde_json::json!(hex_encode(&recipient_id.0));
+
+        let resp = post_intent(State(state.clone()), Json(raw))
+            .await
+            .expect("submit must succeed")
+            .0;
+
+        // The intent COMMITTED — not merely stored.
+        assert!(
+            resp.committed,
+            "a self-fulfillable intent must commit through the verified ledger, not pool"
+        );
+        assert!(!resp.stored, "a committed intent is NOT a pooled (stored) entry");
+        let turn_hash = resp
+            .turn_hash
+            .expect("a committed intent must carry a real receipt turn_hash");
+        assert_eq!(turn_hash.len(), 64, "turn_hash must be a 32-byte hex digest");
+
+        // The VALUE ACTUALLY MOVED through the ledger (the proof this is a real commit,
+        // not a stub): payer debited, recipient credited, exactly `amount`.
+        let s = state.read().await;
+        assert_eq!(
+            balance_of(&s, &payer_id),
+            1_000 - amount as i64,
+            "payer must be debited the payment leg"
+        );
+        assert_eq!(
+            balance_of(&s, &recipient_id),
+            amount as i64,
+            "recipient must be credited the payment leg"
+        );
+        // The pool is NOT a dead-end: the committed intent never entered it.
+        assert!(
+            !s.intent_pool.contains_key(&intent.id),
+            "a committed intent must not also rot in the pool"
+        );
+        eprintln!("[INTENT WELD] submit → verified commit → value moved {amount} (receipt {turn_hash})");
+    }
+
+    /// Without a fulfiller, the intent has no counter-leg yet: it POOLS (the prior
+    /// behavior), and the ledger is untouched. This pins that the weld is additive —
+    /// open offers/needs still pool for a later `/intents/fulfill`.
+    #[tokio::test]
+    async fn submitted_intent_without_fulfiller_pools_and_leaves_ledger_untouched() {
+        let (state, _tmp, payer_id, recipient_id) = funded_intent_state(1_000, 0).await;
+
+        let intent = payable_intent(payer_id, 100);
+        let raw = serde_json::to_value(&intent).expect("intent json"); // no fulfiller_cell
+
+        let resp = post_intent(State(state.clone()), Json(raw))
+            .await
+            .expect("submit must succeed")
+            .0;
+
+        assert!(resp.stored, "an unfulfillable intent must pool");
+        assert!(!resp.committed, "an unfulfillable intent must NOT commit");
+        assert!(resp.turn_hash.is_none(), "no receipt without a commit");
+
+        let s = state.read().await;
+        assert!(
+            s.intent_pool.contains_key(&intent.id),
+            "the intent must be in the pool for a later fulfill"
+        );
+        assert_eq!(balance_of(&s, &payer_id), 1_000, "ledger must be untouched");
+        assert_eq!(balance_of(&s, &recipient_id), 0, "ledger must be untouched");
+    }
+
+    /// Fail-closed: a self-fulfillment the verified executor REFUSES (here: an
+    /// underfunded payer) must be a hard error, NOT a silent downgrade to a quiet pool
+    /// entry. A rejected commit laundered as a successful submit is exactly the bug.
+    #[tokio::test]
+    async fn refused_self_fulfillment_is_a_hard_error_not_a_silent_pool() {
+        // Payer holds only 10 but the intent demands 100 — the verified availability
+        // gate must refuse.
+        let (state, _tmp, payer_id, recipient_id) = funded_intent_state(10, 0).await;
+
+        let intent = payable_intent(payer_id, 100);
+        let mut raw = serde_json::to_value(&intent).expect("intent json");
+        raw["fulfiller_cell"] = serde_json::json!(hex_encode(&recipient_id.0));
+
+        let outcome = post_intent(State(state.clone()), Json(raw)).await;
+        match outcome {
+            Err(code) => assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY),
+            Ok(_) => panic!("an underfunded self-fulfillment must be refused, not accepted"),
+        }
+
+        // The ledger is untouched (fail-closed) and nothing was laundered into the pool.
+        let s = state.read().await;
+        assert_eq!(balance_of(&s, &payer_id), 10, "refused commit must not move value");
+        assert_eq!(balance_of(&s, &recipient_id), 0, "refused commit must not move value");
+        assert!(
+            !s.intent_pool.contains_key(&intent.id),
+            "a refused payable intent must not be silently pooled"
+        );
     }
 }

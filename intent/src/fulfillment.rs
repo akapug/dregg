@@ -220,6 +220,80 @@ pub fn fulfill(
     })
 }
 
+/// Build a genuinely-verifying Trusted-mode [`FulfillmentWithPredicates`] for the
+/// **self-fulfillment** path: a node that accepts a submitted, payable intent and wants
+/// to COMMIT it through the verified ledger immediately (the `POST /intents` inline
+/// drain).
+///
+/// Unlike a stub `token_data`, this mints a REAL HMAC-chained attenuated macaroon under
+/// `root_key` (via the same [`fulfill`] machinery a peer fulfiller uses), so the
+/// downstream [`verify_fulfillment_with_predicates_and_key`] HMAC check genuinely passes —
+/// the commit is verified, not laundered. The grant is attenuated to exactly the intent's
+/// actions/resource (minimum disclosure); the `root_key` is the operator's intent root key
+/// (the same key the recipient would verify the token against), so a self-fulfillment is a
+/// real, verifiable capability grant + a real verified payment leg.
+///
+/// The returned value carries `predicate_proofs: vec![]`; the intent must therefore have no
+/// `predicate_requirements` (the inline self-fulfill path is for the plain payable-intent
+/// case — a node holding the predicate witnesses would use the full `fulfill` path). The
+/// caller still drives the value leg through [`execute_fulfillment_flow_verified`].
+pub fn build_self_fulfillment_trusted(
+    intent: &Intent,
+    fulfiller: CommitmentId,
+    root_key: [u8; 32],
+    state_root: BabyBear,
+    state_root_block: u64,
+) -> Result<FulfillmentWithPredicates, FulfillmentError> {
+    // A synthetic source capability that covers the intent: wildcard actions + resource,
+    // attenuated DOWN to exactly the intent's needs inside `fulfill`. The token id is bound
+    // to the intent id so the minted macaroon is intent-specific.
+    // A stable per-intent token id string (lowercase hex of the intent id), without
+    // pulling a hex dependency.
+    let token_id = intent.id.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    let source = crate::matcher::HeldCapability {
+        token_id,
+        actions: vec!["*".to_string()],
+        resource: "*".to_string(),
+        app_id: None,
+        service: None,
+        user_id: None,
+        features: vec![],
+        oauth_provider: None,
+        expiry: Some(intent.expiry),
+        budget: intent.matcher.min_budget,
+        sensitivity: crate::matcher::Sensitivity::Public,
+    };
+
+    let matched = Match {
+        intent_id: intent.id,
+        satisfier: fulfiller,
+        proof: None,
+        mode: VerificationMode::Trusted,
+    };
+
+    let options = FulfillOptions {
+        mode: VerificationMode::Trusted,
+        root_key: Some(root_key),
+        ..Default::default()
+    };
+
+    // Mint the real attenuated macaroon (HMAC-chained) bound to the intent's grant.
+    let mut base = fulfill(intent, &matched, &source, fulfiller, &options)?;
+    // The fulfiller commitment is the recipient cell; bind it explicitly.
+    base.fulfiller = fulfiller;
+
+    Ok(FulfillmentWithPredicates {
+        base,
+        predicate_proofs: vec![],
+        state_root,
+        state_root_block,
+    })
+}
+
 /// Verify a fulfillment against its intent.
 ///
 /// For Trusted mode: verifies the token HMAC chain using the provided root key.
