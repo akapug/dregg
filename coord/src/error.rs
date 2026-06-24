@@ -83,6 +83,10 @@ pub enum CoordError {
     /// The proposed forest's estimated cost exceeds the coordinator's max budget.
     BudgetExceeded { estimated: u64, max_budget: u64 },
 
+    /// A `forest_data` wire payload (e.g. a received `ProposeAtomicTurn`) failed
+    /// to deserialize back into an `AtomicForest`.
+    WireDecode(String),
+
     // ── Underlying errors ────────────────────────────────────────────────
     /// A turn execution error from the turn executor.
     TurnExecution(TurnError),
@@ -184,6 +188,7 @@ impl core::fmt::Display for CoordError {
                     "estimated cost {estimated} exceeds max budget {max_budget}"
                 )
             }
+            CoordError::WireDecode(e) => write!(f, "atomic-forest wire decode error: {e}"),
             CoordError::TurnExecution(e) => write!(f, "turn execution error: {e}"),
             CoordError::Ledger(e) => write!(f, "ledger error: {e}"),
         }

@@ -53,15 +53,32 @@ pub enum PeerMessage {
 
     // ─── Atomic multi-party coordination ────────────────────────────
     /// Propose an atomic turn affecting multiple cells.
+    ///
+    /// `proposal_id` is the coordinator's `Coordinator::compute_proposal_id`
+    /// (`H("dregg-coord:proposal" || forest.hash || coordinator)`). Carrying it
+    /// CLOSES the proposal-id gap Wire 2 found: a participant signs its vote over
+    /// the coordinator's REAL `proposal_id`, so the returning `VoteAtomicTurn`
+    /// verifies in `Coordinator::receive_vote` (which checks the signature against
+    /// `(proposal_id, forest.hash)`). `coordinator` is carried so the participant
+    /// can recompute and VERIFY the claimed `proposal_id` binds to (forest, coordinator).
     ProposeAtomicTurn {
         forest_hash: [u8; 32],
+        proposal_id: [u8; 32],
+        coordinator: [u8; 32],
         participants: Vec<[u8; 32]>,
         forest_data: Vec<u8>,
     },
 
-    /// Vote on an atomic turn proposal.
+    /// Vote on an atomic turn proposal — the participant's signed verdict returning
+    /// to the coordinator. `proposal_id` matches the `ProposeAtomicTurn` so the
+    /// coordinator can look up the right `Coordinator` and feed the vote into
+    /// `receive_vote`; `voter` is the participant's node id (a key in the
+    /// coordinator's `participant_keys`). `signature` is the Ed25519 vote signature
+    /// over `(proposal_id, forest_hash, vote_flag)`.
     VoteAtomicTurn {
+        proposal_id: [u8; 32],
         forest_hash: [u8; 32],
+        voter: [u8; 32],
         vote: bool,
         signature: Vec<u8>,
     },
@@ -102,13 +119,36 @@ impl PeerMessage {
     /// (`node::blocklace_sync` no longer drops it on `_ => return`).
     pub fn propose_atomic_turn(
         forest_hash: [u8; 32],
+        proposal_id: [u8; 32],
+        coordinator: [u8; 32],
         participants: Vec<[u8; 32]>,
         forest_data: Vec<u8>,
     ) -> Self {
         PeerMessage::ProposeAtomicTurn {
             forest_hash,
+            proposal_id,
+            coordinator,
             participants,
             forest_data,
+        }
+    }
+
+    /// Build a `VoteAtomicTurn` returning a participant's signed verdict to the
+    /// coordinator. Binds the vote to the coordinator's real `proposal_id` (so
+    /// `Coordinator::receive_vote` can tally it) and the `voter`'s identity.
+    pub fn vote_atomic_turn(
+        proposal_id: [u8; 32],
+        forest_hash: [u8; 32],
+        voter: [u8; 32],
+        vote: bool,
+        signature: Vec<u8>,
+    ) -> Self {
+        PeerMessage::VoteAtomicTurn {
+            proposal_id,
+            forest_hash,
+            voter,
+            vote,
+            signature,
         }
     }
 }
@@ -289,11 +329,15 @@ mod tests {
             },
             PeerMessage::ProposeAtomicTurn {
                 forest_hash: [4; 32],
+                proposal_id: [14; 32],
+                coordinator: [15; 32],
                 participants: vec![[5; 32], [6; 32]],
                 forest_data: vec![7; 200],
             },
             PeerMessage::VoteAtomicTurn {
+                proposal_id: [14; 32],
                 forest_hash: [8; 32],
+                voter: [6; 32],
                 vote: true,
                 signature: vec![0xbb; 64],
             },

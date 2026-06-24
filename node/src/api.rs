@@ -1574,6 +1574,13 @@ pub fn router_with_cors(
         .route("/api/cell/{id}", get(get_cell_detail))
         .route("/api/node/cells/{id}", get(get_cell_detail))
         .route("/api/tokens", get(get_tokens))
+        // DEOS-HOST discovery: a hosted private server's cap-gated affordance surface,
+        // projected per viewer (public — discovery confers no authority; the cap tooth
+        // is the EXECUTOR on the fire, not the read).
+        .route(
+            "/api/server/{cell}/affordances",
+            get(get_server_affordances),
+        )
         .route("/api/receipts", get(get_receipts))
         .route("/api/receipts/{hash}/witnesses", get(get_receipt_witnesses))
         // ORGANS identity rider — the KERI-shaped identity event-log export:
@@ -2362,7 +2369,7 @@ fn receipt_infos_from_chain_with_witnesses(
         .collect()
 }
 
-fn seed_executor_receipt_head(
+pub(crate) fn seed_executor_receipt_head(
     executor: &dregg_turn::TurnExecutor,
     agent: CellId,
     previous_receipt_hash: Option<[u8; 32]>,
@@ -2370,6 +2377,105 @@ fn seed_executor_receipt_head(
     if let Some(head) = previous_receipt_hash {
         executor.set_last_receipt_hash(agent, head);
     }
+}
+
+/// Query for `GET /api/server/{cell}/affordances?viewer=<authlabel>` — the discovery
+/// route for a hosted deos-host private server's cap-gated affordance surface.
+#[derive(Debug, Deserialize)]
+pub struct ServerAffordanceQuery {
+    /// The viewer's held authority label ("none"/"signature"/"proof"/"either").
+    /// Defaults to "none" (the broadest viewer — sees every affordance).
+    #[serde(default)]
+    pub viewer: Option<String>,
+}
+
+fn parse_auth_label_api(label: &str) -> dregg_cell::AuthRequired {
+    use dregg_cell::AuthRequired;
+    match label.to_lowercase().as_str() {
+        "signature" | "sig" => AuthRequired::Signature,
+        "proof" => AuthRequired::Proof,
+        "either" => AuthRequired::Either,
+        "impossible" => AuthRequired::Impossible,
+        _ => AuthRequired::None,
+    }
+}
+
+/// `GET /api/server/{cell}/affordances?viewer=<authlabel>` — DISCOVERY.
+///
+/// Project a hosted deos-host private server's published affordance surface for a
+/// viewer's held authority (the proven attenuation lattice: `required ⊆ held`). A
+/// weaker viewer sees a strictly smaller set. Returns `[{name, required}]` JSON, or 404
+/// if no server is hosted at that cell.
+pub async fn get_server_affordances(
+    State(state): State<NodeState>,
+    AxumPath(cell_hex): AxumPath<String>,
+    Query(q): Query<ServerAffordanceQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let cell = match hex_decode_32(&cell_hex) {
+        Some(bytes) => CellId(bytes),
+        None => return Err(StatusCode::BAD_REQUEST),
+    };
+    let held = parse_auth_label_api(q.viewer.as_deref().unwrap_or("none"));
+
+    let s = state.read().await;
+    let specs = match s.deos_server_surfaces.get(&cell) {
+        Some(specs) => specs.clone(),
+        None => return Err(StatusCode::NOT_FOUND),
+    };
+    drop(s);
+
+    // Project per-viewer via the proven attenuation lattice (the deos-reflect surface).
+    let mut surface = deos_reflect::AffordanceSurface::new(cell);
+    for (name, required) in &specs {
+        surface = surface.declare(deos_reflect::Affordance::new(
+            name.clone(),
+            required.clone(),
+            dregg_turn::action::Effect::IncrementNonce { cell },
+        ));
+    }
+    let visible: Vec<serde_json::Value> = surface
+        .project_for(&held)
+        .into_iter()
+        .map(|a| {
+            serde_json::json!({
+                "name": a.name,
+                "required": auth_label_str(&a.required),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "cell": cell_hex,
+        "viewer": q.viewer.unwrap_or_else(|| "none".to_string()),
+        "affordances": visible,
+    })))
+}
+
+/// Stable lowercase label for an `AuthRequired` (matches the deos-js / discovery vocab).
+fn auth_label_str(a: &dregg_cell::AuthRequired) -> &'static str {
+    use dregg_cell::AuthRequired;
+    match a {
+        AuthRequired::None => "none",
+        AuthRequired::Signature => "signature",
+        AuthRequired::Proof => "proof",
+        AuthRequired::Either => "either",
+        AuthRequired::Impossible => "impossible",
+        AuthRequired::Custom { .. } => "custom",
+    }
+}
+
+/// Decode a 64-char hex string into a 32-byte array (cell id). `None` on any malformed
+/// input.
+fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 fn push_committed_event(
@@ -5288,8 +5394,11 @@ async fn post_atomic_proposal(
         Ok(propose_msg) => {
             let proposal_id = propose_msg.proposal_id;
             let proposal_id_hex = hex_encode(&proposal_id);
+            let forest_hash = forest_for_storage.hash;
+            let forest_wire = forest_for_storage.encode_for_wire();
 
-            // Persist the coordinator in the proposals map for later vote collection.
+            // Persist the coordinator in the proposals map for later vote collection
+            // (this Coordinator IS the vote tally the returning votes feed into).
             s.atomic_proposals.insert(
                 proposal_id,
                 crate::state::ActiveProposal {
@@ -5299,15 +5408,22 @@ async fn post_atomic_proposal(
                 },
             );
 
-            // Broadcast proposal to peers via gossip if available.
+            // THE SEND WELD: broadcast the REAL `ProposeAtomicTurn` variant (full
+            // forest + the coordinator's real proposal_id + identity) on the
+            // blocklace topic, so each participant reconstructs the forest, votes
+            // bound to THIS proposal_id, and returns its `VoteAtomicTurn`. Replaces
+            // the old JSON-stub `atomic_proposal` that a peer could not reconstruct.
             drop(s);
-            if let Some(gossip) = state.gossip().await {
-                let msg = serde_json::json!({
-                    "type": "atomic_proposal",
-                    "proposal_id": proposal_id_hex,
-                });
-                let msg_bytes = serde_json::to_vec(&msg).unwrap_or_default();
-                gossip.gossip_turn(proposal_id, msg_bytes).await;
+            if let Some(blocklace) = state.blocklace().await {
+                blocklace
+                    .gossip_atomic_propose(
+                        forest_hash,
+                        proposal_id,
+                        node_id,
+                        participants.clone(),
+                        forest_wire,
+                    )
+                    .await;
             }
 
             Ok(Json(AtomicProposalResponse {

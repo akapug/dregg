@@ -833,6 +833,56 @@ impl BlocklaceHandle {
         }
     }
 
+    /// Broadcast a co-turn `ProposeAtomicTurn` on the blocklace topic so every
+    /// participant's funnel (`handle_blocklace_message`) lifts it into the
+    /// in-process `dregg_coord` engine and votes.
+    ///
+    /// THE SEND WELD: this replaces the old JSON-stub `atomic_proposal` that went
+    /// out as a `PublishTurn` and could not be reconstructed. The dedicated variant
+    /// carries the full forest (`AtomicForest::encode_for_wire`) PLUS the
+    /// coordinator's real `proposal_id` and identity, so a participant binds its
+    /// vote to the id the coordinator will tally against. Published on `self.topic`
+    /// (the blocklace topic) — the topic the funnel is subscribed to — via the
+    /// direct eager broadcast, reaching every committee peer in one hop.
+    pub async fn gossip_atomic_propose(
+        &self,
+        forest_hash: [u8; 32],
+        proposal_id: [u8; 32],
+        coordinator: [u8; 32],
+        participants: Vec<[u8; 32]>,
+        forest_data: Vec<u8>,
+    ) {
+        let peer_msg = PeerMessage::propose_atomic_turn(
+            forest_hash,
+            proposal_id,
+            coordinator,
+            participants,
+            forest_data,
+        );
+        if let Err(e) = self.gossip.publish_eager(&self.topic, &peer_msg).await {
+            warn!(error = %e, "co-turn: failed to broadcast atomic proposal");
+        }
+    }
+
+    /// Return a participant's signed `VoteAtomicTurn` to the coordinator on the
+    /// blocklace topic. The coordinator's funnel arm tallies it into the
+    /// `Coordinator` persisted in `state::atomic_proposals` and fires the commit
+    /// when the quorum agrees. Published on the same direct eager channel.
+    pub async fn gossip_atomic_vote(
+        &self,
+        proposal_id: [u8; 32],
+        forest_hash: [u8; 32],
+        voter: [u8; 32],
+        vote: bool,
+        signature: Vec<u8>,
+    ) {
+        let peer_msg =
+            PeerMessage::vote_atomic_turn(proposal_id, forest_hash, voter, vote, signature);
+        if let Err(e) = self.gossip.publish_eager(&self.topic, &peer_msg).await {
+            warn!(error = %e, "co-turn: failed to return atomic vote");
+        }
+    }
+
     /// Run the tau ordering function and return newly finalized blocks.
     ///
     /// This is the core consensus function: it computes the deterministic total
@@ -1747,6 +1797,8 @@ async fn handle_blocklace_message(
         // genuinely flows into node B's engine instead of being dropped.
         PeerMessage::ProposeAtomicTurn {
             forest_hash,
+            proposal_id,
+            coordinator,
             forest_data,
             ..
         } => {
@@ -1761,33 +1813,59 @@ async fn handle_blocklace_message(
             match dispatch_atomic_proposal(
                 &forest_data,
                 forest_hash,
+                proposal_id,
+                coordinator,
                 node_id,
                 signing_key,
                 local_ledger,
             ) {
                 Ok(vote) => {
+                    let approve = vote.is_yes();
                     debug!(
                         from = %from,
                         forest = ?&forest_hash[..4],
-                        vote = if vote.is_yes() { "yes" } else { "no" },
+                        vote = if approve { "yes" } else { "no" },
                         "co-turn: evaluated received atomic proposal as participant"
                     );
-                    // NOTE — REMAINING 2PC PLUMBING (out of this weld's scope):
-                    // the locally-produced `vote` should now be gossiped back to
-                    // the coordinator as `PeerMessage::VoteAtomicTurn` and the
-                    // received proposal persisted in node state so a later
-                    // `CommitAtomicTurn` can be applied. That send/persist path
-                    // lives in `node/src/api.rs` (the coordinator broadcast +
-                    // `state::received_proposals`) — owned elsewhere. The flow is
-                    // now LIVE on receive (the variant reaches the engine and a
-                    // real vote is produced); closing the loop is the named
-                    // follow-up.
-                    let _ = vote;
+                    // VOTE-RETURN (the send half of the loop): gossip the signed
+                    // verdict back as `PeerMessage::VoteAtomicTurn`, bound to the
+                    // coordinator's real `proposal_id` so it tallies in
+                    // `Coordinator::receive_vote` on the proposer. The signature
+                    // travels as the raw 64-byte vote sig.
+                    let sig: Vec<u8> = match &vote {
+                        dregg_coord::Vote::Yes { signature } => signature.to_vec(),
+                        dregg_coord::Vote::No { signature, .. } => signature.to_vec(),
+                    };
+                    handle
+                        .gossip_atomic_vote(proposal_id, forest_hash, node_id, approve, sig)
+                        .await;
                 }
                 Err(e) => {
                     debug!(from = %from, error = %e, "co-turn: dropped malformed atomic proposal");
                 }
             }
+            return;
+        }
+
+        // ─── Co-turn flow: a participant's vote returns to the coordinator ──────
+        //
+        // WIRE 3 OF THE LIQUID FRONTIER (the vote-return + tally). The coordinator
+        // that broadcast the `ProposeAtomicTurn` receives each participant's signed
+        // `VoteAtomicTurn` and feeds it into the SAME `Coordinator::receive_vote`
+        // the local `/turn/atomic/vote` HTTP path drives — the coordinator persisted
+        // in `state::atomic_proposals` IS the vote tally. When the quorum of Yes
+        // votes lands, `receive_vote` returns `Decision::Commit` and we drive the
+        // existing commit path (`Coordinator::commit` against the local ledger), so
+        // the co-turn SETTLES across the participants. A No-quorum aborts.
+        PeerMessage::VoteAtomicTurn {
+            proposal_id,
+            forest_hash,
+            voter,
+            vote,
+            signature,
+        } => {
+            tally_returned_vote(state, from, proposal_id, forest_hash, voter, vote, signature)
+                .await;
             return;
         }
 
@@ -1862,6 +1940,8 @@ async fn handle_blocklace_message(
 fn dispatch_atomic_proposal(
     forest_data: &[u8],
     forest_hash: [u8; 32],
+    proposal_id: [u8; 32],
+    coordinator: [u8; 32],
     node_id: [u8; 32],
     signing_key: [u8; 32],
     ledger: dregg_cell::Ledger,
@@ -1869,11 +1949,8 @@ fn dispatch_atomic_proposal(
     // Reconstruct the full forest from the richer wire payload.
     let forest = dregg_coord::AtomicForest::decode_from_wire(forest_data)?;
 
-    // The proposal id is bound to (forest, coordinator) on the coordinator side;
-    // here we bind our vote to the forest hash carried on the wire, which the
-    // coordinator can match against its own `forest.hash`. (Cross-checking the
-    // decoded forest's hash against the announced `forest_hash` rejects a payload
-    // whose body was swapped under a stale hash.)
+    // Anti-tamper #1: the decoded forest's hash must match the announced
+    // `forest_hash` (rejects a payload whose body was swapped under a stale hash).
     if forest.hash != forest_hash {
         return Err(dregg_coord::CoordError::HashMismatch {
             claimed: forest_hash,
@@ -1881,11 +1958,130 @@ fn dispatch_atomic_proposal(
         });
     }
 
+    // Anti-tamper #2 (THE PROPOSAL-ID FIX): recompute the coordinator's proposal
+    // id from `(forest.hash, coordinator)` and verify it equals the claimed
+    // `proposal_id` on the wire. This binds our vote to the coordinator's REAL
+    // proposal id — the same id `Coordinator::receive_vote` verifies the returning
+    // vote's signature against — instead of binding to the bare `forest_hash`. A
+    // forged `proposal_id` (not derivable from this forest + coordinator) is
+    // rejected here rather than producing an unverifiable vote.
+    let expected_pid = dregg_coord::Coordinator::proposal_id_for(&forest.hash, &coordinator);
+    if expected_pid != proposal_id {
+        return Err(dregg_coord::CoordError::HashMismatch {
+            claimed: proposal_id,
+            computed: expected_pid,
+        });
+    }
+
     // Build the participant over our local ledger view and evaluate. This is the
     // in-process coord engine reached: real precondition checks against our cells.
+    // The vote is SIGNED over the coordinator's proposal_id so it verifies on return.
     let cell_id = dregg_cell::CellId(node_id);
     let mut participant = dregg_coord::Participant::new(cell_id, node_id, signing_key, ledger);
-    Ok(participant.evaluate_proposal(&forest_hash, &forest))
+    Ok(participant.evaluate_proposal(&proposal_id, &forest))
+}
+
+/// Tally a returned `VoteAtomicTurn` into the coordinator that proposed it, and
+/// drive the commit when the quorum agrees — the COORDINATOR-SIDE close of the
+/// co-turn loop.
+///
+/// The coordinator persisted in `state::atomic_proposals` under `proposal_id` is
+/// the live vote tally (the same `Coordinator` the local `/turn/atomic/vote` HTTP
+/// path feeds). This funnel arm:
+///   1. reconstructs the `Vote` (Yes/No) from the wire,
+///   2. feeds it into `Coordinator::receive_vote` (which verifies the Ed25519
+///      signature against `(proposal_id, forest.hash)` and the voter's registered
+///      key — a forged vote is rejected here),
+///   3. on `Decision::Commit`, drives the existing `Coordinator::commit` against
+///      the local ledger so the atomic forest SETTLES; on `Decision::Abort`,
+///      aborts; otherwise leaves the proposal Proposing for more votes.
+///
+/// A vote for an unknown `proposal_id` (we are not the coordinator, or it expired)
+/// is dropped — only the proposing node holds the coordinator.
+async fn tally_returned_vote(
+    state: &NodeState,
+    from: SocketAddr,
+    proposal_id: [u8; 32],
+    forest_hash: [u8; 32],
+    voter: [u8; 32],
+    approve: bool,
+    signature: Vec<u8>,
+) {
+    if signature.len() != 64 {
+        debug!(from = %from, "co-turn: dropped returned vote with malformed signature length");
+        return;
+    }
+    let mut sig = [0u8; 64];
+    sig.copy_from_slice(&signature);
+    let vote = if approve {
+        dregg_coord::Vote::yes(sig)
+    } else {
+        dregg_coord::Vote::no("participant rejected", sig)
+    };
+
+    let mut s = state.write().await;
+
+    // We must be the COORDINATOR holding this proposal; otherwise drop.
+    let decision = {
+        let active = match s.atomic_proposals.get_mut(&proposal_id) {
+            Some(p) => p,
+            None => {
+                debug!(
+                    from = %from,
+                    proposal = ?&proposal_id[..4],
+                    "co-turn: returned vote for unknown/expired proposal — dropped"
+                );
+                return;
+            }
+        };
+        // Sanity: the announced forest hash must match the proposal we hold.
+        if active.forest.hash != forest_hash {
+            debug!(from = %from, "co-turn: returned vote forest-hash mismatch — dropped");
+            return;
+        }
+        match active.coordinator.receive_vote(voter, vote) {
+            Ok(maybe_decision) => maybe_decision,
+            Err(e) => {
+                debug!(from = %from, error = %e, "co-turn: returned vote rejected by coordinator");
+                return;
+            }
+        }
+    };
+
+    match decision {
+        Some(dregg_coord::Decision::Commit) => {
+            // Quorum of Yes votes reached: drive the existing commit path against
+            // the local ledger so the atomic forest settles.
+            let mut active = match s.atomic_proposals.remove(&proposal_id) {
+                Some(a) => a,
+                None => return,
+            };
+            match active.coordinator.commit(&mut s.ledger) {
+                Ok(_commit_msg) => {
+                    info!(
+                        from = %from,
+                        proposal = ?&proposal_id[..4],
+                        "co-turn: quorum reached — atomic forest committed across participants"
+                    );
+                }
+                Err(e) => {
+                    let _ = active.coordinator.abort(format!("commit failed: {e}"));
+                    warn!(from = %from, error = %e, "co-turn: commit failed after quorum — aborted");
+                }
+            }
+        }
+        Some(dregg_coord::Decision::Abort) => {
+            if let Some(mut active) = s.atomic_proposals.remove(&proposal_id) {
+                let _ = active
+                    .coordinator
+                    .abort("too many rejections — threshold unreachable");
+                debug!(from = %from, proposal = ?&proposal_id[..4], "co-turn: proposal aborted");
+            }
+        }
+        Some(dregg_coord::Decision::Pending) | None => {
+            // Still collecting votes; the coordinator stays Proposing.
+        }
+    }
 }
 
 /// Record ONE finalization vote into the collector and fire the consensus-wide
@@ -5346,14 +5542,25 @@ mod tests {
         let wire = forest.encode_for_wire();
         assert!(!wire.is_empty(), "the richer payload is non-empty");
 
+        // The coordinator's REAL proposal id (bound to forest + coordinator = A).
+        let proposal_id = dregg_coord::Coordinator::proposal_id_for(&forest_hash, &node_a);
+
         // B receives it: the funnel dispatches into the in-process coord engine
         // instead of `_ => return`. This produces a REAL vote, not a no-op.
-        let vote = dispatch_atomic_proposal(&wire, forest_hash, node_b, signing_key, ledger)
-            .expect("a well-formed proposal must reach the engine and produce a vote");
+        let vote = dispatch_atomic_proposal(
+            &wire,
+            forest_hash,
+            proposal_id,
+            node_a,
+            node_b,
+            signing_key,
+            ledger,
+        )
+        .expect("a well-formed proposal must reach the engine and produce a vote");
 
         // With no failing precondition keyed to B's cell, B's participant votes Yes
-        // — and the signature is bound to (forest_hash, forest.hash), provable by
-        // the coordinator. The point: the variant FLOWED into the engine.
+        // — and the signature is bound to the coordinator's REAL proposal_id, so the
+        // coordinator can verify it in `receive_vote`. The variant FLOWED in.
         assert!(
             vote.is_yes(),
             "B's participant should approve (preconditions hold on its local ledger)"
@@ -5364,8 +5571,8 @@ mod tests {
         };
         let pubkey = dregg_coord::Vote::public_key_from_signing_key(&signing_key);
         assert!(
-            dregg_coord::Vote::verify_yes(&sig, &forest_hash, &forest_hash, &pubkey),
-            "the produced vote must be a genuine engine-signed vote"
+            dregg_coord::Vote::verify_yes(&sig, &proposal_id, &forest_hash, &pubkey),
+            "the vote must be a genuine engine-signed vote bound to the coordinator's proposal_id"
         );
     }
 
@@ -5376,6 +5583,8 @@ mod tests {
         let err = dispatch_atomic_proposal(
             &[0xff, 0x00, 0x13, 0x37],
             [0u8; 32],
+            [0u8; 32],
+            [0x0a; 32],
             [0x0b; 32],
             [0x42; 32],
             dregg_cell::Ledger::new(),
@@ -5400,11 +5609,224 @@ mod tests {
         let forest = make_atomic_forest(node_a, node_b);
         let wire = forest.encode_for_wire();
         let wrong_hash = [0x99; 32];
-        let err = dispatch_atomic_proposal(&wire, wrong_hash, node_b, [0x42; 32], ledger)
-            .unwrap_err();
+        let pid = dregg_coord::Coordinator::proposal_id_for(&wrong_hash, &node_a);
+        let err =
+            dispatch_atomic_proposal(&wire, wrong_hash, pid, node_a, node_b, [0x42; 32], ledger)
+                .unwrap_err();
         assert!(
             matches!(err, dregg_coord::CoordError::HashMismatch { .. }),
             "a forest whose hash disagrees with the announced hash is rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn co_turn_propose_rejects_forged_proposal_id() {
+        // THE PROPOSAL-ID FIX, negatively: a proposal_id NOT derivable from
+        // (forest.hash, coordinator) is rejected before producing a vote — so a
+        // participant never signs a vote bound to a forged id.
+        let node_a = [0x0a; 32];
+        let node_b = [0x0b; 32];
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger
+            .insert_cell(dregg_cell::Cell::with_balance(node_b, [0u8; 32], 1_000))
+            .expect("B's cell");
+        let forest = make_atomic_forest(node_a, node_b);
+        let forest_hash = forest.hash;
+        let wire = forest.encode_for_wire();
+        let forged_pid = [0x55; 32]; // not H(.. || forest_hash || node_a)
+        let err = dispatch_atomic_proposal(
+            &wire,
+            forest_hash,
+            forged_pid,
+            node_a,
+            node_b,
+            [0x42; 32],
+            ledger,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, dregg_coord::CoordError::HashMismatch { .. }),
+            "a forged proposal_id (not bound to forest+coordinator) is rejected: {err}"
+        );
+    }
+
+    // ─── Co-turn 2PC ROUND-TRIP: propose → vote → commit, end to end ───────────
+    //
+    // WIRE 3's BAR: a co-turn proposed by node A flows to B, B votes, the vote
+    // RETURNS to A, and A COMMITS the atomic forest when the quorum agrees. This
+    // drives the exact functions the receive funnels call — `dispatch_atomic_proposal`
+    // (B's vote) and `tally_returned_vote` (A's tally + commit) — against a real
+    // `NodeState`, proving the loop SETTLES (the ledger transitions), not a no-op.
+    #[tokio::test]
+    async fn co_turn_round_trip_propose_vote_commit_settles() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        // Sovereign identities (cell_id == pubkey == node_id): A is the coordinator
+        // + initiator, B is the other participant. Their signing keys ARE their ids.
+        let sk_a = [0x0a; 32];
+        let sk_b = [0x0b; 32];
+        let node_a = dregg_coord::Vote::public_key_from_signing_key(&sk_a);
+        let node_b = dregg_coord::Vote::public_key_from_signing_key(&sk_b);
+
+        // Fund both cells permissively so the transfer executes on commit (mirrors
+        // coord's own `permissive_cell` commit fixtures). `with_balance` derives the
+        // cell id from (pubkey, token); `insert_cell` returns that real id, which we
+        // then use as the forest's from/to/initiator so the commit finds the cells.
+        let permissive_cell = |key: [u8; 32], balance: i64| -> dregg_cell::Cell {
+            let mut cell = dregg_cell::Cell::with_balance(key, [0u8; 32], balance);
+            cell.permissions = dregg_cell::Permissions {
+                send: dregg_cell::AuthRequired::None,
+                receive: dregg_cell::AuthRequired::None,
+                set_state: dregg_cell::AuthRequired::None,
+                set_permissions: dregg_cell::AuthRequired::None,
+                set_verification_key: dregg_cell::AuthRequired::None,
+                increment_nonce: dregg_cell::AuthRequired::None,
+                delegate: dregg_cell::AuthRequired::None,
+                access: dregg_cell::AuthRequired::None,
+            };
+            cell
+        };
+        let (cell_a, cell_b) = {
+            let mut s = state.write().await;
+            let cell_a = s
+                .ledger
+                .insert_cell(permissive_cell(node_a, 1_000))
+                .expect("A's cell");
+            let cell_b = s
+                .ledger
+                .insert_cell(permissive_cell(node_b, 1_000))
+                .expect("B's cell");
+            (cell_a, cell_b)
+        };
+
+        // A builds the atomic forest (transfer 10 from cell_a to cell_b, initiator
+        // = cell_a) over the REAL inserted cell ids. Participants are the node ids
+        // (node_a / node_b) — the protocol identities the 2PC quorum is keyed by.
+        let transfer = dregg_turn::Action {
+            target: cell_a,
+            method: *blake3::hash(b"transfer").as_bytes(),
+            args: vec![],
+            authorization: dregg_turn::Authorization::Unchecked,
+            preconditions: dregg_cell::Preconditions::default(),
+            effects: vec![dregg_turn::Effect::Transfer {
+                from: cell_a,
+                to: cell_b,
+                amount: 10,
+            }],
+            may_delegate: dregg_turn::DelegationMode::None,
+            commitment_mode: dregg_turn::CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut call_forest = dregg_turn::CallForest::new();
+        call_forest.add_root(transfer);
+        let forest = dregg_coord::AtomicForest::new(
+            vec![node_a, node_b],
+            call_forest,
+            vec![],
+            cell_a,
+            0,
+        );
+        let forest_hash = forest.hash;
+        let mut participant_keys = HashMap::new();
+        participant_keys.insert(node_a, node_a);
+        participant_keys.insert(node_b, node_b);
+        let mut coordinator = dregg_coord::Coordinator::new(
+            node_a,
+            sk_a,
+            2, // unanimous: A + B both required
+            dregg_turn::ComputronCosts::default(),
+            u64::MAX,
+            participant_keys,
+        );
+        let propose_msg = coordinator.propose(forest.clone()).expect("A proposes");
+        let proposal_id = propose_msg.proposal_id;
+
+        // A casts ITS OWN Yes vote into its coordinator (mirrors the local path where
+        // the initiator is also a participant). Now the only missing vote is B's.
+        let sig_a = dregg_coord::Vote::sign_yes(&proposal_id, &forest_hash, &sk_a);
+        let pending = coordinator
+            .receive_vote(node_a, dregg_coord::Vote::yes(sig_a))
+            .expect("A's self-vote accepted");
+        assert_eq!(pending, None, "one of two votes in — still pending");
+
+        // Persist the coordinator as the live tally (exactly as `post_atomic_proposal`).
+        {
+            let mut s = state.write().await;
+            s.atomic_proposals.insert(
+                proposal_id,
+                crate::state::ActiveProposal {
+                    coordinator,
+                    created_at: std::time::Instant::now(),
+                    forest: forest.clone(),
+                },
+            );
+        }
+
+        // ─ B's side: receive the broadcast proposal, evaluate, produce a real vote ─
+        let wire = forest.encode_for_wire();
+        let b_ledger = {
+            let s = state.read().await;
+            s.ledger.clone()
+        };
+        let b_vote = dispatch_atomic_proposal(
+            &wire,
+            forest_hash,
+            proposal_id,
+            node_a,
+            node_b,
+            sk_b,
+            b_ledger,
+        )
+        .expect("B reaches the engine and votes");
+        assert!(b_vote.is_yes(), "B approves on its local ledger");
+        let b_sig = match &b_vote {
+            dregg_coord::Vote::Yes { signature } => signature.to_vec(),
+            dregg_coord::Vote::No { signature, .. } => signature.to_vec(),
+        };
+
+        // ─ The vote RETURNS to A: tally it. This is the 2nd Yes of threshold-2, so
+        //   the coordinator decides Commit and `tally_returned_vote` drives the
+        //   commit against A's ledger — the co-turn SETTLES.
+        let nonce_before = {
+            let s = state.read().await;
+            s.ledger.get(&cell_a).unwrap().state.nonce()
+        };
+        let from: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+        tally_returned_vote(&state, from, proposal_id, forest_hash, node_b, true, b_sig).await;
+
+        // SETTLEMENT EVIDENCE: the proposal was consumed (committed, not left
+        // pending) AND the ledger transitioned (initiator nonce bumped by the
+        // executed turn).
+        {
+            let s = state.read().await;
+            assert!(
+                !s.atomic_proposals.contains_key(&proposal_id),
+                "a committed proposal is removed from the active map — the loop settled"
+            );
+            let nonce_after = s.ledger.get(&cell_a).unwrap().state.nonce();
+            assert_eq!(
+                nonce_after,
+                nonce_before + 1,
+                "the committed atomic turn advanced the initiator's nonce — real settlement, not a no-op"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn co_turn_returned_vote_for_unknown_proposal_is_dropped() {
+        // A vote for a proposal this node does not coordinate is harmlessly dropped
+        // (we are not the coordinator / it expired) — no panic, no state change.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        let from: SocketAddr = "127.0.0.1:50001".parse().unwrap();
+        tally_returned_vote(&state, from, [0x77; 32], [0x88; 32], [0x0b; 32], true, vec![0u8; 64])
+            .await;
+        let s = state.read().await;
+        assert!(
+            s.atomic_proposals.is_empty(),
+            "a vote for an unknown proposal changes nothing"
         );
     }
 }
