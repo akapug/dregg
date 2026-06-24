@@ -27,6 +27,16 @@ a doc. Read the doc + the captured artifact (boot/test logs), and verify a dated
 memory's `file:line` against HEAD before asserting it. The summary is a map drawn
 from a moving train; the record is the territory — and the reading IS the job.
 
+## Two traps grep + memory hide
+
+- **`grep -c "sorry\|admit"` over `metatheory/` lies** — `admit` ⊂ `admitGuard`/`admits`,
+  `sorry` ⊂ "sorry-free" docstrings. Proof-completeness = `lake env lean
+  metatheory/Dregg2/Claims.lean` + the `Verify/*Lint.lean` gates. If you grep, `-nw` and
+  read each hit.
+- **A memory/doc note about STATE is a hypothesis — verify at HEAD**, especially
+  pessimistic ones ("X is undone / a hole"). Truth = `CLAIMS.md`, the `Dregg2.lean`
+  annotations, `lake … Claims.lean` — not a memory's mood. A named residual ≠ a hole.
+
 ## Use `cargo nextest`, not bare `cargo test`
 
 `cargo-nextest` is installed. It gives per-test timing, parallelism, and — the
@@ -109,6 +119,10 @@ sg -p 'fn $F($$$) -> Result<$T, SdkError>' -l rust   # shape queries (all fns re
 - The **main loop commits**; subagents don't run git (unless explicitly deputized).
   Never `git stash`, never `git checkout`/revert to discard WIP — it is not
   swarm-safe (every parallel agent shares the working tree).
+- **Never branch or worktree.** Commit to the current branch (`main`) — never
+  `git checkout -b` / `switch -c` / `worktree add`. It strands work and drifts the
+  shared HEAD off `main` for every other terminal on this tree. If
+  `git branch --show-current` ≠ `main` after you commit, you branched by mistake.
 - **Don't edit a file another lane is in.** If a cutover/HARDSWAP is rewriting a
   crate, segregate or work elsewhere; report a needed change rather than racing it.
 - Concurrent persvati build collisions are normal — sleep 60s and retry, don't roll
