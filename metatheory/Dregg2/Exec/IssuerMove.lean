@@ -72,14 +72,16 @@ def issuerMoveK (k : RecordKernelState) (actor : CellId) (a : AssetId) (dst : Ce
     some { k with bal := recTransferBal k.bal (issuerOf a) dst a amt }
   else none
 
-/-- **`issuerBurnK` — THE burn mechanism (W1).** The issuer-move with the direction swapped:
-`src → issuerOf a` of `amt ≥ 0`, gated on mint authority over the **ISSUER** + availability at the
-HOLDER (`amt ≤ bal src a` — `src` is an ordinary cell: you can only burn what you hold) + liveness +
-distinctness. Burning RETURNS value to the well (the well's balance rises toward zero — supply
-shrinks). -/
+/-- **`issuerBurnK` — THE burn mechanism (W1, Stage-3 authority split).** The issuer-move with the
+direction swapped: `src → issuerOf a` of `amt ≥ 0`. The authority leg is the Stage-3 SPLIT:
+**HOLDER SELF-REDEEM** (`actor = src` — the holder reducing its OWN holding) is permissionless;
+burning ANOTHER cell's holding stays issuer-authority-gated (`mintAuthorizedB actor (issuerOf a)`).
+Distinctness + availability at the HOLDER (`amt ≤ bal src a` — you can only burn what you hold) +
+liveness are unchanged (load-bearing for conservation). Burning RETURNS value to the well (the
+well's balance rises toward zero — supply shrinks). -/
 def issuerBurnK (k : RecordKernelState) (actor : CellId) (a : AssetId) (src : CellId) (amt : ℤ) :
     Option RecordKernelState :=
-  if mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
+  if (actor = src ∨ mintAuthorizedB k.caps actor (issuerOf a) = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
       ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a
       ∧ cellLifecycleLive k (issuerOf a) = true then
     some { k with bal := recTransferBal k.bal src (issuerOf a) a amt }
@@ -132,7 +134,8 @@ theorem issuerBurnK_preserves_exact {k k' : RecordKernelState} {actor : CellId} 
     {src : CellId} {amt : ℤ} (h : issuerBurnK issuerOf k actor a src amt = some k')
     (hex : ExactConservation k) : ExactConservation k' := by
   unfold issuerBurnK at h
-  by_cases hg : mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
+  by_cases hg : (actor = src ∨ mintAuthorizedB k.caps actor (issuerOf a) = true) ∧ 0 ≤ amt
+      ∧ amt ≤ k.bal src a
       ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a
       ∧ cellLifecycleLive k (issuerOf a) = true
   · rw [if_pos hg] at h
@@ -157,12 +160,14 @@ theorem issuerMoveK_authorized {k k' : RecordKernelState} {actor : CellId} {a : 
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- Burn's authority gate is over the ISSUER too. -/
+/-- Burn's authority gate (Stage-3 split): a committed burn witnesses EITHER holder self-redeem
+(`actor = src`) OR issuer authority (`mintAuthorizedB actor (issuerOf a)`). -/
 theorem issuerBurnK_authorized {k k' : RecordKernelState} {actor : CellId} {a : AssetId}
     {src : CellId} {amt : ℤ} (h : issuerBurnK issuerOf k actor a src amt = some k') :
-    mintAuthorizedB k.caps actor (issuerOf a) = true := by
+    actor = src ∨ mintAuthorizedB k.caps actor (issuerOf a) = true := by
   unfold issuerBurnK at h
-  by_cases hg : mintAuthorizedB k.caps actor (issuerOf a) = true ∧ 0 ≤ amt ∧ amt ≤ k.bal src a
+  by_cases hg : (actor = src ∨ mintAuthorizedB k.caps actor (issuerOf a) = true) ∧ 0 ≤ amt
+      ∧ amt ≤ k.bal src a
       ∧ src ∈ k.accounts ∧ issuerOf a ∈ k.accounts ∧ src ≠ issuerOf a
       ∧ cellLifecycleLive k (issuerOf a) = true
   · exact hg.1

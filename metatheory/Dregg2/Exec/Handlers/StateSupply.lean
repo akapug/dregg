@@ -129,14 +129,18 @@ def burnStep (k : RecordKernelState) (a : SupplyArgs) : Option RecordKernelState
 def burnH : EffectHandler SupplyArgs where
   step := burnStep
   delta := fun _ _ => 0
-  auth := fun k a => mintAuthorizedB k.caps a.actor a.asset
+  -- STAGE-3 authority split: holder SELF-REDEEM (`actor == cell`, permissionless) OR issuer authority.
+  auth := fun k a => (a.actor == a.cell) || mintAuthorizedB k.caps a.actor a.asset
   admission := fun k a => acceptsEffects k a.cell
   trace := fun a => { actor := a.actor, src := a.cell, dst := a.asset, amt := a.amt }
   auth_gated := by
     intro s a s' h
     unfold burnStep at h
     by_cases hadm : acceptsEffects s a.cell
-    · rw [if_pos hadm] at h; exact recKBurnAsset_authorized s s' a.actor a.cell a.asset a.amt h
+    · rw [if_pos hadm] at h
+      rcases recKBurnAsset_authorized s s' a.actor a.cell a.asset a.amt h with hself | hcap
+      · simp [beq_iff_eq, hself]
+      · simp [hcap]
     · rw [if_neg hadm] at h; exact absurd h (by simp)
   admission_gated := by
     intro s a s' h
@@ -767,6 +771,17 @@ def hs1Destroyed : RecordKernelState :=
 #guard ((execEffect (mintEffect 1 1 0 25) hs0).isSome) == false  --  false
 -- §TEETH-5b: self-mint into the issuer's own well is REJECTED (`a ≠ cell`).
 #guard ((execEffect (mintEffect 0 0 0 25) hs0).isSome) == false  --  false
+-- §TEETH-5c (STAGE-3, the non-self gate STILL bites): a burn of cell 1's holding by an actor (5) who
+-- is NEITHER the holder NOR an issuer-cap holder is REJECTED — burning ANOTHER cell's holding stays
+-- issuer-authority-gated. (Actor 5 holds no caps in hs0; cell 1 ≠ 5.)
+#guard ((execEffect (burnEffect 5 1 0 40) hs0).isSome) == false  --  false (non-self, no issuer cap)
+-- §TEETH-5d (STAGE-3, holder SELF-REDEEM is PERMISSIONLESS): cell 1 burning its OWN 40 of asset 0
+-- (actor = holder = 1, NO issuer cap) now SUCCEEDS — the value returns to well 0, measure UNCHANGED
+-- (holder 50 → 10, well 100 → 140). This is the relaxation: a genuine `cell ≠ asset` holder reduces
+-- its own balance without an issuer cap. (Over-redeem 60 > 50 still REJECTED by holder availability.)
+#guard ((execEffect (burnEffect 1 1 0 40) hs0).map
+        (fun k => (recTotalAsset k 0, k.bal 1 0, k.bal 0 0))) == some (150, 10, 140)  --  some (150, 10, 140)
+#guard ((execEffect (burnEffect 1 1 0 60) hs0).isSome) == false  --  false (self, but over-redeem)
 -- §TEETH-6 (account-growth, neutral): createCell of fresh cell 2 (by privileged actor 0) SUCCEEDS and
 -- leaves the combined measure UNCHANGED (born empty), while growing `accounts`.
 #guard ((execEffect (createCellEffect 0 2) hs0).map

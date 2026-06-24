@@ -745,14 +745,16 @@ def recKMintAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (a
     some { k with bal := recTransferBal k.bal a cell a amt }
   else none
 
-/-- **THE per-asset BURN (W1): the issuer-move with direction swapped.** Burning `amt` of asset `a`
-held by `cell` RETURNS it to the issuer's well (`cell → a`): the well's balance rises toward zero —
-supply shrinks, `Σ_c bal c a` unchanged. Gated on mint authority over the **ISSUER** + availability
-at the HOLDER (`amt ≤ bal cell a` — an ordinary cell can only burn what it holds; only the issuer
-WELL waives availability) + liveness + distinctness. -/
+/-- **THE per-asset BURN (W1, Stage-3 authority split): the issuer-move with direction swapped.**
+Burning `amt` of asset `a` held by `cell` RETURNS it to the issuer's well (`cell → a`): the well's
+balance rises toward zero — supply shrinks, `Σ_c bal c a` unchanged. The authority leg is the
+Stage-3 SPLIT: **HOLDER SELF-REDEEM** (`actor = cell` — the holder reducing its OWN holding) is
+permissionless; burning ANOTHER cell's holding stays issuer-authority-gated
+(`mintAuthorizedB actor a`). Availability at the HOLDER (`amt ≤ bal cell a` — an ordinary cell can
+only burn what it holds) + liveness + distinctness are UNCHANGED (load-bearing for conservation). -/
 def recKBurnAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
     Option RecordKernelState :=
-  if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+  if (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
       ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
       ∧ cellLifecycleLive k a = true then
     some { k with bal := recTransferBal k.bal cell a a amt }
@@ -789,7 +791,7 @@ theorem recKBurnAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a 
     (h : recKBurnAsset k actor cell a amt = some k') (b : AssetId) :
     recTotalAsset k' b = recTotalAsset k b := by
   unfold recKBurnAsset at h
-  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+  by_cases hg : (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
       ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
   · rw [if_pos hg] at h
     simp only [Option.some.injEq] at h
@@ -869,7 +871,7 @@ theorem recKMintAsset_issuer_live (k k' : RecordKernelState) (actor cell : CellI
 theorem recKBurnAsset_issuer_live (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') : a ∈ k.accounts := by
   unfold recKBurnAsset at h
-  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+  by_cases hg : (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
       ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
   · exact hg.2.2.2.2.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -3412,21 +3414,22 @@ theorem execFullA_mintA_authorized (s s' : RecChainedState) (actor cell : CellId
   | none => rw [hm] at h; exact absurd h (by simp)
   | some k' => exact recKMintAsset_authorized s.kernel k' actor cell a amt hm
 
-/-- **`recKBurnAsset_authorized`.** A committed per-asset burn implies the privileged mint
-authority over the ISSUER (W1/E2). -/
+/-- **`recKBurnAsset_authorized` (Stage-3 split).** A committed per-asset burn implies EITHER holder
+self-redeem (`actor = cell` — the holder reducing its own holding, permissionless) OR privileged
+mint authority over the ISSUER (W1/E2). -/
 theorem recKBurnAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') :
-    mintAuthorizedB k.caps actor a = true := by
+    actor = cell ∨ mintAuthorizedB k.caps actor a = true := by
   unfold recKBurnAsset at h
-  by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+  by_cases hg : (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
       ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **Per-asset burn authorized over the ISSUER.** -/
+/-- **Per-asset burn authorized (Stage-3 split): self-redeem OR issuer authority.** -/
 theorem execFullA_burnA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : execFullA s (.burnA actor cell a amt) = some s') :
-    mintAuthorizedB s.kernel.caps actor a = true := by
+    actor = cell ∨ mintAuthorizedB s.kernel.caps actor a = true := by
   simp only [execFullA, recCBurnAsset] at h
   cases hb : recKBurnAsset s.kernel actor cell a amt with
   | none => rw [hb] at h; exact absurd h (by simp)
@@ -3876,8 +3879,11 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .mintA actor _ a _  =>
        mintAuthorizedB s.kernel.caps actor a = true ∧
        a ∈ s.kernel.accounts
-   | .burnA actor _ a _  =>
-       mintAuthorizedB s.kernel.caps actor a = true ∧
+   -- Stage-3 authority split: burn's gate is self-redeem (`actor = cell`, the holder reducing its
+   -- OWN holding — permissionless) OR issuer authority (`mintAuthorizedB actor a`). Mint stays
+   -- issuer-only above; only burn relaxes.
+   | .burnA actor cell a _  =>
+       (actor = cell ∨ mintAuthorizedB s.kernel.caps actor a = true) ∧
        a ∈ s.kernel.accounts
    -- §MA-state: the field-writing pure-state effects carry their REAL authority gate
    -- (`stateAuthB` over the cell) ∧ their `Neutral`/`Monotonic` linearity coloring (the

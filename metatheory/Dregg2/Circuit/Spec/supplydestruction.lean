@@ -21,16 +21,17 @@ The kernel burn (`recKBurnAsset`) is the W1 ISSUER-MOVE with direction swapped �
 per-asset transfer `cell → a` (holder → issuer well) on the PER-ASSET ledger `bal`:
 
     def recKBurnAsset (k) (actor cell) (a) (amt) : Option RecordKernelState :=
-      if mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      if (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
           ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a
       then some { k with bal := recTransferBal k.bal cell a a amt }
       else none
 
 W1 (DREGG3 §2.2): `AssetId := CellId` — the asset IS its issuer cell; burning RETURNS value to the
 issuer's negative-capable well (the well's balance rises toward zero — supply shrinks), so
-`Σ_c bal c a` is EXACTLY unchanged. The authority gate targets the **ISSUER** `a` (E2); the HOLDER
-keeps the ordinary availability gate (`amt ≤ bal cell a` — you can only burn what you hold; only
-the issuer WELL waives availability).
+`Σ_c bal c a` is EXACTLY unchanged. STAGE-3 AUTHORITY SPLIT: holder SELF-REDEEM (`actor = cell` —
+reducing one's own holding) is permissionless; burning ANOTHER cell's holding stays issuer-gated
+(`mintAuthorizedB actor a`, E2). The HOLDER keeps the ordinary availability gate (`amt ≤ bal cell a`
+— you can only burn what you hold; only the issuer WELL waives availability).
 
 ## The spec ⟺ executor theorem (BOTH directions — the crown-jewel shape)
 
@@ -56,7 +57,7 @@ conjunction in `recKBurnAsset` (W1): privileged-supply authority over the **ISSU
 production law's destruction face), non-negativity (no negative-burn value inflation), per-asset
 availability at the HOLDER (no over-burn), holder + issuer-well liveness, and holder ≠ well. -/
 def BurnGuard (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) : Prop :=
-  mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+  (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
     ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
 
 /-- The truthful burn receipt the chained executor prepends to the log: the return-to-well row
@@ -74,7 +75,7 @@ theorem recKBurnAsset_iff_guard (k : RecordKernelState) (actor cell : CellId) (a
   unfold recKBurnAsset BurnGuard
   constructor
   · rintro ⟨k', h⟩
-    by_cases hg : mintAuthorizedB k.caps actor a = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+    by_cases hg : (actor = cell ∨ mintAuthorizedB k.caps actor a = true) ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
         ∧ cell ∈ k.accounts ∧ a ∈ k.accounts ∧ cell ≠ a ∧ cellLifecycleLive k a = true
     · exact hg
     · rw [if_neg hg] at h; exact absurd h (by simp)
@@ -152,7 +153,7 @@ theorem recCBurnAsset_iff_spec (s : RecChainedState) (actor cell : CellId) (a : 
   unfold recCBurnAsset BurnSpec
   -- expose the inner kernel burn `if`
   unfold recKBurnAsset
-  by_cases hg : mintAuthorizedB s.kernel.caps actor a = true ∧ 0 ≤ amt
+  by_cases hg : (actor = cell ∨ mintAuthorizedB s.kernel.caps actor a = true) ∧ 0 ≤ amt
       ∧ amt ≤ s.kernel.bal cell a ∧ cell ∈ s.kernel.accounts ∧ a ∈ s.kernel.accounts ∧ cell ≠ a
       ∧ cellLifecycleLive s.kernel a = true
   · rw [if_pos hg]
@@ -225,12 +226,13 @@ theorem recCBurnAsset_no_overburn {s s' : RecChainedState} {actor cell : CellId}
     {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s') : amt ≤ s.kernel.bal cell a :=
   ((recCBurnAsset_iff_spec s actor cell a amt s').mp h).1.2.2.1
 
-/-- **`recCBurnAsset_authorized`** — fail-closed: a committed burn carries privileged-supply
-(`mintAuthorizedB`) authority over the **ISSUER** `a` (W1/E2). An actor without the issuer
-capability cannot destroy supply. -/
+/-- **`recCBurnAsset_authorized` (Stage-3 split)** — fail-closed: a committed burn carries EITHER
+holder self-redeem (`actor = cell` — reducing one's own holding, permissionless) OR privileged-supply
+(`mintAuthorizedB`) authority over the **ISSUER** `a` (W1/E2). An actor that is neither the holder nor
+holds the issuer capability cannot destroy another cell's supply. -/
 theorem recCBurnAsset_authorized {s s' : RecChainedState} {actor cell : CellId} {a : AssetId}
     {amt : ℤ} (h : recCBurnAsset s actor cell a amt = some s') :
-    mintAuthorizedB s.kernel.caps actor a = true :=
+    actor = cell ∨ mintAuthorizedB s.kernel.caps actor a = true :=
   ((recCBurnAsset_iff_spec s actor cell a amt s').mp h).1.1
 
 /-- **`recCBurnAsset_conserves` (the W1 punchline).** A committed burn leaves EVERY asset's total

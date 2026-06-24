@@ -165,7 +165,8 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
   -- per-cell holder row does not pin cross-cell — `recTransferBal cell a a amt`).
   hledgerFrame : post.kernel.bal = recTransferBal pre.kernel.bal cell a a amt
   -- the residual admissibility legs (kernel side-tables, not in the value block) — the `BurnGuard`.
-  guardAuth : mintAuthorizedB pre.kernel.caps actor a = true
+  -- STAGE-3 authority split: holder self-redeem (`actor = cell`) OR issuer authority.
+  guardAuth : actor = cell ∨ mintAuthorizedB pre.kernel.caps actor a = true
   guardNonNeg : 0 ≤ amt
   guardLiveCell : cell ∈ pre.kernel.accounts
   guardLiveWell : a ∈ pre.kernel.accounts
