@@ -511,6 +511,61 @@ impl Cockpit {
         self.graft_dev_pane(surface, window, cx);
     }
 
+    /// Open a LIVE CARD pane: a hyperdreggmedia CARD ([`CardSurface`]) grafted as a
+    /// split beside the active pane — THE keystone joy-path surface. The card binds
+    /// + fires against the cockpit's LIVE `World` (the operator's `user` anchor
+    /// cell): its `bind` re-reads that cell's counter off the live ledger and its
+    /// `+1` button fires ONE cap-gated verified turn through `World::commit_turn` —
+    /// a receipt the cockpit's own cell inspector immediately sees (the SAME ledger
+    /// the editor pane saves onto). A child clicks the +1 and the count rises; the
+    /// turn bottoms out in the verified executor. Built only here (a live window) —
+    /// the headless bake (`render_card_pane_headless`) is the separate PNG path.
+    ///
+    /// Boots a SpiderMonkey runtime to AUTHOR the view-tree (the engine is a
+    /// process-global singleton, so a second open after one already booted fails;
+    /// it is fail-soft — logged, the workspace untouched). The `card-pane` feature
+    /// pulls deos-js + deos-view; this method is compiled only when it is on (with
+    /// `dev-surfaces`'s graft machinery).
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane", feature = "embedded-executor"))]
+    pub(crate) fn open_card_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use starbridge_v2::dock::card_surface::build_card_surface;
+
+        let id = self.next_dev_surface_id();
+        // The card's substance: the operator's own `user` anchor cell (anchors =
+        // [treasury, service, user]) — the SAME cell the `--render-card-pane` bake
+        // binds, so the dock card and the proven PNG card drive one cell.
+        let agent = self.anchors[2];
+
+        // Boot SpiderMonkey to author the card's `deos.ui.*` tree. The engine is a
+        // process-global singleton; a boot failure (e.g. a second open) is
+        // fail-soft so it can never take down the cockpit — but say so loudly.
+        let mut rt = match deos_js::JsRuntime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("open_card_pane: could not boot SpiderMonkey: {e}");
+                self.last_outcome = Some(format!(
+                    "could not open card (SpiderMonkey boots once per process): {e}"
+                ));
+                cx.notify();
+                return;
+            }
+        };
+
+        let surface: Box<dyn CockpitSurface> =
+            match build_card_surface(id, &mut rt, self.world.clone(), agent, cx) {
+                Ok(card) => Box::new(card),
+                Err(e) => {
+                    eprintln!(
+                        "open_card_pane: could not author the card over the live World: {e:#}"
+                    );
+                    self.last_outcome = Some(format!("could not open card: {e}"));
+                    cx.notify();
+                    return;
+                }
+            };
+        self.graft_dev_pane(surface, window, cx);
+    }
+
     /// Open a LIVE AGENT pane: the CONFINED HERMES agent dock, grafted as a split
     /// beside the active pane. The ADOS dev-loop made visible — a chat pane, the
     /// tool-call ledger (every tool-call a cap-gated RECEIPTED turn, or an in-band

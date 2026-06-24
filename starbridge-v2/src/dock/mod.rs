@@ -65,6 +65,13 @@ pub mod migrate;
 pub mod chat_surface;
 #[cfg(feature = "dev-surfaces")]
 pub mod editor_surface;
+// THE HYPERDREGGMEDIA CARD as a live dock pane (the keystone joy-path weld): a
+// `CardPane` (deos-js applet view-tree → gpui-component widgets, bound + firing
+// against the cockpit's LIVE `World`) hosted exactly like the editor/terminal
+// dev panes. Needs `dev-surfaces` (the `graft_dev_pane` mount machinery) AND
+// `card-pane` (the `CardPane`/`agent_attach`/`deos-view` renderer + deos-js).
+#[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+pub mod card_surface;
 #[cfg(feature = "dev-surfaces")]
 pub mod hermes_surface;
 #[cfg(feature = "dev-surfaces")]
