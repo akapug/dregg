@@ -78,11 +78,10 @@ pub async fn discover_server_affordances(
         viewer,
     );
     let client = reqwest::Client::new();
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| SdkError::Wire(format!("server-affordance discovery request failed: {e}")))?;
+    let resp =
+        client.get(&url).send().await.map_err(|e| {
+            SdkError::Wire(format!("server-affordance discovery request failed: {e}"))
+        })?;
 
     if !resp.status().is_success() {
         return Err(SdkError::Wire(format!(
@@ -144,14 +143,15 @@ pub struct FireOutcome {
 /// ingress — a real verified turn on the node's live ledger.
 ///
 /// The flow is the genuine remote-client path:
-///   1. read the agent cell's current nonce off the node (`GET /api/cell/{agent}`) — the
-///      executor rejects a stale nonce;
+///   1. read the agent cell's current nonce off the node (`GET /api/cell/{agent}`) and the
+///      node's receipt-chain head (`GET /api/receipts`) — the executor rejects a stale
+///      nonce or a turn that does not thread the current chain head;
 ///   2. build a single-action turn (`signer.make_action` over `effects`, signed against
-///      the executor's `federation_id` from discovery), with `previous_receipt_hash =
-///      None` (no chain-head pin — the node accepts an unpinned turn) and a `fee` set to
-///      the turn's estimated computron cost (the node's budget gate caps `used ≤ fee`,
-///      and the cost is a pure function of the effects — the standard `ComputronCosts`,
-///      the same the node's executor uses — so a client estimates it without a ledger);
+///      the executor's `federation_id` from discovery), threading the fetched chain head
+///      as `previous_receipt_hash`, with a `fee` set to the turn's estimated computron
+///      cost (the node's budget gate caps `used ≤ fee`, and the cost is a pure function of
+///      the effects — the standard `ComputronCosts`, the same the node's executor uses —
+///      so a client estimates it without a ledger);
 ///   3. POST the postcard-encoded `SignedTurn` to `/turns/submit` and read the verdict.
 ///
 /// The node re-checks every effect against the executor's authority gate, so the fire only
@@ -170,8 +170,9 @@ pub async fn fire_affordance(
     let federation_id = decode_32(federation_id_hex)
         .ok_or_else(|| SdkError::Wire("federation id is not 32 bytes of hex".into()))?;
 
-    // (1) the agent cell's current nonce off the live node ledger.
+    // (1) the agent cell's current nonce + the node's receipt-chain head off the live node.
     let nonce = fetch_cell_nonce(node_url, &agent).await?;
+    let chain_head = fetch_chain_head(node_url).await?;
 
     // (2) build + sign the single-action fire turn.
     let action = signer.make_action(agent, method, effects, &federation_id);
@@ -180,18 +181,17 @@ pub async fn fire_affordance(
     turn.nonce = nonce;
     turn.memo = Some(format!("deos_server_{method}"));
     turn.valid_until = Some(i64::MAX / 2);
-    // No chain-head pin: the node's ingress accepts an unpinned turn (it only verifies a
-    // `previous_receipt_hash` when one is supplied), so a remote client need not track the
-    // node's receipt chain head.
-    turn.previous_receipt_hash = None;
+    // Thread the node's current receipt-chain head: the executor rejects a turn that does
+    // not pin the head when the chain is non-empty (and `None` when it is empty).
+    turn.previous_receipt_hash = chain_head;
     // The fee is the budget ceiling the node's gate caps `used` against. The cost is a pure
     // function of the effects (standard `ComputronCosts`, the same the node uses), so a
     // client estimates it with a bare executor — no ledger needed.
     turn.fee = TurnExecutor::new(ComputronCosts::default()).estimate_cost(&turn);
 
     let signed = signer.sign_turn(&turn);
-    let signed_bytes =
-        postcard::to_stdvec(&signed).map_err(|e| SdkError::Wire(format!("serialize SignedTurn: {e}")))?;
+    let signed_bytes = postcard::to_stdvec(&signed)
+        .map_err(|e| SdkError::Wire(format!("serialize SignedTurn: {e}")))?;
 
     // (3) POST the postcard SignedTurn to the genuine remote ingress.
     let url = format!("{node_url}/turns/submit");
@@ -217,8 +217,14 @@ pub async fn fire_affordance(
         .map_err(|e| SdkError::Wire(format!("failed to parse submit response: {e}")))?;
 
     Ok(FireOutcome {
-        accepted: body.get("accepted").and_then(|a| a.as_bool()).unwrap_or(false),
-        turn_hash: body.get("turn_hash").and_then(|h| h.as_str()).map(String::from),
+        accepted: body
+            .get("accepted")
+            .and_then(|a| a.as_bool())
+            .unwrap_or(false),
+        turn_hash: body
+            .get("turn_hash")
+            .and_then(|h| h.as_str())
+            .map(String::from),
         error: body.get("error").and_then(|e| e.as_str()).map(String::from),
     })
 }
@@ -258,6 +264,46 @@ async fn fetch_cell_nonce(node_url: &str, cell: &CellId) -> Result<u64, SdkError
     }
 
     Ok(body.get("nonce").and_then(|n| n.as_u64()).unwrap_or(0))
+}
+
+/// Read the node's current receipt-chain head (`GET /api/receipts`) — the `receipt_hash`
+/// of the entry flagged `chain_head`. The executor requires a turn to thread this head
+/// (and `None` when the chain is empty); a fire that does not pin it is rejected with a
+/// "receipt chain mismatch".
+async fn fetch_chain_head(node_url: &str) -> Result<Option<[u8; 32]>, SdkError> {
+    let url = format!("{}/api/receipts", node_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| SdkError::Wire(format!("receipts request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err(SdkError::Wire(format!(
+            "receipts returned status {}",
+            resp.status()
+        )));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| SdkError::Wire(format!("failed to parse receipts response: {e}")))?;
+
+    let head_hex = body.as_array().and_then(|arr| {
+        arr.iter()
+            .find(|r| r.get("chain_head").and_then(|h| h.as_bool()) == Some(true))
+            .and_then(|r| r.get("receipt_hash"))
+            .and_then(|h| h.as_str())
+    });
+
+    match head_hex {
+        Some(hex) => decode_32(hex)
+            .map(Some)
+            .ok_or_else(|| SdkError::Wire("chain-head receipt_hash is not 32 bytes of hex".into())),
+        None => Ok(None),
+    }
 }
 
 /// Decode a 64-char hex string into a 32-byte array. `None` on malformed input.

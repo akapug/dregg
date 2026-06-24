@@ -2426,8 +2426,7 @@ pub async fn get_server_affordances(
     // (on a solo/unconfigured node this is `blake3(pubkey)`, not the raw `federation_id`).
     // A remote client cannot derive it, so discovery hands it back: everything needed to
     // build + sign a fire turn arrives in one round-trip.
-    let executor_federation_id =
-        hex_encode(&crate::executor_setup::federation_id_for_executor(&s));
+    let executor_federation_id = hex_encode(&crate::executor_setup::federation_id_for_executor(&s));
     drop(s);
 
     // Project per-viewer via the proven attenuation lattice (the deos-reflect surface).
@@ -9063,11 +9062,18 @@ mod tests {
             resp.committed,
             "a self-fulfillable intent must commit through the verified ledger, not pool"
         );
-        assert!(!resp.stored, "a committed intent is NOT a pooled (stored) entry");
+        assert!(
+            !resp.stored,
+            "a committed intent is NOT a pooled (stored) entry"
+        );
         let turn_hash = resp
             .turn_hash
             .expect("a committed intent must carry a real receipt turn_hash");
-        assert_eq!(turn_hash.len(), 64, "turn_hash must be a 32-byte hex digest");
+        assert_eq!(
+            turn_hash.len(),
+            64,
+            "turn_hash must be a 32-byte hex digest"
+        );
 
         // The VALUE ACTUALLY MOVED through the ledger (the proof this is a real commit,
         // not a stub): payer debited, recipient credited, exactly `amount`.
@@ -9087,7 +9093,9 @@ mod tests {
             !s.intent_pool.contains_key(&intent.id),
             "a committed intent must not also rot in the pool"
         );
-        eprintln!("[INTENT WELD] submit → verified commit → value moved {amount} (receipt {turn_hash})");
+        eprintln!(
+            "[INTENT WELD] submit → verified commit → value moved {amount} (receipt {turn_hash})"
+        );
     }
 
     /// Without a fulfiller, the intent has no counter-leg yet: it POOLS (the prior
@@ -9139,8 +9147,16 @@ mod tests {
 
         // The ledger is untouched (fail-closed) and nothing was laundered into the pool.
         let s = state.read().await;
-        assert_eq!(balance_of(&s, &payer_id), 10, "refused commit must not move value");
-        assert_eq!(balance_of(&s, &recipient_id), 0, "refused commit must not move value");
+        assert_eq!(
+            balance_of(&s, &payer_id),
+            10,
+            "refused commit must not move value"
+        );
+        assert_eq!(
+            balance_of(&s, &recipient_id),
+            0,
+            "refused commit must not move value"
+        );
         assert!(
             !s.intent_pool.contains_key(&intent.id),
             "a refused payable intent must not be silently pooled"

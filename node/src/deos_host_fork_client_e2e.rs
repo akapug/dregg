@@ -103,17 +103,26 @@ async fn server_forks_instance_and_client_discovers_and_fires_over_http() {
         let mut s = state.write().await;
         let mut player = Cell::with_balance(player_pubkey, default_token_id(), 1_000_000);
         player.permissions = open_permissions();
-        assert_eq!(player.id(), player_cell, "player cell id must match derivation");
+        assert_eq!(
+            player.id(),
+            player_cell,
+            "player cell id must match derivation"
+        );
         s.ledger.insert_cell(player).expect("insert player cell");
     }
 
     // ── (2) HOST fork_gm.js — its setup FORKS a party instance + registers a
     //        cap-gated affordance scoped to it ──────────────────────────────────────
-    let program = include_str!("../tests/fixtures/fork_gm.js").to_string();
-    let server_cell =
-        crate::deos_host::host_server_program(&state, "fork-gamemaster", AuthRequired::None, program)
-            .await
-            .expect("host the fork_gm.js private server");
+    let program =
+        include_str!("../tests/fixtures/fork_gm.js").replace("__PLAYER__", &hex_of(&player_cell));
+    let server_cell = crate::deos_host::host_server_program(
+        &state,
+        "fork-gamemaster",
+        AuthRequired::None,
+        program,
+    )
+    .await
+    .expect("host the fork_gm.js private server");
 
     // The instance the fork minted (deterministic from its seed).
     let instance_cell = forked_cell_for("party-session-1");
