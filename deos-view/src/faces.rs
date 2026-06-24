@@ -60,18 +60,61 @@ fn faces_json(applet: &Applet) -> Option<String> {
     cell_present_json(applet.ledger(), &applet.cell(), applet.full_receipts())
 }
 
+/// A face with its display strings PRE-FORMATTED at construction (the faces are
+/// immutable parsed data, so the `format!`s never change between paints). Render walks
+/// these cached strings instead of re-`format!`ing every field/header each frame.
+struct RenderedFace {
+    /// `"[{kind}] {label}"` — the card header.
+    header: String,
+    body: RenderedBody,
+}
+
+enum RenderedBody {
+    Fields {
+        /// `"{title} — {subtitle}"`.
+        summary: String,
+        /// Per field: (`"{key}:"`, `render_value(ty, value)`), pre-formatted.
+        rows: Vec<(String, String)>,
+    },
+    /// `"‹{kind} face — rendered as a tag in this slice›"`.
+    Other(String),
+}
+
+impl RenderedFace {
+    fn from_face(face: &Face) -> Self {
+        let header = format!("[{}] {}", face.kind, face.label);
+        let body = match &face.body {
+            FaceBody::Fields { value } => RenderedBody::Fields {
+                summary: format!("{} — {}", value.title, value.subtitle),
+                rows: value
+                    .fields
+                    .iter()
+                    .map(|f| (format!("{}:", f.key), render_value(&f.ty, &f.value)))
+                    .collect(),
+            },
+            FaceBody::Other => RenderedBody::Other(format!(
+                "‹{} face — rendered as a tag in this slice›",
+                face.kind
+            )),
+        };
+        RenderedFace { header, body }
+    }
+}
+
 /// The inspector view — the moldable `present()` faces of a cell, rendered through the
 /// SAME widget vocabulary the applet view uses (the §7 unification).
 pub struct FacesView {
-    faces: Vec<Face>,
+    faces: Vec<RenderedFace>,
 }
 
 impl FacesView {
     /// Build a faces view from the applet's own cell. Returns `None` if the cell has no
-    /// presentable faces (it always does once minted).
+    /// presentable faces (it always does once minted). The faces' display strings are
+    /// formatted ONCE here (they are immutable), so paint is allocation-light.
     pub fn for_applet(applet: &Applet) -> Option<Self> {
         let json = faces_json(applet)?;
-        let faces: Vec<Face> = serde_json::from_str(&json).ok()?;
+        let parsed: Vec<Face> = serde_json::from_str(&json).ok()?;
+        let faces = parsed.iter().map(RenderedFace::from_face).collect();
         Some(Self { faces })
     }
 
@@ -101,37 +144,28 @@ impl Render for FacesView {
                 .border_1()
                 .border_color(border)
                 .child(
-                    Label::new(format!("[{}] {}", face.kind, face.label))
+                    Label::new(face.header.clone())
                         .font_weight(FontWeight::BOLD)
                         .text_color(fg),
                 );
             match &face.body {
-                FaceBody::Fields { value } => {
-                    card = card.child(
-                        Label::new(format!("{} — {}", value.title, value.subtitle))
-                            .text_color(muted),
-                    );
-                    for f in &value.fields {
+                RenderedBody::Fields { summary, rows } => {
+                    card = card.child(Label::new(summary.clone()).text_color(muted));
+                    for (key, value) in rows {
                         card = card.child(
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    Label::new(format!("{}:", f.key))
+                                    Label::new(key.clone())
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(fg),
                                 )
-                                .child(Label::new(render_value(&f.ty, &f.value)).text_color(muted)),
+                                .child(Label::new(value.clone()).text_color(muted)),
                         );
                     }
                 }
-                FaceBody::Other => {
-                    card = card.child(
-                        Label::new(format!(
-                            "‹{} face — rendered as a tag in this slice›",
-                            face.kind
-                        ))
-                        .text_color(muted),
-                    );
+                RenderedBody::Other(tag) => {
+                    card = card.child(Label::new(tag.clone()).text_color(muted));
                 }
             }
             root = root.child(card);

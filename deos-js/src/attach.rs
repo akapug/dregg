@@ -262,9 +262,15 @@ impl AttachedApplet {
         model
     }
 
-    /// Witnessed read of one model field as a u64 (the scalar shape).
+    /// Witnessed read of one model field as a u64 (the scalar shape) — direct off the
+    /// attached ledger, with no whole-cell `CellModel`/`BTreeMap` projection for a
+    /// single scalar (called per `bind` per frame).
     pub fn get_u64(&self, slot: Slot) -> u64 {
-        self.model().field_u64(slot)
+        let agent = self.agent;
+        let mut v = 0u64;
+        self.sink
+            .with_ledger(&mut |l| v = CellModel::field_u64_direct(l, &agent, slot));
+        v
     }
 
     /// **Fire an affordance** — commit ONE cap-gated verified turn ON THE LIVE WORLD.
@@ -298,8 +304,8 @@ impl AttachedApplet {
         //     (the historical spike shape). The turn's ACTOR is always the agent's cell
         //     (a fire cannot cross to another vessel).
         let effects = if aff.effects.is_empty() {
-            let model = self.model();
-            let cur = model.field_u64(self.counter_slot) as i64;
+            // Read just the counter slot directly (no whole-cell model projection).
+            let cur = self.get_u64(self.counter_slot) as i64;
             let next = (cur + arg).max(0) as u64;
             let value: FieldElement = crate::applet::pack_u64(next);
             vec![

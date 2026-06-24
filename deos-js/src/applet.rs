@@ -90,6 +90,19 @@ impl CellModel {
         CellModel { fields, nonce }
     }
 
+    /// Read ONE model field as a u64 directly off the ledger — WITHOUT projecting the
+    /// whole cell into a [`CellModel`] (which builds an entire `BTreeMap` over all
+    /// `STATE_SLOTS`). The hot read path (`get_u64`, a `bind` re-read, a counter-bump's
+    /// current value) calls this per slot; building a map to pull one scalar is pure
+    /// waste. Absent cell / empty slot reads back 0 (the same default `field_u64` gives).
+    pub fn field_u64_direct(ledger: &dregg_cell::Ledger, cell_id: &CellId, slot: Slot) -> u64 {
+        ledger
+            .get(cell_id)
+            .and_then(|cell| cell.state.get_field(slot).copied())
+            .map(|fe| unpack_u64(&fe))
+            .unwrap_or(0)
+    }
+
     /// An empty model (no fields, nonce 0) — the default a closure-passing ledger
     /// read fills in (the attach path projects through `with_ledger`).
     pub fn from_ledger_empty() -> Self {
@@ -363,9 +376,10 @@ impl Applet {
         CellModel::from_ledger(self.engine.ledger(), &self.cell)
     }
 
-    /// Witnessed read of one model field as a u64.
+    /// Witnessed read of one model field as a u64 — direct off the ledger (no whole-cell
+    /// `CellModel`/`BTreeMap` projection for a single scalar).
     pub fn get_u64(&self, slot: Slot) -> u64 {
-        self.model().field_u64(slot)
+        CellModel::field_u64_direct(self.engine.ledger(), &self.cell, slot)
     }
 
     /// **Fire an affordance** — commit ONE cap-gated verified turn on the embedded

@@ -250,14 +250,26 @@ impl ServoRenderingContext for ServoGpuContext {
         // GL's framebuffer origin is bottom-left; flip vertically so the tile is
         // upright (row 0 = top) — the SAME flip servo's `read_framebuffer_to_image`
         // does, kept here so the GPU tile matches the SWGL/PNG convention.
+        //
+        // IN-PLACE: swap symmetric row pairs through one small per-row scratch buffer
+        // (`stride` bytes), instead of cloning the WHOLE `w*h*4` framebuffer. The two
+        // halves never alias, so `split_at_mut` hands out disjoint mutable slices the
+        // borrow checker accepts; the middle row (odd height) is already in place.
         let rect = source_rectangle.to_usize();
         let stride = rect.width() * 4;
-        if stride > 0 && rect.height() > 0 {
-            let orig = pixels.clone();
-            for y in 0..rect.height() {
-                let dst = y * stride;
-                let src = (rect.height() - y - 1) * stride;
-                pixels[dst..dst + stride].clone_from_slice(&orig[src..src + stride]);
+        if stride > 0 && rect.height() > 1 {
+            let rows = rect.height();
+            let mut scratch = vec![0u8; stride];
+            for y in 0..rows / 2 {
+                let top = y * stride;
+                let bot = (rows - y - 1) * stride;
+                // top..top+stride and bot..bot+stride are disjoint (y < rows-y-1).
+                let (head, tail) = pixels.split_at_mut(bot);
+                let top_row = &mut head[top..top + stride];
+                let bot_row = &mut tail[..stride];
+                scratch.copy_from_slice(top_row);
+                top_row.copy_from_slice(bot_row);
+                bot_row.copy_from_slice(&scratch);
             }
         }
 

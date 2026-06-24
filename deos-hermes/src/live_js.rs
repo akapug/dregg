@@ -107,12 +107,14 @@ where
         call: &ToolCallRequest,
         now: i64,
     ) -> (PermissionOutcome, JsRunRecord) {
-        let script = script_of_call(call);
         let sink = (self.sink_factory)();
 
+        // Build the record OWNING the script (one allocation), then borrow it back for
+        // the run — instead of building the script, cloning it into the record, AND
+        // keeping the original to pass by ref (two live copies of the same string).
         let mut record = JsRunRecord {
             tool_call_id: call.tool_call_id.clone(),
-            script: script.clone(),
+            script: script_of_call(call),
             ..Default::default()
         };
 
@@ -123,7 +125,7 @@ where
             &mut self.gateway,
             call,
             now,
-            &script,
+            &record.script,
         ) {
             Ok(outcome) => {
                 record.result = outcome.result;

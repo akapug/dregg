@@ -214,15 +214,21 @@ impl CardPane {
 
 impl Render for CardPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tree = self.tree.clone();
         let title = self.title.clone();
         let app: &mut App = cx;
         let header_fg = app.theme().muted_foreground;
         let border = app.theme().border;
+        let background = app.theme().background;
+        let foreground = app.theme().foreground;
+        // Walk the view-tree by BORROW (`&self.tree`) — it can be a large `ViewNode`,
+        // and a deep clone every paint is pure waste; `node` only reads it. `self` is
+        // borrowed immutably here, `app` is `cx` (a distinct object), so the two
+        // borrows don't conflict.
+        let body = self.node(&self.tree, window, app);
         div()
             .size_full()
-            .bg(app.theme().background)
-            .text_color(app.theme().foreground)
+            .bg(background)
+            .text_color(foreground)
             .child(
                 // The surface chrome — a titled card frame so it reads as a cockpit pane.
                 v_flex()
@@ -234,7 +240,7 @@ impl Render for CardPane {
                                 .text_color(header_fg),
                         ),
                     )
-                    .child(self.node(&tree, window, app)),
+                    .child(body),
             )
     }
 }
