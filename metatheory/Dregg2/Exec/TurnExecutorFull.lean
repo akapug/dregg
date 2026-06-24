@@ -172,6 +172,7 @@ theorem recKBurn_delta (k k' : RecordKernelState) (actor cell : CellId) (amt : �
 
 /-- **No mint without authority** (the integrity shadow of the privileged supply
 generator). A committed record mint implies the actor held mint authority over `cell`. -/
+@[gate_projection]
 theorem recKMint_authorized (k k' : RecordKernelState) (actor cell : CellId) (amt : ℤ)
     (h : recKMint k actor cell amt = some k') : mintAuthorizedB k.caps actor cell = true := by
   unfold recKMint at h
@@ -179,7 +180,9 @@ theorem recKMint_authorized (k k' : RecordKernelState) (actor cell : CellId) (am
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **No burn without authority.** A committed record burn implies mint authority. -/
+/-- **GATE-EXTRACT — not the authority guarantee.** A committed record burn implies mint authority
+(re-lists `recKBurn`'s own gate). The genuine binding is the iff over the independent burn spec. -/
+@[gate_projection]
 theorem recKBurn_authorized (k k' : RecordKernelState) (actor cell : CellId) (amt : ℤ)
     (h : recKBurn k actor cell amt = some k') : mintAuthorizedB k.caps actor cell = true := by
   unfold recKBurn at h
@@ -838,8 +841,12 @@ theorem recKBurnAssetLegacy_delta (k k' : RecordKernelState) (actor cell : CellI
     exact recBalCredit_recTotalAsset k.accounts k.bal cell a (-amt) hcell b
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- No per-asset mint without authority **over the ISSUER** (E2: the gate target is the asset's
-issuer cell `a`, NOT the recipient — the production law in executable form). -/
+/-- **GATE-EXTRACT (not the authority guarantee).** No per-asset mint without authority **over the
+ISSUER** (E2: the gate target is the asset's issuer cell `a`, NOT the recipient). This `unfold; exact
+hg.1` re-lists `recKMintAsset`'s OWN gate — a LOCAL helper (the `mintH` handler-floor `auth_gated`).
+The GENUINE production-law-E2 binding is `Circuit.Spec.SupplyCreation.mintA_authorized` (through
+`execMintA_iff_spec` over the INDEPENDENT `MintASpec`); the AssuranceCase cites THAT. -/
+@[gate_projection]
 theorem recKMintAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recKMintAsset k actor cell a amt = some k') :
     mintAuthorizedB k.caps actor a = true := by
@@ -1688,6 +1695,7 @@ theorem makeSovereignStep_commitment_present {s s' : RecChainedState} {actor tar
 
 /-- **`makeSovereignStep` authorized.** A committed rebind implies the actor held authority
 over `target` (dregg1's self-sovereign gate). -/
+@[gate_projection]
 theorem makeSovereignStep_authorized {s s' : RecChainedState} {actor target : CellId}
     (h : makeSovereignStep s actor target = some s') :
     stateAuthB s.kernel.caps actor target = true :=
@@ -3331,6 +3339,7 @@ theorem execFullA_obsadvance (s s' : RecChainedState) (fa : FullActionA)
 
 /-- **Per-asset balance authorized.** A committed per-asset transfer was authorized
 (`authorizedB` at the pre-state), via `recKExecAsset_authorized`. -/
+@[gate_projection]
 theorem execFullA_balance_authorized (s s' : RecChainedState) (t : Turn) (a : AssetId)
     (h : execFullA s (.balanceA t a) = some s') : authorizedB s.kernel.caps t = true := by
   simp only [execFullA, recCexecAsset] at h
@@ -3406,6 +3415,7 @@ theorem execFullA_revoke_removeEdge (s s' : RecChainedState) (holder t : CellId)
 /-- **Per-asset mint authorized over the ISSUER (W1/E2).** A committed per-asset mint implies the
 privileged mint authority over the asset's ISSUER cell `a` (`recKMintAsset_authorized`) — the
 production law: authority to mint IS the issuer capability, never a recipient-shaped grant. -/
+@[gate_projection]
 theorem execFullA_mintA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : execFullA s (.mintA actor cell a amt) = some s') :
     mintAuthorizedB s.kernel.caps actor a = true := by
@@ -3414,9 +3424,12 @@ theorem execFullA_mintA_authorized (s s' : RecChainedState) (actor cell : CellId
   | none => rw [hm] at h; exact absurd h (by simp)
   | some k' => exact recKMintAsset_authorized s.kernel k' actor cell a amt hm
 
-/-- **`recKBurnAsset_authorized` (Stage-3 split).** A committed per-asset burn implies EITHER holder
-self-redeem (`actor = cell` — the holder reducing its own holding, permissionless) OR privileged
-mint authority over the ISSUER (W1/E2). -/
+/-- **GATE-EXTRACT (Stage-3 split) — not the authority guarantee.** A committed per-asset burn implies
+EITHER holder self-redeem (`actor = cell` — permissionless) OR privileged mint authority over the
+ISSUER (W1/E2). This `unfold; exact hg.1` re-lists `recKBurnAsset`'s OWN gate — a LOCAL helper (the
+`burnH` handler-floor `auth_gated`). The GENUINE binding is `Circuit.Spec.SupplyDestruction
+.recCBurnAsset_authorized` (through `recCBurnAsset_iff_spec` over the INDEPENDENT `BurnSpec`). -/
+@[gate_projection]
 theorem recKBurnAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') :
     actor = cell ∨ mintAuthorizedB k.caps actor a = true := by
@@ -3427,6 +3440,7 @@ theorem recKBurnAsset_authorized (k k' : RecordKernelState) (actor cell : CellId
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
 /-- **Per-asset burn authorized (Stage-3 split): self-redeem OR issuer authority.** -/
+@[gate_projection]
 theorem execFullA_burnA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : execFullA s (.burnA actor cell a amt) = some s') :
     actor = cell ∨ mintAuthorizedB s.kernel.caps actor a = true := by
@@ -3471,6 +3485,7 @@ creation authority + the freshness gate (proved earlier as `createCellChainA_aut
 privileged mint authority over the bridged asset's ISSUER — the BRIDGE cell `a` itself (W1: the
 bridge cell IS the issuer of the bridged asset; its well carries −(outstanding bridged supply)).
 The foreign finality is the §8 portal, discharged outside Lean. REUSES `recKMintAsset_authorized`. -/
+@[gate_projection]
 theorem execFullA_bridgeMintA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (value : ℤ) (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
     mintAuthorizedB s.kernel.caps actor a = true := by
@@ -3540,6 +3555,7 @@ vacuous: an actor without authority over `cell` cannot commit a field write (see
 
 /-- **`setFieldA` authorized.** A committed `setFieldA` implies the actor held authority over
 `cell` (`stateAuthB` — the faithful model of dregg1's `SetState` cross-cell / ownership gate). -/
+@[gate_projection]
 theorem execFullA_setFieldA_authorized (s s' : RecChainedState) (actor cell : CellId) (f : FieldName)
     (v : Int) (h : execFullA s (.setFieldA actor cell f v) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3549,6 +3565,7 @@ theorem execFullA_setFieldA_authorized (s s' : RecChainedState) (actor cell : Ce
 
 /-- **`incrementNonceA` authorized.** Implies the actor held authority over `cell` (the
 `IncrementNonce` cross-cell / ownership gate). -/
+@[gate_projection]
 theorem execFullA_incrementNonceA_authorized (s s' : RecChainedState) (actor cell : CellId) (n : Int)
     (h : execFullA s (.incrementNonceA actor cell n) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3558,6 +3575,7 @@ theorem execFullA_incrementNonceA_authorized (s s' : RecChainedState) (actor cel
 /-- **`setPermissionsA` authorized.** Implies the actor held authority over `cell` (the
 `SetPermissions` gate; dregg1 applies the permission write LAST off the ORIGINAL snapshot, so the
 gate is evaluated against the PRE-state caps — exactly `stateAuthB s.kernel.caps`, the pre-state). -/
+@[gate_projection]
 theorem execFullA_setPermissionsA_authorized (s s' : RecChainedState) (actor cell : CellId) (p : Int)
     (h : execFullA s (.setPermissionsA actor cell p) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3565,6 +3583,7 @@ theorem execFullA_setPermissionsA_authorized (s s' : RecChainedState) (actor cel
 
 /-- **`setVKA` authorized.** Implies the actor held authority over `cell` (the
 `SetVerificationKey` gate). -/
+@[gate_projection]
 theorem execFullA_setVKA_authorized (s s' : RecChainedState) (actor cell : CellId) (vk : Int)
     (h : execFullA s (.setVKA actor cell vk) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3572,6 +3591,7 @@ theorem execFullA_setVKA_authorized (s s' : RecChainedState) (actor cell : CellI
 
 /-- **`setProgramA` authorized.** Implies the actor held authority over `cell` (the
 `SetProgram` gate). -/
+@[gate_projection]
 theorem execFullA_setProgramA_authorized (s s' : RecChainedState) (actor cell : CellId) (prog : Int)
     (h : execFullA s (.setProgramA actor cell prog) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3587,6 +3607,7 @@ claim. -/
 self-sovereign gate: `cell == action_target` ⇒ the cell's own authority). FILL #133: the action is a
 VALUE-REBIND (the readable state is dropped behind the §8 commitment), so the gate routes through
 `makeSovereignStep_authorized`, not the generic `stateStep`. -/
+@[gate_projection]
 theorem execFullA_makeSovereignA_authorized (s s' : RecChainedState) (actor cell : CellId)
     (h : execFullA s (.makeSovereignA actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3594,6 +3615,7 @@ theorem execFullA_makeSovereignA_authorized (s s' : RecChainedState) (actor cell
 
 /-- **`refusalA` authorized.** Implies the actor held authority over `cell` (dregg1's
 cross-cell `SetState` gate). Refusal NEVER mutates balance/caps/value — the move is the audit write. -/
+@[gate_projection]
 theorem execFullA_refusalA_authorized (s s' : RecChainedState) (actor cell : CellId)
     (h : execFullA s (.refusalA actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3601,6 +3623,7 @@ theorem execFullA_refusalA_authorized (s s' : RecChainedState) (actor cell : Cel
 
 /-- **`receiptArchiveA` authorized.** Implies the actor held authority over `cell` (dregg1's
 checkpoint cell_id = action_target gate). The archive is a lifecycle/log write. -/
+@[gate_projection]
 theorem execFullA_receiptArchiveA_authorized (s s' : RecChainedState) (actor cell : CellId)
     (h : execFullA s (.receiptArchiveA actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3613,18 +3636,21 @@ the no-parent / fresh-snapshot guards are the SEPARATE kernel-level obligations
 `refreshDelegationChainA_noParent_rejects` / `refreshDelegationChainA_snapshots_parent`). -/
 
 /-- **`cellSealA` authorized.** A committed seal implies the actor held authority over `cell`. -/
+@[gate_projection]
 theorem execFullA_cellSealA_authorized (s s' : RecChainedState) (actor cell : CellId)
     (h : execFullA s (.cellSealA actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   (cellSealChainA_factors (by simpa only [execFullA] using h)).1.1
 
 /-- **`cellUnsealA` authorized.** -/
+@[gate_projection]
 theorem execFullA_cellUnsealA_authorized (s s' : RecChainedState) (actor cell : CellId)
     (h : execFullA s (.cellUnsealA actor cell) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
   (cellUnsealChainA_factors (by simpa only [execFullA] using h)).1.1
 
 /-- **`cellDestroyA` authorized.** -/
+@[gate_projection]
 theorem execFullA_cellDestroyA_authorized (s s' : RecChainedState) (actor cell : CellId) (ch : Nat)
     (h : execFullA s (.cellDestroyA actor cell ch) = some s') :
     stateAuthB s.kernel.caps actor cell = true :=
@@ -3632,6 +3658,7 @@ theorem execFullA_cellDestroyA_authorized (s s' : RecChainedState) (actor cell :
 
 /-- **`refreshDelegationA` authorized.** A committed refresh implies the actor held the
 self-authority over the `child` (dregg1's self-only `action_target == child` gate). -/
+@[gate_projection]
 theorem execFullA_refreshDelegationA_authorized (s s' : RecChainedState) (actor child : CellId)
     (h : execFullA s (.refreshDelegationA actor child) = some s') :
     stateAuthB s.kernel.caps actor child = true :=
@@ -3781,6 +3808,7 @@ theorem execFullA_delegateAttenA_non_amplifying (s s' : RecChainedState) (del re
 /-- **`execFullA_exerciseA_authorized`.** A committed exercise HOLDS the source edge:
 `actor ⟶ ⟨target,()⟩` on `execGraph` (the resolved c-list slot — only the holder may exercise). The
 hold-gate (`exerciseStepA`) authorizes regardless of what the inner effects do. -/
+@[gate_projection]
 theorem execFullA_exerciseA_authorized (s s' : RecChainedState) (actor t : CellId) (inner : List FullActionA)
     (h : execFullA s (.exerciseA actor t inner) = some s') :
     Dregg2.Spec.execGraph s.kernel.caps actor (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
