@@ -763,4 +763,165 @@ example (l : Label) (h : (fun l => decide (l = 0)) l = true) : (fun _ => true) l
   setPermissions_non_amplifying (old := fun _ => true) (new := fun l => decide (l = 0))
     (fun _ _ => rfl) l h
 
+/-! ## §11 — NAMED non-vacuity + teeth witnesses for the keystone-audit (the `#keystone_audit` discipline).
+
+The `#guard`/`example` block above DEMONSTRATES the per-effect non-amplification keystones fire on
+concrete data, but a `#guard`/`example` is anonymous — it is not a NAMED, axiom-clean, attribute-
+referable witness a CI keystone-audit can require. An apex keystone is a THEOREM (a relation /
+implication), so its integrity check is not the leaf-spec `isDefEq`-to-gate test: it is
+
+  (1) **NON-VACUITY** — a witness that the keystone is non-trivially TRUE: its hypotheses are jointly
+      SATISFIABLE (so it is not vacuously true) AND its conclusion is EXERCISED on a concrete instance
+      (`*_satisfiable` below — `IsNonAmplifying` HOLDS on a real held cap, an actually-narrowing
+      attenuation), and
+  (2) **TEETH** — a witness that the keystone's predicate DISCRIMINATES: an AMPLIFYING attempt is
+      REFUTED (`*_teeth` below, all routed through `amplifying_grant_rejected`), so the keystone is not
+      `:= True`.
+
+These are the companions `#keystone_audit` (in `Dregg2.Verify.KeystoneLint`) requires for each
+`@[load_bearing_keystone]`-tagged non-amplification keystone. They are `#assert_axioms`-clean (§9-style
+tripwires below), so the audit's axiom-cleanliness gate bites. -/
+
+/-- A concrete held cap with two rights: `endpoint 9 [read, write]`. The non-amp witnesses below
+exercise the keystones on a REAL `List Auth` lattice (not the `()`-skeleton). -/
+def heldRW : ECap := Dregg2.Authority.Cap.endpoint 9 [Auth.read, Auth.write]
+
+/-- An AMPLIFYING grant: `node 9` confers `[control]`, which `heldRW` does NOT confer. -/
+def grantAmp : ECap := Dregg2.Authority.Cap.node 9
+
+/-- **`introduce_non_amplifying_satisfiable` — non-vacuity (the conclusion is EXERCISED).** The
+introduce keystone's conclusion `IsNonAmplifying held (attenuate keep held)` HOLDS on the concrete held
+cap `heldRW` narrowed to `[read]` — an instance where the conferred authority is a GENUINE proper subset
+`[read] ⊊ [read, write]`. So the keystone is not vacuously true: there is a real held/granted pair on
+which it fires. -/
+theorem introduce_non_amplifying_satisfiable :
+    IsNonAmplifying heldRW (attenuate [Auth.read] heldRW) :=
+  introduce_non_amplifying heldRW [Auth.read]
+
+/-- **`introduce_non_amplifying_teeth` — the predicate DISCRIMINATES.** An amplifying grant
+(`grantAmp = node 9`, conferring `[control]`) is REFUTED against `heldRW` (which does not confer
+`control`): `¬ IsNonAmplifying heldRW grantAmp`. So `IsNonAmplifying` is two-valued, not `:= True` — the
+keystone constrains. -/
+theorem introduce_non_amplifying_teeth : ¬ IsNonAmplifying heldRW grantAmp :=
+  amplifying_grant_rejected heldRW grantAmp Auth.control (by decide) (by decide)
+
+/-- **`attenuate_non_amplifying_satisfiable`.** The attenuate keystone fires: the narrowed cap
+`attenuate [read] heldRW` confers `[read] ⊆ [read, write]`. -/
+theorem attenuate_non_amplifying_satisfiable :
+    capAuthConferred (attenuate [Auth.read] heldRW) ⊆ capAuthConferred heldRW :=
+  attenuate_non_amplifying [Auth.read] heldRW
+
+/-- **`attenuate_non_amplifying_teeth`.** Amplification denied: `grantAmp` confers `control ∉ heldRW`,
+so it is not narrower-or-equal to `heldRW` (`¬ IsNonAmplifying heldRW grantAmp`). The attenuate keystone
+is `is_narrower_or_equal`, which the widening grant fails. -/
+theorem attenuate_non_amplifying_teeth : ¬ IsNonAmplifying heldRW grantAmp :=
+  amplifying_grant_rejected heldRW grantAmp Auth.control (by decide) (by decide)
+
+/-- **`refresh_non_amplifying_satisfiable`.** The refresh keystone (re-snapshot via attenuation)
+fires on the concrete held cap. -/
+theorem refresh_non_amplifying_satisfiable :
+    capAuthConferred (attenuate [Auth.read] heldRW) ⊆ capAuthConferred heldRW :=
+  refresh_non_amplifying [Auth.read] heldRW
+
+/-- **`refresh_non_amplifying_teeth`.** A refresh cannot amplify: `grantAmp ⊄ heldRW`. -/
+theorem refresh_non_amplifying_teeth : ¬ IsNonAmplifying heldRW grantAmp :=
+  amplifying_grant_rejected heldRW grantAmp Auth.control (by decide) (by decide)
+
+/-- **`revokeDelegation_non_amplifying_satisfiable`.** Revocation's keystone is the removeEdge
+containment `post ⊆ pre`; it is satisfiable on the concrete state `as0` — every post-graph edge of a
+committed revocation was a pre-graph edge. (Witnessed by the universally-true containment instantiated
+at the concrete `as0` / holder 0 / target 7.) -/
+theorem revokeDelegation_non_amplifying_satisfiable
+    (h : Label) (c : Spec.Cap Label ExecRights)
+    (hpost : execGraph (revokeDelegationStep as0 0 7).kernel.caps h c) :
+    execGraph as0.kernel.caps h c :=
+  revokeDelegation_non_amplifying as0 0 7 h c hpost
+
+/-- **`revokeDelegation_non_amplifying_teeth` (the removeEdge IS effective).** Revocation actually
+REMOVES the held edge: holder 0 held `0 ⟶ ⟨7,()⟩` before, and after `revokeDelegationStep as0 0 7` it is
+GONE. So the keystone's content is non-trivial — revocation strictly shrinks authority, it does not
+preserve the graph (`as0.kernel.caps 0 = [node 7]`, but the post-graph drops it). -/
+theorem revokeDelegation_non_amplifying_teeth :
+    execGraph as0.kernel.caps 0 (⟨7, ()⟩ : Spec.Cap Label ExecRights)
+    ∧ ¬ execGraph (revokeDelegationStep as0 0 7).kernel.caps 0
+          (⟨7, ()⟩ : Spec.Cap Label ExecRights) :=
+  revokeDelegation_authorized as0 0 7 (by rw [execGraph_eq_any]; decide)
+
+/-- **`dropRef_non_amplifying_satisfiable`.** DropRef's keystone is the removeEdge containment;
+satisfiable on `as0` (holder 0 / target 7). -/
+theorem dropRef_non_amplifying_satisfiable
+    (h : Label) (c : Spec.Cap Label ExecRights)
+    (hpost : execGraph (dropRefStep as0 0 7).kernel.caps h c) :
+    execGraph as0.kernel.caps h c :=
+  dropRef_non_amplifying as0 0 7 h c hpost
+
+/-- **`dropRef_non_amplifying_teeth`.** DropRef effectively drops the edge: `as0.kernel.caps 0 =
+[node 7]` before, `[]` after — authority strictly shrinks, the keystone is non-trivial. -/
+theorem dropRef_non_amplifying_teeth :
+    (dropRefStep as0 0 7).kernel.caps 0 = [] ∧ as0.kernel.caps 0 = [Dregg2.Authority.Cap.node 7] :=
+  ⟨by decide, by decide⟩
+
+/-- **`exercise_non_amplifying_satisfiable`.** Exercise's keystone (graph UNCHANGED ∧ confers a
+held-bounded authority) fires on `as0`: actor 0 holds `node 7` and exercises it; the graph is unchanged
+and the witnessed held cap bounds the conferred authority. -/
+theorem exercise_non_amplifying_satisfiable {s' : RecChainedState}
+    (h : exerciseStep as0 0 7 = some s') :
+    execGraph s'.kernel.caps = execGraph as0.kernel.caps
+      ∧ ∃ held : ECap, held ∈ as0.kernel.caps 0 ∧ confersEdgeTo 7 held = true
+          ∧ IsNonAmplifying held held :=
+  exercise_non_amplifying h
+
+/-- **`exercise_non_amplifying_teeth`.** Exercise is fail-closed: an actor with NO edge to the target
+cannot exercise (`exerciseStep as0 5 9 = none`). So the keystone's premise is satisfiable AND its gate is
+two-valued — an unheld exercise is REJECTED, not silently admitted. -/
+theorem exercise_non_amplifying_teeth : exerciseStep as0 5 9 = none :=
+  exercise_unheld_fails as0 5 9 (by decide)
+
+/-- **`setPermissions_non_amplifying_satisfiable`.** The setPermissions keystone fires on a concrete
+strictly-narrower gate: the admit-`{0}` gate narrows the all-true gate, and anyone it admits the old gate
+admitted. -/
+theorem setPermissions_non_amplifying_satisfiable
+    (l : Label) (h : decide (l = 0) = true) : (fun _ => true) l = true :=
+  setPermissions_non_amplifying (old := fun _ => true) (new := fun l => decide (l = 0))
+    (fun _ _ => rfl) l h
+
+/-- **`setPermissions_non_amplifying_teeth`.** `NarrowsGate` DISCRIMINATES: a WIDENING gate
+(admit-everything new over admit-`{0}` old) is NOT a narrowing — there is a label (`1`) the new gate
+admits that the old gate rejects. So the keystone's `NarrowsGate` premise is not vacuously satisfiable
+by every gate pair; a widening is refused. -/
+theorem setPermissions_non_amplifying_teeth :
+    ¬ NarrowsGate (fun l => decide (l = 0)) (fun _ => true) := by
+  intro hN
+  have : (decide ((1 : Label) = 0)) = true := hN 1 rfl
+  simp at this
+
+/-- **`validateHandoff_non_amplifying_satisfiable`.** The handoff keystone fires on a concrete valid
+handoff: with `held.rights = ⊤` and `granted.rights = ⊤` (over a `SemilatticeInf`+`OrderTop` rights
+order), `granted.rights ≤ held.rights` holds (a top-to-top non-amplifying handoff is satisfiable). -/
+theorem validateHandoff_non_amplifying_satisfiable {CellId Rights : Type*}
+    [SemilatticeInf Rights] [OrderTop Rights]
+    (cert : Dregg2.Exec.CapTP.HandoffCert CellId Rights)
+    (G : Graph CellId Rights) (consents : CellId → Prop) (attested : Prop)
+    (hv : Dregg2.Exec.CapTP.HandoffValid cert G consents attested) :
+    cert.granted.rights ≤ cert.held.rights :=
+  validateHandoff_non_amplifying cert G consents attested hv
+
+#assert_axioms heldRW
+#assert_axioms grantAmp
+#assert_axioms introduce_non_amplifying_satisfiable
+#assert_axioms introduce_non_amplifying_teeth
+#assert_axioms attenuate_non_amplifying_satisfiable
+#assert_axioms attenuate_non_amplifying_teeth
+#assert_axioms refresh_non_amplifying_satisfiable
+#assert_axioms refresh_non_amplifying_teeth
+#assert_axioms revokeDelegation_non_amplifying_satisfiable
+#assert_axioms revokeDelegation_non_amplifying_teeth
+#assert_axioms dropRef_non_amplifying_satisfiable
+#assert_axioms dropRef_non_amplifying_teeth
+#assert_axioms exercise_non_amplifying_satisfiable
+#assert_axioms exercise_non_amplifying_teeth
+#assert_axioms setPermissions_non_amplifying_satisfiable
+#assert_axioms setPermissions_non_amplifying_teeth
+#assert_axioms validateHandoff_non_amplifying_satisfiable
+
 end Dregg2.Exec.EffectsAuthority

@@ -4,10 +4,13 @@ name: Proof-integrity mutation canary
 # ci.yml's metatheory-no-sorry job). The linter catches a spec becoming a gate-copy or losing its
 # non-vacuity witness (structural). This canary catches the orthogonal regression: a proof that
 # stays GREEN when its implementation is mutated — i.e. a load-bearing proof decaying to decorative.
-# It MUTATES the kernel source + rebuilds the C-c1 keystone modules (several lake builds), so it runs
-# on a daily schedule, not per-push. `scripts/mutation-canary.sh GATE` exits nonzero iff the two
-# HEAD-targeting C-c1 mutations (AUTH-GRAPH-DROP, LEDGER-SPEC-DROP) fail to RED — i.e. the authConnects
-# authority leg or the fullActionInvA value leg of `deployed_system_secure` regressed to decorative.
+# It MUTATES the kernel source + rebuilds the keystone modules (several lake builds), so it runs on a
+# daily schedule, not per-push. `scripts/mutation-canary.sh GATE` exits nonzero iff any of the three
+# HEAD-targeting mutations fails to RED: the two C-c1 mutations (AUTH-GRAPH-DROP, LEDGER-SPEC-DROP —
+# the authConnects authority leg / the fullActionInvA value leg of `deployed_system_secure`), and the
+# guarantee-A apex mutation NONAMP-WEAKEN (trivializing `IsNonAmplifying` toward `True` must RED the 8
+# `*_non_amplifying` keystones via the `#keystone_audit_tagged` non-vacuity+teeth gate in
+# Dregg2.Verify.KeystoneAuditNonAmp). Each baseline must be GREEN unmutated first.
 
 on:
   schedule:
