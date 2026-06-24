@@ -238,6 +238,98 @@ boot();\n",
     )
 }
 
+/// A full, browser-loadable HTML document for the **REFLECTIVE-INSPECTOR card** that is
+/// **LIVE**. The IDENTICAL gpui-free web renderer paints the inspector card's view-tree (a
+/// "Cell State" section of live `Bind` rows + structural `Text` rows, an "Affordances" section
+/// of `Button`s — generated from a focused cell's real moldable faces by
+/// `wasm/src/bindings_card.rs`'s `InspectorWorld::view_tree_json`); the bootstrap loads the
+/// playground wasm, mints an in-tab [`crate`]-less `InspectorWorld` (the wasm analog of the
+/// native inspector card over a live World), binds it to `window.__deosCard`, and re-paints
+/// EVERY bound row from the committed ledger. An affordance `Button`'s click fires a REAL
+/// cap-gated verified turn over that embedded executor (the shared [`JS`] wire) and the bound
+/// field re-paints — a fully-reflective cockpit surface running in a browser, not just the
+/// native cockpit.
+///
+/// Unlike [`render_card_live_document`] (the single-slot counter), this carries SEVERAL bound
+/// slots: each `deos-bind` span repaints from its own `data-slot` via `InspectorWorld.read(slot)`
+/// (the [`JS`] wire dispatches on `read` arity, so it drives both cards). `tree` is the inspector
+/// view-tree (parsed from `InspectorWorld::view_tree_json` — serve the SAME tree the in-tab
+/// executor reports); `bind_values` is the first-paint snapshot (one per `bind` in tree-walk
+/// order) shown before wasm finishes loading; `seeds` seeds the in-tab cell's scalar slots
+/// (matching the snapshot). `pkg_url` is the wasm bundle's JS shim URL. Must be served over
+/// HTTP (`file://` is CORS-blocked for the module import + `.wasm` fetch).
+pub fn render_inspector_live_document(
+    title: &str,
+    tree: &ViewNode,
+    bind_values: &BindValues,
+    seeds: &[u64],
+    pkg_url: &str,
+) -> String {
+    let body = render_html(tree, bind_values);
+    // `seeds` → a JS array literal for the `InspectorWorld` constructor (it takes a Vec<u64>,
+    // which wasm-bindgen maps to a `BigUint64Array`/array of BigInt — pass `Nn` literals).
+    let seeds_js = seeds
+        .iter()
+        .map(|s| format!("{s}n"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let bootstrap = format!(
+        "import init, {{ InspectorWorld }} from '{pkg}';\n\
+async function boot() {{\n\
+  const status = document.getElementById('deos-status');\n\
+  try {{\n\
+    await init();                                  // instantiate the wasm module\n\
+    const card = new InspectorWorld([{seeds}]);    // mint the in-tab reflective executor\n\
+    window.__deosCard = card;                      // the affordance wire fires real turns into this\n\
+    // Re-paint every bound slot from the committed ledger (the witnessed read), each row\n\
+    // off its OWN data-slot — the reflective inspector binds several fields.\n\
+    document.querySelectorAll('.deos-bind[data-slot]').forEach(function(span) {{\n\
+      const slot = parseInt(span.getAttribute('data-slot') || '0', 10);\n\
+      const label = span.textContent.replace(/[0-9]+$/, '');\n\
+      span.textContent = label + card.read(slot);\n\
+    }});\n\
+    function refreshStatus() {{\n\
+      if (status && window.__deosCard) {{\n\
+        const c = window.__deosCard;\n\
+        status.textContent = 'live — cell ' + c.cellId().slice(0, 10) + '… · balance ' + c.balance() + ' · nonce ' + c.nonce() + ' · receipts ' + c.receiptCount();\n\
+      }}\n\
+    }}\n\
+    refreshStatus();\n\
+    // Keep the structural readout fresh after every committed turn.\n\
+    document.addEventListener('deos-affordance', function() {{ requestAnimationFrame(refreshStatus); }});\n\
+  }} catch (e) {{\n\
+    if (status) status.textContent = 'wasm load failed: ' + e;\n\
+    console.error('deos: inspector wasm executor failed to load', e);\n\
+  }}\n\
+}}\n\
+boot();\n",
+        pkg = pkg_url,
+        seeds = seeds_js,
+    );
+    format!(
+        "<!doctype html>\n\
+<html lang=\"en\">\n\
+<head>\n\
+<meta charset=\"utf-8\">\n\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+<title>{title}</title>\n\
+<style>{CSS}{LIVE_CSS}</style>\n\
+</head>\n\
+<body>\n\
+<main class=\"deos-card\">{body}<div class=\"deos-status\" id=\"deos-status\">loading the in-tab verified executor…</div></main>\n\
+<script>{JS}</script>\n\
+<script type=\"module\">{bootstrap}</script>\n\
+</body>\n\
+</html>\n",
+        title = escape(title),
+        CSS = CSS,
+        LIVE_CSS = LIVE_CSS,
+        body = body,
+        JS = JS,
+        bootstrap = bootstrap,
+    )
+}
+
 /// Extra styling for the live page's status strip (the receipt-count audit readout).
 const LIVE_CSS: &str = "
 .deos-status{margin-top:.5rem;padding:.4rem .75rem;font-size:.8rem;color:var(--muted);border-top:1px solid var(--border);}
@@ -296,12 +388,21 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:'IBM Plex Sans',s
 /// embedding's to wire (load the wasm + bind a `CardWorld`). Either way the click carries
 /// exactly the `{turn, arg}` the native `Button` fires through `Applet::fire`.
 const JS: &str = "
+function deosReadSlot(card, slot){
+  // The witnessed read off the live ledger for ONE bound slot (`Applet::get_u64`). The
+  // counter's `CardWorld.read()` takes no arg (single slot 0); the inspector's
+  // `InspectorWorld.read(slot)` takes the slot (it binds several). Dispatch on arity so the
+  // SAME wire drives both cards.
+  return card.read.length > 0 ? card.read(slot) : card.read();
+}
 function deosRepaintBinds(card){
-  // Re-read the live ledger for every bound slot and repaint it — the witnessed read
-  // the native `bind` makes (`Applet::get_u64`), here `CardWorld.read()`.
+  // Re-read the live ledger for every bound slot and repaint it — the witnessed read the
+  // native `bind` makes, here `card.read(slot)`. Each `deos-bind` span carries its own
+  // `data-slot`, so a multi-field card (the inspector) repaints each row from ITS slot.
   document.querySelectorAll('.deos-bind[data-slot]').forEach(function(span){
+    var slot = parseInt(span.getAttribute('data-slot') || '0', 10);
     var label = span.textContent.replace(/[0-9]+$/, '');
-    span.textContent = label + card.read();
+    span.textContent = label + deosReadSlot(card, slot);
   });
 }
 document.querySelectorAll('.deos-button').forEach(function(b){

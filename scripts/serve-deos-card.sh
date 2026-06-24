@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Serve the LIVE browser-native deos: a deos-js card rendered via the gpui-free web
-# renderer (deos-view/src/web.rs), firing REAL cap-gated verified turns over an in-tab
-# wasm executor (wasm/src/bindings_card.rs's CardWorld — the wasm analog of the native
-# Applet). A `+1` click commits a SetField + IncrementNonce turn and the bound count
-# re-paints from the committed ledger, with a live receipt count.
+# Serve the LIVE browser-native deos: deos-js cards rendered via the gpui-free web renderer
+# (deos-view/src/web.rs), firing REAL cap-gated verified turns over in-tab wasm executors
+# (wasm/src/bindings_card.rs — the wasm analogs of the native Applet / inspector). Two pages
+# are baked + served:
 #
-# Builds the wasm bundle, bakes the live page, assembles a self-contained dist/, and
-# serves it (the page is a module-import + a .wasm fetch — file:// is CORS-blocked, so it
-# MUST be served over HTTP).
+#   /                — the COUNTER card (CardWorld): a `+1` click commits a SetField +
+#                      IncrementNonce turn; the bound count re-paints from the committed ledger.
+#   /inspector.html  — the REFLECTIVE-INSPECTOR card (InspectorWorld): a cockpit surface, in a
+#                      TAB. The inspector card's view-tree (generated from a focused cell's REAL
+#                      moldable faces — RawFields + Affordances, via deos-reflect) renders to
+#                      HTML: a "Cell State" section (several live Bind rows + structural rows)
+#                      and an "Affordances" section. Clicking an affordance (tick/add/score)
+#                      fires a real cap-gated verified turn and the bound field re-paints, with
+#                      a live balance/nonce/receipt readout.
+#
+# Builds the wasm bundle, bakes the live pages, assembles a self-contained dist/, and serves it
+# (each page is a module-import + a .wasm fetch — file:// is CORS-blocked, so it MUST be served
+# over HTTP).
 #
 #   scripts/serve-deos-card.sh           # build + bake + serve on :8000
 #   scripts/serve-deos-card.sh --no-serve  # build + bake only (print the dist path)
@@ -35,8 +44,10 @@ if [[ "${1:-}" == "--no-serve" ]]; then
 fi
 
 echo
-echo "=== Serving the LIVE deos card at http://localhost:$PORT ==="
-echo "Open http://localhost:$PORT and click +1 — each click is a real cap-gated verified turn."
+echo "=== Serving the LIVE deos cards at http://localhost:$PORT ==="
+echo "  COUNTER   : http://localhost:$PORT/            — click +1 (a real cap-gated verified turn)"
+echo "  INSPECTOR : http://localhost:$PORT/inspector.html — a reflective cockpit surface; click an"
+echo "              affordance (tick/add/score) → a real verified turn → the bound field re-paints."
 echo "(Ctrl-C to stop.)"
 cd "$DIST"
 exec python3 -m http.server "$PORT"

@@ -52,4 +52,6 @@ pub use render::{AppletView, SharedApplet};
 #[cfg(feature = "web")]
 pub mod web;
 #[cfg(feature = "web")]
-pub use web::{render_card_document, render_card_live_document, render_html};
+pub use web::{
+    render_card_document, render_card_live_document, render_html, render_inspector_live_document,
+};

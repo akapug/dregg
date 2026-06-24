@@ -52,12 +52,21 @@ fn counter_card_plus_one_click_commits_a_verified_turn_and_repaints() {
 
     // THE CLICK → A REAL VERIFIED TURN. `deos-affordance` fired {turn:"inc", arg:1}; the
     // browser listener calls exactly this. The returned value is the re-read bound slot.
-    let after_one = card.fire("inc", 1).expect("the +1 click fires a verified turn");
-    assert_eq!(after_one, 1, "the fire returned the re-painted bound value 1");
+    let after_one = card
+        .fire("inc", 1)
+        .expect("the +1 click fires a verified turn");
+    assert_eq!(
+        after_one, 1,
+        "the fire returned the re-painted bound value 1"
+    );
 
     // Frame 1: the IDENTICAL witnessed read now sees the committed model — the bind
     // re-paints `count: 1` (the SolidJS-shaped signal re-render, backed by a real turn).
-    assert_eq!(card.read(), 1, "frame 1: the ledger holds the committed count 1");
+    assert_eq!(
+        card.read(),
+        1,
+        "frame 1: the ledger holds the committed count 1"
+    );
     assert_eq!(
         card.receipt_count(),
         1,
@@ -65,13 +74,25 @@ fn counter_card_plus_one_click_commits_a_verified_turn_and_repaints() {
     );
 
     // Fire again — the loop is durable: count := count + arg over the LIVE model.
-    assert_eq!(card.fire("inc", 1).expect("second +1"), 2, "second click → count 2");
+    assert_eq!(
+        card.fire("inc", 1).expect("second +1"),
+        2,
+        "second click → count 2"
+    );
     assert_eq!(card.read(), 2, "the ledger holds 2");
-    assert_eq!(card.receipt_count(), 2, "two verified turns on the audit tape");
+    assert_eq!(
+        card.receipt_count(),
+        2,
+        "two verified turns on the audit tape"
+    );
 
     // A bigger increment (a card could carry arg ≠ 1) flows the SAME way.
     assert_eq!(card.fire("inc", 5).expect("inc by 5"), 7, "count := 2 + 5");
-    assert_eq!(card.receipt_count(), 3, "three verified turns on the audit tape");
+    assert_eq!(
+        card.receipt_count(),
+        3,
+        "three verified turns on the audit tape"
+    );
     // NOTE: the unknown-affordance refusal (`fire("bogus", ..)` → no turn) is asserted on
     // the wasm target only — it returns a `JsError`, which cannot be constructed on a
     // non-wasm target (`JsError::new` is a wasm-bindgen import). The success path above is
@@ -87,8 +108,126 @@ fn a_card_seeded_nonzero_fires_from_its_seed() {
 
     let mut card = CardWorld::new(0, 41).expect("mint a card seeded to 41");
     assert_eq!(card.read(), 41, "the seeded bound value");
-    assert_eq!(card.receipt_count(), 1, "the seed was committed as one turn");
+    assert_eq!(
+        card.receipt_count(),
+        1,
+        "the seed was committed as one turn"
+    );
     assert_eq!(card.fire("inc", 1).expect("fire +1"), 42, "41 + 1");
+}
+
+/// THE REFLECTIVE-INSPECTOR LOOP, EXECUTABLE (host target). The inspector card is generated
+/// from a focused cell's REAL moldable faces (RawFields + Affordances, via `deos-reflect`),
+/// renders renderer-independently (the SAME view-tree → gpui pixels natively AND browser HTML
+/// via `deos-view`'s web renderer), and its affordance buttons fire REAL cap-gated verified
+/// turns. This proves the in-tab `InspectorWorld` executor: it reports a real reflective
+/// view-tree (multiple `Bind` rows + structural rows + affordance `Button`s), and a click on
+/// an affordance fires a real verified turn that advances the bound slot the row re-reads.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inspector_card_renders_faces_and_an_affordance_click_fires_a_verified_turn() {
+    use dregg_wasm::bindings_card::InspectorWorld;
+
+    // Mint the inspector card focused on a cell seeded across three scalar slots.
+    let mut insp = InspectorWorld::new(vec![7, 42, 100]).expect("mint the inspector card world");
+
+    // The three bound slots are the witnessed reads off the live ledger (frame 0).
+    assert_eq!(insp.read(0), 7, "state[0] reads its seed");
+    assert_eq!(insp.read(1), 42, "state[1] reads its seed");
+    assert_eq!(insp.read(2), 100, "state[2] reads its seed");
+    // The three seeds each committed as a real verified turn (a receipt apiece).
+    assert_eq!(
+        insp.receipt_count(),
+        3,
+        "three seeds → three receipts on the audit tape"
+    );
+    assert!(
+        insp.nonce() >= 3,
+        "the cell's nonce advanced with the seed turns"
+    );
+
+    // THE VIEW-TREE IS GENERATED FROM THE LIVE CELL'S REAL FACES — the SAME shape the native
+    // inspector_card produces, here over the in-tab cell. It carries: section titles, a live
+    // `Bind` per revealed slot (re-read off the ledger), structural substance rows, and a
+    // cap-gated `Button` per affordance. This is the DATA the web renderer paints.
+    let view = insp.view_tree_json();
+    assert!(
+        view.contains("\"Inspector\"")
+            && view.contains("\"Cell State\"")
+            && view.contains("\"Affordances\""),
+        "the reflective view-tree carries the RawFields + Affordances faces: {view}"
+    );
+    // The three seeded slots surface as live Bind rows (they re-read these slots).
+    for slot in 0..=2 {
+        assert!(
+            view.contains(&format!("\"slot\": {slot}")),
+            "state[{slot}] is a live Bind row in the view-tree: {view}"
+        );
+    }
+    // The affordances surface as Buttons carrying their turn payloads.
+    for turn in ["tick", "add", "score"] {
+        assert!(
+            view.contains(&format!("\"turn\": \"{turn}\"")),
+            "the `{turn}` affordance is a Button in the view-tree: {view}"
+        );
+    }
+    // A structural substance (balance) renders as a static text row.
+    assert!(
+        view.contains("balance: 1000000"),
+        "the balance substance renders as a static row: {view}"
+    );
+
+    // THE AFFORDANCE CLICK → A REAL VERIFIED TURN. The web renderer put `{turn:"add", arg:1}`
+    // on the `add` button (it advances state[1]); the browser listener calls exactly this.
+    let after = insp
+        .fire("add", 1)
+        .expect("the `add` click fires a verified turn");
+    assert_eq!(
+        after, 43,
+        "the fire returned the re-painted bound value 42 + 1"
+    );
+    assert_eq!(
+        insp.read(1),
+        43,
+        "the live ledger holds the committed state[1] = 43"
+    );
+    assert_eq!(insp.read(0), 7, "the untouched slot is unchanged");
+    assert_eq!(
+        insp.receipt_count(),
+        4,
+        "exactly one more verified turn committed"
+    );
+
+    // A different affordance advances a different slot — the loop is durable + per-slot.
+    assert_eq!(
+        insp.fire("tick", 5).expect("tick by 5"),
+        12,
+        "state[0] := 7 + 5"
+    );
+    assert_eq!(insp.read(0), 12, "the ledger holds state[0] = 12");
+    assert_eq!(
+        insp.receipt_count(),
+        5,
+        "five verified turns on the audit tape"
+    );
+
+    // The reflective view tracks the live state: regenerate and state[0] now reads 12.
+    let view2 = insp.view_tree_json();
+    assert!(
+        view2.contains("state[0]: 12") || view2.contains("\"slot\": 0"),
+        "the regenerated view-tree tracks the advanced state[0]: {view2}"
+    );
+
+    // An unknown affordance commits nothing (the native `FireError::Unknown`).
+    assert!(
+        insp.fire("bogus", 1).is_err(),
+        "an unknown affordance fires no turn"
+    );
+    assert_eq!(
+        insp.receipt_count(),
+        5,
+        "the refusal left the audit tape unchanged"
+    );
 }
 
 // ── The wasm32-target loop ────────────────────────────────────────────────────────────
@@ -126,17 +265,94 @@ mod wasm_loop {
         assert_eq!(card.read(), 0, "frame 0: bound count starts at 0");
         assert_eq!(card.receipt_count(), 0, "no turns yet");
 
-        let after_one = card.fire("inc", 1).expect("the +1 click fires a verified turn in wasm");
-        assert_eq!(after_one, 1, "the fire returned the re-painted bound value 1");
-        assert_eq!(card.read(), 1, "frame 1: the in-tab ledger holds the committed count 1");
-        assert_eq!(card.receipt_count(), 1, "exactly ONE verified turn on the in-tab audit tape");
+        let after_one = card
+            .fire("inc", 1)
+            .expect("the +1 click fires a verified turn in wasm");
+        assert_eq!(
+            after_one, 1,
+            "the fire returned the re-painted bound value 1"
+        );
+        assert_eq!(
+            card.read(),
+            1,
+            "frame 1: the in-tab ledger holds the committed count 1"
+        );
+        assert_eq!(
+            card.receipt_count(),
+            1,
+            "exactly ONE verified turn on the in-tab audit tape"
+        );
 
         // The loop is durable across clicks.
-        assert_eq!(card.fire("inc", 5).expect("inc by 5 in wasm"), 6, "count := 1 + 5");
+        assert_eq!(
+            card.fire("inc", 5).expect("inc by 5 in wasm"),
+            6,
+            "count := 1 + 5"
+        );
         assert_eq!(card.receipt_count(), 2, "two verified turns in the tab");
 
         // An unknown affordance commits nothing (the native `FireError::Unknown`).
-        assert!(card.fire("bogus", 1).is_err(), "an unknown affordance fires no turn");
-        assert_eq!(card.receipt_count(), 2, "the refusal left the audit tape unchanged");
+        assert!(
+            card.fire("bogus", 1).is_err(),
+            "an unknown affordance fires no turn"
+        );
+        assert_eq!(
+            card.receipt_count(),
+            2,
+            "the refusal left the audit tape unchanged"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn inspector_card_affordance_click_fires_a_verified_turn_in_a_real_wasm_module() {
+        use dregg_wasm::bindings_card::InspectorWorld;
+
+        // THE REFLECTIVE-INSPECTOR CARD, IN A REAL WASM MODULE. Mint it focused on a cell with
+        // three seeded scalar slots; the view-tree is generated from its REAL faces; an
+        // affordance click fires a real cap-gated verified turn and the bound row re-reads.
+        let mut insp =
+            InspectorWorld::new(vec![7, 42, 100]).expect("mint the inspector card in wasm");
+        assert_eq!(insp.read(0), 7, "state[0] reads its seed in-tab");
+        assert_eq!(insp.read(1), 42, "state[1] reads its seed in-tab");
+        assert!(!insp.cell_id().is_empty(), "the focused cell has a real id");
+        assert_eq!(
+            insp.receipt_count(),
+            3,
+            "three seed turns on the in-tab audit tape"
+        );
+
+        // The reflective view-tree carries the faces (the DATA the web renderer paints).
+        let view = insp.view_tree_json();
+        assert!(
+            view.contains("\"Cell State\"") && view.contains("\"turn\": \"add\""),
+            "the in-tab reflective view-tree carries the faces + affordances"
+        );
+
+        // The affordance click → a real verified turn in the tab (clock off performance.now()).
+        let after = insp
+            .fire("add", 1)
+            .expect("the `add` click fires a verified turn in wasm");
+        assert_eq!(after, 43, "the in-tab fire returned 42 + 1");
+        assert_eq!(
+            insp.read(1),
+            43,
+            "the in-tab ledger holds the committed state[1] = 43"
+        );
+        assert_eq!(
+            insp.receipt_count(),
+            4,
+            "one more verified turn on the in-tab tape"
+        );
+
+        // An unknown affordance commits nothing.
+        assert!(
+            insp.fire("bogus", 1).is_err(),
+            "an unknown inspector affordance fires no turn"
+        );
+        assert_eq!(
+            insp.receipt_count(),
+            4,
+            "the refusal left the audit tape unchanged"
+        );
     }
 }

@@ -19,7 +19,10 @@
 
 use std::path::PathBuf;
 
-use deos_view::{parse_view_tree, render_card_document, render_card_live_document, render_html};
+use deos_view::{
+    parse_view_tree, render_card_document, render_card_live_document, render_html,
+    render_inspector_live_document,
+};
 
 /// The EXACT `JSON.stringify(tree)` shape the SpiderMonkey engine produces for the
 /// counter card the native test drives:
@@ -43,25 +46,42 @@ const COUNTER_CARD_JSON: &str = r#"{
   ]
 }"#;
 
-/// An inspector-shaped card (the moldable `present()` faces the inspector_card surfaces):
-/// a labelled field table + an affordance button row. Exercises text/bind/row/table/list.
+/// THE REFLECTIVE-INSPECTOR CARD's view-tree — byte-for-byte the shape
+/// `wasm/src/bindings_card.rs`'s `InspectorWorld::view_tree_json` generates from a focused
+/// cell's REAL moldable faces (`deos_reflect::ReflectedCell::raw_fields` + `AffordanceSurface`),
+/// for the default-seeded cell (`state[0]=7`, `state[1]=42`, `state[2]=100`). It is the
+/// substance-agnostic core of the native `deos_js::inspector_card::inspector_view_for`, so this
+/// is the SAME view-tree the cockpit inspector paints — fed to the WEB renderer to prove the
+/// reflective surface is renderer-independent. A titled column with:
+///   - a "Cell State" section: a live `Bind` row per revealed scalar slot (`state[0..2]`,
+///     re-read off the ledger so a fired affordance updates the row) + a labeled `Text` per
+///     structural substance (balance, nonce, id, caps, lifecycle, …);
+///   - an "Affordances" section: a cap-gated `Button` per fireable affordance
+///     (`tick`→state[0], `add`→state[1], `score`→state[2]).
+/// (The structural-row VALUES below — balance/nonce/id — are the live in-tab cell's, re-read
+/// from the wasm `InspectorWorld` after boot; the static bake here is the first paint.)
 const INSPECTOR_CARD_JSON: &str = r#"{
   "kind": "vstack",
   "props": {},
   "children": [
-    { "kind": "text", "props": { "text": "Cell 0xF2 — inspector" } },
-    { "kind": "table", "props": {}, "children": [
-        { "kind": "row", "props": {}, "children": [
-            { "kind": "text", "props": { "text": "count" } },
-            { "kind": "bind", "props": { "slot": 0, "label": "" } }
-        ] },
-        { "kind": "row", "props": {}, "children": [
-            { "kind": "text", "props": { "text": "authority" } },
-            { "kind": "text", "props": { "text": "Signature" } }
-        ] }
+    { "kind": "text", "props": { "text": "Inspector" } },
+    { "kind": "vstack", "props": {}, "children": [
+        { "kind": "text", "props": { "text": "Cell State" } },
+        { "kind": "text", "props": { "text": "balance: 1000000" } },
+        { "kind": "text", "props": { "text": "nonce: 3" } },
+        { "kind": "text", "props": { "text": "capabilities: 0" } },
+        { "kind": "text", "props": { "text": "has_delegate: false" } },
+        { "kind": "text", "props": { "text": "has_program: false" } },
+        { "kind": "text", "props": { "text": "lifecycle: live" } },
+        { "kind": "bind", "props": { "slot": 0, "label": "state[0]: " } },
+        { "kind": "bind", "props": { "slot": 1, "label": "state[1]: " } },
+        { "kind": "bind", "props": { "slot": 2, "label": "state[2]: " } }
     ] },
-    { "kind": "row", "props": {}, "children": [
-        { "kind": "button", "props": { "label": "+1", "onClick": { "turn": "inc", "arg": 1 } } }
+    { "kind": "vstack", "props": {}, "children": [
+        { "kind": "text", "props": { "text": "Affordances" } },
+        { "kind": "button", "props": { "label": "tick", "on_click": { "turn": "tick", "arg": 1 } } },
+        { "kind": "button", "props": { "label": "add", "on_click": { "turn": "add", "arg": 1 } } },
+        { "kind": "button", "props": { "label": "score", "on_click": { "turn": "score", "arg": 1 } } }
     ] }
   ]
 }"#;
@@ -91,10 +111,44 @@ fn main() {
     let p1 = out.join("counter-1.html");
     std::fs::write(&p1, &html1).expect("write counter-1.html");
 
-    // ── 4. Bake the inspector card (count = 7, to show the bound field) ──────────────
-    let html_insp = render_card_document("deos inspector card", &inspector, &[7]);
+    // ── 4. Bake the reflective inspector card (the three bound slots: 7, 42, 100) ─────
+    // bind_values are in tree-walk order: the three `state[i]` Bind rows → [7, 42, 100].
+    let html_insp = render_card_document("deos inspector card", &inspector, &[7, 42, 100]);
     let pi = out.join("inspector.html");
     std::fs::write(&pi, &html_insp).expect("write inspector.html");
+
+    // ── PROVE the reflective projection: the inspector's faces SURVIVED the web render ─
+    // The RawFields face's structural rows + the live `Bind` rows + the cap-gated affordance
+    // `Button`s all paint, carrying their real `{slot}` / `{turn, arg}` contracts.
+    let frag_insp = render_html(&inspector, &[7, 42, 100]);
+    assert!(
+        frag_insp.contains("Inspector")
+            && frag_insp.contains("Cell State")
+            && frag_insp.contains("Affordances"),
+        "the inspector's section titles paint (RawFields + Affordances faces)"
+    );
+    assert!(
+        frag_insp.contains("state[0]: 7")
+            && frag_insp.contains("state[1]: 42")
+            && frag_insp.contains("state[2]: 100"),
+        "the three live Bind rows paint their seeded slot values"
+    );
+    assert!(
+        frag_insp.contains("data-slot=\"0\"")
+            && frag_insp.contains("data-slot=\"1\"")
+            && frag_insp.contains("data-slot=\"2\""),
+        "each Bind row carries its own model slot (the multi-field signal sources)"
+    );
+    assert!(
+        frag_insp.contains("balance: 1000000") && frag_insp.contains("lifecycle: live"),
+        "the structural substances (balance, lifecycle) render as static rows"
+    );
+    assert!(
+        frag_insp.contains("data-turn=\"tick\"")
+            && frag_insp.contains("data-turn=\"add\"")
+            && frag_insp.contains("data-turn=\"score\""),
+        "each cap-gated affordance becomes a Button carrying its `{{turn}}` payload"
+    );
 
     // ── PROVE the projection, not merely write it ────────────────────────────────────
     // The bound value PAINTS (count: 0 vs count: 1) and the affordance payload SURVIVED
@@ -159,18 +213,66 @@ fn main() {
         "the SAME card markup carries the affordance + bind contract the wire drives"
     );
 
+    // ── 6. Bake the LIVE REFLECTIVE-INSPECTOR page — a cockpit surface, browser-native ──
+    // The SAME gpui-free web renderer paints the inspector card's view-tree (Cell State binds
+    // + structural rows + Affordance buttons), the bootstrap mints an in-tab `InspectorWorld`
+    // (the wasm analog of the native inspector over a live World) seeded to [7, 42, 100], binds
+    // `window.__deosCard`, and re-paints each bound row from the committed ledger. Clicking an
+    // affordance (`tick`/`add`/`score`) fires a REAL cap-gated verified turn over that executor
+    // and the bound field re-paints — a reflective cockpit surface running in a TAB.
+    let live_insp = render_inspector_live_document(
+        "deos reflective-inspector card — live",
+        &inspector,
+        /*bind_values (tree-walk order)*/ &[7, 42, 100],
+        /*seeds*/ &[7, 42, 100],
+        "./pkg/dregg_wasm.js",
+    );
+    let plive_insp = dist.join("inspector.html");
+    std::fs::write(&plive_insp, &live_insp).expect("write the live inspector.html");
+
+    // ── PROVE the live inspector page is wired (not merely written) ───────────────────
+    assert!(
+        live_insp.contains("./pkg/dregg_wasm.js")
+            && live_insp.contains("import init, { InspectorWorld }"),
+        "the live inspector page imports the wasm bundle's `init` + `InspectorWorld`"
+    );
+    assert!(
+        live_insp.contains("new InspectorWorld([7n, 42n, 100n])")
+            && live_insp.contains("window.__deosCard = card"),
+        "the live inspector page mints the in-tab reflective executor seeded to the bound slots"
+    );
+    assert!(
+        live_insp.contains("card.read(slot)"),
+        "the live inspector re-paints each bound row from ITS slot off the committed ledger"
+    );
+    assert!(
+        live_insp.contains("card.fire(turn, arg)"),
+        "the affordance wire fires a click as a real verified turn into the in-tab executor"
+    );
+    assert!(
+        live_insp.contains("data-slot=\"0\"")
+            && live_insp.contains("data-slot=\"1\"")
+            && live_insp.contains("data-slot=\"2\"")
+            && live_insp.contains("data-turn=\"tick\""),
+        "the SAME inspector markup carries the multi-slot bind + affordance contract the wire drives"
+    );
+
     eprintln!("deos-view web projection baked (gpui-free):");
-    eprintln!("  counter @ count=0 : {}", p0.display());
-    eprintln!("  counter @ count=1 : {}", p1.display());
-    eprintln!("  inspector card    : {}", pi.display());
-    eprintln!("  LIVE counter page : {}", plive.display());
+    eprintln!("  counter @ count=0    : {}", p0.display());
+    eprintln!("  counter @ count=1    : {}", p1.display());
+    eprintln!("  inspector card       : {}", pi.display());
+    eprintln!("  LIVE counter page    : {}", plive.display());
+    eprintln!("  LIVE inspector page  : {}", plive_insp.display());
     eprintln!();
     eprintln!("To serve the LIVE deos (a card firing real cap-gated verified turns in a TAB):");
     eprintln!("  1. wasm-pack build wasm --target web --out-dir pkg --release");
     eprintln!("  2. cp -R ../wasm/pkg {}/pkg", dist.display());
     eprintln!(
-        "  3. (cd {} && python3 -m http.server 8000)  # then open http://localhost:8000",
+        "  3. (cd {} && python3 -m http.server 8000)  # open http://localhost:8000 (counter)",
         dist.display()
     );
-    eprintln!("Open the static .html files directly; the LIVE page must be SERVED (module + .wasm fetch).");
+    eprintln!(
+        "     …and http://localhost:8000/inspector.html (the LIVE reflective-inspector card)."
+    );
+    eprintln!("Open the static .html files directly; the LIVE pages must be SERVED (module + .wasm fetch).");
 }

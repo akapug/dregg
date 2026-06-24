@@ -790,6 +790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deos-reflect"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+]
+
+[[package]]
 name = "der"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,6 +925,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-circuit",
+ "dregg-dfa",
  "dregg-types",
  "postcard",
  "serde",
@@ -1380,6 +1390,7 @@ dependencies = [
  "blake3",
  "bs58",
  "clear_on_drop",
+ "deos-reflect",
  "dregg-captp",
  "dregg-cell",
  "dregg-cell-crypto",
