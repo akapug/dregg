@@ -76,6 +76,8 @@ pub mod mcp_server;
 #[cfg(feature = "js-agent")]
 pub mod run_js;
 #[cfg(feature = "js-agent")]
+pub mod card_authoring;
+#[cfg(feature = "js-agent")]
 pub mod live_js;
 pub mod mock_peer;
 #[cfg(feature = "screenshot")]
@@ -105,5 +107,7 @@ pub use mandate::{Mandate, MandateRow};
 pub use mock_peer::{MockHermesPeer, ScriptedCall};
 #[cfg(feature = "js-agent")]
 pub use run_js::{RunJsError, RunJsOutcome, RunJsTool};
+#[cfg(feature = "js-agent")]
+pub use card_authoring::{AuthorCardOutcome, CardAuthoringTool};
 #[cfg(feature = "js-agent")]
 pub use live_js::{script_of_call, LiveJsHands};

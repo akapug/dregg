@@ -56,7 +56,9 @@ impl ToolKind {
         match name {
             "read_file" | "skill_view" | "skills_list" | "browser_snapshot" | "browser_vision"
             | "browser_get_images" | "vision_analyze" => ToolKind::Read,
-            "write_file" | "patch" | "skill_manage" => ToolKind::Edit,
+            "write_file" | "patch" | "skill_manage" | "create_card" | "edit_card" => {
+                ToolKind::Edit
+            }
             "terminal" | "process" | "execute_code" | "browser_click" | "browser_type"
             | "browser_scroll" | "browser_press" | "browser_back" | "delegate_task"
             | "image_generate" | "text_to_speech" => ToolKind::Execute,

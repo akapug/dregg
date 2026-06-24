@@ -352,11 +352,38 @@ impl Cockpit {
                         .mt_2()
                         .mb_1(),
                 );
-                col = col.child(div().text_xs().text_color(theme::text()).child(format!(
-                    "this cell transcludes field {} from dregg://{}",
-                    t.transcluded_field,
-                    reflect::short_hex(&t.source.0),
-                )));
+                col = col.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_1()
+                        .child(div().text_xs().text_color(theme::text()).child(format!(
+                            "this cell transcludes field {} from dregg://{}",
+                            t.transcluded_field,
+                            reflect::short_hex(&t.source.0),
+                        )))
+                        // ▶ FOLLOW the forward link: OPEN the transcluded SOURCE cell's
+                        // live attested page in the browser — the transclusion BROWSES
+                        // to where it quotes from (Engelbart/Nelson's link you can click).
+                        // The quote stays a verified READ; this just navigates to the
+                        // source's own `dregg://` affordance surface.
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "transclusion-open-source-{}",
+                                reflect::short_hex(&t.source.0)
+                            )))
+                            .label("▶ open source")
+                            .ghost()
+                            .xsmall()
+                            .on_click({
+                                let source = t.source;
+                                cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                                    this.open_cell_in_browser(source, cx);
+                                })
+                            }),
+                        ),
+                );
                 col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
                     "provenance receipt {} · source finalized={} (the inclusion is CHECKABLE, not trusted)",
                     t.provenance_receipt, t.source_finalized,
@@ -871,6 +898,7 @@ impl Cockpit {
                         div()
                             .flex()
                             .justify_between()
+                            .items_center()
                             .child(
                                 div()
                                     .text_xs()
@@ -879,9 +907,37 @@ impl Cockpit {
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(theme::muted())
-                                    .child(format!("hop {}", b.hops)),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme::muted())
+                                            .child(format!("hop {}", b.hops)),
+                                    )
+                                    // ▶ OPEN the cited (observing) cell's LIVE attested
+                                    // page in the web-of-cells browser — the backlink
+                                    // BROWSES, not just refocuses. Clicking takes you to
+                                    // the cell's `dregg://` affordance surface + its
+                                    // transcluded content (the real attested read).
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "links-open-{}",
+                                            reflect::short_hex(&observer.0)
+                                        )))
+                                        .label("▶ open")
+                                        .ghost()
+                                        .xsmall()
+                                        .on_click(cx.listener(
+                                            move |this, _ev: &ClickEvent, _w, cx| {
+                                                // Swallow the row's own refocus: this is
+                                                // the BROWSE action (open the live page),
+                                                // not the recursive-refocus action.
+                                                this.open_cell_in_browser(observer, cx);
+                                            },
+                                        )),
+                                    ),
                             ),
                     )
                     .child(div().text_xs().text_color(theme::muted()).child(format!(

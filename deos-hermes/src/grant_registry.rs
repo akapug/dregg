@@ -210,12 +210,19 @@ impl GrantRegistry {
     /// * `write_file` / `patch` — workspace mutation: rate 10 / 8.
     /// * `web_extract` — pulls arbitrary page bodies: rate 15 (under Fetch-50).
     /// * `delegate_task` — spawns a sub-agent loop: rate 3.
+    /// * `create_card` / `edit_card` — the agent AUTHORS the world's UI (a receipted,
+    ///   cap-gated view-patch through the [`CardEditor`](deos_js::CardEditor)): rate 12 /
+    ///   20 (authoring is bounded but not as scarce as a sub-agent spawn). Each is its
+    ///   own independently-metered worker under the Edit kind — and the deeper bound is
+    ///   the card's own `edit_authority` cap tooth, which a rate ceiling never replaces.
     pub fn with_standard_tool_grants(self, deadline: i64) -> Self {
         self.with_tool_grant("terminal", 5, deadline)
             .with_tool_grant("write_file", 10, deadline)
             .with_tool_grant("patch", 8, deadline)
             .with_tool_grant("web_extract", 15, deadline)
             .with_tool_grant("delegate_task", 3, deadline)
+            .with_tool_grant("create_card", 12, deadline)
+            .with_tool_grant("edit_card", 20, deadline)
     }
 
     /// The mandate KEY a given tool name routes to: its per-tool grant if one is
