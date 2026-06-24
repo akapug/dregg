@@ -78,6 +78,15 @@ impl Cockpit {
     /// no-op once seeded. The `↵` (PressEnter) subscription routes straight to
     /// [`Self::webshell_go`], so the address bar behaves like a real browser's.
     pub(crate) fn ensure_webshell_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Seed the PAGE TILE's focus handle (it needs a live `Context` for
+        // `cx.focus_handle()`). A click on the rendered page focuses this; while it
+        // holds focus the tile's `on_key_down` routes typed characters into the live
+        // WebView, so you can type into a web form / search box.
+        #[cfg(feature = "web-shell")]
+        if self.webshell_tile_focus.is_none() {
+            self.webshell_tile_focus = Some(cx.focus_handle());
+        }
+
         if self.webshell_input.is_none() {
             let seed = self
                 .webshell_history
@@ -449,6 +458,62 @@ impl Cockpit {
         self.webshell_apply_live_input(servo_render::webview::WebInput::KeyChar { ch }, 96, cx);
     }
 
+    /// A NAMED key (Enter / Backspace / an arrow / …) into the focused web-shell tile →
+    /// a live page named-key event, so a web FORM can be submitted (Enter), edited
+    /// (Backspace / Delete), and its caret moved (the arrows). Routed alongside
+    /// [`Self::webshell_live_key`] from the tile's `on_key_down`.
+    #[cfg(feature = "web-shell")]
+    pub(crate) fn webshell_live_key_named(
+        &mut self,
+        key: servo_render::webview::NamedWebKey,
+        cx: &mut Context<Self>,
+    ) {
+        self.webshell_apply_live_input(
+            servo_render::webview::WebInput::KeyNamed { key },
+            96,
+            cx,
+        );
+    }
+
+    /// **THE KEY ROUTE — a keystroke on the focused page tile → the live WebView.** The
+    /// tile's `on_key_down` lands here while the page holds focus (a click on the page
+    /// focused it). A PRINTABLE character (`key_char`, no ⌘/Ctrl held) is delivered as
+    /// a [`WebInput::KeyChar`](servo_render::webview::WebInput); a NAMED editing key
+    /// (Enter / Backspace / Delete / Tab / Escape / the arrows / Home / End) is
+    /// delivered as a [`WebInput::KeyNamed`](servo_render::webview::WebInput) — so you
+    /// can TYPE into a web form, SUBMIT it, and edit its text. A ⌘/Ctrl chord is left
+    /// alone (it bubbles to the cockpit's `on_key` for ⌘K / ⌘J / nav), never sunk into
+    /// the page. Returns `true` if the keystroke was delivered to the page (the tile
+    /// listener then stops it propagating), `false` if it was left to bubble.
+    #[cfg(feature = "web-shell")]
+    pub(crate) fn webshell_tile_on_key(
+        &mut self,
+        ev: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let ks = &ev.keystroke;
+        // A ⌘/Ctrl chord is a cockpit command (⌘K / ⌘J / ⌘[ / ⌘]); never sink it into
+        // the page — let it bubble to `on_key`.
+        if ks.modifiers.platform || ks.modifiers.control {
+            return false;
+        }
+        // A NAMED editing/navigation key (Enter / Backspace / arrows / …) → the page's
+        // named-key path (form submit / delete / caret motion).
+        if let Some(named) = servo_render::webview::NamedWebKey::from_key_name(ks.key.as_str()) {
+            self.webshell_live_key_named(named, cx);
+            return true;
+        }
+        // A printable character (the typed grapheme) → the page's character path. A
+        // control char (no printable `key_char`) is not delivered.
+        if let Some(ch) = ks.key_char.as_ref().and_then(|s| s.chars().next()) {
+            if !ch.is_control() {
+                self.webshell_live_key(ch, cx);
+                return true;
+            }
+        }
+        false
+    }
+
     // === the live-loop bake hooks (for the headless before/after artifact) =====
 
     /// **BAKE HOOK** — navigate the web-shell to `url` through the persistent live
@@ -493,6 +558,66 @@ impl Cockpit {
             cx.notify();
         }
         changed
+    }
+
+    /// **BAKE HOOK** — deliver ONE click to the live WebView at tile-local `(x, y)`
+    /// (CSS pixels), bypassing the window-coord mapping (a headless bake has no real
+    /// cursor). Used to focus an in-PAGE text field before the key bake types into it.
+    /// Returns `true` if the tile changed.
+    #[cfg(feature = "web-shell")]
+    pub fn webshell_bake_click(&mut self, x: f32, y: f32, cx: &mut Context<Self>) -> bool {
+        let changed = servo_render::with_gl(|| {
+            let mut slot = self.webshell_live.borrow_mut();
+            match slot.as_mut() {
+                Some(live) if live.is_loaded() => {
+                    live.apply_input(servo_render::webview::WebInput::Click { x, y }, 256)
+                }
+                _ => false,
+            }
+        });
+        if changed {
+            self.sync_webshell_frame_from_live();
+            cx.notify();
+        }
+        changed
+    }
+
+    /// **BAKE HOOK** — type ONE character into the live WebView (the same
+    /// [`WebInput::KeyChar`](servo_render::webview::WebInput) the focused tile's
+    /// `on_key_down` routes), pump + repaint, and pull the fresh tile. Returns `true`
+    /// if the tile changed — the "a typed char changes the page" witness (e.g. the
+    /// char appearing in a focused `<input>`). The headless analogue of typing into the
+    /// focused page; the windowed cockpit reaches the same path through
+    /// [`Self::webshell_live_key`].
+    #[cfg(feature = "web-shell")]
+    pub fn webshell_bake_key(&mut self, ch: char, cx: &mut Context<Self>) -> bool {
+        let changed = servo_render::with_gl(|| {
+            let mut slot = self.webshell_live.borrow_mut();
+            match slot.as_mut() {
+                Some(live) if live.is_loaded() => {
+                    live.apply_input(servo_render::webview::WebInput::KeyChar { ch }, 256)
+                }
+                _ => false,
+            }
+        });
+        if changed {
+            self.sync_webshell_frame_from_live();
+            cx.notify();
+        }
+        changed
+    }
+
+    /// **BAKE HOOK** — the current page-tile content digest (the hash of the tile's
+    /// RGBA8 pixels), or `0` before any page paints. A layout-INDEPENDENT witness: it
+    /// hashes the WebView's own rendered tile, not the cockpit window, so a key bake can
+    /// assert "the page tile changed after typing" even when the tile is clipped/scaled
+    /// in the windowed layout. `0` (no frame) is distinguishable from any real digest.
+    #[cfg(feature = "web-shell")]
+    pub fn webshell_tile_digest(&self) -> u64 {
+        self.webshell_frame
+            .as_ref()
+            .map(|f| f.content_digest())
+            .unwrap_or(0)
     }
 
     // === the panel ===========================================================
@@ -735,17 +860,60 @@ impl Cockpit {
                     .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _w, cx| {
                         this.webshell_live_scroll(ev, cx);
                     }))
-                    // CLICK — a live page click (mousedown+up; runs handlers / links).
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, ev: &gpui::MouseDownEvent, _w, cx| {
-                            this.webshell_live_click(ev.position, cx);
-                        }),
-                    )
                     // MOVE — pointer move (drives :hover / cursor). Bounded pump.
                     .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _w, cx| {
                         this.webshell_live_move(ev, cx);
                     }));
+
+                // FOCUS + KEYS: make the tile focusable on its own handle so it can
+                // TAKE KEYBOARD INPUT. A click both (a) focuses the tile — so typed
+                // keys route here, not to the URL bar — and (b) clicks the live page.
+                // While focused, `on_key_down` routes each keystroke into the WebView
+                // (`webshell_tile_on_key`): type into a web form, submit it with Enter.
+                // A 2px ring (transparent → accent on focus) shows when the page has
+                // the keyboard. `track_focus`/`focus(..)` need the seeded handle.
+                if let Some(focus) = self.webshell_tile_focus.clone() {
+                    let focus_for_click = focus.clone();
+                    tile_box = tile_box
+                        .track_focus(&focus)
+                        // A 2px focus ring: transparent at rest, accent when the page
+                        // holds the keyboard (the `focus(..)` style applies on focus).
+                        .border_2()
+                        .border_color(gpui::transparent_black())
+                        .focus(|s| s.border_color(theme::accent()))
+                        // CLICK — focus the tile (so keys route to the page), THEN
+                        // deliver the live page click (mousedown+up; runs handlers /
+                        // links). `window` (was `_w`) is needed to move focus.
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, ev: &gpui::MouseDownEvent, window, cx| {
+                                focus_for_click.focus(window, cx);
+                                this.webshell_live_click(ev.position, cx);
+                            }),
+                        )
+                        // KEY — route the keystroke into the live WebView while the
+                        // tile holds focus. A delivered key is stopped here (it does
+                        // not also bubble to the cockpit's `on_key`); a ⌘/Ctrl chord
+                        // is left to bubble (so ⌘K / ⌘J / nav still work).
+                        .on_key_down(cx.listener(
+                            |this, ev: &gpui::KeyDownEvent, window, cx| {
+                                if this.webshell_tile_on_key(ev, cx) {
+                                    cx.stop_propagation();
+                                    window.prevent_default();
+                                }
+                            },
+                        ));
+                } else {
+                    // Handle not yet seeded (the very first paint): the click still
+                    // drives the live page; the focus/key wire arrives next frame once
+                    // `ensure_webshell_input` has seeded the tile focus handle.
+                    tile_box = tile_box.on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, ev: &gpui::MouseDownEvent, _w, cx| {
+                            this.webshell_live_click(ev.position, cx);
+                        }),
+                    );
+                }
             }
 
             return div()
@@ -759,7 +927,7 @@ impl Cockpit {
                     div()
                         .text_xs()
                         .text_color(theme::good())
-                        .child("PAGE — LIVE cap-gated Servo WebView (scroll · click · move → re-render; SWGL → glass)"),
+                        .child("PAGE — LIVE cap-gated Servo WebView · click to focus, then TYPE into the page · scroll · click → re-render (SWGL → glass)"),
                 )
                 .child(tile_box)
                 .into_any_element();
