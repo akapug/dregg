@@ -108,7 +108,7 @@
 use crate::cell::CellMode;
 use crate::factory::{CapTarget, CapTemplate, ChildVkStrategy, FactoryDescriptor};
 use crate::permissions::AuthRequired;
-use crate::program::{CellProgram, SimpleStateConstraint, StateConstraint, field_from_u64};
+use crate::program::{CellProgram, HashKind, SimpleStateConstraint, StateConstraint, field_from_u64};
 use crate::state::{FIELD_ZERO, FieldElement};
 
 // =============================================================================
@@ -536,6 +536,205 @@ pub fn bridge_factory_descriptor(terms: &BridgeTerms) -> Result<FactoryDescripto
     Ok(settlement_descriptor(
         "dregg-blueprint:bridge-factory v1",
         bridge_state_constraints(terms)?,
+    ))
+}
+
+// =============================================================================
+// Vault — Dregg2.Apps.Vault (HOUSE WELD #1: the conditional-timelock vault)
+// =============================================================================
+//
+// A VAULT is value LOCKED until a release rule, claimable EXACTLY ONCE by the
+// beneficiary after the condition is genuinely met — savings, a vesting
+// schedule, a commitment device ("I cannot spend this until block N"), a
+// deadbolt fund opened by a secret. It is the FIRST house room welded
+// (`docs/HOUSE-CAPACITIES-WELD-PLAN.md` headline #1: highest value × smallest).
+//
+// A vault is a COMPOSITION, NOT a new `Effect`: it rides the SAME committed-cell
+// substrate and the SAME wired settlement triple as the escrow/obligation/bridge
+// families (`CreateCellFromFactory` + `Transfer` + `SetField`), and every gate it
+// needs ALREADY EXISTS. So it is a factory descriptor over the existing
+// constraint vocabulary, light-client-verifiable:
+//
+//   * create a vault   = `CreateCellFromFactory` over `vault_factory_descriptor`
+//                        (installs the lock terms + the one-shot claim machine),
+//   * fund the lock    = an ordinary `Transfer` IN (the value lives in the cell's
+//                        own `balance`),
+//   * claim it         = a `SetField` advancing OPEN→CLAIMED (admitted ONLY when
+//                        the release condition holds) + a `Transfer` OUT to the
+//                        beneficiary.
+//
+// The four claim-safety teeth (mirroring the settlement family + the Lean twin
+// `Dregg2.Apps.Vault` / probe `Dregg2.Verify.VaultFactoryProbe`):
+//
+//   1. **Deal-term integrity** — beneficiary / release-height / condition-digest
+//      are term-pinned once OPEN (`pin_term`).
+//   2. **One-shot** — `AllowedTransitions` admits only
+//      `(UNINIT,UNINIT), (UNINIT,OPEN), (OPEN,OPEN), (OPEN,CLAIMED)`. CLAIMED is a
+//      terminal with NO outgoing (or self) row, so a claimed vault is INERT — no
+//      double-claim, no replay (the lone terminal IS the one-shot tooth; vault is
+//      escrow MINUS the refund leg).
+//   3. **Release gate** — entering CLAIMED requires the committed condition to be
+//      genuinely met:
+//        * a TIMELOCK vault: `TemporalGate { not_before: release_height }` — the
+//          claiming turn's block height must reach the release height (NO early
+//          release; the same height clock the settlement family's resolve-B uses);
+//        * a HASH-LOCK vault: `PreimageGate { commitment_index: COND_DIGEST_SLOT }`
+//          — the claiming turn must reveal a preimage hashing to the committed
+//          digest (NO forged proof).
+//   4. **Drain tooth** — entering CLAIMED requires `BalanceLte { max: 0 }`: the
+//      claim drains the full locked balance to the beneficiary (the value cannot be
+//      partially claimed or stranded in the cell).
+//
+// The locked VALUE lives in the minted cell's own `balance`; funding is an
+// ordinary conserving `Transfer` IN, claiming an ordinary `Transfer` OUT — NO
+// side-table, so vault conservation is the ordinary kernel move law. (The
+// beneficiary-is-the-claim-target binding is enforced by the SDK builder
+// constructing the only sensible claim turn, exactly as the settlement family's
+// payout target is — see the blueprint module-doc "What the program CANNOT see".)
+
+/// Vault slot 0 — lifecycle state ([`STATE_UNINIT`] → [`STATE_OPEN`] →
+/// [`VAULT_STATE_CLAIMED`]).
+pub const VAULT_STATE_SLOT: u8 = 0;
+/// Vault slot 1 — the beneficiary identity (the claim target; 32-byte `CellId`
+/// encoding). Term-pinned once OPEN.
+pub const VAULT_BENEFICIARY_SLOT: u8 = 1;
+/// Vault slot 2 — the timelock release height (big-endian u64; the block height
+/// at/after which a timelock vault is claimable). Term-pinned once OPEN. `0` for
+/// a pure hash-lock vault (the preimage governs).
+pub const VAULT_RELEASE_HEIGHT_SLOT: u8 = 2;
+/// Vault slot 3 — the hash-lock target `H(preimage)` (the committed digest a
+/// claim's revealed preimage must hash to). Term-pinned once OPEN. All-zero for a
+/// pure timelock vault.
+pub const VAULT_COND_DIGEST_SLOT: u8 = 3;
+
+/// Terminal state of a claimed vault (inert — no row out of CLAIMED in the
+/// transition table, the settlement-family one-shot shape).
+pub const VAULT_STATE_CLAIMED: u64 = 2;
+
+/// The release condition a vault is locked under (the minimal genuine slice: one
+/// of two — a height timelock or a hash-lock). Mirrors the Lean
+/// `Dregg2.Verify.VaultFactoryProbe` condition shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VaultCondition {
+    /// Released at/after `release_height`: the claiming turn's block height must
+    /// reach it (`TemporalGate { not_before: release_height }`). The "savings
+    /// until block N" / "vested at block N" lock. `release_height` must be
+    /// nonzero (a zero-height vault is claimable from genesis — not a lock).
+    AtHeight { release_height: u64 },
+    /// Released when a preimage hashing to `digest` is revealed
+    /// (`PreimageGate { commitment_index: COND_DIGEST_SLOT }`). The "deadbolt
+    /// fund opened by a secret/proof" lock. `digest` is the committed
+    /// `H(preimage)` and must be nonzero (a zero digest is satisfied by an
+    /// untouched slot).
+    OnProof {
+        /// The committed hash-lock target `H(genuine_preimage)`.
+        digest: FieldElement,
+        /// The hash family the preimage gate verifies against (Poseidon2 in
+        /// circuit, BLAKE3 otherwise).
+        hash_kind: HashKind,
+    },
+}
+
+/// The published terms of one conditional vault: who may claim, and the release
+/// condition. The locked amount is whatever is `Transfer`-ed IN (held in the
+/// cell's own `balance`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VaultTerms {
+    /// Beneficiary identity (the claim target), 32-byte encoding. Must be nonzero.
+    pub beneficiary: FieldElement,
+    /// The release condition the vault is locked under.
+    pub condition: VaultCondition,
+}
+
+/// The vault constraint set for one lock. The teeth, in keystone order (see the
+/// module-section docs); fails closed on a zero beneficiary (a claim would target
+/// the zero cell), a zero release height (an `AtHeight` vault would be claimable
+/// from genesis — not a lock), and a zero condition digest (an `OnProof` gate is
+/// satisfied by the untouched slot).
+///
+/// Safety contract (proved on the Lean twin `Dregg2.Apps.Vault` + the probe
+/// `Dregg2.Verify.VaultFactoryProbe`): conservation (the value moves by ordinary
+/// `Transfer`), one-shot / no-double-claim (the one-terminal state machine),
+/// claim-only-on-condition (`timelock_rejects_early` / `hashlock_rejects_forged`),
+/// value-not-stranded (`open_vault_claimable`).
+pub fn vault_state_constraints(terms: &VaultTerms) -> Result<Vec<StateConstraint>, BlueprintError> {
+    if terms.beneficiary == FIELD_ZERO {
+        return Err(BlueprintError::ZeroParty);
+    }
+    // ── the release-height term + the release gate (timelock vs hash-lock) ──
+    let (release_height, cond_digest, release_gate): (u64, FieldElement, SimpleStateConstraint) =
+        match &terms.condition {
+            VaultCondition::AtHeight { release_height } => {
+                if *release_height == 0 {
+                    return Err(BlueprintError::ZeroDeadline);
+                }
+                (
+                    *release_height,
+                    FIELD_ZERO,
+                    SimpleStateConstraint::TemporalGate {
+                        not_before: Some(*release_height),
+                        not_after: None,
+                    },
+                )
+            }
+            VaultCondition::OnProof { digest, hash_kind } => {
+                if *digest == FIELD_ZERO {
+                    return Err(BlueprintError::ZeroCondition);
+                }
+                (
+                    0,
+                    *digest,
+                    SimpleStateConstraint::PreimageGate {
+                        commitment_index: VAULT_COND_DIGEST_SLOT,
+                        hash_kind: *hash_kind,
+                    },
+                )
+            }
+        };
+    Ok(vec![
+        // ── 1. deal-term integrity (Lean: the Immutable deal terms) ──
+        pin_term(VAULT_BENEFICIARY_SLOT, terms.beneficiary),
+        pin_term(VAULT_RELEASE_HEIGHT_SLOT, field_from_u64(release_height)),
+        pin_term(VAULT_COND_DIGEST_SLOT, cond_digest),
+        // ── 2. the one-shot state machine (Lean: admitTable [(open, claimed)]) ──
+        // CLAIMED is terminal/inert (no row out): the value leaves AT MOST once
+        // (no double-claim / replay) — vault is escrow minus the refund leg.
+        StateConstraint::AllowedTransitions {
+            slot_index: VAULT_STATE_SLOT,
+            allowed: vec![
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_UNINIT)),
+                (field_from_u64(STATE_UNINIT), field_from_u64(STATE_OPEN)),
+                (field_from_u64(STATE_OPEN), field_from_u64(STATE_OPEN)),
+                (field_from_u64(STATE_OPEN), field_from_u64(VAULT_STATE_CLAIMED)),
+            ],
+        },
+        // ── 3. the RELEASE gate: entering CLAIMED requires the condition met ──
+        // (Lean: timelock_rejects_early / hashlock_rejects_forged.)
+        when_state(VAULT_STATE_CLAIMED, release_gate),
+        // ── 4. the DRAIN tooth: a claim drains the full locked balance out ──
+        // (the value cannot be partially claimed or stranded in the cell).
+        when_state(
+            VAULT_STATE_CLAIMED,
+            SimpleStateConstraint::BalanceLte { max: 0 },
+        ),
+    ])
+}
+
+/// The `CellProgram` installed on the vault cell for its whole life.
+pub fn vault_cell_program(terms: &VaultTerms) -> Result<CellProgram, BlueprintError> {
+    Ok(CellProgram::Predicate(vault_state_constraints(terms)?))
+}
+
+/// **The vault factory (per-lock, content-addressed)** — HOUSE WELD #1. A vault is
+/// a COMPOSITION over the existing constraint vocabulary settled by the wired
+/// `CreateCellFromFactory` + `Transfer` + `SetField` triple — NO new `Effect`.
+/// Lean twin: `Dregg2.Apps.Vault.vaultFactoryEntry`. Each lock gets its own
+/// content-addressed descriptor whose constraints bake the terms as literals; the
+/// locked value lives in the cell's own `balance`.
+pub fn vault_factory_descriptor(terms: &VaultTerms) -> Result<FactoryDescriptor, BlueprintError> {
+    Ok(settlement_descriptor(
+        "dregg-blueprint:vault-factory v1",
+        vault_state_constraints(terms)?,
     ))
 }
 
@@ -1957,6 +2156,267 @@ mod tests {
         })
         .unwrap();
         assert_ne!(a.factory_vk, ob.factory_vk);
+    }
+
+    // =========================================================================
+    // Vault — HOUSE WELD #1 (the conditional-timelock vault as a factory cell).
+    // The four claim-safety teeth, on the program the executor installs: term
+    // integrity, one-shot (no double-claim), claim-only-on-condition (timelock
+    // no-early-release + hash-lock no-forged-proof), and the drain tooth. The
+    // Lean twin is `Dregg2.Apps.Vault` (+ probe `VaultFactoryProbe`).
+    // =========================================================================
+
+    /// A timelock vault: beneficiary 1111 may claim at/after block 11_000.
+    fn timelock_terms() -> VaultTerms {
+        VaultTerms {
+            beneficiary: field_from_u64(1111),
+            condition: VaultCondition::AtHeight {
+                release_height: 11_000,
+            },
+        }
+    }
+
+    /// The genuine hash-lock preimage + a hash-lock vault committing to its hash.
+    fn hashlock_preimage() -> [u8; 32] {
+        let mut p = [0u8; 32];
+        p[0..18].copy_from_slice(b"the-secret-preima\0");
+        p
+    }
+    fn hashlock_terms() -> VaultTerms {
+        let digest = *blake3::hash(&hashlock_preimage()).as_bytes();
+        VaultTerms {
+            beneficiary: field_from_u64(1111),
+            condition: VaultCondition::OnProof {
+                digest,
+                hash_kind: HashKind::Blake3,
+            },
+        }
+    }
+
+    /// The post-open (locked, OPEN) state of a vault. The locked VALUE lives in
+    /// the cell's own `balance` (held until claimed).
+    fn vault_open_state(t: &VaultTerms) -> CellState {
+        let mut s = CellState::new(0);
+        s.fields[VAULT_STATE_SLOT as usize] = field_from_u64(STATE_OPEN);
+        s.fields[VAULT_BENEFICIARY_SLOT as usize] = t.beneficiary;
+        match &t.condition {
+            VaultCondition::AtHeight { release_height } => {
+                s.fields[VAULT_RELEASE_HEIGHT_SLOT as usize] = field_from_u64(*release_height);
+                s.fields[VAULT_COND_DIGEST_SLOT as usize] = FIELD_ZERO;
+            }
+            VaultCondition::OnProof { digest, .. } => {
+                s.fields[VAULT_RELEASE_HEIGHT_SLOT as usize] = field_from_u64(0);
+                s.fields[VAULT_COND_DIGEST_SLOT as usize] = *digest;
+            }
+        }
+        s.set_balance(500); // the locked value, held in the cell
+        s
+    }
+
+    /// The claimed (CLAIMED) post-state: the value has been moved OUT to the
+    /// beneficiary (balance drained to 0), the state advanced to CLAIMED.
+    fn vault_claimed_state(open: &CellState) -> CellState {
+        let mut s = open.clone();
+        s.fields[VAULT_STATE_SLOT as usize] = field_from_u64(VAULT_STATE_CLAIMED);
+        s.set_balance(0); // the claim drained the full locked balance to the beneficiary
+        s
+    }
+
+    /// Evaluate a vault program at `height` with an optional revealed preimage.
+    fn vault_eval(
+        program: &CellProgram,
+        new: &CellState,
+        old: Option<&CellState>,
+        height: u64,
+        preimage: Option<[u8; 32]>,
+    ) -> Result<(), crate::program::ProgramError> {
+        let ctx = EvalContext {
+            block_height: height,
+            timestamp: 0,
+            current_epoch: 0,
+            sender: None,
+            sender_epoch_count: 0,
+            revealed_preimage: preimage,
+        };
+        program.evaluate_full(
+            new,
+            old,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &WitnessBundle::empty(),
+        )
+    }
+
+    #[test]
+    fn vault_birth_and_open_pass_and_term_tamper_refuses() {
+        let t = timelock_terms();
+        let p = vault_cell_program(&t).unwrap();
+        // the all-zero birth state passes (factory mints with no initial fields):
+        let born = CellState::new(0);
+        assert!(vault_eval(&p, &born, None, 0, None).is_ok(), "birth state");
+        // opening writes the lock terms and passes:
+        let open = vault_open_state(&t);
+        assert!(
+            vault_eval(&p, &open, Some(&born), 0, None).is_ok(),
+            "open writes the lock terms"
+        );
+        // re-pointing the beneficiary while OPEN is rejected (term pin bites):
+        let mut bad = open.clone();
+        bad.fields[VAULT_BENEFICIARY_SLOT as usize] = field_from_u64(0xDEAD);
+        assert!(
+            vault_eval(&p, &bad, Some(&open), 0, None).is_err(),
+            "beneficiary term pin must bite"
+        );
+        // tampering the release height while OPEN is rejected:
+        let mut bad2 = open.clone();
+        bad2.fields[VAULT_RELEASE_HEIGHT_SLOT as usize] = field_from_u64(1);
+        assert!(
+            vault_eval(&p, &bad2, Some(&open), 0, None).is_err(),
+            "release-height term pin must bite"
+        );
+    }
+
+    #[test]
+    fn vault_timelock_claim_after_release_passes_before_rejects() {
+        // KEYSTONE (c) timelock: no early release; claimable at/after the height.
+        let t = timelock_terms(); // release at 11_000
+        let p = vault_cell_program(&t).unwrap();
+        let open = vault_open_state(&t);
+        let claimed = vault_claimed_state(&open);
+
+        // EARLY: one block before the release height is REJECTED.
+        assert!(
+            vault_eval(&p, &claimed, Some(&open), 10_999, None).is_err(),
+            "cannot claim before the timelock (no early release)"
+        );
+        // AT the release height is the live boundary (non-vacuity).
+        assert!(
+            vault_eval(&p, &claimed, Some(&open), 11_000, None).is_ok(),
+            "claimable exactly at the release height"
+        );
+        // AFTER is claimable too.
+        assert!(
+            vault_eval(&p, &claimed, Some(&open), 11_500, None).is_ok(),
+            "claimable after the release height"
+        );
+    }
+
+    #[test]
+    fn vault_hashlock_claim_with_genuine_preimage_passes_forged_rejects() {
+        // KEYSTONE (c) hash-lock: genuine preimage claims; forged proof rejected.
+        let t = hashlock_terms();
+        let p = vault_cell_program(&t).unwrap();
+        let open = vault_open_state(&t);
+        let claimed = vault_claimed_state(&open);
+
+        // GENUINE preimage discharges the gate (non-vacuity — the live accept).
+        assert!(
+            vault_eval(&p, &claimed, Some(&open), 0, Some(hashlock_preimage())).is_ok(),
+            "the genuine preimage discharges the hash-lock"
+        );
+        // FORGED preimage (wrong secret) is REJECTED.
+        let mut forged = [0u8; 32];
+        forged[0..5].copy_from_slice(b"WRONG");
+        assert!(
+            vault_eval(&p, &claimed, Some(&open), 0, Some(forged)).is_err(),
+            "a wrong preimage does not satisfy the hash-lock (no forged proof)"
+        );
+        // NO preimage at all is REJECTED.
+        assert!(
+            vault_eval(&p, &claimed, Some(&open), 0, None).is_err(),
+            "claiming a hash-lock vault without any preimage is rejected"
+        );
+    }
+
+    #[test]
+    fn vault_no_double_claim() {
+        // KEYSTONE (b): a CLAIMED vault is inert — no further transition admitted
+        // (no double-claim, no replay). The lone terminal IS the one-shot tooth.
+        let t = timelock_terms();
+        let p = vault_cell_program(&t).unwrap();
+        let open = vault_open_state(&t);
+        let claimed = vault_claimed_state(&open);
+
+        // the first claim (OPEN→CLAIMED, after release) is live:
+        assert!(vault_eval(&p, &claimed, Some(&open), 11_500, None).is_ok());
+        // a SECOND claim (CLAIMED→CLAIMED self-row absent) is REJECTED:
+        assert!(
+            vault_eval(&p, &claimed, Some(&claimed), 11_500, None).is_err(),
+            "a claimed vault cannot be claimed again (one-shot)"
+        );
+    }
+
+    #[test]
+    fn vault_claim_must_drain_the_full_balance() {
+        // The drain tooth: a claim entering CLAIMED with value still in the cell
+        // (balance > 0) is rejected — the value cannot be partially claimed or
+        // stranded in the vault.
+        let t = timelock_terms();
+        let p = vault_cell_program(&t).unwrap();
+        let open = vault_open_state(&t);
+        // CLAIMED but the balance was NOT drained (still 500 in the cell):
+        let mut undrained = open.clone();
+        undrained.fields[VAULT_STATE_SLOT as usize] = field_from_u64(VAULT_STATE_CLAIMED);
+        // (balance left at 500 from vault_open_state)
+        assert!(
+            vault_eval(&p, &undrained, Some(&open), 11_500, None).is_err(),
+            "a claim must drain the full locked balance to the beneficiary"
+        );
+    }
+
+    #[test]
+    fn vault_ill_formed_terms_rejected_at_build() {
+        // a zero beneficiary would target the zero cell on claim:
+        assert_eq!(
+            vault_state_constraints(&VaultTerms {
+                beneficiary: FIELD_ZERO,
+                condition: VaultCondition::AtHeight {
+                    release_height: 11_000
+                },
+            }),
+            Err(BlueprintError::ZeroParty)
+        );
+        // a zero release height is claimable from genesis — not a lock:
+        assert_eq!(
+            vault_state_constraints(&VaultTerms {
+                beneficiary: field_from_u64(1111),
+                condition: VaultCondition::AtHeight { release_height: 0 },
+            }),
+            Err(BlueprintError::ZeroDeadline)
+        );
+        // a zero hash-lock digest is satisfied by an untouched slot:
+        assert_eq!(
+            vault_state_constraints(&VaultTerms {
+                beneficiary: field_from_u64(1111),
+                condition: VaultCondition::OnProof {
+                    digest: FIELD_ZERO,
+                    hash_kind: HashKind::Blake3,
+                },
+            }),
+            Err(BlueprintError::ZeroCondition)
+        );
+    }
+
+    #[test]
+    fn vault_descriptors_are_per_lock_content_addressed() {
+        let a = vault_factory_descriptor(&timelock_terms()).unwrap();
+        let b = vault_factory_descriptor(&timelock_terms()).unwrap();
+        assert_eq!(a.factory_vk, b.factory_vk, "same lock → same factory");
+        // a different release height ⇒ a different factory:
+        let c = vault_factory_descriptor(&VaultTerms {
+            beneficiary: field_from_u64(1111),
+            condition: VaultCondition::AtHeight {
+                release_height: 12_000,
+            },
+        })
+        .unwrap();
+        assert_ne!(a.factory_vk, c.factory_vk, "different lock → different factory");
+        // a hash-lock vault is a distinct factory from a timelock vault:
+        let h = vault_factory_descriptor(&hashlock_terms()).unwrap();
+        assert_ne!(a.factory_vk, h.factory_vk);
+        // and distinct from the escrow family (the domain tag separates them):
+        let esc = escrow_factory_descriptor(&terms()).unwrap();
+        assert_ne!(a.factory_vk, esc.factory_vk);
     }
 }
 
