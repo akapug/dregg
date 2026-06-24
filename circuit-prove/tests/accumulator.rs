@@ -313,6 +313,73 @@ fn pinned_fold_rejects_foreign_vk_in_circuit() {
     }
 }
 
+/// **THE FAIL-CLOSED VK-IDENTITY TOOTH (host-side, the load-bearing negative).** After the running
+/// fixed-point pin is CAPTURED, a running proof whose preprocessed commitment no longer matches the
+/// pin makes `accumulate` REJECT (`AccError::VkIdentityMismatch`) — it does NOT silently fall through
+/// to an unpinned fold (the soundness hole this tooth guards: a forged/foreign running proof folding
+/// through unpinned). The sibling `pinned_fold_rejects_foreign_vk_in_circuit` exercises the IN-CIRCUIT
+/// rejection on the leaf∘leaf probe; THIS exercises the DRIVER's host-side refusal on the live fold
+/// path — the branch the probe never touches.
+///
+/// We fold two continuous turns (turn 1 captures the pin from the first running aggregation), then
+/// FORCE the captured pin to a FOREIGN commitment (simulating a running proof / pin disagreement an
+/// adversary might engineer) and assert the third `accumulate` REJECTS before building any unpinned
+/// fold, leaving the accumulator UNCHANGED (still 2 turns).
+#[test]
+#[ignore = "SLOW: two real folds to capture the pin (~minutes); run with --ignored"]
+fn accumulate_rejects_pin_mismatch_fail_closed() {
+    use p3_baby_bear::BabyBear as P3BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_symmetric::MerkleCap;
+
+    // Two continuous turns: turn 0 → running leaf; turn 1 → first running AGGREGATION, which captures
+    // the fixed-point pin.
+    let (turns, _g, _f) = make_chain(1000, 0, 7, 3);
+    let mut acc = Accumulator::genesis();
+    acc.accumulate(&turns[0]).expect("turn 0 folds");
+    acc.accumulate(&turns[1])
+        .expect("turn 1 folds + captures the pin");
+    assert_eq!(acc.num_turns(), 2);
+    assert!(
+        acc.vk_identity_pinned(),
+        "the fixed-point pin must be captured after the first running aggregation"
+    );
+
+    // The genuine running commitment (what the pin SHOULD equal).
+    let genuine = acc
+        .running_vk_commit()
+        .expect("a running aggregation proof exists after 2 turns");
+
+    // FORCE the pin to a FOREIGN value: flip one field element. Now the running proof's genuine
+    // commitment no longer matches the (corrupted) pin.
+    let mut roots = genuine.into_roots();
+    assert!(!roots.is_empty(), "the cap has at least one root");
+    roots[0][0] += P3BabyBear::ONE; // a different-circuit VK fingerprint
+    let foreign = MerkleCap::new(roots);
+    acc.force_pinned_vk_for_test(foreign);
+
+    // The third accumulate MUST reject fail-closed (NOT fold unpinned).
+    match acc.accumulate(&turns[2]) {
+        Err(AccError::VkIdentityMismatch { index, .. }) => {
+            assert_eq!(
+                index, 2,
+                "the mismatch is reported at the 3rd fold (index 2)"
+            );
+        }
+        Ok(()) => panic!(
+            "a captured-pin MISMATCH MUST be fatal: accumulate folded through (silently unpinned) — \
+             the soundness hole"
+        ),
+        Err(other) => panic!("expected VkIdentityMismatch, got {other:?}"),
+    }
+    // The rejected step did NOT advance the accumulator.
+    assert_eq!(
+        acc.num_turns(),
+        2,
+        "a rejected fold leaves the accumulator unchanged"
+    );
+}
+
 /// **THE PICKLES-PARITY TOOTH — the running VK reaches a CONSTANT FIXED POINT across depth.**
 ///
 /// This is the fixed-size-verifier-forever property: once the running aggregation proof's VK
@@ -341,7 +408,20 @@ fn pinned_fold_rejects_foreign_vk_in_circuit() {
 /// but is empirically a near-no-op here (heights were already constant); the constant-VK property comes
 /// from the fold's NATURAL self-stabilization. To make the fixed point reached EARLIER (eliminate the
 /// 2-step transient so EVERY fold from depth 2 carries the one anchor) needs the structural half of the
-/// wrap — see this test's `WRAP residual` note + the accumulator module header.
+/// wrap.
+///
+/// **ROOT-CAUSED structural reason for the 2-step transient (the precise residual).** The AGG∘LEAF
+/// verifier op-list depends on the STRUCTURE of the running (left) input — its `non_primitives`
+/// per-instance opened-column widths / public-value counts and `rows` (`verify_p3_batch_proof_circuit`
+/// in the fork iterates the input proof's `non_primitives` and allocates per-instance targets from
+/// them). A LEAF, an `AGG(LEAF,LEAF)`, and an `AGG(AGG,LEAF)` input each carry a different such
+/// structure, and that structure propagates EXACTLY ONE level into the parent op-list — so the parent
+/// stabilizes only after the input has been `AGG(AGG,LEAF)`-shaped for one full fold (hence depth 4, not
+/// 2). A true depth-2 fixed point needs the running input to have the steady `AGG(AGG,LEAF)` structure
+/// from the FIRST aggregation, which requires a CANONICAL agg-shaped seed whose own left is agg-shaped (a
+/// recursive fixpoint seed = the genuine Pickles step∘wrap circuit); the fork exposes no
+/// canonical-shape/normalize/re-prove primitive today, so it is genuinely multi-pass outstanding fork
+/// work. See the accumulator module header for the full statement.
 #[test]
 #[ignore = "SLOW: real incremental recursion fold over 5 turns (~minutes); run with --ignored"]
 fn wrapped_running_vk_is_constant_across_depth() {
