@@ -40,6 +40,12 @@ pub mod bindings_lightclient;
 // `ContentHashMismatch`). Only the resolve/render path reaches wasm — never the
 // circuit prover or the recursion path.
 pub mod bindings_transclusion;
+// The card in the tab: the wasm analog of `deos_js::applet::Applet::fire`. A deos-js
+// card renders renderer-independently (the SAME `ViewNode` paints to gpui pixels AND
+// to browser HTML via `deos-view`'s `web` renderer); `bindings_card` closes the LIVE
+// turn seam — a browser button-click fires its `{turn, arg}` affordance as a REAL
+// cap-gated verified turn over the embedded executor, and the bound slot re-paints.
+pub mod bindings_card;
 
 // ============================================================================
 // Token operations (Macaroon backend)

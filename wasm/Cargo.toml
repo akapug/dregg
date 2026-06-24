@@ -8,7 +8,10 @@ license = "AGPL-3.0-or-later"
 description = "WebAssembly playground for dregg token primitives"
 
 [lib]
-crate-type = ["cdylib"]
+# `cdylib` for the browser playground bundle; `rlib` so the integration tests
+# (`tests/*.rs`, e.g. the card-in-the-tab loop) can link the crate as a library
+# and drive its `#[wasm_bindgen]` surface under `wasm-pack test`.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -142,6 +145,14 @@ biscuit-auth = { version = "6.0.0", features = ["wasm"] }
 [dependencies.web-sys]
 version = "0.3"
 features = ["Performance", "Window"]
+
+[dev-dependencies]
+# Drives the `#[wasm_bindgen]` surface as a REAL wasm module under node /
+# headless-Chrome (`wasm-pack test --node` / `--headless --chrome`). The
+# card-in-the-tab loop (`tests/card_fires_a_verified_turn.rs`) runs the EXACT
+# bytes the browser runs — a button-click → a cap-gated verified turn → the
+# bound slot re-paints.
+wasm-bindgen-test = "0.3"
 
 # standalone (excluded from the root workspace — see root Cargo.toml)
 [workspace]

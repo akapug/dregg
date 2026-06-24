@@ -45,6 +45,12 @@ libservo = [
     "dep:rustls",
     "dep:rustls-pki-types",
     "dep:webpki-roots",
+    # The `euclid` geometry backing `webrender_api`'s `DeviceIntRect`
+    # (`Box2D<i32, DevicePixel>`) + the surfman `Size2D<i32>` — the GPU context
+    # (`src/gpu_context.rs`) constructs the readback rect and the surface size from
+    # them. Pinned to the SAME version webrender_api/servo resolve (`euclid 0.22`)
+    # so `DeviceIntRect` UNIFIES with servo's copy.
+    "dep:euclid",
     # The `surfman::Connection` the real `RenderingContext::connection()` returns.
     # servo-paint's `register_rendering_context` (`paint.rs:236`) UNCONDITIONALLY
     # calls `rendering_context.connection().expect("Failed to get connection")` then
@@ -151,6 +157,11 @@ glow = { version = "0.16", optional = true }
 # the EXACT version servo 0.1.x resolves (`surfman 0.11`) so our `Connection` IS the
 # same type servo-paint stores in its `PainterSurfmanDetails`.
 surfman = { version = "0.11", optional = true }
+# `euclid` geometry for the GPU context's `DeviceIntRect` readback rect + surfman
+# `Size2D<i32>` surface size. Pinned to the version webrender_api/servo resolve
+# (`euclid 0.22`) so `DeviceIntRect` (= `euclid::Box2D<i32, DevicePixel>`) unifies
+# with servo's copy. Only linked on libservo.
+euclid = { version = "0.22", optional = true }
 # The `http` crate for the cap-gated http handler's response `Content-Type` header
 # (`HeaderValue` / `CONTENT_TYPE`). Pinned to servo-net's `http 1.4` so the
 # `HeaderMap` unifies with servo's `Response.headers`. Only linked on libservo.

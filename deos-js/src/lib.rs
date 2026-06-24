@@ -29,6 +29,7 @@ pub mod agent_card;
 pub mod applet;
 pub mod attach;
 pub mod card_editor;
+pub mod coauthored_card;
 pub mod composer_card;
 pub mod dynamics_card;
 pub mod graph_card;
@@ -46,6 +47,7 @@ pub use applet::{Affordance, Applet, CellModel, FireError, Transclusion, Transcl
 pub use attach::{AttachedAffordance, AttachedApplet, WorldSink};
 pub use card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
 pub use card_editor::Author;
+pub use coauthored_card::{CardFork, CardStitch, SharedCard, COUNT_SLOT};
 pub use agent_card::{AgentAction, AgentCard, MandateEdge, AGENT_NONCE_SLOT};
 pub use composer_card::{ComposedChild, ComposerCard, ComposerViewEdit, Role as ComposerRole};
 pub use dynamics_card::{DynamicsCard, FeedEntry, FEED_LEN_SLOT};

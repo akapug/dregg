@@ -2068,6 +2068,7 @@ mod audit_tests {
             &serde_json::to_string(&p.output_commitments).unwrap(),
             &proof_json,
             &p.message_hex,
+            None,
         )
         .expect("verify ok");
 
@@ -2126,6 +2127,7 @@ mod audit_tests {
             &serde_json::to_string(&p.output_commitments).unwrap(),
             &proof_json,
             &p.message_hex,
+            None,
         )
         .expect("verify ok");
 
@@ -2179,11 +2181,19 @@ mod audit_tests {
         struct Sealed {
             ciphertext: Vec<u8>,
             ephemeral_pubkey: Vec<u8>,
+            // The AEAD nonce is part of the sealed envelope (see `seal_intent_body`);
+            // it must be carried back to `unseal_intent_body`.
+            nonce: Vec<u8>,
         }
         let s: Sealed = serde_wasm_bindgen::from_value(sealed).unwrap();
 
         // Wrong privkey path: unseal returns Err or non-plaintext.
-        let wrong = unseal_intent_body(&s.ciphertext, &s.ephemeral_pubkey, &recip_b_secret_bytes);
+        let wrong = unseal_intent_body(
+            &s.ciphertext,
+            &s.ephemeral_pubkey,
+            &s.nonce,
+            &recip_b_secret_bytes,
+        );
         match wrong {
             Err(_) => {} // expected: AEAD reject
             Ok(s) => assert_ne!(s, plaintext, "wrong key must not recover plaintext"),
@@ -2191,7 +2201,7 @@ mod audit_tests {
 
         // Right privkey path: recovers plaintext.
         let right_secret = recip_a_secret.to_bytes();
-        let right = unseal_intent_body(&s.ciphertext, &s.ephemeral_pubkey, &right_secret)
+        let right = unseal_intent_body(&s.ciphertext, &s.ephemeral_pubkey, &s.nonce, &right_secret)
             .expect("right key decrypts");
         assert_eq!(right, plaintext);
     }
