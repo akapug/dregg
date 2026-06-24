@@ -33,6 +33,7 @@ pub mod multi_cell;
 pub mod portable;
 pub mod program_doc;
 pub mod reflect_binding;
+pub mod signals;
 
 pub use applet::{Affordance, Applet, CellModel, FireError, Transclusion, TranscludeError};
 pub use attach::{AttachedApplet, WorldSink};
