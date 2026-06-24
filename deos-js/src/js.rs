@@ -67,6 +67,39 @@ impl JsTarget {
             JsTarget::Attached(a) => a.fire(affordance, arg),
         }
     }
+    /// Fire RAW effects (the GM-superpower path) — only the attach path supports it
+    /// (the embedded engine has no live World to commit arbitrary cross-cell effects on).
+    pub fn fire_raw_effects(
+        &mut self,
+        method: &str,
+        effects: Vec<dregg_turn::action::Effect>,
+    ) -> Result<[u8; 32], FireError> {
+        match self {
+            JsTarget::Attached(a) => a.fire_raw_effects(method, effects),
+            JsTarget::Embedded(_) => Err(FireError::Executor(
+                "raw-effect fire requires an attached live World".into(),
+            )),
+        }
+    }
+    /// Fire RAW effects under an explicit `actor` (the GM superpower of acting as a cell
+    /// it governs — e.g. a self-grant from a spawned door cell).
+    pub fn fire_raw_effects_as(
+        &mut self,
+        actor: dregg_types::CellId,
+        method: &str,
+        effects: Vec<dregg_turn::action::Effect>,
+    ) -> Result<[u8; 32], FireError> {
+        match self {
+            JsTarget::Attached(a) => a.fire_raw_effects_as(actor, method, effects),
+            JsTarget::Embedded(_) => Err(FireError::Executor(
+                "raw-effect fire requires an attached live World".into(),
+            )),
+        }
+    }
+    /// The agent cell driving this target (the actor of every committed turn).
+    pub fn agent_cell(&self) -> dregg_types::CellId {
+        self.cell()
+    }
     /// Witnessed read of one model field as a u64.
     pub fn get_u64(&self, slot: usize) -> u64 {
         match self {
@@ -160,6 +193,34 @@ thread_local! {
     /// the crawl/drive target, so `deos.editor.*` is reachable in BOTH the embedded run
     /// and an attached-live-World run: the card is a portable cell either way.
     static CURRENT_EDITOR: RefCell<Option<CardEditor>> = const { RefCell::new(None) };
+    /// THE SERVER REGISTRY the `deos.server.*` natives publish into — the affordances a
+    /// hosted "private server" program registers at boot (`defineAffordance`). The host
+    /// (e.g. the dregg node's `deos-host`) drains this AFTER running the program's setup
+    /// to publish the surface clients discover + fire. Each entry carries a real
+    /// `Vec<Effect>` (the generalized affordance shape, not a hardcoded counter-bump).
+    static SERVER_REGISTRY: RefCell<Vec<ServerAffordanceDef>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One affordance a hosted server program registered via `deos.server.defineAffordance`:
+/// a name, the authority a player must hold to fire it, and the real effects the fire
+/// commits. The host publishes these into its [`crate::AffordanceSurface`] so a client
+/// discovers + fires them.
+#[derive(Clone, Debug)]
+pub struct ServerAffordanceDef {
+    pub name: String,
+    pub required: dregg_cell::AuthRequired,
+    pub effects: Vec<dregg_turn::action::Effect>,
+}
+
+/// Reset the server registry before running a program's setup (so a fresh boot starts
+/// from an empty published surface).
+pub fn reset_server_registry() {
+    SERVER_REGISTRY.with(|r| r.borrow_mut().clear());
+}
+
+/// Drain the affordances a hosted server program registered (after its setup ran).
+pub fn take_server_registry() -> Vec<ServerAffordanceDef> {
+    SERVER_REGISTRY.with(|r| std::mem::take(&mut *r.borrow_mut()))
 }
 
 /// Install the [`CardEditor`] the `deos.editor.*` natives author through. The editor is
@@ -366,6 +427,36 @@ const PRELUDE: &str = r#"
             addAffordance: function(cardId, spec) {
                 return __deos_editor_add_affordance(String(cardId), JSON.stringify(spec || {})) | 0;
             }
+        },
+        // ── THE PRIVATE SERVER SURFACE — `deos.server.*` ───────────────────────────
+        // A hosted userspace program (run headless INSIDE a dregg node) holds state +
+        // offers cap-gated affordances players connect to + fire. The program's setup
+        // registers its surface here; the HOST publishes it for client discovery.
+        //
+        //   defineAffordance({name, required, effects:[...]})  — register a cap-gated
+        //     affordance carrying ARBITRARY effects (the keystone). `required` is an
+        //     authority label ("none"/"signature"/"proof"/"either"). Each effect is a
+        //     small object the host decodes into a real `Effect`:
+        //       {type:"setField", cell:<hex>, index:N, value:N}
+        //       {type:"incrementNonce", cell:<hex>}
+        //     Returns 1 on register, -1 on a malformed spec.
+        //   spawnCell(seedHex, perms) — GM superpower: mint a fresh cell (a real
+        //     CreateCell turn through the host) under the server's authority. Returns
+        //     the new cell id hex, or "" on refusal. `perms` is "open" (default) for a
+        //     fully-open cell.
+        //   grant(toCellHex, onCellHex, required) — GM superpower: grant a capability
+        //     over `onCell` to `toCell` (a real GrantCapability turn). Returns 1/-1.
+        server: {
+            defineAffordance: function(spec) {
+                return __deos_server_define_affordance(JSON.stringify(spec || {})) | 0;
+            },
+            spawnCell: function(seedHex, perms) {
+                var c = __deos_server_spawn_cell(String(seedHex || ""), String(perms || "open"));
+                return c === "" ? null : c;
+            },
+            grant: function(toCellHex, onCellHex, required) {
+                return __deos_server_grant(String(toCellHex), String(onCellHex), String(required || "signature")) | 0;
+            }
         }
     };
 "#;
@@ -435,6 +526,10 @@ impl JsRuntime {
                 (c"__deos_editor_edit_view", native_editor_edit_view as RawNative, 2),
                 (c"__deos_editor_set_field", native_editor_set_field as RawNative, 3),
                 (c"__deos_editor_add_affordance", native_editor_add_affordance as RawNative, 2),
+                // private server (the deos-host surface) — define / spawn / grant
+                (c"__deos_server_define_affordance", native_server_define_affordance as RawNative, 1),
+                (c"__deos_server_spawn_cell", native_server_spawn_cell as RawNative, 2),
+                (c"__deos_server_grant", native_server_grant as RawNative, 3),
             ] {
                 let defined = JS_DefineFunction(realm_cx, g, name.as_ptr(), Some(f), nargs, 0);
                 if defined.is_null() {
@@ -1104,5 +1199,179 @@ unsafe extern "C" fn native_editor_add_affordance(context: *mut RawJSContext, ar
         }
     });
     args.rval().set(Int32Value(if ok { 1 } else { -1 }));
+    true
+}
+
+// ── THE PRIVATE-SERVER natives (`deos.server.*`) — the deos-host surface ────────────
+//
+// A hosted userspace program registers cap-gated affordances (carrying ARBITRARY
+// effects) into the thread-local SERVER_REGISTRY (the host drains it after setup), and
+// wields the GM superpowers (`spawnCell` / `grant`) as real verified turns committed
+// through the attached live World.
+
+/// Decode one effect descriptor (`{type, ...}`) from the `defineAffordance` spec into a
+/// real [`Effect`]. Supports the spike's shapes: `setField` and `incrementNonce`.
+fn parse_effect_descriptor(v: &serde_json::Value) -> Result<dregg_turn::action::Effect, String> {
+    use dregg_turn::action::Effect;
+    let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+    let cell_hex = v.get("cell").and_then(|x| x.as_str()).unwrap_or("");
+    let cell = reflect_binding::parse_cell_id(cell_hex)
+        .ok_or_else(|| format!("effect '{ty}': bad cell id '{cell_hex}'"))?;
+    match ty {
+        "setField" => {
+            let index = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            let value = v.get("value").and_then(|x| x.as_u64()).unwrap_or(0);
+            Ok(Effect::SetField {
+                cell,
+                index,
+                value: crate::applet::pack_u64(value),
+            })
+        }
+        "incrementNonce" => Ok(Effect::IncrementNonce { cell }),
+        other => Err(format!("unknown effect type '{other}'")),
+    }
+}
+
+/// `__deos_server_define_affordance(specJson)` — register a cap-gated affordance carrying
+/// arbitrary effects into the server registry. Returns 1 on register, -1 on a bad spec.
+unsafe extern "C" fn native_server_define_affordance(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let spec_json = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
+    let parsed = (|| -> Result<ServerAffordanceDef, String> {
+        let v: serde_json::Value =
+            serde_json::from_str(&spec_json).map_err(|e| format!("defineAffordance JSON: {e}"))?;
+        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        if name.is_empty() {
+            return Err("defineAffordance needs a name".into());
+        }
+        let required = parse_auth_label(v.get("required").and_then(|x| x.as_str()).unwrap_or("none"));
+        let effects = match v.get("effects").and_then(|x| x.as_array()) {
+            Some(arr) => arr
+                .iter()
+                .map(parse_effect_descriptor)
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
+        Ok(ServerAffordanceDef { name, required, effects })
+    })();
+    let ok = match parsed {
+        Ok(def) => {
+            SERVER_REGISTRY.with(|r| r.borrow_mut().push(def));
+            true
+        }
+        Err(e) => {
+            record_error(format!("server.defineAffordance: {e}"));
+            false
+        }
+    };
+    args.rval().set(Int32Value(if ok { 1 } else { -1 }));
+    true
+}
+
+/// `__deos_server_spawn_cell(seedHex, perms)` — GM superpower: mint a fresh cell via a
+/// real `CreateCell` verified turn through the attached World. Returns the new cell id
+/// hex (its deterministic derivation), or `""` on refusal.
+unsafe extern "C" fn native_server_spawn_cell(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let seed_hex = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
+    let _perms = if args.argc_ >= 2 { arg_string(&mut cx, args.get(1)) } else { "open".into() };
+
+    let mut public_key = [0u8; 32];
+    if !hex_decode_into(&seed_hex, &mut public_key) {
+        public_key = *blake3::hash(seed_hex.as_bytes()).as_bytes();
+    }
+    let token_id = *blake3::hash(b"default").as_bytes();
+    let new_id = dregg_types::CellId::derive_raw(&public_key, &token_id);
+
+    let effect = dregg_turn::action::Effect::CreateCell {
+        public_key,
+        token_id,
+        balance: 0,
+    };
+    let id_hex = CURRENT_APPLET.with(|c| {
+        let mut guard = c.borrow_mut();
+        match guard.as_mut() {
+            Some(target) => match target.fire_raw_effects("spawnCell", vec![effect]) {
+                Ok(_rh) => reflect_binding::id_hex(&new_id),
+                Err(e) => {
+                    record_error(format!("server.spawnCell: {e}"));
+                    String::new()
+                }
+            },
+            None => {
+                record_error("server.spawnCell: no attached World".into());
+                String::new()
+            }
+        }
+    });
+    return_string(&mut cx, &args, &id_hex)
+}
+
+/// `__deos_server_grant(toHex, onHex, required)` — GM superpower: grant a capability over
+/// `on` to `to` via a real `GrantCapability` verified turn. Returns 1 on commit, -1 on
+/// refusal.
+unsafe extern "C" fn native_server_grant(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let to_hex = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
+    let on_hex = if args.argc_ >= 2 { arg_string(&mut cx, args.get(1)) } else { String::new() };
+    let req_label = if args.argc_ >= 3 { arg_string(&mut cx, args.get(2)) } else { "signature".into() };
+    let ok = (|| -> bool {
+        let to = match reflect_binding::parse_cell_id(&to_hex) {
+            Some(c) => c,
+            None => return false,
+        };
+        let on = match reflect_binding::parse_cell_id(&on_hex) {
+            Some(c) => c,
+            None => return false,
+        };
+        let cap = dregg_cell::CapabilityRef {
+            target: on,
+            slot: 0,
+            permissions: parse_auth_label(&req_label),
+            breadstuff: None,
+            expires_at: None,
+            allowed_effects: None,
+            stored_epoch: None,
+        };
+        let effect = dregg_turn::action::Effect::GrantCapability { from: on, to, cap };
+        CURRENT_APPLET.with(|c| {
+            let mut guard = c.borrow_mut();
+            match guard.as_mut() {
+                Some(target) => match target.fire_raw_effects("grant", vec![effect]) {
+                    Ok(_rh) => true,
+                    Err(e) => {
+                        record_error(format!("server.grant: {e}"));
+                        false
+                    }
+                },
+                None => false,
+            }
+        })
+    })();
+    args.rval().set(Int32Value(if ok { 1 } else { -1 }));
+    true
+}
+
+/// Decode 64-char hex into `out` (exact-length match required). Returns false on any
+/// non-hex char or a length mismatch.
+fn hex_decode_into(s: &str, out: &mut [u8; 32]) -> bool {
+    let s = s.trim();
+    if s.len() != 64 {
+        return false;
+    }
+    for (i, byte) in out.iter_mut().enumerate() {
+        let hi = match u8::from_str_radix(&s[i * 2..i * 2 + 1], 16) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let lo = match u8::from_str_radix(&s[i * 2 + 1..i * 2 + 2], 16) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        *byte = (hi << 4) | lo;
+    }
     true
 }

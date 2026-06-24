@@ -110,7 +110,9 @@ pub async fn host_server_program(
     let token_id = default_token_id();
     let server_cell = {
         let mut s = state.write().await;
-        let mut cell = Cell::with_balance(public_key, token_id, 0);
+        // Funded so the server program's own setup turns (GM superpowers: spawnCell /
+        // grant) cover their computron fees — the GM holds resources in its world.
+        let mut cell = Cell::with_balance(public_key, token_id, 1_000_000);
         cell.permissions = open_permissions();
         let id = cell.id();
         // Idempotent: if already present (re-boot), keep it.

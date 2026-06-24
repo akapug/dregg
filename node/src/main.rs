@@ -232,6 +232,15 @@ enum Command {
         /// node should leave it unset (default) so XFF is never believed.
         #[arg(long = "cors-origin", value_delimiter = ',')]
         cors_origins: Vec<String>,
+
+        /// THE DEOS-HOST (`deos-host` feature): host a headless userspace deos-js
+        /// "private server" program at this path. On boot the node mints the server
+        /// cell, runs the program's setup (which registers cap-gated affordances +
+        /// spawns cells via `deos.server.*`), and publishes the affordance surface for
+        /// client discovery at `GET /api/server/{cell}/affordances`. With the feature
+        /// off this flag is accepted but inert (the node logs a warning).
+        #[arg(long = "deos-program")]
+        deos_program: Option<String>,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -410,6 +419,7 @@ async fn main() {
             groups,
             auto_approve_joins,
             cors_origins,
+            deos_program,
         } => {
             run_node(
                 port,
@@ -434,6 +444,7 @@ async fn main() {
                 groups,
                 auto_approve_joins,
                 cors_origins,
+                deos_program,
             )
             .await
         }
@@ -511,6 +522,7 @@ async fn run_node(
     groups: Vec<String>,
     auto_approve_joins_flag: bool,
     cors_origins_flag: Vec<String>,
+    deos_program: Option<String>,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -918,6 +930,41 @@ async fn run_node(
     // server (like the prove pool); the task ends when the runtime shuts down.
     #[cfg(feature = "pg-mirror-live")]
     let _submit_drainer = submit_queue_drainer::spawn(node_state.clone());
+
+    // THE DEOS-HOST: if `--deos-program` was given, host a headless userspace deos-js
+    // private server. On boot the node mints the server cell, runs the program's setup
+    // (registering cap-gated affordances via `deos.server.*`), and publishes its
+    // affordance surface for client discovery — the node as a headless deos-js-server-host.
+    #[cfg(feature = "deos-host")]
+    if let Some(ref program_path) = deos_program {
+        match std::fs::read_to_string(program_path) {
+            Ok(program) => match deos_host::host_server_program(
+                &node_state,
+                "deos-server",
+                dregg_cell::AuthRequired::None,
+                program,
+            )
+            .await
+            {
+                Ok(server_cell) => info!(
+                    server_cell = %dregg_types::hex_encode(server_cell.as_bytes()),
+                    program = %program_path,
+                    "DEOS-HOST: hosting a userspace private server; affordances discoverable at \
+                     GET /api/server/{}/affordances",
+                    dregg_types::hex_encode(server_cell.as_bytes())
+                ),
+                Err(e) => error!(error = %e, program = %program_path, "DEOS-HOST: failed to host program"),
+            },
+            Err(e) => error!(error = %e, program = %program_path, "DEOS-HOST: cannot read program file"),
+        }
+    }
+    #[cfg(not(feature = "deos-host"))]
+    if deos_program.is_some() {
+        tracing::warn!(
+            "--deos-program given but the `deos-host` feature is OFF; the flag is inert. \
+             Rebuild with `--features deos-host` to host a userspace deos-js private server."
+        );
+    }
 
     // P2 Fix 8: Graceful shutdown on Ctrl-C.
     axum::serve(listener, app)
