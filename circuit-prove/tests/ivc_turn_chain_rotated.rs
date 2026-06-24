@@ -26,9 +26,14 @@
 //! host-side rejections (`broken_order_rejected`) stay runnable in CI.
 //!
 //! Run the slow ones with:
-//!   cargo test -p dregg-circuit --features recursion --test ivc_turn_chain_rotated -- --ignored --nocapture
-
-#![cfg(feature = "prover")]
+//!   cargo test -p dregg-circuit-prove --test ivc_turn_chain_rotated -- --ignored --nocapture
+//!
+//! NOTE: this file previously carried `#![cfg(feature = "prover")]`, a VESTIGIAL gate
+//! from when it lived in `circuit/tests/` under `dregg-circuit`'s `recursion` feature.
+//! `dregg-circuit-prove` defines no `prover` feature, so that gate compiled the ENTIRE
+//! file out (0 tests) — every IVC soundness tooth here was silently dead. The recursion
+//! machinery is unconditional in `dregg-circuit-prove` (and the rotated mint rides the
+//! always-present `dregg-turn` dev-dep), so the gate is removed: the teeth run.
 
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
@@ -540,6 +545,243 @@ fn foreign_circuit_root_is_refused_by_vk_pin() {
         Ok(()) => panic!("a foreign circuit's root must NOT verify as the chain fold"),
         Err(other) => panic!("expected VkFingerprintMismatch, got {other:?}"),
     }
+}
+
+/// **CODEX FINDING #1 / #6 — THE OPEN HOLE, MADE EXECUTABLE (binding↔root not linked).**
+///
+/// The final verifier checks three things INDEPENDENTLY: the carried binding proof
+/// (tooth 2), the root VK fingerprint (tooth 1), and the root batch proof (tooth 3). It
+/// NEVER checks that the carried binding proof is the binding leaf folded INTO that root.
+/// So a GENUINE root for history A, paired with a GENUINE binding proof for a DIFFERENT
+/// history B (and B's publics), passes all three teeth — a false whole-chain claim
+/// verifies.
+///
+/// This test CONSTRUCTS that forgery from two real same-shape folds and asserts that the
+/// current verifier ACCEPTS it. It is a WITNESS THAT THE HOLE IS OPEN, not a closure: it
+/// will start FAILING (i.e. the forgery will be REJECTED) once the in-band binding↔root
+/// linkage lands — at which point this `assert!(forged_accepts)` flips to
+/// `assert!(forged_rejected)`. Closing it requires the fork to re-expose the binding
+/// leaf's chain publics at the ROOT as a checkable output (today the root's
+/// `non_primitives` are only `[poseidon2_perm, recompose]`, BOTH with zero public values
+/// — empirically confirmed; the leaf publics are consumed in-circuit and never surfaced),
+/// so the host can verify `root-exposed publics == carried claim`.
+///
+/// Two K=2 transfer chains have the SAME tree shape ⇒ the SAME root VK fingerprint, so
+/// tooth 1 cannot tell them apart. They have DIFFERENT data ⇒ different roots/digests, so
+/// the cross-paired claim is genuinely false.
+#[test]
+#[ignore = "SLOW: two real folds (~minutes); run with --ignored — DEMONSTRATES the open #1 hole"]
+fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
+    // History A: the GENUINE root we keep.
+    let (turns_a, _ga, _fa) = make_chain(1000, 0, 7, 2);
+    let whole_a = prove_turn_chain_recursive(&turns_a).expect("chain A folds");
+    let vk = whole_a.root_vk_fingerprint();
+    verify_turn_chain_recursive(&whole_a, &vk).expect("A verifies honestly");
+
+    // History B: a DIFFERENT history (different start balance ⇒ different roots/digest),
+    // SAME K=2 transfer shape ⇒ SAME root VK fingerprint.
+    let (turns_b, gb, fb) = make_chain(500, 0, 3, 2);
+    let whole_b = prove_turn_chain_recursive(&turns_b).expect("chain B folds");
+    assert_eq!(
+        whole_a.root_vk_fingerprint(),
+        whole_b.root_vk_fingerprint(),
+        "same-shape K=2 transfer chains share a root VK fingerprint (tooth 1 cannot \
+         distinguish them) — this is what makes the cross-pairing attack land"
+    );
+    assert_ne!(
+        whole_a.chain_digest, whole_b.chain_digest,
+        "the two histories are genuinely distinct (different ordered-history digests)"
+    );
+
+    // THE FORGERY: keep A's GENUINE root, but swap in B's GENUINE binding proof + B's
+    // publics. Every field is internally consistent (B's binding proof attests B's
+    // publics), and the root is a genuine same-shape root — nothing ties them.
+    let mut forged = whole_a;
+    forged.binding_proof = whole_b.binding_proof;
+    forged.genesis_root = gb;
+    forged.final_root = fb;
+    forged.chain_digest = whole_b.chain_digest;
+    forged.num_turns = whole_b.num_turns;
+
+    let verdict = verify_turn_chain_recursive(&forged, &vk);
+    // OPEN HOLE: today this VERIFIES (the false claim is accepted). When the binding↔root
+    // linkage lands, flip this to `verdict.is_err()`.
+    assert!(
+        verdict.is_ok(),
+        "WITNESS of codex finding #1: a genuine root for history A paired with a genuine \
+         binding proof for history B currently VERIFIES — the binding↔root linkage is \
+         missing. (If this now ERRORS, the hole has been CLOSED — update the assertion.) \
+         got: {verdict:?}"
+    );
+}
+
+// ============================================================================
+// CODEX FINDING #2 — CLOSED. The binding AIR now enforces the per-row Poseidon2
+// digest hash + num_turns = real-row count IN-CIRCUIT, so a forged digest or a
+// forged num_turns is UNSAT. These two teeth pin the verify→REJECT flip.
+//
+// They build the GENUINE wide binding trace by hand (mirroring the lib-private
+// `binding_row`: 7 scalar cols `[old, new, acc_in, acc_out, idx, is_real,
+// real_count]` + the 352-col Poseidon2 aux block), prove it (honest control
+// passes), then TAMPER one field and assert the inner verify REJECTS. A single
+// inner uni-STARK (no recursion fold) — CI-runnable.
+// ============================================================================
+
+/// Build the GENUINE binding trace for a 2-real-row chain `genesis -> mid -> final`
+/// (padded_len == 2, so no padding rows). Returns `(matrix, pis)` ready for the inner
+/// prover. The Poseidon2 aux block is the real `poseidon2_permute_aux_witness`, so the
+/// in-circuit hash constraint (`acc_out == poseidon2([acc_in, old, new, idx], 4)[0]`)
+/// is satisfied — the honest control. A caller tampers `matrix`/`pis` to forge.
+fn honest_binding_2row(
+    genesis: BabyBear,
+    mid: BabyBear,
+    final_root: BabyBear,
+) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+    use dregg_circuit::plonky3_prover::{POSEIDON2_WIDTH, poseidon2_permute_aux_witness};
+    use dregg_circuit::poseidon2::hash_4_to_1;
+
+    const HASH_ARITY_TAG: u32 = 4;
+    let row =
+        |old: BabyBear, new: BabyBear, acc_in: BabyBear, idx: BabyBear, real_count: BabyBear| {
+            let acc_out = hash_4_to_1(&[acc_in, old, new, idx]);
+            let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
+            st[0] = acc_in;
+            st[1] = old;
+            st[2] = new;
+            st[3] = idx;
+            st[4] = BabyBear::new(HASH_ARITY_TAG);
+            let aux = poseidon2_permute_aux_witness(st);
+            let mut r = vec![
+                old,
+                new,
+                acc_in,
+                acc_out,
+                idx,
+                BabyBear::ONE, // is_real (both rows real for a 2-turn chain)
+                real_count,
+            ];
+            r.extend_from_slice(&aux);
+            (acc_out, r)
+        };
+
+    let (h0, r0) = row(genesis, mid, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ONE);
+    let (h1, r1) = row(mid, final_root, h0, BabyBear::ONE, BabyBear::new(2));
+    let chain_digest = h1;
+    let pis = vec![genesis, final_root, BabyBear::new(2), chain_digest];
+    (vec![r0, r1], pis)
+}
+
+fn to_binding_matrix(rows: &[Vec<BabyBear>]) -> p3_matrix::dense::RowMajorMatrix<P3BabyBear> {
+    use p3_field::PrimeCharacteristicRing;
+    let width = rows[0].len();
+    let flat: Vec<P3BabyBear> = rows
+        .iter()
+        .flat_map(|r| r.iter().map(|&v| P3BabyBear::from_u64(v.0 as u64)))
+        .collect();
+    p3_matrix::dense::RowMajorMatrix::new(flat, width)
+}
+
+use p3_baby_bear::BabyBear as P3BabyBear;
+
+/// **CODEX FINDING #2 (digest) — CLOSED.** The in-AIR per-row Poseidon2 binding forces
+/// `acc_out == hash_4_to_1([acc_in, old, new, idx])`, so a forged `chain_digest` (a
+/// tampered last-row `acc_out` + public) has NO satisfying witness. Honest control
+/// passes; the forgery is REJECTED.
+#[test]
+fn binding_air_forged_digest_unsat() {
+    use dregg_circuit_prove::ivc_turn_chain::{TurnChainBindingAir, ir2_leaf_wrap_config};
+    use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
+        prove_inner_for_air_with_config, verify_inner_for_air_with_config,
+    };
+
+    let genesis = BabyBear::new(111);
+    let mid = BabyBear::new(222);
+    let final_root = BabyBear::new(333);
+    let cfg = ir2_leaf_wrap_config();
+    let air = TurnChainBindingAir;
+
+    // HONEST CONTROL: the genuine trace proves + verifies.
+    let (rows, pis) = honest_binding_2row(genesis, mid, final_root);
+    let honest = prove_inner_for_air_with_config(&air, to_binding_matrix(&rows), &pis, &cfg);
+    verify_inner_for_air_with_config(&air, &honest, &pis, &cfg)
+        .expect("the honest wide binding trace must verify (control)");
+
+    // FORGERY: claim a different chain_digest than the real hash chain. We move the
+    // public AND the last-row acc_out to the forged value (so the carry chain still
+    // links) — but the per-row Poseidon2 constraint now forces acc_out to the REAL
+    // hash, so the tampered last row is UNSAT.
+    let forged_digest = pis[3] + BabyBear::new(0xDEAD);
+    let mut forged_rows = rows.clone();
+    let last = forged_rows.len() - 1;
+    forged_rows[last][3] = forged_digest; // COL_ACC_OUT on the last row
+    let mut forged_pis = pis.clone();
+    forged_pis[3] = forged_digest; // chain_digest public
+
+    // A forged trace cannot satisfy the constraints. In DEBUG the prover's
+    // `check_constraints` panics on the unsatisfied row; in RELEASE the prover emits a
+    // proof that VERIFY rejects. Either way the prove→verify pipeline must NOT SUCCEED.
+    let forged_rows2 = forged_rows.clone();
+    let forged_pis2 = forged_pis.clone();
+    let cfg2 = cfg.clone();
+    let succeeded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let air = TurnChainBindingAir;
+        let p = prove_inner_for_air_with_config(
+            &air,
+            to_binding_matrix(&forged_rows2),
+            &forged_pis2,
+            &cfg2,
+        );
+        verify_inner_for_air_with_config(&air, &p, &forged_pis2, &cfg2).is_ok()
+    }))
+    .unwrap_or(false); // a panic (debug constraint failure) == rejected
+    assert!(
+        !succeeded,
+        "FINDING #2 CLOSED: a forged chain_digest must be REJECTED by the in-AIR \
+         Poseidon2 binding (acc_out is forced to the genuine hash), but the pipeline accepted it"
+    );
+}
+
+/// **CODEX FINDING #2 (num_turns) — CLOSED.** `num_turns` (pv[2]) is pinned to
+/// `real_count[last]`, the cumulative count of `is_real` rows. A forged `num_turns`
+/// (≠ the genuine 2) mismatches the real-row count and is UNSAT.
+#[test]
+fn binding_air_forged_num_turns_unsat() {
+    use dregg_circuit_prove::ivc_turn_chain::{TurnChainBindingAir, ir2_leaf_wrap_config};
+    use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
+        prove_inner_for_air_with_config, verify_inner_for_air_with_config,
+    };
+
+    let genesis = BabyBear::new(444);
+    let mid = BabyBear::new(555);
+    let final_root = BabyBear::new(666);
+    let cfg = ir2_leaf_wrap_config();
+    let air = TurnChainBindingAir;
+
+    let (rows, pis) = honest_binding_2row(genesis, mid, final_root);
+    // HONEST CONTROL.
+    let honest = prove_inner_for_air_with_config(&air, to_binding_matrix(&rows), &pis, &cfg);
+    verify_inner_for_air_with_config(&air, &honest, &pis, &cfg)
+        .expect("the honest wide binding trace must verify (control)");
+
+    // FORGERY: claim num_turns = 99 while the genuine real-row count is 2. Only pv[2]
+    // changes; the trace (real_count[last] == 2) cannot satisfy `real_count == num_turns`.
+    let mut forged_pis = pis.clone();
+    forged_pis[2] = BabyBear::new(99);
+    let rows2 = rows.clone();
+    let forged_pis2 = forged_pis.clone();
+    let cfg2 = cfg.clone();
+    let succeeded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let air = TurnChainBindingAir;
+        let p =
+            prove_inner_for_air_with_config(&air, to_binding_matrix(&rows2), &forged_pis2, &cfg2);
+        verify_inner_for_air_with_config(&air, &p, &forged_pis2, &cfg2).is_ok()
+    }))
+    .unwrap_or(false);
+    assert!(
+        !succeeded,
+        "FINDING #2 CLOSED: a forged num_turns (99 != real count 2) must be REJECTED by \
+         the real_count[last] == num_turns binding, but the pipeline accepted it"
+    );
 }
 
 /// 2-step inductive core: `fold_two_turns` over a continuous pair yields a verifying

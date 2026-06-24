@@ -24,17 +24,26 @@
 //!
 //! ## The two pieces
 //!
-//! 1. **[`TurnChainBindingAir`]** (width 4, one row per finalized turn): binds
-//!    the sequential chain. Each row carries `[old_root, new_root, acc_in,
-//!    acc_out]` with constraints:
+//! 1. **[`TurnChainBindingAir`]** (one row per folded position): binds the
+//!    sequential chain AND the running ordered-history digest. Each row carries
+//!    `[old_root, new_root, acc_in, acc_out, idx, is_real, real_count]` plus the
+//!    per-row Poseidon2 permutation aux block, with constraints:
 //!      - chain continuity: `new_root[i] == old_root[i+1]` (the temporal tooth);
 //!      - first row `old_root == genesis_root` (public input);
 //!      - last row `new_root == final_root` (public input);
-//!      - running digest `acc_out = hash_4_to_1([acc_in, old_root, new_root, idx])`,
-//!        first row `acc_in == 0`, last row `acc_out == chain_digest` (public).
+//!      - **running digest `acc_out == hash_4_to_1([acc_in, old_root, new_root,
+//!        idx])` ENFORCED in-circuit** (the genuine round-by-round Poseidon2 of
+//!        [`poseidon2_permute_expr`], NOT a free witness column), first row
+//!        `acc_in == 0`, last row `acc_out == chain_digest` (public);
+//!      - `idx` is a positional counter (`0,1,2,…`) so the digest is positionally
+//!        bound;
+//!      - `num_turns` (public) is pinned to `real_count[last]`, the cumulative
+//!        count of the non-padding (`is_real`) rows.
 //!
 //!    A trace whose turns are reordered, or that drops/inserts a turn, breaks
-//!    continuity and is UNSAT — that is the load-bearing rejection.
+//!    continuity and is UNSAT; a forged `chain_digest` has no satisfying Poseidon2
+//!    witness; a forged `num_turns` mismatches the real-row count — those are the
+//!    load-bearing rejections.
 //!
 //! 2. **The recursion tree (Gold) — REAL leaves.** Each finalized turn's leaf
 //!    is the **Lean-descriptor EffectVM AIR itself** ([`EffectVmDescriptorAir`],
@@ -95,6 +104,34 @@
 //!      relabeling any carried field is refused outright.
 //!   3. **The root** — `verify_recursive_batch_proof` on the single root.
 //!
+//! ## CRITICAL HOLE #2 — CLOSED; #1/#6 still open (codex review 2026-06-24)
+//!
+//! A cross-model adversarial review (`docs/CODEX-IVC-SOUNDNESS-REVIEW.md`, findings
+//! #1/#6 and #2) found two residuals admitting a FORGED whole-chain claim the verifier
+//! ACCEPTS. **#2 is now CLOSED in-band** (this AIR); #1/#6 remains a fork follow-up.
+//!
+//!   - **#2 — digest + num_turns unconstrained: CLOSED.** [`TurnChainBindingAir`] now
+//!     enforces the per-row hash `acc_out == hash_4_to_1([acc_in, old_root, new_root,
+//!     idx])` IN-CIRCUIT — the genuine round-by-round Poseidon2 ([`poseidon2_permute_expr`],
+//!     the SAME arithmetization the descriptor leaves use), with `acc_out` no longer a
+//!     free column. `idx` is a positional counter, and `num_turns` (pv[2]) is pinned to
+//!     `real_count[last]`, the cumulative count of non-padding rows (an `is_real` flag,
+//!     boolean + monotone, that survives the power-of-two padding). So a forged
+//!     `chain_digest` has no satisfying Poseidon2 witness and a forged `num_turns`
+//!     mismatches the real-row count — both UNSAT. The forge teeth
+//!     `binding_air_forged_digest_unsat` / `binding_air_forged_num_turns_unsat`
+//!     (`circuit-prove/tests/ivc_turn_chain_rotated.rs`) pin the verify→reject flip.
+//!   - **#1/#6 — binding↔root NOT linked (still open).** [`verify_turn_chain_recursive`]
+//!     checks the carried binding proof, the root VK fingerprint, and the root proof
+//!     INDEPENDENTLY — never that the carried binding proof IS the binding leaf folded
+//!     into that root. A GENUINE root for history A, paired with a GENUINE binding proof
+//!     for a DIFFERENT history B (+ B's publics), passes all three teeth. EMPIRICALLY: a
+//!     real K=2 root's `non_primitives` are only `[poseidon2_perm, recompose]`, BOTH with
+//!     ZERO public values — the binding leaf's chain publics are consumed in-circuit and
+//!     NEVER re-exposed at the root, so the host CANNOT compare `root-exposed publics ==
+//!     carried claim`. Closing it needs the fork lever below (re-expose the binding leaf's
+//!     publics at the root as a checkable output, then host-verify equality).
+//!
 //! ## The honest residual floor (named, not hidden)
 //!
 //! - **Engine soundness** (`recursive_sound`): the wrap layer's in-circuit FRI
@@ -153,7 +190,7 @@
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::BabyBear as P3BabyBear;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_recursion::{
     BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput,
@@ -167,6 +204,9 @@ use crate::plonky3_recursion_impl::recursive::{
 };
 use dregg_circuit::descriptor_ir2::Ir2BatchProof;
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::plonky3_prover::{
+    POSEIDON2_PERM_AUX_COLS, POSEIDON2_WIDTH, poseidon2_permute_aux_witness, poseidon2_permute_expr,
+};
 use dregg_circuit::poseidon2::hash_4_to_1;
 
 // Re-exported so chain consumers (the light client) name the trust-anchor type
@@ -327,8 +367,32 @@ impl std::error::Error for TurnChainError {}
 // TurnChainBindingAir: the sequential (temporal) chain binding.
 // ============================================================================
 
-/// Width-4 AIR binding the finalized turn order. One row per finalized turn:
-/// `[old_root, new_root, acc_in, acc_out]`.
+// Column layout of the chain-binding trace (one row per folded position).
+//
+// SOUNDNESS NOTE (#2 fix): the running digest `acc_out` is NO LONGER a free
+// witness column. Each row carries the FULL in-circuit Poseidon2 permutation aux
+// block, and `acc_out` is forced to be `poseidon2([acc_in, old_root, new_root,
+// idx, 4, 0..])[0]` — exactly the `hash_4_to_1` the trace generator computes.
+// A forged `chain_digest` (a tampered `acc_out` on the last row) therefore has
+// no satisfying witness, and a forged `num_turns` is rejected by the real-row
+// counter binding (`real_count[last] == num_turns`).
+const COL_OLD_ROOT: usize = 0;
+const COL_NEW_ROOT: usize = 1;
+const COL_ACC_IN: usize = 2;
+const COL_ACC_OUT: usize = 3;
+const COL_IDX: usize = 4;
+const COL_IS_REAL: usize = 5;
+const COL_REAL_COUNT: usize = 6;
+/// First column of the per-row Poseidon2 permutation aux block.
+const BINDING_AUX0: usize = 7;
+/// Total binding-AIR trace width: 7 scalar columns + the Poseidon2 aux block.
+const BINDING_WIDTH: usize = BINDING_AUX0 + POSEIDON2_PERM_AUX_COLS;
+/// The arity domain-separation tag `hash_4_to_1` seeds at state position 4.
+const HASH_ARITY_TAG: u32 = 4;
+
+/// AIR binding the finalized turn order AND the running ordered-history digest.
+/// One row per folded position: `[old_root, new_root, acc_in, acc_out, idx,
+/// is_real, real_count, <Poseidon2 aux block>]`.
 ///
 /// Public inputs `[genesis_root, final_root, num_turns, chain_digest]`.
 ///
@@ -340,14 +404,27 @@ impl std::error::Error for TurnChainError {}
 ///   3. last row `new_root == final_root`.
 ///   4. running digest continuity: `acc_out[i] == acc_in[i+1]`; first row
 ///      `acc_in == 0`; last row `acc_out == chain_digest`.
+///   5. **per-row hash binding (THE #2 fix):** `acc_out == poseidon2([acc_in,
+///      old_root, new_root, idx], arity=4)[0]`, the genuine in-circuit Poseidon2
+///      (the SAME arithmetization `P3MerklePoseidon2Air` uses, via
+///      [`poseidon2_permute_expr`]). `acc_out` is no longer free — a forged
+///      `chain_digest` has no satisfying witness.
+///   6. **idx counter:** `idx == 0` on the first row, `idx[i+1] == idx[i] + 1`
+///      on transitions — the hash is POSITIONALLY bound (rows cannot be
+///      permuted without breaking the digest).
+///   7. **num_turns binding:** `is_real` is boolean and monotone non-increasing
+///      (real rows first, then padding); `real_count` runs the cumulative count
+///      of real rows; the last row pins `real_count == num_turns`. A forged
+///      `num_turns` (≠ the real folded count) is UNSAT.
 ///
-/// The digest commits to the ordered (old_root, new_root) pairs, so two distinct
-/// finalized histories with the same endpoints still yield distinct digests.
+/// The digest commits to the ordered (old_root, new_root, idx) triples, so two
+/// distinct finalized histories with the same endpoints still yield distinct
+/// digests, and a reordering moves `idx` and so the digest.
 pub struct TurnChainBindingAir;
 
 impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for TurnChainBindingAir {
     fn width(&self) -> usize {
-        4
+        BINDING_WIDTH
     }
 
     fn num_public_values(&self) -> usize {
@@ -355,29 +432,44 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for TurnChainBindingAir {
     }
 
     fn main_next_row_columns(&self) -> Vec<usize> {
-        (0..4).collect()
+        // Next-row reads: old_root (continuity), acc_in (digest chain), idx
+        // (counter), is_real (monotonicity), real_count (cumulative count).
+        vec![
+            COL_OLD_ROOT,
+            COL_ACC_IN,
+            COL_IDX,
+            COL_IS_REAL,
+            COL_REAL_COUNT,
+        ]
     }
 }
 
-impl<AB: AirBuilder> Air<AB> for TurnChainBindingAir {
+impl<AB: AirBuilder> Air<AB> for TurnChainBindingAir
+where
+    AB::F: PrimeField32,
+{
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.current_slice();
         let next = main.next_slice();
 
-        let old_root: AB::Expr = local[0].into();
-        let new_root: AB::Expr = local[1].into();
-        let acc_in: AB::Expr = local[2].into();
-        let acc_out: AB::Expr = local[3].into();
-        let next_old_root: AB::Expr = next[0].into();
-        let next_acc_in: AB::Expr = next[2].into();
+        let old_root: AB::Expr = local[COL_OLD_ROOT].into();
+        let new_root: AB::Expr = local[COL_NEW_ROOT].into();
+        let acc_in: AB::Expr = local[COL_ACC_IN].into();
+        let acc_out: AB::Expr = local[COL_ACC_OUT].into();
+        let idx: AB::Expr = local[COL_IDX].into();
+        let is_real: AB::Expr = local[COL_IS_REAL].into();
+        let real_count: AB::Expr = local[COL_REAL_COUNT].into();
+        let next_old_root: AB::Expr = next[COL_OLD_ROOT].into();
+        let next_acc_in: AB::Expr = next[COL_ACC_IN].into();
+        let next_idx: AB::Expr = next[COL_IDX].into();
+        let next_is_real: AB::Expr = next[COL_IS_REAL].into();
+        let next_real_count: AB::Expr = next[COL_REAL_COUNT].into();
 
         let public_values = builder.public_values();
         let genesis_root: AB::Expr = public_values[0].into();
         let final_root: AB::Expr = public_values[1].into();
-        // public_values[2] = num_turns (carried for the caller; not constrained
-        // here since the trace length encodes it, and binding it would require a
-        // row-count selector the fork's AirBuilder does not expose cheaply).
+        let num_turns: AB::Expr = public_values[2].into();
         let chain_digest: AB::Expr = public_values[3].into();
 
         // Constraint 1 (THE temporal tooth): chain continuity. Each turn's
@@ -392,14 +484,59 @@ impl<AB: AirBuilder> Air<AB> for TurnChainBindingAir {
             .assert_zero(old_root.clone() - genesis_root);
 
         // Constraint 3: last row new_root == final_root.
-        builder.when_last_row().assert_zero(new_root - final_root);
+        builder
+            .when_last_row()
+            .assert_zero(new_root.clone() - final_root);
 
         // Constraint 4: running digest chain.
         builder.when_first_row().assert_zero(acc_in.clone());
         builder
             .when_transition()
             .assert_zero(acc_out.clone() - next_acc_in);
-        builder.when_last_row().assert_zero(acc_out - chain_digest);
+        builder
+            .when_last_row()
+            .assert_zero(acc_out.clone() - chain_digest);
+
+        // Constraint 5 (THE #2 FIX): per-row hash binding. The running digest is
+        // FORCED to be the genuine Poseidon2 of `[acc_in, old_root, new_root,
+        // idx]` with the arity-4 domain tag — byte-identical to the trace
+        // generator's `hash_4_to_1`. `acc_out` is no longer a free column.
+        let aux: &[AB::Var] = &local[BINDING_AUX0..BINDING_AUX0 + POSEIDON2_PERM_AUX_COLS];
+        let arity_tag = AB::F::from_u32(HASH_ARITY_TAG);
+        let input_state: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|i| match i {
+            0 => acc_in.clone(),
+            1 => old_root.clone(),
+            2 => new_root.clone(),
+            3 => idx.clone(),
+            4 => AB::Expr::from(arity_tag),
+            _ => AB::Expr::ZERO,
+        });
+        let digest = poseidon2_permute_expr(builder, input_state, aux);
+        builder.assert_zero(acc_out - digest);
+
+        // Constraint 6: idx is a positional counter (0, 1, 2, ...).
+        builder.when_first_row().assert_zero(idx.clone());
+        builder
+            .when_transition()
+            .assert_zero(next_idx - (idx + AB::Expr::ONE));
+
+        // Constraint 7: num_turns is the count of REAL (non-padding) rows.
+        //   - is_real is boolean;
+        //   - is_real is monotone non-increasing (real rows first, then padding):
+        //     a 0->1 transition is forbidden, so `next_is_real * (1 - is_real) == 0`;
+        //   - real_count starts at is_real[0] and accumulates is_real;
+        //   - the last row pins real_count == num_turns.
+        builder.assert_bool(is_real.clone());
+        builder
+            .when_transition()
+            .assert_zero(next_is_real.clone() * (AB::Expr::ONE - is_real.clone()));
+        builder
+            .when_first_row()
+            .assert_zero(real_count.clone() - is_real);
+        builder
+            .when_transition()
+            .assert_zero(next_real_count - (real_count.clone() + next_is_real));
+        builder.when_last_row().assert_zero(real_count - num_turns);
     }
 }
 
@@ -412,12 +549,16 @@ impl<AB: AirBuilder> Air<AB> for TurnChainBindingAir {
 // The rotated fold builds its binding trace via `generate_chain_trace_rotated` (reading the
 // ROTATED commitments at PI 34/35).
 
-fn trace_to_matrix(trace: &[[BabyBear; 4]]) -> RowMajorMatrix<P3BabyBear> {
+fn trace_to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
+    debug_assert!(
+        trace.iter().all(|row| row.len() == BINDING_WIDTH),
+        "binding trace rows must all be {BINDING_WIDTH} wide"
+    );
     let values: Vec<P3BabyBear> = trace
         .iter()
         .flat_map(|row| row.iter().map(|&v| to_p3(v)))
         .collect();
-    RowMajorMatrix::new(values, 4)
+    RowMajorMatrix::new(values, BINDING_WIDTH)
 }
 
 /// Read a finalized turn's chain roots from its mandatory ROTATED leg (PI 34/35).
@@ -435,7 +576,7 @@ fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
 /// rotated v9 commitments.
 fn generate_chain_trace_rotated(
     turns: &[&FinalizedTurn],
-) -> Result<(Vec<[BabyBear; 4]>, Vec<BabyBear>, BabyBear), TurnChainError> {
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, BabyBear), TurnChainError> {
     if turns.len() < 2 {
         return Err(TurnChainError::TooFewTurns { count: turns.len() });
     }
@@ -452,24 +593,32 @@ fn generate_chain_trace_rotated(
     }
     let n = turns.len();
     let padded_len = n.next_power_of_two().max(2);
-    let mut trace: Vec<[BabyBear; 4]> = Vec::with_capacity(padded_len);
+    let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(padded_len);
     let mut acc = BabyBear::ZERO;
+    let mut real_count = BabyBear::ZERO;
     for (i, t) in turns.iter().enumerate() {
         let (old_root, new_root) = rotated_roots(t);
         let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[acc, old_root, new_root, idx]);
-        trace.push([old_root, new_root, acc, acc_out]);
+        real_count += BabyBear::ONE;
+        let (acc_out, row) = binding_row(
+            old_root, new_root, acc, idx, /* is_real */ true, real_count,
+        );
+        trace.push(row);
         acc = acc_out;
     }
-    let final_root = trace.last().unwrap()[1];
+    let final_root = trace.last().unwrap()[COL_NEW_ROOT];
     for i in n..padded_len {
         let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[acc, final_root, final_root, idx]);
-        trace.push([final_root, final_root, acc, acc_out]);
+        // Padding rows carry is_real = 0 (real_count frozen at n) and continue the
+        // genuine hash chain over the (final_root, final_root, idx) triple.
+        let (acc_out, row) = binding_row(
+            final_root, final_root, acc, idx, /* is_real */ false, real_count,
+        );
+        trace.push(row);
         acc = acc_out;
     }
-    let genesis_root = trace[0][0];
-    let chain_digest = trace.last().unwrap()[3];
+    let genesis_root = trace[0][COL_OLD_ROOT];
+    let chain_digest = trace.last().unwrap()[COL_ACC_OUT];
     let pis = vec![
         genesis_root,
         final_root,
@@ -478,6 +627,51 @@ fn generate_chain_trace_rotated(
     ];
     let digest = pis[3];
     Ok((trace, pis, digest))
+}
+
+/// Build one wide binding-trace row and return `(acc_out, row)`.
+///
+/// `acc_out = hash_4_to_1([acc_in, old_root, new_root, idx])` — the SAME digest the
+/// in-circuit constraint forces — and the Poseidon2 aux block is the genuine
+/// intermediate-state witness [`poseidon2_permute_expr`] checks round-by-round,
+/// seeded from `[acc_in, old_root, new_root, idx, 4, 0..]` (the `hash_4_to_1`
+/// state).
+fn binding_row(
+    old_root: BabyBear,
+    new_root: BabyBear,
+    acc_in: BabyBear,
+    idx: BabyBear,
+    is_real: bool,
+    real_count: BabyBear,
+) -> (BabyBear, Vec<BabyBear>) {
+    let acc_out = hash_4_to_1(&[acc_in, old_root, new_root, idx]);
+
+    let mut input_state = [BabyBear::ZERO; POSEIDON2_WIDTH];
+    input_state[0] = acc_in;
+    input_state[1] = old_root;
+    input_state[2] = new_root;
+    input_state[3] = idx;
+    input_state[4] = BabyBear::new(HASH_ARITY_TAG);
+    let aux = poseidon2_permute_aux_witness(input_state);
+    debug_assert_eq!(aux.len(), POSEIDON2_PERM_AUX_COLS);
+    // The aux block's final state[0] IS the digest (the gadget returns state[0]).
+    debug_assert_eq!(aux[POSEIDON2_PERM_AUX_COLS - POSEIDON2_WIDTH], acc_out);
+
+    let mut row = Vec::with_capacity(BINDING_WIDTH);
+    row.push(old_root); // COL_OLD_ROOT
+    row.push(new_root); // COL_NEW_ROOT
+    row.push(acc_in); // COL_ACC_IN
+    row.push(acc_out); // COL_ACC_OUT
+    row.push(idx); // COL_IDX
+    row.push(if is_real {
+        BabyBear::ONE
+    } else {
+        BabyBear::ZERO
+    }); // COL_IS_REAL
+    row.push(real_count); // COL_REAL_COUNT
+    row.extend_from_slice(&aux); // BINDING_AUX0..
+    debug_assert_eq!(row.len(), BINDING_WIDTH);
+    (acc_out, row)
 }
 
 // ============================================================================
