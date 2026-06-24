@@ -210,16 +210,11 @@ impl Render for CardPane {
                 v_flex()
                     .size_full()
                     .child(
-                        div()
-                            .px_3()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(border)
-                            .child(
-                                Label::new(title)
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(header_fg),
-                            ),
+                        div().px_3().py_2().border_b_1().border_color(border).child(
+                            Label::new(title)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(header_fg),
+                        ),
                     )
                     .child(self.node(&tree, window, app)),
             )

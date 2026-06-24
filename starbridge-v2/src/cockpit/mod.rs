@@ -565,6 +565,16 @@ pub struct Cockpit {
     /// THE DEV DOCK — whether the collapsible bottom dev strip is open (⌘J). The
     /// dev workspace (terminal/editor/shell), available in any mode.
     dock_open: bool,
+    /// FIRST-RUN — whether the cockpit shows the calm, sparse FIRST-VIEW overlay
+    /// (a warm "welcome to your world", a FEW clickable cells, ONE "try this"
+    /// affordance, and a quiet "explore" to reveal the full frame) INSTEAD of the
+    /// full 5-mode wall. `true` only on a brand-new image (set by login via
+    /// [`Self::set_first_run`]); `false` for a returning owner (their wall is
+    /// familiar) and after the operator clicks "explore" (or fires "try this").
+    /// The full chrome is one click away — progressive disclosure, not a separate
+    /// mode. Defaults `false` (the headless cockpit bake / a re-mount shows the
+    /// full frame unless asked).
+    first_run: bool,
     /// M3 WIDEN (`docs/deos/REFLEXIVE-MIGRATION.md` §3.4 — `render(workspace_subgraph)`).
     /// The cockpit's active-tab SELECTOR self-hosted as a REAL cell: the same
     /// [`BufferCell`] two-tier split [`ViewCell`] uses, only the payload is the
@@ -1005,10 +1015,8 @@ pub struct Cockpit {
     /// and rebuilt when the focus moves. Keyed by [`ModeCard`]. `None` on the gpui-free /
     /// `card-pane`-off build (which keeps the Rust panels as the surfaces).
     #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
-    mode_cards: std::collections::HashMap<
-        starbridge_v2::dock::card_surface::ModeCard,
-        ModeCardMount,
-    >,
+    mode_cards:
+        std::collections::HashMap<starbridge_v2::dock::card_surface::ModeCard, ModeCardMount>,
 }
 
 /// The cockpit's live mount of a [`ModeCard`] as a mode's main-pane surface: the

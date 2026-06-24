@@ -647,7 +647,11 @@ impl Cockpit {
     /// it is fail-soft — logged, the workspace untouched). The `card-pane` feature
     /// pulls deos-js + deos-view; this method is compiled only when it is on (with
     /// `dev-surfaces`'s graft machinery).
-    #[cfg(all(feature = "dev-surfaces", feature = "card-pane", feature = "embedded-executor"))]
+    #[cfg(all(
+        feature = "dev-surfaces",
+        feature = "card-pane",
+        feature = "embedded-executor"
+    ))]
     pub(crate) fn open_card_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use starbridge_v2::dock::card_surface::build_card_surface;
 
@@ -912,10 +916,7 @@ impl Cockpit {
     ///
     /// `label` names the action in the logged error so a contained panic is
     /// diagnosable (it is NOT silent — fail-soft, but loud in the log).
-    pub(crate) fn guard_ui_event<R>(
-        label: &str,
-        action: impl FnOnce() -> R,
-    ) -> bool {
+    pub(crate) fn guard_ui_event<R>(label: &str, action: impl FnOnce() -> R) -> bool {
         // `AssertUnwindSafe`: the cockpit's `&mut self` is not `UnwindSafe`, but a
         // contained panic here only ABORTS the in-flight UI action — it does not
         // resume reading torn cockpit state (gpui drops the frame; the next frame
@@ -2823,9 +2824,7 @@ mod popout_crash_repro {
     /// Open a real cockpit window over the demo world, render it once (so the pane
     /// group is seeded + the dock pane shows the active tab), and return the cockpit
     /// entity + its window handle.
-    fn boot_cockpit(
-        cx: &mut HeadlessAppContext,
-    ) -> (Entity<Cockpit>, gpui::WindowHandle<Cockpit>) {
+    fn boot_cockpit(cx: &mut HeadlessAppContext) -> (Entity<Cockpit>, gpui::WindowHandle<Cockpit>) {
         let (world, anchors) = world::demo_world();
         let shared = Rc::new(RefCell::new(world));
         let window = cx
@@ -2879,7 +2878,10 @@ mod popout_crash_repro {
         // The tab is recorded torn off (the move happened) and the cockpit is still
         // alive (no abort) — we can still read it.
         let torn = entity.update(&mut cx, |c, _cx| c.tab_is_torn_off(torn_tab));
-        assert!(torn, "the active tab is recorded torn off into its own window");
+        assert!(
+            torn,
+            "the active tab is recorded torn off into its own window"
+        );
     }
 
     /// THE SAFETY NET, PROVEN: a deliberately-panicking UI action wrapped in the
@@ -2907,6 +2909,9 @@ mod popout_crash_repro {
             cx.notify();
             ran
         });
-        assert!(survived, "a non-panicking guarded action returns true (ran)");
+        assert!(
+            survived,
+            "a non-panicking guarded action returns true (ran)"
+        );
     }
 }

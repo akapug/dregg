@@ -92,10 +92,9 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
         let applet = surface.applet();
         let pre_height = live.borrow().height();
         let pre_field = read_field(&live.borrow());
-        applet
-            .borrow_mut()
-            .fire("bump", 1)
-            .unwrap_or_else(|e| panic!("the {kind:?} card's affordance committed a live turn: {e}"));
+        applet.borrow_mut().fire("bump", 1).unwrap_or_else(|e| {
+            panic!("the {kind:?} card's affordance committed a live turn: {e}")
+        });
         let post_height = live.borrow().height();
         let post_field = read_field(&live.borrow());
         assert_eq!(
@@ -132,7 +131,10 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
             })
         });
         let after = surface.view_source();
-        assert_ne!(before, after, "{kind:?}: the reshape changed the view document");
+        assert_ne!(
+            before, after,
+            "{kind:?}: the reshape changed the view document"
+        );
         assert!(
             after.contains(&marker),
             "{kind:?}: the from-within patch line is in the re-folded view-source"

@@ -79,11 +79,7 @@ impl Cockpit {
         };
         // Already built for this focus → nothing to do (the entity re-reads the live ledger
         // every paint, so it stays current without a rebuild).
-        if self
-            .mode_cards
-            .get(&kind)
-            .is_some_and(|m| m.focus == focus)
-        {
+        if self.mode_cards.get(&kind).is_some_and(|m| m.focus == focus) {
             return;
         }
 
