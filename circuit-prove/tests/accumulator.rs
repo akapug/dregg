@@ -177,7 +177,8 @@ fn accumulate_rejects_discontinuity() {
     let (bad_next, _bo, _bn) = make_turn(500, 50, 3); // unrelated chain
 
     let mut acc = Accumulator::genesis();
-    acc.accumulate(&first).expect("the first turn folds (becomes the running proof)");
+    acc.accumulate(&first)
+        .expect("the first turn folds (becomes the running proof)");
     assert_eq!(acc.num_turns(), 1);
 
     match acc.accumulate(&bad_next) {
@@ -209,10 +210,17 @@ fn incremental_accumulate_verifies_whole_history() {
     // Drive the running left-fold ONE turn at a time (O(1) proof memory).
     let mut acc = Accumulator::genesis();
     for (i, t) in turns.iter().enumerate() {
-        acc.accumulate(t).unwrap_or_else(|e| panic!("turn {i} must accumulate: {e}"));
-        assert_eq!(acc.num_turns(), i + 1, "running num_turns advances per step");
+        acc.accumulate(t)
+            .unwrap_or_else(|e| panic!("turn {i} must accumulate: {e}"));
+        assert_eq!(
+            acc.num_turns(),
+            i + 1,
+            "running num_turns advances per step"
+        );
     }
-    let summary = acc.summary().expect("the accumulator has a summary after 3 turns");
+    let summary = acc
+        .summary()
+        .expect("the accumulator has a summary after 3 turns");
     assert_eq!(summary.genesis_root, genesis);
     assert_eq!(summary.head_root, final_root);
     assert_eq!(summary.num_turns, 3);
