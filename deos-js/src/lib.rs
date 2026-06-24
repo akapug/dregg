@@ -29,6 +29,7 @@ pub mod applet;
 pub mod attach;
 pub mod card_editor;
 pub mod js;
+pub mod multi_cell;
 pub mod portable;
 pub mod program_doc;
 pub mod reflect_binding;
