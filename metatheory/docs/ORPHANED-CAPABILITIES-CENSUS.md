@@ -1,3 +1,11 @@
+>> ⚠ CORRECTION (verify-source on the census itself, 2026-06-24): TARGET #1 (the Polis) is NOT orphaned.
+>> metatheory/lakefile.toml `defaultTargets = ["Dregg2", "Metatheory", "Polis"]` — so `lake build` (which
+>> scripts/axiom-hygiene-guard.sh runs, failing on ANY sorry) ALREADY builds + sorry-checks the whole Polis lib.
+>> The "Dregg2.lean never imports them" reading mistook a separate ENFORCED defaultTarget lib for an orphan; the
+>> lakefile comment confirms no cycle + that the split keeps both libs in the default `lake build`. NO 2-import weld
+>> is needed — the proven constitution is already in the CI-enforced gate. (The OTHER targets stand pending the same
+>> per-target verify; the cell/ house-prototypes' "zero executor callers" WAS directly verified.)
+
 # Orphaned-Capabilities Census — the weld-target map
 
 A whole-tree honest census (read-only) of capabilities that are **built + tested
