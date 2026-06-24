@@ -132,6 +132,18 @@ mut_auth_graph_drop() {
   perl -0pi -e 's/(def authConnects \(caps : Caps\) \(h : Label\) \(c : Spec\.Cap Label ExecRights\) : Prop :=\n)  \xe2\x88\x83 cap, cap \xe2\x88\x88 caps h \xe2\x88\xa7 authConnectsCap c\.target cap/${1}  True  -- AUTH-GRAPH-DROP mutation/' "$ER"
 }
 
+# LEDGER-SPEC-DROP: trivialize the per-action ATTESTATION CONTENT of `fullActionInvA` by replacing its
+# ObsAdvance conjunct (`s.log.length < s'.log.length`) with `True`. This is the value/ledger-side
+# attestation the C-c1 keystones (`fullActionInvA` / `gatedActionInvG`) carry. Post-repair this MUST go
+# RED: the `@[load_bearing]` non-vacuity witnesses (`fullActionInvA_nonvacuous` /
+# `gatedActionInvG_nonvacuous`) REFUTE a same-state instance THROUGH that ObsAdvance conjunct, so a
+# trivialized conjunct makes the witnesses unprovable and the (now-throwing) `#load_bearing_audit`
+# verdict on those two specs FAILS — confirming the retargeted value leg is load-bearing, not decorative.
+# If it stays GREEN, the `fullActionInvA` attestation content is empirically vacuous.
+mut_ledger_spec_drop() {
+  perl -0pi -e "s/\\(s\\.log\\.length < s'\\.log\\.length\\) \\xe2\\x88\\xa7/(True) \\xe2\\x88\\xa7  -- LEDGER-SPEC-DROP mutation/" "$TE"
+}
+
 trap restore EXIT
 
 # The AUTH-GRAPH-DROP mutation is caught by the load-bearing audit's non-vacuity tooth, which lives
@@ -148,6 +160,37 @@ build_auth_graph() {
   local rc=$?
   if [[ $rc -eq 0 ]] && ! grep -qE '^error:|: error:' "$log"; then return 0; fi
   return 1
+}
+
+# LEDGER-SPEC-DROP is caught by the throwing `#load_bearing_audit` (non-vacuity tooth) in the broad
+# audit module, downstream of the mutated `fullActionInvA`.
+LEDGER_SPEC_TARGETS=(
+  Dregg2.Exec.TurnExecutorFull
+  Dregg2.Exec.GatedForestCfg
+  Dregg2.Verify.LoadBearingAuditBroad
+)
+
+build_ledger_spec() {
+  local log="$1"
+  ( cd "$META" && lake build "${LEDGER_SPEC_TARGETS[@]}" ) >"$log" 2>&1
+  local rc=$?
+  if [[ $rc -eq 0 ]] && ! grep -qE '^error:|: error:' "$log"; then return 0; fi
+  return 1
+}
+
+run_ledger_spec() {
+  echo "=================================================================="
+  echo "MUTATION: LEDGER-SPEC-DROP"
+  local log="$LOGDIR/LEDGER-SPEC-DROP.log"
+  mut_ledger_spec_drop
+  if build_ledger_spec "$log"; then
+    echo "  RESULT: GREEN  (mutation NOT caught — fullActionInvA attestation is decorative!)"
+  else
+    echo "  RESULT: RED    (mutation caught — fullActionInvA value leg is load-bearing)"
+    grep -E ': error:|^error:' "$log" | head -3 | sed 's/^/             /'
+  fi
+  restore  # FILE-COPY snapshot restore (preserves the uncommitted tree)
+  echo ""
 }
 
 run_auth_graph() {
@@ -169,6 +212,7 @@ case "${1:-ALL}" in
   BASELINE)            run_one BASELINE            mut_baseline ;;
   AUTH-DROP)           run_one AUTH-DROP           mut_auth_drop ;;
   AUTH-GRAPH-DROP)     run_auth_graph ;;
+  LEDGER-SPEC-DROP)    run_ledger_spec ;;
   CONSERVATION-BREAK)  run_one CONSERVATION-BREAK  mut_conservation_break ;;
   AVAILABILITY-DROP)   run_one AVAILABILITY-DROP   mut_availability_drop ;;
   DISTINCTNESS-DROP)   run_one DISTINCTNESS-DROP   mut_distinctness_drop ;;
@@ -176,6 +220,7 @@ case "${1:-ALL}" in
     run_one BASELINE            mut_baseline
     run_one AUTH-DROP           mut_auth_drop
     run_auth_graph
+    run_ledger_spec
     run_one CONSERVATION-BREAK  mut_conservation_break
     run_one AVAILABILITY-DROP   mut_availability_drop
     run_one DISTINCTNESS-DROP   mut_distinctness_drop

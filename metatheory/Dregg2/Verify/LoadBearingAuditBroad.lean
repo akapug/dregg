@@ -42,6 +42,8 @@ import Dregg2.Spec.FunctionalRefinement
 import Dregg2.Spec.ExecRefinement
 import Dregg2.Exec.TurnExecutorFull
 import Dregg2.Exec.FullForestAuth
+-- the concrete gated fixtures carrying the `gatedActionInvG` non-vacuity witness:
+import Dregg2.Exec.GatedForestCfg
 
 open Dregg2.Verify.LoadBearingLint
 
@@ -255,8 +257,12 @@ Spec-side `execGraph` `.any` copy, so this is reported in prose; the defeq pairi
 #load_bearing_audit_report Dregg2.Spec.absOf
   nonvacuous := Dregg2.Spec.authConnects_nonvacuous
 
--- the Exec attestation invariants (guarantee C-c1): boundary + non-vacuity.
-#load_bearing_audit_report Dregg2.Exec.TurnExecutorFull.fullActionInvA
-#load_bearing_audit_report Dregg2.Exec.FullForestAuth.gatedActionInvG
+-- the Exec attestation invariants (guarantee C-c1): boundary + non-vacuity. Both now PASS [1]
+-- (the `exerciseA` arm rides the INDEPENDENT `innerActionsAttest`, not the executor `execInnerA`) AND
+-- [3] (the committed-accepts / same-state-refutes ObsAdvance witnesses).
+#load_bearing_audit Dregg2.Exec.TurnExecutorFull.fullActionInvA
+  nonvacuous := Dregg2.Exec.TurnExecutorFull.fullActionInvA_nonvacuous
+#load_bearing_audit Dregg2.Exec.FullForestAuth.gatedActionInvG
+  nonvacuous := Dregg2.Exec.StarbridgeGated.gatedActionInvG_nonvacuous
 
 end Dregg2.Verify.LoadBearingAuditBroad

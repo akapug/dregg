@@ -82,11 +82,23 @@ def forbiddenStepGates : List Name :=
   , `Dregg2.Exec.EffectsState.stateStepDev
   ]
 
-/-- Is `n` a forbidden step-gate constant (exact match OR an internal child like `n.match_1`,
-`n._eq_1` of one)? We compare against each forbidden base by `==` or by checking the forbidden base is
-a strict name-prefix of `n` (catching auto-generated equation/match lemmas of the gate). -/
-def isForbidden (n : Name) : Bool :=
-  forbiddenStepGates.any fun base => n == base || base.isPrefixOf n
+/-- Is `n` a compiler-generated MATCHER (`X.match_k`)? A matcher is a generic, SHARED case-eliminator
+carrying no step logic — it is deduplicated across every function that case-splits the same inductive in
+the same way, so `execFullA.match_1` is the SAME constant a pure helper like `fullReceiptA` reuses. It
+belongs namespace-wise to whichever def first forced it, NOT semantically to that def's body. A matcher
+must therefore NOT be counted as its namespace-owner's step gate (otherwise a pure spec that merely
+case-splits `FullActionA` is falsely flagged). Auto-generated `_eq`/`_unfold`/`_def` equation lemmas
+are NOT matchers and stay caught (they carry the gate's body). Detected by the matcher extension. -/
+def isSharedMatcher (env : Environment) (n : Name) : Bool :=
+  Lean.Meta.isMatcherCore env n
+
+/-- Is `n` a forbidden step-gate constant — an exact match, or an internal child like `n._eq_1` /
+`n._unfold` of one (which carry the gate body)? A shared compiler MATCHER (`n.match_k`) is EXCLUDED: it
+is a generic eliminator with no step content (see `isSharedMatcher`). We compare against each forbidden
+base by `==` or by checking the forbidden base is a strict name-prefix of `n`. -/
+def isForbiddenWith (env : Environment) (n : Name) : Bool :=
+  !isSharedMatcher env n &&
+    forbiddenStepGates.any fun base => n == base || base.isPrefixOf n
 
 /-! ## §2 — transitive used-constant collection over definition bodies.
 
@@ -125,7 +137,7 @@ step gate. Returns the offending names on FAIL. -/
 def checkBoundary (spec : Name) : MetaM CheckResult := do
   let env ← getEnv
   let reached ← transitiveConsts env #[spec]
-  let offenders := reached.toList.filter isForbidden
+  let offenders := reached.toList.filter (isForbiddenWith env)
   if offenders.isEmpty then
     return { pass := true, reason := "independent — references no executor step gate" }
   else

@@ -3836,6 +3836,7 @@ theorem execFullA_noteCreateA_inserts (s s' : RecChainedState) (cm : Nat) (actor
   subst h; exact noteCreate_inserts s.kernel cm
 
 
+mutual
 /-- **The per-`FullActionA` `StepInv`** — the per-asset analog of `fullActionInv`, true of every
 committed per-asset action across all kinds. Its **Ledger** conjunct is the full per-asset VECTOR (a
 `∀ b`, never an aggregate scalar — the FILL-1 carrier that forbids cross-asset laundering):
@@ -3845,7 +3846,11 @@ committed per-asset action across all kinds. Its **Ledger** conjunct is the full
   * **ObsAdvance** — the chain grew by exactly one row (replay-detectable);
   * **KindObligation** — the kind-specific integrity content (asset-orthogonal): balanceA ⇒
     `authorizedB`; delegate ⇒ grounds in the source edge AND edits the graph by `addEdge`; revoke ⇒
-    `removeEdge`; mintA/burnA ⇒ `mintAuthorizedB` AND the Generative/Annihilative disclosure. -/
+    `removeEdge`; mintA/burnA ⇒ `mintAuthorizedB` AND the Generative/Annihilative disclosure.
+
+The `exerciseA` arm names the INDEPENDENT `innerActionsAttest` (a chain of per-action `fullActionInvA`
+witnesses from the hold-gate post-state) in place of the executor's `execInnerA` fold — so the body no
+longer transitively reaches an executor step gate. -/
 def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedState) : Prop :=
   -- Ledger: the per-asset COMBINED conservation VECTOR (∀ b — never one aggregate scalar). The UNIFORM
   -- measure across ALL kinds is `recTotalAsset` (= `bal`-ledger + per-asset holding-store);
@@ -3943,13 +3948,17 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        IsNonAmplifyingF (heldCapTo s.kernel.caps del t) (attenuate keep (heldCapTo s.kernel.caps del t))
    | .exerciseA actor t inner =>
        -- authorized BY the held edge (only the holder may exercise) AND the exercise RECURSED — the
-       -- `inner` effects actually RAN against the target (de-SHADOW: there EXISTS a gate-state `s1`
-       -- reached by the hold-gate from which `execInnerA s1 inner = some s'` committed). NO graph-frozen
-       -- claim: an inner effect MAY legitimately edit the cap-graph (e.g. an inner delegate), exactly as
-       -- dregg1 `apply.rs:2647` applies each inner effect against the cap's target.
+       -- `inner` effects actually RAN against the target (de-SHADOW). BOTH legs are now INDEPENDENT of
+       -- the executor STEP: the authority leg is `authConnects` (committed 61ff2306c), and the
+       -- recursion leg is the INDEPENDENT inner-attestation `innerActionsAttest` (a chain of per-action
+       -- `fullActionInvA` witnesses from the hold-gate post-state) — NOT the executor's `execInnerA`
+       -- fold. The actual executor step refining this independent relation is the existing bridge
+       -- `execFullA_exerciseA_recurses` ∘ `execFullA_attests_per_asset` (discharged below). NO
+       -- graph-frozen claim: an inner effect MAY legitimately edit the cap-graph (an inner delegate),
+       -- exactly as dregg1 `apply.rs:2647` applies each inner effect against the cap's target.
        Dregg2.Spec.authConnects s.kernel.caps actor
          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
-       (∃ s1, exerciseStepA s actor t = some s1 ∧ execInnerA s1 inner = some s')
+       innerActionsAttest { s with log := authReceipt actor :: s.log } inner s'
    -- §MA-supply: createCell/spawn carry the REAL privileged-creation gate (`mintAuthorizedB` — bare
    -- ownership is NOT enough) AND the REAL freshness gate (`newCell ∉ accounts`, fail-closed: a
    -- non-fresh id is rejected) AND the Generative disclosure coloring; bridgeMint carries the
@@ -4028,12 +4037,31 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .heapWriteA actor target _ _ _ =>
        stateAuthB s.kernel.caps actor target = true)
 
+/-- **`innerActionsAttest` — the INDEPENDENT inner-attestation fold** an `exerciseA` recurses through.
+A left-to-right, all-or-nothing chain where EACH inner action attests its own per-action
+`fullActionInvA` (the full per-asset Ledger ∧ ChainLink ∧ ObsAdvance ∧ KindObligation) against a real
+intermediate-state chain. This is the de-SHADOW witness restated WITHOUT the executor step `execInnerA`
+— it names only `fullActionInvA` (independent + pure helpers), so the `fullActionInvA` body no longer
+transitively reaches an executor step gate. It is STRUCTURAL on `inner` (each element is a subterm of
+the `exerciseA` constructor), so it sits in the SAME `mutual` as `fullActionInvA` (the same shape
+`execInnerA` uses inside `execFullA`'s mutual). The executor step refining this relation is supplied by
+`execFullA_exerciseA_recurses` ∘ `execFullA_attests_per_asset` ∘ `innerActions_attest_of_execInnerA`. -/
+def innerActionsAttest (s : RecChainedState) : List FullActionA → RecChainedState → Prop
+  | [],        s' => s = s'
+  | a :: rest, s' => ∃ s1, fullActionInvA s a s1 ∧ innerActionsAttest s1 rest s'
+end
+
+mutual
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 .** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
 VECTOR ∧ ChainLink ∧ ObsAdvance ∧ the kind-specific obligation. The per-asset analog of
-`execFull_attests`, carrying the conservation VECTOR (not the scalar). -/
+`execFull_attests`, carrying the conservation VECTOR (not the scalar). The `exerciseA` arm now
+discharges the INDEPENDENT `innerActionsAttest` (the executor-step-free inner-attestation chain) via
+the mutually-recursive `execInnerA_attests` — the executor's `execInnerA` run is refined to the
+independent per-action `fullActionInvA` chain element by element. -/
 theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
     (h : execFullA s fa = some s') : fullActionInvA s fa s' := by
+  unfold fullActionInvA
   refine ⟨fun b => execFullA_ledger_per_asset s s' fa b h,
           execFullA_chainlink s s' fa h, execFullA_obsadvance s s' fa h, ?_⟩
   cases fa with
@@ -4082,9 +4110,12 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | attenuateA actor idx keep => exact execFullA_attenuateA_non_amplifying s s' actor idx keep h
   | revokeDelegationA holder t => exact execFullA_revokeDelegationA_removeEdge s s' holder t h
   | exerciseA actor t inner =>
+      obtain ⟨s1, hgate, hinner⟩ := execFullA_exerciseA_recurses s s' actor t inner h
+      -- the hold-gate post-state is EXACTLY `{ s with log := authReceipt actor :: s.log }`
+      obtain ⟨_, rfl⟩ := exerciseStepA_factors hgate
       exact ⟨(Dregg2.Exec.execGraph_iff_authConnects _ _ _).mp
                (execFullA_exerciseA_authorized s s' actor t inner h),
-             execFullA_exerciseA_recurses s s' actor t inner h⟩
+             execInnerA_attests _ s' inner hinner⟩
   -- §MA-supply: discharge createCell/spawn's (privileged-creation gate ∧ freshness ∧ growth/provenance
   -- ∧ Generative disclosure) and bridgeMint's (privileged mint gate ∧ §8 Generative disclosure).
   | createCellA actor newCell =>
@@ -4135,6 +4166,27 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | heapWriteA actor target addr v newRoot =>
       exact Substrate.HeapKernel.heapStepW_authorized
         (by simpa only [execFullA] using h)
+
+/-- **`execInnerA_attests` — the executor inner-fold REFINES the independent `innerActionsAttest`.** A
+committed `execInnerA s inner = some s'` produces the executor-step-free attestation chain: each inner
+action attests its own `fullActionInvA` (via the mutually-recursive `execFullA_attests_per_asset`)
+along the real intermediate states the fold threads. This is the bridge that lets the `exerciseA` arm of
+`fullActionInvA` name `innerActionsAttest` (independent) while the actual `execInnerA` run discharges it.
+Structural on `inner` (each head `a` is a subterm of the surrounding `exerciseA` constructor). -/
+theorem execInnerA_attests (s s' : RecChainedState) (inner : List FullActionA)
+    (h : execInnerA s inner = some s') : innerActionsAttest s inner s' := by
+  cases inner with
+  | nil =>
+      simp only [execInnerA, Option.some.injEq] at h
+      simp only [innerActionsAttest, h]
+  | cons a rest =>
+      simp only [execInnerA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          exact ⟨s1, execFullA_attests_per_asset ha, execInnerA_attests s1 s' rest h⟩
+end
 
 /-- **`execFullTurnA_each_attests`.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
@@ -4555,6 +4607,24 @@ def fmaA : RecChainedState :=
 
 -- The pre-state per-asset supply: asset 0 = 105, asset 1 = 7.
 #guard ((recTotalAsset fmaA.kernel 0, recTotalAsset fmaA.kernel 1)) == (105, 7)  --  (105, 7)
+
+/-- **`fullActionInvA_nonvacuous`** — the non-vacuity witness the `@[load_bearing]` linter requires:
+`fullActionInvA` is NEITHER everywhere-true NOR everywhere-false. It ACCEPTS the committed
+`introduceA 0 1 7` against the live fixture `fmaA` (a real per-asset step attests its full invariant,
+via `execFullA_attests_per_asset`), and REFUTES any same-state instance `fullActionInvA s fa s` (the
+ObsAdvance conjunct demands `s.log.length < s.log.length`, impossible). A vacuous accept-all relation
+could not carry the refuted half; a vacuous reject-all could not carry the accepted half. -/
+theorem fullActionInvA_nonvacuous :
+    (∃ s', execFullA fmaA (.introduceA 0 1 7) = some s' ∧ fullActionInvA fmaA (.introduceA 0 1 7) s')
+    ∧ ¬ fullActionInvA fmaA (.introduceA 0 1 7) fmaA := by
+  refine ⟨?_, ?_⟩
+  · -- ACCEPTED: the fixture step commits and attests its full per-asset invariant.
+    obtain ⟨s', hs'⟩ := Option.isSome_iff_exists.mp (by decide : (execFullA fmaA (.introduceA 0 1 7)).isSome)
+    exact ⟨s', hs', execFullA_attests_per_asset hs'⟩
+  · -- REFUTED: a same-state instance violates ObsAdvance (`length < length` is irreflexive).
+    intro hinv
+    unfold fullActionInvA at hinv
+    exact Nat.lt_irrefl _ hinv.2.2.1
 
 -- (1) INTRODUCE: actor 0 (holds `node 7`) introduces recipient 1 to target 7. COMMITS, and
 --   `recTotalAsset` is UNCHANGED in BOTH assets (caps change, bal does NOT — balance-NEUTRALITY):
