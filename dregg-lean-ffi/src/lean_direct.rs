@@ -1000,6 +1000,10 @@ mod imp {
                     committed,
                     loglen,
                     status,
+                    // The no-copy direct ABI returns only a status code, not the
+                    // admission-reason code; the JSON-wire path (`unmarshal_result`)
+                    // carries the legible reason. TODO: extend the direct ABI to return it.
+                    reason: None,
                     divergence_note: None,
                 },
                 state: post,
@@ -1093,6 +1097,10 @@ mod imp {
                     committed,
                     loglen,
                     status,
+                    // The no-copy direct ABI returns only a status code, not the
+                    // admission-reason code; the JSON-wire path (`unmarshal_result`)
+                    // carries the legible reason. TODO: extend the direct ABI to return it.
+                    reason: None,
                     divergence_note: None,
                 },
                 state: post,

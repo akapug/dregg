@@ -3,10 +3,32 @@
 use super::*;
 
 impl Cockpit {
-    pub(crate) fn dynamics_feed(&self) -> impl IntoElement {
+    pub(crate) fn dynamics_feed(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let w = self.world.borrow();
         let mut col = div().flex().flex_col().gap_0p5().p_2();
         col = col.child(section_title("DYNAMICS · live").mb_1());
+        // INHABIT/DEV · the live dynamics-feed card AS a surface — the deos-js feed card
+        // over the live World (the header + a live entry-count bind + recent rows),
+        // hosted above the plain text tail. Built on the paint path (`ensure_mode_card`);
+        // absent on the gpui-free / card-pane-off build (the text feed below stands alone).
+        #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+        if let Some(mount) = self
+            .mode_cards
+            .get(&starbridge_v2::dock::card_surface::ModeCard::Dynamics)
+        {
+            mount.entity.update(cx, |_card, cx| cx.notify());
+            col = col.child(
+                div()
+                    .min_h(px(120.))
+                    .mb_1()
+                    .border_1()
+                    .border_color(theme::accent())
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .child(mount.entity.clone()),
+            );
+        }
+        let _ = cx;
         let tail = w.dynamics().tail(12);
         if tail.is_empty() {
             col = col.child(div().text_xs().text_color(theme::muted()).child("(quiet)"));
@@ -154,13 +176,38 @@ impl Cockpit {
         match tab {
             Tab::Home => self.home_panel().into_any_element(),
             Tab::Shell => self.shell_panel(cx).into_any_element(),
+            // OPERATE · the agent-activity card AS the surface (the mode's main pane is a
+            // deos-js card over the live World), Rust agent panel as fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Agent => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Agent,
+                cx,
+                |this, _cx| this.agent_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Agent => self.agent_panel().into_any_element(),
             Tab::Swarm => self.swarm_panel(cx).into_any_element(),
+            // INHABIT · the ocap-graph card AS the surface (the live cap web as a card).
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Graph => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Graph,
+                cx,
+                |this, _cx| this.graph_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Graph => self.graph_panel().into_any_element(),
             Tab::Organs => self.organs_panel().into_any_element(),
             Tab::Proofs => self.proofs_panel().into_any_element(),
             Tab::WebOfCells => self.web_of_cells_panel(cx).into_any_element(),
             Tab::WebShell => self.webshell_panel(cx).into_any_element(),
+            // AUTHOR · the what-links-here card AS the surface (live backlinks as a card).
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::LinksHere => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Links,
+                cx,
+                |this, cx| this.links_here_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::LinksHere => self.links_here_panel(cx).into_any_element(),
             Tab::Powerbox => self.powerbox_panel(cx).into_any_element(),
             Tab::Moldable => self.moldable_panel(cx).into_any_element(),
@@ -175,8 +222,24 @@ impl Cockpit {
             Tab::Devtools => self.devtools_panel(cx).into_any_element(),
             Tab::Buffer => self.buffer_panel(cx).into_any_element(),
             Tab::Terminal => self.terminal_panel(cx).into_any_element(),
+            // AUTHOR · the composition-composer card AS the surface.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Composer => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Composer,
+                cx,
+                |this, cx| this.composer(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Composer => self.composer(cx).into_any_element(),
             Tab::Simulate => self.simulate_panel(cx).into_any_element(),
+            // INHABIT · the object-roster card AS the surface (the live cell roster).
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Objects => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Objects,
+                cx,
+                |this, _cx| this.objects_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Objects => self.objects_panel().into_any_element(),
             Tab::Debugger => self.debugger_panel().into_any_element(),
             Tab::Replay => self.replay_panel().into_any_element(),

@@ -59,6 +59,155 @@ impl Cockpit {
         }
     }
 
+    /// **ENSURE A LANDED CARD (a [`ModeCard`]) is built as its mode's main surface** for the
+    /// current focus. Called on the paint path (where a live `&mut Context` mints the gpui
+    /// entity). Builds the deos-js card over the cockpit's LIVE `World`, focused on
+    /// [`Self::inspector_focus_cell`] — a [`CardPane`](starbridge_v2::card_pane::CardPane)
+    /// entity whose rendered rows re-read the live ledger and whose affordance buttons fire
+    /// real verified turns. Rebuilt when the focus moves; fail-soft (a build error keeps the
+    /// Rust panel as the surface). Idempotent.
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    pub(crate) fn ensure_mode_card(
+        &mut self,
+        kind: starbridge_v2::dock::card_surface::ModeCard,
+        cx: &mut Context<Self>,
+    ) {
+        use starbridge_v2::dock::card_surface::build_mode_card_surface;
+
+        let Some(focus) = self.inspector_focus_cell() else {
+            return;
+        };
+        // Already built for this focus → nothing to do (the entity re-reads the live ledger
+        // every paint, so it stays current without a rebuild).
+        if self
+            .mode_cards
+            .get(&kind)
+            .is_some_and(|m| m.focus == focus)
+        {
+            return;
+        }
+
+        let id = self.next_dev_surface_id();
+        // The operator's authority the affordance fires + the view-edits mount under —
+        // `Signature` (the attenuated operator hand), satisfying the card's edit_authority
+        // so a reshape-from-within is authorized.
+        let held = dregg_cell::AuthRequired::Signature;
+        match build_mode_card_surface(id, kind, self.world.clone(), focus, held, cx) {
+            Ok(surface) => {
+                self.mode_cards.insert(
+                    kind,
+                    super::ModeCardMount {
+                        entity: surface.entity_handle(),
+                        surface,
+                        focus,
+                    },
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "ensure_mode_card({kind:?}): could not build the live card \
+                     (keeping the Rust panel): {e:#}"
+                );
+            }
+        }
+    }
+
+    /// Host a mounted [`ModeCard`]'s [`CardPane`] entity as a mode's main-pane surface (the
+    /// card-as-surface mount). The card is built (or rebuilt on a focus change) by
+    /// [`Self::ensure_mode_card`] on the paint path in `render`; this hosts the prebuilt
+    /// entity in a titled frame with a one-line "this surface IS a deos-js card, editable
+    /// from within" footer (mirrors the inspector-card host in `moldable_panel`, an `&self`
+    /// host over a `&mut Context`). Fail-soft: if the card is not mounted, `fallback` (the
+    /// Rust panel) is rendered.
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    pub(crate) fn mode_card_surface(
+        &self,
+        kind: starbridge_v2::dock::card_surface::ModeCard,
+        cx: &mut Context<Self>,
+        fallback: impl FnOnce(&Self, &mut Context<Self>) -> gpui::AnyElement,
+    ) -> gpui::AnyElement {
+        let Some(mount) = self.mode_cards.get(&kind) else {
+            return fallback(self, cx);
+        };
+        // Immediate-mode binds re-read the live ledger at render time, so a notify each paint
+        // keeps a bound row current after a fire lands (mirrors `CardSurface`).
+        mount.entity.update(cx, |_card, cx| cx.notify());
+        let entity = mount.entity.clone();
+        // The edit-from-within affordance: a `ViewPatch` routed THROUGH the live mount
+        // (re-fold → rebuild the CardPane). A demo `AddText` reshape proves the seam is
+        // closed; an unauthorized hand would be refused in-band by the cap tooth.
+        let edit_btn = gpui_component::button::Button::new(SharedString::from(format!(
+            "mode-card-edit-{kind:?}"
+        )))
+        .label("✎ edit this surface from within")
+        .ghost()
+        .xsmall()
+        .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+            this.mode_card_edit_view(
+                kind,
+                deos_js::card_editor::ViewPatch::AddText {
+                    text: "· reshaped from within (a receipted patch)".into(),
+                },
+                cx,
+            );
+        }));
+        div()
+            .id("mode-card-surface")
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(theme::accent())
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .child(entity),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .p_1()
+                    .child(div().text_xs().text_color(theme::muted()).child(
+                        "↑ this surface IS a deos-js card over the LIVE World: rows re-read the \
+                         operator's real cells, an affordance button fires a real verified turn.",
+                    ))
+                    .child(edit_btn),
+            )
+            .into_any_element()
+    }
+
+    /// **EDIT A MOUNTED MODE CARD FROM WITHIN — the open seam, now wired through the live
+    /// mount.** Route a [`ViewPatch`](deos_js::card_editor::ViewPatch) (deos.editor/edit_view)
+    /// through the mounted card's editable view document: the surface's
+    /// [`edit_view`](starbridge_v2::dock::card_surface::ModeCardSurface::edit_view) applies it
+    /// as a *receipted patch with blame* (refused in-band if the operator's `held` does not
+    /// satisfy the card's edit_authority), re-folds the `ViewTree`, and swaps the re-bridged
+    /// `ViewNode` into the live [`CardPane`] — so the surface repaints reshaped on the next
+    /// frame (the view is data, not compiled code). A no-op if the card is not mounted; the
+    /// outcome (or the in-band refusal) is captured into `last_outcome`.
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    pub(crate) fn mode_card_edit_view(
+        &mut self,
+        kind: starbridge_v2::dock::card_surface::ModeCard,
+        patch: deos_js::card_editor::ViewPatch,
+        cx: &mut Context<Self>,
+    ) {
+        let outcome = match self.mode_cards.get(&kind) {
+            Some(mount) => match mount.surface.edit_view(patch, cx) {
+                Ok(()) => format!("reshaped the {kind:?} card from within (a receipted patch)"),
+                Err(e) => format!("REFUSED · {e}"),
+            },
+            None => format!("the {kind:?} card is not mounted (nothing to reshape)"),
+        };
+        self.last_outcome = Some(outcome);
+        cx.notify();
+    }
+
     /// THE MOLDABLE INSPECTOR — pick a focused object, render its `Registry`-resolved
     /// presentation SET as a tab-strip (one sub-tab per `Presentation`) through the
     /// generic renderer, with the `Halo` ring + a `Spotter` search box that re-focuses.

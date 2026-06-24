@@ -15387,6 +15387,7 @@ dependencies = [
  "dpi",
  "dregg-captp",
  "dregg-firmament",
+ "euclid",
  "gleam",
  "glow 0.16.0",
  "http 1.4.0",

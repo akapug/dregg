@@ -17,6 +17,7 @@
 //! Everything here was previously `#[cfg(feature = "prover")]` inside
 //! `dregg-circuit`; the gate is gone because this whole crate IS the prover.
 
+pub mod accumulator;
 pub mod custom_proof_bind;
 pub mod effect_vm_p3_air;
 pub mod ivc_turn_chain;

@@ -998,6 +998,28 @@ pub struct Cockpit {
     /// the Rust moldable inspector as the surface).
     #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
     inspector_card: Option<InspectorCardMount>,
+    /// **THE SIX LANDED CARDS AS THEIR MODE'S MAIN-PANE SURFACE** — the composer / objects /
+    /// graph / dynamics / agent / links cards, each mounted as a [`CardPane`] over the live
+    /// `World` (the SAME pattern as [`Self::inspector_card`], generalized). LAZY: a mount is
+    /// `None` until its mode's surface first paints, then built by [`Self::ensure_mode_card`]
+    /// and rebuilt when the focus moves. Keyed by [`ModeCard`]. `None` on the gpui-free /
+    /// `card-pane`-off build (which keeps the Rust panels as the surfaces).
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    mode_cards: std::collections::HashMap<
+        starbridge_v2::dock::card_surface::ModeCard,
+        ModeCardMount,
+    >,
+}
+
+/// The cockpit's live mount of a [`ModeCard`] as a mode's main-pane surface: the
+/// [`CardPane`] gpui entity (rendered over the live World), the [`ModeCardSurface`] (which
+/// holds the editable view document — the edit-from-within route), and the focused cell the
+/// view-tree was generated for (so [`Cockpit::ensure_mode_card`] rebuilds on a focus move).
+#[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+pub(crate) struct ModeCardMount {
+    pub(crate) entity: Entity<starbridge_v2::card_pane::CardPane>,
+    pub(crate) surface: starbridge_v2::dock::card_surface::ModeCardSurface,
+    pub(crate) focus: CellId,
 }
 
 /// The cockpit's live inspector-card mount: the [`CardPane`] gpui entity, the shared
