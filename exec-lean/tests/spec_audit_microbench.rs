@@ -197,7 +197,8 @@ fn microbench_hash_cell_subcomponents() {
     let t = Instant::now();
     let mut k = [0u8; 32];
     for _ in 0..N {
-        let h = blake3::Hasher::new_derive_key(dregg_cell::commitment::CANONICAL_COMMITMENT_CONTEXT);
+        let h =
+            blake3::Hasher::new_derive_key(dregg_cell::commitment::CANONICAL_COMMITMENT_CONTEXT);
         k = *h.finalize().as_bytes();
         std::hint::black_box(&k);
     }

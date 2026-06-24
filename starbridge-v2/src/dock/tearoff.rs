@@ -283,11 +283,7 @@ impl Render for TornOffWindow {
                             .text_color(theme::muted())
                             .child(SharedString::from("↗ torn-off")),
                     )
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .child(self.label.clone()),
-                    )
+                    .child(div().text_color(theme::text()).child(self.label.clone()))
                     // The identity / cap-badge pill (who/what authority this surface
                     // runs under) — only when the host supplied one.
                     .when(!self.badge.is_empty(), |row| {
@@ -1009,7 +1005,10 @@ mod tests {
                     root.downcast::<Root>().is_ok()
                 })
                 .expect("read the torn window root");
-            assert!(is_root, "the torn-off window's root view is a gpui_component::Root");
+            assert!(
+                is_root,
+                "the torn-off window's root view is a gpui_component::Root"
+            );
 
             // DRIVE THE DRAW — painting the kit input reads the window `Root`; before
             // the wrap this aborted. The draw completing is the fix proven.

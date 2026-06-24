@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use deos_terminal::model::{Terminal, TermSize};
+use deos_terminal::model::{TermSize, Terminal};
 
 /// Flatten the visible grid into a string so we can assert on shell output.
 fn screen_text(term: &Terminal) -> String {
@@ -41,10 +41,7 @@ fn wait_for<F: Fn(&Terminal) -> bool>(term: &Terminal, timeout: Duration, pred: 
 #[test]
 fn real_shell_echoes_a_marker() {
     // Use a plain POSIX shell with no rc files for a deterministic, fast prompt.
-    let shell = (
-        "/bin/sh".to_string(),
-        vec!["-i".to_string()],
-    );
+    let shell = ("/bin/sh".to_string(), vec!["-i".to_string()]);
     let mut env = HashMap::new();
     // Keep the prompt trivial and predictable.
     env.insert("PS1".to_string(), "$ ".to_string());

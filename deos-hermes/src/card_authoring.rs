@@ -228,9 +228,7 @@ impl CardAuthoringTool {
         };
 
         match editor.edit_view(patch) {
-            Ok(ViewEdit {
-                blame, receipt, ..
-            }) => AuthorCardOutcome {
+            Ok(ViewEdit { blame, receipt, .. }) => AuthorCardOutcome {
                 tool_outcome,
                 provenance_receipt: Some(receipt.receipt_hash()),
                 view_source: Some(editor.view_source()),

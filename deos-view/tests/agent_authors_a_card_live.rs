@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use deos_js::card_editor::{Author, CardEditor, ViewTree};
-use deos_js::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
+use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use deos_js::{Applet, JsRuntime};
 use dregg_cell::AuthRequired;
 use gpui::AppContext;
@@ -262,7 +262,9 @@ fn body() {
     println!("│   deos.editor.editView(card, addButton +1 → fires `inc`)");
     println!("│   deos.editor.editView(card, relabel \"Counter\" → \"Clicks\")");
     println!("│ accountable:");
-    println!("│   receipted patches : {receipt_count} verified provenance turns on the card's chain");
+    println!(
+        "│   receipted patches : {receipt_count} verified provenance turns on the card's chain"
+    );
     println!("│   blame             : every edit attributed to the agent ({AGENT:?})");
     println!("│   receipt[0]        : {}", hex8(&receipts[0]));
     println!("│   receipt[1]        : {}", hex8(&receipts[1]));

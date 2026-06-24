@@ -18,12 +18,12 @@
 //!    DOM-state height; a snapshot pins the old, a live transclusion re-resolves to the
 //!    new (the REAL versioned-transclusion snapshot/live dial).
 
+use deos_web_cells::tests_support::cid;
 use deos_web_cells::{
     fetch_bundle, publish_live_surface, AmendError, BundleAsset, BundleKind, DomNode,
     DreggverseDocument, FetchError, PublishedSurface, RenderedSpan, RenderedSurface, Span,
     SpanRange, SurfaceCapability, WebBundle, WebOfCells, DOM_STATE_ASSET, RENDERED_VIEW_ASSET,
 };
-use deos_web_cells::tests_support::cid;
 
 use starbridge_web_surface::rehydrate::InteractionLog;
 use starbridge_web_surface::{AuthRequired, DreggUri, Membrane};
@@ -98,7 +98,11 @@ fn the_whole_live_surface_story_capture_publish_transclude_darken_amend() {
         false,
     )
     .expect("captures + publishes");
-    assert_eq!(published.cell(), cell, "publish is deterministic in the seed");
+    assert_eq!(
+        published.cell(),
+        cell,
+        "publish is deterministic in the seed"
+    );
 
     // The published cell IS the DOM state at a committed height: a REAL attested fetch
     // round-trips to the captured bundle, and the trusted chrome shows its content
@@ -113,15 +117,26 @@ fn the_whole_live_surface_story_capture_publish_transclude_darken_amend() {
     );
     // The captured DOM state has both the rendered view + the serialized dom-state.
     assert!(fetched.asset(RENDERED_VIEW_ASSET).is_some());
-    assert_eq!(fetched.asset(DOM_STATE_ASSET).unwrap().bytes, surface.dom_state());
+    assert_eq!(
+        fetched.asset(DOM_STATE_ASSET).unwrap().bytes,
+        surface.dom_state()
+    );
 
     // ── (2) TRANSCLUDE A DOM FRAGMENT into a DreggverseDocument with provenance. ──
     // The rendered view contains `<span>open: 3</span>`; quote exactly that DOM fragment.
-    let html =
-        String::from_utf8(published.bundle().asset(RENDERED_VIEW_ASSET).unwrap().bytes.clone())
-            .unwrap();
+    let html = String::from_utf8(
+        published
+            .bundle()
+            .asset(RENDERED_VIEW_ASSET)
+            .unwrap()
+            .bytes
+            .clone(),
+    )
+    .unwrap();
     let frag = "<span>open: 3</span>";
-    let at = html.find(frag).expect("the span fragment is in the rendered view");
+    let at = html
+        .find(frag)
+        .expect("the span fragment is in the rendered view");
     let range = SpanRange::new(at, at + frag.len());
 
     let doc = DreggverseDocument::from_spans(vec![
@@ -129,12 +144,20 @@ fn the_whole_live_surface_story_capture_publish_transclude_darken_amend() {
         published.quote_fragment(range),
     ]);
     let rendered = doc.resolve(&web).expect("the DOM-fragment span resolves");
-    assert_eq!(rendered.composed_text().unwrap(), "status: <span>open: 3</span>");
+    assert_eq!(
+        rendered.composed_text().unwrap(),
+        "status: <span>open: 3</span>"
+    );
     // The span carries the surface's receipt-pinned provenance + the parallel-source link.
-    let prov = rendered.spans()[1].provenance().expect("the DOM-fragment span is provenanced");
+    let prov = rendered.spans()[1]
+        .provenance()
+        .expect("the DOM-fragment span is provenanced");
     assert_eq!(prov.source, published.uri);
     assert!(prov.finalized);
-    assert_eq!(rendered.spans()[1].source_link(), Some((published.uri.clone(), range)));
+    assert_eq!(
+        rendered.spans()[1].source_link(),
+        Some((published.uri.clone(), range))
+    );
 
     // ── (3) THE DARKENED VIEWER: a viewer lacking authority sees the citation, not the
     //        DOM bytes. ──
@@ -165,9 +188,16 @@ fn the_whole_live_surface_story_capture_publish_transclude_darken_amend() {
         .expect("darkened viewer resolves");
     assert!(!dark.is_full());
     assert_eq!(dark.darkened_count(), 1);
-    assert_eq!(dark.composed_text().unwrap(), "<>", "no DOM bytes for the darkened span");
+    assert_eq!(
+        dark.composed_text().unwrap(),
+        "<>",
+        "no DOM bytes for the darkened span"
+    );
     assert!(
-        !dark.composed_bytes().windows(b"open:".len()).any(|w| w == b"open:"),
+        !dark
+            .composed_bytes()
+            .windows(b"open:".len())
+            .any(|w| w == b"open:"),
         "the darkened viewer never sees the surface's DOM bytes"
     );
     // …BUT the darkened span keeps its citation (the docuverse skeleton survives).
@@ -176,21 +206,34 @@ fn the_whole_live_surface_story_capture_publish_transclude_darken_amend() {
 
     // ── (4) RE-PUBLISH ON CHANGE TRACKS LIVE: amend the surface; a snapshot pins the
     //        old DOM-state height, a live transclusion re-resolves to the new. ──
-    let snap = published.dom_state_snapshot(&web).expect("snapshot the current DOM state");
+    let snap = published
+        .dom_state_snapshot(&web)
+        .expect("snapshot the current DOM state");
     let live = published.dom_state_live();
     let pinned_height = snap.pinning().pinned_height().expect("a pinned height");
 
     let new_height = published
         .amend(&mut web, todo_surface(5))
         .expect("amend advances the surface to a new DOM state");
-    assert!(new_height > pinned_height, "the committed DOM-state height advanced");
+    assert!(
+        new_height > pinned_height,
+        "the committed DOM-state height advanced"
+    );
 
     // The SNAPSHOT is stable (still the open:3 DOM state); the LIVE quote re-resolves to
     // the open:5 DOM state.
     let snap_state = decode_dom_state(snap.read(&web).expect("snapshot reads").displayed_bytes());
-    assert_eq!(snap_state, todo_surface(3).dom_state(), "snapshot pins the OLD DOM state");
+    assert_eq!(
+        snap_state,
+        todo_surface(3).dom_state(),
+        "snapshot pins the OLD DOM state"
+    );
     let live_state = decode_dom_state(live.read(&web).expect("live reads").displayed_bytes());
-    assert_eq!(live_state, todo_surface(5).dom_state(), "live re-resolves to the NEW DOM state");
+    assert_eq!(
+        live_state,
+        todo_surface(5).dom_state(),
+        "live re-resolves to the NEW DOM state"
+    );
 
     // And a fresh document re-resolve of the whole rendered DOM now shows open:5 (the
     // unbreakable link at the DOM level — same EDL, advanced surface).
@@ -206,7 +249,10 @@ fn a_captured_surface_is_a_faithful_deterministic_tree_not_a_blob() {
     let a = todo_surface(2).into_bundle().expect("captures");
     let b = todo_surface(2).into_bundle().expect("captures");
     assert_eq!(a.content_hash(), b.content_hash());
-    assert_ne!(a.content_hash(), todo_surface(3).into_bundle().unwrap().content_hash());
+    assert_ne!(
+        a.content_hash(),
+        todo_surface(3).into_bundle().unwrap().content_hash()
+    );
 
     // The node tree extent is the real count of element + text nodes.
     let surface = todo_surface(0);

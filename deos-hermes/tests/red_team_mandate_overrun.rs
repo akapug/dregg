@@ -61,7 +61,10 @@ fn rate_ceiling_holds_exactly_at_the_boundary_and_one_past() {
     let over = ToolCallRequest::new("s", "tc-4", "terminal", args());
     match gw.admit_with_work(&over, 50, Some(vec![])) {
         PermissionOutcome::Reject { reason, .. } => {
-            assert!(reason.contains("rate exhausted"), "names the RATE leg: {reason}");
+            assert!(
+                reason.contains("rate exhausted"),
+                "names the RATE leg: {reason}"
+            );
         }
         other => panic!("RATE OVERRUN ESCALATED — expected an in-band Reject, got {other:?}"),
     }
@@ -84,11 +87,18 @@ fn rate_zero_denies_a_tool_entirely_on_the_first_attempt() {
     let call = ToolCallRequest::new("s", "tc-1", "terminal", args());
     match gw.admit_with_work(&call, 50, Some(vec![])) {
         PermissionOutcome::Reject { reason, .. } => {
-            assert!(reason.contains("rate exhausted"), "rate-0 denies on first try: {reason}");
+            assert!(
+                reason.contains("rate exhausted"),
+                "rate-0 denies on first try: {reason}"
+            );
         }
         other => panic!("RATE-0 DENY ESCALATED — terminal was denied entirely, got {other:?}"),
     }
-    assert_eq!(gw.calls_made_for_tool("terminal"), 0, "no spend on a rate-0 tool");
+    assert_eq!(
+        gw.calls_made_for_tool("terminal"),
+        0,
+        "no spend on a rate-0 tool"
+    );
 }
 
 // ───────────────────────────── DEADLINE — exact boundary ─────────────────────
@@ -112,12 +122,19 @@ fn deadline_holds_exactly_at_the_boundary_and_one_past() {
     let past = ToolCallRequest::new("s", "tc-2", "read_file", args());
     match gw.admit_with_work(&past, 1001, Some(vec![])) {
         PermissionOutcome::Reject { reason, .. } => {
-            assert!(reason.contains("past deadline"), "names the DEADLINE leg: {reason}");
+            assert!(
+                reason.contains("past deadline"),
+                "names the DEADLINE leg: {reason}"
+            );
         }
         other => panic!("DEADLINE OVERRUN ESCALATED — expected in-band Reject, got {other:?}"),
     }
     // The clock-past refusal spent nothing.
-    assert_eq!(gw.calls_made(ToolKind::Read), 1, "only the in-time call committed");
+    assert_eq!(
+        gw.calls_made(ToolKind::Read),
+        1,
+        "only the in-time call committed"
+    );
 }
 
 // ───────────────────────────── SCOPE — wrong worker / unknown tool ───────────
@@ -131,18 +148,28 @@ fn an_unknown_tool_falls_closed_into_the_most_restricted_class() {
     let mut gw = HermesGateway::new(&rt, root, registry);
 
     let bogus = ToolCallRequest::new("s", "tc-1", "totally_made_up_superpower", args());
-    assert_eq!(bogus.kind, ToolKind::Other, "unknown tool fails closed into Other");
+    assert_eq!(
+        bogus.kind,
+        ToolKind::Other,
+        "unknown tool fails closed into Other"
+    );
 
     // It is admitted under Other's TIGHT floor (rate 10), and metered there — not
     // an escape. Exhaust the Other-10 budget and confirm it then refuses.
     for i in 0..10 {
         let c = ToolCallRequest::new("s", format!("o-{i}"), "totally_made_up_superpower", args());
-        assert!(gw.admit_with_work(&c, 50, Some(vec![])).allowed(), "Other call {i} within rate-10");
+        assert!(
+            gw.admit_with_work(&c, 50, Some(vec![])).allowed(),
+            "Other call {i} within rate-10"
+        );
     }
     let over = ToolCallRequest::new("s", "o-11", "totally_made_up_superpower", args());
     match gw.admit_with_work(&over, 50, Some(vec![])) {
         PermissionOutcome::Reject { reason, .. } => {
-            assert!(reason.contains("rate exhausted"), "Other floor is metered, not unbounded: {reason}");
+            assert!(
+                reason.contains("rate exhausted"),
+                "Other floor is metered, not unbounded: {reason}"
+            );
         }
         other => panic!("UNKNOWN-TOOL ESCALATED past the Other floor, got {other:?}"),
     }
@@ -156,19 +183,44 @@ fn scope_is_per_worker_an_overrun_on_one_kind_does_not_leak_budget_to_another() 
     let (rt, root) = grantor();
     let registry = GrantRegistry::default_for_session(10_000).with_grant(
         ToolKind::Execute,
-        ToolGrant { tool_id: 40, rate_limit: 1, deadline: 10_000, tool_method: "tool.execute".into() },
+        ToolGrant {
+            tool_id: 40,
+            rate_limit: 1,
+            deadline: 10_000,
+            tool_method: "tool.execute".into(),
+        },
     );
     let mut gw = HermesGateway::new(&rt, root, registry);
 
-    assert!(gw.admit_with_work(&ToolCallRequest::new("s", "x1", "terminal", args()), 50, Some(vec![])).allowed());
+    assert!(
+        gw.admit_with_work(
+            &ToolCallRequest::new("s", "x1", "terminal", args()),
+            50,
+            Some(vec![])
+        )
+        .allowed()
+    );
     // Execute is now exhausted: the next terminal is refused, regardless of how
     // much Fetch budget exists.
-    match gw.admit_with_work(&ToolCallRequest::new("s", "x2", "terminal", args()), 50, Some(vec![])) {
-        PermissionOutcome::Reject { reason, .. } => assert!(reason.contains("rate exhausted"), "{reason}"),
+    match gw.admit_with_work(
+        &ToolCallRequest::new("s", "x2", "terminal", args()),
+        50,
+        Some(vec![]),
+    ) {
+        PermissionOutcome::Reject { reason, .. } => {
+            assert!(reason.contains("rate exhausted"), "{reason}")
+        }
         other => panic!("CROSS-MANDATE AMPLIFICATION — terminal borrowed budget, got {other:?}"),
     }
     // Fetch is untouched and still works (proving the budgets are genuinely separate).
-    assert!(gw.admit_with_work(&ToolCallRequest::new("s", "f1", "web_search", args()), 50, Some(vec![])).allowed());
+    assert!(
+        gw.admit_with_work(
+            &ToolCallRequest::new("s", "f1", "web_search", args()),
+            50,
+            Some(vec![])
+        )
+        .allowed()
+    );
     assert_eq!(gw.calls_made(ToolKind::Execute), 1);
     assert_eq!(gw.calls_made(ToolKind::Fetch), 1);
 }

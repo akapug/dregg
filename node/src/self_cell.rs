@@ -299,7 +299,7 @@ impl NodeSelfCell {
 /// node's reflexive render is wire-shaped like every other deos-js cell reflection.
 #[allow(dead_code)] // Reached via `reflect_json` (the api.rs `/api/node/self` route lane).
 fn inspectable_to_json(insp: &deos_reflect::Inspectable) -> String {
-    use deos_reflect::substance::{hex_encode, FieldValue};
+    use deos_reflect::substance::{FieldValue, hex_encode};
 
     fn esc(s: &str) -> String {
         let mut out = String::with_capacity(s.len() + 2);
@@ -324,7 +324,11 @@ fn inspectable_to_json(insp: &deos_reflect::Inspectable) -> String {
             FieldValue::Hash(h) => ("hash", format!("\"{}\"", hex_encode(h))),
             FieldValue::CapEdge { target, slot } => (
                 "capEdge",
-                format!("{{\"target\":\"{}\",\"slot\":{}}}", hex_encode(target), slot),
+                format!(
+                    "{{\"target\":\"{}\",\"slot\":{}}}",
+                    hex_encode(target),
+                    slot
+                ),
             ),
             FieldValue::FieldSlot { index, hex } => (
                 "fieldSlot",

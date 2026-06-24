@@ -502,15 +502,6 @@ impl RunJsAuthoringTool {
         script: &str,
     ) -> RunJsAuthorOutcome {
         let card = PortableApplet::mint(public_key, token_id, &manifest);
-        self.run_on(
-            rt,
-            gw,
-            call,
-            now,
-            card,
-            manifest,
-            edit_authority,
-            script,
-        )
+        self.run_on(rt, gw, call, now, card, manifest, edit_authority, script)
     }
 }

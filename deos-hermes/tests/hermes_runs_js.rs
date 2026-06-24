@@ -26,8 +26,8 @@ use std::sync::{Arc, RwLock};
 
 use deos_hermes::run_js::RunJsTool;
 use deos_hermes::{GrantRegistry, HermesGateway, ToolCallRequest};
-use deos_js::applet::pack_u64;
 use deos_js::JsRuntime;
+use deos_js::applet::pack_u64;
 use dregg_cell::AuthRequired;
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 

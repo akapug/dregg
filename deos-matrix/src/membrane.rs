@@ -237,7 +237,8 @@ pub trait MembraneHost {
     /// `World::commit_turn` on the forked world — identical conservation/ocap/
     /// program guarantees, a byte-identical receipt. The fork holds NO cap to
     /// mainline, so side effects are structurally confined (nesting IS safety).
-    fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8]) -> Result<TurnReceiptDigest, Self::Error>;
+    fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8])
+        -> Result<TurnReceiptDigest, Self::Error>;
 
     /// Stitch a driven fork back toward mainline. Implementation (roadmap for the
     /// proof, buildable for the mechanism): compute the pushout against the
@@ -358,7 +359,10 @@ impl MockMembraneHost {
             .collect();
         MockMembraneHost {
             cells,
-            tip: WitnessCursor { height: 100, commit_index: 3 },
+            tip: WitnessCursor {
+                height: 100,
+                commit_index: 3,
+            },
             forks: Mutex::new(Vec::new()),
             next_fork: Mutex::new(1),
         }
@@ -450,7 +454,11 @@ impl MembraneHost for MockMembraneHost {
         Ok((handle, Liveness::ReplayedDeterministic))
     }
 
-    fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8]) -> Result<TurnReceiptDigest, Self::Error> {
+    fn drive(
+        &self,
+        fork: &ForkHandle,
+        turn_bytes: &[u8],
+    ) -> Result<TurnReceiptDigest, Self::Error> {
         let mut forks = self.forks.lock().unwrap();
         let entry = forks
             .iter_mut()
@@ -538,7 +546,10 @@ mod tests {
                 authority_bounded: true,
                 cell_count: 12,
             },
-            cursor: WitnessCursor { height: 42, commit_index: 7 },
+            cursor: WitnessCursor {
+                height: 42,
+                commit_index: 7,
+            },
         }
     }
 
@@ -605,7 +616,10 @@ mod tests {
         assert_eq!(r1.turn_index, 1);
         let r2 = host.drive(&fork, b"SetField(y=2)").unwrap();
         assert_eq!(r2.turn_index, 2);
-        assert_ne!(r1.post_root, r2.post_root, "each driven turn advances the root");
+        assert_ne!(
+            r1.post_root, r2.post_root,
+            "each driven turn advances the root"
+        );
 
         // And it stitches back (clean, in this no-conflict path).
         let outcome = host.stitch(&fork).unwrap();
@@ -617,12 +631,17 @@ mod tests {
     #[test]
     fn rehydrate_fails_closed_on_root_substitution() {
         let host = MockMembraneHost::seeded();
-        let mut env = host.mint([0u8; 32], FrustumCut {
-            focus_cell: [0u8; 32],
-            max_depth: 2,
-            authority_bounded: true,
-            cell_count: 0,
-        }).unwrap();
+        let mut env = host
+            .mint(
+                [0u8; 32],
+                FrustumCut {
+                    focus_cell: [0u8; 32],
+                    max_depth: 2,
+                    authority_bounded: true,
+                    cell_count: 0,
+                },
+            )
+            .unwrap();
         // Substitute the snapshot bytes WITHOUT updating the root — the
         // anti-substitution tooth must fire (fail-closed).
         env.snapshot.push(0xff);
@@ -633,12 +652,17 @@ mod tests {
     #[test]
     fn rehydrate_fails_closed_on_future_version() {
         let host = MockMembraneHost::seeded();
-        let mut env = host.mint([0u8; 32], FrustumCut {
-            focus_cell: [0u8; 32],
-            max_depth: 1,
-            authority_bounded: true,
-            cell_count: 0,
-        }).unwrap();
+        let mut env = host
+            .mint(
+                [0u8; 32],
+                FrustumCut {
+                    focus_cell: [0u8; 32],
+                    max_depth: 1,
+                    authority_bounded: true,
+                    cell_count: 0,
+                },
+            )
+            .unwrap();
         env.version = MembraneEnvelope::VERSION + 1;
         // Re-derive the root won't matter — version is checked first, fail-closed.
         let err = host.rehydrate(&env).unwrap_err();

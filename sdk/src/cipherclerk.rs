@@ -2773,7 +2773,10 @@ impl AgentCipherclerk {
         // that controls this key can make the node spend decrypt/execute work.
         let submitter_auth = {
             use ed25519_dalek::Signer;
-            let signature = self.signing_key.sign(&public_inputs.signing_message()).to_bytes();
+            let signature = self
+                .signing_key
+                .sign(&public_inputs.signing_message())
+                .to_bytes();
             Some(dregg_turn::SubmitterAuth {
                 submitter_public: self.signing_key.verifying_key().to_bytes(),
                 signature,

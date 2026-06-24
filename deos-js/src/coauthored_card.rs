@@ -40,7 +40,7 @@ use dregg_doc::{Author, Rendered};
 
 use crate::applet::{pack_u64, Affordance, Applet, Slot};
 use crate::card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
-use crate::portable::{AffordanceSpec, ApplyOp, AppletManifest};
+use crate::portable::{AffordanceSpec, AppletManifest, ApplyOp};
 use crate::program_doc::ProgramSource;
 
 /// The model slot the seed card's counter lives in (a real field the card's `inc`
@@ -281,7 +281,11 @@ mod tests {
             "A's view edit left a real provenance receipt"
         );
         assert!(
-            edit_a.tree.walk().iter().any(|n| n.label() == Some("alice's counter")),
+            edit_a
+                .tree
+                .walk()
+                .iter()
+                .any(|n| n.label() == Some("alice's counter")),
             "A's fork re-folded with the relabel: {:?}",
             edit_a.tree
         );

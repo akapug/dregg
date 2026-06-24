@@ -359,8 +359,7 @@ pub struct NodeStateInner {
     /// deos-host thread after the server program's setup ran. The discovery route
     /// (`GET /api/server/{cell}/affordances`) projects this per-viewer. Plain data (no
     /// mozjs/gpui) so it lives in the lean node state unconditionally.
-    pub deos_server_surfaces:
-        HashMap<CellId, Vec<(String, dregg_cell::AuthRequired)>>,
+    pub deos_server_surfaces: HashMap<CellId, Vec<(String, dregg_cell::AuthRequired)>>,
     /// Blocklace consensus handle (set after federation sync starts).
     pub blocklace_handle: Option<crate::blocklace_sync::BlocklaceHandle>,
     /// Storage gateway service (ORGANS §3 weld): the content-addressed store

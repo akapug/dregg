@@ -402,11 +402,7 @@ impl Terminal {
             }
             // Don't bother emitting empty default-bg blanks (the view fills the
             // background); keeps the cell vec small for fast frames.
-            if cell.c == ' '
-                && !inverse
-                && bg == DEFAULT_BG
-                && cell.flags.is_empty()
-            {
+            if cell.c == ' ' && !inverse && bg == DEFAULT_BG && cell.flags.is_empty() {
                 continue;
             }
             cells.push(RenderCell {

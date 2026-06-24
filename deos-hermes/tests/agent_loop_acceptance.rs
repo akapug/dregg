@@ -27,8 +27,8 @@
 use std::sync::{Arc, RwLock};
 
 use deos_hermes::{
-    AcpClient, GrantRegistry, HermesGateway, PermissionOutcome, ToolKind, MockHermesPeer,
-    ScriptedCall,
+    AcpClient, GrantRegistry, HermesGateway, MockHermesPeer, PermissionOutcome, ScriptedCall,
+    ToolKind,
 };
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken, ToolGrant};
 
@@ -46,7 +46,11 @@ fn expect_receipt(label: &str, outcome: &PermissionOutcome) -> i64 {
         PermissionOutcome::Allow {
             receipt, remaining, ..
         } => {
-            assert_eq!(receipt.len(), 64, "{label}: receipt is a hex 32-byte turn hash");
+            assert_eq!(
+                receipt.len(),
+                64,
+                "{label}: receipt is a hex 32-byte turn hash"
+            );
             assert!(
                 receipt.chars().all(|c| c.is_ascii_hexdigit()),
                 "{label}: receipt id is hex ({receipt})"
@@ -128,7 +132,11 @@ fn confined_agent_runs_a_metered_receipted_multi_turn_session() {
         last_term_remaining.expect("two terminal calls in turn 1")
     };
     // The terminal mandate (rate 3) shows 2 spent, 1 remaining after turn 1.
-    assert_eq!(gateway.calls_made_for_tool("terminal"), 2, "two terminal calls spent");
+    assert_eq!(
+        gateway.calls_made_for_tool("terminal"),
+        2,
+        "two terminal calls spent"
+    );
     assert_eq!(term_rem_1, 1, "rate-3 terminal: one call left after turn 1");
     // web_search rode the Fetch floor and metered there.
     assert_eq!(gateway.calls_made(ToolKind::Fetch), 1);
@@ -142,7 +150,10 @@ fn confined_agent_runs_a_metered_receipted_multi_turn_session() {
         "build once more, then try again",
         vec![
             ScriptedCall::new("terminal", serde_json::json!({"command": "cargo build"})),
-            ScriptedCall::new("terminal", serde_json::json!({"command": "cargo build --release"})),
+            ScriptedCall::new(
+                "terminal",
+                serde_json::json!({"command": "cargo build --release"}),
+            ),
         ],
         200,
     );
@@ -151,7 +162,10 @@ fn confined_agent_runs_a_metered_receipted_multi_turn_session() {
     assert_eq!(run2.verdicts.len(), 2, "two gated tool-calls in turn 2");
     // The first build is the 3rd (and last) allowed terminal call — receipt, 0 left.
     let last_remaining = expect_receipt("turn2 terminal (last allowed)", &run2.verdicts[0].1);
-    assert_eq!(last_remaining, 0, "rate-3 terminal fully spent after this call");
+    assert_eq!(
+        last_remaining, 0,
+        "rate-3 terminal fully spent after this call"
+    );
 
     // (c) The SECOND build is over rate — REFUSED in-band, fail-closed, naming the
     //     rate leg. No turn, no spend.
@@ -214,7 +228,10 @@ fn confined_agent_runs_a_metered_receipted_multi_turn_session() {
     // refused in-band, naming the deadline leg. ════
     let peer = MockHermesPeer::new(
         "sess-acc",
-        vec![ScriptedCall::new("read_file", serde_json::json!({"path": "README.md"}))],
+        vec![ScriptedCall::new(
+            "read_file",
+            serde_json::json!({"path": "README.md"}),
+        )],
     );
     // Start this prompt's clock ABOVE the mandate deadline (1000). The driver bumps
     // the clock per permission, so the read lands at > 1000.
@@ -244,16 +261,29 @@ fn confined_agent_runs_a_metered_receipted_multi_turn_session() {
     // ════ THE WHOLE-SESSION INVARIANT — over every turn driven on this ONE
     // persistent gateway, the only counters that advanced are the mandated ones,
     // and the terminal mandate sits exactly at its ceiling (depleted, not over). ══
-    assert_eq!(gateway.calls_made_for_tool("terminal"), 3, "terminal at its rate-3 ceiling");
-    assert_eq!(gateway.calls_made(ToolKind::Fetch), 1, "one web_search rode the Fetch floor");
+    assert_eq!(
+        gateway.calls_made_for_tool("terminal"),
+        3,
+        "terminal at its rate-3 ceiling"
+    );
+    assert_eq!(
+        gateway.calls_made(ToolKind::Fetch),
+        1,
+        "one web_search rode the Fetch floor"
+    );
     // A further terminal call now — still refused: the ceiling persists across the
     // whole session (the confinement is a session-wide mandate, not per-prompt).
     let peer = MockHermesPeer::new(
         "sess-acc",
-        vec![ScriptedCall::new("terminal", serde_json::json!({"command": "echo still denied"}))],
+        vec![ScriptedCall::new(
+            "terminal",
+            serde_json::json!({"command": "echo still denied"}),
+        )],
     );
     let mut client = AcpClient::new(peer, gateway, 400);
-    let run5 = client.run_prompt("/deos/confined", "one more build").unwrap();
+    let run5 = client
+        .run_prompt("/deos/confined", "one more build")
+        .unwrap();
     assert!(
         matches!(run5.verdicts[0].1, PermissionOutcome::Reject { .. }),
         "the terminal mandate stays exhausted for the rest of the session"
@@ -290,5 +320,9 @@ fn out_of_scope_tool_id_is_refused_by_the_gate() {
         }
         other => panic!("expected an in-band OutOfScope refusal, got {other:?}"),
     }
-    assert_eq!(gw.calls_made(), 0, "the out-of-scope call advanced no counter");
+    assert_eq!(
+        gw.calls_made(),
+        0,
+        "the out-of-scope call advanced no counter"
+    );
 }

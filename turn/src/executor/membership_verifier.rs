@@ -401,7 +401,9 @@ pub fn verify_nullifier_nonmembership(
     //     reconstruction + `idx_upper == idx_lower + 1` check.
     CircuitNeighborAdjacencyVerifier
         .verify_adjacency(nullifier_set_root, lower, upper, adjacency_proof)
-        .map_err(|e| format!("nullifier-set neighbor adjacency rejected (no forged wide bracket): {e}"))
+        .map_err(|e| {
+            format!("nullifier-set neighbor adjacency rejected (no forged wide bracket): {e}")
+        })
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1715,7 +1717,8 @@ mod tests {
         //     proof for the wide bracket — the bracket check (a) passes (the
         //     nullifier is strictly inside), so it is the ADJACENCY teeth (b)
         //     that close the forgery.
-        let err = verify_nullifier_nonmembership(&root, &nullifier, &lower, &upper, &[]).unwrap_err();
+        let err =
+            verify_nullifier_nonmembership(&root, &nullifier, &lower, &upper, &[]).unwrap_err();
         assert!(
             err.contains("adjacency"),
             "the deployed gate must reject the wide-bracket forge on the adjacency leg; got {err}"
@@ -1726,11 +1729,9 @@ mod tests {
         //     the adjacency STARK binds the specific leaves it attests.
         let good_lp = auth_path(&levels, 1);
         let good_up = auth_path(&levels, 2);
-        let real_proof =
-            prove_neighbor_adjacency(&vals[1], &good_lp, &vals[2], &good_up).unwrap();
-        let err2 =
-            verify_nullifier_nonmembership(&root, &nullifier, &lower, &upper, &real_proof)
-                .unwrap_err();
+        let real_proof = prove_neighbor_adjacency(&vals[1], &good_lp, &vals[2], &good_up).unwrap();
+        let err2 = verify_nullifier_nonmembership(&root, &nullifier, &lower, &upper, &real_proof)
+            .unwrap_err();
         assert!(
             err2.contains("adjacency"),
             "a consecutive proof cannot be replayed for the wide bracket; got {err2}"

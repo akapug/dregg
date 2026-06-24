@@ -113,7 +113,11 @@ fn sdk_mint_supply_capped_commits_and_grows_the_well() {
     let TurnResult::Committed { receipt, .. } = &result else {
         panic!("SDK cap-gated mint must commit: {result:?}");
     };
-    assert_eq!(receipt.turn_hash, turn.hash(), "receipt binds the mint turn");
+    assert_eq!(
+        receipt.turn_hash,
+        turn.hash(),
+        "receipt binds the mint turn"
+    );
     assert_ne!(
         receipt.pre_state_hash, receipt.post_state_hash,
         "the mint mutated state"

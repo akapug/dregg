@@ -48,7 +48,9 @@
 
 use dregg_firmament::{CompositorPd, FrameCommit, Refusal};
 use gleam::gl;
-use starbridge_web_surface::{CapGatedDelegate, ResourceDecision, SurfaceCapability, WebSurfaceDelegate};
+use starbridge_web_surface::{
+    CapGatedDelegate, ResourceDecision, SurfaceCapability, WebSurfaceDelegate,
+};
 
 use crate::compositor_seam::{present_frame, FramePresentation};
 use crate::swgl_context::{with_gl, RenderingContext, RgbaFrame, SwglRenderingContext};
@@ -165,7 +167,12 @@ fn render_frame((w, h): (u32, u32), rgba: (u8, u8, u8, u8)) -> RgbaFrame {
         ctx.prepare_for_rendering();
         let glh = ctx.gleam_gl_api();
         let (r, g, b, a) = rgba;
-        glh.clear_color(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0);
+        glh.clear_color(
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            a as f32 / 255.0,
+        );
         glh.clear(gl::COLOR_BUFFER_BIT);
         ctx.present();
         ctx.read_frame()
@@ -225,10 +232,15 @@ mod tests {
             [String::from("https://example.com")],
             [],
         );
-        let mut compositor = CompositorPd::boot(EmulatedKernel::new(), one_surface_scene(presenter));
+        let mut compositor =
+            CompositorPd::boot(EmulatedKernel::new(), one_surface_scene(presenter));
 
         // The glass starts blank in region 5.
-        assert_eq!(compositor.framebuffer_snapshot()[5], 0, "region 5 starts blank");
+        assert_eq!(
+            compositor.framebuffer_snapshot()[5],
+            0,
+            "region 5 starts blank"
+        );
 
         let outcome = fetch_render_present(
             &mut compositor,
@@ -240,12 +252,21 @@ mod tests {
         );
 
         // The fetch was refused at the CAP gate (not the compositor gate).
-        assert!(outcome.fetch_was_refused(), "an out-of-allowlist fetch is refused at the cap gate");
-        assert!(!outcome.reached_glass(), "a cap-refused fetch puts NOTHING on the glass");
+        assert!(
+            outcome.fetch_was_refused(),
+            "an out-of-allowlist fetch is refused at the cap gate"
+        );
+        assert!(
+            !outcome.reached_glass(),
+            "a cap-refused fetch puts NOTHING on the glass"
+        );
         match outcome {
             PipelineOutcome::FetchRefused { denied_body } => {
                 let s = String::from_utf8(denied_body).unwrap();
-                assert!(s.contains("blocked by capability"), "the page gets the cap-denied body");
+                assert!(
+                    s.contains("blocked by capability"),
+                    "the page gets the cap-denied body"
+                );
             }
             other => panic!("expected FetchRefused, got {other:?}"),
         }
@@ -276,27 +297,43 @@ mod tests {
             [String::from("https://example.com")],
             [],
         );
-        let mut compositor = CompositorPd::boot(EmulatedKernel::new(), one_surface_scene(presenter));
+        let mut compositor =
+            CompositorPd::boot(EmulatedKernel::new(), one_surface_scene(presenter));
 
         let outcome = fetch_render_present(
             &mut compositor,
             &surface,
             &CapGatedDelegate::new(),
-            "https://example.com", // ∈ {example.com} — the cap permits it
+            "https://example.com",    // ∈ {example.com} — the cap permits it
             (0x00, 0x80, 0x80, 0xFF), // opaque teal
             &presentation_for(presenter),
         );
 
         // The frame reached the glass through the genuine gate.
-        assert!(outcome.reached_glass(), "a cap-permitted fetch renders and reaches the glass");
+        assert!(
+            outcome.reached_glass(),
+            "a cap-permitted fetch renders and reaches the glass"
+        );
         match outcome {
             PipelineOutcome::Presented { commit, frame } => {
                 // The frame is a REAL SWGL render (the teal we asked for).
                 assert_eq!(frame.bytes.len(), 16 * 16 * 4, "real RGBA8, 4 bytes/pixel");
-                assert_eq!(frame.pixel(8, 8), (0x00, 0x80, 0x80, 0xFF), "SWGL rasterized the teal");
+                assert_eq!(
+                    frame.pixel(8, 8),
+                    (0x00, 0x80, 0x80, 0xFF),
+                    "SWGL rasterized the teal"
+                );
                 // The commit carries the real pixels' digest + the genuine owner-binding.
-                assert_eq!(commit.digest, frame.content_digest(), "the real pixels' digest is committed");
-                assert_eq!(commit.label, label_of(&presenter, 1000), "T2: the genuine owner-binding");
+                assert_eq!(
+                    commit.digest,
+                    frame.content_digest(),
+                    "the real pixels' digest is committed"
+                );
+                assert_eq!(
+                    commit.label,
+                    label_of(&presenter, 1000),
+                    "T2: the genuine owner-binding"
+                );
                 // The glass shows the real frame's digest byte in the authorized tile.
                 assert_eq!(
                     compositor.framebuffer_snapshot()[5],
@@ -319,8 +356,22 @@ mod tests {
         // Scene: `owner` owns region 5; `intruder` owns region 6.
         let scene = Scene {
             surfaces: vec![
-                Surface { owner, regions: vec![5], content_digest: 0, source_state_root: 1000, z_layer: 0, focus_flag: true },
-                Surface { owner: intruder, regions: vec![6], content_digest: 0, source_state_root: 2000, z_layer: 0, focus_flag: false },
+                Surface {
+                    owner,
+                    regions: vec![5],
+                    content_digest: 0,
+                    source_state_root: 1000,
+                    z_layer: 0,
+                    focus_flag: true,
+                },
+                Surface {
+                    owner: intruder,
+                    regions: vec![6],
+                    content_digest: 0,
+                    source_state_root: 2000,
+                    z_layer: 0,
+                    focus_flag: false,
+                },
             ],
         };
         let mut compositor = CompositorPd::boot(EmulatedKernel::new(), scene);
@@ -346,14 +397,27 @@ mod tests {
         );
 
         // The fetch was NOT refused at the cap gate (the wildcard permitted it)...
-        assert!(!outcome.fetch_was_refused(), "the wildcard cap permits the fetch");
-        // ...but the frame did NOT reach the glass — the COMPOSITOR gate bit (T1).
-        assert!(!outcome.reached_glass(), "the compositor gate refuses the overpaint");
         assert!(
-            matches!(outcome, PipelineOutcome::PresentRefused(Refusal::Overpaint { .. })),
+            !outcome.fetch_was_refused(),
+            "the wildcard cap permits the fetch"
+        );
+        // ...but the frame did NOT reach the glass — the COMPOSITOR gate bit (T1).
+        assert!(
+            !outcome.reached_glass(),
+            "the compositor gate refuses the overpaint"
+        );
+        assert!(
+            matches!(
+                outcome,
+                PipelineOutcome::PresentRefused(Refusal::Overpaint { .. })
+            ),
             "a cap-permitted fetch is still refused by the compositor's T1 overpaint tooth"
         );
         // The victim's tile is untouched (fail-closed at the compositor gate).
-        assert_eq!(compositor.framebuffer_snapshot()[5], 0, "the owner's tile is untouched");
+        assert_eq!(
+            compositor.framebuffer_snapshot()[5],
+            0,
+            "the owner's tile is untouched"
+        );
     }
 }

@@ -93,8 +93,8 @@ pub use rehydrate::{
 // transclude into a `DreggverseDocument` with provenance (per-viewer, darkenable); a
 // re-publish (`amend`) advances the committed height, the snapshot/live dial tracking.
 pub use surface_capture::{
-    publish_live_surface, AmendError, DomNode, PublishedSurface, RenderedSurface,
-    DOM_STATE_ASSET, RENDERED_VIEW_ASSET,
+    publish_live_surface, AmendError, DomNode, PublishedSurface, RenderedSurface, DOM_STATE_ASSET,
+    RENDERED_VIEW_ASSET,
 };
 
 // Re-export the REAL stable web-of-cells + rehydration + membrane API this crate
@@ -103,17 +103,20 @@ pub use surface_capture::{
 // at the crate root — it would collide with this crate's `rehydrate` module; it is
 // reachable as `starbridge_web_surface::rehydrate`, and a consumer of THIS crate uses
 // the bundle-aware [`rehydrate_bundle`].)
-pub use starbridge_web_surface::{
-    is_attenuation, AttestedResource, AuthRequired, Capability, DreggUri, FetchError, Membrane,
-    OriginChrome, Projection, Rehydration, RehydrateError, Sturdyref, SurfaceCapability, WebOfCells,
-};
 pub use starbridge_web_surface::rehydrate::{Interaction, InteractionLog};
 pub use starbridge_web_surface::transclusion::{Provenance, TranscludedField, TransclusionError};
+pub use starbridge_web_surface::{
+    is_attenuation, AttestedResource, AuthRequired, Capability, DreggUri, FetchError, Membrane,
+    OriginChrome, Projection, RehydrateError, Rehydration, Sturdyref, SurfaceCapability,
+    WebOfCells,
+};
 // The REAL SNAPSHOT/LIVE dial (the I-confluence crown made into a dial) — named here
 // so the live-surface amend-tracks-live story (`PublishedSurface::dom_state_snapshot`
 // / `dom_state_live`) uses the genuine versioned-transclusion machinery, never a
 // parallel pinning.
-pub use starbridge_web_surface::transclusion_version::{Pinning, VersionedRead, VersionedTransclusion};
+pub use starbridge_web_surface::transclusion_version::{
+    Pinning, VersionedRead, VersionedTransclusion,
+};
 
 // The REAL content-addressed cell identity (re-exported by starbridge-web-surface,
 // named here so a bundle's boundary cell is the genuine type).

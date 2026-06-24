@@ -116,8 +116,11 @@ pub fn cell_json(ledger: &Ledger, id: &CellId) -> Option<String> {
 /// absence, never a forged read).
 pub fn frustum_json(ledger: &Ledger, viewer: &CellId) -> String {
     let f = Frustum::project(ledger, *viewer);
-    let visible: Vec<String> =
-        f.visible_cells().iter().map(|c| format!("\"{}\"", id_hex(c))).collect();
+    let visible: Vec<String> = f
+        .visible_cells()
+        .iter()
+        .map(|c| format!("\"{}\"", id_hex(c)))
+        .collect();
     format!(
         "{{\"viewer\":\"{}\",\"visibleCount\":{},\"visible\":[{}]}}",
         id_hex(viewer),
@@ -144,7 +147,12 @@ fn inspectable_json(insp: &deos_reflect::Inspectable) -> String {
         .iter()
         .map(|f| {
             let (ty, val) = field_value_json(&f.value);
-            format!("{{\"key\":\"{}\",\"type\":\"{}\",\"value\":{}}}", esc(&f.key), ty, val)
+            format!(
+                "{{\"key\":\"{}\",\"type\":\"{}\",\"value\":{}}}",
+                esc(&f.key),
+                ty,
+                val
+            )
         })
         .collect();
     format!(
@@ -167,11 +175,16 @@ fn field_value_json(v: &FieldValue) -> (&'static str, String) {
         FieldValue::Hash(h) => ("hash", format!("\"{}\"", hex_encode(h))),
         FieldValue::CapEdge { target, slot } => (
             "capEdge",
-            format!("{{\"target\":\"{}\",\"slot\":{}}}", hex_encode(target), slot),
+            format!(
+                "{{\"target\":\"{}\",\"slot\":{}}}",
+                hex_encode(target),
+                slot
+            ),
         ),
-        FieldValue::FieldSlot { index, hex } => {
-            ("fieldSlot", format!("{{\"index\":{},\"hex\":\"{}\"}}", index, esc(hex)))
-        }
+        FieldValue::FieldSlot { index, hex } => (
+            "fieldSlot",
+            format!("{{\"index\":{},\"hex\":\"{}\"}}", index, esc(hex)),
+        ),
         FieldValue::CommittedSlot { index, commitment } => (
             "committedSlot",
             format!(
@@ -216,7 +229,10 @@ fn face_kind_slug(k: PresentationKind) -> &'static str {
 /// Serialize a face body to JSON (each is pure data the view layer renders).
 fn face_body_json(body: &PresentationBody) -> String {
     match body {
-        PresentationBody::Fields(insp) => format!("{{\"type\":\"fields\",\"value\":{}}}", inspectable_json(insp)),
+        PresentationBody::Fields(insp) => format!(
+            "{{\"type\":\"fields\",\"value\":{}}}",
+            inspectable_json(insp)
+        ),
         PresentationBody::Graph(gv) => {
             let nodes: Vec<String> = gv
                 .nodes
@@ -245,7 +261,13 @@ fn face_body_json(body: &PresentationBody) -> String {
             let states: Vec<String> = sm
                 .states
                 .iter()
-                .map(|s| format!("{{\"name\":\"{}\",\"terminal\":{}}}", esc(&s.name), s.terminal))
+                .map(|s| {
+                    format!(
+                        "{{\"name\":\"{}\",\"terminal\":{}}}",
+                        esc(&s.name),
+                        s.terminal
+                    )
+                })
                 .collect();
             let trans: Vec<String> = sm
                 .transitions
@@ -275,10 +297,18 @@ fn face_body_json(body: &PresentationBody) -> String {
                         .hash
                         .map(|h| format!("\"{}\"", hex_encode(&h)))
                         .unwrap_or_else(|| "null".to_string());
-                    format!("{{\"at\":{},\"label\":\"{}\",\"hash\":{}}}", e.at, esc(&e.label), hash)
+                    format!(
+                        "{{\"at\":{},\"label\":\"{}\",\"hash\":{}}}",
+                        e.at,
+                        esc(&e.label),
+                        hash
+                    )
                 })
                 .collect();
-            format!("{{\"type\":\"timeline\",\"events\":[{}]}}", events.join(","))
+            format!(
+                "{{\"type\":\"timeline\",\"events\":[{}]}}",
+                events.join(",")
+            )
         }
     }
 }
@@ -289,7 +319,11 @@ fn face_body_json(body: &PresentationBody) -> String {
 /// `held` may see/fire, as JSON. Built from the registered `specs` (name + required
 /// authority); projected by `is_attenuation` (`required ⊆ held`). A weaker viewer
 /// receives a strictly smaller set — the frustum's affordance half.
-pub fn cell_affordances_json(cell: &CellId, specs: &[(String, AuthRequired)], held: &AuthRequired) -> String {
+pub fn cell_affordances_json(
+    cell: &CellId,
+    specs: &[(String, AuthRequired)],
+    held: &AuthRequired,
+) -> String {
     let mut surface = AffordanceSurface::new(*cell);
     for (name, required) in specs {
         // A representative effect template (the real turn an affordance fires touches
@@ -355,7 +389,12 @@ pub fn spotter_json(ledger: &Ledger, query: &str) -> String {
     let items: Vec<String> = hits
         .iter()
         .map(|(score, cell, title)| {
-            format!("{{\"cell\":\"{}\",\"score\":{},\"snippet\":\"{}\"}}", cell, score, esc(title))
+            format!(
+                "{{\"cell\":\"{}\",\"score\":{},\"snippet\":\"{}\"}}",
+                cell,
+                score,
+                esc(title)
+            )
         })
         .collect();
     format!("[{}]", items.join(","))

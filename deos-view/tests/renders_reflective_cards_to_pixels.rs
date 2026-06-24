@@ -94,11 +94,7 @@ fn body() {
 
 /// Render a card's `view_source` JSON over a live applet, capture a PNG, return its raw
 /// pixels (for the differs-after-reshape assertion) and the saved path.
-fn render_to_png(
-    hr: &mut HeadlessRender,
-    source: &str,
-    png: PathBuf,
-) -> (Vec<u8>, PathBuf) {
+fn render_to_png(hr: &mut HeadlessRender, source: &str, png: PathBuf) -> (Vec<u8>, PathBuf) {
     let tree = parse_view_tree(source).expect("parse the card view-tree");
     let applet = Rc::new(RefCell::new(render_applet()));
     let window = hr
@@ -108,7 +104,10 @@ fn render_to_png(
         .expect("open the card window");
     let frame = hr.capture(window.into()).expect("capture the card frame");
     frame.save(&png).expect("save the card PNG");
-    assert!(frame.width() > 0 && frame.height() > 0, "the frame has pixels");
+    assert!(
+        frame.width() > 0 && frame.height() > 0,
+        "the frame has pixels"
+    );
     (frame.as_raw().clone(), png)
 }
 
@@ -121,10 +120,19 @@ fn bake_composer(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
         AuthRequired::Signature,
     );
     // Compose a document from cells (the gestures = real composition patches).
-    card.add_embed(deos_js::composer_card::ChildCellId(0xA1), ComposerRole::Section);
-    card.add_embed(deos_js::composer_card::ChildCellId(0xB2), ComposerRole::Figure);
+    card.add_embed(
+        deos_js::composer_card::ChildCellId(0xA1),
+        ComposerRole::Section,
+    );
+    card.add_embed(
+        deos_js::composer_card::ChildCellId(0xB2),
+        ComposerRole::Figure,
+    );
     let source0 = card.view_source();
-    assert!(source0.contains("Composed cells"), "the generated composer view has its section");
+    assert!(
+        source0.contains("Composed cells"),
+        "the generated composer view has its section"
+    );
     let (frame0, png0) = render_to_png(hr, &source0, out.join("composer-card.png"));
 
     // EDIT FROM WITHIN: relabel the section + append a note → a receipted patch.
@@ -134,14 +142,20 @@ fn bake_composer(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
             to: "Document body".into(),
         })
         .expect("relabel the composer section from within");
-    assert!(edit.receipt.is_landed(), "the composer reshape left a composition receipt");
+    assert!(
+        edit.receipt.is_landed(),
+        "the composer reshape left a composition receipt"
+    );
     card.edit_view(ViewPatch::AddText {
         text: "— composed by hand —".into(),
     })
     .expect("append a note from within");
     let source1 = card.view_source();
     let (frame1, png1) = render_to_png(hr, &source1, out.join("composer-card-reshaped.png"));
-    assert_ne!(frame0, frame1, "the composer UI was rewritten from within — the frame differs");
+    assert_ne!(
+        frame0, frame1,
+        "the composer UI was rewritten from within — the frame differs"
+    );
     (png0, png1)
 }
 
@@ -156,7 +170,10 @@ fn bake_objects(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
         AuthRequired::Signature,
     );
     let source0 = card.view_source();
-    assert!(source0.contains("Objects · 2 cells"), "the generated objects view lists the roster");
+    assert!(
+        source0.contains("Objects · 2 cells"),
+        "the generated objects view lists the roster"
+    );
     let (frame0, png0) = render_to_png(hr, &source0, out.join("objects-card.png"));
 
     let edit = card
@@ -165,7 +182,11 @@ fn bake_objects(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
             to: "Sovereign cells".into(),
         })
         .expect("relabel the objects header from within");
-    assert_ne!(edit.receipt.receipt_hash(), [0u8; 32], "the objects reshape left a real receipt");
+    assert_ne!(
+        edit.receipt.receipt_hash(),
+        [0u8; 32],
+        "the objects reshape left a real receipt"
+    );
     card.edit_view(ViewPatch::AddButton {
         label: "refresh".into(),
         turn: "refresh".into(),
@@ -174,7 +195,10 @@ fn bake_objects(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
     .expect("append a refresh button from within");
     let source1 = card.view_source();
     let (frame1, png1) = render_to_png(hr, &source1, out.join("objects-card-reshaped.png"));
-    assert_ne!(frame0, frame1, "the objects UI was rewritten from within — the frame differs");
+    assert_ne!(
+        frame0, frame1,
+        "the objects UI was rewritten from within — the frame differs"
+    );
     let _: CellId = card.card().cell(); // the card has its own sovereign cell (the receipt substance)
     (png0, png1)
 }
@@ -202,7 +226,11 @@ fn bake_graph(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
             to: "Who can reach what".into(),
         })
         .expect("relabel the graph section from within");
-    assert_ne!(edit.receipt.receipt_hash(), [0u8; 32], "the graph reshape left a real receipt");
+    assert_ne!(
+        edit.receipt.receipt_hash(),
+        [0u8; 32],
+        "the graph reshape left a real receipt"
+    );
     card.edit_view(ViewPatch::AddButton {
         label: "highlight cycles".into(),
         turn: "highlight_cycles".into(),
@@ -211,6 +239,9 @@ fn bake_graph(hr: &mut HeadlessRender, out: &PathBuf) -> (PathBuf, PathBuf) {
     .expect("append a button from within");
     let source1 = card.view_source();
     let (frame1, png1) = render_to_png(hr, &source1, out.join("graph-card-reshaped.png"));
-    assert_ne!(frame0, frame1, "the graph UI was rewritten from within — the frame differs");
+    assert_ne!(
+        frame0, frame1,
+        "the graph UI was rewritten from within — the frame differs"
+    );
     (png0, png1)
 }

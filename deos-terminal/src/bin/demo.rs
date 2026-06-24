@@ -38,9 +38,8 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
-                    let view = cx.new(|cx| {
-                        TerminalView::spawn_shell(cx).expect("failed to spawn shell")
-                    });
+                    let view =
+                        cx.new(|cx| TerminalView::spawn_shell(cx).expect("failed to spawn shell"));
                     // Focus the terminal so keystrokes flow to the PTY immediately.
                     let handle = view.read(cx).focus_handle(cx);
                     window.focus(&handle, cx);
@@ -50,9 +49,7 @@ fn main() {
             .expect("failed to open window");
 
         // Close the app when the window closes.
-        window
-            .update(cx, |_view, _window, _cx| {})
-            .ok();
+        window.update(cx, |_view, _window, _cx| {}).ok();
         cx.activate(true);
     });
 }

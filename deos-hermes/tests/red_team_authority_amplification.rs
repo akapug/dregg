@@ -48,7 +48,11 @@ fn worker_cannot_fire_a_method_outside_its_granted_scope() {
     };
     let gw = ToolGateway::admit(&rt, &root, grant).expect("admit a search-scoped worker");
     let worker = gw.worker_for_test();
-    assert_eq!(worker.cap_methods(), &["tool.search".to_string()], "scoped to search only");
+    assert_eq!(
+        worker.cap_methods(),
+        &["tool.search".to_string()],
+        "scoped to search only"
+    );
 
     // ESCALATION ATTEMPT: fire under a verb the credential does NOT cover.
     for forbidden in ["tool.execute", "admin", "tool.edit", "sub-agent-method"] {
@@ -59,7 +63,11 @@ fn worker_cannot_fire_a_method_outside_its_granted_scope() {
         );
         let msg = format!("{:?}", result.unwrap_err());
         assert!(
-            msg.contains("Insufficient") || msg.contains("Capability") || msg.contains("Token") || msg.contains("authoriz") || msg.contains("Auth"),
+            msg.contains("Insufficient")
+                || msg.contains("Capability")
+                || msg.contains("Token")
+                || msg.contains("authoriz")
+                || msg.contains("Auth"),
             "the executor refused '{forbidden}' on a capability/authorization ground: {msg}"
         );
     }
@@ -86,11 +94,22 @@ fn a_confined_agent_cannot_widen_its_own_grant() {
     let before = gw.grant_for(ToolKind::Fetch).clone();
     // Drive several calls (and a refused over-deadline one) — none of which can
     // mutate the grant.
-    let _ = gw.admit_with_work(&ToolCallRequest::new("s", "a", "web_search", serde_json::json!({"query":"q"})), 50, Some(vec![]));
-    let _ = gw.admit_with_work(&ToolCallRequest::new("s", "b", "web_search", serde_json::json!({"query":"q"})), 999_999, Some(vec![]));
+    let _ = gw.admit_with_work(
+        &ToolCallRequest::new("s", "a", "web_search", serde_json::json!({"query":"q"})),
+        50,
+        Some(vec![]),
+    );
+    let _ = gw.admit_with_work(
+        &ToolCallRequest::new("s", "b", "web_search", serde_json::json!({"query":"q"})),
+        999_999,
+        Some(vec![]),
+    );
     let after = gw.grant_for(ToolKind::Fetch).clone();
 
-    assert_eq!(before, after, "GRANT-WIDENING HOLE — the grant changed through the seam: {before:?} -> {after:?}");
+    assert_eq!(
+        before, after,
+        "GRANT-WIDENING HOLE — the grant changed through the seam: {before:?} -> {after:?}"
+    );
     assert_eq!(after.rate_limit, 50, "rate ceiling unchanged");
     assert_eq!(after.deadline, 10_000, "deadline unchanged");
 }
@@ -104,13 +123,20 @@ fn a_committed_call_is_signed_under_the_workers_own_cell_never_a_claimed_princip
     // committed turn is bound to the worker's OWN attenuated cell. There is no
     // payload field that redirects the signer.
     let (rt, root) = grantor();
-    let grant = ToolGrant { tool_id: 40, rate_limit: 100, deadline: 10_000, tool_method: "tool.execute".into() };
+    let grant = ToolGrant {
+        tool_id: 40,
+        rate_limit: 100,
+        deadline: 10_000,
+        tool_method: "tool.execute".into(),
+    };
     let mut gw = ToolGateway::admit(&rt, &root, grant).expect("admit worker");
     let worker_cell = gw.worker_cell();
 
     // The metered turn commits — and its receipt is bound to worker_cell, not to
     // any principal the agent might name in the payload.
-    let receipt = gw.invoke(40, 50, vec![]).expect("the in-scope metered turn commits");
+    let receipt = gw
+        .invoke(40, 50, vec![])
+        .expect("the in-scope metered turn commits");
     // The committed turn's worker cell is the gateway's worker cell — the only
     // identity it could have signed under. A confused-deputy redirect is structurally
     // impossible: execute_method always sets `agent = target = self.cell_id`.
@@ -119,7 +145,10 @@ fn a_committed_call_is_signed_under_the_workers_own_cell_never_a_claimed_princip
         worker_cell,
         "the worker's committed identity is its own attenuated cell, immune to a claimed principal"
     );
-    assert!(receipt.receipt.turn_hash != [0u8; 32], "a real receipt under the worker's own cell");
+    assert!(
+        receipt.receipt.turn_hash != [0u8; 32],
+        "a real receipt under the worker's own cell"
+    );
 }
 
 #[test]
@@ -131,7 +160,12 @@ fn claiming_a_different_principal_in_the_payload_does_not_grant_that_principals_
     let (rt, root) = grantor();
     let registry = GrantRegistry::default_for_session(10_000).with_grant(
         ToolKind::Execute,
-        ToolGrant { tool_id: 40, rate_limit: 1, deadline: 10_000, tool_method: "tool.execute".into() },
+        ToolGrant {
+            tool_id: 40,
+            rate_limit: 1,
+            deadline: 10_000,
+            tool_method: "tool.execute".into(),
+        },
     );
     let mut gw = HermesGateway::new(&rt, root, registry);
 
@@ -150,12 +184,28 @@ fn claiming_a_different_principal_in_the_payload_does_not_grant_that_principals_
     // It commits under the rate-1 Execute mandate like any terminal call: the
     // spoofed principal granted NO extra authority (had it, the agent would not
     // still be confined to its own rate-1 budget).
-    assert!(gw.admit_with_work(&spoof, 50, None).allowed(), "metered like any terminal call");
-    assert_eq!(gw.calls_made(ToolKind::Execute), 1, "spent exactly one of the agent's OWN budget");
+    assert!(
+        gw.admit_with_work(&spoof, 50, None).allowed(),
+        "metered like any terminal call"
+    );
+    assert_eq!(
+        gw.calls_made(ToolKind::Execute),
+        1,
+        "spent exactly one of the agent's OWN budget"
+    );
     // And the budget is genuinely exhausted — the 'root' claim did not refill it.
-    let again = ToolCallRequest::new("s", "tc-2", "terminal", serde_json::json!({"command":"id","principal":"root"}));
+    let again = ToolCallRequest::new(
+        "s",
+        "tc-2",
+        "terminal",
+        serde_json::json!({"command":"id","principal":"root"}),
+    );
     match gw.admit_with_work(&again, 50, None) {
-        deos_hermes::PermissionOutcome::Reject { reason, .. } => assert!(reason.contains("rate exhausted"), "{reason}"),
-        other => panic!("CONFUSED-DEPUTY HOLE — the 'root' claim refilled/widened the mandate: {other:?}"),
+        deos_hermes::PermissionOutcome::Reject { reason, .. } => {
+            assert!(reason.contains("rate exhausted"), "{reason}")
+        }
+        other => panic!(
+            "CONFUSED-DEPUTY HOLE — the 'root' claim refilled/widened the mandate: {other:?}"
+        ),
     }
 }

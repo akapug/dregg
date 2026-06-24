@@ -27,9 +27,7 @@ use crate::cell::{IdentityCell, PersonTrust, RoomCell, SendReceipt};
 pub fn parse_room_id(s: &str) -> crate::Result<matrix_sdk::ruma::OwnedRoomId> {
     matrix_sdk::ruma::RoomId::parse(s).map_err(Into::into)
 }
-use crate::client::{
-    EventState, MessageKind, Reaction, ReplyTo, RoomSummary, TimelineMessage,
-};
+use crate::client::{EventState, MessageKind, Reaction, ReplyTo, RoomSummary, TimelineMessage};
 use crate::membrane::MembraneEnvelope;
 use crate::object::DreggObject;
 use crate::Result;
@@ -211,13 +209,23 @@ impl ChatSource for crate::worker::MatrixHandle {
         // The live membrane send: the envelope rides under MEMBRANE_EVENT_KEY in a
         // real m.room.message (see MatrixClient::send_membrane). The SAME wire shape
         // the mock describes locally, now POSTed to a real homeserver.
-        crate::worker::MatrixHandle::send_membrane(self, room_id.to_string(), body.to_string(), membrane)
+        crate::worker::MatrixHandle::send_membrane(
+            self,
+            room_id.to_string(),
+            body.to_string(),
+            membrane,
+        )
     }
 
     fn send_object(&self, room_id: &str, body: &str, object: DreggObject) -> Result<String> {
         // The live object send: the object rides under DREGG_OBJECT_KEY in a real
         // m.room.message (see MatrixClient::send_object). The generalized membrane.
-        crate::worker::MatrixHandle::send_object(self, room_id.to_string(), body.to_string(), object)
+        crate::worker::MatrixHandle::send_object(
+            self,
+            room_id.to_string(),
+            body.to_string(),
+            object,
+        )
     }
 
     fn sync(&self) -> Result<()> {
@@ -293,13 +301,7 @@ impl MockSource {
                 3,
                 false,
             ),
-            room(
-                "!ember:deos.local",
-                "ember (DM)",
-                "direct",
-                2,
-                true,
-            ),
+            room("!ember:deos.local", "ember (DM)", "direct", 2, true),
         ];
 
         let mut clock = 1_718_000_000_000u64; // a fixed plausible ms epoch
@@ -309,7 +311,12 @@ impl MockSource {
         };
 
         let msg = |sender: &str, body: &str, ts: u64| {
-            TimelineMessage::text(format!("$evt{ts}"), sender.to_string(), body.to_string(), ts)
+            TimelineMessage::text(
+                format!("$evt{ts}"),
+                sender.to_string(),
+                body.to_string(),
+                ts,
+            )
         };
         let react = |key: &str, who: &[&str]| Reaction {
             key: key.to_string(),
@@ -324,7 +331,10 @@ impl MockSource {
             "the live image boots on seL4 again — BALANCE_SUM=0 holds",
             step(),
         );
-        m0_grok.reactions = vec![react("🎉", &["@ember:deos.local", "@pug:deos.local"]), react("🔒", &["@ember:deos.local"])];
+        m0_grok.reactions = vec![
+            react("🎉", &["@ember:deos.local", "@pug:deos.local"]),
+            react("🔒", &["@ember:deos.local"]),
+        ];
 
         let mut m0_emb = msg(
             "@ember:deos.local",
@@ -404,36 +414,57 @@ impl MockSource {
             (
                 rooms[0].room_id.to_string(),
                 vec![
-                    m0_grok, m0_emb, m0_mem, m0_reply, m0_edited, m0_redacted, m0_trans, m0_cap,
+                    m0_grok,
+                    m0_emb,
+                    m0_mem,
+                    m0_reply,
+                    m0_edited,
+                    m0_redacted,
+                    m0_trans,
+                    m0_cap,
                     m0_aff,
                 ],
             ),
-            (
-                rooms[1].room_id.to_string(),
-                {
-                    let mut a = msg("@pug:deos.local", "n=1 collapse: local seL4-cap == distributed dregg-cap == window", step());
-                    a.reactions = vec![react("👀", &["@ember:deos.local"])];
-                    let b = msg("@ember:deos.local", "surface IS the membrane boundary then", step());
-                    vec![a, b]
-                },
-            ),
-            (
-                rooms[2].room_id.to_string(),
-                {
-                    let a = msg("@fare:deos.local", "a stitch is a pushout in the event-structure config lattice", step());
-                    let mut b = msg("@ember:deos.local", "and linearity makes the inconsistent events lossy-dropped — exactly where Σδ=0 / nullifiers force it", step());
-                    b.reply_to = Some(ReplyTo {
-                        event_id: a.event_id.clone(),
-                        sender: "@fare:deos.local".to_string(),
-                        preview: "a stitch is a pushout…".to_string(),
-                    });
-                    let c = msg("@fare:deos.local", "conflicts-as-objects. patch theory validates the merge.", step());
-                    vec![a, b, c]
-                },
-            ),
+            (rooms[1].room_id.to_string(), {
+                let mut a = msg(
+                    "@pug:deos.local",
+                    "n=1 collapse: local seL4-cap == distributed dregg-cap == window",
+                    step(),
+                );
+                a.reactions = vec![react("👀", &["@ember:deos.local"])];
+                let b = msg(
+                    "@ember:deos.local",
+                    "surface IS the membrane boundary then",
+                    step(),
+                );
+                vec![a, b]
+            }),
+            (rooms[2].room_id.to_string(), {
+                let a = msg(
+                    "@fare:deos.local",
+                    "a stitch is a pushout in the event-structure config lattice",
+                    step(),
+                );
+                let mut b = msg("@ember:deos.local", "and linearity makes the inconsistent events lossy-dropped — exactly where Σδ=0 / nullifiers force it", step());
+                b.reply_to = Some(ReplyTo {
+                    event_id: a.event_id.clone(),
+                    sender: "@fare:deos.local".to_string(),
+                    preview: "a stitch is a pushout…".to_string(),
+                });
+                let c = msg(
+                    "@fare:deos.local",
+                    "conflicts-as-objects. patch theory validates the merge.",
+                    step(),
+                );
+                vec![a, b, c]
+            }),
             (
                 rooms[3].room_id.to_string(),
-                vec![msg("@ember:deos.local", "note to self: wire the SendMessage worker variant", step())],
+                vec![msg(
+                    "@ember:deos.local",
+                    "note to self: wire the SendMessage worker variant",
+                    step(),
+                )],
             ),
         ];
 
@@ -449,15 +480,19 @@ impl MockSource {
 
         // Ephemeral typing + read-receipts (view-state, seeded for the demo).
         let typing = vec![
-            (rooms[0].room_id.to_string(), vec!["@grok:deos.local".to_string()]),
-            (rooms[2].room_id.to_string(), Vec::new()),
-        ];
-        let read_by = vec![
             (
                 rooms[0].room_id.to_string(),
-                vec!["@grok:deos.local".to_string(), "@pug:deos.local".to_string()],
+                vec!["@grok:deos.local".to_string()],
             ),
+            (rooms[2].room_id.to_string(), Vec::new()),
         ];
+        let read_by = vec![(
+            rooms[0].room_id.to_string(),
+            vec![
+                "@grok:deos.local".to_string(),
+                "@pug:deos.local".to_string(),
+            ],
+        )];
 
         // Seed a couple of unread badges + topics already set above.
         let mut rooms = rooms;
@@ -665,11 +700,18 @@ mod tests {
         let tl = src.timeline(&room, 100).unwrap();
         // It carries reactions, an edit, a redaction, a reply, and a membrane.
         assert!(tl.iter().any(|m| !m.reactions.is_empty()), "has reactions");
-        assert!(tl.iter().any(|m| m.state == EventState::Edited), "has an edit");
-        assert!(tl.iter().any(|m| m.state == EventState::Redacted), "has a redaction");
+        assert!(
+            tl.iter().any(|m| m.state == EventState::Edited),
+            "has an edit"
+        );
+        assert!(
+            tl.iter().any(|m| m.state == EventState::Redacted),
+            "has a redaction"
+        );
         assert!(tl.iter().any(|m| m.reply_to.is_some()), "has a reply");
         assert!(
-            tl.iter().any(|m| m.kind == MessageKind::Membrane && m.membrane.is_some()),
+            tl.iter()
+                .any(|m| m.kind == MessageKind::Membrane && m.membrane.is_some()),
             "has a membrane-bearing message"
         );
     }
@@ -679,7 +721,10 @@ mod tests {
         let src = MockSource::seeded();
         let room = src.rooms().unwrap()[0].room_id.to_string();
         let before = src.room_cell(&room);
-        assert!(before.turn_count >= 1, "the seeded room has history (turns)");
+        assert!(
+            before.turn_count >= 1,
+            "the seeded room has history (turns)"
+        );
         let root_before = before.state_root;
         // A send is a turn — the room cell's history advances.
         src.send(&room, "another turn").unwrap();
@@ -692,8 +737,14 @@ mod tests {
     #[test]
     fn identity_is_a_cell_with_person_trust() {
         let src = MockSource::seeded();
-        assert_eq!(src.identity("@ember:deos.local").trust, PersonTrust::Verified);
-        assert_eq!(src.identity("@pug:deos.local").trust, PersonTrust::Unverified);
+        assert_eq!(
+            src.identity("@ember:deos.local").trust,
+            PersonTrust::Verified
+        );
+        assert_eq!(
+            src.identity("@pug:deos.local").trust,
+            PersonTrust::Unverified
+        );
         // fare's identity changed — the loud, must-surface case.
         assert_eq!(src.identity("@fare:deos.local").trust, PersonTrust::Changed);
         // unknown user defaults to Unverified (never fabricates trust).
@@ -773,7 +824,10 @@ mod tests {
         src.send_object(&room, "", mem.clone()).unwrap();
         let last = src.timeline(&room, 200).unwrap().pop().unwrap();
         assert_eq!(last.kind, MessageKind::Membrane);
-        assert!(last.membrane.is_some(), "membrane object fills the typed field");
+        assert!(
+            last.membrane.is_some(),
+            "membrane object fills the typed field"
+        );
     }
 
     #[test]

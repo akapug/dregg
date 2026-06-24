@@ -245,10 +245,20 @@ impl DreggObject {
                 format!("[deos capability · {} · {}]", c.label, c.sturdyref)
             }
             DreggObject::Transclusion(t) => {
-                format!("[deos transclusion · {}.{} = {}]", t.source_cell.short(), t.field, t.value)
+                format!(
+                    "[deos transclusion · {}.{} = {}]",
+                    t.source_cell.short(),
+                    t.field,
+                    t.value
+                )
             }
             DreggObject::Affordance(a) => {
-                format!("[deos affordance · {} · {}:{}]", a.label, a.action, a.target_cell.short())
+                format!(
+                    "[deos affordance · {} · {}:{}]",
+                    a.label,
+                    a.action,
+                    a.target_cell.short()
+                )
             }
             DreggObject::Receipt(r) => format!(
                 "[deos receipt · turn {} · {} · root {}]",

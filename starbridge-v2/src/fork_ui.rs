@@ -135,9 +135,8 @@ impl TierHolding {
 /// visible, attenuation-faithful (an EMBEDDED cap carries exactly the rights the
 /// powerbox minted, never wider).
 pub fn fork_tiers(fork: &SharedFork) -> Vec<TierHolding> {
-    let mut out = Vec::with_capacity(
-        fork.embedded.len() + fork.studyrefs.len() + fork.boundaries.len(),
-    );
+    let mut out =
+        Vec::with_capacity(fork.embedded.len() + fork.studyrefs.len() + fork.boundaries.len());
     for EmbeddedCap { target, cap } in &fork.embedded {
         out.push(TierHolding {
             target: *target,
@@ -511,7 +510,11 @@ mod tests {
         );
 
         let rows = fork_tiers(&sf);
-        assert_eq!(rows.len(), 3, "one row per designated target across all tiers");
+        assert_eq!(
+            rows.len(),
+            3,
+            "one row per designated target across all tiers"
+        );
 
         // EMBEDDED: docs, holds the ATTENUATED Signature (never the owner's wider None).
         let emb = rows
@@ -526,7 +529,10 @@ mod tests {
             },
             "the embedded holding carries the attenuated cap, not the owner's wider authority"
         );
-        let cap = emb.embedded_cap.as_ref().expect("embedded carries the real cap");
+        let cap = emb
+            .embedded_cap
+            .as_ref()
+            .expect("embedded carries the real cap");
         assert_eq!(cap.target, docs);
         assert_eq!(
             cap.permissions,
@@ -571,7 +577,9 @@ mod tests {
         // runs a REAL consent grant (signed receipt) and COMMITS the conditional turn
         // through the boundary gate (a real verified turn, fired once).
         let (mut world, owner, guest, _docs, peer, _seed) = fc_world();
-        let exec_pub = world.executor_public_key().expect("the world signs receipts");
+        let exec_pub = world
+            .executor_public_key()
+            .expect("the world signs receipts");
 
         // The fork carries the consent-gated boundary over `peer`.
         let mut fork_world = world.fork();
@@ -608,9 +616,16 @@ mod tests {
         // It sits in the inbox, doing nothing.
         let mut inbox = ConsentInbox::new();
         inbox.push(request);
-        assert_eq!(inbox.pending.len(), 1, "the conditional turn awaits consent");
+        assert_eq!(
+            inbox.pending.len(),
+            1,
+            "the conditional turn awaits consent"
+        );
         assert_eq!(inbox.pending[0].target(), peer);
-        assert!(inbox.all_text().iter().any(|l| l.contains("PENDING CONSENT")));
+        assert!(inbox
+            .all_text()
+            .iter()
+            .any(|l| l.contains("PENDING CONSENT")));
 
         // APPROVE: a real consent grant + a real committed conditional turn. Two DISTINCT
         // one-shot ledgers (the owner's world + the fork's own).

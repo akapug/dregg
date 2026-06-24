@@ -24,7 +24,7 @@
 
 use std::collections::VecDeque;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::acp_client::{AcpError, AcpPeer, RpcMessage};
 
@@ -257,8 +257,7 @@ impl AcpPeer for MockHermesPeer {
                 .unwrap_or("deny");
             let allowed = option_id == "allow_once" || option_id == "allow_always";
             let tool_call_id = format!("tc-{}", self.tool_call_seq);
-            self.recorded_outcomes
-                .push((tool_call_id.clone(), outcome));
+            self.recorded_outcomes.push((tool_call_id.clone(), outcome));
             self.pending_permission_id = None;
             self.advance_after_permission(allowed, &tool_call_id);
             return Ok(());

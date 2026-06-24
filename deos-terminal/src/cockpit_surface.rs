@@ -13,11 +13,11 @@
 //! split.
 
 use gpui::{
-    div, AnyElement, App, AppContext, Entity, FocusHandle, IntoElement, ParentElement, SharedString,
-    Styled, Window,
+    div, AnyElement, App, AppContext, Entity, FocusHandle, IntoElement, ParentElement,
+    SharedString, Styled, Window,
 };
 
-use crate::model::{Terminal, TermSize};
+use crate::model::{TermSize, Terminal};
 use crate::view::TerminalView;
 
 /// A dock-mountable terminal surface: a stable id plus the live terminal view.
@@ -44,7 +44,11 @@ impl TerminalSurface {
     /// but with a deterministic one-shot program — so a headless bake/test can run
     /// `cargo --version` / `git --version` and assert the genuine child-process
     /// output landed in the grid. Returns an error if the PTY can't be opened.
-    pub fn spawn(id: u64, cmd: Option<(String, Vec<String>)>, cx: &mut App) -> anyhow::Result<Self> {
+    pub fn spawn(
+        id: u64,
+        cmd: Option<(String, Vec<String>)>,
+        cx: &mut App,
+    ) -> anyhow::Result<Self> {
         let terminal = Terminal::spawn(
             cmd,
             std::env::current_dir().ok(),

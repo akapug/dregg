@@ -2519,13 +2519,13 @@ impl TurnExecutor {
 #[cfg(test)]
 mod custom_effect_dispatch_tests {
     use super::*;
+    use crate::ComputronCosts;
     use crate::action::{Action, Authorization, DelegationMode};
     use crate::forest::{CallForest, CallTree};
     use crate::turn::{CustomProgramProof, Turn};
-    use crate::ComputronCosts;
     use dregg_cell::{
-        canonical_vk_v2, CustomEffectError, CustomEffectRegistry, CustomEffectVerifier,
-        ProvingSystemId, StubCustomEffectVerifier, VerifierFingerprint, VkComponents,
+        CustomEffectError, CustomEffectRegistry, CustomEffectVerifier, ProvingSystemId,
+        StubCustomEffectVerifier, VerifierFingerprint, VkComponents, canonical_vk_v2,
     };
     use std::sync::Arc;
 
@@ -2619,7 +2619,8 @@ mod custom_effect_dispatch_tests {
     fn no_custom_proofs_is_pass() {
         let ex = TurnExecutor::new(ComputronCosts::zero());
         let turn = empty_turn(cell_id(1));
-        ex.enforce_custom_effect_proofs(&turn).expect("no-custom pass");
+        ex.enforce_custom_effect_proofs(&turn)
+            .expect("no-custom pass");
     }
 
     /// A registered verifier that ACCEPTS (non-empty proof bytes) passes.
@@ -2703,7 +2704,10 @@ mod custom_effect_dispatch_tests {
         let err = ex
             .enforce_custom_effect_proofs(&bad)
             .expect_err("non-conforming custom effect must be rejected");
-        assert!(matches!(err, TurnError::ProofVerificationFailed(_)), "{err:?}");
+        assert!(
+            matches!(err, TurnError::ProofVerificationFailed(_)),
+            "{err:?}"
+        );
     }
 
     /// An UNREGISTERED vk_hash fails closed — no silent pass.
@@ -2721,7 +2725,10 @@ mod custom_effect_dispatch_tests {
         let err = ex
             .enforce_custom_effect_proofs(&turn)
             .expect_err("unregistered vk_hash must fail closed");
-        assert!(matches!(err, TurnError::ProofVerificationFailed(_)), "{err:?}");
+        assert!(
+            matches!(err, TurnError::ProofVerificationFailed(_)),
+            "{err:?}"
+        );
     }
 
     /// No registry configured + a turn that carries a custom proof = fail-closed.
@@ -2737,7 +2744,10 @@ mod custom_effect_dispatch_tests {
         let err = ex
             .enforce_custom_effect_proofs(&turn)
             .expect_err("custom proof with no registry must fail closed");
-        assert!(matches!(err, TurnError::ProofVerificationFailed(_)), "{err:?}");
+        assert!(
+            matches!(err, TurnError::ProofVerificationFailed(_)),
+            "{err:?}"
+        );
     }
 
     /// Empty proof bytes are refused (the registry's ProofMissing tooth) even
@@ -2755,6 +2765,9 @@ mod custom_effect_dispatch_tests {
         let err = ex
             .enforce_custom_effect_proofs(&turn)
             .expect_err("empty proof bytes must be refused");
-        assert!(matches!(err, TurnError::ProofVerificationFailed(_)), "{err:?}");
+        assert!(
+            matches!(err, TurnError::ProofVerificationFailed(_)),
+            "{err:?}"
+        );
     }
 }

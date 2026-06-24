@@ -241,12 +241,16 @@ pub fn goto(world: &World, receipt_hash: &[u8; 32]) -> Option<GotoCursor> {
 /// The [`History`] step AFTER the turn carrying `receipt_hash` committed, or
 /// `None` if no recorded committed turn carries it.
 fn step_of_receipt(history: &History, receipt_hash: &[u8; 32]) -> Option<usize> {
-    history.steps().iter().enumerate().find_map(|(i, step)| match step {
-        RecordedStep::Committed { receipt, .. } if &receipt.receipt_hash() == receipt_hash => {
-            Some(i + 1)
-        }
-        _ => None,
-    })
+    history
+        .steps()
+        .iter()
+        .enumerate()
+        .find_map(|(i, step)| match step {
+            RecordedStep::Committed { receipt, .. } if &receipt.receipt_hash() == receipt_hash => {
+                Some(i + 1)
+            }
+            _ => None,
+        })
 }
 
 /// Build the [`GotoCursor`] for a known `step` (root-verified replay + the
@@ -313,9 +317,7 @@ fn effect_kind(e: &Effect) -> String {
 /// A full per-effect detail row (kind + the cells it names + a payload summary).
 fn effect_detail(e: &Effect) -> EffectDetail {
     let (cells, summary): (Vec<CellId>, String) = match e {
-        Effect::Transfer { from, to, amount } => {
-            (vec![*from, *to], format!("{amount} computrons"))
-        }
+        Effect::Transfer { from, to, amount } => (vec![*from, *to], format!("{amount} computrons")),
         Effect::SetField { cell, index, .. } => (vec![*cell], format!("slot {index}")),
         Effect::GrantCapability { from, to, .. } => (vec![*from, *to], String::new()),
         Effect::RevokeCapability { cell, slot } => (vec![*cell], format!("slot {slot}")),
@@ -386,7 +388,10 @@ mod tests {
         // Authors are correct: treasury, treasury, USER.
         assert_eq!(lin[0].author, treasury);
         assert_eq!(lin[1].author, treasury);
-        assert_eq!(lin[2].author, user, "the third turn the user authored itself");
+        assert_eq!(
+            lin[2].author, user,
+            "the third turn the user authored itself"
+        );
 
         // Heights are the chain ordinals (1-based, genesis NOT counted).
         assert_eq!(lin[0].height, 1);
@@ -436,7 +441,10 @@ mod tests {
 
         // Detail the FIRST turn (treasury → user 100).
         let d = turn_detail(&w, &lin[0].receipt_hash).expect("receipt is recorded");
-        assert_eq!(d.author, treasury, "the first turn's author is the treasury");
+        assert_eq!(
+            d.author, treasury,
+            "the first turn's author is the treasury"
+        );
         assert_eq!(d.height, 1);
         assert_eq!(d.effect_count, 1);
         assert_eq!(d.effects[0].kind, "Transfer");

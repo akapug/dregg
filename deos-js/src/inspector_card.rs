@@ -48,8 +48,8 @@ use deos_reflect::present::PresentationBody;
 use deos_reflect::substance::FieldValue;
 use deos_reflect::{AffordanceSurface, ReflectedCell};
 
-use crate::attach::AttachedApplet;
 use crate::applet::{pack_u64, Affordance, Applet, Slot};
+use crate::attach::AttachedApplet;
 use crate::card_editor::{
     BindProps, ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewPatch, ViewTree,
 };
@@ -179,9 +179,7 @@ impl InspectorCard {
         self.card.register_affordance(Affordance {
             name: "__inspector_authorship__".into(),
             required: self.edit_authority.clone(),
-            apply: Box::new(move |_model, _arg| {
-                vec![(INSPECTOR_AUTHORSHIP_SLOT, pack_u64(next))]
-            }),
+            apply: Box::new(move |_model, _arg| vec![(INSPECTOR_AUTHORSHIP_SLOT, pack_u64(next))]),
         });
         self.card
             .fire("__inspector_authorship__", 0)
@@ -246,20 +244,18 @@ impl InspectorCard {
 /// text.)
 fn apply_patch(patch: &ViewPatch, tree: &mut ViewTree) -> bool {
     match patch {
-        ViewPatch::AddButton { label, turn, arg } => {
-            push_child(
-                tree,
-                ViewTree::Button {
-                    props: ButtonProps {
-                        label: label.clone(),
-                        on_click: OnClick {
-                            turn: turn.clone(),
-                            arg: *arg,
-                        },
+        ViewPatch::AddButton { label, turn, arg } => push_child(
+            tree,
+            ViewTree::Button {
+                props: ButtonProps {
+                    label: label.clone(),
+                    on_click: OnClick {
+                        turn: turn.clone(),
+                        arg: *arg,
                     },
                 },
-            )
-        }
+            },
+        ),
         ViewPatch::AddText { text } => push_child(
             tree,
             ViewTree::Text {
@@ -308,12 +304,7 @@ fn relabel_text(tree: &mut ViewTree, from: &str, to: &str) -> bool {
 /// [`Applet`] shape — rung 1). Delegates to [`inspector_view_for`], the substance-agnostic
 /// core that reads the same RawFields + Affordances faces off any [`Ledger`].
 fn generate_view(card: &Applet, held: &AuthRequired) -> ViewTree {
-    inspector_view_for(
-        card.cell(),
-        card.ledger(),
-        &card.affordance_specs(),
-        held,
-    )
+    inspector_view_for(card.cell(), card.ledger(), &card.affordance_specs(), held)
 }
 
 /// **Generate the inspector view-tree over an ATTACHED LIVE WORLD** — the rung-2 entry.

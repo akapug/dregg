@@ -30,14 +30,21 @@ fn headless() -> anyhow::Result<()> {
             if r.is_encrypted { "🔒" } else { "  " },
             r.display_name,
             r.joined_members,
-            r.topic.as_deref().map(|t| format!(" — {t}")).unwrap_or_default()
+            r.topic
+                .as_deref()
+                .map(|t| format!(" — {t}"))
+                .unwrap_or_default()
         );
     }
 
     let first = rooms[0].room_id.to_string();
     let tl = source.timeline(&first, 80)?;
     anyhow::ensure!(!tl.is_empty(), "first room has a seeded timeline");
-    println!("\ntimeline of {} ({} messages):", rooms[0].display_name, tl.len());
+    println!(
+        "\ntimeline of {} ({} messages):",
+        rooms[0].display_name,
+        tl.len()
+    );
     for m in &tl {
         println!("  {}: {}", m.sender, m.body);
     }
@@ -46,7 +53,10 @@ fn headless() -> anyhow::Result<()> {
     let id = source.send(&first, "hello from the headless deos-chat seam")?;
     let after = source.timeline(&first, 80)?;
     anyhow::ensure!(after.len() == before + 1, "send did not append");
-    anyhow::ensure!(after.last().unwrap().body.contains("headless"), "echo mismatch");
+    anyhow::ensure!(
+        after.last().unwrap().body.contains("headless"),
+        "echo mismatch"
+    );
     println!("\nsent {id}; timeline grew {before} → {}", after.len());
 
     println!("\nALL CHECKS PASSED — the deos-chat data path (rooms · timeline · send) works.");
@@ -190,12 +200,10 @@ mod gui {
         ) -> impl gpui::IntoElement {
             v_flex()
                 .size_full()
-                .child(
-                    TitleBar::new().child(div().child(format!(
-                        "deos-chat — the social layer over the dregg world (backend: {})",
-                        self.label
-                    ))),
-                )
+                .child(TitleBar::new().child(div().child(format!(
+                    "deos-chat — the social layer over the dregg world (backend: {})",
+                    self.label
+                ))))
                 .child(div().flex_1().min_h(px(0.)).child(self.view.clone()))
         }
     }

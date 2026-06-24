@@ -234,8 +234,15 @@ fn graph_view_for(ledger: &Ledger) -> ViewTree {
     for n in g.nodes() {
         nodes.push(ViewTree::Row {
             children: vec![
-                text(&format!("{} · out {} / in {}", n.short, n.out_degree, n.in_degree)),
-                button("reach", &format!("reach:{}", short_hex(n.cell.as_bytes())), 1),
+                text(&format!(
+                    "{} · out {} / in {}",
+                    n.short, n.out_degree, n.in_degree
+                )),
+                button(
+                    "reach",
+                    &format!("reach:{}", short_hex(n.cell.as_bytes())),
+                    1,
+                ),
             ],
         });
     }
@@ -281,7 +288,9 @@ fn rows_of(g: &OcapGraph) -> Vec<GraphRow> {
 
 fn text(s: &str) -> ViewTree {
     ViewTree::Text {
-        props: TextProps { text: s.to_string() },
+        props: TextProps {
+            text: s.to_string(),
+        },
     }
 }
 
@@ -376,11 +385,15 @@ mod tests {
 
         // Two cells, one edge.
         assert!(
-            tree.walk().iter().any(|n| n.label() == Some("Ocap web · 2 cells · 1 edges")),
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some("Ocap web · 2 cells · 1 edges")),
             "the header counts the live cells + edges"
         );
         assert!(
-            tree.walk().iter().any(|n| n.label() == Some("Cap edges (holder → target)")),
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some("Cap edges (holder → target)")),
             "the edges section is labeled"
         );
 
@@ -389,7 +402,9 @@ mod tests {
         let b_short = short_hex(b.as_bytes());
         let edge_label = format!("{} → {} @sig", a_short, b_short);
         assert!(
-            tree.walk().iter().any(|n| n.label() == Some(edge_label.as_str())),
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some(edge_label.as_str())),
             "the A → B cap edge is rendered as a row"
         );
 
@@ -418,7 +433,10 @@ mod tests {
             .expect("the authorized relabel reshape is admitted");
         assert_ne!(card.view_source(), source_before, "the view-source changed");
         assert!(
-            edit.tree.walk().iter().any(|n| n.label() == Some("Who can reach what")),
+            edit.tree
+                .walk()
+                .iter()
+                .any(|n| n.label() == Some("Who can reach what")),
             "the re-folded view carries the new section label"
         );
         assert_ne!(
@@ -470,6 +488,10 @@ mod tests {
         });
         assert!(matches!(err, Err(EditError::Unauthorized)));
         assert_eq!(card.view_source(), before, "nothing changed");
-        assert_eq!(card.card().receipt_count(), 0, "no receipt on an unauthorized reshape");
+        assert_eq!(
+            card.card().receipt_count(),
+            0,
+            "no receipt on an unauthorized reshape"
+        );
     }
 }

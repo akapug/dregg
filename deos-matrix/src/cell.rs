@@ -211,7 +211,10 @@ mod tests {
     #[test]
     fn cell_id_is_stable_and_varies() {
         // Stable across calls.
-        assert_eq!(CellId::derive("!room:server"), CellId::derive("!room:server"));
+        assert_eq!(
+            CellId::derive("!room:server"),
+            CellId::derive("!room:server")
+        );
         // Different keys → different ids (the whole 32 bytes, not just a prefix).
         let a = CellId::derive("@ember:deos.local");
         let b = CellId::derive("@grok:deos.local");

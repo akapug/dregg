@@ -67,10 +67,10 @@ use std::sync::Arc;
 
 // NB: the crate is `servo-paint-api` but its `[lib] name` is `paint_api` (verified
 // via `cargo metadata`), so it is imported as `paint_api`, not `servo_paint_api`.
-use paint_api::rendering_context::RenderingContext as ServoRenderingContext;
-use webrender_api::units::DeviceIntRect;
 use dpi::PhysicalSize;
 use image::RgbaImage;
+use paint_api::rendering_context::RenderingContext as ServoRenderingContext;
+use webrender_api::units::DeviceIntRect;
 
 use crate::swgl_context::SwglRenderingContext;
 
@@ -85,7 +85,9 @@ pub struct ServoSwglContext {
 impl ServoSwglContext {
     /// Wrap a SWGL context for use as a real servo `RenderingContext`.
     pub fn new(width: u32, height: u32) -> Self {
-        ServoSwglContext { inner: SwglRenderingContext::new(width, height) }
+        ServoSwglContext {
+            inner: SwglRenderingContext::new(width, height),
+        }
     }
 
     /// The inner SWGL context (for direct frame readback into the compositor seam).
@@ -204,7 +206,8 @@ fn swgl_proc_loader(name: &str) -> *const std::os::raw::c_void {
     // `RTLD_DEFAULT` (0 on macOS, the special handle on glibc) — search the whole
     // process image, where SWGL's bare GL symbols live once `libservo` links it.
     #[cfg(target_os = "macos")]
-    const RTLD_DEFAULT: *mut std::os::raw::c_void = std::ptr::null_mut::<std::os::raw::c_void>().wrapping_offset(-2);
+    const RTLD_DEFAULT: *mut std::os::raw::c_void =
+        std::ptr::null_mut::<std::os::raw::c_void>().wrapping_offset(-2);
     #[cfg(not(target_os = "macos"))]
     const RTLD_DEFAULT: *mut std::os::raw::c_void = std::ptr::null_mut();
 
@@ -333,14 +336,16 @@ impl WebViewDelegate for CapGate {
                 // The cap authorized it, but the audited netlayer could not reach the
                 // peer. The page gets the transport refusal — NOT a silent ambient
                 // fallback to a different socket.
-                let body = format!("dregg: net-cap transport could not reach {origin} ({reason})").into_bytes();
+                let body = format!("dregg: net-cap transport could not reach {origin} ({reason})")
+                    .into_bytes();
                 let url = load.request().url.clone();
                 let mut intercepted = load.intercept(WebResourceResponse::new(url));
                 intercepted.send_body_data(body);
                 intercepted.finish();
                 return;
             }
-            ConnectOutcome::Dialed { .. } => { /* audited session opened — fall through to the gate */ }
+            ConnectOutcome::Dialed { .. } => { /* audited session opened — fall through to the gate */
+            }
         }
         match self.gate.load_web_resource(&self.surface, &origin) {
             ResourceDecision::Continue => { /* not intercepted — proceeds to net */ }
@@ -516,21 +521,18 @@ impl CapGatedHttpEngine {
     /// for http AND https (both permitted by the fork). The handler starts pointed at
     /// `initial_surface`/`initial_seeds`; [`Self::render`] re-points it per page.
     pub fn new(initial_surface: SurfaceCapability, initial_seeds: &[String]) -> Self {
-        let handler = std::sync::Arc::new(CapGatedHttpHandler::new(
-            initial_surface,
-            initial_seeds,
-        ));
+        let handler = std::sync::Arc::new(CapGatedHttpHandler::new(initial_surface, initial_seeds));
         let shared = SharedHttpHandler(handler.clone());
 
         // Register it for BOTH http and https (the fork permits both). servo's
         // `scheme_fetch` consults this handler first for those schemes.
         let mut registry = ProtocolRegistry::default();
-        registry
-            .register("http", shared.clone())
-            .expect("the servo-net fork permits registering an http handler (FORBIDDEN_SCHEMES loosened)");
-        registry
-            .register("https", shared)
-            .expect("the servo-net fork permits registering an https handler (FORBIDDEN_SCHEMES loosened)");
+        registry.register("http", shared.clone()).expect(
+            "the servo-net fork permits registering an http handler (FORBIDDEN_SCHEMES loosened)",
+        );
+        registry.register("https", shared).expect(
+            "the servo-net fork permits registering an https handler (FORBIDDEN_SCHEMES loosened)",
+        );
 
         let servo = ServoBuilder::default()
             .event_loop_waker(Box::new(HeadlessWaker))
@@ -702,7 +704,12 @@ pub fn apply_input(webview: &WebView, input: WebInput) {
             // `WheelDelta.y` positive reveals content ABOVE, so negate `dy` to make
             // "scroll down `dy`px" reveal content below (the intuitive sense).
             webview.notify_input_event(InputEvent::Wheel(WheelEvent::new(
-                WheelDelta { x: dx as f64, y: -(dy as f64), z: 0.0, mode: WheelMode::DeltaPixel },
+                WheelDelta {
+                    x: dx as f64,
+                    y: -(dy as f64),
+                    z: 0.0,
+                    mode: WheelMode::DeltaPixel,
+                },
                 point,
             )));
             // The high-level scroll the paint thread applies to the scroll tree:
@@ -727,9 +734,7 @@ pub fn apply_input(webview: &WebView, input: WebInput) {
         }
         WebInput::MouseMove { x, y } => {
             let point = WebViewPoint::Device(DevicePoint::new(x, y));
-            webview.notify_input_event(InputEvent::MouseMove(
-                servo::MouseMoveEvent::new(point),
-            ));
+            webview.notify_input_event(InputEvent::MouseMove(servo::MouseMoveEvent::new(point)));
         }
     }
 }
@@ -816,11 +821,248 @@ pub fn render_url_then_input_on_servo(
     Some((frame_a, frame_b))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE PERSISTENT LIVE WEBVIEW — the cockpit-pane holder (SERVO-INTERACTIVE §3/§5.1).
+//
+// `render_url_*` above each build a fresh `WebView` per call (the spike shape). To
+// intersperse a LIVE web pane into the gpui cockpit, the pane needs ONE long-lived
+// `WebView` on ONE engine: load a URL, keep it alive, feed it input between paints,
+// and read back the current tile on demand. [`LiveWebView`] is exactly that — the
+// SAME `ServoSwglContext` + `CapGate` + `apply_input` loop the spike proves, only
+// HELD across calls instead of constructed per call.
+//
+// !Send by construction (`servo::Servo`/`WebView` are `Rc`-based); the cockpit is a
+// gpui view that lives on the main thread and drives this under the process-wide
+// `with_gl` SWGL lock, so the single-thread + single-engine discipline holds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use std::cell::RefCell;
+
+thread_local! {
+    /// At most ONE [`LiveWebView`] (hence one `Servo` engine) may exist per process —
+    /// `servo_config::opts` is a process-wide `OnceCell` set once by `ServoBuilder::build`.
+    /// This flag refuses a second concurrent engine so a buggy caller fails loudly
+    /// instead of tripping servo's `OnceCell` re-set panic. Cleared on [`LiveWebView`] drop.
+    static LIVE_WEBVIEW_ALIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A persistent, live `servo::WebView` on its own `servo::Servo` engine, rendering
+/// into a held [`ServoSwglContext`] behind the cap gate — the embeddable web pane.
+///
+/// Build it once ([`LiveWebView::open`]); thereafter [`LiveWebView::apply_input`]
+/// feeds one input event (scroll / click / move / key) and repaints, and
+/// [`LiveWebView::frame`] reads the current RGBA8 tile. This is the "hold ONE
+/// engine + a per-pane WebView, bridge events → `apply_input`, repaint on change"
+/// of `SERVO-INTERACTIVE.md §5.1`, made concrete.
+///
+/// `!Send`: `servo::Servo`/`WebView` are `Rc`-based and servo's options are a
+/// process `OnceCell`, so this lives on ONE thread (the gpui main thread) and all
+/// of its methods MUST be called under [`crate::with_gl`] (the process-wide SWGL
+/// current-context lock) — every public method documents this.
+pub struct LiveWebView {
+    /// The one-per-process engine. Held for the pane's lifetime (re-navigating
+    /// rebuilds the `WebView` on THIS engine, never a second `Servo`).
+    servo: servo::Servo,
+    /// The held SWGL render target the live `WebView` paints into.
+    rendering_context: Rc<ServoSwglContext>,
+    /// The live `WebView` — `None` until [`LiveWebView::open`]/[`LiveWebView::load`]
+    /// builds one. Rebuilt on navigation.
+    webview: Option<WebView>,
+    /// The cap gate delegate for the current `WebView` (carries `frame_ready` /
+    /// `load_complete` + the net-cap audit). Rebuilt alongside `webview`.
+    delegate: Option<Rc<CapGate>>,
+    /// The current tile (the last frame read back). Repainted by [`Self::repaint`].
+    frame: Option<RgbaFrame>,
+    /// The viewport size (device pixels) the context + `WebView` are sized to.
+    size: (u32, u32),
+    /// The URL currently loaded (for status / reload).
+    url: Option<String>,
+}
+
+impl Drop for LiveWebView {
+    fn drop(&mut self) {
+        LIVE_WEBVIEW_ALIVE.with(|a| a.set(false));
+    }
+}
+
+impl LiveWebView {
+    /// Build the persistent engine + SWGL context for a `width`×`height` pane. Does
+    /// NOT load a page yet (call [`Self::load`]). Returns `Err` if a [`LiveWebView`]
+    /// already exists on this process (only one `Servo` engine is permitted — its
+    /// options are a process-wide `OnceCell`).
+    ///
+    /// MUST be called under [`crate::with_gl`].
+    pub fn new(width: u32, height: u32) -> Result<Self, &'static str> {
+        if LIVE_WEBVIEW_ALIVE.with(|a| a.replace(true)) {
+            return Err("a LiveWebView (Servo engine) already exists on this process");
+        }
+        let servo = ServoBuilder::default()
+            .event_loop_waker(Box::new(HeadlessWaker))
+            .build();
+        let rendering_context = Rc::new(ServoSwglContext::new(width, height));
+        let _ = ServoRenderingContext::make_current(&*rendering_context);
+        Ok(LiveWebView {
+            servo,
+            rendering_context,
+            webview: None,
+            delegate: None,
+            frame: None,
+            size: (width, height),
+            url: None,
+        })
+    }
+
+    /// Build the pane AND load `url` through the cap gate, pumping until the page is
+    /// loaded + painted, leaving a live `WebView` ready for input. The convenience
+    /// constructor for "open a live web pane at this URL". MUST be called under
+    /// [`crate::with_gl`].
+    pub fn open(
+        url: &str,
+        surface: SurfaceCapability,
+        width: u32,
+        height: u32,
+        max_spins: usize,
+    ) -> Result<Self, &'static str> {
+        let mut live = Self::new(width, height)?;
+        live.load(url, surface, max_spins);
+        Ok(live)
+    }
+
+    /// Navigate the live pane to `url` (building a fresh `WebView` on the held engine,
+    /// pointed at the held SWGL context, behind a fresh [`CapGate`] for `surface`),
+    /// pump until loaded + painted, and read back the first tile. Re-navigating drops
+    /// the previous `WebView` and builds a new one on the SAME engine (servo's options
+    /// are a process `OnceCell`, so the engine is never rebuilt). MUST be called under
+    /// [`crate::with_gl`]. Returns `true` if a frame was produced.
+    pub fn load(&mut self, url: &str, surface: SurfaceCapability, max_spins: usize) -> bool {
+        use crate::swgl_context::RenderingContext as _;
+        let Ok(parsed) = Url::parse(url) else {
+            return false;
+        };
+
+        let mut seed: Vec<String> = vec![parsed.origin().ascii_serialization()];
+        if let Some(allow) = surface_fetch_allow(&surface) {
+            seed.extend(allow);
+        }
+        let delegate = build_cap_gate(surface, &seed);
+
+        let _ = ServoRenderingContext::make_current(&*self.rendering_context);
+        let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
+            .url(parsed)
+            .delegate(delegate.clone())
+            .build();
+
+        // Pump until loaded AND a frame is ready (bounded), then a few paced extra
+        // spins so the WebRender scene is fully built — the SAME load loop the
+        // headless `render_url_on_servo` uses.
+        let mut spins = 0;
+        while spins < max_spins {
+            self.servo.spin_event_loop();
+            if delegate.load_complete.get() && delegate.frame_ready.get() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            spins += 1;
+        }
+        for _ in 0..16 {
+            self.servo.spin_event_loop();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        self.webview = Some(webview);
+        self.delegate = Some(delegate);
+        self.url = Some(url.to_string());
+        self.repaint();
+        self.frame.is_some()
+    }
+
+    /// Read the current page into the held tile (`WebView::paint` → SWGL back buffer →
+    /// `read_to_image`). Called after a load or an input. MUST be called under
+    /// [`crate::with_gl`].
+    fn repaint(&mut self) {
+        use crate::swgl_context::RenderingContext as _;
+        let Some(webview) = self.webview.as_ref() else {
+            return;
+        };
+        let _ = ServoRenderingContext::make_current(&*self.rendering_context);
+        webview.paint();
+        let (w, h) = self.rendering_context.inner().size();
+        let rect = crate::swgl_context::ReadRect::whole(w, h);
+        self.frame = self.rendering_context.inner().read_to_image(rect);
+    }
+
+    /// **THE LIVE LOOP — feed ONE input event to the live `WebView`, pump the engine,
+    /// and repaint.** A scroll/click/move/key on the cockpit web-pane lowers to a
+    /// [`WebInput`] and lands here: the input is delivered through the SAME
+    /// [`apply_input`] the interactivity spike proves, the actor threads are pumped so
+    /// the input takes effect (scroll-tree update / hit-test / script), and the page is
+    /// repainted. Returns `true` if the resulting tile DIFFERS from the previous one
+    /// (the content digest changed) — the "repaint on change" signal the cockpit uses
+    /// to `cx.notify()`. MUST be called under [`crate::with_gl`].
+    ///
+    /// `pump` bounds how many `spin_event_loop` iterations to drive between the input
+    /// and the repaint (a scroll needs only a handful; a click that runs script may
+    /// want more). The spike uses 256; a live pane uses fewer for responsiveness.
+    pub fn apply_input(&mut self, input: WebInput, pump: usize) -> bool {
+        let Some(webview) = self.webview.as_ref() else {
+            return false;
+        };
+        let before = self.frame.as_ref().map(|f| f.content_digest());
+
+        if let Some(d) = self.delegate.as_ref() {
+            d.frame_ready.set(false);
+        }
+        apply_input(webview, input);
+        for _ in 0..pump {
+            self.servo.spin_event_loop();
+            // A short yield lets servo's worker threads make progress between spins
+            // (the same pacing the headless loops use). Cheap; bounded by `pump`.
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            // Early-out once the engine reports a fresh frame is ready to read back.
+            if self
+                .delegate
+                .as_ref()
+                .map(|d| d.frame_ready.get())
+                .unwrap_or(false)
+            {
+                break;
+            }
+        }
+        self.repaint();
+
+        let after = self.frame.as_ref().map(|f| f.content_digest());
+        before != after
+    }
+
+    /// The current tile (the last frame read back), or `None` before the first load.
+    pub fn frame(&self) -> Option<&RgbaFrame> {
+        self.frame.as_ref()
+    }
+
+    /// The URL currently loaded, if any.
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+
+    /// The viewport size (device pixels) the pane renders at.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// Whether a live `WebView` is currently built (a page has been loaded).
+    pub fn is_loaded(&self) -> bool {
+        self.webview.is_some()
+    }
+}
+
 /// The surface's fetch allowlist as a `Vec<String>` (for seeding reachable peers) —
 /// `None` when the surface is the wildcard root (no finite allowlist to seed beyond
 /// the navigated origin).
 fn surface_fetch_allow(surface: &SurfaceCapability) -> Option<Vec<String>> {
-    surface.fetch_allow.as_ref().map(|s| s.iter().cloned().collect())
+    surface
+        .fetch_allow
+        .as_ref()
+        .map(|s| s.iter().cloned().collect())
 }
 
 #[cfg(test)]
@@ -970,9 +1212,9 @@ mod tests {
             let servo = servo::ServoBuilder::default()
                 .event_loop_waker(Box::new(super::HeadlessWaker))
                 .build();
-            let box_frame =
-                super::render_url_on_servo(&servo, PAGE, surface, W, H, 4096).0
-                    .expect("the real Servo WebView produced a frame for the data: page");
+            let box_frame = super::render_url_on_servo(&servo, PAGE, surface, W, H, 4096)
+                .0
+                .expect("the real Servo WebView produced a frame for the data: page");
             // SECOND page on the SAME engine: a text page, proving glyph layout.
             render_glyph_page(&servo);
             box_frame
@@ -981,7 +1223,11 @@ mod tests {
         // It is a REAL RGBA8 frame of the requested size.
         assert_eq!(frame.width, W);
         assert_eq!(frame.height, H);
-        assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "real RGBA8, 4 bytes/pixel");
+        assert_eq!(
+            frame.bytes.len(),
+            (W * H * 4) as usize,
+            "real RGBA8, 4 bytes/pixel"
+        );
 
         // ── PROVE it is genuine laid-out PAGE content, not an empty/uniform buffer ──
         // The page has two CSS-positioned regions; a real layout+paint produces BOTH
@@ -1010,7 +1256,10 @@ mod tests {
         let png = png_encode_rgba8(frame.width, frame.height, &frame.bytes);
         std::fs::write(&out_path, &png).expect("write the rendered-page PNG");
         let png_len = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
-        assert!(png_len > 100, "the captured PNG is substantial, got {png_len} bytes");
+        assert!(
+            png_len > 100,
+            "the captured PNG is substantial, got {png_len} bytes"
+        );
         println!(
             "WEB_RENDER_PNG_WRITTEN path={out_path} bytes={png_len} dims={W}x{H} \
              distinct_colors={} page='data: blue bg + yellow block (real servo layout)'",
@@ -1043,8 +1292,16 @@ mod tests {
         .expect("the real page's frame is admitted by the gate");
 
         // The commit carries the REAL page pixels' digest + the genuine owner-binding.
-        assert_eq!(commit.digest, frame.content_digest(), "the real page's digest is committed");
-        assert_eq!(commit.label, label_of(&presenter, 7), "T2: the genuine owner-binding");
+        assert_eq!(
+            commit.digest,
+            frame.content_digest(),
+            "the real page's digest is committed"
+        );
+        assert_eq!(
+            commit.label,
+            label_of(&presenter, 7),
+            "T2: the genuine owner-binding"
+        );
         // The glass shows the rendered page's digest byte in the authorized tile.
         assert_eq!(
             compositor.framebuffer_snapshot()[3],
@@ -1076,7 +1333,8 @@ mod tests {
         let presenter = cell_seed(11);
         let surface = SurfaceCapability::root(presenter, AuthRequired::Either);
 
-        let frame = super::render_url_on_servo(servo, PAGE, surface, W, H, 4096).0
+        let frame = super::render_url_on_servo(servo, PAGE, surface, W, H, 4096)
+            .0
             .expect("the real Servo WebView produced a frame for the text page");
 
         assert_eq!(frame.width, W);
@@ -1101,7 +1359,10 @@ mod tests {
             }
         }
         assert!(has_white, "the page background (white) is present");
-        assert!(has_dark, "glyph ink (near-black) is present — real text was rasterized");
+        assert!(
+            has_dark,
+            "glyph ink (near-black) is present — real text was rasterized"
+        );
         assert!(
             has_intermediate,
             "antialiased glyph edges (gray intermediates) are present — a box/clear render \
@@ -1167,7 +1428,12 @@ mod tests {
                 H,
                 // Scroll down 450px at the viewport center — past the first block, so the
                 // lime block enters view.
-                super::WebInput::Scroll { x: 120.0, y: 100.0, dx: 0.0, dy: 450.0 },
+                super::WebInput::Scroll {
+                    x: 120.0,
+                    y: 100.0,
+                    dx: 0.0,
+                    dy: 450.0,
+                },
                 4096,
             )
             .expect("the live WebView produced both a pre- and post-scroll frame")
@@ -1245,7 +1511,10 @@ mod tests {
 
         // The cap-denied origin: refused at the socket, NO dial.
         let denied = gate.decide_net_cap("https://evil.com");
-        assert!(denied.refused_by_cap(), "evil.com is refused by the held cap: {denied:?}");
+        assert!(
+            denied.refused_by_cap(),
+            "evil.com is refused by the held cap: {denied:?}"
+        );
         assert!(
             gate.connector.dialed_origins().is_empty(),
             "Netlayer::dial was NEVER called for the cap-denied origin — the socket never opened"
@@ -1253,9 +1522,16 @@ mod tests {
 
         // The cap-authorized origin: dials through the audited netlayer.
         let allowed = gate.decide_net_cap("https://example.com");
-        assert!(allowed.dialed(), "example.com dials through the netlayer: {allowed:?}");
+        assert!(
+            allowed.dialed(),
+            "example.com dials through the netlayer: {allowed:?}"
+        );
         let dialed = gate.connector.dialed_origins();
-        assert_eq!(dialed.len(), 1, "exactly the authorized origin opened an audited session");
+        assert_eq!(
+            dialed.len(),
+            1,
+            "exactly the authorized origin opened an audited session"
+        );
         assert_eq!(dialed[0].0, "https://example.com");
 
         // The audit trail recorded BOTH decisions (refused, then dialed), newest last.

@@ -1864,8 +1864,16 @@ async fn handle_blocklace_message(
             vote,
             signature,
         } => {
-            tally_returned_vote(state, from, proposal_id, forest_hash, voter, vote, signature)
-                .await;
+            tally_returned_vote(
+                state,
+                from,
+                proposal_id,
+                forest_hash,
+                voter,
+                vote,
+                signature,
+            )
+            .await;
             return;
         }
 
@@ -5505,7 +5513,11 @@ mod tests {
             args: vec![],
             authorization: dregg_turn::Authorization::Unchecked,
             preconditions: dregg_cell::Preconditions::default(),
-            effects: vec![dregg_turn::Effect::Transfer { from, to, amount: 10 }],
+            effects: vec![dregg_turn::Effect::Transfer {
+                from,
+                to,
+                amount: 10,
+            }],
             may_delegate: dregg_turn::DelegationMode::None,
             commitment_mode: dregg_turn::CommitmentMode::Full,
             balance_change: None,
@@ -5721,13 +5733,8 @@ mod tests {
         };
         let mut call_forest = dregg_turn::CallForest::new();
         call_forest.add_root(transfer);
-        let forest = dregg_coord::AtomicForest::new(
-            vec![node_a, node_b],
-            call_forest,
-            vec![],
-            cell_a,
-            0,
-        );
+        let forest =
+            dregg_coord::AtomicForest::new(vec![node_a, node_b], call_forest, vec![], cell_a, 0);
         let forest_hash = forest.hash;
         let mut participant_keys = HashMap::new();
         participant_keys.insert(node_a, node_a);
@@ -5821,8 +5828,16 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
         let from: SocketAddr = "127.0.0.1:50001".parse().unwrap();
-        tally_returned_vote(&state, from, [0x77; 32], [0x88; 32], [0x0b; 32], true, vec![0u8; 64])
-            .await;
+        tally_returned_vote(
+            &state,
+            from,
+            [0x77; 32],
+            [0x88; 32],
+            [0x0b; 32],
+            true,
+            vec![0u8; 64],
+        )
+        .await;
         let s = state.read().await;
         assert!(
             s.atomic_proposals.is_empty(),

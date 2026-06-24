@@ -61,8 +61,8 @@ fn zlib_stored(raw: &[u8]) -> Vec<u8> {
     let mut z = Vec::new();
     z.push(0x78); // CMF: deflate, 32K window
     z.push(0x01); // FLG: check bits make 0x7801 a multiple of 31, no preset dict
-    // STORED blocks: each is [BFINAL(1)|BTYPE=00 (2)] padded to a byte, then
-    // LEN(LE16), NLEN(~LEN, LE16), then LEN literal bytes. Max LEN per block = 65535.
+                  // STORED blocks: each is [BFINAL(1)|BTYPE=00 (2)] padded to a byte, then
+                  // LEN(LE16), NLEN(~LEN, LE16), then LEN literal bytes. Max LEN per block = 65535.
     let mut off = 0usize;
     while off < raw.len() {
         let take = (raw.len() - off).min(0xFFFF);
@@ -119,7 +119,12 @@ fn render_demo_frame(w: u32, h: u32, bg: (u8, u8, u8, u8), inner: (u8, u8, u8, u
         let swgl = ctx.swgl_context();
 
         let (r, g, b, a) = bg;
-        glh.clear_color(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0);
+        glh.clear_color(
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            a as f32 / 255.0,
+        );
         glh.clear(gl::COLOR_BUFFER_BIT);
 
         // A centered box covering the middle half, in `inner`.
@@ -129,8 +134,15 @@ fn render_demo_frame(w: u32, h: u32, bg: (u8, u8, u8, u8), inner: (u8, u8, u8, u
         let bh = (h / 2) as i32;
         let (ir, ig, ib, ia) = inner;
         swgl.clear_color_rect(
-            0, bx, by, bw, bh,
-            ir as f32 / 255.0, ig as f32 / 255.0, ib as f32 / 255.0, ia as f32 / 255.0,
+            0,
+            bx,
+            by,
+            bw,
+            bh,
+            ir as f32 / 255.0,
+            ig as f32 / 255.0,
+            ib as f32 / 255.0,
+            ia as f32 / 255.0,
         );
         ctx.present();
         ctx.read_frame()
@@ -149,14 +161,21 @@ fn swgl_renders_a_real_frame_and_writes_a_png() {
     // ── the pixels are sane ──
     assert_eq!(frame.width, W);
     assert_eq!(frame.height, H);
-    assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "RGBA8 = 4 bytes/pixel");
+    assert_eq!(
+        frame.bytes.len(),
+        (W * H * 4) as usize,
+        "RGBA8 = 4 bytes/pixel"
+    );
     // a corner is the background; the center is the inner box.
     assert_eq!(frame.pixel(2, 2), bg, "corner is the slate background");
     assert_eq!(frame.pixel(W / 2, H / 2), inner, "center is the amber box");
     // not a flat image: at least two distinct colors really rasterized.
     let center = frame.pixel(W / 2, H / 2);
     let corner = frame.pixel(2, 2);
-    assert_ne!(center, corner, "the frame is non-trivial (box != background)");
+    assert_ne!(
+        center, corner,
+        "the frame is non-trivial (box != background)"
+    );
 
     // ── write the PNG artifact ──
     let out_path = std::env::var("SWGL_PNG_OUT").unwrap_or_else(|_| {
@@ -165,9 +184,17 @@ fn swgl_renders_a_real_frame_and_writes_a_png() {
         p.to_string_lossy().into_owned()
     });
     let png = encode_png(&frame);
-    assert!(png.len() > 100, "encoded PNG should be substantial, got {} bytes", png.len());
+    assert!(
+        png.len() > 100,
+        "encoded PNG should be substantial, got {} bytes",
+        png.len()
+    );
     // PNG magic is present.
-    assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A], "PNG signature");
+    assert_eq!(
+        &png[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "PNG signature"
+    );
 
     let mut f = std::fs::File::create(&out_path).expect("create PNG output file");
     f.write_all(&png).expect("write PNG bytes");

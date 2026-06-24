@@ -108,7 +108,9 @@
 use crate::cell::CellMode;
 use crate::factory::{CapTarget, CapTemplate, ChildVkStrategy, FactoryDescriptor};
 use crate::permissions::AuthRequired;
-use crate::program::{CellProgram, HashKind, SimpleStateConstraint, StateConstraint, field_from_u64};
+use crate::program::{
+    CellProgram, HashKind, SimpleStateConstraint, StateConstraint, field_from_u64,
+};
 use crate::state::{FIELD_ZERO, FieldElement};
 
 // =============================================================================
@@ -224,13 +226,19 @@ impl std::fmt::Display for BlueprintError {
                 write!(f, "allowance per-epoch ceiling must be nonzero")
             }
             BlueprintError::ZeroEpochLength => {
-                write!(f, "allowance epoch length must be a nonzero number of blocks")
+                write!(
+                    f,
+                    "allowance epoch length must be a nonzero number of blocks"
+                )
             }
             BlueprintError::ZeroAmount => {
                 write!(f, "standing-obligation amount per period must be nonzero")
             }
             BlueprintError::ZeroPeriod => {
-                write!(f, "standing-obligation period length must be a nonzero number of blocks")
+                write!(
+                    f,
+                    "standing-obligation period length must be a nonzero number of blocks"
+                )
             }
         }
     }
@@ -733,7 +741,10 @@ pub fn vault_state_constraints(terms: &VaultTerms) -> Result<Vec<StateConstraint
                 (field_from_u64(STATE_UNINIT), field_from_u64(STATE_UNINIT)),
                 (field_from_u64(STATE_UNINIT), field_from_u64(STATE_OPEN)),
                 (field_from_u64(STATE_OPEN), field_from_u64(STATE_OPEN)),
-                (field_from_u64(STATE_OPEN), field_from_u64(VAULT_STATE_CLAIMED)),
+                (
+                    field_from_u64(STATE_OPEN),
+                    field_from_u64(VAULT_STATE_CLAIMED),
+                ),
             ],
         },
         // ── 3. the RELEASE gate: entering CLAIMED requires the condition met ──
@@ -1087,7 +1098,10 @@ pub fn standing_obligation_state_constraints(
         // ── 1. deal-term integrity / no-forge schedule (Lean: the four Immutable
         //       deal terms — beneficiary/amount/period/start) ──
         pin_term(OBLIGATION_BENEFICIARY_SLOT, terms.beneficiary),
-        pin_term(OBLIGATION_AMOUNT_SLOT, field_from_u64(terms.amount_per_period)),
+        pin_term(
+            OBLIGATION_AMOUNT_SLOT,
+            field_from_u64(terms.amount_per_period),
+        ),
         pin_term(OBLIGATION_PERIOD_SLOT, field_from_u64(terms.period)),
         pin_term(OBLIGATION_START_SLOT, field_from_u64(terms.start)),
         // ── 2. the perpetual lifecycle: OPEN is live and stays live (no terminal
@@ -1142,9 +1156,9 @@ pub fn standing_obligation_state_constraints(
 pub fn standing_obligation_cell_program(
     terms: &StandingObligationTerms,
 ) -> Result<CellProgram, BlueprintError> {
-    Ok(CellProgram::Predicate(standing_obligation_state_constraints(
-        terms,
-    )?))
+    Ok(CellProgram::Predicate(
+        standing_obligation_state_constraints(terms)?,
+    ))
 }
 
 /// **The standing-obligation factory (per-schedule, content-addressed)** — HOUSE
@@ -2835,7 +2849,10 @@ mod tests {
             },
         })
         .unwrap();
-        assert_ne!(a.factory_vk, c.factory_vk, "different lock → different factory");
+        assert_ne!(
+            a.factory_vk, c.factory_vk,
+            "different lock → different factory"
+        );
         // a hash-lock vault is a distinct factory from a timelock vault:
         let h = vault_factory_descriptor(&hashlock_terms()).unwrap();
         assert_ne!(a.factory_vk, h.factory_vk);

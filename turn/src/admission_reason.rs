@@ -108,9 +108,7 @@ impl AdmissionReason {
             Self::AgentFrozen => {
                 "refused: the agent cell is frozen for migration; no turns may execute against it"
             }
-            Self::WriteSetFrozen => {
-                "refused: a cell this turn would write is frozen for migration"
-            }
+            Self::WriteSetFrozen => "refused: a cell this turn would write is frozen for migration",
             Self::ChainHeadMismatch => {
                 "refused: the turn's previous-receipt-hash does not match the agent's receipt-chain head"
             }
@@ -167,7 +165,10 @@ mod tests {
             AdmissionReason::OverBudget,
         ];
         for r in all {
-            assert!(r.explain().starts_with("refused:"), "{r:?} explains a refusal");
+            assert!(
+                r.explain().starts_with("refused:"),
+                "{r:?} explains a refusal"
+            );
             assert_eq!(r.to_string(), r.explain());
         }
         assert!(!AdmissionReason::Admitted.explain().starts_with("refused:"));

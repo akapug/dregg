@@ -49,7 +49,10 @@ fn main() {
             "  threshold source (the highlighted quote) : {}",
             step.threshold_text
         );
-        println!("  provenance height                        : {}", step.height);
+        println!(
+            "  provenance height                        : {}",
+            step.height
+        );
         println!(
             "  weaker-viewer darkened spans             : {} (citation preserved, bytes withheld)",
             step.darkened

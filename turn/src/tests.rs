@@ -9269,7 +9269,9 @@ mod privacy_wiring {
             min_fee: 0,
             conflict_set_commitment: conflict_set.commitment(),
         };
-        let signature = signing_key.sign(&public_inputs.signing_message()).to_bytes();
+        let signature = signing_key
+            .sign(&public_inputs.signing_message())
+            .to_bytes();
         let validity_proof = TurnValidityProof {
             proof_bytes: vec![],
             public_inputs,
@@ -9350,13 +9352,14 @@ mod privacy_wiring {
 
         // The agent cell is derived from the signing key the same way the
         // ingress binding expects (derive_raw(key, blake3("default"))).
-        let (encrypted, agent_id) =
-            build_authenticated_encrypted_turn(0x42, 500, &executor_pub);
+        let (encrypted, agent_id) = build_authenticated_encrypted_turn(0x42, 500, &executor_pub);
 
         // Fund the matching agent cell with open permissions so execution can
         // reach commit (we are testing the validity GATE, not authorization).
         let token_id = *blake3::hash(b"default").as_bytes();
-        let pubkey = SigningKey::from_bytes(&[0x42u8; 32]).verifying_key().to_bytes();
+        let pubkey = SigningKey::from_bytes(&[0x42u8; 32])
+            .verifying_key()
+            .to_bytes();
         let mut cell = Cell::with_balance(pubkey, token_id, 1_000_000);
         cell.permissions = Permissions {
             send: AuthRequired::None,

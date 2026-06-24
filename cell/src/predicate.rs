@@ -1554,9 +1554,7 @@ impl DfaAcceptanceVerifier {
     /// Extract the classified input bytes from the predicate input. `Dfa`
     /// predicates classify either a raw byte witness (`InputRef::Witness`) or a
     /// 32-byte slot value (`InputRef::Slot`).
-    fn input_bytes<'a>(
-        input: &'a PredicateInput<'a>,
-    ) -> Result<&'a [u8], WitnessedPredicateError> {
+    fn input_bytes<'a>(input: &'a PredicateInput<'a>) -> Result<&'a [u8], WitnessedPredicateError> {
         match input {
             PredicateInput::Bytes(b) => Ok(b),
             PredicateInput::Slot(s) => Ok(&s[..]),

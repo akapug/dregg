@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use deos_js::card_editor::{Author, CardEditor, ViewPatch, ViewTree};
-use deos_js::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
+use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use deos_js::Applet;
 use dregg_cell::AuthRequired;
 use gpui::AppContext;
@@ -120,7 +120,11 @@ fn body() {
         .expect("the view-patch is admitted");
 
     // The edit is a receipted patch (a provenance turn landed on the card's chain).
-    assert_ne!(edit.receipt.receipt_hash(), [0u8; 32], "the view edit left a receipt");
+    assert_ne!(
+        edit.receipt.receipt_hash(),
+        [0u8; 32],
+        "the view edit left a receipt"
+    );
     assert!(
         edit.tree.has_button_for("inc"),
         "the re-folded card view-tree carries the new button"

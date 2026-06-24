@@ -38,7 +38,7 @@
 //!   attested, per-viewer bundle projection those consume.
 
 use starbridge_web_surface::{
-    rehydrate, Membrane, OriginChrome, Rehydration, RehydrateError, SurfaceCapability, Sturdyref,
+    rehydrate, Membrane, OriginChrome, RehydrateError, Rehydration, Sturdyref, SurfaceCapability,
     WebOfCells,
 };
 
@@ -143,7 +143,10 @@ impl DomSnapshot {
             manifest_digest: bundle.manifest().digest(),
             asset_names: bundle.manifest().asset_names(),
         };
-        Ok(DomSnapshot { sturdyref, boundary })
+        Ok(DomSnapshot {
+            sturdyref,
+            boundary,
+        })
     }
 
     /// The number of asset names in the frustum boundary (the extent of what could
@@ -352,7 +355,11 @@ mod tests {
             vec![
                 BundleAsset::new("index.html", "text/html", b"<h1>app</h1>".to_vec()),
                 BundleAsset::new("app.js", "application/javascript", b"run()".to_vec()),
-                BundleAsset::new("secret.js", "application/javascript", b"privileged()".to_vec()),
+                BundleAsset::new(
+                    "secret.js",
+                    "application/javascript",
+                    b"privileged()".to_vec(),
+                ),
             ],
         )
         .expect("valid bundle");
@@ -383,8 +390,7 @@ mod tests {
             .iter()
             .map(|n| WebBundle::asset_origin(cell, n))
             .collect();
-        let lineage =
-            SurfaceCapability::scoped(cell, lineage_rights, origins(&all_origins), []);
+        let lineage = SurfaceCapability::scoped(cell, lineage_rights, origins(&all_origins), []);
 
         // Re-publish with the real lineage in the sturdyref (a fresh web so the cell
         // id is identical — same seed, same derivation).
@@ -419,7 +425,11 @@ mod tests {
         assert_eq!(snapshot.boundary_extent(), 3); // three asset names
         assert_eq!(
             snapshot.boundary.asset_names,
-            vec!["app.js".to_string(), "index.html".to_string(), "secret.js".to_string()]
+            vec![
+                "app.js".to_string(),
+                "index.html".to_string(),
+                "secret.js".to_string()
+            ]
         );
         // The boundary carries a manifest digest (32 bytes), NOT the asset bytes.
         assert_ne!(snapshot.boundary.manifest_digest, [0u8; 32]);
@@ -501,21 +511,27 @@ mod tests {
         // regardless of which assets it asked for.
         let bundle = WebBundle::static_html(b"<h1>confidential</h1>".to_vec());
         let mut web = WebOfCells::new(3);
-        let lineage = SurfaceCapability::root(cid(40), AuthRequired::Custom { vk_hash: [0xAA; 32] });
-        let (_uri, sturdyref) = publish_bundle(
-            &mut web,
-            40,
-            &bundle,
-            lineage,
-            InteractionLog::new(),
-            false,
+        let lineage = SurfaceCapability::root(
+            cid(40),
+            AuthRequired::Custom {
+                vk_hash: [0xAA; 32],
+            },
         );
+        let (_uri, sturdyref) =
+            publish_bundle(&mut web, 40, &bundle, lineage, InteractionLog::new(), false);
         let snapshot = DomSnapshot::take(&bundle, sturdyref).expect("snapshot");
 
-        let incomparable =
-            Membrane::new(SurfaceCapability::root(cid(41), AuthRequired::Custom { vk_hash: [0xBB; 32] }));
+        let incomparable = Membrane::new(SurfaceCapability::root(
+            cid(41),
+            AuthRequired::Custom {
+                vk_hash: [0xBB; 32],
+            },
+        ));
         let r = rehydrate_bundle(&snapshot, &incomparable, &web);
-        assert_eq!(r, Err(SnapshotError::Rehydrate(RehydrateError::Amplification)));
+        assert_eq!(
+            r,
+            Err(SnapshotError::Rehydrate(RehydrateError::Amplification))
+        );
     }
 
     // ── A scene whose committed content is NOT a bundle re-expands NOTHING,
@@ -533,7 +549,11 @@ mod tests {
         let intended = WebBundle::static_html(b"the bundle the surface meant to carry".to_vec());
         let mut web = WebOfCells::new(3);
         // The sturdyref points at a cell that committed RAW, non-bundle bytes.
-        let raw_uri = web.publish(50, b"raw bytes that are not a bundle encoding", "dregg://raw");
+        let raw_uri = web.publish(
+            50,
+            b"raw bytes that are not a bundle encoding",
+            "dregg://raw",
+        );
         let raw_cell = raw_uri.cell;
         let sturdyref = starbridge_web_surface::Sturdyref::new(
             raw_uri,
@@ -557,7 +577,10 @@ mod tests {
         // content.
         let full = Membrane::new(SurfaceCapability::root(cid(51), AuthRequired::None));
         let r = rehydrate_bundle(&snapshot, &full, &web);
-        assert_eq!(r, Err(SnapshotError::Bundle(BundleError::MalformedEncoding)));
+        assert_eq!(
+            r,
+            Err(SnapshotError::Bundle(BundleError::MalformedEncoding))
+        );
     }
 
     // ── The liveness-type is DERIVED and carries through. ──
@@ -605,8 +628,14 @@ mod tests {
         let other = WebBundle::static_html(b"a DIFFERENT bundle".to_vec());
         let mut web = WebOfCells::new(3);
         let lineage = SurfaceCapability::root(cid(70), AuthRequired::Either);
-        let (_uri, sturdyref) =
-            publish_bundle(&mut web, 70, &published, lineage, InteractionLog::new(), false);
+        let (_uri, sturdyref) = publish_bundle(
+            &mut web,
+            70,
+            &published,
+            lineage,
+            InteractionLog::new(),
+            false,
+        );
 
         // Take the snapshot against `other` (so its boundary digest ≠ the published
         // bundle's), but with the published bundle's sturdyref.

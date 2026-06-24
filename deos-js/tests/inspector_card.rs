@@ -87,7 +87,9 @@ fn firing_an_affordance_from_the_inspector_advances_the_bound_field() {
     let mut card = focused_inspector();
     assert_eq!(card.get_u64(0), 1, "the counter starts at its seed (1)");
 
-    let receipt = card.fire("inc", 1).expect("the `inc` affordance fires a verified turn");
+    let receipt = card
+        .fire("inc", 1)
+        .expect("the `inc` affordance fires a verified turn");
     assert_ne!(
         receipt.receipt_hash(),
         [0u8; 32],
@@ -127,11 +129,18 @@ fn editing_the_inspector_view_from_within_is_a_receipted_patch_with_blame() {
         "the inspector's view-source changed (it reshaped from within)"
     );
     assert!(
-        edit.tree.walk().iter().any(|n| n.label() == Some("Substance")),
+        edit.tree
+            .walk()
+            .iter()
+            .any(|n| n.label() == Some("Substance")),
         "the re-folded view-tree carries the new face label"
     );
     assert!(
-        !edit.tree.walk().iter().any(|n| n.label() == Some("Cell State")),
+        !edit
+            .tree
+            .walk()
+            .iter()
+            .any(|n| n.label() == Some("Cell State")),
         "the old label is gone"
     );
 

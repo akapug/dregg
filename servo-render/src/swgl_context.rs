@@ -88,7 +88,12 @@ pub struct ReadRect {
 impl ReadRect {
     /// The whole framebuffer (origin, full size).
     pub fn whole(width: u32, height: u32) -> Self {
-        ReadRect { x: 0, y: 0, width: width as i32, height: height as i32 }
+        ReadRect {
+            x: 0,
+            y: 0,
+            width: width as i32,
+            height: height as i32,
+        }
     }
 }
 
@@ -108,7 +113,12 @@ impl RgbaFrame {
     /// The pixel at `(x, y)` as `(r, g, b, a)`. Panics out of bounds (test helper).
     pub fn pixel(&self, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * self.width + x) * 4) as usize;
-        (self.bytes[i], self.bytes[i + 1], self.bytes[i + 2], self.bytes[i + 3])
+        (
+            self.bytes[i],
+            self.bytes[i + 1],
+            self.bytes[i + 2],
+            self.bytes[i + 3],
+        )
     }
 
     /// `blake3(bytes)` truncated to a `u64` — the bind from these REAL pixels to
@@ -188,7 +198,10 @@ impl SwglRenderingContext {
     pub fn new(width: u32, height: u32) -> Self {
         let swgl = swgl::Context::create();
         let gl: Rc<dyn Gl> = Rc::new(swgl);
-        let buffer = Box::new(std::cell::RefCell::new(vec![0u8; (width * height * 4) as usize]));
+        let buffer = Box::new(std::cell::RefCell::new(vec![
+            0u8;
+            (width * height * 4) as usize
+        ]));
 
         let ctx = SwglRenderingContext {
             swgl,
@@ -249,14 +262,9 @@ impl RenderingContext for SwglRenderingContext {
         // gleam `Gl::read_pixels` — allocates a `Vec<u8>` of w*h*4 and fills it
         // from the framebuffer. This is the EXACT call servo's
         // `Framebuffer::read_framebuffer_to_image` makes.
-        let pixels = self.gl.read_pixels(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            RGBA,
-            UNSIGNED_BYTE,
-        );
+        let pixels =
+            self.gl
+                .read_pixels(rect.x, rect.y, rect.width, rect.height, RGBA, UNSIGNED_BYTE);
         Some(RgbaFrame {
             width: rect.width as u32,
             height: rect.height as u32,
@@ -274,7 +282,9 @@ impl RenderingContext for SwglRenderingContext {
         }
         self.width.set(width);
         self.height.set(height);
-        self.buffer.borrow_mut().resize((width * height * 4) as usize, 0);
+        self.buffer
+            .borrow_mut()
+            .resize((width * height * 4) as usize, 0);
         self.bind_default_framebuffer();
     }
 
@@ -322,7 +332,12 @@ mod tests {
             // Drive the SWGL GL: set the clear color (normalized 0..1) and clear the
             // color buffer. This is real CPU rasterization into our buffer.
             let gl = ctx.gleam_gl_api();
-            gl.clear_color(R as f32 / 255.0, G as f32 / 255.0, B as f32 / 255.0, A as f32 / 255.0);
+            gl.clear_color(
+                R as f32 / 255.0,
+                G as f32 / 255.0,
+                B as f32 / 255.0,
+                A as f32 / 255.0,
+            );
             gl.clear(gl::COLOR_BUFFER_BIT);
             ctx.present();
 
@@ -332,7 +347,11 @@ mod tests {
 
         assert_eq!(frame.width, W);
         assert_eq!(frame.height, H);
-        assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "RGBA8 = 4 bytes/pixel");
+        assert_eq!(
+            frame.bytes.len(),
+            (W * H * 4) as usize,
+            "RGBA8 = 4 bytes/pixel"
+        );
 
         // Every pixel must be the cleared color.
         for y in 0..H {
@@ -388,8 +407,16 @@ mod tests {
 
         // Inside the box (e.g. (5,5)) is green; outside (e.g. (0,0), (20,20)) is red.
         assert_eq!(frame.pixel(5, 5), (0, 255, 0, 255), "the sub-rect is green");
-        assert_eq!(frame.pixel(0, 0), (255, 0, 0, 255), "corner is background red");
-        assert_eq!(frame.pixel(20, 20), (255, 0, 0, 255), "outside the box is red");
+        assert_eq!(
+            frame.pixel(0, 0),
+            (255, 0, 0, 255),
+            "corner is background red"
+        );
+        assert_eq!(
+            frame.pixel(20, 20),
+            (255, 0, 0, 255),
+            "outside the box is red"
+        );
     }
 
     /// The pixels→digest bind is deterministic and content-sensitive: two
@@ -397,9 +424,25 @@ mod tests {
     /// same — the property the compositor's F3 closure relies on.
     #[test]
     fn content_digest_binds_the_real_pixels() {
-        let a = RgbaFrame { width: 1, height: 1, bytes: vec![1, 2, 3, 4] };
-        let b = RgbaFrame { width: 1, height: 1, bytes: vec![1, 2, 3, 5] };
-        assert_eq!(a.content_digest(), a.content_digest(), "digest is a function");
-        assert_ne!(a.content_digest(), b.content_digest(), "different pixels ⇒ different digest");
+        let a = RgbaFrame {
+            width: 1,
+            height: 1,
+            bytes: vec![1, 2, 3, 4],
+        };
+        let b = RgbaFrame {
+            width: 1,
+            height: 1,
+            bytes: vec![1, 2, 3, 5],
+        };
+        assert_eq!(
+            a.content_digest(),
+            a.content_digest(),
+            "digest is a function"
+        );
+        assert_ne!(
+            a.content_digest(),
+            b.content_digest(),
+            "different pixels ⇒ different digest"
+        );
     }
 }

@@ -291,10 +291,7 @@ impl Stitcher {
         let patch = doc.edit(resolver, new_text);
         // Adopt the doc's history (it has appended the edit patch).
         self.history = doc.history().clone();
-        Some(StitchReceipt {
-            patch,
-            resolver,
-        })
+        Some(StitchReceipt { patch, resolver })
     }
 
     /// BLAME — attribute every current source line to its authoring patch + author.
@@ -374,9 +371,16 @@ mod tests {
         let (ours, theirs) = divergent_branches();
         let st = Stitcher::from_branches(&ours, &theirs);
 
-        assert!(st.has_conflict(), "two overlapping edits MUST surface a conflict");
+        assert!(
+            st.has_conflict(),
+            "two overlapping edits MUST surface a conflict"
+        );
         let conflicts = st.conflicts();
-        assert_eq!(conflicts.len(), 1, "exactly one conflict region: {conflicts:?}");
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "exactly one conflict region: {conflicts:?}"
+        );
 
         let c = &conflicts[0];
         assert!(!c.is_field, "this is a prose antichain, not a field clash");
@@ -385,11 +389,20 @@ mod tests {
         // Both authors' text is present, each attributed to who wrote it (a fact,
         // never a guess) — the loser is never hidden.
         let texts: Vec<&str> = c.alternatives.iter().map(|a| a.text.as_str()).collect();
-        assert!(texts.iter().any(|t| t.contains("alice's take")), "alice surfaced: {texts:?}");
-        assert!(texts.iter().any(|t| t.contains("bob's take")), "bob surfaced: {texts:?}");
+        assert!(
+            texts.iter().any(|t| t.contains("alice's take")),
+            "alice surfaced: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("bob's take")),
+            "bob surfaced: {texts:?}"
+        );
 
         let authors: Vec<Author> = c.alternatives.iter().map(|a| a.provenance.author).collect();
-        assert!(authors.contains(&Author(1)), "alice attributed: {authors:?}");
+        assert!(
+            authors.contains(&Author(1)),
+            "alice attributed: {authors:?}"
+        );
         assert!(authors.contains(&Author(2)), "bob attributed: {authors:?}");
     }
 
@@ -417,13 +430,23 @@ mod tests {
         // The resolution is a RECEIPTED turn: a new patch in the history.
         assert!(receipt.patch.0 != 0, "the receipt carries a real patch id");
         assert_eq!(receipt.resolver, Author(1), "alice settled it");
-        assert_eq!(st.history().len(), before_len + 1, "exactly one resolution turn committed");
+        assert_eq!(
+            st.history().len(),
+            before_len + 1,
+            "exactly one resolution turn committed"
+        );
 
         // The antichain collapsed: the document is clean and reads the CHOSEN content.
         assert!(!st.has_conflict(), "the pick collapsed the conflict");
         let text = st.rendered().to_marked_string();
-        assert!(text.contains("alice's take"), "kept the chosen content: {text:?}");
-        assert!(!text.contains("bob's take"), "the loser is dropped from the reading: {text:?}");
+        assert!(
+            text.contains("alice's take"),
+            "kept the chosen content: {text:?}"
+        );
+        assert!(
+            !text.contains("bob's take"),
+            "the loser is dropped from the reading: {text:?}"
+        );
 
         // The loser is dropped-but-PROVENANCED, not silently lost: bob's atom is
         // still in the graph, tombstoned, carrying his authorship.
@@ -432,7 +455,10 @@ mod tests {
             .atoms()
             .find(|a| a.content.contains("bob's take"))
             .expect("bob's atom is retained in the graph (provenance, not deletion)");
-        assert!(!bob_atom.is_alive(), "bob's branch is tombstoned (dropped from the walk)");
+        assert!(
+            !bob_atom.is_alive(),
+            "bob's branch is tombstoned (dropped from the walk)"
+        );
         assert_eq!(
             bob_atom.provenance.author,
             Author(2),
@@ -453,10 +479,16 @@ mod tests {
             .expect("a two-way fork offers an order-both choice");
         st.resolve(&order);
 
-        assert!(!st.has_conflict(), "ordering collapses the antichain into a chain");
+        assert!(
+            !st.has_conflict(),
+            "ordering collapses the antichain into a chain"
+        );
         let text = st.rendered().to_marked_string();
         assert!(text.contains("alice's take"), "alice kept: {text:?}");
-        assert!(text.contains("bob's take"), "bob kept too — nothing lost: {text:?}");
+        assert!(
+            text.contains("bob's take"),
+            "bob kept too — nothing lost: {text:?}"
+        );
     }
 
     #[test]
@@ -469,11 +501,24 @@ mod tests {
             .custom_resolution(0, Side::A, Author(9), "shared\nthe agreed wording\n")
             .expect("a two-way fork accepts a custom resolution");
 
-        assert!(!st.has_conflict(), "the custom resolution collapsed the conflict");
+        assert!(
+            !st.has_conflict(),
+            "the custom resolution collapsed the conflict"
+        );
         let text = st.rendered().to_marked_string();
-        assert!(text.contains("the agreed wording"), "reads the typed reading: {text:?}");
-        assert!(text.contains("shared"), "the clean prefix survives: {text:?}");
-        assert_eq!(receipt.resolver, Author(9), "the custom resolver authored it");
+        assert!(
+            text.contains("the agreed wording"),
+            "reads the typed reading: {text:?}"
+        );
+        assert!(
+            text.contains("shared"),
+            "the clean prefix survives: {text:?}"
+        );
+        assert_eq!(
+            receipt.resolver,
+            Author(9),
+            "the custom resolver authored it"
+        );
     }
 
     #[test]
@@ -494,7 +539,10 @@ mod tests {
         // the surface still must not invent a region for a clean document — assert
         // the contract on a truly clean stitch.
         if !st.has_conflict() {
-            assert!(st.conflicts().is_empty(), "clean doc => no conflicts to surface");
+            assert!(
+                st.conflicts().is_empty(),
+                "clean doc => no conflicts to surface"
+            );
         }
     }
 
@@ -515,7 +563,9 @@ mod tests {
         // attributed to alice; the resolution turn authored only the tombstone.
         let lines = st.blame();
         assert!(
-            lines.iter().any(|l| l.content.contains("alice's take") && l.author == Author(1)),
+            lines
+                .iter()
+                .any(|l| l.content.contains("alice's take") && l.author == Author(1)),
             "the kept line is blamed to its author: {lines:?}"
         );
         assert!(

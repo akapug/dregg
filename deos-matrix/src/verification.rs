@@ -208,15 +208,24 @@ impl VerificationFlow {
                     .cancel_info()
                     .map(|c| c.reason().to_string())
                     .unwrap_or_else(|| "cancelled".into());
-                return SasProgress { phase: VerificationPhase::Cancelled(reason), is_self_verification: is_self };
+                return SasProgress {
+                    phase: VerificationPhase::Cancelled(reason),
+                    is_self_verification: is_self,
+                };
             }
             if sas.is_done() {
-                return SasProgress { phase: VerificationPhase::Done, is_self_verification: is_self };
+                return SasProgress {
+                    phase: VerificationPhase::Done,
+                    is_self_verification: is_self,
+                };
             }
             if let Some(emoji) = sas.emoji() {
                 let emoji = emoji
                     .iter()
-                    .map(|e| SasEmoji { symbol: e.symbol.to_string(), name: e.description.to_string() })
+                    .map(|e| SasEmoji {
+                        symbol: e.symbol.to_string(),
+                        name: e.description.to_string(),
+                    })
                     .collect();
                 return SasProgress {
                     phase: VerificationPhase::CompareEmoji(emoji),
@@ -230,13 +239,22 @@ impl VerificationFlow {
                 .cancel_info()
                 .map(|c| c.reason().to_string())
                 .unwrap_or_else(|| "cancelled".into());
-            return SasProgress { phase: VerificationPhase::Cancelled(reason), is_self_verification: is_self };
+            return SasProgress {
+                phase: VerificationPhase::Cancelled(reason),
+                is_self_verification: is_self,
+            };
         }
         if self.request.is_done() {
-            return SasProgress { phase: VerificationPhase::Done, is_self_verification: is_self };
+            return SasProgress {
+                phase: VerificationPhase::Done,
+                is_self_verification: is_self,
+            };
         }
         if self.request.is_ready() {
-            return SasProgress { phase: VerificationPhase::Ready, is_self_verification: is_self };
+            return SasProgress {
+                phase: VerificationPhase::Ready,
+                is_self_verification: is_self,
+            };
         }
         SasProgress {
             phase: VerificationPhase::Requested {
@@ -270,7 +288,10 @@ mod tests {
     fn sas_progress_phases_render() {
         // The comparison phase carries the 7 emoji the user compares.
         let emoji = (0..7)
-            .map(|i| SasEmoji { symbol: "🐶".into(), name: format!("Animal {i}") })
+            .map(|i| SasEmoji {
+                symbol: "🐶".into(),
+                name: format!("Animal {i}"),
+            })
             .collect::<Vec<_>>();
         let p = SasProgress {
             phase: VerificationPhase::CompareEmoji(emoji.clone()),
@@ -302,7 +323,10 @@ mod tests {
             is_self_verification: false,
         };
         match p.phase {
-            VerificationPhase::Requested { other_user, we_started } => {
+            VerificationPhase::Requested {
+                other_user,
+                we_started,
+            } => {
                 assert_eq!(other_user, "@them:s");
                 assert!(we_started);
             }

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use gpui::{
-    px, size, App, AppContext as _, Entity, HeadlessAppContext, PlatformTextSystem, Render, Window,
+    App, AppContext as _, Entity, HeadlessAppContext, PlatformTextSystem, Render, Window, px, size,
 };
 use gpui_wgpu::CosmicTextSystem;
 
@@ -97,8 +97,10 @@ pub fn live_conversation_model() -> crate::surface::AgentDockModel {
 
     let mut cclerk = AgentCipherclerk::new();
     let root = cclerk.mint_token(&[7u8; 32], "deos");
-    let rt: &'static AgentRuntime =
-        Box::leak(Box::new(AgentRuntime::new(Arc::new(std::sync::RwLock::new(cclerk)), "deos")));
+    let rt: &'static AgentRuntime = Box::leak(Box::new(AgentRuntime::new(
+        Arc::new(std::sync::RwLock::new(cclerk)),
+        "deos",
+    )));
     // Tighten terminal to rate-2 so the demo SHOWS a refusal on the 3rd call.
     let registry = GrantRegistry::default_for_session(1000)
         .with_standard_tool_grants(1000)

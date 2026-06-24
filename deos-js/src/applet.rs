@@ -507,8 +507,8 @@ impl Applet {
 
         // THE VERIFIED FINALIZED READ — the genuine anti-forge tooth. A forged or
         // non-finalized surface fails HERE.
-        let field = TranscludedField::include(&web, &uri)
-            .map_err(|e| TranscludeError(format!("{e:?}")))?;
+        let field =
+            TranscludedField::include(&web, &uri).map_err(|e| TranscludeError(format!("{e:?}")))?;
 
         // The bytes the embed displays ARE the source's committed bytes
         // (content-addressed) — proven, not assumed.

@@ -38,11 +38,7 @@ async fn spawn_server() -> String {
 /// Drive the shell with `keystrokes` and read binary (PTY output) frames until
 /// `needle` appears or a timeout elapses. Returns whether it was seen + the bytes.
 /// Connects with a short retry loop in case the accept loop hasn't polled yet.
-async fn run_and_await(
-    url: &str,
-    keystrokes: &str,
-    needle: &str,
-) -> (bool, String) {
+async fn run_and_await(url: &str, keystrokes: &str, needle: &str) -> (bool, String) {
     let mut ws = None;
     for _ in 0..50 {
         if let Ok((stream, _resp)) = tokio_tungstenite::connect_async(url).await {

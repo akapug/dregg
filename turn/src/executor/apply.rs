@@ -250,15 +250,7 @@ impl TurnExecutor {
                 target,
                 slot,
                 amount,
-            } => self.apply_mint(
-                ledger,
-                path,
-                actor,
-                journal,
-                target,
-                *slot,
-                *amount,
-            ),
+            } => self.apply_mint(ledger, path, actor, journal, target, *slot, *amount),
             Effect::AttenuateCapability {
                 cell,
                 slot,

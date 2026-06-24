@@ -71,7 +71,11 @@ pub struct CellSlots {
 impl CellSlots {
     /// The seed state: a fresh PENDING proposal, zero tally, height 0.
     pub fn pending() -> Self {
-        CellSlots { status: PENDING, tally: 0, height: 0 }
+        CellSlots {
+            status: PENDING,
+            tally: 0,
+            height: 0,
+        }
     }
 
     /// Project the load-bearing slots out of a REAL [`CellState`] (the read the
@@ -80,7 +84,11 @@ impl CellSlots {
     pub fn from_cell_state(s: &CellState) -> Self {
         let status = s.get_field(STATUS_SLOT).map(fe_u64).unwrap_or(0);
         let tally = s.get_field(TALLY_SLOT).map(fe_u64).unwrap_or(0);
-        CellSlots { status, tally, height: 0 }
+        CellSlots {
+            status,
+            tally,
+            height: 0,
+        }
     }
 
     /// Reconstruct a REAL [`CellState`] from these slots — so the gate evaluates the
@@ -94,12 +102,20 @@ impl CellSlots {
 
     /// The slot state after a successful `vote` (tally += 1, still PENDING).
     pub fn after_vote(&self) -> Self {
-        CellSlots { status: PENDING, tally: self.tally + 1, height: self.height }
+        CellSlots {
+            status: PENDING,
+            tally: self.tally + 1,
+            height: self.height,
+        }
     }
 
     /// The slot state after a successful `resolve` (status := RESOLVED).
     pub fn after_resolve(&self) -> Self {
-        CellSlots { status: RESOLVED, tally: self.tally, height: self.height }
+        CellSlots {
+            status: RESOLVED,
+            tally: self.tally,
+            height: self.height,
+        }
     }
 
     /// Whether the proposal is open (PENDING).
@@ -141,13 +157,24 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn councillor() -> Self {
-        Viewer { label: "councillor", held: AuthRequired::Either }
+        Viewer {
+            label: "councillor",
+            held: AuthRequired::Either,
+        }
     }
     pub fn member() -> Self {
-        Viewer { label: "member", held: AuthRequired::Signature }
+        Viewer {
+            label: "member",
+            held: AuthRequired::Signature,
+        }
     }
     pub fn outsider() -> Self {
-        Viewer { label: "outsider", held: AuthRequired::Custom { vk_hash: [0x9E; 32] } }
+        Viewer {
+            label: "outsider",
+            held: AuthRequired::Custom {
+                vk_hash: [0x9E; 32],
+            },
+        }
     }
     /// All three exemplar viewers (for the rehydration two-viewers panel).
     pub fn exemplars() -> Vec<Viewer> {
@@ -261,7 +288,9 @@ mod tests {
         assert!(cap_ok(&AuthRequired::Either, &AuthRequired::Either));
         assert!(!cap_ok(&AuthRequired::Signature, &AuthRequired::Either));
         assert!(!cap_ok(
-            &AuthRequired::Custom { vk_hash: [0x9E; 32] },
+            &AuthRequired::Custom {
+                vk_hash: [0x9E; 32]
+            },
             &AuthRequired::Either
         ));
         // and a Signature holder clears a Signature requirement (the `comment` baseline).
@@ -272,7 +301,11 @@ mod tests {
     fn state_tooth_is_the_real_cellprogram() {
         let prog = pending_precondition();
         let pending = CellSlots::pending();
-        let resolved = CellSlots { status: RESOLVED, tally: 3, height: 0 };
+        let resolved = CellSlots {
+            status: RESOLVED,
+            tally: 3,
+            height: 0,
+        };
         // PENDING admits the fire; RESOLVED forbids it — the htmx tooth, evaluated by the
         // genuine CellProgram::evaluate.
         assert!(state_ok(&prog, &pending));
@@ -284,14 +317,33 @@ mod tests {
         let prog = pending_precondition();
         let pending = CellSlots::pending();
         // councillor + PENDING ⇒ LIT.
-        let v = gated_verdict(&AuthRequired::Either, &AuthRequired::Either, &prog, &pending);
+        let v = gated_verdict(
+            &AuthRequired::Either,
+            &AuthRequired::Either,
+            &prog,
+            &pending,
+        );
         assert!(v.lit());
         // member + PENDING ⇒ DARK on the cap tooth (right state, wrong caps).
-        let v = gated_verdict(&AuthRequired::Signature, &AuthRequired::Either, &prog, &pending);
+        let v = gated_verdict(
+            &AuthRequired::Signature,
+            &AuthRequired::Either,
+            &prog,
+            &pending,
+        );
         assert!(!v.lit() && v.dark_reason().unwrap().starts_with("cap tooth"));
         // councillor + RESOLVED ⇒ DARK on the state tooth (right caps, wrong state).
-        let resolved = CellSlots { status: RESOLVED, tally: 1, height: 0 };
-        let v = gated_verdict(&AuthRequired::Either, &AuthRequired::Either, &prog, &resolved);
+        let resolved = CellSlots {
+            status: RESOLVED,
+            tally: 1,
+            height: 0,
+        };
+        let v = gated_verdict(
+            &AuthRequired::Either,
+            &AuthRequired::Either,
+            &prog,
+            &resolved,
+        );
         assert!(!v.lit() && v.dark_reason().unwrap().starts_with("state tooth"));
     }
 
@@ -301,16 +353,34 @@ mod tests {
         let mut pending = CellSlots::pending();
         pending.height = 5;
         // inside [0,10] ⇒ window passes; at height 11 ⇒ window tooth darkens.
-        let v = reactive_verdict(&AuthRequired::Either, &AuthRequired::Either, &prog, &pending, 0, 10);
+        let v = reactive_verdict(
+            &AuthRequired::Either,
+            &AuthRequired::Either,
+            &prog,
+            &pending,
+            0,
+            10,
+        );
         assert!(v.lit());
         pending.height = 11;
-        let v = reactive_verdict(&AuthRequired::Either, &AuthRequired::Either, &prog, &pending, 0, 10);
+        let v = reactive_verdict(
+            &AuthRequired::Either,
+            &AuthRequired::Either,
+            &prog,
+            &pending,
+            0,
+            10,
+        );
         assert!(!v.lit() && v.dark_reason().unwrap().starts_with("window tooth"));
     }
 
     #[test]
     fn slots_roundtrip_through_real_cellstate() {
-        let s = CellSlots { status: RESOLVED, tally: 7, height: 0 };
+        let s = CellSlots {
+            status: RESOLVED,
+            tally: 7,
+            height: 0,
+        };
         let cs = s.to_cell_state();
         let back = CellSlots::from_cell_state(&cs);
         assert_eq!(s.status, back.status);

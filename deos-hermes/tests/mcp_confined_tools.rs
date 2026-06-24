@@ -24,10 +24,10 @@
 use std::io::BufReader;
 use std::sync::{Arc, RwLock};
 
-use deos_hermes::mcp_server::{McpServer, McpToolHost, DREGG_TOOL_NAMES};
+use deos_hermes::mcp_server::{DREGG_TOOL_NAMES, McpServer, McpToolHost};
 use deos_hermes::{GrantRegistry, HermesGateway};
 use dregg_sdk::{AgentCipherclerk, AgentRuntime};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// deos the grantor: the runtime that admits the confined tool workers + runs
 /// their cap-gated receipted turns.
@@ -43,7 +43,11 @@ fn grantor() -> (AgentRuntime, dregg_sdk::HeldToken) {
 /// is process-global + one-shot, so ONLY the dedicated `run_js` test may boot it;
 /// every other test (terminal/tools-list/unknown/rate-0 — none need run_js)
 /// builds a bare host so the engine is initialised AT MOST once per process.
-fn host(runtime: &AgentRuntime, root: dregg_sdk::HeldToken, registry: GrantRegistry) -> McpToolHost<'_> {
+fn host(
+    runtime: &AgentRuntime,
+    root: dregg_sdk::HeldToken,
+    registry: GrantRegistry,
+) -> McpToolHost<'_> {
     let gateway = HermesGateway::new(runtime, root, registry);
     McpToolHost::new(gateway, 0)
 }
@@ -66,7 +70,9 @@ fn note(method: &str) -> String {
 fn drive(server: &mut McpServer<'_>, requests: &str) -> Vec<Value> {
     let reader = BufReader::new(requests.as_bytes());
     let mut out: Vec<u8> = Vec::new();
-    server.serve(reader, &mut out).expect("serve the MCP session to EOF");
+    server
+        .serve(reader, &mut out)
+        .expect("serve the MCP session to EOF");
     String::from_utf8(out)
         .unwrap()
         .lines()
@@ -79,19 +85,27 @@ fn drive(server: &mut McpServer<'_>, requests: &str) -> Vec<Value> {
 #[test]
 fn the_confined_model_has_only_dregg_tools() {
     let (runtime, root) = grantor();
-    let registry = GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
     let mut server = McpServer::new(host(&runtime, root, registry));
 
     let session = format!(
         "{}{}{}",
-        req(1, "initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {} })),
+        req(
+            1,
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18", "capabilities": {} })
+        ),
         note("notifications/initialized"),
         req(2, "tools/list", json!({})),
     );
     let replies = drive(&mut server, &session);
 
     // (a) initialize echoed our protocol version + advertised `tools`.
-    let init = replies.iter().find(|r| r["id"] == json!(1)).expect("initialize reply");
+    let init = replies
+        .iter()
+        .find(|r| r["id"] == json!(1))
+        .expect("initialize reply");
     assert_eq!(init["result"]["protocolVersion"], json!("2025-06-18"));
     assert!(
         init["result"]["capabilities"]["tools"].is_object(),
@@ -99,7 +113,10 @@ fn the_confined_model_has_only_dregg_tools() {
     );
 
     // (b) tools/list = EXACTLY the dregg confined surface — no unconfined tool path.
-    let list = replies.iter().find(|r| r["id"] == json!(2)).expect("tools/list reply");
+    let list = replies
+        .iter()
+        .find(|r| r["id"] == json!(2))
+        .expect("tools/list reply");
     let names: Vec<String> = list["result"]["tools"]
         .as_array()
         .expect("tools is an array")
@@ -108,7 +125,10 @@ fn the_confined_model_has_only_dregg_tools() {
         .collect();
     assert_eq!(
         names,
-        DREGG_TOOL_NAMES.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        DREGG_TOOL_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
         "the model's ONLY tools are dregg's run_js + terminal"
     );
 }
@@ -123,7 +143,8 @@ fn terminal_execs_inside_a_confined_pd_with_ambient_authority_denied() {
 
     let (runtime, root) = grantor();
     // `terminal` is in the standard grants (rate 5) — admitted, then run in a PD.
-    let registry = GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
     let mut server = McpServer::new(host(&runtime, root, registry));
 
     let session = format!(
@@ -140,11 +161,18 @@ fn terminal_execs_inside_a_confined_pd_with_ambient_authority_denied() {
         ),
     );
     let replies = drive(&mut server, &session);
-    let call = replies.iter().find(|r| r["id"] == json!(2)).expect("tools/call reply");
+    let call = replies
+        .iter()
+        .find(|r| r["id"] == json!(2))
+        .expect("tools/call reply");
     let result = &call["result"];
 
     // The tool-call was ADMITTED (cap-gated) and is NOT an MCP error.
-    assert_eq!(result["isError"], json!(false), "terminal admitted (cap-gated)");
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "terminal admitted (cap-gated)"
+    );
     // It carries a dregg receipt — a real verified turn committed.
     assert!(
         result["_deos"]["receipt"].is_string(),
@@ -154,7 +182,9 @@ fn terminal_execs_inside_a_confined_pd_with_ambient_authority_denied() {
     // ambient authority — open(/etc/passwd) denied, inet socket denied, only the
     // Endpoint fd open, and IPC works. The `cat`/`curl` the model asked for could
     // not reach the file or the network: the shell ran IN THE CONTAINER.
-    let verdict = result["_deos"]["sandboxVerdict"].as_i64().expect("a probe verdict") as i32;
+    let verdict = result["_deos"]["sandboxVerdict"]
+        .as_i64()
+        .expect("a probe verdict") as i32;
     assert_eq!(
         verdict & probe::OPEN_DENIED,
         probe::OPEN_DENIED,
@@ -171,7 +201,8 @@ fn terminal_execs_inside_a_confined_pd_with_ambient_authority_denied() {
         "only the firmament Endpoint fd survived confinement (verdict 0x{verdict:x})"
     );
     assert_eq!(
-        verdict, probe::ALL,
+        verdict,
+        probe::ALL,
         "EVERY confinement tooth held — the shell ran in the container, not loose"
     );
 
@@ -207,18 +238,31 @@ fn a_rate_zero_terminal_grant_refuses_before_any_shell_runs() {
         ),
     );
     let replies = drive(&mut server, &session);
-    let call = replies.iter().find(|r| r["id"] == json!(2)).expect("tools/call reply");
+    let call = replies
+        .iter()
+        .find(|r| r["id"] == json!(2))
+        .expect("tools/call reply");
     let result = &call["result"];
 
     // REFUSED in-band — an MCP `isError`, no receipt, no sandbox verdict (no PD).
-    assert_eq!(result["isError"], json!(true), "the rate-0 terminal call is refused");
-    assert!(result["_deos"]["receipt"].is_null(), "no receipt — no turn committed");
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "the rate-0 terminal call is refused"
+    );
+    assert!(
+        result["_deos"]["receipt"].is_null(),
+        "no receipt — no turn committed"
+    );
     assert!(
         result["_deos"]["sandboxVerdict"].is_null(),
         "no PD launched — the gate bit before any shell ran"
     );
     let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("refused"), "the model sees the in-band refusal: {text}");
+    assert!(
+        text.contains("refused"),
+        "the model sees the in-band refusal: {text}"
+    );
 }
 
 /// (d) tools/call run_js — the model's chosen script runs on the dregg verified
@@ -265,7 +309,10 @@ fn run_js_routes_through_dregg_to_a_receipted_verified_turn() {
         ),
     );
     let replies = drive(&mut server, &session);
-    let call = replies.iter().find(|r| r["id"] == json!(2)).expect("run_js reply");
+    let call = replies
+        .iter()
+        .find(|r| r["id"] == json!(2))
+        .expect("run_js reply");
     let result = &call["result"];
 
     assert_eq!(result["isError"], json!(false), "run_js admitted: {result}");
@@ -274,7 +321,8 @@ fn run_js_routes_through_dregg_to_a_receipted_verified_turn() {
         "the run_js fire left a dregg receipt (a verified turn): {result}"
     );
     assert_eq!(
-        result["_deos"]["firesCommitted"], json!(1),
+        result["_deos"]["firesCommitted"],
+        json!(1),
         "exactly one affordance fire committed a verified turn"
     );
     let text = result["content"][0]["text"].as_str().unwrap();
@@ -293,7 +341,8 @@ fn session_new_registers_only_the_dregg_mcp_server() {
     use deos_hermes::{AcpClient, MockHermesPeer};
 
     let (runtime, root) = grantor();
-    let registry = GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
     let gateway = HermesGateway::new(&runtime, root, registry);
 
     // No scripted tool-calls — we only need the handshake + session/new to land.
@@ -312,7 +361,9 @@ fn session_new_registers_only_the_dregg_mcp_server() {
     // The client registered EXACTLY the dregg server on session/new — the model's
     // ONLY tool source. (The McpServerStdio shape: {name, command, args, env}.)
     let registered = client.peer().registered_mcp_servers();
-    let arr = registered.as_array().expect("mcpServers is an array on session/new");
+    let arr = registered
+        .as_array()
+        .expect("mcpServers is an array on session/new");
     assert_eq!(arr.len(), 1, "exactly ONE tool source — the dregg server");
     assert_eq!(arr[0]["name"], json!("dregg"));
     assert_eq!(arr[0]["command"], json!("deos-hermes"));
@@ -326,7 +377,8 @@ fn session_new_registers_only_the_dregg_mcp_server() {
 #[test]
 fn an_unknown_tool_has_no_path() {
     let (runtime, root) = grantor();
-    let registry = GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
+    let registry =
+        GrantRegistry::default_for_session(1_000_000).with_standard_tool_grants(1_000_000);
     let mut server = McpServer::new(host(&runtime, root, registry));
 
     let session = format!(
@@ -341,7 +393,14 @@ fn an_unknown_tool_has_no_path() {
     );
     let replies = drive(&mut server, &session);
     let call = replies.iter().find(|r| r["id"] == json!(2)).expect("reply");
-    assert_eq!(call["result"]["isError"], json!(true), "an unknown tool is refused");
+    assert_eq!(
+        call["result"]["isError"],
+        json!(true),
+        "an unknown tool is refused"
+    );
     let text = call["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("not a") && text.contains("confined"), "names the no-path: {text}");
+    assert!(
+        text.contains("not a") && text.contains("confined"),
+        "names the no-path: {text}"
+    );
 }

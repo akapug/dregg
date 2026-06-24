@@ -89,7 +89,10 @@ fn applet_program_is_a_portable_cell_blob() {
 
     // ── (2) SERIALIZE the whole cell to a portable blob (model + program). ──────────
     let cell_bytes = PortableApplet::to_cell_bytes(&origin);
-    println!("portable cell blob: {} bytes (model + program)", cell_bytes.len());
+    println!(
+        "portable cell blob: {} bytes (model + program)",
+        cell_bytes.len()
+    );
     assert!(!cell_bytes.is_empty());
 
     // ── (3) LOAD in a FRESH applet (a separate executor): reconstitute from the cell. ─
@@ -119,13 +122,31 @@ fn applet_program_is_a_portable_cell_blob() {
         "the loaded cell carries the model state at serialization time"
     );
     // The loaded applet committed NO turns yet (fresh executor, fresh audit tape).
-    assert_eq!(loaded.receipt_count(), 0, "a freshly-loaded applet has an empty audit tape");
+    assert_eq!(
+        loaded.receipt_count(),
+        0,
+        "a freshly-loaded applet has an empty audit tape"
+    );
 
     // ── (4) FIRE on the LOADED applet → a REAL cap-gated verified turn. ─────────────
-    let receipt = loaded.fire("inc", 10).expect("the loaded program's inc fires a real turn");
-    assert_ne!(receipt.receipt_hash(), [0u8; 32], "the loaded fire left a real receipt");
-    assert_eq!(loaded.get_u64(0), 17, "the loaded model advanced (7 + 10) via a verified turn");
-    assert_eq!(loaded.receipt_count(), 1, "exactly one verified turn committed on the loaded cell");
+    let receipt = loaded
+        .fire("inc", 10)
+        .expect("the loaded program's inc fires a real turn");
+    assert_ne!(
+        receipt.receipt_hash(),
+        [0u8; 32],
+        "the loaded fire left a real receipt"
+    );
+    assert_eq!(
+        loaded.get_u64(0),
+        17,
+        "the loaded model advanced (7 + 10) via a verified turn"
+    );
+    assert_eq!(
+        loaded.receipt_count(),
+        1,
+        "exactly one verified turn committed on the loaded cell"
+    );
 
     // The cap tooth is INTACT on the loaded applet: `reset` requires Proof, the driver
     // holds Signature (incomparable) → REFUSED, nothing committed (anti-ghost).
@@ -135,7 +156,11 @@ fn applet_program_is_a_portable_cell_blob() {
         "the loaded program's cap tooth still refuses the over-reach"
     );
     assert_eq!(loaded.get_u64(0), 17, "the refused turn changed nothing");
-    assert_eq!(loaded.receipt_count(), 1, "the refused fire committed nothing (anti-ghost)");
+    assert_eq!(
+        loaded.receipt_count(),
+        1,
+        "the refused fire committed nothing (anti-ghost)"
+    );
 }
 
 /// THE LOAD-AND-RUN loop driven through a REAL SpiderMonkey runtime: load an applet from
@@ -182,16 +207,26 @@ fn js_load_and_run_body() {
         app.get(0);            // witnessed read: 7
     "#;
     let result = rt.eval(js).expect("JS drives the loaded applet");
-    assert_eq!(result, Some(7), "the loaded program advanced its model via a verified turn from JS");
+    assert_eq!(
+        result,
+        Some(7),
+        "the loaded program advanced its model via a verified turn from JS"
+    );
 
     let driven = take_current_applet().expect("loaded applet present");
-    assert_eq!(driven.get_u64(0), 7, "the loaded cell's model = 7 after the JS-driven turn");
+    assert_eq!(
+        driven.get_u64(0),
+        7,
+        "the loaded cell's model = 7 after the JS-driven turn"
+    );
     assert_eq!(
         driven.receipt_count(),
         1,
         "one verified turn committed (inc); the Proof-gated reset was refused — the cap tooth ran"
     );
-    let last = driven.last_receipt().expect("a real receipt landed on the loaded cell");
+    let last = driven
+        .last_receipt()
+        .expect("a real receipt landed on the loaded cell");
     assert_ne!(last, [0u8; 32]);
     println!(
         "loaded-from-cell program fired a REAL turn; receipt: {}",

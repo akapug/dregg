@@ -72,7 +72,9 @@ fn open_generates_a_view_from_the_held_mandate_and_a_bound_step_count() {
     let tree = card.view_tree().expect("the generated agent view parses");
 
     assert!(
-        tree.walk().iter().any(|n| n.label() == Some("Held Mandate")),
+        tree.walk()
+            .iter()
+            .any(|n| n.label() == Some("Held Mandate")),
         "the HELD MANDATE section is labeled"
     );
     // The mandate row names the peer it reaches (read off the live c-list).
@@ -87,7 +89,10 @@ fn open_generates_a_view_from_the_held_mandate_and_a_bound_step_count() {
         blob.contains(&format!("→ {peer_short}")),
         "the mandate row names the peer cell it reaches: {blob}"
     );
-    assert!(blob.contains("expires@h100"), "the expiry is annotated on the row");
+    assert!(
+        blob.contains("expires@h100"),
+        "the expiry is annotated on the row"
+    );
     assert_eq!(card.reach(), 1, "the mandate reaches one peer");
 
     assert!(
@@ -109,18 +114,30 @@ fn observing_a_turn_prepends_a_row_and_advances_the_bound_step_count() {
     let r1 = card
         .observe(action(1, "set field[0]", 0xAA))
         .expect("observe a committed turn");
-    assert_ne!(r1.receipt_hash(), [0u8; 32], "the observe left a real TurnReceipt");
+    assert_ne!(
+        r1.receipt_hash(),
+        [0u8; 32],
+        "the observe left a real TurnReceipt"
+    );
     assert_eq!(card.live_steps(), 1, "the bound step count advanced 0 -> 1");
 
     let r2 = card
         .observe(action(2, "granted cap", 0xBB))
         .expect("observe a second turn");
-    assert_ne!(r2.receipt_hash(), [0u8; 32], "the second observe left a receipt");
+    assert_ne!(
+        r2.receipt_hash(),
+        [0u8; 32],
+        "the second observe left a receipt"
+    );
     assert_eq!(card.live_steps(), 2, "the bound step count advanced 1 -> 2");
 
     // Most-recent-FIRST: the @h2 action is the first action in the stream.
     assert_eq!(card.actions().len(), 2, "two actions in the stream");
-    assert_eq!(card.actions()[0].height, 2, "the newest action is first (most-recent-FIRST)");
+    assert_eq!(
+        card.actions()[0].height,
+        2,
+        "the newest action is first (most-recent-FIRST)"
+    );
 
     let tree = card.view_tree().expect("re-folded agent view parses");
     let blob: String = tree
@@ -129,10 +146,20 @@ fn observing_a_turn_prepends_a_row_and_advances_the_bound_step_count() {
         .filter_map(|n| n.label())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(blob.contains("@h2 · granted cap · receipt"), "the newest turn row carries its receipt");
-    assert!(blob.contains("@h1 · set field[0] · receipt"), "the older turn row is present");
+    assert!(
+        blob.contains("@h2 · granted cap · receipt"),
+        "the newest turn row carries its receipt"
+    );
+    assert!(
+        blob.contains("@h1 · set field[0] · receipt"),
+        "the older turn row is present"
+    );
 
-    assert_eq!(card.card().receipt_count(), 2, "two observes -> two verified turns");
+    assert_eq!(
+        card.card().receipt_count(),
+        2,
+        "two observes -> two verified turns"
+    );
 }
 
 // ── (c) EDIT FROM WITHIN — reshape the card's OWN view, accountably. ──
@@ -149,7 +176,10 @@ fn editing_the_agent_view_from_within_is_a_receipted_patch_with_blame() {
         .expect("the authorized relabel reshape is admitted");
     assert_ne!(card.view_source(), source_before, "the view-source changed");
     assert!(
-        edit.tree.walk().iter().any(|n| n.label() == Some("Receipted Actions")),
+        edit.tree
+            .walk()
+            .iter()
+            .any(|n| n.label() == Some("Receipted Actions")),
         "the re-folded view carries the new section label"
     );
     assert_ne!(

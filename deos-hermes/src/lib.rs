@@ -62,24 +62,24 @@
 pub mod acp;
 pub mod acp_client;
 pub mod bridge;
+#[cfg(feature = "js-agent")]
+pub mod card_authoring;
 #[cfg(feature = "cockpit-surface")]
 pub mod cockpit_surface;
 #[cfg(unix)]
 pub mod confined;
 #[cfg(unix)]
 pub mod egress;
+pub mod grant_registry;
 #[cfg(unix)]
 pub mod host;
-pub mod grant_registry;
-pub mod mandate;
-pub mod mcp_server;
-#[cfg(feature = "js-agent")]
-pub mod run_js;
-#[cfg(feature = "js-agent")]
-pub mod card_authoring;
 #[cfg(feature = "js-agent")]
 pub mod live_js;
+pub mod mandate;
+pub mod mcp_server;
 pub mod mock_peer;
+#[cfg(feature = "js-agent")]
+pub mod run_js;
 #[cfg(feature = "screenshot")]
 pub mod screenshot;
 pub mod surface;
@@ -92,22 +92,22 @@ pub use acp_client::{
 pub use bridge::HermesGateway;
 #[cfg(unix)]
 pub use egress::{EgressGrant, EgressPolicy};
+pub use grant_registry::{GrantRegistry, MandateKey};
 #[cfg(unix)]
 pub use host::{DreggHost, HostedAgentReport};
-pub use grant_registry::{GrantRegistry, MandateKey};
-pub use mcp_server::{ConfinedToolResult, McpServer, McpToolHost, DREGG_TOOL_NAMES};
+pub use mcp_server::{ConfinedToolResult, DREGG_TOOL_NAMES, McpServer, McpToolHost};
 
 // Re-export the grounding SDK types a HOST needs to construct a confined gateway
 // (mint a root token, build a runtime) WITHOUT depending on `dregg-sdk` directly —
 // e.g. deos-zed-full's agent-panel mount builds its own tightly-confined
 // `HermesGateway` over these. The enforcement still lives entirely in `dregg-sdk`;
 // this is a convenience re-export of the constructor surface.
+#[cfg(feature = "js-agent")]
+pub use card_authoring::{AuthorCardOutcome, CardAuthoringTool};
 pub use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken, ToolGrant};
+#[cfg(feature = "js-agent")]
+pub use live_js::{LiveAuthoringHands, LiveJsHands, script_of_call};
 pub use mandate::{Mandate, MandateRow};
 pub use mock_peer::{MockHermesPeer, ScriptedCall};
 #[cfg(feature = "js-agent")]
 pub use run_js::{RunJsAuthorOutcome, RunJsAuthoringTool, RunJsError, RunJsOutcome, RunJsTool};
-#[cfg(feature = "js-agent")]
-pub use card_authoring::{AuthorCardOutcome, CardAuthoringTool};
-#[cfg(feature = "js-agent")]
-pub use live_js::{script_of_call, LiveAuthoringHands, LiveJsHands};

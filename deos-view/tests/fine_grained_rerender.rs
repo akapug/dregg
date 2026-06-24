@@ -82,8 +82,16 @@ fn a_turn_on_slot_a_dirties_only_binding_a() {
     // We seed the cache via on_committed_turn over BOTH slots so the values are present
     // exactly as a first paint would lazily fill them.
     let _seed = view.on_committed_turn(&[0, 1]);
-    assert_eq!(view.cached(BindingId(0)), Some(10), "binding A primed to 10");
-    assert_eq!(view.cached(BindingId(1)), Some(20), "binding B primed to 20");
+    assert_eq!(
+        view.cached(BindingId(0)),
+        Some(10),
+        "binding A primed to 10"
+    );
+    assert_eq!(
+        view.cached(BindingId(1)),
+        Some(20),
+        "binding B primed to 20"
+    );
 
     // ── Fire a REAL verified turn that writes ONLY slot 0 (the +5 on "a") ────────────
     shared

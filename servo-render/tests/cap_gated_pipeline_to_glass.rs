@@ -63,11 +63,25 @@ fn the_cap_gate_decides_whether_a_real_frame_reaches_the_glass() {
         (0x20, 0xC0, 0x40, 0xFF),
         &presentation_for(presenter),
     );
-    assert!(permitted.reached_glass(), "a cap-permitted fetch reaches the glass");
+    assert!(
+        permitted.reached_glass(),
+        "a cap-permitted fetch reaches the glass"
+    );
     let digest_byte = match permitted {
-        PipelineOutcome::Presented { ref frame, ref commit } => {
-            assert_eq!(frame.pixel(8, 8), (0x20, 0xC0, 0x40, 0xFF), "SWGL rasterized the color");
-            assert_eq!(commit.digest, frame.content_digest(), "the real pixels' digest is committed");
+        PipelineOutcome::Presented {
+            ref frame,
+            ref commit,
+        } => {
+            assert_eq!(
+                frame.pixel(8, 8),
+                (0x20, 0xC0, 0x40, 0xFF),
+                "SWGL rasterized the color"
+            );
+            assert_eq!(
+                commit.digest,
+                frame.content_digest(),
+                "the real pixels' digest is committed"
+            );
             (frame.content_digest() & 0xFF) as u8
         }
         other => panic!("expected Presented, got {other:?}"),
@@ -88,8 +102,14 @@ fn the_cap_gate_decides_whether_a_real_frame_reaches_the_glass() {
         (0xFF, 0x00, 0x00, 0xFF),
         &presentation_for(presenter),
     );
-    assert!(forbidden.fetch_was_refused(), "an out-of-allowlist fetch is refused at the cap gate");
-    assert!(!forbidden.reached_glass(), "a cap-refused fetch puts nothing on the glass");
+    assert!(
+        forbidden.fetch_was_refused(),
+        "an out-of-allowlist fetch is refused at the cap gate"
+    );
+    assert!(
+        !forbidden.reached_glass(),
+        "a cap-refused fetch puts nothing on the glass"
+    );
     assert_eq!(
         compositor2.framebuffer_snapshot()[3],
         0,

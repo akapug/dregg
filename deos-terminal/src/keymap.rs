@@ -291,14 +291,26 @@ mod test {
     #[test]
     fn test_ctrl_codes() {
         let mode = Modes::NONE;
-        assert_eq!(to_esc_str(&Keystroke::parse("ctrl-c").unwrap(), mode, false), Some("\x03".into()));
-        assert_eq!(to_esc_str(&Keystroke::parse("ctrl-d").unwrap(), mode, false), Some("\x04".into()));
+        assert_eq!(
+            to_esc_str(&Keystroke::parse("ctrl-c").unwrap(), mode, false),
+            Some("\x03".into())
+        );
+        assert_eq!(
+            to_esc_str(&Keystroke::parse("ctrl-d").unwrap(), mode, false),
+            Some("\x04".into())
+        );
     }
 
     #[test]
     fn test_enter_and_backspace() {
         let mode = Modes::NONE;
-        assert_eq!(to_esc_str(&Keystroke::parse("enter").unwrap(), mode, false), Some("\x0d".into()));
-        assert_eq!(to_esc_str(&Keystroke::parse("backspace").unwrap(), mode, false), Some("\x7f".into()));
+        assert_eq!(
+            to_esc_str(&Keystroke::parse("enter").unwrap(), mode, false),
+            Some("\x0d".into())
+        );
+        assert_eq!(
+            to_esc_str(&Keystroke::parse("backspace").unwrap(), mode, false),
+            Some("\x7f".into())
+        );
     }
 }

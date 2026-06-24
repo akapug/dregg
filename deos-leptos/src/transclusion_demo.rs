@@ -57,9 +57,9 @@
 
 use leptos::prelude::*;
 
+use dregg_types::CellId;
 use starbridge_web_surface::transclusion::{Backlinks, TranscludedField, TransclusionError};
 use starbridge_web_surface::web_of_cells::{AttestedResource, DreggUri, WebOfCells};
-use dregg_types::CellId;
 
 /// The constitution cell's committed-URL (the trusted-path chrome the source binds —
 /// drawn from the ledger, never the page). The `dregg://constitution` the council
@@ -91,7 +91,11 @@ impl Constitution {
     /// (3-of-3 quorum) into a fresh web-of-cells — a real finalized read source.
     pub fn found(threshold: u64) -> Self {
         let mut web = WebOfCells::new(3);
-        let uri = web.publish(CONSTITUTION_SEED, &encode_threshold(threshold), CONSTITUTION_URL);
+        let uri = web.publish(
+            CONSTITUTION_SEED,
+            &encode_threshold(threshold),
+            CONSTITUTION_URL,
+        );
         Constitution { web, uri }
     }
 
@@ -201,7 +205,11 @@ impl LiveQuote {
             r[1],
             r[2],
             r[3],
-            if p.finalized { "finalized" } else { "UNATTESTED" },
+            if p.finalized {
+                "finalized"
+            } else {
+                "UNATTESTED"
+            },
         )
     }
 }
@@ -418,7 +426,12 @@ pub fn live_quote_sequence(
 
     // STEP 0 — the founded value, freshly quoted.
     let founded_height = 1; // one publish advanced the attested height once.
-    steps.push(render_step(&constitution, "founded", founded_height, backlink_count));
+    steps.push(render_step(
+        &constitution,
+        "founded",
+        founded_height,
+        backlink_count,
+    ));
 
     // EACH AMENDMENT — the source's turn; the quote re-resolves to the NEW value at
     // the NEW height (the live update).
@@ -427,7 +440,12 @@ pub fn live_quote_sequence(
         threshold += 2; // a visible jump (e.g. 3 → 5 → 7).
         let new_height = constitution.amend_threshold(threshold);
         let label = format!("after amend #{}", i + 1);
-        steps.push(render_step(&constitution, &label, new_height, backlink_count));
+        steps.push(render_step(
+            &constitution,
+            &label,
+            new_height,
+            backlink_count,
+        ));
     }
 
     steps
@@ -467,11 +485,14 @@ fn render_step(
 /// show "the forger tried to show X; the chain refused".
 pub fn forge_a_quote(genuine_threshold: u64, forged_threshold: u64) -> (Vec<u8>, String) {
     let mut web = WebOfCells::new(3);
-    let uri = web.publish(0xF0, &encode_threshold(genuine_threshold), "dregg://forged-source");
+    let uri = web.publish(
+        0xF0,
+        &encode_threshold(genuine_threshold),
+        "dregg://forged-source",
+    );
     // Fetch a GENUINE attested resource, then tamper its bytes to claim a different
     // threshold — the forge.
-    let (mut resource, _chrome): (AttestedResource, _) =
-        web.fetch(&uri).expect("genuine fetch");
+    let (mut resource, _chrome): (AttestedResource, _) = web.fetch(&uri).expect("genuine fetch");
     let forged_bytes = encode_threshold(forged_threshold);
     resource.content_bytes = forged_bytes.clone();
     // The verification chain catches it: the tampered bytes no longer hash to the
@@ -496,18 +517,36 @@ mod tests {
             .expect("the founded constitution resolves a faithful quote");
 
         // The quote IS the source's committed value (the verified cross-cell read).
-        assert_eq!(q.threshold, 3, "the live quote shows the source's committed threshold");
+        assert_eq!(
+            q.threshold, 3,
+            "the live quote shows the source's committed threshold"
+        );
         // The provenance line dates it: the source ref + height + receipt + finalized.
         let line = q.provenance_line();
-        assert!(line.contains("dregg://"), "provenance cites the source: {line}");
-        assert!(line.contains("height 1"), "provenance dates the height: {line}");
-        assert!(line.contains("finalized"), "a quorum-attested source is finalized: {line}");
+        assert!(
+            line.contains("dregg://"),
+            "provenance cites the source: {line}"
+        );
+        assert!(
+            line.contains("height 1"),
+            "provenance dates the height: {line}"
+        );
+        assert!(
+            line.contains("finalized"),
+            "a quorum-attested source is finalized: {line}"
+        );
 
         // The SSR render carries the value, the provenance, and the backlink count.
         let html = render_council_with_live_quote(constitution.web(), constitution.uri(), 1, 4);
         assert!(html.contains("constitution threshold (live quote): "));
-        assert!(html.contains("<strong>3</strong>"), "the quote renders the value: {html}");
-        assert!(html.contains("transcluded from dregg://"), "the provenance line renders");
+        assert!(
+            html.contains("<strong>3</strong>"),
+            "the quote renders the value: {html}"
+        );
+        assert!(
+            html.contains("transcluded from dregg://"),
+            "the provenance line renders"
+        );
         assert!(html.contains("4 surface(s) quote"), "the backlinks render");
     }
 
@@ -519,8 +558,8 @@ mod tests {
         let mut constitution = Constitution::found(3);
 
         // Before: the quote shows V = 3 at height 1.
-        let before = LiveQuote::try_resolve(constitution.web(), constitution.uri(), 1)
-            .expect("resolves");
+        let before =
+            LiveQuote::try_resolve(constitution.web(), constitution.uri(), 1).expect("resolves");
         assert_eq!(before.threshold, 3);
 
         // FIRE A TURN ON THE SOURCE: amend the constitution to threshold 5.
@@ -531,7 +570,10 @@ mod tests {
         // value), NOT the stale 3 — the live quote tracked the source reactively.
         let after = LiveQuote::try_resolve(constitution.web(), constitution.uri(), h2)
             .expect("the amended source still resolves (the unbreakable link)");
-        assert_eq!(after.threshold, 5, "the live quote shows the AMENDED value, not stale");
+        assert_eq!(
+            after.threshold, 5,
+            "the live quote shows the AMENDED value, not stale"
+        );
         assert_eq!(after.height, h2, "the provenance height advanced");
         assert_ne!(
             after.field.cite().receipt_hash,
@@ -541,8 +583,8 @@ mod tests {
 
         // A second amend → V'' = 7, height advances again. The link never rots.
         let h3 = constitution.amend_threshold(7);
-        let third = LiveQuote::try_resolve(constitution.web(), constitution.uri(), h3)
-            .expect("resolves");
+        let third =
+            LiveQuote::try_resolve(constitution.web(), constitution.uri(), h3).expect("resolves");
         assert_eq!(third.threshold, 7);
         assert!(h3 > h2);
     }
@@ -559,8 +601,14 @@ mod tests {
         assert!(steps[0].html.contains("<strong>3</strong>"));
         // Step 1: amended to 5 — the render shows 5, NOT the stale 3.
         assert_eq!(steps[1].threshold, 5);
-        assert!(steps[1].html.contains("<strong>5</strong>"), "render shows amended 5");
-        assert!(!steps[1].html.contains("<strong>3</strong>"), "render is NOT stale 3");
+        assert!(
+            steps[1].html.contains("<strong>5</strong>"),
+            "render shows amended 5"
+        );
+        assert!(
+            !steps[1].html.contains("<strong>3</strong>"),
+            "render is NOT stale 3"
+        );
         // Step 2: amended to 7.
         assert_eq!(steps[2].threshold, 7);
         assert!(steps[2].html.contains("<strong>7</strong>"));
@@ -570,7 +618,9 @@ mod tests {
         assert!(
             steps[0].height < steps[1].height && steps[1].height < steps[2].height,
             "provenance heights advance: {} < {} < {}",
-            steps[0].height, steps[1].height, steps[2].height
+            steps[0].height,
+            steps[1].height,
+            steps[2].height
         );
     }
 
@@ -604,8 +654,14 @@ mod tests {
 
         // The render of an absent/forged source shows the REFUSAL, never bytes.
         let html = render_council_with_live_quote(constitution.web(), &absent, 1, 0);
-        assert!(html.contains("quote refused"), "a refused source renders its refusal: {html}");
-        assert!(!html.contains("<strong>"), "and NEVER renders a value for it");
+        assert!(
+            html.contains("quote refused"),
+            "a refused source renders its refusal: {html}"
+        );
+        assert!(
+            !html.contains("<strong>"),
+            "and NEVER renders a value for it"
+        );
     }
 
     // ── (4) THE UNBREAKABLE LINK: the dregg:// ref is unchanged across amendments. ──
@@ -624,7 +680,8 @@ mod tests {
             "the dregg:// ref is unchanged across amendments (the unbreakable link)"
         );
         // …and it still resolves, now to the latest value.
-        let q = LiveQuote::try_resolve(constitution.web(), constitution.uri(), 3).expect("resolves");
+        let q =
+            LiveQuote::try_resolve(constitution.web(), constitution.uri(), 3).expect("resolves");
         assert_eq!(q.threshold, 7);
     }
 
@@ -633,8 +690,8 @@ mod tests {
     #[test]
     fn backlinks_count_the_surfaces_that_quote_the_constitution() {
         let constitution = Constitution::found(3);
-        let quote = TranscludedField::include(constitution.web(), constitution.uri())
-            .expect("resolves");
+        let quote =
+            TranscludedField::include(constitution.web(), constitution.uri()).expect("resolves");
 
         // Three council surfaces transclude the same constitution.
         let mut links = Backlinks::new();
@@ -668,8 +725,14 @@ mod tests {
         // button (the payoff the browser would press).
         assert!(html.contains("deos-council-transclusion"));
         assert!(html.contains("constitution threshold (live quote): "));
-        assert!(html.contains("<strong>3</strong>"), "the founded value renders: {html}");
-        assert!(html.contains("amend constitution"), "the payoff button renders");
+        assert!(
+            html.contains("<strong>3</strong>"),
+            "the founded value renders: {html}"
+        );
+        assert!(
+            html.contains("amend constitution"),
+            "the payoff button renders"
+        );
         assert!(html.contains("surface(s) quote"), "the backlinks render");
     }
 }

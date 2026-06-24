@@ -3012,7 +3012,8 @@ mod admission_reason_decode_tests {
     /// An out-of-range reason code is fail-closed (a verifier-drift bug, never silently mis-named).
     #[test]
     fn out_of_range_reason_is_rejected() {
-        let wire = format!("{{\"state\":{STATE},\"loglen\":0,\"status\":0,\"reason\":99,\"ok\":0}}");
+        let wire =
+            format!("{{\"state\":{STATE},\"loglen\":0,\"status\":0,\"reason\":99,\"ok\":0}}");
         assert!(unmarshal_result(&wire).is_err());
     }
 }

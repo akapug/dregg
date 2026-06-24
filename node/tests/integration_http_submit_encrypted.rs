@@ -36,9 +36,7 @@ const TURN_UNSEALER_DOMAIN: &str = "dregg-turn-unsealer-v1";
 /// (`verify_stark`) before the node decrypts — the fee-DoS is closed.
 #[test]
 fn unauthenticated_encrypted_turn_rejected_at_ingress() {
-    use dregg_turn::{
-        ConflictSet, EncryptedTurn, TurnValidityProof, TurnValidityPublicInputs,
-    };
+    use dregg_turn::{ConflictSet, EncryptedTurn, TurnValidityProof, TurnValidityPublicInputs};
 
     let executor_cclerk = make_cclerk("ingress-gate-executor");
     let sealer_secret = executor_cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);

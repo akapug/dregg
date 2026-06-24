@@ -25,16 +25,14 @@ pub(crate) fn sorted_cells(w: &World) -> Vec<CellId> {
 /// `holder ──rights──▶ target` edges), centered on the focused cell.
 pub(crate) fn render_graph_body(g: &GraphView) -> impl IntoElement {
     let mut col = div().flex().flex_col().gap_0p5();
-    col = col.child(
-        div().text_xs().text_color(theme::muted()).child(format!(
+    col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
             "{} node(s) · {} edge(s){}",
             g.nodes.len(),
             g.edges.len(),
             g.focus
                 .map(|f| format!(" · focus ⬡ {}", reflect::short_hex(f.as_bytes())))
                 .unwrap_or_default(),
-        )),
-    );
+        )));
     if g.edges.is_empty() {
         col = col.child(
             div()

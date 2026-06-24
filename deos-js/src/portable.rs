@@ -57,9 +57,7 @@ pub enum ApplyOp {
 impl ApplyOp {
     /// Reconstitute the live apply closure. The closure is a pure function of the live
     /// model + the JS-supplied arg, exactly as the originally-minted affordance was.
-    pub(crate) fn into_closure(
-        self,
-    ) -> Box<dyn Fn(&CellModel, i64) -> Vec<(Slot, FieldElement)>> {
+    pub(crate) fn into_closure(self) -> Box<dyn Fn(&CellModel, i64) -> Vec<(Slot, FieldElement)>> {
         match self {
             ApplyOp::AddToSlot { slot } => Box::new(move |model, arg| {
                 let cur = model.field_u64(slot);
@@ -189,11 +187,7 @@ impl PortableApplet {
     /// Mint an applet from a [`AppletManifest`] AND persist the program into the minted
     /// cell's heap. The returned [`Applet`] is fully runnable; its cell now carries its
     /// own program source.
-    pub fn mint(
-        public_key: [u8; 32],
-        token_id: [u8; 32],
-        manifest: &AppletManifest,
-    ) -> Applet {
+    pub fn mint(public_key: [u8; 32], token_id: [u8; 32], manifest: &AppletManifest) -> Applet {
         let mut applet = Applet::mint(
             public_key,
             token_id,

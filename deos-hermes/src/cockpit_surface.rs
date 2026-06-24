@@ -56,9 +56,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use gpui::{
-    div, px, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
@@ -70,7 +70,9 @@ use crate::bridge::HermesGateway;
 use crate::grant_registry::GrantRegistry;
 use crate::mandate::Mandate;
 use crate::mock_peer::{MockHermesPeer, ScriptedCall};
-use crate::surface::{AgentDockModel, ChatEntry, MandateBudget, PermissionMoment, RefusalLeg, ToolLine};
+use crate::surface::{
+    AgentDockModel, ChatEntry, MandateBudget, PermissionMoment, RefusalLeg, ToolLine,
+};
 
 /// A buffered streaming step: one ACP delta + the mandate snapshot at that moment
 /// (so the dock can repaint depleting budgets exactly as the gate spent them).
@@ -105,8 +107,10 @@ impl HermesSession {
         // Leak the runtime: one per app-lived session; the gateway's `'static`
         // borrow points into it. (Box::leak is the standard owned-`'static` trick
         // for a long-lived `!Send` resource a view must hold without self-ref.)
-        let runtime: &'static AgentRuntime =
-            Box::leak(Box::new(AgentRuntime::new(Arc::new(RwLock::new(cclerk)), "deos")));
+        let runtime: &'static AgentRuntime = Box::leak(Box::new(AgentRuntime::new(
+            Arc::new(RwLock::new(cclerk)),
+            "deos",
+        )));
         let registry = GrantRegistry::default_for_session(1_000).with_standard_tool_grants(1_000);
         let gateway = HermesGateway::new(runtime, root, registry);
         HermesSession {
@@ -168,7 +172,8 @@ impl HermesSession {
         // mandate by deriving the inspector view from the verdicts seen so far
         // (`Mandate::from_session` overlays the verdict tally onto the grants).
         let mut steps: Vec<StreamStep> = Vec::new();
-        let mut seen: Vec<(crate::acp::ToolCallRequest, crate::acp::PermissionOutcome)> = Vec::new();
+        let mut seen: Vec<(crate::acp::ToolCallRequest, crate::acp::PermissionOutcome)> =
+            Vec::new();
         for ev in raw {
             let snapshot = match &ev {
                 StreamEvent::Verdict { call, outcome } => {
@@ -325,15 +330,14 @@ impl AgentDockView {
 
         // The streaming timer: drain ONE buffered step per tick into the model and
         // repaint. ~24ms/step makes the reply + tool-calls stream in visibly.
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(24))
-                .await;
-            if this
-                .update(cx, |this, cx| this.drain_one(cx))
-                .is_err()
-            {
-                break;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(24))
+                    .await;
+                if this.update(cx, |this, cx| this.drain_one(cx)).is_err() {
+                    break;
+                }
             }
         })
         .detach();
@@ -455,7 +459,12 @@ impl AgentDockView {
             col = col.child(self.transcript_entry(entry));
         }
         if self.model.running {
-            col = col.child(div().text_color(MUTED).text_size(px(12.)).child("▍ thinking…"));
+            col = col.child(
+                div()
+                    .text_color(MUTED)
+                    .text_size(px(12.))
+                    .child("▍ thinking…"),
+            );
         }
         col.into_any_element()
     }
@@ -465,13 +474,21 @@ impl AgentDockView {
             ChatEntry::User { text } => h_flex()
                 .gap_2()
                 .child(div().text_color(USER).min_w(px(48.)).child("you"))
-                .child(div().text_color(BODY).child(SharedString::from(text.clone())))
+                .child(
+                    div()
+                        .text_color(BODY)
+                        .child(SharedString::from(text.clone())),
+                )
                 .into_any_element(),
             ChatEntry::Agent { text } => h_flex()
                 .gap_2()
                 .items_start()
                 .child(div().text_color(AGENT).min_w(px(48.)).child("hermes"))
-                .child(div().text_color(BODY).child(SharedString::from(text.clone())))
+                .child(
+                    div()
+                        .text_color(BODY)
+                        .child(SharedString::from(text.clone())),
+                )
                 .into_any_element(),
             ChatEntry::Tool { line } => self.inline_tool(line),
         }
@@ -480,7 +497,11 @@ impl AgentDockView {
     /// A gated tool-call rendered inline in the transcript: the gate verdict right
     /// where the agent reached — ✓ receipt+budget or ✗ refused+leg.
     fn inline_tool(&self, line: &ToolLine) -> AnyElement {
-        let (mark, color) = if line.allowed { ("✓", ALLOW) } else { ("✗", REJECT) };
+        let (mark, color) = if line.allowed {
+            ("✓", ALLOW)
+        } else {
+            ("✗", REJECT)
+        };
         let rem = line
             .remaining
             .map(|r| format!("  ·  {r} left"))
@@ -507,19 +528,17 @@ impl AgentDockView {
     /// THE PERMISSION MOMENT — the most recent gate decision, surfaced prominently:
     /// the tool, the cap it needed, the verdict (allow→receipt+budget / refuse→leg).
     fn permission_pane(&self) -> AnyElement {
-        let mut col = v_flex()
-            .gap_1()
-            .p_2()
-            .border_1()
-            .rounded(px(6.))
-            .child(div().text_color(HEADING).child("permission moment (the deos gate)"));
+        let mut col = v_flex().gap_1().p_2().border_1().rounded(px(6.)).child(
+            div()
+                .text_color(HEADING)
+                .child("permission moment (the deos gate)"),
+        );
         match &self.model.last_permission {
             None => {
-                col = col.child(
-                    div()
-                        .text_color(MUTED)
-                        .child("no tool-call gated yet — every agent reach is decided here, live."),
-                );
+                col =
+                    col.child(div().text_color(MUTED).child(
+                        "no tool-call gated yet — every agent reach is decided here, live.",
+                    ));
             }
             Some(PermissionMoment {
                 tool,
@@ -534,16 +553,23 @@ impl AgentDockView {
                         h_flex()
                             .gap_2()
                             .child(div().text_color(ALLOW).child("✓ ALLOWED"))
-                            .child(div().text_color(BODY).child(SharedString::from(format!(
-                                "{tool}  under  {mandate}"
-                            )))),
+                            .child(
+                                div()
+                                    .text_color(BODY)
+                                    .child(SharedString::from(format!("{tool}  under  {mandate}"))),
+                            ),
                     )
-                    .child(div().text_color(MUTED).text_size(px(12.)).child(
-                        SharedString::from(format!(
-                            "{detail}  ·  budget left: {}",
-                            remaining.map(|r| r.to_string()).unwrap_or_else(|| "—".into())
-                        )),
-                    ));
+                    .child(
+                        div()
+                            .text_color(MUTED)
+                            .text_size(px(12.))
+                            .child(SharedString::from(format!(
+                                "{detail}  ·  budget left: {}",
+                                remaining
+                                    .map(|r| r.to_string())
+                                    .unwrap_or_else(|| "—".into())
+                            ))),
+                    );
             }
             Some(PermissionMoment {
                 tool,
@@ -656,17 +682,72 @@ impl AgentDockView {
 // A small, theme-independent palette so the surface paints without a specific
 // gpui-component Theme variant installed (the headless capture + the cockpit both
 // work). Plain gpui Rgba literals.
-const HEADING: gpui::Rgba = gpui::Rgba { r: 0.85, g: 0.90, b: 1.0, a: 1.0 };
-const BODY: gpui::Rgba = gpui::Rgba { r: 0.82, g: 0.84, b: 0.88, a: 1.0 };
-const MUTED: gpui::Rgba = gpui::Rgba { r: 0.55, g: 0.58, b: 0.64, a: 1.0 };
-const USER: gpui::Rgba = gpui::Rgba { r: 0.60, g: 0.78, b: 1.0, a: 1.0 };
-const AGENT: gpui::Rgba = gpui::Rgba { r: 0.80, g: 0.72, b: 1.0, a: 1.0 };
-const TOOL: gpui::Rgba = gpui::Rgba { r: 0.95, g: 0.82, b: 0.55, a: 1.0 };
-const ALLOW: gpui::Rgba = gpui::Rgba { r: 0.45, g: 0.85, b: 0.55, a: 1.0 };
-const WARN: gpui::Rgba = gpui::Rgba { r: 0.95, g: 0.78, b: 0.40, a: 1.0 };
-const REJECT: gpui::Rgba = gpui::Rgba { r: 0.95, g: 0.45, b: 0.45, a: 1.0 };
-const TRACK: gpui::Rgba = gpui::Rgba { r: 0.18, g: 0.20, b: 0.25, a: 1.0 };
-const BG: gpui::Rgba = gpui::Rgba { r: 0.07, g: 0.08, b: 0.11, a: 1.0 };
+const HEADING: gpui::Rgba = gpui::Rgba {
+    r: 0.85,
+    g: 0.90,
+    b: 1.0,
+    a: 1.0,
+};
+const BODY: gpui::Rgba = gpui::Rgba {
+    r: 0.82,
+    g: 0.84,
+    b: 0.88,
+    a: 1.0,
+};
+const MUTED: gpui::Rgba = gpui::Rgba {
+    r: 0.55,
+    g: 0.58,
+    b: 0.64,
+    a: 1.0,
+};
+const USER: gpui::Rgba = gpui::Rgba {
+    r: 0.60,
+    g: 0.78,
+    b: 1.0,
+    a: 1.0,
+};
+const AGENT: gpui::Rgba = gpui::Rgba {
+    r: 0.80,
+    g: 0.72,
+    b: 1.0,
+    a: 1.0,
+};
+const TOOL: gpui::Rgba = gpui::Rgba {
+    r: 0.95,
+    g: 0.82,
+    b: 0.55,
+    a: 1.0,
+};
+const ALLOW: gpui::Rgba = gpui::Rgba {
+    r: 0.45,
+    g: 0.85,
+    b: 0.55,
+    a: 1.0,
+};
+const WARN: gpui::Rgba = gpui::Rgba {
+    r: 0.95,
+    g: 0.78,
+    b: 0.40,
+    a: 1.0,
+};
+const REJECT: gpui::Rgba = gpui::Rgba {
+    r: 0.95,
+    g: 0.45,
+    b: 0.45,
+    a: 1.0,
+};
+const TRACK: gpui::Rgba = gpui::Rgba {
+    r: 0.18,
+    g: 0.20,
+    b: 0.25,
+    a: 1.0,
+};
+const BG: gpui::Rgba = gpui::Rgba {
+    r: 0.07,
+    g: 0.08,
+    b: 0.11,
+    a: 1.0,
+};
 
 impl Render for AgentDockView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -760,7 +841,10 @@ impl HermesDockSurface {
 
     /// `CockpitSurface::render_body` — the live agent dock view.
     pub fn render_body(&mut self, _window: &mut Window, _cx: &mut App) -> AnyElement {
-        div().size_full().child(self.view.clone()).into_any_element()
+        div()
+            .size_full()
+            .child(self.view.clone())
+            .into_any_element()
     }
 
     /// `CockpitSurface::is_dirty` — a confined agent is "dirty" (worth a marker)

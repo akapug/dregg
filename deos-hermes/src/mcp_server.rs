@@ -62,7 +62,7 @@
 //!
 //! The model has NO other tool path — `tools/list` returns exactly these.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::acp::{PermissionOutcome, ToolCallRequest};
 use crate::bridge::HermesGateway;
@@ -345,8 +345,12 @@ impl<'rt> McpToolHost<'rt> {
         // (1) THE AUTHORITY FACE — the `terminal` tool-call is a cap-gated,
         //     metered, receipted dregg turn (or an in-band refusal). This is the
         //     SAME gate the rate-0 `live-refuse` demo bites on.
-        let call =
-            ToolCallRequest::new("mcp", "tc-terminal", "terminal", json!({ "command": command }));
+        let call = ToolCallRequest::new(
+            "mcp",
+            "tc-terminal",
+            "terminal",
+            json!({ "command": command }),
+        );
         let outcome = self.gateway.admit_call(&call, now);
         let admitted = outcome.allowed();
         let receipt = match &outcome {
@@ -412,8 +416,12 @@ impl<'rt> McpToolHost<'rt> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let call =
-            ToolCallRequest::new("mcp", "tc-terminal", "terminal", json!({ "command": command }));
+        let call = ToolCallRequest::new(
+            "mcp",
+            "tc-terminal",
+            "terminal",
+            json!({ "command": command }),
+        );
         let outcome = self.gateway.admit_call(&call, now);
         ConfinedToolResult {
             tool: "terminal".into(),
@@ -453,7 +461,11 @@ fn run_command_in_confined_pd(_command: &str) -> std::io::Result<i32> {
         let mut verdict = crate::confined::run_sandbox_probes();
         // Prove the Endpoint round-trips (the only channel): write one ack line.
         use std::io::Write;
-        if sock.write_all(b"{\"confined\":true}\n").and_then(|_| sock.flush()).is_ok() {
+        if sock
+            .write_all(b"{\"confined\":true}\n")
+            .and_then(|_| sock.flush())
+            .is_ok()
+        {
             verdict |= crate::confined::probe::IPC_WORKS;
         }
         verdict

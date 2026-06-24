@@ -63,7 +63,11 @@ fn program_source_edits_as_a_patch_and_blame_attributes_it() {
 
     // Alice seeds the gadget's source (the genesis patch carries the whole base).
     let mut src = ProgramSource::seed(alice, BASE_SOURCE);
-    assert_eq!(src.view_source(), BASE_SOURCE, "the fold reproduces the seed source");
+    assert_eq!(
+        src.view_source(),
+        BASE_SOURCE,
+        "the fold reproduces the seed source"
+    );
 
     // Bob edits: insert a label line in the middle (a PATCH, not a rewrite).
     let edited = "\
@@ -75,7 +79,11 @@ deos.ui.vstack(
 )
 ";
     src.edit(bob, edited);
-    assert_eq!(src.view_source(), edited, "the edited source is the doc's new fold");
+    assert_eq!(
+        src.view_source(),
+        edited,
+        "the edited source is the doc's new fold"
+    );
 
     // BLAME: the inserted line is attributed to Bob; the surrounding lines stay Alice's
     // (correct-by-construction — the middle insert did NOT smear blame).
@@ -84,7 +92,10 @@ deos.ui.vstack(
         .iter()
         .find(|l| l.content.contains("clicks so far"))
         .expect("the inserted line is present in blame");
-    assert_eq!(inserted.author, bob, "the inserted line is blamed on its author (Bob)");
+    assert_eq!(
+        inserted.author, bob,
+        "the inserted line is blamed on its author (Bob)"
+    );
 
     let surrounding = blamed
         .iter()
@@ -95,7 +106,10 @@ deos.ui.vstack(
         "a line Bob did NOT touch is still attributed to Alice (blame did not smear)"
     );
     // The inserted line's patch id differs from the seed line's patch id (distinct edits).
-    assert_ne!(inserted.patch, surrounding.patch, "the two lines came from different patches");
+    assert_ne!(
+        inserted.patch, surrounding.patch,
+        "the two lines came from different patches"
+    );
 }
 
 /// ── TRANSCLUDE: a provenanced live quote of another gadget's source fragment, ──────
@@ -116,7 +130,10 @@ fn one_gadget_transcludes_another_gadgets_source_fragment_with_provenance() {
         TranscludedFragment::Quoted { from, lines } => {
             assert_eq!(*from, cite, "the quote cites the source gadget");
             assert_eq!(lines.len(), 1, "one line was quoted");
-            assert!(lines[0].content.contains("deos.ui.bind"), "the right fragment was quoted");
+            assert!(
+                lines[0].content.contains("deos.ui.bind"),
+                "the right fragment was quoted"
+            );
             assert_eq!(
                 lines[0].author, alice,
                 "the quoted line carries the SOURCE author's provenance (a provenanced quote)"
@@ -124,13 +141,23 @@ fn one_gadget_transcludes_another_gadgets_source_fragment_with_provenance() {
         }
         other => panic!("expected an authorized quote, got {other:?}"),
     }
-    assert!(quote.text().contains("deos.ui.bind"), "the quote's bytes are the source fragment");
+    assert!(
+        quote.text().contains("deos.ui.bind"),
+        "the quote's bytes are the source fragment"
+    );
 
     // An UNAUTHORIZED viewer gets a DARKENED quote: the citation survives, the bytes do
     // not (cap-bounded like the membrane — no amplification).
     let dark = source_gadget.transclude_fragment(cite, 2..3, /*viewer_can_read=*/ false);
-    assert!(dark.is_darkened(), "an out-of-cap viewer's quote is darkened");
-    assert_eq!(dark.cite(), &cite, "the citation (which gadget) survives darkening");
+    assert!(
+        dark.is_darkened(),
+        "an out-of-cap viewer's quote is darkened"
+    );
+    assert_eq!(
+        dark.cite(),
+        &cite,
+        "the citation (which gadget) survives darkening"
+    );
     assert_eq!(dark.text(), "", "the bytes were withheld (darkened)");
 
     // A QUOTING gadget (Carol's) splices the authorized quote into its own source: the
@@ -145,7 +172,10 @@ fn one_gadget_transcludes_another_gadgets_source_fragment_with_provenance() {
     // The quote record still attributes the quoted material to Alice (provenance fact).
     assert_eq!(quote.cite(), &cite);
     if let TranscludedFragment::Quoted { lines, .. } = &quote {
-        assert_eq!(lines[0].author, alice, "the quote's provenance still names the original author");
+        assert_eq!(
+            lines[0].author, alice,
+            "the quote's provenance still names the original author"
+        );
     }
 }
 
@@ -169,11 +199,23 @@ fn two_authors_merge_concurrent_edits_disjoint_clean_overlapping_conflicts() {
 
         // Merge Bob's branch into Alice's: a disjoint merge folds CLEAN.
         let rendered = a.merge(&b);
-        assert!(!rendered.has_conflict(), "disjoint edits merge with NO conflict");
+        assert!(
+            !rendered.has_conflict(),
+            "disjoint edits merge with NO conflict"
+        );
         let folded = a.view_source();
-        assert!(folded.contains("HEADER-A"), "Alice's header change survived the merge");
-        assert!(folded.contains("FOOTER-B"), "Bob's footer change survived the merge");
-        assert!(folded.contains("middle"), "the untouched middle line is intact");
+        assert!(
+            folded.contains("HEADER-A"),
+            "Alice's header change survived the merge"
+        );
+        assert!(
+            folded.contains("FOOTER-B"),
+            "Bob's footer change survived the merge"
+        );
+        assert!(
+            folded.contains("middle"),
+            "the untouched middle line is intact"
+        );
     }
 
     // ── overlapping: both edit the SAME line concurrently — a first-class conflict. ──
@@ -205,9 +247,19 @@ fn two_authors_merge_concurrent_edits_disjoint_clean_overlapping_conflicts() {
             conflict.alternatives.len() >= 2,
             "the conflict carries both authors' alternatives"
         );
-        let authors: Vec<u64> = conflict.alternatives.iter().map(|alt| alt.provenance.author.0).collect();
-        assert!(authors.contains(&alice.0), "Alice's alternative is attributed to her");
-        assert!(authors.contains(&bob.0), "Bob's alternative is attributed to him");
+        let authors: Vec<u64> = conflict
+            .alternatives
+            .iter()
+            .map(|alt| alt.provenance.author.0)
+            .collect();
+        assert!(
+            authors.contains(&alice.0),
+            "Alice's alternative is attributed to her"
+        );
+        assert!(
+            authors.contains(&bob.0),
+            "Bob's alternative is attributed to him"
+        );
     }
 }
 
@@ -222,7 +274,10 @@ fn a_patched_document_program_loads_and_runs_a_real_turn() {
     let mut src = ProgramSource::seed(alice, BASE_SOURCE);
     let patched = BASE_SOURCE.replace("\"Counter\"", "\"Counter (patched)\"");
     src.edit(bob, &patched);
-    assert!(src.view_source().contains("Counter (patched)"), "the source carries Bob's patch");
+    assert!(
+        src.view_source().contains("Counter (patched)"),
+        "the source carries Bob's patch"
+    );
 
     // SEAL the doc's fold into a manifest — the rest of the portable path is unchanged.
     let manifest = src.seal_into(counter_manifest(BASE_SOURCE));
@@ -253,10 +308,24 @@ fn a_patched_document_program_loads_and_runs_a_real_turn() {
     );
 
     // FIRE on the loaded gadget → a REAL cap-gated verified turn on the loaded cell.
-    let receipt = loaded.fire("inc", 10).expect("the document-sourced program's inc fires a real turn");
-    assert_ne!(receipt.receipt_hash(), [0u8; 32], "the fire left a real receipt");
-    assert_eq!(loaded.get_u64(0), 14, "the loaded model advanced (4 + 10) via a verified turn");
-    assert_eq!(loaded.receipt_count(), 1, "exactly one verified turn committed");
+    let receipt = loaded
+        .fire("inc", 10)
+        .expect("the document-sourced program's inc fires a real turn");
+    assert_ne!(
+        receipt.receipt_hash(),
+        [0u8; 32],
+        "the fire left a real receipt"
+    );
+    assert_eq!(
+        loaded.get_u64(0),
+        14,
+        "the loaded model advanced (4 + 10) via a verified turn"
+    );
+    assert_eq!(
+        loaded.receipt_count(),
+        1,
+        "exactly one verified turn committed"
+    );
 
     // The cap tooth is intact: reset (Proof) vs held Signature → refused, anti-ghost.
     let refused = loaded.fire("reset", 0);

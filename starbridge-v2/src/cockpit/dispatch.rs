@@ -116,9 +116,7 @@ impl Cockpit {
             // forks for the real membrane mint/rehydrate/drive/stitch) — same
             // deferred-window open path as the agent/card panes.
             #[cfg(all(feature = "dev-surfaces", feature = "embedded-executor"))]
-            CommandId::OpenMembrane => {
-                self.open_dev_pane_deferred(cx, Cockpit::open_membrane_pane)
-            }
+            CommandId::OpenMembrane => self.open_dev_pane_deferred(cx, Cockpit::open_membrane_pane),
             // Membrane command present in the palette but the build lacks the
             // executor (no `World` to fork for the membrane): a comprehensive-palette
             // no-op.

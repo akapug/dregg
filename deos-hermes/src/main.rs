@@ -33,15 +33,17 @@
 
 use std::sync::{Arc, RwLock};
 
-use deos_hermes::surface::AgentDockModel;
 use deos_hermes::mcp_server::{McpServer, McpToolHost};
+use deos_hermes::surface::AgentDockModel;
 use deos_hermes::{
     AcpClient, AcpTransport, GrantRegistry, HermesGateway, MockHermesPeer, ScriptedCall,
 };
 use dregg_sdk::{AgentCipherclerk, AgentRuntime};
 
 fn main() {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "mock".to_string());
+    let mode = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "mock".to_string());
     match mode.as_str() {
         // The live brain → gateway seam over the standard confinement: the
         // `terminal` tool-call the model emits is ADMITTED (a cap-gated,
@@ -192,7 +194,10 @@ fn run_live(confine: Confine) {
             let dock = AgentDockModel::from_run("live", &run, client.gateway());
             print!("{}", dock.render_text());
             println!("\n── live ceiling ──");
-            println!("handshake + session/new + session/prompt: COMPLETED (stop_reason = {})", run.stop_reason);
+            println!(
+                "handshake + session/new + session/prompt: COMPLETED (stop_reason = {})",
+                run.stop_reason
+            );
             if run.verdicts.is_empty() {
                 println!(
                     "permission round-trip: NOT reached — Hermes produced no tool-call.\n\
@@ -257,13 +262,17 @@ fn run_live_mcp() {
     let model = hermes_acp_model();
     // The dregg MCP server binary the model's tools route through = THIS binary
     // (overridable via DEOS_MCP_SERVER_BIN, e.g. an absolute path or a wrapper).
-    let self_bin = std::env::var("DEOS_MCP_SERVER_BIN").ok().unwrap_or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "deos-hermes".to_string())
-    });
-    println!("spawning `{program}` (model `{model}`); dregg MCP server = `{self_bin} mcp-server`\n");
+    let self_bin = std::env::var("DEOS_MCP_SERVER_BIN")
+        .ok()
+        .unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "deos-hermes".to_string())
+        });
+    println!(
+        "spawning `{program}` (model `{model}`); dregg MCP server = `{self_bin} mcp-server`\n"
+    );
 
     let (runtime, root_token, registry) = confinement();
     let gateway = HermesGateway::new(&runtime, root_token, registry);
@@ -326,8 +335,16 @@ fn run_live_mcp() {
                     println!(
                         "  • {} ({}) — {}",
                         tc.name,
-                        if dregg { "DREGG confined tool — routed through our MCP server (the sandbox)" } else { "non-dregg" },
-                        if dregg { "executed in the dregg sandbox (see the MCP server's stderr)" } else { "the model has no dregg executor for this" }
+                        if dregg {
+                            "DREGG confined tool — routed through our MCP server (the sandbox)"
+                        } else {
+                            "non-dregg"
+                        },
+                        if dregg {
+                            "executed in the dregg sandbox (see the MCP server's stderr)"
+                        } else {
+                            "the model has no dregg executor for this"
+                        }
                     );
                 }
             }

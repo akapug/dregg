@@ -55,7 +55,7 @@ pub mod transport;
 pub mod cockpit_surface;
 
 #[cfg(all(feature = "native-ui", not(target_arch = "wasm32")))]
-pub use model::{Terminal, TerminalContent, TermSize};
+pub use model::{TermSize, Terminal, TerminalContent};
 #[cfg(all(feature = "native-ui", not(target_arch = "wasm32")))]
 pub use view::TerminalView;
 

@@ -158,7 +158,10 @@ impl std::fmt::Display for ComposeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ComposeError::OverReach { step, reason } => {
-                write!(f, "step {step} over-reaches the author's held authority: {reason}")
+                write!(
+                    f,
+                    "step {step} over-reaches the author's held authority: {reason}"
+                )
             }
             ComposeError::Executor { step, reason } => {
                 write!(f, "step {step} refused by the embedded executor: {reason}")
@@ -437,10 +440,10 @@ impl MultiCellAuthor {
     fn commit_step(&mut self, step: Step) -> Result<(TurnReceipt, Option<CellId>), String> {
         let method = step.method();
         // The author cell's current nonce drives the turn (it is the agent).
-        let nonce = crate::applet::CellModel::from_ledger(self.engine.ledger(), &self.author).nonce();
+        let nonce =
+            crate::applet::CellModel::from_ledger(self.engine.ledger(), &self.author).nonce();
 
-        let mut action =
-            ActionBuilder::new_unchecked_for_tests(self.author, method, self.author);
+        let mut action = ActionBuilder::new_unchecked_for_tests(self.author, method, self.author);
         let mut new_cell: Option<CellId> = None;
 
         // A MintCard leg carries genesis configuration (open the new cell + seed its
@@ -489,10 +492,7 @@ impl MultiCellAuthor {
         tb.add_action(action);
         let turn = tb.build();
 
-        let receipt = self
-            .engine
-            .execute_turn(&turn)
-            .map_err(|e| e.to_string())?;
+        let receipt = self.engine.execute_turn(&turn).map_err(|e| e.to_string())?;
 
         // Post-commit genesis configuration of a freshly-minted card (single-custody):
         // open its permissions, seed its genesis model, and give the AUTHOR a c-list
@@ -582,8 +582,8 @@ mod tests {
             tok(1),
             // `Either` is the wide held authority (admits Signature/Proof grants below).
             AuthRequired::Either,
-            &[],                 // no pre-declared scope cards — this story MINTS its card.
-            &[(pk(9), tok(9))],  // one foreign peer to grant TO.
+            &[],                // no pre-declared scope cards — this story MINTS its card.
+            &[(pk(9), tok(9))], // one foreign peer to grant TO.
         );
         let author_id = author.author();
         let new_card = CellId::derive_raw(&pk(2), &tok(2));
@@ -626,7 +626,10 @@ mod tests {
         assert_eq!(author.receipt_count(), 4);
         // The minted card was reported and joined the author's scope.
         assert_eq!(comp.minted, vec![new_card]);
-        assert!(author.holds_cell(&new_card), "the minted card is now in scope");
+        assert!(
+            author.holds_cell(&new_card),
+            "the minted card is now in scope"
+        );
         assert!(author.holds_cell(&author_id));
         assert!(!author.holds_cell(&peer), "the peer stays foreign");
 
@@ -638,8 +641,16 @@ mod tests {
         // The writes landed across cells: card field 0 = 7 (seed), field 1 = 42; the
         // author cell field 2 = 99. A re-read off the live ledger proves it.
         assert_eq!(author.get_u64(&new_card, 0), 7, "the seed model survived");
-        assert_eq!(author.get_u64(&new_card, 1), 42, "leg-2 write landed on the new card");
-        assert_eq!(author.get_u64(&author_id, 2), 99, "leg-3 write landed on the author");
+        assert_eq!(
+            author.get_u64(&new_card, 1),
+            42,
+            "leg-2 write landed on the new card"
+        );
+        assert_eq!(
+            author.get_u64(&author_id, 2),
+            99,
+            "leg-3 write landed on the author"
+        );
     }
 
     /// THE RED-TEAM LEG: a step that reaches PAST the author's `held` scope (a SetField
@@ -652,8 +663,8 @@ mod tests {
             pk(1),
             tok(1),
             AuthRequired::Either,
-            &[],                 // no scope cards.
-            &[(pk(9), tok(9))],  // the foreign vessel exists but is NOT in scope.
+            &[],                // no scope cards.
+            &[(pk(9), tok(9))], // the foreign vessel exists but is NOT in scope.
         );
         let author_id = author.author();
 
@@ -674,7 +685,9 @@ mod tests {
             },
         ];
 
-        let err = author.compose(story).expect_err("the over-reach is refused");
+        let err = author
+            .compose(story)
+            .expect_err("the over-reach is refused");
         match err {
             ComposeError::OverReach { step, .. } => {
                 assert_eq!(step, 1, "the SECOND leg is the over-reach");
@@ -684,8 +697,16 @@ mod tests {
 
         // NO partial commit: the AUTHORIZED leg-1 turn did NOT land either — the whole
         // story aborts before ANY turn commits (the all-or-nothing pre-screen).
-        assert_eq!(author.receipt_count(), 0, "nothing committed — no partial leg");
-        assert_eq!(author.get_u64(&author_id, 0), 0, "leg-1 write never happened");
+        assert_eq!(
+            author.receipt_count(),
+            0,
+            "nothing committed — no partial leg"
+        );
+        assert_eq!(
+            author.get_u64(&author_id, 0),
+            0,
+            "leg-1 write never happened"
+        );
     }
 
     /// THE AUTHORITY TOOTH: a step whose `required` authority is NOT narrower-or-equal
@@ -705,7 +726,9 @@ mod tests {
             required: AuthRequired::Either, // wider than held Signature ⇒ over-reach.
         }];
 
-        let err = author.compose(story).expect_err("the authority over-reach is refused");
+        let err = author
+            .compose(story)
+            .expect_err("the authority over-reach is refused");
         assert!(matches!(err, ComposeError::OverReach { step: 0, .. }));
         assert_eq!(author.receipt_count(), 0, "nothing committed");
     }
@@ -732,7 +755,9 @@ mod tests {
             required: AuthRequired::Signature,
         }];
 
-        let err = author.compose(story).expect_err("granting wider-than-held is refused");
+        let err = author
+            .compose(story)
+            .expect_err("granting wider-than-held is refused");
         assert!(matches!(err, ComposeError::OverReach { step: 0, .. }));
         assert_eq!(author.receipt_count(), 0);
     }

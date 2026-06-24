@@ -7,9 +7,9 @@
 //! that the vote button is lit/dark by the REAL `ReactiveAffordance` gate.
 
 use deos_leptos::server::{fire_affordance, reset_executor_cell, FireRequest};
-use deos_leptos::{council_surface, render_council_for, member_held, observer_held};
-use starbridge_web_surface::{AuthRequired, Rehydration, Viewer};
+use deos_leptos::{council_surface, member_held, observer_held, render_council_for};
 use dregg_types::CellId;
+use starbridge_web_surface::{AuthRequired, Rehydration, Viewer};
 
 fn cid(b: u8) -> CellId {
     let mut k = [0u8; 32];
@@ -38,9 +38,21 @@ fn main() {
     println!("== deos council cell, rendered per-viewer by the Leptos runtime ==\n");
 
     for (label, viewer, liveness) in [
-        ("MEMBER  (Either / ballot cap, permits all)", &member, Rehydration::ReplayedDeterministic),
-        ("OBSERVER(Signature, permits all)", &observer, Rehydration::Live),
-        ("GUEST   (Signature, permits NONE — equal caps to observer)", &guest, Rehydration::ReconstructedApproximate),
+        (
+            "MEMBER  (Either / ballot cap, permits all)",
+            &member,
+            Rehydration::ReplayedDeterministic,
+        ),
+        (
+            "OBSERVER(Signature, permits all)",
+            &observer,
+            Rehydration::Live,
+        ),
+        (
+            "GUEST   (Signature, permits NONE — equal caps to observer)",
+            &guest,
+            Rehydration::ReconstructedApproximate,
+        ),
     ] {
         let html = render_council_for(&surface, viewer, height, liveness);
         println!("--- {label} ---");
@@ -61,11 +73,12 @@ fn main() {
     // `TurnReceipt`. We drive it here exactly as the island would: POST a
     // FireRequest, reflect the committed state.
     // ════════════════════════════════════════════════════════════════════════
-    println!(
-        "\n== the vote button's press is a REAL verified turn (not a mock) ==\n"
-    );
+    println!("\n== the vote button's press is a REAL verified turn (not a mock) ==\n");
     let start = reset_executor_cell();
-    println!("fresh council cell (server-side, real executor): tally {}\n", start.tally);
+    println!(
+        "fresh council cell (server-side, real executor): tally {}\n",
+        start.tally
+    );
 
     // A COUNCILLOR (holds the ballot cap `Either`) presses vote — both teeth pass,
     // the gate dispatches through the real executor, a real receipt comes back.

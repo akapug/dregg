@@ -67,7 +67,8 @@ impl HeadlessRender {
     /// wgpu render). gpui's headless window reports a 2.0 scale factor, so the returned
     /// image is 2w×2h device pixels.
     pub fn capture(&mut self, window: AnyWindowHandle) -> anyhow::Result<RgbaImage> {
-        self.cx.update_window(window, |_, window, _cx| window.refresh())?;
+        self.cx
+            .update_window(window, |_, window, _cx| window.refresh())?;
         self.cx.run_until_parked();
         Ok(self.cx.capture_screenshot(window)?)
     }

@@ -250,7 +250,10 @@ mod ws {
                         let bytes = js_sys::Uint8Array::new(&buf).to_vec();
                         let mut inner = inner.borrow_mut();
                         let Inner {
-                            grid, parser, generation, ..
+                            grid,
+                            parser,
+                            generation,
+                            ..
                         } = &mut *inner;
                         let mut perform = GridPerform { grid };
                         parser.advance(&mut perform, &bytes);

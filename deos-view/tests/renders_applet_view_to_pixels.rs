@@ -131,7 +131,10 @@ fn render_proof_body() {
     let frame0 = hr.capture(window.into()).expect("capture frame 0");
     let png0 = out.join("applet-count-0.png");
     frame0.save(&png0).expect("save PNG #0");
-    assert!(frame0.width() > 0 && frame0.height() > 0, "frame 0 has pixels");
+    assert!(
+        frame0.width() > 0 && frame0.height() > 0,
+        "frame 0 has pixels"
+    );
 
     // ── 3. Fire the button's handler — a REAL cap-gated verified turn ────────────────
     // This is exactly what the rendered Button's `on_click` does (fire the affordance
@@ -186,13 +189,18 @@ fn render_proof_body() {
 
     // ── 5. The moldable present() faces through the SAME widget vocabulary ───────────
     let faces = FacesView::for_applet(&shared.borrow()).expect("the applet cell has faces");
-    assert!(faces.face_count() >= 1, "at least the RawFields face is present");
+    assert!(
+        faces.face_count() >= 1,
+        "at least the RawFields face is present"
+    );
     let window_faces = hr
         .open(520.0, 420.0, move |_window, cx| {
             cx.new(|_cx| FacesView::for_applet(&shared.borrow()).expect("faces"))
         })
         .expect("open the faces window");
-    let frame_faces = hr.capture(window_faces.into()).expect("capture faces frame");
+    let frame_faces = hr
+        .capture(window_faces.into())
+        .expect("capture faces frame");
     let png_faces = out.join("applet-faces.png");
     frame_faces.save(&png_faces).expect("save faces PNG");
 

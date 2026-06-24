@@ -31,7 +31,10 @@ fn a_confined_agent_cannot_open_files_dial_the_network_or_hold_extra_fds() {
     let gateway = HermesGateway::new(&rt, root, registry);
 
     // A scripted turn so the child runs a real ACP session (and the probes).
-    let script = vec![ScriptedCall::new("web_search", serde_json::json!({"query": "escape?"}))];
+    let script = vec![ScriptedCall::new(
+        "web_search",
+        serde_json::json!({"query": "escape?"}),
+    )];
 
     let kernel = ProcessKernel::new();
     let agent = spawn_hermes_in_pd(&kernel, "sess-escape", script, None, None)

@@ -15,7 +15,7 @@ use gpui::{
 };
 
 use crate::keymap::to_esc_str;
-use crate::model::{RenderCell, Rgba, Terminal, TermSize, DEFAULT_BG, DEFAULT_FG};
+use crate::model::{RenderCell, Rgba, TermSize, Terminal, DEFAULT_BG, DEFAULT_FG};
 use crate::transport::TerminalTransport;
 
 /// Font size (px) and line-height multiple for the terminal grid.
@@ -272,9 +272,9 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .key_context("Terminal")
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| this.on_key_down(ev, cx)))
-            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, w, cx| {
-                this.on_scroll(ev, w, cx)
-            }))
+            .on_scroll_wheel(
+                cx.listener(|this, ev: &ScrollWheelEvent, w, cx| this.on_scroll(ev, w, cx)),
+            )
             .size_full()
             .overflow_hidden()
             .bg(rgba_to_rgb(DEFAULT_BG))
@@ -302,10 +302,7 @@ impl Render for TerminalView {
 
 /// Collect a maximal run of cells from `col` onward that share the same visual
 /// style, returning the run's text and that shared style. Advances `col`.
-fn collect_run(
-    row: &[Option<RenderCell>],
-    col: &mut usize,
-) -> (String, Rgba, bool, bool, bool) {
+fn collect_run(row: &[Option<RenderCell>], col: &mut usize) -> (String, Rgba, bool, bool, bool) {
     let start = *col;
     let style_of = |c: &Option<RenderCell>| -> (Rgba, bool, bool, bool) {
         match c {

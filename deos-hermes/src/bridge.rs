@@ -22,9 +22,7 @@
 
 use std::collections::HashMap;
 
-use dregg_sdk::{
-    AgentRuntime, GatewayRefusal, HeldToken, ToolCallError, ToolGateway, ToolGrant,
-};
+use dregg_sdk::{AgentRuntime, GatewayRefusal, HeldToken, ToolCallError, ToolGateway, ToolGrant};
 use dregg_turn::Effect;
 
 use crate::acp::{PermissionOutcome, ToolCallRequest, ToolKind};
@@ -212,4 +210,3 @@ fn hex32(bytes: &[u8; 32]) -> String {
     }
     s
 }
-

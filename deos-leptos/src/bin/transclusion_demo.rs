@@ -34,7 +34,10 @@ fn main() {
 
     for (i, step) in steps.iter().enumerate() {
         println!("─── step {i}: {} ───", step.label);
-        println!("  live quote value : constitution threshold = {}", step.threshold);
+        println!(
+            "  live quote value : constitution threshold = {}",
+            step.threshold
+        );
         println!("  provenance       : {}", step.provenance);
         println!();
         // The rendered council surface the viewer's island shows (the live quote +

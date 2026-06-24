@@ -1143,11 +1143,8 @@ impl PersistentStore {
                         .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                     let ordinal = entry.0.value();
                     let record: CommitRecord = postcard::from_bytes(entry.1.value())?;
-                    let hc_key = CommitRecord::height_creator_key(
-                        record.height,
-                        &record.creator,
-                        ordinal,
-                    );
+                    let hc_key =
+                        CommitRecord::height_creator_key(record.height, &record.creator, ordinal);
                     doomed.push(Doomed {
                         ordinal,
                         receipt_hash: record.receipt_hash,
@@ -1180,9 +1177,8 @@ impl PersistentStore {
                     let log = write_txn.open_table(tables::COMMIT_LOG)?;
                     let mut v = Vec::new();
                     for entry in log.range(floor..)? {
-                        let entry = entry.map_err(|e: redb::StorageError| {
-                            StoreError::Database(e.to_string())
-                        })?;
+                        let entry = entry
+                            .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
                         v.push(postcard::from_bytes::<CommitRecord>(entry.1.value())?);
                     }
                     v
@@ -2151,7 +2147,10 @@ mod tests {
         );
         assert!(store.commit_record_at(3).unwrap().is_none(), "tail dropped");
         assert!(store.commit_record_at(4).unwrap().is_none(), "tail dropped");
-        assert!(store.commit_record_at(2).unwrap().is_some(), "last-good kept");
+        assert!(
+            store.commit_record_at(2).unwrap().is_some(),
+            "last-good kept"
+        );
 
         // THE CONVERGENCE CHECK NOW PASSES at the recovered point: the head's
         // recorded root equals the reconstruction (this is what `recover` asserts).

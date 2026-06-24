@@ -30,7 +30,7 @@ use std::sync::{Arc, RwLock};
 use deos_hermes::card_authoring::CardAuthoringTool;
 use deos_hermes::{GrantRegistry, HermesGateway, ToolCallRequest};
 use deos_js::card_editor::{BindProps, TextProps, ViewPatch, ViewTree};
-use deos_js::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
+use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use dregg_cell::AuthRequired;
 use dregg_doc::Author;
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
@@ -139,7 +139,9 @@ fn agent_creates_a_card_authoring_its_first_button_as_a_receipted_patch() {
         "the structural view-edit left a real provenance receipt"
     );
     // The re-folded view carries the new button (the UI the agent built from within).
-    let new_view = out.view_source.expect("authoring yields the new view source");
+    let new_view = out
+        .view_source
+        .expect("authoring yields the new view source");
     let tree = ViewTree::from_json(&new_view).expect("the authored view is a parseable tree");
     assert!(
         tree.has_button_for("inc"),
@@ -189,9 +191,20 @@ fn agent_edits_an_existing_cards_view_as_a_receipted_patch() {
         },
     );
 
-    assert!(out.tool_admitted(), "edit_card is admitted (the accountability turn)");
-    assert_eq!(gw.calls_made_for_tool("edit_card"), 1, "the edit_card call is metered");
-    assert!(out.authored(), "the agent's edit landed a receipted patch: {:?}", out.refused_reason);
+    assert!(
+        out.tool_admitted(),
+        "edit_card is admitted (the accountability turn)"
+    );
+    assert_eq!(
+        gw.calls_made_for_tool("edit_card"),
+        1,
+        "the edit_card call is metered"
+    );
+    assert!(
+        out.authored(),
+        "the agent's edit landed a receipted patch: {:?}",
+        out.refused_reason
+    );
     let tree = ViewTree::from_json(&out.view_source.unwrap()).unwrap();
     assert!(
         tree.has_button_for("reset"),

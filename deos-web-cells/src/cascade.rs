@@ -203,15 +203,25 @@ mod tests {
             "index.html",
             vec![
                 BundleAsset::new("index.html", "text/html", b"<h1>source page</h1>".to_vec()),
-                BundleAsset::new("widget.js", "application/javascript", b"renderWidget()".to_vec()),
+                BundleAsset::new(
+                    "widget.js",
+                    "application/javascript",
+                    b"renderWidget()".to_vec(),
+                ),
                 BundleAsset::new("theme.css", "text/css", b"h1{color:teal}".to_vec()),
             ],
         )
         .expect("valid bundle");
         let mut web = WebOfCells::new(3);
         let lineage = root_lineage(seed);
-        let (uri, _sr) =
-            publish_bundle(&mut web, seed, &bundle, lineage, InteractionLog::new(), false);
+        let (uri, _sr) = publish_bundle(
+            &mut web,
+            seed,
+            &bundle,
+            lineage,
+            InteractionLog::new(),
+            false,
+        );
         (web, uri)
     }
 
@@ -225,18 +235,24 @@ mod tests {
     fn transclude_a_fragment_carries_the_source_bytes_and_provenance() {
         let (web, uri) = published_bundle(1);
 
-        let quote = transclude_bundle_fragment(&web, &uri, "widget.js")
-            .expect("the fragment transcludes");
+        let quote =
+            transclude_bundle_fragment(&web, &uri, "widget.js").expect("the fragment transcludes");
 
         // The fragment bytes ARE the source asset's committed bytes (not a copy).
         assert_eq!(quote.fragment_bytes, b"renderWidget()");
         assert_eq!(quote.asset_name, "widget.js");
         // It carries the receipt-pinned provenance: the source bundle ref + finalized.
         assert_eq!(quote.cite().source, uri);
-        assert!(quote.cite().finalized, "a published+attested bundle is finalized");
+        assert!(
+            quote.cite().finalized,
+            "a published+attested bundle is finalized"
+        );
         // And it re-verifies (the whole bundle's content→commitment→receipt→root→
         // quorum chain).
-        assert!(quote.verify().is_ok(), "the fragment's provenance must re-verify");
+        assert!(
+            quote.verify().is_ok(),
+            "the fragment's provenance must re-verify"
+        );
     }
 
     // ── A different fragment of the same bundle. ──
@@ -273,7 +289,10 @@ mod tests {
         let absent = DreggUri::new(cid(200));
         let r = transclude_bundle_fragment(&web, &absent, "widget.js");
         assert!(
-            matches!(r, Err(CascadeError::Transclusion(TransclusionError::Fetch(_)))),
+            matches!(
+                r,
+                Err(CascadeError::Transclusion(TransclusionError::Fetch(_)))
+            ),
             "an absent source yields no finalized read, got {r:?}"
         );
     }
@@ -323,7 +342,10 @@ mod tests {
         let uri = web.publish(5, b"just some html, not a bundle", "dregg://raw");
         let r = transclude_bundle_fragment(&web, &uri, "index.html");
         assert!(
-            matches!(&r, Err(CascadeError::Bundle(BundleError::MalformedEncoding))),
+            matches!(
+                &r,
+                Err(CascadeError::Bundle(BundleError::MalformedEncoding))
+            ),
             "an attested non-bundle source is a decode error, got {r:?}"
         );
     }
