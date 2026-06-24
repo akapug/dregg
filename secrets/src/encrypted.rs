@@ -213,13 +213,20 @@ fn default_secrets_dir() -> Result<PathBuf, SecretStoreError> {
 /// Uses percent-encoding for non-alphanumeric characters (except `-` and `_`)
 /// to avoid collisions between different IDs.
 fn sanitize_name(name: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(name.len());
+    let mut enc = [0u8; 4];
     for c in name.chars() {
         if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
             out.push(c);
         } else {
-            for b in c.to_string().as_bytes() {
-                out.push_str(&format!("%{:02X}", b));
+            // Percent-encode each UTF-8 byte without a per-byte `format!` allocation
+            // (and without the per-char `to_string()`): write the two hex digits
+            // directly. Output is byte-identical to the prior `%{:02X}` encoding.
+            for &b in c.encode_utf8(&mut enc).as_bytes() {
+                out.push('%');
+                out.push(HEX[(b >> 4) as usize] as char);
+                out.push(HEX[(b & 0x0f) as usize] as char);
             }
         }
     }

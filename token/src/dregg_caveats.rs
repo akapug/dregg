@@ -595,26 +595,56 @@ pub fn verify_caveats(
 
     // --- Feature globs: all glob caveats must permit all requested features ---
     if !request.features.is_empty() && !feature_globs.is_empty() {
+        // Compile each glob pattern ONCE (DFA construction is expensive) instead of
+        // recompiling it per requested feature. Patterns that fail to compile are
+        // dropped here exactly as the per-feature `unwrap_or(false)`/`if let Ok` arms
+        // did — so the verdict is identical, just without the per-feature recompile.
+        struct CompiledGlobCaveat {
+            // `include_nonempty` preserves the ORIGINAL raw-pattern-Vec emptiness test:
+            // an include caveat with patterns that all fail to compile still runs the
+            // "at least one must match" check (and denies), exactly as before.
+            include_nonempty: bool,
+            include: Vec<globset::GlobMatcher>,
+            exclude: Vec<(String, globset::GlobMatcher)>,
+        }
+        let compile_named = |pats: &[String]| -> Vec<(String, globset::GlobMatcher)> {
+            pats.iter()
+                .filter_map(|p| {
+                    globset::Glob::new(p)
+                        .ok()
+                        .map(|g| (p.clone(), g.compile_matcher()))
+                })
+                .collect()
+        };
+        let compiled: Vec<CompiledGlobCaveat> = feature_globs
+            .iter()
+            .map(|(include, exclude)| CompiledGlobCaveat {
+                include_nonempty: !include.is_empty(),
+                include: include
+                    .iter()
+                    .filter_map(|p| globset::Glob::new(p).ok().map(|g| g.compile_matcher()))
+                    .collect(),
+                exclude: compile_named(exclude),
+            })
+            .collect();
+
         for req_feat in &request.features {
-            for (include, exclude) in &feature_globs {
+            for caveat in &compiled {
                 // Check excludes first — any match denies
-                for pat in exclude {
-                    if let Ok(matcher) = globset::Glob::new(pat).map(|g| g.compile_matcher()) {
-                        if matcher.is_match(req_feat) {
-                            return Err(TokenError::Denied(format!(
-                                "feature '{}' matches exclusion pattern '{}'",
-                                req_feat, pat
-                            )));
-                        }
+                for (pat, matcher) in &caveat.exclude {
+                    if matcher.is_match(req_feat) {
+                        return Err(TokenError::Denied(format!(
+                            "feature '{}' matches exclusion pattern '{}'",
+                            req_feat, pat
+                        )));
                     }
                 }
-                // If includes are specified, at least one must match
-                if !include.is_empty() {
-                    let matched = include.iter().any(|pat| {
-                        globset::Glob::new(pat)
-                            .map(|g| g.compile_matcher().is_match(req_feat))
-                            .unwrap_or(false)
-                    });
+                // If includes are specified, at least one must match.
+                if caveat.include_nonempty {
+                    let matched = caveat
+                        .include
+                        .iter()
+                        .any(|matcher| matcher.is_match(req_feat));
                     if !matched {
                         return Err(TokenError::Denied(format!(
                             "feature '{}' does not match any include pattern",

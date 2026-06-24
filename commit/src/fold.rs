@@ -207,13 +207,14 @@ impl FoldDelta {
         // Verify coverage: the unchanged subtrees must have distinct, non-overlapping
         // paths. Duplicate paths would indicate an attempt to claim the same subtree
         // multiple times.
-        let mut seen_paths: Vec<&[u8]> = Vec::new();
+        // O(1) duplicate detection via a hash set: `Vec::contains` made this O(n²)
+        // over the (potentially large) survival witness. `insert` returning `false`
+        // signals a path already seen — identical reject as the prior linear scan.
+        let mut seen_paths: std::collections::HashSet<&[u8]> = std::collections::HashSet::new();
         for subtree in &self.surviving_proof.unchanged_subtrees {
-            let path_slice = subtree.path.as_slice();
-            if seen_paths.contains(&path_slice) {
+            if !seen_paths.insert(subtree.path.as_slice()) {
                 return Err(FoldVerification::InvalidSurvivalWitness);
             }
-            seen_paths.push(path_slice);
         }
 
         // Without the full old state's fact list, we cannot independently recompute
