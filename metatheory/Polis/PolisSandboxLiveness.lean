@@ -20,7 +20,7 @@ property the one-step floor simply cannot deliver.
 
 `#eval`/`#guard` assert TRUE props (`decide` tells the truth).
 -/
-import Metatheory.PolisSandboxAdaptive
+import Polis.PolisSandboxAdaptive
 
 namespace Metatheory.PolisSandboxLiveness
 

@@ -35,9 +35,9 @@ violation (no astrology, no forgotten case). Non-vacuity is EXECUTED both polari
 l4v bar: the floor is decidable and bites both ways (a trace
 where both councils stay recoverable clears; a trace where one council locks itself out is caught).
 -/
-import Metatheory.PolisRecoveryFloor
-import Metatheory.PolisViability
-import Metatheory.Polis
+import Polis.PolisRecoveryFloor
+import Polis.PolisViability
+import Polis.Polis
 
 namespace Metatheory.PolisFloorComposed
 

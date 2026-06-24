@@ -29,10 +29,10 @@ The remaining toy edges are the scan domain `cells` (an explicit
 roster, since `Caps := Label → List Cap` has no enumerable domain) and the fixed delegated-authority
 set — both named, neither load-bearing for the foreclosure/admission content.
 -/
-import Metatheory.PolisDatalog
-import Metatheory.PolisAuthReachDatalog
-import Metatheory.PolisGovernorTheory
-import Metatheory.PolisAuthViability
+import Polis.PolisDatalog
+import Polis.PolisAuthReachDatalog
+import Polis.PolisGovernorTheory
+import Polis.PolisAuthViability
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthLive

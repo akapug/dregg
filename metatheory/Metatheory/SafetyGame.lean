@@ -16,7 +16,7 @@ maximality, the *best* such governor — `envelope_least_restrictive` becomes th
 `kernel_maximal` the global one (gpt5.5 Q4: compute the kernel, then envelope it).
 -/
 import Mathlib.Order.FixedPoints
-import Metatheory.PolisGovernorTheory
+import Polis.PolisGovernorTheory
 
 namespace Metatheory.SafetyGame
 

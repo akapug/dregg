@@ -43,7 +43,7 @@ Distributed-Houyhnhnm Settlement-Soundness frontier).
 
 Pure Lean 4 core (imports `Metatheory.Polis`); kernel-clean.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.KeyLeak
 

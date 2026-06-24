@@ -14,7 +14,7 @@ anticipated.
 
 Pure Lean 4 core.
 -/
-import Metatheory.PolisSandboxLongGame
+import Polis.PolisSandboxLongGame
 
 namespace Metatheory.PolisSandboxAdaptive
 

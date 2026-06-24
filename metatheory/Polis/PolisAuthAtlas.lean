@@ -23,7 +23,7 @@ mechanism is then shown to fire on the SAME real cell ids the moment an edge car
 No load-bearing `True`. The cap-state is transcribed from the atlas JSON by hand (Lean
 cannot parse JSON in-kernel); the ids and edge structure are the file's, verbatim.
 -/
-import Metatheory.PolisAuthLive
+import Polis.PolisAuthLive
 
 namespace Metatheory.PolisAuthAtlas
 

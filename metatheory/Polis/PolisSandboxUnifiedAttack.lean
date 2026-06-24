@@ -23,7 +23,7 @@ Honest scope: a small finite world (two `Bool` agents, `decide`-cheap); the adve
 bounded Lean searcher exhaustively enumerating the move space, not an LLM — but it genuinely explores
 every actor×action at every step, and the governance is proven universal over those trees.
 -/
-import Metatheory.PolisSandboxUnified
+import Polis.PolisSandboxUnified
 
 namespace Metatheory.PolisSandboxUnifiedAttack
 

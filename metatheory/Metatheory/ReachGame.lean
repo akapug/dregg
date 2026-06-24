@@ -35,7 +35,7 @@ one move = the victim's step through an open gate). Recorded as `reachHome_is_re
 -/
 import Mathlib.Order.FixedPoints
 import Metatheory.SafetyGame
-import Metatheory.PolisSandboxLongGame
+import Polis.PolisSandboxLongGame
 
 namespace Metatheory.ReachGame
 

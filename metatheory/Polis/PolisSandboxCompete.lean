@@ -11,7 +11,7 @@ Governance does not just block one bad move — it changes the EQUILIBRIUM of th
 
 Honest: greedy Lean optimizers, not LLMs; a small fixed pool for a cheap `decide`.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisSandboxCompete
 

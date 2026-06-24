@@ -13,9 +13,9 @@ This closes the frontier for the safety + flow fragment over the deployed carrie
   * `flowMonitor` + `flowBad_iff_decide` — the flow-policy floor is monitorable AND its bad-prefix
     is DECIDED by the deployed Büchi/DupSim game `FlowRefine.decideRefines` (gpt5.5's pointer, met).
 -/
-import Metatheory.PolisCrossCell
-import Metatheory.PolisStreamCarrier
-import Metatheory.PolisFlowRefine
+import Polis.PolisCrossCell
+import Polis.PolisStreamCarrier
+import Polis.PolisFlowRefine
 
 namespace Metatheory.PolisMonitor
 

@@ -27,7 +27,7 @@ Conclusion: **the polis = the substance discipline (`PasRefined`, deployed) ∧ 
 over `Caps`.** The first stops laundering; only the second stops foreclosure.
 -/
 import Metatheory.SafetyGame
-import Metatheory.PolisAuthGame
+import Polis.PolisAuthGame
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthViability

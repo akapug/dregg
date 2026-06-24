@@ -18,7 +18,7 @@ the severity order); that instance is wired in `Metatheory.PolisGradeTier` (`ins
 
 Pure Lean 4 core (imports only the import-free `Metatheory.Polis`; `ℕ` + `omega`).
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisGrade
 

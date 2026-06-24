@@ -27,7 +27,7 @@ authority executor. No load-bearing `True`; non-vacuity is `decide`-checked on a
 2-cell graph.
 -/
 import Dregg2.Exec.AuthTurn
-import Metatheory.PolisGovernorTheory
+import Polis.PolisGovernorTheory
 
 namespace Metatheory.PolisAuthExecGraph
 

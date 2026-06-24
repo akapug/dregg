@@ -27,7 +27,7 @@ Proven end to end:
 Honest: bounded Lean world (small `Nat`s so `decide` is cheap); the "detectors" are Lean functions,
 not learned models.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisSandboxDeceiver
 

@@ -7,8 +7,8 @@ where `⊗ = ⊔ = max` (finality takes the WORST tier reached; it does not accu
 `causal` (the weakest tier). Combined with `instProd` and the max-plus `ℕ` rent grade, the deployed
 product grade `Tier × ℕ` (laundering × rent) is now a quantale for free — gpt5.5 §5, fully wired.
 -/
-import Metatheory.PolisGrade
-import Metatheory.PolisGradeProduct
+import Polis.PolisGrade
+import Polis.PolisGradeProduct
 import Dregg2.Finality
 
 namespace Metatheory.PolisGrade

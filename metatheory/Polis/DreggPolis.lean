@@ -31,7 +31,7 @@ over `rotateWrite` (incl. the multi-link bridge `writeStep_commits_target`) is b
 shadow only as a TIGHTENING, not a gap: `held ⊆ bound` IS the deployed `fits` relation by
 `Dregg2.Authority.USet.fits_iff`, and the camera `Fpu` form is pinned in `PolisNonConfusion`.
 -/
-import Metatheory.Polis
+import Polis.Polis
 import Metatheory.EpistemicDial
 import Dregg2.Authority.Positional
 import Dregg2.Exec.Kernel

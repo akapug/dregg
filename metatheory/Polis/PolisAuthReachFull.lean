@@ -12,8 +12,8 @@ cannot forge the discharge.
 Grounded on the real `Dregg2.Laws.{Verifiable, Discharged}` (the `PolisAuthCoord` instance) and the
 `Caps`/derivation reachability (`PolisAuthReach`).
 -/
-import Metatheory.PolisAuthReach
-import Metatheory.PolisAuthCoord
+import Polis.PolisAuthReach
+import Polis.PolisAuthCoord
 
 namespace Metatheory.PolisAuthReachFull
 

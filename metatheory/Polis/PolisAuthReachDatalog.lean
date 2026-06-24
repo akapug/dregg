@@ -35,8 +35,8 @@ PROVED (all `decide`-checked on concrete grant graphs):
     another (the direct `read` fact removed, the `grant` chain remains).
   * `foreclosure_cuts_all_pathsD` — cut EVERY derivation path ⇒ `¬ Derivable`.
 -/
-import Metatheory.PolisDatalog
-import Metatheory.PolisAuthReach
+import Polis.PolisDatalog
+import Polis.PolisAuthReach
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthReachDatalog

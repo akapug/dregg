@@ -12,9 +12,9 @@ This is the unification axis. The relational/counterfactual axis (`viable_option
 self-composed actual-vs-counterfactual product, bounded-liveness → safety) is the next file
 (`PolisViability` / `PolisSelfCompose`), per gpt5.5's build plan.
 -/
-import Metatheory.Polis
-import Metatheory.DreggPolis
-import Metatheory.PolisFlowRefine
+import Polis.Polis
+import Polis.DreggPolis
+import Polis.PolisFlowRefine
 
 namespace Metatheory.PolisTrace
 

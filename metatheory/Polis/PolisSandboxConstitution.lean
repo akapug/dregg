@@ -25,8 +25,8 @@ Chosen instantiation (matches `Polis.polis_safety`'s signature exactly):
 Pure Lean 4 core (imports `Metatheory.Polis`, `Metatheory.PolisSandbox`).
 `#guard` / `decide` assert TRUE props on the live world.
 -/
-import Metatheory.Polis
-import Metatheory.PolisSandbox
+import Polis.Polis
+import Polis.PolisSandbox
 
 namespace Metatheory.PolisSandboxConstitution
 

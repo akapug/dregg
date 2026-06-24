@@ -10,7 +10,7 @@ graded non-regression theorems lift to it for free.
 
 Pure Lean 4 core (imports `Metatheory.PolisGrade`).
 -/
-import Metatheory.PolisGrade
+import Polis.PolisGrade
 
 namespace Metatheory.PolisGrade
 

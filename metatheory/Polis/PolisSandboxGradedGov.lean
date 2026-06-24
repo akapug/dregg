@@ -25,7 +25,7 @@ Proven end-to-end, reusing `PolisGrade` (`comp = +`, the max-plus rent quantale)
 
 Pure Lean 4 core (imports `Metatheory.PolisGrade`); `ℕ` + `omega`.
 -/
-import Metatheory.PolisGrade
+import Polis.PolisGrade
 
 namespace Metatheory.PolisSandboxGradedGov
 

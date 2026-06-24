@@ -34,7 +34,7 @@ Honest scope: the *theory* is fully general (any `State`, any `step`, any decida
 non-vacuity/adversary demonstrations live in the concrete sandbox files (bounded worlds, scripted
 optimizers, not LLMs).
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisGovernorTheory
 

@@ -33,7 +33,7 @@ infinite event space — it is the public author-occurrence of a finite publishe
 The §8 crypto seam (hash-injectivity, signature-unforgeability) is untouched, exactly as in the
 deployed `Blocklace.lean`.
 -/
-import Metatheory.PolisDominationDregg
+import Polis.PolisDominationDregg
 
 namespace Metatheory.PolisViewFunctor
 

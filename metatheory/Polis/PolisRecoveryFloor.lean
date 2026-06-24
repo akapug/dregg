@@ -41,7 +41,7 @@ witness the GAME, not re-prove the hash.
 l4v bar: the floor is `Bool`-valued and non-vacuous both
 polarities (a recoverable view passes; a locked-out view is foreclosed). `#guard`s execute both.
 -/
-import Metatheory.PolisViability
+import Polis.PolisViability
 import Dregg2.Apps.PreRotation
 
 namespace Metatheory.PolisRecoveryFloor
