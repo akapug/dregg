@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-commit: rustfmt every STAGED .rs file on its way into the commit, so format-drift never lands
+# (keeps CI's Format job green without anyone having to remember `cargo fmt`).
+#
+# - Touches ONLY staged files (not the tree), so it's safe alongside concurrent edits / parallel agents.
+# - Re-stages each formatted file so the commit contains the formatted version.
+# - SKIPS a file that doesn't parse (mid-edit / macro it can't handle) rather than BLOCKING the commit —
+#   a perf/fmt hook must never wedge a commit. CI's `cargo fmt --check` remains the hard gate.
+# - Edition 2024 = the workspace default (Cargo.toml `[workspace.package] edition = "2024"`); the few
+#   excluded 2021 crates (chain/) aren't in the CI fmt set anyway.
+#
+# Installed by scripts/install-hooks.sh (symlinked into .git/hooks, leaving git-lfs's hooks intact).
+set -uo pipefail
+
+command -v rustfmt >/dev/null 2>&1 || exit 0   # no rustfmt on PATH → don't block the commit
+
+# Null-delimited so paths with spaces are safe; ACM = Added/Copied/Modified (skip Deleted/Renamed-away).
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] || continue
+  if rustfmt --edition 2024 "$f" 2>/dev/null; then
+    git add -- "$f"
+  else
+    printf 'pre-commit: rustfmt skipped %s (does not parse?) — committing as-is\n' "$f" >&2
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.rs')
+
+exit 0
