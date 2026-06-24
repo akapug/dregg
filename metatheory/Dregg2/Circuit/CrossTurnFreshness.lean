@@ -1230,22 +1230,32 @@ theorem runTurn_forest_strictly_advances (ctx : Admission.AdmCtx) (h : Admission
     (hsov : forestTouchesSovereign f h.agent = false) :
     ∀ s', Admission.runTurn ctx h s (fun s₀ => FullForest.execFullForestA s₀ f) = some s' →
       agentNonce s.kernel h.agent < agentNonce s'.kernel h.agent := by
-  -- discharge `BodyNonceNondecreasing` at the post-prologue state: membership rides through the prologue.
+  intro s' hrun
+  -- the prologue's strict +1 bump.
+  have hpro := prologue_strictly_increases_nonce s h.agent h.fee
+  -- the post-prologue state's agent membership (from admission's `AgentLive`, preserved by the prologue).
   have hmem0 : h.agent ∈ (Admission.commitPrologue s h.agent h.fee).kernel.accounts := by
     rw [Admission.commitPrologue_accounts]; exact admissible_agentLive ctx h s hadm
-  have hbody : BodyNonceNondecreasing
-      (fun s₀ => FullForest.execFullForestA s₀ f) h.agent := by
-    intro s₁ s' hb
-    -- the body is only ever applied to the post-prologue state; but the predicate is `∀ s₁` — we use the
-    -- forest keystone which needs `h.agent ∈ s₁.accounts`. In the `runTurn` composition only the
-    -- post-prologue state occurs; we discharge generally by NOT requiring it here — instead the
-    -- composition below feeds the post-prologue membership. (See `runTurn_strictly_advances_agentNonce`.)
-    exact execFullForestA_agentNonce_nondecr s₁ s' f h.agent (by
-      -- membership at an arbitrary `s₁` is NOT available; restrict via the actual call site. We obtain it
-      -- from the fact that a committed forest preserves membership from a state where the agent IS live —
-      -- here we instead thread the post-prologue membership through the executor composition.
-      sorry) hsov hb
-  sorry
+  -- split on whether the forest body commits.
+  cases hb : (fun s₀ => FullForest.execFullForestA s₀ f) (Admission.commitPrologue s h.agent h.fee) with
+  | none =>
+      -- failed body: `runTurn = commitPrologue`; the prologue advance IS the result.
+      exact runTurn_failed_strictly_advances ctx h s (fun s₀ => FullForest.execFullForestA s₀ f)
+        hadm hb s' hrun
+  | some sb =>
+      -- committing body: `runTurn = sb`; the forest body ran on the post-prologue state, only RAISING the
+      -- agent nonce (the FOREST KEYSTONE, discharged at the post-prologue state via `hmem0`).
+      have hrunsb : Admission.runTurn ctx h s (fun s₀ => FullForest.execFullForestA s₀ f) = some sb :=
+        Admission.prologue_then_commit ctx h s (fun s₀ => FullForest.execFullForestA s₀ f) sb hadm hb
+      have hbmono : agentNonce (Admission.commitPrologue s h.agent h.fee).kernel h.agent
+          ≤ agentNonce sb.kernel h.agent :=
+        execFullForestA_agentNonce_nondecr (Admission.commitPrologue s h.agent h.fee) sb f h.agent
+          hmem0 hsov hb
+      rw [hrunsb] at hrun
+      cases hrun
+      omega
+
+/-! ## §4d — wire the accepted-turn sequence into a `TurnChain` ⟹ `no_replay` on the DEPLOYED executor.
 
 Given a sequence of states produced by ACCEPTED `runTurn`s (each admissible, each with a
 nonce-nondecreasing body), the strict per-turn advance (`runTurn_strictly_advances_agentNonce`) is
@@ -1281,6 +1291,60 @@ theorem deployed_no_replay (S : CommitSurface) (agent : CellId) (t : Turn)
     (hj : LiveCommitMatches (acceptedSeq_to_TurnChain S agent t seq wf advance) j preCommit) :
     i = j :=
   no_replay (acceptedSeq_to_TurnChain S agent t seq wf advance) hi hj
+
+/-! ## §4e — THE FOREST-DRIVEN DEPLOYED NO-REPLAY (the whole-executor close — hypothesis DISCHARGED).
+
+The `advance` witness `deployed_no_replay` takes is now a THEOREM of the live forest executor
+(`runTurn_forest_strictly_advances`), not an assumption. Given a sequence of states each produced by an
+ACCEPTED `Admission.runTurn` over a (non-self-sovereign) `execFullForestA` body, the strict per-turn
+agent-nonce advance is automatic, so the sequence IS a monotone `TurnChain` and a fixed pre-anchor opens
+the CAS gate at most once — NO REPLAY, unconditional, on the DEPLOYED forest executor. -/
+
+/-- **`forest_advance_holds` — the `advance` witness IS a theorem of the live executor.** For a
+forest-driven accepted-`runTurn` sequence (each admissible, each non-self-sovereign), the per-step strict
+agent-nonce advance is PROVED, not assumed — discharged by `runTurn_forest_strictly_advances`. This is
+exactly the `TurnChain.monotone` obligation, established OF the live executor. -/
+theorem forest_advance_holds (agent : CellId)
+    (seq : Nat → RecChainedState) (ctxs : Nat → Admission.AdmCtx) (hdrs : Nat → Admission.TurnHdr)
+    (fwd : Nat → FullForest.FullForestA)
+    (hagent : ∀ i, (hdrs i).agent = agent)
+    (hadm : ∀ i, Admission.admissible (ctxs i) (hdrs i) (seq i) = true)
+    (hsov : ∀ i, forestTouchesSovereign (fwd i) agent = false)
+    (hstep : ∀ i, Admission.runTurn (ctxs i) (hdrs i) (seq i)
+                    (fun s₀ => FullForest.execFullForestA s₀ (fwd i)) = some (seq (i + 1))) :
+    ∀ i, agentNonce (seq i).kernel agent < agentNonce (seq (i + 1)).kernel agent := by
+  intro i
+  have hsovi : forestTouchesSovereign (fwd i) (hdrs i).agent = false := by
+    rw [hagent i]; exact hsov i
+  have := runTurn_forest_strictly_advances (ctxs i) (hdrs i) (seq i) (fwd i) (hadm i) hsovi
+    (seq (i + 1)) (hstep i)
+  rwa [hagent i] at this
+
+/-- **`deployed_forest_no_replay` — NO REPLAY on the DEPLOYED FOREST executor (the whole-executor close,
+hypothesis-free).** Given indexed states `seq i` (all `AccountsWF`) each produced by an ACCEPTED
+`Admission.runTurn` over a non-self-sovereign `execFullForestA` body (`hagent`/`hadm`/`hsov`/`hstep`),
+a fixed pre-anchor opens the CAS gate at most ONCE. The monotone `advance` is DERIVED internally from the
+executor witnesses (`forest_advance_holds`) — NOT taken as a hypothesis — so no-replay is true OF the
+deployed forest `runTurn` sequence unconditionally, the assembled close of the cross-turn defense. -/
+theorem deployed_forest_no_replay (S : CommitSurface) (agent : CellId) (t : Turn)
+    (seq : Nat → RecChainedState) (ctxs : Nat → Admission.AdmCtx) (hdrs : Nat → Admission.TurnHdr)
+    (fwd : Nat → FullForest.FullForestA)
+    (wf : ∀ i, AccountsWF (seq i).kernel)
+    (hagent : ∀ i, (hdrs i).agent = agent)
+    (hadm : ∀ i, Admission.admissible (ctxs i) (hdrs i) (seq i) = true)
+    (hsov : ∀ i, forestTouchesSovereign (fwd i) agent = false)
+    (hstep : ∀ i, Admission.runTurn (ctxs i) (hdrs i) (seq i)
+                    (fun s₀ => FullForest.execFullForestA s₀ (fwd i)) = some (seq (i + 1)))
+    {i j : Nat} {preCommit : ℤ}
+    (hi : LiveCommitMatches
+        (acceptedSeq_to_TurnChain S agent t seq wf
+          (forest_advance_holds agent seq ctxs hdrs fwd hagent hadm hsov hstep)) i preCommit)
+    (hj : LiveCommitMatches
+        (acceptedSeq_to_TurnChain S agent t seq wf
+          (forest_advance_holds agent seq ctxs hdrs fwd hagent hadm hsov hstep)) j preCommit) :
+    i = j :=
+  no_replay (acceptedSeq_to_TurnChain S agent t seq wf
+    (forest_advance_holds agent seq ctxs hdrs fwd hagent hadm hsov hstep)) hi hj
 
 /-! ## §5 — NON-VACUITY: the no-replay machinery has TEETH (a real chain exists, both polarities).
 
@@ -1330,6 +1394,25 @@ theorem witnessChain_replay_rejected (S : CommitSurface) (agent : CellId) (t : T
     ¬ LiveCommitMatches (witnessChain S agent t base hwf hin) j preCommit :=
   replay_rejected_after_apply _ hi hlt
 
+/-! ### §5b — THE CARVE-OUT BITES: `faTouchesSovereign` flags exactly the down-vector (non-vacuity).
+
+The `forestTouchesSovereign` carve-out is not a vacuous over-restriction: it is `true` EXACTLY on the
+self-sovereign-of-agent action and `false` on the others. A `makeSovereignA _ agent` IS flagged; a
+`makeSovereignA _ other` (other ≠ agent), and every non-sovereign arm, is NOT — so the forest keystone
+admits the full executor minus precisely the one nonce-dropping vector. -/
+
+-- `makeSovereignA actor agent` (target = the agent) IS flagged — the down-vector is caught.
+#guard faTouchesSovereign (.makeSovereignA 5 7) 7 == true
+-- `makeSovereignA actor other` (other ≠ agent) is NOT flagged — a sovereign of a DIFFERENT cell is fine.
+#guard faTouchesSovereign (.makeSovereignA 5 8) 7 == false
+-- non-sovereign arms are NOT flagged (the keystone admits them): transfer / incrementNonce / setField.
+#guard faTouchesSovereign (.balanceA ⟨0, 1, 2, 0⟩ 3) 7 == false
+#guard faTouchesSovereign (.incrementNonceA 7 7 9) 7 == false
+#guard faTouchesSovereign (.setFieldA 7 7 "x" 1) 7 == false
+-- the carve-out recurses INTO `exerciseA`: a self-sovereign hidden in inner effects IS still flagged.
+#guard faTouchesSovereign (.exerciseA 5 6 [.makeSovereignA 5 7]) 7 == true
+#guard faTouchesSovereign (.exerciseA 5 6 [.balanceA ⟨0, 1, 2, 0⟩ 3]) 7 == false
+
 /-! ## §6 — the RESIDUAL (named precisely): what connects this to the deployed CAS.
 
 This module proves, AXIOM-CLEAN, the core no-replay implication over the concrete `recStateCommit`
@@ -1377,5 +1460,16 @@ The genuinely-hard fact — that the commitment cannot hide a stale nonce — is
 #assert_axioms TurnChain.commit_no_repeat
 #assert_axioms prologue_strictly_increases_nonce
 #assert_axioms witnessChain_replay_rejected
+
+-- The ASSEMBLY keystones (the discharged `BodyNonceNondecreasing` + the live-executor wiring) are
+-- axiom-clean: the no-replay defense holds OF the deployed forest `runTurn`, not under an assumption.
+#assert_axioms nonceOf_setField_of_ne
+#assert_axioms makeSovereign_drops_nonce
+#assert_axioms execFullA_agentNonce_nondecr
+#assert_axioms execFullA_accounts_mono
+#assert_axioms execFullForestA_agentNonce_nondecr
+#assert_axioms runTurn_forest_strictly_advances
+#assert_axioms deployed_forest_no_replay
+#assert_axioms forest_advance_holds
 
 end Dregg2.Circuit.CrossTurnFreshness
