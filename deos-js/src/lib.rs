@@ -36,6 +36,6 @@ pub mod reflect_binding;
 pub use applet::{Affordance, Applet, CellModel, FireError, Transclusion, TranscludeError};
 pub use attach::{AttachedApplet, WorldSink};
 pub use card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
-pub use js::{JsRuntime, JsTarget};
+pub use js::{set_current_editor, take_current_editor, JsRuntime, JsTarget};
 pub use portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 pub use program_doc::{GadgetCite, ProgramSource, TranscludedFragment};

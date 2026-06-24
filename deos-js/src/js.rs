@@ -33,6 +33,8 @@ use mozjs::rust::{
 
 use crate::applet::{Applet, FireError};
 use crate::attach::AttachedApplet;
+use crate::card_editor::{CardEditor, EditError, ViewPatch};
+use crate::portable::{AffordanceSpec, ApplyOp};
 use crate::reflect_binding;
 
 /// The substance the native functions drive: EITHER deos-js's own embedded engine
@@ -152,6 +154,26 @@ thread_local! {
     /// Snapshot store for `deos.world.snapshot()`/`.rewind(token)`: token → (bytes,
     /// receipt-count-at-snapshot). A snapshot is the integrity-hashed ledger state.
     static SNAPSHOTS: RefCell<Vec<(Vec<u8>, usize)>> = const { RefCell::new(Vec::new()) };
+    /// THE CARD EDITOR the `deos.editor.*` natives drive — the card being authored from
+    /// within deos (its view/field/affordance). Mounted under the editor's own `held`
+    /// (the authoring cap tooth). Installed by the host alongside (and independent of)
+    /// the crawl/drive target, so `deos.editor.*` is reachable in BOTH the embedded run
+    /// and an attached-live-World run: the card is a portable cell either way.
+    static CURRENT_EDITOR: RefCell<Option<CardEditor>> = const { RefCell::new(None) };
+}
+
+/// Install the [`CardEditor`] the `deos.editor.*` natives author through. The editor is
+/// mounted under its own `held`; `deos.editor.editView/setField/addAffordance(cardId,…)`
+/// drive it, refusing in-band when `held` does not satisfy the card's `edit_authority`
+/// OR when `cardId` is not the editor's card (an author-the-wrong-card over-reach).
+pub fn set_current_editor(editor: CardEditor) {
+    CURRENT_EDITOR.with(|c| *c.borrow_mut() = Some(editor));
+}
+
+/// Take the editor back out — to read the authored card (its re-folded view, blame,
+/// receipts, the re-mintable manifest) after a JS authoring run.
+pub fn take_current_editor() -> Option<CardEditor> {
+    CURRENT_EDITOR.with(|c| c.borrow_mut().take())
 }
 
 /// Install the embedded applet the native functions drive (deos-js's own engine).
@@ -311,6 +333,39 @@ const PRELUDE: &str = r#"
                     };
                 }
             };
+        },
+        // ── THE CARD EDITOR (the authoring surface) — `deos.editor.*` ──────────────
+        // A user OR an agent (via run_js) authors a card LIVE from inside the image:
+        // edit its view (a receipted structural patch + blame), set a field (a real
+        // verified turn), weld a fireable affordance. Every gesture is bounded by the
+        // editor's `held` (the cap tooth) AND by `cardId` (you may only author the
+        // editor's own card) — an over-reach returns -1/null, NO patch, NO turn.
+        //
+        // `card()` names the editor's current card (the id editView/setField target).
+        editor: {
+            card: function() { var c = __deos_editor_card(); return c === "" ? null : c; },
+            // editView(cardId, patchSpec) — apply a structural view-patch, re-fold the
+            // view-source, leave a receipted patch + blame. patchSpec is a small object:
+            //   {op:"addButton", label, affordance, arg}  — append a button (a turn);
+            //   {op:"addText",   text}                     — append a text node;
+            //   {op:"relabel",   target, text}            — relabel a text node.
+            // Returns the re-folded view-tree (the {kind,props,children} JSON deos-view
+            // consumes), or null on refusal (unauthorized / wrong card / no-op).
+            editView: function(cardId, patchSpec) {
+                var j = __deos_editor_edit_view(String(cardId), JSON.stringify(patchSpec || {}));
+                return j === "null" ? null : JSON.parse(j);
+            },
+            // setField(cardId, slot, value) — a real SetField verified turn on the card's
+            // state. Returns 1 on commit (a re-read reflects it), -1 on refusal.
+            setField: function(cardId, slot, value) {
+                return __deos_editor_set_field(String(cardId), slot | 0, value | 0) | 0;
+            },
+            // addAffordance(cardId, spec) — weld a fireable affordance into the card's
+            // program. spec: {name, required:"none"/"signature"/"proof"/"either",
+            //   op:"add"/"sub"/"set", slot, value}. Returns 1 on commit, -1 on refusal.
+            addAffordance: function(cardId, spec) {
+                return __deos_editor_add_affordance(String(cardId), JSON.stringify(spec || {})) | 0;
+            }
         }
     };
 "#;
@@ -375,6 +430,11 @@ impl JsRuntime {
                 (c"__deos_snapshot", native_snapshot as RawNative, 0),
                 (c"__deos_rewind", native_rewind as RawNative, 1),
                 (c"__deos_search", native_search as RawNative, 1),
+                // author (the card editor) — view/field/affordance, cap-gated
+                (c"__deos_editor_card", native_editor_card as RawNative, 0),
+                (c"__deos_editor_edit_view", native_editor_edit_view as RawNative, 2),
+                (c"__deos_editor_set_field", native_editor_set_field as RawNative, 3),
+                (c"__deos_editor_add_affordance", native_editor_add_affordance as RawNative, 2),
             ] {
                 let defined = JS_DefineFunction(realm_cx, g, name.as_ptr(), Some(f), nargs, 0);
                 if defined.is_null() {
@@ -421,6 +481,32 @@ impl JsRuntime {
                 fires_committed: attached.receipt_count(),
                 applet: attached,
             }),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// THE AUTHORING RUN — install a [`CardEditor`] as the `deos.editor.*` target, eval
+    /// `source` (which authors the card via `deos.editor.editView/setField/addAffordance`),
+    /// then take the editor back out so the caller can read the authored card (its
+    /// re-folded view, blame, receipts, the re-mintable manifest).
+    ///
+    /// The editor is INDEPENDENT of the crawl/drive target, so this composes with the
+    /// embedded engine (install both `set_current_applet` + the editor) or an attached
+    /// live World (`set_current_attached` + the editor) — the authoring surface is
+    /// reachable in either run, and the authored card is a portable cell either way.
+    ///
+    /// Returns `(script_result, the_editor_back)`.
+    pub fn run_authoring(
+        &mut self,
+        editor: CardEditor,
+        source: &str,
+    ) -> Result<(Option<i32>, CardEditor), String> {
+        set_current_editor(editor);
+        let eval = self.eval(source);
+        let editor = take_current_editor()
+            .ok_or_else(|| "card editor vanished during run".to_string())?;
+        match eval {
+            Ok(result) => Ok((result, editor)),
             Err(e) => Err(e),
         }
     }
@@ -850,4 +936,173 @@ fn parse_auth_label(label: &str) -> dregg_cell::AuthRequired {
         "impossible" => AuthRequired::Impossible,
         _ => AuthRequired::None,
     }
+}
+
+// ── THE CARD EDITOR natives (the authoring surface) — `deos.editor.*` ──────────────
+//
+// Each authors the thread-local [`CardEditor`] (installed by the host under its own
+// `held`). The bound the agent cannot exceed is TWO-FOLD: (1) the cap tooth in
+// `CardEditor` (`held` must satisfy the card's `edit_authority`) and (2) `cardId` must
+// be the editor's OWN card — authoring a card outside the editor's reach is refused
+// in-band (no patch, no turn), exactly the run_js confinement bar.
+
+/// `cardId` matches the installed editor's card iff equal (case-insensitive hex). A
+/// mismatch is the "author the wrong card" over-reach the JS layer refuses.
+fn editor_card_matches(editor: &CardEditor, card_id_hex: &str) -> bool {
+    reflect_binding::id_hex(&editor.card().cell()).eq_ignore_ascii_case(card_id_hex.trim())
+}
+
+/// `__deos_editor_card()` → the editor's card id hex, or `""` if no editor installed.
+unsafe extern "C" fn native_editor_card(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let id = CURRENT_EDITOR.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|e| reflect_binding::id_hex(&e.card().cell()))
+            .unwrap_or_default()
+    });
+    return_string(&mut cx, &args, &id)
+}
+
+/// Build a [`ViewPatch`] from the JS `patchSpec` JSON (`{op, ...}`). Returns the parse
+/// error string on a malformed/unknown spec.
+fn parse_view_patch(spec_json: &str) -> Result<ViewPatch, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(spec_json).map_err(|e| format!("patchSpec JSON: {e}"))?;
+    let op = v.get("op").and_then(|o| o.as_str()).unwrap_or("");
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let i = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+    match op {
+        "addButton" => Ok(ViewPatch::AddButton {
+            label: s("label"),
+            turn: s("affordance"),
+            arg: i("arg"),
+        }),
+        "addText" => Ok(ViewPatch::AddText { text: s("text") }),
+        "relabel" => Ok(ViewPatch::Relabel {
+            from: s("target"),
+            to: s("text"),
+        }),
+        other => Err(format!("unknown view-patch op '{other}'")),
+    }
+}
+
+/// `__deos_editor_edit_view(cardId, patchSpec)` → the re-folded view-tree JSON on a
+/// committed patch, else `"null"` (refused: unauthorized / wrong card / no-op / bad
+/// spec). A view-patch leaves a receipted patch + blame on the card's chain.
+unsafe extern "C" fn native_editor_edit_view(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let card_id = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
+    let spec_json = if args.argc_ >= 2 { arg_string(&mut cx, args.get(1)) } else { String::new() };
+    let json = CURRENT_EDITOR.with(|c| {
+        let mut guard = c.borrow_mut();
+        let editor = match guard.as_mut() {
+            Some(e) => e,
+            None => return "null".to_string(),
+        };
+        // (1) cardId must be the editor's own card (the wrong-card over-reach).
+        if !editor_card_matches(editor, &card_id) {
+            return "null".to_string();
+        }
+        // (2) the structural patch (the cap tooth runs inside `edit_view`).
+        let patch = match parse_view_patch(&spec_json) {
+            Ok(p) => p,
+            Err(_) => return "null".to_string(),
+        };
+        match editor.edit_view(patch) {
+            Ok(edit) => edit.tree.to_json(),
+            // Unauthorized / no-op / fire fault → no patch, refused in-band.
+            Err(EditError::Unauthorized) | Err(EditError::NoOp) => "null".to_string(),
+            Err(e) => {
+                record_error(format!("editor.editView: {e}"));
+                "null".to_string()
+            }
+        }
+    });
+    return_string(&mut cx, &args, &json)
+}
+
+/// `__deos_editor_set_field(cardId, slot, value)` → 1 on a committed `SetField` turn,
+/// -1 on refusal (unauthorized / wrong card). A re-read reflects the new value.
+unsafe extern "C" fn native_editor_set_field(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let card_id = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
+    let slot = if args.argc_ >= 2 { arg_i32(args.get(1)).max(0) as usize } else { 0 };
+    let value = if args.argc_ >= 3 { arg_i32(args.get(2)).max(0) as u64 } else { 0 };
+    let ok = CURRENT_EDITOR.with(|c| {
+        let mut guard = c.borrow_mut();
+        let editor = match guard.as_mut() {
+            Some(e) => e,
+            None => return false,
+        };
+        if !editor_card_matches(editor, &card_id) {
+            return false;
+        }
+        match editor.set_field(slot, value) {
+            Ok(_receipt) => true,
+            Err(EditError::Unauthorized) => false,
+            Err(e) => {
+                record_error(format!("editor.setField: {e}"));
+                false
+            }
+        }
+    });
+    args.rval().set(Int32Value(if ok { 1 } else { -1 }));
+    true
+}
+
+/// Build an [`AffordanceSpec`] from the JS spec JSON (`{name, required, op, slot, value}`).
+fn parse_affordance_spec(spec_json: &str) -> Result<AffordanceSpec, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(spec_json).map_err(|e| format!("affordance spec JSON: {e}"))?;
+    let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if name.is_empty() {
+        return Err("affordance spec needs a name".into());
+    }
+    let required = parse_auth_label(v.get("required").and_then(|x| x.as_str()).unwrap_or("none"));
+    let slot = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+    let value = v.get("value").and_then(|x| x.as_u64()).unwrap_or(0);
+    let op = match v.get("op").and_then(|x| x.as_str()).unwrap_or("add") {
+        "add" | "inc" => ApplyOp::AddToSlot { slot },
+        "sub" | "dec" => ApplyOp::SubFromSlot { slot },
+        "set" => ApplyOp::SetSlot { slot, value },
+        other => return Err(format!("unknown affordance op '{other}'")),
+    };
+    Ok(AffordanceSpec { name, required, op })
+}
+
+/// `__deos_editor_add_affordance(cardId, spec)` → 1 on a committed weld (the card gains
+/// a new fireable affordance + a provenance receipt), -1 on refusal.
+unsafe extern "C" fn native_editor_add_affordance(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let card_id = if args.argc_ >= 1 { arg_string(&mut cx, args.get(0)) } else { String::new() };
+    let spec_json = if args.argc_ >= 2 { arg_string(&mut cx, args.get(1)) } else { String::new() };
+    let ok = CURRENT_EDITOR.with(|c| {
+        let mut guard = c.borrow_mut();
+        let editor = match guard.as_mut() {
+            Some(e) => e,
+            None => return false,
+        };
+        if !editor_card_matches(editor, &card_id) {
+            return false;
+        }
+        let spec = match parse_affordance_spec(&spec_json) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        match editor.add_affordance(spec) {
+            Ok(_receipt) => true,
+            Err(EditError::Unauthorized) => false,
+            Err(e) => {
+                record_error(format!("editor.addAffordance: {e}"));
+                false
+            }
+        }
+    });
+    args.rval().set(Int32Value(if ok { 1 } else { -1 }));
+    true
 }

@@ -32,7 +32,9 @@ pub fn parse_cell_id(hex: &str) -> Option<CellId> {
     Some(CellId::from_bytes(bytes))
 }
 
-fn id_hex(id: &CellId) -> String {
+/// The 64-hex-char rendering of a cell id (the JS-facing string form). Public so the
+/// editor binding can name "the current card" to JS by the same id the crawl uses.
+pub fn id_hex(id: &CellId) -> String {
     hex_encode(id.as_bytes())
 }
 
