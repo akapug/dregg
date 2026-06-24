@@ -33,13 +33,18 @@ chained lift carries NO extra side-condition (a cleaner lift than BalanceA's).
 `refreshDelegationA` carries a GENUINE standalone full-state circuit⟺spec descriptor in the v2
 EffectCommit2 / `Surface2` universe (`Dregg2/Circuit/Inst/refreshDelegationA.lean`):
 
-  * `refreshDelegationE D hD` — the `EffectSpec2` whose touched component is the WHOLE `delegations`
-    FUNCTION, digested by a `funcComponent` (`D : (CellId → List Cap) → ℤ`, `Function.Injective D`); its
-    `restFrame` freezes the other 16 kernel fields and its `logUpdate` is the receipt prepend.
+  * `refreshDelegationE D hD` — the `EffectSpec2` whose touched component is the PRODUCT
+    `(delegations, delegationEpochAt)` — the `delegations` FUNCTION AND the per-cell `delegationEpochAt`
+    freshness-tag function — digested TOGETHER by a `funcComponent` over the pair
+    (`D : (CellId → List Cap) × (CellId → Nat) → ℤ`, `Function.Injective D`); its `restFrame` freezes the
+    other kernel fields and its `logUpdate` is the receipt prepend. Because the product binds
+    `delegationEpochAt` too, the freshness-restore epoch stamp (`delegationEpochAt = refreshEpochAtMap`) is
+    now WRITE-GATE-FORCED by the descriptor (no longer a framed/residual face).
   * `refreshDelegationA_full_sound : satisfiedE2 S (refreshDelegationE D hD) (encodeE2 …) ⟹
-    RefreshDelegationSpec` — a FULL 17-field declarative post-state soundness (`Spec/refreshdelegation.lean`),
-    keyed on the chained executor via the independent `refreshDelegation_iff_spec` (executor ⟺ spec, BOTH
-    directions, full state).
+    RefreshDelegationFullSpec` — a FULL declarative post-state soundness (`Spec/RefreshDelegation.lean`)
+    concluding the STRENGTHENED `RefreshDelegationFullSpec` (the freshness-restore stamp forced), keyed on
+    the chained executor via the independent `refreshDelegation_iff_spec` (executor ⟺ strengthened full
+    spec, BOTH directions, full state).
 
 This module covers both directions, exactly as BalanceA:
 
@@ -224,10 +229,12 @@ agrees with the FULL post-state the IR term's executor interpretation produces.
 
 This welds against refreshDelegation's GENUINE standalone descriptor `refreshDelegationE D hD` (the v2
 `Surface2` circuit whose soundness is `refreshDelegationA_full_sound`), exactly as `BalanceA` welds against
-`balanceAE`/`balanceA_full_sound`. The executor side is routed through §3 (`interp` ⟹ `execFullA`) and the
-independent `refreshDelegation_iff_spec` (executor ⟺ `RefreshDelegationSpec`); the circuit side is the
-audited `refreshDelegationA_full_sound` (circuit ⟹ `RefreshDelegationSpec`). Both name the SAME
-`RefreshDelegationSpec`, so they PROVABLY agree on the WHOLE 17-field state + the log — a full-state weld. -/
+`balanceAE`/`balanceA_full_sound`. The executor side is routed through §3 (`interp` ⟹ `execFullA`, carrying
+the freshness-restore epoch re-stamp) and the independent `refreshDelegation_iff_spec` (executor ⟺
+`RefreshDelegationFullSpec`); the circuit side is the audited `refreshDelegationA_full_sound` (circuit ⟹
+`RefreshDelegationFullSpec`). Both name the SAME STRENGTHENED `RefreshDelegationFullSpec`, so they PROVABLY
+agree on the WHOLE state + the log — a full-state weld in which the `delegationEpochAt` freshness stamp is
+write-gate-FORCED, not framed. -/
 
 /-- The Argus circuit interpretation of a `refreshDelegation` term: refreshDelegation's OWN audited
 standalone v2 `Surface2` circuit step — the full-state arithmetization `satisfiedE2 S (refreshDelegationE D
@@ -236,7 +243,8 @@ hD) (encodeE2 …)` satisfied on the encoded `(st, ⟨actor,child⟩, st')` trip
 here so this module imports only `Inst.refreshDelegationA`). Its soundness `refreshDelegationA_full_sound`
 pins the complete `RefreshDelegationSpec`. The refreshDelegation-keyed analog of `balanceACircuit`, in the
 descriptor universe where refresh carries its OWN genuine full-state circuit. -/
-def refreshDelegationCircuit (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+def refreshDelegationCircuit (S : Surface2)
+    (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (st : RecChainedState) (actor child : CellId) (st' : RecChainedState) : Prop :=
   satisfiedE2 S (refreshDelegationE D hD)
     (encodeE2 S (refreshDelegationE D hD) st { actor := actor, child := child } st')
@@ -263,47 +271,41 @@ refreshDelegation's OWN full-state descriptor.**
 Suppose, for the Argus refreshDelegation term `refreshDelegationStmt actor child`:
   * the standalone refreshDelegation circuit `refreshDelegationCircuit S D hD st actor child st'` (=
     `refreshDelegationE`'s full-state v2 arithmetization satisfied on the encoded triple) holds, under the
-    realizable whole-function digest portals (`hRest : RestIffNoDelegations S.RH`, `hLog :
-    logHashInjective S.LH`, `hD : Function.Injective D`);
+    realizable product-digest portals (`hRest : RestIffNoDelegations S.RH`, `hLog :
+    logHashInjective S.LH`, `hD : Function.Injective D` on the PRODUCT `(delegations, delegationEpochAt)`);
   * the IR term's EXECUTOR interpretation COMMITS on the kernel:
-    `interp (refreshDelegationStmt actor child) st.kernel = some k'` (`hexec`).
+    `interp (refreshDelegationStmt actor child) st.kernel = some k'` (`hexec`) — the FROZEN-FACE
+    `delegations` snapshot only.
 
-Then the chained post-state the circuit pins is EXACTLY the FROZEN-FACE chained post-state the IR term
-produces: `st' = { kernel := k', log := refreshDelegationReceipt actor child :: st.log }`. I.e.
-refreshDelegation's OWN standalone circuit and the IR term AGREE on the WHOLE 17-field RecordKernelState
-(`delegations child` overwritten with the parent snapshot, every other field FROZEN — including
-`delegationEpochAt`, which BOTH the deployed circuit and the IR leave unchanged) AND the receipt log — the
-full FROZEN `RefreshDelegationSpec`. (The FAITHFUL executor ADDS the freshness-restore epoch stamp; that is
-the SEPARATE `RefreshDelegationFullSpec` named residual the deployed standalone descriptor does not yet
-write-gate-force — `interp_refreshDelegationStmt_chained` carries it explicitly.) -/
+Then the chained post-state the circuit pins is EXACTLY the FAITHFUL chained post-state the IR term lifts
+to: `st' = { kernel := k' WITH delegationEpochAt := refreshEpochAtMap st.kernel child,
+log := refreshDelegationReceipt actor child :: st.log }`. I.e. refreshDelegation's OWN standalone circuit
+and the lifted IR term AGREE on the WHOLE RecordKernelState (`delegations child` overwritten with the parent
+snapshot, the child's `delegationEpochAt` re-stamped to the parent's CURRENT epoch, every other field
+FROZEN) AND the receipt log — the full STRENGTHENED `RefreshDelegationFullSpec`. The freshness-restore epoch
+stamp is now write-gate-FORCED by the product descriptor (no longer a framed residual); §3's
+`interp_refreshDelegationStmt_chained` carries the re-stamp on top of the IR's frozen `k'`, and
+`refreshDelegation_iff_spec` matches it to the circuit's forced post. -/
 theorem refreshDelegation_compile_sound
-    (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2) (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (hRest : RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
     (st st' : RecChainedState) (actor child : CellId) (k' : RecordKernelState)
     (hcirc : refreshDelegationCircuit S D hD st actor child st')
     (hexec : interp (refreshDelegationStmt actor child) st.kernel = some k') :
-    st' = { kernel := k', log := refreshDelegationReceipt actor child :: st.log } := by
-  -- circuit side: refreshDelegation's OWN audited soundness forces the FROZEN `RefreshDelegationSpec` on
-  -- `(st, ⟨actor,child⟩, st')`.
-  have hspec : RefreshDelegationSpec st actor child st' :=
+    st' = { kernel := { k' with delegationEpochAt := refreshEpochAtMap st.kernel child },
+            log := refreshDelegationReceipt actor child :: st.log } := by
+  -- circuit side: refreshDelegation's OWN audited soundness forces the STRENGTHENED
+  -- `RefreshDelegationFullSpec` on `(st, ⟨actor,child⟩, st')` — the freshness-restore epoch stamp is now
+  -- write-gate-forced by the product component (`delegations` AND `delegationEpochAt`).
+  have hspec : RefreshDelegationFullSpec st actor child st' :=
     refreshDelegationA_full_sound S D hD hRest hLog st { actor := actor, child := child } st' hcirc
-  -- IR side: the §2 cornerstone fixes `k'` to the FROZEN-FACE kernel step `refreshDelegationStep` post,
-  -- which satisfies the SAME FROZEN `RefreshDelegationSpec` on `⟨k', receipt :: st.log⟩` (the `delegations`
-  -- snapshot moved, every other field — `delegationEpochAt` included — frozen).
-  rw [interp_refreshDelegationStmt_eq_refreshDelegationStep] at hexec
-  unfold refreshDelegationStep at hexec
-  by_cases hg : (stateAuthB st.kernel.caps actor child && (st.kernel.delegate child).isSome) = true
-  · rw [if_pos hg] at hexec
-    simp only [Option.some.injEq] at hexec
-    have hgP : RefreshDelegationGuard st actor child := by
-      simp only [RefreshDelegationGuard, Bool.and_eq_true] at hg ⊢; exact ⟨hg.1, hg.2⟩
-    have hspec' : RefreshDelegationSpec st actor child
-        { kernel := k', log := refreshDelegationReceipt actor child :: st.log } := by
-      subst hexec
-      exact ⟨hgP, by funext c; simp only [refreshDelegationsMap], rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-             rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    exact refreshDelegationSpec_unique hspec hspec'
-  · rw [if_neg hg] at hexec; exact absurd hexec (by simp)
+  -- the full spec IS the chained executor's committed post (executor ⟺ strengthened full spec).
+  have hst' : execFullA st (.refreshDelegationA actor child) = some st' :=
+    (refreshDelegation_iff_spec st actor child st').mpr hspec
+  -- IR side: the §3 lift turns the IR term's committed FROZEN-FACE `k'` into the FAITHFUL chained post —
+  -- `k'` WITH the `refreshEpochAtMap` epoch re-stamp — under the SAME `execFullA`. Two `some`s ⟹ equal.
+  rw [interp_refreshDelegationStmt_chained st actor child k' hexec] at hst'
+  exact (Option.some.injEq _ _).mp hst'.symm
 
 #assert_axioms refreshDelegation_compile_sound
 

@@ -316,7 +316,7 @@ def spawnEmittedStep (S : Surface2) (LE : CellId → ℤ) (cN : List ℤ → ℤ
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) : Prop :=
   effect2quintEmittedStepLocal S
     (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) spawnAAirName s args s'
@@ -326,7 +326,7 @@ theorem spawn_emitted_equiv_circuit (S : Surface2) (LE : CellId → ℤ) (cN : L
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState) :
     spawnEmittedStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s' ↔
       spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s' :=
@@ -338,14 +338,14 @@ theorem spawn_emitted_refines_spec (S : Surface2) (LE : CellId → ℤ) (cN : Li
     (DLeg : SpawnCreateLeg → ℤ) (hDLeg : Function.Injective DLeg)
     (DCaps : Caps → ℤ) (hDCaps : Function.Injective DCaps)
     (DDel : (CellId → Option CellId) → ℤ) (hDDel : Function.Injective DDel)
-    (DDgs : (CellId → List Cap) → ℤ) (hDDgs : Function.Injective DDgs)
+    (DDgs : (CellId → List Cap) × (CellId → Nat) → ℤ) (hDDgs : Function.Injective DDgs)
     (hRest : RestIffNoSpawnTouched S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : SpawnArgs) (s' : RecChainedState)
     (h : spawnEmittedStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs s args s') :
-    spawnSpecStep s args s' :=
+    spawnFullSpecStep s args s' :=
   effect2quint_emitted_refines_bespoke_spec S
     (spawnE LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) spawnAAirName
-    (spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) spawnSpecStep
+    (spawnCircuitStep S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs) spawnFullSpecStep
     (spawn_circuit_refines_spec S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs hRest hLog)
     (fun pre args post =>
       spawn_emitted_equiv_circuit S LE cN hN hLE DLeg hDLeg DCaps hDCaps DDel hDDel DDgs hDDgs
@@ -615,7 +615,7 @@ open Dregg2.Circuit.Spec.SovereignCommitment (MakeSovereignSpec)
 open Dregg2.Circuit.Spec.CellStateAudit (RefusalSpec ReceiptArchiveSpec)
 open Dregg2.Circuit.Spec.QueuePipelinedSend (PipelinedSendSpec)
 open Dregg2.Circuit.Spec.CellLifecycle (CellSealSpec CellUnsealSpec CellDestroySpec)
-open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationSpec)
+open Dregg2.Circuit.Spec.RefreshDelegation (RefreshDelegationSpec RefreshDelegationFullSpec)
 
 -- Batch-2 effects: emitted portals composed through Inst `*_full_sound` diamonds.
 def attenuateAEmittedStep (S : Surface2) (D : Caps → ℤ) (hD : Function.Injective D)
@@ -1004,30 +1004,30 @@ theorem cellDestroyA_emitted_refines_spec (S : Surface2) (DLife : (CellId → Na
       cellDestroyA_emitted_equiv_circuit S DLife hDLife DDeath hDDeath pre args post)
     s args s' h
 
-def refreshDelegationAEmittedStep (S : Surface2) (DDel : (CellId → List Cap) → ℤ)
+def refreshDelegationAEmittedStep (S : Surface2) (DDel : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDel : Function.Injective DDel) (s : RecChainedState) (args : RefreshDelegationArgs)
     (s' : RecChainedState) : Prop :=
   effect2EmittedStepLocal S (refreshDelegationE DDel hDDel) refreshDelegationAAirName s args s'
 
-theorem refreshDelegationA_emitted_equiv_circuit (S : Surface2) (DDel : (CellId → List Cap) → ℤ)
+theorem refreshDelegationA_emitted_equiv_circuit (S : Surface2) (DDel : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDel : Function.Injective DDel) (s : RecChainedState) (args : RefreshDelegationArgs)
     (s' : RecChainedState) :
     refreshDelegationAEmittedStep S DDel hDDel s args s' ↔
       effect2CircuitStep S (refreshDelegationE DDel hDDel) s args s' :=
   effect2_emitted_equiv_circuit_local S (refreshDelegationE DDel hDDel) refreshDelegationAAirName s args s'
 
-theorem refreshDelegationA_emitted_refines_spec (S : Surface2) (DDel : (CellId → List Cap) → ℤ)
+theorem refreshDelegationA_emitted_refines_spec (S : Surface2) (DDel : (CellId → List Cap) × (CellId → Nat) → ℤ)
     (hDDel : Function.Injective DDel)
     (hRest : RestIffNoDelegations S.RH)
     (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : RefreshDelegationArgs) (s' : RecChainedState)
     (h : refreshDelegationAEmittedStep S DDel hDDel s args s') :
-    RefreshDelegationSpec s args.actor args.child s' :=
+    RefreshDelegationFullSpec s args.actor args.child s' :=
   effect2_emitted_refines_bespoke_spec S (refreshDelegationE DDel hDDel) refreshDelegationAAirName
     (fun pre args post =>
       satisfiedE2 S (refreshDelegationE DDel hDDel)
         (encodeE2 S (refreshDelegationE DDel hDDel) pre args post))
-    (fun pre args post => RefreshDelegationSpec pre args.actor args.child post)
+    (fun pre args post => RefreshDelegationFullSpec pre args.actor args.child post)
     (fun pre args post hc => refreshDelegationA_full_sound S DDel hDDel hRest hLog pre args post hc)
     (fun pre args post => refreshDelegationA_emitted_equiv_circuit S DDel hDDel pre args post)
     s args s' h

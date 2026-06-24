@@ -307,11 +307,10 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
       Satisfied2 hash Dregg2.Circuit.RotatedKernelRefinementMintBurn.burnV3 minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
-  /-- mint (tag 3) — also re-exported to bridgeMint (tag 20). At the DEPLOYED gated mint descriptor
-  (`withSelectorGate selM.MINT mintV3`, the live `mintVmDescriptor2R24` carrying the selector-binding
-  tooth) — `= Rfix 3 = Rfix 20` — so an honest mint completeness witness must publish a trace
-  satisfying the deployed selector-bound descriptor (its active rows set `sel[MINT]`, its pads
-  `sel[NOOP]`, both of which the gate admits). -/
+  /-- bridgeMint (tag 20) — at the DEPLOYED gated bridge-mint descriptor (`withSelectorGate
+  selM.MINT mintV3`, the live `mintVmDescriptor2R24` on selector `BRIDGE_MINT = 40`) — `= Rfix 20`.
+  An honest bridge-mint completeness witness publishes a trace satisfying it (active rows set
+  `sel[BRIDGE_MINT]`, pads `sel[NOOP]`). The dedicated supply-mint (tag 3) is `bwSupplyMint`. -/
   bwMint : ∀ (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.SupplyCreation.MintASpec pre actor cell a amt post →
@@ -319,6 +318,19 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
       Satisfied2 hash
         (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
           Dregg2.Circuit.Emit.EffectVmEmitMint.selM.MINT
+          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3) minit mfin maddrs t ∧
+      tracePublishedCommit t = commitOf S pre post turn
+  /-- mint (tag 3) — the DEDICATED supply-mint (SUPPLY-MODEL.md Stage 2b). At the deployed
+  `supplyMintVmDescriptor2R24` (`withSelectorGate sel.MINT mintV3`, selector `MINT = 14`) — `= Rfix
+  3`. Same `MintASpec` and same `mintV3` body as `bwMint`; only the selector the gate binds differs
+  (the supply-mint's active rows set `sel[MINT]`, not `sel[BRIDGE_MINT]`). -/
+  bwSupplyMint : ∀ (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+      (turn : BoundaryTurn),
+    Dregg2.Circuit.Spec.SupplyCreation.MintASpec pre actor cell a amt post →
+    ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
+      Satisfied2 hash
+        (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
+          Dregg2.Circuit.Emit.EffectVmEmit.sel.MINT
           Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- setField (tag 5) — GENERIC field name, at the live `Rfix 5` descriptor (the `setFieldDyn` rung). -/
@@ -429,11 +441,13 @@ The Value rungs conclude `Satisfied2 hash <e>V3`; the apex needs `Satisfied2 has
 (`actionTagToPos`) lands each value tag at its cohort position, so `Rfix e = <e>V3` by `rfl`. -/
 
 theorem Rfix_burn : Rfix 4 = Dregg2.Circuit.RotatedKernelRefinementMintBurn.burnV3 := rfl
--- mint/bridgeMint route to the DEPLOYED gated `mintVmDescriptor2R24` (the bare `mintV3` plus the
--- appended `selectorGate selM.MINT` — the cross-selector replay close), so the identities now name
--- the WRAPPED descriptor.
+-- mint (tag 3) routes to the DEDICATED `supplyMintVmDescriptor2R24` (the bare `mintV3` plus the
+-- appended `selectorGate sel.MINT = 14`, SUPPLY-MODEL.md Stage 2b — its OWN selector). bridgeMint
+-- (tag 20) keeps the original `mintVmDescriptor2R24` (`selectorGate selM.MINT = BRIDGE_MINT = 40`).
+-- The descriptor BODY is identical (`mintV3`); only the appended selector operand differs, so the
+-- two share every proven value/anti-ghost tooth.
 theorem Rfix_mint : Rfix 3 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
-    Dregg2.Circuit.Emit.EffectVmEmitMint.selM.MINT
+    Dregg2.Circuit.Emit.EffectVmEmit.sel.MINT
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 := rfl
 theorem Rfix_bridgeMint : Rfix 20 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
     Dregg2.Circuit.Emit.EffectVmEmitMint.selM.MINT
@@ -491,7 +505,7 @@ theorem descriptorComplete_mint (S : CommitSurface) (hash : List ℤ → ℤ) (c
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, a, amt, hspec⟩ := dispatchArm_mint pre post hstep
     rw [Rfix_mint]
-    exact bw.bwMint pre post actor cell a amt turn hspec
+    exact bw.bwSupplyMint pre post actor cell a amt turn hspec
 
 /-- bridgeMint (tag 20) — shares the mint floor over the same `mintV3`. -/
 theorem descriptorComplete_bridgeMint (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)

@@ -568,28 +568,34 @@ theorem cellUnsealA_extract_rejects_wrong_lifecycle
 
 /-- **`refreshDelegationA_extract`** — adversarial extraction for `refreshDelegation`. -/
 theorem refreshDelegationA_extract
-    (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2) (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (hRest : Inst.RefreshDelegationA.RestIffNoDelegations S.RH) (hLog : logHashInjective S.LH)
     (s : RecChainedState) (args : Inst.RefreshDelegationA.RefreshDelegationArgs) (s' : RecChainedState)
     (a : Assignment)
     (hsat : satisfiedE2 S (Inst.RefreshDelegationA.refreshDelegationE D hD) a)
     (hPI : PIBindsDigests S (Inst.RefreshDelegationA.refreshDelegationE D hD) s args s' a) :
-    Spec.RefreshDelegation.RefreshDelegationSpec s args.actor args.child s' :=
+    Spec.RefreshDelegation.RefreshDelegationFullSpec s args.actor args.child s' :=
   (Inst.RefreshDelegationA.apex_iff_refreshDelegationSpec D hD s args s').mp
     (effect2_extract S (Inst.RefreshDelegationA.refreshDelegationE D hD)
       (Inst.RefreshDelegationA.refreshDelegationRestFrameDecodes S D hD hRest) hLog
       (Inst.RefreshDelegationA.refreshDelegationGuardDecodes D hD) s args s' a hsat hPI)
 
 theorem refreshDelegationA_extract_rejects_wrong_delegations
-    (S : Surface2) (D : (CellId → List Cap) → ℤ) (hD : Function.Injective D)
+    (S : Surface2) (D : (CellId → List Cap) × (CellId → Nat) → ℤ) (hD : Function.Injective D)
     (s : RecChainedState) (args : Inst.RefreshDelegationA.RefreshDelegationArgs) (s' : RecChainedState)
     (a : Assignment)
     (hPI : PIBindsDigests S (Inst.RefreshDelegationA.refreshDelegationE D hD) s args s' a)
-    (htamper : ¬ (Inst.RefreshDelegationA.refreshDelegationE D hD).active.postClause s args
-      ((Inst.RefreshDelegationA.refreshDelegationE D hD).view.toKernel s')) :
+    -- a GENUINE delegations forgery: the post `delegations` is NOT the parent-snapshot move. The product
+    -- postClause `(delegations, delegationEpochAt) = (refreshDelegationsMap …, refreshEpochAtMap …)` fails
+    -- whenever EITHER product component disagrees, so a wrong `delegations` alone breaks it (`Prod.mk.injEq`).
+    (htamper : ((Inst.RefreshDelegationA.refreshDelegationE D hD).view.toKernel s').delegations
+      ≠ Spec.RefreshDelegation.refreshDelegationsMap s.kernel args.child) :
     ¬ satisfiedE2 S (Inst.RefreshDelegationA.refreshDelegationE D hD) a :=
   effect2_extract_rejects_wrong_component S (Inst.RefreshDelegationA.refreshDelegationE D hD) s args s' a
-    hPI htamper
+    -- `funcComponent`'s `postClause` is the product equation `read post = expected pre args`, i.e.
+    -- `(post.delegations, post.delegationEpochAt) = (refreshDelegationsMap …, refreshEpochAtMap …)`.
+    -- A wrong `delegations` is exactly the first projection (`congrArg Prod.fst`), so it breaks the product.
+    hPI (fun h => htamper (congrArg Prod.fst h))
 
 /-- **`receiptArchiveLifecycleA_extract`** — adversarial extraction for `receiptArchiveLifecycle`. -/
 theorem receiptArchiveLifecycleA_extract
