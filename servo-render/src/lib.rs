@@ -69,6 +69,16 @@ pub mod content_tile;
 #[cfg(feature = "libservo")]
 pub mod webview;
 
+/// The HARDWARE-GL render path (route a of the dual backend): a surfman hardware-GL
+/// [`gpu_context::ServoGpuContext`] (offscreen FBO + `glReadPixels` readback) selected
+/// at runtime over the software SWGL fallback via [`gpu_context::make_rendering_context`].
+/// See `docs/desktop-os-research/SERVO-INTERACTIVE.md §4`.
+#[cfg(feature = "libservo")]
+pub mod gpu_context;
+
+#[cfg(feature = "libservo")]
+pub use gpu_context::{gpu_available, make_rendering_context, ServoGpuContext};
+
 /// **THE CAP-GATED HTTP(S) PROTOCOL HANDLER** — the embedder `ProtocolHandler` the
 /// vendored `servo-net` fork lets us register for `http`/`https`, so the http(s)
 /// byte socket is owned by the cap gate (`Netlayer::dial` connect-decision + a real

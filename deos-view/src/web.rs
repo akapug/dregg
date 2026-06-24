@@ -30,13 +30,17 @@
 //!   value (read off the applet ledger and passed in) AND the `data-slot` it re-reads; a
 //!   `button` carries its affordance `{turn, arg}` as `data-turn`/`data-arg` — the exact
 //!   payload a click must fire. The produced document is a real, browser-loadable file.
-//! - **The seam (named, not papered):** wiring a browser button-click back to a REAL
-//!   cap-gated verified turn needs the executor reachable from the browser. That is the
-//!   wasm bridge (`wasm/` `bindings*.rs` already exposes the verifier/turn surface to
-//!   JS): a click POSTs `{turn, arg}` to a node, or drives an in-browser wasm executor,
-//!   and the receipt re-reads the bound slots. The bake here renders the view + carries
-//!   every affordance payload; the live-turn wire is the documented follow-on, exactly
-//!   as the native path's live turn is `Applet::fire`.
+//! - **The live turn (seam CLOSED):** a browser button-click fires its `{turn, arg}` as
+//!   a REAL cap-gated verified turn over an in-tab executor. The executor is the wasm
+//!   `CardWorld` (`wasm/src/bindings_card.rs`) — the wasm analog of the native
+//!   `Applet::fire` (the SAME `SetField + IncrementNonce` over the embedded `DreggEngine`,
+//!   leaving a receipt). A page binds a `CardWorld` to `window.__deosCard`; the [`JS`]
+//!   wire calls `__deosCard.fire(turn, arg)` on click and re-paints every `data-slot`
+//!   bind from the committed model (`CardWorld.read()` — the witnessed re-read). With NO
+//!   `__deosCard` bound (a static bake) the click still emits the `deos-affordance`
+//!   event so the payload is observable; loading the playground wasm + binding a
+//!   `CardWorld` upgrades that to a live turn. The loop is proven in
+//!   `wasm/tests/card_fires_a_verified_turn.rs`.
 
 use crate::tree::ViewNode;
 
@@ -192,22 +196,51 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:'IBM Plex Sans',s
 .deos-table{border:1px solid var(--border);border-radius:6px;padding:.25rem;}
 ";
 
-/// The browser-side affordance wire — a button click reads its `data-turn`/`data-arg`
-/// and dispatches a `deos-affordance` CustomEvent carrying that payload. The LIVE turn
-/// (POST to a node / an in-browser wasm executor, then re-read the bound slots) is the
-/// named seam an embedding fills; this proves the affordance payload survives the web
-/// projection intact (the click carries exactly the `{turn, arg}` the native `Button`
-/// fires through `Applet::fire`).
+/// The browser-side affordance wire — a button click reads its `data-turn`/`data-arg`,
+/// dispatches a `deos-affordance` CustomEvent carrying that payload, AND (when an
+/// in-tab dregg executor is present) fires it as a REAL cap-gated verified turn and
+/// re-paints the bound slot.
+///
+/// The seam is closed by `wasm/src/bindings_card.rs`'s `CardWorld` — the wasm analog of
+/// the native `Applet::fire`. A page that wants live turns loads the playground wasm and
+/// hands the document a `window.__deosCard` with `{ fire(turn, arg) -> u64, read() -> u64 }`
+/// (a `CardWorld` instance). On click this wire calls `__deosCard.fire(turn, arg)` — a
+/// real `SetField + IncrementNonce` verified turn over the embedded executor, leaving a
+/// receipt — then writes the returned value into the matching `data-slot` `deos-bind`
+/// span (the SolidJS-shaped signal re-render, mirroring the native `bind` re-read).
+///
+/// With NO `__deosCard` bound (a static bake), the click still dispatches the
+/// `deos-affordance` event so the affordance payload is observable; the live turn is the
+/// embedding's to wire (load the wasm + bind a `CardWorld`). Either way the click carries
+/// exactly the `{turn, arg}` the native `Button` fires through `Applet::fire`.
 const JS: &str = "
+function deosRepaintBinds(card){
+  // Re-read the live ledger for every bound slot and repaint it — the witnessed read
+  // the native `bind` makes (`Applet::get_u64`), here `CardWorld.read()`.
+  document.querySelectorAll('.deos-bind[data-slot]').forEach(function(span){
+    var label = span.textContent.replace(/[0-9]+$/, '');
+    span.textContent = label + card.read();
+  });
+}
 document.querySelectorAll('.deos-button').forEach(function(b){
   b.addEventListener('click', function(){
     var turn = b.getAttribute('data-turn');
     var arg = parseInt(b.getAttribute('data-arg') || '0', 10);
-    // SEAM: dispatch the affordance payload. An embedding listens for this and fires a
-    // REAL cap-gated verified turn (node POST or in-browser wasm executor), then re-reads
-    // the bound slots. Here we surface it (so the wire is demonstrable, not papered).
+    // Always surface the affordance payload (observable, never papered).
     document.dispatchEvent(new CustomEvent('deos-affordance', {detail:{turn:turn, arg:arg}}));
-    console.log('deos affordance:', turn, arg);
+    // THE LIVE TURN: if an in-tab executor (a `CardWorld`) is bound, fire the affordance
+    // as a REAL cap-gated verified turn and re-paint the bound slots from the new model.
+    var card = window.__deosCard;
+    if (card && typeof card.fire === 'function') {
+      try {
+        card.fire(turn, arg);   // real SetField + IncrementNonce verified turn → receipt
+        deosRepaintBinds(card); // the bind re-reads the committed ledger
+      } catch (e) {
+        console.error('deos affordance refused (no turn committed):', turn, arg, e);
+      }
+    } else {
+      console.log('deos affordance (no in-tab executor bound):', turn, arg);
+    }
   });
 });
 ";

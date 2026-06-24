@@ -236,29 +236,74 @@ SWGL path is therefore **never removed** — it is the load-bearing guarantee fo
 environments SERVO-ON-SEL4 targets, and the GPU path is an *acceleration* layered
 above the same seam.
 
-### 4.4 The build sketch for `ServoGpuContext` (route a, the tractable GPU step)
+### 4.4 `ServoGpuContext` (route a, the tractable GPU step) — EXECUTED
 
-A new `servo-render/src/gpu_context.rs` (feature `libservo` + a new `gpu` feature),
-mirroring `ServoSwglContext`:
+`servo-render/src/gpu_context.rs` (feature `libservo`) carries
+[`ServoGpuContext`], a real `paint_api::rendering_context::RenderingContext` over a
+surfman HARDWARE-GL context rendering into an offscreen `SurfaceType::Generic`
+surface, with a `glReadPixels` readback at the present boundary (route a). It is,
+structurally, servo's own `SoftwareRenderingContext` with EXACTLY ONE difference: it
+asks the surfman `Connection` for `create_hardware_adapter()` (the GPU) instead of
+`create_software_adapter()` (Mesa/llvmpipe). Everything else — the `gl::GlFns::load_with`
+over the device `get_proc_address`, the `SwapChain::create_attached` present, the
+vertically-flipped `glReadPixels` readback — is servo's own working code path.
 
 ```rust
-pub struct ServoGpuContext { surfman_ctx: surfman::Context, device: surfman::Device, fbo: GLuint, … }
+pub struct ServoGpuContext { size: Cell<PhysicalSize<u32>>, inner: SurfmanHardware, swap_chain: SwapChain<Device> }
 
-impl paint_api::rendering_context::RenderingContext for ServoGpuContext {
-    fn make_current(&self) -> Result<(), Error> { self.device.make_context_current(&self.surfman_ctx) }
-    fn gleam_gl_api(&self)  -> Rc<dyn gleam::gl::Gl> { /* gleam over the surfman hardware GL */ }
-    fn glow_gl_api(&self)   -> Arc<glow::Context>     { /* glow from the surfman get_proc_address */ }
-    fn connection(&self)    -> Option<surfman::Connection> { Some(self.device.connection()) }
-    fn read_to_image(&self, rect) -> Option<RgbaImage> { /* glReadPixels from the FBO → tile (route a) */ }
-    fn size(&self) / resize(&self) / present(&self) / prepare_for_rendering(&self) { /* surfman surface */ }
+impl ServoGpuContext {
+    pub fn new(w, h) -> Result<Self, Error> {        // Err ⇒ caller falls back to SWGL
+        let connection = Connection::new()?;
+        let adapter = connection.create_hardware_adapter()?;  // ← THE GPU (vs create_software_adapter)
+        // SurfmanHardware::new (gleam load) → offscreen Generic surface → attached swap chain
+    }
+}
+impl RenderingContext for ServoGpuContext {
+    fn gleam_gl_api(&self) -> Rc<dyn Gl>            { /* surfman hardware GL (gleam) */ }
+    fn glow_gl_api(&self)  -> Arc<glow::Context>    { /* real glow over device.get_proc_address */ }
+    fn connection(&self)   -> Option<Connection>    { Some(self.device.connection()) }
+    fn read_to_image(&self, rect) -> Option<RgbaImage> { /* glReadPixels + v-flip → tile (route a) */ }
+    fn size / resize / present / prepare_for_rendering / make_current { /* surfman swap-chain surface */ }
 }
 ```
 
-surfman already provides `Connection::new()` → `create_device()` →
-`create_context()` against the host's hardware GL (CGL/Metal on macOS, EGL/GLX on
-Linux); servo's `WindowRenderingContext` is the working template. `read_to_image`
-(`glReadPixels`) gives route (a)'s tile for the compositor gate. Route (b) replaces
-that readback with handing gpui the texture id directly — a gpui-fork change.
+**Proof (tests `gpu_context::tests::*`, `--features libservo`, GREEN on this macOS
+host):** `gpu_available() == true` (a hardware surfman device opened — CGL/Metal);
+`ServoGpuContext::new(64,48)` built a hardware-GL context, cleared the framebuffer to
+a known color ON THE GPU, and read it back as a real RGBA8 tile via the route-a
+`glReadPixels` path:
+
+```
+GPU_PROBE     gpu_available=true
+GPU_SPIKE     hardware-GL context cleared 64x48 to (0x12,0x34,0x56,0x78) and read it back
+              — route-a tile produced; digest=0x6151fe37a9ad6a62
+BACKEND_SELECT gpu_available=true chosen_size=32x24
+```
+
+This is GPU rasterization with one CPU readback at the present boundary — fully
+accelerated paint, one copy at the seam. The tile is the SAME `RgbaFrame` the SWGL
+path yields, so it flows into the unchanged compositor `present(region,
+content_digest)` gate with no verification change. Route (b) replaces that readback
+with handing gpui the texture id directly — a gpui-fork change (§4.2).
+
+**Runtime selection — EXECUTED.** `gpu_available()` (a cheap probe: open a
+`Connection` + `create_hardware_adapter()` + `create_device()`, then drop them) and
+`make_rendering_context(w, h) -> Rc<dyn RenderingContext>` (the hardware
+`ServoGpuContext` when available, else the software `ServoSwglContext`) are both in
+`gpu_context.rs`. `make_rendering_context` returns the exact type
+`WebViewBuilder::new(servo, _)` takes, so the SAME embed code (`render_url_on_servo`
+et al.) drives either backend — the §4.3 "ONLY new branch." The SWGL `--lib` default
+stays green (the no-GPU guarantee is untouched); the GPU path is gated behind
+`libservo` and selected only when a hardware device opens.
+
+**The remaining seam (a real page through the GPU context).** The spike clears +
+reads back through the hardware context (proving the GL + tile path). Driving a full
+`servo::WebView` *into* `ServoGpuContext` (a real page laid out + painted on the GPU)
+is the same `WebViewBuilder` flow `render_url_on_servo` already runs against
+`ServoSwglContext` — point it at `make_rendering_context(w, h)` instead of
+`Rc::new(ServoSwglContext::new(w, h))`. That swap is the wiring step; the engine
+renders into whatever `Rc<dyn RenderingContext>` it is handed, so no new engine work
+remains for route (a).
 
 ---
 
@@ -268,9 +313,12 @@ that readback with handing gpui the texture id directly — a gpui-fork change.
    `Servo` engine + a per-pane `WebView`, bridge gpui pane events → `apply_input`,
    repaint on `notify_new_frame_ready`. This makes the web pane scroll/click LIVE
    in the cockpit on the existing SWGL backend.
-2. **GPU route (a)**: build `ServoGpuContext` (surfman hardware GL + FBO readback),
-   add `gpu_available()` selection. Accelerated layout/paint, one readback at the
-   present boundary; SWGL stays the fallback.
+2. **GPU route (a)** — DONE: `ServoGpuContext` (surfman hardware GL + offscreen FBO +
+   `glReadPixels` readback) + `gpu_available()` / `make_rendering_context` runtime
+   selection are in `servo-render/src/gpu_context.rs`, green under `--features
+   libservo` (the spike clears + reads back a GPU tile; SWGL stays the no-GPU
+   fallback). The remaining wiring is pointing `render_url_on_servo` at
+   `make_rendering_context` so a real page lays out + paints on the GPU (§4.4).
 3. **GPU route (b)** (the fluid ideal): a gpui-fork `GpuSurfaceSpecifier` element +
    device sharing so WebRender renders into a gpui-composited texture — zero
    readback. The hard part is in the gpui fork; servo renders into whatever
