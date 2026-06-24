@@ -122,6 +122,15 @@ pub enum CommandId {
     /// turn on that live ledger (a receipt the cell inspector sees). THE keystone
     /// joy-path surface. (A no-op if the `card-pane`/`dev-surfaces` build is off.)
     OpenCardPane,
+    /// Open the deos MEMBRANE pane — the deos-matrix chat surface in its own split
+    /// pane: the social/multiplayer layer where a message IS a cap-bounded
+    /// world-fork. The transport is the dregg world itself (rooms are real cells, a
+    /// send is a real verified turn); the `⬡ attach membrane` affordance mints a
+    /// real executor-backed frustum of the chat world, and a received membrane
+    /// rehydrates → drives → stitches a genuine `Cell` fork through the
+    /// branch-and-stitch settlement gate. (A no-op if the `dev-surfaces` build is
+    /// off.)
+    OpenMembrane,
 
     // --- SURFACE MIGRATION (the Local→Surface tear-off) ---
     /// TEAR OFF the active surface into its own OS window — the Local→Surface
@@ -234,6 +243,7 @@ impl CommandId {
             | OpenEditorPane
             | OpenAgentPane
             | OpenCardPane
+            | OpenMembrane
             | SwarmCoordinatorEmitA
             | SwarmWorkerADrain
             | SwarmCoordinatorTransferAndWake
@@ -322,6 +332,7 @@ impl CommandId {
             OpenEditorPane => "Open Editor pane (live deos-zed editor · edit deos inside deos)",
             OpenAgentPane => "Open Agent pane (confined Hermes · tool-call ledger + receipts + mandate inspector)",
             OpenCardPane => "Open Card (a live hyperdreggmedia card · a +1 button fires a verified turn on the live ledger)",
+            OpenMembrane => "Open Membrane (the deos social pane · a message IS a cap-bounded world-fork you mint · drive · stitch)",
             ShellOpenSelected => "Shell: open the selected cell as a surface",
             ShellFocusFront => "Shell: focus the front surface (cap-gated)",
             ShellCloseFocused => "Shell: close the focused surface (cap-gated)",
@@ -417,6 +428,7 @@ impl CommandId {
             OpenEditorPane => "open editor pane code edit deos-zed file source dev self-hosting live split ide author write text",
             OpenAgentPane => "open agent pane hermes confined ai llm tool-call ledger receipt refusal mandate inspector ados dev-loop cap-gated turn dock chat",
             OpenCardPane => "open card hyperdreggmedia applet view button +1 counter bind live ledger verified turn receipt joy clickable widget deos-js dock pane",
+            OpenMembrane => "open membrane chat deos-matrix social multiplayer message world-fork frustum mint rehydrate drive stitch settlement branch fork capability bounded room timeline send turn comms-pd dock pane",
             ShellOpenSelected => "open window surface cell app spawn view",
             ShellFocusFront => "focus raise front bring forward window",
             ShellCloseFocused => "close window surface dismiss",
@@ -550,6 +562,8 @@ pub fn all_commands() -> Vec<Command> {
         OpenAgentPane,
         // the keystone joy-path: a live hyperdreggmedia CARD as a dock pane
         OpenCardPane,
+        // the deos MEMBRANE: the social pane where a message IS a cap-bounded world-fork
+        OpenMembrane,
         // the A2 SWARM surface (multi-agent cap-coordination + notify-edge inbox)
         SwarmCoordinatorEmitA,
         SwarmWorkerADrain,
