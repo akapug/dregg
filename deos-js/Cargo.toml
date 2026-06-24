@@ -61,8 +61,8 @@ dregg-doc = { path = "../dregg-doc" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 postcard = { version = "1", features = ["use-std"] }
-
-[dev-dependencies]
+# blake3: the `deos.server.spawnCell` native derives a stable cell seed from a JS label
+# (and the default token domain), matching the node's `blake3("default")` token id.
 blake3 = "1"
 
 # ── THE FORK SEAMS (mirrored from servo-render/starbridge-v2, the other standalone

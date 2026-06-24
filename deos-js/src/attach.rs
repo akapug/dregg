@@ -65,6 +65,44 @@ pub trait WorldSink {
     ) -> Result<[u8; 32], String>;
 }
 
+/// One affordance on an attached applet: its name, the authority a viewer must HOLD
+/// to fire it, and the effects a fire commits.
+///
+/// `effects` empty ⇒ the historical counter-bump (slot `counter_slot += arg`,
+/// nonce++). `effects` non-empty ⇒ those literal effects are the turn (the arbitrary
+/// shape `deos.server.defineAffordance` registers). A fire ALWAYS targets the agent's
+/// own cell as its actor, but the effects may name any cell the executor authorizes.
+#[derive(Clone, Debug)]
+pub struct AttachedAffordance {
+    pub name: String,
+    pub required: AuthRequired,
+    pub effects: Vec<Effect>,
+}
+
+impl AttachedAffordance {
+    /// A counter-bump affordance (no explicit effects — the spike's default shape).
+    pub fn counter(name: impl Into<String>, required: AuthRequired) -> Self {
+        AttachedAffordance {
+            name: name.into(),
+            required,
+            effects: Vec::new(),
+        }
+    }
+
+    /// An affordance carrying arbitrary effects (the generalized shape).
+    pub fn with_effects(
+        name: impl Into<String>,
+        required: AuthRequired,
+        effects: Vec<Effect>,
+    ) -> Self {
+        AttachedAffordance {
+            name: name.into(),
+            required,
+            effects,
+        }
+    }
+}
+
 /// An applet whose substance is a PROVIDED live World (the attach path), in contrast
 /// to [`Applet`](crate::Applet) which owns a fresh embedded engine.
 ///
@@ -81,10 +119,15 @@ pub struct AttachedApplet {
     /// The held authority the runtime is mounted under (the red-team invariant: the
     /// caller's ATTENUATED cap, never the World's root).
     held: AuthRequired,
-    /// The agent's affordance surface — `(name, required)`. A fire of `name` is gated
-    /// on `required`; an unheld `required` is the over-reach the cap tooth refuses.
-    affordances: Vec<(String, AuthRequired)>,
-    /// The slot a fire's counter-bump writes (the spike's mutating shape).
+    /// The agent's affordance surface. A fire of `name` is gated on `required` (an
+    /// unheld `required` is the over-reach the cap tooth refuses); on admission it
+    /// commits THIS affordance's `effects`. An empty `effects` falls back to the
+    /// historical counter-bump on `counter_slot` (so the spike's bump shape stays
+    /// expressible), while a non-empty `effects` carries ARBITRARY effects — the
+    /// generalization the `deos.server.defineAffordance` keystone needs.
+    affordances: Vec<AttachedAffordance>,
+    /// The slot a fire's counter-bump writes when an affordance carries no explicit
+    /// effects (the spike's default mutating shape).
     counter_slot: Slot,
     /// The committed receipt hashes, in order (the audit tape the JS left on the live
     /// World).
@@ -103,6 +146,32 @@ impl AttachedApplet {
         agent: CellId,
         held: AuthRequired,
         affordances: Vec<(String, AuthRequired)>,
+        counter_slot: Slot,
+    ) -> Self {
+        let affordances = affordances
+            .into_iter()
+            .map(|(name, required)| AttachedAffordance::counter(name, required))
+            .collect();
+        AttachedApplet {
+            sink,
+            agent,
+            held,
+            affordances,
+            counter_slot,
+            receipts: Vec::new(),
+            view: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Attach with affordances that carry ARBITRARY effects (the generalized shape the
+    /// `deos.server.*` natives register). Each [`AttachedAffordance`] is the cap-gated
+    /// `(name, required, effects)` the surface fires. `counter_slot` is the fallback
+    /// slot for any affordance that carries no explicit effects.
+    pub fn attach_with(
+        sink: Box<dyn WorldSink>,
+        agent: CellId,
+        held: AuthRequired,
+        affordances: Vec<AttachedAffordance>,
         counter_slot: Slot,
     ) -> Self {
         AttachedApplet {
@@ -136,7 +205,11 @@ impl AttachedApplet {
     /// The registered affordance specs (name + required authority) — the cap-gated
     /// message surface the reflective `affordances(viewer)` projects.
     pub fn affordance_specs(&self) -> Vec<(String, AuthRequired)> {
-        let mut specs = self.affordances.clone();
+        let mut specs: Vec<(String, AuthRequired)> = self
+            .affordances
+            .iter()
+            .map(|a| (a.name.clone(), a.required.clone()))
+            .collect();
         specs.sort_by(|a, b| a.0.cmp(&b.0));
         specs
     }
@@ -179,43 +252,80 @@ impl AttachedApplet {
     ///    threaded from the live World, the fee stamped) and commit it through the
     ///    [`WorldSink`] — landing the receipt on the live ledger.
     pub fn fire(&mut self, affordance: &str, arg: i64) -> Result<[u8; 32], FireError> {
-        let required = self
+        let aff = self
             .affordances
             .iter()
-            .find(|(n, _)| n == affordance)
-            .map(|(_, r)| r.clone())
+            .find(|a| a.name == affordance)
+            .cloned()
             .ok_or_else(|| FireError::UnknownAffordance(affordance.to_string()))?;
 
         // (2) CAP TOOTH — the REAL is_attenuation, in-band. Refused ⇒ nothing committed,
         // and (crucially on a LIVE world) nothing reaches the executor at all.
-        if !dregg_cell::is_attenuation(&self.held, &required) {
+        if !dregg_cell::is_attenuation(&self.held, &aff.required) {
             return Err(FireError::Unauthorized {
                 affordance: affordance.to_string(),
             });
         }
 
-        // (3) writes = the counter-bump (pure function of the live model), exactly as
-        //     the embedded `Applet::fire`. The effects bump the counter slot AND the
-        //     nonce (so the turn chains + the model witnesses the fire). They act on
-        //     the agent's OWN cell — a fire cannot reach another vessel.
-        let model = self.model();
-        let cur = model.field_u64(self.counter_slot) as i64;
-        let next = (cur + arg).max(0) as u64;
-        let value: FieldElement = crate::applet::pack_u64(next);
-        let effects = vec![
-            Effect::SetField {
-                cell: self.agent,
-                index: self.counter_slot,
-                value,
-            },
-            Effect::IncrementNonce { cell: self.agent },
-        ];
+        // (3) THE EFFECTS. An affordance carrying explicit `effects` fires THOSE (the
+        //     generalized shape — arbitrary effects on the cells the affordance names,
+        //     each re-checked by the executor's authority gate). An affordance with NO
+        //     explicit effects falls back to the counter-bump on the agent's OWN cell
+        //     (the historical spike shape). The turn's ACTOR is always the agent's cell
+        //     (a fire cannot cross to another vessel).
+        let effects = if aff.effects.is_empty() {
+            let model = self.model();
+            let cur = model.field_u64(self.counter_slot) as i64;
+            let next = (cur + arg).max(0) as u64;
+            let value: FieldElement = crate::applet::pack_u64(next);
+            vec![
+                Effect::SetField {
+                    cell: self.agent,
+                    index: self.counter_slot,
+                    value,
+                },
+                Effect::IncrementNonce { cell: self.agent },
+            ]
+        } else {
+            aff.effects.clone()
+        };
 
         // (4) commit through the host's World (its own turn shape — the chain head,
         //     nonce + fee threaded host-side). The receipt lands on the live ledger.
         let rh = self
             .sink
             .fire_effects(self.agent, affordance, effects)
+            .map_err(FireError::Executor)?;
+        self.receipts.push(rh);
+        Ok(rh)
+    }
+
+    /// **Fire RAW effects** — commit ONE verified turn carrying `effects` directly,
+    /// bypassing the named-affordance surface (the GM-superpower path: `spawnCell` /
+    /// `grant` build their effects in-host and commit them as the agent). The turn's
+    /// ACTOR is the agent's own cell; the effects may name any cell the executor
+    /// authorizes. Records the receipt on the audit tape.
+    ///
+    /// There is NO affordance-level cap tooth here (the caller IS the agent driving its
+    /// own surface, e.g. the GM program's privileged setup) — the executor's authority
+    /// gate is the binding check on every effect.
+    pub fn fire_raw_effects(&mut self, method: &str, effects: Vec<Effect>) -> Result<[u8; 32], FireError> {
+        self.fire_raw_effects_as(self.agent, method, effects)
+    }
+
+    /// As [`Self::fire_raw_effects`], but commit the turn under `actor` rather than the
+    /// applet's own agent — the GM superpower of acting AS a cell it governs (e.g. a
+    /// self-grant from a door cell the GM spawned). The executor's authority gate is the
+    /// binding check; the GM's broad authority is what lets it drive its own world's cells.
+    pub fn fire_raw_effects_as(
+        &mut self,
+        actor: CellId,
+        method: &str,
+        effects: Vec<Effect>,
+    ) -> Result<[u8; 32], FireError> {
+        let rh = self
+            .sink
+            .fire_effects(actor, method, effects)
             .map_err(FireError::Executor)?;
         self.receipts.push(rh);
         Ok(rh)
