@@ -142,6 +142,19 @@ pub fn build_card_surface(
 /// `held` is the operator's authority the affordance fires are mounted under (the
 /// cap tooth checks every fire against it). A build error is returned for the caller
 /// to surface fail-soft (the cockpit keeps the Rust moldable inspector as fallback).
+///
+/// ## Edit-from-within: the open seam
+///
+/// This rung mounts the inspector card LIVE (render + fire on the cockpit's World).
+/// The reshape-the-inspector-from-within keystone
+/// ([`deos_js::inspector_card::InspectorCard::edit_view`] — a `ViewPatch` that
+/// re-folds the view + leaves a receipted patch with blame) is PROVEN at rung 1 over
+/// the embedded engine but NOT yet routed through this live mount: [`CardPane`] holds
+/// the generated [`ViewNode`] as a static render input with no patch entry. Wiring it
+/// is additive (hold the view as an editable [`deos_js::card_editor::ViewTree`]
+/// document on the mount, apply a `ViewPatch`, and rebuild the `CardPane` from the
+/// re-folded tree) and is the next rung — the view is already DATA, not compiled code,
+/// so the reshape needs a route, not a recompile.
 #[allow(clippy::result_large_err)]
 pub fn build_inspector_card_surface(
     id: u64,

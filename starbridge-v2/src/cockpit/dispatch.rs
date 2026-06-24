@@ -110,11 +110,32 @@ impl Cockpit {
                 );
                 cx.notify();
             }
+            // The deos MEMBRANE: the social pane where a message IS a cap-bounded
+            // world-fork. Needs `dev-surfaces` (the deos-matrix `ChatSource` + graft
+            // machinery) AND `embedded-executor` (the `World` the comms-PD source
+            // forks for the real membrane mint/rehydrate/drive/stitch) — same
+            // deferred-window open path as the agent/card panes.
+            #[cfg(all(feature = "dev-surfaces", feature = "embedded-executor"))]
+            CommandId::OpenMembrane => {
+                self.open_dev_pane_deferred(cx, Cockpit::open_membrane_pane)
+            }
+            // Membrane command present in the palette but the build lacks the
+            // executor (no `World` to fork for the membrane): a comprehensive-palette
+            // no-op.
+            #[cfg(all(feature = "dev-surfaces", not(feature = "embedded-executor")))]
+            CommandId::OpenMembrane => {
+                self.last_outcome = Some(
+                    "Open Membrane needs the `embedded-executor` build (a live World to fork)"
+                        .into(),
+                );
+                cx.notify();
+            }
             #[cfg(not(feature = "dev-surfaces"))]
             CommandId::OpenTerminalPane
             | CommandId::OpenEditorPane
             | CommandId::OpenAgentPane
-            | CommandId::OpenCardPane => {}
+            | CommandId::OpenCardPane
+            | CommandId::OpenMembrane => {}
 
             CommandId::SwarmCoordinatorEmitA => self.swarm_coordinator_emit_a(cx),
             CommandId::SwarmWorkerADrain => self.swarm_worker_a_drain(cx),

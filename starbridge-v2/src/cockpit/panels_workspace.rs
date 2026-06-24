@@ -641,6 +641,54 @@ impl Cockpit {
         self.graft_dev_pane(surface, window, cx);
     }
 
+    /// Open the deos MEMBRANE pane: the deos-matrix chat surface ([`ChatPane`])
+    /// grafted as a split beside the active pane — the social/multiplayer layer
+    /// where **a message IS a cap-bounded world-fork**.
+    ///
+    /// The transport is the dregg world itself (`WorldChatSource`): rooms are real
+    /// cells, a send is a real verified turn, the timeline is read back from real
+    /// cell state — never a mock. The pane is wrapped in [`CommsPdSource`], an
+    /// executor-backed `ChatSource` holding a real fork of the chat world, so the
+    /// `⬡ attach membrane` affordance is GENUINE: it mints a real `MembraneFrustum`
+    /// (a "screenshot of the moment" — an anti-amplification frustum culled in view
+    /// of the local user's cell), and a received membrane rehydrates → drives →
+    /// stitches a real `Cell` fork through the branch-and-stitch settlement gate
+    /// (the math is proven in `SettlementSoundness.lean`). Because the source holds
+    /// an executor, `membrane_capable()` is true and the membrane fire button is
+    /// LIVE (not the disabled "open in deos to rehydrate" of a bare transport).
+    ///
+    /// This is the WINDOWED mount of the pane that previously rendered only in the
+    /// headless `--render-guest`/`--render-showcase` PNG bakes — the same
+    /// construction (`guest.rs`/`showcase.rs`), grafted into a clickable dock split.
+    /// Built only here (a live window). Needs `dev-surfaces` (the deos-matrix
+    /// `ChatSource` + the graft machinery) and `embedded-executor` (the `World` the
+    /// comms-PD source forks).
+    #[cfg(all(feature = "dev-surfaces", feature = "embedded-executor"))]
+    pub(crate) fn open_membrane_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use starbridge_v2::dock::chat_surface::ChatPane;
+        use std::sync::Arc;
+
+        let id = self.next_dev_surface_id();
+
+        // CHAT — fully REAL, no mock anywhere (the guest/showcase bake construction).
+        // The TRANSPORT is the dregg world itself (`WorldChatSource`): rooms are real
+        // cells, a sent message is a real verified turn. The MEMBRANE affordances are
+        // REAL too: the comms-PD source wraps the world-chat and snapshots a fork of
+        // the SAME chat world (the "screenshot a moment"), rehydrating/driving/
+        // stitching genuine `Cell` frusta. Every membrane button drives the real
+        // executor — never a mock envelope.
+        let world_chat = crate::world_chat::WorldChatSource::seeded("@ember:deos.local");
+        let membrane_world = world_chat.fork_world();
+        let focus = world_chat.me_cell();
+        let transport: Arc<dyn deos_matrix::source::ChatSource> = Arc::new(world_chat);
+        let source: Arc<dyn deos_matrix::source::ChatSource> = Arc::new(
+            crate::comms_pd_source::CommsPdSource::new(transport, membrane_world, focus, 3),
+        );
+
+        let surface: Box<dyn CockpitSurface> = Box::new(ChatPane::new(id, source, window, cx));
+        self.graft_dev_pane(surface, window, cx);
+    }
+
     /// Mint a dev-surface id in the high range (away from the `0..27` tab ids).
     /// Derived from the live pane count so repeated opens get distinct ids
     /// without a persistent counter field; a dev surface lives alone in its own
