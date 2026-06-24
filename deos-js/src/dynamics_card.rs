@@ -44,7 +44,7 @@ use dregg_turn::TurnReceipt;
 
 use deos_reflect::short_hex;
 
-use crate::applet::{pack_u64, Affordance, Applet, Slot};
+use crate::applet::{Affordance, Applet, Slot, pack_u64};
 use crate::card_editor::{
     BindProps, ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewPatch, ViewTree,
 };

@@ -39,7 +39,7 @@
 
 use dregg_cell::AuthRequired;
 use dregg_doc::composition::{
-    self, content_composed, AtomContent, ChildRef, EmbedRole, LayoutGraph, MapResolver, Op, Viewer,
+    self, AtomContent, ChildRef, EmbedRole, LayoutGraph, MapResolver, Op, Viewer, content_composed,
 };
 use dregg_doc::{AtomId, Author, BlameLine, PatchId, Provenance, Status};
 

@@ -32,7 +32,7 @@
 //! before (the doc is the source of truth; the cell carries the fold the runtime
 //! runs). The document is the editor; the fold is what executes.
 
-use dregg_doc::{blame, content, merge, Author, BlameLine, Doc, Granularity, History, Rendered};
+use dregg_doc::{Author, BlameLine, Doc, Granularity, History, Rendered, blame, content, merge};
 
 use crate::portable::AppletManifest;
 
