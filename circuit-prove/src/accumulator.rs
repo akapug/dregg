@@ -27,8 +27,8 @@
 //!      `num_turns += 1`, `chain_digest = H(prev_digest, old, new, idx)`;
 //!   4. aggregate `running ∘ new_turn_leaf` into the NEW running `RecursionOutput`.
 //!
-//! O(1) memory: only the single running [`AccState`] is kept between steps (the running proof + the
-//! four scalar chain commitments); the consumed turns are dropped.
+//! O(1) memory: only the single running [`Accumulator`] is kept between steps (the running proof +
+//! the four scalar chain commitments); the consumed turns are dropped.
 //!
 //! ## What is GENUINELY here vs the named in-band gap (honest, tiered)
 //!
@@ -376,16 +376,13 @@ impl Accumulator {
         // Fold the running root with the binding leaf into the FINAL root.
         let left = running.into_recursion_input::<BatchOnly>();
         let right = binding_batch.into_recursion_input::<BatchOnly>();
-        let root = build_and_prove_aggregation_layer::<
-            DreggRecursionConfig,
-            BatchOnly,
-            BatchOnly,
-            _,
-            D,
-        >(&left, &right, &config, &backend, &params, None)
-        .map_err(|e| AccError::RecursionFailed {
-            reason: format!("finalize root aggregation failed: {e:?}"),
-        })?;
+        let root =
+            build_and_prove_aggregation_layer::<DreggRecursionConfig, BatchOnly, BatchOnly, _, D>(
+                &left, &right, &config, &backend, &params, None,
+            )
+            .map_err(|e| AccError::RecursionFailed {
+                reason: format!("finalize root aggregation failed: {e:?}"),
+            })?;
 
         // The artifact digest is the binding leaf's PADDED last-row `acc_out` (`binding_pis[3]`) —
         // the SAME quantity `generate_chain_trace_rotated` exposes as the K-fold `chain_digest`, so
