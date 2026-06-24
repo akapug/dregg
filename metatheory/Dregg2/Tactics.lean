@@ -98,6 +98,39 @@ initialize gateProjectionAttr : Lean.TagAttribute ←
     "marks a gate-EXTRACT (`step = some _ → its own gate`, `unfold; exact h.1`) — NOT an authority \
      guarantee; the genuine binding is the executor⟺independent-spec iff"
 
+/-! ## `@[linter_calibration]` — the DELIBERATE-linter-fixture marker.
+
+A `@[linter_calibration]` declaration is a fixture that exists SOLELY to exercise (calibrate) a
+rejector — it is constructed to be the kind of thing a checker MUST reject, so that a checker which
+fails to reject it is provably toothless. It is NOT spec debt: it is a negative test masquerading, by
+shape, as the thing being tested. Two such fixtures calibrate `Verify.LoadBearingLint`:
+
+  * `Dregg2.Verify.LoadBearingAuditKey.gateCopyBurnSpec` — a "spec" that calls the executor STEP gate
+    `recCBurnAsset` directly. It calibrates the linter's BOUNDARY check (#1): the linter MUST FAIL it.
+  * `Dregg2.Spec.execGraph` — a graph reconstructed VERBATIM as the executor's `.any confersEdgeTo`
+    lookup gate, so it is `isDefEq` to that gate (`execGraph_eq_any := rfl`). It calibrates the
+    linter's DEFEQ check (#2): the linter MUST FAIL it. Its GENUINE counterpart — the independent
+    authority-connectivity spec the C-c1 legs actually attest against — is `Spec.authConnects`
+    (linter-PASS, grounded in `Metatheory.AuthorizedProduction`). `execGraph` survives only as (a) this
+    calibration fixture and (b) the executor-side gate-relation that TRANSPORTS onto `authConnects`
+    (`execGraph_iff_authConnects` / `execGraph_has_iff_authConnects_has`).
+
+The two together are the linter's INTENDED NEGATIVE-CALIBRATION PAIR: every `#load_bearing_audit*`
+sweep is expected to produce exactly these two FAILs, and the calibration is ASSERTED (not left a
+silent FAIL count) by `#load_bearing_calibration_expect_fail` in the audit modules. The tag is a
+documentation marker only — it carries no proof power and gates nothing; its job is to STOP an auditor
+reading a deliberate gate-copy as a real-but-broken authority spec. -/
+
+/-- The `@[linter_calibration]` tag — marks a DELIBERATE checker-calibration fixture (a gate-copy /
+boundary-violator built to be REJECTED, so the rejector is proven non-toothless). A documentation
+marker ONLY: no proof power, gates nothing. Its job is to STOP a deliberate gate-copy from reading as
+real spec debt — see the module note above. The genuine counterpart of the `execGraph` calibration is
+the independent `Spec.authConnects`. -/
+initialize linterCalibrationAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `linter_calibration
+    "marks a DELIBERATE linter-calibration fixture (a gate-copy / boundary-violator built to be \
+     REJECTED) — NOT spec debt; carries no proof power"
+
 /-! ## `#assert_namespace_axioms` — module-wide axiom-hygiene pinning.
 
 `#assert_namespace_axioms` pins every theorem under a namespace to the three standard

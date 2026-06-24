@@ -302,10 +302,23 @@ theorem strict_attenuation_witness :
 #guard decide (({Authority.Auth.read} : ExecCapRights)
                   ≤ {Authority.Auth.read, Authority.Auth.write}) = true   -- attenuation SOUND
 
-/-- **`execGraph caps`** — the `Spec.Authority.Graph` reconstructed from the executable cap
-table: cell `h` holds a Spec edge to `t` iff, in `Exec.caps`, `h` holds a `node t` cap or an
-`endpoint t` cap carrying `write` (the two branches `authorizedB` accepts). The rights are
-`Unit` (the connectivity skeleton). -/
+/-- **`execGraph caps` — a DELIBERATE linter-calibration fixture, NOT an authority spec.** It
+reconstructs a `Spec.Authority.Graph` from the executable cap table VERBATIM as the executor's own
+authority-edge lookup: cell `h` holds a Spec edge to `t` iff, in `Exec.caps`, `h` holds a `node t` cap
+or an `endpoint t` cap carrying `write` — i.e. the `.any confersEdgeTo` body the dispatch gate folds.
+Because it is the gate copied verbatim, it is `isDefEq` to that gate (`execGraph_eq_any := rfl`), so
+reading `execGraph caps h c` as a *connectivity claim* attests it tautologically — a "spec" that IS the
+implementation gate. That is precisely why it is `@[linter_calibration]`: it is the negative-calibration
+fixture for `Verify.LoadBearingLint`'s DEFEQ check (#2), which MUST reject it (asserted by
+`#load_bearing_calibration_expect_fail` in the audit modules — the intended FAIL paired with
+`gateCopyBurnSpec`). Its GENUINE counterpart — the INDEPENDENT authority-connectivity reference the
+C-c1 legs actually attest against — is `Spec.authConnects` (a `Prop`-existential, linter-PASS, grounded
+in `Metatheory.AuthorizedProduction` via `authConnects_is_authorized_production`). `execGraph` retains
+exactly two non-calibration roles: it is the genuine carrier of a graph CHANGE (`addEdge`/`removeEdge`
+on the `Spec` edge, where the defeq is harmless), and it is the executor-side gate-relation that
+TRANSPORTS onto `authConnects` (`execGraph_iff_authConnects` / `execGraph_has_iff_authConnects_has`).
+The rights are `Unit` (the connectivity skeleton). -/
+@[linter_calibration]
 def execGraph (caps : Caps) : Graph Label ExecRights :=
   fun h c =>
     -- the `.any` reads `c.target`, so the edge depends on the cap `c`.

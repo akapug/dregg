@@ -7,9 +7,12 @@ the `Spec.execGraph` refinement abstraction + its siblings, and the Exec attesta
 (`fullActionInvA` / `gatedActionInvG`). The deliverable is the MEASURED scope table: which specs
 are independent + non-vacuous vs which collapse to the gate.
 
-CALIBRATION (must come out as stated):
-  * `Dregg2.Spec.execGraph` — check #2 MUST FAIL (defeq to its `.any` gate copy).
+CALIBRATION — the intended NEGATIVE-CALIBRATION PAIR (both `@[linter_calibration]` fixtures, each FAIL
+ASSERTED by `#load_bearing_calibration_expect_fail`, which throws if a fixture unexpectedly passes):
+  * `Dregg2.Spec.execGraph` — check #2 MUST FAIL (defeq to its `.any` gate copy); genuine counterpart
+    `Spec.authConnects`.
   * `gateCopyBurnSpec` (in AuditKey) — check #1 MUST FAIL (names recCBurnAsset).
+So the audit's two FAILs are explicitly named, asserted-intended calibrations — not silent spec debt.
 -/
 import Dregg2.Verify.LoadBearingLint
 -- the per-effect full-state specs:
@@ -236,11 +239,15 @@ Spec-side `execGraph` `.any` copy, so this is reported in prose; the defeq pairi
 `execGraph` itself, the source).
 =========================================================================== -/
 
--- CALIBRATION: execGraph — MUST FAIL #2 (defeq to its own `.any` gate copy). It is no longer the
--- abstract refinement TARGET (the inheritors below now ride `authConnects`); it survives ONLY as the
--- genuine graph-CHANGE carrier (`addEdge`/`removeEdge`), where the defeq is harmless.
-#load_bearing_audit_report Dregg2.Spec.execGraph
+-- NEGATIVE-CALIBRATION FIXTURE (defeq tooth): execGraph — ASSERTED to FAIL #2 (defeq to its own `.any`
+-- gate copy) via `#load_bearing_calibration_expect_fail`, which THROWS if it unexpectedly passes. It is
+-- a DELIBERATE gate-copy (`@[linter_calibration]`), NOT the abstract refinement target (the inheritors
+-- below ride `authConnects`); it survives ONLY as the genuine graph-CHANGE carrier (`addEdge`/
+-- `removeEdge`, defeq harmless) + the transport-onto-`authConnects` bridge. Its GENUINE counterpart is
+-- `Spec.authConnects`. With `gateCopyBurnSpec` (boundary tooth, in AuditKey) this is the intended pair.
+#load_bearing_calibration_expect_fail Dregg2.Spec.execGraph
   gate := Dregg2.Verify.LoadBearingAuditBroad.execGraphGate
+  genuine := Dregg2.Spec.authConnects
 
 -- THE SEVERED SPEC: `authConnects` — the INDEPENDENT authority-connectivity reference the C-c1
 -- authority-graph legs now attest against. MUST PASS: [1] independent (no step gate, only the pure

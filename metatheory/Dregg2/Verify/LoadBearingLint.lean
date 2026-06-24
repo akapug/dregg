@@ -277,6 +277,38 @@ elab_rules : command
     let (_overall, lines) ← liftTermElabM <| (runAudit { spec, gate?, nonvacuous? := nv? }).run'
     logInfo <| s!"load_bearing audit — {spec}\n" ++ String.intercalate "\n" lines.toList
 
+/-- `#load_bearing_calibration_expect_fail S …` — the calibration ASSERTION. Runs the same three
+checks on a `@[linter_calibration]` fixture (a DELIBERATE gate-copy / boundary-violator), then ASSERTS
+the overall verdict is FAIL: it throws if the audit unexpectedly PASSES (the linter went toothless) and
+`logInfo`s a confirming line otherwise. This turns a calibration fixture's FAIL from a SILENT entry in
+the FAIL count into an explicitly-named, asserted-intended one — so a reader/CI sees "this FAIL is the
+calibration, and it is supposed to be here". The genuine spec the fixture stands in for is named in the
+report. -/
+syntax (name := loadBearingCalibrationExpectFailCmd)
+  "#load_bearing_calibration_expect_fail" ident (" gate " ":=" ident)? (" nonvacuous " ":=" ident)?
+    (" genuine " ":=" ident)? : command
+
+elab_rules : command
+  | `(command| #load_bearing_calibration_expect_fail $s
+        $[gate := $g?]? $[nonvacuous := $w?]? $[genuine := $real?]?) => do
+    let spec ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo s
+    let gate? ← g?.mapM fun g => liftCoreM <| realizeGlobalConstNoOverloadWithInfo g
+    let nv?   ← w?.mapM fun w => liftCoreM <| realizeGlobalConstNoOverloadWithInfo w
+    -- the genuine counterpart (purely for the report) — e.g. `execGraph`'s genuine spec is `authConnects`.
+    let real? ← real?.mapM fun r => liftCoreM <| realizeGlobalConstNoOverloadWithInfo r
+    let (overall, lines) ← liftTermElabM <| (runAudit { spec, gate?, nonvacuous? := nv? }).run'
+    let realLine := match real? with
+      | some r => s!"\n  GENUINE counterpart (the real spec this fixture stands in for): {r}"
+      | none   => ""
+    let report := s!"linter CALIBRATION — {spec} (EXPECTED FAIL){realLine}\n"
+      ++ String.intercalate "\n" lines.toList
+    if overall then
+      throwError s!"CALIBRATION BROKEN — `{spec}` was expected to FAIL the load_bearing audit (it is a \
+        deliberate calibration fixture) but it PASSED. The linter has gone TOOTHLESS — a rejector that \
+        accepts its own negative-calibration fixture is not enforcing anything.\n{report}"
+    else
+      logInfo s!"{report}\n  ✓ asserted-intended FAIL (the linter correctly REJECTS this calibration fixture)"
+
 /-- `#load_bearing_audit_tagged` — sweep every `@[load_bearing]`-tagged decl in the environment,
 auditing each with its attached `gate?`/`nonvacuous?`. Throws if ANY fails (CI gate over the whole
 tagged corpus). -/
