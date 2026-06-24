@@ -34,52 +34,98 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Render a deos-js applet's view-tree into real gpui-component widgets (the renderer extraction)."
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TWO RENDERERS, ONE VIEW-TREE  (renderer-independence, the web-projection seam)
+# ─────────────────────────────────────────────────────────────────────────────
+# The `deos.ui.*` view-tree (`tree::ViewNode`) is gpui-free serializable DATA.
+# This crate carries TWO renderers over the SAME data:
+#
+#   * `native` (DEFAULT) — `ViewNode` → real gpui-component widgets (`render.rs`),
+#     baked to a PNG via the offscreen-wgpu headless path (`headless.rs`). Pulls
+#     the heavy gpui stack + deos-js (mozjs SpiderMonkey) for the live-turn proof.
+#
+#   * `web` — `ViewNode` → an HTML/DOM string (`web.rs`), gpui-FREE and deos-js-
+#     FREE: only `serde`/`serde_json`. `cargo build -p deos-view --no-default-features
+#     --features web` compiles a TINY graph (no GPU, no SpiderMonkey) and the
+#     `web_render_card` example bakes a browser-loadable `.html` of the SAME card.
+#     This is the proof that the card is renderer-independent: the identical
+#     view-tree paints in a browser, not just the native cockpit.
+#
+# Everything gpui/deos-js is `optional` and gated on `native` so the `web` build
+# does not drag the elephants.
+
 [dependencies]
 # THE VIEW-TREE MODEL + THE VERIFIED-TURN FIRING — the gpui-free substance crate.
 # Its `Applet` mints a sovereign cell; `fire` is a real cap-gated verified turn
 # (a `TurnReceipt`); `get_u64` is a witnessed read; the `deos.ui.*` JS prelude
 # builds the serializable element-tree this crate renders. We do NOT touch its src.
-deos-js = { path = "../deos-js" }
+# NATIVE-ONLY (pulls the mozjs SpiderMonkey elephant — the live-turn render proof).
+deos-js = { path = "../deos-js", optional = true }
 # `dregg-cell` — the SAME crate deos-js path-deps (its `AuthRequired` is the authority
 # in `Applet::mint`'s signature). Naming it directly lets the render proof construct an
 # applet's affordances; cargo resolves the IDENTICAL instance deos-js already pulls.
-dregg-cell = { path = "../cell" }
+dregg-cell = { path = "../cell", optional = true }
 # `dregg-types` — `CellId`, the sovereignty boundary every `bind` reads `(cell, slot)`
 # of. The SAME instance deos-js path-deps (identical `../types`), so the renderer can
 # name the `CellId` it registers in deos-js's signal `BindingRegistry` without inverting
 # the dependency. (deos-js owns the registry; deos-view consumes it — the fine-grained
 # re-render hook.)
-dregg-types = { path = "../types" }
+dregg-types = { path = "../types", optional = true }
 
 # THE GPUI STACK — the SAME fork rev the cockpit uses (emberian/zed@407a6ff), so
 # cargo resolves ONE gpui instance across this crate + gpui-component. `test-support`
 # lights up the HeadlessAppContext + offscreen wgpu renderer the render-capture proof
 # uses (the exact path starbridge-v2's `render_cockpit_headless` bakes through).
-gpui = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
+# NATIVE-ONLY.
+gpui = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"], optional = true }
 # `runtime_shaders` is LOAD-BEARING on macOS (mirrors starbridge-v2): it makes gpui
 # compile its Metal shaders AT RUNTIME (via `MTLDevice::newLibraryWithSource`) instead
 # of at BUILD time (`xcrun metal`, which needs the offline Metal Toolchain component).
 # Without it the `gpui_macos` build script fails "cannot execute tool 'metal'". `x11`/
 # `wayland` light up the Linux windowing backends (inert on macOS — gpui_linux is not
 # in the macOS graph).
-gpui_platform = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["font-kit", "runtime_shaders", "test-support", "x11", "wayland"] }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["font-kit", "runtime_shaders", "test-support", "x11", "wayland"], optional = true }
 # The wgpu renderer leaf — the CosmicTextSystem text system + the offscreen renderer.
-gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"], optional = true }
 
 # THE REAL WIDGET LIBRARY — the vendored longbridge fork the cockpit uses
 # (emberian/gpui-component@dregg-repoint, the `crates/ui` member). Button, Label,
 # v_flex/h_flex, Input, List, Table — the vocabulary the view-tree maps onto.
-gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", default-features = false }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", default-features = false, optional = true }
 
 # JSON parse of the view-tree the JS engine stringifies (and the present() faces).
+# NEEDED BY BOTH renderers (the gpui-free `web` renderer parses the same view-tree).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # The headless capture path returns `anyhow::Result<image::RgbaImage>` (gpui's
 # `capture_screenshot` signature); the `headless` module re-encodes + saves the PNG.
-# 0.25 matches gpui_wgpu's `image` (one resolved version across the graph).
+# 0.25 matches gpui_wgpu's `image` (one resolved version across the graph). NATIVE-ONLY.
 anyhow = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+[features]
+default = ["native"]
+# native — `ViewNode` → gpui-component pixels (the heavy stack + deos-js live turns).
+native = [
+    "dep:deos-js",
+    "dep:dregg-cell",
+    "dep:dregg-types",
+    "dep:gpui",
+    "dep:gpui_platform",
+    "dep:gpui_wgpu",
+    "dep:gpui-component",
+    "dep:image",
+]
+# web — `ViewNode` → an HTML/DOM string (gpui-free, deos-js-free): only serde.
+web = []
+
+# THE WEB-PROJECTION BAKE — render the SAME counter card view-tree (the EXACT JSON the
+# SpiderMonkey engine produces) to a browser-loadable `.html`, gpui-free. Build + run:
+#   cd deos-view && cargo run --no-default-features --features web --example web_render_card
+[[example]]
+name = "web_render_card"
+required-features = ["web"]
 
 # ─── THE FORK SEAMS — replicated from deos-js + starbridge-v2 (the two standalone
 #     workspaces this crate path-deps). Because deos-view is its OWN workspace root,

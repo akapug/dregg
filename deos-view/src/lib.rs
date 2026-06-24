@@ -1,34 +1,55 @@
-//! # deos-view — render a deos-js applet's view-tree into REAL gpui-component pixels.
+//! # deos-view — render a deos-js applet's view-tree, native (gpui) OR web (HTML).
 //!
 //! THE RENDERER EXTRACTION (mirroring the deos-reflect extraction ember asked for):
-//! `deos-js` stays GPUI-FREE — it produces the serializable `deos.ui.*` view-tree and
-//! drives the verified turns. `deos-view` holds ALL the gpui and turns that data into
-//! pixels.
+//! `deos-js` stays GPUI-FREE — it produces the serializable `deos.ui.*` view-tree
+//! ([`tree::ViewNode`]) and drives the verified turns. `deos-view` holds the renderers
+//! that turn that DATA into a surface.
 //!
-//! The flow:
+//! TWO RENDERERS, ONE VIEW-TREE — the card is renderer-INDEPENDENT:
 //!
-//!   1. [`bridge::build_live_view`] runs a deos-js applet's JS in real SpiderMonkey,
-//!      extracts its view-tree (the engine `JSON.stringify`s it and the bridge reads it
-//!      back out of the applet's ephemeral view-state) and hands back the live
-//!      [`deos_js::applet::Applet`] paired with the parsed [`tree::ViewNode`].
-//!   2. [`render::AppletView`] walks that tree into real gpui-component widgets
-//!      (`vstack→v_flex`, `button→Button`, `text→Label`, `bind→Label`re-read, …). A
-//!      button's `on_click` fires the applet's affordance = a REAL cap-gated verified
-//!      turn (a `TurnReceipt`); a `bind` re-reads the model off the live ledger.
-//!   3. [`faces::FacesView`] renders the moldable `present()` faces through the SAME
-//!      vocabulary (the §7 unification — inspector and custom view share widgets).
+//! * **`native`** (default, feature-gated) — `ViewNode` → real gpui-component pixels:
+//!     1. `bridge::build_live_view` runs an applet's JS in real SpiderMonkey, extracts
+//!        its view-tree and hands back the live `Applet` paired with the parsed
+//!        [`tree::ViewNode`].
+//!     2. `render::AppletView` walks the tree into gpui widgets (`vstack→v_flex`,
+//!        `button→Button`, `text→Label`, `bind→Label` re-read, …); a button's `on_click`
+//!        fires a REAL cap-gated verified turn; a `bind` re-reads the live ledger.
+//!     3. `faces::FacesView` renders the moldable `present()` faces through the SAME
+//!        vocabulary; `headless` bakes any view to a PNG offscreen (the cockpit's path).
 //!
-//! [`headless`] bakes any `Render` view to a PNG offscreen (the same HeadlessAppContext
-//! + offscreen-wgpu path the cockpit's `--render-cockpit` bake uses), so the whole flow
-//! is provable by RUNNING + a captured frame, not merely by compiling.
+//! * **`web`** (feature-gated, gpui-FREE + deos-js-FREE) — the IDENTICAL
+//!     [`tree::ViewNode`] → an HTML/DOM string ([`web::render_card_document`]),
+//!     node-for-node mirroring the gpui vocabulary, into a browser-loadable `.html`. This
+//!     is the web-projection of the reflective cockpit: the SAME card paints in a browser,
+//!     not just the native window. See the `web_render_card` example for the bake.
 
-pub mod bridge;
-pub mod faces;
-pub mod headless;
-pub mod render;
+// The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
+// always compiled, under BOTH the `native` and `web` renderers.
 pub mod tree;
+pub use tree::{parse_view_tree, RawNode, RawProps, ViewNode};
 
+// ── The NATIVE renderer: `ViewNode` → real gpui-component pixels (the heavy stack
+//    + deos-js live verified turns). Gated on `native` so the `web` build stays tiny. ──
+#[cfg(feature = "native")]
+pub mod bridge;
+#[cfg(feature = "native")]
+pub mod faces;
+#[cfg(feature = "native")]
+pub mod headless;
+#[cfg(feature = "native")]
+pub mod render;
+
+#[cfg(feature = "native")]
 pub use bridge::{build_live_view, view_tree_key, LiveView};
+#[cfg(feature = "native")]
 pub use faces::FacesView;
+#[cfg(feature = "native")]
 pub use render::{AppletView, SharedApplet};
-pub use tree::{parse_view_tree, ViewNode};
+
+// ── The WEB renderer: the SAME `ViewNode` → an HTML/DOM string. gpui-free + deos-js-
+//    free (only serde). This is the web-projection of the reflective cockpit — the
+//    card paints in a browser, not just the native cockpit. ──
+#[cfg(feature = "web")]
+pub mod web;
+#[cfg(feature = "web")]
+pub use web::{render_card_document, render_html};
