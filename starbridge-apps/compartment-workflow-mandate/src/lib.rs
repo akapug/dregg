@@ -31,6 +31,8 @@ use dregg_app_framework::{
     symbol,
 };
 
+use std::collections::HashSet;
+
 // Re-export the field type so differential tests can build the same clearance-label corpus the
 // admission predicates consume, without depending directly on `dregg-app-framework`.
 pub use dregg_app_framework::FieldElement;
@@ -137,15 +139,16 @@ pub fn clearance_label(name: &str) -> FieldElement {
     field_from_bytes(name.as_bytes())
 }
 
-/// Completed step ids implied by the monotonic cursor (Lean `completedOf`).
-pub fn completed_of(cursor: u64) -> Vec<u64> {
+/// Completed step ids implied by the monotonic cursor (Lean `completedOf`). A set —
+/// membership is the only query, so the admission check is O(1) per prerequisite.
+pub fn completed_of(cursor: u64) -> HashSet<u64> {
     (0..cursor).collect()
 }
 
 /// **`step_admissible`** — DAG prerequisites satisfied and target not yet done.
 ///
 /// Mirrors Lean `stepAdmissible`: all `needs` ∈ `completed`, and `step_id ∉ completed`.
-pub fn step_admissible(step_id: u64, completed: &[u64], phase: WorkflowPhase) -> bool {
+pub fn step_admissible(step_id: u64, completed: &HashSet<u64>, phase: WorkflowPhase) -> bool {
     if step_id != phase.step_id() {
         return false;
     }
@@ -884,11 +887,11 @@ mod tests {
 
     #[test]
     fn step_admissible_matches_lean_charter() {
-        assert!(step_admissible(0, &[], WorkflowPhase::Review));
-        assert!(!step_admissible(1, &[], WorkflowPhase::Redact));
-        assert!(step_admissible(1, &[0], WorkflowPhase::Redact));
-        assert!(step_admissible(2, &[0, 1], WorkflowPhase::Sign));
-        assert!(!step_admissible(2, &[0], WorkflowPhase::Sign));
+        assert!(step_admissible(0, &HashSet::new(), WorkflowPhase::Review));
+        assert!(!step_admissible(1, &HashSet::new(), WorkflowPhase::Redact));
+        assert!(step_admissible(1, &HashSet::from([0]), WorkflowPhase::Redact));
+        assert!(step_admissible(2, &HashSet::from([0, 1]), WorkflowPhase::Sign));
+        assert!(!step_admissible(2, &HashSet::from([0]), WorkflowPhase::Sign));
     }
 
     #[test]

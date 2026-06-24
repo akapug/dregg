@@ -707,8 +707,7 @@ impl BridgePresentationBuilder {
         let trace = authorize::authorize_with_trace(&self.auth_state, request, &self.symbols)?;
 
         // 3. Compute the final state root (from the fold chain state).
-        let mut final_state_clone = final_state.clone();
-        let final_root_bytes = final_state_clone.root();
+        let final_root_bytes = final_state.root_immutable();
 
         // 4. Build the circuit witness (Poseidon2 path — legacy linear path removed).
         let circuit_witness = self.build_circuit_witness_poseidon2(&trace, request)?;
@@ -771,8 +770,7 @@ impl BridgePresentationBuilder {
         let trace = authorize::authorize_with_trace(&self.auth_state, request, &self.symbols)?;
 
         // 3. Compute the final state root.
-        let mut final_state_clone = final_state.clone();
-        let final_root_bytes = final_state_clone.root();
+        let final_root_bytes = final_state.root_immutable();
 
         // 4. Build the circuit witness with Poseidon2-compatible issuer membership.
         let circuit_witness = self.build_circuit_witness_poseidon2(&trace, request)?;
@@ -846,8 +844,7 @@ impl BridgePresentationBuilder {
         let trace = authorize::authorize_with_trace(&self.auth_state, request, &self.symbols)?;
 
         // 3. Compute the final state root.
-        let mut final_state_clone = final_state.clone();
-        let final_root_bytes = final_state_clone.root();
+        let final_root_bytes = final_state.root_immutable();
 
         // 4. Build the circuit witness with Poseidon2 hashing.
         //    SECURITY: Must use poseidon2 witness to compute a real composition_commitment
@@ -911,8 +908,7 @@ impl BridgePresentationBuilder {
 
         // Compute state root from the final state for fact commitment binding.
         let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
-        let mut final_state_clone = final_step.state.clone();
-        let state_root_bytes = final_state_clone.root();
+        let state_root_bytes = final_step.state.root_immutable();
         let state_root = bytes_to_babybear(&state_root_bytes);
 
         // Generate predicate proofs for each specified fact.
@@ -964,8 +960,7 @@ impl BridgePresentationBuilder {
         let trace = authorize::authorize_with_trace(&self.auth_state, request, &self.symbols)?;
 
         // 3. Compute the final state root.
-        let mut final_state_clone = final_state.clone();
-        let final_root_bytes = final_state_clone.root();
+        let final_root_bytes = final_state.root_immutable();
 
         // 4. Build the circuit witness with Poseidon2-compatible issuer membership.
         let circuit_witness = self.build_circuit_witness_poseidon2(&trace, request)?;
@@ -1061,6 +1056,17 @@ impl BridgePresentationBuilder {
             let tree_depth = 4;
             let (old_root, old_proofs) = build_shared_tree(&old_leaf_hashes, tree_depth);
 
+            // Index old-leaf hash → first index, so each removed fact's lookup is
+            // O(1) instead of an O(old) linear scan. `or_insert` keeps the FIRST
+            // index for duplicate hashes, matching `.position()`'s semantics.
+            let old_leaf_index: std::collections::HashMap<BabyBear, usize> = {
+                let mut m = std::collections::HashMap::with_capacity(old_leaf_hashes.len());
+                for (idx, h) in old_leaf_hashes.iter().enumerate() {
+                    m.entry(*h).or_insert(idx);
+                }
+                m
+            };
+
             // Compute the new state's Poseidon2 root.
             let new_leaf_hashes: Vec<BabyBear> = new_facts
                 .iter()
@@ -1090,14 +1096,11 @@ impl BridgePresentationBuilder {
                 let fact_hash = hash_fact(pred_bb, &terms);
 
                 // Find this fact's index in the old state to get its Merkle proof.
-                let proof_idx = old_leaf_hashes
-                    .iter()
-                    .position(|&h| h == fact_hash)
-                    .ok_or_else(|| {
-                        AuthError::InvalidRequest(
-                            "removed fact not found in old state for validated IVC".into(),
-                        )
-                    })?;
+                let proof_idx = *old_leaf_index.get(&fact_hash).ok_or_else(|| {
+                    AuthError::InvalidRequest(
+                        "removed fact not found in old state for validated IVC".into(),
+                    )
+                })?;
 
                 let merkle_witness = &old_proofs[proof_idx];
 
@@ -1350,6 +1353,16 @@ impl BridgePresentationBuilder {
             let tree_depth = 4; // Match the circuit's tree depth.
             let (old_root, old_proofs) = build_shared_tree(&old_leaf_hashes, tree_depth);
 
+            // Index old-leaf hash → first index for O(1) removed-fact lookup
+            // (replaces the per-removed-fact O(old) `.position()` scan below).
+            let old_leaf_index: std::collections::HashMap<BabyBear, usize> = {
+                let mut m = std::collections::HashMap::with_capacity(old_leaf_hashes.len());
+                for (idx, h) in old_leaf_hashes.iter().enumerate() {
+                    m.entry(*h).or_insert(idx);
+                }
+                m
+            };
+
             // Compute the new state's Poseidon2 root.
             let new_leaf_hashes: Vec<BabyBear> = new_facts
                 .iter()
@@ -1379,9 +1392,8 @@ impl BridgePresentationBuilder {
                     let fact_hash = hash_fact(pred_bb, &terms);
 
                     // Find this fact's index in the old state to get its Merkle proof.
-                    let proof_idx = old_leaf_hashes
-                        .iter()
-                        .position(|&h| h == fact_hash)
+                    let proof_idx = *old_leaf_index
+                        .get(&fact_hash)
                         .expect("removed fact must exist in old state");
 
                     RemovedFact {

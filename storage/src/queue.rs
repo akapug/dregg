@@ -16,6 +16,12 @@ use crate::wal::{WalEntry, WriteAheadLog};
 pub struct MerkleQueue {
     /// Current entries (linear buffer with head pointer).
     entries: Vec<QueueEntry>,
+    /// Cached leaf commitments, one per entry, index-aligned with `entries`.
+    /// `leaf_hashes[i] == hash_entry(&entries[i])`. A leaf never changes once
+    /// computed (entries are immutable post-enqueue), so this is computed once
+    /// at enqueue and reused for every `recompute_root` / `pending_leaves`
+    /// instead of re-hashing the whole pending window each time.
+    leaf_hashes: Vec<[u8; 32]>,
     /// Head pointer (first un-dequeued entry index into `entries`).
     head: usize,
     /// Maximum capacity (bounded by quota).
@@ -38,6 +44,7 @@ impl Clone for MerkleQueue {
         // Cloning produces an in-memory-only copy (WAL is not cloned).
         Self {
             entries: self.entries.clone(),
+            leaf_hashes: self.leaf_hashes.clone(),
             head: self.head,
             capacity: self.capacity,
             root: self.root,
@@ -102,6 +109,7 @@ impl MerkleQueue {
     pub fn new(capacity: usize) -> Self {
         let mut q = Self {
             entries: Vec::new(),
+            leaf_hashes: Vec::new(),
             head: 0,
             capacity,
             root: [0u8; 32],
@@ -128,6 +136,7 @@ impl MerkleQueue {
 
         let mut q = Self {
             entries: Vec::new(),
+            leaf_hashes: Vec::new(),
             head: 0,
             capacity,
             root: [0u8; 32],
@@ -168,6 +177,7 @@ impl MerkleQueue {
         wal_state.wal.sync()?;
 
         // Now apply in memory.
+        self.leaf_hashes.push(hash_entry(&entry));
         self.entries.push(entry);
         self.recompute_root();
         Ok(self.root)
@@ -255,8 +265,10 @@ impl MerkleQueue {
             }
         }
 
+        let leaf_hashes: Vec<[u8; 32]> = queue_entries.iter().map(hash_entry).collect();
         let mut q = Self {
             entries: queue_entries,
+            leaf_hashes,
             head,
             capacity,
             root: [0u8; 32],
@@ -286,6 +298,7 @@ impl MerkleQueue {
                 capacity: self.capacity,
             });
         }
+        self.leaf_hashes.push(hash_entry(&entry));
         self.entries.push(entry);
         self.recompute_root();
         Ok(self.root)
@@ -391,18 +404,20 @@ impl MerkleQueue {
     /// For an empty queue, the root is `MerkleRoot::empty().blake3_root`
     /// (the all-zeros sentinel) — NOT the legacy `blake3(b"empty_queue")`.
     fn recompute_root(&mut self) {
-        let pending = &self.entries[self.head..];
+        // Reuse the cached, index-aligned leaf commitments for the pending
+        // window (head..tail) — byte-identical to re-hashing each entry via
+        // `hash_entry`, since `leaf_hashes[i] == hash_entry(&entries[i])`.
+        let pending = &self.leaf_hashes[self.head..];
         if pending.is_empty() {
             self.root = empty_queue_root();
             return;
         }
-        let leaves: Vec<[u8; 32]> = pending.iter().map(hash_entry).collect();
-        self.root = merkle_root(&leaves);
+        self.root = merkle_root(pending);
     }
 
     /// Leaf hashes of the current pending window (head..tail), in FIFO order.
     fn pending_leaves(&self) -> Vec<[u8; 32]> {
-        self.entries[self.head..].iter().map(hash_entry).collect()
+        self.leaf_hashes[self.head..].to_vec()
     }
 }
 
@@ -696,6 +711,88 @@ mod tests {
         assert_eq!(q.remaining_capacity(), 1);
         // capacity() is the construction bound, invariant under fill.
         assert_eq!(q.capacity(), 3);
+    }
+
+    /// Byte-identity differential: the cached-leaf root and proofs must be
+    /// IDENTICAL to a from-scratch full rebuild over a long, varied random
+    /// enqueue/dequeue sequence. Guards the #3 incremental-Merkle rewrite —
+    /// any divergence from re-hashing every pending entry is a Merkle-root
+    /// regression (a tracked root would fork from the live queue).
+    #[test]
+    fn cached_leaves_byte_identical_to_full_rebuild() {
+        // From-scratch reference root: re-hash every pending entry, exactly
+        // the pre-cache `recompute_root` behaviour.
+        fn rebuild_root(entries: &[QueueEntry], head: usize) -> [u8; 32] {
+            let pending = &entries[head..];
+            if pending.is_empty() {
+                return empty_queue_root();
+            }
+            let leaves: Vec<[u8; 32]> = pending.iter().map(hash_entry).collect();
+            merkle_root(&leaves)
+        }
+        fn rebuild_pending_leaves(entries: &[QueueEntry], head: usize) -> Vec<[u8; 32]> {
+            entries[head..].iter().map(hash_entry).collect()
+        }
+
+        // Deterministic xorshift PRNG (no external dep), seeded for repeatability.
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let cap = 64;
+        let mut q = MerkleQueue::new(cap);
+        // Shadow of the full entry log + head, for the reference rebuild.
+        let mut all_entries: Vec<QueueEntry> = Vec::new();
+        let mut ref_head: usize = 0;
+
+        for round in 0..2000u64 {
+            // Bias toward enqueue early, dequeue later, but mix throughout.
+            let do_enqueue = (next() % 3 != 0) && !q.is_full();
+            if do_enqueue {
+                let payload = format!("entry-{round}-{}", next());
+                let mut sender = [0u8; 32];
+                sender[0] = (next() % 251) as u8;
+                let entry = QueueEntry {
+                    content_hash: *blake3::hash(payload.as_bytes()).as_bytes(),
+                    sender,
+                    deposit: next() % 1000,
+                    enqueued_at: round,
+                    size: payload.len(),
+                };
+                let root = q.enqueue(entry.clone()).unwrap();
+                all_entries.push(entry);
+                assert_eq!(
+                    root,
+                    rebuild_root(&all_entries, ref_head),
+                    "enqueue root diverged at round {round}"
+                );
+            } else if !q.is_empty() {
+                let pre = q.root();
+                let (_, proof) = q.dequeue().unwrap();
+                // Proof internal consistency: old_root is the pre-state root.
+                assert_eq!(proof.old_root, pre);
+                ref_head += 1;
+                // Root + remaining-leaf witness match the full rebuild exactly.
+                assert_eq!(
+                    proof.new_root,
+                    rebuild_root(&all_entries, ref_head),
+                    "dequeue new_root diverged at round {round}"
+                );
+                assert_eq!(
+                    proof.remaining_leaves,
+                    rebuild_pending_leaves(&all_entries, ref_head),
+                    "remaining_leaves diverged at round {round}"
+                );
+                // The emitted proof must still structurally verify.
+                assert!(verify_dequeue_proof(&proof), "proof unverifiable at round {round}");
+            }
+            // Live root tracks the reference at every step.
+            assert_eq!(q.root(), rebuild_root(&all_entries, ref_head));
+        }
     }
 
     #[test]

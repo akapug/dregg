@@ -274,6 +274,19 @@ impl CellMigrationManager {
         )
     }
 
+    /// Check if ANY cell is currently frozen for migration (`Frozen` or
+    /// `AwaitingReceipt`). Cheap O(migrations) scan — the map is empty in the
+    /// common no-migration case, so this short-circuits the per-turn
+    /// write-set extraction used solely to look for a frozen touched cell.
+    pub fn any_frozen(&self) -> bool {
+        self.migrations.values().any(|state| {
+            matches!(
+                state,
+                MigrationState::Frozen { .. } | MigrationState::AwaitingReceipt { .. }
+            )
+        })
+    }
+
     /// Check if a migration was cancelled (target should reject the bundle).
     pub fn is_cancelled(&self, cell_id: &CellId) -> bool {
         matches!(

@@ -63,7 +63,7 @@
 //! through the verified executor); the on-ledger cell is the ADDITIVE deos floor that makes
 //! "you cannot overwrite a committed bid" a real executor refusal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use dregg_app_framework::CellId as DeosCellId;
 use dregg_app_framework::{
@@ -198,8 +198,9 @@ pub struct Auction {
     pub asset: AssetId,
     /// The asset the award slot delivers to the winner (the task-token column).
     pub slot_asset: AssetId,
-    /// The sealed commitments collected during the commit phase, in commit order.
-    pub commitments: Vec<Seal>,
+    /// The sealed commitments collected during the commit phase (a set — membership
+    /// is the only query, so a `HashSet` makes the reveal-time check O(1)).
+    pub commitments: HashSet<Seal>,
     /// The current phase.
     pub phase: Phase,
     /// The validly-revealed bids (collected during the reveal phase), keyed by seal so a seal can be
@@ -215,7 +216,7 @@ impl Auction {
             slot,
             asset,
             slot_asset,
-            commitments: Vec::new(),
+            commitments: HashSet::new(),
             phase: Phase::Commit,
             revealed: BTreeMap::new(),
         }
@@ -227,7 +228,7 @@ impl Auction {
         if self.phase != Phase::Commit {
             return Err(AuctionError::NotCommitPhase);
         }
-        self.commitments.push(seal);
+        self.commitments.insert(seal);
         Ok(())
     }
 

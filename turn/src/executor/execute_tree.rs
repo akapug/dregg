@@ -702,9 +702,6 @@ impl TurnExecutor {
                 e.insert(c.state.clone());
             }
         }
-        // Back-compat alias for code below that still references the
-        // single old_target_state path.
-        let old_target_state = old_cell_states.get(&action.target).cloned();
 
         // =====================================================================
         // PERMISSION UPDATE ORDERING (Fix 2):
@@ -1022,9 +1019,6 @@ impl TurnExecutor {
         if _pf {
             super::turn_profile::accum(super::turn_profile::Phase::f_program, _pf_program);
         }
-
-        // Suppress unused warning on the legacy alias.
-        let _ = old_target_state;
 
         // Per-action target-nonce bump for legacy (CellProgram::None) cells.
         //

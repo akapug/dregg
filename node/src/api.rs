@@ -7019,7 +7019,7 @@ async fn post_bearer_auth(
 
     // Call the executor's verify_bearer_cap with an empty path (top-level check).
     match executor.verify_bearer_cap(&bearer_proof, &s.ledger, &[]) {
-        Ok(()) => Ok(Json(BearerAuthResponse {
+        Ok(_) => Ok(Json(BearerAuthResponse {
             authorized: true,
             error: None,
         })),

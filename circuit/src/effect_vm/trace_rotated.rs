@@ -741,7 +741,9 @@ pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
         addr: nf_key,
         value: nf_value,
     });
-    let after_root = CanonicalHeapTree::new(after_leaves.clone(), HEAP_TREE_DEPTH).root();
+    // The after-tree is built only to read its root; move `after_leaves` in (no clone — it is
+    // not read again after this point).
+    let after_root = CanonicalHeapTree::new(after_leaves, HEAP_TREE_DEPTH).root();
 
     // Override limb 26 of BOTH blocks on EVERY row with the openable accumulator roots, then
     // recompute the dependent chained commitments so the published `STATE_COMMIT` binds the grown
@@ -831,7 +833,8 @@ pub fn generate_rotated_create_cell_trace_with_accounts_tree(
         addr: cell_key,
         value: cell_key, // the born-empty cell rides its own key as its leaf value.
     });
-    let after_root = CanonicalHeapTree::new(after_leaves.clone(), HEAP_TREE_DEPTH).root();
+    // The after-tree is built only to read its root; move `after_leaves` in (no clone).
+    let after_root = CanonicalHeapTree::new(after_leaves, HEAP_TREE_DEPTH).root();
 
     // Override limb 0 of BOTH blocks on EVERY row with the openable accumulator roots, then
     // recompute the dependent chained commitments so the published `STATE_COMMIT` binds the grown
@@ -904,7 +907,8 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
         addr: cm_key,
         value: cm_value,
     });
-    let after_root = CanonicalHeapTree::new(after_leaves.clone(), HEAP_TREE_DEPTH).root();
+    // The after-tree is built only to read its root; move `after_leaves` in (no clone).
+    let after_root = CanonicalHeapTree::new(after_leaves, HEAP_TREE_DEPTH).root();
 
     // Override limb 27 of BOTH blocks on EVERY row with the openable accumulator roots, then
     // recompute the dependent chained commitments so the published `STATE_COMMIT` binds the grown
@@ -2529,11 +2533,13 @@ pub fn append_wide_carriers(
     }
     let before_commit_base = cb_before + 8 * WIDE_COMMIT_CARRIER;
     let after_commit_base = cb_after + 8 * WIDE_COMMIT_CARRIER;
-    let r0 = trace[0].clone();
-    let last = trace[trace.len() - 1].clone();
+    // Borrow the two boundary rows to read 8 felts each (no row clone).
+    let last_idx = trace.len() - 1;
+    let r0 = &trace[0];
     for j in 0..8 {
         dpis.push(r0[before_commit_base + j]); // BEFORE 8-felt commit (first row)
     }
+    let last = &trace[last_idx];
     for j in 0..8 {
         dpis.push(last[after_commit_base + j]); // AFTER 8-felt commit (last row)
     }

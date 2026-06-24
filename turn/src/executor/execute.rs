@@ -367,7 +367,19 @@ impl TurnExecutor {
         // Also reject if any cell touched in the call-forest write set is
         // frozen. Per-effect freezing checks are also applied inside
         // `apply_effect` as defence in depth.
-        {
+        //
+        // GUARD: the write-set extraction (a forest walk + two Vec allocs +
+        // sort/dedup) is only needed when SOME cell is frozen. In the common
+        // no-migration case nothing is frozen, so skip the extraction entirely
+        // (the per-effect `apply_effect` freeze checks remain as defence in
+        // depth either way). Equivalent: with nothing frozen, every
+        // `check_not_frozen` in the loop returns `Ok`.
+        let any_frozen = self
+            .cell_migrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .any_frozen();
+        if any_frozen {
             let (_read_set, write_set) = crate::conflict::extract_access_sets(turn);
             for cell_id in &write_set {
                 if let Err(e) = self.check_not_frozen(cell_id) {

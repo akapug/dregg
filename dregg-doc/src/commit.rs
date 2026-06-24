@@ -120,9 +120,8 @@ pub fn commit(g: &DocGraph) -> Commitment {
 
     // 1. Atoms (BTreeMap id-order is canonical). Provenance is bound here.
     e.tag(b"atoms");
-    let atoms: Vec<_> = g.atoms().collect();
-    e.u64(atoms.len() as u64);
-    for a in atoms {
+    e.u64(g.atom_count() as u64);
+    for a in g.atoms() {
         e.u128(a.id.0);
         e.bytes_run(a.content.as_bytes());
         e.status(a.status);
@@ -131,12 +130,14 @@ pub fn commit(g: &DocGraph) -> Commitment {
 
     // 2. Order-edges (from-id order; successors already BTreeSet-sorted).
     e.tag(b"edges");
-    let froms: Vec<_> = g.atoms().map(|a| a.id).collect();
-    for from in froms {
-        let succ: Vec<_> = g.successors(from).collect();
-        if succ.is_empty() {
+    for from in g.atoms().map(|a| a.id) {
+        let mut succ = g.successors(from).peekable();
+        if succ.peek().is_none() {
             continue;
         }
+        // The successor count is needed up-front (length-prefix); the set is
+        // BTreeSet-sorted, so collecting once preserves the canonical order.
+        let succ: Vec<_> = succ.collect();
         e.u128(from.0);
         e.u64(succ.len() as u64);
         for to in succ {

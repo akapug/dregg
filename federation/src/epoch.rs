@@ -219,11 +219,13 @@ pub fn propose_epoch_transition(
         }
     }
 
-    // Compute new member set.
+    // Compute new member set. Index the leave set once so the per-member filter is
+    // O(1) instead of a linear scan of `pending_leaves`.
+    let leaving: std::collections::HashSet<&PublicKey> = pending_leaves.iter().collect();
     let mut new_members: Vec<ValidatorInfo> = current_config
         .members
         .iter()
-        .filter(|m| !pending_leaves.contains(&m.public_key))
+        .filter(|m| !leaving.contains(&m.public_key))
         .cloned()
         .collect();
     new_members.extend(pending_joins.iter().cloned());

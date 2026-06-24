@@ -87,9 +87,11 @@ pub fn unhex32_pub(s: &str) -> Result<[u8; 32], KeyError> {
 
 /// Lowercase hex of arbitrary bytes (display / explain helper — no dep).
 pub(crate) fn hex(bytes: &[u8]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+    for &b in bytes {
+        s.push(LUT[(b >> 4) as usize] as char);
+        s.push(LUT[(b & 0x0f) as usize] as char);
     }
     s
 }

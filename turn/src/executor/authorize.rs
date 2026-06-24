@@ -147,33 +147,17 @@ impl TurnExecutor {
         // Bearer caps carry their own delegation proof and MUST always be verified,
         // regardless of target cell permission level.
         if let Authorization::Bearer(bearer_proof) = &action.authorization {
-            self.verify_bearer_cap(bearer_proof, ledger, path)?;
+            // `verify_bearer_cap` already locates the delegator cell + its
+            // capability; it RETURNS the inherited facet mask so we don't re-scan
+            // the ledger for the same `delegator_pk` here (the SignedDelegation
+            // path; `None` for the anonymous StarkDelegation path).
+            let inherited_facet = self.verify_bearer_cap(bearer_proof, ledger, path)?;
 
             // Enforce bearer facet: if the bearer proof has an allowed_effects mask,
             // verify that all effects in the action are within it.
-            // If the bearer proof has no explicit mask, check whether the delegator's
-            // capability has a facet constraint (inherited facet).
-            let effective_mask = bearer_proof.allowed_effects.or_else(|| {
-                // Look up the delegator's capability to see if it has a facet.
-                // For SignedDelegation, we can find the delegator by pk.
-                match &bearer_proof.delegation_proof {
-                    crate::action::DelegationProofData::SignedDelegation {
-                        delegator_pk, ..
-                    } => ledger
-                        .iter()
-                        .find(|(_, cell)| *cell.public_key() == *delegator_pk)
-                        .and_then(|(_, cell)| {
-                            cell.capabilities
-                                .capabilities_for(&bearer_proof.target)
-                                .into_iter()
-                                .find(|cap| cap.permissions != AuthRequired::Impossible)
-                                .and_then(|cap| cap.allowed_effects)
-                        }),
-                    // For STARK delegations, the delegator is anonymous — facet must be
-                    // explicitly specified in the bearer proof if needed.
-                    crate::action::DelegationProofData::StarkDelegation { .. } => None,
-                }
-            });
+            // If the bearer proof has no explicit mask, fall back to the delegator's
+            // inherited facet (computed above by `verify_bearer_cap`).
+            let effective_mask = bearer_proof.allowed_effects.or(inherited_facet);
 
             if let Some(mask) = effective_mask {
                 if mask != 0 {
@@ -832,7 +816,9 @@ impl TurnExecutor {
                         effects_mask,
                     )
                 }
-                Authorization::Bearer(proof) => self.verify_bearer_cap(proof, ledger, path),
+                Authorization::Bearer(proof) => {
+                    self.verify_bearer_cap(proof, ledger, path).map(|_| ())
+                }
                 Authorization::Stealth { .. } => {
                     self.verify_stealth_authorization(action, target_cell, path, turn_nonce)
                 }
@@ -1230,12 +1216,20 @@ impl TurnExecutor {
 
     /// Verify a bearer capability proof: the parallel authorization path for capabilities
     /// NOT in the actor's c-list but proven via delegation chain.
+    /// Verify a bearer capability proof.
+    ///
+    /// On success returns the delegator's INHERITED facet mask
+    /// (`Some(delegator_cap.allowed_effects)`) for the SignedDelegation path,
+    /// or `None` when there is no delegator-side facet / for the anonymous
+    /// StarkDelegation path. The caller reuses this to compute the effective
+    /// facet WITHOUT re-scanning the ledger for the same `delegator_pk` (the
+    /// delegator cell + its capability are already located here).
     pub fn verify_bearer_cap(
         &self,
         proof: &crate::action::BearerCapProof,
         ledger: &Ledger,
         path: &[usize],
-    ) -> Result<(), (TurnError, Vec<usize>)> {
+    ) -> Result<Option<u32>, (TurnError, Vec<usize>)> {
         use crate::action::DelegationProofData;
         if self.block_height > proof.expires_at {
             return Err((
@@ -1339,6 +1333,10 @@ impl TurnExecutor {
                     .capabilities_for(&proof.target)
                     .into_iter()
                     .find(|cap| cap.permissions != AuthRequired::Impossible);
+                // The delegator's INHERITED facet — exactly what the caller would
+                // otherwise re-scan the ledger to recompute. Hoisted here so the
+                // delegator cell + capability are located ONCE.
+                let inherited_facet = delegator_cap.as_ref().and_then(|cap| cap.allowed_effects);
                 if let Some(cap) = delegator_cap {
                     if !proof.permissions.is_narrower_or_equal(&cap.permissions) {
                         return Err((
@@ -1390,7 +1388,7 @@ impl TurnExecutor {
                         crate::turn::ConsumedCapAuthPath::BearerSignedDelegation,
                     );
                 }
-                Ok(())
+                Ok(inherited_facet)
             }
             DelegationProofData::StarkDelegation {
                 proof_bytes,

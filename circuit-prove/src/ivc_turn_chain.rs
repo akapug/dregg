@@ -574,12 +574,19 @@ pub fn prove_descriptor_leaf_rotated(
 /// fed to [`prove_descriptor_leaf_rotated`] must be minted under THIS config (see
 /// `descriptor_ir2::prove_vm_descriptor2_for_config`).
 pub fn ir2_leaf_wrap_config() -> DreggRecursionConfig {
-    crate::plonky3_recursion_impl::recursive::create_recursion_config_for_inner_fri(
-        IR2_INNER_LOG_BLOWUP,
-        IR2_INNER_LOG_FINAL_POLY_LEN,
-        IR2_INNER_COMMIT_POW_BITS,
-        IR2_INNER_QUERY_POW_BITS,
-    )
+    // Fixed `IR2_INNER_*` knobs ⇒ identical config on every call; build once per thread and clone
+    // on access (Arc-backed, cheap). `thread_local` sidesteps any `Sync` requirement; the cached
+    // value is identical to a fresh `create_recursion_config_for_inner_fri(..)` at these constants.
+    thread_local! {
+        static LEAF_WRAP_CONFIG: DreggRecursionConfig =
+            crate::plonky3_recursion_impl::recursive::create_recursion_config_for_inner_fri(
+                IR2_INNER_LOG_BLOWUP,
+                IR2_INNER_LOG_FINAL_POLY_LEN,
+                IR2_INNER_COMMIT_POW_BITS,
+                IR2_INNER_QUERY_POW_BITS,
+            );
+    }
+    LEAF_WRAP_CONFIG.with(|c| c.clone())
 }
 
 /// [`prove_descriptor_leaf_rotated`] under an explicit recursion config (the inner proof must

@@ -222,9 +222,11 @@ impl Assurance {
 pub const COMPUTRON_ASSET: &str = "computron";
 
 fn hex32(b: &[u8; 32]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(64);
-    for byte in b {
-        s.push_str(&format!("{byte:02x}"));
+    for &byte in b {
+        s.push(LUT[(byte >> 4) as usize] as char);
+        s.push(LUT[(byte & 0x0f) as usize] as char);
     }
     s
 }
@@ -668,15 +670,254 @@ pub fn extract_ring_legs(forest: &CallForest) -> Vec<RingLeg> {
 /// `Intent::RingSettlement` artifacts). For an ordinary turn, ring balance is
 /// `Pass` (vacuously — no ring legs to imbalance) unless you opt in.
 pub fn analyze(forest: &CallForest, treat_as_ring: bool) -> Assurance {
+    // One FUSED pre-order pass produces the conservation, no-amplification, and
+    // well-formedness verdicts together — each with its own accumulator, so the
+    // verdicts are byte-identical to running the three checks independently. The
+    // ring check works off extracted legs (a separate, opt-in projection).
+    let fused = fused_walk(forest);
     let ring_balance = if treat_as_ring {
         check_ring_balance(&extract_ring_legs(forest))
     } else {
         Verdict::Pass
     };
     Assurance {
-        conservation: check_conservation(forest),
-        no_amplification: check_no_amplification(forest),
-        wellformed: check_wellformed(forest),
+        conservation: fused.conservation,
+        no_amplification: fused.no_amplification,
+        wellformed: fused.wellformed,
         ring_balance,
+    }
+}
+
+/// The three forest-walk verdicts produced together by [`fused_walk`].
+struct FusedVerdicts {
+    conservation: Verdict,
+    no_amplification: Verdict,
+    wellformed: Verdict,
+}
+
+/// A persistent (immutable, structurally-shared) map of the caps granted into
+/// each cell scope by ancestors of the current node. Threading this by `&`
+/// avoids the per-node `BTreeMap::clone` of the whole inherited map: a child
+/// that grants nothing reuses the parent's map by reference; a child that
+/// grants caps layers a small overlay node in front, so only the grants
+/// themselves (not the inherited bulk) are copied.
+enum GrantedScope<'a> {
+    Root,
+    /// `parent` plus the caps `additions` grants into each recipient cell.
+    Layer {
+        parent: &'a GrantedScope<'a>,
+        additions: BTreeMap<dregg_types::CellId, Vec<CapabilityRef>>,
+    },
+}
+
+impl<'a> GrantedScope<'a> {
+    /// All caps any ancestor (or this layer) granted into `cell`, walking the
+    /// layer chain. Order matches the flattened `granted_to` the cloning
+    /// version built (parent grants are visited before this layer's), so any
+    /// `.iter().any(..)` predicate over them yields the identical result.
+    fn caps_for(&self, cell: &dregg_types::CellId) -> Vec<&CapabilityRef> {
+        let mut out = Vec::new();
+        self.collect_into(cell, &mut out);
+        out
+    }
+
+    fn collect_into<'s>(&'s self, cell: &dregg_types::CellId, out: &mut Vec<&'s CapabilityRef>) {
+        match self {
+            GrantedScope::Root => {}
+            GrantedScope::Layer { parent, additions } => {
+                parent.collect_into(cell, out);
+                if let Some(caps) = additions.get(cell) {
+                    out.extend(caps.iter());
+                }
+            }
+        }
+    }
+}
+
+fn fused_walk(forest: &CallForest) -> FusedVerdicts {
+    // B (conservation): per-asset signed ledger.
+    let mut net: BTreeMap<String, i128> = BTreeMap::new();
+    // A (non-amplification) and well-formedness: located findings.
+    let mut amp_findings: Vec<Finding> = Vec::new();
+    let mut wf_findings: Vec<Finding> = Vec::new();
+
+    fn rec(
+        path: &mut Vec<usize>,
+        node: &CallTree,
+        scope: &GrantedScope<'_>,
+        net: &mut BTreeMap<String, i128>,
+        amp_findings: &mut Vec<Finding>,
+        wf_findings: &mut Vec<Finding>,
+    ) {
+        // ── conservation (mirrors check_conservation's per-node body) ──
+        for eff in &node.action.effects {
+            match eff {
+                Effect::Transfer { amount, .. } => {
+                    *net.entry(COMPUTRON_ASSET.to_string()).or_default() -= *amount as i128;
+                    *net.entry(COMPUTRON_ASSET.to_string()).or_default() += *amount as i128;
+                }
+                Effect::NoteSpend {
+                    value, asset_type, ..
+                } => {
+                    *net.entry(format!("note:{asset_type}")).or_default() += *value as i128;
+                }
+                Effect::NoteCreate {
+                    value, asset_type, ..
+                } => {
+                    *net.entry(format!("note:{asset_type}")).or_default() -= *value as i128;
+                }
+                _ => {}
+            }
+        }
+        if let Some(delta) = node.action.balance_change {
+            *net.entry(COMPUTRON_ASSET.to_string()).or_default() += delta as i128;
+        }
+
+        // ── well-formedness (mirrors check_wellformed's per-node body) ──
+        if node.action.effects.is_empty() {
+            wf_findings.push(Finding {
+                guarantee: "well-formedness".to_string(),
+                locus: Locus::node(path.clone()),
+                message: "node carries zero effects (an empty action — the SDK's \
+                          sign() refuses these; a forest splice should not produce one)"
+                    .to_string(),
+            });
+        }
+        match &node.action.authorization {
+            Authorization::Unchecked => {
+                wf_findings.push(Finding {
+                    guarantee: "well-formedness".to_string(),
+                    locus: Locus::node(path.clone()),
+                    message: "node carries Authorization::Unchecked outside genesis \
+                              (the auth-bypass sentinel; only the sealed `raw` genesis \
+                              path may emit it — the executor rejects it elsewhere)"
+                        .to_string(),
+                });
+            }
+            Authorization::OneOf { candidates, .. } => {
+                if candidates
+                    .iter()
+                    .any(|c| matches!(c, Authorization::Unchecked))
+                {
+                    wf_findings.push(Finding {
+                        guarantee: "well-formedness".to_string(),
+                        locus: Locus::node(path.clone()),
+                        message: "Authorization::OneOf carries an Unchecked candidate \
+                                  (auth-bypass-by-naming-Unchecked; the executor rejects \
+                                  any OneOf whose candidate is Unchecked)"
+                            .to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+
+        // ── non-amplification + no-op-exercise well-formedness, in one pass over
+        //    effects (mirrors the two effect loops, same order) ──
+        let mut additions: BTreeMap<dregg_types::CellId, Vec<CapabilityRef>> = BTreeMap::new();
+        for (ei, eff) in node.action.effects.iter().enumerate() {
+            match eff {
+                Effect::GrantCapability { from, to, cap } => {
+                    let parent_caps = scope.caps_for(from);
+                    if !parent_caps.is_empty() {
+                        let covers_target = parent_caps.iter().any(|p| p.target == cap.target);
+                        if covers_target {
+                            let attenuates =
+                                parent_caps.iter().any(|p| cap_attenuates(cap, p));
+                            if !attenuates {
+                                amp_findings.push(Finding {
+                                    guarantee: "A (non-amplification)".to_string(),
+                                    locus: Locus::node(path.clone()).at_effect(ei),
+                                    message: format!(
+                                        "grant from cell {} amplifies: the granted cap \
+                                         (target slot {}, facet {:?}, expiry {:?}) is NOT an \
+                                         attenuation of any cap this cell was delegated earlier \
+                                         in the forest for the same target — it confers wider \
+                                         authority than the chain handed it",
+                                        short_cell(from),
+                                        cap.slot,
+                                        cap.allowed_effects,
+                                        cap.expires_at,
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    additions.entry(*to).or_default().push(cap.clone());
+                }
+                Effect::ExerciseViaCapability { inner_effects, .. } => {
+                    if inner_effects.is_empty() {
+                        wf_findings.push(Finding {
+                            guarantee: "well-formedness".to_string(),
+                            locus: Locus::node(path.clone()).at_effect(ei),
+                            message: "ExerciseViaCapability with empty inner_effects \
+                                      (a no-op exercise — pays gas, changes nothing)"
+                                .to_string(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Recurse. If this node granted nothing, children inherit the parent
+        // scope by reference (no clone); otherwise layer the additions in front.
+        if additions.is_empty() {
+            for (i, child) in node.children.iter().enumerate() {
+                path.push(i);
+                rec(path, child, scope, net, amp_findings, wf_findings);
+                path.pop();
+            }
+        } else {
+            let child_scope = GrantedScope::Layer {
+                parent: scope,
+                additions,
+            };
+            for (i, child) in node.children.iter().enumerate() {
+                path.push(i);
+                rec(path, child, &child_scope, net, amp_findings, wf_findings);
+                path.pop();
+            }
+        }
+    }
+
+    let mut path = Vec::new();
+    let root_scope = GrantedScope::Root;
+    for (i, root) in forest.roots.iter().enumerate() {
+        path.push(i);
+        rec(
+            &mut path,
+            root,
+            &root_scope,
+            &mut net,
+            &mut amp_findings,
+            &mut wf_findings,
+        );
+        path.pop();
+    }
+
+    // conservation findings (mirrors check_conservation's post-walk loop — the
+    // BTreeMap iteration order is the same deterministic ascending-key order).
+    let mut cons_findings = Vec::new();
+    for (asset, residue) in net {
+        if residue != 0 {
+            cons_findings.push(Finding {
+                guarantee: "B (conservation)".to_string(),
+                locus: Locus::forest().at_asset(asset.clone()),
+                message: format!(
+                    "asset column `{asset}` does not conserve: net residue = {residue} \
+                     (a conserving turn must net to exactly 0 per asset; \
+                     {} value was {} across the forest)",
+                    residue.unsigned_abs(),
+                    if residue > 0 { "conjured" } else { "destroyed" },
+                ),
+            });
+        }
+    }
+
+    FusedVerdicts {
+        conservation: Verdict::from_findings(cons_findings),
+        no_amplification: Verdict::from_findings(amp_findings),
+        wellformed: Verdict::from_findings(wf_findings),
     }
 }

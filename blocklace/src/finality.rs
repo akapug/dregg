@@ -925,6 +925,38 @@ impl Blocklace {
         visited
     }
 
+    /// Compute the union of the causal pasts of several blocks in ONE
+    /// shared-visited traversal (instead of re-walking overlapping history once
+    /// per block), and INCLUSIVE of each seed id itself. This mirrors the
+    /// `crate::Blocklace::causal_past_union` reference impl: each seed is
+    /// enqueued (so the seeds are in the result), and unknown ids contribute
+    /// only themselves. The single shared visited set makes overlapping
+    /// histories cheap — the cost is the size of the union, not the sum of the
+    /// per-block pasts.
+    pub fn causal_past_union<'a, I>(&self, ids: I) -> HashSet<BlockId>
+    where
+        I: IntoIterator<Item = &'a BlockId>,
+    {
+        let mut result = HashSet::new();
+        let mut queue: VecDeque<BlockId> = VecDeque::new();
+        for id in ids {
+            queue.push_back(*id);
+        }
+        while let Some(current) = queue.pop_front() {
+            if !result.insert(current) {
+                continue;
+            }
+            if let Some(block) = self.blocks.get(&current) {
+                for pred in &block.predecessors {
+                    if !result.contains(pred) {
+                        queue.push_back(*pred);
+                    }
+                }
+            }
+        }
+        result
+    }
+
     /// Check if block `a` is in the causal past of block `b`.
     pub fn is_predecessor(&self, a: &BlockId, b: &BlockId) -> bool {
         if a == b {

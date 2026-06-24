@@ -200,8 +200,12 @@ fn enforce_budget_and_revocation(
         if request.not_revoked.is_empty() {
             return Err(AuthError::Denied);
         }
+        // Build a set once so each revocable-id membership test is O(1) rather
+        // than an O(not_revoked) Vec scan per revocable id.
+        let not_revoked: std::collections::HashSet<&str> =
+            request.not_revoked.iter().map(String::as_str).collect();
         for token_id in &revocable_ids {
-            if !request.not_revoked.contains(token_id) {
+            if !not_revoked.contains(token_id.as_str()) {
                 return Err(AuthError::Denied);
             }
         }

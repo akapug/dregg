@@ -50,7 +50,7 @@
 //! deos floor that makes "you cannot swap a committed submission" a real executor
 //! refusal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use dregg_app_framework::CellId as DeosCellId;
 use dregg_app_framework::{
@@ -166,8 +166,9 @@ impl std::error::Error for GalleryError {}
 pub struct Gallery {
     /// The curating party (picks the featured piece).
     pub curator: ArtistId,
-    /// The sealed commitments collected during the submission phase, in order.
-    pub submissions: Vec<Seal>,
+    /// The sealed commitments collected during the submission phase (a set —
+    /// membership is the only query, so a `HashSet` makes the reveal-time check O(1)).
+    pub submissions: HashSet<Seal>,
     /// The current phase.
     pub phase: Phase,
     /// The validly-revealed submissions, keyed by seal so a seal reveals at most once.
@@ -179,7 +180,7 @@ impl Gallery {
     pub fn new(curator: ArtistId) -> Self {
         Self {
             curator,
-            submissions: Vec::new(),
+            submissions: HashSet::new(),
             phase: Phase::Submission,
             revealed: BTreeMap::new(),
         }
@@ -191,7 +192,7 @@ impl Gallery {
         if self.phase != Phase::Submission {
             return Err(GalleryError::NotSubmissionPhase);
         }
-        self.submissions.push(seal);
+        self.submissions.insert(seal);
         Ok(())
     }
 

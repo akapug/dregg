@@ -90,11 +90,20 @@ pub use dregg_app_framework::field_from_bytes;
 /// `dregg_turn::verify_receipt_extends` — which is exactly right here: the orchestration's receipts are
 /// the window AFTER the coordinator's birth receipt, so `open` is not genesis. A tampered, reordered,
 /// or substituted receipt anywhere in the window breaks the link and is surfaced as [`VerifyError`].
-fn verify_receipt_window(receipts: &[TurnReceipt]) -> Result<(), VerifyError> {
+fn verify_receipt_window(receipts: &[&TurnReceipt]) -> Result<(), VerifyError> {
     for pair in receipts.windows(2) {
-        verify_receipt_extends(&pair[0], &pair[1])?;
+        verify_receipt_extends(pair[0], pair[1])?;
     }
     Ok(())
+}
+
+/// The full receipt window `[open] ++ committed steps` as borrows — the chain an auditor /
+/// recovery re-validates. No receipt is cloned; the window is verified pairwise in place.
+fn receipt_window<'a>(open: &'a TurnReceipt, log: &'a OrchestrationLog) -> Vec<&'a TurnReceipt> {
+    let mut chain = Vec::with_capacity(log.len() + 1);
+    chain.push(open);
+    chain.extend(log.receipts_iter());
+    chain
 }
 
 // =============================================================================
@@ -510,7 +519,13 @@ impl OrchestrationLog {
     }
     /// The committed receipts in order — the chain the auditor verifies.
     pub fn receipts(&self) -> Vec<TurnReceipt> {
-        self.entries.iter().map(|e| e.receipt.clone()).collect()
+        self.receipts_iter().cloned().collect()
+    }
+
+    /// The committed receipts in order, borrowed — the allocation-free form the auditor /
+    /// recovery use to re-validate the chain without cloning every receipt.
+    pub fn receipts_iter(&self) -> impl Iterator<Item = &TurnReceipt> {
+        self.entries.iter().map(|e| &e.receipt)
     }
 }
 
@@ -678,7 +693,7 @@ impl<'a> OrchestrationEngine<'a> {
         step: &WorkStep,
         log: &mut OrchestrationLog,
     ) -> Result<TurnReceipt, OrchestrationError> {
-        let ws = self.worker_state(step.worker).clone();
+        let ws = self.worker_state(step.worker);
 
         // (1) The off-ledger mandate pre-check — fail-closed BEFORE the turn runs.
         if !ws.mandate.tools.contains(&step.tool) {

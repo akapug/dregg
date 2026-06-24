@@ -223,9 +223,11 @@ fn encode_attribute(name: &str, value: &AttrValue) -> String {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+    for &b in bytes {
+        s.push(LUT[(b >> 4) as usize] as char);
+        s.push(LUT[(b & 0x0f) as usize] as char);
     }
     s
 }
