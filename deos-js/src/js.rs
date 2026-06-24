@@ -28,7 +28,7 @@ use mozjs::rust::wrappers2::{
     EncodeStringToUTF8, JS_DefineFunction, JS_NewGlobalObject, JS_NewStringCopyN,
 };
 use mozjs::rust::{
-    evaluate_script, CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS,
+    CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS, evaluate_script,
 };
 
 use crate::applet::{Applet, FireError};
@@ -818,8 +818,8 @@ impl JsRuntime {
     ) -> Result<ComposeRunOutcome, String> {
         set_current_composer(composer);
         let eval = self.eval(source);
-        let composer = take_current_composer()
-            .ok_or_else(|| "composer vanished during run".to_string())?;
+        let composer =
+            take_current_composer().ok_or_else(|| "composer vanished during run".to_string())?;
         let compose = take_last_compose();
         match eval {
             Ok(result) => Ok(ComposeRunOutcome {
@@ -1960,7 +1960,11 @@ unsafe extern "C" fn native_server_get_field(
 /// Decode one compose leg (`{op, ...}`) from the brain's JSON into a [`ComposeStep`].
 fn parse_compose_step(v: &serde_json::Value) -> Result<ComposeStep, String> {
     let op = v.get("op").and_then(|x| x.as_str()).unwrap_or("");
-    let required = parse_auth_label(v.get("required").and_then(|x| x.as_str()).unwrap_or("signature"));
+    let required = parse_auth_label(
+        v.get("required")
+            .and_then(|x| x.as_str())
+            .unwrap_or("signature"),
+    );
     match op {
         "mintCard" => {
             let seed = v
@@ -2010,8 +2014,11 @@ fn parse_compose_step(v: &serde_json::Value) -> Result<ComposeStep, String> {
             let to_hex = v.get("to").and_then(|x| x.as_str()).unwrap_or("");
             let to = reflect_binding::parse_cell_id(to_hex)
                 .ok_or_else(|| format!("grant: bad 'to' cell id '{to_hex}'"))?;
-            let granted =
-                parse_auth_label(v.get("granted").and_then(|x| x.as_str()).unwrap_or("signature"));
+            let granted = parse_auth_label(
+                v.get("granted")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("signature"),
+            );
             Ok(ComposeStep::GrantCap {
                 from,
                 to,
@@ -2047,11 +2054,7 @@ fn compose_outcome_json(out: &ComposeOutcome) -> String {
 /// pre-screen refuses any over-reach IN-BAND (nothing committed); a fully-authorized story
 /// commits each leg as a verified turn on the live ledger. Returns the outcome JSON string;
 /// also stashed in `LAST_COMPOSE` for the host. A malformed steps blob is a refusal.
-unsafe extern "C" fn native_compose(
-    context: *mut RawJSContext,
-    argc: u32,
-    vp: *mut Value,
-) -> bool {
+unsafe extern "C" fn native_compose(context: *mut RawJSContext, argc: u32, vp: *mut Value) -> bool {
     let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
     let args = CallArgs::from_vp(vp, argc);
     let steps_json = if args.argc_ >= 1 {

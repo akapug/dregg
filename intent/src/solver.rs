@@ -468,8 +468,7 @@ impl RingSolver {
                 if i == j {
                     continue;
                 }
-                if let Some(&score) =
-                    score_cache.get(&(intents[i].intent_id, intents[j].intent_id))
+                if let Some(&score) = score_cache.get(&(intents[i].intent_id, intents[j].intent_id))
                 {
                     if score >= self.min_edge_score {
                         edges[i].push((j, score));
@@ -494,10 +493,8 @@ impl RingSolver {
         // graph is then rebuilt over the shrinking active pool by reading this
         // cache (cheap lookups), masking out expired/used intents — yielding the
         // same edges, the same rings, and the same greedy choices as before.
-        let mut score_cache: std::collections::HashMap<
-            (crate::IntentId, crate::IntentId),
-            f64,
-        > = std::collections::HashMap::new();
+        let mut score_cache: std::collections::HashMap<(crate::IntentId, crate::IntentId), f64> =
+            std::collections::HashMap::new();
         for i in 0..intents.len() {
             for j in 0..intents.len() {
                 if i == j {

@@ -259,7 +259,6 @@ impl SwglRenderingContext {
     pub fn swgl_context(&self) -> swgl::Context {
         self.swgl
     }
-
 }
 
 impl RenderingContext for SwglRenderingContext {

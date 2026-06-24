@@ -280,7 +280,8 @@ fn pinned_fold_rejects_foreign_vk_in_circuit() {
     // clean leaf∘leaf fold).
     let (t0, _o0, _n0) = make_turn(1000, 0, 11);
     let mut acc = Accumulator::genesis();
-    acc.accumulate(&t0).expect("turn 0 folds (becomes the running leaf proof)");
+    acc.accumulate(&t0)
+        .expect("turn 0 folds (becomes the running leaf proof)");
     assert_eq!(acc.num_turns(), 1);
 
     // The running leaf proof's genuine VK-identity core (the preprocessed Merkle cap).
@@ -420,12 +421,17 @@ fn wrap_grows_vk_when_disabled() {
             "UNWRAPPED depth-{} vs depth-{}: {}",
             k + 1,
             k + 2,
-            if fps[k] == fps[k - 1] { "EQUAL" } else { "DIFFER" }
+            if fps[k] == fps[k - 1] {
+                "EQUAL"
+            } else {
+                "DIFFER"
+            }
         );
     }
     // The transient is real: the leaf→agg step (depth-2 vs depth-3) genuinely changes the VK.
     assert_ne!(
-        fps[0], fps[1],
+        fps[0],
+        fps[1],
         "the running VK must change across the leaf→agg transition (depth-2 {} == depth-3 {} would \
          mean the shape was already constant — investigate)",
         fps[0].to_hex(),
@@ -434,7 +440,8 @@ fn wrap_grows_vk_when_disabled() {
     // And the fold DOES reach a fixed point: depth-4 == depth-5 even unwrapped (the natural
     // self-stabilization the constant-VK tooth asserts).
     assert_eq!(
-        fps[2], fps[3],
+        fps[2],
+        fps[3],
         "the running VK must reach a fixed point by depth 4 (depth-4 {} != depth-5 {})",
         fps[2].to_hex(),
         fps[3].to_hex(),

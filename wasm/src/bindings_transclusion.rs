@@ -35,10 +35,10 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 use dregg_cell::{AuthRequired, CellId};
+use starbridge_web_surface::SurfaceCapability;
 use starbridge_web_surface::rehydrate::Membrane;
 use starbridge_web_surface::transclusion::{TranscludedField, TransclusionError};
 use starbridge_web_surface::web_of_cells::{DreggUri, FetchError, WebOfCells};
-use starbridge_web_surface::SurfaceCapability;
 
 // ============================================================================
 // The transclusion demo store (WASM is single-threaded, so this is safe).
@@ -273,7 +273,8 @@ pub fn transclusion_publish(
 pub fn transclusion_include(handle: usize, name: &str) -> Result<JsValue, JsError> {
     with_demo_ref(handle, |demo| {
         let uri = demo.uri_of(name)?;
-        let field = TranscludedField::include(&demo.web, &uri).map_err(describe_transclusion_err)?;
+        let field =
+            TranscludedField::include(&demo.web, &uri).map_err(describe_transclusion_err)?;
         let view = quote_view(&field, demo.web.height())?;
         serde_wasm_bindgen::to_value(&view).map_err(|e| e.to_string())
     })
@@ -287,11 +288,7 @@ pub fn transclusion_include(handle: usize, name: &str) -> Result<JsValue, JsErro
 /// a fresh serve-receipt + an advanced federation height. A subsequent LIVE read
 /// follows it; a SNAPSHOT taken before stays pinned. Returns the new height.
 #[wasm_bindgen]
-pub fn transclusion_amend(
-    handle: usize,
-    name: &str,
-    new_content: &str,
-) -> Result<u64, JsError> {
+pub fn transclusion_amend(handle: usize, name: &str, new_content: &str) -> Result<u64, JsError> {
     with_demo(handle, |demo| {
         let uri = demo.uri_of(name)?;
         demo.web
@@ -339,7 +336,10 @@ pub fn transclusion_forge_attempt(
         // Run the REAL client verification. It MUST refuse.
         let verdict = resource.verify();
         let (refused, reason) = match &verdict {
-            Ok(()) => (false, "NOT REFUSED — the forge slipped through (bug)".to_string()),
+            Ok(()) => (
+                false,
+                "NOT REFUSED — the forge slipped through (bug)".to_string(),
+            ),
             Err(e) => (true, fetch_err_name(e)),
         };
         let view = ForgeView {
@@ -371,7 +371,8 @@ pub fn transclusion_project_for(
 ) -> Result<JsValue, JsError> {
     with_demo_ref(handle, |demo| {
         let uri = demo.uri_of(name)?;
-        let field = TranscludedField::include(&demo.web, &uri).map_err(describe_transclusion_err)?;
+        let field =
+            TranscludedField::include(&demo.web, &uri).map_err(describe_transclusion_err)?;
 
         let viewer_auth = parse_rights(viewer_rights)?;
         let lineage_auth = parse_rights(lineage_rights)?;
@@ -387,8 +388,7 @@ pub fn transclusion_project_for(
                 // No-amplification: the projected rights must be ⊆ the lineage rights
                 // (the projection never grants MORE than the source's authority). We
                 // assert it via the real `is_attenuation` (granted ⊆ held).
-                let no_amplify =
-                    dregg_cell::is_attenuation(&lineage_auth, &projected_rights);
+                let no_amplify = dregg_cell::is_attenuation(&lineage_auth, &projected_rights);
                 ProjectionView {
                     projected: true,
                     viewer_rights: format!("{projected_rights:?}"),
@@ -501,10 +501,10 @@ fn hex32(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use starbridge_web_surface::SurfaceCapability;
     use starbridge_web_surface::rehydrate::Membrane;
     use starbridge_web_surface::transclusion::TranscludedField;
     use starbridge_web_surface::web_of_cells::WebOfCells;
-    use starbridge_web_surface::SurfaceCapability;
 
     // (1) INCLUDE — a transclusion IS the verified finalized read: the displayed
     //     bytes ARE the source's committed bytes AND the quote re-verifies (positive),
@@ -517,8 +517,15 @@ mod tests {
 
         // POSITIVE: the verified read shows the committed bytes + verifies.
         let field = TranscludedField::include(&web, &uri).expect("include resolves");
-        assert_eq!(field.quoted_bytes(), body, "displayed bytes ARE the source's");
-        assert!(field.verify().is_ok(), "the quote re-verifies (content→…→quorum)");
+        assert_eq!(
+            field.quoted_bytes(),
+            body,
+            "displayed bytes ARE the source's"
+        );
+        assert!(
+            field.verify().is_ok(),
+            "the quote re-verifies (content→…→quorum)"
+        );
         let view = quote_view(&field, web.height()).expect("view");
         assert!(view.verifies, "the QuoteView reports verifies=true");
         assert!(view.finalized, "a 3-of-3 published source is finalized");
@@ -569,8 +576,15 @@ mod tests {
         // STILL verifies (its pinned receipt remains a valid leaf — I-confluence). The
         // pin did NOT follow the amend.
         assert_eq!(snapshot.quoted_bytes(), v0, "the snapshot stayed at v0");
-        assert_eq!(snapshot.cite().content_hash, snap_hash, "the pin did not move");
-        assert!(snapshot.verify().is_ok(), "the pinned snapshot re-verifies forever");
+        assert_eq!(
+            snapshot.cite().content_hash,
+            snap_hash,
+            "the pin did not move"
+        );
+        assert!(
+            snapshot.verify().is_ok(),
+            "the pinned snapshot re-verifies forever"
+        );
     }
 
     // (3) THE FORGE — a lying node that swaps the bytes is REFUSED with
@@ -596,7 +610,10 @@ mod tests {
             "a byte-tamper forge is refused with ContentHashMismatch"
         );
         // And the binding's name-mapper renders exactly that teaching string.
-        assert_eq!(fetch_err_name(&FetchError::ContentHashMismatch), "ContentHashMismatch");
+        assert_eq!(
+            fetch_err_name(&FetchError::ContentHashMismatch),
+            "ContentHashMismatch"
+        );
     }
 
     // (4) NO AMPLIFICATION — a weaker viewer's projection is ATTENUATED to its ceiling
@@ -612,8 +629,13 @@ mod tests {
         // POSITIVE — a weaker (Signature) viewer of an Either lineage projects to its
         // own Signature ceiling (attenuated, never the strong lineage's Either).
         let lineage = SurfaceCapability::root(uri.cell, AuthRequired::Either);
-        let weak = Membrane::new(SurfaceCapability::root(viewer_cell(), AuthRequired::Signature));
-        let proj = field.project_for(&weak, &lineage).expect("weaker viewer projects");
+        let weak = Membrane::new(SurfaceCapability::root(
+            viewer_cell(),
+            AuthRequired::Signature,
+        ));
+        let proj = field
+            .project_for(&weak, &lineage)
+            .expect("weaker viewer projects");
         assert_eq!(
             proj.window.rights,
             AuthRequired::Signature,
@@ -630,7 +652,9 @@ mod tests {
         // so they never amplify past read-only.
         let ro_lineage = SurfaceCapability::root(uri.cell, AuthRequired::Signature);
         let wide = Membrane::new(SurfaceCapability::root(viewer_cell(), AuthRequired::None));
-        let proj2 = field.project_for(&wide, &ro_lineage).expect("wide viewer projects");
+        let proj2 = field
+            .project_for(&wide, &ro_lineage)
+            .expect("wide viewer projects");
         assert!(
             dregg_cell::is_attenuation(&AuthRequired::Signature, &proj2.window.rights),
             "a wide-open viewer NEVER amplifies past the read-only lineage (projected ⊆ Signature)"
@@ -643,7 +667,9 @@ mod tests {
     #[test]
     fn demo_store_resolves_published_names_unknown_errors() {
         let mut demo = TransclusionDemo::new();
-        let uri = demo.web.publish(demo.next_seed, b"<p>x</p>", "dregg://constitution");
+        let uri = demo
+            .web
+            .publish(demo.next_seed, b"<p>x</p>", "dregg://constitution");
         demo.docs.push(("constitution".to_string(), uri.clone()));
 
         // POSITIVE: the registered name resolves to the published ref.
@@ -660,7 +686,13 @@ mod tests {
         assert_eq!(parse_rights("read-only").unwrap(), AuthRequired::Signature);
         assert_eq!(parse_rights("either").unwrap(), AuthRequired::Either);
         assert_eq!(parse_rights("writable").unwrap(), AuthRequired::Either);
-        assert_eq!(parse_rights("impossible").unwrap(), AuthRequired::Impossible);
-        assert!(parse_rights("garbage").is_err(), "unknown rights error, no silent default");
+        assert_eq!(
+            parse_rights("impossible").unwrap(),
+            AuthRequired::Impossible
+        );
+        assert!(
+            parse_rights("garbage").is_err(),
+            "unknown rights error, no silent default"
+        );
     }
 }

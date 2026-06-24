@@ -1147,7 +1147,11 @@ impl Cockpit {
         // The IDE surfaces as quick-jump chips (the persistent dev strip) — READ from
         // the layout cell's Dev-mode surfaces (rung 3), so a reshape that re-homes an
         // IDE surface is reflected in the dock too.
-        for (i, t) in self.layout_surfaces_of(CockpitMode::Dev).into_iter().enumerate() {
+        for (i, t) in self
+            .layout_surfaces_of(CockpitMode::Dev)
+            .into_iter()
+            .enumerate()
+        {
             let is_active = t == active_tab;
             bar = bar.child(
                 div()
@@ -1287,10 +1291,15 @@ mod tests {
 /// build keeps the hardcoded fallback (the pure tests above cover the bridge there).
 ///
 /// Run: `cd starbridge-v2 && cargo test --features native-full --lib cockpit::frame::layout_cell_drives_the_rail -- --nocapture`
-#[cfg(all(test, feature = "dev-surfaces", feature = "card-pane", feature = "render-capture"))]
+#[cfg(all(
+    test,
+    feature = "dev-surfaces",
+    feature = "card-pane",
+    feature = "render-capture"
+))]
 mod layout_cell_drives_the_rail {
     use super::*;
-    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -1346,7 +1355,8 @@ mod layout_cell_drives_the_rail {
             "the rail's mode order is READ from the layout cell (default = the five modes)"
         );
         // The Inhabit sub-nav reads the cell; AGENT lives in Operate by default.
-        let inhabit_before = entity.read_with(&cx, |c, _| c.layout_surfaces_of(CockpitMode::Inhabit));
+        let inhabit_before =
+            entity.read_with(&cx, |c, _| c.layout_surfaces_of(CockpitMode::Inhabit));
         assert!(
             !inhabit_before.contains(&Tab::Agent),
             "AGENT does not start in Inhabit's sub-nav (it lives in Operate)"
@@ -1369,7 +1379,8 @@ mod layout_cell_drives_the_rail {
 
         // (C) THE READ-WIRE REFLECTS THE MOVE — the rail's Inhabit sub-nav now carries AGENT,
         // Operate no longer does, and AGENT's rail highlight reads Inhabit.
-        let inhabit_after = entity.read_with(&cx, |c, _| c.layout_surfaces_of(CockpitMode::Inhabit));
+        let inhabit_after =
+            entity.read_with(&cx, |c, _| c.layout_surfaces_of(CockpitMode::Inhabit));
         assert!(
             inhabit_after.contains(&Tab::Agent),
             "after the reshape AGENT is in Inhabit's sub-nav (the rail re-read the cell)"
@@ -1392,7 +1403,10 @@ mod layout_cell_drives_the_rail {
                 .map(|lc| lc.card().receipt_count())
                 .unwrap_or(0)
         });
-        assert_eq!(receipts, 1, "the reshape committed exactly one provenance receipt");
+        assert_eq!(
+            receipts, 1,
+            "the reshape committed exactly one provenance receipt"
+        );
 
         println!(
             "OK rung-3: the cockpit rail is DRIVEN BY THE LAYOUT CELL — default mirrored the \

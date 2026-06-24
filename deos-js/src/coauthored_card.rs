@@ -38,7 +38,7 @@
 use dregg_cell::AuthRequired;
 use dregg_doc::{Author, Rendered};
 
-use crate::applet::{pack_u64, Affordance, Applet, Slot};
+use crate::applet::{Affordance, Applet, Slot, pack_u64};
 use crate::card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
 use crate::portable::{AffordanceSpec, AppletManifest, ApplyOp};
 use crate::program_doc::ProgramSource;

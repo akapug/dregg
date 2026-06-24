@@ -487,7 +487,10 @@ impl std::fmt::Display for ComposeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ComposeError::OverReach { step, reason } => {
-                write!(f, "step {step} over-reaches the agent's held authority: {reason}")
+                write!(
+                    f,
+                    "step {step} over-reaches the agent's held authority: {reason}"
+                )
             }
             ComposeError::Executor { step, reason } => {
                 write!(f, "step {step} refused by the live executor: {reason}")
@@ -699,7 +702,11 @@ impl AttachedComposer {
                 // leaves a receipt of its own.
                 let mut effects: Vec<Effect> = seed_fields
                     .into_iter()
-                    .map(|(index, value)| Effect::SetField { cell: id, index, value })
+                    .map(|(index, value)| Effect::SetField {
+                        cell: id,
+                        index,
+                        value,
+                    })
                     .collect();
                 effects.push(Effect::IncrementNonce { cell: id });
                 let rh = self.sink.fire_effects(id, "mint_card", effects)?;

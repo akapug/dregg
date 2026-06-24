@@ -223,10 +223,14 @@ pub async fn boot_mud_world(player_seed: &str) -> Result<MudSession, String> {
     // ── (2) HOST mud_play_gm.js — the GM spawns the world + registers the affordances ─
     let gm_program = include_str!("../tests/fixtures/mud_play_gm.js")
         .replace("__PLAYER__", &hex_of(&player_cell));
-    let gm_cell =
-        crate::deos_host::host_server_program(&state, "mud-play-gamemaster", AuthRequired::None, gm_program)
-            .await
-            .map_err(|e| format!("host mud_play_gm.js: {e}"))?;
+    let gm_cell = crate::deos_host::host_server_program(
+        &state,
+        "mud-play-gamemaster",
+        AuthRequired::None,
+        gm_program,
+    )
+    .await
+    .map_err(|e| format!("host mud_play_gm.js: {e}"))?;
 
     // ── (3) bind a REAL HTTP listener so the client drives the genuine wire ──────────
     let metrics_handle = crate::metrics::install_recorder();
@@ -239,7 +243,9 @@ pub async fn boot_mud_world(player_seed: &str) -> Result<MudSession, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| format!("bind listener: {e}"))?;
-    let addr = listener.local_addr().map_err(|e| format!("local addr: {e}"))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| format!("local addr: {e}"))?;
     let server = tokio::spawn(async move {
         let _ = axum::serve(
             listener,
@@ -250,13 +256,10 @@ pub async fn boot_mud_world(player_seed: &str) -> Result<MudSession, String> {
     let node_url = format!("http://{addr}");
 
     // ── (4) one discovery round-trip to learn the federation id (the fire binding) ───
-    let discovery = dregg_sdk_net::discover_server_affordances(
-        &node_url,
-        &hex_of(&gm_cell),
-        "signature",
-    )
-    .await
-    .map_err(|e| format!("initial discovery: {e}"))?;
+    let discovery =
+        dregg_sdk_net::discover_server_affordances(&node_url, &hex_of(&gm_cell), "signature")
+            .await
+            .map_err(|e| format!("initial discovery: {e}"))?;
 
     Ok(MudSession {
         node_url,
@@ -373,16 +376,22 @@ impl<'a> MudClient<'a> {
 
         let mut out = String::new();
         out.push_str(&format!("You are in {}.\n", MudWorld::room_name(room)));
-        out.push_str(&format!(
-            "  Aria — level {level}, {xp} xp.\n"
-        ));
+        out.push_str(&format!("  Aria — level {level}, {xp} xp.\n"));
         if room == 1 {
             out.push_str("  A watchman stands by the gate, ");
-            out.push_str(if mood == 0 { "calm.\n" } else { "ALERT — eyeing you.\n" });
+            out.push_str(if mood == 0 {
+                "calm.\n"
+            } else {
+                "ALERT — eyeing you.\n"
+            });
             out.push_str("  Exits: north (to the Hall).\n");
         } else if room == 2 {
             out.push_str("  The watchman from the entrance is ");
-            out.push_str(if mood == 0 { "still calm.\n" } else { "ALERT and watching you closely.\n" });
+            out.push_str(if mood == 0 {
+                "still calm.\n"
+            } else {
+                "ALERT and watching you closely.\n"
+            });
             out.push_str("  Exits: south (to the Entrance). A dark stair descends here.\n");
         }
         Ok(out)
@@ -435,7 +444,10 @@ impl<'a> MudClient<'a> {
 
     /// Whether the player has descended into their personal dungeon (the instance's flag).
     pub async fn dungeon_descended(&self) -> Result<bool, String> {
-        Ok(self.read_field(&self.world.dungeon, DUNGEON_DESCENDED).await? == 1)
+        Ok(self
+            .read_field(&self.world.dungeon, DUNGEON_DESCENDED)
+            .await?
+            == 1)
     }
 
     /// THE ASYMMETRY (the refusal): attempt to `descend` into the SEALED dungeon — an
@@ -503,10 +515,15 @@ pub async fn gm_tick(state: &NodeState, world: &MudWorld) -> Result<(), String> 
     let tick = include_str!("../tests/fixtures/mud_play_tick.js")
         .replace("__CHAR__", &hex_of(&world.character))
         .replace("__NPC__", &hex_of(&world.watchman));
-    crate::deos_host::host_server_program(state, "mud-play-gamemaster-tick", AuthRequired::None, tick)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("host mud_play_tick.js: {e}"))
+    crate::deos_host::host_server_program(
+        state,
+        "mud-play-gamemaster-tick",
+        AuthRequired::None,
+        tick,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| format!("host mud_play_tick.js: {e}"))
 }
 
 /// THE INTERACTIVE REPL — play the MUD from a terminal. Reads commands off `input`, drives
@@ -563,7 +580,9 @@ pub async fn run_repl<R: BufRead, W: Write>(
                 Err(e) => writeln!(output, "(your step falters: {e})")?,
             },
             "gain-xp" | "kill" | "fight" => match client.gain_xp().await {
-                Ok(o) => render_outcome(&mut output, "You strike down a foe and gain experience", &o)?,
+                Ok(o) => {
+                    render_outcome(&mut output, "You strike down a foe and gain experience", &o)?
+                }
                 Err(e) => writeln!(output, "(the foe slips away: {e})")?,
             },
             "tick" | "wait" => {
@@ -591,16 +610,24 @@ pub async fn run_repl<R: BufRead, W: Write>(
                 Err(e) => writeln!(output, "(the stair crumbles: {e})")?,
             },
             "forge" | "cheat" => {
-                writeln!(output, "You try to bend the watchman to your will (a forbidden GM-only write)…")?;
+                writeln!(
+                    output,
+                    "You try to bend the watchman to your will (a forbidden GM-only write)…"
+                )?;
                 match client.forge_npc().await {
                     Ok(o) => {
                         if o.accepted {
-                            writeln!(output, "  …it WORKED?! (this should not happen — the asymmetry broke)")?;
+                            writeln!(
+                                output,
+                                "  …it WORKED?! (this should not happen — the asymmetry broke)"
+                            )?;
                         } else {
                             writeln!(
                                 output,
                                 "  …the world REFUSES you. {}",
-                                o.error.unwrap_or_else(|| "(no cap over the NPC — GM-only)".to_string())
+                                o.error.unwrap_or_else(
+                                    || "(no cap over the NPC — GM-only)".to_string()
+                                )
                             )?;
                         }
                     }
@@ -620,7 +647,11 @@ pub async fn run_repl<R: BufRead, W: Write>(
     Ok(())
 }
 
-fn render_outcome<W: Write>(output: &mut W, narration: &str, o: &PlayOutcome) -> std::io::Result<()> {
+fn render_outcome<W: Write>(
+    output: &mut W,
+    narration: &str,
+    o: &PlayOutcome,
+) -> std::io::Result<()> {
     if o.accepted {
         let receipt = o
             .turn_hash
@@ -632,7 +663,9 @@ fn render_outcome<W: Write>(output: &mut W, narration: &str, o: &PlayOutcome) ->
         writeln!(
             output,
             "{narration}… but the turn was REFUSED: {}",
-            o.error.clone().unwrap_or_else(|| "(no reason given)".to_string())
+            o.error
+                .clone()
+                .unwrap_or_else(|| "(no reason given)".to_string())
         )
     }
 }

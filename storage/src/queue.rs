@@ -788,7 +788,10 @@ mod tests {
                     "remaining_leaves diverged at round {round}"
                 );
                 // The emitted proof must still structurally verify.
-                assert!(verify_dequeue_proof(&proof), "proof unverifiable at round {round}");
+                assert!(
+                    verify_dequeue_proof(&proof),
+                    "proof unverifiable at round {round}"
+                );
             }
             // Live root tracks the reference at every step.
             assert_eq!(q.root(), rebuild_root(&all_entries, ref_head));

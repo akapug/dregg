@@ -743,16 +743,17 @@ pub fn verify_range_proof(commitment: &[u8], range_proof: &[u8]) -> Result<JsVal
     let mut commit_arr = [0u8; 32];
     commit_arr.copy_from_slice(commitment);
 
-    let result = match dregg_cell_crypto::value_commitment::verify_range_bytes(&commit_arr, range_proof) {
-        Ok(()) => VerifyRangeResult {
-            valid: true,
-            error: None,
-        },
-        Err(e) => VerifyRangeResult {
-            valid: false,
-            error: Some(e.to_string()),
-        },
-    };
+    let result =
+        match dregg_cell_crypto::value_commitment::verify_range_bytes(&commit_arr, range_proof) {
+            Ok(()) => VerifyRangeResult {
+                valid: true,
+                error: None,
+            },
+            Err(e) => VerifyRangeResult {
+                valid: false,
+                error: Some(e.to_string()),
+            },
+        };
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }
 
@@ -1671,7 +1672,8 @@ pub fn compose_and_verify_proofs(proofs_json: &str, mode: &str) -> Result<JsValu
                     .as_ref()
                     .ok_or("range requires 'range_proof_hex'")?;
                 let commit = decode_hex_32(ch).map_err(|e| format!("commitment_hex: {e}"))?;
-                let range_proof = decode_hex_vec(rp).map_err(|e| format!("range_proof_hex: {e}"))?;
+                let range_proof =
+                    decode_hex_vec(rp).map_err(|e| format!("range_proof_hex: {e}"))?;
                 dregg_cell_crypto::value_commitment::verify_range_bytes(&commit, &range_proof)
                     .map_err(|e| e.to_string())
             }
@@ -1686,17 +1688,13 @@ pub fn compose_and_verify_proofs(proofs_json: &str, mode: &str) -> Result<JsValu
                         .as_ref()
                         .ok_or("conservation requires 'output_commitments'")?,
                 )?;
-                let pj = p
-                    .proof
-                    .as_ref()
-                    .ok_or("conservation requires 'proof'")?;
+                let pj = p.proof.as_ref().ok_or("conservation requires 'proof'")?;
                 let proof = ConservationProof {
                     excess_commitment: decode_hex_32(&pj.excess_commitment)
                         .map_err(|e| format!("excess_commitment: {e}"))?,
                     nonce_commitment: decode_hex_32(&pj.nonce_commitment)
                         .map_err(|e| format!("nonce_commitment: {e}"))?,
-                    response: decode_hex_32(&pj.response)
-                        .map_err(|e| format!("response: {e}"))?,
+                    response: decode_hex_32(&pj.response).map_err(|e| format!("response: {e}"))?,
                 };
                 let message = match &p.message_hex {
                     None => Vec::new(),
@@ -1714,11 +1712,16 @@ pub fn compose_and_verify_proofs(proofs_json: &str, mode: &str) -> Result<JsValu
                                 decode_hex_vec(h).map_err(|e| format!("range_proof[{i}]: {e}"))
                             })
                             .collect::<Result<_, _>>()?;
-                        let in_bytes: Vec<[u8; 32]> = inputs.iter().map(|c| c.to_bytes().0).collect();
+                        let in_bytes: Vec<[u8; 32]> =
+                            inputs.iter().map(|c| c.to_bytes().0).collect();
                         let out_bytes: Vec<[u8; 32]> =
                             outputs.iter().map(|c| c.to_bytes().0).collect();
                         verify_full_conservation_bytes(
-                            &in_bytes, &out_bytes, &proof, &range_proofs, &message,
+                            &in_bytes,
+                            &out_bytes,
+                            &proof,
+                            &range_proofs,
+                            &message,
                         )
                         .map_err(|e| format!("full conservation: {e}"))
                     }

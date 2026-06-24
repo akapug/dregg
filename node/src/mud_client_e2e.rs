@@ -22,7 +22,7 @@
 //! or a thin terminal uses.
 #![cfg(all(test, feature = "deos-host"))]
 
-use crate::mud_client::{boot_mud_world, gm_tick, MudClient};
+use crate::mud_client::{MudClient, boot_mud_world, gm_tick};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn client_plays_the_node_hosted_mud_living_world() {
@@ -42,20 +42,51 @@ async fn client_plays_the_node_hosted_mud_living_world() {
         view.contains("level 1"),
         "the character starts at level 1; view was:\n{view}"
     );
-    assert_eq!(client.room().await.expect("room"), 1, "starts in the Entrance (room 1)");
-    assert_eq!(client.stats().await.expect("stats"), (1, 0), "starts level 1, 0 xp");
-    assert_eq!(client.npc_mood().await.expect("mood"), 0, "the watchman starts calm");
+    assert_eq!(
+        client.room().await.expect("room"),
+        1,
+        "starts in the Entrance (room 1)"
+    );
+    assert_eq!(
+        client.stats().await.expect("stats"),
+        (1, 0),
+        "starts level 1, 0 xp"
+    );
+    assert_eq!(
+        client.npc_mood().await.expect("mood"),
+        0,
+        "the watchman starts calm"
+    );
 
     // ── (2) GAIN-XP ── a real signed, verified turn → xp lands on the ledger.
     let gain = client.gain_xp().await.expect("fire gain-xp");
-    assert!(gain.accepted, "the player's gain-xp turn was accepted; error={:?}", gain.error);
-    assert!(gain.turn_hash.is_some(), "an accepted gain-xp turn carries a receipt (turn hash)");
-    assert_eq!(client.stats().await.expect("stats after gain-xp").1, 120, "xp rose to 120 on the ledger");
+    assert!(
+        gain.accepted,
+        "the player's gain-xp turn was accepted; error={:?}",
+        gain.error
+    );
+    assert!(
+        gain.turn_hash.is_some(),
+        "an accepted gain-xp turn carries a receipt (turn hash)"
+    );
+    assert_eq!(
+        client.stats().await.expect("stats after gain-xp").1,
+        120,
+        "xp rose to 120 on the ledger"
+    );
 
     // ── (3) MOVE ── walk into the Hall (room = 2) on the real ledger.
     let mov = client.do_move().await.expect("fire move");
-    assert!(mov.accepted, "the player's move turn was accepted; error={:?}", mov.error);
-    assert_eq!(client.room().await.expect("room after move"), 2, "moved into the Hall (room 2)");
+    assert!(
+        mov.accepted,
+        "the player's move turn was accepted; error={:?}",
+        mov.error
+    );
+    assert_eq!(
+        client.room().await.expect("room after move"),
+        2,
+        "moved into the Hall (room 2)"
+    );
 
     // ── (4) TICK ── the GM observes + the WORLD RESPONDS (level-up + NPC reaction).
     gm_tick(session.node_state(), client.world())
@@ -77,8 +108,14 @@ async fn client_plays_the_node_hosted_mud_living_world() {
         !client.dungeon_descended().await.expect("dungeon flag pre"),
         "the dungeon starts un-descended"
     );
-    let (visible, descend) = client.descend().await.expect("fire descend into the personal dungeon");
-    assert!(visible, "the personal dungeon's `descend` affordance is discoverable");
+    let (visible, descend) = client
+        .descend()
+        .await
+        .expect("fire descend into the personal dungeon");
+    assert!(
+        visible,
+        "the personal dungeon's `descend` affordance is discoverable"
+    );
     assert!(
         descend.accepted,
         "descend into the ADMITTED dungeon is authorized (the GM granted the player a cap); error={:?}",
@@ -105,7 +142,10 @@ async fn client_plays_the_node_hosted_mud_living_world() {
 
     // ── (6b) THE ASYMMETRY: a GM-only NPC write the player holds no cap over → REFUSED ───
     let mood_before = client.npc_mood().await.expect("npc mood before forge");
-    let forge = client.forge_npc().await.expect("attempt the forbidden NPC write");
+    let forge = client
+        .forge_npc()
+        .await
+        .expect("attempt the forbidden NPC write");
     assert!(
         !forge.accepted,
         "a player CANNOT write the NPC (no cap held — GM-only); outcome={forge:?}"

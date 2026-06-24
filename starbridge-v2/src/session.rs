@@ -780,7 +780,9 @@ impl IdentityKeystore {
     /// KEK: a deployment hardens it by (a) deriving the KEK from a user passphrase
     /// / TPM and (b) fronting the file store with the OS keychain
     /// ([`dregg_secrets::KeychainStore`], a one-line [`CompositeStore`] addition).
-    pub fn default_for(base_dir: &std::path::Path) -> Result<Self, dregg_secrets::SecretStoreError> {
+    pub fn default_for(
+        base_dir: &std::path::Path,
+    ) -> Result<Self, dregg_secrets::SecretStoreError> {
         let secrets_dir = base_dir.join("secrets");
         // A per-image device master key: derived from a fixed context + the image
         // root path, so the same desktop re-derives the same KEK across launches.
@@ -802,9 +804,7 @@ impl IdentityKeystore {
     /// Does a persisted identity already exist for `label`? `true` ⟹ a RETURNING
     /// user (present the key); `false` ⟹ a NEW user (mint one).
     pub fn has_identity(&self, label: &str) -> bool {
-        self.store
-            .exists(&Self::seed_id(label))
-            .unwrap_or(false)
+        self.store.exists(&Self::seed_id(label)).unwrap_or(false)
     }
 
     /// **MINT a new identity** for `label`: generate a fresh Ed25519 keypair (via a
@@ -847,7 +847,10 @@ impl IdentityKeystore {
     ///
     /// This is the load half of "present your key": the holder proves possession by
     /// signing a [`Challenge`] with the reconstructed clerk (the manager verifies).
-    pub fn present(&self, label: &str) -> Result<Option<AgentCipherclerk>, dregg_secrets::SecretStoreError> {
+    pub fn present(
+        &self,
+        label: &str,
+    ) -> Result<Option<AgentCipherclerk>, dregg_secrets::SecretStoreError> {
         let Some(value) = self.store.get(&Self::seed_id(label))? else {
             return Ok(None);
         };
@@ -1339,7 +1342,7 @@ fn next_free_slot(world: &World, cell: &CellId) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{make_open_cell, World};
+    use crate::world::{World, make_open_cell};
 
     /// A login world: a SYSTEM PRINCIPAL holding caps to two home/app cells (the
     /// authority a session is provisioned from), and two resource cells (`home`,

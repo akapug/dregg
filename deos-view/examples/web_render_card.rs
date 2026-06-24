@@ -20,8 +20,8 @@
 use std::path::PathBuf;
 
 use deos_view::{
-    parse_view_tree, render_card_document, render_card_live_document, render_gallery_document,
-    render_html, render_inspector_live_document, GalleryCard,
+    GalleryCard, parse_view_tree, render_card_document, render_card_live_document,
+    render_gallery_document, render_html, render_inspector_live_document,
 };
 
 /// The EXACT `JSON.stringify(tree)` shape the SpiderMonkey engine produces for the
@@ -308,8 +308,8 @@ fn main() {
         "  3. (cd {} && python3 -m http.server 8000)  # open http://localhost:8000 (the gallery)",
         dist.display()
     );
+    eprintln!("     The gallery links to /counter.html and /inspector.html (the LIVE cards).");
     eprintln!(
-        "     The gallery links to /counter.html and /inspector.html (the LIVE cards)."
+        "Open the static .html files directly; the LIVE pages must be SERVED (module + .wasm fetch)."
     );
-    eprintln!("Open the static .html files directly; the LIVE pages must be SERVED (module + .wasm fetch).");
 }

@@ -156,7 +156,7 @@ pub fn verify_history_against_anchor(
     anchor_hex: &str,
 ) -> Result<JsValue, JsError> {
     use dregg_circuit_prove::ivc_turn_chain::RecursionVk;
-    use dregg_lightclient::{verify_history, LightClientError};
+    use dregg_lightclient::{LightClientError, verify_history};
 
     // Parse the CONFIG anchor from the caller (never from the artifact).
     let anchor_bytes = parse_hex32(anchor_hex)
@@ -282,7 +282,7 @@ pub fn verify_devnet_history(
 ) -> Result<JsValue, JsError> {
     use base64::Engine as _;
     use dregg_circuit_prove::ivc_turn_chain::RecursionVk;
-    use dregg_lightclient::{verify_history_bytes, LightClientError};
+    use dregg_lightclient::{LightClientError, verify_history_bytes};
 
     // (1) Parse + version-check the envelope.
     let env: ExternalHistoryEnvelope = serde_json::from_str(envelope_json)
@@ -305,9 +305,8 @@ pub fn verify_devnet_history(
     // that built a DIFFERENT circuit cannot pass the client's anchor) — the REAL
     // recursion verify in (5) re-pins the anchor from the proof bytes regardless,
     // so this is a fast-path diagnostic, not the soundness boundary.
-    let claimed_bytes = parse_hex32(&env.vk_fingerprint_hex).map_err(|e| {
-        JsError::new(&format!("envelope claimed fingerprint malformed: {e}"))
-    })?;
+    let claimed_bytes = parse_hex32(&env.vk_fingerprint_hex)
+        .map_err(|e| JsError::new(&format!("envelope claimed fingerprint malformed: {e}")))?;
     if claimed_bytes != cfg_bytes {
         let view = AttestedHistoryView {
             attested: false,
@@ -515,7 +514,8 @@ fn fold_demo_chain(
         nonce += 1; // the v1 sub-trace bumps the nonce by 1 per Transfer row.
     }
 
-    fold_and_attest(&turns).map_err(|e| JsError::new(&format!("light-client fold/verify failed: {e}")))
+    fold_and_attest(&turns)
+        .map_err(|e| JsError::new(&format!("light-client fold/verify failed: {e}")))
 }
 
 /// Parse a 64-char hex string into a `[u8; 32]`. The single hex→anchor decoder the
@@ -576,10 +576,7 @@ mod tests {
         // A fat-fingered anchor must be a CLEAR error, never a silent zero-fill
         // (a zero anchor would be a real fingerprint a forger could target).
         assert!(parse_hex32("dead").is_err(), "too short must error");
-        assert!(
-            parse_hex32(&"a".repeat(63)).is_err(),
-            "63 chars must error"
-        );
+        assert!(parse_hex32(&"a".repeat(63)).is_err(), "63 chars must error");
         let mut bad = "a".repeat(63);
         bad.push('z'); // 64 chars, but 'z' is not hex
         let e = parse_hex32(&bad).unwrap_err();
@@ -609,7 +606,10 @@ mod tests {
         let minimal = r#"{"version":1,"vk_fingerprint_hex":"00","genesis_root":0,
             "final_root":0,"chain_digest":0,"num_turns":2}"#;
         let m: ExternalHistoryEnvelope = serde_json::from_str(minimal).unwrap();
-        assert!(m.proof_bytes_b64.is_empty(), "omitted proof bytes default empty");
+        assert!(
+            m.proof_bytes_b64.is_empty(),
+            "omitted proof bytes default empty"
+        );
     }
 
     #[test]
@@ -631,11 +631,17 @@ mod tests {
         };
         let json = serde_json::to_string(&env).unwrap();
         let back: ExternalHistoryEnvelope = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.proof_bytes_b64, b64, "the b64 survives the JSON wrapper");
+        assert_eq!(
+            back.proof_bytes_b64, b64,
+            "the b64 survives the JSON wrapper"
+        );
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(back.proof_bytes_b64.as_bytes())
             .expect("the carried b64 decodes");
-        assert_eq!(decoded, raw, "the proof bytes round-trip through the envelope");
+        assert_eq!(
+            decoded, raw,
+            "the proof bytes round-trip through the envelope"
+        );
     }
 
     #[test]

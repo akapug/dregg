@@ -2118,7 +2118,9 @@ struct PeerCellViewSerializable {
     last_updated: i64,
 }
 
-fn peer_cell_view_to_serializable(view: &dregg_cell_crypto::PeerCellView) -> PeerCellViewSerializable {
+fn peer_cell_view_to_serializable(
+    view: &dregg_cell_crypto::PeerCellView,
+) -> PeerCellViewSerializable {
     PeerCellViewSerializable {
         cell_id: hex_encode(&view.cell_id.0),
         last_known_commitment: hex_encode(&view.last_known_commitment),
@@ -3457,7 +3459,8 @@ fn deploy_parse(text: &str) -> Result<dregg_deploy::Deployment, String> {
 #[wasm_bindgen]
 pub fn deploy_check(text: &str, ring: bool) -> Result<String, JsError> {
     let dep = deploy_parse(text).map_err(|e| JsError::new(&e))?;
-    let verdict = dregg_deploy::check_deployment(&dep, ring).map_err(|e| JsError::new(&e.to_string()))?;
+    let verdict =
+        dregg_deploy::check_deployment(&dep, ring).map_err(|e| JsError::new(&e.to_string()))?;
     let a = &verdict.assurance;
     let out = DeployCheckJson {
         pass: verdict.pass(),
@@ -3472,12 +3475,18 @@ pub fn deploy_check(text: &str, ring: bool) -> Result<String, JsError> {
         factories: verdict
             .factories
             .iter()
-            .map(|(name, value)| DeployNamedHexJson { name: name.clone(), value: value.clone() })
+            .map(|(name, value)| DeployNamedHexJson {
+                name: name.clone(),
+                value: value.clone(),
+            })
             .collect(),
         cells: verdict
             .cells
             .iter()
-            .map(|(name, value)| DeployNamedHexJson { name: name.clone(), value: value.clone() })
+            .map(|(name, value)| DeployNamedHexJson {
+                name: name.clone(),
+                value: value.clone(),
+            })
             .collect(),
         turn_count: verdict.turn_count,
     };
@@ -3499,7 +3508,8 @@ struct DeployLowerJson {
 #[wasm_bindgen]
 pub fn deploy_lower(text: &str) -> Result<String, JsError> {
     let dep = deploy_parse(text).map_err(|e| JsError::new(&e))?;
-    let lowered = dregg_deploy::Lowered::from_deployment(&dep).map_err(|e| JsError::new(&e.to_string()))?;
+    let lowered =
+        dregg_deploy::Lowered::from_deployment(&dep).map_err(|e| JsError::new(&e.to_string()))?;
     let forest = serde_json::to_value(&lowered.forest).map_err(|e| JsError::new(&e.to_string()))?;
     let out = DeployLowerJson {
         forest,
@@ -3507,12 +3517,18 @@ pub fn deploy_lower(text: &str) -> Result<String, JsError> {
         factories: lowered
             .factory_vks
             .iter()
-            .map(|(name, vk)| DeployNamedHexJson { name: name.clone(), value: hex_lower(vk) })
+            .map(|(name, vk)| DeployNamedHexJson {
+                name: name.clone(),
+                value: hex_lower(vk),
+            })
             .collect(),
         cells: lowered
             .cell_ids
             .iter()
-            .map(|(name, id)| DeployNamedHexJson { name: name.clone(), value: hex_lower(&id.0) })
+            .map(|(name, id)| DeployNamedHexJson {
+                name: name.clone(),
+                value: hex_lower(&id.0),
+            })
             .collect(),
     };
     serde_json::to_string(&out).map_err(|e| JsError::new(&e.to_string()))
