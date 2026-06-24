@@ -550,6 +550,10 @@ import Dregg2.Verify.KeystoneAuditAuthModes     -- guarantee A (5): AuthModes.{c
 import Dregg2.Verify.KeystoneAuditIntegrity     -- guarantee C (8): Argus.Receipt + CommitmentCrossBind + UniversalBridge
 import Dregg2.Verify.KeystoneAuditFreshness     -- guarantee D (10): noteSpend + NonMembership + CapSlotFactory
 import Dregg2.Verify.KeystoneAuditUnfoolability -- guarantee E (12): RecursiveAggregation + HistoryAggregation + LightClientUC
+-- AUDITABLE-not-yet · CHEAP waves (KEYSTONE-LEDGER Waves 1–3): extend the discipline with genuine witnesses.
+import Dregg2.Verify.KeystoneAuditSupply        -- Wave 1 (5): mint/burn issuer-move (mintA_authorized + execMintA_iff_spec + recK{Mint,Burn}Asset_delta + requires_live_issuer)
+import Dregg2.Verify.KeystoneAuditConservation  -- Wave 2 (15): Conserve.* + recTransferBal/recKExec/recTransfer + monoid layer + W1 executor closure
+import Dregg2.Verify.KeystoneAuditTransport     -- Wave 3 (7): non-amp transport + writeCell0/stateCommit receipt-binding + moveAsset memory-program
 
 -- REFINEMENT wave R2 (2026-06-11): THE HEAP's Lean foundation (REFINEMENT-DESIGN Decision 1).
 import Dregg2.Substrate.Heap              -- R2 keystone: the openable sorted-map semantics — the cap_root machinery generalized to a generic leaf (get/set/sorted-insert/non-membership via the REUSED sorted_gap_excludes; ext_get canonicity; root_deterministic + root_injective under the ONE named Poseidon2SpongeCR floor)
