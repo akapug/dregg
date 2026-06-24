@@ -841,12 +841,15 @@ impl Cockpit {
             }
         };
 
-        // STEP 1 (brief lease): prune dead windows + TAKE the registry out of the
-        // cockpit, so the open below runs without holding the cockpit borrowed.
-        let Some(mut registry) = weak
+        // STEP 1 (brief lease): prune dead windows, compute the surface's
+        // identity/cap-badge (who/what authority it runs under — the same operator
+        // principal + c-list count the top bar shows), and TAKE the registry out of
+        // the cockpit, so the open below runs without holding the cockpit borrowed.
+        let Some((mut registry, badge)) = weak
             .update(app, |this, cx| {
                 this.window_registry.prune_closed(cx);
-                std::mem::take(&mut this.window_registry)
+                let badge = this.torn_off_badge();
+                (std::mem::take(&mut this.window_registry), badge)
             })
             .ok()
         else {
@@ -857,7 +860,7 @@ impl Cockpit {
         // re-enters the cockpit via `render` above — which now succeeds, because we
         // are NOT inside a cockpit lease here. This is the line that previously
         // aborted the process.
-        let outcome = match registry.tear_off(id, label, render, app) {
+        let outcome = match registry.tear_off(id, label, badge, render, app) {
             Ok(_handle) => {
                 let torn = registry.len();
                 Ok(format!(
@@ -954,6 +957,22 @@ impl Cockpit {
     pub(crate) fn tab_is_torn_off(&self, tab: Tab) -> bool {
         self.window_registry
             .is_torn_off(DockSurfaceId(tab.index() as u64))
+    }
+
+    /// The operator IDENTITY / cap-badge a torn-off window's chrome shows — the
+    /// same `you · {id} · 🔑 {n} caps` the persistent top bar carries, so a popped
+    /// pane names WHICH authority it runs under (identifiable, not anonymous). The
+    /// firmament "one cap across distance" made visible at the second window.
+    pub(crate) fn torn_off_badge(&self) -> SharedString {
+        let w = self.world.borrow();
+        let user = self.anchors[2];
+        let id_short = reflect::short_hex(user.as_bytes());
+        let cap_count = w
+            .ledger()
+            .get(&user)
+            .map(|c| c.capabilities.len())
+            .unwrap_or(0);
+        SharedString::from(format!("you · {id_short} · 🔑 {cap_count} caps"))
     }
 
     /// THE HOME panel — the warm LANDING portal (the boot view). Renders the
