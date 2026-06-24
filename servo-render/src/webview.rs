@@ -856,8 +856,6 @@ pub fn render_url_then_input_on_servo(
 // `with_gl` SWGL lock, so the single-thread + single-engine discipline holds.
 // ─────────────────────────────────────────────────────────────────────────────
 
-use std::cell::RefCell;
-
 thread_local! {
     /// At most ONE [`LiveWebView`] (hence one `Servo` engine) may exist per process —
     /// `servo_config::opts` is a process-wide `OnceCell` set once by `ServoBuilder::build`.
