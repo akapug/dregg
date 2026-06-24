@@ -48,8 +48,9 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Window,
 };
 use gpui_component::{
+    h_flex,
     input::{Input, InputEvent, InputState},
-    h_flex, v_flex, ActiveTheme as _,
+    v_flex, ActiveTheme as _,
 };
 
 use crate::cell::PersonTrust;
@@ -165,7 +166,8 @@ impl ChatView {
         let room_id = self.rooms[idx].room_id.to_string();
         match self.source.send_turn(&room_id, &body) {
             Ok(receipt) => {
-                self.composer.update(cx, |state, cx| state.set_value("", window, cx));
+                self.composer
+                    .update(cx, |state, cx| state.set_value("", window, cx));
                 self.editing = None;
                 self.status = SharedString::from(format!("sent · {}", receipt.digest()));
                 self.refresh_timeline(cx);
@@ -211,11 +213,16 @@ impl ChatView {
     /// the real executor; shows the settled outcome in the status. Fail-closed if
     /// the source holds no executor (NO mock).
     fn rehydrate_membrane(&mut self, event_id: String, cx: &mut Context<Self>) {
-        let Some(m) = self.timeline.iter().find(|m| m.event_id == event_id) else { return };
-        let Some(env) = m.membrane.clone() else { return };
+        let Some(m) = self.timeline.iter().find(|m| m.event_id == event_id) else {
+            return;
+        };
+        let Some(env) = m.membrane.clone() else {
+            return;
+        };
         match self.source.rehydrate_drive_stitch(&env) {
             Ok(summary) => {
-                self.status = SharedString::from(format!("▶ rehydrated + drove + stitched — {summary}"));
+                self.status =
+                    SharedString::from(format!("▶ rehydrated + drove + stitched — {summary}"));
                 self.refresh_timeline(cx);
             }
             Err(e) => {
@@ -240,7 +247,8 @@ impl ChatView {
         if let Some(m) = last {
             let body = m.body.clone();
             let id = m.event_id.clone();
-            self.composer.update(cx, |state, cx| state.set_value(&body, window, cx));
+            self.composer
+                .update(cx, |state, cx| state.set_value(&body, window, cx));
             self.editing = Some(id);
             self.status = SharedString::from("editing your last message — Enter to resubmit");
             cx.notify();
@@ -282,7 +290,13 @@ impl ChatView {
                         } else {
                             "#"
                         }))
-                        .child(div().flex_1().font_weight(gpui::FontWeight::MEDIUM).truncate().child(name))
+                        .child(
+                            div()
+                                .flex_1()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .truncate()
+                                .child(name),
+                        )
                         .when(unread > 0, |d| {
                             d.child(
                                 div()
@@ -387,13 +401,12 @@ impl ChatView {
             let mut block = v_flex().id(("msg", i)).px_3();
             if let Some(label) = day_sep {
                 block = block.child(
-                    h_flex().my_2().items_center().gap_2().justify_center().child(
-                        div()
-                            .px_2()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(label),
-                    ),
+                    h_flex()
+                        .my_2()
+                        .items_center()
+                        .gap_2()
+                        .justify_center()
+                        .child(div().px_2().text_xs().text_color(muted).child(label)),
                 );
             }
 
@@ -452,16 +465,20 @@ impl ChatView {
                     .text_color(muted)
                     .child("⌫ message removed")
                     .into_any_element(),
-                (_, MessageKind::Membrane) => {
-                    self.membrane_card(m, card_bg, border, accent, foreground, muted, cx).into_any_element()
-                }
+                (_, MessageKind::Membrane) => self
+                    .membrane_card(m, card_bg, border, accent, foreground, muted, cx)
+                    .into_any_element(),
                 (_, MessageKind::Object(_)) => {
                     object_card(m, card_bg, border, accent, foreground, muted).into_any_element()
                 }
                 (state, kind) => {
                     let mut row = h_flex().ml(px(36.)).items_baseline().gap_1().child(
                         div()
-                            .text_color(if *kind == MessageKind::Notice { muted } else { foreground })
+                            .text_color(if *kind == MessageKind::Notice {
+                                muted
+                            } else {
+                                foreground
+                            })
                             .when(*kind == MessageKind::Emote, |d| d.italic())
                             .child(m.body.clone()),
                     );
@@ -617,8 +634,16 @@ impl Render for ChatView {
         // room = a cell: show the room cell id + turn-count in the header.
         let cell_line = selected_room.as_ref().map(|r| {
             let rc = self.source.room_cell(&r.room_id.to_string());
-            format!("cell:{} · {} turns · {}", rc.cell_id.short(), rc.turn_count,
-                if r.is_encrypted { "🔒 e2e" } else { "plaintext" })
+            format!(
+                "cell:{} · {} turns · {}",
+                rc.cell_id.short(),
+                rc.turn_count,
+                if r.is_encrypted {
+                    "🔒 e2e"
+                } else {
+                    "plaintext"
+                }
+            )
         });
 
         let sidebar = self.render_sidebar(cx);
@@ -660,12 +685,7 @@ impl Render for ChatView {
                                 )
                             })
                             .when_some(cell_line, |d, c| {
-                                d.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().accent)
-                                        .child(c),
-                                )
+                                d.child(div().text_xs().text_color(cx.theme().accent).child(c))
                             }),
                     )
                     .child(timeline)
@@ -679,7 +699,12 @@ impl Render for ChatView {
 
 /// A small round avatar chip with the sender's initial on their stable hue.
 fn avatar_chip(name: &str, color: Hsla) -> impl IntoElement {
-    let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+    let initial = name
+        .chars()
+        .next()
+        .unwrap_or('?')
+        .to_uppercase()
+        .to_string();
     div()
         .size(px(22.))
         .rounded_full()
@@ -745,11 +770,20 @@ impl ChatView {
         let event_id = m.event_id.clone();
         let button_id = SharedString::from(format!("rehydrate-{}", m.event_id));
         let (button_label, hint): (&str, &str) = if live {
-            ("▶ rehydrate & drive", "drives real turns · stitches back fail-closed")
+            (
+                "▶ rehydrate & drive",
+                "drives real turns · stitches back fail-closed",
+            )
         } else if rehydratable && !capable {
-            ("⬡ open in deos to rehydrate", "this chat surface holds no executor")
+            (
+                "⬡ open in deos to rehydrate",
+                "this chat surface holds no executor",
+            )
         } else {
-            ("⨯ newer membrane — update deos", "this build cannot rehydrate it")
+            (
+                "⨯ newer membrane — update deos",
+                "this build cannot rehydrate it",
+            )
         };
         let mut button = div()
             .id(gpui::ElementId::Name(button_id))
@@ -802,14 +836,9 @@ impl ChatView {
                             .child("a cap-bounded fork of the world"),
                     ),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!(
-                        "{cells} cells · depth {depth} · cut@h{h} · root {root}…"
-                    )),
-            )
+            .child(div().text_xs().text_color(muted).child(format!(
+                "{cells} cells · depth {depth} · cut@h{h} · root {root}…"
+            )))
             .child(
                 h_flex()
                     .gap_2()
@@ -844,7 +873,12 @@ fn object_card(
             Some(DreggObject::Cell(c)) => (
                 "▢",
                 "deos cell",
-                format!("{} · {}:{}", c.label, c.cell_kind.as_deref().unwrap_or("cell"), c.cell_id.short()),
+                format!(
+                    "{} · {}:{}",
+                    c.label,
+                    c.cell_kind.as_deref().unwrap_or("cell"),
+                    c.cell_id.short()
+                ),
                 "open cell",
                 true,
             ),
@@ -858,7 +892,13 @@ fn object_card(
             Some(DreggObject::Transclusion(t)) => (
                 "❝",
                 "deos transclusion",
-                format!("{}.{} = {} · bound {}…", t.source_cell.short(), t.field, t.value, hex8(&t.bound_root)),
+                format!(
+                    "{}.{} = {} · bound {}…",
+                    t.source_cell.short(),
+                    t.field,
+                    t.value,
+                    hex8(&t.bound_root)
+                ),
                 "re-resolve live",
                 true,
             ),
@@ -872,7 +912,12 @@ fn object_card(
             Some(DreggObject::Receipt(r)) => (
                 "✔",
                 "deos receipt",
-                format!("turn {} · {} · root {}…", r.turn_index, r.cell_id.short(), hex8(&r.post_root)),
+                format!(
+                    "turn {} · {} · root {}…",
+                    r.turn_index,
+                    r.cell_id.short(),
+                    hex8(&r.post_root)
+                ),
                 "verify",
                 false,
             ),
@@ -895,7 +940,12 @@ fn object_card(
                 .gap_2()
                 .items_center()
                 .child(div().text_color(accent).child(glyph))
-                .child(div().font_weight(gpui::FontWeight::BOLD).text_color(fg).child(title)),
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(fg)
+                        .child(title),
+                ),
         )
         .child(div().text_xs().text_color(muted).child(summary))
         .when(!action.is_empty(), |d| {
@@ -909,7 +959,10 @@ fn object_card(
                     .border_color(border)
                     .text_xs()
                     .when(fireable, |d| {
-                        d.bg(accent).text_color(gpui::white()).cursor_pointer().child(action.to_string())
+                        d.bg(accent)
+                            .text_color(gpui::white())
+                            .cursor_pointer()
+                            .child(action.to_string())
                     })
                     .when(!fireable, |d| d.text_color(muted).child(action.to_string())),
             )

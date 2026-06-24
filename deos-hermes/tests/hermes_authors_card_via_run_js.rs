@@ -35,9 +35,9 @@ use deos_hermes::{
     GrantRegistry, HermesGateway, LiveAuthoringHands, MockHermesPeer, RunJsAuthoringTool,
     ScriptedCall, ToolCallRequest,
 };
-use deos_js::card_editor::{BindProps, TextProps, ViewTree};
-use deos_js::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
 use deos_js::JsRuntime;
+use deos_js::card_editor::{BindProps, TextProps, ViewTree};
+use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use dregg_cell::AuthRequired;
 use dregg_doc::Author;
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
@@ -194,7 +194,10 @@ fn an_agent_authors_a_card_via_run_js_decided_js() {
             out.receipts
         );
         // The re-folded view-source carries the new button (the UI the agent built).
-        let view = out.view_source.clone().expect("authoring yields a view source");
+        let view = out
+            .view_source
+            .clone()
+            .expect("authoring yields a view source");
         let tree = ViewTree::from_json(&view).expect("the authored view is parseable");
         assert!(
             tree.has_button_for("inc"),
@@ -321,7 +324,10 @@ fn an_agent_authors_a_card_via_run_js_decided_js() {
 
         let mut client = AcpClient::new(script, session_gw, 10).with_run_js_hook(hands.into_hook());
         let run = client
-            .run_prompt("/tmp", "Add a reset/+1 button to my counter card and relabel it.")
+            .run_prompt(
+                "/tmp",
+                "Add a reset/+1 button to my counter card and relabel it.",
+            )
             .expect("the ACP session drives the run_js authoring call");
 
         // The gateway admitted the `run_js` tool-call (the accountability turn).
@@ -480,7 +486,9 @@ fn live_authors_card_via_run_js() {
                 } else if let Some(err) = &rec.js_error {
                     // The model emitted a run_js body that didn't author — names the seam:
                     // the live brain didn't (yet) produce well-formed editView JS.
-                    eprintln!("LIVE-SEAM: the brain's run_js body did not author (js_error): {err}");
+                    eprintln!(
+                        "LIVE-SEAM: the brain's run_js body did not author (js_error): {err}"
+                    );
                 } else {
                     eprintln!(
                         "LIVE-SEAM: the brain emitted a run_js body that ran but authored \

@@ -119,9 +119,15 @@ fn typed_prompt_streams_a_gated_multi_turn_conversation() {
 
     // The model is a real multi-turn transcript: a User entry, an Agent reply, and
     // three inline Tool entries — accumulated in order.
-    assert!(matches!(model.transcript.first(), Some(ChatEntry::User { .. })));
+    assert!(matches!(
+        model.transcript.first(),
+        Some(ChatEntry::User { .. })
+    ));
     assert!(
-        model.transcript.iter().any(|e| matches!(e, ChatEntry::Agent { .. })),
+        model
+            .transcript
+            .iter()
+            .any(|e| matches!(e, ChatEntry::Agent { .. })),
         "the agent reply streamed into the transcript"
     );
     let tool_entries = model
@@ -132,7 +138,11 @@ fn typed_prompt_streams_a_gated_multi_turn_conversation() {
     assert_eq!(tool_entries, 3, "three gated tool-calls inline in the chat");
 
     // The agent reply text actually streamed in.
-    assert!(model.agent_text.contains("searching"), "{:?}", model.agent_text);
+    assert!(
+        model.agent_text.contains("searching"),
+        "{:?}",
+        model.agent_text
+    );
 
     // The permission moment is surfaced: the last gated call (an allowed terminal)
     // with its mandate + remaining budget.
@@ -211,7 +221,9 @@ fn rate_exhaustion_surfaces_the_leg_live() {
     );
 
     assert_eq!(
-        log.iter().filter(|e| *e == "verdict:terminal:reject").count(),
+        log.iter()
+            .filter(|e| *e == "verdict:terminal:reject")
+            .count(),
         1,
         "the 2nd terminal was refused in-band: {log:?}"
     );

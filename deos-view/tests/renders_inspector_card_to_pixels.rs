@@ -97,18 +97,31 @@ fn inspector_proof_body() {
             cx.new(|_cx| AppletView::new(a0, tree0))
         })
         .expect("open the inspector window");
-    let frame0 = hr.capture(window.into()).expect("capture inspector frame 0");
+    let frame0 = hr
+        .capture(window.into())
+        .expect("capture inspector frame 0");
     let png0 = out.join("inspector-focus.png");
     frame0.save(&png0).expect("save PNG #0");
-    assert!(frame0.width() > 0 && frame0.height() > 0, "frame 0 has pixels");
+    assert!(
+        frame0.width() > 0 && frame0.height() > 0,
+        "frame 0 has pixels"
+    );
 
     // ── 2. FIRE the `inc` affordance from the inspector — a REAL verified turn ───────────
-    assert_eq!(shared.borrow().get_u64(0), 1, "the counter starts at its seed (1)");
+    assert_eq!(
+        shared.borrow().get_u64(0),
+        1,
+        "the counter starts at its seed (1)"
+    );
     let receipt = shared
         .borrow_mut()
         .fire("inc", 1)
         .expect("the inspector's `inc` affordance fires a verified turn");
-    assert_ne!(receipt.receipt_hash(), [0u8; 32], "a real TurnReceipt committed");
+    assert_ne!(
+        receipt.receipt_hash(),
+        [0u8; 32],
+        "a real TurnReceipt committed"
+    );
     assert_eq!(
         shared.borrow().get_u64(0),
         2,
@@ -124,7 +137,9 @@ fn inspector_proof_body() {
         "the inc turn dirtied the slot-0 binding the RawFields row reads"
     );
     hr.update(|cx| cx.refresh_windows());
-    let frame1 = hr.capture(window.into()).expect("capture inspector frame 1");
+    let frame1 = hr
+        .capture(window.into())
+        .expect("capture inspector frame 1");
     let png1 = out.join("inspector-fired.png");
     frame1.save(&png1).expect("save PNG #1");
     assert_ne!(
@@ -160,15 +175,29 @@ fn inspector_proof_body() {
         .expect("append a button from within");
 
     // The reshapes are RECEIPTED PATCHES with BLAME.
-    assert_ne!(edit_a.receipt.receipt_hash(), [0u8; 32], "relabel left a provenance receipt");
-    assert_ne!(edit_b.receipt.receipt_hash(), [0u8; 32], "add-button left a provenance receipt");
+    assert_ne!(
+        edit_a.receipt.receipt_hash(),
+        [0u8; 32],
+        "relabel left a provenance receipt"
+    );
+    assert_ne!(
+        edit_b.receipt.receipt_hash(),
+        [0u8; 32],
+        "add-button left a provenance receipt"
+    );
     assert!(
         card2.view_blame().iter().any(|l| l.author == Author(42)),
         "the reshapes are blamed on their author"
     );
     let source_after = card2.view_source();
-    assert!(source_after.contains("Substance"), "the new face label landed");
-    assert!(source_after.contains("inc \u{00d7}5"), "the appended button landed");
+    assert!(
+        source_after.contains("Substance"),
+        "the new face label landed"
+    );
+    assert!(
+        source_after.contains("inc \u{00d7}5"),
+        "the appended button landed"
+    );
 
     // Render the RESHAPED view-source over the SAME live applet (advanced to 2) → PNG #3
     // (differs from #1: the face relabel + the appended button reshaped the UI from within).
@@ -179,7 +208,9 @@ fn inspector_proof_body() {
             cx.new(|_cx| AppletView::new(a2, tree2))
         })
         .expect("open the reshaped inspector window");
-    let frame2 = hr.capture(window2.into()).expect("capture reshaped inspector frame");
+    let frame2 = hr
+        .capture(window2.into())
+        .expect("capture reshaped inspector frame");
     let png2 = out.join("inspector-reshaped.png");
     frame2.save(&png2).expect("save PNG #2");
     assert_ne!(

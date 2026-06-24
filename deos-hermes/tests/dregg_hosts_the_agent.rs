@@ -32,7 +32,7 @@ use deos_hermes::mcp_server::{McpServer, McpToolHost};
 use deos_hermes::{DreggHost, GrantRegistry, HermesGateway};
 use dregg_firmament::process_kernel::ProcessKernel;
 use dregg_sdk::{AgentCipherclerk, AgentRuntime};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// deos the grantor — the runtime that admits the confined tool workers + runs
 /// their cap-gated receipted turns.
@@ -59,7 +59,9 @@ fn note(method: &str) -> String {
 fn drive(server: &mut McpServer<'_>, requests: &str) -> Vec<Value> {
     let reader = std::io::BufReader::new(requests.as_bytes());
     let mut out: Vec<u8> = Vec::new();
-    server.serve(reader, &mut out).expect("serve the MCP session to EOF");
+    server
+        .serve(reader, &mut out)
+        .expect("serve the MCP session to EOF");
     String::from_utf8(out)
         .unwrap()
         .lines()
@@ -100,7 +102,11 @@ fn leg_a_dregg_tools_are_the_only_effect_path_and_are_receipted() {
         .expect("tools/call reply")["result"];
 
     // Admitted (cap-gated) + receipted (a real verified turn committed).
-    assert_eq!(result["isError"], json!(false), "terminal admitted: {result}");
+    assert_eq!(
+        result["isError"],
+        json!(false),
+        "terminal admitted: {result}"
+    );
     assert!(
         result["_deos"]["receipt"].is_string(),
         "the dregg-tool turn left a receipt: {result}"
@@ -172,7 +178,10 @@ fn leg_b_the_jail_neutralizes_the_base_tool_escape() {
     );
 
     // SEALED by default — no egress door was wired, so nothing outside was reached.
-    assert!(!report.egress_granted_open, "sealed host opened no egress door");
+    assert!(
+        !report.egress_granted_open,
+        "sealed host opened no egress door"
+    );
 }
 
 /// (c) STRUCTURED EGRESS — the host grants ONE specific host subpath; inside the

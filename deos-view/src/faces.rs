@@ -126,8 +126,11 @@ impl Render for FacesView {
                 }
                 FaceBody::Other => {
                     card = card.child(
-                        Label::new(format!("‹{} face — rendered as a tag in this slice›", face.kind))
-                            .text_color(muted),
+                        Label::new(format!(
+                            "‹{} face — rendered as a tag in this slice›",
+                            face.kind
+                        ))
+                        .text_color(muted),
                     );
                 }
             }

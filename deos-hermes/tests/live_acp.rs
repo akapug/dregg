@@ -199,7 +199,10 @@ fn live_hermes_acp_in_band_refusal() {
 
     match client.run_prompt_with_model("/tmp", prompt, Some(&model)) {
         Ok(run) => {
-            assert!(!run.stop_reason.is_empty(), "live session has a stop_reason");
+            assert!(
+                !run.stop_reason.is_empty(),
+                "live session has a stop_reason"
+            );
             if run.verdicts.is_empty() {
                 eprintln!(
                     "SKIP-NOTE: no provider reachable — handshake/session LIVE, but no \
@@ -220,9 +223,9 @@ fn live_hermes_acp_in_band_refusal() {
                             saw_terminal_refusal = true;
                             eprintln!("LIVE refusal: terminal REFUSED — {reason}");
                         }
-                        deos_hermes::PermissionOutcome::Allow { .. } => panic!(
-                            "terminal pinned to rate 0 must be refused, not allowed"
-                        ),
+                        deos_hermes::PermissionOutcome::Allow { .. } => {
+                            panic!("terminal pinned to rate 0 must be refused, not allowed")
+                        }
                     }
                 }
             }

@@ -296,9 +296,9 @@ impl AgentDockModel {
                 self.agent_text.push_str(text);
                 match self.transcript.last_mut() {
                     Some(ChatEntry::Agent { text: t }) => t.push_str(text),
-                    _ => self.transcript.push(ChatEntry::Agent {
-                        text: text.clone(),
-                    }),
+                    _ => self
+                        .transcript
+                        .push(ChatEntry::Agent { text: text.clone() }),
                 }
             }
             StreamEvent::ToolCall { call } => {
@@ -340,7 +340,10 @@ impl AgentDockModel {
     /// gpui dock renders the same fields as styled panes instead.
     pub fn render_text(&self) -> String {
         let mut s = String::new();
-        s.push_str(&format!("╭─ Hermes (confined) — session {}\n", self.session_id));
+        s.push_str(&format!(
+            "╭─ Hermes (confined) — session {}\n",
+            self.session_id
+        ));
         s.push_str(&format!("│ chat: {}\n", self.agent_text.trim()));
         s.push_str("│ tool-calls:\n");
         for line in &self.tool_lines {
@@ -449,9 +452,9 @@ fn budget_rows(mandate: &Mandate) -> Vec<MandateBudget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HermesGateway;
     use crate::acp::ToolCallRequest;
     use crate::grant_registry::GrantRegistry;
-    use crate::HermesGateway;
     use dregg_sdk::{AgentCipherclerk, AgentRuntime};
     use std::sync::{Arc, RwLock};
 
@@ -468,7 +471,8 @@ mod tests {
             stop_reason: "end_turn".into(),
             ..Default::default()
         };
-        let call = ToolCallRequest::new("s1", "tc-1", "web_search", serde_json::json!({"query":"x"}));
+        let call =
+            ToolCallRequest::new("s1", "tc-1", "web_search", serde_json::json!({"query":"x"}));
         let outcome = gw.admit_call(&call, 50);
         run.verdicts.push((call, outcome));
 

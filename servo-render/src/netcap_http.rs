@@ -113,7 +113,10 @@ fn build_active(surface: SurfaceCapability, seed_origins: &[String]) -> Active {
     for o in seed_origins {
         let _ = fabric.join(origin_to_peer(o));
     }
-    Active { surface, connector: NetcapConnector::new(me) }
+    Active {
+        surface,
+        connector: NetcapConnector::new(me),
+    }
 }
 
 impl CapGatedHttpHandler {
@@ -148,7 +151,10 @@ impl CapGatedHttpHandler {
     /// cap-admitted socket (false for plain http or if no https fetch ran). The test
     /// asserts this to prove the bytes crossed an encrypted socket.
     pub fn last_tls_handshake(&self) -> bool {
-        *self.last_tls_handshake.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .last_tls_handshake
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Re-point this handler at a NEW surface + reachable-peer set for the next
@@ -157,9 +163,15 @@ impl CapGatedHttpHandler {
     pub fn reconfigure(&self, surface: SurfaceCapability, seed_origins: &[String]) {
         *self.active.lock().unwrap_or_else(|e| e.into_inner()) =
             build_active(surface, seed_origins);
-        self.outcomes.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         *self.last_fetch.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *self.last_tls_handshake.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *self
+            .last_tls_handshake
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
         // NOTE: `extra_roots` is intentionally NOT cleared — the embedder's trust set
         // (e.g. the test's self-signed root) is about the environment, not the
         // per-render surface, and persists across renders.
@@ -167,12 +179,18 @@ impl CapGatedHttpHandler {
 
     /// The net-cap outcomes this handler produced, newest last (the audit trail).
     pub fn outcomes(&self) -> Vec<ConnectOutcome> {
-        self.outcomes.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The last (url, fetched-byte-length) this handler served — the test's status line.
     pub fn last_fetch(&self) -> Option<(String, usize)> {
-        self.last_fetch.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.last_fetch
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -226,7 +244,8 @@ impl ProtocolHandler for CapGatedHttpHandler {
                     )),
                 )));
             }
-            ConnectOutcome::Dialed { .. } => { /* cap admitted + peer reachable — fetch the bytes */ }
+            ConnectOutcome::Dialed { .. } => { /* cap admitted + peer reachable — fetch the bytes */
+            }
         }
 
         // ── TOOTH 2: THE REAL BYTE SOCKET ────────────────────────────────────────
@@ -242,7 +261,10 @@ impl ProtocolHandler for CapGatedHttpHandler {
                 .clone();
             let r = https_get_over_real_socket(&url, &extra_roots);
             if r.is_ok() {
-                *self.last_tls_handshake.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                *self
+                    .last_tls_handshake
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = true;
             }
             r
         } else {
@@ -251,7 +273,11 @@ impl ProtocolHandler for CapGatedHttpHandler {
         let timing = ResourceFetchTiming::new(request.timing_type());
 
         match fetched {
-            Ok(HttpFetch { status, content_type, body }) => {
+            Ok(HttpFetch {
+                status,
+                content_type,
+                body,
+            }) => {
                 *self.last_fetch.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some((url.as_str().to_string(), body.len()));
                 let mut response = Response::new(url, timing);
@@ -260,8 +286,7 @@ impl ProtocolHandler for CapGatedHttpHandler {
                     response.headers.insert(http::header::CONTENT_TYPE, ct);
                 }
                 // A real http status (200/…); default if the line was unparsable.
-                response.status =
-                    servo::protocol_handler::HttpStatus::new_raw(status, Vec::new());
+                response.status = servo::protocol_handler::HttpStatus::new_raw(status, Vec::new());
                 Box::pin(std::future::ready(response))
             }
             Err(e) => Box::pin(std::future::ready(Response::network_error(
@@ -379,7 +404,8 @@ fn https_get_over_real_socket(
     let req = http_request_bytes(host, request_path(url));
     tls.write_all(req.as_bytes())
         .map_err(|e| format!("TLS write request to {host}: {e}"))?;
-    tls.flush().map_err(|e| format!("TLS flush to {host}: {e}"))?;
+    tls.flush()
+        .map_err(|e| format!("TLS flush to {host}: {e}"))?;
 
     let mut raw = Vec::new();
     match tls.read_to_end(&mut raw) {
@@ -409,7 +435,11 @@ fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
 /// The request path from a url (non-empty, default `/`).
 fn request_path(url: &ServoUrl) -> String {
     let p = url.path();
-    if p.is_empty() { "/".to_string() } else { p.to_string() }
+    if p.is_empty() {
+        "/".to_string()
+    } else {
+        p.to_string()
+    }
 }
 
 /// A real HTTP/1.1 `GET` request. `Connection: close` so the server closes the socket
@@ -454,5 +484,9 @@ fn parse_http_response(raw: &[u8]) -> Result<HttpFetch, String> {
         }
     }
 
-    Ok(HttpFetch { status, content_type, body })
+    Ok(HttpFetch {
+        status,
+        content_type,
+        body,
+    })
 }

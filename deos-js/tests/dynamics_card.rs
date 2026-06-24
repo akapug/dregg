@@ -76,28 +76,53 @@ fn observing_a_turn_appends_a_row_and_advances_the_bound_count() {
     let r1 = card
         .observe(entry(1, "turn committed", 0xAA))
         .expect("observe a committed turn");
-    assert_ne!(r1.receipt_hash(), [0u8; 32], "the append left a real TurnReceipt");
-    assert_eq!(card.live_len(), 1, "the bound count advanced 0 -> 1 (the live ledger)");
+    assert_ne!(
+        r1.receipt_hash(),
+        [0u8; 32],
+        "the append left a real TurnReceipt"
+    );
+    assert_eq!(
+        card.live_len(),
+        1,
+        "the bound count advanced 0 -> 1 (the live ledger)"
+    );
     assert_eq!(card.entries().len(), 1, "one entry in the stream");
 
     let r2 = card
         .observe(entry(2, "balance flowed", 0xBB))
         .expect("observe a second turn");
-    assert_ne!(r2.receipt_hash(), [0u8; 32], "the second append left a receipt");
+    assert_ne!(
+        r2.receipt_hash(),
+        [0u8; 32],
+        "the second append left a receipt"
+    );
     assert_eq!(card.live_len(), 2, "the bound count advanced 1 -> 2");
 
     // The rows are present, most-recent-LAST, each carrying the (height, kind, author) triple.
     let tree = card.view_tree().expect("re-folded feed view parses");
     let labels: Vec<&str> = tree.walk().iter().filter_map(|n| n.label()).collect();
     let blob = labels.join("\n");
-    assert!(blob.contains("@h1 · turn committed"), "the first turn row landed: {blob}");
-    assert!(blob.contains("@h2 · balance flowed"), "the second turn row landed");
+    assert!(
+        blob.contains("@h1 · turn committed"),
+        "the first turn row landed: {blob}"
+    );
+    assert!(
+        blob.contains("@h2 · balance flowed"),
+        "the second turn row landed"
+    );
     // Most-recent-LAST: the @h2 row appears after the @h1 row in the flattened order.
     let i1 = labels.iter().position(|l| l.starts_with("@h1")).unwrap();
     let i2 = labels.iter().position(|l| l.starts_with("@h2")).unwrap();
-    assert!(i2 > i1, "the newest entry is the bottom row (most-recent-LAST)");
+    assert!(
+        i2 > i1,
+        "the newest entry is the bottom row (most-recent-LAST)"
+    );
 
-    assert_eq!(card.card().receipt_count(), 2, "two observes -> two verified turns");
+    assert_eq!(
+        card.card().receipt_count(),
+        2,
+        "two observes -> two verified turns"
+    );
 }
 
 // ── (c) EDIT FROM WITHIN — reshape the feed card's OWN view, accountably. ──
@@ -114,7 +139,10 @@ fn editing_the_feed_view_from_within_is_a_receipted_patch_with_blame() {
         .expect("the authorized relabel reshape is admitted");
     assert_ne!(card.view_source(), source_before, "the view-source changed");
     assert!(
-        edit.tree.walk().iter().any(|n| n.label() == Some("Live Feed")),
+        edit.tree
+            .walk()
+            .iter()
+            .any(|n| n.label() == Some("Live Feed")),
         "the re-folded view carries the new header"
     );
     assert_ne!(
@@ -150,7 +178,11 @@ fn an_unauthorized_card_refuses_observe_and_reshape_in_band() {
         "an unauthorized observe is refused"
     );
     assert_eq!(card.view_source(), before, "nothing changed on the refusal");
-    assert_eq!(card.card().receipt_count(), 0, "no receipt on a refused observe");
+    assert_eq!(
+        card.card().receipt_count(),
+        0,
+        "no receipt on a refused observe"
+    );
 }
 
 fn has_bind_for_slot(tree: &ViewTree, slot: usize) -> bool {

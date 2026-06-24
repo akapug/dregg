@@ -176,7 +176,13 @@ impl Render for WebCockpitRoot {
             .size_full()
             .bg(rgb(0x0b0d12))
             // The cockpit fills the remaining space.
-            .child(div().flex_1().h_full().min_w(px(0.)).child(self.cockpit.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w(px(0.))
+                    .child(self.cockpit.clone()),
+            )
             // The right dock column: editor over chat.
             .child(
                 div()
@@ -206,7 +212,8 @@ impl Render for WebCockpitRoot {
 /// The seed file the editor opens onto (a single on-ledger file-cell). Saving it
 /// fires a real cap-gated `SetField` turn through the in-tab `TurnExecutor`.
 const EDITOR_SEED_PATH: &str = "/deos/main.rs";
-const EDITOR_SEED_CONTENT: &str = "// edit me — every save here is a RECEIPTED dregg turn on the in-tab ledger.\n\
+const EDITOR_SEED_CONTENT: &str =
+    "// edit me — every save here is a RECEIPTED dregg turn on the in-tab ledger.\n\
 fn main() {\n    println!(\"hello from a sovereign cell\");\n}\n";
 
 /// A firmament-backed editor pane: the buffer edits a sovereign cell on a fresh
@@ -247,7 +254,9 @@ impl WebEditorPane {
             Err(e) => SharedString::from(format!("seed failed: {e}")),
         };
 
-        let initial = fs.load(&path).unwrap_or_else(|_| EDITOR_SEED_CONTENT.to_string());
+        let initial = fs
+            .load(&path)
+            .unwrap_or_else(|_| EDITOR_SEED_CONTENT.to_string());
         let buffer = cx.new(|cx| {
             let mut st = InputState::new(window, cx).multi_line(true);
             st.set_value(&initial, window, cx);
@@ -462,7 +471,12 @@ impl Render for WebChatPane {
         let me = self.me.clone().unwrap_or_default();
 
         // Room sidebar.
-        let mut rooms_col = div().flex().flex_col().w(px(120.)).h_full().bg(rgb(0x0e1117));
+        let mut rooms_col = div()
+            .flex()
+            .flex_col()
+            .w(px(120.))
+            .h_full()
+            .bg(rgb(0x0e1117));
         for (i, r) in self.rooms.iter().enumerate() {
             let selected = self.selected == Some(i);
             rooms_col = rooms_col.child(
@@ -472,12 +486,16 @@ impl Render for WebChatPane {
                     .py_1()
                     .text_xs()
                     .when(selected, |d| d.bg(rgb(0x223052)))
-                    .text_color(if selected { rgb(0xe6ebf5) } else { rgb(0x9aa8c0) })
+                    .text_color(if selected {
+                        rgb(0xe6ebf5)
+                    } else {
+                        rgb(0x9aa8c0)
+                    })
                     .cursor_pointer()
                     .child(SharedString::from(r.display_name.clone()))
-                    .on_click(cx.listener(move |this, _ev, window, cx| {
-                        this.select_room(i, window, cx)
-                    })),
+                    .on_click(
+                        cx.listener(move |this, _ev, window, cx| this.select_room(i, window, cx)),
+                    ),
             );
         }
 
@@ -544,7 +562,12 @@ impl Render for WebChatPane {
                     .py_2()
                     .border_t_1()
                     .border_color(rgb(0x222838))
-                    .child(div().flex_1().min_w(px(0.)).child(Input::new(&self.composer)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(Input::new(&self.composer)),
+                    )
                     .child(
                         div()
                             .id("web-chat-send")

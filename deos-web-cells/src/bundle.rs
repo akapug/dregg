@@ -42,10 +42,10 @@
 //!   `starbridge_web_surface::delegate` already names). See [`crate::cascade`].
 
 use blake3::Hasher;
-use starbridge_web_surface::{
-    AttestedResource, DreggUri, FetchError, OriginChrome, SurfaceCapability, Sturdyref, WebOfCells,
-};
 use starbridge_web_surface::rehydrate::InteractionLog;
+use starbridge_web_surface::{
+    AttestedResource, DreggUri, FetchError, OriginChrome, Sturdyref, SurfaceCapability, WebOfCells,
+};
 
 /// What KIND of web content a [`WebBundle`] carries — a static bundle, or a
 /// snapshot of LIVE DOM / reactive-signal state.
@@ -169,7 +169,10 @@ impl BundleManifest {
     /// The asset names the manifest pins (sorted — canonical). The culling boundary
     /// a snapshot carries (it bounds WHAT could re-expand, without the bytes).
     pub fn asset_names(&self) -> Vec<String> {
-        self.asset_digests.iter().map(|(n, _, _)| n.clone()).collect()
+        self.asset_digests
+            .iter()
+            .map(|(n, _, _)| n.clone())
+            .collect()
     }
 }
 
@@ -263,14 +266,20 @@ impl WebBundle {
         let mut seen = std::collections::BTreeSet::new();
         for a in &assets {
             if !seen.insert(a.name.clone()) {
-                return Err(BundleError::DuplicateAssetName { name: a.name.clone() });
+                return Err(BundleError::DuplicateAssetName {
+                    name: a.name.clone(),
+                });
             }
         }
         // The entrypoint must name an asset.
         if !assets.iter().any(|a| a.name == entrypoint) {
             return Err(BundleError::EntrypointNotAnAsset { entrypoint });
         }
-        Ok(WebBundle { kind, entrypoint, assets })
+        Ok(WebBundle {
+            kind,
+            entrypoint,
+            assets,
+        })
     }
 
     /// A convenience: a STATIC HTML bundle of a single `index.html` document.
@@ -391,7 +400,11 @@ impl WebBundle {
             let content_type = c.string()?;
             let blen = c.u64()? as usize;
             let bytes = c.take(blen)?.to_vec();
-            assets.push(BundleAsset { name, content_type, bytes });
+            assets.push(BundleAsset {
+                name,
+                content_type,
+                bytes,
+            });
         }
         // Reconstruct via the validating constructor (entrypoint + uniqueness).
         WebBundle::new(kind, entrypoint, assets)
@@ -483,7 +496,10 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], BundleError> {
-        let end = self.pos.checked_add(n).ok_or(BundleError::MalformedEncoding)?;
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or(BundleError::MalformedEncoding)?;
         if end > self.bytes.len() {
             return Err(BundleError::MalformedEncoding);
         }
@@ -521,7 +537,11 @@ mod tests {
             "index.html",
             vec![
                 BundleAsset::new("index.html", "text/html", b"<h1>hello dregg</h1>".to_vec()),
-                BundleAsset::new("app.js", "application/javascript", b"console.log(1)".to_vec()),
+                BundleAsset::new(
+                    "app.js",
+                    "application/javascript",
+                    b"console.log(1)".to_vec(),
+                ),
                 BundleAsset::new("theme.css", "text/css", b"h1{color:rebeccapurple}".to_vec()),
             ],
         )
@@ -538,7 +558,11 @@ mod tests {
             "index.html",
             vec![
                 BundleAsset::new("theme.css", "text/css", b"h1{color:rebeccapurple}".to_vec()),
-                BundleAsset::new("app.js", "application/javascript", b"console.log(1)".to_vec()),
+                BundleAsset::new(
+                    "app.js",
+                    "application/javascript",
+                    b"console.log(1)".to_vec(),
+                ),
                 BundleAsset::new("index.html", "text/html", b"<h1>hello dregg</h1>".to_vec()),
             ],
         )
@@ -586,11 +610,17 @@ mod tests {
 
     #[test]
     fn a_malformed_encoding_is_rejected() {
-        assert_eq!(WebBundle::decode(b"not a bundle"), Err(BundleError::MalformedEncoding));
+        assert_eq!(
+            WebBundle::decode(b"not a bundle"),
+            Err(BundleError::MalformedEncoding)
+        );
         // Right magic, truncated body.
         let mut bytes = html_bundle().encode();
         bytes.truncate(BUNDLE_MAGIC.len() + 3);
-        assert_eq!(WebBundle::decode(&bytes), Err(BundleError::MalformedEncoding));
+        assert_eq!(
+            WebBundle::decode(&bytes),
+            Err(BundleError::MalformedEncoding)
+        );
     }
 
     #[test]
@@ -601,7 +631,12 @@ mod tests {
             vec![BundleAsset::new("index.html", "text/html", b"x".to_vec())],
         )
         .unwrap_err();
-        assert_eq!(err, BundleError::EntrypointNotAnAsset { entrypoint: "missing.html".to_string() });
+        assert_eq!(
+            err,
+            BundleError::EntrypointNotAnAsset {
+                entrypoint: "missing.html".to_string()
+            }
+        );
     }
 
     #[test]
@@ -615,7 +650,12 @@ mod tests {
             ],
         )
         .unwrap_err();
-        assert_eq!(err, BundleError::DuplicateAssetName { name: "index.html".to_string() });
+        assert_eq!(
+            err,
+            BundleError::DuplicateAssetName {
+                name: "index.html".to_string()
+            }
+        );
     }
 
     // ── publish → fetch → verify: the bundle IS the committed content. ──
@@ -625,14 +665,8 @@ mod tests {
         let mut web = WebOfCells::new(3);
         let bundle = html_bundle();
         let lineage = SurfaceCapability::root(crate::tests_support::cid(1), AuthRequired::Either);
-        let (uri, _sturdyref) = publish_bundle(
-            &mut web,
-            1,
-            &bundle,
-            lineage,
-            InteractionLog::new(),
-            false,
-        );
+        let (uri, _sturdyref) =
+            publish_bundle(&mut web, 1, &bundle, lineage, InteractionLog::new(), false);
 
         let (fetched, chrome) = fetch_bundle(&web, &uri).expect("fetch + verify + decode");
         // The fetched bundle IS the published one (content-addressed).
@@ -642,7 +676,10 @@ mod tests {
         // the cell's identity-of-content IS the bundle's content-address.
         // (fetch's verify() already checked content_bytes hashes to the commitment.)
         // The trusted chrome shows the bundle's content-address, drawn from the ledger.
-        assert_eq!(chrome.committed_url.as_deref(), Some(bundle.content_uri().as_str()));
+        assert_eq!(
+            chrome.committed_url.as_deref(),
+            Some(bundle.content_uri().as_str())
+        );
         assert!(chrome.finalized);
     }
 
@@ -659,16 +696,25 @@ mod tests {
         let uri = web.publish(2, b"just some html, not a bundle encoding", "dregg://raw");
         // The attestation HOLDS (it is a genuine finalized read)…
         let (resource, _chrome) = web.fetch(&uri).expect("the raw cell resolves + attests");
-        assert!(resource.verify().is_ok(), "the attestation chain still verifies");
+        assert!(
+            resource.verify().is_ok(),
+            "the attestation chain still verifies"
+        );
         // …but fetch_bundle's decode rejects: attested, but not a bundle.
-        assert_eq!(fetch_bundle(&web, &uri), Err(BundleError::MalformedEncoding));
+        assert_eq!(
+            fetch_bundle(&web, &uri),
+            Err(BundleError::MalformedEncoding)
+        );
     }
 
     #[test]
     fn a_dead_ref_yields_no_bundle() {
         let web = WebOfCells::new(3);
         let dead = DreggUri::new(crate::tests_support::cid(99));
-        assert_eq!(fetch_bundle(&web, &dead), Err(BundleError::Fetch(FetchError::OriginNotFound)));
+        assert_eq!(
+            fetch_bundle(&web, &dead),
+            Err(BundleError::Fetch(FetchError::OriginNotFound))
+        );
     }
 
     #[test]

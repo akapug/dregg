@@ -52,7 +52,9 @@ pub struct EgressGrant {
 impl EgressGrant {
     /// A read-only grant for one host subpath.
     pub fn read(path: impl Into<String>) -> EgressGrant {
-        EgressGrant { read_path: path.into() }
+        EgressGrant {
+            read_path: path.into(),
+        }
     }
 }
 

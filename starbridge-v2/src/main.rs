@@ -103,7 +103,10 @@ fn main() {
             // `--render-tab NAME` selects a surface (inspector/graph/proofs/…).
             let (w, h) = render_size_arg(&args).unwrap_or((800.0, 600.0));
             let tab = render_tab_arg(&args);
-            match render_cockpit_headless(&out, &replays, w, h, tab.as_deref()) {
+            // `--render-first-run` — bake the calm sparse FIRST-VIEW (a first-timer's
+            // warm landing) instead of the full 5-mode frame, for the welcome bakes.
+            let first_run = args.iter().any(|a| a == "--render-first-run");
+            match render_cockpit_headless(&out, &replays, w, h, tab.as_deref(), first_run) {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!("render-cockpit FAILED: {e:#}");
@@ -166,7 +169,11 @@ fn main() {
     // World the brain drove. SKIPS gracefully (exit 0, prints why) when the env
     // can't reach a provider — the handshake/session still run LIVE. Hard-cap the
     // session with HERMES_MAX_ITERATIONS to bound provider spend. Default 1400x900.
-    #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "live-brain"
+    ))]
     {
         if let Some(out) = render_live_brain_arg(&args) {
             let (w, h) = render_size_arg(&args).unwrap_or((1400.0, 900.0));
@@ -946,7 +953,11 @@ fn render_card_pane_arg(args: &[String]) -> Option<String> {
 /// Parse the `--render-live-brain <out>` (or `=<out>`) argument — the output base
 /// path for THE HEADLINE bake (a LIVE Hermes brain driving `run_js` on the live
 /// cockpit World). Returns `None` when absent. `<out>.before.png` / `<out>.after.png`.
-#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "live-brain"
+))]
 fn render_live_brain_arg(args: &[String]) -> Option<String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -1638,6 +1649,7 @@ fn render_cockpit_headless(
     w: f32,
     h: f32,
     tab: Option<&str>,
+    first_run: bool,
 ) -> anyhow::Result<()> {
     use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
@@ -1735,6 +1747,9 @@ fn render_cockpit_headless(
                     eprintln!("render-tab: no tab named `{t}` — keeping default");
                 }
             }
+            // FIRST-VIEW BAKE — show the calm sparse first-run landing for the welcome
+            // shot (the warm "welcome to your world", a few cells, ONE "try this").
+            c.set_first_run(first_run);
             c
         });
         view.update(cx, |c, cx| c.focus_on_open(window, cx));
@@ -1824,14 +1839,19 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
         (s, w, "FORK (the safe sandbox — the live image untouched)")
     } else {
         let s = WorldSinkAdapter::live(live.clone());
-        (s, live.clone(), "LIVE cockpit World (the operator's real cells)")
+        (
+            s,
+            live.clone(),
+            "LIVE cockpit World (the operator's real cells)",
+        )
     };
     let pre_height = rendered_world.borrow().height();
     let cell_count = rendered_world.borrow().cell_count();
     let applet = attach_agent(sink, agent, held, affordances);
 
     // 3. Run the agent's JS on that World (real SpiderMonkey).
-    let mut rt = deos_js::JsRuntime::new().map_err(|e| anyhow::anyhow!("boot SpiderMonkey: {e}"))?;
+    let mut rt =
+        deos_js::JsRuntime::new().map_err(|e| anyhow::anyhow!("boot SpiderMonkey: {e}"))?;
     let script = r#"
         var app = deos.applet({ affordances: ["bump", "escalate"] });
         var cells = deos.world.cells().length;     // crawl the LIVE cells
@@ -1851,7 +1871,11 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
         .borrow()
         .ledger()
         .get(&agent)
-        .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(|fe| deos_js::applet::unpack_u64(fe)))
+        .and_then(|c| {
+            c.state
+                .get_field(AGENT_COUNTER_SLOT)
+                .map(|fe| deos_js::applet::unpack_u64(fe))
+        })
         .unwrap_or(0);
 
     println!(
@@ -1866,9 +1890,15 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
             .map(|r| hex::encode(&r[..6]))
             .unwrap_or_else(|| "—".into()),
     );
-    anyhow::ensure!(after == 42 && live_field == 42, "the agent's JS did not land on the live ledger");
+    anyhow::ensure!(
+        after == 42 && live_field == 42,
+        "the agent's JS did not land on the live ledger"
+    );
     anyhow::ensure!(over_refused, "the over-reach was NOT refused");
-    anyhow::ensure!(outcome.fires_committed == 1, "expected exactly ONE committed fire");
+    anyhow::ensure!(
+        outcome.fires_committed == 1,
+        "expected exactly ONE committed fire"
+    );
 
     // 4. Bake the cockpit INSPECTOR over the SAME World (the agent's field is on glass).
     let text_system: Arc<dyn PlatformTextSystem> =
@@ -1989,7 +2019,8 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         key = key,
     );
 
-    let mut rt = deos_js::JsRuntime::new().map_err(|e| anyhow::anyhow!("boot SpiderMonkey: {e}"))?;
+    let mut rt =
+        deos_js::JsRuntime::new().map_err(|e| anyhow::anyhow!("boot SpiderMonkey: {e}"))?;
     let (attached, tree) = build_card_over_live(&mut rt, attached, &card_js)
         .map_err(|e| anyhow::anyhow!("author the card over the live World: {e}"))?;
 
@@ -2084,7 +2115,11 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// Bake the cockpit INSPECTOR over a shared `World` to `path` (a PNG). Shared by the
 /// live-brain bake for the before/after shots so both render the same surface over
 /// the SAME World the brain drove. Returns the captured pixel dimensions.
-#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "live-brain"
+))]
 fn bake_inspector_over_world(
     path: &str,
     world: std::rc::Rc<std::cell::RefCell<world::World>>,
@@ -2152,7 +2187,11 @@ fn bake_inspector_over_world(
 /// SKIPS GRACEFULLY (Ok, prints why, still bakes the BEFORE shot) when the env can't
 /// run it (no `hermes-acp`, or no provider reachable so the brain emits no
 /// `run_js`). Cap provider spend with `HERMES_MAX_ITERATIONS`.
-#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "live-brain"
+))]
 fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     use deos_hermes::{
         AcpClient, AcpTransport, GrantRegistry, HermesGateway, RunJsTool, ToolCallRequest,
@@ -2173,10 +2212,17 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
             .borrow()
             .ledger()
             .get(&before_anchors[2])
-            .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(deos_js::applet::unpack_u64))
+            .and_then(|c| {
+                c.state
+                    .get_field(AGENT_COUNTER_SLOT)
+                    .map(deos_js::applet::unpack_u64)
+            })
             .unwrap_or(0);
-        let (pw, ph) = bake_inspector_over_world(&format!("{out}.before.png"), bw, before_anchors, w, h)?;
-        println!("live-brain: BEFORE shot -> {out}.before.png ({pw}x{ph}); agent slot-0 = {pre_field0}.");
+        let (pw, ph) =
+            bake_inspector_over_world(&format!("{out}.before.png"), bw, before_anchors, w, h)?;
+        println!(
+            "live-brain: BEFORE shot -> {out}.before.png ({pw}x{ph}); agent slot-0 = {pre_field0}."
+        );
     }
 
     // ── 2. The live World the brain drives (NO cockpit on it yet). ───────────────
@@ -2192,7 +2238,11 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         .borrow()
         .ledger()
         .get(&agent)
-        .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(deos_js::applet::unpack_u64))
+        .and_then(|c| {
+            c.state
+                .get_field(AGENT_COUNTER_SLOT)
+                .map(deos_js::applet::unpack_u64)
+        })
         .unwrap_or(0);
 
     // The brain's HANDS: a `RunJsTool` over the `user` cell (held = Signature, NOT
@@ -2321,7 +2371,10 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    println!("\n── the brain's chosen JS (run_js on the LIVE World) ──\n{}\n──", script.trim());
+    println!(
+        "\n── the brain's chosen JS (run_js on the LIVE World) ──\n{}\n──",
+        script.trim()
+    );
 
     // ── Run the brain's EXACT script on the LIVE World via run_js. ───────────────
     let sink: Box<dyn deos_js::WorldSink> = Box::new(WorldSinkAdapter::live(live.clone()));
@@ -2332,7 +2385,15 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         serde_json::json!({ "script": script }),
     );
     let outcome = tool
-        .run_attached_on(&mut js_rt, sink, agent, &mut js_gateway, &call, 200, &script)
+        .run_attached_on(
+            &mut js_rt,
+            sink,
+            agent,
+            &mut js_gateway,
+            &call,
+            200,
+            &script,
+        )
         .map_err(|e| anyhow::anyhow!("run_js on the live World: {e}"))?;
     println!(
         "   run_js tool-call admitted = {}; result = {:?}; fires committed = {} (real verified turns); \
@@ -2351,9 +2412,14 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         .borrow()
         .ledger()
         .get(&agent)
-        .and_then(|c| c.state.get_field(AGENT_COUNTER_SLOT).map(deos_js::applet::unpack_u64))
+        .and_then(|c| {
+            c.state
+                .get_field(AGENT_COUNTER_SLOT)
+                .map(deos_js::applet::unpack_u64)
+        })
         .unwrap_or(0);
-    let (aw, ah) = bake_inspector_over_world(&format!("{out}.after.png"), live.clone(), anchors, w, h)?;
+    let (aw, ah) =
+        bake_inspector_over_world(&format!("{out}.after.png"), live.clone(), anchors, w, h)?;
 
     println!(
         "\nlive-brain: AFTER shot -> {out}.after.png ({aw}x{ah}). LIVE LEDGER: height {pre_height}→{post_height}, \
@@ -2366,7 +2432,11 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// Pull the first ```js (or ```javascript / generic ```) fenced code block out of
 /// the brain's answer; if none, return the trimmed whole text (the model may answer
 /// with bare JS). The script the live brain CHOSE — run verbatim on the live World.
-#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "live-brain"))]
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "live-brain"
+))]
 fn extract_js_block(text: &str) -> String {
     // Find a fenced block; prefer a js/javascript-tagged one, else the first fence.
     for tag in ["```js", "```javascript", "```JS", "```"] {

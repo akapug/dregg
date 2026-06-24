@@ -60,9 +60,7 @@
 //! `servo-render`/`deos-leptos` UX seam, named here, not built in this crate.
 
 use starbridge_web_surface::transclusion::{Provenance, TranscludedField, TransclusionError};
-use starbridge_web_surface::{
-    DreggUri, Membrane, RehydrateError, SurfaceCapability, WebOfCells,
-};
+use starbridge_web_surface::{DreggUri, Membrane, RehydrateError, SurfaceCapability, WebOfCells};
 
 use crate::bundle::WebBundle;
 
@@ -92,7 +90,10 @@ impl SpanRange {
     /// The whole source content — `0..end-of-content`. The EDL's "transclude all of
     /// cell X".
     pub fn whole() -> Self {
-        SpanRange { start: 0, end: usize::MAX }
+        SpanRange {
+            start: 0,
+            end: usize::MAX,
+        }
     }
 
     /// The number of bytes this range selects from a `len`-byte source (clamped to
@@ -167,7 +168,11 @@ impl Span {
 
     /// A transcluded span: a byte `range` of the `source` cell's raw committed content.
     pub fn transclude_range(source: DreggUri, range: SpanRange) -> Self {
-        Span::Transcluded { source, range, asset: None }
+        Span::Transcluded {
+            source,
+            range,
+            asset: None,
+        }
     }
 
     /// A transcluded span: a byte `range` within a NAMED `asset` of the `source`
@@ -303,7 +308,11 @@ impl DreggverseDocument {
                 // OWN content always renders (the author's own, under the document's
                 // own authority).
                 Span::Own(_) => rendered.push(resolve_span(span, index, web)?),
-                Span::Transcluded { source, range, asset } => {
+                Span::Transcluded {
+                    source,
+                    range,
+                    asset,
+                } => {
                     // The per-viewer meet: project the source's lineage through the
                     // viewer's membrane (the REAL is_attenuation lattice). An
                     // incomparable identity is refused here → the span darkens.
@@ -334,9 +343,8 @@ impl DreggverseDocument {
                         // — it is the source ref + receipt the author cited), then drop
                         // the bytes. If even the citation cannot be formed (the source
                         // vanished), that is a genuine resolve error.
-                        let provenance = cite_only(source, web).map_err(|e| {
-                            DocumentError::Transclusion(index, e)
-                        })?;
+                        let provenance = cite_only(source, web)
+                            .map_err(|e| DocumentError::Transclusion(index, e))?;
                         rendered.push(RenderedSpan::Darkened {
                             provenance,
                             range: *range,
@@ -354,10 +362,18 @@ impl DreggverseDocument {
 /// via the REAL verified cross-cell read of its source's range). The shared full-read
 /// path of [`DreggverseDocument::resolve`] and the reachable branch of
 /// [`DreggverseDocument::resolve_for`].
-fn resolve_span(span: &Span, index: usize, web: &WebOfCells) -> Result<RenderedSpan, DocumentError> {
+fn resolve_span(
+    span: &Span,
+    index: usize,
+    web: &WebOfCells,
+) -> Result<RenderedSpan, DocumentError> {
     match span {
         Span::Own(content) => Ok(RenderedSpan::Own(content.clone())),
-        Span::Transcluded { source, range, asset } => {
+        Span::Transcluded {
+            source,
+            range,
+            asset,
+        } => {
             // (1) THE FINALIZED READ — the REAL verified cross-cell observation of the
             //     source cell. Verifies the provenance chain + refuses a forged/absent/
             //     un-finalized quote (no opened provenance ⇒ no span).
@@ -505,12 +521,12 @@ impl RenderedSpan {
     pub fn source_link(&self) -> Option<(DreggUri, SpanRange)> {
         match self {
             RenderedSpan::Own(_) => None,
-            RenderedSpan::Transcluded { provenance, range, .. } => {
-                Some((provenance.source.clone(), *range))
-            }
-            RenderedSpan::Darkened { provenance, range, .. } => {
-                Some((provenance.source.clone(), *range))
-            }
+            RenderedSpan::Transcluded {
+                provenance, range, ..
+            } => Some((provenance.source.clone(), *range)),
+            RenderedSpan::Darkened {
+                provenance, range, ..
+            } => Some((provenance.source.clone(), *range)),
         }
     }
 }
@@ -667,7 +683,10 @@ mod tests {
         assert_eq!(prov.len(), 5);
         assert!(prov[0].is_none(), "OWN intro has no foreign provenance");
         assert_eq!(prov[1].unwrap().source, src_a, "span 1 cites source A");
-        assert!(prov[1].unwrap().finalized, "a published+attested source is finalized");
+        assert!(
+            prov[1].unwrap().finalized,
+            "a published+attested source is finalized"
+        );
         assert!(prov[2].is_none(), "OWN connective has no provenance");
         assert_eq!(prov[3].unwrap().source, src_b, "span 3 cites source B");
         assert!(prov[4].is_none(), "OWN outro has no provenance");
@@ -693,7 +712,11 @@ mod tests {
             BundleKind::StaticBundle,
             "index.html",
             vec![
-                BundleAsset::new("index.html", "text/html", b"<h1>HELLO DREGGVERSE</h1>".to_vec()),
+                BundleAsset::new(
+                    "index.html",
+                    "text/html",
+                    b"<h1>HELLO DREGGVERSE</h1>".to_vec(),
+                ),
                 BundleAsset::new("app.js", "application/javascript", b"run()".to_vec()),
             ],
         )
@@ -710,7 +733,10 @@ mod tests {
             Span::own(b">".to_vec()),
         ]);
         let rendered = doc.resolve(&web).expect("resolves the bundle-asset span");
-        assert_eq!(rendered.composed_text().unwrap(), "quote: <HELLO DREGGVERSE>");
+        assert_eq!(
+            rendered.composed_text().unwrap(),
+            "quote: <HELLO DREGGVERSE>"
+        );
         // The span cites the bundle source.
         assert_eq!(rendered.spans()[1].provenance().unwrap().source, uri);
     }
@@ -732,12 +758,16 @@ mod tests {
 
         // v0: the document quotes the original constitution.
         let r0 = doc.resolve(&web).expect("v0 resolves");
-        assert_eq!(r0.composed_text().unwrap(), "STABLE PREAMBLE / current: threshold = 3");
+        assert_eq!(
+            r0.composed_text().unwrap(),
+            "STABLE PREAMBLE / current: threshold = 3"
+        );
         let cited_receipt_v0 = r0.spans()[2].provenance().unwrap().receipt_hash;
 
         // AMEND the constitution source (the REAL WebOfCells::amend — a verified state
         // advance; the dregg:// ref is UNCHANGED).
-        web.amend(&constitution, b"threshold = 5").expect("amend resolves");
+        web.amend(&constitution, b"threshold = 5")
+            .expect("amend resolves");
 
         // v1: the SAME document, re-resolved, now shows the source's NEW value in that
         // span — the unbreakable link. The other spans are untouched.
@@ -750,7 +780,10 @@ mod tests {
         // The cited receipt for that span ADVANCED (a distinct cited point — a holder
         // can SEE the source moved; no silent live read).
         let cited_receipt_v1 = r1.spans()[2].provenance().unwrap().receipt_hash;
-        assert_ne!(cited_receipt_v1, cited_receipt_v0, "the cited receipt advanced");
+        assert_ne!(
+            cited_receipt_v1, cited_receipt_v0,
+            "the cited receipt advanced"
+        );
         // The OTHER transcluded span (the stable preamble) is byte-identical AND cites
         // the SAME receipt — amending one source touched only its span.
         assert_eq!(r1.spans()[0].bytes(), b"STABLE PREAMBLE");
@@ -777,7 +810,10 @@ mod tests {
         ]);
         let r = doc_absent.resolve(&web);
         assert!(
-            matches!(&r, Err(DocumentError::Transclusion(1, TransclusionError::Fetch(_)))),
+            matches!(
+                &r,
+                Err(DocumentError::Transclusion(1, TransclusionError::Fetch(_)))
+            ),
             "a span citing an absent source refuses the document at span 1, got {r:?}"
         );
 
@@ -852,7 +888,10 @@ mod tests {
             .resolve_for(&web, &full_viewer, &lineage)
             .expect("full viewer resolves");
         assert!(full.is_full(), "the full-authority viewer darkens nothing");
-        assert_eq!(full.composed_text().unwrap(), "DOC: PUBLIC paragraph + SECRET paragraph");
+        assert_eq!(
+            full.composed_text().unwrap(),
+            "DOC: PUBLIC paragraph + SECRET paragraph"
+        );
         assert_eq!(full.darkened_count(), 0);
 
         // A WEAKER viewer scoped to ONLY the public span's origin (Either rights, but a
@@ -882,17 +921,29 @@ mod tests {
         assert_eq!(weak.spans()[1].bytes(), b"PUBLIC paragraph");
         // …and the secret span is DARKENED: NO source bytes…
         assert!(weak.spans()[3].is_darkened());
-        assert_eq!(weak.spans()[3].bytes(), b"", "a darkened span yields NO source bytes");
+        assert_eq!(
+            weak.spans()[3].bytes(),
+            b"",
+            "a darkened span yields NO source bytes"
+        );
         // The viewer NEVER sees the secret value (the anti-forgery tooth: not the
         // bytes, and not a substituted forgery either — the darkened span is opaque).
         assert!(
-            !weak.composed_bytes().windows(b"SECRET".len()).any(|w| w == b"SECRET"),
+            !weak
+                .composed_bytes()
+                .windows(b"SECRET".len())
+                .any(|w| w == b"SECRET"),
             "the weaker viewer never sees the source value it lacks authority to read"
         );
         // …BUT the darkened span STILL carries its PROVENANCE (the document's shape +
         // citation survive — the docuverse skeleton is visible, only the bytes withheld).
-        let dark_prov = weak.spans()[3].provenance().expect("a darkened span keeps its citation");
-        assert_eq!(dark_prov.source, secret_src, "the darkened span still cites its source");
+        let dark_prov = weak.spans()[3]
+            .provenance()
+            .expect("a darkened span keeps its citation");
+        assert_eq!(
+            dark_prov.source, secret_src,
+            "the darkened span still cites its source"
+        );
         assert!(dark_prov.finalized);
         // And the parallel-source link survives (the EEL navigates to the source even
         // for a darkened span — "you may not read this, but here is what it cites").
@@ -913,8 +964,12 @@ mod tests {
         // The lineage carries a DISTINCT Custom identity; the viewer a DIFFERENT
         // incomparable one. is_attenuation holds NEITHER way → project() refuses →
         // the span darkens (not the whole document erroring).
-        let lineage =
-            SurfaceCapability::root(src.cell, AuthRequired::Custom { vk_hash: [0xAA; 32] });
+        let lineage = SurfaceCapability::root(
+            src.cell,
+            AuthRequired::Custom {
+                vk_hash: [0xAA; 32],
+            },
+        );
         let doc = DreggverseDocument::from_spans(vec![
             Span::own(b"[".to_vec()),
             Span::transclude(src.clone()),
@@ -922,7 +977,9 @@ mod tests {
         ]);
         let incomparable = Membrane::new(SurfaceCapability::root(
             cid(41),
-            AuthRequired::Custom { vk_hash: [0xBB; 32] },
+            AuthRequired::Custom {
+                vk_hash: [0xBB; 32],
+            },
         ));
         let r = doc
             .resolve_for(&web, &incomparable, &lineage)
@@ -932,7 +989,9 @@ mod tests {
         // The OWN brackets still render; the confidential span is withheld.
         assert_eq!(r.composed_text().unwrap(), "[]");
         assert!(
-            !r.composed_bytes().windows(b"confidential".len()).any(|w| w == b"confidential"),
+            !r.composed_bytes()
+                .windows(b"confidential".len())
+                .any(|w| w == b"confidential"),
             "an incomparable viewer never sees the confidential span"
         );
         // The citation still survives (the darkened span knows its source).
@@ -946,7 +1005,7 @@ mod tests {
     fn a_span_range_clamps_to_the_source_length() {
         let mut web = WebOfCells::new(3);
         let src = publish_raw(&mut web, 11, b"short"); // 5 bytes
-        // A range 2..100 of a 5-byte source selects "ort" (clamped), never OOB.
+                                                       // A range 2..100 of a 5-byte source selects "ort" (clamped), never OOB.
         let doc = DreggverseDocument::from_spans(vec![Span::transclude_range(
             src.clone(),
             SpanRange::new(2, 100),
@@ -961,7 +1020,11 @@ mod tests {
         )]);
         let r2 = doc2.resolve(&web).expect("resolves an out-of-range span");
         assert_eq!(r2.composed_text().unwrap(), "");
-        assert_eq!(r2.spans()[0].provenance().unwrap().source, src, "still provenanced");
+        assert_eq!(
+            r2.spans()[0].provenance().unwrap().source,
+            src,
+            "still provenanced"
+        );
     }
 
     // ── An empty document resolves to empty (no spans, no error). ──

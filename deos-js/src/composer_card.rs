@@ -39,14 +39,11 @@
 
 use dregg_cell::AuthRequired;
 use dregg_doc::composition::{
-    self, content_composed, AtomContent, ChildRef, EmbedRole, LayoutGraph, MapResolver, Op,
-    Viewer,
+    self, content_composed, AtomContent, ChildRef, EmbedRole, LayoutGraph, MapResolver, Op, Viewer,
 };
-use dregg_doc::{Author, AtomId, BlameLine, PatchId, Provenance, Status};
+use dregg_doc::{AtomId, Author, BlameLine, PatchId, Provenance, Status};
 
-use crate::card_editor::{
-    ButtonProps, EditError, OnClick, TextProps, ViewPatch, ViewTree,
-};
+use crate::card_editor::{ButtonProps, EditError, OnClick, TextProps, ViewPatch, ViewTree};
 use crate::program_doc::ProgramSource;
 
 pub use dregg_doc::composition::CellId as ChildCellId;
@@ -379,8 +376,7 @@ impl ComposerCard {
     pub fn roster(&self) -> Vec<ComposedChild> {
         let live = self.children();
         let mut out = live.clone();
-        let live_atoms: std::collections::BTreeSet<AtomId> =
-            live.iter().map(|c| c.atom).collect();
+        let live_atoms: std::collections::BTreeSet<AtomId> = live.iter().map(|c| c.atom).collect();
         for (id, role, cell, prov) in embed_atoms(&self.layout) {
             if !live_atoms.contains(&id) {
                 out.push(ComposedChild {
@@ -485,7 +481,11 @@ impl ComposerCard {
 
     /// A viewer that clears every embedded cell (the owning author's full-authority read).
     fn full_authority_viewer(&self) -> Viewer {
-        Viewer::able(embed_atoms(&self.layout).into_iter().map(|(_, _, cell, _)| cell))
+        Viewer::able(
+            embed_atoms(&self.layout)
+                .into_iter()
+                .map(|(_, _, cell, _)| cell),
+        )
     }
 
     /// A resolver that renders each embedded cell as a one-atom leaf (the standalone shape).
@@ -588,7 +588,9 @@ pub fn composer_view(card: &ComposerCard) -> ViewTree {
 
 fn text(s: &str) -> ViewTree {
     ViewTree::Text {
-        props: TextProps { text: s.to_string() },
+        props: TextProps {
+            text: s.to_string(),
+        },
     }
 }
 
@@ -615,9 +617,7 @@ fn short_cell(c: ChildCellId) -> String {
 
 fn apply_view_patch(patch: &ViewPatch, tree: &mut ViewTree) -> bool {
     match patch {
-        ViewPatch::AddButton { label, turn, arg } => {
-            push_child(tree, button(label, turn, *arg))
-        }
+        ViewPatch::AddButton { label, turn, arg } => push_child(tree, button(label, turn, *arg)),
         ViewPatch::AddText { text: t } => push_child(tree, text(t)),
         ViewPatch::Relabel { from, to } => relabel_text(tree, from, to),
     }
@@ -655,10 +655,7 @@ fn relabel_text(tree: &mut ViewTree, from: &str, to: &str) -> bool {
 
 // ── composition graph helpers (verbatim shape from the cockpit composer) ────────────────
 
-fn children_of(
-    rendered: &composition::Rendered,
-    layout: &LayoutGraph,
-) -> Vec<ComposedChild> {
+fn children_of(rendered: &composition::Rendered, layout: &LayoutGraph) -> Vec<ComposedChild> {
     let mut out = Vec::new();
     for seg in &rendered.segments {
         if let composition::Segment::Embedded {
@@ -778,7 +775,9 @@ mod tests {
             );
         }
         assert!(
-            tree.walk().iter().any(|n| n.label() == Some("Composed cells")),
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some("Composed cells")),
             "the composed-children section is labeled"
         );
         assert!(
@@ -811,15 +810,15 @@ mod tests {
         // The regenerated view carries a row for each child (numbered, with role).
         let tree = card.view_tree().expect("regenerated view parses");
         assert!(
-            tree.walk()
-                .iter()
-                .any(|n| matches!(n.label(), Some(l) if l.starts_with("1.") && l.contains("section"))),
+            tree.walk().iter().any(
+                |n| matches!(n.label(), Some(l) if l.starts_with("1.") && l.contains("section"))
+            ),
             "the first composed child renders as a row with its role"
         );
         assert!(
-            tree.walk()
-                .iter()
-                .any(|n| matches!(n.label(), Some(l) if l.starts_with("2.") && l.contains("figure"))),
+            tree.walk().iter().any(
+                |n| matches!(n.label(), Some(l) if l.starts_with("2.") && l.contains("figure"))
+            ),
             "the second composed child renders as a row with its role"
         );
     }
@@ -860,7 +859,11 @@ mod tests {
             .expect("re-roling a live child succeeds");
         assert_eq!(receipt.author, Author(7));
         let kids = card.children();
-        assert_eq!(kids.len(), 1, "still one live child (re-roled, not duplicated)");
+        assert_eq!(
+            kids.len(),
+            1,
+            "still one live child (re-roled, not duplicated)"
+        );
         assert_eq!(kids[0].role, Role::Figure);
         assert_eq!(kids[0].cell, fig);
         assert!(card.set_role(cell(0xDEAD), Role::Citation).is_none());
@@ -882,7 +885,10 @@ mod tests {
             .expect("the authorized relabel reshape is admitted");
         assert_ne!(card.view_source(), source_before, "the view-source changed");
         assert!(
-            edit.tree.walk().iter().any(|n| n.label() == Some("Document body")),
+            edit.tree
+                .walk()
+                .iter()
+                .any(|n| n.label() == Some("Document body")),
             "the re-folded view carries the new section label"
         );
         assert!(
@@ -901,7 +907,11 @@ mod tests {
             })
             .expect("the authorized add-text reshape is admitted");
         assert!(
-            edit2.tree.walk().iter().any(|n| n.label() == Some("— composed by hand —")),
+            edit2
+                .tree
+                .walk()
+                .iter()
+                .any(|n| n.label() == Some("— composed by hand —")),
             "the appended note landed"
         );
         assert!(

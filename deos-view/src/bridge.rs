@@ -56,7 +56,8 @@ pub fn build_live_view(
     applet_js: &str,
 ) -> Result<LiveView, String> {
     set_current_applet(applet);
-    rt.eval(applet_js).map_err(|e| format!("applet eval: {e}"))?;
+    rt.eval(applet_js)
+        .map_err(|e| format!("applet eval: {e}"))?;
     let applet = take_current_applet().ok_or("applet vanished from the runtime")?;
 
     let json = applet

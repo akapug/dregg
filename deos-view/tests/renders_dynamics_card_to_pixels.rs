@@ -79,9 +79,12 @@ fn bake_body() {
             AuthRequired::Signature,
         );
         // Observe a few turns so the feed scrolls with real rows.
-        card.observe(feed_entry(1, "turn committed", 0xAA)).expect("observe 1");
-        card.observe(feed_entry(2, "balance flowed", 0xBB)).expect("observe 2");
-        card.observe(feed_entry(3, "cap granted", 0xCC)).expect("observe 3");
+        card.observe(feed_entry(1, "turn committed", 0xAA))
+            .expect("observe 1");
+        card.observe(feed_entry(2, "balance flowed", 0xBB))
+            .expect("observe 2");
+        card.observe(feed_entry(3, "cap granted", 0xCC))
+            .expect("observe 3");
         let source0 = card.view_source();
 
         // Reshape from within (relabel the header).
@@ -91,7 +94,9 @@ fn bake_body() {
             AuthRequired::None,
             AuthRequired::Signature,
         );
-        card2.observe(feed_entry(1, "turn committed", 0xAA)).expect("observe 1'");
+        card2
+            .observe(feed_entry(1, "turn committed", 0xAA))
+            .expect("observe 1'");
         card2
             .edit_view(ViewPatch::Relabel {
                 from: "Dynamics".into(),
@@ -104,7 +109,10 @@ fn bake_body() {
         let p0 = out.join("dynamics-card.png");
         let p1 = out.join("dynamics-card-reshaped.png");
         let (f0, f1) = render_pair(&mut hr, card.into_card(), &source0, &source1, &p0, &p1);
-        assert_ne!(f0, f1, "the dynamics card was reshaped from within (the frame differs)");
+        assert_ne!(
+            f0, f1,
+            "the dynamics card was reshaped from within (the frame differs)"
+        );
         println!("DYNAMICS card : {} / {}", p0.display(), p1.display());
     }
 
@@ -129,8 +137,10 @@ fn bake_body() {
             AuthRequired::Signature,
         );
         // Drop the borrow before reusing `cell` is moot — `cell` only loaned the ledger.
-        card.observe(agent_action(1, "set field[0]", 0xAA)).expect("observe action 1");
-        card.observe(agent_action(2, "granted cap", 0xBB)).expect("observe action 2");
+        card.observe(agent_action(1, "set field[0]", 0xAA))
+            .expect("observe action 1");
+        card.observe(agent_action(2, "granted cap", 0xBB))
+            .expect("observe action 2");
         let source0 = card.view_source();
 
         let mut cell2 = substance(0xA9);
@@ -153,12 +163,18 @@ fn bake_body() {
             })
             .expect("relabel the actions section from within");
         let source1 = card2.view_source();
-        assert!(source1.contains("Receipted Actions"), "the reshaped section landed");
+        assert!(
+            source1.contains("Receipted Actions"),
+            "the reshaped section landed"
+        );
 
         let p0 = out.join("agent-card.png");
         let p1 = out.join("agent-card-reshaped.png");
         let (f0, f1) = render_pair(&mut hr, card.into_card(), &source0, &source1, &p0, &p1);
-        assert_ne!(f0, f1, "the agent card was reshaped from within (the frame differs)");
+        assert_ne!(
+            f0, f1,
+            "the agent card was reshaped from within (the frame differs)"
+        );
         println!("AGENT card    : {} / {}", p0.display(), p1.display());
     }
 
@@ -197,12 +213,18 @@ fn bake_body() {
             })
             .expect("relabel the panel header from within");
         let source1 = card2.view_source();
-        assert!(source1.contains("Two-Way Links"), "the reshaped header landed");
+        assert!(
+            source1.contains("Two-Way Links"),
+            "the reshaped header landed"
+        );
 
         let p0 = out.join("links-card.png");
         let p1 = out.join("links-card-reshaped.png");
         let (f0, f1) = render_pair(&mut hr, card.into_card(), &source0, &source1, &p0, &p1);
-        assert_ne!(f0, f1, "the links card was reshaped from within (the frame differs)");
+        assert_ne!(
+            f0, f1,
+            "the links card was reshaped from within (the frame differs)"
+        );
         println!("LINKS card    : {} / {}", p0.display(), p1.display());
     }
 }
@@ -222,16 +244,23 @@ fn render_pair(
     let tree0 = parse_view_tree(source0).expect("parse the generated view-tree");
     let a0 = shared.clone();
     let w0 = hr
-        .open(560.0, 760.0, move |_w, cx| cx.new(|_cx| AppletView::new(a0, tree0)))
+        .open(560.0, 760.0, move |_w, cx| {
+            cx.new(|_cx| AppletView::new(a0, tree0))
+        })
         .expect("open the card window");
     let frame0 = hr.capture(w0.into()).expect("capture frame 0");
     frame0.save(p0).expect("save PNG #0");
-    assert!(frame0.width() > 0 && frame0.height() > 0, "frame 0 has pixels");
+    assert!(
+        frame0.width() > 0 && frame0.height() > 0,
+        "frame 0 has pixels"
+    );
 
     let tree1 = parse_view_tree(source1).expect("parse the reshaped view-tree");
     let a1 = shared.clone();
     let w1 = hr
-        .open(560.0, 760.0, move |_w, cx| cx.new(|_cx| AppletView::new(a1, tree1)))
+        .open(560.0, 760.0, move |_w, cx| {
+            cx.new(|_cx| AppletView::new(a1, tree1))
+        })
         .expect("open the reshaped card window");
     let frame1 = hr.capture(w1.into()).expect("capture frame 1");
     frame1.save(p1).expect("save PNG #1");

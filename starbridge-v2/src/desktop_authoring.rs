@@ -466,11 +466,18 @@ mod tests {
         // Each open advanced the ledger (a real verified turn + a receipt).
         assert_eq!(w.height(), h0 + 2, "two layout-edit turns landed");
         assert_eq!(w.receipts().len(), r0 + 2, "two receipts appended");
-        assert!(rev_a >= 1 && rev_b > rev_a, "the revision advances per edit");
+        assert!(
+            rev_a >= 1 && rev_b > rev_a,
+            "the revision advances per edit"
+        );
 
         // layout() lists BOTH windows; the last-opened (B) is front-most.
         let owners: Vec<CellId> = desk.layout().iter().map(|win| win.owner).collect();
-        assert_eq!(owners, vec![b, a], "both windows open; B opened last is front");
+        assert_eq!(
+            owners,
+            vec![b, a],
+            "both windows open; B opened last is front"
+        );
         assert!(desk.is_clean(&w), "after commit the layout is clean");
     }
 
@@ -556,7 +563,10 @@ mod tests {
         desk.open(win(a, 10), &mut w).unwrap();
         desk.open(win(b, 20), &mut w).unwrap(); // [B, A]
         let committed = desk.committed_commit(&w);
-        assert_ne!(committed, COMMIT_NONE, "a populated layout commits non-empty");
+        assert_ne!(
+            committed, COMMIT_NONE,
+            "a populated layout commits non-empty"
+        );
 
         // REBUILD off the world with the SAME ordered window list (the relaunch
         // re-hydrates the live windows; the witnessed commitment is durable). The

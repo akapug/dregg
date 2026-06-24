@@ -154,9 +154,9 @@ impl Mandate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HermesGateway;
     use crate::acp::ToolCallRequest;
     use crate::grant_registry::GrantRegistry;
-    use crate::HermesGateway;
     use dregg_sdk::{AgentCipherclerk, AgentRuntime};
     use std::sync::{Arc, RwLock};
 
@@ -199,6 +199,9 @@ mod tests {
         assert_eq!(term.receipts[0].len(), 64, "a real hex turn hash receipt");
 
         let text = mandate.render_text();
-        assert!(text.contains("tool:terminal"), "renders the terminal mandate");
+        assert!(
+            text.contains("tool:terminal"),
+            "renders the terminal mandate"
+        );
     }
 }

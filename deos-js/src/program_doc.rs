@@ -131,10 +131,7 @@ impl ProgramSource {
         // Rebuild our doc from the stitched history. (`Doc` exposes editing by text;
         // we reconstruct it from the merged history by re-seeding, but the canonical
         // truth is the merged GRAPH — `merge` of the two replays — which we render.)
-        let merged_graph = merge(
-            &self.doc.history().replay(),
-            &theirs.doc.history().replay(),
-        );
+        let merged_graph = merge(&self.doc.history().replay(), &theirs.doc.history().replay());
         // Adopt the stitched history so subsequent edits chain off the merged state.
         self.doc = Doc::from_history(hist, Granularity::Line);
         content(&merged_graph)

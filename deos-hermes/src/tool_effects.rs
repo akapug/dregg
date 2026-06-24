@@ -27,11 +27,11 @@
 //! the rest fall back to a generic single-event witness so every tool's receipt
 //! still carries its name + a digest of its arguments.
 
+use dregg_cell::CellId;
 use dregg_cell::program::field_from_u64;
 use dregg_cell::state::FieldElement;
-use dregg_cell::CellId;
-use dregg_turn::action::{symbol, Event};
 use dregg_turn::Effect;
+use dregg_turn::action::{Event, symbol};
 
 use crate::acp::ToolCallRequest;
 
@@ -169,12 +169,12 @@ mod tests {
         match &fx[0] {
             Effect::EmitEvent { event, .. } => {
                 assert_eq!(event.topic, symbol("tool.write_file"));
-                assert_eq!(event.data.len(), 3, "path digest + path prefix + content len");
                 assert_eq!(
-                    event.data[2],
-                    field_from_u64(5),
-                    "content length witnessed"
+                    event.data.len(),
+                    3,
+                    "path digest + path prefix + content len"
                 );
+                assert_eq!(event.data[2], field_from_u64(5), "content length witnessed");
             }
             other => panic!("expected an EmitEvent witness, got {other:?}"),
         }
@@ -182,7 +182,12 @@ mod tests {
 
     #[test]
     fn web_search_carries_a_query_witness() {
-        let call = ToolCallRequest::new("s", "tc", "web_search", serde_json::json!({"query": "dregg"}));
+        let call = ToolCallRequest::new(
+            "s",
+            "tc",
+            "web_search",
+            serde_json::json!({"query": "dregg"}),
+        );
         let fx = effects_for_call(&call, cell());
         match &fx[0] {
             Effect::EmitEvent { event, .. } => {
@@ -197,7 +202,11 @@ mod tests {
     fn unknown_tool_still_witnessed() {
         let call = ToolCallRequest::new("s", "tc", "todo", serde_json::json!({"x": 1}));
         let fx = effects_for_call(&call, cell());
-        assert_eq!(fx.len(), 1, "every authorized call witnesses at least name+args");
+        assert_eq!(
+            fx.len(),
+            1,
+            "every authorized call witnesses at least name+args"
+        );
         match &fx[0] {
             Effect::EmitEvent { event, .. } => assert_eq!(event.topic, symbol("tool.call")),
             other => panic!("expected a generic witness, got {other:?}"),

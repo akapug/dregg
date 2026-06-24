@@ -1037,7 +1037,11 @@ mod tests {
         let lineage = SurfaceCapability::scoped(
             cid(150),
             AuthRequired::Either,
-            origins(&["https://a.example.com", "https://b.example.com", "https://c.example.com"]),
+            origins(&[
+                "https://a.example.com",
+                "https://b.example.com",
+                "https://c.example.com",
+            ]),
             [PermissionKind::Geolocation, PermissionKind::Clipboard],
         );
         let (web, sturdyref) =
@@ -1052,8 +1056,14 @@ mod tests {
         ));
         let pa = rehydrate(&sturdyref, &a, &web).expect("A rehydrates");
         // The projection attenuates BOTH A's held authority AND the lineage.
-        assert!(surface_attenuates_both(a.held(), &pa.surface), "A's projection ⊆ A held");
-        assert!(surface_attenuates_both(&lineage, &pa.surface), "A's projection ⊆ lineage");
+        assert!(
+            surface_attenuates_both(a.held(), &pa.surface),
+            "A's projection ⊆ A held"
+        );
+        assert!(
+            surface_attenuates_both(&lineage, &pa.surface),
+            "A's projection ⊆ lineage"
+        );
         // Concretely: the fetch set is the intersection, the permission set the meet.
         assert!(pa.surface.may_fetch("https://a.example.com"));
         assert!(!pa.surface.may_fetch("https://c.example.com")); // A never held it.
@@ -1071,8 +1081,14 @@ mod tests {
             ))
             .expect("A->C reshare admitted (strict attenuation)");
         let pc = rehydrate(&sturdyref, &c, &web).expect("C rehydrates");
-        assert!(surface_attenuates_both(c.held(), &pc.surface), "C's projection ⊆ C held");
-        assert!(surface_attenuates_both(&lineage, &pc.surface), "C's projection ⊆ lineage");
+        assert!(
+            surface_attenuates_both(c.held(), &pc.surface),
+            "C's projection ⊆ C held"
+        );
+        assert!(
+            surface_attenuates_both(&lineage, &pc.surface),
+            "C's projection ⊆ lineage"
+        );
         // C is strictly narrower than A on every axis (the chain attenuates).
         assert!(pc.surface.may_fetch("https://a.example.com"));
         assert!(!pc.surface.may_fetch("https://b.example.com")); // dropped at the reshare.

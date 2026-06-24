@@ -89,6 +89,16 @@ use leptos::prelude::*;
 /// the REAL `CellProgram::evaluate`/`is_attenuation`). The signal payload + the
 /// server-side committed-state readback live here.
 pub mod gate;
+/// The EEL — Ted Nelson's **parallel source view**, made runnable. Renders a multi-span
+/// [`deos_web_cells::DreggverseDocument`] in one column and, BESIDE each transcluded
+/// span, its SOURCE cell with the quoted byte range highlighted + a working
+/// `#eel-src-N` jump-to-source anchor — built on [`deos_web_cells::RenderedSpan::source_link`]
+/// + the genuine [`deos_web_cells::DreggverseDocument::resolve_for`] per-viewer membrane
+/// meet. A DARKENED span (the viewer lacks authority) still shows its citation ("you may
+/// not read this, but here is what it cites" — bytes withheld, never forged), and the
+/// reactive [`parallel_source_view::ParallelSourceView`] re-resolves on a source amend so
+/// the highlight tracks the source LIVE (the unbreakable link, in the parallel view).
+pub mod parallel_source_view;
 /// The SERVER side — the real [`dregg_turn::TurnExecutor`] (owned by
 /// [`dregg_sdk::AgentRuntime`]) behind the affordance fire. This module CLOSES the
 /// seam the prototype named: a fire is now a genuine verified turn that returns a real
@@ -103,25 +113,15 @@ pub mod server;
 /// and the view shows the NEW committed value at the NEW provenance height (the live
 /// update). The runnable demo of the proven `Dregg2.Deos.Transclusion` primitive.
 pub mod transclusion_demo;
-/// The EEL — Ted Nelson's **parallel source view**, made runnable. Renders a multi-span
-/// [`deos_web_cells::DreggverseDocument`] in one column and, BESIDE each transcluded
-/// span, its SOURCE cell with the quoted byte range highlighted + a working
-/// `#eel-src-N` jump-to-source anchor — built on [`deos_web_cells::RenderedSpan::source_link`]
-/// + the genuine [`deos_web_cells::DreggverseDocument::resolve_for`] per-viewer membrane
-/// meet. A DARKENED span (the viewer lacks authority) still shows its citation ("you may
-/// not read this, but here is what it cites" — bytes withheld, never forged), and the
-/// reactive [`parallel_source_view::ParallelSourceView`] re-resolves on a source amend so
-/// the highlight tracks the source LIVE (the unbreakable link, in the parallel view).
-pub mod parallel_source_view;
 
-use starbridge_web_surface::{
-    AffordanceSurface, AuthRequired, CellAffordance, EvalContext, ReactiveAffordance,
-    Rehydration, SurfaceCapability, TransitionGate, Viewer,
-};
-use starbridge_web_surface::affordance::RecordPredicate;
 use dregg_cell::state::CellState;
 use dregg_turn::Effect;
 use dregg_types::CellId;
+use starbridge_web_surface::affordance::RecordPredicate;
+use starbridge_web_surface::{
+    AffordanceSurface, AuthRequired, CellAffordance, EvalContext, ReactiveAffordance, Rehydration,
+    SurfaceCapability, TransitionGate, Viewer,
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 // The council/counter CELL — the worked example. Its state is the same council
@@ -205,11 +205,7 @@ pub fn vote_gate() -> TransitionGate {
 /// `SetField` on the tally slot. The Rust twin of the Lean `voteBtn`.
 pub fn vote_btn(cell: CellId) -> ReactiveAffordance {
     ReactiveAffordance::new(
-        CellAffordance::new(
-            "vote",
-            AuthRequired::Either,
-            set_field(cell, TALLY_SLOT, 0),
-        ),
+        CellAffordance::new("vote", AuthRequired::Either, set_field(cell, TALLY_SLOT, 0)),
         vote_gate(),
         10,
         20,
@@ -437,40 +433,40 @@ pub fn render_council_for(
     // in and be disposed with — the per-request reactive scope an SSR handler owns.
     let owner = Owner::new();
     owner.with(move || {
-    // Render the per-viewer surface as a Leptos reactive view tree → HTML. Each
-    // affordance is a reactive button (lit/dark by the gate, given the live state).
-    let view = view! {
-        <section class="deos-council-surface" data-cell=format!("{:?}", cell)>
-            <header class="trusted-path">
-                <span class="liveness-badge">{badge.clone()}</span>
-            </header>
-            <ul class="affordances">
-                {names
+        // Render the per-viewer surface as a Leptos reactive view tree → HTML. Each
+        // affordance is a reactive button (lit/dark by the gate, given the live state).
+        let view = view! {
+            <section class="deos-council-surface" data-cell=format!("{:?}", cell)>
+                <header class="trusted-path">
+                    <span class="liveness-badge">{badge.clone()}</span>
+                </header>
+                <ul class="affordances">
+                    {names
+                        .iter()
+                        .cloned()
+                        .map(|name| {
+                            let label = name.clone();
+                            view! { <li class="affordance" data-name=name>{label}</li> }
+                        })
+                        .collect::<Vec<_>>()}
+                </ul>
+                // The vote counter cell itself (MAPPING 1 + 3) — rendered only if the
+                // membrane showed the viewer the vote affordance.
+                {shown
                     .iter()
-                    .cloned()
-                    .map(|name| {
-                        let label = name.clone();
-                        view! { <li class="affordance" data-name=name>{label}</li> }
-                    })
-                    .collect::<Vec<_>>()}
-            </ul>
-            // The vote counter cell itself (MAPPING 1 + 3) — rendered only if the
-            // membrane showed the viewer the vote affordance.
-            {shown
-                .iter()
-                .any(|a| a.name == "vote")
-                .then(move || {
-                    view! {
-                        <CounterCell
-                            cell=cell
-                            held=held
-                            height=height
-                        />
-                    }
-                })}
-        </section>
-    };
-    view.to_html()
+                    .any(|a| a.name == "vote")
+                    .then(move || {
+                        view! {
+                            <CounterCell
+                                cell=cell
+                                held=held
+                                height=height
+                            />
+                        }
+                    })}
+            </section>
+        };
+        view.to_html()
     })
 }
 
@@ -522,10 +518,22 @@ mod tests {
         let held = member_held(cid(10));
 
         // PENDING, tally 0 → candidate (PENDING, 1): LIT.
-        assert!(affordance_is_lit(&btn, &held, 15, &council(PENDING, 0), &council(PENDING, 1)));
+        assert!(affordance_is_lit(
+            &btn,
+            &held,
+            15,
+            &council(PENDING, 0),
+            &council(PENDING, 1)
+        ));
         // RESOLVED, tally 0 → candidate (PENDING, 1): the `pre` (status PENDING)
         // fails on `old` → DARK. The surface reacted to the cell's state.
-        assert!(!affordance_is_lit(&btn, &held, 15, &council(RESOLVED, 0), &council(PENDING, 1)));
+        assert!(!affordance_is_lit(
+            &btn,
+            &held,
+            15,
+            &council(RESOLVED, 0),
+            &council(PENDING, 1)
+        ));
     }
 
     #[test]
@@ -563,8 +571,14 @@ mod tests {
             crate::server::FireRequest::at("vote", AuthRequired::Either), // ballot cap — a councillor
         );
         let committed = resp.result.expect("an authorized vote commits a real turn");
-        assert_eq!(committed.slots.tally, 1, "the committed tally the view re-seeds from");
-        assert_ne!(committed.turn_hash, [0u8; 32], "a REAL verified turn, not a mock");
+        assert_eq!(
+            committed.slots.tally, 1,
+            "the committed tally the view re-seeds from"
+        );
+        assert_ne!(
+            committed.turn_hash, [0u8; 32],
+            "a REAL verified turn, not a mock"
+        );
     }
 
     #[test]
@@ -611,9 +625,15 @@ mod tests {
             render_council_for(&surface, &observer, 15, Rehydration::ReplayedDeterministic);
 
         // The member's surface carries the vote affordance; the observer's does not.
-        assert!(member_html.contains("data-name=\"vote\""), "member sees vote: {member_html}");
+        assert!(
+            member_html.contains("data-name=\"vote\""),
+            "member sees vote: {member_html}"
+        );
         assert!(member_html.contains("data-name=\"tally\""));
-        assert!(!observer_html.contains("data-name=\"vote\""), "observer must NOT see vote: {observer_html}");
+        assert!(
+            !observer_html.contains("data-name=\"vote\""),
+            "observer must NOT see vote: {observer_html}"
+        );
         assert!(observer_html.contains("data-name=\"tally\""));
 
         // DISTINCT surfaces over the SAME server render.
@@ -640,8 +660,7 @@ mod tests {
         );
         let guest = Viewer::new(observer_held(cid(41)), Box::new(|_| false));
 
-        let trustee_html =
-            render_council_for(&surface, &trustee, 15, Rehydration::Live);
+        let trustee_html = render_council_for(&surface, &trustee, 15, Rehydration::Live);
         let guest_html = render_council_for(&surface, &guest, 15, Rehydration::Live);
 
         // Equal caps, yet distinct surfaces: the trustee sees the tally, the guest

@@ -517,7 +517,9 @@ mod tests {
         AuthRequired::Signature
     }
     fn outsider() -> AuthRequired {
-        AuthRequired::Custom { vk_hash: [0x9E; 32] }
+        AuthRequired::Custom {
+            vk_hash: [0x9E; 32],
+        }
     }
     const MID: u64 = (WINDOW_OPEN + WINDOW_CLOSE) / 2;
 
@@ -539,21 +541,37 @@ mod tests {
 
         // The receipt is the REAL one: a non-zero turn-hash, a post-state commitment,
         // and computrons were actually spent running the verified turn.
-        assert_ne!(out.receipt.turn_hash, [0u8; 32], "real turn has a real hash");
+        assert_ne!(
+            out.receipt.turn_hash, [0u8; 32],
+            "real turn has a real hash"
+        );
         assert_ne!(out.receipt.post_state_hash, [0u8; 32]);
         assert!(out.receipt.computrons_used > 0, "the verified turn ran");
-        assert_eq!(out.receipt.agent, cell.cell_id(), "committed by the council cell");
+        assert_eq!(
+            out.receipt.agent,
+            cell.cell_id(),
+            "committed by the council cell"
+        );
 
         // The COMMITTED state advanced — the tally the executor wrote is 1 (read back
         // from the executor's own ledger, not a hand-applied guess).
         assert_eq!(out.committed.tally, 1);
-        assert_eq!(cell.live_slots().tally, 1, "the live ledger reflects the commit");
+        assert_eq!(
+            cell.live_slots().tally,
+            1,
+            "the live ledger reflects the commit"
+        );
 
         // A second vote advances to 2 (the monotonic tally accumulates through real
         // turns), a distinct turn.
-        let out2 = cell.fire("vote", &councillor(), MID).expect("a second vote commits");
+        let out2 = cell
+            .fire("vote", &councillor(), MID)
+            .expect("a second vote commits");
         assert_eq!(out2.committed.tally, 2);
-        assert_ne!(out2.receipt.turn_hash, out.receipt.turn_hash, "distinct turns");
+        assert_ne!(
+            out2.receipt.turn_hash, out.receipt.turn_hash,
+            "distinct turns"
+        );
     }
 
     // ── THE ANTI-GHOST TEETH: a refused fire is a precise gate FireError and NOTHING
@@ -604,7 +622,11 @@ mod tests {
             matches!(err, FireRefusal::Gate(FireError::OutsideWindow { .. })),
             "window tooth ⇒ Gate(OutsideWindow), got {err:?}"
         );
-        assert_eq!(cell.live_slots(), before, "a window-refused fire commits nothing");
+        assert_eq!(
+            cell.live_slots(),
+            before,
+            "a window-refused fire commits nothing"
+        );
     }
 
     #[test]
@@ -626,7 +648,11 @@ mod tests {
             matches!(err, FireRefusal::Gate(FireError::TransitionUnmet { .. })),
             "transition tooth ⇒ Gate(TransitionUnmet), got {err:?}"
         );
-        assert_eq!(cell.live_slots(), before, "a transition-refused fire commits nothing");
+        assert_eq!(
+            cell.live_slots(),
+            before,
+            "a transition-refused fire commits nothing"
+        );
     }
 
     #[test]
@@ -649,7 +675,10 @@ mod tests {
         reset_executor_cell();
         let resp = fire_affordance(FireRequest::at("vote", councillor()));
         let committed = resp.result.expect("an authorized fire commits");
-        assert_eq!(committed.slots.tally, 1, "the server-fn returns the committed tally");
+        assert_eq!(
+            committed.slots.tally, 1,
+            "the server-fn returns the committed tally"
+        );
         assert_ne!(committed.turn_hash, [0u8; 32], "and the real turn-hash");
     }
 
@@ -664,7 +693,10 @@ mod tests {
             "precise cap-tooth reason: {}",
             refused.reason
         );
-        assert_eq!(refused.slots.tally, 0, "a refused fire leaves the tally at 0");
+        assert_eq!(
+            refused.slots.tally, 0,
+            "a refused fire leaves the tally at 0"
+        );
         assert!(refused.slots.is_pending());
     }
 

@@ -23,9 +23,7 @@
 //! REPLACED by the splice (col 87 cannot be doubly pinned): the published root is now bound to the
 //! sorted-tree SPLICE, not the prepend accumulator.
 
-use dregg_circuit::descriptor_ir2::{
-    MapKind, MapOpSpec, VmConstraint2, parse_vm_descriptor2,
-};
+use dregg_circuit::descriptor_ir2::{MapKind, MapOpSpec, VmConstraint2, parse_vm_descriptor2};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 use dregg_circuit::lean_descriptor_air::LeanExpr;
 
@@ -123,14 +121,26 @@ fn deployed_heapwrite_forces_sorted_merkle_splice() {
         _ => None,
     });
 
-    let m: &MapOpSpec =
-        splice.expect("PHASE-E: heapWriteVmDescriptor2R24 must carry a `.write` map_op (the splice)");
+    let m: &MapOpSpec = splice
+        .expect("PHASE-E: heapWriteVmDescriptor2R24 must carry a `.write` map_op (the splice)");
 
     // The splice op opens the committed heap root (col 65) at the in-row-recomputed address (col 102)
     // for the written value (col 72) and FORCES the new heap root (col 87) to the genuine sorted update.
-    assert_eq!(m.root, LeanExpr::Var(HEAP_ROOT_BEFORE), "splice root must be HEAP_ROOT_BEFORE(65)");
-    assert_eq!(m.key, LeanExpr::Var(HEAP_ADDR), "splice key must be the recomputed HEAP_ADDR(102)");
-    assert_eq!(m.value, LeanExpr::Var(VALUE), "splice value must be VALUE(72)");
+    assert_eq!(
+        m.root,
+        LeanExpr::Var(HEAP_ROOT_BEFORE),
+        "splice root must be HEAP_ROOT_BEFORE(65)"
+    );
+    assert_eq!(
+        m.key,
+        LeanExpr::Var(HEAP_ADDR),
+        "splice key must be the recomputed HEAP_ADDR(102)"
+    );
+    assert_eq!(
+        m.value,
+        LeanExpr::Var(VALUE),
+        "splice value must be VALUE(72)"
+    );
     assert_eq!(
         m.new_root,
         LeanExpr::Var(HEAP_ROOT_AFTER),

@@ -258,7 +258,11 @@ fn verify_receipt(client: &Client, receipt: &ReceiptInfo) -> VerifyReport {
     let witnessed = match dregg_sdk::decode_witnessed_receipt_artifact_hex(artifact_hex) {
         Ok(w) => w,
         Err(e) => {
-            push(&mut lines, format!("   DWR1 decode failed: {e}"), Color::Red);
+            push(
+                &mut lines,
+                format!("   DWR1 decode failed: {e}"),
+                Color::Red,
+            );
             return VerifyReport {
                 receipt_hash: receipt.receipt_hash.clone(),
                 lines,
@@ -443,20 +447,29 @@ impl App {
             // generic "offline" — same diagnostic the headless path prints.
             match id_err {
                 Some(e) => format!("offline · {} — {e}", self.client.base),
-                None => format!("offline · could not reach {} (is a dregg node running?)", self.client.base),
+                None => format!(
+                    "offline · could not reach {} (is a dregg node running?)",
+                    self.client.base
+                ),
             }
         };
         // Keep the selection in range.
         if self.receipts.is_empty() {
             self.receipt_sel.select(None);
         } else {
-            let i = self.receipt_sel.selected().unwrap_or(0).min(self.receipts.len() - 1);
+            let i = self
+                .receipt_sel
+                .selected()
+                .unwrap_or(0)
+                .min(self.receipts.len() - 1);
             self.receipt_sel.select(Some(i));
         }
     }
 
     fn selected_receipt(&self) -> Option<&ReceiptInfo> {
-        self.receipt_sel.selected().and_then(|i| self.receipts.get(i))
+        self.receipt_sel
+            .selected()
+            .and_then(|i| self.receipts.get(i))
     }
 
     fn move_sel(&mut self, delta: i64) {
@@ -481,7 +494,10 @@ impl App {
         self.status = if report.accepted {
             format!("VERIFIED {} independently", short(&report.receipt_hash))
         } else {
-            format!("verify report for {} (see Verify tab)", short(&report.receipt_hash))
+            format!(
+                "verify report for {} (see Verify tab)",
+                short(&report.receipt_hash)
+            )
         };
         self.report = Some(report);
         self.tab = Tab::Verify;
@@ -493,14 +509,27 @@ impl App {
 fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(f.area());
 
     let titles: Vec<Line> = Tab::titles().iter().map(|t| Line::from(*t)).collect();
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" dregg robigalia v0 — light client "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" dregg robigalia v0 — light client "),
+        )
         .select(app.tab.index())
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
     f.render_widget(tabs, chunks[0]);
 
     match app.tab {
@@ -532,11 +561,20 @@ fn draw_identity(f: &mut Frame, app: &App, area: Rect) {
     let id = &app.identity;
     let lock = if id.unlocked { "unlocked" } else { "locked" };
     let lines = vec![
-        Line::from(vec![Span::styled("operator pubkey ", Style::default().fg(Color::Cyan)), Span::raw(blank_dash(&id.public_key))]),
-        Line::from(vec![Span::styled("agent cell      ", Style::default().fg(Color::Cyan)), Span::raw(blank_dash(&id.agent_cell))]),
+        Line::from(vec![
+            Span::styled("operator pubkey ", Style::default().fg(Color::Cyan)),
+            Span::raw(blank_dash(&id.public_key)),
+        ]),
+        Line::from(vec![
+            Span::styled("agent cell      ", Style::default().fg(Color::Cyan)),
+            Span::raw(blank_dash(&id.agent_cell)),
+        ]),
         Line::from(vec![
             Span::styled("agent state     ", Style::default().fg(Color::Cyan)),
-            Span::raw(format!("balance {} · nonce {} · {}", id.agent_balance, id.agent_nonce, lock)),
+            Span::raw(format!(
+                "balance {} · nonce {} · {}",
+                id.agent_balance, id.agent_nonce, lock
+            )),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -553,7 +591,11 @@ fn draw_identity(f: &mut Frame, app: &App, area: Rect) {
         )),
     ];
     f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" node identity ")),
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" node identity "),
+        ),
         area,
     );
 }
@@ -568,8 +610,16 @@ fn draw_cells(f: &mut Frame, app: &App, area: Rect) {
                 c.balance.to_string(),
                 c.nonce.to_string(),
                 c.capability_count.to_string(),
-                if c.has_program { "yes".into() } else { "—".into() },
-                if c.has_delegate { "yes".into() } else { "—".into() },
+                if c.has_program {
+                    "yes".into()
+                } else {
+                    "—".into()
+                },
+                if c.has_delegate {
+                    "yes".into()
+                } else {
+                    "—".into()
+                },
             ])
         })
         .collect();
@@ -583,10 +633,20 @@ fn draw_cells(f: &mut Frame, app: &App, area: Rect) {
     ];
     let table = Table::new(rows, widths)
         .header(
-            Row::new(vec!["cell id", "balance", "nonce", "caps", "program", "delegate"])
-                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Row::new(vec![
+                "cell id", "balance", "nonce", "caps", "program", "delegate",
+            ])
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         )
-        .block(Block::default().borders(Borders::ALL).title(format!(" cells ({}) ", app.cells.len())));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" cells ({}) ", app.cells.len())),
+        );
     f.render_widget(table, area);
 }
 
@@ -604,11 +664,17 @@ fn draw_receipts(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled("·        ", Style::default().fg(Color::DarkGray))
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{head} #{:<3} ", r.chain_index), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{head} #{:<3} ", r.chain_index),
+                    Style::default().fg(Color::Cyan),
+                ),
                 mark,
                 Span::raw("  "),
                 Span::raw(short(&r.receipt_hash)),
-                Span::styled(format!("  {:<10}", r.finality), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {:<10}", r.finality),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(
                     format!("  {} act · {} cu", r.action_count, r.computrons_used),
                     Style::default().fg(Color::DarkGray),
@@ -621,7 +687,11 @@ fn draw_receipts(f: &mut Frame, app: &mut App, area: Rect) {
             " receipts ({}) — [↑↓] select, [v] verify ",
             app.receipts.len()
         )))
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("» ");
     f.render_stateful_widget(list, area, &mut app.receipt_sel);
 }
@@ -651,13 +721,28 @@ fn draw_verify(f: &mut Frame, app: &App, area: Rect) {
         ),
         Some(rep) => {
             let verdict = if rep.accepted {
-                Span::styled(" ✓ INDEPENDENTLY VERIFIED ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+                Span::styled(
+                    " ✓ INDEPENDENTLY VERIFIED ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
-                Span::styled(" ✗ NOT VERIFIED ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD))
+                Span::styled(
+                    " ✗ NOT VERIFIED ",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                )
             };
             let mut ls: Vec<Line> = vec![Line::from(verdict), Line::from("")];
             for (text, color) in &rep.lines {
-                ls.push(Line::from(Span::styled(text.clone(), Style::default().fg(*color))));
+                ls.push(Line::from(Span::styled(
+                    text.clone(),
+                    Style::default().fg(*color),
+                )));
             }
             (format!(" verify · {} ", short(&rep.receipt_hash)), ls)
         }
@@ -725,9 +810,7 @@ fn run_selfcheck() -> i32 {
     println!(
         "  the v1 hand-AIR (EffectVmAir) single-proof verify core is RETIRED; the live core is"
     );
-    println!(
-        "  the rotated replay-chain verify (dregg_verifier::verify_rotated_replay_chain, the"
-    );
+    println!("  the rotated replay-chain verify (dregg_verifier::verify_rotated_replay_chain, the");
     println!("  prover-free `verifier` floor). Verify a rotated chain to exercise the live core.");
     0
 }

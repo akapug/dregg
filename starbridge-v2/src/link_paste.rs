@@ -103,9 +103,7 @@ pub fn parse_uri(uri: &str) -> Option<CellRef> {
         let pair = hex.get(i * 2..i * 2 + 2)?;
         *byte = u8::from_str_radix(pair, 16).ok()?;
     }
-    Some(CellRef {
-        cell: CellId(id),
-    })
+    Some(CellRef { cell: CellId(id) })
 }
 
 /// The resolve-status of a [`Paste`] — what the document shows for one pasted
@@ -163,8 +161,9 @@ impl ResolveStatus {
     /// Unresolvable link (there is nothing genuine to cite).
     pub fn receipt(&self) -> Option<&str> {
         match self {
-            ResolveStatus::Resolved { receipt, .. }
-            | ResolveStatus::Darkened { receipt, .. } => Some(receipt),
+            ResolveStatus::Resolved { receipt, .. } | ResolveStatus::Darkened { receipt, .. } => {
+                Some(receipt)
+            }
             ResolveStatus::Unresolvable { .. } => None,
         }
     }
@@ -271,9 +270,7 @@ impl LinkPasteDoc {
         let host = self.host;
         let paste = resolve_paste(web, host, uri, viewer, declared_surface, lineage);
         self.pastes.push(paste);
-        self.pastes
-            .last()
-            .expect("just pushed a paste")
+        self.pastes.last().expect("just pushed a paste")
     }
 
     /// Every line of real text the document renders, flattened — used by tests/panels
@@ -321,25 +318,20 @@ fn resolve_paste(
     // (1) THE VERIFIED FINALIZED READ — embed the source cell's whole surface via the
     //     real WholeCellTransclusion::embed. A forged/absent/un-finalized URI fails HERE
     //     → Unresolvable, NO embed (the anti-forge tooth inherited verbatim).
-    let embed = match WholeCellTransclusion::embed(
-        web,
-        host,
-        &source_uri,
-        declared_surface,
-        lineage,
-    ) {
-        Ok(embed) => embed,
-        Err(WholeCellTransclusionError::Surface(e)) => {
-            return Paste {
-                source_uri: source_uri.to_uri_string(),
-                host,
-                status: ResolveStatus::Unresolvable {
-                    reason: format!("{e:?}"),
-                },
-                provenance: None,
-            };
-        }
-    };
+    let embed =
+        match WholeCellTransclusion::embed(web, host, &source_uri, declared_surface, lineage) {
+            Ok(embed) => embed,
+            Err(WholeCellTransclusionError::Surface(e)) => {
+                return Paste {
+                    source_uri: source_uri.to_uri_string(),
+                    host,
+                    status: ResolveStatus::Unresolvable {
+                        reason: format!("{e:?}"),
+                    },
+                    provenance: None,
+                };
+            }
+        };
     let provenance = embed.cite().clone();
 
     // (2) THE PER-VIEWER PROJECTION — resolve the embed through the viewer's membrane.
@@ -357,7 +349,10 @@ fn resolve_paste(
             commitment,
             visible_affordances: affordance_names.len(),
         },
-        EmbedVisibility::Darkened => ResolveStatus::Darkened { receipt, commitment },
+        EmbedVisibility::Darkened => ResolveStatus::Darkened {
+            receipt,
+            commitment,
+        },
     };
 
     Paste {
@@ -455,7 +450,11 @@ mod tests {
         let uri = uri_for(cell);
         // The genuine web_cells scheme: dregg:// + 64 hex chars (the content-addressed id).
         assert!(uri.starts_with("dregg://"), "the genuine dregg:// scheme");
-        assert_eq!(uri.len(), "dregg://".len() + 64, "the content-addressed cell id");
+        assert_eq!(
+            uri.len(),
+            "dregg://".len() + 64,
+            "the content-addressed cell id"
+        );
         // Round-trips back to the SAME cell.
         let parsed = parse_uri(&uri).expect("a well-formed dregg:// URI parses");
         assert_eq!(parsed.cell, cell, "uri_for ∘ parse_uri = identity");
@@ -466,7 +465,10 @@ mod tests {
     // (1b) A malformed string does NOT parse — it cannot masquerade as a cell ref.
     #[test]
     fn a_malformed_uri_does_not_parse() {
-        assert!(parse_uri("https://evil.example.com").is_none(), "wrong scheme");
+        assert!(
+            parse_uri("https://evil.example.com").is_none(),
+            "wrong scheme"
+        );
         assert!(parse_uri("dregg://tooshort").is_none(), "wrong length");
         assert!(
             parse_uri(&format!("dregg://{}", "zz".repeat(32))).is_none(),
@@ -512,7 +514,10 @@ mod tests {
             other => panic!("an authorized paste must resolve, got {other:?}"),
         }
         // The provenance survives on the paste (a checkable citation).
-        assert!(paste.provenance.is_some(), "a resolved paste carries provenance");
+        assert!(
+            paste.provenance.is_some(),
+            "a resolved paste carries provenance"
+        );
         assert!(paste.cited_receipt().is_some(), "and a cited receipt");
     }
 
@@ -540,18 +545,33 @@ mod tests {
         );
 
         match resolve_status(paste) {
-            ResolveStatus::Darkened { receipt, commitment } => {
+            ResolveStatus::Darkened {
+                receipt,
+                commitment,
+            } => {
                 // The CITATION survives — the reader knows WHAT cell is pasted and that
                 // it is genuinely cited (provenance kept).
-                assert!(receipt.len() >= 4, "the citation (receipt) survives darkening");
-                assert!(commitment.len() >= 4, "the cited commitment survives darkening");
+                assert!(
+                    receipt.len() >= 4,
+                    "the citation (receipt) survives darkening"
+                );
+                assert!(
+                    commitment.len() >= 4,
+                    "the cited commitment survives darkening"
+                );
             }
             other => panic!("an under-capped paste must darken, got {other:?}"),
         }
         // The provenance + cited receipt STILL survive on the paste — withheld content,
         // never a forgery.
-        assert!(paste.provenance.is_some(), "a darkened paste keeps its provenance");
-        assert!(paste.cited_receipt().is_some(), "a darkened paste keeps its citation");
+        assert!(
+            paste.provenance.is_some(),
+            "a darkened paste keeps its provenance"
+        );
+        assert!(
+            paste.cited_receipt().is_some(),
+            "a darkened paste keeps its citation"
+        );
         // But the status is NOT resolved (content withheld).
         assert!(!resolve_status(paste).is_resolved(), "content is withheld");
     }
@@ -580,7 +600,10 @@ mod tests {
                 "a malformed URI is unresolvable"
             );
             assert!(paste.provenance.is_none(), "no embed ⇒ no provenance");
-            assert!(paste.cited_receipt().is_none(), "no embed ⇒ no cited receipt");
+            assert!(
+                paste.cited_receipt().is_none(),
+                "no embed ⇒ no cited receipt"
+            );
         }
 
         // (b) A well-formed URI to a cell that was NEVER published (a dead/forged link).
@@ -600,7 +623,10 @@ mod tests {
                 matches!(resolve_status(paste), ResolveStatus::Unresolvable { .. }),
                 "a dead/forged URI cannot be embedded — it is unresolvable, never forged"
             );
-            assert!(paste.provenance.is_none(), "a forged link produces no embed");
+            assert!(
+                paste.provenance.is_none(),
+                "a forged link produces no embed"
+            );
         }
     }
 
@@ -622,13 +648,20 @@ mod tests {
         );
 
         let text = doc.all_text();
-        assert!(text.len() >= 2, "the document renders real lines, got {}", text.len());
+        assert!(
+            text.len() >= 2,
+            "the document renders real lines, got {}",
+            text.len()
+        );
         for line in &text {
             assert!(!line.trim().is_empty(), "every line is non-empty real text");
         }
         let blob = text.join("\n");
         assert!(blob.contains("link-paste document"), "names the surface");
-        assert!(blob.contains("dregg://"), "names the dregg:// paste addressing");
+        assert!(
+            blob.contains("dregg://"),
+            "names the dregg:// paste addressing"
+        );
         assert!(blob.contains("resolved"), "shows the resolve-status badge");
         assert!(blob.contains("receipt"), "shows the cited receipt");
     }

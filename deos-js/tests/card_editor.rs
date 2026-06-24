@@ -17,7 +17,7 @@
 //!       the agent's `held` (an unauthorized card-edit is refused in-band).
 
 use deos_js::card_editor::{CardEditor, EditError, ViewPatch, ViewTree};
-use deos_js::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
+use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use dregg_cell::AuthRequired;
 use dregg_doc::Author;
 
@@ -119,10 +119,7 @@ fn edit_view_adds_a_button_as_a_receipted_patch_and_blame_attributes_it() {
         "the view-patch added view-source lines (a patch, not a recompile)"
     );
     assert!(
-        editor
-            .view_blame()
-            .iter()
-            .any(|l| l.author == Author(7)),
+        editor.view_blame().iter().any(|l| l.author == Author(7)),
         "the view edit is blamed on its author (the accountable patch)"
     );
 }
@@ -162,7 +159,10 @@ fn edit_view_relabel_changes_a_label_accountably() {
         from: "Nonexistent".into(),
         to: "X".into(),
     });
-    assert!(matches!(noop, Err(EditError::NoOp)), "a no-op edit is refused");
+    assert!(
+        matches!(noop, Err(EditError::NoOp)),
+        "a no-op edit is refused"
+    );
 }
 
 // ── (b) EDIT A FIELD — a real verified turn. ───────────────────────────────────────
@@ -171,7 +171,9 @@ fn set_field_is_a_real_verified_turn_and_reread_reflects_it() {
     let mut editor = authorized_editor();
     assert_eq!(editor.card().get_u64(0), 0, "the field starts at 0");
 
-    let receipt = editor.set_field(0, 42).expect("set_field fires a real turn");
+    let receipt = editor
+        .set_field(0, 42)
+        .expect("set_field fires a real turn");
     assert_ne!(
         receipt.receipt_hash(),
         [0u8; 32],
@@ -182,7 +184,11 @@ fn set_field_is_a_real_verified_turn_and_reread_reflects_it() {
         42,
         "a re-read reflects the new field value (set via a verified turn)"
     );
-    assert_eq!(editor.card().receipt_count(), 1, "exactly one verified turn committed");
+    assert_eq!(
+        editor.card().receipt_count(),
+        1,
+        "exactly one verified turn committed"
+    );
 }
 
 // ── (c) ADD AN AFFORDANCE — a new fireable turn. ───────────────────────────────────
@@ -212,8 +218,16 @@ fn add_affordance_adds_a_fireable_turn_that_travels_in_the_cell() {
         .card_mut()
         .fire("dec", 3)
         .expect("the newly-welded affordance fires a real verified turn");
-    assert_ne!(fire.receipt_hash(), [0u8; 32], "the new affordance fired a real turn");
-    assert_eq!(editor.card().get_u64(0), 7, "10 - 3 via the welded affordance");
+    assert_ne!(
+        fire.receipt_hash(),
+        [0u8; 32],
+        "the new affordance fired a real turn"
+    );
+    assert_eq!(
+        editor.card().get_u64(0),
+        7,
+        "10 - 3 via the welded affordance"
+    );
     assert_eq!(
         editor.card().receipt_count(),
         before + 1,
@@ -230,7 +244,11 @@ fn add_affordance_adds_a_fireable_turn_that_travels_in_the_cell() {
         .fire("dec", 2)
         .expect("the welded affordance is present on the re-minted card");
     assert_ne!(r.receipt_hash(), [0u8; 32]);
-    assert_eq!(reminted.get_u64(0), 3, "5 - 2 on the re-minted authored card");
+    assert_eq!(
+        reminted.get_u64(0),
+        3,
+        "5 - 2 on the re-minted authored card"
+    );
 }
 
 // ── (d) THE AGENT DOES IT — run_js-shaped authoring, bounded by held. ──────────────
@@ -276,7 +294,11 @@ fn agent_authors_an_authorized_cards_ui_as_a_receipted_patch() {
     );
     // Every agent edit is a receipt, attributed to the agent (the agent-authors-its-own-
     // UI flex, accountably).
-    assert_ne!(edit.receipt.receipt_hash(), [0u8; 32], "the agent's edit left a receipt");
+    assert_ne!(
+        edit.receipt.receipt_hash(),
+        [0u8; 32],
+        "the agent's edit left a receipt"
+    );
     assert!(
         edit.blame.iter().any(|l| l.author == Author(99)),
         "the agent's patch is blamed on the agent"

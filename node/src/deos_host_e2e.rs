@@ -25,7 +25,7 @@ use std::collections::HashSet;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use dregg_cell::{AuthRequired, Cell, CapabilityRef, CellId, Permissions};
+use dregg_cell::{AuthRequired, CapabilityRef, Cell, CellId, Permissions};
 use dregg_turn::action::Effect;
 use dregg_turn::{CallForest, Turn};
 use http_body_util::BodyExt;
@@ -111,7 +111,11 @@ async fn headless_node_hosts_deos_server_client_discovers_and_fires() {
         // Player: an OPEN, funded cell so its signed turn passes the budget gate.
         let mut player = Cell::with_balance(player_pubkey, token, 1_000_000);
         player.permissions = open_permissions();
-        assert_eq!(player.id(), player_cell, "player cell id must match derivation");
+        assert_eq!(
+            player.id(),
+            player_cell,
+            "player cell id must match derivation"
+        );
         s.ledger.insert_cell(player).expect("insert player cell");
 
         // GRANT: a self-grant FROM the door TO the player (a real verified turn
@@ -148,14 +152,10 @@ async fn headless_node_hosts_deos_server_client_discovers_and_fires() {
     //        Substitute the real door id into the fixture; its setup spawns a lever
     //        cell (a GM superpower turn) + registers the `knock` affordance. ────────
     let program = include_str!("../tests/fixtures/gm.js").replace("__DOOR__", &door_hex);
-    let gm_cell = crate::deos_host::host_server_program(
-        &state,
-        "gamemaster",
-        AuthRequired::None,
-        program,
-    )
-    .await
-    .expect("host the gm.js private server");
+    let gm_cell =
+        crate::deos_host::host_server_program(&state, "gamemaster", AuthRequired::None, program)
+            .await
+            .expect("host the gm.js private server");
     let gm_hex = hex_of(&gm_cell);
 
     // The host published the affordance surface for discovery.
@@ -229,7 +229,11 @@ async fn headless_node_hosts_deos_server_client_discovers_and_fires() {
     let signed_bytes = {
         let s = state.read().await;
         let exec_fed = crate::executor_setup::federation_id_for_executor(&s);
-        let nonce = s.ledger.get(&player_cell).map(|c| c.state.nonce()).unwrap_or(0);
+        let nonce = s
+            .ledger
+            .get(&player_cell)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
         let prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
 
         let action = player_cclerk.make_action(player_cell, "knock", vec![knock], &exec_fed);
@@ -272,11 +276,12 @@ async fn headless_node_hosts_deos_server_client_discovers_and_fires() {
     fire_req
         .extensions_mut()
         .insert(axum::extract::ConnectInfo(loopback));
-    let fire_resp = make_router()
-        .oneshot(fire_req)
-        .await
-        .expect("fire request");
-    assert_eq!(fire_resp.status(), StatusCode::OK, "submit route returns 200");
+    let fire_resp = make_router().oneshot(fire_req).await.expect("fire request");
+    assert_eq!(
+        fire_resp.status(),
+        StatusCode::OK,
+        "submit route returns 200"
+    );
     let fire_body = fire_resp.into_body().collect().await.unwrap().to_bytes();
     let fire: serde_json::Value = serde_json::from_slice(&fire_body).unwrap();
     assert_eq!(

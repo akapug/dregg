@@ -37,8 +37,8 @@ use std::thread;
 use servo_render::webview::CapGatedHttpEngine;
 use servo_render::RgbaFrame;
 
-use starbridge_web_surface::{AuthRequired, SurfaceCapability};
 use dregg_firmament::cell_seed;
+use starbridge_web_surface::{AuthRequired, SurfaceCapability};
 
 // ───────────────────────── a tiny self-contained PNG encoder ─────────────────────────
 fn crc32(bytes: &[u8]) -> u32 {
@@ -199,23 +199,20 @@ fn real_http_page_rasterized_through_the_cap_gate() {
         // ── RUN 2: CAP-ALLOWED. A surface scoped to the SERVER's origin. The cap gate
         // admits it, the handler opens a real TCP socket, fetches the real bytes,
         // servo lays them out, SWGL rasterizes. ──
-        let allowed_surface = SurfaceCapability::scoped(
-            presenter,
-            AuthRequired::Either,
-            [origin.clone()],
-            [],
-        );
-        let (frame, outcome) = engine.render(
-            &page_url,
-            allowed_surface,
-            &[origin.clone()],
-            W,
-            H,
-            4096,
-        );
+        let allowed_surface =
+            SurfaceCapability::scoped(presenter, AuthRequired::Either, [origin.clone()], []);
+        let (frame, outcome) =
+            engine.render(&page_url, allowed_surface, &[origin.clone()], W, H, 4096);
         let outcomes = engine.handler().outcomes();
         let last_fetch = engine.handler().last_fetch();
-        (frame, last_fetch, outcomes, denied_outcomes, denied_fetched, outcome)
+        (
+            frame,
+            last_fetch,
+            outcomes,
+            denied_outcomes,
+            denied_fetched,
+            outcome,
+        )
     });
 
     // The cap gate bites for the unauthorized origin: NO bytes were fetched (the byte
@@ -267,7 +264,11 @@ fn real_http_page_rasterized_through_the_cap_gate() {
     let frame = frame.expect("the real Servo WebView produced a frame for the http page");
     assert_eq!(frame.width, W);
     assert_eq!(frame.height, H);
-    assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "real RGBA8, 4 bytes/pixel");
+    assert_eq!(
+        frame.bytes.len(),
+        (W * H * 4) as usize,
+        "real RGBA8, 4 bytes/pixel"
+    );
 
     // ── PROVE it is genuine laid-out PAGE content from the http bytes ──
     // The page has a blue bg, a yellow block, and black antialiased glyphs. Real
@@ -290,7 +291,10 @@ fn real_http_page_rasterized_through_the_cap_gate() {
         "the rendered http page is non-trivial (≥3 distinct colors = real layout); got {}",
         distinct.len()
     );
-    assert!(has_blue, "the page's blue background (from the http bytes) was rasterized");
+    assert!(
+        has_blue,
+        "the page's blue background (from the http bytes) was rasterized"
+    );
     assert!(
         has_yellowish,
         "the page's yellow block (from the http bytes) was laid out + rasterized"
@@ -305,7 +309,10 @@ fn real_http_page_rasterized_through_the_cap_gate() {
     let png = png_encode_rgba8(frame.width, frame.height, &frame.bytes);
     std::fs::write(&out_path, &png).expect("write the rendered http-page PNG");
     let png_len = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
-    assert!(png_len > 100, "the captured PNG is substantial, got {png_len} bytes");
+    assert!(
+        png_len > 100,
+        "the captured PNG is substantial, got {png_len} bytes"
+    );
     println!(
         "HTTP_RENDER_PNG_WRITTEN path={out_path} bytes={png_len} dims={W}x{H} \
          distinct_colors={} source='REAL http:// page fetched over a cap-gated socket, \

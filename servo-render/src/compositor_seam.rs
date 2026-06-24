@@ -31,8 +31,8 @@
 
 #![cfg(feature = "swgl-standalone")]
 
-use dregg_firmament::{label_of, CompositorPd, FrameCommit, Present, Refusal};
 use dregg_firmament::CellId;
+use dregg_firmament::{label_of, CompositorPd, FrameCommit, Present, Refusal};
 
 use crate::swgl_context::RgbaFrame;
 
@@ -100,8 +100,8 @@ pub fn present_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dregg_firmament::{cell_seed, Scene, Surface};
     use dregg_firmament::emulated_kernel::EmulatedKernel;
+    use dregg_firmament::{cell_seed, Scene, Surface};
 
     /// A one-surface scene the presenter owns region 7 in, focused, projecting
     /// root 42 with an initial digest of 0 (so any real frame advances it).
@@ -151,14 +151,25 @@ mod tests {
             .expect("an honest present of a real frame is admitted by the gate");
 
         // The commit carries the REAL pixels' digest and the genuine owner-label.
-        assert_eq!(commit.digest, digest, "the frame log records the real pixels' digest");
-        assert_eq!(commit.label, label_of(&presenter, 42), "T2: the genuine owner-binding");
+        assert_eq!(
+            commit.digest, digest,
+            "the frame log records the real pixels' digest"
+        );
+        assert_eq!(
+            commit.label,
+            label_of(&presenter, 42),
+            "T2: the genuine owner-binding"
+        );
         assert_eq!(commit.regions, vec![7]);
 
         // The framebuffer the compositor SOLELY holds now shows the frame's digest
         // byte in region 7 (the load-bearing authority observable).
         let fb = compositor.framebuffer_snapshot();
-        assert_eq!(fb[7], (digest & 0xFF) as u8, "the authorized tile composited the real frame");
+        assert_eq!(
+            fb[7],
+            (digest & 0xFF) as u8,
+            "the authorized tile composited the real frame"
+        );
         assert_eq!(fb[0], 0, "an unrelated tile is untouched");
     }
 
@@ -173,13 +184,31 @@ mod tests {
         // Scene: presenter owns region 7 (focused); intruder owns region 8.
         let scene = Scene {
             surfaces: vec![
-                Surface { owner: presenter, regions: vec![7], content_digest: 0, source_state_root: 42, z_layer: 0, focus_flag: true },
-                Surface { owner: intruder, regions: vec![8], content_digest: 0, source_state_root: 99, z_layer: 0, focus_flag: false },
+                Surface {
+                    owner: presenter,
+                    regions: vec![7],
+                    content_digest: 0,
+                    source_state_root: 42,
+                    z_layer: 0,
+                    focus_flag: true,
+                },
+                Surface {
+                    owner: intruder,
+                    regions: vec![8],
+                    content_digest: 0,
+                    source_state_root: 99,
+                    z_layer: 0,
+                    focus_flag: false,
+                },
             ],
         };
         let mut compositor = CompositorPd::boot(kernel, scene);
 
-        let frame = RgbaFrame { width: 1, height: 1, bytes: vec![0xAA, 0xBB, 0xCC, 0xDD] };
+        let frame = RgbaFrame {
+            width: 1,
+            height: 1,
+            bytes: vec![0xAA, 0xBB, 0xCC, 0xDD],
+        };
         // The intruder tries to paint region 7 (the presenter's) — overpaint.
         let presentation = FramePresentation {
             presenter: intruder,

@@ -213,9 +213,9 @@ pub fn decode_shadow_state(output: &str) -> Result<ShadowState, String> {
                 verdict: ShadowVerdict {
                     committed,
                     loglen: r.loglen,
-            status: r.status,
-            reason: r.reason,
-            divergence_note: None,
+                    status: r.status,
+                    reason: r.reason,
+                    divergence_note: None,
                 },
                 state: r.state,
             })

@@ -929,14 +929,14 @@ impl Cockpit {
                                         .label("▶ open")
                                         .ghost()
                                         .xsmall()
-                                        .on_click(cx.listener(
-                                            move |this, _ev: &ClickEvent, _w, cx| {
+                                        .on_click(
+                                            cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
                                                 // Swallow the row's own refocus: this is
                                                 // the BROWSE action (open the live page),
                                                 // not the recursive-refocus action.
                                                 this.open_cell_in_browser(observer, cx);
-                                            },
-                                        )),
+                                            }),
+                                        ),
                                     ),
                             ),
                     )
@@ -1276,16 +1276,14 @@ impl Cockpit {
         // selected row is scrolled into view by `on_key` via `palette_scroll`.
         if results.is_empty() {
             card = card.child(
-                div()
-                    .p_1()
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(theme::muted())
-                            .child("(no matching action — Esc to close)"),
-                    ),
+                div().p_1().child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("(no matching action — Esc to close)"),
+                ),
             );
         } else {
             // Each row needs to know the command id it dispatches; clone the

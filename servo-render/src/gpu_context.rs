@@ -46,14 +46,16 @@ use std::sync::Arc;
 use dpi::PhysicalSize;
 use euclid::Size2D;
 use gleam::gl::{self, Gl};
-use paint_api::rendering_context::{Error as PaintError, RenderingContext as ServoRenderingContext};
+use image::RgbaImage;
+use paint_api::rendering_context::{
+    Error as PaintError, RenderingContext as ServoRenderingContext,
+};
 use surfman::chains::{PreserveBuffer, SwapChain};
 use surfman::{
     Adapter, Connection, Context, ContextAttributeFlags, ContextAttributes, Device, GLApi,
     SurfaceAccess, SurfaceType,
 };
 use webrender_api::units::DeviceIntRect;
-use image::RgbaImage;
 
 use crate::swgl_context::RgbaFrame;
 
@@ -193,7 +195,11 @@ impl ServoGpuContext {
         let inner = SurfmanHardware::new(&connection, &adapter)?;
         inner.create_generic_surface(size)?;
         let swap_chain = inner.create_attached_swap_chain()?;
-        Ok(ServoGpuContext { size: Cell::new(size), inner, swap_chain })
+        Ok(ServoGpuContext {
+            size: Cell::new(size),
+            inner,
+            swap_chain,
+        })
     }
 
     /// Read the whole framebuffer back as an owned [`RgbaFrame`] — the direct
@@ -207,7 +213,11 @@ impl ServoGpuContext {
         );
         let img = ServoRenderingContext::read_to_image(self, rect)?;
         let (w, h) = (img.width(), img.height());
-        Some(RgbaFrame { width: w, height: h, bytes: img.into_raw() })
+        Some(RgbaFrame {
+            width: w,
+            height: h,
+            bytes: img.into_raw(),
+        })
     }
 }
 
@@ -397,10 +407,16 @@ mod tests {
             gl.clear(gl::COLOR_BUFFER_BIT);
             gl.finish();
 
-            let frame = ctx.read_frame().expect("the hardware framebuffer reads back");
+            let frame = ctx
+                .read_frame()
+                .expect("the hardware framebuffer reads back");
             assert_eq!(frame.width, W);
             assert_eq!(frame.height, H);
-            assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "RGBA8 = 4 bytes/pixel");
+            assert_eq!(
+                frame.bytes.len(),
+                (W * H * 4) as usize,
+                "RGBA8 = 4 bytes/pixel"
+            );
 
             // Every pixel is the cleared color — real GPU rasterization into a tile.
             let mismatch = (0..(W * H) as usize).find(|&i| {
@@ -431,7 +447,11 @@ mod tests {
             let ctx = make_rendering_context(W, H);
             let _ = ServoRenderingContext::make_current(&*ctx);
             let size = ctx.size();
-            assert_eq!((size.width, size.height), (W, H), "selected backend honors the size");
+            assert_eq!(
+                (size.width, size.height),
+                (W, H),
+                "selected backend honors the size"
+            );
             println!(
                 "BACKEND_SELECT gpu_available={} chosen_size={}x{}",
                 gpu_available(),

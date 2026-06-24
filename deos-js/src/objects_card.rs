@@ -209,7 +209,11 @@ fn objects_view_for_rows(rows: &[ObjectRow]) -> ViewTree {
             list.push(ViewTree::Row {
                 children: vec![
                     text(&format!("{} · bal {}", row.short, row.balance)),
-                    button("inspect", &format!("inspect:{}", short_hex(row.cell.as_bytes())), 1),
+                    button(
+                        "inspect",
+                        &format!("inspect:{}", short_hex(row.cell.as_bytes())),
+                        1,
+                    ),
                 ],
             });
         }
@@ -249,7 +253,9 @@ pub fn object_rows(ledger: &Ledger) -> Vec<ObjectRow> {
 
 fn text(s: &str) -> ViewTree {
     ViewTree::Text {
-        props: TextProps { text: s.to_string() },
+        props: TextProps {
+            text: s.to_string(),
+        },
     }
 }
 
@@ -314,7 +320,13 @@ mod tests {
     fn world(seed: u8) -> Applet {
         let mut pk = [0u8; 32];
         pk[0] = seed;
-        Applet::mint(pk, [0u8; 32], &[(0usize, pack_u64(1))], Vec::new(), AuthRequired::None)
+        Applet::mint(
+            pk,
+            [0u8; 32],
+            &[(0usize, pack_u64(1))],
+            Vec::new(),
+            AuthRequired::None,
+        )
     }
 
     fn objects_card_over(world: &Applet) -> ObjectsCard {
@@ -353,7 +365,9 @@ mod tests {
         assert!(rows[0].balance > 0, "the cell's live balance reads back");
         // The header counts the cells.
         assert!(
-            tree.walk().iter().any(|n| n.label() == Some("Objects · 1 cells")),
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some("Objects · 1 cells")),
             "the header counts the live roster"
         );
     }
@@ -374,7 +388,10 @@ mod tests {
             .expect("the authorized relabel reshape is admitted");
         assert_ne!(card.view_source(), source_before, "the view-source changed");
         assert!(
-            edit.tree.walk().iter().any(|n| n.label() == Some("Sovereign cells")),
+            edit.tree
+                .walk()
+                .iter()
+                .any(|n| n.label() == Some("Sovereign cells")),
             "the re-folded view carries the new header label"
         );
         assert_ne!(
@@ -426,6 +443,10 @@ mod tests {
         });
         assert!(matches!(err, Err(EditError::Unauthorized)));
         assert_eq!(card.view_source(), before, "nothing changed");
-        assert_eq!(card.card().receipt_count(), 0, "no receipt on an unauthorized reshape");
+        assert_eq!(
+            card.card().receipt_count(),
+            0,
+            "no receipt on an unauthorized reshape"
+        );
     }
 }

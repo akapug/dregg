@@ -21,7 +21,7 @@
 
 use deos_js::card_editor::{CardEditor, ViewTree};
 use deos_js::js::JsRuntime;
-use deos_js::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
+use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use dregg_cell::AuthRequired;
 use dregg_doc::Author;
 
@@ -142,7 +142,11 @@ fn editor_js_body() {
         42,
         "a re-read reflects the field set via a JS-driven verified turn"
     );
-    assert_eq!(editor.card().receipt_count(), 1, "one verified turn committed");
+    assert_eq!(
+        editor.card().receipt_count(),
+        1,
+        "one verified turn committed"
+    );
 
     // ── (c) ADD AN AFFORDANCE from JS — a new fireable turn. ───────────────────────
     let editor = editor_with(0xCC, Author(7), AuthRequired::None, AuthRequired::Signature);
@@ -164,14 +168,27 @@ fn editor_js_body() {
         .card_mut()
         .fire("dec", 3)
         .expect("the JS-welded affordance fires a real verified turn");
-    assert_ne!(fire.receipt_hash(), [0u8; 32], "the welded affordance fired a real turn");
-    assert_eq!(editor.card().get_u64(0), 7, "10 - 3 via the JS-welded affordance");
+    assert_ne!(
+        fire.receipt_hash(),
+        [0u8; 32],
+        "the welded affordance fired a real turn"
+    );
+    assert_eq!(
+        editor.card().get_u64(0),
+        7,
+        "10 - 3 via the JS-welded affordance"
+    );
 
     // ── (d) AN UNAUTHORIZED edit is REFUSED in-band — no patch, no turn. ───────────
     // Two distinct over-reaches refused at the JS surface:
     //   (d.1) the cap tooth — held(Signature) does NOT satisfy edit_authority(Proof);
     //   (d.2) the wrong card — a cardId that is NOT the editor's own.
-    let editor = editor_with(0xCD, Author(99), AuthRequired::Signature, AuthRequired::Proof);
+    let editor = editor_with(
+        0xCD,
+        Author(99),
+        AuthRequired::Signature,
+        AuthRequired::Proof,
+    );
     let js_d = r#"
         var card = deos.editor.card();
         // (d.1) over-reach the cap: the card needs Proof, the editor holds Signature.
@@ -207,7 +224,12 @@ fn editor_js_body() {
     // The agent (Author 99) holds a broad-but-attenuated mandate (held=None) that
     // satisfies the card's authoring authority (Signature) — exactly run_js mounting
     // the editor under the agent's `held`. It authors the card's UI live, accountably.
-    let editor = editor_with(0xA6, Author(99), AuthRequired::None, AuthRequired::Signature);
+    let editor = editor_with(
+        0xA6,
+        Author(99),
+        AuthRequired::None,
+        AuthRequired::Signature,
+    );
     let js_e = r#"
         // The agent's snippet: build its OWN card UI from inside the image.
         var card = deos.editor.card();

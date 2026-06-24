@@ -93,7 +93,11 @@ fn js_spike_body() {
     assert_eq!(result, Some(6), "JS witnessed read of the model = 6");
 
     let applet = take_current_applet().expect("applet (a) present");
-    assert_eq!(applet.get_u64(0), 6, "the cell model reflects the verified turns");
+    assert_eq!(
+        applet.get_u64(0),
+        6,
+        "the cell model reflects the verified turns"
+    );
     assert_eq!(
         applet.receipt_count(),
         4,
@@ -175,7 +179,11 @@ fn js_spike_body() {
     "#
     );
     let crawl_ok = rt.eval(&js_crawl).expect("eval (d.1) should succeed");
-    assert_eq!(crawl_ok, Some(1), "JS crawled the live image and read a cell's substances");
+    assert_eq!(
+        crawl_ok,
+        Some(1),
+        "JS crawled the live image and read a cell's substances"
+    );
 
     // (d.2) the frustum is cap-bounded: the cell observes ITSELF (it is on its own
     // ledger); an all-zero stranger id is NOT observable (absence, not forgery).
@@ -273,7 +281,11 @@ fn js_spike_body() {
         (mid !== null && after !== null) ? 1 : 0;
     "#
     );
-    assert_eq!(rt.eval(&js_tt).expect("eval (e.3)"), Some(1), "snapshot/rewind round-trip");
+    assert_eq!(
+        rt.eval(&js_tt).expect("eval (e.3)"),
+        Some(1),
+        "snapshot/rewind round-trip"
+    );
 
     let fanout = take_current_applet().expect("fanout applet");
     // After the rewind the audit tape is back to the snapshot's receipt count (1).
@@ -282,7 +294,11 @@ fn js_spike_body() {
         1,
         "rewind truncates the audit tape — time-travel leaves no phantom receipts"
     );
-    assert_eq!(fanout.get_u64(0), 5, "the model rewound to the snapshot (5)");
+    assert_eq!(
+        fanout.get_u64(0),
+        5,
+        "the model rewound to the snapshot (5)"
+    );
 
     // (e.4) spotter — fuzzy search over every cell's faces finds the applet cell.
     set_current_applet(counter_applet(0xE9));
@@ -296,11 +312,18 @@ fn js_spike_body() {
         "the spotter finds cells by their reflective text"
     );
     let searched = take_current_applet().expect("search applet");
-    assert_eq!(searched.receipt_count(), 0, "search is a READ: no turns committed");
+    assert_eq!(
+        searched.receipt_count(),
+        0,
+        "search is a READ: no turns committed"
+    );
 
     // ── (f) THE DRIVE PATH RUNS SYMBOLIC BY DEFAULT — defers the WITNESS, never a GATE ─
     let sym = counter_applet(0xF1);
-    assert!(sym.is_symbolic(), "the applet drive path is Symbolic by default");
+    assert!(
+        sym.is_symbolic(),
+        "the applet drive path is Symbolic by default"
+    );
     set_current_applet(sym);
     let js_sym = r#"
         var app = deos.applet({ affordances: ["inc", "reset"] });
@@ -318,7 +341,11 @@ fn js_spike_body() {
         sym.last_receipt_deferred(),
         "the committed turn DEFERRED its witness (DEFERRED_STATE_HASH) — Symbolic"
     );
-    assert_eq!(sym.get_u64(0), 8, "the model is correct under Symbolic (witness deferred only)");
+    assert_eq!(
+        sym.get_u64(0),
+        8,
+        "the model is correct under Symbolic (witness deferred only)"
+    );
     assert_eq!(
         sym.receipt_count(),
         1,
@@ -362,7 +389,11 @@ fn js_spike_body() {
         1,
         "building the view-tree committed NOTHING; only firing the button's handler did (1 turn)"
     );
-    assert_eq!(viewed.get_u64(0), 1, "the bound model reflects the fired turn");
+    assert_eq!(
+        viewed.get_u64(0),
+        1,
+        "the bound model reflects the fired turn"
+    );
 }
 
 #[test]

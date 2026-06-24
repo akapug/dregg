@@ -7851,8 +7851,7 @@ async fn handle_tools_call(id: Value, params: Value, state: &NodeState) -> JsonR
 /// (`node/data/ontology-catalog.generated.json`) so the node never depends on
 /// the (discarded) `./site` tree; its generator currently survives only under
 /// `site-old-scavenge/tools/gen-ontology-catalog.js` and must emit here.
-const DREGG_ONTOLOGY_CATALOG: &str =
-    include_str!("../data/ontology-catalog.generated.json");
+const DREGG_ONTOLOGY_CATALOG: &str = include_str!("../data/ontology-catalog.generated.json");
 
 /// A static MCP resource the node always exposes.
 struct StaticResource {

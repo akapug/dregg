@@ -136,10 +136,7 @@ mod server {
     }
 
     /// Bridge one WebSocket connection ↔ one PTY-hosted process.
-    async fn serve_connection(
-        stream: tokio::net::TcpStream,
-        spawn: Spawn,
-    ) -> anyhow::Result<()> {
+    async fn serve_connection(stream: tokio::net::TcpStream, spawn: Spawn) -> anyhow::Result<()> {
         let ws = tokio_tungstenite::accept_async(stream)
             .await
             .context("websocket handshake")?;
@@ -418,7 +415,10 @@ mod ws {
                         let bytes = js_sys::Uint8Array::new(&buf).to_vec();
                         let mut inner = inner.borrow_mut();
                         let Inner {
-                            grid, parser, generation, ..
+                            grid,
+                            parser,
+                            generation,
+                            ..
                         } = &mut *inner;
                         let mut perform = GridPerform { grid };
                         parser.advance(&mut perform, &bytes);
@@ -485,7 +485,10 @@ mod tests {
 
     #[test]
     fn wire_msg_roundtrips() {
-        let resize = WireMsg::Resize { cols: 120, rows: 40 };
+        let resize = WireMsg::Resize {
+            cols: 120,
+            rows: 40,
+        };
         assert_eq!(WireMsg::from_text(&resize.to_text()), Some(resize));
         let exit = WireMsg::Exit { code: Some(0) };
         assert_eq!(WireMsg::from_text(&exit.to_text()), Some(exit));

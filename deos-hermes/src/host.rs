@@ -54,7 +54,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-use crate::confined::{can_read_path, launch_confined_with_egress, probe, ConfinedAgent};
+use crate::confined::{ConfinedAgent, can_read_path, launch_confined_with_egress, probe};
 use crate::egress::EgressPolicy;
 use dregg_firmament::process_kernel::ProcessKernel;
 
@@ -134,7 +134,9 @@ impl DreggHost {
     /// A new dregg host with a SEALED egress policy (the agent reaches the outside
     /// only through dregg's tools, which route to our containers).
     pub fn new() -> DreggHost {
-        DreggHost { egress: EgressPolicy::sealed() }
+        DreggHost {
+            egress: EgressPolicy::sealed(),
+        }
     }
 
     /// GRANT the jailed agent a structured, revocable read-door to one host
@@ -169,9 +171,10 @@ impl DreggHost {
     ) -> std::io::Result<HostedAgentReport> {
         let granted = granted_egress_probe.map(|s| s.to_string());
         let ungranted = ungranted_egress_probe.map(|s| s.to_string());
-        let agent: ConfinedAgent = launch_confined_with_egress(kernel, &self.egress, move |sock| {
-            hosted_agent_body(sock, granted.as_deref(), ungranted.as_deref())
-        })?;
+        let agent: ConfinedAgent =
+            launch_confined_with_egress(kernel, &self.egress, move |sock| {
+                hosted_agent_body(sock, granted.as_deref(), ungranted.as_deref())
+            })?;
 
         // The body reports its FULL verdict over the dregg control Endpoint (the
         // agent's only channel) as one JSON line — NOT the 8-bit exit code, which
@@ -183,7 +186,8 @@ impl DreggHost {
             let mut line = String::new();
             if reader.read_line(&mut line).is_ok() {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-                    endpoint_verdict = v.get("verdict").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+                    endpoint_verdict =
+                        v.get("verdict").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
                 }
             }
         }
@@ -191,7 +195,9 @@ impl DreggHost {
         // The Endpoint verdict is the full bitmask; OR in the exit-code base teeth
         // so the jail teeth are doubly-witnessed (channel + exit code agree on the
         // low bits).
-        Ok(HostedAgentReport::from_verdict(endpoint_verdict | (exit_verdict & probe::ALL)))
+        Ok(HostedAgentReport::from_verdict(
+            endpoint_verdict | (exit_verdict & probe::ALL),
+        ))
     }
 }
 
@@ -245,7 +251,11 @@ fn hosted_agent_body(
     //     IPC_WORKS only if the write actually landed (the honest cross-check).
     let reported = verdict | probe::IPC_WORKS;
     let line = format!("{{\"hosted\":true,\"verdict\":{reported}}}\n");
-    if sock.write_all(line.as_bytes()).and_then(|_| sock.flush()).is_ok() {
+    if sock
+        .write_all(line.as_bytes())
+        .and_then(|_| sock.flush())
+        .is_ok()
+    {
         verdict |= probe::IPC_WORKS;
     }
     verdict & probe::ALL
@@ -285,7 +295,6 @@ fn can_execve_shell() -> bool {
         libc::waitpid(pid, &mut status, 0);
     }
     // WIFEXITED && status==0 would be exec success; anything else = denied.
-    let exited_zero =
-        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
+    let exited_zero = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
     exited_zero
 }

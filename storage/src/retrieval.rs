@@ -52,7 +52,11 @@ pub trait ChunkSource {
     /// `Ok(None)` means "I do not have it / I am withholding it" — a benign
     /// availability fault the loop routes around. `Err` is a transport failure,
     /// treated the same as a miss for liveness but surfaced for scoring.
-    fn fetch_chunk(&self, root: &crate::ContentHash, index: usize) -> Result<Option<ErasureChunk>, ChunkFetchError>;
+    fn fetch_chunk(
+        &self,
+        root: &crate::ContentHash,
+        index: usize,
+    ) -> Result<Option<ErasureChunk>, ChunkFetchError>;
 }
 
 /// A transport-level failure fetching a chunk (distinct from an honest miss).
@@ -371,7 +375,10 @@ mod tests {
     /// Encode a blob and split its chunks across `n` in-memory peers
     /// round-robin (so each peer holds a disjoint slice and no single peer can
     /// serve the whole blob).
-    fn shard_across_peers(data: &[u8], n_peers: usize) -> (AvailabilityManifest, Vec<InMemorySource>) {
+    fn shard_across_peers(
+        data: &[u8],
+        n_peers: usize,
+    ) -> (AvailabilityManifest, Vec<InMemorySource>) {
         let (manifest, chunks) = encode_bytes_for_availability(data, 16, 2);
         let mut peers: Vec<InMemorySource> = (0..n_peers).map(|_| InMemorySource::new()).collect();
         for (i, chunk) in chunks.into_iter().enumerate() {
@@ -399,7 +406,10 @@ mod tests {
         let (manifest, peers) = shard_across_peers(&data, 4);
         // Sanity: no peer alone meets the threshold.
         for p in &peers {
-            assert!(p.chunks.len() < manifest.n_data, "no peer should be self-sufficient");
+            assert!(
+                p.chunks.len() < manifest.n_data,
+                "no peer should be self-sufficient"
+            );
         }
         let recovered = retrieve(&manifest, &peers).expect("k-of-n across peers reconstructs");
         assert_eq!(recovered, data);
@@ -442,7 +452,8 @@ mod tests {
         // integrity check) but whose leaf is not in the manifest's tree — it
         // must NOT count toward the threshold. An honest peer holding the same
         // index lets retrieval still succeed.
-        let data = b"a forged chunk is rejected by its merkle path against the manifest root".to_vec();
+        let data =
+            b"a forged chunk is rejected by its merkle path against the manifest root".to_vec();
         let (manifest, chunks) = encode_bytes_for_availability(&data, 16, 2);
 
         // Forger: holds a tampered version of chunk 0.
@@ -458,7 +469,8 @@ mod tests {
 
         // forger first in the list — its forged chunk-0 must be skipped, and the
         // honest peer's chunks reconstruct.
-        let recovered = retrieve(&manifest, &[forger, honest]).expect("forged chunk skipped, honest k-of-n wins");
+        let recovered = retrieve(&manifest, &[forger, honest])
+            .expect("forged chunk skipped, honest k-of-n wins");
         assert_eq!(recovered, data);
     }
 
@@ -468,12 +480,16 @@ mod tests {
         // by Merkle membership against THIS manifest's root.
         let data_a = b"i am blob A, the one the manifest commits to, the real article".to_vec();
         let (manifest_a, _) = encode_bytes_for_availability(&data_a, 16, 2);
-        let (_, chunks_b) = encode_bytes_for_availability(b"i am blob B, an impostor that should not count", 16, 2);
+        let (_, chunks_b) =
+            encode_bytes_for_availability(b"i am blob B, an impostor that should not count", 16, 2);
         // A source serving ONLY blob B's (internally valid) chunks.
         let impostor = InMemorySource::from_chunks(chunks_b);
         match retrieve(&manifest_a, &[impostor]) {
             Err(RetrievalError::Unavailable { gathered, .. }) => {
-                assert_eq!(gathered, 0, "no impostor chunk authenticates against A's root");
+                assert_eq!(
+                    gathered, 0,
+                    "no impostor chunk authenticates against A's root"
+                );
             }
             other => panic!("impostor chunks must yield Unavailable, got {other:?}"),
         }
@@ -487,8 +503,14 @@ mod tests {
         let (manifest, chunks) = encode_bytes_for_availability(&data, 16, 2);
         let source = InMemorySource::from_chunks(chunks);
         let verdict = sample_das(&manifest, &[source], manifest.n_total.min(8), 0xDA5);
-        assert_eq!(verdict.found, verdict.sampled, "every sampled chunk present");
-        assert!(verdict.is_available(0.99), "full availability ⇒ high confidence: {verdict:?}");
+        assert_eq!(
+            verdict.found, verdict.sampled,
+            "every sampled chunk present"
+        );
+        assert!(
+            verdict.is_available(0.99),
+            "full availability ⇒ high confidence: {verdict:?}"
+        );
     }
 
     // ── HTTP light-client adapter (multi-node stitch over the serving routes) ─
@@ -519,7 +541,8 @@ mod tests {
     /// MUST stitch across both.
     #[test]
     fn retrieve_via_http_stitches_across_two_nodes() {
-        let data = b"retrieve the bytes behind a verified commitment across two http nodes".to_vec();
+        let data =
+            b"retrieve the bytes behind a verified commitment across two http nodes".to_vec();
         let (manifest, chunks) = encode_bytes_for_availability(&data, 16, 2);
         let mut bodies = HashMap::new();
         for chunk in &chunks {
@@ -533,8 +556,14 @@ mod tests {
                 serde_json::to_vec(chunk).unwrap(),
             );
         }
-        let net = FakeNet { bodies, hits: Mutex::new(Vec::new()) };
-        let bases = vec!["http://node-a/storage".into(), "http://node-b/storage".into()];
+        let net = FakeNet {
+            bodies,
+            hits: Mutex::new(Vec::new()),
+        };
+        let bases = vec![
+            "http://node-a/storage".into(),
+            "http://node-b/storage".into(),
+        ];
         let fetch = |u: &str| net.fetch(u);
         let recovered = retrieve_via_http(&manifest, &bases, &fetch).expect("k-of-n across nodes");
         assert_eq!(recovered, data);
@@ -556,9 +585,15 @@ mod tests {
                 serde_json::to_vec(chunk).unwrap(),
             );
         }
-        let net = FakeNet { bodies, hits: Mutex::new(Vec::new()) };
+        let net = FakeNet {
+            bodies,
+            hits: Mutex::new(Vec::new()),
+        };
         // node-a (the withholder) listed FIRST: every index asks it first.
-        let bases = vec!["http://node-a/storage".into(), "http://node-b/storage".into()];
+        let bases = vec![
+            "http://node-a/storage".into(),
+            "http://node-b/storage".into(),
+        ];
         let fetch = |u: &str| net.fetch(u);
         let recovered = retrieve_via_http(&manifest, &bases, &fetch).expect("honest node serves");
         assert_eq!(recovered, data);
@@ -568,7 +603,8 @@ mod tests {
     /// the honest node's k-of-n still reconstructs.
     #[test]
     fn retrieve_via_http_rejects_a_forging_node() {
-        let data = b"a forging http node cannot poison retrieval: the merkle root catches it".to_vec();
+        let data =
+            b"a forging http node cannot poison retrieval: the merkle root catches it".to_vec();
         let (manifest, chunks) = encode_bytes_for_availability(&data, 16, 2);
         let mut forged = chunks[0].clone();
         forged.data[0] ^= 0xFF;
@@ -584,8 +620,14 @@ mod tests {
                 serde_json::to_vec(chunk).unwrap(),
             );
         }
-        let net = FakeNet { bodies, hits: Mutex::new(Vec::new()) };
-        let bases = vec!["http://node-a/storage".into(), "http://node-b/storage".into()];
+        let net = FakeNet {
+            bodies,
+            hits: Mutex::new(Vec::new()),
+        };
+        let bases = vec![
+            "http://node-a/storage".into(),
+            "http://node-b/storage".into(),
+        ];
         let fetch = |u: &str| net.fetch(u);
         let recovered = retrieve_via_http(&manifest, &bases, &fetch)
             .expect("forged chunk skipped, honest k-of-n wins");
@@ -604,6 +646,9 @@ mod tests {
         let source = InMemorySource::from_chunks(kept);
         let verdict = sample_das(&manifest, &[source], manifest.n_total, 0xBEEF);
         assert!(verdict.found < verdict.sampled, "gaps observed");
-        assert!(!verdict.is_available(0.99), "withheld data ⇒ low confidence: {verdict:?}");
+        assert!(
+            !verdict.is_available(0.99),
+            "withheld data ⇒ low confidence: {verdict:?}"
+        );
     }
 }

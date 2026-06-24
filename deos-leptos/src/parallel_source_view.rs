@@ -53,11 +53,11 @@
 
 use leptos::prelude::*;
 
+use deos_web_cells::AuthRequired;
 use deos_web_cells::{
     DreggUri, DreggverseDocument, Membrane, Provenance, RenderedDocument, RenderedSpan, Span,
     SpanRange, SurfaceCapability, TranscludedField, WebBundle, WebOfCells,
 };
-use deos_web_cells::AuthRequired;
 
 // ════════════════════════════════════════════════════════════════════════════
 // THE SCENARIO — a real web-of-cells, a multi-span dreggverse document, and the
@@ -322,7 +322,11 @@ impl EelSource {
             self.range.start,
             range_end_label(self.range),
             self.receipt_prefix,
-            if self.finalized { "finalized" } else { "UNATTESTED" },
+            if self.finalized {
+                "finalized"
+            } else {
+                "UNATTESTED"
+            },
         )
     }
 }
@@ -430,7 +434,11 @@ fn full_source_split(uri: &DreggUri, range: SpanRange, web: &WebOfCells) -> Full
     let len = content.len();
     let start = range.start.min(len);
     let end = range.end.min(len);
-    let (start, end) = if start >= end { (start, start) } else { (start, end) };
+    let (start, end) = if start >= end {
+        (start, start)
+    } else {
+        (start, end)
+    };
 
     FullSource {
         before: String::from_utf8_lossy(&content[..start]).into_owned(),
@@ -802,15 +810,27 @@ mod tests {
         assert_eq!(rows.len(), 7, "one row per EDL span");
 
         // Row 0 (OWN) carries document text, NO source.
-        assert!(rows[0].source.is_none(), "OWN content has no parallel source");
+        assert!(
+            rows[0].source.is_none(),
+            "OWN content has no parallel source"
+        );
         assert!(rows[0].document_text.contains("The council adopts"));
 
         // Row 1 (the preamble quote) carries the cited-range text + the source detail.
-        let preamble = rows[1].source.as_ref().expect("the preamble quote has a source");
-        assert!(!preamble.darkened, "the preamble is readable at full authority");
+        let preamble = rows[1]
+            .source
+            .as_ref()
+            .expect("the preamble quote has a source");
+        assert!(
+            !preamble.darkened,
+            "the preamble is readable at full authority"
+        );
         assert_eq!(preamble.range, SpanRange::new(0, 53));
         assert!(preamble.uri.to_uri_string().contains("dregg://"));
-        assert!(preamble.finalized, "a published+attested source is finalized");
+        assert!(
+            preamble.finalized,
+            "a published+attested source is finalized"
+        );
         // The cited-range document text is the FIRST 53 bytes of the preamble source.
         assert_eq!(
             rows[1].document_text,
@@ -819,14 +839,29 @@ mod tests {
 
         // The source column shows the WHOLE preamble cell, split at the quoted range —
         // the quoted part equals the document text, and there are bytes AFTER it.
-        let fs = preamble.full_source.as_ref().expect("a readable quote carries full bytes");
-        assert_eq!(fs.quoted, rows[1].document_text, "the highlighted range IS the quote");
+        let fs = preamble
+            .full_source
+            .as_ref()
+            .expect("a readable quote carries full bytes");
+        assert_eq!(
+            fs.quoted, rows[1].document_text,
+            "the highlighted range IS the quote"
+        );
         assert_eq!(fs.before, "", "the preamble quote starts at byte 0");
-        assert!(fs.after.contains("charter"), "the rest of the source follows the highlight");
+        assert!(
+            fs.after.contains("charter"),
+            "the rest of the source follows the highlight"
+        );
 
         // Row 3 (the threshold quote — the whole source) shows the full committed value.
-        let threshold = rows[3].source.as_ref().expect("the threshold quote has a source");
-        assert_eq!(rows[3].document_text, "quorum = 3 of 5", "the whole threshold source");
+        let threshold = rows[3]
+            .source
+            .as_ref()
+            .expect("the threshold quote has a source");
+        assert_eq!(
+            rows[3].document_text, "quorum = 3 of 5",
+            "the whole threshold source"
+        );
         let tfs = threshold.full_source.as_ref().unwrap();
         assert_eq!(tfs.quoted, "quorum = 3 of 5");
         assert_eq!(tfs.after, "", "a whole-source quote highlights to the end");
@@ -842,11 +877,20 @@ mod tests {
         let html = render_parallel_source_view(&rendered, scenario.web(), "test caption");
 
         // The two columns are present.
-        assert!(html.contains("eel-document-column"), "the document column renders");
-        assert!(html.contains("eel-source-column"), "the source column renders");
+        assert!(
+            html.contains("eel-document-column"),
+            "the document column renders"
+        );
+        assert!(
+            html.contains("eel-source-column"),
+            "the source column renders"
+        );
 
         // The quoted range is HIGHLIGHTED in the source column (the <mark>).
-        assert!(html.contains("<mark"), "the quoted range is marked in the source");
+        assert!(
+            html.contains("<mark"),
+            "the quoted range is marked in the source"
+        );
         assert!(
             html.contains("We the council, to govern in the open, do ordain this"),
             "the highlighted preamble clause appears in the source column: {html}"
@@ -883,16 +927,35 @@ mod tests {
         let rendered = scenario.resolve_weaker();
 
         // Exactly one span darkened (the annex), through the REAL membrane meet.
-        assert_eq!(rendered.darkened_count(), 1, "the weaker viewer darkens the annex span");
+        assert_eq!(
+            rendered.darkened_count(),
+            1,
+            "the weaker viewer darkens the annex span"
+        );
 
         let rows = eel_rows(&rendered, scenario.web());
         // The annex quote is span 5 — darkened, NO full source bytes, citation kept.
-        let annex = rows[5].source.as_ref().expect("the annex row still carries its citation");
-        assert!(annex.darkened, "the annex span darkened for the weaker viewer");
-        assert!(annex.full_source.is_none(), "a darkened row reads NO source bytes");
-        assert!(annex.finalized, "the darkened span's citation is still finalized");
+        let annex = rows[5]
+            .source
+            .as_ref()
+            .expect("the annex row still carries its citation");
+        assert!(
+            annex.darkened,
+            "the annex span darkened for the weaker viewer"
+        );
+        assert!(
+            annex.full_source.is_none(),
+            "a darkened row reads NO source bytes"
+        );
+        assert!(
+            annex.finalized,
+            "the darkened span's citation is still finalized"
+        );
         // The document column contributes nothing for the darkened span.
-        assert_eq!(rows[5].document_text, "", "a darkened span yields no document text");
+        assert_eq!(
+            rows[5].document_text, "",
+            "a darkened span yields no document text"
+        );
         // …but the jump anchor (source_link) survives — you can still navigate to what
         // it cites.
         assert!(annex.uri.to_uri_string().contains("dregg://"));
@@ -904,9 +967,15 @@ mod tests {
             html.contains("you may not read this, but here is what it cites"),
             "the darkened source shows the honest withholding line: {html}"
         );
-        assert!(html.contains("eel-darkened"), "the darkened row is marked as such");
+        assert!(
+            html.contains("eel-darkened"),
+            "the darkened row is marked as such"
+        );
         // The citation (source ref) survives in the darkened block.
-        assert!(html.contains("id=\"eel-src-5\""), "the darkened source has its jump target");
+        assert!(
+            html.contains("id=\"eel-src-5\""),
+            "the darkened source has its jump target"
+        );
         // THE ANTI-FORGE TOOTH: the secret annex bytes NEVER appear (not the value, not a
         // forgery) — the viewer sees the citation, not the bytes it lacks authority for.
         assert!(
@@ -914,8 +983,14 @@ mod tests {
             "the weaker viewer NEVER sees the secret source bytes: {html}"
         );
         // The two readable quotes (preamble, threshold) still render their source bytes.
-        assert!(html.contains("We the council"), "the readable preamble still shows");
-        assert!(html.contains("quorum = 3 of 5"), "the readable threshold still shows");
+        assert!(
+            html.contains("We the council"),
+            "the readable preamble still shows"
+        );
+        assert!(
+            html.contains("quorum = 3 of 5"),
+            "the readable threshold still shows"
+        );
     }
 
     // ── (4) THE LIVE UPDATE, IN THE PARALLEL VIEW: amend the threshold source → the
@@ -962,7 +1037,10 @@ mod tests {
         // The weaker viewer keeps darkening exactly the annex across the updates — the
         // amend touched only the threshold span; the darkened annex stays withheld.
         for step in &steps {
-            assert_eq!(step.darkened, 1, "the weaker viewer darkens the annex at every step");
+            assert_eq!(
+                step.darkened, 1,
+                "the weaker viewer darkens the annex at every step"
+            );
             assert!(
                 !step.weaker_html.contains("sealed deliberations"),
                 "the weaker viewer never sees the secret bytes, at any step"
@@ -995,14 +1073,20 @@ mod tests {
 
         // The preamble span is byte-identical AND cites the SAME receipt — amending the
         // threshold touched only the threshold span.
-        assert_eq!(rows1[1].document_text, preamble0, "the preamble text is unchanged");
+        assert_eq!(
+            rows1[1].document_text, preamble0,
+            "the preamble text is unchanged"
+        );
         assert_eq!(
             rows1[1].source.as_ref().unwrap().receipt_prefix,
             preamble_receipt0,
             "the preamble's citation is unchanged (the amend touched only the threshold)"
         );
         // The threshold span DID advance.
-        assert_eq!(rows1[3].document_text, "quorum = 4 of 5", "the threshold span tracked");
+        assert_eq!(
+            rows1[3].document_text, "quorum = 4 of 5",
+            "the threshold span tracked"
+        );
     }
 
     // ── SSR sanity: the reactive component renders the parallel source view on the
@@ -1012,21 +1096,31 @@ mod tests {
     fn ssr_parallel_source_view_component_renders_both_viewers() {
         // Full authority — nothing darkened, the amend button present.
         let owner = Owner::new();
-        let full_html = owner.with(|| {
-            view! { <ParallelSourceView as_weaker_viewer=false /> }.to_html()
-        });
+        let full_html =
+            owner.with(|| view! { <ParallelSourceView as_weaker_viewer=false /> }.to_html());
         assert!(full_html.contains("deos-eel"), "the EEL view rendered");
-        assert!(full_html.contains("<mark"), "the quoted range is highlighted");
-        assert!(full_html.contains("href=\"#eel-src-1\""), "the jump anchor renders");
-        assert!(full_html.contains("eel-amend"), "the amend payoff button renders");
-        assert!(full_html.contains("0 span(s) darkened"), "full authority darkens nothing");
+        assert!(
+            full_html.contains("<mark"),
+            "the quoted range is highlighted"
+        );
+        assert!(
+            full_html.contains("href=\"#eel-src-1\""),
+            "the jump anchor renders"
+        );
+        assert!(
+            full_html.contains("eel-amend"),
+            "the amend payoff button renders"
+        );
+        assert!(
+            full_html.contains("0 span(s) darkened"),
+            "full authority darkens nothing"
+        );
 
         // Weaker viewer — one span darkened, the withholding line present, the secret
         // bytes absent.
         let owner2 = Owner::new();
-        let weaker_html = owner2.with(|| {
-            view! { <ParallelSourceView as_weaker_viewer=true /> }.to_html()
-        });
+        let weaker_html =
+            owner2.with(|| view! { <ParallelSourceView as_weaker_viewer=true /> }.to_html());
         assert!(
             weaker_html.contains("1 span(s) darkened"),
             "the weaker viewer darkens one span: {weaker_html}"

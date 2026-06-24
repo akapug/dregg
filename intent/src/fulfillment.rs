@@ -249,11 +249,14 @@ pub fn build_self_fulfillment_trusted(
     // to the intent id so the minted macaroon is intent-specific.
     // A stable per-intent token id string (lowercase hex of the intent id), without
     // pulling a hex dependency.
-    let token_id = intent.id.iter().fold(String::with_capacity(64), |mut s, b| {
-        use std::fmt::Write as _;
-        let _ = write!(s, "{b:02x}");
-        s
-    });
+    let token_id = intent
+        .id
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write as _;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
     let source = crate::matcher::HeldCapability {
         token_id,
         actions: vec!["*".to_string()],

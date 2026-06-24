@@ -28,7 +28,7 @@
 use wasm_bindgen_test::*;
 
 use deos_matrix::source::{ChatSource, MockSource};
-use deos_zed::fs::{Fs, FirmamentFs};
+use deos_zed::fs::{FirmamentFs, Fs};
 
 #[wasm_bindgen_test]
 fn editor_firmament_save_is_a_receipted_turn() {
@@ -43,10 +43,15 @@ fn editor_firmament_save_is_a_receipted_turn() {
     let saves_before = fs.save_count().unwrap_or(0);
 
     // THE SAVE IS A TURN — a real cap-gated SetField through the in-tab TurnExecutor.
-    fs.save(&path, "// edited in-tab\nfn main() { println!(\"sovereign\"); }\n")
-        .expect("firmament save (a receipted turn) succeeds on wasm");
+    fs.save(
+        &path,
+        "// edited in-tab\nfn main() { println!(\"sovereign\"); }\n",
+    )
+    .expect("firmament save (a receipted turn) succeeds on wasm");
 
-    let saves_after = fs.save_count().expect("FirmamentFs reports a receipt count");
+    let saves_after = fs
+        .save_count()
+        .expect("FirmamentFs reports a receipt count");
     assert!(
         saves_after > saves_before,
         "the on-ledger receipt count GROWS on save ({saves_before} -> {saves_after})"
@@ -54,7 +59,10 @@ fn editor_firmament_save_is_a_receipted_turn() {
 
     // The save left a real receipt with a post-state digest.
     let receipt = fs.last_receipt().expect("a TurnReceipt after the save");
-    assert_ne!(receipt.post_state_hash, [0u8; 32], "receipt carries a post-state root");
+    assert_ne!(
+        receipt.post_state_hash, [0u8; 32],
+        "receipt carries a post-state root"
+    );
 
     // The saved bytes read back through the same Fs seam the editor uses.
     let read_back = fs.load(&path).expect("load the saved file-cell");
@@ -82,7 +90,10 @@ fn chat_mocksource_drives_on_wasm() {
 
     let rid = rooms[0].room_id.to_string();
     let tl_before = source.timeline(&rid, 80).expect("timeline").len();
-    assert!(tl_before > 0, "the room has a populated timeline with no server");
+    assert!(
+        tl_before > 0,
+        "the room has a populated timeline with no server"
+    );
 
     // send_turn — the composer's send: appends locally + returns a SendReceipt
     // (the turn the send committed against the room cell). Exactly WebChatPane::send.

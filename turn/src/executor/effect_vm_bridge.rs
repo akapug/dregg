@@ -318,9 +318,8 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(target.as_bytes());
                     hasher.update(&slot.to_le_bytes());
                     let mint_hash_bytes = hasher.finalize();
-                    let value_lo = dregg_circuit::field::BabyBear::new(
-                        (*amount & ((1u64 << 30) - 1)) as u32,
-                    );
+                    let value_lo =
+                        dregg_circuit::field::BabyBear::new((*amount & ((1u64 << 30) - 1)) as u32);
                     vm_effects.push(VmEffect::Mint {
                         value_lo,
                         mint_hash: hash_to_bb(mint_hash_bytes.as_bytes()),

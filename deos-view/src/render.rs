@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use deos_js::applet::Applet;
-use deos_js::signals::{BindingId, BindingRegistry, SourceEvent, Slot};
+use deos_js::signals::{BindingId, BindingRegistry, Slot, SourceEvent};
 use dregg_types::CellId;
 use gpui::{
     div, px, App, ClickEvent, Context, FontWeight, IntoElement, ParentElement, Render, Styled,
@@ -65,10 +65,7 @@ pub type SharedApplet = Rc<RefCell<Applet>>;
 fn bind_plan(tree: &ViewNode, out: &mut Vec<Slot>) {
     match tree {
         ViewNode::Bind { slot, .. } => out.push(*slot),
-        ViewNode::VStack(cs)
-        | ViewNode::Row(cs)
-        | ViewNode::List(cs)
-        | ViewNode::Table(cs) => {
+        ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
             for c in cs {
                 bind_plan(c, out);
             }

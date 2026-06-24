@@ -6695,9 +6695,8 @@ mod tests {
         let layout = check_descriptor2(&desc).expect("deployed noteSpend descriptor checks");
         let presence = Presence::of(&desc, &layout);
         let chip_laned = trace_with_chip_lanes(&desc, &trace);
-        let honest_proof =
-            prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
-                .expect("NO DOWNGRADE: the honest deployed noteSpend must prove");
+        let honest_proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+            .expect("NO DOWNGRADE: the honest deployed noteSpend must prove");
         verify_vm_descriptor2(&desc, &honest_proof, &dpis)
             .expect("NO DOWNGRADE: the honest deployed noteSpend must verify");
 

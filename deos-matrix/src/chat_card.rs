@@ -188,7 +188,10 @@ mod tests {
         assert_eq!(cell_before.room_id, room_id, "the card's room IS this cell");
         let turns_before = cell_before.turn_count;
         let root_before = cell_before.state_root;
-        assert!(turns_before >= 1, "the seeded room cell already holds turns");
+        assert!(
+            turns_before >= 1,
+            "the seeded room cell already holds turns"
+        );
 
         // View = the cell's history: the timeline reads back oldest-first.
         let tl_before = card.timeline().unwrap();
@@ -208,14 +211,28 @@ mod tests {
         // advances the room cell's history.
         let me = "@ember:deos.local";
         let r1 = card.send("first card turn").unwrap();
-        assert_eq!(r1.room_cell, cell_before.cell_id, "turn committed against this room cell");
+        assert_eq!(
+            r1.room_cell, cell_before.cell_id,
+            "turn committed against this room cell"
+        );
         // turn_index = the room cell's turn_count AFTER the send (send_turn sends, then
         // reads rc.turn_count — source.rs:92-98), so the first send lands at turns_before + 1.
-        assert_eq!(r1.turn_index, turns_before + 1, "first send advanced the room cell to the next turn");
+        assert_eq!(
+            r1.turn_index,
+            turns_before + 1,
+            "first send advanced the room cell to the next turn"
+        );
 
         let r2 = card.send("second card turn").unwrap();
-        assert_eq!(r2.turn_index, turns_before + 2, "second send advanced the index again");
-        assert_ne!(r2.post_root, r1.post_root, "each turn moved the room cell root");
+        assert_eq!(
+            r2.turn_index,
+            turns_before + 2,
+            "second send advanced the index again"
+        );
+        assert_ne!(
+            r2.post_root, r1.post_root,
+            "each turn moved the room cell root"
+        );
 
         // The room cell's history grew by exactly the two receipted turns.
         let cell_after = card.room();
@@ -224,17 +241,33 @@ mod tests {
             turns_before + 2,
             "the room cell's history grew by the two turns"
         );
-        assert_ne!(cell_after.state_root, root_before, "the room cell root advanced");
-        assert_eq!(cell_after.cell_id, cell_before.cell_id, "same room == same cell");
+        assert_ne!(
+            cell_after.state_root, root_before,
+            "the room cell root advanced"
+        );
+        assert_eq!(
+            cell_after.cell_id, cell_before.cell_id,
+            "same room == same cell"
+        );
 
         // View reads them back FROM the room cell's real state, in order, with
         // senders — the timeline IS the cell's history.
         let tl_after = card.timeline().unwrap();
-        assert_eq!(tl_after.len(), tl_before.len() + 2, "two new lines in the history");
+        assert_eq!(
+            tl_after.len(),
+            tl_before.len() + 2,
+            "two new lines in the history"
+        );
         let last_two = &tl_after[tl_after.len() - 2..];
         assert_eq!(last_two[0].body, "first card turn");
-        assert_eq!(last_two[0].sender, me, "the sender rode the turn into the cell");
-        assert_eq!(last_two[0].event_id, r1.event_id, "the line carries the turn's event id");
+        assert_eq!(
+            last_two[0].sender, me,
+            "the sender rode the turn into the cell"
+        );
+        assert_eq!(
+            last_two[0].event_id, r1.event_id,
+            "the line carries the turn's event id"
+        );
         assert_eq!(last_two[1].body, "second card turn");
         assert_eq!(last_two[1].sender, me);
         assert_eq!(last_two[1].event_id, r2.event_id);
@@ -264,7 +297,11 @@ mod tests {
         // Re-focus moves the card to the other room cell.
         let card = card.focus(second.clone());
         assert_eq!(card.room_id(), second);
-        assert_eq!(card.room().room_id, second, "the card now IS the second room cell");
+        assert_eq!(
+            card.room().room_id,
+            second,
+            "the card now IS the second room cell"
+        );
         assert_eq!(card.backend_label(), "mock");
     }
 }

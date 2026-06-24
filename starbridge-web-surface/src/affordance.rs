@@ -1979,7 +1979,9 @@ mod tests {
         let view_key = ViewKey::from_root([0x5A; 32]);
         // A WIDE read-cap over slots {3,5}; a NARROW one (attenuated) over {3}.
         let wide_cap = ReadCap::new(doc, FieldSet::from_slots(&[3, 5]), view_key);
-        let narrow_cap = wide_cap.attenuate(FieldSet::single(3)).expect("attenuation");
+        let narrow_cap = wide_cap
+            .attenuate(FieldSet::single(3))
+            .expect("attenuation");
 
         // Two viewers at EQUAL write-authority (both Signature), differing ONLY in
         // their read-cap — the membrane permits-bit comes from the cap.

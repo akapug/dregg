@@ -199,7 +199,9 @@ fn adversary_amplifying_captp_handoff_is_rejected() {
         AuthRequired::None, // GRANTS the loosest tier — amplification over the locked cell
     );
 
-    let committed = executor().execute(&turn, &mut ledger.clone()).is_committed();
+    let committed = executor()
+        .execute(&turn, &mut ledger.clone())
+        .is_committed();
     assert!(
         !committed,
         "SOUNDNESS HOLE: the executor COMMITTED an amplifying CapTpDelivered turn from an \
@@ -263,7 +265,9 @@ fn legitimate_captp_handoff_still_accepted() {
         AuthRequired::None, // matches the open cell's required tier — no amplification
     );
 
-    let committed = executor().execute(&turn, &mut ledger.clone()).is_committed();
+    let committed = executor()
+        .execute(&turn, &mut ledger.clone())
+        .is_committed();
     assert!(
         committed,
         "REGRESSION: a LEGITIMATE non-amplifying CapTpDelivered handoff on an OPEN cell was \

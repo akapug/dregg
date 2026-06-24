@@ -348,9 +348,7 @@ impl Effect {
             Effect::Burn { .. } => Inversion::Committed(CommittedReason::ValueBurned),
             // Supply creation (well→holder): generative, committed — un-minting
             // requires a compensating cap-gated burn, not a structural inverse.
-            Effect::Mint { .. } => {
-                Inversion::Committed(CommittedReason::GenerativeOrProofCarrying)
-            }
+            Effect::Mint { .. } => Inversion::Committed(CommittedReason::GenerativeOrProofCarrying),
             // The freshness ratchet (§4.2).
             Effect::IncrementNonce { .. } => {
                 Inversion::Committed(CommittedReason::FreshnessRatchet)

@@ -16,16 +16,15 @@
 //!    carrying the source's receipt-pinned provenance (the live quote), via the
 //!    REAL `TranscludedField`.
 
+use deos_web_cells::tests_support::cid;
 use deos_web_cells::{
     fetch_bundle, publish_bundle, rehydrate_bundle, transclude_bundle_fragment, BundleAsset,
     BundleError, BundleKind, CascadeError, DomSnapshot, SnapshotError, WebBundle,
 };
-use deos_web_cells::tests_support::cid;
 
 use starbridge_web_surface::rehydrate::InteractionLog;
 use starbridge_web_surface::{
-    AuthRequired, DreggUri, FetchError, Membrane, RehydrateError, SurfaceCapability,
-    WebOfCells,
+    AuthRequired, DreggUri, FetchError, Membrane, RehydrateError, SurfaceCapability, WebOfCells,
 };
 
 use std::collections::BTreeSet;
@@ -93,8 +92,14 @@ fn the_whole_story_publish_fetch_snapshot_rehydrate_transclude() {
     let lineage = SurfaceCapability::scoped(cell, AuthRequired::Either, origins(&all_origins), []);
 
     let mut web = WebOfCells::new(3);
-    let (uri, sturdyref) =
-        publish_bundle(&mut web, seed, &bundle, lineage, InteractionLog::new(), false);
+    let (uri, sturdyref) = publish_bundle(
+        &mut web,
+        seed,
+        &bundle,
+        lineage,
+        InteractionLog::new(),
+        false,
+    );
     assert_eq!(uri.cell, cell, "publish is deterministic in the seed");
 
     // ── FETCH through the REAL attested path: the fetched bundle IS the published. ──
@@ -102,7 +107,10 @@ fn the_whole_story_publish_fetch_snapshot_rehydrate_transclude() {
     assert_eq!(fetched, bundle);
     assert_eq!(fetched.content_hash(), bundle.content_hash());
     // The trusted chrome shows the bundle's content-address, drawn from the ledger.
-    assert_eq!(chrome.committed_url.as_deref(), Some(bundle.content_uri().as_str()));
+    assert_eq!(
+        chrome.committed_url.as_deref(),
+        Some(bundle.content_uri().as_str())
+    );
     assert!(chrome.finalized);
 
     // ── (2) THE CAP TOOTH: nothing reaches a decode without a verified bundle. ──
@@ -121,7 +129,9 @@ fn the_whole_story_publish_fetch_snapshot_rehydrate_transclude() {
         // here we exercise the public path.)
         let mut raw_web = WebOfCells::new(3);
         let raw_uri = raw_web.publish(8, b"raw bytes, not a bundle encoding", "dregg://raw");
-        let (resource, _c) = raw_web.fetch(&raw_uri).expect("the raw cell resolves + attests");
+        let (resource, _c) = raw_web
+            .fetch(&raw_uri)
+            .expect("the raw cell resolves + attests");
         assert!(resource.verify().is_ok(), "the attestation still verifies");
         assert_eq!(
             fetch_bundle(&raw_web, &raw_uri),
@@ -173,7 +183,12 @@ fn the_whole_story_publish_fetch_snapshot_rehydrate_transclude() {
     //      (Re-publish under a Custom-identity lineage so the meet is incomparable.)
     let mut idweb = WebOfCells::new(3);
     let id_bundle = WebBundle::static_html(b"<h1>confidential</h1>".to_vec());
-    let id_lineage = SurfaceCapability::root(cid(40), AuthRequired::Custom { vk_hash: [0xAA; 32] });
+    let id_lineage = SurfaceCapability::root(
+        cid(40),
+        AuthRequired::Custom {
+            vk_hash: [0xAA; 32],
+        },
+    );
     let (_iduri, id_sr) = publish_bundle(
         &mut idweb,
         40,
@@ -183,8 +198,12 @@ fn the_whole_story_publish_fetch_snapshot_rehydrate_transclude() {
         false,
     );
     let id_snapshot = DomSnapshot::take(&id_bundle, id_sr).expect("snapshot");
-    let incomparable =
-        Membrane::new(SurfaceCapability::root(cid(41), AuthRequired::Custom { vk_hash: [0xBB; 32] }));
+    let incomparable = Membrane::new(SurfaceCapability::root(
+        cid(41),
+        AuthRequired::Custom {
+            vk_hash: [0xBB; 32],
+        },
+    ));
     assert_eq!(
         rehydrate_bundle(&id_snapshot, &incomparable, &idweb),
         Err(SnapshotError::Rehydrate(RehydrateError::Amplification)),
@@ -194,16 +213,22 @@ fn the_whole_story_publish_fetch_snapshot_rehydrate_transclude() {
     // ── (4) TRANSCLUSION-WITH-PROVENANCE: include a fragment into another surface. ──
     // Another surface transcludes the live app's `dom-state` fragment — the live
     // quote, carrying the source's receipt-pinned provenance.
-    let quote = transclude_bundle_fragment(&web, &uri, "dom-state")
-        .expect("the fragment transcludes");
+    let quote =
+        transclude_bundle_fragment(&web, &uri, "dom-state").expect("the fragment transcludes");
     // The fragment bytes ARE the source asset's committed bytes (not a copy).
-    assert_eq!(quote.fragment_bytes, br#"{"signals":{"counter":3},"effects":["render"]}"#);
+    assert_eq!(
+        quote.fragment_bytes,
+        br#"{"signals":{"counter":3},"effects":["render"]}"#
+    );
     assert_eq!(quote.asset_name, "dom-state");
     // It carries the receipt-pinned provenance: the source bundle ref + finalized.
     assert_eq!(quote.cite().source, uri);
     assert!(quote.cite().finalized);
     // And it re-verifies (content→commitment→receipt→receipt-stream-root→quorum).
-    assert!(quote.verify().is_ok(), "the transcluded fragment's provenance re-verifies");
+    assert!(
+        quote.verify().is_ok(),
+        "the transcluded fragment's provenance re-verifies"
+    );
 
     // A fragment NOT in the source bundle is refused. (BundleFragmentQuote carries a
     // TranscludedField, which is not Eq, so we match on the error variant.)
@@ -242,7 +267,9 @@ fn a_dead_ref_yields_nothing_everywhere() {
     let viewer = Membrane::new(SurfaceCapability::root(cid(98), AuthRequired::Either));
     assert_eq!(
         rehydrate_bundle(&dead_snapshot, &viewer, &web),
-        Err(SnapshotError::Rehydrate(RehydrateError::Fetch(FetchError::OriginNotFound)))
+        Err(SnapshotError::Rehydrate(RehydrateError::Fetch(
+            FetchError::OriginNotFound
+        )))
     );
 
     assert!(matches!(

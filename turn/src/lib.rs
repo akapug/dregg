@@ -124,6 +124,7 @@ pub use action::{
     Action, Authorization, BearerCapProof, CommitmentMode, DelegationMode, DelegationProofData,
     Effect, Event, TokenKeyRef, derive_cell_macaroon_secret,
 };
+pub use admission_reason::AdmissionReason;
 pub use budget_gate::{BudgetGate, BudgetSlice};
 pub use builder::{
     ActionBuilder, Authorized, Bearer, Breadstuff, NeedsAuth, Proved, Signed, TurnBuilder,
@@ -145,7 +146,6 @@ pub use encrypted::{
     ConflictBucket, EncryptedTurn, EncryptedTurnError, SubmitterAuth, TurnOrdering,
     TurnValidityProof, TurnValidityPublicInputs, order_encrypted_turns,
 };
-pub use admission_reason::AdmissionReason;
 pub use error::TurnError;
 pub use eventual::{
     CycleError, EventualRef, OutputRef, Pipeline, PipelineBuilder, PipelineError, PipelineResult,

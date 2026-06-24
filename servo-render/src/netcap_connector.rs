@@ -210,7 +210,9 @@ impl<N: Netlayer> NetcapConnector<N> {
             Err(e) => ConnectOutcome::RefusedByTransport {
                 origin: origin.to_string(),
                 reason: match e {
-                    NetlayerError::PeerUnreachable { .. } => "peer unreachable on this netlayer".to_string(),
+                    NetlayerError::PeerUnreachable { .. } => {
+                        "peer unreachable on this netlayer".to_string()
+                    }
                     other => other.to_string(),
                 },
             },
@@ -231,7 +233,10 @@ pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         fn clone(_: *const ()) -> RawWaker {
             raw()
         }
-        RawWaker::new(std::ptr::null(), &RawWakerVTable::new(clone, no_op, no_op, no_op))
+        RawWaker::new(
+            std::ptr::null(),
+            &RawWakerVTable::new(clone, no_op, no_op, no_op),
+        )
     }
 
     let waker = unsafe { Waker::from_raw(raw()) };
@@ -255,7 +260,9 @@ mod tests {
     /// Build an in-process netlayer where `self` has joined, plus the peers for the
     /// given origins also joined (so an authorized dial to them SUCCEEDS). Returns the
     /// connector.
-    fn connector_with_peers(origins: &[&str]) -> NetcapConnector<dregg_captp::netlayer::InProcessNetlayer> {
+    fn connector_with_peers(
+        origins: &[&str],
+    ) -> NetcapConnector<dregg_captp::netlayer::InProcessNetlayer> {
         let fabric = InProcessFabric::new();
         // Our own node (the dialer) — any peer id in the keyspace.
         let me = fabric.join([0x01; 32]);
@@ -286,11 +293,19 @@ mod tests {
 
         let outcome = block_on(connector.connect(&surface, "https://evil.com"));
 
-        assert!(outcome.refused_by_cap(), "the uncapped origin is refused by the cap");
-        assert!(!outcome.dialed(), "no audited session opened for the uncapped origin");
+        assert!(
+            outcome.refused_by_cap(),
+            "the uncapped origin is refused by the cap"
+        );
+        assert!(
+            !outcome.dialed(),
+            "no audited session opened for the uncapped origin"
+        );
         assert_eq!(
             outcome,
-            ConnectOutcome::RefusedByCap { origin: "https://evil.com".to_string() }
+            ConnectOutcome::RefusedByCap {
+                origin: "https://evil.com".to_string()
+            }
         );
         // THE PROOF THE GATE BIT AT THE TRANSPORT: the netlayer was NEVER dialed for
         // evil.com — the dialed-audit is empty. A gate that merely sat in front of an
@@ -317,7 +332,10 @@ mod tests {
 
         let outcome = block_on(connector.connect(&surface, "https://example.com"));
 
-        assert!(outcome.dialed(), "the cap-authorized origin dials through the netlayer");
+        assert!(
+            outcome.dialed(),
+            "the cap-authorized origin dials through the netlayer"
+        );
         match &outcome {
             ConnectOutcome::Dialed { origin, peer } => {
                 assert_eq!(origin, "https://example.com");
@@ -352,7 +370,10 @@ mod tests {
             matches!(unreachable, ConnectOutcome::RefusedByTransport { .. }),
             "wildcard cap + unreachable peer → refused by TRANSPORT, not the cap: {unreachable:?}"
         );
-        assert!(!unreachable.refused_by_cap(), "this refusal is the transport's, not the cap's");
+        assert!(
+            !unreachable.refused_by_cap(),
+            "this refusal is the transport's, not the cap's"
+        );
     }
 
     /// The status line tells the truth for each of the three ends.
@@ -362,9 +383,13 @@ mod tests {
             origin: "https://example.com".to_string(),
             peer: origin_to_peer("https://example.com"),
         };
-        assert!(dialed.status_line().contains("dialed through captp Netlayer"));
+        assert!(dialed
+            .status_line()
+            .contains("dialed through captp Netlayer"));
 
-        let cap = ConnectOutcome::RefusedByCap { origin: "https://evil.com".to_string() };
+        let cap = ConnectOutcome::RefusedByCap {
+            origin: "https://evil.com".to_string(),
+        };
         assert!(cap.status_line().contains("REFUSED at the socket"));
         assert!(cap.status_line().contains("Netlayer::dial never called"));
 
@@ -372,6 +397,8 @@ mod tests {
             origin: "https://x.invalid".to_string(),
             reason: "peer unreachable on this netlayer".to_string(),
         };
-        assert!(transport.status_line().contains("unreachable on the netlayer"));
+        assert!(transport
+            .status_line()
+            .contains("unreachable on the netlayer"));
     }
 }

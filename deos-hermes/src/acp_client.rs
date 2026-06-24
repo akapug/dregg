@@ -44,7 +44,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::acp::{PermissionOutcome, ToolCallRequest};
 use crate::bridge::HermesGateway;
@@ -758,17 +758,19 @@ fn parse_tool_call_update(params: &Value, update: &Value) -> Option<ToolCallRequ
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| infer_tool_name(update, &raw_input));
-    Some(ToolCallRequest::new(session_id, tool_call_id, name, raw_input))
+    Some(ToolCallRequest::new(
+        session_id,
+        tool_call_id,
+        name,
+        raw_input,
+    ))
 }
 
 /// Best-effort tool-name inference when the ACP wire omits an explicit name
 /// (the permission `ToolCallUpdate` carries `kind` + `rawInput`, not always a
 /// name). Maps the kind + arg shape to a representative Hermes tool name.
 fn infer_tool_name(tc: &Value, raw_input: &Value) -> String {
-    let kind = tc
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("other");
+    let kind = tc.get("kind").and_then(|v| v.as_str()).unwrap_or("other");
     if raw_input.get("command").is_some() {
         return "terminal".to_string();
     }

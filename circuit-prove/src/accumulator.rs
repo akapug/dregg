@@ -70,10 +70,19 @@
 //! `acc_attests_whole_history`, `#assert_axioms`-clean): the running fold preserves whole-history
 //! attestation by induction from genesis, carrying the SAME named `EngineSound` recursion boundary.
 
+use p3_commit::Pcs;
 use p3_recursion::{
     BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput,
     build_and_prove_aggregation_layer, build_and_prove_next_layer,
 };
+use p3_uni_stark::StarkGenericConfig;
+
+/// The runtime preprocessed-commitment value type for the recursion config — the child proof's
+/// VK-identity core (a Merkle cap). This is what the VK-identity pin (lever (a)) constrains in-band.
+type RecursionCommit = <<DreggRecursionConfig as StarkGenericConfig>::Pcs as Pcs<
+    <DreggRecursionConfig as StarkGenericConfig>::Challenge,
+    <DreggRecursionConfig as StarkGenericConfig>::Challenger,
+>>::Commitment;
 
 use crate::ivc_turn_chain::{
     FinalizedTurn, RecursionVk, TurnChainBindingAir, WholeChainProof, ir2_leaf_wrap_config,
@@ -188,6 +197,21 @@ pub struct Accumulator {
     /// reconstruction witness (see the struct note: O(num_turns) SCALARS, not proofs; eliminated by
     /// prereq (b)).
     seam_pairs: Vec<(BabyBear, BabyBear)>,
+    /// **THE VK-IDENTITY FIXED-POINT PIN (lever (a), now CONSUMED).** When set, each running fold
+    /// pins the RUNNING (left) input's preprocessed commitment IN-CIRCUIT to this expected value via
+    /// [`RecursionOutput::into_recursion_input_pinned`] — so the next aggregation layer's in-circuit
+    /// verifier constrains "the proof I am re-folding came from THE SAME running circuit." Captured
+    /// once the running circuit shape stabilizes (after the first aggregation), then held constant.
+    /// A running proof from a DIFFERENT circuit (different preprocessed commitment) makes the
+    /// aggregation circuit UNSAT — `accumulate` fails with [`AccError::RecursionFailed`].
+    ///
+    /// `None` until the first aggregation OR if the pin is disabled (see
+    /// [`Accumulator::with_vk_identity_pin`]). Default: pin ENABLED.
+    pinned_running_vk: Option<RecursionCommit>,
+    /// Whether the VK-identity fixed-point pin is enabled. Default `true`. Disable only to reproduce
+    /// the legacy unpinned fold (e.g. to exhibit that a foreign-circuit proof is REJECTED only with
+    /// the pin on).
+    pin_vk_identity: bool,
 }
 
 impl Default for Accumulator {
@@ -198,12 +222,75 @@ impl Default for Accumulator {
 
 impl Accumulator {
     /// `acc_0`: the empty accumulator (no running proof, no summary). The base of the IVC fold.
+    /// The VK-identity fixed-point pin (lever (a)) is ENABLED by default.
     pub fn genesis() -> Self {
         Self {
             running: None,
             summary: None,
             seam_pairs: Vec::new(),
+            pinned_running_vk: None,
+            pin_vk_identity: true,
         }
+    }
+
+    /// Toggle the VK-identity fixed-point pin (lever (a)). Enabled by default; disable to reproduce
+    /// the legacy unpinned fold. Returns `self` for chaining (`Accumulator::genesis().with_vk_identity_pin(false)`).
+    pub fn with_vk_identity_pin(mut self, enabled: bool) -> Self {
+        self.pin_vk_identity = enabled;
+        self
+    }
+
+    /// Whether the running fixed-point VK pin has been captured yet (i.e. the running circuit shape
+    /// has stabilized and subsequent folds are pinned in-band).
+    pub fn vk_identity_pinned(&self) -> bool {
+        self.pinned_running_vk.is_some()
+    }
+
+    /// The running proof's genuine preprocessed commitment (its VK-identity core), if a turn has been
+    /// folded. This is the value an honest fixed-point fold pins against.
+    pub fn running_vk_commit(&self) -> Option<RecursionCommit> {
+        self.running
+            .as_ref()
+            .and_then(|r| r.running_preprocessed_commit())
+    }
+
+    /// **VK-IDENTITY-PIN PROBE (lever (a) demonstration).** Re-fold the current running proof against
+    /// `turn`'s freshly-wrapped descriptor leaf, pinning the running (left) input's preprocessed
+    /// commitment IN-CIRCUIT to `expected_running_vk`. Returns `Ok(())` iff the aggregation circuit is
+    /// satisfiable — i.e. iff the running proof's actual VK matches `expected_running_vk`.
+    ///
+    /// Pass the running proof's GENUINE commitment ([`running_vk_commit`](Self::running_vk_commit)) to
+    /// see the honest fold succeed; pass a CORRUPTED commitment to see the in-circuit VK check reject
+    /// it (`AccError::RecursionFailed`). This is the direct witness that a proof from a different
+    /// circuit is refused IN-CIRCUIT, not host-side. Does NOT mutate the accumulator.
+    pub fn probe_pinned_fold(
+        &self,
+        turn: &FinalizedTurn,
+        expected_running_vk: RecursionCommit,
+    ) -> Result<(), AccError> {
+        let running = self.running.as_ref().ok_or(AccError::Empty)?;
+        let config = ir2_leaf_wrap_config();
+        let backend = create_recursion_backend();
+        let params = ProveNextLayerParams::default();
+
+        let leg = &turn.participant.rotated;
+        let new_leaf = prove_descriptor_leaf_rotated_with_config(
+            &leg.descriptor,
+            &leg.proof,
+            &leg.public_inputs,
+            &config,
+        )
+        .map_err(|reason| AccError::TurnProofInvalid { index: 0, reason })?;
+
+        let left = running.into_recursion_input_pinned::<BatchOnly>(expected_running_vk);
+        let right = new_leaf.into_recursion_input::<BatchOnly>();
+        build_and_prove_aggregation_layer::<DreggRecursionConfig, BatchOnly, BatchOnly, _, D>(
+            &left, &right, &config, &backend, &params, None,
+        )
+        .map(|_| ())
+        .map_err(|e| AccError::RecursionFailed {
+            reason: format!("pinned aggregation layer failed: {e:?}"),
+        })
     }
 
     /// The current running summary, if any turn has been folded.
@@ -270,7 +357,19 @@ impl Accumulator {
                 // THE RECURSION: re-verify the running proof in-circuit (BatchOnly) and fold it
                 // against the new leaf. This is `into_recursion_input::<BatchOnly>` driven as a
                 // running LEFT-fold (the same re-verification `aggregate_tree` does per node).
-                let left = running.into_recursion_input::<BatchOnly>();
+                //
+                // ── VK-IDENTITY FIXED-POINT PIN (lever (a), in-band). ──────────────────────────
+                // When a stabilized running VK has been captured, pin the RUNNING (left) input's
+                // preprocessed commitment to it IN-CIRCUIT: the next aggregation layer's verifier
+                // now constrains that the proof being re-folded came from THE SAME running circuit.
+                // A running proof of a DIFFERENT circuit (different preprocessed commitment) makes
+                // this aggregation circuit UNSAT — the IVC self-verification fixed-point check.
+                let left = match (self.pin_vk_identity, self.pinned_running_vk.clone()) {
+                    (true, Some(expected)) => {
+                        running.into_recursion_input_pinned::<BatchOnly>(expected)
+                    }
+                    _ => running.into_recursion_input::<BatchOnly>(),
+                };
                 let right = new_leaf.into_recursion_input::<BatchOnly>();
                 build_and_prove_aggregation_layer::<
                     DreggRecursionConfig,
@@ -284,6 +383,15 @@ impl Accumulator {
                 })?
             }
         };
+
+        // Capture the running circuit's stabilized VK fingerprint the first time it exists so every
+        // SUBSEQUENT fold pins against it. The running aggregation circuit shape is identical from
+        // the first aggregation on (same BatchOnly∘BatchOnly fold), so its preprocessed commitment
+        // is constant — that constant IS the perpetual fixed point. (The very first leaf has no
+        // running aggregation yet; the pin engages from the second aggregation onward.)
+        if self.pin_vk_identity && self.pinned_running_vk.is_none() {
+            self.pinned_running_vk = new_running.running_preprocessed_commit();
+        }
 
         // (5) advance the running summary. The running digest folds each turn's `(old, new)` pair
         //     into the Poseidon2 carrier, in order — so it commits to the WHOLE ordered history

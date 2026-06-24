@@ -1152,7 +1152,14 @@ async fn get_storage_manifest(
         .cloned()
         .ok_or(StorageRefusal::NotFound)?;
 
-    let turn_hash = commit_storage_op(inner, gateway, StorageOp::Get, &key, admitted.new_spent, hash.0)?;
+    let turn_hash = commit_storage_op(
+        inner,
+        gateway,
+        StorageOp::Get,
+        &key,
+        admitted.new_spent,
+        hash.0,
+    )?;
     drop(s);
     state.emit(crate::state::NodeEvent::Receipt {
         hash: hex_encode(&turn_hash),
@@ -1203,7 +1210,14 @@ async fn get_storage_chunk(
         .derive_chunk(&hash, index)
         .ok_or(StorageRefusal::NotFound)?;
 
-    let turn_hash = commit_storage_op(inner, gateway, StorageOp::Get, &key, admitted.new_spent, hash.0)?;
+    let turn_hash = commit_storage_op(
+        inner,
+        gateway,
+        StorageOp::Get,
+        &key,
+        admitted.new_spent,
+        hash.0,
+    )?;
     drop(s);
     state.emit(crate::state::NodeEvent::Receipt {
         hash: hex_encode(&turn_hash),
@@ -1711,7 +1725,10 @@ mod tests {
         let mut forged = gathered[0].clone();
         forged.data[0] ^= 0xFF;
         forged.commitment = erasure::chunk_commitment_dual(&forged.data).blake3;
-        assert!(erasure::verify_chunk(&forged), "integrity passes (recomputed leaf)");
+        assert!(
+            erasure::verify_chunk(&forged),
+            "integrity passes (recomputed leaf)"
+        );
         assert!(
             !erasure::verify_chunk_against_root(&forged, &manifest.root),
             "but Merkle membership against the manifest root REJECTS the forgery"
@@ -1740,7 +1757,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "manifest needs clearance");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "manifest needs clearance"
+        );
 
         let app = routes().with_state(state.clone());
         let resp = app
@@ -1753,6 +1774,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "chunk needs clearance");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "chunk needs clearance"
+        );
     }
 }

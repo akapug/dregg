@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 
-use gpui::{AnyElement, App, AppContext as _, Entity, FocusHandle, Focusable as _, IntoElement, Window};
+use gpui::{
+    AnyElement, App, AppContext as _, Entity, FocusHandle, Focusable as _, IntoElement, Window,
+};
 
 use crate::chat::ChatView;
 use crate::source::ChatSource;
@@ -36,12 +38,7 @@ impl ChatSurface {
     /// Build a chat surface over a [`ChatSource`]. `id` is the stable surface
     /// identity within a pane (the host supplies a monotonic counter or a `Tab`
     /// discriminant).
-    pub fn new(
-        id: u64,
-        source: Arc<dyn ChatSource>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self {
+    pub fn new(id: u64, source: Arc<dyn ChatSource>, window: &mut Window, cx: &mut App) -> Self {
         let view = cx.new(|cx| ChatView::new(source, window, cx));
         Self { id, view }
     }

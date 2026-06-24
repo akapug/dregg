@@ -120,7 +120,10 @@ pub struct Receipt {
 
 impl Receipt {
     fn from_prov(p: Provenance) -> Self {
-        Receipt { author: p.author, patch: p.patch }
+        Receipt {
+            author: p.author,
+            patch: p.patch,
+        }
     }
 }
 
@@ -178,7 +181,12 @@ impl DocumentComposer {
     /// adds append after the current document tail.
     pub fn over(host: ChildCellId, author: Author, layout: LayoutGraph) -> Self {
         let tail = last_live_atom(&layout);
-        DocumentComposer { host, author, layout, tail }
+        DocumentComposer {
+            host,
+            author,
+            layout,
+            tail,
+        }
     }
 
     /// The document cell this composer authors.
@@ -270,7 +278,10 @@ impl DocumentComposer {
     /// the CRDT represents as a fork, never a silent overwrite). Pass [`AtomId::ROOT`] as
     /// `before` to constrain `child` to follow the head. Returns the [`Receipt`].
     pub fn reorder(&mut self, child: AtomId, before: AtomId) -> Receipt {
-        self.apply(&[Op::Order { from: before, to: child }]);
+        self.apply(&[Op::Order {
+            from: before,
+            to: child,
+        }]);
         self.receipt_of(child)
     }
 
@@ -352,8 +363,7 @@ impl DocumentComposer {
     pub fn roster(&self) -> Vec<ComposedChild> {
         let live = self.children();
         let mut out = live.clone();
-        let live_atoms: std::collections::BTreeSet<AtomId> =
-            live.iter().map(|c| c.atom).collect();
+        let live_atoms: std::collections::BTreeSet<AtomId> = live.iter().map(|c| c.atom).collect();
         // Append the tombstoned embed-atoms (graph order by id — stable, deterministic).
         for (id, role, cell, prov) in embed_atoms(&self.layout) {
             if !live_atoms.contains(&id) {
@@ -394,14 +404,21 @@ impl DocumentComposer {
             // An order-only gesture (no atom written) still has a deterministic
             // provenance under the author; fall back to the host genesis-shaped author
             // stamp so a receipt is never absent.
-            None => Receipt { author: self.author, patch: PatchId::GENESIS },
+            None => Receipt {
+                author: self.author,
+                patch: PatchId::GENESIS,
+            },
         }
     }
 
     /// A viewer that clears every embedded cell (the owning author's full-authority
     /// read — no child darkens for them).
     fn full_authority_viewer(&self) -> Viewer {
-        Viewer::able(embed_atoms(&self.layout).into_iter().map(|(_, _, cell, _)| cell))
+        Viewer::able(
+            embed_atoms(&self.layout)
+                .into_iter()
+                .map(|(_, _, cell, _)| cell),
+        )
     }
 
     /// A resolver that renders each embedded cell as a one-atom leaf (the standalone
@@ -607,7 +624,11 @@ mod tests {
         let a_atom = c.embed_id(a);
         let b_atom = c.embed_id(b);
         let receipt = c.reorder(b_atom, a_atom);
-        assert_eq!(receipt.author, Author(7), "the reorder is a receipted gesture");
+        assert_eq!(
+            receipt.author,
+            Author(7),
+            "the reorder is a receipted gesture"
+        );
         let order: Vec<ChildCellId> = c.children().iter().map(|k| k.cell).collect();
         assert_eq!(order, vec![a, b], "the reorder resolved the fork: a then b");
 
@@ -639,7 +660,10 @@ mod tests {
         // GONE from the live render: only b remains a child.
         let kids = c.children();
         assert_eq!(kids.len(), 1, "the removed child drops off the live render");
-        assert_eq!(kids[0].cell, b, "b survives; the order conducts through the tombstone");
+        assert_eq!(
+            kids[0].cell, b,
+            "b survives; the order conducts through the tombstone"
+        );
 
         // BUT RETAINED — the roster still carries a, marked not-live, with its provenance.
         let roster = c.roster();
@@ -670,7 +694,11 @@ mod tests {
         assert_eq!(receipt.author, Author(7), "set_role is a receipted gesture");
 
         let kids = c.children();
-        assert_eq!(kids.len(), 1, "still exactly one live child (re-roled, not duplicated)");
+        assert_eq!(
+            kids.len(),
+            1,
+            "still exactly one live child (re-roled, not duplicated)"
+        );
         // THE ROLE READS BACK CHANGED.
         assert_eq!(kids[0].role, Role::Figure, "the role reads back as Figure");
         // THE CITATION (which cell) IS PRESERVED.
@@ -700,7 +728,11 @@ mod tests {
 
         // Every receipt is authored by the composer (each is a turn on the document cell).
         for r in [r_add_a, r_add_b, r_reorder, r_role, r_remove] {
-            assert_eq!(r.author, Author(7), "every gesture is attributed to the author");
+            assert_eq!(
+                r.author,
+                Author(7),
+                "every gesture is attributed to the author"
+            );
         }
         // The adds are distinct turns (distinct content => distinct patch ids).
         assert_ne!(r_add_a.patch, r_add_b.patch);

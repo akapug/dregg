@@ -87,11 +87,17 @@ async fn sync_until(
 ) -> deos_matrix::TimelineMessage {
     for attempt in 0..tries {
         client.sync_once().await.expect("sync");
-        let tl = client.recent_timeline(room_id, 100).await.expect("timeline");
+        let tl = client
+            .recent_timeline(room_id, 100)
+            .await
+            .expect("timeline");
         if let Some(m) = tl.iter().find(|m| pred(m)) {
             return m.clone();
         }
-        eprintln!("  ({label}) not yet visible after sync {} — retrying", attempt + 1);
+        eprintln!(
+            "  ({label}) not yet visible after sync {} — retrying",
+            attempt + 1
+        );
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
     panic!("{label}: message never arrived on the receiver after {tries} syncs");
@@ -164,7 +170,9 @@ async fn live_login_sync_send_membrane_roundtrip() {
     assert_eq!(stored.homeserver, homeserver);
 
     // 2. SESSION PERSISTENCE: restore from the stored session, no password.
-    let restored = MatrixClient::restore(&stored).await.expect("restore session");
+    let restored = MatrixClient::restore(&stored)
+        .await
+        .expect("restore session");
     assert_eq!(restored.user_id(), client.user_id());
 
     // 3. SYNC + ROOMS. The test user must be in at least one room; the harness
@@ -179,10 +187,19 @@ async fn live_login_sync_send_membrane_roundtrip() {
     let room_id = rooms[0].room_id.to_string();
 
     // 4. SEND a plain text message (real POST) and read it back.
-    let marker = format!("deos-matrix live test {}", stored.session.tokens.access_token.len());
-    let sent_id = client.send_text(&room_id, &marker).await.expect("send text");
+    let marker = format!(
+        "deos-matrix live test {}",
+        stored.session.tokens.access_token.len()
+    );
+    let sent_id = client
+        .send_text(&room_id, &marker)
+        .await
+        .expect("send text");
     client.sync_once().await.expect("sync after send");
-    let tl = client.recent_timeline(&room_id, 50).await.expect("timeline");
+    let tl = client
+        .recent_timeline(&room_id, 50)
+        .await
+        .expect("timeline");
     assert!(
         tl.iter().any(|m| m.event_id == sent_id && m.body == marker),
         "our sent text message read back over the wire"
@@ -205,7 +222,10 @@ async fn live_login_sync_send_membrane_roundtrip() {
         .await
         .expect("send membrane");
     client.sync_once().await.expect("sync after membrane");
-    let tl = client.recent_timeline(&room_id, 50).await.expect("timeline");
+    let tl = client
+        .recent_timeline(&room_id, 50)
+        .await
+        .expect("timeline");
     let received = tl
         .iter()
         .find(|m| m.event_id == mem_id)
@@ -215,7 +235,10 @@ async fn live_login_sync_send_membrane_roundtrip() {
         .membrane
         .as_ref()
         .expect("membrane envelope extracted from the wire");
-    assert_eq!(back, &env, "the membrane round-tripped through the real server");
+    assert_eq!(
+        back, &env,
+        "the membrane round-tripped through the real server"
+    );
 
     // 6. SEND a generalized DREGG OBJECT (a non-membrane kind) and read it back as
     //    a typed object — the generalized envelope over real Matrix (the new
@@ -230,7 +253,10 @@ async fn live_login_sync_send_membrane_roundtrip() {
         .await
         .expect("send object");
     client.sync_once().await.expect("sync after object");
-    let tl = client.recent_timeline(&room_id, 50).await.expect("timeline");
+    let tl = client
+        .recent_timeline(&room_id, 50)
+        .await
+        .expect("timeline");
     let received = tl
         .iter()
         .find(|m| m.event_id == obj_id)
@@ -241,7 +267,10 @@ async fn live_login_sync_send_membrane_roundtrip() {
         "kind is Object(cell)"
     );
     assert_eq!(
-        received.object.as_ref().expect("object extracted from the wire"),
+        received
+            .object
+            .as_ref()
+            .expect("object extracted from the wire"),
         &obj,
         "the dregg object round-tripped through the real server"
     );
@@ -253,10 +282,19 @@ async fn live_login_sync_send_membrane_roundtrip() {
         label: "Approve the merge".into(),
         required_cap: "dregg://cap/approve".into(),
     });
-    let aff_id = client.send_object(&room_id, "", &aff).await.expect("send affordance");
+    let aff_id = client
+        .send_object(&room_id, "", &aff)
+        .await
+        .expect("send affordance");
     client.sync_once().await.expect("sync after affordance");
-    let tl = client.recent_timeline(&room_id, 50).await.expect("timeline");
-    let r = tl.iter().find(|m| m.event_id == aff_id).expect("affordance read back");
+    let tl = client
+        .recent_timeline(&room_id, 50)
+        .await
+        .expect("timeline");
+    let r = tl
+        .iter()
+        .find(|m| m.event_id == aff_id)
+        .expect("affordance read back");
     assert_eq!(r.kind, MessageKind::Object("affordance".into()));
     assert_eq!(r.object.as_ref().unwrap(), &aff);
 
@@ -292,12 +330,22 @@ async fn live_two_user_cross_user_roundtrip() {
 
     // Two clients, two SQLite stores — genuinely separate users/devices.
     let (client_a, _stored_a) = MatrixClient::login_password(
-        &hs, &tmp_store(), "live-A-passphrase", &user_a, &pass_a, "deos-matrix-live-A",
+        &hs,
+        &tmp_store(),
+        "live-A-passphrase",
+        &user_a,
+        &pass_a,
+        "deos-matrix-live-A",
     )
     .await
     .expect("user A login");
     let (client_b, _stored_b) = MatrixClient::login_password(
-        &hs, &tmp_store(), "live-B-passphrase", &user_b, &pass_b, "deos-matrix-live-B",
+        &hs,
+        &tmp_store(),
+        "live-B-passphrase",
+        &user_b,
+        &pass_b,
+        "deos-matrix-live-B",
     )
     .await
     .expect("user B login");
@@ -309,7 +357,11 @@ async fn live_two_user_cross_user_roundtrip() {
 
     // A creates a room and invites B.
     let room_id = client_a
-        .create_room(Some("deos-lab"), Some("the live deos-pilled room"), &[uid_b.as_str()])
+        .create_room(
+            Some("deos-lab"),
+            Some("the live deos-pilled room"),
+            &[uid_b.as_str()],
+        )
         .await
         .expect("A creates room + invites B");
     eprintln!("LIVE two-user: room {room_id} created by A, B invited");
@@ -320,16 +372,28 @@ async fn live_two_user_cross_user_roundtrip() {
         client_b.sync_once().await.expect("B sync for invite");
         let invites = client_b.invited_rooms().await.expect("B invited rooms");
         if invites.iter().any(|r| r.room_id.as_str() == room_id) {
-            client_b.accept_invite(&room_id).await.expect("B accepts invite");
+            client_b
+                .accept_invite(&room_id)
+                .await
+                .expect("B accepts invite");
             joined = true;
             break;
         }
         // Maybe already auto-joined / already visible as joined.
-        if client_b.joined_rooms().await.expect("B joined").iter().any(|r| r.room_id.as_str() == room_id) {
+        if client_b
+            .joined_rooms()
+            .await
+            .expect("B joined")
+            .iter()
+            .any(|r| r.room_id.as_str() == room_id)
+        {
             joined = true;
             break;
         }
-        eprintln!("  (invite) not visible to B yet after sync {} — retrying", attempt + 1);
+        eprintln!(
+            "  (invite) not visible to B yet after sync {} — retrying",
+            attempt + 1
+        );
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
     assert!(joined, "B never saw/accepted the invite");
@@ -338,7 +402,10 @@ async fn live_two_user_cross_user_roundtrip() {
 
     // ---- LEG 1: a PLAIN text message A→B ------------------------------------
     let marker = format!("hello from A · {}", uid_a);
-    let text_id = client_a.send_text(&room_id, &marker).await.expect("A sends text");
+    let text_id = client_a
+        .send_text(&room_id, &marker)
+        .await
+        .expect("A sends text");
     let got = sync_until(&client_b, &room_id, 20, "text A→B", |m| {
         m.event_id == text_id || (m.body == marker && m.sender == uid_a)
     })
@@ -350,14 +417,33 @@ async fn live_two_user_cross_user_roundtrip() {
 
     // ---- LEG 2: a MembraneEnvelope (dregg object) A→B -----------------------
     let env = MockMembraneHost::sample_envelope();
-    let mem_id = client_a.send_membrane(&room_id, "", &env).await.expect("A sends membrane");
-    let got = sync_until(&client_b, &room_id, 20, "membrane A→B", |m| m.event_id == mem_id).await;
-    assert_eq!(got.kind, MessageKind::Membrane, "B sees a Membrane-kind message");
-    let back = got.membrane.as_ref().expect("B extracts the membrane envelope from the wire");
-    assert_eq!(back, &env, "the MembraneEnvelope round-tripped A→B byte-intact through the real server");
+    let mem_id = client_a
+        .send_membrane(&room_id, "", &env)
+        .await
+        .expect("A sends membrane");
+    let got = sync_until(&client_b, &room_id, 20, "membrane A→B", |m| {
+        m.event_id == mem_id
+    })
+    .await;
+    assert_eq!(
+        got.kind,
+        MessageKind::Membrane,
+        "B sees a Membrane-kind message"
+    );
+    let back = got
+        .membrane
+        .as_ref()
+        .expect("B extracts the membrane envelope from the wire");
+    assert_eq!(
+        back, &env,
+        "the MembraneEnvelope round-tripped A→B byte-intact through the real server"
+    );
     // And it is rehydratable on B's side (the forward-compat + anti-substitution teeth hold).
     let host = deos_matrix::MockMembraneHost::seeded();
-    assert!(back.is_rehydratable(), "B can rehydrate the received envelope");
+    assert!(
+        back.is_rehydratable(),
+        "B can rehydrate the received envelope"
+    );
     deos_matrix::MembraneHost::rehydrate(&host, back).expect("B rehydrates the membrane");
     eprintln!("LIVE two-user: ✓ LEG 2 MembraneEnvelope A→B received + extracted + rehydrated by B");
 
@@ -367,10 +453,24 @@ async fn live_two_user_cross_user_roundtrip() {
         label: "the deos-lab room cell".into(),
         cell_kind: Some("room".into()),
     });
-    let obj_id = client_a.send_object(&room_id, "", &obj).await.expect("A sends object");
-    let got = sync_until(&client_b, &room_id, 20, "object A→B", |m| m.event_id == obj_id).await;
-    assert_eq!(got.kind, MessageKind::Object("cell".into()), "B sees an Object(cell)");
-    assert_eq!(got.object.as_ref().expect("B extracts the object"), &obj, "DreggObject round-tripped A→B");
+    let obj_id = client_a
+        .send_object(&room_id, "", &obj)
+        .await
+        .expect("A sends object");
+    let got = sync_until(&client_b, &room_id, 20, "object A→B", |m| {
+        m.event_id == obj_id
+    })
+    .await;
+    assert_eq!(
+        got.kind,
+        MessageKind::Object("cell".into()),
+        "B sees an Object(cell)"
+    );
+    assert_eq!(
+        got.object.as_ref().expect("B extracts the object"),
+        &obj,
+        "DreggObject round-tripped A→B"
+    );
     eprintln!("LIVE two-user: ✓ LEG 3 DreggObject A→B received + extracted by B");
 
     eprintln!(
@@ -425,12 +525,22 @@ async fn live_two_user_real_executor_membrane_roundtrip() {
 
     // Two clients, two SQLite stores — genuinely separate users/devices.
     let (client_a, _sa) = MatrixClient::login_password(
-        &hs, &tmp_store(), "live-realA-pass", &user_a, &pass_a, "deos-matrix-realA",
+        &hs,
+        &tmp_store(),
+        "live-realA-pass",
+        &user_a,
+        &pass_a,
+        "deos-matrix-realA",
     )
     .await
     .expect("user A login");
     let (client_b, _sb) = MatrixClient::login_password(
-        &hs, &tmp_store(), "live-realB-pass", &user_b, &pass_b, "deos-matrix-realB",
+        &hs,
+        &tmp_store(),
+        "live-realB-pass",
+        &user_b,
+        &pass_b,
+        "deos-matrix-realB",
     )
     .await
     .expect("user B login");
@@ -438,18 +548,37 @@ async fn live_two_user_real_executor_membrane_roundtrip() {
 
     // A creates a room and invites B; B accepts (real join over the wire).
     let room_id = client_a
-        .create_room(Some("deos-lab-real"), Some("executor-real membrane room"), &[uid_b.as_str()])
+        .create_room(
+            Some("deos-lab-real"),
+            Some("executor-real membrane room"),
+            &[uid_b.as_str()],
+        )
         .await
         .expect("A creates room + invites B");
     let mut joined = false;
     for _ in 0..15 {
         client_b.sync_once().await.expect("B sync for invite");
-        if client_b.invited_rooms().await.expect("B invites").iter().any(|r| r.room_id.as_str() == room_id) {
-            client_b.accept_invite(&room_id).await.expect("B accepts invite");
+        if client_b
+            .invited_rooms()
+            .await
+            .expect("B invites")
+            .iter()
+            .any(|r| r.room_id.as_str() == room_id)
+        {
+            client_b
+                .accept_invite(&room_id)
+                .await
+                .expect("B accepts invite");
             joined = true;
             break;
         }
-        if client_b.joined_rooms().await.expect("B joined").iter().any(|r| r.room_id.as_str() == room_id) {
+        if client_b
+            .joined_rooms()
+            .await
+            .expect("B joined")
+            .iter()
+            .any(|r| r.room_id.as_str() == room_id)
+        {
             joined = true;
             break;
         }
@@ -465,7 +594,10 @@ async fn live_two_user_real_executor_membrane_roundtrip() {
         "the fixture is a real multiplayer subrealm (>=6 cells), got {}",
         real_env.cut.cell_count
     );
-    assert!(real_env.is_rehydratable(), "the executor envelope is a supported wire version");
+    assert!(
+        real_env.is_rehydratable(),
+        "the executor envelope is a supported wire version"
+    );
 
     // A SCREENSHOTS THE MOMENT: ship the REAL executor membrane A→B over the server.
     let mem_id = client_a
@@ -474,8 +606,15 @@ async fn live_two_user_real_executor_membrane_roundtrip() {
         .expect("A sends the executor-real membrane");
 
     // B RECEIVES IT THROUGH THE SERVER and extracts the typed envelope.
-    let got = sync_until(&client_b, &room_id, 20, "executor membrane A→B", |m| m.event_id == mem_id).await;
-    assert_eq!(got.kind, MessageKind::Membrane, "B sees a Membrane-kind message");
+    let got = sync_until(&client_b, &room_id, 20, "executor membrane A→B", |m| {
+        m.event_id == mem_id
+    })
+    .await;
+    assert_eq!(
+        got.kind,
+        MessageKind::Membrane,
+        "B sees a Membrane-kind message"
+    );
     let back = got
         .membrane
         .as_ref()
@@ -487,8 +626,14 @@ async fn live_two_user_real_executor_membrane_roundtrip() {
         "the executor-minted MembraneEnvelope round-tripped A→B byte-intact through the real server"
     );
     // The anti-substitution + forward-compat teeth hold on B's received copy.
-    assert_eq!(back.frustum_root, real_env.frustum_root, "the frustum root survived A→B");
-    assert!(back.is_rehydratable(), "B can rehydrate the received executor envelope");
+    assert_eq!(
+        back.frustum_root, real_env.frustum_root,
+        "the frustum root survived A→B"
+    );
+    assert!(
+        back.is_rehydratable(),
+        "B can rehydrate the received executor envelope"
+    );
 
     eprintln!(
         "LIVE OK (executor-real): A→B shipped the GENUINE executor-minted membrane \
@@ -496,7 +641,10 @@ async fn live_two_user_real_executor_membrane_roundtrip() {
          + rehydratable. The executor-side rehydrate→drive→stitch (conflict + Σδ=0) is proven \
          in the starbridge-v2 bake test that wrote the fixture.",
         back.cut.cell_count,
-        back.frustum_root[0], back.frustum_root[1], back.frustum_root[2], back.frustum_root[3],
+        back.frustum_root[0],
+        back.frustum_root[1],
+        back.frustum_root[2],
+        back.frustum_root[3],
     );
 }
 
@@ -533,6 +681,11 @@ async fn live_servername_discovery_login() {
     )
     .await
     .expect("discovery login from a bare server name");
-    assert!(client.user_id().is_some(), "discovery login resolved a session");
-    eprintln!("LIVE OK: bare-server-name `.well-known` discovery login proven against {server_name}");
+    assert!(
+        client.user_id().is_some(),
+        "discovery login resolved a session"
+    );
+    eprintln!(
+        "LIVE OK: bare-server-name `.well-known` discovery login proven against {server_name}"
+    );
 }

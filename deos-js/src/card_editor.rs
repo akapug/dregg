@@ -42,7 +42,7 @@ use dregg_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 
 use crate::applet::{pack_u64, Applet, Slot};
-use crate::portable::{AffordanceSpec, ApplyOp, AppletManifest, PortableApplet};
+use crate::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use crate::program_doc::ProgramSource;
 
 /// The heap slot the card editor uses to witness an authoring gesture that does not
@@ -167,9 +167,9 @@ impl ViewTree {
     /// Does the tree contain a button bound to affordance `turn`? (The assertion the
     /// keystone test makes after a view-patch: the new button is in the re-folded view.)
     pub fn has_button_for(&self, turn: &str) -> bool {
-        self.walk().iter().any(|n| {
-            matches!(n, ViewTree::Button { props } if props.on_click.turn == turn)
-        })
+        self.walk()
+            .iter()
+            .any(|n| matches!(n, ViewTree::Button { props } if props.on_click.turn == turn))
     }
 
     /// The label of a node, if it has one (for asserting a relabel patch).
@@ -468,9 +468,7 @@ impl CardEditor {
             return Err(EditError::Unauthorized);
         }
         // Record in the manifest (travels with the cell when re-minted).
-        self.manifest
-            .affordances
-            .retain(|a| a.name != spec.name);
+        self.manifest.affordances.retain(|a| a.name != spec.name);
         self.manifest.affordances.push(spec.clone());
         // Register live on the card so the new affordance fires NOW.
         self.card.register_affordance(crate::applet::Affordance {

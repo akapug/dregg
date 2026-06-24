@@ -213,7 +213,9 @@ mod tests {
         let page = b"<dregg-cell><balance>100</balance><p>a live cell</p></dregg-cell>";
         let outcome = render_dregg_page(&surface, "dregg://cell/abc", page, 64, 48);
 
-        let frame = outcome.frame().expect("a cap-permitted page renders a real frame");
+        let frame = outcome
+            .frame()
+            .expect("a cap-permitted page renders a real frame");
         assert_eq!(frame.width, 64);
         assert_eq!(frame.height, 48);
         assert_eq!(frame.bytes.len(), 64 * 48 * 4, "real RGBA8, 4 bytes/pixel");
@@ -266,12 +268,18 @@ mod tests {
 
         let outcome =
             render_dregg_page(&surface, "dregg://cell/forbidden", b"secret bytes", 16, 16);
-        assert!(outcome.was_refused(), "an out-of-allowlist page is refused at the cap gate");
+        assert!(
+            outcome.was_refused(),
+            "an out-of-allowlist page is refused at the cap gate"
+        );
         assert!(outcome.frame().is_none(), "a refused page renders NO frame");
         match outcome {
             TileOutcome::Refused { denied_body } => {
                 let s = String::from_utf8(denied_body).unwrap();
-                assert!(s.contains("blocked by capability"), "the tab gets the cap-denied body");
+                assert!(
+                    s.contains("blocked by capability"),
+                    "the tab gets the cap-denied body"
+                );
             }
             TileOutcome::Rendered(_) => unreachable!(),
         }

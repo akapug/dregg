@@ -234,8 +234,8 @@ impl MatrixClient {
         #[cfg(not(target_family = "wasm"))]
         let builder = Client::builder().sqlite_store(store_path, Some(passphrase));
         #[cfg(target_family = "wasm")]
-        let builder = Client::builder()
-            .indexeddb_store(&store_path.to_string_lossy(), Some(passphrase));
+        let builder =
+            Client::builder().indexeddb_store(&store_path.to_string_lossy(), Some(passphrase));
 
         // A URL (has a scheme) → use it directly; a bare name → discover.
         let builder = if server.starts_with("http://") || server.starts_with("https://") {
@@ -403,9 +403,7 @@ impl MatrixClient {
             &stored.store_passphrase,
         )
         .await?;
-        me.inner
-            .restore_session(stored.session.clone())
-            .await?;
+        me.inner.restore_session(stored.session.clone()).await?;
         Ok(me)
     }
 
@@ -445,7 +443,11 @@ impl MatrixClient {
             });
         }
         // Stable, human-friendly ordering by display name.
-        out.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        out.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
         Ok(out)
     }
 
@@ -455,11 +457,7 @@ impl MatrixClient {
     /// The richer [`matrix_sdk_ui::Timeline`] (edits/reactions/threads folded in)
     /// is the UI-phase upgrade; the headless core only needs the raw recent
     /// message bodies to prove the protocol path end to end.
-    pub async fn recent_timeline(
-        &self,
-        room_id: &str,
-        limit: u16,
-    ) -> Result<Vec<TimelineMessage>> {
+    pub async fn recent_timeline(&self, room_id: &str, limit: u16) -> Result<Vec<TimelineMessage>> {
         let room_id = matrix_sdk::ruma::RoomId::parse(room_id)?;
         let room = self
             .inner
@@ -494,18 +492,22 @@ impl MatrixClient {
                         MessageType::Text(t) => (t.body.clone(), MessageKind::Text),
                         MessageType::Emote(t) => (format!("* {}", t.body), MessageKind::Emote),
                         MessageType::Notice(t) => (t.body.clone(), MessageKind::Notice),
-                        MessageType::Image(i) => {
-                            (format!("[image] {}", i.body), MessageKind::Attachment("image".into()))
-                        }
-                        MessageType::File(f) => {
-                            (format!("[file] {}", f.body), MessageKind::Attachment("file".into()))
-                        }
-                        MessageType::Audio(a) => {
-                            (format!("[audio] {}", a.body), MessageKind::Attachment("audio".into()))
-                        }
-                        MessageType::Video(v) => {
-                            (format!("[video] {}", v.body), MessageKind::Attachment("video".into()))
-                        }
+                        MessageType::Image(i) => (
+                            format!("[image] {}", i.body),
+                            MessageKind::Attachment("image".into()),
+                        ),
+                        MessageType::File(f) => (
+                            format!("[file] {}", f.body),
+                            MessageKind::Attachment("file".into()),
+                        ),
+                        MessageType::Audio(a) => (
+                            format!("[audio] {}", a.body),
+                            MessageKind::Attachment("audio".into()),
+                        ),
+                        MessageType::Video(v) => (
+                            format!("[video] {}", v.body),
+                            MessageKind::Attachment("video".into()),
+                        ),
                         other => (format!("[{}]", other.msgtype()), MessageKind::Text),
                     };
                     // The deos-pilling: detect a membrane riding in the namespaced
@@ -685,11 +687,7 @@ impl MatrixClient {
             source: MediaSource::Plain(uri),
             format: MediaFormat::File,
         };
-        Ok(self
-            .inner
-            .media()
-            .get_media_content(&request, true)
-            .await?)
+        Ok(self.inner.media().get_media_content(&request, true).await?)
     }
 
     /// List the joined **spaces** (rooms with `m.room.type = m.space`) as
@@ -710,7 +708,10 @@ impl MatrixClient {
                 .unwrap_or_else(|_| room.room_id().to_string());
             // The space's children: each m.space.child state event keys a child room.
             let mut children = Vec::new();
-            if let Ok(events) = room.get_state_events_static::<SpaceChildEventContent>().await {
+            if let Ok(events) = room
+                .get_state_events_static::<SpaceChildEventContent>()
+                .await
+            {
                 for raw in events {
                     if let Ok(state) = raw.deserialize() {
                         // The state_key of an m.space.child IS the child room id.
@@ -724,7 +725,11 @@ impl MatrixClient {
                 child_room_ids: children,
             });
         }
-        out.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        out.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
         Ok(out)
     }
 
@@ -815,7 +820,11 @@ impl MatrixClient {
                 unread_notifications: 0,
             });
         }
-        out.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+        out.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
         Ok(out)
     }
 
@@ -862,7 +871,9 @@ impl MatrixClient {
         // Infinite (room creator) — represent that as i64::MAX for display.
         let my_level = match me.as_ref().map(|u| pl.for_user(u)) {
             Some(matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Int(i)) => i.into(),
-            Some(matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Infinite) => i64::MAX,
+            Some(matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Infinite) => {
+                i64::MAX
+            }
             Some(_) => i64::from(pl.users_default),
             None => i64::from(pl.users_default),
         };

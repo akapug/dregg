@@ -225,7 +225,9 @@ fn real_https_page_rasterized_through_the_cap_gated_tls_socket() {
         // Trust the test's self-signed root in the genuine rustls verifier (NOT a
         // danger-accept). Persists across `reconfigure`, so both runs use the same
         // real trust set; only the cap-allowed run reaches the handshake.
-        engine.handler().trust_extra_root_der(TEST_CERT_DER.to_vec());
+        engine
+            .handler()
+            .trust_extra_root_der(TEST_CERT_DER.to_vec());
 
         // ── RUN 1: CAP-DENIED. A surface scoped to a DIFFERENT origin. The cap gate
         // must refuse the server's https origin AT the socket — no socket, no TLS
@@ -252,20 +254,10 @@ fn real_https_page_rasterized_through_the_cap_gated_tls_socket() {
         // gate admits it; the handler opens a real TCP socket, drives a REAL rustls TLS
         // handshake, fetches the real bytes over the encrypted socket; servo lays them
         // out, SWGL rasterizes. ──
-        let allowed_surface = SurfaceCapability::scoped(
-            presenter,
-            AuthRequired::Either,
-            [origin.clone()],
-            [],
-        );
-        let (frame, outcome) = engine.render(
-            &page_url,
-            allowed_surface,
-            &[origin.clone()],
-            W,
-            H,
-            4096,
-        );
+        let allowed_surface =
+            SurfaceCapability::scoped(presenter, AuthRequired::Either, [origin.clone()], []);
+        let (frame, outcome) =
+            engine.render(&page_url, allowed_surface, &[origin.clone()], W, H, 4096);
         let outcomes = engine.handler().outcomes();
         let last_fetch = engine.handler().last_fetch();
         let tls_handshook = engine.handler().last_tls_handshake();
@@ -332,7 +324,11 @@ fn real_https_page_rasterized_through_the_cap_gated_tls_socket() {
     let frame = frame.expect("the real Servo WebView produced a frame for the https page");
     assert_eq!(frame.width, W);
     assert_eq!(frame.height, H);
-    assert_eq!(frame.bytes.len(), (W * H * 4) as usize, "real RGBA8, 4 bytes/pixel");
+    assert_eq!(
+        frame.bytes.len(),
+        (W * H * 4) as usize,
+        "real RGBA8, 4 bytes/pixel"
+    );
 
     // ── PROVE it is genuine laid-out PAGE content from the https bytes ──
     // The page has a green bg, a magenta block, and black antialiased glyphs.
@@ -354,7 +350,10 @@ fn real_https_page_rasterized_through_the_cap_gated_tls_socket() {
         "the rendered https page is non-trivial (≥3 distinct colors = real layout); got {}",
         distinct.len()
     );
-    assert!(has_green, "the page's green background (from the https bytes) was rasterized");
+    assert!(
+        has_green,
+        "the page's green background (from the https bytes) was rasterized"
+    );
     assert!(
         has_magenta,
         "the page's magenta block (from the https bytes) was laid out + rasterized"
@@ -369,7 +368,10 @@ fn real_https_page_rasterized_through_the_cap_gated_tls_socket() {
     let png = png_encode_rgba8(frame.width, frame.height, &frame.bytes);
     std::fs::write(&out_path, &png).expect("write the rendered https-page PNG");
     let png_len = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
-    assert!(png_len > 100, "the captured PNG is substantial, got {png_len} bytes");
+    assert!(
+        png_len > 100,
+        "the captured PNG is substantial, got {png_len} bytes"
+    );
     println!(
         "HTTPS_RENDER_PNG_WRITTEN path={out_path} bytes={png_len} dims={W}x{H} \
          distinct_colors={} source='REAL https:// page fetched over a cap-gated TLS socket \

@@ -61,7 +61,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::acp_client::{AcpError, AcpPeer, RpcMessage};
 use dregg_firmament::process_kernel::{PdProcess, ProcessKernel};
@@ -348,7 +348,10 @@ fn run_acp_session<R: BufRead>(
     let id = new_s.id.clone().unwrap_or(Value::Null);
     send_line(
         sock,
-        &RpcMessage::response(id, json!({ "sessionId": session_id, "models": [], "modes": [] })),
+        &RpcMessage::response(
+            id,
+            json!({ "sessionId": session_id, "models": [], "modes": [] }),
+        ),
     )?;
 
     // 3. session/prompt → stream the turn.
@@ -358,10 +361,13 @@ fn run_acp_session<R: BufRead>(
     // opening agent chunk.
     send_line(
         sock,
-        &update(session_id, json!({
-            "sessionUpdate": "agent_message_chunk",
-            "content": { "type": "text", "text": "working (confined)… " }
-        })),
+        &update(
+            session_id,
+            json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "working (confined)… " }
+            }),
+        ),
     )?;
 
     // each scripted call: a tool_call event + a request_permission the client
@@ -372,14 +378,17 @@ fn run_acp_session<R: BufRead>(
         let kind = call.acp_kind_str();
         send_line(
             sock,
-            &update(session_id, json!({
-                "sessionUpdate": "tool_call",
-                "toolCallId": tool_call_id,
-                "toolName": call.name,
-                "kind": kind,
-                "status": "pending",
-                "rawInput": call.raw_input,
-            })),
+            &update(
+                session_id,
+                json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": tool_call_id,
+                    "toolName": call.name,
+                    "kind": kind,
+                    "status": "pending",
+                    "rawInput": call.raw_input,
+                }),
+            ),
         )?;
         next_perm_id += 1;
         send_line(
@@ -416,23 +425,32 @@ fn run_acp_session<R: BufRead>(
             .unwrap_or(false);
         send_line(
             sock,
-            &update(session_id, json!({
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": tool_call_id,
-                "status": if allowed { "completed" } else { "failed" },
-            })),
+            &update(
+                session_id,
+                json!({
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": tool_call_id,
+                    "status": if allowed { "completed" } else { "failed" },
+                }),
+            ),
         )?;
     }
 
     // closing chunk + the prompt response.
     send_line(
         sock,
-        &update(session_id, json!({
-            "sessionUpdate": "agent_message_chunk",
-            "content": { "type": "text", "text": "done." }
-        })),
+        &update(
+            session_id,
+            json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": "done." }
+            }),
+        ),
     )?;
-    send_line(sock, &RpcMessage::response(prompt_id, json!({ "stopReason": "end_turn" })))?;
+    send_line(
+        sock,
+        &RpcMessage::response(prompt_id, json!({ "stopReason": "end_turn" })),
+    )?;
     Ok(())
 }
 
@@ -485,7 +503,10 @@ impl PdAcpTransport {
     /// Wrap a clone of the kernel's end of the firmament Endpoint.
     pub fn new(sock: UnixStream) -> PdAcpTransport {
         let reader = BufReader::new(sock.try_clone().expect("clone Endpoint for reading"));
-        PdAcpTransport { writer: sock, reader }
+        PdAcpTransport {
+            writer: sock,
+            reader,
+        }
     }
 }
 
@@ -563,7 +584,10 @@ fn can_inet_socket() -> bool {
     !matches!(
         errno,
         libc::ENETUNREACH | libc::EPERM | libc::EHOSTUNREACH | libc::EACCES | libc::EAFNOSUPPORT
-    ) && matches!(errno, libc::EINPROGRESS | libc::ECONNREFUSED | libc::ETIMEDOUT)
+    ) && matches!(
+        errno,
+        libc::EINPROGRESS | libc::ECONNREFUSED | libc::ETIMEDOUT
+    )
 }
 
 /// Count open fds in `3..max` (above the std streams).

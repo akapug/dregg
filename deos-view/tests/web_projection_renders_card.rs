@@ -54,14 +54,26 @@ fn counter_card_view_tree_renders_to_browser_loadable_html_with_a_live_bind() {
     // This is the web `bind` re-paint: same view-tree, advanced model snapshot — the
     // SolidJS-shaped signal re-render, mirroring the native `bind` re-reading the ledger.
     let frag1 = render_html(&tree, &[1]);
-    assert!(frag1.contains("count: 1"), "frame 1 paints the advanced bound value 1");
-    assert_ne!(frag0, frag1, "the two frames DIFFER — the bound value visibly re-painted");
+    assert!(
+        frag1.contains("count: 1"),
+        "frame 1 paints the advanced bound value 1"
+    );
+    assert_ne!(
+        frag0, frag1,
+        "the two frames DIFFER — the bound value visibly re-painted"
+    );
 
     // ── The full document is a real, browser-loadable file ───────────────────────────
     let doc = render_card_document("deos counter card", &tree, &[0]);
-    assert!(doc.starts_with("<!doctype html>"), "a complete HTML document");
+    assert!(
+        doc.starts_with("<!doctype html>"),
+        "a complete HTML document"
+    );
     assert!(doc.contains("<title>deos counter card</title>"));
-    assert!(doc.contains(".deos-button{"), "the cockpit-dark card styling is inlined");
+    assert!(
+        doc.contains(".deos-button{"),
+        "the cockpit-dark card styling is inlined"
+    );
     assert!(
         doc.contains("deos-affordance"),
         "the affordance wire (the click → CustomEvent seam) is present"

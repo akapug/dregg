@@ -46,9 +46,7 @@ pub enum WorkerRequest {
         reply: oneshot::Sender<Result<()>>,
     },
     /// One sync round-trip.
-    SyncOnce {
-        reply: oneshot::Sender<Result<()>>,
-    },
+    SyncOnce { reply: oneshot::Sender<Result<()>> },
     /// List joined rooms.
     JoinedRooms {
         reply: oneshot::Sender<Result<Vec<RoomSummary>>>,
@@ -183,8 +181,7 @@ impl MatrixWorker {
                     body,
                     reply,
                 } => {
-                    let _ = reply
-                        .send(Self::with(&client, |c| c.send_text(&room_id, &body)).await);
+                    let _ = reply.send(Self::with(&client, |c| c.send_text(&room_id, &body)).await);
                 }
                 WorkerRequest::SendMembrane {
                     room_id,
@@ -207,7 +204,9 @@ impl MatrixWorker {
                     );
                 }
                 WorkerRequest::Whoami { reply } => {
-                    let me = client.as_ref().and_then(|c| c.user_id().map(|u| u.to_string()));
+                    let me = client
+                        .as_ref()
+                        .and_then(|c| c.user_id().map(|u| u.to_string()));
                     let _ = reply.send(me);
                 }
                 WorkerRequest::CreateRoom {
@@ -218,8 +217,10 @@ impl MatrixWorker {
                 } => {
                     let _ = reply.send(
                         Self::with(&client, |c| async move {
-                            let invite_refs: Vec<&str> = invites.iter().map(|s| s.as_str()).collect();
-                            c.create_room(name.as_deref(), topic.as_deref(), &invite_refs).await
+                            let invite_refs: Vec<&str> =
+                                invites.iter().map(|s| s.as_str()).collect();
+                            c.create_room(name.as_deref(), topic.as_deref(), &invite_refs)
+                                .await
                         })
                         .await,
                     );
@@ -228,8 +229,7 @@ impl MatrixWorker {
                     let _ = reply.send(Self::with(&client, |c| c.invited_rooms()).await);
                 }
                 WorkerRequest::AcceptInvite { room_id, reply } => {
-                    let _ = reply
-                        .send(Self::with(&client, |c| c.accept_invite(&room_id)).await);
+                    let _ = reply.send(Self::with(&client, |c| c.accept_invite(&room_id)).await);
                 }
                 WorkerRequest::Shutdown => break,
             }
@@ -255,7 +255,10 @@ pub struct MatrixHandle {
 }
 
 impl MatrixHandle {
-    fn call<T>(&self, build: impl FnOnce(oneshot::Sender<Result<T>>) -> WorkerRequest) -> Result<T> {
+    fn call<T>(
+        &self,
+        build: impl FnOnce(oneshot::Sender<Result<T>>) -> WorkerRequest,
+    ) -> Result<T> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(build(reply_tx))
@@ -344,7 +347,11 @@ impl MatrixHandle {
     /// The logged-in user's full id, if the worker holds an authenticated client.
     pub fn whoami(&self) -> Option<String> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        if self.tx.send(WorkerRequest::Whoami { reply: reply_tx }).is_err() {
+        if self
+            .tx
+            .send(WorkerRequest::Whoami { reply: reply_tx })
+            .is_err()
+        {
             return None;
         }
         reply_rx.blocking_recv().ok().flatten()

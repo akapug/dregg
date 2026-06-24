@@ -63,12 +63,10 @@
 //!   signals. The render (bytes → pixels) is the `servo-render` Stage-A seam
 //!   ([`crate::cascade`]) exactly as for any bundle.
 
+use starbridge_web_surface::rehydrate::InteractionLog;
 use starbridge_web_surface::transclusion::TransclusionError;
 use starbridge_web_surface::transclusion_version::VersionedTransclusion;
-use starbridge_web_surface::rehydrate::InteractionLog;
-use starbridge_web_surface::{
-    DreggUri, FetchError, SurfaceCapability, Sturdyref, WebOfCells,
-};
+use starbridge_web_surface::{DreggUri, FetchError, Sturdyref, SurfaceCapability, WebOfCells};
 
 use crate::bundle::{publish_bundle, BundleAsset, BundleError, BundleKind, WebBundle};
 use crate::cascade::{transclude_bundle_fragment, BundleFragmentQuote, CascadeError};
@@ -147,7 +145,11 @@ impl DomNode {
 
     fn render_html_into(&self, out: &mut String) {
         match self {
-            DomNode::Element { name, attrs, children } => {
+            DomNode::Element {
+                name,
+                attrs,
+                children,
+            } => {
                 out.push('<');
                 out.push_str(name);
                 for (k, v) in attrs {
@@ -183,7 +185,11 @@ impl DomNode {
 
     fn serialize_state_into(&self, out: &mut String) {
         match self {
-            DomNode::Element { name, attrs, children } => {
+            DomNode::Element {
+                name,
+                attrs,
+                children,
+            } => {
                 out.push_str("(el ");
                 push_len_token(out, name);
                 out.push_str(" (attrs");
@@ -618,7 +624,9 @@ mod tests {
         assert_eq!(bundle.entrypoint, RENDERED_VIEW_ASSET);
 
         // The rendered view is the fragment tree serialized to HTML (the count is in it).
-        let view = bundle.asset(RENDERED_VIEW_ASSET).expect("rendered view asset");
+        let view = bundle
+            .asset(RENDERED_VIEW_ASSET)
+            .expect("rendered view asset");
         assert_eq!(view.content_type, "text/html");
         let html = String::from_utf8(view.bytes.clone()).unwrap();
         assert_eq!(
@@ -629,7 +637,10 @@ mod tests {
         // The dom-state asset is the structural serialization (distinct from the HTML).
         let state = bundle.asset(DOM_STATE_ASSET).expect("dom-state asset");
         assert_eq!(state.content_type, "application/dom-snapshot");
-        assert_ne!(state.bytes, view.bytes, "the state serialization ≠ the rendered HTML");
+        assert_ne!(
+            state.bytes, view.bytes,
+            "the state serialization ≠ the rendered HTML"
+        );
 
         // The referenced asset rode along.
         assert_eq!(bundle.asset("app.js").unwrap().bytes, b"onClick(inc)");
@@ -662,11 +673,17 @@ mod tests {
         // A referenced asset cannot claim the captured-from-tree names.
         let surface = RenderedSurface::new(
             DomNode::labelled("h1", "x"),
-            [BundleAsset::new(DOM_STATE_ASSET, "text/plain", b"collision".to_vec())],
+            [BundleAsset::new(
+                DOM_STATE_ASSET,
+                "text/plain",
+                b"collision".to_vec(),
+            )],
         );
         assert_eq!(
             surface.into_bundle(),
-            Err(BundleError::DuplicateAssetName { name: DOM_STATE_ASSET.to_string() })
+            Err(BundleError::DuplicateAssetName {
+                name: DOM_STATE_ASSET.to_string()
+            })
         );
     }
 
@@ -692,9 +709,13 @@ mod tests {
         // FETCH through the REAL attested path: the fetched bundle IS the captured DOM
         // state (content-addressed), and the committed content hash on the cell IS the
         // captured bundle's content hash.
-        let (fetched, chrome) = fetch_bundle(&web, &published.uri).expect("fetch + verify + decode");
+        let (fetched, chrome) =
+            fetch_bundle(&web, &published.uri).expect("fetch + verify + decode");
         assert_eq!(fetched, published.bundle());
-        assert_eq!(fetched.content_hash(), surface.into_bundle().unwrap().content_hash());
+        assert_eq!(
+            fetched.content_hash(),
+            surface.into_bundle().unwrap().content_hash()
+        );
         assert!(chrome.finalized);
         // The trusted chrome shows the bundle's content-address (the DOM state's
         // identity), drawn from the ledger.
@@ -733,7 +754,8 @@ mod tests {
             .iter()
             .map(|n| WebBundle::asset_origin(cell, n))
             .collect();
-        let lineage = SurfaceCapability::scoped(cell, AuthRequired::Either, origins(&all_origins), []);
+        let lineage =
+            SurfaceCapability::scoped(cell, AuthRequired::Either, origins(&all_origins), []);
 
         let mut web = WebOfCells::new(3);
         let (published, sturdyref) = publish_live_surface(
@@ -782,24 +804,27 @@ mod tests {
         let surface = counter_surface(3);
         let mut web = WebOfCells::new(3);
         let lineage = SurfaceCapability::root(cid(2), AuthRequired::Either);
-        let (published, _sr) = publish_live_surface(
-            &mut web,
-            2,
-            surface,
-            lineage,
-            InteractionLog::new(),
-            false,
-        )
-        .unwrap();
+        let (published, _sr) =
+            publish_live_surface(&mut web, 2, surface, lineage, InteractionLog::new(), false)
+                .unwrap();
 
         // The rendered view is
         // `<div id="app"><h1>counter: 3</h1><button class="inc">++</button></div>`.
         // The `<h1>counter: 3</h1>` substring is at a known byte range — quote exactly
         // that DOM fragment as a span of a document.
-        let html = String::from_utf8(published.bundle().asset(RENDERED_VIEW_ASSET).unwrap().bytes.clone())
-            .unwrap();
+        let html = String::from_utf8(
+            published
+                .bundle()
+                .asset(RENDERED_VIEW_ASSET)
+                .unwrap()
+                .bytes
+                .clone(),
+        )
+        .unwrap();
         let h1 = "<h1>counter: 3</h1>";
-        let start = html.find(h1).expect("the h1 fragment is in the rendered view");
+        let start = html
+            .find(h1)
+            .expect("the h1 fragment is in the rendered view");
         let range = SpanRange::new(start, start + h1.len());
 
         let doc = DreggverseDocument::from_spans(vec![
@@ -807,7 +832,9 @@ mod tests {
             published.quote_fragment(range),
             Span::own(b" (from the surface)".to_vec()),
         ]);
-        let rendered = doc.resolve(&web).expect("the document resolves the DOM-fragment span");
+        let rendered = doc
+            .resolve(&web)
+            .expect("the document resolves the DOM-fragment span");
 
         // The composed text quotes exactly the DOM fragment.
         assert_eq!(
@@ -815,8 +842,13 @@ mod tests {
             "LIVE: <h1>counter: 3</h1> (from the surface)"
         );
         // The transcluded span carries the surface's receipt-pinned provenance.
-        let prov = rendered.spans()[1].provenance().expect("the DOM-fragment span is provenanced");
-        assert_eq!(prov.source, published.uri, "the span cites the published surface");
+        let prov = rendered.spans()[1]
+            .provenance()
+            .expect("the DOM-fragment span is provenanced");
+        assert_eq!(
+            prov.source, published.uri,
+            "the span cites the published surface"
+        );
         assert!(prov.finalized, "a published+attested surface is finalized");
         // The parallel-source link (the EEL) navigates back to the surface + range.
         assert_eq!(
@@ -842,12 +874,17 @@ mod tests {
         )
         .unwrap();
 
-        let quote = published.quote_dom_state(&web).expect("the dom-state fragment transcludes");
+        let quote = published
+            .quote_dom_state(&web)
+            .expect("the dom-state fragment transcludes");
         // The fragment bytes ARE the surface's serialized DOM-state (not a copy).
         assert_eq!(quote.fragment_bytes, surface.dom_state());
         assert_eq!(quote.asset_name, DOM_STATE_ASSET);
         assert_eq!(quote.cite().source, published.uri);
-        assert!(quote.verify().is_ok(), "the live quote's provenance re-verifies");
+        assert!(
+            quote.verify().is_ok(),
+            "the live quote's provenance re-verifies"
+        );
     }
 
     // ── THE DARKENED VIEWER: a viewer lacking authority sees the citation, not the
@@ -929,7 +966,10 @@ mod tests {
         // The DOM bytes are withheld: the viewer never sees the count.
         assert_eq!(dark.composed_text().unwrap(), "[]");
         assert!(
-            !dark.composed_bytes().windows(b"counter".len()).any(|w| w == b"counter"),
+            !dark
+                .composed_bytes()
+                .windows(b"counter".len())
+                .any(|w| w == b"counter"),
             "a darkened viewer never sees the surface's DOM bytes"
         );
         // …BUT the citation survives (the darkened span still cites the surface).
@@ -978,7 +1018,10 @@ mod tests {
         let new_height = published
             .amend(&mut web, counter_surface(4))
             .expect("amend advances the surface");
-        assert!(new_height > pinned_height, "the committed DOM-state height advanced");
+        assert!(
+            new_height > pinned_height,
+            "the committed DOM-state height advanced"
+        );
         // The handle now reflects the new capture, at the SAME dregg:// ref.
         assert_eq!(published.surface, counter_surface(4));
 
@@ -1045,7 +1088,9 @@ mod tests {
         let receipt_v0 = r0.spans()[0].provenance().unwrap().receipt_hash;
 
         // Amend the surface to count-4.
-        published.amend(&mut web, counter_surface(4)).expect("amend");
+        published
+            .amend(&mut web, counter_surface(4))
+            .expect("amend");
 
         // v1: the SAME document, re-resolved, now renders the count-4 view (the quote
         // tracked the surface live), with an advanced cited receipt.
@@ -1053,7 +1098,10 @@ mod tests {
         assert!(r1.composed_text().unwrap().contains("counter: 4"));
         assert!(!r1.composed_text().unwrap().contains("counter: 3"));
         let receipt_v1 = r1.spans()[0].provenance().unwrap().receipt_hash;
-        assert_ne!(receipt_v1, receipt_v0, "the cited receipt advanced with the surface");
+        assert_ne!(
+            receipt_v1, receipt_v0,
+            "the cited receipt advanced with the surface"
+        );
     }
 
     #[test]
@@ -1077,7 +1125,12 @@ mod tests {
     /// bytes (the read displays the surface cell's WHOLE committed bundle; we pull the
     /// dom-state asset to compare DOM states).
     fn decode_dom_state(bundle_bytes: &[u8]) -> Vec<u8> {
-        let bundle = WebBundle::decode(bundle_bytes).expect("the displayed bytes decode as a bundle");
-        bundle.asset(DOM_STATE_ASSET).expect("a dom-state asset").bytes.clone()
+        let bundle =
+            WebBundle::decode(bundle_bytes).expect("the displayed bytes decode as a bundle");
+        bundle
+            .asset(DOM_STATE_ASSET)
+            .expect("a dom-state asset")
+            .bytes
+            .clone()
     }
 }

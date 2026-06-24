@@ -28,7 +28,12 @@ fn grantor() -> (AgentRuntime, HeldToken) {
 }
 
 fn term(id: &str) -> ToolCallRequest {
-    ToolCallRequest::new("s", id, "terminal", serde_json::json!({"command": "ls -la"}))
+    ToolCallRequest::new(
+        "s",
+        id,
+        "terminal",
+        serde_json::json!({"command": "ls -la"}),
+    )
 }
 
 // ───────────────────────────────── 4. REPLAY ─────────────────────────────────
@@ -41,20 +46,37 @@ fn replaying_an_identical_call_still_spends_budget_and_eventually_refuses() {
     let (rt, root) = grantor();
     let registry = GrantRegistry::default_for_session(10_000).with_grant(
         ToolKind::Execute,
-        ToolGrant { tool_id: 40, rate_limit: 2, deadline: 10_000, tool_method: "tool.execute".into() },
+        ToolGrant {
+            tool_id: 40,
+            rate_limit: 2,
+            deadline: 10_000,
+            tool_method: "tool.execute".into(),
+        },
     );
     let mut gw = HermesGateway::new(&rt, root, registry);
 
     let replay = term("tc-REPLAY"); // the SAME call object, resubmitted.
-    assert!(gw.admit_with_work(&replay, 50, None).allowed(), "1st commit");
-    assert!(gw.admit_with_work(&replay, 50, None).allowed(), "2nd (replay) commits but SPENDS");
+    assert!(
+        gw.admit_with_work(&replay, 50, None).allowed(),
+        "1st commit"
+    );
+    assert!(
+        gw.admit_with_work(&replay, 50, None).allowed(),
+        "2nd (replay) commits but SPENDS"
+    );
     // The 3rd replay is refused: the monotonic budget is exhausted — a replay can
     // never be a free repeat.
     match gw.admit_with_work(&replay, 50, None) {
-        PermissionOutcome::Reject { reason, .. } => assert!(reason.contains("rate exhausted"), "{reason}"),
+        PermissionOutcome::Reject { reason, .. } => {
+            assert!(reason.contains("rate exhausted"), "{reason}")
+        }
         other => panic!("REPLAY HOLE — a replayed call escaped the monotonic meter: {other:?}"),
     }
-    assert_eq!(gw.calls_made(ToolKind::Execute), 2, "replays spent the whole budget, no free repeat");
+    assert_eq!(
+        gw.calls_made(ToolKind::Execute),
+        2,
+        "replays spent the whole budget, no free repeat"
+    );
 }
 
 #[test]
@@ -64,13 +86,21 @@ fn two_committed_calls_produce_distinct_chained_receipts() {
     // turn hashes, and the second's `previous_receipt_hash` equals the first's
     // turn hash. A verbatim turn replay would therefore mismatch the chain head.
     let (rt, root) = grantor();
-    let grant = ToolGrant { tool_id: 40, rate_limit: 10, deadline: 10_000, tool_method: "tool.execute".into() };
+    let grant = ToolGrant {
+        tool_id: 40,
+        rate_limit: 10,
+        deadline: 10_000,
+        tool_method: "tool.execute".into(),
+    };
     let mut gw = ToolGateway::admit(&rt, &root, grant).expect("admit worker");
 
     let r1 = gw.invoke(40, 50, vec![]).expect("1st commits").receipt;
     let r2 = gw.invoke(40, 50, vec![]).expect("2nd commits").receipt;
 
-    assert_ne!(r1.turn_hash, r2.turn_hash, "REPLAY HOLE — two calls produced the SAME turn hash");
+    assert_ne!(
+        r1.turn_hash, r2.turn_hash,
+        "REPLAY HOLE — two calls produced the SAME turn hash"
+    );
     // The chain link is the RECEIPT hash (receipt_hash(), the SDK's stored chain
     // head), not the turn_hash. The 2nd turn binds the 1st's receipt_hash as its
     // previous_receipt_hash — a tamper-evident provenance chain (replay/reorder
@@ -80,7 +110,10 @@ fn two_committed_calls_produce_distinct_chained_receipts() {
         Some(r1.receipt_hash()),
         "the 2nd receipt chains to the 1st via receipt_hash() — the anti-replay/anti-reorder link"
     );
-    assert!(r1.previous_receipt_hash.is_none(), "the 1st turn opens the chain (no prior link)");
+    assert!(
+        r1.previous_receipt_hash.is_none(),
+        "the 1st turn opens the chain (no prior link)"
+    );
     assert_eq!(r1.agent, r2.agent, "both under the worker's own cell");
 }
 
@@ -92,7 +125,12 @@ fn a_stale_previous_receipt_chain_is_rejected_by_the_executor() {
     // ReceiptChainMismatch. We exercise this via the gateway's worker: after one
     // commit, re-seeding a WRONG head makes the next turn fail.
     let (rt, root) = grantor();
-    let grant = ToolGrant { tool_id: 40, rate_limit: 10, deadline: 10_000, tool_method: "tool.execute".into() };
+    let grant = ToolGrant {
+        tool_id: 40,
+        rate_limit: 10,
+        deadline: 10_000,
+        tool_method: "tool.execute".into(),
+    };
     let mut gw = ToolGateway::admit(&rt, &root, grant).expect("admit worker");
 
     // First commit establishes a chain head.
@@ -102,8 +140,13 @@ fn a_stale_previous_receipt_chain_is_rejected_by_the_executor() {
     // a NON-matching previous_receipt_hash is rejected; the SDK never lets the agent
     // forge that field (it is read from the worker's own last_receipt_hash), and a
     // mismatch is a hard executor reject. We assert the live chain advances correctly.
-    let r2 = gw.invoke(40, 50, vec![]).expect("2nd commits on the live chain");
-    assert!(r2.receipt.previous_receipt_hash.is_some(), "the 2nd turn carried a chain link — replay is chain-detectable");
+    let r2 = gw
+        .invoke(40, 50, vec![])
+        .expect("2nd commits on the live chain");
+    assert!(
+        r2.receipt.previous_receipt_hash.is_some(),
+        "the 2nd turn carried a chain link — replay is chain-detectable"
+    );
 }
 
 // ──────────────────────── 5. RECEIPT FORGERY / ANTI-GHOST ────────────────────
@@ -119,14 +162,20 @@ fn a_refused_call_leaves_no_receipt_and_no_spend() {
 
     let outcome = gw.admit_with_work(&term("tc-ghost"), 5000, None); // now > deadline
     match &outcome {
-        PermissionOutcome::Reject { reason, .. } => assert!(reason.contains("past deadline"), "{reason}"),
+        PermissionOutcome::Reject { reason, .. } => {
+            assert!(reason.contains("past deadline"), "{reason}")
+        }
         PermissionOutcome::Allow { receipt, .. } => {
             panic!("ANTI-GHOST HOLE — a refused call produced a receipt id {receipt}")
         }
     }
     // No Allow variant means no receipt field exists for this outcome at all.
     assert!(!outcome.allowed(), "the refused call is not an Allow");
-    assert_eq!(gw.calls_made(ToolKind::Execute), 0, "no ghost spend on the refused call");
+    assert_eq!(
+        gw.calls_made(ToolKind::Execute),
+        0,
+        "no ghost spend on the refused call"
+    );
 }
 
 #[test]
@@ -137,23 +186,38 @@ fn the_remaining_budget_an_allow_reports_is_honest() {
     let (rt, root) = grantor();
     let registry = GrantRegistry::default_for_session(10_000).with_grant(
         ToolKind::Execute,
-        ToolGrant { tool_id: 40, rate_limit: 3, deadline: 10_000, tool_method: "tool.execute".into() },
+        ToolGrant {
+            tool_id: 40,
+            rate_limit: 3,
+            deadline: 10_000,
+            tool_method: "tool.execute".into(),
+        },
     );
     let mut gw = HermesGateway::new(&rt, root, registry);
 
     let expected = [2i64, 1, 0];
     for (i, want) in expected.iter().enumerate() {
         match gw.admit_with_work(&term(&format!("tc-{i}")), 50, None) {
-            PermissionOutcome::Allow { remaining, receipt, .. } => {
+            PermissionOutcome::Allow {
+                remaining, receipt, ..
+            } => {
                 assert_eq!(remaining, *want, "honest remaining at call {i}");
-                assert_eq!(receipt.len(), 64, "a real 32-byte hex turn hash, not a fabricated stub");
+                assert_eq!(
+                    receipt.len(),
+                    64,
+                    "a real 32-byte hex turn hash, not a fabricated stub"
+                );
             }
             other => panic!("expected Allow at call {i}, got {other:?}"),
         }
     }
     // Budget now genuinely 0: the next call cannot conjure a 4th receipt.
     match gw.admit_with_work(&term("tc-over"), 50, None) {
-        PermissionOutcome::Reject { reason, .. } => assert!(reason.contains("rate exhausted"), "{reason}"),
-        other => panic!("RECEIPT-FORGERY HOLE — a 4th receipt was minted past the rate-3 budget: {other:?}"),
+        PermissionOutcome::Reject { reason, .. } => {
+            assert!(reason.contains("rate exhausted"), "{reason}")
+        }
+        other => panic!(
+            "RECEIPT-FORGERY HOLE — a 4th receipt was minted past the rate-3 budget: {other:?}"
+        ),
     }
 }

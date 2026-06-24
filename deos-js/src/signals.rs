@@ -99,10 +99,16 @@ impl BindingRegistry {
     /// node has exactly one source at a time, so re-registering re-points it.
     pub fn register(&mut self, binding: BindingId, cell: CellId, slot: Slot) {
         self.unregister(binding);
-        self.by_source.entry((cell, slot)).or_default().push(binding);
+        self.by_source
+            .entry((cell, slot))
+            .or_default()
+            .push(binding);
         // Keep each source bucket sorted+deduped so `invalidate` returns a stable,
         // duplicate-free dirty set regardless of registration order.
-        let bucket = self.by_source.get_mut(&(cell, slot)).expect("just inserted");
+        let bucket = self
+            .by_source
+            .get_mut(&(cell, slot))
+            .expect("just inserted");
         bucket.sort_unstable();
         bucket.dedup();
         self.source_of.insert(binding, (cell, slot));
@@ -237,7 +243,10 @@ mod tests {
         // Register out of order to prove the bucket sorts.
         reg.register(BindingId(5), x, 0);
         reg.register(BindingId(2), x, 0);
-        assert_eq!(reg.invalidate(SourceEvent::new(x, 0)), vec![BindingId(2), BindingId(5)]);
+        assert_eq!(
+            reg.invalidate(SourceEvent::new(x, 0)),
+            vec![BindingId(2), BindingId(5)]
+        );
     }
 
     /// `invalidate_all` unions several touched slots into one deduped dirty set.
@@ -284,9 +293,8 @@ mod tests {
         reg.register(BindingId(1), y, 4);
 
         // A stand-in for the live ledger: slot's value depends on (cell tag, slot).
-        let world = |cell: CellId, slot: Slot| -> u64 {
-            (cell.as_bytes()[0] as u64) * 100 + slot as u64
-        };
+        let world =
+            |cell: CellId, slot: Slot| -> u64 { (cell.as_bytes()[0] as u64) * 100 + slot as u64 };
         assert_eq!(reg.reread(BindingId(0), world), Some(1 * 100 + 0));
         assert_eq!(reg.reread(BindingId(1), world), Some(2 * 100 + 4));
         // Unregistered binding → None.

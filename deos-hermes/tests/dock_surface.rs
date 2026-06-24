@@ -35,7 +35,11 @@ fn demo_model() -> AgentDockModel {
     };
     for (id, name, args) in [
         ("tc-1", "web_search", serde_json::json!({"query": "dregg"})),
-        ("tc-2", "terminal", serde_json::json!({"command": "cargo build"})),
+        (
+            "tc-2",
+            "terminal",
+            serde_json::json!({"command": "cargo build"}),
+        ),
     ] {
         let call = ToolCallRequest::new("sess-demo", id, name, args);
         let outcome = gw.admit_call(&call, 50);
@@ -54,9 +58,16 @@ fn dock_model_carries_chat_ledger_and_mandate() {
 
     // tool-call ledger: two rows, one allow with a receipt, both names present.
     assert_eq!(model.tool_lines.len(), 2);
-    let search = model.tool_lines.iter().find(|l| l.name == "web_search").unwrap();
+    let search = model
+        .tool_lines
+        .iter()
+        .find(|l| l.name == "web_search")
+        .unwrap();
     assert!(search.allowed, "web_search committed a receipted turn");
-    assert!(search.detail.contains("receipt"), "allow row shows the receipt id");
+    assert!(
+        search.detail.contains("receipt"),
+        "allow row shows the receipt id"
+    );
     assert!(model.tool_lines.iter().any(|l| l.name == "terminal"));
 
     // mandate inspector text
@@ -81,7 +92,12 @@ fn dock_surface_captures_offscreen() {
         Ok((w, h)) => {
             assert!(w > 0 && h > 0, "captured a non-empty frame");
             assert!(out.exists(), "wrote the PNG to {}", out.display());
-            println!("dock surface captured offscreen: {}x{} -> {}", w, h, out.display());
+            println!(
+                "dock surface captured offscreen: {}x{} -> {}",
+                w,
+                h,
+                out.display()
+            );
         }
         Err(e) => {
             // No offscreen GPU backend in this env — the headless model test is
@@ -102,7 +118,12 @@ fn live_conversation_captures_offscreen() {
         Ok((w, h)) => {
             assert!(w > 0 && h > 0, "captured a non-empty frame");
             assert!(out.exists(), "wrote the PNG to {}", out.display());
-            println!("LIVE conversation captured offscreen: {}x{} -> {}", w, h, out.display());
+            println!(
+                "LIVE conversation captured offscreen: {}x{} -> {}",
+                w,
+                h,
+                out.display()
+            );
         }
         Err(e) => {
             println!("offscreen capture unavailable in-env (skipping): {e}");
@@ -132,7 +153,10 @@ fn live_conversation_model_is_a_gated_multi_turn_chat() {
     assert_eq!(tools, 4, "four gated tool-calls inline");
     // terminal is rate-2: the 3rd terminal call (cargo bench) is refused.
     assert!(
-        model.tool_lines.iter().any(|l| l.name == "terminal" && !l.allowed),
+        model
+            .tool_lines
+            .iter()
+            .any(|l| l.name == "terminal" && !l.allowed),
         "a terminal call was refused once the rate-2 budget exhausted"
     );
     let term = model

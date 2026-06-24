@@ -15,8 +15,8 @@ use std::sync::{Arc, RwLock};
 
 use deos_hermes::surface::AgentDockModel;
 use deos_hermes::{
-    AcpClient, GrantRegistry, HermesGateway, Mandate, MandateKey, MockHermesPeer, PermissionOutcome,
-    ScriptedCall,
+    AcpClient, GrantRegistry, HermesGateway, Mandate, MandateKey, MockHermesPeer,
+    PermissionOutcome, ScriptedCall,
 };
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 
@@ -51,7 +51,11 @@ fn full_acp_session_drives_every_permission_through_the_gate() {
 
     // The session completed with a stop reason and streamed text.
     assert_eq!(run.stop_reason, "end_turn");
-    assert!(run.agent_text.contains("working"), "streamed agent text: {:?}", run.agent_text);
+    assert!(
+        run.agent_text.contains("working"),
+        "streamed agent text: {:?}",
+        run.agent_text
+    );
 
     // Every scripted call produced a permission verdict, and all three ALLOW
     // (within budget) — each carrying a real receipt.
@@ -59,7 +63,12 @@ fn full_acp_session_drives_every_permission_through_the_gate() {
     for (call, outcome) in &run.verdicts {
         match outcome {
             PermissionOutcome::Allow { receipt, .. } => {
-                assert_eq!(receipt.len(), 64, "{} got a real hex turn receipt", call.name);
+                assert_eq!(
+                    receipt.len(),
+                    64,
+                    "{} got a real hex turn receipt",
+                    call.name
+                );
                 assert!(receipt.chars().all(|c| c.is_ascii_hexdigit()));
             }
             other => panic!("{} expected Allow, got {other:?}", call.name),
@@ -68,8 +77,16 @@ fn full_acp_session_drives_every_permission_through_the_gate() {
 
     // The per-tool grants metered INDEPENDENTLY of their kind floors.
     let gw = client.gateway();
-    assert_eq!(gw.calls_made_for_tool("terminal"), 1, "terminal per-tool worker");
-    assert_eq!(gw.calls_made_for_tool("write_file"), 1, "write_file per-tool worker");
+    assert_eq!(
+        gw.calls_made_for_tool("terminal"),
+        1,
+        "terminal per-tool worker"
+    );
+    assert_eq!(
+        gw.calls_made_for_tool("write_file"),
+        1,
+        "write_file per-tool worker"
+    );
     // web_search has no per-tool grant → rode the Fetch kind floor.
     assert_eq!(gw.calls_made(deos_hermes::ToolKind::Fetch), 1);
 
@@ -110,13 +127,18 @@ fn over_rate_terminal_refused_in_band_over_the_wire() {
     let peer = MockHermesPeer::new("sess-2", script);
     let mut client = AcpClient::new(peer, gateway, 100);
 
-    let run = client.run_prompt("/tmp", "run two commands").expect("loop completes");
+    let run = client
+        .run_prompt("/tmp", "run two commands")
+        .expect("loop completes");
 
     assert_eq!(run.verdicts.len(), 2);
     assert!(run.verdicts[0].1.allowed(), "1st terminal within rate-1");
     match &run.verdicts[1].1 {
         PermissionOutcome::Reject { reason, .. } => {
-            assert!(reason.contains("rate exhausted"), "names the rate leg: {reason}");
+            assert!(
+                reason.contains("rate exhausted"),
+                "names the rate leg: {reason}"
+            );
         }
         other => panic!("2nd terminal must be refused in-band, got {other:?}"),
     }
@@ -141,9 +163,14 @@ fn tool_side_effect_rides_the_metered_turn() {
     )];
     let peer = MockHermesPeer::new("sess-3", script);
     let mut client = AcpClient::new(peer, gateway, 100);
-    let run = client.run_prompt("/tmp", "write a file").expect("loop completes");
+    let run = client
+        .run_prompt("/tmp", "write a file")
+        .expect("loop completes");
 
     assert_eq!(run.verdicts.len(), 1);
-    assert!(run.verdicts[0].1.allowed(), "the write committed a receipted turn");
+    assert!(
+        run.verdicts[0].1.allowed(),
+        "the write committed a receipted turn"
+    );
     assert_eq!(client.gateway().calls_made_for_tool("write_file"), 1);
 }

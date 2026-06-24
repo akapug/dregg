@@ -118,7 +118,8 @@ fn confined_hermes_round_trips_acp_over_the_endpoint_and_is_sandboxed() {
         "the ACP round-trip over the Endpoint must have completed (verdict={verdict:#x})"
     );
     assert_eq!(
-        verdict, probe::ALL,
+        verdict,
+        probe::ALL,
         "CONFINED-LAUNCH TOOTH: the agent ran ACP over the Endpoint AND was OS-confined \
          (file/network/exec ambient authority denied, one fd held). verdict={verdict:#x}"
     );

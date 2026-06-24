@@ -169,6 +169,8 @@ impl gpui::Render for RootView {
     ) -> impl gpui::IntoElement {
         use gpui::{div, ParentElement, Styled};
         let app: &mut gpui::App = cx;
-        div().size_full().child(self.surface.render_body(window, app))
+        div()
+            .size_full()
+            .child(self.surface.render_body(window, app))
     }
 }

@@ -12,7 +12,7 @@
 //!   (c) EDIT FROM WITHIN → `edit_view` relabels the header on the panel's OWN view-source →
 //!       the view changes, the edit a RECEIPTED PATCH attributed by BLAME.
 
-use deos_js::applet::{Affordance, pack_u64, Applet};
+use deos_js::applet::{pack_u64, Affordance, Applet};
 use deos_js::card_editor::{ViewPatch, ViewTree};
 use deos_js::links_card::LINK_COUNT_SLOT;
 use deos_js::LinksCard;
@@ -68,19 +68,31 @@ fn open_generates_a_panel_from_the_focused_cells_real_backlinks() {
         .join("\n");
 
     assert!(blob.contains("What Links Here"), "the question is named");
-    assert!(blob.contains("dregg://"), "the focus has a dregg:// identity");
+    assert!(
+        blob.contains("dregg://"),
+        "the focus has a dregg:// identity"
+    );
     assert!(
         has_bind_for_slot(&tree, LINK_COUNT_SLOT),
         "the panel carries a live-bound visible-count row"
     );
     // A root (None) viewer clears the gated focus lineage → sees backlinks.
-    assert!(!card.is_empty(), "the root viewer sees the focus's backlinks");
+    assert!(
+        !card.is_empty(),
+        "the root viewer sees the focus's backlinks"
+    );
     assert!(
         blob.contains("transcludes dregg://"),
         "a backlink row is a cited two-way link"
     );
-    assert!(blob.contains("receipt"), "the backlink carries its cited receipt");
-    assert!(blob.contains("commitment"), "the backlink carries its content commitment");
+    assert!(
+        blob.contains("receipt"),
+        "the backlink carries its cited receipt"
+    );
+    assert!(
+        blob.contains("commitment"),
+        "the backlink carries its content commitment"
+    );
 }
 
 // ── (b) FOG-OF-WAR — an incomparable viewer sees fewer than the god's-eye. ──
@@ -89,7 +101,10 @@ fn a_fogged_viewer_sees_fewer_backlinks_than_the_godseye() {
     let root = links_card(AuthRequired::None);
     let fogged = links_card(AuthRequired::Signature);
 
-    assert!(!root.is_empty(), "the root viewer sees the focus's backlinks");
+    assert!(
+        !root.is_empty(),
+        "the root viewer sees the focus's backlinks"
+    );
     assert!(
         fogged.is_empty(),
         "the Signature viewer (incomparable to the Proof lineage) fogs the gated backlinks"
@@ -103,7 +118,10 @@ fn a_fogged_viewer_sees_fewer_backlinks_than_the_godseye() {
         fogged.total(),
         "the god's-eye docuverse is the same; only the per-viewer projection differs"
     );
-    assert!(fogged.fogged_count() >= 1, "the incomparable viewer has >=1 fogged backlink");
+    assert!(
+        fogged.fogged_count() >= 1,
+        "the incomparable viewer has >=1 fogged backlink"
+    );
 }
 
 // ── publish_count advances the bound visible-count via a real verified turn. ──
@@ -112,7 +130,11 @@ fn publish_count_advances_the_bound_visible_count_via_a_real_turn() {
     let mut card = links_card(AuthRequired::None);
     assert_eq!(card.live_count(), 0, "the bound count starts at 0");
     let receipt = card.publish_count().expect("publish the visible count");
-    assert_ne!(receipt.receipt_hash(), [0u8; 32], "a real TurnReceipt committed");
+    assert_ne!(
+        receipt.receipt_hash(),
+        [0u8; 32],
+        "a real TurnReceipt committed"
+    );
     assert_eq!(
         card.live_count(),
         card.backlinks().len() as u64,
@@ -134,7 +156,10 @@ fn editing_the_panel_view_from_within_is_a_receipted_patch_with_blame() {
         .expect("the authorized relabel reshape is admitted");
     assert_ne!(card.view_source(), source_before, "the view-source changed");
     assert!(
-        edit.tree.walk().iter().any(|n| n.label() == Some("Two-Way Links")),
+        edit.tree
+            .walk()
+            .iter()
+            .any(|n| n.label() == Some("Two-Way Links")),
         "the re-folded view carries the new header"
     );
     assert_ne!(
@@ -162,7 +187,10 @@ fn a_cell_outside_the_ring_has_an_honest_empty_readout() {
         AuthRequired::None,
         AuthRequired::Signature,
     );
-    assert!(card.is_empty(), "a cell nobody transcludes has no backlinks");
+    assert!(
+        card.is_empty(),
+        "a cell nobody transcludes has no backlinks"
+    );
     assert_eq!(card.total(), 0, "the god's-eye map is also empty for it");
     let blob: String = card
         .view_tree()
@@ -172,7 +200,10 @@ fn a_cell_outside_the_ring_has_an_honest_empty_readout() {
         .filter_map(|n| n.label())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(blob.contains("no backlinks"), "an empty readout renders an honest line");
+    assert!(
+        blob.contains("no backlinks"),
+        "an empty readout renders an honest line"
+    );
 }
 
 fn has_bind_for_slot(tree: &ViewTree, slot: usize) -> bool {

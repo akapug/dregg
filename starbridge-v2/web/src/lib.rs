@@ -100,7 +100,12 @@ impl WebImage {
             Some(id) => id,
             None => return err(&format!("no cell matched `{cell}`")),
         };
-        let ia = InspectAct::build(&self.world, InspectFocus::Cell(id), id, AuthRequired::Either);
+        let ia = InspectAct::build(
+            &self.world,
+            InspectFocus::Cell(id),
+            id,
+            AuthRequired::Either,
+        );
         out(&json!({
             "cell": short(id.as_bytes()),
             "messages": ia.messages.iter().map(|m| json!({
@@ -117,14 +122,25 @@ impl WebImage {
             Some(id) => id,
             None => return err(&format!("no cell matched `{cell}`")),
         };
-        let ia = InspectAct::build(&self.world, InspectFocus::Cell(id), id, AuthRequired::Either);
+        let ia = InspectAct::build(
+            &self.world,
+            InspectFocus::Cell(id),
+            id,
+            AuthRequired::Either,
+        );
         match ia.send(&mut self.world, message, AuthRequired::Either) {
-            SendResult::Committed { receipt, reinspected } => out(&json!({
+            SendResult::Committed {
+                receipt,
+                reinspected,
+            } => out(&json!({
                 "outcome": "committed", "cell": short(id.as_bytes()), "message": message,
                 "receipt": { "post_state": short(&receipt.post_state_hash), "computrons": receipt.computrons_used, "actions": receipt.action_count },
                 "reinspected": inspectable_json(&reinspected),
             })),
-            SendResult::Refused { reason, by_executor } => out(&json!({
+            SendResult::Refused {
+                reason,
+                by_executor,
+            } => out(&json!({
                 "outcome": "refused", "cell": short(id.as_bytes()), "message": message,
                 "by_executor": by_executor, "reason": reason,
             })),
@@ -199,7 +215,9 @@ fn field_value_json(v: &FieldValue) -> Value {
         FieldValue::Bool(b) => json!({ "t": "bool", "v": b }),
         FieldValue::Id(id) => json!({ "t": "id", "v": hex32(id), "short": short(id) }),
         FieldValue::Hash(h) => json!({ "t": "hash", "v": hex32(h), "short": short(h) }),
-        FieldValue::CapEdge { target, slot } => json!({ "t": "cap-edge", "target": hex32(target), "short": short(target), "slot": slot }),
+        FieldValue::CapEdge { target, slot } => {
+            json!({ "t": "cap-edge", "target": hex32(target), "short": short(target), "slot": slot })
+        }
         FieldValue::FieldSlot { index, hex } => json!({ "t": "slot", "index": index, "hex": hex }),
     }
 }
@@ -223,7 +241,9 @@ fn body_json(b: &PresentationBody) -> Value {
             "shape": "timeline",
             "events": t.events.iter().map(|e| json!({ "at": e.at, "label": e.label })).collect::<Vec<_>>(),
         }),
-        PresentationBody::Gauge(g) => json!({ "shape": "gauge", "label": g.label, "value": g.value, "ceiling": g.ceiling }),
+        PresentationBody::Gauge(g) => {
+            json!({ "shape": "gauge", "label": g.label, "value": g.value, "ceiling": g.ceiling })
+        }
         PresentationBody::StateMachine(sm) => json!({
             "shape": "state-machine", "current": sm.current,
             "transitions": sm.transitions.iter().map(|t| json!({ "from": t.from, "to": t.to, "verb": t.verb })).collect::<Vec<_>>(),
