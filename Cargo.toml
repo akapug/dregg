@@ -162,14 +162,6 @@ servo-net = { path = "servo-render/vendor/servo-net" }
 # starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture
 # bakes need is on that pushed rev) — no local-path [patch] override.
 
-# TEMPORARY local-path patch for fork iteration on the depth-2 fixed-point work.
-# REMOVED before the final two-repo state (push fork + bump the four p3-* revs).
-[patch."https://github.com/emberian/plonky3-recursion"]
-p3-recursion = { path = "../plonky3-recursion/recursion" }
-p3-circuit = { path = "../plonky3-recursion/circuit" }
-p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
-
 [workspace.dependencies]
 ## Local
 dregg-macaroon = { path = "macaroon", default-features = false }

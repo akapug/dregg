@@ -27,8 +27,14 @@
 //!      `num_turns += 1`, `chain_digest = H(prev_digest, old, new, idx)`;
 //!   4. aggregate `running ∘ new_turn_leaf` into the NEW running `RecursionOutput`.
 //!
-//! O(1) memory: only the single running [`Accumulator`] is kept between steps (the running proof +
-//! the four scalar chain commitments); the consumed turns are dropped.
+//! **O(1) PROOF memory, O(num_turns) scalar binding state (precise).** The dominant cost — the
+//! running RECURSION PROOF — is O(1): one [`RecursionOutput`] is held regardless of chain length, and
+//! the consumed turns (proofs) are dropped. The accumulator ALSO retains a small per-turn scalar
+//! witness — the four chain commitments (O(1)) PLUS `seam_pairs`, the ordered `(old_root, new_root)`
+//! pairs (two field elements per folded turn), which `finalize` replays to rebuild the chain-binding
+//! leaf so its digest reproduces the running `chain_digest`. So the running STATE is O(num_turns)
+//! SCALARS, not O(1) — though the proof memory (the expensive part) is genuinely constant. Folding
+//! the binding incrementally so `seam_pairs` vanishes is named open work (prereq (b) below).
 //!
 //! ## What is GENUINELY here vs the named in-band gap (honest, tiered)
 //!
@@ -64,31 +70,48 @@
 //! SHAPE. The WRAP step ([`wrap_params`] / [`WRAP_LOG_CEIL`], ON by default) proves each running fold
 //! under a fixed `min_trace_height` ceiling so the running FRI trace shape cannot grow with depth.
 //!
-//! **What is now MEASURED (not merely named) — the running VK reaches a CONSTANT FIXED POINT.** A real
-//! incremental fold over a continuous chain (test `wrapped_running_vk_is_constant_across_depth`) shows
-//! the running aggregation proof's full VK fingerprint — table packing, `rows`, `degree_bits`, the
-//! non-primitive manifest, AND the preprocessed commitment (the op-list / VK core) — settling to a
-//! PERPETUAL FIXED POINT after a short transient:
-//!   - depth 2 (LEAF∘LEAF result) and depth 3 (first AGG∘LEAF result) DIFFER — the leaf→agg transient;
-//!   - **depth 4 == depth 5 == … : byte-IDENTICAL VK material, including the preprocessed commitment.**
-//! The `degree_bits` are constant THROUGHOUT (`[9,9,15,14,15]`, natural max `2^15`); the transient
-//! lives entirely in the op-list (logical `rows` + preprocessed commitment), which self-stabilizes once
-//! the running INPUT is itself a fixed-shape aggregation. So the verifier IS fixed-size from depth 4 on
-//! — a true Mina-Pickles constant-VK perpetual fixed point for the steady state. The pin engages exactly
-//! there (it captures the fixed-point VK from the first running aggregation and pins every later fold
-//! against it; it never falsely rejects an honest fold).
+//! **What is MEASURED (not merely named) — the running VK reaches a CONSTANT FIXED POINT (at depth 4),
+//! with the steady state holding by a STRUCTURAL IDEMPOTENCE argument (not yet a mechanized induction).**
+//! A real incremental fold over a continuous chain (test `wrapped_running_vk_is_constant_across_depth`)
+//! shows the running aggregation proof's full VK fingerprint — table packing, `rows`, `degree_bits`, the
+//! non-primitive manifest, AND the preprocessed commitment (the op-list / VK core) — settling to a fixed
+//! point after a short transient:
+//!   - depth 2 (LEAF∘LEAF result) ≠ depth 3 (AGG over LEAF∘LEAF) ≠ depth 4 (AGG over AGG∘LEAF) — the
+//!     transient (the running INPUT's own sub-structure propagates EXACTLY ONE level into the parent
+//!     op-list before it stabilizes — see the structural finding below);
+//!   - **depth 4 == depth 5 (== … ): byte-IDENTICAL VK material, including the preprocessed commitment.**
+//! The `degree_bits` are constant THROUGHOUT (`[9,9,15,14,15]`, natural max `2^15`); the transient lives
+//! entirely in the op-list (logical `rows` + preprocessed commitment).
 //!
-//! **THE PRECISE REMAINING CRYPTO (the only residual, named exactly).** The fixed point is reached at
-//! depth 4, NOT depth 2 — there is a 2-step transient where the running VK is not yet the steady-state
-//! anchor (depth-2 leaf-era ≠ depth-3 settling ≠ depth-4 fixed point). A light client must therefore
-//! either (i) pin the depth-4 steady-state anchor and accept that the first ~3 folds carry transient
-//! shapes (fine for an unbounded chain — the tail is constant), or (ii) to make EVERY fold from depth 2
-//! carry the ONE anchor, the structural half of the wrap is needed: re-prove the running input to a
-//! FIXED STRUCTURE (fixed instance / FRI-opening counts) so the AGG∘LEAF verifier op-list is identical
-//! from the first aggregation. The `min_trace_height` ceiling here pins the FRI trace heights (the easy
-//! half) but not the op-list (the input-structure-dependent half) — empirically a near-no-op because the
-//! heights were already constant. The op-list-normalizing re-prove is the precise outstanding fork work;
-//! lever (a)+(b) and the measured natural fixed point are its foundation.
+//! **Why the fixed point is PERPETUAL (the structural argument — honest about its status).** Once the
+//! running input is an `AGG(AGG, LEAF)`-shaped proof (depth 4+), folding it against a leaf produces
+//! another `AGG(AGG, LEAF)`-shaped proof: the verifier op-list of `verify(AGG(AGG,LEAF))` is a function
+//! of that fixed input shape, so the fold map `f` is IDEMPOTENT on it (`f(steady) = steady`). The
+//! measured `depth-4 == depth-5` is the first application of that idempotence; the perpetual claim rests
+//! on the idempotence argument, NOT on a measurement at every depth (which is impossible) NOR on a
+//! mechanized induction over the fold (an honest residual — the Lean skeleton below proves the
+//! whole-history attestation invariant, not the byte-level VK-shape fixpoint). It is a measured fixed
+//! point + a structural idempotence argument, not a proof of `∀N, VK_N == VK_4`.
+//!
+//! **THE PRECISE REMAINING CRYPTO (the structural half of the wrap — named exactly, with the localized
+//! delta).** The fixed point is reached at depth 4, NOT depth 2 — a finite 2-step transient. The
+//! ROOT-CAUSED structural reason: the AGG∘LEAF verifier op-list depends on the STRUCTURE of the running
+//! (left) input proof — specifically the per-instance opened-column widths / public-value counts of its
+//! `non_primitives` and its `rows` (see `verify_p3_batch_proof_circuit` in the fork: it iterates the
+//! input proof's `non_primitives` and allocates per-instance targets from their `public_values.len()`
+//! and opened-value widths). A LEAF input, an `AGG(LEAF,LEAF)` input, and an `AGG(AGG,LEAF)` input each
+//! carry a DIFFERENT such structure — and that structure propagates exactly ONE level into the parent's
+//! op-list (measured: `rows` Const 269→277, recompose 19112→19093; `prep_commit` ddaa…→830a…), so the
+//! parent op-list stabilizes only once the input has been `AGG(AGG,LEAF)`-shaped for one full fold.
+//! To make EVERY fold from depth 2 carry the ONE anchor, the running input must have the steady
+//! `AGG(AGG,LEAF)` structure from the FIRST aggregation — which requires a CANONICAL agg-shaped SEED
+//! whose own left is already agg-shaped (a recursive fixpoint seed). That is the genuine Pickles
+//! step∘wrap circuit: a fixed wrap circuit whose output shape equals its input shape, seeded once. The
+//! fork exposes no such canonical-shape / re-prove primitive today (no identity/normalize fold), so
+//! building the fixpoint seed is genuinely multi-pass — the precise outstanding fork work. The
+//! `min_trace_height` ceiling pins the FRI trace heights (the easy half, empirically a near-no-op since
+//! heights were already constant) but NOT the op-list. Lever (a)+(b), the tracked-pin fail-closed tooth,
+//! and the measured-plus-idempotent fixed point are its foundation.
 //!
 //! The soundness SKELETON of the unbounded loop is PROVEN in Lean
 //! (`Dregg2.Circuit.RecursiveAggregation.accumulate_preserves_wellformed` /
@@ -165,6 +188,14 @@ fn to_p3(v: BabyBear) -> P3BabyBear {
     P3BabyBear::from_u64(v.0 as u64)
 }
 
+/// A short blake3 fingerprint of a recursion preprocessed commitment (the VK-identity core), for
+/// diagnostic error messages on a pin mismatch. Not a security-bearing comparison — the actual
+/// pin equality compares the full `RecursionCommit` value.
+fn commit_fingerprint(commit: &RecursionCommit) -> String {
+    let bytes = postcard::to_allocvec(commit).unwrap_or_default();
+    blake3::hash(&bytes).to_hex()[..16].to_string()
+}
+
 /// Why an accumulate step failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccError {
@@ -189,6 +220,18 @@ pub enum AccError {
         /// What failed.
         reason: String,
     },
+    /// **The VK-identity fixed-point tooth (fail-closed).** After the running fixed-point VK was
+    /// captured, this fold's running (left) input carried a DIFFERENT preprocessed commitment than
+    /// the pinned one — i.e. the running proof came from a different circuit than the captured fixed
+    /// point. The fold is REJECTED (never folded unpinned). The accumulator is left UNCHANGED.
+    VkIdentityMismatch {
+        /// The 0-based fold index (`num_turns` at the time of the failing step).
+        index: usize,
+        /// A blake3-16 fingerprint of the pinned (expected) preprocessed commitment.
+        expected: String,
+        /// A blake3-16 fingerprint of the running proof's actual preprocessed commitment.
+        found: String,
+    },
     /// `finalize` on an empty accumulator (no turns folded — there is nothing to attest).
     Empty,
 }
@@ -208,6 +251,16 @@ impl core::fmt::Display for AccError {
                 write!(f, "turn {index} proof invalid: {reason}")
             }
             AccError::RecursionFailed { reason } => write!(f, "recursion failed: {reason}"),
+            AccError::VkIdentityMismatch {
+                index,
+                expected,
+                found,
+            } => write!(
+                f,
+                "VK-identity pin mismatch at fold {index}: running proof commitment {found} != \
+                 pinned fixed-point VK {expected} (the running proof came from a different circuit \
+                 than the captured fixed point — fold REJECTED, not folded unpinned)"
+            ),
             AccError::Empty => write!(f, "cannot finalize an empty accumulator (no turns folded)"),
         }
     }
@@ -233,7 +286,8 @@ pub struct ChainSummary {
     acc_carrier: BabyBear,
 }
 
-/// The running accumulator: a single running recursion proof + the O(1) chain summary.
+/// The running accumulator: a single running recursion proof (O(1) PROOF memory) + the O(1) chain
+/// summary + the O(num_turns) `seam_pairs` scalar binding witness.
 ///
 /// Built by [`Accumulator::genesis`], extended by [`Accumulator::accumulate`], and read out by
 /// [`Accumulator::finalize`] into a [`WholeChainProof`] a light client verifies.
@@ -257,13 +311,25 @@ pub struct Accumulator {
     /// reconstruction witness (see the struct note: O(num_turns) SCALARS, not proofs; eliminated by
     /// prereq (b)).
     seam_pairs: Vec<(BabyBear, BabyBear)>,
-    /// **THE VK-IDENTITY FIXED-POINT PIN (lever (a), now CONSUMED).** When set, each running fold
-    /// pins the RUNNING (left) input's preprocessed commitment IN-CIRCUIT to this expected value via
-    /// [`RecursionOutput::into_recursion_input_pinned`] — so the next aggregation layer's in-circuit
-    /// verifier constrains "the proof I am re-folding came from THE SAME running circuit." Captured
-    /// once the running circuit shape stabilizes (after the first aggregation), then held constant.
-    /// A running proof from a DIFFERENT circuit (different preprocessed commitment) makes the
-    /// aggregation circuit UNSAT — `accumulate` fails with [`AccError::RecursionFailed`].
+    /// **THE VK-IDENTITY PIN — the EXPECTED commitment of the running proof we hold (lever (a)).**
+    /// This is the preprocessed commitment of the running [`RecursionOutput`] currently in `running`,
+    /// recorded each fold from the OUTPUT we just produced. Each subsequent fold (i) checks the held
+    /// running proof's commitment STILL equals this expected value — fail-closed
+    /// ([`AccError::VkIdentityMismatch`]) if a foreign/swapped proof ever appears — and (ii) pins the
+    /// running (left) input IN-CIRCUIT to it via [`RecursionOutput::into_recursion_input_pinned`], so
+    /// the aggregation circuit constrains "the proof I am re-folding is the one I produced last step."
+    ///
+    /// **Why it TRACKS the running commitment rather than freezing one value.** The running
+    /// aggregation VK passes through a finite TRANSIENT before it reaches the perpetual fixed point
+    /// (the AGG∘LEAF shape settles once the running input is itself a stable-shape aggregation — the
+    /// `degree_bits` are constant throughout, but the op-list `rows` + preprocessed commitment settle
+    /// after a couple of folds; see [`WRAP_LOG_CEIL`] and the module header). During the transient the
+    /// running proof's commitment genuinely changes each step, so a frozen pin would FALSELY reject
+    /// honest transient folds. Tracking the actual running commitment pins EVERY fold against the
+    /// genuinely-expected running proof — fail-closed against a foreign proof at all depths — and
+    /// becomes CONSTANT once the fixed point is reached (the pin then naturally holds the perpetual
+    /// fixed-point VK forever). A FOREIGN running proof (different preprocessed commitment than the one
+    /// we recorded) makes the aggregation circuit UNSAT and is rejected host-side BEFORE the fold.
     ///
     /// `None` until the first aggregation OR if the pin is disabled (see
     /// [`Accumulator::with_vk_identity_pin`]). Default: pin ENABLED.
@@ -377,10 +443,22 @@ impl Accumulator {
         })
     }
 
-    /// Whether the running fixed-point VK pin has been captured yet (i.e. the running circuit shape
-    /// has stabilized and subsequent folds are pinned in-band).
+    /// Whether the running VK-identity pin is active yet — i.e. the running proof is an aggregation
+    /// (the first fold has happened) so its expected commitment is being tracked and every subsequent
+    /// fold is pinned-or-rejected in-band. `false` while the running proof is still the genesis leaf.
     pub fn vk_identity_pinned(&self) -> bool {
         self.pinned_running_vk.is_some()
+    }
+
+    /// **TEST-ONLY: forcibly overwrite the captured fixed-point pin.** Exercises the fail-closed
+    /// VK-identity tooth (`AccError::VkIdentityMismatch`): after a genuine pin is captured, setting it
+    /// to a FOREIGN commitment makes the NEXT `accumulate` (or `finalize`) reject — the running proof's
+    /// genuine commitment no longer matches the (now-corrupted) pin. This simulates an adversary who
+    /// got the accumulator into a state where the running proof and the pinned VK disagree; the driver
+    /// must refuse rather than fold unpinned. Not a production API.
+    #[doc(hidden)]
+    pub fn force_pinned_vk_for_test(&mut self, commit: RecursionCommit) {
+        self.pinned_running_vk = Some(commit);
     }
 
     /// The running proof's genuine preprocessed commitment (its VK-identity core), if a turn has been
@@ -441,7 +519,9 @@ impl Accumulator {
     }
 
     /// **The IVC STEP — `accumulate(acc, turn) -> acc'`.** Fold one more finalized turn into the
-    /// running proof. O(1) memory: only `self` is retained.
+    /// running proof. O(1) PROOF memory (one running [`RecursionOutput`] is held); the running scalar
+    /// state is O(num_turns) (the `seam_pairs` binding witness — see the struct note). Only `self` is
+    /// retained between steps; the consumed turns are dropped.
     ///
     /// Steps (the running-fold dual of one `aggregate_tree` internal node):
     ///   1. host admission: the turn's rotated descriptor proof verifies selector-bound;
@@ -509,7 +589,6 @@ impl Accumulator {
         //            fixed). THAT constant is the perpetual fixed point.
         // The pin must therefore be captured from the running AGGREGATION shape (era 1+), NOT the
         // first leaf — pinning an AGG left input to a LEAF commitment is a genuine mismatch.
-        let folded_an_aggregation = self.running.is_some(); // this fold re-verifies a running proof
         let new_running = match self.running.take() {
             None => new_leaf, // first turn: the leaf is the running proof (no fold yet).
             Some(running) => {
@@ -517,20 +596,56 @@ impl Accumulator {
                 // against the new leaf. This is `into_recursion_input::<BatchOnly>` driven as a
                 // running LEFT-fold (the same re-verification `aggregate_tree` does per node).
                 //
-                // ── VK-IDENTITY FIXED-POINT PIN (lever (a), in-band). ──────────────────────────
-                // Pin the RUNNING (left) input's preprocessed commitment to the captured fixed-point
-                // VK, but ONLY once that VK has been captured from the SAME (aggregation) shape the
-                // left input now has. The next aggregation layer's verifier then constrains that the
-                // proof being re-folded came from THE SAME running circuit. A running proof of a
-                // DIFFERENT circuit (different preprocessed commitment) makes the aggregation circuit
-                // UNSAT — the IVC self-verification fixed-point check.
+                // ── VK-IDENTITY PIN (lever (a), in-band) + FAIL-CLOSED tooth. ──────────────────
+                // `pinned_running_vk` holds the EXPECTED commitment of the running proof we are about
+                // to re-fold — recorded from the proof we PRODUCED last step (below). Three things:
+                //   1. We assert the held running proof's commitment STILL equals that expected value.
+                //      A mismatch means the running proof is NOT the one we produced (a foreign/swapped
+                //      proof) — FATAL: reject with `AccError::VkIdentityMismatch`, leaving the
+                //      accumulator UNCHANGED. (The previous behaviour silently fell through to the
+                //      UNPINNED fold on any mismatch — a forged running proof of a different circuit
+                //      would have folded through unpinned, defeating the pin. Now the driver refuses.)
+                //   2. We pin the running (left) input's preprocessed commitment IN-CIRCUIT to that
+                //      value, so the aggregation circuit constrains "I fold the proof I produced."
+                //   3. The expected value TRACKS the running commitment across the finite transient
+                //      (the AGG∘LEAF op-list settles over a couple of folds before the perpetual fixed
+                //      point) — so honest transient folds are NOT falsely rejected, and once the fixed
+                //      point is reached the pin naturally holds the perpetual fixed-point VK forever.
+                // On the FIRST aggregation (`pinned_running_vk` is `None` — the running proof is still
+                // the genesis leaf) there is no recorded expectation yet, so that one fold is unpinned;
+                // its OUTPUT seeds the expectation for every subsequent fold.
                 let expected = running.running_preprocessed_commit();
-                let pin_this_fold = self.pin_vk_identity
-                    && self.pinned_running_vk.is_some()
-                    && self.pinned_running_vk == expected;
-                let left = match (pin_this_fold, self.pinned_running_vk.clone()) {
-                    (true, Some(exp)) => running.into_recursion_input_pinned::<BatchOnly>(exp),
-                    _ => running.into_recursion_input::<BatchOnly>(),
+                let left = if self.pin_vk_identity && self.pinned_running_vk.is_some() {
+                    if self.pinned_running_vk != expected {
+                        // Restore the running proof we `take()`-d so the accumulator is unchanged on
+                        // the rejection, then fail closed.
+                        let exp_fp = self
+                            .pinned_running_vk
+                            .as_ref()
+                            .map(commit_fingerprint)
+                            .unwrap_or_default();
+                        let found_fp = expected
+                            .as_ref()
+                            .map(commit_fingerprint)
+                            .unwrap_or_default();
+                        self.running = Some(running);
+                        return Err(AccError::VkIdentityMismatch {
+                            index: idx,
+                            expected: exp_fp,
+                            found: found_fp,
+                        });
+                    }
+                    // The unwrap is justified: the guard requires `pinned_running_vk.is_some()`.
+                    running.into_recursion_input_pinned::<BatchOnly>(
+                        self.pinned_running_vk
+                            .clone()
+                            .expect("pinned_running_vk is Some by the enclosing guard"),
+                    )
+                } else {
+                    // First aggregation (no recorded expectation yet) OR pin disabled: the unpinned
+                    // fold. The expectation is recorded from this fold's OUTPUT (below), so EVERY
+                    // subsequent fold takes the pinned-or-reject branch above.
+                    running.into_recursion_input::<BatchOnly>()
                 };
                 let right = new_leaf.into_recursion_input::<BatchOnly>();
                 build_and_prove_aggregation_layer::<
@@ -546,13 +661,17 @@ impl Accumulator {
             }
         };
 
-        // Capture the perpetual fixed-point VK from the running AGGREGATION shape (era 1+). We
-        // capture the FIRST time `new_running` is itself an aggregation (i.e. this fold re-verified a
-        // running proof). From the SECOND aggregation onward the AGG∘LEAF circuit shape — hence its
-        // preprocessed commitment — is constant; capturing here pins every fold from turn 2 on
-        // against that constant (the genuine fixed point). The first leaf (era 0) is NOT captured.
-        if self.pin_vk_identity && folded_an_aggregation && self.pinned_running_vk.is_none() {
-            self.pinned_running_vk = new_running.running_preprocessed_commit();
+        // RECORD the expectation for the NEXT fold: the commitment of the running proof we just
+        // produced. The next `accumulate` will re-fold THIS proof and must see this exact commitment
+        // (the fail-closed tooth above). We record only once `new_running` is an aggregation (it has a
+        // preprocessed commitment); the genesis leaf produces `None`, leaving the first aggregation
+        // unpinned (as intended). Across the transient this updates each step; at the fixed point it
+        // stabilizes to the perpetual VK.
+        if self.pin_vk_identity {
+            let produced = new_running.running_preprocessed_commit();
+            if produced.is_some() {
+                self.pinned_running_vk = produced;
+            }
         }
 
         // (5) advance the running summary. The running digest folds each turn's `(old, new)` pair
@@ -618,7 +737,18 @@ impl Accumulator {
 
         let config = ir2_leaf_wrap_config();
         let backend = create_recursion_backend();
-        let params = ProveNextLayerParams::default();
+        // The binding leaf is wrapped uni->batch at the DEFAULT params (a leaf is already a fixed
+        // shape — the same discipline `accumulate`'s step-3 leaf wrap uses). The FINAL root
+        // aggregation, by contrast, is proven under [`wrap_params`] when the wrap step is enabled, so
+        // the terminal root proof carries the SAME wrap-shaped FRI trace ceiling as the running folds
+        // (codex finding #5: the terminal proof must not have a depth/shape-dependent root VK from a
+        // default-params fold).
+        let leaf_params = ProveNextLayerParams::default();
+        let root_params = if self.wrap_enabled {
+            wrap_params()
+        } else {
+            leaf_params.clone()
+        };
 
         // The per-turn binding leaf, rebuilt from the seam-pair witness so its digest reproduces the
         // running `chain_digest` exactly.
@@ -636,7 +766,10 @@ impl Accumulator {
                 preprocessed_commit: None,
             };
             build_and_prove_next_layer::<DreggRecursionConfig, TurnChainBindingAir, _, D>(
-                &input, &config, &backend, &params,
+                &input,
+                &config,
+                &backend,
+                &leaf_params,
             )
             .map_err(|e| AccError::RecursionFailed {
                 reason: format!("finalize binding-leaf wrap failed: {e:?}"),
@@ -644,15 +777,50 @@ impl Accumulator {
         };
 
         // Fold the running root with the binding leaf into the FINAL root.
-        let left = running.into_recursion_input::<BatchOnly>();
-        let right = binding_batch.into_recursion_input::<BatchOnly>();
-        let root =
-            build_and_prove_aggregation_layer::<DreggRecursionConfig, BatchOnly, BatchOnly, _, D>(
-                &left, &right, &config, &backend, &params, None,
+        //
+        // **PIN the running (left) input against the captured fixed-point VK (codex finding #5).**
+        // The terminal fold is itself an AGG∘LEAF (left = the running aggregation, right = the
+        // binding leaf), structurally identical to a steady running fold — so the SAME VK-identity
+        // pin applies. When the pin was captured during the fold, the running proof's commitment MUST
+        // equal it (else the running proof came from a foreign circuit); fail closed, exactly as
+        // `accumulate` does. When no pin was captured (a single-turn chain — the running proof is
+        // still a leaf, never aggregated) the unpinned fold is correct (there is no captured running
+        // aggregation VK to pin against).
+        let running_commit = running.running_preprocessed_commit();
+        let left = if self.pin_vk_identity && self.pinned_running_vk.is_some() {
+            if self.pinned_running_vk != running_commit {
+                return Err(AccError::VkIdentityMismatch {
+                    index: summary.num_turns,
+                    expected: self
+                        .pinned_running_vk
+                        .as_ref()
+                        .map(commit_fingerprint)
+                        .unwrap_or_default(),
+                    found: running_commit
+                        .as_ref()
+                        .map(commit_fingerprint)
+                        .unwrap_or_default(),
+                });
+            }
+            running.into_recursion_input_pinned::<BatchOnly>(
+                self.pinned_running_vk
+                    .clone()
+                    .expect("pinned_running_vk is Some by the enclosing guard"),
             )
-            .map_err(|e| AccError::RecursionFailed {
-                reason: format!("finalize root aggregation failed: {e:?}"),
-            })?;
+        } else {
+            running.into_recursion_input::<BatchOnly>()
+        };
+        let right = binding_batch.into_recursion_input::<BatchOnly>();
+        let root = build_and_prove_aggregation_layer::<
+            DreggRecursionConfig,
+            BatchOnly,
+            BatchOnly,
+            _,
+            D,
+        >(&left, &right, &config, &backend, &root_params, None)
+        .map_err(|e| AccError::RecursionFailed {
+            reason: format!("finalize root aggregation failed: {e:?}"),
+        })?;
 
         // The artifact digest is the binding leaf's PADDED last-row `acc_out` (`binding_pis[3]`) —
         // the SAME quantity `generate_chain_trace_rotated` exposes as the K-fold `chain_digest`, so
