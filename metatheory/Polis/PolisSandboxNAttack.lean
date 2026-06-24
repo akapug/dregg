@@ -25,7 +25,7 @@ genuinely explores every actor×action×victim, and the governance guarantee is 
 those trees and over the agent count `n`. `#eval`/`#guard` assert
 TRUE props (`decide` tells the truth).
 -/
-import Metatheory.PolisSandboxN
+import Polis.PolisSandboxN
 import Mathlib.Data.List.FinRange
 
 namespace Metatheory.PolisSandboxNAttack

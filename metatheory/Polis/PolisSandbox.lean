@@ -17,7 +17,7 @@ The experiment, proven end-to-end:
 Pure Lean 4 core (imports `Metatheory.Polis`). Two agents (`Bool`) for the demo; the
 shape generalizes to any `Fintype` of agents.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisSandbox
 

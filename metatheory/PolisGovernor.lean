@@ -31,7 +31,7 @@ Output per line:
 budget = 5: an agent keeps its bounded exit iff its distance ≤ 5. A `trap`
 pushes the victim to distance 99 (> budget), so it is REFUSED.
 -/
-import Metatheory.PolisSandbox
+import Polis.PolisSandbox
 
 open Metatheory.PolisSandbox
 

@@ -11,7 +11,7 @@ Domination = that region is empty (`Foreclosed`) — the generalized exit-forecl
 not a single trajectory. (Pull it onto the unified `UTrace` of `PolisTrace` with
 `(viabilityBar Ar k).pullback projConfig`.)
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisViability
 

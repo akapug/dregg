@@ -14,7 +14,7 @@ Honest scope: agents are scripted Lean policies, not LLMs — the politics is am
 write; this is the verified governor + a runnable arena, not yet emergent LLM politics (that's the
 Minecraft phase).
 -/
-import Metatheory.PolisSandboxN
+import Polis.PolisSandboxN
 
 namespace Metatheory.PolisSandboxObservatory
 

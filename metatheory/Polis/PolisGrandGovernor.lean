@@ -28,8 +28,8 @@ governor: `grand_no_adversary_captures` quantifies over ALL controllers, so the 
 adversaries are merely the recognizable witnesses that the universal guarantee is non-vacuous.
 Every concrete claim is `decide`-checked on the live world.
 -/
-import Metatheory.PolisSandboxUnified
-import Metatheory.PolisGovernorTheory
+import Polis.PolisSandboxUnified
+import Polis.PolisGovernorTheory
 
 namespace Metatheory.PolisGrandGovernor
 

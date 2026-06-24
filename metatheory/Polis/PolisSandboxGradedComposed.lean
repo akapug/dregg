@@ -38,8 +38,8 @@ contrast made concrete by `#eval`:
 
 Pure Lean 4 core (imports `PolisSandboxGradedGov` + `PolisGovernorTheory`); `ℕ` + `decide`/`omega`.
 -/
-import Metatheory.PolisSandboxGradedGov
-import Metatheory.PolisGovernorTheory
+import Polis.PolisSandboxGradedGov
+import Polis.PolisGovernorTheory
 
 namespace Metatheory.PolisSandboxGradedComposed
 

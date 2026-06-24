@@ -58,7 +58,7 @@ l4v bar: `floorOk` is `Bool`-valued, non-vacuous both
 polarities (a recoverable live state passes; a locked-out live state is foreclosed). `#guard`s run
 the real bounded game over the deployed `rotateWrite`.
 -/
-import Metatheory.PolisViability
+import Polis.PolisViability
 import Dregg2.Apps.PreRotation
 
 namespace Metatheory.PolisRecoveryWrite

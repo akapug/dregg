@@ -46,9 +46,9 @@ and the deployed blocklace causal order, whether author `A`'s lawful public cont
 
 Pure Lean 4 core over the deployed modules.
 -/
-import Metatheory.PolisSelfCompose
-import Metatheory.PolisRecoveryFloor
-import Metatheory.PolisEraseBlocklace
+import Polis.PolisSelfCompose
+import Polis.PolisRecoveryFloor
+import Polis.PolisEraseBlocklace
 
 namespace Metatheory.PolisDominationDregg
 

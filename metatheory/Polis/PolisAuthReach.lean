@@ -15,7 +15,7 @@ that derivation; it generalizes the static `Viable` (which is `Derives = refl` o
 The load-bearing facts are `decide`-checked on a concrete two-path model.
 -/
 import Metatheory.SafetyGame
-import Metatheory.PolisAuthGame
+import Polis.PolisAuthGame
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthReach

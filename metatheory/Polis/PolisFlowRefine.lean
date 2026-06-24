@@ -12,7 +12,7 @@ procedure* rather than a hand-rolled predicate. This is the first weld of the te
 frontier onto the deployed substrate; the broader interleaved-multi-agent hyperproperty family
 remains the named research object.
 -/
-import Metatheory.Polis
+import Polis.Polis
 import Dregg2.Tactics
 import Dregg2.Deos.FlowRefine
 

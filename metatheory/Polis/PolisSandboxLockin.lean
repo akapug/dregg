@@ -24,7 +24,7 @@ The experiment, proven end-to-end:
 Pure Lean 4 core (imports `Metatheory.PolisSandbox` for the `Move`-style envelope shape).
 The detector and the demo are decidable and PROVEN by `decide`, not asserted.
 -/
-import Metatheory.PolisSandbox
+import Polis.PolisSandbox
 
 namespace Metatheory.PolisSandboxLockin
 

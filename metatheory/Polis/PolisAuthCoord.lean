@@ -31,7 +31,7 @@ Honest scope (see end of file): the coalition is modelled with a concrete two-fa
 does not model conjunction/implication of arbitrary admissibility conditions. No
 load-bearing `True`; `#guard` asserts the runnable facts.
 -/
-import Metatheory.PolisAuthGame
+import Polis.PolisAuthGame
 
 namespace Metatheory.PolisAuthCoord
 

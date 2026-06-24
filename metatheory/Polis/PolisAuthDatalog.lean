@@ -25,7 +25,7 @@ Over THIS instance the coordination phenomena are re-derived as Datalog facts:
 
 No load-bearing `True`; the discharge bridge is a proven `↔`; `#eval` runs the gate.
 -/
-import Metatheory.PolisDatalog
+import Polis.PolisDatalog
 import Dregg2.Laws
 
 namespace Metatheory.PolisAuthDatalog

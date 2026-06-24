@@ -32,9 +32,9 @@ The 2-label files remain as the non-vacuity witnesses; here we add ONE non-toy 3
 `decide` (`caps3_*`, labels `7, 42, 99`), to certify the general machinery genuinely admits and
 refuses on a roster nobody hand-special-cased.
 -/
-import Metatheory.PolisGovernorTheory
-import Metatheory.PolisAuthReach
-import Metatheory.PolisAuthViability
+import Polis.PolisGovernorTheory
+import Polis.PolisAuthReach
+import Polis.PolisAuthViability
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthGameN

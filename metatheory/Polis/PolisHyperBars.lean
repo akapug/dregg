@@ -8,7 +8,7 @@ politician-floor form of the constitution's **amendment non-regression**. The po
 `NoWeaken`, so the politician floor (the or-fold of its capture-shapes) is monotone-amendable — the
 constitution's `amendment_stream_nonregression` lifts to the composed hyperproperty floor.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisHyperBars
 

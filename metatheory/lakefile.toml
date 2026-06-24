@@ -1,5 +1,5 @@
 name = "Dregg2"
-defaultTargets = ["Dregg2", "Metatheory"]
+defaultTargets = ["Dregg2", "Metatheory", "Polis"]
 
 # Pin mathlib to the revision matching ~/src/mathlib4 @ v4.30.0
 # (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). Using a local `path`
@@ -20,6 +20,16 @@ name = "Dregg2"
 [[lean_lib]]
 name = "Metatheory"
 globs = ["Metatheory.+"]
+
+# The Polis/* polisware-constitution theory — split out of `Metatheory/` so the
+# core categorical/dynamics/settlement spec stays uncrowded. Files keep their
+# `Metatheory.*` namespaces (qualified names resolve unchanged); only the MODULE
+# path moved (`Metatheory.PolisX` → `Polis.PolisX`). The two libs interleave at
+# the module level (core game files import Polis theory; some Polis files import
+# core game/dynamics files) — Lake resolves this fine, no module-import cycle.
+[[lean_lib]]
+name = "Polis"
+globs = ["Polis.+"]
 
 # A CALLABLE GOVERNOR: the verified `Metatheory.PolisSandbox.govStep` as a
 # stdin/stdout service. Reads `<d0> <d1> <actor> <action> [victim]` per line,

@@ -31,9 +31,9 @@ PROVED (no load-bearing `True`):
     `capsBoth`/`capsDropRead`/`capsDropAll`: `capsDropRead` is ADMITTED (`B` still `ReachesD read` via
     the `read ← call ← grant` chain), `capsDropAll` is REFUSED (`¬ ReachesD read`).
 -/
-import Metatheory.PolisGovernorTheory
-import Metatheory.PolisAuthReachDatalog
-import Metatheory.PolisAuthViability
+import Polis.PolisGovernorTheory
+import Polis.PolisAuthReachDatalog
+import Polis.PolisAuthViability
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthGrandDatalog

@@ -12,7 +12,7 @@ Proven: governance holds ∀ controller (`sandbox_governed_safe`), gentle (`govS
 are both prevented governed. `#eval` shows it. Scripted agents (not LLMs); 2 agents for a cheap
 `decide`.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisSandboxCombined
 

@@ -30,7 +30,7 @@ This is the authority/conservation-axis counterpart of `PolisDreggGame` over PHY
 dregg turns: every admitted move is one the deployed kernel actually committed. No
 load-bearing `True`; the concrete admit/refuse facts are `decide`-checked on a real `KernelState`.
 -/
-import Metatheory.PolisGovernorTheory
+import Polis.PolisGovernorTheory
 import Dregg2.Exec.Kernel
 
 namespace Metatheory.PolisAuthExec

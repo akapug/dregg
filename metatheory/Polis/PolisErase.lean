@@ -12,7 +12,7 @@ Abstract over a public causal order here; instantiated on the deployed blocklace
 (`Dregg2.Authority.Blocklace.{Block, precedes}`: `actor := creator`, `le := precedes∪=`). Pure
 Lean 4 core (imports the import-free `Metatheory.Polis`).
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisErase
 

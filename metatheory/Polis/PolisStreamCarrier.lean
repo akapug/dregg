@@ -40,7 +40,7 @@ Imports the deployed `Dregg2.Proof.CoinductiveAdversary` and the framework
 `Metatheory.PolisCrossCell`; no `:= True` load-bearing.
 -/
 import Dregg2.Proof.CoinductiveAdversary
-import Metatheory.PolisCrossCell
+import Polis.PolisCrossCell
 
 namespace Metatheory.PolisStreamCarrier
 

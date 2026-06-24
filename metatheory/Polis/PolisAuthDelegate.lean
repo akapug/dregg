@@ -23,8 +23,8 @@ So Y's authority is derived from X's facts — pooled, cross-agent. The delivera
 All `decide`-checked, no load-bearing `True`. This is the genuine multi-agent
 knowledge/authority coordination over the real Datalog derivation closure.
 -/
-import Metatheory.PolisDatalog
-import Metatheory.PolisAuthReachDatalog
+import Polis.PolisDatalog
+import Polis.PolisAuthReachDatalog
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthDelegate

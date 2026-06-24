@@ -29,7 +29,7 @@ Honest: `bestMove` is a bounded greedy argmax (a Lean function), not an LLM — 
 chooses, and the two members' choices genuinely coincide on foreclosure without any coordination term.
 Three agents, a small option space, for a cheap `decide`.
 -/
-import Metatheory.Polis
+import Polis.Polis
 import Mathlib.Data.Fintype.Basic
 
 namespace Metatheory.PolisSandboxCoalitionEmerge

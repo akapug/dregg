@@ -11,9 +11,9 @@ Everything `decide`-evaluated end-to-end; the detector is the verified one, not 
 
 Pure Lean 4 core (imports the in-Lean sandbox + the detectors).
 -/
-import Metatheory.PolisSandbox
-import Metatheory.PolisViability
-import Metatheory.PolisSelfCompose
+import Polis.PolisSandbox
+import Polis.PolisViability
+import Polis.PolisSelfCompose
 
 namespace Metatheory.PolisSandboxDetect
 

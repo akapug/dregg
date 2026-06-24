@@ -13,7 +13,7 @@ is a political form a single-actor model cannot express.
 
 Imports Mathlib only for `Fintype`-decidable `∀ i, …`.
 -/
-import Metatheory.Polis
+import Polis.Polis
 import Mathlib.Data.Fintype.Basic
 
 namespace Metatheory.PolisSandboxN

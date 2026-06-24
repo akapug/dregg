@@ -16,7 +16,7 @@ Two things that separate a real result from a toy:
      - governed: the traps are refused, the victim's honest progress home is ALLOWED.
    Not a constructed witness — an actual simulation whose output you read.
 -/
-import Metatheory.PolisSandbox
+import Polis.PolisSandbox
 
 namespace Metatheory.PolisSandboxRun
 

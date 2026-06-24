@@ -14,8 +14,8 @@ combined floor — at every tick authority stays policy-bounded AND every agent'
 A move that breaks EITHER axis is refused by the grounded governor (`combine_monotone`). This is the
 theory of knowledge/authority coordination, as one guarantee, over dregg's real nouns.
 -/
-import Metatheory.PolisAuthGame
-import Metatheory.PolisAuthReach
+import Polis.PolisAuthGame
+import Polis.PolisAuthReach
 import Dregg2.Authority.Positional
 
 namespace Metatheory.PolisAuthGrand

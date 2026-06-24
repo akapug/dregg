@@ -61,7 +61,7 @@ membrane is exactly where it sits.
 The concrete instance at the end exhibits a non-trivial membrane
 over the sandbox world and checks both polarities by `decide`.
 -/
-import Metatheory.PolisGovernorTheory
+import Polis.PolisGovernorTheory
 
 namespace Metatheory.PolisMembrane
 

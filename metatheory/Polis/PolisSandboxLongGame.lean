@@ -22,7 +22,7 @@ while admitting all honest play. Contrast, proven:
 
 Pure Lean 4 core.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisSandboxLongGame
 

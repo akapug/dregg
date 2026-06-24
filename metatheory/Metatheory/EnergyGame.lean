@@ -27,7 +27,7 @@ Reuses `SafetyGame.Game` + kernel machinery on `EWorld` verbatim; the grade arit
 `#eval`/`#guard`/`example`s assert TRUE props (`decide` tells the truth).
 -/
 import Metatheory.SafetyGame
-import Metatheory.PolisGrade
+import Polis.PolisGrade
 
 namespace Metatheory.EnergyGame
 

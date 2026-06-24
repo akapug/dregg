@@ -18,7 +18,7 @@ but the viability governor refuses the discovered move and the victim reaches ho
 Honest: this is a bounded greedy/lookahead optimizer (a Lean function), not an LLM — but it genuinely
 *chooses* and genuinely *discovers* the strategy.
 -/
-import Metatheory.PolisSandboxLongGame
+import Polis.PolisSandboxLongGame
 
 namespace Metatheory.PolisSandboxAgent
 

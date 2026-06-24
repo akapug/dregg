@@ -31,7 +31,7 @@ Honest scope: a small finite world (two agents, `decide`-cheap); the adversary i
 bounded Lean function, not an LLM — but it genuinely mixes strategies and the governance is proven
 universal over controllers.
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisSandboxUnified
 

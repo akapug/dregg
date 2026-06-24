@@ -11,7 +11,7 @@ so `Dominated` is **decidable** and **interior-free**, and `dominationBar` is an
 deployed blocklace in `Metatheory.PolisEraseBlocklace.eraseAuthor`, and the bounded domination bar is
 instantiated on real blocklace counterfactual-pairs in `Metatheory.PolisDominationDregg`.)
 -/
-import Metatheory.PolisViability
+import Polis.PolisViability
 
 namespace Metatheory.PolisSelfCompose
 

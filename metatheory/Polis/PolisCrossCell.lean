@@ -11,7 +11,7 @@ and falsely claim anti-tyranny). Deployment: instantiate `polisFloorProp` from
 
 Pure Lean 4 core (imports only the import-free `Metatheory.Polis`).
 -/
-import Metatheory.Polis
+import Polis.Polis
 
 namespace Metatheory.PolisCrossCell
 

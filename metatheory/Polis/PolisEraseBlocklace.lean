@@ -24,7 +24,7 @@ the `Causal` interface those results consume, so they apply to the real log. The
 
 Pure Lean 4 core.
 -/
-import Metatheory.PolisErase
+import Polis.PolisErase
 import Dregg2.Authority.Blocklace
 
 namespace Metatheory.PolisEraseBlocklace

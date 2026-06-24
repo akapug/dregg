@@ -38,9 +38,9 @@ l4v bar: every floor is `Bool`/decidable and non-vacuous both
 polarities (a solvent reachable state passes; an insolvent dead-end is foreclosed). `#guard`s and
 `decide` proofs execute both, over the real deployed `exec` and the heterogeneous `or`-fold.
 -/
-import Metatheory.PolisViability
-import Metatheory.PolisRecoveryFloor
-import Metatheory.Polis
+import Polis.PolisViability
+import Polis.PolisRecoveryFloor
+import Polis.Polis
 import Dregg2.Exec.Kernel
 
 namespace Metatheory.PolisViabilityKernel
