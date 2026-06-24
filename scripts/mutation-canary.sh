@@ -22,6 +22,7 @@ META="$REPO/metatheory"
 IM="$META/Dregg2/Exec/IssuerMove.lean"
 TE="$META/Dregg2/Exec/TurnExecutorFull.lean"
 ER="$META/Dregg2/Spec/ExecRefinement.lean"
+EA="$META/Dregg2/Exec/EffectsAuthority.lean"
 
 TARGETS=(
   Dregg2.Exec.IssuerMove
@@ -43,10 +44,12 @@ mkdir -p "$SNAPDIR"
 cp "$IM" "$SNAPDIR/IssuerMove.snap"
 cp "$TE" "$SNAPDIR/TurnExecutorFull.snap"
 cp "$ER" "$SNAPDIR/ExecRefinement.snap"
+cp "$EA" "$SNAPDIR/EffectsAuthority.snap"
 restore() {
   cp "$SNAPDIR/IssuerMove.snap" "$IM"
   cp "$SNAPDIR/TurnExecutorFull.snap" "$TE"
   cp "$SNAPDIR/ExecRefinement.snap" "$ER"
+  cp "$SNAPDIR/EffectsAuthority.snap" "$EA"
 }
 
 build_targets() {
@@ -144,6 +147,19 @@ mut_ledger_spec_drop() {
   perl -0pi -e "s/\\(s\\.log\\.length < s'\\.log\\.length\\) \\xe2\\x88\\xa7/(True) \\xe2\\x88\\xa7  -- LEDGER-SPEC-DROP mutation/" "$TE"
 }
 
+# NONAMP-WEAKEN: trivialize the AUTHORITY non-amplification predicate `IsNonAmplifying` (the headline of
+# guarantee A) toward `True` — i.e. drop the `granted ⊆ held` attenuation check that "amplification
+# denied" rests on. Post-repair this MUST go RED: the `*_teeth` keystone-audit witnesses
+# (`{introduce,attenuate,refresh}_non_amplifying_teeth`, all `¬ IsNonAmplifying heldRW grantAmp`) become
+# `¬ True` and are UNPROVABLE, so the 8 `*_non_amplifying` keystones lose their discriminating tooth and
+# `#keystone_audit_tagged` (in Dregg2.Verify.KeystoneAuditNonAmp) FAILS. If it stays GREEN, the
+# non-amplification predicate is empirically vacuous (`:= True`) and the authority claim is decorative.
+# Anchored on the `def IsNonAmplifying … : Prop :=\n  capAuthConferred granted ⊆ capAuthConferred held`
+# body (EffectsAuthority.lean), leaving the signature intact.
+mut_nonamp_weaken() {
+  perl -0pi -e 's/(def IsNonAmplifying \(held granted : ECap\) : Prop :=\n)  capAuthConferred granted \xe2\x8a\x86 capAuthConferred held/${1}  True  -- NONAMP-WEAKEN mutation/' "$EA"
+}
+
 trap restore EXIT
 
 # The AUTH-GRAPH-DROP mutation is caught by the load-bearing audit's non-vacuity tooth, which lives
@@ -187,6 +203,36 @@ run_ledger_spec() {
     echo "  RESULT: GREEN  (mutation NOT caught — fullActionInvA attestation is decorative!)"
   else
     echo "  RESULT: RED    (mutation caught — fullActionInvA value leg is load-bearing)"
+    grep -E ': error:|^error:' "$log" | head -3 | sed 's/^/             /'
+  fi
+  restore  # FILE-COPY snapshot restore (preserves the uncommitted tree)
+  echo ""
+}
+
+# NONAMP-WEAKEN is caught by the keystone-audit (the `*_teeth` non-vacuity witnesses + the throwing
+# `#keystone_audit_tagged`) over the 8 `*_non_amplifying` keystones, in KeystoneAuditNonAmp.
+NONAMP_TARGETS=(
+  Dregg2.Exec.EffectsAuthority
+  Dregg2.Verify.KeystoneAuditNonAmp
+)
+
+build_nonamp() {
+  local log="$1"
+  ( cd "$META" && lake build "${NONAMP_TARGETS[@]}" ) >"$log" 2>&1
+  local rc=$?
+  if [[ $rc -eq 0 ]] && ! grep -qE '^error:|: error:' "$log"; then return 0; fi
+  return 1
+}
+
+run_nonamp() {
+  echo "=================================================================="
+  echo "MUTATION: NONAMP-WEAKEN"
+  local log="$LOGDIR/NONAMP-WEAKEN.log"
+  mut_nonamp_weaken
+  if build_nonamp "$log"; then
+    echo "  RESULT: GREEN  (mutation NOT caught — IsNonAmplifying is decorative (:= True)!)"
+  else
+    echo "  RESULT: RED    (mutation caught — the non-amplification keystones are load-bearing)"
     grep -E ': error:|^error:' "$log" | head -3 | sed 's/^/             /'
   fi
   restore  # FILE-COPY snapshot restore (preserves the uncommitted tree)
@@ -241,6 +287,22 @@ run_gate() {
     echo "  LEDGER-SPEC-DROP: RED ✓ (fullActionInvA value leg is load-bearing)"
   fi
   restore
+  # NONAMP baseline (the keystone-audit family must build unmutated) then the weaken tooth.
+  if build_nonamp "$LOGDIR/gate-base-nonamp.log"; then
+    echo "  BASELINE(non-amp): GREEN ✓ (the KeystoneAuditNonAmp family builds unmutated)"
+  else
+    echo "  ⛔ BASELINE(non-amp): RED — a pre-existing break; see $LOGDIR/gate-base-nonamp.log"
+    fail=1
+  fi
+  restore
+  mut_nonamp_weaken
+  if build_nonamp "$LOGDIR/gate-NONAMP-WEAKEN.log"; then
+    echo "  ⛔ NONAMP-WEAKEN: GREEN — the non-amplification keystones regressed to DECORATIVE (:= True)"
+    fail=1
+  else
+    echo "  NONAMP-WEAKEN: RED ✓ (the *_non_amplifying keystones are load-bearing)"
+  fi
+  restore
   echo "=================================================================="
   if [[ $fail -eq 0 ]]; then
     echo "MUTATION GATE: PASS (C-c1 keystones load-bearing; baseline green)"
@@ -256,6 +318,7 @@ case "${1:-ALL}" in
   AUTH-DROP)           run_one AUTH-DROP           mut_auth_drop ;;
   AUTH-GRAPH-DROP)     run_auth_graph ;;
   LEDGER-SPEC-DROP)    run_ledger_spec ;;
+  NONAMP-WEAKEN)       run_nonamp ;;
   CONSERVATION-BREAK)  run_one CONSERVATION-BREAK  mut_conservation_break ;;
   AVAILABILITY-DROP)   run_one AVAILABILITY-DROP   mut_availability_drop ;;
   DISTINCTNESS-DROP)   run_one DISTINCTNESS-DROP   mut_distinctness_drop ;;
@@ -264,6 +327,7 @@ case "${1:-ALL}" in
     run_one AUTH-DROP           mut_auth_drop
     run_auth_graph
     run_ledger_spec
+    run_nonamp
     run_one CONSERVATION-BREAK  mut_conservation_break
     run_one AVAILABILITY-DROP   mut_availability_drop
     run_one DISTINCTNESS-DROP   mut_distinctness_drop
