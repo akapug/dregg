@@ -239,9 +239,9 @@ use std::cell::Cell;
 
 use servo::{
     EventLoopWaker, InputEvent, Key, KeyState, KeyboardEvent, LoadStatus, MouseButton,
-    MouseButtonAction, MouseButtonEvent, Scroll, ServoBuilder, WebResourceLoad, WebResourceResponse,
-    WebView, WebViewBuilder, WebViewDelegate, WebViewPoint, WebViewVector, WheelDelta, WheelEvent,
-    WheelMode,
+    MouseButtonAction, MouseButtonEvent, NamedKey, Scroll, ServoBuilder, WebResourceLoad,
+    WebResourceResponse, WebView, WebViewBuilder, WebViewDelegate, WebViewPoint, WebViewVector,
+    WheelDelta, WheelEvent, WheelMode,
 };
 use url::Url;
 use webrender_api::units::{DevicePoint, DeviceVector2D};
@@ -393,6 +393,30 @@ impl WebViewDelegate for CapGate {
     }
 }
 
+/// **Install the process-default rustls [`CryptoProvider`](rustls::crypto::CryptoProvider)
+/// before the engine starts.** Servo's `ResourceManager` builds a rustls `ClientConfig`
+/// for its network fetches; this graph links BOTH the `aws-lc-rs` and `ring` providers
+/// (servo-net pulls `aws-lc-rs`, another consumer pulls `ring`), so rustls cannot pick
+/// one automatically and PANICS the `ResourceManager` thread on the first TLS config
+/// unless a process default is installed. We install the `aws-lc-rs` default — the
+/// provider servo-net's own `hyper-rustls` uses, and the one
+/// [`crate::netcap_http`]'s `ClientConfig::builder()` expects — so the engine and our
+/// cap-gated http handler agree on one provider.
+///
+/// IDEMPOTENT: `install_default` returns `Err` if a provider is already installed (a
+/// prior call, or an embedder that installed its own); we ignore that — the goal is
+/// only that SOME default exists before `ServoBuilder::build` spins up the net stack.
+/// Called at every engine-construction site below.
+pub fn ensure_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // Ignore the result: an `Err(_)` means a default is already installed, which
+        // is exactly the post-condition we want. The `Once` keeps this to one attempt.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
 /// A no-op [`EventLoopWaker`] — the headless render driver pumps
 /// [`Servo::spin_event_loop`] itself in a bounded loop (no external event loop to
 /// wake). A real windowed embedder wakes its winit proxy here (cf. `winit_minimal`).
@@ -482,6 +506,9 @@ pub fn render_url_to_frame_netcap(
     // process-global options/prefs (`servo_config::opts`) are a `OnceCell` set ONCE
     // per process by `ServoBuilder::build`, so at most one `Servo` exists per process;
     // [`render_url_on_servo`] renders additional pages on this same engine.
+    // Install the default rustls provider before the net stack spins up (else the
+    // `ResourceManager` thread panics on its first TLS config — see the fn's doc).
+    ensure_crypto_provider();
     let servo = ServoBuilder::default()
         .event_loop_waker(Box::new(HeadlessWaker))
         .build();
@@ -535,6 +562,9 @@ impl CapGatedHttpEngine {
             "the servo-net fork permits registering an https handler (FORBIDDEN_SCHEMES loosened)",
         );
 
+        // Install the default rustls provider before the net stack spins up (the
+        // http handler path uses TLS; without it the `ResourceManager` panics).
+        ensure_crypto_provider();
         let servo = ServoBuilder::default()
             .event_loop_waker(Box::new(HeadlessWaker))
             .protocol_registry(registry)
@@ -693,6 +723,84 @@ pub enum WebInput {
     /// input / key handlers. `char`-typed (not a `String`) so [`WebInput`] stays
     /// `Copy`; an embedder lowers each typed grapheme to one of these.
     KeyChar { ch: char },
+    /// A NAMED editing/navigation key (a `keydown`+`keyup` for a non-printable key
+    /// like Enter / Backspace / an arrow) — what a text field needs for submit,
+    /// delete, and caret motion. Carried separately from [`Self::KeyChar`] because
+    /// servo distinguishes `Key::Named(NamedKey::Enter)` from `Key::Character("\r")`:
+    /// only the NAMED form drives a form submit / a real backspace. An embedder lowers
+    /// a non-character keystroke (its gpui/winit key name) to one of these.
+    KeyNamed { key: NamedWebKey },
+}
+
+/// The non-printable keys a text field / page needs, lowered from the embedder's key
+/// name to a `servo::NamedKey` inside [`apply_input`]. `Copy` (a plain discriminant)
+/// so [`WebInput`] stays `Copy`. Deliberately the small essential set — text editing
+/// (Enter / Backspace / Delete / Tab / Escape) + caret motion (the four arrows + Home
+/// / End); a key outside this set is simply not delivered (the page sees nothing,
+/// never a wrong key).
+#[derive(Clone, Copy, Debug)]
+pub enum NamedWebKey {
+    /// ↵ — submit a form / insert a newline in a multiline field.
+    Enter,
+    /// ⌫ — delete the character before the caret.
+    Backspace,
+    /// ⌦ — delete the character after the caret.
+    Delete,
+    /// ⇥ — advance focus to the next field / insert a tab.
+    Tab,
+    /// ⎋ — cancel / blur.
+    Escape,
+    /// ← caret left.
+    ArrowLeft,
+    /// → caret right.
+    ArrowRight,
+    /// ↑ caret up / previous.
+    ArrowUp,
+    /// ↓ caret down / next.
+    ArrowDown,
+    /// ↖ caret to line start.
+    Home,
+    /// ↘ caret to line end.
+    End,
+}
+
+impl NamedWebKey {
+    /// Lower to the `servo::NamedKey` the engine's keyboard event carries.
+    fn to_named(self) -> NamedKey {
+        match self {
+            NamedWebKey::Enter => NamedKey::Enter,
+            NamedWebKey::Backspace => NamedKey::Backspace,
+            NamedWebKey::Delete => NamedKey::Delete,
+            NamedWebKey::Tab => NamedKey::Tab,
+            NamedWebKey::Escape => NamedKey::Escape,
+            NamedWebKey::ArrowLeft => NamedKey::ArrowLeft,
+            NamedWebKey::ArrowRight => NamedKey::ArrowRight,
+            NamedWebKey::ArrowUp => NamedKey::ArrowUp,
+            NamedWebKey::ArrowDown => NamedKey::ArrowDown,
+            NamedWebKey::Home => NamedKey::Home,
+            NamedWebKey::End => NamedKey::End,
+        }
+    }
+
+    /// Map an embedder key NAME (the gpui/winit `Keystroke::key`, e.g. `"enter"`,
+    /// `"backspace"`, `"left"`) to a [`NamedWebKey`], or `None` for a name outside the
+    /// essential editing/navigation set (which is then not delivered to the page).
+    pub fn from_key_name(name: &str) -> Option<NamedWebKey> {
+        Some(match name {
+            "enter" => NamedWebKey::Enter,
+            "backspace" => NamedWebKey::Backspace,
+            "delete" => NamedWebKey::Delete,
+            "tab" => NamedWebKey::Tab,
+            "escape" => NamedWebKey::Escape,
+            "left" => NamedWebKey::ArrowLeft,
+            "right" => NamedWebKey::ArrowRight,
+            "up" => NamedWebKey::ArrowUp,
+            "down" => NamedWebKey::ArrowDown,
+            "home" => NamedWebKey::Home,
+            "end" => NamedWebKey::End,
+            _ => return None,
+        })
+    }
 }
 
 /// Deliver one [`WebInput`] to a live `webview`. Mouse/wheel events go through
@@ -747,6 +855,22 @@ pub fn apply_input(webview: &WebView, input: WebInput) {
             // with defaults (the embedder-minimal lowering — the same `winit_minimal`
             // does for a plain character before it has a physical key code).
             let key = Key::Character(ch.to_string());
+            webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
+                KeyState::Down,
+                key.clone(),
+            )));
+            webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
+                KeyState::Up,
+                key,
+            )));
+        }
+        WebInput::KeyNamed { key } => {
+            // A NAMED key (Enter / Backspace / an arrow / …) as a keydown then keyup.
+            // `Key::Named(NamedKey::_)` is what a form submit / a real backspace / a
+            // caret move needs — servo treats it differently from `Key::Character`.
+            // `from_state_and_key` fills code/location/modifiers with defaults (the
+            // same embedder-minimal lowering the `KeyChar` arm uses).
+            let key = Key::Named(key.to_named());
             webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
                 KeyState::Down,
                 key.clone(),
@@ -925,6 +1049,10 @@ impl LiveWebView {
         if LIVE_WEBVIEW_ALIVE.with(|a| a.replace(true)) {
             return Err("a LiveWebView (Servo engine) already exists on this process");
         }
+        // Install the default rustls provider before the net stack spins up — the
+        // LIVE cockpit pane fetches over TLS, so without this the engine's
+        // `ResourceManager` thread panics on its first https config (see the fn doc).
+        ensure_crypto_provider();
         let servo = ServoBuilder::default()
             .event_loop_waker(Box::new(HeadlessWaker))
             .build();
@@ -933,11 +1061,26 @@ impl LiveWebView {
         // backend produced (not a separate `gpu_available()` probe that could disagree
         // if the GPU device opens but its offscreen surface fails). Both yield the same
         // `Rc<dyn RenderingContext>` the embed code drives.
-        let (rendering_context, gpu_backed): (Rc<dyn ServoRenderingContext>, bool) =
-            match crate::gpu_context::ServoGpuContext::new(width, height) {
-                Ok(gpu) => (Rc::new(gpu), true),
-                Err(_) => (Rc::new(ServoSwglContext::new(width, height)), false),
-            };
+        //
+        // ESCAPE HATCH: `DREGG_WEBSHELL_SWGL=1` forces the SWGL software path even when a
+        // GPU opens. The offscreen hardware-GL READBACK (`glReadPixels` after `paint`)
+        // is unreliable in some headless contexts (a "texture unloadable / using zero
+        // texture" GL state where the read returns a degenerate frame), which makes the
+        // tile fail to reflect input. SWGL's `read_pixels` is the deterministic path the
+        // engine's own render tests use; this lets a headless bake / a flaky-GPU CI box
+        // pin it. It selects between the two existing backends — it does not alter either.
+        let force_swgl = std::env::var("DREGG_WEBSHELL_SWGL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let (rendering_context, gpu_backed): (Rc<dyn ServoRenderingContext>, bool) = match (
+            force_swgl,
+            (!force_swgl)
+                .then(|| crate::gpu_context::ServoGpuContext::new(width, height))
+                .and_then(Result::ok),
+        ) {
+            (false, Some(gpu)) => (Rc::new(gpu), true),
+            _ => (Rc::new(ServoSwglContext::new(width, height)), false),
+        };
         let _ = ServoRenderingContext::make_current(&*rendering_context);
         Ok(LiveWebView {
             servo,
