@@ -82,12 +82,12 @@ dregg-doc = { path = "../dregg-doc" }
 
 # THE SEAM: Zed's `fs::Fs` trait — pulled at the SAME zed fork rev gpui comes
 # from. FirmamentZedFs implements this trait over the cell-ledger.
-fs = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
-git = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
-gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
-rope = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
-text = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
-util = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
+fs = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
+git = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
+gpui = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
+rope = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
+text = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
+util = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
 futures = "0.3"
 # Match the zed `git` crate's `async-channel`/`smallvec` (its `GitRepository`
 # trait names `async_channel::Sender` in `initial_graph_data`/`search_commits`
@@ -97,27 +97,27 @@ async-channel = "2.5.0"
 smallvec = { version = "1.6", features = ["union", "const_new"] }
 smol = "2"
 async-tar = "0.5.1"
-collections = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
+collections = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
 
 # THE REAL ZED EDITOR STACK (gated on full-zed — the heavy graph).
-editor = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-workspace = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-project = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-language = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+editor = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+workspace = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+project = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+language = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
 
 # THE WORKSPACE SHELL + ITS REAL PANELS (gated on full-zed). These sit on the
 # editor/workspace/project base already in the graph — little NEW transitive
 # weight. `boot.rs` loads project_panel/outline_panel/terminal_view into a real
 # Workspace; command_palette + search register their actions on it. `theme` is
 # pulled directly so `boot::install_workspace_globals` can run `theme::init`.
-project_panel = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-outline_panel = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-terminal_view = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-command_palette = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-search = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-theme = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-theme_settings = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
-settings = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+project_panel = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+outline_panel = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+terminal_view = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+command_palette = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+search = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+theme = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+theme_settings = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
+settings = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
 
 # THE CONFINED-HERMES AGENT (gated on full-zed via `cockpit-surface`). Its
 # `cockpit_surface::AgentDockView` is a live gpui view over a real
@@ -134,7 +134,7 @@ deos-hermes = { path = "../deos-hermes", default-features = false, optional = tr
 # Zed's `ui` crate — only to name `ui::IconName` in the agent panel's
 # `Panel::icon` (the trait method returns `Option<ui::IconName>`). Same zed-fork
 # rev as the rest of the graph.
-ui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", optional = true }
+ui = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", optional = true }
 
 
 # Replicate the zed fork's [patch.crates-io] table (the subset our graph pulls),
@@ -153,22 +153,22 @@ ui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92
 # — the exact crate + trait zed's own worktree integration tests use to await a
 # lazy directory expansion. Pinned to the same 0.5 the zed graph already carries.
 postage = { version = "0.5", features = ["futures-traits"] }
-gpui = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
-project = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
-language = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
-settings = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
+gpui = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
+project = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
+language = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
+settings = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
 # `project/test-support` turns on `remote/test-support` graph-wide, which makes
 # `RemoteConnectionIdentity::Mock` appear. The `workspace` crate (pulled by
 # `editor`) only matches that variant under ITS OWN `test-support` — an upstream
 # feature-unification gap in the zed fork at this rev. Enabling `workspace`'s
 # test-support here turns the matching arm on, so the unified graph compiles.
-workspace = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
+workspace = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
 # Same feature-unification gap one layer deeper, surfaced by the panel crates'
 # test-support: `project/test-support` turns on `remote/test-support` graph-wide
 # (so `RemoteConnectionOptions::Mock` appears), but `remote_connection`'s OWN
 # `Mock` match arm is gated on ITS test-support. The panel `*::load` paths pull
 # `remote_connection`, so enable its test-support here to turn the arm on.
-remote_connection = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support"] }
+remote_connection = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"] }
 
 # THE HEADLESS RENDER PATH for the unified-Workspace PNG bake
 # (`tests/unified_workspace_png_bake.rs`). `gpui_platform::current_headless_renderer`
@@ -178,8 +178,8 @@ remote_connection = { git = "https://github.com/emberian/zed", rev = "407a6ffd97
 # carries the `CosmicTextSystem` (real text shaping); `image` is `RgbaImage::save`
 # (the captured screenshot → PNG). Same zed-fork rev as `gpui`, so the
 # renderer/text types unify with the rest of the graph.
-gpui_platform = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549", features = ["test-support", "font-kit"] }
-gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "407a6ffd977d82b828e392f92db5cb34edea9549" }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support", "font-kit"] }
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "54fbcb6943" }
 image = { version = "0.25" }
 
 # The `project_over_cells` test only compiles under `--features full-zed` (it
