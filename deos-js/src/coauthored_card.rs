@@ -96,6 +96,36 @@ pub struct CardStitch {
 }
 
 impl CardStitch {
+    /// **Stitch two driven view-sources** (each branched from a shared seed prefix) by
+    /// the `dregg_doc` pushout — the string-driven core both [`SharedCard::stitch`] (the
+    /// local, two-live-fork path) and the DISTRIBUTED carry
+    /// (`starbridge_v2::distributed_card`, where the two sources arrive over an instance
+    /// boundary as a card-fork envelope) delegate to.
+    ///
+    /// Both branches re-root on the SAME `seed` (authored neutrally as `Author(0)`), so
+    /// the pushout sees a real common ancestor: disjoint edits fold CLEAN (both kept); an
+    /// overlapping edit (both principals touched the same node) surfaces a first-class
+    /// [`dregg_doc::ConflictRegion`] (two attributed, live alternatives — never a silent
+    /// last-writer-wins). `who_a`/`who_b` are the two principals' blame identities.
+    pub fn from_sources(
+        seed: &str,
+        who_a: Author,
+        driven_a: &str,
+        who_b: Author,
+        driven_b: &str,
+    ) -> CardStitch {
+        let seed_author = Author(0);
+        let mut branch_a = ProgramSource::seed(seed_author, seed);
+        branch_a.edit(who_a, driven_a);
+        let mut branch_b = ProgramSource::seed(seed_author, seed);
+        branch_b.edit(who_b, driven_b);
+        // The pushout: fold B's divergent patches into A's branch (a conflict is a
+        // first-class region, not a failure — see `ProgramSource::merge`).
+        CardStitch {
+            rendered: branch_a.merge(&branch_b),
+        }
+    }
+
     /// True iff the two principals' edits collided on the same node — surfaced as a
     /// first-class [`dregg_doc::ConflictRegion`] antichain (NOT a silent overwrite).
     pub fn has_conflict(&self) -> bool {
@@ -156,6 +186,37 @@ impl SharedCard {
         }
     }
 
+    /// **Rebuild a shared card from a carried seed view-source.** The distributed
+    /// twin of [`SharedCard::seed`]: where `seed` bakes the fixed counter view, this
+    /// reconstitutes the SAME shared card a peer minted — from the exact
+    /// `seed_view_source` string that crossed an instance boundary (a card-fork
+    /// envelope) — so a second principal on a DIFFERENT instance can take its own
+    /// [`CardFork`] over the identical seed prefix and stitch faithfully.
+    ///
+    /// The seed view IS the carried source verbatim; the model/affordances are seeded
+    /// to the shared card's standard counter shape (the seed both peers branch from),
+    /// so a fork the receiver hands a principal re-folds, fires, and STITCHES against
+    /// the originator's fork by the same `dregg_doc` pushout (the carried seed is the
+    /// real common ancestor → disjoint edits fold clean, an overlap is a
+    /// [`dregg_doc::ConflictRegion`]). `edit_authority` is the authoring cap a fork's
+    /// `held` must satisfy (carried alongside the seed in the envelope).
+    pub fn seed_from_source(edit_authority: AuthRequired, seed_view_source: &str) -> Self {
+        let manifest = AppletManifest {
+            seed_fields: vec![(COUNT_SLOT, 0)],
+            affordances: vec![AffordanceSpec {
+                name: "inc".into(),
+                required: edit_authority.clone(),
+                op: ApplyOp::AddToSlot { slot: COUNT_SLOT },
+            }],
+            held: edit_authority.clone(),
+            view_source: seed_view_source.to_string(),
+        };
+        SharedCard {
+            manifest,
+            edit_authority,
+        }
+    }
+
     /// The seed view source (the shared prefix both forks branch from).
     pub fn seed_view_source(&self) -> &str {
         &self.manifest.view_source
@@ -194,20 +255,19 @@ impl SharedCard {
     /// the seed) and `b`'s divergent patches are stitched in, so the merge is symmetric
     /// in *content* (both readings are surfaced) while attributing each side.
     pub fn stitch(&self, a: &CardFork, b: &CardFork) -> CardStitch {
-        // Root both branches on the SHARED seed prefix (authored neutrally), then layer
-        // each principal's driven view as their own patch — so the pushout sees a real
-        // common ancestor and a real divergence per principal.
-        let seed_author = Author(0);
-        let mut branch_a = ProgramSource::seed(seed_author, self.seed_view_source());
-        branch_a.edit(a.who, &a.view_source());
-        let mut branch_b = ProgramSource::seed(seed_author, self.seed_view_source());
-        branch_b.edit(b.who, &b.view_source());
-
-        // The pushout: fold B's divergent patches into A's branch (a conflict is a
-        // first-class region, not a failure — see `ProgramSource::merge`).
-        let rendered = branch_a.merge(&branch_b);
         let _ = b.as_branch(); // keep the branch-shape API exercised/honest
-        CardStitch { rendered }
+        // Delegate to the string-driven core: the stitch consumes exactly the shared
+        // seed prefix + each principal's driven view-source fold. (The same three
+        // strings a card-fork envelope carries across an instance boundary — so the
+        // DISTRIBUTED stitch is byte-identical to this local one; see
+        // `starbridge_v2::distributed_card`.)
+        CardStitch::from_sources(
+            self.seed_view_source(),
+            a.who,
+            &a.view_source(),
+            b.who,
+            &b.view_source(),
+        )
     }
 }
 

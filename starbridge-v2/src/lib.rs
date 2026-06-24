@@ -216,6 +216,18 @@ pub mod shared_fork;
 #[cfg(feature = "agent-js")]
 pub mod agent_attach;
 
+// DISTRIBUTED MULTIPLAYER CARDS — two principals on DIFFERENT instances co-drive ONE
+// shared card across a membrane boundary. Welds deos-js's `coauthored_card` (the LOCAL
+// fork/drive/stitch) to the `shared_fork` membrane's serialize→carry→rehydrate pattern
+// (with an anti-substitution root tooth): principal A seals its driven card-fork to a
+// portable `CardForkEnvelope`, B opens it on its own instance, rehydrates its OWN live
+// cap-bounded fork, drives it, and stitches by the `dregg_doc` pushout — a clean merge
+// keeps both edits, an overlap surfaces a resolvable `ConflictRegion`, an unauthorized B
+// contributes no patch (the cap tooth). gpui-free + `cargo test`-able. Gated on
+// `agent-js` (pulls deos-js; implies `embedded-executor` → `dregg-doc` + the membrane).
+#[cfg(feature = "agent-js")]
+pub mod distributed_card;
+
 // CARD PANE — mount a hyperdreggmedia CARD (a deos-js applet's view-tree) as a LIVE
 // cockpit surface, backed by the cockpit's REAL `World` (a `CardPane` gpui `Render`
 // view that fires verified turns on the live ledger). Gated on `card-pane` (pulls
