@@ -302,10 +302,16 @@ impl Cockpit {
             }
             "down" => {
                 self.palette.select_next();
+                // Follow the highlight: scroll the now-selected row into view so
+                // arrow-down past the visible fold keeps the selection visible.
+                self.palette_scroll
+                    .scroll_to_item(self.palette.selected(), ScrollStrategy::Nearest);
                 cx.notify();
             }
             "up" => {
                 self.palette.select_prev();
+                self.palette_scroll
+                    .scroll_to_item(self.palette.selected(), ScrollStrategy::Nearest);
                 cx.notify();
             }
             _ => {

@@ -1208,64 +1208,94 @@ impl Cockpit {
                 ),
         );
 
-        // The results list.
-        let mut list = div().flex().flex_col().gap_0p5().p_1().overflow_hidden();
+        // The results list. EVERY matched command is reachable: the rows live
+        // in a `uniform_list` that virtualizes + scrolls (mouse-wheel AND ↑/↓),
+        // not a fixed `.take(12)` slice that silently drops the rest. The
+        // selected row is scrolled into view by `on_key` via `palette_scroll`.
         if results.is_empty() {
-            list = list.child(
+            card = card.child(
                 div()
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(theme::muted())
-                    .child("(no matching action — Esc to close)"),
-            );
-        }
-        for (i, hit) in results.iter().enumerate().take(12) {
-            let active = i == selected;
-            let (badge, bcolor) = category_badge(hit.command.category);
-            let id = hit.command.id;
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("palette-row-{i}")))
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .bg(if active {
-                        theme::panel_hi()
-                    } else {
-                        theme::panel()
-                    })
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme::border()))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _ev, _w, cx| {
-                            this.palette.close();
-                            this.dispatch(id, cx);
-                            cx.notify();
-                        }),
-                    )
+                    .p_1()
                     .child(
                         div()
+                            .px_2()
+                            .py_1()
                             .text_xs()
-                            .text_color(if active {
-                                theme::accent()
-                            } else {
-                                theme::text()
-                            })
-                            .child(format!(
-                                "{} {}",
-                                if active { "▸" } else { " " },
-                                hit.command.title
-                            )),
-                    )
-                    .child(pill(badge, bcolor)),
+                            .text_color(theme::muted())
+                            .child("(no matching action — Esc to close)"),
+                    ),
             );
+        } else {
+            // Each row needs to know the command id it dispatches; clone the
+            // ids into the closure so the virtualizing list can build rows on
+            // demand as it scrolls.
+            let ids: Vec<CommandId> = results.iter().map(|h| h.command.id).collect();
+            let titles: Vec<&'static str> = results.iter().map(|h| h.command.title).collect();
+            let categories: Vec<Category> = results.iter().map(|h| h.command.category).collect();
+            let row_count = results.len();
+
+            let list = uniform_list(
+                "palette-results",
+                row_count,
+                cx.processor(move |this, range: std::ops::Range<usize>, _w, cx| {
+                    let mut rows = Vec::with_capacity(range.end - range.start);
+                    for i in range {
+                        let active = i == selected;
+                        let (badge, bcolor) = category_badge(categories[i]);
+                        let id = ids[i];
+                        let title = titles[i];
+                        rows.push(
+                            div()
+                                .id(SharedString::from(format!("palette-row-{i}")))
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .px_2()
+                                .py_1()
+                                .mx_1()
+                                .rounded_md()
+                                .bg(if active {
+                                    theme::panel_hi()
+                                } else {
+                                    theme::panel()
+                                })
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme::border()))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _ev, _w, cx| {
+                                        this.palette.close();
+                                        this.dispatch(id, cx);
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if active {
+                                            theme::accent()
+                                        } else {
+                                            theme::text()
+                                        })
+                                        .child(format!(
+                                            "{} {}",
+                                            if active { "▸" } else { " " },
+                                            title
+                                        )),
+                                )
+                                .child(pill(badge, bcolor))
+                                .into_any_element(),
+                        );
+                    }
+                    let _ = this;
+                    rows
+                }),
+            )
+            .track_scroll(&self.palette_scroll)
+            .flex_grow(1.0)
+            .py_1();
+            card = card.child(list);
         }
-        card = card.child(list);
 
         // Footer hint.
         card = card.child(
