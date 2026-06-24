@@ -231,47 +231,57 @@ impl Cockpit {
 
         #[cfg(feature = "web-shell")]
         {
-            const W: u32 = 720;
-            const H: u32 = 460;
             const MAX_SPINS: usize = 4096;
             let surface = self.webshell_surface_cap();
-            // The render runs under the process-wide SWGL current-context lock (the
-            // global `ctx`), the same serialization the content-tile path uses. The
-            // `_netcap` variant ALSO routes every fetch's connect decision through the
-            // dregg captp `Netlayer::dial` connector and reports the outcome, so the
-            // status line tells the truth about the transport, not just the allowlist.
-            let (frame, net) = servo_render::with_gl(|| {
-                servo_render::webview::render_url_to_frame_netcap(&url, surface, W, H, MAX_SPINS)
+            // THE PERSISTENT LIVE WEBVIEW: open it once (on the first navigation), then
+            // NAVIGATE it on subsequent loads (a fresh `WebView` on the SAME held
+            // engine — servo's options are a process `OnceCell`, so only one engine
+            // exists). Holding it alive is what makes the pane interactive: the same
+            // live `WebView` then takes scroll/click/key input between paints.
+            //
+            // Runs under the process-wide SWGL current-context lock (the global `ctx`),
+            // the same serialization the headless render path uses.
+            let painted = servo_render::with_gl(|| {
+                let mut slot = self.webshell_live.borrow_mut();
+                match slot.as_mut() {
+                    // Already open — navigate the live pane to the new URL.
+                    Some(live) => live.load(&url, surface, MAX_SPINS),
+                    // First navigation — build the persistent engine + pane and load.
+                    None => match servo_render::webview::LiveWebView::open(
+                        &url,
+                        surface,
+                        Self::WEBSHELL_W,
+                        Self::WEBSHELL_H,
+                        MAX_SPINS,
+                    ) {
+                        Ok(live) => {
+                            let ok = live.frame().is_some();
+                            *slot = Some(live);
+                            ok
+                        }
+                        // A second engine was refused (one already exists this process):
+                        // the only way this fires is a logic error, surfaced honestly.
+                        Err(_) => false,
+                    },
+                }
             });
-            // The net-cap leg's truth: dialed through the audited netlayer, refused at
-            // the socket by the held cap, or unreachable on the transport.
-            let net_line = match &net {
-                Some(o) => o.status_line(),
-                None => "net-cap: (no socket fetch this navigation — e.g. an inline/data page)"
-                    .to_string(),
-            };
-            match frame {
-                Some(f) => {
+            // Pull the live pane's current tile into the painted-tile field.
+            self.sync_webshell_frame_from_live();
+            match (painted, &self.webshell_frame) {
+                (true, Some(f)) => {
                     self.webshell_status = format!(
-                        "rendered {}×{} of {url} · {} bytes RGBA8 · digest {:#x} · {net_line}",
+                        "rendered {}×{} of {url} · {} bytes RGBA8 · digest {:#x} · LIVE (scroll · click · type)",
                         f.width,
                         f.height,
                         f.bytes.len(),
                         f.content_digest(),
                     );
-                    self.webshell_frame = Some(f);
                 }
-                None => {
-                    // FAIL-CLOSED — keep the old tile, show why. If the net-cap gate
-                    // refused the origin at the socket, SAY SO explicitly (that is the
-                    // most important fail-closed case: the cap bit at the transport).
-                    if net.as_ref().map(|o| o.refused_by_cap()).unwrap_or(false) {
-                        self.webshell_status = format!("⚠ {net_line} (tile kept)");
-                    } else {
-                        self.webshell_status = format!(
-                            "⚠ no frame for {url} — the page did not paint within {MAX_SPINS} spins or the address is unparseable · {net_line} (tile kept)"
-                        );
-                    }
+                _ => {
+                    // FAIL-CLOSED — keep the old tile, show why.
+                    self.webshell_status = format!(
+                        "⚠ no frame for {url} — the page did not paint within {MAX_SPINS} spins or the address is unparseable (tile kept)"
+                    );
                 }
             }
         }
@@ -282,6 +292,198 @@ impl Cockpit {
             );
         }
         cx.notify();
+    }
+
+    // === the live loop (input → re-render → repaint) =========================
+
+    /// The web-shell content tile's device dimensions — the persistent
+    /// [`LiveWebView`](servo_render::webview::LiveWebView)'s viewport AND the
+    /// `img()` paint size, so the gpui pane's pixel coordinates map 1:1 onto the
+    /// WebView's device points (no scale factor in the bridge).
+    #[cfg(feature = "servo")]
+    pub(crate) const WEBSHELL_W: u32 = 720;
+    /// See [`Self::WEBSHELL_W`].
+    #[cfg(feature = "servo")]
+    pub(crate) const WEBSHELL_H: u32 = 460;
+
+    /// Pull the persistent live pane's current tile into [`Self::webshell_frame`] (the
+    /// field the `img()` paints). Called after a load or a live input. A no-op on the
+    /// `servo`-off build / before the pane has opened.
+    #[cfg(feature = "web-shell")]
+    fn sync_webshell_frame_from_live(&mut self) {
+        if let Some(live) = self.webshell_live.borrow().as_ref() {
+            if let Some(frame) = live.frame() {
+                self.webshell_frame = Some(frame.clone());
+            }
+        }
+    }
+
+    /// Map a WINDOW-space gpui position to the live WebView's local DEVICE point, using
+    /// the tile's last-recorded window bounds ([`Self::webshell_tile_bounds`], set each
+    /// frame by the tile's `canvas` overlay). Returns `None` when the point is outside
+    /// the tile or the bounds have not been recorded yet (so an out-of-tile scroll is
+    /// not mis-delivered into the page).
+    #[cfg(feature = "web-shell")]
+    fn webshell_local_point(&self, window_pos: gpui::Point<gpui::Pixels>) -> Option<(f32, f32)> {
+        let bounds = self.webshell_tile_bounds.get()?;
+        let lx = f32::from(window_pos.x - bounds.origin.x);
+        let ly = f32::from(window_pos.y - bounds.origin.y);
+        let w = f32::from(bounds.size.width);
+        let h = f32::from(bounds.size.height);
+        if lx < 0.0 || ly < 0.0 || lx >= w || ly >= h {
+            return None;
+        }
+        Some((lx, ly))
+    }
+
+    /// **THE EVENT BRIDGE — deliver ONE lowered [`WebInput`] to the live pane, repaint,
+    /// and notify the cockpit on change.** The tile's gpui scroll / click / move / key
+    /// listeners lower their native events to a [`WebInput`] (translating window coords
+    /// to the WebView's local device point via [`Self::webshell_local_point`]) and land
+    /// here: the input is delivered to the persistent
+    /// [`LiveWebView`](servo_render::webview::LiveWebView) (which pumps the engine +
+    /// repaints), the fresh tile is pulled into [`Self::webshell_frame`], and — if the
+    /// tile actually changed — `cx.notify()` repaints the `img()`. This is the live
+    /// loop: scrolling / clicking / typing in the web-shell updates the cockpit pane.
+    ///
+    /// `pump` bounds the per-input engine spins (a scroll resolves in a handful; a click
+    /// running script may want more). Runs under the SWGL current-context lock.
+    #[cfg(feature = "web-shell")]
+    fn webshell_apply_live_input(
+        &mut self,
+        input: servo_render::webview::WebInput,
+        pump: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = servo_render::with_gl(|| {
+            let mut slot = self.webshell_live.borrow_mut();
+            match slot.as_mut() {
+                Some(live) if live.is_loaded() => live.apply_input(input, pump),
+                _ => false,
+            }
+        });
+        if changed {
+            self.sync_webshell_frame_from_live();
+            // Re-paint the tile this very frame; the digest moved, so the pixels did.
+            cx.notify();
+        }
+    }
+
+    /// A gpui SCROLL-WHEEL event over the tile → a live page scroll. The wheel delta is
+    /// resolved to pixels (line deltas scaled by a nominal line height) and the position
+    /// mapped to the tile-local device point; positive `dy` scrolls the page DOWN.
+    #[cfg(feature = "web-shell")]
+    pub(crate) fn webshell_live_scroll(
+        &mut self,
+        ev: &gpui::ScrollWheelEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((x, y)) = self.webshell_local_point(ev.position) else {
+            return;
+        };
+        // Resolve the delta to pixels (a line delta uses a nominal 16px line height —
+        // the same magnitude order servo's own winit embedder uses for wheel lines).
+        let delta = ev.delta.pixel_delta(gpui::px(16.));
+        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        // gpui scroll delta is "content moves with the gesture" (scroll down ⇒ negative
+        // y); the page-scroll sense `WebInput::Scroll` wants is "reveal content below ⇒
+        // positive dy", so negate.
+        self.webshell_apply_live_input(
+            servo_render::webview::WebInput::Scroll {
+                x,
+                y,
+                dx: -dx,
+                dy: -dy,
+            },
+            48,
+            cx,
+        );
+    }
+
+    /// A gpui left-CLICK over the tile → a live page click at the tile-local point
+    /// (a `mousedown`+`mouseup`, which runs the page's click handlers / follows links).
+    #[cfg(feature = "web-shell")]
+    pub(crate) fn webshell_live_click(
+        &mut self,
+        window_pos: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((x, y)) = self.webshell_local_point(window_pos) else {
+            return;
+        };
+        // A click may run script / start a navigation; give it more spins than a scroll.
+        self.webshell_apply_live_input(servo_render::webview::WebInput::Click { x, y }, 128, cx);
+    }
+
+    /// A gpui POINTER-MOVE over the tile → a live page pointer move (drives `:hover` /
+    /// cursor). Cheap pump — a hover repaint is small; many of these arrive.
+    #[cfg(feature = "web-shell")]
+    pub(crate) fn webshell_live_move(
+        &mut self,
+        ev: &gpui::MouseMoveEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((x, y)) = self.webshell_local_point(ev.position) else {
+            return;
+        };
+        self.webshell_apply_live_input(servo_render::webview::WebInput::MouseMove { x, y }, 16, cx);
+    }
+
+    /// A typed CHARACTER into the focused web-shell tile → a live page key event
+    /// (a `keydown`+`keyup` for the character). Routed from the cockpit key handler
+    /// when the web-shell tile holds focus.
+    #[cfg(feature = "web-shell")]
+    pub(crate) fn webshell_live_key(&mut self, ch: char, cx: &mut Context<Self>) {
+        self.webshell_apply_live_input(servo_render::webview::WebInput::KeyChar { ch }, 96, cx);
+    }
+
+    // === the live-loop bake hooks (for the headless before/after artifact) =====
+
+    /// **BAKE HOOK** — navigate the web-shell to `url` through the persistent live
+    /// WebView (the same path a typed-Enter takes), so a headless bake can show a real
+    /// page in the pane. Sets the WebShell tab + history to `url`, then loads. Returns
+    /// `true` if a frame painted. Used by the `--render-webshell-live` artifact bake;
+    /// the windowed cockpit reaches the same render through [`Self::webshell_go`].
+    #[cfg(feature = "web-shell")]
+    pub fn webshell_bake_load(&mut self, url: &str, cx: &mut Context<Self>) -> bool {
+        self.set_tab(Tab::WebShell, cx);
+        self.webshell_history = vec![url.to_string()];
+        self.webshell_cursor = 0;
+        self.webshell_render_current(cx);
+        self.webshell_frame.is_some()
+    }
+
+    /// **BAKE HOOK** — deliver ONE scroll-down input to the live WebView at the pane
+    /// center (bypassing the window-coord mapping the gpui listeners use, since a
+    /// headless bake has no real cursor), pump + repaint, and pull the fresh tile.
+    /// Returns `true` if the tile changed — the "input → re-render" witness the
+    /// before/after artifact captures. `dy` is CSS pixels to scroll DOWN.
+    #[cfg(feature = "web-shell")]
+    pub fn webshell_bake_scroll(&mut self, dy: f32, cx: &mut Context<Self>) -> bool {
+        let (w, h) = (Self::WEBSHELL_W as f32, Self::WEBSHELL_H as f32);
+        let changed = servo_render::with_gl(|| {
+            let mut slot = self.webshell_live.borrow_mut();
+            match slot.as_mut() {
+                Some(live) if live.is_loaded() => live.apply_input(
+                    servo_render::webview::WebInput::Scroll {
+                        x: w / 2.0,
+                        y: h / 2.0,
+                        dx: 0.0,
+                        dy,
+                    },
+                    256,
+                ),
+                _ => false,
+            }
+        });
+        if changed {
+            self.sync_webshell_frame_from_live();
+            cx.notify();
+        }
+        changed
     }
 
     // === the panel ===========================================================
@@ -397,8 +599,8 @@ impl Cockpit {
                 .child(SharedString::from(self.webshell_status.clone())),
         );
 
-        // ── the content tile ──
-        col = col.child(self.webshell_tile());
+        // ── the content tile (with the live event bridge) ──
+        col = col.child(self.webshell_tile(cx));
 
         // ── the cap model / net-cap seam note ──
         col = col.child(
@@ -463,9 +665,80 @@ impl Cockpit {
     /// path the web-of-cells tab uses, or a "no page yet / engine not linked"
     /// placeholder. Fail-closed: a kept frame stays painted even after a failing
     /// navigation (the status line carries the error).
-    fn webshell_tile(&self) -> gpui::AnyElement {
+    ///
+    /// LIVE (feature `web-shell`): the painted tile carries the gpui→`apply_input`
+    /// EVENT BRIDGE — scroll-wheel / left-click / pointer-move listeners on the tile
+    /// container lower to a [`WebInput`](servo_render::webview::WebInput) and drive the
+    /// persistent live `WebView` ([`Self::webshell_apply_live_input`]), so the pane
+    /// scrolls / clicks LIVE. A transparent `canvas` overlay records the tile's
+    /// window-space bounds each frame ([`Self::webshell_tile_bounds`]) so the listeners
+    /// can map window coords → the WebView's local device point.
+    fn webshell_tile(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // `cx` drives the live event bridge (feature `web-shell`); in a `servo`-only or
+        // engine-off build the tile is non-interactive, so `cx` is unused there.
+        #[cfg(not(feature = "web-shell"))]
+        let _ = &cx;
         #[cfg(feature = "servo")]
         if let Some(frame) = self.webshell_frame.as_ref() {
+            let (fw, fh) = (frame.width as f32, frame.height as f32);
+            // The bounds-recording overlay: a transparent `canvas` sized to the tile,
+            // absolutely positioned over it; its prepaint records the tile's
+            // window-space bounds into `webshell_tile_bounds` for the coordinate map.
+            // (Feature-gated to `web-shell`: only the live build needs the mapping.)
+            #[cfg(feature = "web-shell")]
+            let bounds_recorder = {
+                let handle = cx.entity().downgrade();
+                gpui::canvas(
+                    move |bounds, _window, cx| {
+                        if let Some(this) = handle.upgrade() {
+                            this.read(cx).webshell_tile_bounds.set(Some(bounds));
+                        }
+                    },
+                    |_bounds, _state, _window, _cx| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(gpui::px(fw))
+                .h(gpui::px(fh))
+            };
+
+            // The painted image, with the LIVE event bridge on its container.
+            // `mut` only used under `web-shell` (the listeners); harmless otherwise.
+            #[cfg_attr(not(feature = "web-shell"), allow(unused_mut))]
+            let mut tile_box = div()
+                .id("webshell-live-tile")
+                .relative()
+                .w(gpui::px(fw))
+                .h(gpui::px(fh))
+                .child(
+                    gpui::img(rgba_frame_to_image(frame))
+                        .w(gpui::px(fw))
+                        .h(gpui::px(fh)),
+                );
+
+            #[cfg(feature = "web-shell")]
+            {
+                tile_box = tile_box
+                    .cursor_pointer()
+                    .child(bounds_recorder)
+                    // SCROLL — the live page scroll (the headline interaction).
+                    .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _w, cx| {
+                        this.webshell_live_scroll(ev, cx);
+                    }))
+                    // CLICK — a live page click (mousedown+up; runs handlers / links).
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, ev: &gpui::MouseDownEvent, _w, cx| {
+                            this.webshell_live_click(ev.position, cx);
+                        }),
+                    )
+                    // MOVE — pointer move (drives :hover / cursor). Bounded pump.
+                    .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _w, cx| {
+                        this.webshell_live_move(ev, cx);
+                    }));
+            }
+
             return div()
                 .mt_2()
                 .p_2()
@@ -477,13 +750,9 @@ impl Cockpit {
                     div()
                         .text_xs()
                         .text_color(theme::good())
-                        .child("PAGE — real cap-gated Servo WebView render (SWGL → glass)"),
+                        .child("PAGE — LIVE cap-gated Servo WebView (scroll · click · move → re-render; SWGL → glass)"),
                 )
-                .child(
-                    gpui::img(rgba_frame_to_image(frame))
-                        .w(gpui::px(frame.width as f32))
-                        .h(gpui::px(frame.height as f32)),
-                )
+                .child(tile_box)
                 .into_any_element();
         }
 

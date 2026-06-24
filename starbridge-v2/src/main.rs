@@ -161,6 +161,26 @@ fn main() {
         }
     }
 
+    // `--render-webshell-live <out>`: THE LIVE WEB-SHELL — open the full cockpit on the
+    // WEB-SHELL tab, drive the persistent live `servo::WebView` to load a tall `data:`
+    // page (a real cap-gated Servo render in the pane), bake `<out>.before.png`, deliver
+    // ONE scroll-down input through the live loop (input → re-render → fresh tile), then
+    // bake `<out>.after.png` — the before/after witness that the web-shell pane is
+    // LIVE-interactive. Default 980x760 (the toolbar + a 720x460 tile + chrome).
+    #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "web-shell"))]
+    {
+        if let Some(out) = render_webshell_live_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((980.0, 760.0));
+            match render_webshell_live_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-webshell-live FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-live-brain <out>`: THE HEADLINE — a LIVE Hermes brain (a real Claude
     // over the `hermes-acp` ACP subprocess) is given a short task, DECIDES the JS
     // itself, and that JS runs `run_js` against the cockpit's LIVE `World`: a real
@@ -944,6 +964,27 @@ fn render_card_pane_arg(args: &[String]) -> Option<String> {
             return it.next().cloned();
         }
         if let Some(rest) = a.strip_prefix("--render-card-pane=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-webshell-live <out>` (or `=<out>`) argument — the output base
+/// path for THE LIVE WEB-SHELL bake (a real page in the cockpit web-shell pane, then
+/// a scroll input causing a re-render). `<out>.before.png` / `<out>.after.png`.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "web-shell"
+))]
+fn render_webshell_live_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-webshell-live" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-webshell-live=") {
             return Some(rest.to_string());
         }
     }
@@ -2108,6 +2149,126 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
          height {pre_height}->{post_height}, receipt {}), and the bound value re-read off the live \
          cell (the AFTER frame differs).",
         hex::encode(&receipt[..6]),
+    );
+    Ok(())
+}
+
+/// **THE LIVE WEB-SHELL BAKE — a real page in the cockpit pane, then a scroll input
+/// causing a re-render.** Opens the full `cockpit::Cockpit` on the WEB-SHELL tab,
+/// drives the persistent live `servo::WebView` to load a tall `data:` page (a real
+/// cap-gated Servo render painted into the pane via SWGL), bakes `<out>.before.png`,
+/// then delivers ONE scroll-down input through the live loop
+/// ([`Cockpit::webshell_bake_scroll`] → `LiveWebView::apply_input` → re-render →
+/// fresh tile) and bakes `<out>.after.png`. The load-bearing assertion: the two cockpit
+/// frames differ — the scroll genuinely re-rendered the embedded page IN THE COCKPIT.
+///
+/// The `data:` page is a tall two-band page (red over lime, taller than the 460px
+/// tile) so the scroll visibly flips the visible band — the same content the engine
+/// spike uses, now driven through the cockpit's gpui event bridge.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "web-shell"))]
+fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // A page taller than the 460px tile: a 600px red band over a 600px lime band, so
+    // scrolling down flips the visible band (an UNMISTAKABLE before/after). `%23` is the
+    // URL-escaped `#` of a hex color inside the `data:` URL.
+    const PAGE: &str = "data:text/html,\
+        <html><body style='margin:0'>\
+        <div style='height:600px;background:%23ff3030'></div>\
+        <div style='height:600px;background:%2330ff30'></div>\
+        </body></html>";
+
+    // 1. The headless renderer + gpui-component theme (the SAME offscreen-wgpu path the
+    //    cockpit bakes through), with the vendored OFL fonts.
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    // 2. The cockpit's real image, on the WEB-SHELL tab. The `Root` wrap is required —
+    //    the web-shell bears the URL-bar text input, which aborts on paint without it.
+    //    The inner cockpit `Entity` is threaded OUT of the build closure (a shared cell)
+    //    so the bake can drive its live-load + scroll methods afterward.
+    let (world, anchors) = world::demo_world();
+    let shared = Rc::new(RefCell::new(world));
+    let cockpit_slot: Rc<RefCell<Option<gpui::Entity<cockpit::Cockpit>>>> =
+        Rc::new(RefCell::new(None));
+    let cockpit_slot_build = cockpit_slot.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+            c.select_tab_named("web-shell");
+            c
+        });
+        view.update(cx, |c, cx| c.focus_on_open(window, cx));
+        *cockpit_slot_build.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    // Let the cockpit paint once (seeds the URL bar input etc.).
+    cx.run_until_parked();
+
+    // 3. The inner Cockpit entity (threaded out above) — drive the LIVE load on it.
+    let cockpit_view = cockpit_slot
+        .borrow()
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("the cockpit view was not captured from the window build"))?;
+
+    // LOAD the tall page into the persistent live WebView (a real Servo render in the pane).
+    let loaded = cx.update(|app| cockpit_view.update(app, |c, cx| c.webshell_bake_load(PAGE, cx)));
+    anyhow::ensure!(
+        loaded,
+        "the live web-shell did not paint a frame for the data: page (engine did not render)"
+    );
+
+    // 4. BEFORE — the loaded page (top band) in the cockpit pane.
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let before = cx.capture_screenshot(window.into())?;
+    let (bw, bh) = (before.width(), before.height());
+    before.save(format!("{out}.before.png"))?;
+
+    // 5. THE LIVE INPUT — one scroll DOWN past the first band, through the cockpit's
+    //    event bridge → `LiveWebView::apply_input` → re-render → fresh tile.
+    let changed =
+        cx.update(|app| cockpit_view.update(app, |c, cx| c.webshell_bake_scroll(700.0, cx)));
+    anyhow::ensure!(
+        changed,
+        "the scroll input did not change the live tile (input -> re-render did not fire in the cockpit)"
+    );
+
+    // 6. AFTER — the scrolled page (the second band has entered the pane).
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let after = cx.capture_screenshot(window.into())?;
+    let (aw, ah) = (after.width(), after.height());
+    after.save(format!("{out}.after.png"))?;
+
+    // THE LOAD-BEARING ASSERTION: the two cockpit frames differ — scrolling the embedded
+    // web-shell genuinely re-rendered the page inside the cockpit (a static tile could
+    // not). This is the live-interactive web pane, witnessed by a before/after bake.
+    anyhow::ensure!(
+        before.as_raw() != after.as_raw(),
+        "the cockpit frame did not change after the scroll (the web pane did not re-render live)"
+    );
+
+    println!(
+        "OK webshell-live render -> {out}.before.png ({bw}x{bh}) / {out}.after.png ({aw}x{ah}), \
+         logical {w}x{h}; the cockpit WEB-SHELL pane rendered a real cap-gated Servo page \
+         (persistent live WebView), and ONE scroll input through the gpui event bridge \
+         re-rendered it live (the AFTER frame differs from the BEFORE)."
     );
     Ok(())
 }

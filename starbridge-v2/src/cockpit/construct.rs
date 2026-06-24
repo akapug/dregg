@@ -451,6 +451,13 @@ impl Cockpit {
             #[cfg(feature = "servo")]
             webshell_frame: None,
             webshell_input_pending: None,
+            // The persistent live WebView opens lazily on the first navigation
+            // (`webshell_render_current`), then stays alive across frames so the pane
+            // is scroll/click/type-interactive.
+            #[cfg(feature = "web-shell")]
+            webshell_live: std::cell::RefCell::new(None),
+            #[cfg(feature = "servo")]
+            webshell_tile_bounds: std::cell::Cell::new(None),
             // The live inspector card mounts lazily on the first Inspect-surface paint
             // (`ensure_inspector_card` builds it from the focused cell over the World).
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]

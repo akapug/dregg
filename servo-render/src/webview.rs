@@ -238,9 +238,10 @@ fn swgl_proc_loader(name: &str) -> *const std::os::raw::c_void {
 use std::cell::Cell;
 
 use servo::{
-    EventLoopWaker, InputEvent, LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent,
-    Scroll, ServoBuilder, WebResourceLoad, WebResourceResponse, WebView, WebViewBuilder,
-    WebViewDelegate, WebViewPoint, WebViewVector, WheelDelta, WheelEvent, WheelMode,
+    EventLoopWaker, InputEvent, Key, KeyState, KeyboardEvent, LoadStatus, MouseButton,
+    MouseButtonAction, MouseButtonEvent, Scroll, ServoBuilder, WebResourceLoad, WebResourceResponse,
+    WebView, WebViewBuilder, WebViewDelegate, WebViewPoint, WebViewVector, WheelDelta, WheelEvent,
+    WheelMode,
 };
 use url::Url;
 use webrender_api::units::{DevicePoint, DeviceVector2D};
@@ -688,6 +689,10 @@ pub enum WebInput {
     Click { x: f32, y: f32 },
     /// A pointer move to viewport `(x, y)` (drives `:hover`, cursor).
     MouseMove { x: f32, y: f32 },
+    /// A typed character key (a `keydown`+`keyup` for the character) — drives text
+    /// input / key handlers. `char`-typed (not a `String`) so [`WebInput`] stays
+    /// `Copy`; an embedder lowers each typed grapheme to one of these.
+    KeyChar { ch: char },
 }
 
 /// Deliver one [`WebInput`] to a live `webview`. Mouse/wheel events go through
@@ -735,6 +740,21 @@ pub fn apply_input(webview: &WebView, input: WebInput) {
         WebInput::MouseMove { x, y } => {
             let point = WebViewPoint::Device(DevicePoint::new(x, y));
             webview.notify_input_event(InputEvent::MouseMove(servo::MouseMoveEvent::new(point)));
+        }
+        WebInput::KeyChar { ch } => {
+            // A character key as a keydown then keyup. `Key::Character` carries the
+            // typed string; servo's `from_state_and_key` fills code/location/modifiers
+            // with defaults (the embedder-minimal lowering — the same `winit_minimal`
+            // does for a plain character before it has a physical key code).
+            let key = Key::Character(ch.to_string());
+            webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
+                KeyState::Down,
+                key.clone(),
+            )));
+            webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
+                KeyState::Up,
+                key,
+            )));
         }
     }
 }
