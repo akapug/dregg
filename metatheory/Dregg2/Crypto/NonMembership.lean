@@ -406,6 +406,13 @@ example : (2 : Int) ∉ sampleLeaves :=
   sorted_gap_excludes sampleLeaves 1 3 2 sampleLeaves_sorted sampleLeaves_adjacent
     (by norm_num) (by norm_num)
 
+/-- **`nonmembership_sound_teeth`** — `NonMember` DISCRIMINATES: a genuine MEMBER (`1 ∈ [1,3]`) is NOT
+non-member (`¬ NonMember [1,3] 1`). So `nonmembership_sound`'s conclusion is two-valued — proving it
+constrains the gate; it is not `:= True`. -/
+theorem nonmembership_sound_teeth : ¬ NonMember sampleLeaves (1 : Int) := by
+  rintro ⟨_, hni⟩
+  exact hni (by simp [sampleLeaves])
+
 /-- A single-level Merkle membership witness over `ℤ`: leaf `x` is "present" at root `x + s` via a
 self-hash path `compress x s = x + s` with the chosen sibling `s` (`recompose (+) x [s] = x + s`).
 The reference present-ness witness, with the root made explicit so two neighbors share one root. -/
@@ -427,6 +434,27 @@ example :
       Satisfies refCompress circuit 2 2 sampleLeaves :=
   nonmembership_complete refCompress 2 2 sampleLeaves 1 3 sampleLeaves_sorted
     sampleLeaves_adjacent (by norm_num) (by norm_num) ref_present_1 ref_present_3
+
+/-- **`nonmembership_complete_satisfiable`** — the completeness keystone FIRES on the concrete absence
+`2 ∉ [1,3]`: a real satisfying trace exists (the `1`/`3` bracketing witnesses, both present at root `2`).
+The named non-vacuity witness for `nonmembership_complete`. -/
+theorem nonmembership_complete_satisfiable :
+    ∃ circuit : CircuitIR Int, Satisfies refCompress circuit 2 2 sampleLeaves :=
+  nonmembership_complete refCompress 2 2 sampleLeaves 1 3 sampleLeaves_sorted
+    sampleLeaves_adjacent (by norm_num) (by norm_num) ref_present_1 ref_present_3
+
+/-- **`nonmembership_sound_satisfiable`** — the soundness keystone FIRES: the concrete satisfying trace
+(from completeness) feeds `nonmembership_sound` to PROVE `NonMember [1,3] 2`. Its hypothesis `Satisfies`
+is jointly satisfiable (not vacuous). -/
+theorem nonmembership_sound_satisfiable : NonMember sampleLeaves (2 : Int) := by
+  obtain ⟨circuit, hsat⟩ := nonmembership_complete_satisfiable
+  exact nonmembership_sound refCompress circuit 2 2 sampleLeaves hsat
+
+/-- **`nonmembership_complete_teeth`** — completeness DISCRIMINATES: a genuine MEMBER is not a
+non-member, so `NonMember` (the relation completeness witnesses) is two-valued. Reuses the soundness
+teeth instance (the relation is shared). -/
+theorem nonmembership_complete_teeth : ¬ NonMember sampleLeaves (1 : Int) :=
+  nonmembership_sound_teeth
 
 /-- A degenerate reference non-membership verifier kernel over `ℤ` (`def`, not a global `instance`).
 `compress := (+)`; `verify` accepts iff `stmt.elem = 2 ∧ stmt.root = 2` (the toy "2 is absent from the
@@ -477,6 +505,12 @@ verifier's bit, and an accepting proof proves absence. -/
 example :
     (nonMembershipKindObligation (Digest := Int)).dialFloor = Dial.acceptanceOnly :=
   (nonmembership_dial_wired (K := refKernel) trivial base absentStmt 0).1
+
+-- keystone-audit companions (named satisfiable + teeth), kernel-triple clean.
+#assert_axioms nonmembership_sound_satisfiable
+#assert_axioms nonmembership_sound_teeth
+#assert_axioms nonmembership_complete_satisfiable
+#assert_axioms nonmembership_complete_teeth
 
 end Reference
 

@@ -217,9 +217,76 @@ def slotCS : Option CapSlot := storeCap kCS 0 (Cap.endpoint 5 [Auth.read])
 #guard (storeCap kCS 0 (Cap.endpoint 5 [Auth.read, Auth.write])).isSome == false
 #guard (storeCap kCS 9 (Cap.endpoint 5 [Auth.read])).isSome == false
 
+/-! ## §5½ — keystone-audit companions (named `*_satisfiable` / `*_teeth`).
+
+The keystone-audit looks companions up BY NAME. The concrete world `kCS` (grantor `0` holds a read cap
+on `5`) gives a stored slot that retrieves freshly (satisfiable) and refuses after a revoke (teeth). -/
+
+/-- The concrete stored slot: grantor `0` parks its held read cap (commits, stamped epoch 0). -/
+def slotFix : CapSlot := (storeCap kCS 0 (Cap.endpoint 5 [Auth.read])).get (by decide)
+
+/-- The fresh retrieval of `slotFix` to recipient `9` COMMITS (epoch 0 unrevoked). -/
+theorem slotFix_retrieve_commits : ∃ k', retrieveCap kCS slotFix 9 = some k' :=
+  Option.isSome_iff_exists.mp (by decide)
+
+/-- **`stored_cap_only_fresh_if_epoch_unrevoked_satisfiable`** — the freshness keystone FIRES on the
+concrete fresh retrieval: the grantor's epoch has not advanced past the stored epoch
+(`delegationEpoch ≤ storedEpoch`). Non-vacuous. -/
+theorem stored_cap_only_fresh_if_epoch_unrevoked_satisfiable :
+    kCS.delegationEpoch slotFix.grantor ≤ slotFix.storedEpoch := by
+  obtain ⟨k', h⟩ := slotFix_retrieve_commits
+  exact stored_cap_only_fresh_if_epoch_unrevoked h
+
+/-- **`stored_cap_only_fresh_if_epoch_unrevoked_teeth`** — the freshness gate DISCRIMINATES: after a
+faithful revoke (epoch bump) the retrieval is REFUSED (`= none`), so the fresh-only admission is
+two-valued, not `:= True`. Reuses the R7 tooth. -/
+theorem stored_cap_only_fresh_if_epoch_unrevoked_teeth :
+    retrieveCap (recKRevokeDelegationFull kCS slotFix.grantor 7) slotFix 9 = none :=
+  revoke_stales_stored_cap kCS 7 9 slotFix (Nat.le_refl _)
+
+/-- **`no_forge_from_storage_satisfiable`** — the no-forge keystone FIRES on the concrete store +
+retrieve: the stored payload was genuinely held, the slot carries exactly it, and the retrieval's whole
+effect is one grant of that payload. Non-vacuous. -/
+theorem no_forge_from_storage_satisfiable :
+    Cap.endpoint 5 [Auth.read] ∈ kCS.caps 0 ∧ slotFix.payload = Cap.endpoint 5 [Auth.read] ∧
+      ∃ k', retrieveCap kCS slotFix 9 = some k' := by
+  obtain ⟨k', hret⟩ := slotFix_retrieve_commits
+  have hstore : storeCap kCS 0 (Cap.endpoint 5 [Auth.read]) = some slotFix := by
+    simp only [slotFix]; exact (Option.some_get _).symm
+  obtain ⟨hheld, hpay, _⟩ := no_forge_from_storage hstore hret
+  exact ⟨hheld, hpay, k', hret⟩
+
+/-- **`no_forge_from_storage_teeth`** — the store mouth DISCRIMINATES: an UNHELD payload (a write cap
+the grantor never had) cannot be stored (`storeCap … = none`). So storage confers no authority beyond
+the original grant — the no-forge predicate is two-valued, not `:= True`. -/
+theorem no_forge_from_storage_teeth :
+    storeCap kCS 0 (Cap.endpoint 5 [Auth.read, Auth.write]) = none := by decide
+
+/-- **`store_then_revoke_refused_satisfiable`** — the staleness keystone FIRES on the concrete
+store-then-revoke: the retrieval after the grantor's revoke is REFUSED (`= none`). -/
+theorem store_then_revoke_refused_satisfiable :
+    retrieveCap (recKRevokeDelegationFull kCS 0 7) slotFix 9 = none := by
+  have hstore : storeCap kCS 0 (Cap.endpoint 5 [Auth.read]) = some slotFix := by
+    simp only [slotFix]; exact (Option.some_get _).symm
+  exact store_then_revoke_refused hstore
+
+/-- **`store_then_revoke_refused_teeth`** — the refusal is NOT `:= True`: WITHOUT a revoke the fresh
+retrieval COMMITS (`≠ none`). So "store-then-revoke refused" discriminates the revoked-vs-fresh case. -/
+theorem store_then_revoke_refused_teeth : retrieveCap kCS slotFix 9 ≠ none := by
+  obtain ⟨k', h⟩ := slotFix_retrieve_commits
+  rw [h]; exact Option.some_ne_none k'
+
 #assert_axioms stored_cap_only_fresh_if_epoch_unrevoked
 #assert_axioms no_forge_from_storage
 #assert_axioms revoke_stales_stored_cap
 #assert_axioms store_then_revoke_refused
+-- keystone-audit companions, kernel-triple clean.
+#assert_axioms slotFix_retrieve_commits
+#assert_axioms stored_cap_only_fresh_if_epoch_unrevoked_satisfiable
+#assert_axioms stored_cap_only_fresh_if_epoch_unrevoked_teeth
+#assert_axioms no_forge_from_storage_satisfiable
+#assert_axioms no_forge_from_storage_teeth
+#assert_axioms store_then_revoke_refused_satisfiable
+#assert_axioms store_then_revoke_refused_teeth
 
 end Dregg2.Apps.CapSlotFactory

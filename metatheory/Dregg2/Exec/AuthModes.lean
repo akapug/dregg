@@ -583,7 +583,138 @@ example : authModeAdmits (Rights := Rt) (CellId := C) (Ctx := Cx) (Gateway := Gw
 #guard (authModeAdmits (.oneOf demoCandidates 0) baseCtx)  --  true
 #guard (authModeAdmits (.oneOf demoCandidates 5) baseCtx) == false  --  false (OOB)
 
+/-! ## §6½ — NAMED keystone-audit companions (`*_satisfiable` / `*_teeth`).
+
+The anonymous `example`s above EXERCISE and DISCRIMINATE each `*_sound` keystone; the keystone-audit
+(`Dregg2.Verify.KeystoneLint`) looks up companions by NAME, so we re-state the load-bearing ones as
+NAMED theorems. `*_satisfiable` fires the keystone's conclusion on a concrete admitting instance (its
+hypotheses are jointly satisfiable — not vacuous); `*_teeth` REFUTES the predicate on a hostile
+instance (so the keystone is two-valued, not `:= True`). -/
+
+/-- **`custom_sound_satisfiable`** — the `dfa` predicate IS `Discharged` at the seam on the concrete
+witness `7` at statement `7`: the keystone fires (hypotheses jointly satisfiable). -/
+theorem custom_sound_satisfiable :
+    @Discharged S W (customSeam baseCtx.registry .dfa) baseCtx.customStmt
+      (baseCtx.wit baseCtx.customStmt) :=
+  custom_sound (Rights := Rt) (Ctx := Cx) (Gateway := Gw) .dfa baseCtx (by decideAdmits)
+
+/-- **`custom_sound_teeth`** — the `Custom` mode DISCRIMINATES: at the `nonMembership` kind (which
+`demoReg` does NOT install — it fails closed), the dispatcher REFUSES. So the registry dispatch is the
+discriminating core (not `:= True`). -/
+theorem custom_sound_teeth :
+    authModeAdmits (Rights := Rt) (.custom .nonMembership) baseCtx = false := by decideAdmits
+
+/-- **`token_sound_satisfiable`** — the windowed biscuit admits at height 150 (∈ [100,200]): the
+`Token` keystone fires on a concrete discharging token. -/
+theorem token_sound_satisfiable :
+    authModeAdmits (Request := R) (Stmt := S) (Wit := W) (CellId := C) (Rights := Rt)
+      (.token demoToken) baseCtx = true := by decideAdmits
+
+/-- **`token_sound_teeth`** — a height OUTSIDE the window does NOT admit: a caveat narrowed the token
+out, so the token-discharge predicate DISCRIMINATES (it is not `:= True`). -/
+theorem token_sound_teeth :
+    authModeAdmits (Request := R) (Stmt := S) (Wit := W) (CellId := C) (Rights := Rt)
+      (.token demoToken) { baseCtx with caveatCtx := 50 } = false := by decideAdmits
+
+/-- **`bearer_sound_satisfiable`** — the windowed token + an identity (non-amplifying) delegation edge
+admits: the `Bearer` keystone fires (the conferral edge + token discharge both hold). -/
+theorem bearer_sound_satisfiable :
+    authModeAdmits (Request := R) (Stmt := S) (Wit := W)
+      (.bearer { target := true, rights := () } { target := true, rights := () } demoToken)
+      baseCtx = true := by decideAdmits
+
+/-- **`bearer_sound_teeth`** — at a height outside the caveat window the bearer chain DOES NOT admit
+(the carried token's caveats fail), so the `Bearer` admission DISCRIMINATES. -/
+theorem bearer_sound_teeth :
+    authModeAdmits (Request := R) (Stmt := S) (Wit := W)
+      (.bearer { target := true, rights := () } { target := true, rights := () } demoToken)
+      { baseCtx with caveatCtx := 50 } = false := by decideAdmits
+
+/-- **`captp_granted_le_held_satisfiable`** — the identity handoff cert admits and the headline
+non-amplification FIRES: `demoCert.granted.rights ≤ demoCert.held.rights` (the keystone is exercised on
+a concrete admitting handoff). -/
+theorem captp_granted_le_held_satisfiable :
+    demoCert.granted.rights ≤ demoCert.held.rights :=
+  captp_granted_le_held (Request := R) (Stmt := S) (Wit := W) (Ctx := Cx) (Gateway := Gw)
+    demoCert True baseCtx (by decideAdmits)
+
+/-- **`captp_sound_satisfiable`** — on the `HandoffValid` demo cert, `captp_sound` delivers the
+`Introduce` step + the non-amplification (the keystone fires on a real graph + admitting cert). -/
+theorem captp_sound_satisfiable :
+    Introduce baseCtx.graph baseCtx.consents demoCert.introducer demoCert.recipient
+        demoCert.held demoCert.granted (demoCert.post baseCtx.graph)
+      ∧ demoCert.granted.rights ≤ demoCert.held.rights :=
+  captp_sound (Request := R) (Stmt := S) (Wit := W) demoCert True baseCtx demoValid (by decideAdmits)
+
 end Demo
+
+/-! ## §6¾ — the CapTP non-amplification teeth (a NON-TRIVIAL rights lattice).
+
+`Demo` uses `Rights := Unit` (one-point), where `granted.rights ≤ held.rights` is `() ≤ ()` — always
+true. That makes `Demo` perfect for the `*_satisfiable` face but USELESS for the `captp` teeth: the
+discriminating core of `captp_granted_le_held` is the `decide (granted ≤ held)` gate, and over a
+one-point lattice that gate never refuses. So we build the teeth over `Bool` (`false < true`), the
+smallest lattice where an AMPLIFYING grant (`granted = true`, `held = false`) is order-REFUSED. -/
+
+namespace CapTpTeeth
+
+abbrev R := Bool
+abbrev S := Nat
+abbrev W := Nat
+abbrev C := Bool
+abbrev Rt := Bool                 -- the two-point rights lattice: `false < true`.
+abbrev Cx := Nat
+abbrev Gw := Unit
+
+/-- Bool is a bounded meet-semilattice with a decidable order — the dispatcher's `granted ≤ held` gate
+computes. -/
+example : SemilatticeInf Bool := inferInstance
+example : OrderTop Bool := inferInstance
+example : DecidableLE Bool := inferInstance
+
+local instance teethVerifiable : Verifiable S W := verifiableOfRegistry Demo.demoReg .dfa
+
+/-- An AMPLIFYING handoff cert: the introducer holds `false` (bottom rights) but the cert grants `true`
+(top rights) — `granted.rights = true ⋬ false = held.rights`. This is the attack dregg1's Rust misses. -/
+def amplifyingCert : HandoffCert C Rt :=
+  { introducer := true
+  , recipient  := false
+  , held       := { target := true, rights := false }
+  , granted    := { target := true, rights := true } }
+
+/-- The teeth context: facet + freshness pass, so ONLY the rights-order gate can refuse. -/
+def teethCtx : AuthContext R S W C Rt Cx Gw :=
+  { req         := true
+  , customStmt  := 7
+  , wit         := fun _ => 7
+  , registry    := Demo.demoReg
+  , caveatCtx   := 150
+  , discharges  := fun _ => false
+  , graph       := fun _ _ => True
+  , consents    := fun _ => True
+  , facetOk     := true
+  , freshOk     := true }
+
+/-- **`captp_granted_le_held_teeth`** — the headline non-amplification DISCRIMINATES: the amplifying
+cert (`granted = true ⋬ false = held`) is REFUSED by the dispatcher (`authModeAdmits = false`), even
+with facet + freshness green. So the `granted ≤ held` gate is the load-bearing, two-valued core — NOT
+`:= True`. This is precisely the attenuation check `verify_captp_delivered` FAILS to perform. -/
+theorem captp_granted_le_held_teeth :
+    authModeAdmits (.capTpDelivered amplifyingCert True) teethCtx = false := by
+  simp only [authModeAdmits, amplifyingCert, teethCtx, Bool.and_eq_false_iff,
+    decide_eq_false_iff_not]
+  decide
+
+/-- …and the contrapositive read of the keystone: were the amplifying cert admitted, the keystone would
+force `true ≤ false` — `False`. The gate's refusal is exactly what averts that. -/
+theorem captp_amplifying_would_break (c : AuthContext R S W C Rt Cx Gw)
+    (h : authModeAdmits (.capTpDelivered amplifyingCert True) c = true) : False := by
+  have : amplifyingCert.granted.rights ≤ amplifyingCert.held.rights :=
+    captp_granted_le_held (Request := R) (Stmt := S) (Wit := W) (Ctx := Cx) (Gateway := Gw)
+      amplifyingCert True c h
+  exact absurd this (by simp [amplifyingCert])
+
+end CapTpTeeth
 
 /-! ## §7 — Axiom-hygiene tripwires. -/
 
@@ -597,5 +728,17 @@ end Demo
 #assert_axioms unchecked_sound
 #assert_axioms unchecked_no_escalation
 #assert_axioms unchecked_unconstrained_admits
+
+-- §6½/§6¾ keystone-audit companions (named satisfiable + teeth), kernel-triple clean.
+#assert_axioms Demo.custom_sound_satisfiable
+#assert_axioms Demo.custom_sound_teeth
+#assert_axioms Demo.token_sound_satisfiable
+#assert_axioms Demo.token_sound_teeth
+#assert_axioms Demo.bearer_sound_satisfiable
+#assert_axioms Demo.bearer_sound_teeth
+#assert_axioms Demo.captp_granted_le_held_satisfiable
+#assert_axioms Demo.captp_sound_satisfiable
+#assert_axioms CapTpTeeth.captp_granted_le_held_teeth
+#assert_axioms CapTpTeeth.captp_amplifying_would_break
 
 end Dregg2.Exec.AuthModes

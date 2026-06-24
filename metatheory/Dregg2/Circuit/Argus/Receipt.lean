@@ -577,6 +577,19 @@ theorem writeCell0_receipt_observable
              = (Dregg2.Exec.FieldsMap.userTail (.record [("8", .int 999)])).map
                 (Dregg2.Exec.FieldsMap.tailLeaf c2C)) == false
 
+/-! ### keystone-audit companions (named `*_satisfiable` / `*_teeth`).
+
+The keystone-audit looks companions up BY NAME. The receipt-weld keystones reuse:
+  • SATISFIABLE := `writeCell0_receipt_eq` — a CONCRETE instance (pure `rfl`, no injectivity hypothesis):
+    the receipt of `writeCell0 v` for cell `0` IS the canonical `cellCommit` of the written `v`. The
+    "receipt = cellCommit of the produced cell" relation is exercised, non-vacuous.
+  • TEETH := `writeCell0_receipt_observable` — the receipt is NON-CONSTANT: two Argus terms producing
+    distinct-tail cells publish DISTINCT receipts under the realizable carriers. So the receipt Q is a
+    two-valued, observable function of the output — tampering MOVES Q; the weld is not `:= True`.
+(A fully concrete `decide`d teeth would crunch the toy `cNC` foldl over a base-`10⁶` `*` chain — that
+does not reduce in the kernel, only under the compiled `#guard` evaluator; the abstract observability
+theorem is the kernel-clean refutation.) -/
+
 #assert_axioms writeCell0_receipt_binds_tail
 #assert_axioms writeCell0_receipt_observable
 
