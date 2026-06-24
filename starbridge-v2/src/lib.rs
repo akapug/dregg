@@ -112,6 +112,11 @@ pub mod fork_ui;
 #[cfg(feature = "embedded-executor")]
 pub mod desktop_authoring;
 
+// dregg:// LINK-PASTE (NOTES §6): select a cell → a dregg:// URI → paste a live
+// provenanced transclusion (receipt-pinned, per-viewer, darkens if unauthorized).
+#[cfg(feature = "embedded-executor")]
+pub mod link_paste;
+
 // The DREGGVERSE navigation — "what links here", the verified per-viewer query on
 // the witness-graph. VENDORED byte-identical from the committed
 // `dregg_app_framework::dreggverse_map` (a thin pure navigation over the REAL
