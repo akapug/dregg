@@ -39,8 +39,11 @@ set_option linter.dupNamespace false
 
 The burn spec exposes its guard as a `Prop` (`BurnGuard`), not a per-gate circuit, so we commit it as
 ONE `propBit` column at wire `0` (guardWidth = 1) and decode via `propBit = 1 ↔ p`. (Identical to
-`mintE`/`noteSpendE`; the bit gate is guard-agnostic, so the 4-conjunct `BurnGuard` fits the same shape
-as the 3-conjunct `mintAdmit`.) -/
+`mintE`/`noteSpendE`; the bit gate is guard-agnostic, so `BurnGuard` fits the same shape as the
+3-conjunct `mintAdmit`.) STAGE-3 NOTE: `BurnGuard`'s authority leg is now the disjunction
+`(actor = cell ∨ mintAuthorizedB actor a)` — holder self-redeem is permissionless. The COLUMN shape
+is unchanged (one `propBit`), but the BIT's MEANING changed, so the burn AIR is VK-affecting (the
+prover may now satisfy the guard bit by exhibiting `actor = cell` without an issuer cap). -/
 
 /-- The guard wire (the single `propBit` column). -/
 abbrev vBitGuard : Var := 0

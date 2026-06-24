@@ -221,11 +221,13 @@ def mintGate (k : RecordKernelState) (a : SupplyArgs) : Prop :=
     ∧ a.asset ∈ k.accounts ∧ a.cell ∈ k.accounts ∧ a.asset ≠ a.cell
     ∧ cellLifecycleLive k a.asset = true
 
-/-- The burn gate: issuer authority PLUS availability at the HOLDER (you cannot burn more than the
-holder holds; only the issuer WELL is negative-capable) + liveness + distinctness. -/
+/-- The burn gate (Stage-3 authority split): holder SELF-REDEEM (`actor = cell`, permissionless) OR
+issuer authority, PLUS availability at the HOLDER (you cannot burn more than the holder holds; only
+the issuer WELL is negative-capable) + liveness + distinctness. -/
 def burnGate (k : RecordKernelState) (a : SupplyArgs) : Prop :=
   acceptsEffects k a.cell = true ∧
-  mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt ∧ a.amt ≤ k.bal a.cell a.asset ∧
+  (a.actor = a.cell ∨ mintAuthorizedB k.caps a.actor a.asset = true)
+    ∧ 0 ≤ a.amt ∧ a.amt ≤ k.bal a.cell a.asset ∧
   a.cell ∈ k.accounts ∧ a.asset ∈ k.accounts ∧ a.cell ≠ a.asset
     ∧ cellLifecycleLive k a.asset = true
 
@@ -272,7 +274,7 @@ theorem burn_triangle (k k' : RecordKernelState) (a : SupplyArgs) :
   · intro h
     by_cases hadm : acceptsEffects k a.cell = true
     · rw [if_pos hadm] at h
-      by_cases hg : mintAuthorizedB k.caps a.actor a.asset = true ∧ 0 ≤ a.amt
+      by_cases hg : (a.actor = a.cell ∨ mintAuthorizedB k.caps a.actor a.asset = true) ∧ 0 ≤ a.amt
           ∧ a.amt ≤ k.bal a.cell a.asset ∧ a.cell ∈ k.accounts ∧ a.asset ∈ k.accounts
           ∧ a.cell ≠ a.asset ∧ cellLifecycleLive k a.asset = true
       · rw [if_pos hg] at h; simp only [Option.some.injEq] at h
