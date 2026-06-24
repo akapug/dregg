@@ -44,7 +44,7 @@ use deos_reflect::short_hex;
 use starbridge_web_surface::transclusion::{Backlinks, TranscludedField};
 use starbridge_web_surface::web_of_cells::{DreggUri, WebOfCells};
 
-use crate::applet::{pack_u64, Affordance, Applet, Slot};
+use crate::applet::{Affordance, Applet, Slot, pack_u64};
 use crate::card_editor::{
     BindProps, ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewPatch, ViewTree,
 };

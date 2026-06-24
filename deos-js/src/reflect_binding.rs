@@ -14,8 +14,8 @@
 //! All JSON is hand-built (no serde dep) to keep the binding lean.
 
 use deos_reflect::present::{PresentationBody, PresentationKind};
-use deos_reflect::substance::{hex_encode, FieldValue};
-use deos_reflect::{reflect_cell, AffordanceSurface, Frustum, OcapGraph, ReflectedCell};
+use deos_reflect::substance::{FieldValue, hex_encode};
+use deos_reflect::{AffordanceSurface, Frustum, OcapGraph, ReflectedCell, reflect_cell};
 use dregg_cell::{AuthRequired, Ledger};
 use dregg_turn::action::Effect;
 use dregg_types::CellId;

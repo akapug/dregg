@@ -48,7 +48,7 @@ use deos_reflect::present::PresentationBody;
 use deos_reflect::substance::FieldValue;
 use deos_reflect::{AffordanceSurface, ReflectedCell};
 
-use crate::applet::{pack_u64, Affordance, Applet, Slot};
+use crate::applet::{Affordance, Applet, Slot, pack_u64};
 use crate::attach::AttachedApplet;
 use crate::card_editor::{
     BindProps, ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewPatch, ViewTree,
